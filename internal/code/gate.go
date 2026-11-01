@@ -75,25 +75,6 @@ func ApprovalCounts() []Approvals { return []Approvals{ApprovalsNone, ApprovalsO
 // [MergeBy].
 func (a Approvals) Valid() bool { return slices.Contains(ApprovalCounts(), a) }
 
-// LandingPolicy is how a gated target's queue lands a change.
-type LandingPolicy string
-
-const (
-	// LandingPreLand tests each change merged on the target before it lands:
-	// the speculative queue, candidates of batches, a red batch bisected.
-	LandingPreLand LandingPolicy = "pre_land"
-	// LandingPostLand lands changes ahead of their checks, which then run on
-	// the target's newest tip, a red tip bisected over the landings.
-	LandingPostLand LandingPolicy = "post_land"
-)
-
-// LandingPolicies is the closed set, the default first.
-func LandingPolicies() []LandingPolicy { return []LandingPolicy{LandingPreLand, LandingPostLand} }
-
-// Valid reports a value this build knows; empty is none of them, as for
-// [MergeBy].
-func (p LandingPolicy) Valid() bool { return slices.Contains(LandingPolicies(), p) }
-
 // DeleteSource is whether a merge deletes its change's source branch in the
 // record that merges it.
 type DeleteSource string
@@ -180,9 +161,6 @@ type MergeGate struct {
 	// DeleteSource is whether a merge deletes its source branch in the same
 	// record.
 	DeleteSource DeleteSource `json:"delete_source"`
-	// AutoRevert lets an enqueuer consent, at the enqueue, to the revert of
-	// a landing that breaks the target.
-	AutoRevert bool `json:"auto_revert,omitempty"`
 	// AgentsEditChecks lets a change to `.crewlet/**` — where a repository's
 	// checks are defined — merge on a seat's approval where the rule requires
 	// checks, which otherwise waits for a person's.
@@ -198,13 +176,13 @@ type HumanPath struct {
 	Unless []ChangeClass `json:"unless,omitempty"`
 }
 
-// Landing is how a gated target's queue lands a change: its policy, how many
-// candidates it tests at once (1..[MaxQueueDepth]) and how many changes one
-// candidate takes (1..[MaxQueueBatch]).
+// Landing is how a gated target's queue lands a change — every change tested
+// merged on the target before it lands: how many candidates it tests at once
+// (1..[MaxQueueDepth]) and how many changes one candidate takes
+// (1..[MaxQueueBatch]).
 type Landing struct {
-	Policy LandingPolicy `json:"policy"`
-	Depth  int           `json:"depth"`
-	Batch  int           `json:"batch"`
+	Depth int `json:"depth"`
+	Batch int `json:"batch"`
 }
 
 // RuleGate is one branch rule's merge gate, named by the rule's pattern: how
@@ -245,7 +223,7 @@ func (g MergeGate) Equal(o MergeGate) bool {
 		slices.Equal(g.ApprovalsUnless, o.ApprovalsUnless) &&
 		slices.EqualFunc(g.HumanPaths, o.HumanPaths, HumanPath.Equal) &&
 		slices.Equal(g.Checks, o.Checks) && g.Landing == o.Landing && g.OwnersApprove == o.OwnersApprove &&
-		g.DeleteSource == o.DeleteSource && g.AutoRevert == o.AutoRevert && g.AgentsEditChecks == o.AgentsEditChecks
+		g.DeleteSource == o.DeleteSource && g.AgentsEditChecks == o.AgentsEditChecks
 }
 
 // Equal reports two human paths the same: their glob and their classes.
@@ -314,8 +292,6 @@ func (g MergeGate) fieldsInvalid() (field, why string) {
 		return "merge_by", fmt.Sprintf("%q is not one of %v", g.MergeBy, MergeBys())
 	case !g.Approvals.Valid():
 		return "approvals", fmt.Sprintf("%q is not one of %v", g.Approvals, ApprovalCounts())
-	case !g.Landing.Policy.Valid():
-		return "landing.policy", fmt.Sprintf("%q is not one of %v", g.Landing.Policy, LandingPolicies())
 	case g.Landing.Depth < 1 || g.Landing.Depth > MaxQueueDepth:
 		return "landing.depth", fmt.Sprintf("%d is outside 1..%d", g.Landing.Depth, MaxQueueDepth)
 	case g.Landing.Batch < 1 || g.Landing.Batch > MaxQueueBatch:
@@ -387,12 +363,11 @@ func classesInvalid(at string, list []ChangeClass) (field, why string) {
 // field, so a change that tightens one field and opens another loosens by the
 // one it opens:
 //
-//   - merge_by and approvals loosen LOWERED, and landing.policy moved from
-//     pre_land to post_land, where a target's checks hold its newest tip and
-//     never the landing. FAIL CLOSED, as a rule's direct_push is judged: a
-//     value this build does not know ranks above every value it does, so a
-//     move away from one is a lowering, and a move to one is judged a
-//     loosening, since nothing here says what it lets through ([lowered]);
+//   - merge_by and approvals loosen LOWERED. FAIL CLOSED, as a rule's
+//     direct_push is judged: a value this build does not know ranks above
+//     every value it does, so a move away from one is a lowering, and a move
+//     to one is judged a loosening, since nothing here says what it lets
+//     through ([lowered]);
 //   - approvals_unless loosens by each class it adds: one more kind of
 //     change that merges with no approval;
 //   - human_paths loosens by each glob it drops and by each class it adds to
@@ -403,9 +378,8 @@ func classesInvalid(at string, list []ChangeClass) (field, why string) {
 //     that erred would make a loosening a seat may make;
 //   - checks loosens by each required check it drops;
 //   - owners_approve loosens turned off, as a merge then waits for no path
-//     owner; auto_revert turned on, as a queue may then revert a landing on its
-//     enqueuer's consent alone; and agents_edit_checks turned on, as a seat's
-//     approval then stands for a change to the checks themselves;
+//     owner; and agents_edit_checks turned on, as a seat's approval then
+//     stands for a change to the checks themselves;
 //   - landing.depth, landing.batch and delete_source are NEUTRAL: how fast a
 //     queue lands and what a merge tidies after it, never what a merge is held
 //     to.
@@ -442,15 +416,8 @@ func (g MergeGate) LoosenedBy(old MergeGate) []string {
 	if dropped := notIn(old.Checks, g.Checks); len(dropped) > 0 {
 		opens = append(opens, fmt.Sprintf("drops %s from checks", listed(dropped)))
 	}
-	if lowered(landingStrictness(), old.Landing.Policy, g.Landing.Policy) {
-		opens = append(opens, fmt.Sprintf("moves landing.policy from %s to %s", old.Landing.Policy,
-			g.Landing.Policy))
-	}
 	if old.OwnersApprove && !g.OwnersApprove {
 		opens = append(opens, "turns owners_approve off")
-	}
-	if g.AutoRevert && !old.AutoRevert {
-		opens = append(opens, "turns auto_revert on")
 	}
 	if g.AgentsEditChecks && !old.AgentsEditChecks {
 		opens = append(opens, "turns agents_edit_checks on")
@@ -477,12 +444,6 @@ func lowered[T comparable](order []T, from, to T) bool {
 	return !slices.Contains(order, to) || rank(to) < rank(from)
 }
 
-// landingStrictness is the landing policies, the loosest first — the order a
-// policy is judged lowered in ([MergeGate.LoosenedBy]): post_land lands a
-// change before its checks run, and pre_land lands only a change they passed
-// on. Not [LandingPolicies]' order, which is the default first.
-func landingStrictness() []LandingPolicy { return []LandingPolicy{LandingPostLand, LandingPreLand} }
-
 // notIn is every value of list that of does not hold, in list's order.
 func notIn[T comparable](list, of []T) []T {
 	var out []T
@@ -508,16 +469,15 @@ func listed[T ~string](values []T) string {
 
 // defaultGate is the gate a rule with none takes where a protect request's
 // change names some of a gate's fields ([GateChange]): every other field its
-// default — writers, none, pre_land at depth 4 and batch 2, seats — each read
+// default — writers, none, a queue at depth 4 and batch 2, seats — each read
 // from the ONE PLACE config applies it ([config.CodeProtection.Gate]), so a
 // gate a tool forms and a gate a declaration forms default alike.
 func defaultGate() MergeGate {
 	landing := config.CodeLanding{}.Resolved()
 	return MergeGate{
-		MergeBy:   MergeBy(config.CodeMergeBy("").Resolved()),
-		Approvals: Approvals(config.CodeApprovals("").Resolved()),
-		Landing: Landing{Policy: LandingPolicy(landing.Policy), Depth: landing.Depth,
-			Batch: landing.Batch},
+		MergeBy:      MergeBy(config.CodeMergeBy("").Resolved()),
+		Approvals:    Approvals(config.CodeApprovals("").Resolved()),
+		Landing:      Landing{Depth: landing.Depth, Batch: landing.Batch},
 		DeleteSource: DeleteSource(config.CodeDeleteSource("").Resolved()),
 	}
 }
@@ -555,16 +515,14 @@ type GateChange struct {
 	Landing          *LandingChange `json:"landing,omitempty"`
 	OwnersApprove    *bool          `json:"owners_approve,omitempty"`
 	DeleteSource     *DeleteSource  `json:"delete_source,omitempty"`
-	AutoRevert       *bool          `json:"auto_revert,omitempty"`
 	AgentsEditChecks *bool          `json:"agents_edit_checks,omitempty"`
 }
 
 // LandingChange is a gate change's change to the landing: each field it
 // leaves nil is kept.
 type LandingChange struct {
-	Policy *LandingPolicy `json:"policy,omitempty"`
-	Depth  *int           `json:"depth,omitempty"`
-	Batch  *int           `json:"batch,omitempty"`
+	Depth *int `json:"depth,omitempty"`
+	Batch *int `json:"batch,omitempty"`
 }
 
 // gateChangeField is one field a [GateChange] names, by the name a request
@@ -582,7 +540,7 @@ func (c GateChange) fields() []gateChangeField {
 		{"approvals_unless", c.ApprovalsUnless != nil}, {"human_paths", c.HumanPaths != nil},
 		{"checks", c.Checks != nil}, {"landing", c.Landing != nil},
 		{"owners_approve", c.OwnersApprove != nil}, {"delete_source", c.DeleteSource != nil},
-		{"auto_revert", c.AutoRevert != nil}, {"agents_edit_checks", c.AgentsEditChecks != nil},
+		{"agents_edit_checks", c.AgentsEditChecks != nil},
 	}
 }
 
@@ -629,7 +587,7 @@ func (c GateChange) invalid() (field, why string) {
 	case len(named) == 0:
 		return "", "a change of the gate names one of its fields at least, or removes it"
 	case c.Landing != nil && *c.Landing == (LandingChange{}):
-		return "landing", "a change of the landing names its policy, depth or batch at least"
+		return "landing", "a change of the landing names its depth or batch at least"
 	}
 	return c.applyTo(defaultGate()).fieldsInvalid()
 }
@@ -654,9 +612,6 @@ func (c GateChange) applyTo(base MergeGate) MergeGate {
 		g.Checks = *c.Checks
 	}
 	if l := c.Landing; l != nil {
-		if l.Policy != nil {
-			g.Landing.Policy = *l.Policy
-		}
 		if l.Depth != nil {
 			g.Landing.Depth = *l.Depth
 		}
@@ -669,9 +624,6 @@ func (c GateChange) applyTo(base MergeGate) MergeGate {
 	}
 	if c.DeleteSource != nil {
 		g.DeleteSource = *c.DeleteSource
-	}
-	if c.AutoRevert != nil {
-		g.AutoRevert = *c.AutoRevert
 	}
 	if c.AgentsEditChecks != nil {
 		g.AgentsEditChecks = *c.AgentsEditChecks

@@ -14,7 +14,7 @@ import (
 // A PROTECTED TARGET'S TIP WORK, READ FROM THE ROWS (ADR-0068): every landing
 // on a protected target leaves a row (code_landings) and moves its green row
 // (code_green) only where its record proved the target's required checks —
-// a pre_land queue's landing, which its candidates' checks proved, and a
+// a queue's landing, which its candidates' checks proved, and a
 // merge or a push into a target whose gate requires none. Every other landing
 // — a merge a person's override landed, a person's own push under
 // `direct_push: persons` — lies ABOVE ITS TARGET'S GREEN until a check of a

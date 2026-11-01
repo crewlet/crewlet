@@ -799,10 +799,9 @@ func gateParams(props map[string]any) {
 		"glob": map[string]any{"type": "string"}, "unless": classes}, "required": []string{"glob"}})
 	props["checks"] = list(map[string]any{"type": "string"})
 	props["landing"] = map[string]any{"type": "object", "properties": map[string]any{
-		"policy": enum(spelled(code.LandingPolicies())),
-		"depth":  map[string]any{"type": "integer"}, "batch": map[string]any{"type": "integer"}}}
+		"depth": map[string]any{"type": "integer"}, "batch": map[string]any{"type": "integer"}}}
 	props["delete_source"] = enum(spelled(code.DeleteSources()))
-	for _, flag := range []string{"owners_approve", "auto_revert", "agents_edit_checks"} {
+	for _, flag := range []string{"owners_approve", "agents_edit_checks"} {
 		props[flag] = map[string]any{"type": "boolean"}
 	}
 }

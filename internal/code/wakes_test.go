@@ -115,32 +115,35 @@ func TestAFailedCheckWakesItsAuthorsAndItsActor(t *testing.T) {
 	}
 }
 
-// A BROKEN LANDING WAKES AUTHORS, ENQUEUER AND LEAD (D-QUEUE): dev's change,
-// queued by ada, lands ahead of its checks on a post_land main, and its
-// required check then fails on the landed tip: the broken record marking that
-// landing tells dev, its author, ada, who queued it, and cto, the effective
-// lead of Engineering, which owns the repository — whoever can put the branch
-// right — that the landing broke it. The broken record is the home's own, so
-// none of them made it and all hear.
+// A BROKEN LANDING WAKES ITS AUTHORS AND LEAD (D-QUEUE): dev's change, queued
+// by ada, lands ahead of its checks by her override merge past main's queue,
+// and its required check then fails on the landed tip: the broken record
+// marking that landing tells dev, its author, and cto, the effective lead of
+// Engineering, which owns the repository — whoever can put the branch right —
+// that the landing broke it. The broken record is the home's own, so none of
+// them made it and both hear. Ada's seat founder, who queued the change, is
+// told nothing: her override landed it, not the queue, whose own landings
+// land green and so are never broken.
 //
 // Mutations: stamp no lead on a broken record's routing — cto is not told,
-// red; read the enqueuer off the landing's merger instead of its enqueuer
-// column — ada is lost when another merged it; route the broken record's
-// reason as conflicted — the reason is wrong, red.
-func TestABrokenLandingWakesAuthorsEnqueuerAndLead(t *testing.T) {
+// red; route the broken record's reason as conflicted — the reason is wrong,
+// red.
+func TestABrokenLandingWakesItsAuthorsAndLead(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	n.chart = testChart()
 	c, _ := committerOn(t, n, n.pub)
 	w, _ := writerOn(t, n, n.pub)
-	repo, change := laneRepo(t, n, c, "web")
+	repo, change := queueRepo(t, n, c, "web")
 	ready(t, n, w, repo, change)
 	enqueue := enqueueing(repo, change, ada, oidOf("B"))
 	res, err := c.ProposeQueue(t.Context(), enqueue)
 	requireQueued(t, res, err, code.QueueWaiting, 1)
-	res, err = c.ProposeQueue(t.Context(), landingOf(repo, code.LandingPostLand, "", oidOf("A"),
-		code.LandEntry{EntryID: enqueue.Enqueue.EntryID, ChangeID: change, Commit: oidOf("M")}))
-	landed := requireRecorded(t, res, err)
+	override := merging(repo, change, ada, code.MergeMethodMerge, oidOf("A"), oidOf("B"), oidOf("M"))
+	override.Merge.Override = "the queue's runner is down"
+	merged, err := c.ProposeMerge(t.Context(), override)
+	requireMerged(t, merged, err, oidOf("M"))
+	landed := merged.Position
 
 	n.checked(repo, oidOf("M"), mainRef, "unit", 1, code.CheckStateFailed)
 	res, err = c.ProposeQueue(t.Context(), queueRecord(func(p *code.QueueProposal) {
@@ -150,13 +153,13 @@ func TestABrokenLandingWakesAuthorsEnqueuerAndLead(t *testing.T) {
 	broken := requireRecorded(t, res, err)
 	routings := routingAt(t, n, broken)
 	if len(routings) != 1 || routings[0].ChangeID != change || !routings[0].Broken || routings[0].Actor != "" ||
-		routings[0].Enqueuer != "founder" || routings[0].Lead != "cto" {
-		t.Fatalf("the broken record carries %+v, want web!1 broken, queued by ada's seat founder, its lead cto, "+
-			"made by nobody", routings)
+		routings[0].Enqueuer != "" || routings[0].Lead != "cto" {
+		t.Fatalf("the broken record carries %+v, want web!1 broken, no enqueuer, its lead cto, made by nobody",
+			routings)
 	}
 	if got := heard(code.Concerns(routings)); !slices.Equal(got,
-		[]string{"dev:target_broken", "founder:target_broken", "cto:target_broken"}) {
-		t.Fatalf("the broken landing tells %v, want its author, its enqueuer and Engineering's lead", got)
+		[]string{"dev:target_broken", "cto:target_broken"}) {
+		t.Fatalf("the broken landing tells %v, want its author and Engineering's lead", got)
 	}
 }
 
@@ -222,9 +225,10 @@ func TestAPassingCheckCanMakeAChangeReady(t *testing.T) {
 
 // EVERY M5 WAKE NAMES ITS WORK ITEM (D-WAKES): a change carrying a work item
 // is checked, queued, put out of its queue twice — a dequeue its enqueuer
-// asked, an ejection for a conflicting merge — queued again and landed, its
-// landing then broken, and a second change merged by its record: every one of
-// those records wakes the seats it concerns under its own reason, each wake
+// asked, an ejection for a conflicting merge — queued again and landed by its
+// queue; a second change lands ahead of its checks by a person's override
+// and that landing is then broken; and a third is merged by its record:
+// every one of those records wakes the seats it concerns under its own reason, each wake
 // naming the change's work item, so the turn it starts is charged to it
 // (ADR-0022). A person is told in their inbox, never woken: ada's seat
 // founder, who queued the change, has no wake of their own.
@@ -243,9 +247,7 @@ func TestEveryM5WakeNamesItsWorkItem(t *testing.T) {
 		Key: "ENG-7", Project: "ENG"}
 	s := suiteSettings()
 	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
-	gate := queueGate()
-	gate.Landing.Policy = code.LandingPostLand
-	s.Protections[0].Gate = gate
+	s.Protections[0].Gate = queueGate()
 	repo := n.ensure("web", s, t1).RepoID
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
 		set(featureRef, code.ZeroOID, oidOf("B"))))
@@ -282,16 +284,15 @@ func TestEveryM5WakeNamesItsWorkItem(t *testing.T) {
 	enqueue = enqueueing(repo, change, ada, oidOf("B"))
 	res, err = c.ProposeQueue(t.Context(), enqueue)
 	requireQueued(t, res, err, code.QueueWaiting, 1)
-	res, err = c.ProposeQueue(t.Context(), landingOf(repo, code.LandingPostLand, "", oidOf("A"),
+	train := training(repo, oidOf("A"), enqueue.Enqueue.EntryID, oidOf("M"))
+	res, err = c.ProposeQueue(t.Context(), train)
+	requireRecorded(t, res, err)
+	n.passed(repo, oidOf("M"), mainRef, "unit")
+	res, err = c.ProposeQueue(t.Context(), landingOf(repo, train.Candidate.Train, oidOf("A"),
 		code.LandEntry{EntryID: enqueue.Enqueue.EntryID, ChangeID: change, Commit: oidOf("M")}))
-	landed := requireRecorded(t, res, err)
-	records["a landing"], wants["a landing"] = landed, []string{"dev:merged"}
-	n.checked(repo, oidOf("M"), mainRef, "unit", 1, code.CheckStateFailed)
-	res, err = c.ProposeQueue(t.Context(), queueRecord(func(p *code.QueueProposal) {
-		p.Broken = &code.Broken{RepoID: repo, TargetRef: mainRef, Position: landed, Ordinal: 1, OID: oidOf("M"),
-			Checks: []string{"unit"}}
-	}))
-	records["a broken landing"] = requireRecorded(t, res, err)
+	records["a landing"], wants["a landing"] = requireRecorded(t, res, err), []string{"dev:merged"}
+
+	records["a broken landing"] = brokenWorkItemLanding(t, n, c, w, item)
 	wants["a broken landing"] = []string{"cto:target_broken", "dev:target_broken"}
 
 	merged := mergedWorkItemChange(t, n, c, w, item)
@@ -312,6 +313,37 @@ func TestEveryM5WakeNamesItsWorkItem(t *testing.T) {
 			}
 		}
 	}
+}
+
+// brokenWorkItemLanding is the position of the broken record marking the
+// landing of a change dev opened for item, on a repository of its own whose
+// main queues every merge on its check unit: ada's override merge lands it
+// ahead of that check, which then fails on the landed tip.
+func brokenWorkItemLanding(t *testing.T, n *node, c *code.Committer, w *code.ChangeWriter,
+	item *types.WorkItem) statelog.Position {
+
+	t.Helper()
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].Gate = queueGate()
+	repo := n.ensure("api", s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
+		set(featureRef, code.ZeroOID, oidOf("B"))))
+	open := opening(repo, featureRef, mainRef, dev)
+	open.Open.WorkItem = item
+	opened, err := c.ProposeChange(t.Context(), open)
+	requireChanged(t, opened, err)
+	converse(t, w, n.revising(repo, opened.ChangeID, 1, oidOf("B"), mainRef, nil))
+	override := merging(repo, opened.ChangeID, ada, code.MergeMethodMerge, oidOf("A"), oidOf("B"), oidOf("M"))
+	override.Merge.Override = "the queue's runner is down"
+	merged, err := c.ProposeMerge(t.Context(), override)
+	requireMerged(t, merged, err, oidOf("M"))
+	n.checked(repo, oidOf("M"), mainRef, "unit", 1, code.CheckStateFailed)
+	res, err := c.ProposeQueue(t.Context(), queueRecord(func(p *code.QueueProposal) {
+		p.Broken = &code.Broken{RepoID: repo, TargetRef: mainRef, Position: merged.Position, Ordinal: 1,
+			OID: oidOf("M"), Checks: []string{"unit"}}
+	}))
+	return requireRecorded(t, res, err)
 }
 
 // mergedWorkItemChange is the position of cto's merge of a change dev opened

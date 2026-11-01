@@ -54,10 +54,10 @@ import (
 //     ending carry the very keys a head's do, a check's key and nothing of
 //     its purpose, so check_started, check_named and check_finished price
 //     them;
-//   - broken and green: the same change landed ahead of its checks on a
-//     lane, as its home's tip work asks its committer to judge it — broken,
-//     naming the one required check that failed on its tip, then green once
-//     the check passed there;
+//   - broken and green: the same change landed ahead of its checks by a
+//     person's override, as its home's tip work asks its committer to judge
+//     it — broken, naming the one required check that failed on its tip,
+//     then green once the check passed there;
 //   - publication_tail and publication_one: a repository's maintainer
 //     publishing a multi-pack-index layer, through the committer's compact
 //     path, over a tail of compact.PublishPacks (64) packs — a busy
@@ -88,7 +88,7 @@ var changeRecordBytes = map[string]int64{
 	"check_named":      840,
 	"check_finished":   840,
 	"tip_check_queued": 960,
-	"broken":           1_060,
+	"broken":           1_040,
 	"green":            800,
 	"publication_tail": 3_830,
 	"publication_one":  1_110,
@@ -219,10 +219,10 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	})
 
 	// THE SAME CHANGE INTO A TARGET WITH A QUEUE: queued.
-	lane, queued := laneRepo(t, n, c, "lane")
-	ready(t, n, w, lane, queued)
+	queue, queued := queueRepo(t, n, c, "queue")
+	ready(t, n, w, queue, queued)
 	took("enqueue", func() {
-		p := enqueueing(lane, queued, dev, oidOf("B"))
+		p := enqueueing(queue, queued, dev, oidOf("B"))
 		p.Enqueue.DeleteSource = true
 		res, err := c.ProposeQueue(t.Context(), p)
 		requireQueued(t, res, err, code.QueueWaiting, 1)
@@ -264,16 +264,16 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 		Base: oidOf("A"), DefsOID: defs, Def: &code.CheckDef{Name: "unit", Run: "go test ./...",
 			TimeoutSeconds: 600}, Required: true, Reason: code.QueueDispatch})
 
-	// THE SAME CHANGE LANDED AHEAD OF ITS CHECKS, on a lane: its tip judged
-	// broken where its required check failed, then green once it passed.
-	tipped, landing := laneRepo(t, n, c, "tip")
+	// THE SAME CHANGE LANDED AHEAD OF ITS CHECKS, by a person's override
+	// past its target's queue: its tip judged broken where its required
+	// check failed, then green once it passed.
+	tipped, landing := queueRepo(t, n, c, "tip")
 	ready(t, n, w, tipped, landing)
-	lined := enqueueing(tipped, landing, dev, oidOf("B"))
-	queuedRes, err := c.ProposeQueue(t.Context(), lined)
-	requireQueued(t, queuedRes, err, code.QueueWaiting, 1)
-	queuedRes, err = c.ProposeQueue(t.Context(), landingOf(tipped, code.LandingPostLand, "", oidOf("A"),
-		code.LandEntry{EntryID: lined.Enqueue.EntryID, ChangeID: landing, Commit: oidOf("M")}))
-	landed := requireRecorded(t, queuedRes, err)
+	override := merging(tipped, landing, ada, code.MergeMethodMerge, oidOf("A"), oidOf("B"), oidOf("M"))
+	override.Merge.Override = "the queue's runner is down"
+	merged, err := c.ProposeMerge(t.Context(), override)
+	requireMerged(t, merged, err, oidOf("M"))
+	landed := merged.Position
 	judged := func(name string, set func(*code.QueueProposal)) {
 		took(name, func() {
 			res, err := c.ProposeQueue(t.Context(), queueRecord(set))

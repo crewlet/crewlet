@@ -24,7 +24,7 @@ func aGate() code.MergeGate {
 			{Glob: "deploy/**", Unless: []code.ChangeClass{code.ChangeClassCommentOnly}},
 		},
 		Checks:        []string{"lint", "unit"},
-		Landing:       code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4},
+		Landing:       code.Landing{Depth: 4, Batch: 4},
 		OwnersApprove: true, DeleteSource: code.DeleteSeats,
 	}
 }
@@ -423,7 +423,6 @@ func TestAGateIsHeldToItsForm(t *testing.T) {
 		"an unknown merge_by":    {func(g *code.MergeGate) { g.MergeBy = "admins" }, "merge_by"},
 		"no approvals":           {func(g *code.MergeGate) { g.Approvals = "" }, "approvals"},
 		"two approvals":          {func(g *code.MergeGate) { g.Approvals = "two" }, "approvals"},
-		"an unknown landing":     {func(g *code.MergeGate) { g.Landing.Policy = "on_green" }, "landing.policy"},
 		"a depth of none":        {func(g *code.MergeGate) { g.Landing.Depth = 0 }, "landing.depth"},
 		"a depth past its bound": {func(g *code.MergeGate) { g.Landing.Depth = code.MaxQueueDepth + 1 }, "landing.depth"},
 		"a batch of none":        {func(g *code.MergeGate) { g.Landing.Batch = 0 }, "landing.batch"},

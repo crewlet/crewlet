@@ -504,9 +504,10 @@ func TestAMergeRefusedExpungingIsBuiltAgain(t *testing.T) {
 }
 
 // A QUEUE TARGET'S MERGE IS AN ENQUEUE (M5-D9): a target whose gate requires a
-// check takes a change through its queue, so a merge_change of it builds
-// nothing and enqueues the change, answering its entry and its place; main
-// does not move; and a person's override merges it directly, past the queue.
+// check takes a change through its queue, so a merge_change of a change whose
+// head passed it builds nothing and enqueues the change, answering its entry
+// and its place; main does not move; and a person's override merges it
+// directly, past the queue.
 //
 // Mutation: build the merge on a queue target → the record is refused
 // queue_target, red.
@@ -514,12 +515,16 @@ func TestAQueueTargetsMergeIsEnqueued(t *testing.T) {
 	t.Parallel()
 	settings := codetest.Settings()
 	settings.Protections[0].Gate = &code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
-		Checks: []string{"unit"}, Landing: code.Landing{Policy: code.LandingPostLand, Depth: 4, Batch: 4},
-		DeleteSource: code.DeleteNone}
+		Checks: []string{"unit"}, Landing: code.Landing{Depth: 4, Batch: 4}, DeleteSource: code.DeleteNone}
 	c := newMergeCase(t, codetest.SoloOptions{}, settings, map[string]string{"README.md": "one\n"})
 	n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Queue me")
 	c.meetGate(n, lead())
 	head := c.change(n).Head
+	// THE HEAD'S REQUIRED CHECK PASSED, for main: the gate an enqueue is
+	// decided by holds a change's head to it.
+	unit := code.CheckKey{RepoID: c.repo, OID: head, Target: "refs/heads/main", Name: "unit", Attempt: 1}
+	queueCheck(t, c.solo(), unit)
+	endCheck(t, c.solo(), unit)
 	before := len(c.objects())
 	w := merge(c.repo, alice(), n, head, code.MergeMethodSquash)
 	res, err := c.write(w)
@@ -567,9 +572,6 @@ func TestAMergeChangeIsHeldToItsShape(t *testing.T) {
 		{"a message", func(w *code.EngineWrite) { w.Message = "mine" }, "message"},
 		{"files", func(w *code.EngineWrite) { w.Files = []code.FileOp{text("a", "a")} }, "files"},
 		{"a long override", func(w *code.EngineWrite) { w.Override = long }, "override"},
-		{"an override and a consent", func(w *code.EngineWrite) {
-			w.Override, w.AutoRevert = "now", true
-		}, "auto_revert"},
 	} {
 		w := ok
 		tc.edit(&w)

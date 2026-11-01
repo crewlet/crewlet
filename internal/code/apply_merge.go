@@ -23,18 +23,15 @@ import (
 // ledger would have collapsed, met again.
 
 // LandingKind is what landed a commit on a protected branch, as its landing
-// row says (code_landings.kind): a pre_land queue's landing of its tested
-// prefix, a post_land lane's, a change's direct merge, or a push. A named
-// string with a closed set, so a kind a later build records is a value.
+// row says (code_landings.kind): a queue's landing of its tested prefix, a
+// change's direct merge, or a push. A named string with a closed set, so a
+// kind a later build records is a value.
 type LandingKind string
 
 const (
-	// LandedPreLand is a pre_land queue's landing, each change tested merged
-	// on the branch before it landed (m5-q2's `land` record).
+	// LandedPreLand is a queue's landing, each change tested merged on the
+	// branch before it landed (m5-q2's `land` record).
 	LandedPreLand LandingKind = "pre_land"
-	// LandedPostLand is a post_land lane's landing, ahead of the checks the
-	// branch's tip then runs (m5-q2's `land` record).
-	LandedPostLand LandingKind = "post_land"
 	// LandedDirect is a change merged by a merge record ([Merge]), its gate
 	// held — or overridden by a person — from one snapshot.
 	LandedDirect LandingKind = "direct"
@@ -43,11 +40,9 @@ const (
 	LandedPush LandingKind = "push"
 )
 
-// LandingKinds is the closed set, in the order a branch's landing policies
-// read: its queue's two, then a direct merge and a push.
-func LandingKinds() []LandingKind {
-	return []LandingKind{LandedPreLand, LandedPostLand, LandedDirect, LandedPush}
-}
+// LandingKinds is the closed set: a branch's queue's, then a direct merge and
+// a push.
+func LandingKinds() []LandingKind { return []LandingKind{LandedPreLand, LandedDirect, LandedPush} }
 
 // Valid reports a kind this build knows.
 func (k LandingKind) Valid() bool { return slices.Contains(LandingKinds(), k) }

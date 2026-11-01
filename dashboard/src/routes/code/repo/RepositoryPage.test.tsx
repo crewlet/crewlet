@@ -73,7 +73,7 @@ function detail(extra: Record<string, unknown> = {}) {
         gate: {
           merge_by: "writers",
           approvals: "one",
-          landing: { policy: "pre_land", depth: 1, batch: 1 },
+          landing: { depth: 1, batch: 1 },
           delete_source: "seats",
         },
       },

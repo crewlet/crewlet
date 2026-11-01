@@ -144,7 +144,6 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"CodeProtection", "merge_by", strs(CodeMergeBys)},
 		{"CodeProtection", "approvals", strs(CodeApprovalCounts)},
 		{"CodeProtection", "delete_source", strs(CodeDeleteSources)},
-		{"CodeLanding", "policy", strs(CodeLandingPolicies)},
 		{"Code", "merge_by_floor", strs(CodeMergeBys)},
 		// The three tiers, each in its one spelling: the validator reads
 		// exactly these, so an editor underlines exactly what the engine
@@ -1045,9 +1044,8 @@ units:
 			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  merge_by_floor: maintainers\n" +
 				"  repos:\n    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, " +
 				"merge_by: persons, approvals: one, approvals_unless: [comment_only], human_paths: [{glob: " +
-				"'deploy/**', unless: [whitespace_only]}], checks: [unit, e2e.linux], landing: {policy: post_land, " +
-				"depth: 8, batch: 2}, owners_approve: true, delete_source: none, auto_revert: true, " +
-				"agents_edit_checks: true}\n",
+				"'deploy/**', unless: [whitespace_only]}], checks: [unit, e2e.linux], landing: {depth: 8, " +
+				"batch: 2}, owners_approve: true, delete_source: none, agents_edit_checks: true}\n",
 		},
 		// A CLASS NO EXEMPTING LIST TAKES, which the members' enum names
 		// while the author is still typing.

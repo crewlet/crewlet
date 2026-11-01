@@ -55,7 +55,6 @@ type QueueRow struct {
 	Method       MergeMethod       `json:"method"`
 	DeleteSource bool              `json:"delete_source,omitempty"`
 	CloseTask    bool              `json:"close_task,omitempty"`
-	AutoRevert   bool              `json:"auto_revert,omitempty"`
 	// EnqueuedBy is who enqueued it, and EnqueuedOperator the credential a
 	// person acted through.
 	EnqueuedBy       Party      `json:"enqueued_by"`
@@ -76,7 +75,7 @@ type CandidateEntry struct {
 	Commit  string `json:"commit"`
 }
 
-// CandidateRow is one candidate a pre_land queue built: its train's ordinal'th
+// CandidateRow is one candidate a queue built: its train's ordinal'th
 // merge of its entries onto Base, Tip its result, its entries and their
 // commits, the pack its objects are stored in, where it stands, and the
 // record that wrote it.
@@ -561,7 +560,7 @@ func trainsOf(ctx context.Context, tx *sql.Tx, repoID, target string) ([]Candida
 func (e queueEntry) row(repo string, number int64, place int) QueueRow {
 	return QueueRow{RepoID: e.RepoID, Repo: repo, EntryID: e.EntryID, TargetRef: e.TargetRef, ChangeID: e.ChangeID,
 		Number: number, Place: place, Seq: unpacked(e.Seq), HeadOID: e.HeadOID, Method: e.Method,
-		DeleteSource: e.DeleteSource, CloseTask: e.CloseTask, AutoRevert: e.AutoRevert, EnqueuedBy: e.EnqueuedBy,
+		DeleteSource: e.DeleteSource, CloseTask: e.CloseTask, EnqueuedBy: e.EnqueuedBy,
 		EnqueuedOperator: e.EnqueuedOperator, State: e.State, Train: e.Train, CandidateID: e.CandidateID,
 		CommitOID: e.CommitOID, EnqueuedAt: store.DecodeTime(e.EnqueuedAt)}
 }

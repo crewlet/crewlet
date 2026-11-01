@@ -18,7 +18,7 @@ import (
 // as an enqueue is — the queue's work is the repository's home's (M4's home
 // git node builds what they record), its decisions the committer's:
 //
-//   - a CANDIDATE ([Candidate]) records a pre_land queue's TRAIN: the
+//   - a CANDIDATE ([Candidate]) records a queue's TRAIN: the
 //     candidates its home built of the target's live entries onto the
 //     target's tip — each a batch of entries merged on the candidate before
 //     it, its tip what the queue's checks then run on — and the one pack the
@@ -30,19 +30,18 @@ import (
 //     check failed on what they were tested in, their merge conflicted, their
 //     gate no longer holds, their head moved, a fast-forward that is not one —
 //     naming the checks or the paths, and abandons the train each was in.
-//   - a LAND ([Land]) lands entries on their target in ONE record: a pre_land
-//     train's tested PREFIX — its candidates from the first, up to one whose
-//     tip every required check passed on — or a post_land lane's CHAIN, built
-//     onto the target's tip by its home and landed ahead of the checks its tip
-//     then runs. ITS DECIDE PROVES EVERY ENTRY'S GATE AGAIN, from its own
-//     snapshot, with the entry's ENQUEUER as the merger (M5-D8): an enqueue
-//     is the gate, and a landing is the record that moves the branch, which
-//     the ADR binds. Its apply merges each entry's change first and lands ONE
-//     PUSH ROW AN ENTRY, `via queue`, naming its enqueuer — the queue never
-//     acts on its own account — so which push landed a commit names each
-//     change's own landing.
+//   - a LAND ([Land]) lands entries on their target in ONE record: a train's
+//     tested PREFIX — its candidates from the first, up to one whose tip
+//     every required check passed on. ITS DECIDE PROVES EVERY ENTRY'S GATE
+//     AGAIN, from its own snapshot, with the entry's ENQUEUER as the merger
+//     (M5-D8): an enqueue is the gate, and a landing is the record that
+//     moves the branch, which the ADR binds. Its apply merges each entry's
+//     change first and lands ONE PUSH ROW AN ENTRY, `via queue`, naming its
+//     enqueuer — the queue never acts on its own account — so which push
+//     landed a commit names each change's own landing.
 //   - a GREEN ([Green]) moves a protected target's green row onto a landing
-//     record whose required checks passed on its tip; a BROKEN ([Broken])
+//     record whose required checks passed on its tip — a landing no queue
+//     tested first, a person's override merge or push; a BROKEN ([Broken])
 //     marks a landing above the green row whose required check failed. Green
 //     only ever advances on green: no record moves it on red, and none moves
 //     it back.
@@ -53,12 +52,12 @@ import (
 //
 // # A train and a landing are built at a drop epoch
 //
-// A candidate's and a post_land landing's commits are built by the home over
-// its copy of the repository, and a pre_land landing moves the target onto
-// commits its train built so: each proposal carries the drop epoch that copy
-// held ([QueueProposal.DropEpoch]), and its decide refuses it `expunging`
-// where an expunge has begun since ([MergeRefusalExpunging]), before every
-// rule of its own, as a push's and a merge's are — a build before a begin may
+// A candidate's commits are built by the home over its copy of the
+// repository, and a landing moves the target onto commits its train built
+// so: each proposal carries the drop epoch that copy held
+// ([QueueProposal.DropEpoch]), and its decide refuses it `expunging` where an
+// expunge has begun since ([MergeRefusalExpunging]), before every rule of its
+// own, as a push's and a merge's are — a build before a begin may
 // rely on objects the begin left dropping. And what the queue holds in flight
 // an expunge keeps, as it keeps a ref's tip: every live entry's head, every
 // candidate's tip and every target's green row are among the objects its
@@ -73,8 +72,8 @@ import (
 // versionedFields row ({Name: "MutationRecord.Op <op>", Since: 2, Path:
 // []string{"op"}, Equals: "<op>"} — candidate, eject, land, green, broken,
 // queue_sweep) with the companions queue.go's head names, and so do the
-// values they add to closed sets an older build reads: `merged_via` queue and
-// lane on a change's row and `via` queue on a push's, which an older reader
+// values they add to closed sets an older build reads: `merged_via` queue on
+// a change's row and `via` queue on a push's, which an older reader
 // of either refuses as a way it does not know (scanPush). Neither is a gate.
 
 // The queue's bounds.
@@ -87,8 +86,8 @@ const (
 
 	// MaxLandEntries is the most entries one land record lands: 64,
 	// [MaxPushesPerRecord], since it lands one push row an entry — the
-	// committer's group commit's shape, a lane's whole chain in one record
-	// (M5-D14).
+	// committer's group commit's shape — which a train's whole tested
+	// prefix, at most [MaxCandidateEntries] (also 64), fits in.
 	MaxLandEntries = MaxPushesPerRecord
 
 	// MaxEjectedPaths is the most paths one ejection names of a conflicted
@@ -145,7 +144,7 @@ func QueueCandidateID(train string, ordinal int) string {
 }
 
 // QueueLandID is the landing a land record under opID is: the id its pushes
-// are derived from, and its post_land pack's.
+// are derived from.
 func QueueLandID(opID string) string {
 	at, _ := statelog.OpMintedAt(opID)
 	return statelog.DeriveOpID(at, "", "code.queue.land", opID)
@@ -165,7 +164,7 @@ const (
 	// tested in.
 	EjectCheckFailed QueueEndReason = "check_failed"
 	// EjectConflict is the entry's merge onto what was before it in its
-	// train or its chain conflicting.
+	// train conflicting.
 	EjectConflict QueueEndReason = "conflict"
 	// EjectGateUnmet is the entry's gate no longer holding with its
 	// enqueuer as the merger: a blocker raised, an approval withdrawn, a
@@ -181,22 +180,13 @@ func EjectReasons() []QueueEndReason {
 	return []QueueEndReason{EjectCheckFailed, EjectConflict, EjectGateUnmet, EjectHeadMoved, EjectNotFastForward}
 }
 
-// LandingPolicies' merges: how a change a land record merged reached its
-// target ([MergedVia]).
-const (
-	// MergedViaQueue is a change a pre_land queue landed, tested merged on
-	// its target first.
-	//
-	// BASE FORMAT, under the condition this file's head states.
-	MergedViaQueue MergedVia = "queue"
-	// MergedViaLane is a change a post_land lane landed, ahead of the checks
-	// its target's tip then ran.
-	//
-	// BASE FORMAT, under the condition this file's head states.
-	MergedViaLane MergedVia = "lane"
-)
+// MergedViaQueue is how a change a land record merged reached its target
+// ([MergedVia]): its queue landed it, tested merged on its target first.
+//
+// BASE FORMAT, under the condition this file's head states.
+const MergedViaQueue MergedVia = "queue"
 
-// Candidate records a pre_land queue's TRAIN on one target: its candidates,
+// Candidate records a queue's TRAIN on one target: its candidates,
 // built by the repository's home onto the target's tip, and the pack the
 // commits they built are stored in — the record of op candidate on the
 // repository's subject.
@@ -277,26 +267,16 @@ type Land struct {
 	// commit.
 	BaseOID string `json:"base_oid"`
 	TipOID  string `json:"tip_oid"`
-	// Policy is the target's landing policy the landing was built under:
-	// pre_land, a train's tested prefix (Train its train), or post_land, a
-	// lane's chain (no train).
-	Policy LandingPolicy `json:"policy"`
-	Train  string        `json:"train,omitempty"`
+	// Train is the train the landing lands a tested prefix of, whose pack
+	// holds every commit it lands.
+	Train string `json:"train"`
 	// Entries are what lands, in the order the target moves through them,
 	// the first onto BaseOID.
 	Entries []LandEntry `json:"entries"`
-	// Pack is a post_land chain's pack, stored before it was proposed — nil
-	// for a pre_land landing, whose commits its train's pack holds, and for
-	// a chain of fast-forwards, which writes none.
-	Pack *PackRef `json:"pack,omitempty"`
 	// Node is the git node that built the landing and ReceivedAt when it was
 	// asked to — each push row's node and received_at.
 	Node       string    `json:"node"`
 	ReceivedAt time.Time `json:"received_at"`
-	// Green is STAMPED BY THE DECIDE: a pre_land landing, every required
-	// check having passed on its tip, lands green and moves the target's
-	// green row; a post_land one lands ahead of its checks.
-	Green bool `json:"green,omitempty"`
 	// Routing is whom the record concerns, a routing an entry's change in
 	// the entries' order — its authors told it merged, its enqueuer, who
 	// merged it, not — STAMPED BY THE DECIDE and kept within the record's
@@ -501,13 +481,11 @@ func (e Eject) validate() error {
 
 // validate refuses a land record no home builds: its id not [QueueLandID] of
 // opID; a target that is no branch; a base or a tip that is no whole object
-// id, a tip that is not its last entry's commit; a policy this build does not
-// know — a pre_land landing naming no train or carrying a pack, a post_land
-// one naming a train; no entry or more than [MaxLandEntries]; an entry or a
-// change that is no bare UUIDv7 or named twice, a commit that is no whole
-// object id or the base; a pack whose row is no bundle's, past
-// [MaxWritePackBytes] or not named for the landing; no node, or no instant it
-// was asked at; and a field the decide stamps set by its asker.
+// id, a tip that is not its last entry's commit; a train that is no bare
+// UUIDv7; no entry or more than [MaxLandEntries]; an entry or a change that
+// is no bare UUIDv7 or named twice, a commit that is no whole object id or the
+// base; no node, or no instant it was asked at; and a field the decide stamps
+// set by its asker.
 func (l Land) validate(opID string) error {
 	if err := validRepoID("land.repo_id", l.RepoID); err != nil {
 		return err
@@ -526,20 +504,8 @@ func (l Land) validate(opID string) error {
 			return badField(oid.field, "%q is not a whole object id", oid.value)
 		}
 	}
-	switch {
-	case !l.Policy.Valid():
-		return badField("land.policy", "%q is not one of %v", l.Policy, LandingPolicies())
-	case l.Policy == LandingPreLand && l.Train == "":
-		return badField("land.train", "a pre_land landing lands a prefix of its target's train, and names it")
-	case l.Policy == LandingPreLand && l.Pack != nil:
-		return badField("land.pack", "a pre_land landing's commits are its train's, whose pack holds them")
-	case l.Policy == LandingPostLand && l.Train != "":
-		return badField("land.train", "a post_land lane lands a chain of its own, which no train holds")
-	}
-	if l.Train != "" {
-		if err := bareUUIDv7("land.train", l.Train); err != nil {
-			return err
-		}
+	if err := bareUUIDv7("land.train", l.Train); err != nil {
+		return err
 	}
 	switch n := len(l.Entries); {
 	case n == 0:
@@ -576,17 +542,11 @@ func (l Land) validate(opID string) error {
 	if last := l.Entries[len(l.Entries)-1].Commit; l.TipOID != last {
 		return badField("land.tip_oid", "%q, and a landing's tip is its last entry's commit %s", l.TipOID, last)
 	}
-	if err := checkQueuePack("land.pack", l.Pack, l.LandID); err != nil {
-		return err
-	}
 	switch {
 	case !config.ValidNodeID(l.Node):
 		return badField("land.node", "%q is not a node id config admits", l.Node)
 	case l.ReceivedAt.IsZero():
 		return badField("land.received_at", "a landing names when its builder was asked for it")
-	case l.Green:
-		return badField("land.green", "the committer stamps whether a landing is green from its snapshot, and "+
-			"an asker sends none")
 	}
 	return nil
 }

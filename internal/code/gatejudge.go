@@ -31,10 +31,10 @@ import (
 // writers — and of code.merge_by_floor, on a protected target alone; an
 // approval where any gate asks one, exempted only by a class every gate
 // asking one exempts; every gate's human paths and required checks; path
-// owners gating where any gate makes them so; pre_land where any gate
-// requiring checks lands so. A branch no rule matches has no gate: a change
-// into it merges on M4's preconditions and its merger's right to push the
-// branch.
+// owners gating where any gate makes them so; the smallest queue depth and
+// batch of the gates requiring checks. A branch no rule matches has no gate:
+// a change into it merges on M4's preconditions and its merger's right to
+// push the branch.
 //
 // # What it judges, beside M4's preconditions
 //
@@ -58,10 +58,9 @@ import (
 //     home's work on every decide's round. A snapshot whose owner rows digest
 //     to another digest than the match recorded is owners the home has not
 //     matched yet, and leaves the term COMPUTING until its next revise.
-//   - CHECK, where it requires checks and lands pre_land: every required check
-//     passed — or skipped, its paths untouched — on the head commit, by its
-//     latest attempt whatever ran it; a post_land target's checks hold its
-//     tip and never a landing (code_green).
+//   - CHECK, where it requires checks: every required check passed — or
+//     skipped, its paths untouched — on the head commit, by its latest
+//     attempt whatever ran it.
 //   - MERGE_AUTHORITY, where a merger is named ([GateFacts.Merger]): the
 //     asker of a read, the principal of a decide. A person always holds it;
 //     a seat and a credential the gate's merge_by on a protected target, and
@@ -113,22 +112,15 @@ type GateRules struct {
 	// it, by glob; Checks every gate's required checks, sorted and each once.
 	HumanPaths []HumanPath
 	Checks     []string
-	// Landing is post_land only where every gate requiring checks lands so:
-	// a gate that tests a change before it lands holds the target whatever a
-	// looser one beside it allows.
-	Landing LandingPolicy
-	// QueueDepth and QueueBatch are how many candidates a pre_land queue
+	// QueueDepth and QueueBatch are how many candidates the target's queue
 	// tests at once and how many changes one candidate takes: the SMALLEST
-	// of each over the pre_land gates requiring checks — throughput, never
-	// what is tested (M5-D3), so the smallest is the one that keeps every
-	// matching rule's bound — and zero where no such gate matches.
+	// of each over the gates requiring checks — throughput, never what is
+	// tested (M5-D3), so the smallest is the one that keeps every matching
+	// rule's bound — and zero where no such gate matches.
 	QueueDepth int
 	QueueBatch int
-	// OwnersApprove is whether any gate makes path owners gating;
-	// AutoRevert whether every gate requiring checks lets an enqueuer
-	// consent to a reverting of a landing that breaks the target.
+	// OwnersApprove is whether any gate makes path owners gating.
 	OwnersApprove bool
-	AutoRevert    bool
 	// KeepsSource is whether any gate matching Target keeps a seat's source
 	// branch when a change merges (delete_source: none): a merge's caller
 	// deletes a source in a seat's namespace unless it is so, and keeps
@@ -148,13 +140,10 @@ type GateRules struct {
 // build does not know reads as its strictest, FAIL CLOSED, as a loosening is
 // judged ([MergeGate.LoosenedBy]).
 func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, error) {
-	out := GateRules{Target: target, Approvals: ApprovalsNone, Landing: LandingPreLand}
+	out := GateRules{Target: target, Approvals: ApprovalsNone}
 	var (
-		asked      int
-		unless     []ChangeClass
-		gatedCheck int
-		postLand   int
-		reverting  int
+		asked  int
+		unless []ChangeClass
 	)
 	// THE FIRST MATCHING RULE SETS MERGE_BY and every later one can only
 	// tighten it — never "" as a start, which ranks as a value this build does
@@ -211,16 +200,8 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 		// term reads as its strictest.
 		out.KeepsSource = out.KeepsSource || g.DeleteSource != DeleteSeats
 		if len(g.Checks) > 0 {
-			gatedCheck++
-			if g.Landing.Policy == LandingPostLand {
-				postLand++
-			} else {
-				out.QueueDepth = smallest(out.QueueDepth, g.Landing.Depth)
-				out.QueueBatch = smallest(out.QueueBatch, g.Landing.Batch)
-			}
-			if g.AutoRevert {
-				reverting++
-			}
+			out.QueueDepth = smallest(out.QueueDepth, g.Landing.Depth)
+			out.QueueBatch = smallest(out.QueueBatch, g.Landing.Batch)
 		}
 	}
 	if len(out.Patterns) > 0 && floor != "" {
@@ -231,10 +212,6 @@ func GateRulesOf(rules []Protection, target string, floor MergeBy) (GateRules, e
 	}
 	slices.SortStableFunc(out.HumanPaths, func(a, b HumanPath) int { return strings.Compare(a.Glob, b.Glob) })
 	slices.Sort(out.Checks)
-	if gatedCheck > 0 && postLand == gatedCheck {
-		out.Landing = LandingPostLand
-	}
-	out.AutoRevert = gatedCheck > 0 && reverting == gatedCheck
 	return out, nil
 }
 
@@ -251,19 +228,15 @@ func smallest(held, next int) int {
 func (r GateRules) Protected() bool { return len(r.Patterns) > 0 }
 
 // QueueTarget reports a target whose merges land through its QUEUE: a gated
-// one requiring a check (M5-D9) — pre_land, its queue testing each change
-// merged on it, or post_land, its lane landing changes ahead of the checks
-// its tip then runs. Every other merge is a direct one.
+// one requiring a check (M5-D9), its queue testing each change merged on it
+// before it lands. Every other merge is a direct one. Its required checks
+// are what hold a change's head ([JudgeGate]'s check term), so a target is a
+// queue's exactly where they do.
 func (r GateRules) QueueTarget() bool { return len(r.Checks) > 0 }
 
 // readsPaths reports a gate that judges the paths a change touches: one naming
 // human paths, or classes that exempt a change from its approval.
 func (r GateRules) readsPaths() bool { return len(r.HumanPaths) > 0 || len(r.ApprovalsUnless) > 0 }
-
-// judgesChecks reports a gate whose required checks hold a CHANGE: pre_land,
-// where a change's head is checked before it lands — a post_land target's
-// checks hold its tip (M5-D8).
-func (r GateRules) judgesChecks() bool { return len(r.Checks) > 0 && r.Landing != LandingPostLand }
 
 // GateFacts is everything a change's merge gate judges, as ONE snapshot holds
 // it ([LoadGateFacts], [gateFactsIn]), beside the chart and the floor of ONE
@@ -416,7 +389,7 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 		if gate.OwnersApprove {
 			owned = appendOnce(owned, s.repo.ID)
 		}
-		if !gate.judgesChecks() {
+		if !gate.QueueTarget() {
 			continue
 		}
 		// EACH (REPOSITORY, COMMIT, TARGET, CHECK) ASKED ONCE, whichever
@@ -655,7 +628,7 @@ func gateChecksIn(ctx context.Context, tx *sql.Tx, keys [][4]any, byHead map[[3]
 // in [PreconditionKinds]' order: M4's draft, facts, blocker and mergeable
 // always, and each other only where it holds the change — the approval where
 // the gate asks one, a person's where it names human paths, the owners' where
-// it makes them gating, the checks where it requires them pre_land, the merge
+// it makes them gating, the checks where it requires them, the merge
 // authority where f names a merger.
 func JudgeGate(f GateFacts, r GateRules) Readiness {
 	j := newReadinessJudge(f.Rows, f.Roster)
@@ -671,7 +644,7 @@ func JudgeGate(f GateFacts, r GateRules) Readiness {
 		pre = append(pre, g.ownersApproval())
 	}
 	pre = append(pre, j.blocker())
-	if r.judgesChecks() {
+	if r.QueueTarget() {
 		pre = append(pre, g.check())
 	}
 	pre = append(pre, j.mergeable())

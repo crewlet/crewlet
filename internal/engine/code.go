@@ -793,10 +793,9 @@ func declaredGate(g config.CodeGate) code.MergeGate {
 	out := code.MergeGate{
 		MergeBy: code.MergeBy(g.MergeBy), Approvals: code.Approvals(g.Approvals),
 		ApprovalsUnless: declaredClasses(g.ApprovalsUnless), Checks: g.Checks,
-		Landing: code.Landing{Policy: code.LandingPolicy(g.Landing.Policy), Depth: g.Landing.Depth,
-			Batch: g.Landing.Batch},
+		Landing:       code.Landing{Depth: g.Landing.Depth, Batch: g.Landing.Batch},
 		OwnersApprove: g.OwnersApprove, DeleteSource: code.DeleteSource(g.DeleteSource),
-		AutoRevert: g.AutoRevert, AgentsEditChecks: g.AgentsEditChecks,
+		AgentsEditChecks: g.AgentsEditChecks,
 	}
 	if g.HumanPaths != nil {
 		out.HumanPaths = make([]code.HumanPath, len(g.HumanPaths))

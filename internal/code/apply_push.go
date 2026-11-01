@@ -418,14 +418,12 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 }
 
 // packKind is what added e's pack, as its code_packs row names it: a merge
-// record's push its merge's pack ([PackMerge]), a land record's first push its
-// post_land chain's ([PackLand]), and every other push its own ([PackPush]).
+// record's push its merge's pack ([PackMerge]), and every other push its own
+// ([PackPush]). A land record's pushes carry none: what they land is their
+// train's pack, which its candidate record added ([PackCandidate]).
 func (e PushEntry) packKind() PackKind {
-	switch e.Via {
-	case ViaMerge:
+	if e.Via == ViaMerge {
 		return PackMerge
-	case ViaQueue:
-		return PackLand
 	}
 	return PackPush
 }

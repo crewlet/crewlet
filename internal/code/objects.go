@@ -277,11 +277,8 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 			out = append(out, written(p.RepoID, []PackRef{*p.Pack})...)
 		}
 	case Land:
-		// A POST_LAND CHAIN'S PACK, which the landing's first push lands as
-		// a push lands its own; a pre_land landing's commits are its train's.
-		if p.Pack != nil {
-			out = append(out, written(p.RepoID, []PackRef{*p.Pack})...)
-		}
+		// NOTHING OF ITS OWN: a landing's commits are its train's, whose
+		// candidate record wrote their pack.
 	default:
 		return nil, fmt.Errorf("code: the %s on %s carries a %T", env.Op, env.Subject, payloadAny)
 	}

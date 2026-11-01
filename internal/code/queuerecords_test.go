@@ -21,25 +21,7 @@ import (
 // and broken landings and its sweep — decided by the shipped committer from one
 // snapshot on a real embedded broker and applied by the shipped applier.
 
-// laneRepo is queueRepo with main landing post_land: a lane lands changes ahead
-// of the checks its tip then runs.
-func laneRepo(t *testing.T, n *node, c *code.Committer, name string) (repo, change string) {
-	t.Helper()
-	s := suiteSettings()
-	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
-	gate := queueGate()
-	gate.Landing.Policy = code.LandingPostLand
-	s.Protections[0].Gate = gate
-	repo = n.ensure(name, s, t1).RepoID
-	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
-		set(featureRef, code.ZeroOID, oidOf("B")), set(releaseRef, code.ZeroOID, oidOf("R"))))
-	opened, err := c.ProposeChange(t.Context(), opening(repo, featureRef, mainRef, dev))
-	requireChanged(t, opened, err)
-	return repo, opened.ChangeID
-}
-
-// queuedPack is a pack named id, as a home's build of a train or a chain
-// stores it.
+// queuedPack is a pack named id, as a home's build of a train stores it.
 func queuedPack(id string) *code.PackRef {
 	return &code.PackRef{PackID: id, Object: objstore.KeyAt(harnessAt), Hash: objstore.HashOf([]byte(id)),
 		Size: 32 + code.IndexBytesFor(1) + code.ReverseBytesFor(1), IndexBytes: code.IndexBytesFor(1),
@@ -57,18 +39,14 @@ func training(repo, base, entry, commit string) code.QueueProposal {
 			Entries: []code.CandidateEntry{{EntryID: entry, Commit: commit}}}}}}
 }
 
-// landing is a landing on main of entries — each change's entry and the commit
-// it lands as, in chain order — onto base, under policy (a pre_land one of
-// train), under an operation id of its own.
-func landingOf(repo string, policy code.LandingPolicy, train, base string, entries ...code.LandEntry) code.QueueProposal {
+// landingOf is a landing on main of entries — each change's entry and the
+// commit it lands as, in the order main moves through them — onto base, a
+// tested prefix of train, under an operation id of its own.
+func landingOf(repo, train, base string, entries ...code.LandEntry) code.QueueProposal {
 	opID := statelog.NewOpID(time.Now(), "code.queue")
-	l := &code.Land{RepoID: repo, LandID: code.QueueLandID(opID), TargetRef: mainRef, BaseOID: base,
-		TipOID: entries[len(entries)-1].Commit, Policy: policy, Train: train, Entries: entries, Node: "git-a",
-		ReceivedAt: harnessAt}
-	if policy == code.LandingPostLand {
-		l.Pack = queuedPack(l.LandID)
-	}
-	return code.QueueProposal{OpID: opID, Land: l}
+	return code.QueueProposal{OpID: opID, Land: &code.Land{RepoID: repo, LandID: code.QueueLandID(opID),
+		TargetRef: mainRef, BaseOID: base, TipOID: entries[len(entries)-1].Commit, Train: train,
+		Entries: entries, Node: "git-a", ReceivedAt: harnessAt}}
 }
 
 // queueRecord is a record of the queue's own, under an operation id of its own.
@@ -196,7 +174,7 @@ func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 	n.passed(repo, oidOf("M"), mainRef, "unit")
 
 	converse(t, w, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil))
-	land := landingOf(repo, code.LandingPreLand, train.Candidate.Train, oidOf("A"),
+	land := landingOf(repo, train.Candidate.Train, oidOf("A"),
 		code.LandEntry{EntryID: entryID, ChangeID: change, Commit: oidOf("M")})
 	before := n.end()
 	res, err = c.ProposeQueue(t.Context(), land)
@@ -243,41 +221,47 @@ func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 	}
 }
 
-// A POST_LAND RECORD FITS ITS CAPS (M5-D14): a lane's whole chain — sixty-four
-// changes, MaxLandEntries — is ONE land record, its payload within what one
-// proposal may carry and its rows but the changes its pushes move within
-// MaxRecordRows with the horizons' room, which the decide adds the moved
-// changes to and holds whole; one entry more is refused before it is queued.
+// A LAND RECORD FITS ITS CAPS: a train's whole tested prefix — sixty-four
+// changes, MaxLandEntries, as many as a train's candidates take — is ONE land
+// record, its payload within what one proposal may carry and its rows but the
+// changes its pushes move within MaxRecordRows with the horizons' room, which
+// the decide adds the moved changes to and holds whole; one entry more is
+// refused before it is queued.
 //
 // Mutation: take one entry past MaxLandEntries in a land's validation — the
 // 65th is taken, red.
-func TestAPostLandRecordFitsItsCaps(t *testing.T) {
+func TestALandRecordFitsItsCaps(t *testing.T) {
 	t.Parallel()
-	repo := uuid.Must(uuid.NewV7()).String()
+	repo, train := uuid.Must(uuid.NewV7()).String(), uuid.Must(uuid.NewV7()).String()
 	entries := make([]code.LandEntry, code.MaxLandEntries+1)
 	for i := range entries {
 		entries[i] = code.LandEntry{EntryID: uuid.Must(uuid.NewV7()).String(),
 			ChangeID: uuid.Must(uuid.NewV7()).String(), Commit: oidOf(fmt.Sprint("commit", i))}
 	}
-	full := landingOf(repo, code.LandingPostLand, "", oidOf("A"), entries[:code.MaxLandEntries]...)
+	if code.MaxCandidateEntries > code.MaxLandEntries {
+		t.Fatalf("a train takes %d entries and a land record lands %d: its whole prefix would not land as one",
+			code.MaxCandidateEntries, code.MaxLandEntries)
+	}
+	full := landingOf(repo, train, oidOf("A"), entries[:code.MaxLandEntries]...)
 	if err := full.Validate(); err != nil {
-		t.Fatalf("a lane of %d changes is refused: %v", code.MaxLandEntries, err)
+		t.Fatalf("a landing of %d changes is refused: %v", code.MaxLandEntries, err)
 	}
 	if got := code.RecordRows(code.LandRecordRows(code.MaxLandEntries)); got > code.MaxRecordRows {
 		t.Fatalf("a land of %d entries writes up to %d rows with its horizons' room, past MaxRecordRows (%d)",
 			code.MaxLandEntries, got, code.MaxRecordRows)
 	}
-	over := landingOf(repo, code.LandingPostLand, "", oidOf("A"), entries...)
+	over := landingOf(repo, train, oidOf("A"), entries...)
 	if err := over.Validate(); err == nil || !strings.Contains(err.Error(), "MaxLandEntries") {
-		t.Fatalf("a lane of %d changes validated (%v), want refused past MaxLandEntries", len(entries), err)
+		t.Fatalf("a landing of %d changes validated (%v), want refused past MaxLandEntries", len(entries), err)
 	}
 }
 
 // GREEN ADVANCES ONLY ON GREEN (M5-D16): dev's change lands ahead of its checks
-// on a post_land main — its landing row not green, main's green row untouched.
-// Its required check FAILS on the landed tip: a green naming that landing is
-// refused not_green, appending nothing, and a broken marks the landing broken
-// while main's green row stays where it was. The check run again PASSES: the
+// by a person's override merge past main's queue — its landing row not green,
+// main's green row untouched. Its required check FAILS on the landed tip: a
+// green naming that landing is refused not_green, appending nothing, and a
+// broken marks the landing broken while main's green row stays where it was.
+// The check run again PASSES: the
 // green then moves main's green row onto the landing, at the landing's own
 // position — so a read of main's landings above its green lists what came
 // after it — and marks the landing green; asked again, it is refused
@@ -292,21 +276,19 @@ func TestGreenAdvancesOnlyOnGreen(t *testing.T) {
 	n.chart = testChart()
 	c, _ := committerOn(t, n, n.pub)
 	w, _ := writerOn(t, n, n.pub)
-	repo, change := laneRepo(t, n, c, "web")
-	ready(t, n, w, repo, change)
-	enqueue := enqueueing(repo, change, ada, oidOf("B"))
-	res, err := c.ProposeQueue(t.Context(), enqueue)
-	requireQueued(t, res, err, code.QueueWaiting, 1)
-	land := landingOf(repo, code.LandingPostLand, "", oidOf("A"),
-		code.LandEntry{EntryID: enqueue.Enqueue.EntryID, ChangeID: change, Commit: oidOf("M")})
-	res, err = c.ProposeQueue(t.Context(), land)
-	landed := requireRecorded(t, res, err)
-	if got := n.landingsOf(repo, mainRef); len(got) != 1 || got[0].kind != string(code.LandedPostLand) ||
+	repo, change := queueRepo(t, n, c, "web")
+	converse(t, w, n.revising(repo, change, 1, oidOf("B"), mainRef, nil))
+	override := merging(repo, change, ada, code.MergeMethodMerge, oidOf("A"), oidOf("B"), oidOf("M"))
+	override.Merge.Override = "the queue's runner is down"
+	merged, err := c.ProposeMerge(t.Context(), override)
+	requireMerged(t, merged, err, oidOf("M"))
+	landed := merged.Position
+	if got := n.landingsOf(repo, mainRef); len(got) != 1 || got[0].kind != string(code.LandedDirect) ||
 		got[0].green {
-		t.Fatalf("main's landings read %+v, want one post_land landing, not green", got)
+		t.Fatalf("main's landings read %+v, want one direct landing, not green", got)
 	}
 	if green, _ := n.greenOf(repo, mainRef); green != "" {
-		t.Fatalf("main's green row is at %q: a lane lands ahead of its checks", green)
+		t.Fatalf("main's green row is at %q: an override lands ahead of its checks", green)
 	}
 
 	n.checked(repo, oidOf("M"), mainRef, "unit", 1, code.CheckStateFailed)
@@ -314,7 +296,7 @@ func TestGreenAdvancesOnlyOnGreen(t *testing.T) {
 		p.Green = &code.Green{RepoID: repo, TargetRef: mainRef, OID: oidOf("M"), Through: landed}
 	})
 	before := n.end()
-	res, err = c.ProposeQueue(t.Context(), green)
+	res, err := c.ProposeQueue(t.Context(), green)
 	requireQueueRefused(t, n, before, res, err, code.MergeRefusalNotGreen, "unit (failed, attempt 1)")
 	broken := queueRecord(func(p *code.QueueProposal) {
 		p.Broken = &code.Broken{RepoID: repo, TargetRef: mainRef, Position: landed, Ordinal: 1, OID: oidOf("M"),
@@ -364,7 +346,8 @@ func TestAWideLandingNamesTheWholeDomain(t *testing.T) {
 		entries[i] = code.LandEntry{EntryID: uuid.Must(uuid.NewV7()).String(),
 			ChangeID: uuid.Must(uuid.NewV7()).String(), Commit: oidOf(strings.Repeat("c", i+1))}
 	}
-	fits := landingOf(repo, code.LandingPostLand, "", oidOf("A"), entries[:code.MaxScopePaths-2]...)
+	train := uuid.Must(uuid.NewV7()).String()
+	fits := landingOf(repo, train, oidOf("A"), entries[:code.MaxScopePaths-2]...)
 	scope := code.QueueScope(fits)
 	if len(scope) != code.MaxScopePaths || scope[0] != code.RepoPath(repo) || scope[1] != code.ChecksPath(repo) {
 		t.Fatalf("a landing of %d entries names %v, want the repository, its checks and each change",
@@ -375,7 +358,7 @@ func TestAWideLandingNamesTheWholeDomain(t *testing.T) {
 			t.Fatalf("a landing's scope names %q in place of entry %d's change", scope[i+2], i)
 		}
 	}
-	wide := landingOf(repo, code.LandingPostLand, "", oidOf("A"), entries...)
+	wide := landingOf(repo, train, oidOf("A"), entries...)
 	if scope := code.QueueScope(wide); !slices.Equal(scope, []string{code.DomainPath()}) {
 		t.Fatalf("a landing of %d entries names %v, want the whole domain", len(entries), scope)
 	}
@@ -426,9 +409,9 @@ func TestAnIdleTargetsLandingsAreSwept(t *testing.T) {
 	inGrace := store.EncodeTime(harnessAt.Add(-code.QueueHistory - time.Hour))
 	seedEntry := func(repo, state string, ended int64) {
 		n.exec(`INSERT INTO code_queue (repo_id, entry_id, target_ref, change_id, seq, head_oid, method,
-			delete_source, close_task, auto_revert, enqueued_by, enqueued_kind, enqueued_operator, state,
-			enqueued_at, ended_at, ended_position, end_reason)
-			VALUES (?, ?, 'refs/heads/main', ?, 1, ?, 'merge', 0, 0, 0, 'dev', 'agent', '', ?, ?, ?, 2, '')`,
+			delete_source, close_task, enqueued_by, enqueued_kind, enqueued_operator, state, enqueued_at,
+			ended_at, ended_position, end_reason)
+			VALUES (?, ?, 'refs/heads/main', ?, 1, ?, 'merge', 0, 0, 'dev', 'agent', '', ?, ?, ?, 2, '')`,
 			repo, uuid.Must(uuid.NewV7()).String(), uuid.Must(uuid.NewV7()).String(), oidOf("B"), state, old, ended)
 	}
 	seedLanding := func(repo string, position int64, at int64) {
@@ -678,7 +661,7 @@ func (n *node) purgeTips(repo string, since time.Time, pageRows int) []string {
 }
 
 // A CANDIDATE'S TIP SURVIVES A PURGE (M6-D2): a candidate is rows and a pack,
-// never a ref, so its tip — the commit a pre_land landing moves its target
+// never a ref, so its tip — the commit a landing moves its target
 // onto — is reached by no ref; a purge, which keeps no drop, keeps it all the
 // same, because the read its scan walks from names what rows hold in flight
 // whatever its instant: the candidate's tip, the live entry's head and the
@@ -724,7 +707,7 @@ func TestACandidateTipSurvivesAPurge(t *testing.T) {
 	}
 
 	n.passed(repo, oidOf("M"), mainRef, "unit")
-	land := landingOf(repo, code.LandingPreLand, train.Candidate.Train, oidOf("A"),
+	land := landingOf(repo, train.Candidate.Train, oidOf("A"),
 		code.LandEntry{EntryID: enqueue.Enqueue.EntryID, ChangeID: change, Commit: oidOf("M")})
 	res, err = c.ProposeQueue(t.Context(), land)
 	requireRecorded(t, res, err)
@@ -827,7 +810,7 @@ func TestATrainBuiltBeforeABeginIsRefusedExpunging(t *testing.T) {
 	// refused too, main left where it was; built at the begin's epoch, it
 	// moves main onto the train's tip.
 	n.passed(repo, oidOf("M"), mainRef, "unit")
-	land := landingOf(repo, code.LandingPreLand, train.Candidate.Train, oidOf("A"),
+	land := landingOf(repo, train.Candidate.Train, oidOf("A"),
 		code.LandEntry{EntryID: enqueue.Enqueue.EntryID, ChangeID: change, Commit: oidOf("M")})
 	before = n.end()
 	res, err = c.ProposeQueue(t.Context(), land)

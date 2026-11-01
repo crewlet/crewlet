@@ -13,8 +13,8 @@ import (
 )
 
 // THE MERGE RATE (M5-D28): what raises code_merge_rate_over_capacity — a
-// pre_land queue asked to land more changes within [code.MergeRateWindow]
-// than it can land in it — measured by the queue worker of the repository's
+// queue asked to land more changes within [code.MergeRateWindow] than it can
+// land in it — measured by the queue worker of the repository's
 // HOME, from the two figures only it holds together:
 //
 //   - WHAT IT WAS ASKED, from the rows: every page of its queue work counts
@@ -117,10 +117,10 @@ func (r *mergeRate) landed(repoID, target, train string, at time.Time) {
 
 // measure takes d's merge rate at now, from repoID's queue work d: its
 // enqueues within the window against its capacity at the mean round this
-// node timed — none where it has timed no round, and none for a target that
-// is no pre_land queue requiring a check.
+// node timed — none where it has timed no round, and none for a target whose
+// gate requires no check, which has no queue to price.
 func (r *mergeRate) measure(repoID string, d code.QueueDue, now time.Time) {
-	if d.Policy != code.LandingPreLand || len(d.Required) == 0 {
+	if len(d.Required) == 0 {
 		return
 	}
 	r.mu.Lock()

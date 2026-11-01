@@ -40,7 +40,7 @@ func TestEveryProtectionControlIsJudged(t *testing.T) {
 	gate := func() *MergeGate {
 		return &MergeGate{
 			MergeBy: MergeByMaintainers, Approvals: ApprovalsOne, Checks: []string{"lint", "unit"},
-			Landing: Landing{Policy: LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: DeleteSeats,
+			Landing: Landing{Depth: 4, Batch: 4}, DeleteSource: DeleteSeats,
 		}
 	}
 

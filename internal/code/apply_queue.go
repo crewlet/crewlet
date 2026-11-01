@@ -60,7 +60,7 @@ func (a *Applier) applyEnqueue(ctx context.Context, tx *sql.Tx, at applyContext,
 		operator = e.Principal.OperatorID
 	}
 	res, err := tx.ExecContext(ctx, enqueueSQL, e.RepoID, e.EntryID, e.TargetRef, e.ChangeID, at.packed, e.HeadOID,
-		string(e.Method), e.DeleteSource, e.CloseTask, e.AutoRevert, by, string(kind), operator,
+		string(e.Method), e.DeleteSource, e.CloseTask, by, string(kind), operator,
 		string(QueueWaiting), at.at())
 	if err != nil {
 		return 0, fmt.Errorf("code: enqueue change %s at %s: %w", e.ChangeID, at.position, err)
@@ -180,9 +180,8 @@ func queueNotApplied(ctx context.Context, at applyContext, repoID, entryID, why 
 // code_queue_live_idx is partial on them.
 const (
 	enqueueSQL = `INSERT INTO code_queue (repo_id, entry_id, target_ref, change_id, seq, head_oid, method,
-			delete_source, close_task, auto_revert, enqueued_by, enqueued_kind, enqueued_operator, state,
-			enqueued_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			delete_source, close_task, enqueued_by, enqueued_kind, enqueued_operator, state, enqueued_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (repo_id, entry_id) DO NOTHING`
 	endEntrySQL = `UPDATE code_queue SET state = ?, ended_at = ?, ended_position = ?, end_reason = ?
 		WHERE repo_id = ? AND entry_id = ?`

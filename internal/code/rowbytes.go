@@ -576,16 +576,12 @@ func (g MergeGate) encodedBytes() int {
 	if len(g.Checks) > 0 {
 		n += field("checks", stringsBytes(g.Checks), false)
 	}
-	n += field("landing", 2+field("policy", stringBytes(string(g.Landing.Policy)), true)+
-		field("depth", intBytes(int64(g.Landing.Depth)), false)+
+	n += field("landing", 2+field("depth", intBytes(int64(g.Landing.Depth)), true)+
 		field("batch", intBytes(int64(g.Landing.Batch)), false), false)
 	if g.OwnersApprove {
 		n += field("owners_approve", trueBytes, false)
 	}
 	n += field("delete_source", stringBytes(string(g.DeleteSource)), false)
-	if g.AutoRevert {
-		n += field("auto_revert", trueBytes, false)
-	}
 	if g.AgentsEditChecks {
 		n += field("agents_edit_checks", trueBytes, false)
 	}

@@ -28,7 +28,7 @@ const seatRef = "refs/heads/seats/dev/fix"
 // green row moves with every merge.
 func mergeGate() *code.MergeGate {
 	return &code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsOne,
-		Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
+		Landing: code.Landing{Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
 }
 
 // mergeRepo is a fresh repository named name — the one Engineering owns, its

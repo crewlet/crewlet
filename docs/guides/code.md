@@ -607,11 +607,10 @@ and every git node runs a queued check in a box of the company's sandbox
 catalogue ([Who runs a check](../concepts/code-host.md#who-runs-a-check)). A
 change's readiness counts the checks its branch's gate requires, and a merge
 into that branch puts the change in its merge queue, which the home git node
-lands as below — on a `post_land` branch, not yet ([What it does not do
-yet](../concepts/code-host.md#what-it-does-not-do-yet)).
+lands as below.
 
-**A branch whose gate requires a check lands through its merge queue.** On a
-`pre_land` branch (the `landing` default) the home git node tests the waiting
+**A branch whose gate requires a check lands through its merge queue.** The
+home git node tests the waiting
 changes merged on the branch before any of them lands: up to `depth`
 candidates at once, each one change while the queue keeps up and up to
 `batch` changes as it falls behind, every candidate's tip checked under the

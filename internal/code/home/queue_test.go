@@ -142,8 +142,8 @@ func (r *queueRows) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, 
 	if len(r.entries) == 0 {
 		return code.ReadAnswer{Position: r.position()}, nil
 	}
-	d := &code.QueueDue{TargetRef: queueMain, Repo: "web", Tip: r.tip, Policy: code.LandingPreLand,
-		Depth: r.depth, Batch: r.batch, Required: slices.Clone(r.required), Entries: slices.Clone(r.entries),
+	d := &code.QueueDue{TargetRef: queueMain, Repo: "web", Tip: r.tip, Depth: r.depth,
+		Batch: r.batch, Required: slices.Clone(r.required), Entries: slices.Clone(r.entries),
 		DropEpoch: r.epoch}
 	if since := q.QueueDue.EnqueuedSince; !since.IsZero() {
 		r.since = append(r.since, since)
@@ -437,7 +437,7 @@ func TestTheQueueLandsTheLongestGreenPrefix(t *testing.T) {
 	if land == nil {
 		t.Fatalf("the turn after the second candidate passed recorded %+v, want a landing", records[len(records)-1])
 	}
-	if land.BaseOID != base || land.TipOID != train[1].TipOID || land.Policy != code.LandingPreLand ||
+	if land.BaseOID != base || land.TipOID != train[1].TipOID ||
 		land.Train != train[0].Train || len(land.Entries) != 4 {
 		t.Fatalf("the landing is %+v, want the first four entries landed from main's tip onto the second "+
 			"candidate's tip", land)

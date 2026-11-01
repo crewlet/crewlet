@@ -45,8 +45,8 @@ type TaskClose struct {
 	As       code.Principal
 }
 
-// queue is the home's MERGE QUEUE (M5-D12, M5-D13): for each pre_land target
-// of a repository holding live entries, from ONE snapshot of its queue work
+// queue is the home's MERGE QUEUE (M5-D12, M5-D13): for each queue target of
+// a repository holding live entries, from ONE snapshot of its queue work
 // (internal/code's QueueDue), the next step of its train:
 //
 //   - NO TRAIN, or one its target moved under — a person's override merge, a
@@ -74,12 +74,10 @@ type TaskClose struct {
 //     checks; the eject abandons the train, and the next turn builds again
 //     without it.
 //
-// A post_land target is no train's: its queue lands no candidate.
-//
-// Each pre_land target's MERGE RATE is measured as its queue work is read —
-// its enqueues within code.MergeRateWindow against what its depth and batch
-// land at the rounds this node timed its trains at (mergerate.go) — and
-// handed to the node's alarm reading ([queue.AlarmReading]), which raises
+// Each target's MERGE RATE is measured as its queue work is read — its
+// enqueues within code.MergeRateWindow against what its depth and batch land
+// at the rounds this node timed its trains at (mergerate.go) — and handed to
+// the node's alarm reading ([queue.AlarmReading]), which raises
 // code_merge_rate_over_capacity (M5-D28).
 //
 // A candidate and a landing state the repository's DROP EPOCH (M6-D4): the
@@ -170,7 +168,7 @@ func (w *queue) target(ctx context.Context, repoID string, d code.QueueDue, memo
 
 	w.rate.measure(repoID, d, w.now())
 	switch {
-	case d.Policy != code.LandingPreLand || len(d.Required) == 0 || len(d.Entries) == 0:
+	case len(d.Required) == 0 || len(d.Entries) == 0:
 		return nil
 	case len(d.Train) > 0 && trainStands(d):
 		return w.test(ctx, repoID, d, memo, at)
@@ -437,7 +435,7 @@ func (w *queue) land(ctx context.Context, repoID string, d code.QueueDue, green 
 	about := fmt.Sprintf("target %s at %s", d.TargetRef, short(tip))
 	opID := statelog.NewOpID(w.now(), "")
 	l := code.Land{RepoID: repoID, LandID: code.QueueLandID(opID), TargetRef: d.TargetRef,
-		BaseOID: prefix[0].BaseOID, TipOID: tip, Policy: code.LandingPreLand, Train: prefix[0].Train,
+		BaseOID: prefix[0].BaseOID, TipOID: tip, Train: prefix[0].Train,
 		Node: w.node, ReceivedAt: w.now().UTC()}
 	var landed []code.QueueWorkEntry
 	for _, c := range prefix {

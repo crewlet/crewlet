@@ -93,10 +93,10 @@ func gated(t *testing.T, gate code.MergeGate) code.GateRules {
 }
 
 // bareGate is a gate holding nothing but its defaults — writers, no
-// approval, pre_land 4/4, seats — which a case sets a term of.
+// approval, a queue at 4/4, seats — which a case sets a term of.
 func bareGate() code.MergeGate {
 	return code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
-		Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
+		Landing: code.Landing{Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
 }
 
 // judgedAs fails t unless r's precondition of kind is in state, its sentence
@@ -282,13 +282,6 @@ func TestAnExternalCheckWaitsOnItsReport(t *testing.T) {
 		code.PreconditionUnmet, "ci (failed, attempt 1) did not pass")
 	if !slices.Equal(p.WaitsOn, []code.Party{gateDev}) {
 		t.Errorf("a failed check waits on %+v, want the change's owner", p.WaitsOn)
-	}
-	// AND A POST_LAND TARGET'S CHECKS HOLD ITS TIP, never a change.
-	gate.Landing.Policy = code.LandingPostLand
-	if slices.ContainsFunc(code.JudgeGate(f, gated(t, gate)).Preconditions, func(p code.Precondition) bool {
-		return p.Kind == code.PreconditionCheck
-	}) {
-		t.Error("a post_land target's required checks hold a change's readiness")
 	}
 }
 

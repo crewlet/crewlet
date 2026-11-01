@@ -1,0 +1,20 @@
+-- A queue entry carries no revert consent.
+--
+-- 0082 gave code_queue an `auto_revert` column: the enqueuer's consent, taken
+-- at the enqueue, to the engine reverting a landing of the change that broke
+-- its target, where the target's merge gate allowed one. Consented
+-- auto-revert is not part of the engine: nothing reverts a landing on its
+-- own, a broken target wakes the people who can act (internal/code's
+-- target_broken) and code_revert_change reverts a change when one of them
+-- asks. No gate field allows a consent and no enqueue carries one, so the
+-- column could only ever hold the 0 every applier wrote — a column every row
+-- holds the same value in is one each reader has to remember means nothing.
+--
+-- 0082 IS NOT EDITED: `schema_migrations` keys on the filename, so a database
+-- that applied it would never see the change. No index, view or trigger names
+-- the column, which is what Turso's `ALTER TABLE … DROP COLUMN` needs.
+--
+-- Class: code_queue stays REPRODUCIBLE: a dropped column adds no row, and the
+-- table is written only by the applier from the records on a repository's own
+-- subject.
+ALTER TABLE code_queue DROP COLUMN auto_revert;

@@ -402,8 +402,7 @@ func (wr *writing) enqueue(ctx context.Context, j mergeJudgement) (code.EngineWr
 	wr.landed = true
 	res, err := wr.s.o.Estate.Queue(ctx, code.QueueProposal{OpID: w.OpID, Asker: asker, Seen: wr.synced.Position,
 		Enqueue: &code.Enqueue{RepoID: w.RepoID, EntryID: entry, ChangeID: j.change.ID, TargetRef: w.Ref,
-			HeadOID: w.ExpectedHead, Method: w.Method, DeleteSource: w.DeleteSource, CloseTask: w.CloseTask,
-			AutoRevert: w.AutoRevert}})
+			HeadOID: w.ExpectedHead, Method: w.Method, DeleteSource: w.DeleteSource, CloseTask: w.CloseTask}})
 	var quiet silence
 	switch {
 	case errors.Is(err, code.ErrInvalidProposal):

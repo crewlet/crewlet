@@ -1565,8 +1565,8 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 func widestGate(t *testing.T) code.MergeGate {
 	t.Helper()
 	g := code.MergeGate{MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne,
-		Landing:      code.Landing{Policy: code.LandingPostLand, Depth: code.MaxQueueDepth, Batch: code.MaxQueueBatch},
-		DeleteSource: code.DeleteSeats, OwnersApprove: true, AutoRevert: true, AgentsEditChecks: true}
+		Landing:      code.Landing{Depth: code.MaxQueueDepth, Batch: code.MaxQueueBatch},
+		DeleteSource: code.DeleteSeats, OwnersApprove: true, AgentsEditChecks: true}
 	for i := range code.MaxRequiredChecks {
 		g.Checks = append(g.Checks, fmt.Sprintf("%02d", i)+strings.Repeat("x", 62))
 	}

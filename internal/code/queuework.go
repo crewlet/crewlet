@@ -16,7 +16,7 @@ import (
 // read of ONE repository answers its home one target's [QueueDue] a page —
 // everything the home's queue worker (internal/code/home's queue) decides its
 // next step from, in ONE snapshot: the target's tip, the gate its queue lands
-// under (its policy, depth, batch and required checks), its live entries in
+// under (its depth, batch and required checks), its live entries in
 // queue order — as many as one train can take, each with the change its chain
 // commit is written from and who enqueued it — and its live train, each
 // candidate's commits with the latest attempt of each required check on each,
@@ -42,14 +42,13 @@ type QueueDue struct {
 	Repo string `json:"repo,omitempty"`
 	// Tip is the target's tip, what a train is built onto.
 	Tip string `json:"tip"`
-	// Policy, Depth, Batch and Required are the target's gate as its queue
-	// lands under it ([GateRules]): its landing policy, how many candidates
-	// it tests at once, how many changes one takes, and the checks every
-	// candidate's tip passes before it lands, sorted.
-	Policy   LandingPolicy `json:"policy"`
-	Depth    int           `json:"depth"`
-	Batch    int           `json:"batch"`
-	Required []string      `json:"required,omitempty"`
+	// Depth, Batch and Required are the target's gate as its queue lands
+	// under it ([GateRules]): how many candidates it tests at once, how many
+	// changes one takes, and the checks every candidate's tip passes before
+	// it lands, sorted.
+	Depth    int      `json:"depth"`
+	Batch    int      `json:"batch"`
+	Required []string `json:"required,omitempty"`
 	// Entries are the target's live entries in queue order: the first
 	// [MaxCandidateEntries] — every entry one train can take — and More
 	// where more wait behind them.
@@ -70,9 +69,9 @@ type QueueDue struct {
 	// Enqueued is how many entries were enqueued on the target at or after
 	// the read's [QueueDueQuery.EnqueuedSince] — live, landed, ejected or
 	// dequeued alike, since each was a change asked to land — up to
-	// [MergeRateScan]; zero where the read asked no count, or the target is
-	// no pre_land queue requiring a check, whose merge rate nothing prices
-	// (M5-D28).
+	// [MergeRateScan]; zero where the read asked no count, or the target's
+	// gate requires no check, so it has no queue whose merge rate anything
+	// prices (M5-D28).
 	Enqueued int `json:"enqueued,omitempty"`
 }
 
@@ -136,7 +135,7 @@ func (c QueueWorkCommit) Check(name string) (TipCheck, bool) {
 // The target is the first holding a live entry past cursor: the first page's
 // one row of queueOfRepoSQL, a later page's of queueOfRepoAfterSQL past every
 // seq of the cursor's target. A non-zero since counts the target's enqueues
-// from it ([enqueuedSince]) where it is a pre_land queue requiring a check.
+// from it ([enqueuedSince]) where its gate requires a check.
 func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time.Time, out *ReadAnswer) error {
 	stmt, args := queueOfRepoSQL, []any{repoID, 1}
 	if cursor != "" {
@@ -157,7 +156,7 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 	if err != nil {
 		return err
 	}
-	due.Policy, due.Depth, due.Batch, due.Required = gate.Landing, gate.QueueDepth, gate.QueueBatch, gate.Checks
+	due.Depth, due.Batch, due.Required = gate.QueueDepth, gate.QueueBatch, gate.Checks
 	if due.Tip, err = targetTip(ctx, tx, repoID, target); err != nil {
 		return err
 	}
@@ -171,7 +170,7 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 	case ok:
 		due.DropEpoch, due.Repo = repo.dropEpoch, repo.name
 	}
-	if !since.IsZero() && gate.Landing == LandingPreLand && len(gate.Checks) > 0 {
+	if !since.IsZero() && len(gate.Checks) > 0 {
 		if due.Enqueued, err = enqueuedSince(ctx, tx, repoID, target, since); err != nil {
 			return err
 		}
@@ -195,7 +194,7 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 }
 
 // enqueuedSince is how many entries were enqueued on repoID's target at or
-// after since, up to [MergeRateScan] — what a pre_land queue was asked to
+// after since, up to [MergeRateScan] — what a queue was asked to
 // land within its merge rate's window (M5-D28). Two seeks, each counting at
 // most the scan: the live entries over code_queue_live_idx, and the entries
 // ENDED since — an entry enqueued within the window that has ended ended

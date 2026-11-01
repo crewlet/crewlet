@@ -7199,8 +7199,8 @@ export interface CodeChangeRoutingAnswer extends CodePage {
 /**
  * One branch rule's merge gate (`code.MergeGate`): who may merge, how many
  * approvals it waits for and what spares a change them, the paths a person
- * must approve, the checks it waits for, how its queue lands a change, and
- * its switches.
+ * must approve, the checks it waits for, how many changes its queue tests at
+ * once, and its switches.
  */
 export interface CodeMergeGate {
   merge_by: "writers" | "maintainers" | "persons" | (string & {});
@@ -7208,10 +7208,9 @@ export interface CodeMergeGate {
   approvals_unless?: string[];
   human_paths?: { glob: string; unless?: string[] }[];
   checks?: string[];
-  landing: { policy: string; depth: number; batch: number };
+  landing: { depth: number; batch: number };
   owners_approve?: boolean;
   delete_source: "seats" | "none" | (string & {});
-  auto_revert?: boolean;
   agents_edit_checks?: boolean;
 }
 

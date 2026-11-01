@@ -20,7 +20,7 @@ import (
 )
 
 // behindQueue is a git node's home change work's code seam and chain builder
-// with one pre_land queue in it — repository rateRepo's main, at depth
+// with one merge queue in it — repository rateRepo's main, at depth
 // rateDepth and batch rateBatch, one change waiting — asked MergeRateScan
 // enqueues within the window: the queue worker builds its train through the
 // chain builder, the train's record is answered applied and the queue's next
@@ -65,7 +65,7 @@ func (q *behindQueue) Read(ctx context.Context, rq code.ReadQuery) (code.ReadAns
 	entry := code.QueueWorkEntry{EntryID: "entry-1", State: code.QueueWaiting, HeadOID: rateHead,
 		Method: code.MergeMethodMerge, EnqueuedBy: code.Principal{Kind: code.PrincipalAgent, Seat: "swe"}}
 	due := code.QueueDue{TargetRef: "refs/heads/main", Repo: rateRepoName, Tip: rateTip,
-		Policy: code.LandingPreLand, Depth: rateDepth, Batch: rateBatch, Required: []string{"unit"},
+		Depth: rateDepth, Batch: rateBatch, Required: []string{"unit"},
 		Enqueued: code.MergeRateScan}
 	if q.train != "" {
 		entry.State, entry.Train = code.QueueTesting, q.train
@@ -109,7 +109,7 @@ func (q *behindQueue) trainRecorded() (string, int) {
 
 // THE MERGE-RATE ALARM BORROWS THE QUEUE'S CAPACITY (M5-D28, ADR-0015), through
 // the wiring a running node has: a STARTED git node, alone the home of every
-// repository, whose queue worker builds a train onto a pre_land queue at depth
+// repository, whose queue worker builds a train onto a merge queue at depth
 // rateDepth and batch rateBatch and times it standing — so its reading prices
 // the queue at exactly config.LandingCapacity of those figures at the round it
 // timed, over code.MergeRateWindow, and names the queue's MergeRateScan

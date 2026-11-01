@@ -253,12 +253,9 @@ type EngineWrite struct {
 	// at most [MaxOverrideReasonBytes] — merged directly, on a queue target
 	// too — and "" for a merge its gate holds.
 	Override string `json:"override,omitempty"`
-	// CloseTask and AutoRevert are what a merge_change onto a QUEUE TARGET
-	// records on its entry ([Enqueue]): whether its landing closes its work
-	// item, and the enqueuer's consent to a revert of a landing of it that
-	// breaks the target.
-	CloseTask  bool `json:"close_task,omitempty"`
-	AutoRevert bool `json:"auto_revert,omitempty"`
+	// CloseTask is what a merge_change onto a QUEUE TARGET records on its
+	// entry ([Enqueue]): whether its landing closes its work item.
+	CloseTask bool `json:"close_task,omitempty"`
 	// Home is whether this attempt was asked of the walk's EFFECTIVE HOME —
 	// stamped by the router's keyed git walk on every attempt
 	// ([GitQuery.Home]'s rule), never by a caller — the one node that may
@@ -863,8 +860,7 @@ func (w EngineWrite) validKind() error {
 	files := field{"files", len(w.Files) > 0}
 	suggestions := field{"suggestions", len(w.Suggestions) > 0}
 	merging := []field{{"change", w.Change != 0}, {"method", w.Method != ""},
-		{"delete_source", w.DeleteSource}, {"override", w.Override != ""}, {"close_task", w.CloseTask},
-		{"auto_revert", w.AutoRevert}}
+		{"delete_source", w.DeleteSource}, {"override", w.Override != ""}, {"close_task", w.CloseTask}}
 	switch w.Kind {
 	case WriteMergeChange:
 		return w.validMerge(want(head), none(commit, files, base, message, suggestions))
@@ -941,9 +937,7 @@ func (w EngineWrite) validKind() error {
 // within [MaxOverrideReasonBytes] of valid text. A merge's message is the
 // engine's own — its change's reference and title — so it carries none, nor
 // files, a base or a commit; its Ref is its change's target and its
-// ExpectedHead its change's head. AutoRevert and CloseTask ride an enqueue,
-// and an override merges directly, so a consent beside an override is a
-// write asking two things.
+// ExpectedHead its change's head.
 func (w EngineWrite) validMerge(fields ...error) error {
 	for _, err := range fields {
 		if err != nil {
@@ -955,9 +949,6 @@ func (w EngineWrite) validMerge(fields ...error) error {
 		return fmt.Errorf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
 	case !w.Method.Valid():
 		return fmt.Errorf("%w: method: %q is not one of %v", ErrInvalid, w.Method, MergeMethods())
-	case w.Override != "" && w.AutoRevert:
-		return fmt.Errorf("%w: auto_revert: an override merges the change directly, and a consent to a revert "+
-			"rides its entry in its target's queue", ErrInvalid)
 	}
 	if why := textProblem(w.Override, MaxOverrideReasonBytes, "merge's override reason"); why != "" {
 		return fmt.Errorf("%w: override: %s", ErrInvalid, why)

@@ -28,7 +28,7 @@ func tightGate() code.MergeGate {
 			{Glob: "deploy/**", Unless: []code.ChangeClass{code.ChangeClassCommentOnly}},
 		},
 		Checks:        []string{"lint", "unit"},
-		Landing:       code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4},
+		Landing:       code.Landing{Depth: 4, Batch: 4},
 		OwnersApprove: true, DeleteSource: code.DeleteSeats,
 	}
 }
@@ -56,10 +56,7 @@ func gateLoosenings() []aLoosening {
 		{"human_paths' unless", code.GateChange{HumanPaths: ptr([]code.HumanPath{{Glob: "deploy/**",
 			Unless: both}})}, "adds whitespace_only to the unless of deploy/** in human_paths"},
 		{"checks", code.GateChange{Checks: ptr([]string{"lint"})}, "drops unit from checks"},
-		{"landing.policy", code.GateChange{Landing: &code.LandingChange{Policy: ptr(code.LandingPostLand)}},
-			"moves landing.policy from pre_land to post_land"},
 		{"owners_approve", code.GateChange{OwnersApprove: ptr(false)}, "turns owners_approve off"},
-		{"auto_revert", code.GateChange{AutoRevert: ptr(true)}, "turns auto_revert on"},
 		{"agents_edit_checks", code.GateChange{AgentsEditChecks: ptr(true)}, "turns agents_edit_checks on"},
 		{"the gate", code.GateChange{Remove: true}, "removes its merge gate"},
 	}
@@ -120,7 +117,7 @@ func TestAGateChangeIsResolvedInsideTheDecide(t *testing.T) {
 	n.chart = testChart()
 	const main = "refs/heads/main"
 	want := code.MergeGate{MergeBy: code.MergeByPersons, Approvals: code.ApprovalsNone, Checks: []string{"unit"},
-		Landing: code.Landing{Policy: code.LandingPreLand, Depth: config.CodeDefaultQueueDepth,
+		Landing: code.Landing{Depth: config.CodeDefaultQueueDepth,
 			Batch: config.CodeDefaultQueueBatch}, DeleteSource: code.DeleteSeats}
 	for i, order := range [][2]code.GateChange{
 		{{Checks: ptr([]string{"unit"})}, {MergeBy: ptr(code.MergeByPersons)}},
@@ -168,15 +165,14 @@ func TestAGateChangeIsResolvedInsideTheDecide(t *testing.T) {
 // full_access, which maintains the repository, asks a protect request that
 // loosens main's merge gate in one field — each in turn: merge_by or approvals
 // lowered, a class added to approvals_unless, a human path dropped or its
-// unless widened, a required check dropped, landing.policy moved to
-// post_land, owners_approve turned off, auto_revert or agents_edit_checks
-// turned on, or the gate removed. Each is refused not_permitted, the sentence
+// unless widened, a required check dropped, owners_approve turned off,
+// agents_edit_checks turned on, or the gate removed. Each is refused not_permitted, the sentence
 // naming the pattern and what the change opens by its field, and nothing is
 // written: the gate a person set stands. A change that tightens one field and
 // opens another is refused for the one it opens, and names that one alone.
 //
-// Mutation: treat auto_revert turned on as neutral in LoosenedBy — the lead
-// turns it on, red.
+// Mutation: treat agents_edit_checks turned on as neutral in LoosenedBy — the
+// lead turns it on, red.
 func TestAnAgentCannotLoosenAGate(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -217,8 +213,8 @@ func TestAnAgentCannotLoosenAGate(t *testing.T) {
 // none — the defaults, and the one field it names — and tightens a person's
 // loose gate field by field: merge_by and approvals raised, a class taken from
 // approvals_unless, a human path's unless narrowed and a human path added, a
-// check required more, landing.policy moved to pre_land, owners_approve turned
-// on and auto_revert and agents_edit_checks off — each landing — and moves the
+// check required more, owners_approve turned on and agents_edit_checks off —
+// each landing — and moves the
 // neutral fields, landing.depth, landing.batch and delete_source, either way.
 // A request naming no gate field tightens direct_push and keeps the gate, which
 // ends as every change left it.
@@ -235,8 +231,7 @@ func TestAnAgentMayTightenAGate(t *testing.T) {
 	both := []code.ChangeClass{code.ChangeClassCommentOnly, code.ChangeClassWhitespaceOnly}
 	loose := code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone, ApprovalsUnless: both,
 		HumanPaths: []code.HumanPath{{Glob: "deploy/**", Unless: both}}, Checks: []string{"lint"},
-		Landing: code.Landing{Policy: code.LandingPostLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats,
-		AutoRevert: true, AgentsEditChecks: true}
+		Landing: code.Landing{Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats, AgentsEditChecks: true}
 	n.lands(lcGate(lcPerson, id, main, persons, gateTo(loose)))
 
 	// A GATE ADDED where the rule had none: the defaults, and the one field
@@ -245,7 +240,7 @@ func TestAnAgentMayTightenAGate(t *testing.T) {
 	got := n.lands(lcGate(cto, id, release, persons, code.GateChange{Checks: ptr([]string{"unit"})}))
 	sameGate(t, "a gate the lead added", gateOf(t, got, release), &code.MergeGate{
 		MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone, Checks: []string{"unit"},
-		Landing: code.Landing{Policy: code.LandingPreLand, Depth: config.CodeDefaultQueueDepth,
+		Landing: code.Landing{Depth: config.CodeDefaultQueueDepth,
 			Batch: config.CodeDefaultQueueBatch}, DeleteSource: code.DeleteSeats})
 
 	for _, change := range []code.GateChange{
@@ -255,9 +250,7 @@ func TestAnAgentMayTightenAGate(t *testing.T) {
 		{HumanPaths: ptr([]code.HumanPath{{Glob: ".crewlet/**"},
 			{Glob: "deploy/**", Unless: []code.ChangeClass{code.ChangeClassCommentOnly}}})},
 		{Checks: ptr([]string{"lint", "unit"})},
-		{Landing: &code.LandingChange{Policy: ptr(code.LandingPreLand)}},
 		{OwnersApprove: ptr(true)},
-		{AutoRevert: ptr(false)},
 		{AgentsEditChecks: ptr(false)},
 		// NEUTRAL, either way.
 		{Landing: &code.LandingChange{Depth: ptr(1), Batch: ptr(code.MaxQueueBatch)}},
@@ -277,7 +270,7 @@ func TestAnAgentMayTightenAGate(t *testing.T) {
 		HumanPaths: []code.HumanPath{{Glob: ".crewlet/**"},
 			{Glob: "deploy/**", Unless: []code.ChangeClass{code.ChangeClassCommentOnly}}},
 		Checks:        []string{"lint", "unit"},
-		Landing:       code.Landing{Policy: code.LandingPreLand, Depth: code.MaxQueueDepth, Batch: 1},
+		Landing:       code.Landing{Depth: code.MaxQueueDepth, Batch: 1},
 		OwnersApprove: true, DeleteSource: code.DeleteSeats,
 	})
 }
@@ -309,8 +302,7 @@ func TestAPersonMayLoosenAGate(t *testing.T) {
 	sameGate(t, "loosened by a person", gateAmong(n.gatesOf("loosened"), main), &code.MergeGate{
 		MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone, ApprovalsUnless: both,
 		HumanPaths: []code.HumanPath{{Glob: "deploy/**", Unless: both}}, Checks: []string{"lint"},
-		Landing: code.Landing{Policy: code.LandingPostLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats,
-		AutoRevert: true, AgentsEditChecks: true,
+		Landing: code.Landing{Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats, AgentsEditChecks: true,
 	})
 	got := n.lands(lcGate(lcPerson, id, main, persons, removal))
 	sameGate(t, "removed by a person", gateOf(t, got, main), nil)

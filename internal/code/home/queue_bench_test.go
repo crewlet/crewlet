@@ -12,7 +12,7 @@ import (
 )
 
 // BenchmarkQueueThroughput is what decides config.CodeDefaultQueueBatch
-// (M5-D13): a `pre_land` queue simulated round by round — a round one
+// (M5-D13): a queue simulated round by round — a round one
 // required check's run, the unit every candidate and every bisect probe
 // costs — for each failure rate p (1, 5, 10 %), depth D (1, 4, 8) and batch
 // B (1, 2, 4, 8), under SATURATING arrivals: D changes a round, the most a

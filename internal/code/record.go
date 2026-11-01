@@ -488,7 +488,7 @@ const (
 	// same companions. It is no gate.
 	OpMarks OpKind = "marks"
 
-	// OpCandidate records a pre_land queue's TRAIN ([Candidate]): the
+	// OpCandidate records a queue's TRAIN ([Candidate]): the
 	// candidates its home built of a target's live entries onto the target's
 	// tip, each a merge of a batch of them on the one before, and the pack
 	// their objects are stored in — on the repository's own subject, decided
@@ -511,11 +511,11 @@ const (
 	// same companions. It is no gate.
 	OpEject OpKind = "eject"
 
-	// OpLand lands a queue's entries on their target ([Land]) — a pre_land
-	// train's tested prefix, or a post_land lane's chain — merging each
-	// change and moving the target in ONE record whose decide proves every
-	// entry's gate again with its enqueuer as the merger, on the
-	// repository's own subject, decided by its committer alone.
+	// OpLand lands a queue's entries on their target ([Land]) — a train's
+	// tested prefix — merging each change and moving the target in ONE
+	// record whose decide proves every entry's gate again with its enqueuer
+	// as the merger, on the repository's own subject, decided by its
+	// committer alone.
 	//
 	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
 	// a build without it has run, it takes {Name: "MutationRecord.Op land",

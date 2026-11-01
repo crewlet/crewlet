@@ -88,25 +88,6 @@ This is the product's current shape, not a configuration choice:
   rename, archive, delete, restore and protect repositories through the same
   tools, a seat's own scratch repositories among them
   ([Repositories made by tools](#repositories-made-by-tools)).
-- **Nothing lands a `post_land` branch's merge queue yet.** A repository defines
-  its checks in `.crewlet/checks.yaml`, which `crewlet validate` reads as the
-  code host does ([Checks](#checks)); its home git node queues the checks its
-  target's file defines at every live change's head ([How a head's checks are
-  dispatched](#how-a-heads-checks-are-dispatched)) and a protected branch's
-  required checks at its newest landing ([Tip checks and
-  code_green](#tip-checks-and-code_green)), and every git node runs whatever
-  attempt is queued ([Who runs a check](#who-runs-a-check)). A change is
-  merged by `code_merge_change` — a seat's, a person's assistant's or the
-  dashboard's — as one record its gate proves ([A merge, end to
-  end](#a-merge-end-to-end), [Merging a
-  change](../guides/code.md#merging-a-change)), and a change into a branch
-  whose gate requires a check is put in that branch's [merge
-  queue](#the-merge-queue) instead, which the repository's home git node
-  lands on a `pre_land` branch ([What the home does with a
-  queue](#what-the-home-does-with-a-queue)). But no git node lands a
-  `post_land` branch's queue in this release, so a change queued there waits
-  until a person merges it past the gate (`override_reason`) or it is taken
-  out (`code_dequeue_change`).
 - **Nothing searches a repository's code yet.** Every repository names how it
   is to be searched — `search: indexed` or `grep`
   ([Declaring repositories](#declaring-repositories)) — and the mode is
@@ -330,7 +311,7 @@ protect:
       - glob: "deploy/**"
         unless: [comment_only, whitespace_only]
     checks: [lint, unit]             # the checks a merge waits for, by name
-    landing: {policy: pre_land, depth: 4, batch: 2}
+    landing: {depth: 4, batch: 2}    # the queue's candidates at once, changes a candidate
     owners_approve: true             # one approval eligible for every owned glob touched
     delete_source: seats             # seats (unset) or none
 ```
@@ -342,10 +323,9 @@ protect:
 | `approvals_unless` | none | The [path classes](#change-classes) — `whitespace_only`, `comment_only` — that exempt a change from those approvals: one whose every touched path is of a class listed waits for none |
 | `human_paths` | none | At most 32 globs, in the [path owners'](#path-owners) grammar: a change touching a path one matches waits for a **person's** approval, whatever else approved it — unless every path that glob matched is of a class its `unless` lists |
 | `checks` | none | At most 32 checks a merge waits for, each by the name a repository's [checks file](#the-checks-file) gives it: a lowercase letter or digit, then up to 63 more of them, `.`, `_` and `-` — one rule for both, so a rule never requires a check no repository can define |
-| `landing` | `pre_land`, `depth: 4`, `batch: 2` | `policy`: `pre_land` tests each change merged on the branch before it lands, and `post_land` lands changes ahead of their checks and checks the branch's newest tip; `depth`: how many candidates the queue tests at once, 1 to 8; `batch`: how many waiting changes one candidate takes, 1 to 8 |
+| `landing` | `depth: 4`, `batch: 2` | How the branch's [merge queue](#the-merge-queue), which tests each change merged on the branch before it lands, keeps pace: `depth`, how many candidates it tests at once, 1 to 8; `batch`, how many waiting changes one candidate takes, 1 to 8 |
 | `owners_approve` | off | A change waits for one counted approval from somebody eligible for every [path owner](#path-owners)'s glob it touches |
 | `delete_source` | `seats`: a merge deletes a source branch in a seat's own namespace, in the record that merges it | `none`: it keeps every source branch |
-| `auto_revert` | off | Whoever queues a change may consent, when they queue it, to the revert of a landing that breaks the branch |
 | `agents_edit_checks` | off: on a rule requiring checks, a change to `.crewlet/**` — where a repository's checks are defined — waits for a person | A seat's approval stands for it too |
 
 A merge gate on a `tag` rule is refused, at the first gate field it sets: a tag
@@ -389,8 +369,8 @@ which none of them needs, and a git node rewrites the row it keeps at every
 push.
 `crewlet validate` warns — never fails — about a gate field that would do
 nothing: `owners_approve` on a repository that names no path owners, `landing`
-or `auto_revert` on a rule that requires no checks (only a branch whose merges
-wait for checks has a queue), and `approvals_unless` beside `approvals: none`.
+on a rule that requires no checks (only a branch whose merges wait for checks
+has a queue), and `approvals_unless` beside `approvals: none`.
 
 ### Path owners
 
@@ -639,14 +619,13 @@ protections would bind every seat but the one with the most reach.
 | `approvals_unless` | Take a class out | Add a class |
 | `human_paths` | Add a glob, or take a class from one's `unless` | Drop a glob — a broader one put in its place included — or add a class to one's `unless` |
 | `checks` | Require one more | Drop one |
-| `landing.policy` | Move it to `pre_land` | Move it to `post_land` |
 | `owners_approve` | Turn it on | Turn it off |
-| `auto_revert`, `agents_edit_checks` | Turn either off | Turn either on |
+| `agents_edit_checks` | Turn it off | Turn it on |
 | `landing.depth`, `landing.batch`, `delete_source` | Change them either way: how fast a queue lands and what a merge tidies after it, never what a merge is held to | — |
 
 A value the deciding node's build does not know — one a newer build wrote —
-counts as stricter than every value it knows, so a seat moves `merge_by`,
-`approvals` or `landing.policy` neither away from one nor to one, and
+counts as stricter than every value it knows, so a seat moves `merge_by`
+or `approvals` neither away from one nor to one, and
 `direct_push` away from one only to `none`, which admits nobody. And since
 `owners_approve` makes the repository's [path
 owners](#path-owners) whom a merge waits for, a seat may not take a glob from
@@ -5429,7 +5408,7 @@ rules' combination, the strictest of each term:
 | `approvals` | `one` where any gate asks one; `approvals_unless` exempts a change only by a class every such gate names. |
 | `human_paths`, `checks` | Every gate's, each entry as its gate wrote it. |
 | `owners_approve` | On where any gate turns it on. |
-| `landing` | `post_land` only where every gate requiring checks lands so. |
+| `landing` | The smallest `depth` and the smallest `batch` of the gates requiring checks: how fast a queue lands, never what it tests. |
 
 Its preconditions are [Merge readiness](#merge-readiness)'s and the gate's
 own, each listed only where the gate holds the change to it, in the order a
@@ -5443,7 +5422,7 @@ merged by somebody, and landed by its queue:
 | `human_approval` | The gate names human paths. | No human path holds the head revision — none matches a path it touches, or every path one matched is of a class its `unless` waives — or a **person's** counted approval stands. | The persons asked to review it; its owner, to ask one, where none is. |
 | `owners_approval` | The gate sets `owners_approve`. | The head revision touches no owned path, or ONE counted approval comes from somebody eligible for **every** [path owner](#path-owners) it touches: a unit owner's effective lead and every lead above it, a seat owner and its unit's lead chain — or any person. | The seats on every touched owner's chain that may review it, and the persons asked; its owner, to ask one, where none is. |
 | `blocker` | Always. | As in [Merge readiness](#merge-readiness). | As there. |
-| `check` | The gate requires checks and lands `pre_land`. | Every required check passed — or was skipped, its paths untouched — on the head commit checked for the change's own target, by its latest attempt, whatever ran it. An attempt checked for another branch ran that branch's checks file and counts for nothing. | Its owner, on a check that failed, errored past the home's requeue or was cancelled. |
+| `check` | The gate requires checks. | Every required check passed — or was skipped, its paths untouched — on the head commit checked for the change's own target, by its latest attempt, whatever ran it. An attempt checked for another branch ran that branch's checks file and counts for nothing. | Its owner, on a check that failed, errored past the home's requeue or was cancelled. |
 | `mergeable` | Always. | As in [Merge readiness](#merge-readiness). | As there. |
 | `merge_authority` | A merger is named: whoever reads, on a read; the principal, on a decision. | A person; on a protected branch, a principal holding what `merge_by` asks — `writers` write the repository, `maintainers` maintain it, `persons` are persons; on a branch no rule protects, a principal that may push it. | The seat that maintains the repository, where one may merge it. |
 | `queue` | The branch's [merge queue](#the-merge-queue) holds the change. | Never: it is `computing`, naming the change's place, while the queue lands it. | Nobody. |
@@ -5469,8 +5448,7 @@ merged by somebody, and landed by its queue:
   [checks file](#the-checks-file) defines waits for the repository's home to
   queue it, and one it does not for a person's CI to report it. So is one
   queued or running, and one that errored for its runner's reasons below its
-  third attempt, which the home queues again. A `post_land` branch's checks
-  hold its tip, never a change into it.
+  third attempt, which the home queues again.
 - **What a change's home stores is its readiness for whoever merges it**: a
   [mergeability](#mergeability) record judges the gate with no merger, so
   `merge_authority` is a read's alone, judged for whoever reads.
@@ -5478,15 +5456,12 @@ merged by somebody, and landed by its queue:
 ### The merge queue
 
 A branch whose merge gate requires a check is a **queue target**: a change
-merges into it through its **merge queue** — `pre_land`, the queue testing
-each change merged on the branch before it lands, or `post_land`, a lane that
-lands changes ahead of the checks the branch's newest tip then runs ([Merge
-gates](#merge-gates)'s `landing`). A change joins it by an **enqueue**, which
-names the change at the head and on the target its asker was shown, how it
-merges (`merge`, `squash` or `fast_forward`), whether its landing deletes its
-source branch and closes its work item, and — where the gate allows
-`auto_revert` — the enqueuer's consent to a revert of a landing that breaks
-the branch.
+merges into it through its **merge queue**, which tests each change merged on
+the branch before it lands ([Merge gates](#merge-gates)'s `landing` says how
+many at once). A change joins it by an **enqueue**, which names the change at
+the head and on the target its asker was shown, how it merges (`merge`,
+`squash` or `fast_forward`), and whether its landing deletes its source branch
+and closes its work item.
 
 An enqueue is a record on the repository's own subject, the one its pushes and
 its changes' lifecycles are on, decided by the repository's
@@ -5495,8 +5470,8 @@ pushes that move its head have one writer, and a change is never both queued
 and closed. **The enqueue is the gate**: it is decided from one snapshot by the
 change's [merge gate](#the-merge-gate), its principal the merger — every
 precondition met but `mergeable`, which the queue's candidate proves on the
-branch it is built on, and on a `post_land` branch no check, whose checks hold
-its tip. Its landing judges the gate again from its own snapshot. **The chart
+branch it is built on — its required checks among them, passed on the
+change's head. Its landing judges the gate again from its own snapshot. **The chart
 judges every enqueue, whoever asks** — who may approve the change, the lead
 chains above the owners it touches, a seat's merge authority — so a node that
 holds no chart yet, or one [behind the company's
@@ -5510,7 +5485,6 @@ hands it to the repository's next committer.
 | `change_not_open`, `change_draft` | The change is closed or merged, or a draft, which merges nowhere. |
 | `stale`, `head_moved` | The change targets another branch, or its head moved, since its asker read it: read it again. |
 | `no_queue` | The branch's gate requires no check: a change merges into it directly. |
-| `no_auto_revert` | The enqueue consents to a revert, and the branch's gate allows none. |
 | `already_queued` | The change holds a live entry already, naming it. |
 | `queue_full` | The branch's queue holds 1 024 waiting changes: a queue more than a day of its fastest capacity behind is broken, not busy. |
 
@@ -5536,7 +5510,7 @@ node](#the-home-git-node) and decided by its committer from one snapshot,
 naming no asker: the queue's work is the engine's, and a landing lands each
 change as whoever enqueued it.
 
-- A **candidate** records a `pre_land` queue's **train**: up to `depth`
+- A **candidate** records a queue's **train**: up to `depth`
   candidates of up to `batch` live entries each — 64 entries at most — every
   candidate its entries merged onto the one before, the first onto the
   branch's tip, its own tip what the branch's required checks then run on.
@@ -5550,24 +5524,24 @@ change as whoever enqueued it.
   The node whose committer landed it announces a `code_queue_ejected` event
   for each, fed to the activity feed. A dequeue of an entry a train tests
   abandons the train too.
-- A **land** lands up to 64 entries in ONE record: a `pre_land` train's
-  tested **prefix** — its candidates from the first, in order, up to one
-  whose tip every required check passed on — or a `post_land` lane's chain,
-  landed ahead of its checks with a pack of its own (`kind: land`). **Its
+- A **land** lands up to 64 entries in ONE record: a train's tested
+  **prefix** — its candidates from the first, in order, up to one whose tip
+  every required check passed on. **Its
   decide proves every entry's gate again**, from its own snapshot, with the
   entry's ENQUEUER as the merger: the enqueue was the gate, and the landing
   is the record that moves the branch, so a review asking for changes, a
   blocker or a merge authority lost since the enqueue keeps the whole landing
   off the branch, its answer naming each entry it would not land for the home
-  to eject. Its apply marks each change **merged first** (`merged_via: queue`
-  or `lane`, merged by its enqueuer — the queue never acts on its own
+  to eject. Its apply marks each change **merged first** (`merged_via: queue`,
+  merged by its enqueuer — the queue never acts on its own
   account), lands **one push row `via: queue` a change**, naming the enqueuer,
   so [which push landed a commit](#which-push-landed-a-commit) names each
   change's own landing, deletes each source where the entry asked it and a
   push deleting it as the enqueuer would be taken — each deletion recording
   its [ref drop](#retention-and-history) — and writes the branch's
-  landing rows in chain order — green, and the branch's green row moved to
-  the tip, where it lands `pre_land`.
+  landing rows in the order the branch held them — each green, every
+  required check having passed on the tip — and moves the branch's green row
+  to the tip.
 - A **green** moves a protected branch's **green row** onto a landing record
   whose required checks passed on its tip — at the landing's own position, so
   the `landings` read lists what came after it — and a **broken** marks a
@@ -5581,15 +5555,15 @@ change as whoever enqueued it.
 | `expunging` | The train was built from a copy of the repository taken before an expunge of its unreachable objects began, or the landing decided from a read taken before one: the home builds the train again, or reads it again to land it. |
 | `target_moved` | The branch is no longer at the tip the train or the landing was built onto: the home builds it again. |
 | `not_queued` | An entry is not live in the branch's queue — ended since, or another branch's. |
-| `stale` | What the record names is not what the rows hold: a commit its entry's method does not make, a pack it does not need or lacks, a landing that is no prefix of the branch's train, a policy the branch does not land by. |
+| `stale` | What the record names is not what the rows hold: a commit its entry's method does not make, a pack it does not need or lacks, a landing that is no prefix of the branch's train. |
 | `gate_unmet`, `head_moved`, `change_not_open` | An entry of a landing no longer meets its gate with its enqueuer as the merger, or its change moved or ended: the answer names each such entry. |
-| `not_green` | A `pre_land` landing's tip, or a green's landing, has a required check not passed by its latest attempt checked for the branch. |
+| `not_green` | A landing's tip, or a green's landing, has a required check not passed by its latest attempt checked for the branch. |
 | `not_red`, `no_landing` | A broken names a check that did not fail, or a green or a broken names no landing above the branch's green row. |
 | `record_full` | A landing's rows — its own, its pushes' and the live changes they move — would pass a record's: land fewer at once. A green marking more than 2 000 landings names an earlier one first. |
-| `upload_expired`, `repo_size`, `compaction_behind` | The train's or the chain's pack, held to a push's rules: a busy queue waits for compaction rather than outrunning it. |
+| `upload_expired`, `repo_size`, `compaction_behind` | The train's pack, held to a push's rules: a busy queue waits for compaction rather than outrunning it. |
 
 **Every record that moves a protected branch leaves its landing row**: a
-merge's (`kind: direct`), a queue's (`pre_land`, `post_land`) and a person's
+merge's (`kind: direct`), a queue's (`pre_land`) and a person's
 own push under `direct_push: persons` (`kind: push`, naming their human seat)
 — green, and the branch's green row moved with it, where the branch's gate
 requires no check. The push's decide stamps its landings from the rules its
@@ -5629,8 +5603,7 @@ own snapshot. A step decided from rows the log has moved past is refused
 there and read again on the next turn, so a home that crashes, or hands the
 repository to another git node, leaves nothing behind but rows: **the next
 home resumes the train from them**, building nothing a standing train already
-holds. Only `pre_land` branches have a train; a `post_land` branch's queue
-lands no candidate.
+holds.
 
 - **Build.** With no train, a train its branch moved under (a person's
   override merge, a person's push) or one testing an entry no longer live,
@@ -5687,7 +5660,7 @@ lands no candidate.
 
 #### How fast a queue lands
 
-A `pre_land` queue lands at most `depth` × `batch` changes a **round** — one
+A queue lands at most `depth` × `batch` changes a **round** — one
 train, from the record that builds it to the landing of its green prefix — and
 a round lasts as long as its candidates' slowest required check. So its
 **capacity** over a span is ⌊`depth` × `batch` × span ÷ round⌋: at ten-minute
@@ -5728,7 +5701,7 @@ repositories each have a queue of their own.
 
 ### Tip checks and code_green
 
-**Every protected tip is checked.** A `pre_land` landing proved its branch's
+**Every protected tip is checked.** A queue's landing proved its branch's
 required checks on its candidate before it landed, and lands green; a merge or
 a push into a branch whose gate requires no check is green as it lands. Every
 other landing — a merge a person's override landed, a person's own push under
@@ -5893,7 +5866,7 @@ record.
 | `review_requested` | A reviewer asked who was not asked already; a path owner a revision's facts ask | An ask for review; a revision's facts |
 | `changes_requested` | The change's authors | A review asking for changes |
 | `checks_failed` | The change's authors, and whoever pushed the head the check measured | The ending of a check of the change's current head that failed, or that errored past the home's own requeue (its third attempt, or an error its infrastructure did not cause) |
-| `target_broken` | The change's authors, whoever put it in its target's queue, and the effective lead of the repository's owner | The broken record that names the landing that merged the change — a check the target requires fails on the landed tip |
+| `target_broken` | The change's authors and the effective lead of the repository's owner — never an enqueuer: a queue's landing lands green, so only a landing ahead of its checks, a person's override merge or push, can be broken | The broken record that names the landing that merged the change — a check the target requires fails on the landed tip |
 | `conflicted` | The change's authors | The merge that **turns** into a conflict — not every recheck that finds it one still; the queue's ejection of the change for a merge that conflicts |
 | `dequeued` | The change's authors, and whoever put it in the queue | A record that put the change's entry out of its target's queue: an ejection, or a dequeue somebody asked |
 | `finding_replied` | The raiser of the finding a comment replies to, or an answer answers | A reply to a finding; an answer to findings |

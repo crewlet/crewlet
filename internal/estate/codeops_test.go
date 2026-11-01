@@ -811,8 +811,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				HumanPaths: []code.HumanPath{{Glob: "deploy/**", Unless: []code.ChangeClass{
 					code.ChangeClassCommentOnly}}},
 				Checks:  []string{"lint", "unit"},
-				Landing: code.Landing{Policy: code.LandingPostLand, Depth: 2, Batch: 3}, OwnersApprove: true,
-				DeleteSource: code.DeleteNone, AutoRevert: true, AgentsEditChecks: true}}},
+				Landing: code.Landing{Depth: 2, Batch: 3}, OwnersApprove: true,
+				DeleteSource: code.DeleteNone, AgentsEditChecks: true}}},
 		}, Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 			Position: at}}, Introduced: []code.IntroducedRow{introduced},
 			Due: []code.CompactionCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, LiveObjects: 4_000,
@@ -912,7 +912,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Queue: []code.QueueRow{{RepoID: ref.ID, Repo: "app", EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 				TargetRef: "refs/heads/main", ChangeID: "019a0c2e-0000-7000-8000-0000000000d1", Number: 42,
 				Place: 2, Seq: at, HeadOID: "7777777777777777777777777777777777777777",
-				Method: code.MergeMethodSquash, DeleteSource: true, CloseTask: true, AutoRevert: true,
+				Method: code.MergeMethodSquash, DeleteSource: true, CloseTask: true,
 				EnqueuedBy: code.Party{Handle: "founder", Kind: code.PartyPerson}, EnqueuedOperator: "op-founder",
 				State: code.QueueTesting, Train: "019a0c2e-0000-7000-8000-0000000000f2",
 				CandidateID: "019a0c2e-0000-7000-8000-0000000000f3",
@@ -1089,7 +1089,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		"an enqueue": {Enqueue: &code.Enqueue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			ChangeID: item.ChangeID, TargetRef: "refs/heads/main",
 			HeadOID: "7777777777777777777777777777777777777777", Method: code.MergeMethodSquash,
-			DeleteSource: true, CloseTask: true, AutoRevert: true, Principal: seat}},
+			DeleteSource: true, CloseTask: true, Principal: seat}},
 		"a dequeue": {Dequeue: &code.Dequeue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
 			Principal: seat}},
 	} {
@@ -1491,7 +1491,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.lifecycle = code.LifecycleResult{Outcome: statelog.OutcomePending, Repo: ref,
 		Rule: &code.Protection{PushRule: ref.Protections[0], Gate: &code.MergeGate{
 			MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne, Checks: []string{"lint"},
-			Landing:      code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4},
+			Landing:      code.Landing{Depth: 4, Batch: 4},
 			DeleteSource: code.DeleteSeats, OwnersApprove: true}},
 		Refusal: code.LifecycleStale, Detail: "another rename of the repository landed first", Position: at}
 	d.mu.Unlock()
@@ -1500,7 +1500,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// A GATE CHANGE OF EVERY FIELD, a list emptied and a flag turned off
 	// among them: an empty list and a false flag are changes, which must
 	// cross as themselves and never as fields left out.
-	mergeBy, approvals, policy, depth := code.MergeByMaintainers, code.ApprovalsOne, code.LandingPostLand, 2
+	mergeBy, approvals, depth := code.MergeByMaintainers, code.ApprovalsOne, 2
 	classes := []code.ChangeClass{code.ChangeClassCommentOnly}
 	humanPaths := []code.HumanPath{{Glob: "deploy/**", Unless: classes}}
 	noChecks, deleteSource, on, off := []string{}, code.DeleteNone, true, false
@@ -1523,8 +1523,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				PushRule: code.PushRule{Pattern: "refs/heads/release/*", AllowForce: true, AllowDelete: true,
 					DirectPush: code.DirectPersons}}, Gate: &code.GateChange{MergeBy: &mergeBy,
 				Approvals: &approvals, ApprovalsUnless: &classes, HumanPaths: &humanPaths, Checks: &noChecks,
-				Landing:       &code.LandingChange{Policy: &policy, Depth: &depth, Batch: &depth},
-				OwnersApprove: &on, DeleteSource: &deleteSource, AutoRevert: &off, AgentsEditChecks: &on}}},
+				Landing:       &code.LandingChange{Depth: &depth, Batch: &depth},
+				OwnersApprove: &on, DeleteSource: &deleteSource, AgentsEditChecks: &off}}},
 		"a gate's removal": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
 			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Rule: &code.Protection{
 				PushRule: code.PushRule{DirectPush: code.DirectNone}}, Gate: &code.GateChange{Remove: true}}},

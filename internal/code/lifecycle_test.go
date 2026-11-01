@@ -81,9 +81,8 @@ func lcGate(actor code.Principal, id, pattern string, rule *code.Protection,
 func gateTo(g code.MergeGate) code.GateChange {
 	return code.GateChange{MergeBy: ptr(g.MergeBy), Approvals: ptr(g.Approvals),
 		ApprovalsUnless: ptr(g.ApprovalsUnless), HumanPaths: ptr(g.HumanPaths), Checks: ptr(g.Checks),
-		Landing: &code.LandingChange{Policy: ptr(g.Landing.Policy), Depth: ptr(g.Landing.Depth),
-			Batch: ptr(g.Landing.Batch)},
-		OwnersApprove: ptr(g.OwnersApprove), DeleteSource: ptr(g.DeleteSource), AutoRevert: ptr(g.AutoRevert),
+		Landing:       &code.LandingChange{Depth: ptr(g.Landing.Depth), Batch: ptr(g.Landing.Batch)},
+		OwnersApprove: ptr(g.OwnersApprove), DeleteSource: ptr(g.DeleteSource),
 		AgentsEditChecks: ptr(g.AgentsEditChecks)}
 }
 

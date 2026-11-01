@@ -19,10 +19,10 @@ import (
 // through the shipped reader.
 
 // queueGate is main's gate on a queue repository: one counted approval, and
-// the check unit — a queue target, pre_land.
+// the check unit — a queue target.
 func queueGate() *code.MergeGate {
 	return &code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsOne, Checks: []string{"unit"},
-		Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
+		Landing: code.Landing{Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
 }
 
 // queueRepo is a fresh repository named name — the one Engineering owns, its

@@ -19,7 +19,7 @@ import (
 // THE QUEUE'S OWN RECORDS, DECIDED (queuerecords.go): each from ONE snapshot of
 // the repository's rows on its committer, as an enqueue is — what its home
 // built is proposed with what it was built from, and the decide holds the rows
-// to it: the target AT THE TIP the train or the chain was built onto, read off
+// to it: the target AT THE TIP the train or the landing was built onto, read off
 // the snapshot's refs (target_moved, which its home answers by building
 // again); every entry LIVE in the target's queue (not_queued); and, for a
 // landing, every entry's gate MET AGAIN with its enqueuer as the merger — the
@@ -28,7 +28,7 @@ import (
 
 // The rows each of the queue's own records makes its apply touch at most,
 // beside a landing's pushes, which its decide counts as their apply writes
-// them ([Committer.ProposeQueue] charges each; [TestAPostLandRecordFitsItsCaps]
+// them ([Committer.ProposeQueue] charges each; [TestALandRecordFitsItsCaps]
 // holds them under MaxRecordRows).
 const (
 	// candidateDecidedRows: the target's earlier train abandoned
@@ -42,11 +42,12 @@ const (
 	// landings it marks green ([greenLandingRows]).
 	greenDecidedRows = 2 + greenLandingRows
 	// greenLandingRows is the most landings one green record marks green:
-	// half of MaxRecordRows, 2 000 — JUDGMENT: thirty-one post_land
-	// landings of sixty-four changes each above a target's green row is a
-	// target whose tip checks run that far behind its lane, and its next
-	// green names an earlier landing first, refused record_full until it
-	// does. A green past it would be a record past MaxRecordRows.
+	// half of MaxRecordRows, 2 000 — JUDGMENT: what lies above a target's
+	// green row is the landings no queue tested first, a person's override
+	// merges and pushes, each one landing; two thousand of them is a target
+	// whose tip checks run that far behind its people, and its next green
+	// names an earlier landing first, refused record_full until it does. A
+	// green past it would be a record past MaxRecordRows.
 	greenLandingRows = MaxRecordRows / 2
 )
 
@@ -112,7 +113,7 @@ func decideCandidate(ctx context.Context, tx *sql.Tx, c Candidate, repo pushRepo
 			builds = builds || entry.Method != MergeMethodFastForward
 		}
 	}
-	if refusal, detail := queuePack(c.Pack, builds, "train", repo, limits, now); refusal != "" {
+	if refusal, detail := queuePack(c.Pack, builds, repo, limits, now); refusal != "" {
 		return d.refuse(refusal, detail)
 	}
 	d.payload = c
@@ -179,29 +180,28 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 //
 //  1. the target at the landing's base, read off the snapshot's refs
 //     (target_moved);
-//  2. the target a queue target of the landing's policy (no_queue, stale);
+//  2. the target a queue target (no_queue);
 //  3. every entry live in the target's queue, of its change, at the head it
 //     was enqueued at, its commit what its method makes (not_queued, stale);
-//  4. a pre_land landing a PREFIX of the target's train — its candidates
-//     from the first, in order, up to the one whose tip is the landing's —
-//     whose every required check passed on its tip, by its latest attempt
-//     checked for the target (stale, not_green); a post_land chain its pack
-//     carrying what it built, held to a push's rules (stale, upload_expired,
-//     repo_size, compaction_behind);
+//  4. the landing a PREFIX of the target's train — its candidates from the
+//     first, in order, up to the one whose tip is the landing's — whose
+//     every required check passed on its tip, by its latest attempt checked
+//     for the target (stale, not_green);
 //  5. EVERY ENTRY'S GATE MET AGAIN, from this snapshot, with its ENQUEUER as
-//     the merger — every precondition but `mergeable`, which its candidate or
-//     its chain proved on the branch, and the entry's own place in the queue
+//     the merger — every precondition but `mergeable`, which its candidate
+//     proved on the branch, and the entry's own place in the queue
 //     — its change open, not a draft, into the target at the entry's head:
 //     each entry it would not land named in [QueueResult.Refused]
 //     (gate_unmet, head_moved, change_not_open), for its home to eject;
 //  6. its rows within a record — its own, its pushes', and the live changes
 //     those pushes move, counted as their apply writes them (record_full).
 //
-// It STAMPS what its snapshot holds, so the apply matches no pattern: a
-// pre_land landing green, and each entry's source deleted where the entry
-// asked it and a push deleting it as its enqueuer would be taken.
+// It STAMPS what its snapshot holds, so the apply matches no pattern: each
+// entry's source deleted where the entry asked it and a push deleting it as
+// its enqueuer would be taken. A landing lands GREEN, its required checks
+// proved on its tip by rule 4, so its apply moves the target's green row.
 func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats SeatRules, limits Limits,
-	now time.Time, d queueDecision) (queueDecision, error) {
+	d queueDecision) (queueDecision, error) {
 
 	if tip, err := targetTip(ctx, tx, l.RepoID, l.TargetRef); err != nil {
 		return queueDecision{}, err
@@ -217,13 +217,9 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 	if err != nil {
 		return queueDecision{}, err
 	}
-	switch {
-	case !gate.QueueTarget():
+	if !gate.QueueTarget() {
 		return d.refuse(MergeRefusalNoQueue, fmt.Sprintf("%s has no merge queue — no rule matching it requires a "+
 			"check — so nothing lands on it through one", l.TargetRef))
-	case gate.Landing != l.Policy:
-		return d.refuse(MergeRefusalStale, fmt.Sprintf("%s lands %s, and this landing was built %s: build it "+
-			"again under the branch's policy", l.TargetRef, gate.Landing, l.Policy))
 	}
 
 	named := make([]string, len(l.Entries))
@@ -234,7 +230,6 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 	if err != nil {
 		return queueDecision{}, err
 	}
-	builds := false
 	for _, e := range l.Entries {
 		entry, found := entries[e.EntryID]
 		if why := whyNotLive(entry, found, l.TargetRef); why != "" {
@@ -242,42 +237,33 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 				Detail: fmt.Sprintf("entry %s %s", e.EntryID, why)})
 			continue
 		}
-		switch {
-		case entry.ChangeID != e.ChangeID:
+		if entry.ChangeID != e.ChangeID {
 			return d.refuse(MergeRefusalStale, fmt.Sprintf("entry %s queues change %s, and this landing lands "+
 				"it as change %s", e.EntryID, entry.ChangeID, e.ChangeID))
-		case l.Policy == LandingPostLand && entry.State != QueueWaiting:
-			return d.refuse(MergeRefusalStale, fmt.Sprintf("entry %s is %s, and a post_land lane lands "+
-				"waiting entries", e.EntryID, entry.State))
 		}
 		if why := builtAs(entry, e.Commit); why != "" {
 			return d.refuse(MergeRefusalStale, why)
 		}
-		builds = builds || entry.Method != MergeMethodFastForward
 	}
 	if len(d.refused) > 0 {
 		return d.refuse(MergeRefusalNotQueued, fmt.Sprintf("%d of the landing's %d entries are not live in %s's "+
 			"queue: %s", len(d.refused), len(l.Entries), l.TargetRef, d.refused[0].Detail))
 	}
 
-	if l.Policy == LandingPreLand {
-		if detail, ok, err := prefixOfTrain(ctx, tx, l); err != nil || !ok {
-			if err != nil {
-				return queueDecision{}, err
-			}
-			return d.refuse(MergeRefusalStale, detail)
-		}
-		checks, err := latestChecksOn(ctx, tx, l.RepoID, l.TipOID, l.TargetRef, gate.Checks)
+	if detail, ok, err := prefixOfTrain(ctx, tx, l); err != nil || !ok {
 		if err != nil {
 			return queueDecision{}, err
 		}
-		if waiting := notPassed(gate.Checks, checks); len(waiting) > 0 {
-			return d.refuse(MergeRefusalNotGreen, fmt.Sprintf("%s's required checks have not all passed on the "+
-				"train's tip %s: %s — a pre_land queue lands only what it tested green", l.TargetRef,
-				short(l.TipOID), strings.Join(waiting, ", ")))
-		}
-	} else if refusal, detail := queuePack(l.Pack, builds, "chain", repo, limits, now); refusal != "" {
-		return d.refuse(refusal, detail)
+		return d.refuse(MergeRefusalStale, detail)
+	}
+	checks, err := latestChecksOn(ctx, tx, l.RepoID, l.TipOID, l.TargetRef, gate.Checks)
+	if err != nil {
+		return queueDecision{}, err
+	}
+	if waiting := notPassed(gate.Checks, checks); len(waiting) > 0 {
+		return d.refuse(MergeRefusalNotGreen, fmt.Sprintf("%s's required checks have not all passed on the "+
+			"train's tip %s: %s — a queue lands only what it tested green", l.TargetRef, short(l.TipOID),
+			strings.Join(waiting, ", ")))
 	}
 
 	// EVERY ENTRY'S GATE, AGAIN, its enqueuer the merger.
@@ -364,7 +350,6 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 			stamped.Entries[i].DeleteSource = true
 		}
 	}
-	stamped.Green = l.Policy == LandingPreLand
 
 	// ITS ROWS, the pushes' moves of the live changes among them, as the
 	// apply writes them.
@@ -501,9 +486,13 @@ func decideBroken(ctx context.Context, tx *sql.Tx, b Broken, repo pushRepo, seat
 				"a check that failed on it", name, short(b.OID), state))
 		}
 	}
-	// WHOM IT CONCERNS: the authors of the change the landing merged, its
-	// enqueuer and the effective lead of the repository's owner — the home's
-	// own record, so nobody's actor; nobody for a landing no change made.
+	// WHOM IT CONCERNS: the authors of the change the landing merged and the
+	// effective lead of the repository's owner — the home's own record, so
+	// nobody's actor; nobody for a landing no change made. NEVER AN
+	// ENQUEUER: a queue's landing lands green, its green row at its own
+	// position, so the green row refuses every broken naming one above; what
+	// a broken can name landed ahead of its checks — a person's override
+	// merge or push — and no queue landed it.
 	if landing.changeID != "" {
 		row, found, err := changeRowIn(ctx, tx, landing.changeID)
 		if err != nil {
@@ -512,12 +501,6 @@ func decideBroken(ctx context.Context, tx *sql.Tx, b Broken, repo pushRepo, seat
 		if found {
 			c := concerning{repoName: repo.name, change: row, authors: true, broken: true,
 				ownerLead: ownersLead(repo.grantRef(b.RepoID), seats.Roster)}
-			if landing.enqueuedBy != "" {
-				c.enqueuer = Reviewer{Handle: landing.enqueuedBy, Kind: PartyAgent}
-				if seat, ok := seats.Roster.Seat(landing.enqueuedBy); ok && seat.Human {
-					c.enqueuer.Kind = PartyPerson
-				}
-			}
 			if b.Routing, err = routingFor(ctx, tx, c); err != nil {
 				return queueDecision{}, err
 			}
@@ -566,25 +549,21 @@ func builtAs(entry queueEntry, commit string) string {
 	return ""
 }
 
-// queuePack is a queue record's pack held to a push's rules — or why it may
-// not be: carried exactly where the record built a commit (stale), uploaded
-// recently enough for a record to name it (upload_expired), within the
-// repository's size (repo_size) and into a repository whose compaction keeps
-// pace with its packs (compaction_behind, m3-k5's rule 6c). what names the
-// record's build in a sentence.
-func queuePack(pack *PackRef, builds bool, what string, repo pushRepo, limits Limits, now time.Time) (MergeRefusal,
-	string) {
-
+// queuePack is a train's pack held to a push's rules — or why it may not be:
+// carried exactly where the train built a commit (stale), uploaded recently
+// enough for a record to name it (upload_expired), within the repository's
+// size (repo_size) and into a repository whose compaction keeps pace with its
+// packs (compaction_behind, m3-k5's rule 6c).
+func queuePack(pack *PackRef, builds bool, repo pushRepo, limits Limits, now time.Time) (MergeRefusal, string) {
 	switch {
 	case pack == nil && builds:
-		return MergeRefusalStale, fmt.Sprintf("the %s builds commits of its own and carries no pack of them", what)
+		return MergeRefusalStale, "the train builds commits of its own and carries no pack of them"
 	case pack != nil && !builds:
-		return MergeRefusalStale, fmt.Sprintf("the %s fast-forwards alone, building nothing, and carries a pack",
-			what)
+		return MergeRefusalStale, "the train fast-forwards alone, building nothing, and carries a pack"
 	case pack == nil:
 		return "", ""
 	}
-	if detail, expired := uploadExpired("the "+what+"'s pack", pack.Object, now, "its home builds it again"); expired {
+	if detail, expired := uploadExpired("the train's pack", pack.Object, now, "its home builds it again"); expired {
 		return MergeRefusalUploadExpired, detail
 	}
 	// THE ENGINE'S OWN BUILD, never a seat's outside share: the whole bound.
@@ -736,10 +715,9 @@ func landingTipAt(ctx context.Context, tx *sql.Tx, repoID, target string, positi
 }
 
 // landingRow is what a broken record reads of the landing it names: its
-// commit, the change it landed ("" for a push that landed none) and who
-// enqueued that change ("" for a change no queue landed).
+// commit and the change it landed ("" for a push that landed none).
 type landingRow struct {
-	commit, changeID, enqueuedBy string
+	commit, changeID string
 }
 
 // landingAt is target's landing at (position, ordinal), and false where there
@@ -749,7 +727,7 @@ func landingAt(ctx context.Context, tx *sql.Tx, repoID, target string, position 
 
 	var l landingRow
 	switch err := tx.QueryRowContext(ctx, landingSQL, repoID, target, position, ordinal).Scan(&l.commit,
-		&l.changeID, &l.enqueuedBy); {
+		&l.changeID); {
 	case errors.Is(err, sql.ErrNoRows):
 		return landingRow{}, false, nil
 	case err != nil:
@@ -763,10 +741,10 @@ func landingAt(ctx context.Context, tx *sql.Tx, repoID, target string, position 
 // derived from the landing's, its enqueuer its principal, `via queue`, the
 // target moved from what the entry before it left onto its commit (a
 // fast-forward, which leaves nothing behind), the change's source deleted
-// where the decide stamped it, the chain's pack on the first, and what it
-// introduced: the commit a merge or a squash built, none for a fast-forward,
-// whose head its change's own pushes brought. entries are the entries' rows
-// and rows their changes', in l's order.
+// where the decide stamped it, and what it introduced: the commit a merge or
+// a squash built, none for a fast-forward, whose head its change's own pushes
+// brought. entries are the entries' rows and rows their changes', in l's
+// order.
 func (l Land) pushes(entries map[string]queueEntry, rows []changeRow) []PushEntry {
 	out := make([]PushEntry, len(l.Entries))
 	from := l.BaseOID
@@ -778,9 +756,6 @@ func (l Land) pushes(entries map[string]queueEntry, rows []changeRow) []PushEntr
 		if e.DeleteSource {
 			p.Commands = append(p.Commands, Command{Ref: rows[i].source, Old: rows[i].head, New: ZeroOID,
 				Result: ResultOK})
-		}
-		if i == 0 {
-			p.Pack = l.Pack
 		}
 		if entry.Method != MergeMethodFastForward {
 			p.Introduced, p.IntroducedCount = []string{e.Commit}, 1
@@ -1018,7 +993,7 @@ const (
 		WHERE repo_id = ? AND target_ref = ? AND train = ? AND position = ?`
 	landingTipSQL = `SELECT commit_oid FROM code_landings WHERE repo_id = ? AND target_ref = ? AND position = ?
 		ORDER BY ordinal DESC LIMIT 1`
-	landingSQL = `SELECT commit_oid, change_id, enqueued_by FROM code_landings
+	landingSQL = `SELECT commit_oid, change_id FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`
 	landingBrokenSQL = `SELECT broken FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`

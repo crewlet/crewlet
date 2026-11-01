@@ -3,6 +3,7 @@ package config_test
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -601,11 +602,6 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 			}(),
 			path: "code.repos[0].protect[0].checks", kind: "out_of_range", says: []string{"33", "32"},
 		},
-		"a landing policy nobody knows": {
-			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {policy: on_green}}")),
-			path: "code.repos[0].protect[0].landing.policy", kind: "unknown_value",
-			says: []string{"on_green", "pre_land, post_land"},
-		},
 		"a queue past its depth": {
 			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {depth: 9}}")),
 			path: "code.repos[0].protect[0].landing.depth", kind: "out_of_range", says: []string{"1..8", "4"},
@@ -807,7 +803,7 @@ func TestAGateOnATagRuleIsRefused(t *testing.T) {
 	for field, value := range map[string]string{
 		"merge_by": "persons", "approvals": "one", "approvals_unless": "[comment_only]",
 		"human_paths": "[{glob: 'deploy/**'}]", "checks": "[unit]", "landing": "{depth: 2}",
-		"owners_approve": "true", "delete_source": "none", "auto_revert": "true", "agents_edit_checks": "true",
+		"owners_approve": "true", "delete_source": "none", "agents_edit_checks": "true",
 	} {
 		_, err := config.ParseCompany([]byte(codeRepos("    - name: web\n      owner: {seat: swe}\n" +
 			"      protect:\n        - {branch: main}\n        - {tag: 'v*', " + field + ": " + value + "}\n")))
@@ -820,8 +816,32 @@ func TestAGateOnATagRuleIsRefused(t *testing.T) {
 	}
 }
 
+// A GATE NAMES NO LANDING POLICY AND NO REVERT CONSENT: a branch's queue tests
+// every change before it lands, and nothing reverts a landing on its own, so
+// `landing.policy` and `auto_revert` are no settings — each refused as the
+// one unknown field it is, at its line, by the loader's rule for any key the
+// schema does not define, rather than accepted and never acted on.
+//
+// Mutation: give CodeLanding a `policy` field, or CodeProtection an
+// `auto_revert` one, again — the document is accepted, red.
+func TestAGateNamesNoLandingPolicyAndNoRevertConsent(t *testing.T) {
+	t.Parallel()
+	for path, rule := range map[string]string{
+		"code.repos[0].protect[0].landing.policy": "{branch: main, checks: [unit], landing: {policy: pre_land}}",
+		"code.repos[0].protect[0].auto_revert":    "{branch: main, checks: [unit], auto_revert: true}",
+	} {
+		_, err := config.ParseCompany([]byte(codeRepos("    - name: web\n      owner: {seat: swe}\n" +
+			"      protect:\n        - " + rule + "\n")))
+		problems := config.Problems(err)
+		if !errors.Is(err, config.ErrUnknownField) || len(problems) != 1 || problems[0].Path != path ||
+			problems[0].Kind != "unknown_field" {
+			t.Errorf("%s: err = %v, problems = %+v, want the one unknown_field at %s", rule, err, problems, path)
+		}
+	}
+}
+
 // A GATE IS FORMED BY ANY OF ITS FIELDS, THE REST RESOLVED — writers, none,
-// pre_land at depth 4 and batch 2, seats — in one place (CodeProtection.Gate),
+// a queue at depth 4 and batch 2, seats — in one place (CodeProtection.Gate),
 // which the reconcile records and the gate's bound weighs; and a rule that
 // sets none of them has no gate.
 func TestAGateResolvesItsDefaults(t *testing.T) {
@@ -830,18 +850,17 @@ func TestAGateResolvesItsDefaults(t *testing.T) {
 		t.Fatalf("a rule setting no gate field has the gate %+v", *g)
 	}
 	defaults := config.CodeGate{MergeBy: config.CodeMergeByWriters, Approvals: config.CodeApprovalsNone,
-		Landing: config.CodeLanding{Policy: config.CodeLandingPreLand, Depth: config.CodeDefaultQueueDepth,
-			Batch: config.CodeDefaultQueueBatch}, DeleteSource: config.CodeDeleteSeats}
+		Landing:      config.CodeLanding{Depth: config.CodeDefaultQueueDepth, Batch: config.CodeDefaultQueueBatch},
+		DeleteSource: config.CodeDeleteSeats}
 	for name, tc := range map[string]struct {
 		rule config.CodeProtection
 		want func(*config.CodeGate)
 	}{
-		"merge_by":    {config.CodeProtection{MergeBy: config.CodeMergeByPersons}, func(g *config.CodeGate) { g.MergeBy = config.CodeMergeByPersons }},
-		"approvals":   {config.CodeProtection{Approvals: config.CodeApprovalsOne}, func(g *config.CodeGate) { g.Approvals = config.CodeApprovalsOne }},
-		"checks":      {config.CodeProtection{Checks: []string{"unit"}}, func(g *config.CodeGate) { g.Checks = []string{"unit"} }},
-		"a depth":     {config.CodeProtection{Landing: config.CodeLanding{Depth: 2}}, func(g *config.CodeGate) { g.Landing.Depth = 2 }},
-		"a policy":    {config.CodeProtection{Landing: config.CodeLanding{Policy: config.CodeLandingPostLand}}, func(g *config.CodeGate) { g.Landing.Policy = config.CodeLandingPostLand }},
-		"auto_revert": {config.CodeProtection{AutoRevert: true}, func(g *config.CodeGate) { g.AutoRevert = true }},
+		"merge_by":  {config.CodeProtection{MergeBy: config.CodeMergeByPersons}, func(g *config.CodeGate) { g.MergeBy = config.CodeMergeByPersons }},
+		"approvals": {config.CodeProtection{Approvals: config.CodeApprovalsOne}, func(g *config.CodeGate) { g.Approvals = config.CodeApprovalsOne }},
+		"checks":    {config.CodeProtection{Checks: []string{"unit"}}, func(g *config.CodeGate) { g.Checks = []string{"unit"} }},
+		"a depth":   {config.CodeProtection{Landing: config.CodeLanding{Depth: 2}}, func(g *config.CodeGate) { g.Landing.Depth = 2 }},
+		"a batch":   {config.CodeProtection{Landing: config.CodeLanding{Batch: 8}}, func(g *config.CodeGate) { g.Landing.Batch = 8 }},
 		"delete_source": {config.CodeProtection{DeleteSource: config.CodeDeleteNone},
 			func(g *config.CodeGate) { g.DeleteSource = config.CodeDeleteNone }},
 		"agents_edit_checks": {config.CodeProtection{AgentsEditChecks: true},
@@ -905,9 +924,9 @@ func TestAGateIsBoundedByItsBytes(t *testing.T) {
 }
 
 // A MERGE GATE FIELD THAT DOES NOTHING IS WARNED, NEVER REFUSED, at that field:
-// owners_approve where the repository names no path owners, landing and
-// auto_revert where the rule requires no checks — only a branch whose merges
-// wait for checks has a queue — and approvals_unless beside approvals: none.
+// owners_approve where the repository names no path owners, landing where the
+// rule requires no checks — only a branch whose merges wait for checks has a
+// queue — and approvals_unless beside approvals: none.
 // Each is silent once the field beside it is set.
 func TestAGateFieldThatDoesNothingIsWarned(t *testing.T) {
 	t.Parallel()
@@ -918,10 +937,8 @@ func TestAGateFieldThatDoesNothingIsWarned(t *testing.T) {
 	}{
 		"owners_approve and no path owners": {rule: "owners_approve: true", warns: "owners_approve"},
 		"owners_approve and path owners":    {rule: "owners_approve: true", beside: owned},
-		"a landing and no checks":           {rule: "landing: {policy: post_land}", warns: "landing"},
-		"a landing and checks":              {rule: "landing: {policy: post_land}, checks: [unit]"},
-		"auto_revert and no checks":         {rule: "auto_revert: true", warns: "auto_revert"},
-		"auto_revert and checks":            {rule: "auto_revert: true, checks: [unit]"},
+		"a landing and no checks":           {rule: "landing: {depth: 2}", warns: "landing"},
+		"a landing and checks":              {rule: "landing: {depth: 2}, checks: [unit]"},
 		"approvals_unless and no approval":  {rule: "approvals_unless: [comment_only]", warns: "approvals_unless"},
 		"approvals_unless and an approval":  {rule: "approvals: one, approvals_unless: [comment_only]"},
 	} {
@@ -982,7 +999,7 @@ func TestAQueuesCapacityIsItsRoundsOverASpan(t *testing.T) {
 	}
 }
 
-// VALIDATE WARNS A QUEUE SLOWER THAN ITS WRITERS (M5-D28): a pre_land queue
+// VALIDATE WARNS A QUEUE SLOWER THAN ITS WRITERS (M5-D28): a merge queue
 // that cannot land one change a day for every seat that may merge into its
 // branch is advised at the rule's landing, from the configured depth, batch
 // and code.checks.max_timeout_seconds — `crewlet validate` observes no rate.
@@ -1124,10 +1141,9 @@ func TestADeclaredCodeBlockIsAccepted(t *testing.T) {
             - glob: .crewlet/**
             - {glob: "deploy/**", unless: [comment_only]}
           checks: [unit, lint, e2e.linux]
-          landing: {policy: post_land, depth: 8, batch: 1}
+          landing: {depth: 8, batch: 1}
           owners_approve: true
           delete_source: none
-          auto_revert: true
           agents_edit_checks: true
         - branch: release/*
           direct_push: none

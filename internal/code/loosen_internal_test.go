@@ -18,7 +18,7 @@ func strictGate() MergeGate {
 		ApprovalsUnless: []ChangeClass{ChangeClassCommentOnly},
 		HumanPaths:      []HumanPath{{Glob: "deploy/**", Unless: []ChangeClass{ChangeClassCommentOnly}}},
 		Checks:          []string{"lint", "unit"},
-		Landing:         Landing{Policy: LandingPreLand, Depth: 4, Batch: 4},
+		Landing:         Landing{Depth: 4, Batch: 4},
 		OwnersApprove:   true, DeleteSource: DeleteSeats,
 	}
 }
@@ -59,11 +59,10 @@ func gateFieldNames(t *testing.T) map[string]string {
 // closed on either side. A human path is kept only by its own glob with an
 // unless naming nothing more.
 //
-// Mutations: treat auto_revert turned on as neutral — its case opens nothing,
-// red; rank merge_by only among the values this build knows — the unknown
-// value it moves to is no lowering, red; keep a human path by its glob alone —
-// the widened unless opens nothing, red; judge landing.policy in
-// LandingPolicies' order — pre_land to post_land opens nothing, red.
+// Mutations: treat agents_edit_checks turned on as neutral — its case opens
+// nothing, red; rank merge_by only among the values this build knows — the
+// unknown value it moves to is no lowering, red; keep a human path by its glob
+// alone — the widened unless opens nothing, red.
 func TestEveryGateFieldIsJudged(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {
@@ -77,12 +76,10 @@ func TestEveryGateFieldIsJudged(t *testing.T) {
 		}},
 		"HumanPaths":       {open: func(g *MergeGate) { g.HumanPaths = nil }},
 		"Checks":           {open: func(g *MergeGate) { g.Checks = []string{"lint"} }},
-		"Landing.Policy":   {open: func(g *MergeGate) { g.Landing.Policy = LandingPostLand }},
 		"Landing.Depth":    {open: func(g *MergeGate) { g.Landing.Depth = 1 }, neutral: true},
 		"Landing.Batch":    {open: func(g *MergeGate) { g.Landing.Batch = MaxQueueBatch }, neutral: true},
 		"OwnersApprove":    {open: func(g *MergeGate) { g.OwnersApprove = false }},
 		"DeleteSource":     {open: func(g *MergeGate) { g.DeleteSource = DeleteNone }, neutral: true},
-		"AutoRevert":       {open: func(g *MergeGate) { g.AutoRevert = true }},
 		"AgentsEditChecks": {open: func(g *MergeGate) { g.AgentsEditChecks = true }},
 	}
 	fields := gateFieldNames(t)
@@ -140,8 +137,7 @@ func TestEveryGateFieldIsJudged(t *testing.T) {
 	}
 
 	// EVERY PAIR OF A RANKED FIELD'S VALUES, decided here — each the loosest
-	// first: writers < maintainers < persons, none < one, post_land <
-	// pre_land.
+	// first: writers < maintainers < persons, none < one.
 	type ranked struct {
 		field  string
 		values []string
@@ -157,9 +153,6 @@ func TestEveryGateFieldIsJudged(t *testing.T) {
 			}},
 		{"approvals", spelledAll(ApprovalCounts()), func(g *MergeGate, v string) { g.Approvals = Approvals(v) },
 			map[[2]string]bool{{"none", "one"}: false, {"one", "none"}: true}},
-		{"landing.policy", spelledAll(LandingPolicies()),
-			func(g *MergeGate, v string) { g.Landing.Policy = LandingPolicy(v) },
-			map[[2]string]bool{{"pre_land", "post_land"}: true, {"post_land", "pre_land"}: false}},
 	} {
 		for _, from := range r.values {
 			for _, to := range r.values {
@@ -258,8 +251,7 @@ func TestAGateChangeNamesEveryGateField(t *testing.T) {
 	values := map[string]string{
 		"merge_by": `"persons"`, "approvals": `"none"`, "approvals_unless": `["whitespace_only"]`,
 		"human_paths": `[{"glob":"web/**"}]`, "checks": `["e2e","unit"]`, "landing": `{"depth":2}`,
-		"owners_approve": `false`, "delete_source": `"none"`, "auto_revert": `true`,
-		"agents_edit_checks": `true`,
+		"owners_approve": `false`, "delete_source": `"none"`, "agents_edit_checks": `true`,
 	}
 	if got := slices.Sorted(maps.Keys(values)); !slices.Equal(got, slices.Sorted(slices.Values(GateChangeFields()))) {
 		t.Fatalf("the cases name %v, want every field a change names, %v", got, GateChangeFields())

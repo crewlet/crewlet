@@ -18,9 +18,8 @@ import (
 
 // A PROTECTED BRANCH'S MERGE QUEUE: a branch whose merge gate requires a check
 // is a QUEUE TARGET ([GateRules.QueueTarget]) — its merges land through its
-// queue, pre_land (a change tested merged on the branch before it lands) or
-// post_land (changes landed ahead of the checks the branch's tip then runs) —
-// and a change joins it by an ENQUEUE ([Enqueue]): a record on the
+// queue, each change tested merged on the branch before it lands — and a
+// change joins it by an ENQUEUE ([Enqueue]): a record on the
 // REPOSITORY's own subject, the one its pushes and its changes' lifecycles are
 // on, decided by its committer alone ([Committer.ProposeQueue]) as a change's
 // write is. So a change's entry, its merge and its close are decided by one
@@ -31,16 +30,13 @@ import (
 // An enqueue is decided by the change's merge gate ([JudgeGate]) from ONE
 // snapshot, its principal the merger (M5-D8): every precondition met but the
 // change's own merge into its target, which the queue's candidate proves
-// against the branch it is built on, as a merge's build does — and on a
-// post_land target, whose checks hold its tip and never a landing, no check
-// (the gate lists none). A refusal names every precondition not met and whom
-// it waits on (gate_unmet). Beside the gate: a live, ready change into a
-// queue target, at the head and the target the asker formed it against (stale,
-// head_moved), not queued already (already_queued), behind fewer than
-// [MaxQueueEntries] waiting entries of its target (queue_full), its consent to
-// a reverting only where the gate allows one (no_auto_revert). Its landing
-// proves the gate again from its own snapshot; between the two, the verdict
-// race is the deliberate one.
+// against the branch it is built on, as a merge's build does. A refusal names
+// every precondition not met and whom it waits on (gate_unmet). Beside the
+// gate: a live, ready change into a queue target, at the head and the target
+// the asker formed it against (stale, head_moved), not queued already
+// (already_queued), behind fewer than [MaxQueueEntries] waiting entries of its
+// target (queue_full). Its landing proves the gate again from its own
+// snapshot; between the two, the verdict race is the deliberate one.
 //
 // # An entry leaves its queue with its change
 //
@@ -140,14 +136,14 @@ const (
 )
 
 // MaxQueueEntries is the most WAITING entries one target's queue holds:
-// 1 024. JUDGMENT: a pre_land queue at depth 8 and batch 1 with ten-minute
+// 1 024. JUDGMENT: a queue at depth 8 and batch 1 with ten-minute
 // checks lands about 1 152 changes a day, so a queue holding more than a
 // day of its fastest capacity waiting is broken, not busy — one read of a
 // keyset page, and its every entry's place counted in one seek of
 // code_queue_live_idx.
 const MaxQueueEntries = 1024
 
-// MergeRateWindow is the span a pre_land queue's merge rate is measured over:
+// MergeRateWindow is the span a queue's merge rate is measured over:
 // an HOUR. JUDGMENT (M5-D28): about six rounds at ten-minute checks — enough
 // rounds that one slow round moves the mean little, and short enough that a
 // burst of enqueues is seen while it lasts. The repository's home counts a
@@ -198,9 +194,6 @@ type Enqueue struct {
 	Method       MergeMethod `json:"method"`
 	DeleteSource bool        `json:"delete_source,omitempty"`
 	CloseTask    bool        `json:"close_task,omitempty"`
-	// AutoRevert is the enqueuer's consent to a revert of a landing of the
-	// change that breaks the target, taken only where the gate allows one.
-	AutoRevert bool `json:"auto_revert,omitempty"`
 	// Principal is who enqueued it — the proposal's asker, STAMPED by the
 	// committer: the merger the gate judged, and whom the queue lands it as.
 	Principal Principal `json:"principal"`
@@ -252,12 +245,12 @@ type QueueProposal struct {
 	// Synced.DropEpoch), as a push's is ([Proposal.DropEpoch]): the committer
 	// refuses it `expunging` where the repository's epoch is another
 	// ([MergeRefusalExpunging]) — an expunge's begin since has left dropping
-	// objects that copy held live, and a train's or a chain's commits built
-	// over them would move the target onto an object the expunge's commit
-	// retires. Zero, the epoch of a repository never expunged, on every other
-	// record: an enqueue, a dequeue, an eject, a green and a broken move no
-	// ref onto anything a build made. NEVER RECORDED, as Seen is not, so no
-	// record's format moves for it.
+	// objects that copy held live, and a train's commits built over them,
+	// which its landing lands, would move the target onto an object the
+	// expunge's commit retires. Zero, the epoch of a repository never
+	// expunged, on every other record: an enqueue, a dequeue, an eject, a
+	// green and a broken move no ref onto anything a build made. NEVER
+	// RECORDED, as Seen is not, so no record's format moves for it.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
 	// Ceiling is a seat's DEQUEUE's requester ceiling (M3-decisions U40 (a)):
 	// whom the turn that asks it works for, judged by the committer beside
@@ -416,9 +409,6 @@ const (
 	// MergeRefusalNoQueue is an enqueue onto a target that has no queue: its
 	// gate requires no check, so a change merges into it directly.
 	MergeRefusalNoQueue MergeRefusal = "no_queue"
-	// MergeRefusalNoAutoRevert is an enqueue consenting to a revert where the
-	// target's gate allows none.
-	MergeRefusalNoAutoRevert MergeRefusal = "no_auto_revert"
 	// MergeRefusalAlreadyQueued is a change its target's queue holds already.
 	MergeRefusalAlreadyQueued MergeRefusal = "already_queued"
 	// MergeRefusalQueueFull is a target whose queue holds MaxQueueEntries
@@ -454,7 +444,7 @@ const (
 	// whoever its turn works for may not make (its git node judges the
 	// write's ceiling, internal/code/host's merge.go).
 	MergeRefusalNotPermitted MergeRefusal = "not_permitted"
-	// MergeRefusalNotGreen is a pre_land landing whose tip, or a green row
+	// MergeRefusalNotGreen is a landing whose tip, or a green row
 	// whose landing, some required check of its target has not passed on —
 	// by its latest attempt checked for the target: nothing moves on red,
 	// nor on what is still running.
@@ -485,7 +475,7 @@ func MergeRefusals() []MergeRefusal {
 		MergeRefusalRepoMirrored, MergeRefusalExpunging, MergeRefusalChangeNotFound,
 		MergeRefusalChangeNotOpen, MergeRefusalChangeDraft, MergeRefusalStale, MergeRefusalHeadMoved,
 		MergeRefusalTargetMoved, MergeRefusalTargetMoving, MergeRefusalNotPerson, MergeRefusalQueueTarget, MergeRefusalNoQueue,
-		MergeRefusalNoAutoRevert, MergeRefusalAlreadyQueued, MergeRefusalQueueFull, MergeRefusalGateUnmet,
+		MergeRefusalAlreadyQueued, MergeRefusalQueueFull, MergeRefusalGateUnmet,
 		MergeRefusalSourceRefused, MergeRefusalUploadExpired, MergeRefusalRepoSize,
 		MergeRefusalCompactionBehind, MergeRefusalNotQueued, MergeRefusalNotPermitted, MergeRefusalNotGreen,
 		MergeRefusalNotRed, MergeRefusalNoLanding, MergeRefusalRecordFull, MergeRefusalBusy,
@@ -515,16 +505,14 @@ func (p QueueProposal) Validate() error {
 }
 
 // measure validates p and answers its queued byte charge: its record's
-// payload as the committer stamps it — a landing green and every entry of it
-// deleting its source, the widest its decide makes it — encoded, held under
-// [EntryRoom].
+// payload as the committer stamps it — every entry of a landing deleting its
+// source, the widest its decide makes it — encoded, held under [EntryRoom].
 func (p QueueProposal) measure() (int, error) {
 	if err := p.validFields(); err != nil {
 		return 0, err
 	}
 	op, payload := p.stamped()
 	if l, ok := payload.(Land); ok {
-		l.Green = true
 		l.Entries = slices.Clone(l.Entries)
 		for i := range l.Entries {
 			l.Entries[i].DeleteSource = true
@@ -873,9 +861,9 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 		return d.refuse(MergeRefusalRepoMirrored, MirroredDetail(repo.name, repo.managedBy))
 	case (p.Candidate != nil || p.Land != nil) && p.DropEpoch != repo.dropEpoch:
 		// THE DROP EPOCH, before every rule of the record's own, as a
-		// push's is: a train or a chain built against a copy at another
-		// epoch may move the target onto an object an expunge begun since
-		// left dropping, and its home builds it again.
+		// push's is: a train built against a copy at another epoch, or a
+		// landing of one read at another, may move the target onto an object
+		// an expunge begun since left dropping, and its home builds it again.
 		what, builder := "train", "its home"
 		if p.Land != nil {
 			what = "landing"
@@ -899,7 +887,7 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 	case p.Eject != nil:
 		return decideEject(ctx, tx, *p.Eject, repo, d)
 	case p.Land != nil:
-		return decideLand(ctx, tx, *p.Land, repo, seats, limits, now, d)
+		return decideLand(ctx, tx, *p.Land, repo, seats, limits, d)
 	case p.Green != nil:
 		return decideGreen(ctx, tx, *p.Green, repo, d)
 	case p.Broken != nil:
@@ -943,13 +931,9 @@ func decideEnqueue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 	if err != nil {
 		return queueDecision{}, err
 	}
-	switch {
-	case !gate.QueueTarget():
+	if !gate.QueueTarget() {
 		return d.refuse(MergeRefusalNoQueue, fmt.Sprintf("%s has no merge queue — no rule matching it requires "+
 			"a check — so %s merges into it directly", c.TargetRef, named))
-	case e.AutoRevert && !gate.AutoRevert:
-		return d.refuse(MergeRefusalNoAutoRevert, fmt.Sprintf("%s's merge gate does not let an enqueuer consent "+
-			"to a revert (auto_revert): enqueue %s without consenting", c.TargetRef, named))
 	}
 	live, err := liveEntryOf(ctx, tx, e.ChangeID)
 	if err != nil {
@@ -1285,7 +1269,7 @@ type queueEntry struct {
 	Seq                                  int64
 	HeadOID                              string
 	Method                               MergeMethod
-	DeleteSource, CloseTask, AutoRevert  bool
+	DeleteSource, CloseTask              bool
 	EnqueuedBy                           Party
 	EnqueuedOperator                     string
 	State                                QueueState
@@ -1302,7 +1286,7 @@ func scanEntry(scan func(...any) error) (queueEntry, error) {
 		method, kind, state, reason string
 	)
 	err := scan(&e.RepoID, &e.EntryID, &e.TargetRef, &e.ChangeID, &e.Seq, &e.HeadOID, &method, &e.DeleteSource,
-		&e.CloseTask, &e.AutoRevert, &e.EnqueuedBy.Handle, &kind, &e.EnqueuedOperator, &state, &e.Train,
+		&e.CloseTask, &e.EnqueuedBy.Handle, &kind, &e.EnqueuedOperator, &state, &e.Train,
 		&e.CandidateID, &e.CommitOID, &e.EnqueuedAt, &e.EndedAt, &e.EndedPosition, &reason)
 	e.Method, e.EnqueuedBy.Kind, e.State, e.EndReason = MergeMethod(method), PartyKind(kind), QueueState(state),
 		QueueEndReason(reason)
@@ -1403,13 +1387,13 @@ const (
 	// entryColumns is every column of an entry [scanEntry] reads, in its
 	// order.
 	entryColumns = `repo_id, entry_id, target_ref, change_id, seq, head_oid, method, delete_source, close_task,
-		auto_revert, enqueued_by, enqueued_kind, enqueued_operator, state, train, candidate_id, commit_oid,
-		enqueued_at, ended_at, ended_position, end_reason`
+		enqueued_by, enqueued_kind, enqueued_operator, state, train, candidate_id, commit_oid, enqueued_at,
+		ended_at, ended_position, end_reason`
 	// qualifiedEntryColumns is entryColumns read beside json_each, which has
 	// columns of its own: the same columns, in the same order.
 	qualifiedEntryColumns = `q.repo_id, q.entry_id, q.target_ref, q.change_id, q.seq, q.head_oid, q.method,
-		q.delete_source, q.close_task, q.auto_revert, q.enqueued_by, q.enqueued_kind, q.enqueued_operator,
-		q.state, q.train, q.candidate_id, q.commit_oid, q.enqueued_at, q.ended_at, q.ended_position, q.end_reason`
+		q.delete_source, q.close_task, q.enqueued_by, q.enqueued_kind, q.enqueued_operator, q.state, q.train,
+		q.candidate_id, q.commit_oid, q.enqueued_at, q.ended_at, q.ended_position, q.end_reason`
 	entrySQL       = `SELECT ` + entryColumns + ` FROM code_queue WHERE repo_id = ? AND entry_id = ?`
 	liveEntriesSQL = `SELECT ` + qualifiedEntryColumns + ` FROM json_each(?) AS j
 		CROSS JOIN code_queue AS q INDEXED BY code_queue_change_idx

@@ -775,7 +775,7 @@ func Catalogue() []Instrument {
 				"the rows it wrote say so; `pending` and `unknown`, its record " +
 				"was appended and is not yet known here to have applied; a " +
 				"refusal's own code — `gate_unmet`, `already_queued`, " +
-				"`queue_full`, `no_queue`, `no_auto_revert`, `head_moved`, " +
+				"`queue_full`, `no_queue`, `head_moved`, " +
 				"`stale`, `target_moved`, `change_not_open`, `change_draft`, " +
 				"`change_not_found`, `not_queued`, `not_permitted`, " +
 				"`not_green`, `not_red`, `no_landing`, `record_full`, " +

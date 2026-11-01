@@ -357,15 +357,11 @@ const (
 	// squashed commit and the trees and blobs the merge wrote — which its
 	// merge record adds ([Merge]).
 	PackMerge PackKind = "merge"
-	// PackCandidate is the pack a pre_land queue's train is recorded with —
+	// PackCandidate is the pack a queue's train is recorded with —
 	// the commits its candidates built of their entries, and the trees and
 	// blobs their merges wrote — which its candidate record adds
 	// ([Candidate]).
 	PackCandidate PackKind = "candidate"
-	// PackLand is the pack a post_land lane's landing is recorded with — the
-	// commits its chain built of its entries — which its land record's first
-	// push adds ([Land]).
-	PackLand PackKind = "land"
 	// PackExpunge is a pack an expunge's begin keeps: what of its inputs a
 	// ref reached, live.
 	PackExpunge PackKind = "expunge"
@@ -387,8 +383,8 @@ const (
 // added — the merge's three among them, which the merge records extend, so
 // one list names every kind code_packs may hold.
 func PackKinds() []PackKind {
-	return []PackKind{PackPush, PackCompact, PackMerge, PackCandidate, PackLand, PackExpunge, PackCruft,
-		PackRescue, PackImport, PackMirror}
+	return []PackKind{PackPush, PackCompact, PackMerge, PackCandidate, PackExpunge, PackCruft, PackRescue,
+		PackImport, PackMirror}
 }
 
 // Valid reports a kind this build knows.

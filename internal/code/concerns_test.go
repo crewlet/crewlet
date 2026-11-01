@@ -110,7 +110,7 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 			code.ReasonReviewSubmitted, nil},
 		"checks failed": {func(r *code.ChangeRouting) { r.ChecksFailed = true }, code.ReasonChecksFailed, nil},
 		"target broken": {func(r *code.ChangeRouting) { r.Broken = true }, code.ReasonTargetBroken,
-			[]string{"e:target_broken", "l:target_broken"}},
+			[]string{"l:target_broken"}},
 		"dequeued": {func(r *code.ChangeRouting) { r.Dequeued = true }, code.ReasonDequeued,
 			[]string{"e:dequeued"}},
 	} {

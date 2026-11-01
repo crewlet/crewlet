@@ -261,7 +261,7 @@
 // preconditions, the approval only where the gate asks one, and the gate's
 // own: a person's approval of a change touching its human paths, one approval
 // from somebody on every touched path owner's lead chain (the head revision's
-// RECORDED match, no glob matched in a judgment), the checks a pre_land gate
+// RECORDED match, no glob matched in a judgment), the checks the gate
 // requires passed on the head commit, and the merger's authority where a
 // merger is named.
 //

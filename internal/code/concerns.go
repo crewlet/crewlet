@@ -52,9 +52,10 @@ import (
 //     head that failed, or errored past the home's own requeue: the one
 //     reason that is news to its actor too ([Reason.WakesActor]), since a
 //     pusher learns that their commit fails its checks only from this.
-//   - target_broken: the authors, the enqueuer and the effective lead of the
-//     repository's owner, on the broken record naming the landing that
-//     merged the change.
+//   - target_broken: the authors and the effective lead of the repository's
+//     owner, on the broken record naming the landing that merged the change
+//     — never an enqueuer, since only a landing ahead of its checks, which
+//     no queue made, can be broken.
 //   - conflicted: the authors, on the mergeability that TURNED the change's
 //     merge into a conflict — not on every recheck that finds it still one —
 //     and on a queue's ejection of it for a conflicting merge.
@@ -273,7 +274,7 @@ type ChangeRouting struct {
 	// past the home's own requeue: its authors and its actor hear.
 	ChecksFailed bool `json:"checks_failed,omitempty"`
 	// Broken is a broken record naming the landing that merged the change:
-	// its authors, Enqueuer and Lead hear. Dequeued is a record that put the
+	// its authors and Lead hear. Dequeued is a record that put the
 	// change's entry out of its queue: its authors and Enqueuer hear.
 	Broken   bool `json:"broken,omitempty"`
 	Dequeued bool `json:"dequeued,omitempty"`
@@ -327,7 +328,7 @@ func (r *ChangeRouting) heard(reason Reason) []string {
 		}
 	case ReasonTargetBroken:
 		if r.Broken {
-			return withOnce(r.Authors, r.Enqueuer, r.Lead)
+			return withOnce(r.Authors, r.Lead)
 		}
 	case ReasonConflicted:
 		if r.Conflicted {

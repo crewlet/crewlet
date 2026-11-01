@@ -136,7 +136,7 @@ const (
 	codeCheckFinishedBytes   = 840
 	codeTipCheckQueuedBytes  = 960
 	codeGreenBytes           = 800
-	codeBrokenBytes          = 1_060
+	codeBrokenBytes          = 1_040
 	codePublicationTailBytes = 3_830
 	codePublicationOneBytes  = 1_110
 )
@@ -159,8 +159,8 @@ const (
 // beside the head's dispatch. A queued change's landing is priced as its
 // merge: this build appends no land record (codeLogUnwritten). And at the
 // most every change's landing lies above its target's green row — landed
-// ahead of its checks, as a post_land lane or a merge into a branch whose
-// gate requires them lands — so its home's tip work checks it: the three
+// ahead of its checks, as a person's override merge or push into a branch
+// whose gate requires them lands — so its home's tip work checks it: the three
 // checks queued on the landed commit (purpose tip, no dispatch record),
 // each claimed, its box named and ended, and a green moving the target's
 // green row onto it. One a change is the most, since each landing is the
@@ -507,8 +507,8 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"changes is recorded by its repository's home git node, through the estate's code.queue"},
 	code.OpEject: {payload: reflect.TypeFor[code.Eject](), how: "entries a check, a conflict or a gate " +
 		"put out are ejected by their repository's home git node, through the estate's code.queue"},
-	code.OpLand: {payload: reflect.TypeFor[code.Land](), how: "a train's tested prefix, or a lane's chain, " +
-		"is landed by its repository's home git node, through the estate's code.queue"},
+	code.OpLand: {payload: reflect.TypeFor[code.Land](), how: "a train's tested prefix is landed by its " +
+		"repository's home git node, through the estate's code.queue"},
 }
 
 // codeLogPushVias is every way a push's pack is built (code.PushVias), and
@@ -890,8 +890,7 @@ var codeLogFields = map[code.OpKind]struct {
 			"delete_source", "principal.kind", "principal.seat"},
 		absent: absent(principalAbsent("principal", "kind", "seat"),
 			map[string]string{
-				"close_task":  "a queued change closing its work item as it lands, a flag",
-				"auto_revert": "a queued change reverted should its landing break its target, a flag",
+				"close_task": "a queued change closing its work item as it lands, a flag",
 			}),
 	},
 	code.OpCheckQueued: {

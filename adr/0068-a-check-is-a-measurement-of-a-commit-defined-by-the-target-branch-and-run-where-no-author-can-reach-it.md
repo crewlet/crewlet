@@ -61,7 +61,8 @@ the target actually held, in the order it held them.
 ## What this does not decide
 
 Who is woken when a landing is broken, and what they are offered (the code
-wakes, M5's `target_broken`); whether a broken landing is reverted on its own
-(auto-revert was dropped from M5); what the gate requires of a change before
+wakes, M5's `target_broken`); whether a broken landing is ever reverted with
+nobody asking (nothing reverts one: `code_revert_change` reverts a change when
+somebody asks); what the gate requires of a change before
 it merges (ADR-0066); and how a queue builds and lands its candidates, which
 prove their checks before they land and so leave their tips green as they land.

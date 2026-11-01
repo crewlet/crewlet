@@ -871,7 +871,7 @@ func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) 
 func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 	t.Parallel()
 	gate := code.MergeGate{MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne,
-		Checks: []string{"lint", "unit"}, Landing: code.Landing{Policy: code.LandingPreLand, Depth: 2, Batch: 4},
+		Checks: []string{"lint", "unit"}, Landing: code.Landing{Depth: 2, Batch: 4},
 		DeleteSource: code.DeleteSeats}
 	writer := &codeWrites{life: func(r code.LifecycleRequest) (code.LifecycleResult, error) {
 		// THE ROW AS THE CODE HOST ANSWERS IT, each rule as a push is held to

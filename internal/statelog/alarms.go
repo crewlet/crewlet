@@ -772,7 +772,7 @@ type Reading struct {
 	CodeChecksBacklogOldest time.Duration
 	CodeChecksBacklogCheck  string
 
-	// CodeMergeRateOver is how many pre_land queues this node is the home of
+	// CodeMergeRateOver is how many merge queues this node is the home of
 	// were asked to land more changes within the merge rate's window than
 	// they can land in it: their enqueues within CodeMergeRateWindow — live
 	// or ended — past the queue's own capacity over it, depth × batch
@@ -1744,7 +1744,7 @@ var table = []rule{
 					r.CodeMergeRateOverAsked, r.CodeMergeRateOverCapacity, spoken(r.CodeMergeRateOverRound)),
 				r.CodeMergeRateOver > 0
 		},
-		remedy: "A pre_land queue lands at most depth × batch changes a " +
+		remedy: "A merge queue lands at most depth × batch changes a " +
 			"round, a round as long as its candidates' slowest required " +
 			"check takes, so a branch asked faster than that falls further " +
 			"behind every round: each change waits a round longer for every " +

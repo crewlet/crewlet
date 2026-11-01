@@ -599,8 +599,8 @@ func sameClosedSet[C, D ~string](t *testing.T, field string, declared []C, recor
 }
 
 // EVERY VALUE A MERGE GATE MAY DECLARE IS ONE THE CODE DOMAIN RECORDS, AND THE
-// OTHER WAY ROUND — merge_by, and with it approvals, the landing's policy,
-// delete_source and the change classes, the path classes an unless list takes
+// OTHER WAY ROUND — merge_by, and with it approvals, delete_source and the
+// change classes, the path classes an unless list takes
 // among them. config cannot import the domain that imports it, so each set is
 // spelled twice and held to the other here, in order: a value only config had
 // would pass `crewlet validate` and be refused by every node's reconcile, and
@@ -610,15 +610,13 @@ func TestEveryDeclaredMergeByIsOneTheDomainRecords(t *testing.T) {
 	t.Parallel()
 	sameClosedSet(t, "merge_by", config.CodeMergeBys, code.MergeBys())
 	sameClosedSet(t, "approvals", config.CodeApprovalCounts, code.ApprovalCounts())
-	sameClosedSet(t, "landing.policy", config.CodeLandingPolicies, code.LandingPolicies())
 	sameClosedSet(t, "delete_source", config.CodeDeleteSources, code.DeleteSources())
 	sameClosedSet(t, "a change class", config.CodeChangeClasses, code.ChangeClasses())
 	sameClosedSet(t, "an exempting class", config.CodePathClasses, code.PathClasses())
 	for field, valid := range map[string]bool{
-		"merge_by":       code.MergeBy(config.CodeMergeBy("").Resolved()).Valid(),
-		"approvals":      code.Approvals(config.CodeApprovals("").Resolved()).Valid(),
-		"landing.policy": code.LandingPolicy(config.CodeLandingPolicy("").Resolved()).Valid(),
-		"delete_source":  code.DeleteSource(config.CodeDeleteSource("").Resolved()).Valid(),
+		"merge_by":      code.MergeBy(config.CodeMergeBy("").Resolved()).Valid(),
+		"approvals":     code.Approvals(config.CodeApprovals("").Resolved()).Valid(),
+		"delete_source": code.DeleteSource(config.CodeDeleteSource("").Resolved()).Valid(),
 	} {
 		if !valid {
 			t.Errorf("an unset %s resolves to a value the code domain refuses", field)
@@ -656,8 +654,8 @@ func TestADeclaredGateWeighsWhatTheDomainRecords(t *testing.T) {
 				{Glob: "a/été/**"},
 			},
 			Checks:        []string{"unit", "lint", "e2e.linux"},
-			Landing:       config.CodeLanding{Policy: config.CodeLandingPostLand, Depth: 8, Batch: 1},
-			OwnersApprove: true, DeleteSource: config.CodeDeleteNone, AutoRevert: true, AgentsEditChecks: true,
+			Landing:       config.CodeLanding{Depth: 8, Batch: 1},
+			OwnersApprove: true, DeleteSource: config.CodeDeleteNone, AgentsEditChecks: true,
 		},
 	} {
 		repo := c.Config.Code.Repos[0]
@@ -800,7 +798,7 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 	}
 
 	// A MERGE GATE, every field the document left unset resolved — writers,
-	// none, pre_land at 4 and 4, seats — and its lists in their one order
+	// none, a queue at 4 and 4, seats — and its lists in their one order
 	// whatever order the document wrote them in; a rule with no gate field
 	// records none.
 	gated := c.Config.Code.Repos[0]
@@ -815,7 +813,7 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 		HumanPaths: []code.HumanPath{{Glob: ".crewlet/**"}, {Glob: "deploy/**", Unless: []code.ChangeClass{
 			code.ChangeClassCommentOnly, code.ChangeClassWhitespaceOnly}}},
 		Checks: []string{"lint", "unit"},
-		Landing: code.Landing{Policy: code.LandingPreLand, Depth: config.CodeDefaultQueueDepth,
+		Landing: code.Landing{Depth: config.CodeDefaultQueueDepth,
 			Batch: config.CodeDefaultQueueBatch}, DeleteSource: code.DeleteSeats}
 	switch rules := recorded.Settings.Protections; {
 	case len(rules) != 2 || rules[0].Pattern != "refs/heads/main" || rules[1].Gate != nil:
@@ -924,7 +922,7 @@ func TestAnUnchangedGateWritesNothing(t *testing.T) {
 			HumanPaths: []code.HumanPath{{Glob: ".crewlet/**", Unless: []code.ChangeClass{code.ChangeClassCommentOnly}},
 				{Glob: "deploy/**"}},
 			Checks: checks,
-			Landing: code.Landing{Policy: code.LandingPreLand, Depth: config.CodeDefaultQueueDepth,
+			Landing: code.Landing{Depth: config.CodeDefaultQueueDepth,
 				Batch: config.CodeDefaultQueueBatch}, DeleteSource: code.DeleteSeats}
 	}
 	node := newSandboxNode(t, parseCompany(t, doc(gated("unit, lint"))))

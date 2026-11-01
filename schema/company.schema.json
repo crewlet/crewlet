@@ -332,15 +332,6 @@
             "integer",
             "null"
           ]
-        },
-        "policy": {
-          "description": "pre_land (unset) tests each change merged on the branch before it lands; post_land lands changes ahead of their checks, which then run on the branch's newest tip.",
-          "enum": [
-            "pre_land",
-            "post_land",
-            "",
-            null
-          ]
         }
       },
       "type": [
@@ -601,15 +592,6 @@
           },
           "type": [
             "array",
-            "null"
-          ]
-        },
-        "auto_revert": {
-          "description": "Let whoever queues a change consent, when it does, to reverting a landing that breaks the branch.",
-          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
-          "type": [
-            "boolean",
-            "string",
             "null"
           ]
         },

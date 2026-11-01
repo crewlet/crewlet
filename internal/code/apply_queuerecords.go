@@ -183,22 +183,23 @@ func (a *Applier) applyEject(ctx context.Context, tx *sql.Tx, at applyContext, e
 
 // applyLand lands a queue's entries as one record — see queuerecords.go's head:
 //
-//  1. EACH CHANGE MERGED FIRST — `merged_via` queue or lane, at the commit
+//  1. EACH CHANGE MERGED FIRST — `merged_via` queue, at the commit
 //     the queue built of it, merged by its ENQUEUER — so that the pushes this
 //     record lands find it merged, as a merge's push finds its change
 //     ([Applier.applyMerge]): a push setting a target to a live change's head
 //     would otherwise merge it, and one deleting its source close it.
-//  2. Each entry landed, at its commit; a pre_land train's landed candidates
+//  2. Each entry landed, at its commit; its train's landed candidates
 //     removed, its candidates after them testing on.
-//  3. The target's landing rows in chain order, one an entry, and its green
-//     row moved to the tip where the landing is green.
+//  3. The target's landing rows in chain order, one an entry, each GREEN —
+//     the decide proved every required check on the tip — and its green row
+//     moved to the tip.
 //  4. The queue's history past its horizon — before the pushes, whose own
 //     horizons take what the record's rows leave.
 //  5. THE PUSHES, one an entry, through the one apply every push takes
 //     ([Applier.landPushes]): the target moved from what the entry before it
 //     left onto its commit, its source deleted where the decide stamped it,
-//     the chain's pack, a push row `via queue` naming its enqueuer and what it
-//     introduced, the repository's counters, and the horizons.
+//     a push row `via queue` naming its enqueuer and what it introduced, the
+//     repository's counters, and the horizons.
 func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l Land) (int, error) {
 	named := make([]string, len(l.Entries))
 	for i, e := range l.Entries {
@@ -248,15 +249,11 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 
 	// 1 EVERY CHANGE MERGED FIRST, by its enqueuer — the queue never acts on
 	// its own account — one version more each at the record's position.
-	via := MergedViaQueue
-	if l.Policy == LandingPostLand {
-		via = MergedViaLane
-	}
 	merged := make([]*changeRow, len(changes))
 	for i, row := range changes {
 		entry := entries[l.Entries[i].EntryID]
 		next := row
-		next.state, next.mergedVia, next.mergeOID = ChangeStateMerged, via, l.Entries[i].Commit
+		next.state, next.mergedVia, next.mergeOID = ChangeStateMerged, MergedViaQueue, l.Entries[i].Commit
 		next.mergedAt = sql.NullInt64{Int64: at.at(), Valid: true}
 		next.mergedBy, next.mergedByKind = entry.EnqueuedBy.Handle, entry.EnqueuedBy.Kind
 		if entry.EnqueuedBy.Kind == PartyPerson {
@@ -278,37 +275,29 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		}
 		rows++
 	}
-	if l.Policy == LandingPreLand {
-		dropped, err := dropLandedCandidates(ctx, tx, l)
-		if err != nil {
-			return 0, fmt.Errorf("code: remove train %s's landed candidates at %s: %w", l.Train, at.position, err)
-		}
-		rows += dropped
+	dropped, err := dropLandedCandidates(ctx, tx, l)
+	if err != nil {
+		return 0, fmt.Errorf("code: remove train %s's landed candidates at %s: %w", l.Train, at.position, err)
 	}
+	rows += dropped
 
 	// 3 THE LANDINGS, in chain order, and the green row.
-	kind := LandedPreLand
-	if l.Policy == LandingPostLand {
-		kind = LandedPostLand
-	}
 	landings := make([]landing, len(l.Entries))
 	from := l.BaseOID
 	for i, e := range l.Entries {
 		by := entries[e.EntryID].EnqueuedBy.Handle
-		landings[i] = landing{target: l.TargetRef, ordinal: i + 1, kind: kind, change: e.ChangeID, entry: e.EntryID,
-			base: from, commit: e.Commit, enqueuedBy: by, by: by, green: l.Green}
+		landings[i] = landing{target: l.TargetRef, ordinal: i + 1, kind: LandedPreLand, change: e.ChangeID,
+			entry: e.EntryID, base: from, commit: e.Commit, enqueuedBy: by, by: by, green: true}
 		from = e.Commit
 	}
 	if err := writeLandings(ctx, tx, at, l.RepoID, landings); err != nil {
 		return 0, err
 	}
 	rows += len(landings)
-	if l.Green {
-		if err := advanceGreen(ctx, tx, at, l.RepoID, l.TargetRef, l.TipOID); err != nil {
-			return 0, err
-		}
-		rows++
+	if err := advanceGreen(ctx, tx, at, l.RepoID, l.TargetRef, l.TipOID); err != nil {
+		return 0, err
 	}
+	rows++
 
 	// 4 THE QUEUE'S HISTORY, before the pushes' own horizons.
 	swept, err := sweepQueueHistory(ctx, tx, l.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)), queueHorizonRows)
@@ -417,7 +406,7 @@ func abandonTrainOn(ctx context.Context, tx *sql.Tx, repoID, target string) (int
 	return int(r + d), nil
 }
 
-// dropLandedCandidates removes the candidates of l's train a pre_land landing
+// dropLandedCandidates removes the candidates of l's train the landing
 // landed — those up to the one whose tip is the landing's — and answers how
 // many. The train's later candidates test on: each was built on the one
 // before, whose tip the target now holds.

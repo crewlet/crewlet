@@ -389,7 +389,7 @@ func TestNothingMergesIntoAPullMirror(t *testing.T) {
 	queued, err = c.ProposeQueue(ctx, training(api, oidOf("A"), entryID, oidOf("N")))
 	requireQueueRefused(t, n, before, queued, err, code.MergeRefusalRepoMirrored,
 		code.MirroredDetail("api", code.ManagedConfig))
-	queued, err = c.ProposeQueue(ctx, landingOf(api, code.LandingPreLand, train.Candidate.Train, oidOf("A"),
+	queued, err = c.ProposeQueue(ctx, landingOf(api, train.Candidate.Train, oidOf("A"),
 		code.LandEntry{EntryID: entryID, ChangeID: queuedChange, Commit: oidOf("M")}))
 	requireQueueRefused(t, n, before, queued, err, code.MergeRefusalRepoMirrored,
 		code.MirroredDetail("api", code.ManagedConfig))

@@ -200,7 +200,7 @@ var alarmMeaning = map[Kind]string{
 		"where no git node runs checks at all; past a thousand it says there " +
 		"are more rather than how many. A deleted repository's queued attempts " +
 		"are not counted: no runner may claim them, and its purge removes them.",
-	KindCodeMergeRateOver: "Merge queues this node is home to — pre_land " +
+	KindCodeMergeRateOver: "Merge queues this node is home to — " +
 		"branches whose merges wait for checks — were asked to land more " +
 		"changes in the last hour than they can land in it: their " +
 		"enqueues within the hour, live or ended, past depth × batch " +

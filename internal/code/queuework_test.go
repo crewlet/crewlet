@@ -15,7 +15,7 @@ import (
 // `queue_due` read of one repository answers its home a target a page, every
 // fact the queue worker decides its next step from read in one transaction by
 // the shipped reader over the shipped applier's rows — main's tip, the gate its
-// queue lands under (pre_land, its depth and batch, the required check), the
+// queue lands under (its depth and batch, the required check), the
 // live entry with who enqueued it, whether it closes its work item, the change
 // its merge commit is written from and that work item, and the live train with
 // the latest attempt of the required check on each candidate commit, for main.
@@ -61,9 +61,9 @@ func TestTheHomesQueueWorkIsOneSnapshotOfOneTarget(t *testing.T) {
 		t.Fatalf("the home's queue work of web reads %+v (%v), want main's", answer.DueQueue, err)
 	}
 	d := *answer.DueQueue
-	if d.TargetRef != mainRef || d.Tip != oidOf("A") || d.Policy != code.LandingPreLand || d.Depth != 4 ||
+	if d.TargetRef != mainRef || d.Tip != oidOf("A") || d.Depth != 4 ||
 		d.Batch != 3 || len(d.Required) != 1 || d.Required[0] != "unit" || d.More || answer.Next != mainRef {
-		t.Fatalf("main's queue work reads %+v (next %q), want main at A, pre_land at depth 4 and batch 3 "+
+		t.Fatalf("main's queue work reads %+v (next %q), want main at A, a queue at depth 4 and batch 3 "+
 			"requiring unit, its cursor main", d, answer.Next)
 	}
 	if len(d.Entries) != 1 {

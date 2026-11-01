@@ -165,7 +165,6 @@ var notRefArgs = map[string]string{
 	"landing":            "a merge gate's field",
 	"delete_source":      "a merge gate's field",
 	"owners_approve":     "a merge gate's field",
-	"auto_revert":        "a merge gate's field",
 	"agents_edit_checks": "a merge gate's field",
 	"op_id":              "an operation's id",
 	"title":              "a change's title",

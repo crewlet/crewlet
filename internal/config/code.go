@@ -995,7 +995,6 @@ type CodeProtection struct {
 	Landing          CodeLanding       `yaml:"landing,omitempty" json:"landing,omitzero" desc:"How the branch's queue lands a change: each field its default when unset."`
 	OwnersApprove    bool              `yaml:"owners_approve,omitempty" json:"owners_approve,omitempty" desc:"Make the repository's path owners gating: a change waits for one counted approval from somebody eligible for every owned glob it touches."`
 	DeleteSource     CodeDeleteSource  `yaml:"delete_source,omitempty" json:"delete_source,omitempty" js:"enum=seats|none" desc:"Whether a merge deletes its change's source branch in the record that merges it: seats (unset), a branch in a seat's own namespace, or none."`
-	AutoRevert       bool              `yaml:"auto_revert,omitempty" json:"auto_revert,omitempty" desc:"Let whoever queues a change consent, when it does, to reverting a landing that breaks the branch."`
 	AgentsEditChecks bool              `yaml:"agents_edit_checks,omitempty" json:"agents_edit_checks,omitempty" desc:"Let a seat's approval stand for a change to .crewlet/** — where a repository's checks are defined — which, on a rule requiring checks, otherwise waits for a person's."`
 }
 
@@ -1007,19 +1006,18 @@ type CodeHumanPath struct {
 	Unless []CodeChangeClass `yaml:"unless,omitempty" json:"unless,omitempty" js:"enum=whitespace_only|comment_only" desc:"The path classes — whitespace_only, comment_only — that let a change through without the person's approval when every path this glob matched is of one. Each once."`
 }
 
-// CodeLanding is how a gated branch's queue lands a change. An unset field
-// takes its default ([CodeLanding.Resolved]); the queue lands only where the
-// rule requires checks.
+// CodeLanding is how a gated branch's queue lands a change: the queue tests
+// each change merged on the branch before it lands, and these two fields are
+// its throughput. An unset field takes its default ([CodeLanding.Resolved]);
+// the queue lands only where the rule requires checks.
 type CodeLanding struct {
-	Policy CodeLandingPolicy `yaml:"policy,omitempty" json:"policy,omitempty" js:"enum=pre_land|post_land" desc:"pre_land (unset) tests each change merged on the branch before it lands; post_land lands changes ahead of their checks, which then run on the branch's newest tip."`
-	Depth  int               `yaml:"depth,omitempty" json:"depth,omitempty" js:"min=1;max=8" desc:"How many candidates the queue tests at once: 1..8; unset is 4."`
-	Batch  int               `yaml:"batch,omitempty" json:"batch,omitempty" js:"min=1;max=8" desc:"How many waiting changes one candidate takes: 1..8; unset is 2."`
+	Depth int `yaml:"depth,omitempty" json:"depth,omitempty" js:"min=1;max=8" desc:"How many candidates the queue tests at once: 1..8; unset is 4."`
+	Batch int `yaml:"batch,omitempty" json:"batch,omitempty" js:"min=1;max=8" desc:"How many waiting changes one candidate takes: 1..8; unset is 2."`
 }
 
 // Resolved is the landing with its defaults applied — THE ONE PLACE they are
 // applied ([CodeProtection.Gate] reads it).
 func (l CodeLanding) Resolved() CodeLanding {
-	l.Policy = l.Policy.Resolved()
 	if l.Depth == 0 {
 		l.Depth = CodeDefaultQueueDepth
 	}
@@ -1029,7 +1027,7 @@ func (l CodeLanding) Resolved() CodeLanding {
 	return l
 }
 
-// LandingCapacity is the most changes a pre_land queue lands over a span:
+// LandingCapacity is the most changes a merge queue lands over a span:
 // ⌊depth × batch × over / round⌋ (M5-D28). Each round tests depth candidates
 // at once, each taking at most batch waiting changes, and lands its green
 // prefix — at most depth × batch changes — once its checks finish, so a round
@@ -1082,7 +1080,6 @@ type CodeGate struct {
 	Landing          CodeLanding       `json:"landing"`
 	OwnersApprove    bool              `json:"owners_approve,omitempty"`
 	DeleteSource     CodeDeleteSource  `json:"delete_source"`
-	AutoRevert       bool              `json:"auto_revert,omitempty"`
 	AgentsEditChecks bool              `json:"agents_edit_checks,omitempty"`
 }
 
@@ -1097,7 +1094,7 @@ func (g CodeGate) EncodedBytes() int {
 
 // Gate is the rule's merge gate RESOLVED: nil where the rule sets none of its
 // fields, and otherwise every field its value or its default — writers, none,
-// pre_land at depth 4 and batch 2, seats. THE ONE PLACE those defaults are
+// a queue at depth 4 and batch 2, seats. THE ONE PLACE those defaults are
 // applied, read by the engine's reconcile, which records it, and by the
 // gate's bound here, so the gate validated is the gate recorded.
 func (rule CodeProtection) Gate() *CodeGate {
@@ -1108,8 +1105,7 @@ func (rule CodeProtection) Gate() *CodeGate {
 		MergeBy: rule.MergeBy.Resolved(), Approvals: rule.Approvals.Resolved(),
 		ApprovalsUnless: rule.ApprovalsUnless, HumanPaths: rule.HumanPaths, Checks: rule.Checks,
 		Landing: rule.Landing.Resolved(), OwnersApprove: rule.OwnersApprove,
-		DeleteSource: rule.DeleteSource.Resolved(), AutoRevert: rule.AutoRevert,
-		AgentsEditChecks: rule.AgentsEditChecks,
+		DeleteSource: rule.DeleteSource.Resolved(), AgentsEditChecks: rule.AgentsEditChecks,
 	}
 }
 
@@ -1126,7 +1122,7 @@ func (rule CodeProtection) gateFields() []string {
 		{"approvals_unless", len(rule.ApprovalsUnless) > 0}, {"human_paths", len(rule.HumanPaths) > 0},
 		{"checks", len(rule.Checks) > 0}, {"landing", rule.Landing != CodeLanding{}},
 		{"owners_approve", rule.OwnersApprove}, {"delete_source", rule.DeleteSource != ""},
-		{"auto_revert", rule.AutoRevert}, {"agents_edit_checks", rule.AgentsEditChecks},
+		{"agents_edit_checks", rule.AgentsEditChecks},
 	} {
 		if f.set {
 			set = append(set, f.name)
@@ -1236,33 +1232,6 @@ func (a CodeApprovals) Resolved() CodeApprovals {
 		return CodeApprovalsNone
 	}
 	return a
-}
-
-// CodeLandingPolicy is how a gated branch's queue lands a change.
-type CodeLandingPolicy string
-
-const (
-	// CodeLandingPreLand tests each change merged on the branch before it
-	// lands — what unset reads as.
-	CodeLandingPreLand CodeLandingPolicy = "pre_land"
-	// CodeLandingPostLand lands changes ahead of their checks, which then run
-	// on the branch's newest tip.
-	CodeLandingPostLand CodeLandingPolicy = "post_land"
-)
-
-// CodeLandingPolicies is the closed set, the default first.
-var CodeLandingPolicies = []CodeLandingPolicy{CodeLandingPreLand, CodeLandingPostLand}
-
-// Valid reports a value this build knows. Unset is valid: it reads as
-// pre_land.
-func (l CodeLandingPolicy) Valid() bool { return l == "" || slices.Contains(CodeLandingPolicies, l) }
-
-// Resolved is the value with its default applied: unset is pre_land.
-func (l CodeLandingPolicy) Resolved() CodeLandingPolicy {
-	if l == "" {
-		return CodeLandingPreLand
-	}
-	return l
 }
 
 // CodeDeleteSource is whether a merge deletes its change's source branch.
@@ -2172,10 +2141,6 @@ func (rule CodeProtection) validateGate(p *problems, path Path) {
 		}
 	}
 	landing := at(path, "landing")
-	if !rule.Landing.Policy.Valid() {
-		p.add(at(landing, "policy"), ErrUnknownValue, "%q (want %s, or unset for %s)",
-			rule.Landing.Policy, names(CodeLandingPolicies), CodeLandingPreLand)
-	}
 	if d := rule.Landing.Depth; d < 0 || d > CodeMaxQueueDepth {
 		p.add(at(landing, "depth"), ErrOutOfRange, "%d is outside 1..%d candidates, or unset for the default %d",
 			d, CodeMaxQueueDepth, CodeDefaultQueueDepth)
@@ -2237,7 +2202,7 @@ func validateGateClasses(p *problems, path Path, name string, list []CodeChangeC
 //     ADD, the repository's protect;
 //   - has a rule whose merge gate sets a field that does nothing as the rule
 //     stands ([idleGateFields]), located at that field;
-//   - has a pre_land queue that cannot land one change a day for every seat
+//   - has a merge queue that cannot land one change a day for every seat
 //     that may merge into it ([Company.mergeRateWarnings]), located at the
 //     rule's landing.
 //
@@ -2382,9 +2347,9 @@ func (c *Company) directBoxWarnings() []Warning {
 //
 //   - owners_approve on a repository that names no path owners: no change
 //     touches an owned path, so it waits for nobody's approval;
-//   - landing or auto_revert on a rule that requires no checks: only a branch
-//     whose merges wait for checks has a queue to land them, whose enqueuer
-//     consents to a revert — every merge into this one lands directly;
+//   - landing on a rule that requires no checks: only a branch whose merges
+//     wait for checks has a queue to land them — every merge into this one
+//     lands directly;
 //   - approvals_unless beside approvals: none, which exempts changes from
 //     approvals the rule never asks.
 //
@@ -2410,11 +2375,6 @@ func idleGateFields(i int, r CodeRepo) []Warning {
 			idle("landing", "and requires no checks: only a branch whose merges wait for checks has a queue "+
 				"to land them, so every merge into this one lands directly (require checks, or remove landing)")
 		}
-		if len(rule.Checks) == 0 && rule.AutoRevert {
-			idle("auto_revert", "and requires no checks: a revert is consented to when a change is queued, "+
-				"and only a branch whose merges wait for checks has a queue (require checks, or remove "+
-				"auto_revert)")
-		}
 		if len(rule.ApprovalsUnless) > 0 && rule.Approvals.Resolved() == CodeApprovalsNone {
 			idle("approvals_unless", "beside approvals: none, so it exempts changes from approvals the rule "+
 				"never asks (set approvals: one, or remove approvals_unless)")
@@ -2430,8 +2390,8 @@ func idleGateFields(i int, r CodeRepo) []Warning {
 const codeMergeRateDay = 24 * time.Hour
 
 // mergeRateWarnings is a warning for every rule of code.repos[i], r, whose
-// branch is a pre_land queue — a merge gate requiring a check, its landing
-// pre_land — that lands fewer changes a day than the seats that may merge
+// branch has a merge queue — a merge gate requiring a check — that lands
+// fewer changes a day than the seats that may merge
 // into it, at one change a day each (M5-D28): [LandingCapacity] at the rule's
 // depth and batch, a round as long as code.checks.max_timeout_seconds — the
 // longest a check of the company may run, so the slowest round the company
@@ -2453,7 +2413,7 @@ func (c *Company) mergeRateWarnings(units *org.Index, persons, i int, r CodeRepo
 			continue
 		}
 		g := rule.Gate()
-		if g == nil || len(g.Checks) == 0 || g.Landing.Policy != CodeLandingPreLand {
+		if g == nil || len(g.Checks) == 0 {
 			continue
 		}
 		by := g.MergeBy
