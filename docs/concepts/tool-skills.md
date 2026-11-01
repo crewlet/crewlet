@@ -137,7 +137,7 @@ Exactly one of these fields:
 | Trigger | Fires when |
 |---|---|
 | `tool: <name>` | `<name>` is in the phase's tool surface |
-| `mcp_server: <server>` | `<server>`'s tools reach the seat: a shared server (the default) reaches every agent seat, and a `shared: false` one only a seat that declares it under `mcp_env`, its own or its unit's |
+| `mcp_server: <server>` | `<server>`'s tools reach the seat: a shared server (the default) reaches every agent seat, a `shared: false` one only a seat that declares it under `mcp_env`, its own or its unit's, and one the company has turned off (`enabled: false`) reaches nobody. Read off the tools the seat's registry holds, the set the required-skill guard is armed against, so the catalogue offers exactly the skills the guard enforces; an `mcp_env` block alone, which names credentials, fires nothing |
 | `any_of: [...]` | Any sub-trigger fires (logical OR) |
 | `all_of: [...]` | Every sub-trigger fires (logical AND) |
 

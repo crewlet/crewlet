@@ -52,6 +52,10 @@ func TestTheToolStateComesFromTheResolvedBinding(t *testing.T) {
 	server := func(name, command string) config.MCPServer {
 		return config.MCPServer{Name: name, Transport: config.TransportStdio, Command: command, Shared: org.Off()}
 	}
+	off := func(s config.MCPServer) config.MCPServer {
+		s.Enabled = org.Off()
+		return s
+	}
 	live := held("a")
 	cases := []struct {
 		name string
@@ -66,6 +70,14 @@ func TestTheToolStateComesFromTheResolvedBinding(t *testing.T) {
 		{"Jira on the engine's own tools", &config.Company{}, seataccess.LaneJira, seataccess.ToolBuiltin},
 		{"Jira through mcp-atlassian", &config.Company{MCPServers: []config.MCPServer{
 			server("atl", "mcp-atlassian")}}, seataccess.LaneJira, seataccess.ToolLive},
+		// The engine's own tools read the Atlassian credential whether or
+		// not a server does, so a server turned off leaves Jira builtin.
+		{"Jira with mcp-atlassian turned off", &config.Company{MCPServers: []config.MCPServer{
+			off(server("atl", "mcp-atlassian"))}}, seataccess.LaneJira, seataccess.ToolBuiltin},
+		// One server on is the lane's tool, whatever else is off.
+		{"one of two servers turned off", &config.Company{MCPServers: []config.MCPServer{
+			off(server("chat", "slack-mcp-server")), server("chat-2", "slack-mcp-server")}},
+			seataccess.LaneSlack, seataccess.ToolLive},
 	}
 	for _, tc := range cases {
 		if got := seataccess.ToolStateOf(tc.c, tc.lane, on("a"), live); got != tc.want {

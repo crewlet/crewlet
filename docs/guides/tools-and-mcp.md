@@ -473,7 +473,7 @@ and, above the catalogue on the same screen, as a row of its own: every node
 re-publishes its MCP servers as they are at each beat on its presence heartbeat
 (per server, its instances counted), so **MCP servers** shows each server as
 *Running*, *Partly failing*, *Failing*, *Waiting for credentials*, *Not
-started* or *Not reported* with one cell per live node and the first failure's
+started*, *Not reported* or *Disabled* (turned off, [below](#turning-a-server-off)) with one cell per live node and the first failure's
 reason and seat, and the first waiting instance's sentence and seat
 (`GET /mcp-servers`, which takes `admin` because it shows each server's
 configured launch, as `/config` does; the heartbeat carries each reason
@@ -499,6 +499,46 @@ Over the API it is `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [configure via the API](configure-via-api.md). A per-seat server still needs
 a seat to declare credentials for it under `mcp_env`, which is written in the
 org builder.
+
+### Turning a server off
+
+`enabled: false` on an `mcp_servers` entry turns the server off and keeps
+everything else. Nothing runs it:
+
+- the shared instance, or every seat's instance, that was running is stopped
+  on the apply that turns it off;
+- no seat is granted it, so its tools leave every seat's surface and its
+  `mcp:<server>` leaves every seat's `tool_sources`;
+- no executor box is given it, even where a seat's `sandbox.mcp.servers` lists
+  it.
+
+Everything that names it stays, and is checked as before: the entry, every
+seat's and unit's `mcp_env` block for it, and every box listing. A `${VAR}` it
+would need is nobody's concern while it is off, so one that resolves to nothing
+holds nothing back and is not reported. Its row on Settings › MCP Tools reads
+*Disabled* (`state: disabled` on [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)),
+and an integration's Agents tab says the agent's tool is not running where
+every server that reads the integration's credential is off.
+
+Set it back to `true`, or remove the key (on is the default), and the next apply
+starts it with the credentials its seats kept. Removing a server instead means
+clearing every block that names it first, and losing what they held.
+
+### Saying what a server is for
+
+`description` is one line, at most 200 characters with no line breaks or tabs,
+saying what the server is for. Each agent's prompt names its MCP servers under
+`## Tools to discover` before it shows any of their tools, and prints the
+description beside the name:
+
+```text
+- MCP server `handbook`: Searches the engineering handbook and the runbooks
+```
+
+A name like `internal` says nothing about what is behind it; the description is
+what tells an agent which server to look in before it spends a call listing
+one. Editing it reaches the next turn and restarts nothing, since no server
+process reads it. It is also on the server's row of `GET /mcp-servers`.
 
 ### The curated catalogue, and a community registry
 
@@ -1175,6 +1215,7 @@ mcp_servers:
   # stdio, shared by all agents; it advertises no annotations, so these say
   # its tools only read (see Tool annotation overrides below)
   - name: tavily
+    description: Searches and reads the public web
     command: npm
     args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env: { TAVILY_API_KEY: "${TAVILY_API_KEY}" }

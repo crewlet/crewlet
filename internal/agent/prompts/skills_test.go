@@ -5,6 +5,10 @@ import (
 	"testing"
 )
 
+// engineerServers are the MCP servers the engineer's surface holds a tool of,
+// which is what a server-keyed skill fires on.
+var engineerServers = []string{"atlassian", "github"}
+
 // allSkills is the reference registry: one tool-keyed skill, one
 // server-keyed, and one that fires on either of two servers. Inserted in an
 // order that is NOT the key order, so the catalogue's own sort is what has to
@@ -41,11 +45,11 @@ func TestNoPhaseInlinesSkillBodies(t *testing.T) {
 	s := engineer()
 	for name, p := range map[string]string{
 		"executor": BuildExecutor(s, ExecutorInput{
-			AvailableTools: []string{"refresh_memory"}, Skills: cat,
+			AvailableTools: []string{"refresh_memory"}, Skills: cat, MCPServers: engineerServers,
 		}).Text,
-		"review": BuildReview(s, ReviewInput{Skills: cat}).Text,
+		"review": BuildReview(s, ReviewInput{Skills: cat, MCPServers: engineerServers}).Text,
 		"subagent": BuildSubagent(s, SubagentInput{
-			ParentSystemPrompt: "P", Skills: cat,
+			ParentSystemPrompt: "P", Skills: cat, MCPServers: engineerServers,
 		}).Text,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -73,22 +77,50 @@ func TestPlanCatalogueFiresOnToolsAndServers(t *testing.T) {
 	cat := allSkills()
 
 	// A tool-keyed skill needs its tool in the surface.
-	without := BuildExecutor(engineer(), ExecutorInput{Skills: cat}).Text
+	without := BuildExecutor(engineer(), ExecutorInput{Skills: cat, MCPServers: engineerServers}).Text
 	excludes(t, without, "tool:refresh_memory")
 
 	with := BuildExecutor(engineer(), ExecutorInput{
-		AvailableTools: []string{"refresh_memory"}, Skills: cat,
+		AvailableTools: []string{"refresh_memory"}, Skills: cat, MCPServers: engineerServers,
 	}).Text
 	contains(t, with, "## Tool skills", "tool:refresh_memory",
 		"Re-filter personal memory after recon")
 
-	// A server-keyed skill fires on the role's mcp_env, independent of
-	// tools: the Engineer carries atlassian and github.
+	// A server-keyed skill fires on the servers the surface holds,
+	// independent of tools: the engineer's holds atlassian and github.
 	contains(t, without, "mcp:github", "skill:platform_mentions")
 
-	// The Engineering Lead carries neither server.
+	// A surface holding neither server gets neither skill.
 	excludes(t, BuildExecutor(lead(), ExecutorInput{Skills: cat}).Text,
 		"mcp:github", "skill:platform_mentions")
+}
+
+// A SERVER SKILL FIRES ON THE SERVERS THE SURFACE HOLDS, which is the set the
+// skill guard arms its triggers against, and never on the keys of the seat's
+// mcp_env. A block there names the seat's credentials, not a server it
+// reaches: a server the company turned off keeps every block that names it and
+// reaches nobody, and a shared server reaches every agent with no block at all.
+// Read off the keys, the catalogue offered the first and missed the second.
+func TestAServerSkillFiresOnTheServersTheSurfaceHolds(t *testing.T) {
+	t.Parallel()
+	cat := allSkills()
+	// The engineer declares mcp_env blocks for atlassian and github; its
+	// surface holds neither, as when both are turned off.
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{Skills: cat}).Text,
+		"mcp:github", "skill:platform_mentions")
+	// The lead declares no block at all; its surface holds github, as a
+	// shared server's tools are held.
+	held := BuildExecutor(lead(), ExecutorInput{Skills: cat, MCPServers: []string{"github"}}).Text
+	contains(t, held, "mcp:github")
+	excludes(t, held, "skill:platform_mentions")
+	for name, p := range map[string]string{
+		"review":   BuildReview(lead(), ReviewInput{Skills: cat, MCPServers: []string{"atlassian"}}).Text,
+		"subagent": BuildSubagent(lead(), SubagentInput{ParentSystemPrompt: "P", Skills: cat, MCPServers: []string{"atlassian"}}).Text,
+	} {
+		t.Run(name, func(t *testing.T) {
+			contains(t, p, "skill:platform_mentions")
+		})
+	}
 }
 
 // Deterministic key-sorted order is what keeps the prompt prefix byte-stable
@@ -98,7 +130,7 @@ func TestPlanCatalogueFiresOnToolsAndServers(t *testing.T) {
 func TestCatalogueOrdersEntriesByKey(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{
-		AvailableTools: []string{"refresh_memory"}, Skills: allSkills(),
+		AvailableTools: []string{"refresh_memory"}, Skills: allSkills(), MCPServers: engineerServers,
 	}).Text
 	order(t, p, "- `mcp:github`", "- `skill:platform_mentions`", "- `tool:refresh_memory`")
 }
@@ -166,8 +198,8 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	}}
 	s := engineer()
 	for name, p := range map[string]string{
-		"executor": BuildExecutor(s, ExecutorInput{Skills: cat}).Text,
-		"subagent": BuildSubagent(s, SubagentInput{ParentSystemPrompt: "P", Skills: cat}).Text,
+		"executor": BuildExecutor(s, ExecutorInput{Skills: cat, MCPServers: engineerServers}).Text,
+		"subagent": BuildSubagent(s, SubagentInput{ParentSystemPrompt: "P", Skills: cat, MCPServers: engineerServers}).Text,
 	} {
 		t.Run(name, func(t *testing.T) {
 			contains(t, p, "- `mcp:github` (required — load before use) — GITHUB-SUMMARY")
@@ -180,7 +212,7 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	// Review is the exception: it has no domain tools and no
 	// load_tool_skill, so nothing is enforced there and the marker would
 	// point at a tool the reviewer does not have.
-	rv := BuildReview(s, ReviewInput{Skills: cat}).Text
+	rv := BuildReview(s, ReviewInput{Skills: cat, MCPServers: engineerServers}).Text
 	contains(t, rv, "- `mcp:github` — GITHUB-SUMMARY")
 	excludes(t, rv, "(required — load before use)", "engine rejects calls")
 	// Nor is the reviewer told to LOAD anything: its only tool is its
@@ -192,7 +224,7 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	// No enforcement note when nothing catalogued is required.
 	advisory := BuildExecutor(s, ExecutorInput{Skills: &fakeCatalogue{skills: []fakeSkill{
 		{key: "mcp:github", mcpServer: "github", summary: "GITHUB-SUMMARY"},
-	}}}).Text
+	}}, MCPServers: engineerServers}).Text
 	contains(t, advisory, "## Tool skills")
 	excludes(t, advisory, "(required — load before use)", "engine rejects calls")
 }
@@ -225,9 +257,9 @@ func TestNoRegistryMeansNoSkillScaffolding(t *testing.T) {
 func TestExecuteCatalogueIsScopedToTheExecutorsSurface(t *testing.T) {
 	t.Parallel()
 	cat := allSkills()
-	p := BuildExecutor(engineer(), ExecutorInput{Skills: cat}).Text
+	p := BuildExecutor(engineer(), ExecutorInput{Skills: cat, MCPServers: engineerServers}).Text
 	excludes(t, p, "tool:refresh_memory")
-	// Server-keyed skills still fire: they key on the role's MCP servers,
-	// not on the tool list.
+	// Server-keyed skills still fire: they key on the servers the surface
+	// holds, not on the tool list.
 	contains(t, p, "mcp:github")
 }

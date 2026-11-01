@@ -2195,6 +2195,7 @@ Everything else Chatlet could be told is either the operator's — how big the l
 mcp_servers:
   # shared stdio server (one instance for all agents)
   - name: tavily
+    description: Searches and reads the public web   # optional, one line beside its name in each agent's prompt
     command: npm
     args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env:
@@ -2220,13 +2221,14 @@ mcp_servers:
     transport: http                     # stdio | http (default: stdio)
     shared: false                       # per-role: each seat's own app token, bound by the engine
     url: "https://api.githubcopilot.com/mcp/"
+    enabled: true                       # optional, default true; false keeps the entry and starts nothing
     tool_prefix: ""                     # optional — prefix tool names
     tool_annotations: {}                # optional — behavioural-hint overrides (see Tool Capabilities)
     startup_timeout_seconds: 120        # optional — connect + handshake + discovery
     request_timeout_seconds: 300        # optional — one tool call
 ```
 
-Full field reference: `name` (required; `crewlet` is reserved — it is the name every coding CLI sees the seat's own tools under — over its run's session on this host, and over the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) in an executor's box — and a server called the same would be replaced by it there), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`, and `seat_credentials` (which agent credential a per-seat server reads, under which variable or header: `{kind, field, key, as, prefix}`; a server the engine recognises needs none, see [Tools & MCP](../guides/tools-and-mcp.md)).
+Full field reference: `name` (required; `crewlet` is reserved — it is the name every coding CLI sees the seat's own tools under — over its run's session on this host, and over the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) in an executor's box — and a server called the same would be replaced by it there), `enabled` (default `true`; `false` turns the server off and keeps the entry and every `mcp_env` block and box listing that names it, see [Tools & MCP](../guides/tools-and-mcp.md#turning-a-server-off)), `description` (what the server is for, one line of at most 200 characters with no line breaks, listed beside its name in each agent's prompt, see [Tools & MCP](../guides/tools-and-mcp.md#saying-what-a-server-is-for)), `transport` (`stdio`/`http`), `shared` (default `true`), `command`/`args`/`env` (stdio), `url`/`headers` (http), `optional_keys` (the keys of `env`, `headers` or a seat's `mcp_env` block for the server whose value may resolve to nothing: such a key is left out rather than holding the server back, and every other `${VAR}` must resolve before the server starts — see [Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)), `tool_prefix`, `tool_annotations`, `startup_timeout_seconds`, `request_timeout_seconds`, and `seat_credentials` (which agent credential a per-seat server reads, under which variable or header: `{kind, field, key, as, prefix}`; a server the engine recognises needs none, see [Tools & MCP](../guides/tools-and-mcp.md)).
 
 ### Timeouts
 

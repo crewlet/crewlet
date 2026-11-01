@@ -1577,6 +1577,25 @@
             "null"
           ]
         },
+        "description": {
+          "description": "What this server is for, one line of at most 200 characters; listed beside its name in each agent's prompt.",
+          "maxLength": 200,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Run this server (default on). Off keeps the entry and everything that names it, and starts nothing.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "env": {
           "additionalProperties": {
             "type": [

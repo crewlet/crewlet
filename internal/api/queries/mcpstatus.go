@@ -20,12 +20,21 @@ import (
 // MCPServerState is one server's condition across the fleet, decided here
 // from every node's report so a screen never re-derives it.
 //
-// SIX VALUES, because each calls for something different from the person
+// SEVEN VALUES, because each calls for something different from the person
 // reading it: nothing to do, a node to look at, a server to fix, a grant to
-// write, a provisioning pass to let finish, and a fleet that has not said.
+// write, a provisioning pass to let finish, a fleet that has not said, and a
+// server somebody turned off on purpose.
 type MCPServerState string
 
 const (
+	// MCPDisabled is a server the configuration turns off
+	// (`enabled: false`): nothing is started for it and no seat is granted
+	// it, by choice. DECIDED FIRST, before anything a node reports, so a
+	// server turned off reads as off rather than as not started, which
+	// would send the reader looking for a grant to write; a node still on
+	// an earlier revision that runs it shows in its own cell until it
+	// applies this one.
+	MCPDisabled MCPServerState = "disabled"
 	// MCPRunning — every instance any node launched is serving: it
 	// started, listed its tools and was up at its node's last beat.
 	MCPRunning MCPServerState = "running"
@@ -60,7 +69,7 @@ const (
 
 // MCPServerStates is every state, for the gate holding the dashboard's copy.
 var MCPServerStates = []MCPServerState{
-	MCPRunning, MCPPartial, MCPFailing, MCPWaiting, MCPNotStarted, MCPUnreported,
+	MCPDisabled, MCPRunning, MCPPartial, MCPFailing, MCPWaiting, MCPNotStarted, MCPUnreported,
 }
 
 // Valid reports whether s is a state this build sends.
@@ -125,6 +134,15 @@ type MCPServerRow struct {
 	// that declares credentials for it. From the configuration where it
 	// declares the server, else from a node's report.
 	Shared bool `json:"shared"`
+	// Enabled is whether the configuration runs the server at all
+	// (`enabled`, default true); a server it turns off is [MCPDisabled].
+	// True on a server the configuration does not carry, which a node is
+	// running.
+	Enabled bool `json:"enabled"`
+	// Description is what the configuration says the server is for, the
+	// line each agent's prompt lists beside its name; "" where it says
+	// nothing, or does not carry the server.
+	Description string `json:"description"`
 	// Transport, Command, Args and URL are the launch as configured —
 	// the parts that are not credentials (`env` and `headers` are, and
 	// are not here). Empty on a server the configuration does not carry.
@@ -253,7 +271,7 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	for _, r := range reports {
 		for name, m := range r.servers {
 			if _, known := rows[name]; !known {
-				rows[name] = &MCPServerRow{Name: name, Title: name, Shared: m.Shared, Args: []string{}}
+				rows[name] = &MCPServerRow{Name: name, Title: name, Shared: m.Shared, Enabled: true, Args: []string{}}
 			}
 		}
 	}
@@ -294,7 +312,7 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		}
 		slices.Sort(unlisted)
 		row.UnlistedAnnotations = append([]string{}, unlisted...)
-		row.State = mcpState(anyReported, row.Started, row.Failed, row.Waiting)
+		row.State = mcpState(row.Enabled, anyReported, row.Started, row.Failed, row.Waiting)
 		out.Servers = append(out.Servers, *row)
 	}
 	return out, nil
@@ -323,14 +341,16 @@ func instanceSeat(organization *org.Organization, id uuid.UUID) string {
 // no credential in it.
 func configuredRow(m *config.MCPServer) *MCPServerRow {
 	row := &MCPServerRow{
-		Name:       m.Name,
-		Title:      m.Name,
-		Configured: true,
-		Shared:     m.IsShared(),
-		Transport:  string(m.Kind()),
-		Command:    m.Command,
-		Args:       append([]string{}, m.Args...),
-		URL:        m.URL,
+		Name:        m.Name,
+		Title:       m.Name,
+		Configured:  true,
+		Shared:      m.IsShared(),
+		Enabled:     m.IsEnabled(),
+		Description: m.Description,
+		Transport:   string(m.Kind()),
+		Command:     m.Command,
+		Args:        append([]string{}, m.Args...),
+		URL:         m.URL,
 	}
 	if entry, ok := catalogue.Recognise(m.Launch()); ok {
 		row.Title, row.Catalogue, row.Vendor = entry.Title, entry.ID, entry.Vendor
@@ -340,12 +360,18 @@ func configuredRow(m *config.MCPServer) *MCPServerRow {
 
 // mcpState is the ONE reading of a server's counts.
 //
+// A SERVER TURNED OFF IS OFF whatever the counts say ([MCPDisabled]): it is
+// the configuration's decision, and the only counts left are a node's that has
+// not applied it yet.
+//
 // A WAITING INSTANCE DECIDES THE STATE ONLY WHERE NOTHING ELSE DOES: a server
 // serving some seats while another's credential is minted is running, since
 // nothing is wrong with it, and one with a failure is partial or failing
 // whatever waits beside it, since the failure is what somebody has to act on.
-func mcpState(anyReported bool, started, failed, waiting int) MCPServerState {
+func mcpState(enabled, anyReported bool, started, failed, waiting int) MCPServerState {
 	switch {
+	case !enabled:
+		return MCPDisabled
 	case !anyReported:
 		return MCPUnreported
 	case started > 0 && failed > 0:
