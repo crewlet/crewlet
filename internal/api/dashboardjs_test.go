@@ -1452,7 +1452,13 @@ const (
 	// the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows
 	// +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB
 	// and Home +0.2 KiB, less 0.2 KiB in the one sheet. 5254 KiB.
-	treeBudget = 5<<20 + 134<<10
+	// Each launch of an executor's run drawn inside its round's Execute card
+	// rather than as a phase of its own (the `executor_collected` record read
+	// by the turn, the phase lists, the waterfall and the executors board)
+	// took it from 5253.5 KiB to 5259.0 KiB (+5.5 KiB): the settled turn
+	// chunk +2.1 KiB, the phases module +2.1 KiB, the live screens +0.8 KiB
+	// and the wire protocol +0.6 KiB. 5260 KiB.
+	treeBudget = 5<<20 + 140<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
