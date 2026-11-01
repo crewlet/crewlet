@@ -213,6 +213,16 @@ type carrier interface {
 	Continues(box, writer string) (bool, string)
 }
 
+// mcpHolder is a harness that can be held to the MCP servers a run hands it,
+// starting none its own configuration, a repository's or a plugin's declares
+// ([sandbox.RunRequest.OnlyMCPServers]).
+//
+// OPTIONAL, as [resumer] is, and only Claude Code's runner implements it: the
+// one run that asks for it, the assistant's deep work, runs on Claude Code
+// alone. A run held that way on any other harness is refused rather than
+// started on every server that harness's configuration adds up to.
+type mcpHolder interface{ HoldsToItsMCPServers() bool }
+
 // sessionTotals is a harness whose result, on a run that continues a session, can
 // state the SESSION's spend rather than the run's own: from the release
 // TotalsRestored names, the harness starts a continued session from the totals
@@ -498,6 +508,11 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	if err := r.refuseCarried(req); err != nil {
 		return sandbox.RunHandle{}, err
+	}
+	if h, ok := r.harness.(mcpHolder); req.OnlyMCPServers && (!ok || !h.HoldsToItsMCPServers()) {
+		return sandbox.RunHandle{}, fmt.Errorf("executor: %s starts the MCP servers its own "+
+			"configuration declares, and this run asks to be held to the ones it is handed",
+			r.harness.Name())
 	}
 	paths := PathsFor(box)
 	// WHAT THE SESSION HAD SPENT, read before the clear removes it: the

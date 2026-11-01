@@ -874,8 +874,9 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		//
 		// The box is the boundary here exactly as it is for claude-code's
 		// --permission-mode bypassPermissions (see [ClaudeCode.Command]):
-		// what the agent may reach was decided engine-side, before it
-		// started, by which MCP servers and credentials the run carries. And
+		// what the agent may reach is its cell's to bound, beside the
+		// credentials the run carries, and its MCP servers are the run's and
+		// whatever the image's and the repository's configuration add. And
 		// a vendor default is not a posture to rest on — it is a value that
 		// moves between releases, which is the assumption every profile in
 		// internal/providers/llm/harness is built on.

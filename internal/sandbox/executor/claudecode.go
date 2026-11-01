@@ -105,6 +105,10 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 // Resumes says Claude Code continues a session it reported (`--resume`).
 func (ClaudeCode) Resumes() bool { return true }
 
+// HoldsToItsMCPServers says a Claude Code run can be held to the MCP servers
+// it is handed (`--strict-mcp-config`), which the assistant's deep work asks.
+func (ClaudeCode) HoldsToItsMCPServers() bool { return true }
+
 // NoteInstruction is the standing instruction about notes a Claude Code run is
 // given: it takes a person's notes between its steps, through the hooks its
 // settings file holds — see [ClaudeCode].
@@ -130,7 +134,7 @@ func (ClaudeCode) Session(req sandbox.RunRequest) Session {
 // ([claudeCapture]), exiting with the harness's own status.
 //
 // Pure and deterministic given its session, so the exact flags can be pinned by
-// a test. Budget caps are appended only when set, so a minimal call stays
+// a test. The turn cap is appended only when set, so a minimal call stays
 // minimal.
 //
 // THE BRIEF IS NOT ON IT: `-p` with no prompt reads the prompt on stdin, which
@@ -144,11 +148,12 @@ func (ClaudeCode) Session(req sandbox.RunRequest) Session {
 // consequence of how the run is driven rather than an oversight: a headless
 // run has nobody to answer a permission prompt, so a gate left to ask would
 // hang the run or refuse the step, and there is no per-tool allowlist inside
-// it. What the agent may reach is decided before it starts, engine-side: by
-// its box's CELL — `container` and `e2b` keep it off the engine host, while
-// `direct` runs it on the engine host as the engine's own user — by which MCP
-// servers were rendered into its config, and by which credentials the run
-// env carries.
+// it. What the agent may reach is its box's CELL's to bound — `container` and
+// `e2b` keep it off the engine host, while `direct` runs it on the engine host
+// as the engine's own user — beside the credentials the run env carries; the
+// MCP servers it starts are the ones the engine hands it and, for a seat's
+// executor, whatever its own configuration declares, as for a person running
+// it ([sandbox.RunRequest.OnlyMCPServers]).
 //
 // STREAM-JSON, AND --verbose WITH IT. `--output-format json` prints ONE object
 // when the run ends and nothing before it, and in print mode this harness writes
@@ -206,15 +211,20 @@ func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, 
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-turns", strconv.Itoa(req.Limits.MaxTurns))
 	}
-	if req.Limits.MaxBudgetUSD > 0 {
-		parts = append(parts, "--max-budget-usd",
-			strconv.FormatFloat(req.Limits.MaxBudgetUSD, 'f', -1, 64))
-	}
 	if configPath != "" {
-		// --strict-mcp-config so the agent gets EXACTLY the scoped surface:
-		// without it the harness also loads whatever config the box's home
-		// happens to carry, which on a reused box is the previous run's.
-		parts = append(parts, "--mcp-config", shellQuote(configPath), "--strict-mcp-config")
+		parts = append(parts, "--mcp-config", shellQuote(configPath))
+	}
+	// THE SERVERS IT IS HANDED ALONE only for a run held to them
+	// ([sandbox.RunRequest.OnlyMCPServers]): the assistant's deep work, with
+	// or without a file of servers. A seat's executor starts what Claude Code
+	// starts for a person beside the engine's servers: the box's own user- and
+	// local-scope servers, the repository's .mcp.json — which a print-mode run
+	// connects without the approval it has nobody to ask for (the vendor's MCP
+	// page, "Project scope") — a plugin's, and the signed-in account's claude.ai
+	// connectors. It used to run strict everywhere, which kept a repository's
+	// own tool servers and the box's from every seat.
+	if req.OnlyMCPServers {
+		parts = append(parts, "--strict-mcp-config")
 	}
 
 	var b strings.Builder

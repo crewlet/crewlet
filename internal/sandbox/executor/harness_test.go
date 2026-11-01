@@ -44,7 +44,7 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 	t.Parallel()
 	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, ""))
-	for _, absent := range []string{"--max-turns", "--max-budget-usd", "--model", "--mcp-config", "--settings"} {
+	for _, absent := range []string{"--max-turns", "--model", "--mcp-config", "--settings"} {
 		if strings.Contains(cmd, absent) {
 			t.Fatalf("%q was added for an unset value:\n%s", absent, cmd)
 		}
@@ -55,15 +55,12 @@ func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 	t.Parallel()
 	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{
 		Brief:  "x",
-		Limits: sandbox.Limits{MaxTurns: 30, MaxBudgetUSD: 2.5},
+		Limits: sandbox.Limits{MaxTurns: 30},
 		Model:  "claude-opus-5",
 	}, executor.Paths{}, "/box/.crewlet/mcp.json"))
 	for _, want := range []string{
-		"--max-turns 30", "--max-budget-usd 2.5", "--model 'claude-opus-5'",
+		"--max-turns 30", "--model 'claude-opus-5'",
 		"--mcp-config '/box/.crewlet/mcp.json'",
-		// Without strict mode the harness ALSO loads whatever config the box's
-		// home carries, which on a reused box is the previous run's.
-		"--strict-mcp-config",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("the invocation is missing %q:\n%s", want, cmd)
