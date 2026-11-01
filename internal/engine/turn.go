@@ -578,7 +578,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// constituents, and only the ask a model is handed is merged.
 	trigger := routing.Events
 	if routing.Coalesce {
-		merged, ok := mergeNotifications(d.promptRegistry(), routing.Events)
+		merged, ok := mergePartition(d.promptRegistry(), routing.Events)
 		if !ok {
 			// A PARTITION THAT CANNOT BE MERGED degrades to per-event
 			// dispatch: requeue the tail FIRST, then run the head in the
@@ -630,13 +630,17 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// the two lines about a turn that do not name its trace, which is
 	// precisely when an operator is looking for them.
 	//
-	// A COALESCED TURN HAS ONE TRACE AND SEVERAL CAUSES. The trace comes from
+	// A COALESCED TURN HAS ONE TRACE AND SEVERAL CAUSES, and the trace is the
+	// one the merged trigger carries. For a conversation's digest that is
 	// the first event of the partition, the same event describeTurn takes the
-	// trigger from — ten Slack comments become one turn under one trace. The
-	// others are already recorded as the turn's interactions; a span cannot
-	// have two parents, and inventing a root to hold them would put a node
-	// above the webhook that actually happened.
-	ctx = tracing.WithRemote(ctx, triggerTrace(routing.Events))
+	// trigger from, so ten comments on one thread become one turn under one
+	// trace and the others are recorded as the turn's interactions: a span
+	// cannot have two parents, and inventing a root to hold them would put a
+	// node above the webhook that actually happened. For a schedule's waiting
+	// fires it is the LATEST fire's, because that fire is the run and each
+	// earlier one is recorded as superseded under its own trace
+	// ([Dispatcher.noteSuperseded]).
+	ctx = tracing.WithRemote(ctx, triggerTrace(trigger))
 	depth, chain := delegationOf(routing.Events)
 	// MINTED HERE, at the one frame that knows a partition is about to
 	// RUN, because both halves of the dispatch's own bookkeeping need it:
@@ -666,6 +670,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	// for a direct message's thread reply, where the record would otherwise
 	// name the whole DM channel and say nothing about which batch collapsed.
 	d.noteCoalesced(ctx, handle, partitionKeyOf(routing.Events), routing)
+	d.noteSuperseded(ctx, handle, routing.Events, trigger)
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if history, err := d.history(ctx, handle, req.ConversationKey); err == nil {
 		req.History = history
@@ -1826,6 +1831,47 @@ func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, partition string
 	}, tracing.TraceOf(ctx))
 	ev.Source = "engine." + routing.Events[0].Source
 	d.Observe(ctx, ev)
+}
+
+// noteSuperseded records every scheduled fire the turn's trigger stands for
+// and does not run ([mergeScheduledFires]), each under that fire's OWN trace.
+//
+// UNDER ITS OWN TRACE because a fire's trace is how its schedule history finds
+// what became of it: the run is found by the turn under the kept fire's trace,
+// and a fire that was not run is found by this record under its own. Recorded
+// at the merge, like the coalescing record beside it, because this is the one
+// frame that holds both the constituents and the run they became. A turn that
+// fails and comes back merges again and records again, which a reader asking
+// "was this fire run" answers the same way.
+//
+// Best effort and nil-safe, like the records beside it.
+func (d *Dispatcher) noteSuperseded(ctx context.Context, handle string, evs, trigger []*events.Event) {
+	if d.Observe == nil || len(trigger) != 1 {
+		return
+	}
+	kept, ok := events.DataAs[*types.TaskAssigned](trigger[0])
+	if !ok || kept == nil || len(kept.Missed) == 0 {
+		return
+	}
+	missed := make(map[string]bool, len(kept.Missed))
+	for _, m := range kept.Missed {
+		missed[m.TaskID] = true
+	}
+	for _, ev := range evs {
+		fire, ok := events.DataAs[*types.TaskAssigned](ev)
+		if !ok || fire == nil || !missed[fire.TaskID] {
+			continue
+		}
+		rec := events.New(types.ScheduledFireSuperseded{
+			ScheduleName: fire.Schedule,
+			TargetHandle: handle,
+			TaskID:       fire.TaskID,
+			ScheduledAt:  dueAt(ev, fire).Format(time.RFC3339),
+			SupersededBy: kept.TaskID,
+		}, events.TraceContext{TraceID: ev.TraceID, ParentSpanID: ev.SpanID})
+		rec.Source = "engine." + ev.Source
+		d.Observe(ctx, rec)
+	}
 }
 
 // noteSkipped records every constituent the completion ledger already worked.

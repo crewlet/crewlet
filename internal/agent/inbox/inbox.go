@@ -398,10 +398,12 @@ type Routing struct {
 
 // Route decides how the surviving events reach a turn.
 //
-// A multi-event partition is always external notifications for one
-// conversation — every other inbox event type keys uniquely and so arrives
-// alone — which is why merging is safe and why a heterogeneous partition
-// reaching here is a key-scheme bug rather than an ordinary case.
+// A multi-event partition is always one of two things: external notifications
+// for one conversation, or fires of one schedule that waited in the inbox
+// together (schedule.FirePartition). Every other inbox event type keys
+// uniquely and so arrives alone, which is why merging is safe and why a
+// heterogeneous partition reaching here is a key-scheme bug rather than an
+// ordinary case.
 //
 // ledgered names the event types the completion ledger records. Only those
 // contribute to the work key: a type the ledger never writes cannot be looked

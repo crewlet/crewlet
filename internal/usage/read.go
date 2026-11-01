@@ -326,8 +326,10 @@ type ScheduleRunsQuery struct {
 	// Target narrows to the fires addressed to one seat.
 	Target string
 
-	// Outcome narrows to the fires the ledger recorded under one outcome
-	// (`fired`, `skipped_catchup`, `skipped_paused`); empty is every one.
+	// Outcome narrows to the fires recorded under one outcome (`fired`,
+	// `skipped_catchup`, `skipped_paused`, or `skipped_superseded` for a fire
+	// its seat did not run because a later fire of the schedule ran in its
+	// place); empty is every one.
 	Outcome string
 
 	// Limit is how many rows; one more is read to say whether there are
