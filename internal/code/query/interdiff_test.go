@@ -1,7 +1,12 @@
 package query_test
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -99,6 +104,95 @@ func TestTheInterdiffKeepsToTheChangesPaths(t *testing.T) {
 		if kept := len(got.Diff.Files) == 1 && got.Diff.Patch != ""; kept != tc.kept {
 			t.Errorf("the interdiff's patch of %s holds %d files (%q), want it kept %t", tc.file,
 				len(got.Diff.Files), got.Diff.Patch, tc.kept)
+		}
+	}
+}
+
+// AN INTERDIFF'S GIT IS THE CHANGE'S, NEVER THE TARGET'S. A change rebased
+// over a target that moved thirty files of its own — a busy monorepo's —
+// adds a file, deletes one, makes one executable, turns one into a link and
+// edits one: its interdiff walks neither head's tree (no diff-tree runs) but
+// looks each touched path up at both heads, two lines of one lookup a path
+// and none of the target's, and answers exactly the heads' whole diff kept to
+// the touched paths — each file's status, modes, ids and counts as git's own
+// walk gives them — and one file's patch exactly as the heads' diff of it.
+//
+// Mutations: walk the heads for an exact filter — a diff-tree runs, red; read
+// a mode change as a change of type — m.sh's status is T, red; read a change
+// of type as a modification — t.txt's status is M, red.
+func TestAnInterdiffsGitIsTheChangesNeverTheTargets(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	base := x.commit(map[string]string{"a.txt": "v1\n", "b.txt": "b\n", "m.sh": "echo\n", "t.txt": "t\n"},
+		"base")
+	x.branch("change", base)
+	first := x.commitStaged(map[string]string{"a.txt": "v2\n"}, nil, "the change's first revision")
+	x.git("checkout", "-q", "main")
+	churn := map[string]string{}
+	for i := range 30 {
+		churn[fmt.Sprintf("z/%02d.txt", i)] = fmt.Sprintf("target %d\n", i)
+	}
+	moved := x.commit(churn, "the target moves thirty files of its own")
+	x.git("checkout", "-q", "change")
+	x.git("rebase", "-q", "main")
+	second := x.commitStaged(map[string]string{"a.txt": "v3\n", "n.txt": "new\n"}, func() {
+		if err := os.Remove(filepath.Join(x.work, "b.txt")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(x.work, "m.sh"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		x.link("t.txt", "a.txt")
+	}, "the change's second revision")
+	x.git("branch", "first-revision", first)
+	x.push(codetest.RepoName, "refs/heads/change", "refs/heads/first-revision")
+	repo := x.repo(codetest.RepoName)
+	s := x.server(0, query.Options{})
+
+	from, to := x.facts(s, repo, first, base), x.facts(s, repo, second, moved)
+	touched := []string{"a.txt", "b.txt", "m.sh", "n.txt", "t.txt"}
+	if from.MergeBase == to.MergeBase || !slices.Equal(to.Touched, touched) {
+		t.Fatalf("the revisions are based on %s and %s, the later touching %v; want two bases and %v",
+			from.MergeBase, to.MergeBase, to.Touched, touched)
+	}
+	whole := mustRead(t, s, diffQ(repo, code.DiffQuery{Base: first, Head: second}))
+	var want []code.DiffFile
+	for _, f := range whole.Diff.Files {
+		if slices.Contains(touched, f.Path) {
+			want = append(want, f)
+		}
+	}
+	if len(whole.Diff.Files) != len(want)+len(churn) {
+		t.Fatalf("the heads' whole diff lists %d files, want the %d touched and the target's %d: the case "+
+			"could not fail", len(whole.Diff.Files), len(want), len(churn))
+	}
+
+	rec := &recording{}
+	lean := x.server(0, query.Options{Git: rec.on(x, 0)})
+	q := code.InterdiffQuery{FromBase: from.MergeBase, FromHead: first, ToBase: to.MergeBase, ToHead: second,
+		FromTouched: from.Touched, ToTouched: to.Touched}
+	a := mustRead(t, lean, interdiffQ(repo, q))
+	if !reflect.DeepEqual(a.Diff.Files, want) || a.Diff.Total != len(want) {
+		t.Errorf("the interdiff lists\n\t%+v\nwant the heads' whole diff kept to the touched paths\n\t%+v",
+			a.Diff.Files, want)
+	}
+	one := q
+	one.File = "t.txt"
+	patch := mustRead(t, lean, interdiffQ(repo, one))
+	own := mustRead(t, s, diffQ(repo, code.DiffQuery{Base: first, Head: second, File: "t.txt"}))
+	if patch.Diff.Patch == "" || patch.Diff.Patch != own.Diff.Patch {
+		t.Errorf("the interdiff's patch of t.txt is %q, want the heads' own %q", patch.Diff.Patch,
+			own.Diff.Patch)
+	}
+	for _, c := range rec.ran() {
+		if c.Args[0] == "diff-tree" {
+			t.Errorf("the interdiff walked the heads: %v", c.Args)
+		}
+	}
+	for _, in := range rec.fed("cat-file") {
+		if lines := strings.Count(in, "\x00"); strings.Contains(in, "z/") || lines > 2*len(touched) {
+			t.Errorf("a lookup of the interdiff was fed %d lines (%q), want two a touched path and none of the "+
+				"target's", lines, in)
 		}
 	}
 }

@@ -50,11 +50,12 @@ import (
 // change's revisions: their facts walk and diff the paths by ids alone, and
 // lex a Go file's two versions — `--output=y.go`'s — from blobs a batch is
 // fed by id, anchors on them are found by the batch and diffed by pairs
-// numbered rather than named, and an interdiff kept to them filters git's
-// records as a filtered stat does, its touched paths no pathspec.
+// numbered rather than named, and an interdiff kept to them looks its touched
+// paths up as `<id>:<path>` lines of a lookup's batch, no pathspec.
 //
 // Mutations: the log's path before `--`, or `--output=x` added to the log's
-// or the blame's arguments → red.
+// or the blame's arguments → red; an interdiff kept to its touched paths that
+// walks the heads rather than look them up → red.
 func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
@@ -167,6 +168,12 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	}) {
 		t.Error("the facts lexed no Go file's versions: --output=y.go's change ran no batch of its blobs")
 	}
+	if !slices.ContainsFunc(ran, func(c gitproc.Cmd) bool {
+		return c.Args[0] == "cat-file" &&
+			strings.HasPrefix(c.Args[1], "--batch-check=%(objectmode)")
+	}) {
+		t.Error("the interdiff kept to its touched paths looked none of them up")
+	}
 	fed := strings.Join(rec.fed("cat-file"), "\x00")
 	for _, p := range paths {
 		if !strings.Contains(fed, head+":"+p+"\x00") {
@@ -186,6 +193,7 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 // validated hex, ending the list.
 var templates = [][]string{
 	{"cat-file", "--batch-check", "-Z"},
+	{"cat-file", "--batch-check=%(objectmode) %(objectname) %(objecttype)", "-Z"},
 	{"cat-file", "blob", "<oid>"},
 	{"rev-parse", "<abbrevs>"},
 	{"ls-tree", "-z", "-l", "<oid>"},

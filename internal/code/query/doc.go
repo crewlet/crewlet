@@ -99,9 +99,10 @@
 // (`:(literal)<path>`, log.go) and a blame's as itself, blame taking a path
 // rather than a pathspec (blame.go). Never `log --stdin`, which reads a path
 // a line at a time and takes a carriage return off its end. A diff's paths are
-// filtered here, over git's whole raw answer, and so are an interdiff's
-// touched paths, each a file's whole name, so no option can hide in one:
-// `--output=x` is a file's name there like any other. A re-anchoring's
+// filtered here, over git's whole raw answer, and an interdiff's touched
+// paths are each a file's whole name, looked up at both heads as
+// `<head>:<path>` lines of one cat-file's standard input (interdiff.go), so no
+// option can hide in one: `--output=x` is a file's name there like any other. A re-anchoring's
 // diff-pairs is handed no path at all, its pairs numbered (anchor.go).
 // TestAPathReachesGitOnlyAsData holds every argument list a read runs to its
 // template, a history's and a blame's path the one argument after `--`.

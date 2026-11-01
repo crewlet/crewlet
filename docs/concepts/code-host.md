@@ -5938,10 +5938,15 @@ between the two brought in what the target changed meanwhile, and the files
 neither revision touches differ between the heads without being anything the
 change did. It is read as a diff is — its stat a page at a time, or one file's
 patch — and a file is kept by its whole name, so the touched path `a*` keeps
-the file `a*` and never `ab`. The paths are judged by the node over git's own
-records, never handed to git as a pathspec ([A path is data](#server-side-reads)).
-Where either revision touches all, or the two share their base — whose heads
-then differ only in files one of them touches — it is the heads' whole diff.
+the file `a*` and never `ab`. The paths are never handed to git as a pathspec
+([A path is data](#server-side-reads)): each touched path is looked up at both
+heads, one lookup on git's standard input for them all, and only the files
+whose two entries differ are diffed — so an interdiff costs git two lookups a
+touched path and the change's own diffs, however much the target moved
+between the two bases, and a change rebased over a busy target reads none of
+the target's files. Where either revision touches all, or the two share their
+base — whose heads then differ only in files one of them touches — it is the
+heads' whole diff.
 
 ---
 

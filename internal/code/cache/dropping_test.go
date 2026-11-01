@@ -517,6 +517,7 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/code/query/facts.go", "diff-tree", queryServes},
 	{"internal/code/query/facts.go", "patch-id", queryServes},
 	{"internal/code/query/facts.go", "cat-file", queryServes},
+	{"internal/code/query/interdiff.go", "cat-file", queryServes},
 	{"internal/code/query/landed.go", "merge-base", queryServes},
 	{"internal/code/query/log.go", "log", queryServes},
 	{"internal/code/query/objects.go", "rev-parse", queryServes},

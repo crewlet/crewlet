@@ -606,7 +606,8 @@ var cacheWriters = []writerRow{
 		"a seat's read of a diff or an interdiff — its stat's raw records, with their counts where the stat " +
 			"admits every file, and the raw record of the one file a patch names — whose only arguments not " +
 			"spelled as literals are the two whole object ids a read resolved and `-M`; a path never reaches " +
-			"the command line (the stat is filtered after git answers, an interdiff's by its touched paths, and " +
+			"the command line (the stat is filtered after git answers — an interdiff kept to its touched paths " +
+			"walks no tree, looking each path up on a cat-file's standard input instead — and " +
 			"the records it admits reach diff-pairs on its standard input), and " +
 			"query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no " +
 			"--output can be added unseen", nil},
