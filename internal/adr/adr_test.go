@@ -326,11 +326,15 @@ func TestACitationOfARecordNobodyWroteIsReported(t *testing.T) {
 	}
 }
 
-// AND THE INDEX IS THE RECORDS.
+// AND THE INDEX IS THE RECORDS, each on one row.
 //
 // adr/README.md carries the table a reader scans, and a table maintained by
 // hand goes stale on the first record somebody adds — silently, and in the
-// direction that matters least to the person who added it.
+// direction that matters least to the person who added it. A record's row is
+// counted as well as found: a merge that keeps both sides of a conflict in the
+// table lists a record twice, and a reader of two rows cannot tell which one
+// is current. ADR-0071 sat on two identical rows while the gate only asked
+// whether its file name appeared.
 func TestTheIndexNamesEveryRecord(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -340,6 +344,12 @@ func TestTheIndexNamesEveryRecord(t *testing.T) {
 		if !strings.Contains(index, r.File) {
 			t.Errorf("%s is not linked from adr/README.md, so it is reachable "+
 				"only by listing the directory", r.File)
+			continue
+		}
+		if rows := indexRows(index, r.File); rows != 1 {
+			t.Errorf("%s has %d rows in adr/README.md's table, want one: delete "+
+				"the copies, keeping the row that states the decision as it stands",
+				r.File, rows)
 		}
 	}
 	for _, link := range markdownLinks(index) {
@@ -348,6 +358,36 @@ func TestTheIndexNamesEveryRecord(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(root, adr.Dir, link)); err != nil {
 			t.Errorf("adr/README.md links %s and there is no such record", link)
+		}
+	}
+}
+
+// indexRows counts the table rows of index whose first cell links file.
+func indexRows(index, file string) int {
+	n := 0
+	for _, line := range strings.Split(index, "\n") {
+		rest, ok := strings.CutPrefix(line, "| [")
+		if !ok {
+			continue
+		}
+		if _, after, found := strings.Cut(rest, "]("); found && strings.HasPrefix(after, file+")") {
+			n++
+		}
+	}
+	return n
+}
+
+// A ROW IS COUNTED BY ITS LINK, so a row that names a record in its prose is
+// not a second row for it, and a repeated row is.
+func TestAnIndexRowIsCountedByItsLink(t *testing.T) {
+	t.Parallel()
+	index := "| [0001](0001-a.md) | A, which [0002](0002-b.md) refines | `TestA` |\n" +
+		"| [0002](0002-b.md) | B | `TestB` |\n" +
+		"| [0002](0002-b.md) | B | `TestB` |\n" +
+		"See [0001](0001-a.md) for the first.\n"
+	for file, want := range map[string]int{"0001-a.md": 1, "0002-b.md": 2, "0003-c.md": 0} {
+		if got := indexRows(index, file); got != want {
+			t.Errorf("indexRows(%s) = %d, want %d", file, got, want)
 		}
 	}
 }
