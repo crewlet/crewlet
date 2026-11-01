@@ -2003,63 +2003,13 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 		// what it decided before this call answers.
 		Pattern: statelog.PatternSequenced,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			// THE ROOM IS READ BEFORE ANYTHING ELSE, and not only
-			// for the routing: the applier REFUSES a post into a
-			// room it has no row for, because under a strict replay
-			// the room's create is below this position on the same
-			// log — so publishing one would not fail this caller, it
-			// would stall every node's applier on this domain.
-			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			room, _, err := readRoomTx(ctx, tx, channelID)
+			d, err := s.draft(ctx, tx, actor, channelID, replyTo, id, in, mentions)
+			out = d.room
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			out = room
-			if room.ArchivedAt != nil {
-				// EVERY WORD OF IT IS STILL READABLE; it takes nothing
-				// new until somebody reopens it, and who may is the
-				// archive's own relation (authz's chat.channel.archive).
-				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrArchived,
-					archivedRoom)
-			}
-			held, err := readMembersTx(ctx, tx, room.ID)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := reachable(room, held, actor); err != nil {
-				return statelog.Decision{}, err
-			}
-			root, rootAuthor, err := s.threadOf(ctx, tx, room.ID, replyTo)
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			named := s.employed(mentions)
-			payload := MessagePost{
-				V: DocumentVersion, MessageID: id, Body: in.Body,
-				ThreadRoot: root, Mentions: named,
-				Collective: in.Collective, Links: in.Links,
-				Author: actor.Name(), AuthorKind: actor.Kind,
-				// THE RULE [reachable] JUST APPLIED, carried for the
-				// applier to apply again at the record's position.
-				MembersOnly: privateRoom(room.Kind),
-			}
-			message = Message{
-				V: DocumentVersion, ID: id, ChannelID: room.ID,
-				ThreadRoot: root, Author: payload.Author,
-				AuthorKind: payload.AuthorKind, Body: in.Body,
-				Links: in.Links, Mentions: named,
-				Collective: in.Collective,
-			}
-			notify, err := s.notifyOf(ctx, tx, actor, room, message, Routing{
-				ChannelKind: room.Kind, AuthorKind: actor.Kind,
-				Members: held, Mentions: named, Collective: in.Collective,
-				ThreadRoot: root, RootAuthor: rootAuthor,
-			})
-			if err != nil {
-				return statelog.Decision{}, err
-			}
-			return decide(stamp, actor, subject, OpPost, scope, opID, payload, notify, at)
+			message = d.message
+			return decide(stamp, actor, subject, OpPost, scope, opID, d.payload, d.notify, at)
 		},
 	})
 	if err != nil {
@@ -2069,6 +2019,172 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 		Channel: out, Message: message, Revision: writtenRevision(result, 0),
 		ChangeID: opID, Outcome: result,
 	})
+}
+
+// drafted is a post as its decision forms it: the room it is said in, the
+// payload and the message the record carries, and the routing snapshot a wake
+// is derived from.
+type drafted struct {
+	room    Channel
+	payload MessagePost
+	message Message
+	notify  *Notify
+	routing Routing
+}
+
+// draft forms a post or a reply inside a snapshot, without publishing it.
+//
+// ONE FUNCTION FOR THE POST AND ITS DRY RUN. [Store.post] decides from it, and
+// [Store.Reach] answers a composer from it, so who a draft is told it will
+// reach is what the same words would reach when sent: the same room checks,
+// the same thread, the same mentions and the same routing ([Store.notifyOf]),
+// against the same roster. A preview that routed by a rule of its own would be
+// a second answer that could disagree with the first the day either changed.
+//
+// THE ROOM IS RETURNED EVEN ON A REFUSAL that read it, because the post's
+// answer names the room it refused.
+func (s *Store) draft(ctx context.Context, tx *sql.Tx, actor Actor, channelID, replyTo,
+	id string, in NewMessage, mentions []string) (drafted, error) {
+
+	// THE ROOM IS READ BEFORE ANYTHING ELSE, and not only for the routing:
+	// the applier REFUSES a post into a room it has no row for, because
+	// under a strict replay the room's create is below this position on
+	// the same log, so publishing one would not fail this caller, it would
+	// stall every node's applier on this domain.
+	room, _, err := readRoomTx(ctx, tx, channelID)
+	if err != nil {
+		return drafted{}, err
+	}
+	out := drafted{room: room}
+	if room.ArchivedAt != nil {
+		// EVERY WORD OF IT IS STILL READABLE; it takes nothing new until
+		// somebody reopens it, and who may is the archive's own relation
+		// (authz's chat.channel.archive).
+		return out, fmt.Errorf("%w: %s", ErrArchived, archivedRoom)
+	}
+	held, err := readMembersTx(ctx, tx, room.ID)
+	if err != nil {
+		return out, err
+	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
+	if err := reachable(room, held, actor); err != nil {
+		return out, err
+	}
+	root, rootAuthor, err := s.threadOf(ctx, tx, room.ID, replyTo)
+	if err != nil {
+		return out, err
+	}
+	named := s.employed(mentions)
+	out.payload = MessagePost{
+		V: DocumentVersion, MessageID: id, Body: in.Body,
+		ThreadRoot: root, Mentions: named,
+		Collective: in.Collective, Links: in.Links,
+		Author: actor.Name(), AuthorKind: actor.Kind,
+		// THE RULE [reachable] JUST APPLIED, carried for the applier to
+		// apply again at the record's position.
+		MembersOnly: privateRoom(room.Kind),
+	}
+	out.message = Message{
+		V: DocumentVersion, ID: id, ChannelID: room.ID,
+		ThreadRoot: root, Author: out.payload.Author,
+		AuthorKind: out.payload.AuthorKind, Body: in.Body,
+		Links: in.Links, Mentions: named,
+		Collective: in.Collective,
+	}
+	out.routing = Routing{
+		ChannelKind: room.Kind, AuthorKind: actor.Kind,
+		Members: held, Mentions: named, Collective: in.Collective,
+		ThreadRoot: root, RootAuthor: rootAuthor,
+	}
+	out.notify, err = s.notifyOf(ctx, tx, actor, room, out.message, out.routing)
+	if err != nil {
+		return out, err
+	}
+	// WHOM IT REACHED, on the answer as the applier writes it on the row,
+	// so the poster's own answer can say so before a read does.
+	out.message.Reach = reachOf(actor.Kind, out.notify)
+	return out, nil
+}
+
+// Draft is what a post WOULD do if it were sent now: the room, the thread it
+// would join, and whom it would reach ([Reach]), as [Store.Reach] answers it.
+type Draft struct {
+	ChannelID  string `json:"channel_id"`
+	ThreadRoot string `json:"thread_root,omitempty"`
+
+	// Reach is whom the post would wake and why, in routing order; nil for
+	// an author the routing records no reach for (anyone but a person).
+	Reach *Reach `json:"reach,omitempty"`
+
+	// Mentions are the seats the words name, and Collective whether they
+	// address the whole room (`@channel`): the routing's two inputs from
+	// the words, said back so a composer shows what it read.
+	Mentions   []string `json:"mentions,omitempty"`
+	Collective bool     `json:"collective,omitempty"`
+
+	// Quiet is why a draft that reaches no agent reaches none, and empty
+	// when it reaches one: [QuietNoAgent] or [QuietAddressed].
+	Quiet Quiet `json:"quiet,omitempty"`
+}
+
+// Quiet is why a person's post would reach no agent.
+type Quiet string
+
+const (
+	// QuietNoAgent is a room with no agent seat to answer it: no agent
+	// member (for a unit's room, no lead), and none the words name.
+	QuietNoAgent Quiet = "no_agent"
+
+	// QuietAddressed is a post that names only people: it is addressed to
+	// them, so no agent is asked to answer for the room
+	// ([Routing.namesASeat]).
+	QuietAddressed Quiet = "addressed_to_people"
+)
+
+// Reach answers whom a post or a reply would reach if it were sent now,
+// without sending it: a DRY RUN of the post's own decision ([Store.draft]),
+// read in a snapshot of the estate and published nowhere.
+//
+// The same refusals a post meets come back here (a room that is archived, or
+// that the actor may not post in), so a composer learns them before the send
+// rather than after it. A draft with no words is not refused: whom an empty
+// box would reach is what a composer shows before anybody types.
+func (s *Store) Reach(ctx context.Context, actor Actor, channelID, replyTo string,
+	in NewMessage) (Draft, error) {
+
+	if err := actor.seatedOrSystem(); err != nil {
+		return Draft{}, err
+	}
+	if err := checkBody(in.Body); err != nil {
+		return Draft{}, err
+	}
+	mentions := cleanHandles(in.Mentions)
+	if err := checkMentions(mentions); err != nil {
+		return Draft{}, err
+	}
+	var out Draft
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
+		d, err := s.draft(ctx, tx, actor, channelID, strings.TrimSpace(replyTo), "", in, mentions)
+		if err != nil {
+			return err
+		}
+		out = Draft{
+			ChannelID: d.room.ID, ThreadRoot: d.message.ThreadRoot,
+			Reach: d.message.Reach, Mentions: d.message.Mentions,
+			Collective: d.message.Collective,
+		}
+		if out.Reach != nil && len(out.Reach.Recipients) == 0 {
+			out.Quiet = QuietNoAgent
+			if d.routing.namesASeat(s.roster.Seat, actor.Name()) {
+				out.Quiet = QuietAddressed
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Draft{}, err
+	}
+	return out, nil
 }
 
 // answer is a gesture's answer: [answered]'s, and — where the framework

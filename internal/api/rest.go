@@ -209,6 +209,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/chatlet/sent", what: "chat_sent"},
 	{method: "GET", pattern: "/chatlet/channels/{channel_id}/links", what: "chat_links",
 		path: map[string]string{"channel_id": "channel_id"}},
+	// WHOM A DRAFT WOULD REACH, before it is sent: the post's own decision
+	// run dry, with the words in `body` and a reply's thread in `reply_to`.
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/reach", what: "chat_reach",
+		path: map[string]string{"channel_id": "channel_id"}},
 	{method: "GET", pattern: "/chatlet/channels/{channel_id}/messages/{message_id}",
 		what: "chat_message",
 		path: map[string]string{"channel_id": "channel_id", "message_id": "message_id"}},

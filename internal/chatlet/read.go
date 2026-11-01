@@ -1598,6 +1598,66 @@ type MessageView struct {
 	// Thread is the replies under a room post, nil on a reply, on a room
 	// event and on a post nobody answered.
 	Thread *ThreadSummary `json:"thread,omitempty"`
+
+	// Answered is which of the seats a person's post reached
+	// ([Message.Reach]) have answered it, in the order they answered:
+	// spoken in its thread, or anywhere after it in a direct
+	// conversation. Empty while nobody has, and on every message with no
+	// reach.
+	//
+	// READ BESIDE THE PAGE from `chat_receipts`, which the applier marks as
+	// the answers land, because whether a seat answered is a fact about
+	// LATER messages and the document is the post's own.
+	Answered []Answer `json:"answered,omitempty"`
+
+	// Delivery is where a person's post stands with the agents it reached,
+	// read from its reach and its answers; empty on every message with no
+	// reach. One word a reader can filter or badge on, beside the two lists
+	// it is read from.
+	Delivery Delivery `json:"delivery,omitempty"`
+}
+
+// Delivery is where a person's post stands with the agents it reached.
+type Delivery string
+
+const (
+	// DeliveryNoAgent is a post that reached no agent: nobody was asked.
+	DeliveryNoAgent Delivery = "no_agent"
+
+	// DeliveryWaiting is a post that reached agents, none of whom has
+	// answered yet.
+	DeliveryWaiting Delivery = "waiting"
+
+	// DeliveryPartlyAnswered is a post some of the agents it reached have
+	// answered, and some have not.
+	DeliveryPartlyAnswered Delivery = "partly_answered"
+
+	// DeliveryAnswered is a post every agent it reached has answered.
+	DeliveryAnswered Delivery = "answered"
+)
+
+// deliveryOf is the state of a post with this reach and these answers.
+func deliveryOf(r *Reach, answered []Answer) Delivery {
+	switch {
+	case r == nil:
+		return ""
+	case len(r.Recipients) == 0:
+		return DeliveryNoAgent
+	case len(answered) == 0:
+		return DeliveryWaiting
+	case len(answered) < len(r.Recipients):
+		return DeliveryPartlyAnswered
+	}
+	return DeliveryAnswered
+}
+
+// Answer is a seat's answer to a message it was reached by.
+type Answer struct {
+	Handle string `json:"handle"`
+
+	// MessageID is the message that answered, and At its broker instant.
+	MessageID string    `json:"message_id"`
+	At        time.Time `json:"at"`
 }
 
 // ThreadSummary is a root's replies, as a transcript shows them under it.
@@ -2070,7 +2130,58 @@ func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 	if err := attachReactions(ctx, tx, who, out.views, ids); err != nil {
 		return messagePage{}, err
 	}
+	if err := attachAnswers(ctx, tx, out.views); err != nil {
+		return messagePage{}, err
+	}
+	for i := range out.views {
+		out.views[i].Delivery = deliveryOf(out.views[i].Message.Reach, out.views[i].Answered)
+	}
 	return out, attachThreads(ctx, tx, out.views)
+}
+
+// attachAnswers puts on each post with a reach the seats that have answered
+// it, in one statement for the page.
+//
+// ONLY THE POSTS THAT REACHED SOMEBODY ARE ASKED ABOUT, which is a person's
+// posts and nothing else, so a page of agents talking costs no statement at
+// all. The receipts are keyed (message, seat), and a page is at most
+// [MaxLimit] ids, inside the 999 parameters the store guarantees.
+func attachAnswers(ctx context.Context, tx *sql.Tx, views []MessageView) error {
+	at := make(map[string]int, len(views))
+	var ids []any
+	for i, view := range views {
+		if r := view.Message.Reach; r != nil && len(r.Recipients) > 0 {
+			at[view.Message.ID] = i
+			ids = append(ids, view.Message.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT message_id, handle, answer_id, answered_at
+		  FROM chat_receipts
+		 WHERE message_id IN (`+placeholders(len(ids))+`) AND answer_id <> ''
+		 ORDER BY message_id, answered_at, handle`, ids...)
+	if err != nil {
+		return fmt.Errorf("chatlet: read a page's answers: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			id     string
+			answer Answer
+			when   int64
+		)
+		if err := rows.Scan(&id, &answer.Handle, &answer.MessageID, &when); err != nil {
+			return fmt.Errorf("chatlet: scan an answer: %w", err)
+		}
+		answer.At = store.DecodeTime(when)
+		if i, ok := at[id]; ok {
+			views[i].Answered = append(views[i].Answered, answer)
+		}
+	}
+	return rows.Err()
 }
 
 // attachThreads puts each room post's thread summary on it, in two statements

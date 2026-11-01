@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -404,6 +405,13 @@ type Sources struct {
 	// of rooms — see [ChatSearcher]. Nil leaves `chat_search`
 	// unregistered.
 	ChatSearch ChatSearcher
+
+	// ChatDraft is a post's dry run through the router, and ChatMentions
+	// the seats a message's words name, read by the post tool's own
+	// reading: together they answer `chat_reach`, whom a draft would reach.
+	// Nil ChatDraft leaves it unregistered.
+	ChatDraft    ChatDrafter
+	ChatMentions builtin.MentionResolver
 
 	// ChatReads is where each person's eye has reached, which rooms they
 	// muted and whether they are in do-not-disturb: the ONE piece of chat
@@ -956,6 +964,11 @@ func Register(r *Registry, s Sources) {
 		r.Register("chat_rooms", Requires(iam.GrantChatlet), s.chatRooms)
 		if s.ChatSearch != nil {
 			r.Register("chat_search", Requires(iam.GrantChatlet), s.chatSearch)
+		}
+		// WHOM A DRAFT WOULD REACH, before it is sent: the post's own
+		// decision run dry (chatreach.go).
+		if s.ChatDraft != nil {
+			r.Register("chat_reach", Requires(iam.GrantChatlet), s.chatReach)
 		}
 	}
 	if s.Memory != nil {

@@ -14,7 +14,8 @@ import "github.com/crewlet/crewlet/internal/statelog"
 // to `internal/store/schema/replicated/0055_the_chat_domain_lands.sql` (and
 // `0068_a_chat_message_is_decided_where_it_is_applied.sql`, the verdicts,
 // `0070_the_chat_verdicts_say_how_far_back_they_were_pruned.sql`, and
-// `0071_a_room_says_what_changed_in_it.sql`, the auto-join account), and a
+// `0071_a_room_says_what_changed_in_it.sql`, the auto-join account, and
+// `0074_a_message_says_who_answered_it.sql`, the receipts), and a
 // misspelling is silent in the direction that matters: a table left out of the
 // map is scrubbed from no snapshot, compared by no claim and swept by nobody,
 // which looks exactly like a table that behaves. What catches it is the
@@ -54,6 +55,12 @@ var ReproducibleTables = []string{
 	// message are facts about the messages themselves.
 	"chat_messages", "chat_thread_participants", "chat_follows",
 	"chat_reactions", "chat_mentions",
+
+	// Whether each seat a person's post reached has answered it: written
+	// beside the post from its record, and marked by the later post that
+	// answers ([answerReceipts]). Derived from the messages like the four
+	// above, so a replay from zero rebuilds it from the same records.
+	"chat_receipts",
 
 	// The compliance erase's marker, which is how a node tells a message
 	// that never existed from one the company destroyed — and what stops a

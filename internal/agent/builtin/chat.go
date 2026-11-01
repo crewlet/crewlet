@@ -813,9 +813,20 @@ func addressesRoom(body string) bool {
 // posts is a new message — exactly as a person pressing send twice says it
 // twice, since nothing redelivers that call.
 func (d ChatDeps) message(body string, links []string) chatlet.NewMessage {
+	return ChatMessage(d.Mentions, body, links)
+}
+
+// ChatMessage is what a post carries, read from the words a person or a model
+// wrote: the seats it names (through mentions, which may be nil) and whether
+// it addresses the whole room.
+//
+// EXPORTED FOR THE POST'S DRY RUN, which a composer asks before the send
+// (`chat_reach`): the words are read by this one function on both sides, so
+// whom a draft is told it reaches is whom the same words reach when posted.
+func ChatMessage(mentions MentionResolver, body string, links []string) chatlet.NewMessage {
 	in := chatlet.NewMessage{Body: body, Links: links, Collective: addressesRoom(body)}
-	if d.Mentions != nil {
-		in.Mentions = d.Mentions.Mentions(body)
+	if mentions != nil {
+		in.Mentions = mentions.Mentions(body)
 	}
 	return in
 }
@@ -878,6 +889,15 @@ func postReceipt(written chatlet.Written, channelID string) map[string]any {
 		// the receipt is where it learns that thirty-two colleagues are
 		// about to be woken.
 		out["addressed_whole_room"] = true
+	}
+	if reach := written.Message.Reach; reach != nil {
+		// WHOM A PERSON'S POST REACHED, said back so the person who sent
+		// it through an assistant is told at once whether any agent was
+		// asked, rather than waiting on an answer nobody owes them.
+		out["reached"] = reach.Recipients
+		if len(reach.Recipients) == 0 {
+			out["reached_no_agent"] = true
+		}
 	}
 	return out
 }
