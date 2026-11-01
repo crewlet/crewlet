@@ -91,6 +91,8 @@ import { useMemo } from "react";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
+import { useServicesAsk } from "~/lib/services.ts";
+import { ChangeList } from "~/routes/code/ChangeList.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
@@ -216,6 +218,18 @@ export function MyWork({ section }: { section: MeSection }) {
   const viewer = useViewer();
   const whose = handle || viewer.owner;
   const ownDay = whose !== "" && whose === viewer.owner;
+  // AN UNBOUND READER'S OWN DAY, kept under their login rather than a seat's
+  // handle: the code host's listings take a seat, so Reviews asks none.
+  const loginDay = ownDay && viewer.unbound;
+  // THE TRACKER'S READS, asked wherever they answer: every section but
+  // Reviews is the tracker's, and on Reviews they still fill the strip's
+  // counts — for a reader the tracker answers. For one it does not (no
+  // Tracker, or a company running no Crewlet Works) Reviews asks none of
+  // them, rather than drawing their refusal over the code host's answer.
+  const ask = useServicesAsk();
+  const reviews = section === "reviews";
+  const trackerAnswers = ask.tracker && viewer.tracker;
+  const trackerReads = whose !== "" && (!reviews || trackerAnswers);
   const they = ownDay ? "you" : "them";
   const whoseName = index.byHandle.get(whose)?.name ?? whose;
 
@@ -239,14 +253,14 @@ export function MyWork({ section }: { section: MeSection }) {
   // already take (`routes/inbox/Inbox.tsx`, `routes/agents/People.tsx`): a load
   // is read, not watched.
   const workload = useQuery("work_workload", undefined, {
-    enabled: !viewer.anonymous,
+    enabled: !viewer.anonymous && (!reviews || trackerAnswers),
     pollMs: 60_000,
   });
 
   // NOT UNTIL SOMEBODY IS CHOSEN — `whose` is empty until the viewer has
   // answered, and the engine refuses this question without a handle.
   const state = useQuery("work_my_work", whose ? { handle: whose } : undefined, {
-    enabled: whose !== "",
+    enabled: trackerReads,
     pollMs: 30_000,
     refetchOnInboxOf: whose,
   });
@@ -269,7 +283,7 @@ export function MyWork({ section }: { section: MeSection }) {
   // sidebar's My work figure draws, so the two can never name two numbers —
   // and this screen's own read of the same question on anybody else's.
   const ownQueue = useOwnQueueCount();
-  const theirQueue = useQueueCountRead(whose, !ownDay);
+  const theirQueue = useQueueCountRead(whose, !ownDay && trackerReads);
   const askedBy = useQuery(
     "work_items",
     whose
@@ -283,7 +297,7 @@ export function MyWork({ section }: { section: MeSection }) {
       : undefined,
     // AN ANSWER TO ONE OF THEIR QUESTIONS IS A NOTICE TO THEM, so the frame
     // that moves their inbox moves this count too.
-    { enabled: whose !== "", pollMs: 30_000, refetchOnInboxOf: whose },
+    { enabled: trackerReads, pollMs: 30_000, refetchOnInboxOf: whose },
   );
 
   // AND THIS PERSON'S OWN RECORD, read ONCE for the page: the stamp it carries
@@ -291,7 +305,7 @@ export function MyWork({ section }: { section: MeSection }) {
   // the mark on the order switch, and its stored list and version are what a
   // reorder is made from and conditional on.
   const person = useQuery("work_person", whose ? { handle: whose } : undefined, {
-    enabled: whose !== "",
+    enabled: trackerReads,
     pollMs: 60_000,
     refetchOnInboxOf: whose,
   });
@@ -472,7 +486,19 @@ export function MyWork({ section }: { section: MeSection }) {
         />
       )}
 
-      {whose && (
+      {/* AN UNBOUND READER'S OWN DAY IS KEPT UNDER A LOGIN, and a review is
+          asked of a seat and a change owned by one: the engine refuses a
+          login as either, so their Reviews asks nothing and says why. */}
+      {whose && reviews && loginDay && (
+        <EmptyState
+          icon={<UserGlyph size={32} />}
+          title="No review is asked of a login"
+          description="A review is asked of a seat, and a change is owned by one. Bound to a seat, the changes asking its review and its own changes waiting on a fix are listed here."
+        />
+      )}
+      {whose && reviews && !loginDay && <DayReviews whose={whose} they={they} />}
+
+      {whose && !reviews && (
         <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
           {state.loading && !mine && <Skeleton variant="text" rows={6} label="Loading the day" />}
           {mine && (
@@ -579,6 +605,46 @@ export function MyWork({ section }: { section: MeSection }) {
         </QueryState>
       )}
     </>
+  );
+}
+
+/**
+ * The code host's claims on somebody's day: the changes asking THEIR review
+ * (`code_changes?needs=review&reviewer=`), and their own changes waiting on
+ * THEIR fix — a reviewer asked for changes, or a finding stands that no author
+ * has answered (`needs=fix&owner=`). Each the engine's own listing, held to
+ * the reader's grant on every repository, so a lead reading a report's day
+ * sees the changes of the repositories they may read.
+ *
+ * NO COUNT ON THE STRIP: a listing of changes is a page the engine READ, not
+ * a total it kept (`code_changes`), so the honest figure is none rather than
+ * the length of a first page.
+ *
+ * NEVER FOR AN UNBOUND READER'S OWN DAY, whose `whose` is a login: the engine
+ * takes a seat's handle as a reviewer and an owner, and refuses anything else.
+ */
+function DayReviews({ whose, they }: { whose: string; they: string }) {
+  return (
+    <div className="col gap-4">
+      <ChangeList
+        params={{ needs: "review", reviewer: whose }}
+        label={<h3 className="t-label">Waiting on {they === "you" ? "your" : "their"} review</h3>}
+        empty={{
+          title: "No review waiting",
+          hint: `A change that asks ${they === "you" ? "you" : "them"} to review it is listed here until ${they} review it or it closes.`,
+        }}
+      />
+      <ChangeList
+        params={{ needs: "fix", owner: whose }}
+        label={
+          <h3 className="t-label">{they === "you" ? "Your" : "Their"} changes waiting on a fix</h3>
+        }
+        empty={{
+          title: "No change waiting on a fix",
+          hint: "A change whose reviewer asked for changes, or whose finding stands unanswered, is listed here.",
+        }}
+      />
+    </div>
   );
 }
 
@@ -806,7 +872,9 @@ function figures(all: Record<string, string>): Record<string, string> {
  * zero, which would read as an empty day.
  */
 function countFor(
-  tab: Exclude<Tab, "priorities">,
+  // NOT REVIEWS: its listings are pages the code host read, not totals it
+  // kept, so its tab carries no figure (see `DayReviews`).
+  tab: Exclude<Tab, "priorities" | "reviews">,
   mine: WorkMyWork,
   listed: { assigned?: WorkClaimTotal; askedBy?: WorkClaimTotal },
 ): string {

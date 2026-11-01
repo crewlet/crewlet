@@ -13,8 +13,7 @@
 
 import { Fragment } from "react";
 import { Kbd, Modal, Text } from "@crewlethq/ui";
-import { KEY_SCOPES, KEYMAP, capsOf, type KeyRow } from "./keymap.ts";
-import { serviceShown } from "./nav.ts";
+import { KEY_SCOPES, KEYMAP, capsOf, keyShown, type KeyRow } from "./keymap.ts";
 import type { ServicesRun } from "~/lib/services.ts";
 
 /** A row's presses: each a cap, a sequence as two, a run of digits as a range. */
@@ -60,7 +59,7 @@ export function KeyLegend({
       <div className="key-legend">
         <div className="key-legend-groups">
           {KEY_SCOPES.map(({ scope, title }) => {
-            const rows = KEYMAP.filter((row) => row.scope === scope && serviceShown(row, runs));
+            const rows = KEYMAP.filter((row) => row.scope === scope && keyShown(row, runs));
             if (rows.length === 0) return null;
             return (
               <section key={scope} className="key-legend-group" aria-labelledby={`keys-${scope}`}>

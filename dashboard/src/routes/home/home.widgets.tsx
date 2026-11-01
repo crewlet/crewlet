@@ -18,6 +18,7 @@ import {
   ExternalLinkGlyph,
   FolderKanbanGlyph,
   GaugeGlyph,
+  DiffGlyph,
   HashGlyph,
   MessageCircleQuestionMarkGlyph,
   RadioGlyph,
@@ -80,6 +81,17 @@ const CARDS: Record<SectionId, HomeCard> = {
     icon: MessageCircleQuestionMarkGlyph,
     hue: "rose",
     size: { w: 8, minW: 4, minH: 8, vertical: true },
+  },
+  // THE CODE HOST'S, hidden where the company hosts no code: its changes
+  // asking the reader's review and those only a person can move. Its own
+  // reads, not the page's `HomeData`: no other card asks the code log.
+  code: {
+    label: "Code waiting on a person",
+    description: "Changes asking your review, and those only a person can move",
+    icon: DiffGlyph,
+    hue: "purple",
+    size: { w: 8, minW: 4, minH: 8, vertical: true },
+    service: "code",
   },
   live: {
     label: "Live now",

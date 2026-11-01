@@ -35,6 +35,7 @@ import {
   workspaceOf,
   workspaceOpen,
   workspaceRow,
+  type ServicesRun,
   type WorkspaceRow,
 } from "./nav.ts";
 import { keyRow, sequenceWords } from "./keymap.ts";
@@ -52,6 +53,9 @@ import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from ".
 import { ALL_PROJECTS, scopeAt } from "./scope.ts";
 import { segmentsOf } from "~/test/routes.ts";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
+
+/** A company running every service built into Crewlet. */
+const EVERY_SERVICE: ServicesRun = { tracker: true, knowledge: true, code: true };
 
 /** Every Settings section's own address but Spend's readings, which `nav gates by app` sets apart. */
 function settingsPaths(): string[][] {
@@ -266,7 +270,7 @@ describe("the navigation grammar", () => {
       Runtime: ["models", "mcp-tools", "secrets", "limits"],
       Spend: ["spend", "spend-tasks"],
       Access: ["people", "service-accounts", "tokens", "sign-in", "audit"],
-      Engine: ["nodes", "config", "backups", "storage"],
+      Engine: ["nodes", "config", "backups", "storage", "code"],
     });
     // IT LANDS ON ITS FIRST SECTION and holds every address under it.
     expect(workspaceRow("settings")?.path).toEqual(["settings", "models"]);
@@ -317,14 +321,14 @@ describe("the navigation grammar", () => {
     // its locks are drawn per section, in its column.
     const spend = settings.sections.find((s) => s.key === "spend")!;
     expect(sectionOpen(spend, [])).toBe(true);
-    expect(workspaceOpen(settings, [])).toBe(true);
-    expect(workspaceMissing(settings, [])).toEqual([]);
-    expect(workspaceOpen(workspaceRow("account")!, [])).toBe(true);
+    expect(workspaceOpen(settings, [], EVERY_SERVICE)).toBe(true);
+    expect(workspaceMissing(settings, [], EVERY_SERVICE)).toEqual([]);
+    expect(workspaceOpen(workspaceRow("account")!, [], EVERY_SERVICE)).toBe(true);
     // A WORKSPACE'S OWN PERMISSION IS NEEDED BESIDE ITS SECTION'S.
     const guarded: WorkspaceRow = { ...workspaceRow("live")!, grants: ["tracker"] };
-    expect(workspaceOpen(guarded, [])).toBe(false);
-    expect(workspaceMissing(guarded, [])).toEqual(["tracker"]);
-    expect(workspaceOpen(guarded, ["tracker"])).toBe(true);
+    expect(workspaceOpen(guarded, [], EVERY_SERVICE)).toBe(false);
+    expect(workspaceMissing(guarded, [], EVERY_SERVICE)).toEqual(["tracker"]);
+    expect(workspaceOpen(guarded, ["tracker"], EVERY_SERVICE)).toBe(true);
     // THE READER'S OWN ADDRESSES, which the frame draws for anybody signed in.
     expect(personalPath(["account"])).toBe(true);
     expect(personalPath(["settings", "models"])).toBe(false);
@@ -349,7 +353,7 @@ describe("the navigation grammar", () => {
     const opens = (path: string[], held: string[]) => {
       const row = workspaceRow(workspaceOf(path))!;
       const section = sectionOf(path);
-      return workspaceOpen(row, held) && (!section || sectionOpen(section, held));
+      return workspaceOpen(row, held, EVERY_SERVICE) && (!section || sectionOpen(section, held));
     };
     const TRACKER_ONLY = [["me"], ["work"], ["work", "tasks"], ["settings", "spend", "tasks"]];
     for (const path of TRACKER_ONLY) {

@@ -419,10 +419,13 @@ export const WORKSPACES: WorkspaceRow[] = [
     place: "you",
     renderer: "tabs",
     keep: ["handle"],
-    // THE TRACKER'S: every tab is a question about somebody's work items, so
-    // it reads Crewlet Works and is not offered where the company runs none.
-    grants: ["tracker"],
-    service: "tracker",
+    // NO PERMISSION AND NO SERVICE OF ITS OWN: a person's day is claims on
+    // their attention from more than one service. Every tab but Reviews is a
+    // question about somebody's work items, so EACH of those names the
+    // tracker — locked without Tracker, hidden where the company runs no
+    // Crewlet Works — and Reviews names the code host, which no app gates
+    // (ADR-0058). A person without Tracker still has a day: the reviews asked
+    // of them, where the landing sends them ([landingPath]).
     sections: [
       {
         key: "queue",
@@ -430,6 +433,8 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "list",
         path: ["me"],
         hint: "Their tasks, by due date or priority",
+        grants: ["tracker"],
+        service: "tracker",
       },
       {
         key: "asked-of-me",
@@ -437,6 +442,8 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "message-square",
         path: ["me", "asked-of-me"],
         hint: "Questions waiting on this person",
+        grants: ["tracker"],
+        service: "tracker",
       },
       {
         key: "asked-by-me",
@@ -444,6 +451,8 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "send",
         path: ["me", "asked-by-me"],
         hint: "Questions they asked that are still open",
+        grants: ["tracker"],
+        service: "tracker",
       },
       {
         key: "unblocked",
@@ -451,6 +460,8 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "zap",
         path: ["me", "unblocked"],
         hint: "Work whose blockers have all finished",
+        grants: ["tracker"],
+        service: "tracker",
       },
       {
         key: "collaborating",
@@ -458,6 +469,8 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "users",
         path: ["me", "collaborating"],
         hint: "Tasks this person was brought onto without owning",
+        grants: ["tracker"],
+        service: "tracker",
       },
       {
         key: "watching",
@@ -465,6 +478,8 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "eye",
         path: ["me", "watching"],
         hint: "Followed work that changed recently",
+        grants: ["tracker"],
+        service: "tracker",
       },
       {
         key: "checklist",
@@ -472,6 +487,19 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "check",
         path: ["me", "checklist"],
         hint: "Their checklist items on other people’s tasks",
+        grants: ["tracker"],
+        service: "tracker",
+      },
+      {
+        // THE CODE HOST'S CLAIMS on a person: the changes asking their
+        // review, and their own changes waiting on their fix.
+        key: "reviews",
+        label: "Reviews",
+        icon: "diff",
+        path: ["me", "reviews"],
+        hint: "Changes waiting on their review, and their own waiting on a fix",
+        keywords: ["review", "code review", "changes", "pull request"],
+        service: "code",
       },
     ],
   },
@@ -1096,6 +1124,20 @@ export const WORKSPACES: WorkspaceRow[] = [
         group: "Engine",
         grants: ["admin"],
       },
+      {
+        // THE CODE HOST AS IT RUNS: its log's retention, its alarms on every
+        // node, and the scratch and identity policy its configuration sets —
+        // the document is an admin's read. Hidden where it hosts no code.
+        key: "code",
+        label: "Code",
+        icon: "code",
+        path: ["settings", "code"],
+        hint: "The code log's retention, the code host's alarms, scratch repositories and commit identity",
+        keywords: ["git", "code host", "scratch", "identity domain", "alarms"],
+        group: "Engine",
+        grants: ["admin"],
+        service: "code",
+      },
     ],
   },
   ACCOUNT,
@@ -1378,26 +1420,44 @@ export function grantsMissing(
 }
 
 /**
- * Whether a workspace is open to a reader holding `held`: when it is the
- * reader's own, when any of its own sections is, or — where it has none — when
- * its landing is; and a workspace that names grants of its own needs one of
- * them too, beside whatever its section needs. A workspace only part of which
- * is closed is not locked as a whole: its column or its screens draw the lock
- * where the closed part is.
+ * Whether a workspace is open to a reader holding `held` in a company running
+ * `runs`: when it is the reader's own, when any of its own sections the
+ * company runs is, or — where it has none — when its landing is; and a
+ * workspace that names grants of its own needs one of them too, beside
+ * whatever its section needs. A workspace only part of which is closed is not
+ * locked as a whole: its column or its screens draw the lock where the closed
+ * part is.
+ *
+ * ONLY THE SECTIONS THE COMPANY RUNS COUNT ([serviceShown]): a section hidden
+ * for its service opens nothing, so it cannot keep a row unlocked. My work's
+ * Reviews needs no permission, and where the engine hosts no code it is drawn
+ * nowhere — counting it would leave the row open to a reader without Tracker
+ * and land them on a refusal, where the row's lock names Tracker instead.
  */
-export function workspaceOpen(row: WorkspaceRow, held: readonly string[]): boolean {
+export function workspaceOpen(
+  row: WorkspaceRow,
+  held: readonly string[],
+  runs: ServicesRun,
+): boolean {
   if (row.personal) return true;
-  const own = row.sections;
+  const own = runSections(row, runs);
   if (own.some((s) => s.personal)) return true;
   if (!sectionOpen({ grants: row.grants }, held)) return false;
   return own.length === 0 || own.some((s) => sectionOpen(s, held));
 }
 
+/** A workspace's sections a company running `runs` offers ([serviceShown]). */
+function runSections(row: WorkspaceRow, runs: ServicesRun): Section[] {
+  return row.sections.filter((s) => serviceShown(s, runs));
+}
+
 /**
  * Where a workspace's row, its `g` chord and its palette entry open for a
  * reader holding `held`: its own path, or, where that landing section is
- * closed to them, the first of its sections they can open and the company
- * runs. Settings lands on Models & keys, which is Admin's, and a reader
+ * closed to them or reads a service the company does not run, the first of
+ * its sections they can open and the company runs. My work lands on its
+ * Queue, the tracker's, and a company hosting code with no Crewlet Works
+ * lands it on Reviews. Settings lands on Models & keys, which is Admin's, and a reader
  * holding only Tracker was sent to a refusal although Token spend and
  * Expensive tasks are theirs. `held` null is a reader not yet read: the
  * workspace's own path, as the frame draws every lock only once it knows.
@@ -1409,20 +1469,25 @@ export function landingPath(
 ): string[] {
   if (held === null) return row.path;
   const own = row.sections.find((s) => samePath(s.path, row.path));
-  if (!own || sectionOpen(own, held)) return row.path;
+  if (!own || (sectionOpen(own, held) && serviceShown(own, runs))) return row.path;
   return row.sections.find((s) => serviceShown(s, runs) && sectionOpen(s, held))?.path ?? row.path;
 }
 
 /**
  * What a closed workspace's lock names, as [grantsMissing] does for a
  * section: nothing when it is open; the workspace's own permissions; then
- * every permission that would open one of its sections, once each.
+ * every permission that would open one of the sections the company runs, once
+ * each.
  */
-export function workspaceMissing(row: WorkspaceRow, held: readonly string[]): readonly Grant[] {
-  if (workspaceOpen(row, held)) return [];
+export function workspaceMissing(
+  row: WorkspaceRow,
+  held: readonly string[],
+  runs: ServicesRun,
+): readonly Grant[] {
+  if (workspaceOpen(row, held, runs)) return [];
   const whole = grantsMissing({ grants: row.grants }, held);
   if (whole.length > 0) return whole;
-  return [...new Set(row.sections.flatMap((s) => grantsMissing(s, held)))];
+  return [...new Set(runSections(row, runs).flatMap((s) => grantsMissing(s, held)))];
 }
 
 /**
@@ -1478,6 +1543,20 @@ export function personalPath(path: readonly string[]): boolean {
  */
 export function serviceShown(place: { service?: Service }, runs: ServicesRun): boolean {
   return place.service === undefined || runs[place.service];
+}
+
+/**
+ * Whether a workspace's row is offered to a company running `runs`: its own
+ * service's, as [serviceShown] decides; and a workspace whose every section
+ * names a service is offered only where one of them is run — My work, whose
+ * sections are the tracker's and the code host's, is no row at all for a
+ * company running neither.
+ */
+export function workspaceShown(row: WorkspaceRow, runs: ServicesRun): boolean {
+  if (!serviceShown(row, runs)) return false;
+  const sections = row.sections;
+  if (sections.length === 0 || sections.some((s) => s.service === undefined)) return true;
+  return sections.some((s) => serviceShown(s, runs));
 }
 
 /**

@@ -40,7 +40,7 @@
  * for exactly this reader (`App.tsx`'s `Screen`).
  */
 
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import {
   ButtonLink,
   Callout,
@@ -48,6 +48,8 @@ import {
   InlineCode,
   Menu,
   Skeleton,
+  Tabs,
+  tabId,
   Tag,
   useMediaMatch,
 } from "@crewlethq/ui";
@@ -63,6 +65,10 @@ import { QueryState } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import { RestoreButton } from "~/components/writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { useServicesAsk } from "~/lib/services.ts";
+import { useTab } from "~/app/frame/tabs.ts";
+import { ChangeList, CODE_LIST_POLL_MS } from "~/routes/code/ChangeList.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import {
@@ -233,6 +239,40 @@ function useTask(id: string) {
 // The page
 // ---------------------------------------------------------------------------
 
+/**
+ * A task's two tabs: the task itself, and the changes proposed to carry it out
+ * on the company's own code host.
+ */
+export const TASK_TABS = ["task", "changes"] as const;
+export type TaskTab = (typeof TASK_TABS)[number];
+
+/**
+ * A task's identity across trackers, as a change names the work item it
+ * carries out (`<backend>:<id>`) and `code_changes?work=` is asked by: this
+ * page is the engine's own tracker's, so its backend is `native`.
+ */
+export function changeWorkRef(itemId: string): string {
+  return `native:${itemId}`;
+}
+
+/**
+ * Whether a task has a change, and so a Changes tab: ONE ROW of every change
+ * of the item, whatever its state — a listing that names a work item and no
+ * state lists every one, the work item narrowing the engine's walk — asked
+ * only where the company hosts code. The tab is drawn only once the engine
+ * has found one — a strip whose second tab always said "nothing" would be a
+ * strip on every task of a company that proposes its code changes elsewhere.
+ */
+function useTaskHasChanges(itemId: string): boolean {
+  const ask = useServicesAsk();
+  const probe = useCodeQuery(
+    "code_changes",
+    { work: changeWorkRef(itemId), limit: 1 },
+    { enabled: ask.code && itemId !== "", pollMs: CODE_LIST_POLL_MS },
+  );
+  return (probe.data?.changes?.length ?? 0) > 0;
+}
+
 export function WorkItem({ id }: { id: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -260,6 +300,12 @@ export function WorkItem({ id }: { id: string }) {
     item ? { [id]: item.key, ...(projectName ? { [item.project]: projectName } : {}) } : {},
   );
   const liveTurn = turnIdOf(live);
+  // THE CHANGES TAB, where the engine finds one: `?tab=changes`. Until it has
+  // answered the strip holds the task alone, and an address naming the tab
+  // lands on the task rather than on a tab that may not be there.
+  const hasChanges = useTaskHasChanges(item?.id ?? "");
+  const [tab, setTab] = useTab<TaskTab>("tab", hasChanges ? TASK_TABS : ["task"]);
+  const panelId = useId();
   // THE TASK'S ADDRESS, which every write, peek and step on this page names
   // it by: its key, or its id where another task claimed that key first.
   const address = state.data ? itemAddress(detailItem(state.data)) : "";
@@ -357,33 +403,71 @@ export function WorkItem({ id }: { id: string }) {
             <div className="task-frame">
               <div className="task-main">
                 <div className="task-col">
-                  {itemFlags(state.data)}
-                  {item.removed && <RemovedNote tomb={item.removed} now={now} />}
-                  <Coverage answer={state.data} />
-                  <ItemEditNote readOnly={READ_ONLY} />
-                  <ItemTitle item={item} />
-                  <ItemDescription item={item} />
-                  <Checklists item={item} chrome={chrome} />
-                  {tracker && (
-                    <Subtasks
-                      rows={children.data?.items ?? []}
-                      error={children.error}
-                      refusal={children.refusal}
-                      chrome={chrome}
-                      parent={item.removed ? undefined : item}
-                      statusOf={statusFor}
-                      peek={(row: WorkSummary) => openPeek({ kind: "item", id: itemAddress(row) })}
+                  {hasChanges && (
+                    <Tabs
+                      variant="underline"
+                      ariaLabel={`${item.key}'s sections`}
+                      value={tab}
+                      onValueChange={(next) => setTab(next as TaskTab)}
+                      panelId={panelId}
+                      items={[
+                        { value: "task", label: "Task" },
+                        { value: "changes", label: "Changes" },
+                      ]}
                     />
                   )}
-                  <Activity
-                    item={item}
-                    address={address}
-                    chrome={chrome}
-                    index={index}
-                    now={now}
-                    live={live}
-                    {...(state.data.comments ? { thread: state.data.comments } : {})}
-                  />
+                  {tab === "changes" ? (
+                    <div
+                      className="tabpanel"
+                      role="tabpanel"
+                      id={panelId}
+                      aria-labelledby={tabId(panelId, tab)}
+                      tabIndex={0}
+                    >
+                      {/* EVERY CHANGE OF THE ITEM, whatever its state: a task
+                          is carried out by what merged as much as by what is
+                          still open. */}
+                      <ChangeList
+                        params={{ work: changeWorkRef(item.id) }}
+                        empty={{
+                          title: "No changes",
+                          hint: "A change that names this task as its work item is listed here.",
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      {itemFlags(state.data)}
+                      {item.removed && <RemovedNote tomb={item.removed} now={now} />}
+                      <Coverage answer={state.data} />
+                      <ItemEditNote readOnly={READ_ONLY} />
+                      <ItemTitle item={item} />
+                      <ItemDescription item={item} />
+                      <Checklists item={item} chrome={chrome} />
+                      {tracker && (
+                        <Subtasks
+                          rows={children.data?.items ?? []}
+                          error={children.error}
+                          refusal={children.refusal}
+                          chrome={chrome}
+                          parent={item.removed ? undefined : item}
+                          statusOf={statusFor}
+                          peek={(row: WorkSummary) =>
+                            openPeek({ kind: "item", id: itemAddress(row) })
+                          }
+                        />
+                      )}
+                      <Activity
+                        item={item}
+                        address={address}
+                        chrome={chrome}
+                        index={index}
+                        now={now}
+                        live={live}
+                        {...(state.data.comments ? { thread: state.data.comments } : {})}
+                      />
+                    </>
+                  )}
                 </div>
               </div>
               <aside className="task-rail" aria-label={`Properties of ${item.key}`}>

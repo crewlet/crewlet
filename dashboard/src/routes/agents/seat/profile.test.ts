@@ -24,6 +24,7 @@ import {
   tokensTile,
   turnTokens,
   workersWords,
+  seatTabs,
 } from "./profile.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import type {
@@ -48,8 +49,18 @@ const window_ = (period: BudgetWindow["period"], used: number, limit?: number): 
 
 describe("the tabs", () => {
   test("a person has no runtime tab, and every tab of theirs is an agent's too", () => {
-    expect(HUMAN_TABS).toEqual(["overview", "work", "settings"]);
+    expect(HUMAN_TABS).toEqual(["overview", "work", "code", "settings"]);
     for (const tab of HUMAN_TABS) expect(AGENT_TABS).toContain(tab);
+  });
+
+  // A SEAT'S CODE TAB IS THE CODE HOST'S, and Work the tracker's: each is
+  // left out where the company does not run that service, and nothing else is.
+  // Mutation: drop the code gate from seatTabs and Code is drawn anyway.
+  test("Code is left out where the engine hosts no code, and Work where it runs no tracker", () => {
+    const runs = (tracker: boolean, code: boolean) => ({ tracker, knowledge: true, code });
+    expect(seatTabs(true, runs(true, false))).toEqual(["overview", "work", "settings"]);
+    expect(seatTabs(true, runs(false, true))).toEqual(["overview", "code", "settings"]);
+    expect(seatTabs(false, runs(true, true))).toEqual(AGENT_TABS);
   });
 });
 

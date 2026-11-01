@@ -2006,7 +2006,7 @@ The two axes are **separate** on purpose. A company running a native tracker aga
 
 **Moving either one to or from `native` takes effect when each node restarts.** A node builds the engine's own tracker and knowledge base once, from the company it started with, so a revision that switches one activates normally and the node keeps serving what it was built with, saying so with a `native_backend_needs_restart` warning at every activation until it restarts (see [A native backend changes at a restart](../concepts/control-plane.md#a-native-backend-changes-at-a-restart)). Moving between two vendors, or the first native backend on a node that ran none, needs no restart.
 
-The backend each axis resolves to, and nothing else of either block, is published to every signed-in reader as [`services` on the org answer](../reference/api-endpoints.md#get-org), because it decides which of the dashboard's own surfaces exist: a company that does not run the native tracker has no Work or My work there, and one that does not run the native knowledge base has no Knowledge.
+The backend each axis resolves to, and nothing else of either block, is published to every signed-in reader as [`services` on the org answer](../reference/api-endpoints.md#get-org), because it decides which of the dashboard's own surfaces exist: a company that does not run the native tracker has no Work there, and a My work holding only the code host's Reviews (none at all where it hosts no code either), and one that does not run the native knowledge base has no Knowledge.
 
 ### A person's inbox
 

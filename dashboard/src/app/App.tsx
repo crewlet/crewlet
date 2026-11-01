@@ -145,6 +145,7 @@ const Fleet = lazyScreen("settings", (m) => m.Fleet);
 const ConfigScreen = lazyScreen("settings", (m) => m.ConfigScreen);
 const Backups = lazyScreen("settings", (m) => m.Backups);
 const FileStoragePage = lazyScreen("settings", (m) => m.FileStoragePage);
+const CodeSettings = lazyScreen("settings", (m) => m.CodeSettings);
 const Account = lazyScreen("account", (m) => m.Account);
 const SignIn = lazyScreen("signin", (m) => m.SignIn);
 const Invite = lazyScreen("signin", (m) => m.Invite);
@@ -305,6 +306,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Backups key={route.domain ?? ""} domain={route.domain} />;
     case "storage":
       return <FileStoragePage />;
+    case "code-settings":
+      return <CodeSettings />;
     case "audit":
       return <Audit />;
     case "account":

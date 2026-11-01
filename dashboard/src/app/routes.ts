@@ -92,7 +92,8 @@ export type MeSection =
   | "unblocked"
   | "collaborating"
   | "watching"
-  | "checklist";
+  | "checklist"
+  | "reviews";
 
 const ME_SECTIONS: readonly MeSection[] = [
   "asked-of-me",
@@ -101,6 +102,7 @@ const ME_SECTIONS: readonly MeSection[] = [
   "collaborating",
   "watching",
   "checklist",
+  "reviews",
 ];
 
 /**
@@ -265,6 +267,7 @@ export type FramedScreen =
   | { screen: "config"; revisions: boolean; revision?: string }
   | { screen: "backups"; domain?: string }
   | { screen: "storage" }
+  | { screen: "code-settings" }
   | { screen: "account" };
 
 /** Every screen the dashboard draws. */
@@ -676,6 +679,7 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     "sign-in": { screen: "sign-in" },
     audit: { screen: "audit" },
     storage: { screen: "storage" },
+    code: { screen: "code-settings" },
   };
   const plain = Object.hasOwn(bare, first) ? bare[first] : undefined;
   if (plain) return tail.length ? none() : screen(plain);

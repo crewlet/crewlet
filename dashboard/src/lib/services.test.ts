@@ -53,8 +53,8 @@ test("the engine's word decides what runs, and every service runs until it has s
 });
 
 // HIDDEN, NOT LOCKED, where the engine hosts no code: no Code row, no Code
-// destination and no address under it, and nothing else of the company goes
-// with it. Mutation: drop `service` from Code's row, and it is offered.
+// destination and no address under it — My work's Reviews and Settings › Code
+// are the code host's too — and nothing else of the company goes with it. Mutation: drop `service` from Code's row, and it is offered.
 test("a company hosting no code in the engine is offered no Code", () => {
   const none = { tracker: true, knowledge: true, code: false } as const;
   const rows = WORKSPACES.filter((w) => w.place !== "menu" && serviceShown(w, none)).map(
@@ -63,22 +63,29 @@ test("a company hosting no code in the engine is offered no Code", () => {
   expect(rows).not.toContain("code");
   expect(rows).toEqual(expect.arrayContaining(["work", "knowledge"]));
   const places = DESTINATIONS.filter((d) => !serviceShown(d, none)).map((d) => d.key);
-  expect(places.sort()).toEqual(["code", "code-pushes", "code-repos"]);
+  expect(places.sort()).toEqual([
+    "code",
+    "code-pushes",
+    "code-repos",
+    "me-reviews",
+    "settings-code",
+  ]);
   expect(serviceOfPath(["code", "pushes"])).toBe("code");
   expect(pathShown(["code", "repos"], none)).toBe(false);
   expect(pathShown(["work"], none)).toBe(true);
 });
 
-// HIDDEN, NOT LOCKED: a company on another tracker is offered no Work, no My
-// work and no way to its tasks, and keeps the Inbox, whose seat and budget
-// conditions arrive whatever runs the tracker.
+// HIDDEN, NOT LOCKED: a company on another tracker is offered no Work and no
+// way to its tasks, and keeps the Inbox, whose seat and budget conditions
+// arrive whatever runs the tracker — and My work, for its Reviews, where the
+// engine hosts its code (navServices.test.ts holds My work to either app).
 test("a company on another tracker is offered nothing of Crewlet Works", () => {
   const jira = { tracker: false, knowledge: true, code: true } as const;
   const rows = WORKSPACES.filter((w) => w.place !== "menu" && serviceShown(w, jira)).map(
     (w) => w.key,
   );
   expect(rows).not.toContain("work");
-  expect(rows).not.toContain("me");
+  expect(rows).toContain("me");
   expect(rows).toContain("inbox");
   expect(rows).toContain("knowledge");
   const places = DESTINATIONS.filter((d) => !serviceShown(d, jira)).map((d) => d.key);

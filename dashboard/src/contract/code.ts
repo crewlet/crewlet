@@ -246,3 +246,28 @@ export const CODE_PHRASES: Readonly<Record<string, { short: string; about: strin
       why: "nobody who may review was asked, and you lead the change's owner",
     },
   };
+
+/**
+ * The alarm kinds that are the code host's (the `code_` kinds of
+ * `statelog.Kinds()`, in its sorted order): what Settings › Code lists from
+ * each node's alarms, of everything the node's table can raise. Held both
+ * ways, in order, by `internal/code.TestTheDashboardKnowsEveryCodeAlarm`.
+ */
+export const CODE_ALARM_KINDS = [
+  "code_checks_backlog",
+  "code_commit_busy",
+  "code_compaction_behind",
+  "code_maintenance_refused",
+  "code_refs_near_limit",
+] as const;
+
+/**
+ * What an unset `code.scratch` and `code.identity_domain` read as — the
+ * engine's own defaults (`config.DefaultCodeScratchIdleDays`,
+ * `DefaultCodeScratchMaxPerSeat`, `DefaultCodeIdentityDomain`), which
+ * Settings › Code says beside an unset field so the page states the policy in
+ * force. Held by `internal/code.TestTheDashboardStatesTheCodePolicysDefaults`.
+ */
+export const CODE_SCRATCH_IDLE_DAYS = 7;
+export const CODE_SCRATCH_MAX_PER_SEAT = 50;
+export const CODE_IDENTITY_DOMAIN = "seats.invalid";

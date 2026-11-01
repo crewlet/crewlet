@@ -206,15 +206,17 @@ function mount(
     answers = {},
     viewer = JANE,
     agents = [],
+    org = ORG,
   }: {
     answers?: Record<string, Answer>;
     viewer?: Record<string, unknown>;
     agents?: Record<string, unknown>[];
+    org?: Record<string, unknown>;
   } = {},
 ) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
-  store.applyOrg(withDerived(ORG) as never);
+  store.applyOrg(withDerived(org) as never);
   store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
@@ -2018,4 +2020,88 @@ test("a task that does not exist says so, naming the key, with the way back to T
     "#/work/tasks",
   );
   expect(screen.queryByText("Not found. It may have been removed.")).toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// The Changes tab
+// ---------------------------------------------------------------------------
+
+/** The company hosting code, so a task asks whether a change carries it out. */
+const CODE_ORG = { ...ORG, services: { tracker: "native", knowledge: "native", code: "native" } };
+
+/** Answers `/query/code_changes` with `changes`, recording each ask. */
+function serveChanges(changes: unknown[]): URL[] {
+  const codeAsks: URL[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/query/code_changes") codeAsks.push(url);
+      const position = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 3 };
+      return new Response(JSON.stringify({ changes, position, level: "session" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  );
+  return codeAsks;
+}
+
+// A TASK NO CHANGE NAMES CARRIES NO STRIP: the page asks the engine for one
+// change naming the task by `native:<id>`, and draws no tab that would always
+// say nothing. Mutation: draw the strip before a change is found, or ask by
+// the key rather than the id, and this fails.
+test("a task no change names draws no Changes tab, after asking by its id", async () => {
+  const codeAsks = serveChanges([]);
+  mount(<WorkItemPage id="ENG-42" />, { org: CODE_ORG });
+  await waitFor(() => expect(codeAsks.length).toBeGreaterThan(0));
+  await settle();
+  expect(codeAsks[0]!.searchParams.get("work")).toBe("native:t-1");
+  expect(codeAsks[0]!.searchParams.get("limit")).toBe("1");
+  expect(codeAsks[0]!.searchParams.has("state")).toBe(false);
+  expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
+});
+
+// A TASK A CHANGE CARRIES OUT HAS A CHANGES TAB, listing every change of the
+// item in Code › Changes' grid — whatever its state, so the listing names the
+// task and no state (a work listing that names none lists every one, and the
+// engine refuses the dashboard's "all"). Mutation: never draw the strip, list
+// the tab's changes by anything but the task, or name a state, and this
+// fails.
+test("a task a change names has a Changes tab listing the task's changes", async () => {
+  const position = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 3 };
+  const codeAsks = serveChanges([
+    {
+      id: "c1",
+      repo_id: "r1",
+      number: 42,
+      title: "Fix the login race",
+      state: "merged",
+      source_ref: "refs/heads/fix",
+      target_ref: "refs/heads/main",
+      head: "0123456789abcdef0123456789abcdef01234567",
+      revision: 1,
+      owner: "swe",
+      owner_kind: "agent",
+      opened_at: "2026-10-27T10:00:00Z",
+      opened_position: position,
+      version: 1,
+      position,
+      repo: "web",
+      ref: "web!42",
+      access: "write",
+    },
+  ]);
+  mount(<WorkItemPage id="ENG-42" />, { org: CODE_ORG });
+  const tab = await screen.findByRole("tab", { name: "Changes" });
+  fireEvent.click(tab);
+  const grid = await screen.findByRole("table", { name: "Changes" });
+  expect(within(grid).getByText("web!42")).toBeTruthy();
+  // THE TAB'S OWN LISTING, beside the one-row probe that found the change.
+  const listing = codeAsks.filter((u) => u.searchParams.get("limit") !== "1");
+  expect(listing.length).toBeGreaterThan(0);
+  for (const u of listing) {
+    expect(u.searchParams.get("work")).toBe("native:t-1");
+    expect(u.searchParams.has("state")).toBe(false);
+  }
 });

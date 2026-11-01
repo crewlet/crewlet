@@ -905,15 +905,18 @@ Home, Company › Principles and Brand, the Org chart (the chart, the roster,
 Teams and every seat page's status), Schedules, Budgets, Live › Now running and
 Coding runs, and Settings › Token spend: what every seat is doing, what it has spent,
 what it may spend and who answers to whom, which everybody who works here
-reads. An APP's sections need that app: Inbox, My work, Work and Settings ›
-Expensive tasks are the tracker's, Knowledge is the knowledge base's. And the
+reads. An APP's sections need that app: Inbox, My work's tracker sections,
+Work and Settings › Expensive tasks are the tracker's, Knowledge is the
+knowledge base's; the code host's (Code, My work › Reviews, a seat's Code tab)
+need none, since every person reads every repository (ADR-0058). And the
 company-wide TRANSCRIPTS (Live › Turns, Agent-to-agent and the Event log,
 Knowledge › Agent diaries, and a seat's Turns and Memory tabs to anybody but its
 lead) and every other Settings page are admin's; Company › Integrations is
 every reader's, with an app's state and connecting kept for Admins on the page. Every comparison goes through
 `lib/access.ts`'s `holdsAny`, which counts every app an admin carries, so an
 administrator is never drawn a lock on an app. A sidebar row is
-locked only when NOTHING in its workspace is open, its title naming the access
+locked only when NOTHING in its workspace that the company runs is open (a
+section hidden for its service opens nothing), its title naming the access
 that would open it — what a reader would ask an admin for; a workspace only
 part of which is closed draws its locks where the closed part is, which for
 Settings is its column. So the foot's Settings is never locked: it carried a key
@@ -949,12 +952,16 @@ signed-in reader as the org projection's `services`, which the frame already
 reads (`lib/services.ts`). Where the company does not run one, the places that read
 it are HIDDEN rather than locked, because there is nothing to ask an admin
 for and a lock would say there was (`serviceShown` in `nav.ts`): without
-Crewlet Works, Work and My work leave the sidebar, the palette and the `g`
-chords, and so does every way to file or move a task (New task, the palette's
+Crewlet Works, Work and My work's tracker sections leave the sidebar, the
+palette and the `g` chords (My work itself leaves only where the engine hosts
+no code either, since its Reviews is the code host's, `workspaceShown`), and
+so does every way to file or move a task (New task, the palette's
 Create task, Ask an agent and Assign, a seat's Message and Assign, every
 create page's Ask an agent, and New design, whose one way to finish files a
 task); without Crewlet Knowledge, Knowledge does; and where the engine hosts
-no code, Code does. The Inbox stays, because
+no code, Code does, with My work › Reviews, a seat's Code tab, a task's
+Changes tab, Home's Code waiting on a person and Settings › Code. The Inbox
+stays, because
 the seat and budget conditions waiting on a person arrive under every
 backend: it draws those, and one line in place of its updates. Home leaves
 out the blocks and figures that cannot arrive, and each row of the board
@@ -1265,16 +1272,17 @@ a screen, and every workspace and section the code declares is below.
 |---|---|---|
 | `#/` · `#/home` | **Home** — the landing screen: the company's day, the engine's one sentence, the pulse figures and what needs a decision | |
 | `#/inbox` | **Inbox**: what waits on your decision, and what reached you *(needs Tracker access)* | `row=` (which item the pane is on) |
-| `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it, reordered by dragging a row *(the whole of My work needs Tracker access)* | `order=due\|priorities` · `handle=` (whoever leads somebody, or an admin, reading their day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
+| `#/me` | **My work › Queue** — what one person holds, by due date or in the order somebody put it, reordered by dragging a row *(needs Tracker access, as every section of My work but Reviews does)* | `order=due\|priorities` · `handle=` (whoever leads somebody, or an admin, reading their day, kept across the sections) · on the queue, `shape=`, `cols.list=` / `cols.table=` and the filter grammar with the assignee LOCKED |
 | `#/me/asked-of-me` · `#/me/unblocked` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me (answered in place) · Unblocked · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
 | `#/me/asked-by-me` | **My work › Asked by me** — the work this person asked a question on that is still waiting for its answer: the work list, held to the asker | `handle=` · `shape=` and the filter grammar, with the asker LOCKED |
+| `#/me/reviews` | **My work › Reviews** — the code host's claims on this person: the changes asking their review, then their own changes waiting on their fix, each Code › Changes' grid over the engine's own listing, with no count on the tab *(no access needed; not offered where the company hosts no code)* | `handle=` |
 | `#/work` | **Work › Projects**: Work's landing, All projects' first lens: every project, its lead, its target date and its four counts *(the whole of Work needs Tracker access, but for a task somebody was asked about, which the person asked opens without it)*. The segment and the sort are the ENGINE's question (`shown=` becomes `archived=`, `sort=` travels as written), because the answer stops at the engine's own 200. **Unit** is the one optional column, reached through the **Columns** menu | `shown=active\|archived\|all` · `sort=key\|name\|unit\|todo\|active\|done\|closed\|last_change\|target`, `-` for descending · `cols=` |
 | `#/work/tasks` | **Work › Tasks**: All projects' Tasks lens: every task in the company, in one list | `view=` (a saved view) · `shape=list\|board\|calendar\|timeline\|table` · `cols.list=` / `cols.table=` + the filter grammar |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/history` | **History**: All projects' History lens: the tracker's own log, on the log frame. One project's changes are that project's History lens | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `kind=` · `actor=` |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
-| `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
+| `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost; and, where the company hosts code and a change names the task as its work item, a **Changes** tab listing every such change | `tab=task\|changes` (the strip is drawn only once a change is found) · `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/code` | **Code › Changes**, Code's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, standing blockers and when it was opened — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer or a need) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `peek=change:{repo}!{n}` |
 | `#/code/repos` | **Code › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its page | `status=importing\|active\|archived\|deleted\|purging` (none is importing, active and archived) |
 | `#/code/repos/{name}` | **A repository**: its header (name, description, state, owner, default branch and head, which seats read it, last push, size) and tabs **Overview** (what it holds and the README at its default branch's root), **Files** (a directory's listing or a file's numbered lines at a revision, the lines picked ruled, its **Blame**, its **History** and a **Permalink** at the commit the revision resolved to), **Branches** (its live branches by name, each opening its files), **Commits** (the history at a revision, of a path or of every path, with who pushed each commit), **Pushes** (its push history) and **Settings** (its settings, rules, merge gates and path owners, shown and never edited here: a declared repository's lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=overview\|files\|branches\|commits\|pushes\|settings` · on Files and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Files, `lens=blame` and `lines=` (`12`, or `12-20`) |
@@ -1289,7 +1297,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
 | `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the units and seats and the company's name are written; the company's node carries no Edit, and its principles are the toolbar's Edit principles, which opens Company › Principles, the one place its mission, vision and standing policies are written *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
-| `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
+| `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|code\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · code · settings — `code` only where the company hosts code |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`works`, `knowledge`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
@@ -1323,6 +1331,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/settings/audit` | **Audit log**: every write a person or a token made, every call they made at runtime, the identity estate's own trail, every artifact's history (an administrator's read of somebody's private artifact said in words), and every configuration revision labelled with the kind of writer it recorded (`agent`, `human`, `operator` or `system`) *(needs Admin access)*. No detail route | `window=` · `actor=` · `kind=work\|knowledge\|config\|credentials\|runtime\|identity\|artifacts` |
 | `#/settings/nodes` · `#/settings/nodes/{node}` | **Nodes**, leases (each seat's holder and **since** when), duties, config rollout, and the fleet broker's members as the nodes advertise them and as its metadata group counts them *(needs Admin access)* | |
 | `#/settings/config` · `#/settings/config/revisions` · `#/settings/config/revisions/{id}` | **Configuration** *(needs Admin access)* — `revisions` lands on the History lens; one revision's page draws no lenses | `lens=active\|entities\|audit\|diff` |
+| `#/settings/code` | **Settings › Code**, the company's own git host as an administrator runs it: the code log's row of the retention report (its ceiling, what it holds and the trim's terms, drawn as Backups & retention draws it), the code host's alarms firing on every node from the fleet's node rows, the longest-standing first, and the configuration's scratch policy and identity domain, each unset field beside the default it reads as *(needs Admin access; not offered where the company hosts no code)*. Read-only | |
 | `#/settings/backups` · `#/settings/backups/{domain}` | **Backups & retention** — take a backup, what the fleet has backed up and the backup history, each state-log domain and what holds its trim; one domain *(needs Admin access)*. Domains live only under `backups/` | `at=alarms` (brings the alarm list into view) |
 | `#/settings/storage` | **File storage**, where the company's files are kept (the object store's backend, as a settings table row with its key), its collector's last passes from the fleet's own record, and the company's storage against the plan's quotas (`artifacts.limits`: artifact files, artifacts and datastores, each a figure over its ceiling with a bar, counted over every artifact, private ones and the trash included) *(needs Admin access)* | |
 | `#/account` | **Account**, the signed-in reader's own page, opened from the reader's own name in the user block at the sidebar's foot, from its menu (it has no sidebar row) or `g u`: the profile the directory holds and the reader's access, "Your access" (an administrator changes both), the password (changed with the current one, which ends every other session and personal token and keeps this browser), the second factor and recovery codes, where they are signed in (this browser marked, any other signed out by name, or everywhere), and their personal access tokens (minted, the value shown once, and revoked). A credential that is not a person's, a Tier A token's session whether or not it is bound to a seat, is told what it is and offered none of it, and asks the directory nothing; the engine answers a seat-bound token's session with a person's `kind`, so the page reads the login's grammar (`ownsAccount` in `lib/login.ts`) | |
@@ -2869,6 +2878,18 @@ company did.** That is Home until its reader arranges it (see
   review ("Execute · round 7 of 25"), and the last call it made, each a way
   into its turn. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
+- **Code waiting on a person**, where the company hosts code: the changes an
+  agent cannot move. Two halves, the first three of each of the engine's own
+  listings: *Asking your review* (`code_changes?needs=review`, which names no
+  reviewer and so asks the reader's own seat; a reader bound to no seat is
+  told a review is asked of a seat, and asked nothing) and *Waiting on a
+  person* (`needs=person`: a change whose first unmet precondition only a
+  person can settle — a person's approval, a blocker a person raised), each
+  row its reference, title and the sentence its readiness leads with, opening
+  the change in the peek. Three rows, as Needs your decision draws, and
+  **Open Code** is Code › Changes narrowed to what waits on a person. A
+  listing is a page the engine read, never a total, so the card counts
+  nothing.
 - **Tasks completed** per company day over the last fourteen (today in the
   accent), **Tokens by team** over the window (tokens, never money), each
   team's bar split by the seats that spent in it and keyed under the bar (the
@@ -2894,8 +2915,10 @@ company did.** That is Home until its reader arranges it (see
 Works (see [the sidebar](#the-sidebar)), the *Tasks in progress* and
 *Completed* figures, **Tasks completed** and **Projects** are not drawn, nor
 offered in the tray, and New task leaves the page bar: a tile reading zero
-would claim a tracker that answered nothing. The decisions, the conditions,
-Live now and the tokens arrive under every backend and stay.
+would claim a tracker that answered nothing. Where it hosts no code, **Code
+waiting on a person** is neither drawn nor offered, for the same reason. The
+decisions, the conditions, Live now and the tokens arrive under every backend
+and stay.
 
 Five tiles sit in a row while the page column holds them — five tiles at their
 176px floor and four of the board's own 16px gaps, 944px, so the figures'
@@ -3131,7 +3154,8 @@ there.", or that the company runs no work tracker.
 
 `#/me` is everything one person is expected to look at, as the SECTIONS of
 the page header: the **Queue**, **Asked of me**, **Asked by me**,
-**Unblocked**, **Collaborating**, **Watching** and **Checklist**. Every tab
+**Unblocked**, **Collaborating**, **Watching** and **Checklist** — the
+tracker's — and, where the company hosts code, **Reviews**. Every tracker tab
 carries the engine's own count of its claim — `work_my_work`'s `totals`, or
 `total_hint` for the two that are the work list — written as a floor (`20+`)
 only where the engine stopped counting, absent while its read is in flight, and
@@ -3139,9 +3163,31 @@ drawn at zero rather than hidden, because a tab that vanished when it was
 empty is what the page was rebuilt to stop. A section holds at most twenty
 rows of its claim, and one holding fewer than its count says which ones. The
 page opens straight on its sections, as the working screens do: no paragraph
-explains it, and each empty section says in its own words what would fill it. Every
-section is a question about work items, so where the company runs no Crewlet
-Works My work is hidden, never locked (see [the sidebar](#the-sidebar)).
+explains it, and each empty section says in its own words what would fill it.
+
+**Each section names its own service and permission; the page names none.**
+Every section but Reviews is a question about work items: it needs Tracker
+and is hidden where the company runs no Crewlet Works. Reviews is the code
+host's, which no app gates: hidden where the company hosts no code, and open
+to everybody signed in. So My work is hidden, never locked, only where the
+company runs neither (see [the sidebar](#the-sidebar)); a reader without
+Tracker lands on Reviews, with the tracker's sections locked beside it; and
+where the engine hosts no code, Reviews opens nothing, so for that reader the
+row is locked naming Tracker rather than opening onto the Queue's refusal.
+
+**Reviews is the code host's claims on the person**: the changes asking their
+review (`code_changes?needs=review&reviewer=`), then their own changes waiting
+on their fix — a reviewer asked for changes, or a finding stands that no
+author answered (`needs=fix&owner=`). Each is Code › Changes' own grid over
+the engine's listing, held to the reader's grant on every repository, paged
+with Load more, and each row opens its change in the peek. Its tab carries no
+count: a listing of changes is a page the engine read, not a total it kept,
+and the length of a first page would be a figure nobody counted. On a reader
+the tracker does not answer, Reviews asks none of the tracker's questions, so
+no refusal is drawn over the code host's answer. A reader bound to no seat,
+on their own day, is asked nothing either: their day is kept under a login,
+and a review is asked of a seat and a change owned by one, so Reviews says so
+instead of drawing the engine's refusal of a login as a handle.
 
 **Every figure for one person's day counts one named thing.** The Queue's is
 the open work ASSIGNED to the person, and on your own day it is the same
@@ -3214,6 +3260,18 @@ when the task was opened from a list — by its row's link or through the peek's
 stepping to the task before and after it (the list's own two keys, standing
 aside while a grid on the page holds them), **Watch live** while a turn is running on it, Restore for a task
 in the trash, and a menu with **Open on the board**.
+
+**A task a change carries out has a Changes tab.** Where the company hosts
+code, the page asks the engine for one change naming the task as its work
+item (`code_changes?work=native:<id>&limit=1`, every state, since a listing by
+work item needs none), and only once it finds one does the column open with a
+**Task | Changes** strip (`tab=changes`); a task no change names carries no
+strip, so a company that proposes its code elsewhere never sees a tab that
+always says nothing, and an address naming the tab before the answer lands on
+the task. Changes lists every change of the task, merged and closed as well as
+open, in Code › Changes' own grid, paged with Load more, each row opening its
+change in the peek. The rail stays beside both tabs. The activity filter's
+**Changes** is the task's own history and a different thing.
 
 **The column is the task in the order a person reads one.** The exceptional
 flags only (in the trash, blocked, archived), the title (24px, edited in place),
@@ -3536,8 +3594,9 @@ budget", "Not placed", "Idle"); under it the line that places the seat
 head's own rule. The trail reads **Org chart › Engineering · Core › SWE**: the
 unit is a way to its team, and the seat's crumb wears its badge.
 
-**The kind decides the tabs.** An agent has Overview, Work, Turns, Memory,
-Schedules and Settings; a person has Overview, Work and Settings. Turns, Memory
+**The kind decides the tabs.** An agent has Overview, Work, Code, Turns,
+Memory, Schedules and Settings; a person has Overview, Work, Code and
+Settings, and Code is drawn on either only where the company hosts code. Turns, Memory
 and Schedules are properties of a RUNTIME, and the engine never spawns a
 person — so a person's profile asks nothing a runtime answers: no activity, no
 memory, no turn list, no phase history. A `tab=` naming a tab the seat has not
@@ -3687,6 +3746,23 @@ opened their own page to find their password or second factor found neither —
 linking to [Account](#account-the-readers-own-page); the card decides for
 itself whose seat it is on, so the seat's peek carries it too, and a
 colleague's seat draws no such card.
+
+**Code** is what the seat does on the company's own code host, agent or
+person, each the engine's own question held to the reader's grant on every
+repository it names, so it is every reader's tab (no app gates code) and a
+repository the reader may not read is simply absent from its rows. Its open
+changes (`code_changes?owner=&state=open`, the owner's listing, which the
+engine keeps one state at a time), with **Open in Code** for Code › Changes
+narrowed to the owner, where the other states are; the reviews it gave
+(`code_reviews?reviewer=`, newest first), each row the change it judged, the
+verdict in words (a verdict is a judgement, not a state, so it carries no
+hue), the revision, the findings it raised and when, opening that change's
+page; and, for an agent seat, three figures from the same `seat_activity`
+answer the Overview's tiles read — **Changes opened**, **Reviews given** and
+**Findings received**, the last counted on the owner of the changes the
+findings were raised on. A person's openings and reviews count on no seat's
+day, so a human seat's tab draws no figures. The figures say how much
+happened; the reviews and the changes' readiness say how well.
 
 **Turns** is the seat's own turns (`turns{seat}`, the seat's TRAIL, which the
 engine answers to an admin and to whoever leads the seat, `audit.seat.read` —
@@ -6864,7 +6940,13 @@ it, so a link to one run landed on a board with the run below the fold.
   - A run is collected when its record is deleted, and its page still
     answers: it reads the turn and draws every `sandbox` phase the turn
     published — what the job reported, what it delivered, its tokens and its
-    transcript — named by the task its `sandbox_run_started` carried.
+    transcript — named by the task its `sandbox_run_started` carried. A run
+    given a repository on the engine's own code host it could push to adds
+    **Pushed**: what its push record says it moved, a chip per ref
+    (`web:feature/x`), followed by the change that branch heads, named by
+    its reference (`web!42`) and opening the change's page; refs past the
+    record's bound are counted, and a record that could not be read says why
+    rather than reading as nothing pushed.
   - Beside a peek the board keeps the seat and the task and drops the coding
     agent, the placement and the box, in that order, saying so in its footer.
   - The page reads two sources, and "no run" needs BOTH: only when the run
@@ -7175,6 +7257,29 @@ and `Cache-Control: immutable`, and the hook keeps its tag, so a read again
 names it and a `304` is the answer it already holds. The engine's reader gates
 read a code question where it is asked, as they read every other:
 `useCodeQuery("…")`, and `codeRest.query("…")` for an older page.
+
+**Changes are listed outside Code in Code's own grid.** A task's Changes tab,
+a seat's Code tab and My work's Reviews each mount one fixed listing
+(`routes/code/ChangeList.tsx`): the filter is the screen's, so there is no bar
+to narrow it, and its rows are `ChangesGrid`, the very grid Code › Changes
+draws, paged the same way and read again every minute while its first page is
+the only one loaded. A change reads the same reference, readiness, owner and
+blockers wherever it is listed. A seat's reviews are the one listing of
+reviews (`code_reviews?reviewer=`), its rows naming the change each judged.
+
+**Settings › Code is the code host as an administrator runs it**
+(`#/settings/code`, Admin's, beside the rest of the Engine group, and hidden
+where the company hosts no code). It asks no question of its own: the code
+log's row of the retention report, drawn by Backups & retention's own row so
+the two pages cannot disagree about the log; the code host's alarms on every
+node, from the fleet's node rows (each node's own table at its last beat, the
+kinds `CODE_ALARM_KINDS` names, which `internal/code`'s gate holds to the
+engine's alarm table both ways), with a node that has evaluated no table yet
+named apart rather than counted as quiet; and the company document's
+`code.scratch` and `code.identity_domain`, each unset field drawn beside the
+default it reads as (`CODE_SCRATCH_IDLE_DAYS`, `CODE_SCRATCH_MAX_PER_SEAT`,
+`CODE_IDENTITY_DOMAIN`, held to the engine's defaults). It edits nothing:
+the policy is changed where the configuration is.
 
 ## Knowledge: the spaces, a landing, and search with real modes
 

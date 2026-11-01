@@ -1709,6 +1709,20 @@ export interface FleetNode {
   draining?: boolean;
   started_at?: string;
   posture?: string;
+  /**
+   * The alarms firing on this node, as its own table found them at its last
+   * beat — the longest-standing first. ABSENT RATHER THAN EMPTY on a node
+   * that has evaluated no table (one running no state log, or mid-boot): an
+   * empty list is a node that looked and found nothing.
+   */
+  alarms?: FleetNodeAlarm[];
+}
+
+/** One alarm firing on a node, as the fleet's node row carries it. */
+export interface FleetNodeAlarm {
+  kind: string;
+  /** When it was raised, empty where the node did not say. */
+  since: string;
 }
 
 /**
@@ -5091,6 +5105,11 @@ export interface SeatActivityTotals {
   first_pass: number;
   sent_back: number;
   tokens: number;
+  /** The changes the seat opened, the reviews it gave, and the findings the
+   *  reviews of its own changes raised (`usage.CodeDay`), over the window. */
+  changes_opened: number;
+  reviews_given: number;
+  findings_received: number;
   /** Every day of the previous window, oldest first — so the fortnight a
    *  week-on-week figure is made over comes from the same answer. */
   per_day: SeatActivityDay[];
@@ -5119,6 +5138,11 @@ export interface SeatActivityRow {
   p50_ms?: number;
   p90_ms?: number;
   tokens: number;
+  /** The changes the seat opened, the reviews it gave, and the findings the
+   *  reviews of its own changes raised (`usage.CodeDay`), over the window. */
+  changes_opened: number;
+  reviews_given: number;
+  findings_received: number;
   /** Every day of the window, oldest first, a quiet day as zeros. */
   per_day: SeatActivityDay[];
   last_turn_at?: string;
@@ -7012,6 +7036,11 @@ export interface CodeReviewRow {
   model?: string;
   position: LogPosition;
   at: string;
+  /**
+   * The change it judged, on a `code_reviews` listing's rows, which span
+   * changes; absent on a change's own read, which names its change.
+   */
+  change?: CodeChangeName;
 }
 
 /** Where a comment on a line points (`code.CommentAnchor`). */
@@ -7462,6 +7491,16 @@ export interface CodeQueryMap {
   code_changes: CodeChangesAnswer;
   code_change: CodeChangeAnswer;
   code_change_routing: CodeChangeRoutingAnswer;
+  code_reviews: CodeReviewsAnswer;
+}
+
+/**
+ * `code_reviews`: one reviewer's reviews across the repositories the asker may
+ * read, newest first, each naming the change it judged.
+ */
+export interface CodeReviewsAnswer extends CodePage {
+  /** Absent on a page that holds none. */
+  reviews?: CodeReviewRow[];
 }
 
 export type CodeQueryName = keyof CodeQueryMap;

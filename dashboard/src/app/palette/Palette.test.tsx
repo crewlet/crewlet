@@ -1437,6 +1437,55 @@ describe("a screen found by what it holds", () => {
     expect(to).toHaveBeenLastCalledWith(["settings", "models"]);
   });
 
+  // A WORKSPACE'S ENTRY IS OFFERED WHERE ITS ROW IS: My work's landing
+  // section is the tracker's, but the row is offered wherever the tracker or
+  // the code host runs, so a company on another tracker that hosts its code
+  // here finds My work in the palette, and it opens on Reviews — and one
+  // hosting neither finds no entry for it. Mutation: filter the workspace's
+  // entry by its landing section's service, and the first lookup is empty.
+  test("My work is offered where only the code host runs, and opens on Reviews", () => {
+    const to = vi.fn();
+    const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
+    const mine = (code: boolean) =>
+      destinationHits(
+        "work",
+        nav,
+        Infinity,
+        { anonymous: false, grants: ["tracker"] },
+        {
+          tracker: false,
+          knowledge: true,
+          code,
+        },
+      ).find((h) => h.id === "nav-me");
+    const entry = mine(true);
+    expect(entry).toBeDefined();
+    entry!.go();
+    expect(to).toHaveBeenCalledWith(["me", "reviews"]);
+    expect(mine(false)).toBeUndefined();
+  });
+
+  // AND IT IS LOCKED AS ITS ROW IS: where the engine hosts no code its
+  // Reviews is offered nowhere, so a reader without Tracker is told what
+  // would open My work rather than sent to the Queue's refusal; where it
+  // hosts code, Reviews is theirs and the entry says nothing of access.
+  // Mutation: weigh every section's grants whatever the company runs, and the
+  // first hint names no access.
+  test("My work's entry needs Tracker exactly where its Reviews is not offered", () => {
+    const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
+    const hint = (code: boolean) =>
+      destinationHits(
+        "my work",
+        nav,
+        Infinity,
+        { anonymous: false, grants: [] },
+        { tracker: true, knowledge: true, code },
+      ).find((h) => h.id === "nav-me")?.hint;
+    expect(hint(false)).toMatch(/needs Tracker access$/);
+    expect(hint(true)).toBeDefined();
+    expect(hint(true)).not.toMatch(/needs/);
+  });
+
   // THE HINT IS PROSE AND IS NEVER SEARCHED: Service accounts' mentions
   // "machine principals", and it is no answer to "principals".
   test("a word only a hint's prose holds finds nothing", async () => {

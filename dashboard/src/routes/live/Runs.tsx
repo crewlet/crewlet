@@ -31,7 +31,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { uiletTone } from "~/ui/primitives.tsx";
-import { useNavigator } from "~/app/router.tsx";
+import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
   Button,
@@ -71,7 +71,8 @@ import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
-import { deliveredLine, fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
+import { deliveredLine, fromPhaseEvent, type PhaseRecord, type PushedRef } from "~/lib/phases.ts";
+import { changePath, parseChangeRef, refName } from "~/lib/code.ts";
 import { AnswerRunButton } from "~/components/writes.tsx";
 import { LiveOutput } from "./trace/Waterfall.tsx";
 import {
@@ -1012,6 +1013,14 @@ function CollectedRun({
                   label: "Delivered",
                   value: deliveredLine(record),
                 },
+                // WHAT ITS PUSH RECORD SAYS IT MOVED on the engine's own code
+                // host, beside what its report says it delivered: only a run
+                // given a repository it could push to carries the record.
+                ...(record.pushedRefs.length > 0 ||
+                record.pushedRefsElided > 0 ||
+                record.pushedRefsUnread
+                  ? [{ label: "Pushed", value: <PushedRefs record={record} /> }]
+                  : []),
                 {
                   label: "Tokens",
                   value: record.totalTokens > 0 ? fmtCount(record.totalTokens) : "",
@@ -1037,6 +1046,59 @@ function CollectedRun({
         )}
       </div>
     </Card>
+  );
+}
+
+/**
+ * The refs a run moved on the engine's own code host, a chip each — the
+ * branch, and the change it heads named by its reference (`web!42`), which
+ * opens the change's page. What the record names past them is counted, and a
+ * record that could not be read says why rather than reading as "nothing
+ * pushed".
+ */
+export function PushedRefs({
+  record,
+}: {
+  record: Pick<PhaseRecord, "pushedRefs" | "pushedRefsElided" | "pushedRefsUnread">;
+}) {
+  if (record.pushedRefsUnread) {
+    return (
+      <span className="t-caption">
+        Its push record could not be read: {record.pushedRefsUnread}
+      </span>
+    );
+  }
+  return (
+    <span className="row gap-1 wrap" aria-label="Pushed refs">
+      {record.pushedRefs.map((r) => (
+        <PushedRefChip key={`${r.repo}\u0000${r.ref}`} pushed={r} />
+      ))}
+      {record.pushedRefsElided > 0 && (
+        <span className="t-caption">
+          +{fmtCount(record.pushedRefsElided)} more its record names
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** One pushed ref: its repository and branch, then the change it heads, if any. */
+function PushedRefChip({ pushed }: { pushed: PushedRef }) {
+  const change = parseChangeRef(pushed.change);
+  const deleted = /^0+$/.test(pushed.new);
+  return (
+    <span className="row gap-1 nowrap">
+      <Tag appearance="outline" title={deleted ? "Deleted by the run" : undefined}>
+        <span className="mono">
+          {pushed.repo}:{refName(pushed.ref).name}
+        </span>
+      </Tag>
+      {change && (
+        <a className="t-link mono" href={href(changePath(change.repo, change.number))}>
+          {pushed.change}
+        </a>
+      )}
+    </span>
   );
 }
 

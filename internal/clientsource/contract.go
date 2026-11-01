@@ -260,6 +260,10 @@ var contract = []Entry{
 	{"FINDING_SEVERITIES", ReadLiteral, "internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords"},
 	{"FINDING_CATEGORIES", ReadLiteral, "internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords"},
 	{"CODE_PHRASES", ReadLiteral, "internal/code.TestEveryCodeReasonReadsAsEnglishOnTheClient"},
+	{"CODE_ALARM_KINDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryCodeAlarm"},
+	{"CODE_SCRATCH_IDLE_DAYS", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
+	{"CODE_SCRATCH_MAX_PER_SEAT", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
+	{"CODE_IDENTITY_DOMAIN", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
 
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},

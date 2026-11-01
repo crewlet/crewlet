@@ -38,17 +38,20 @@
  *
  * # A lock goes where the closed thing is, and a row is hidden only for a service
  *
- * A ROW THAT READS A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Work and
- * My work where it runs no Crewlet Works, Knowledge where it runs no Crewlet
- * Knowledge, Code where the engine hosts none of its code (`nav.ts`'s
- * `serviceShown`, over `lib/services.ts`). There is nothing to ask anybody
+ * A ROW THAT READS A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Work
+ * where it runs no Crewlet Works, My work where it runs neither that nor the
+ * code host (its Reviews is the code host's), Knowledge where it runs no
+ * Crewlet Knowledge, Code where the engine hosts none of its code (`nav.ts`'s
+ * `workspaceShown`, over `lib/services.ts`). There is nothing to ask anybody
  * for, and a locked row would say there was.
  *
  * A ROW IS LOCKED ONLY WHEN NOTHING IN ITS WORKSPACE IS OPEN to the reader
- * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`), and stays: a
- * row that vanished when access is absent is indistinguishable from one that
- * does not exist. Its title names what would open it — the access a reader
- * would ask an admin for: Inbox, My work and Work say Tracker, Knowledge says
+ * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`, counting only
+ * the sections the company runs), and stays: a row that vanished when access
+ * is absent is indistinguishable from one that does not exist. Its title
+ * names what would open it — the access a reader would ask an admin for:
+ * Inbox and Work say Tracker, and so does My work where the engine hosts no
+ * code (where it does, its Reviews is open to everybody), Knowledge says
  * Knowledge. A workspace only PART of which is closed is not locked as a
  * whole: Settings draws its locks per section, in its column, and is open to
  * every reader through Spend's readings.
@@ -80,7 +83,7 @@ import {
   landingPath,
   pathShown,
   sectionOpen,
-  serviceShown,
+  workspaceShown,
   workspaceMissing,
   workspaceOf,
   workspaceRow,
@@ -151,7 +154,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const known = useServicesKnown();
   const needsYou = useNeedsYouCount(viewer.owner !== "" && known && !runs.tracker);
   const shown = (place: WorkspaceRow["place"]) =>
-    WORKSPACES.filter((ws) => ws.place === place && serviceShown(ws, runs));
+    WORKSPACES.filter((ws) => ws.place === place && workspaceShown(ws, runs));
   const here = workspaceOf(route.path);
   const at = route.path.join("/");
 
@@ -241,7 +244,8 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
     stars.some((s) => samePath(route.path, s.path)) ||
     running.shown.some((row) => samePath(route.path, watchLink(turnIdOf(row)).path));
 
-  const lockOf = (ws: WorkspaceRow) => lockReason(held === null ? [] : workspaceMissing(ws, held));
+  const lockOf = (ws: WorkspaceRow) =>
+    lockReason(held === null ? [] : workspaceMissing(ws, held, runs));
   const footPlace = (ws: WorkspaceRow): FootPlace => {
     const lock = lockOf(ws);
     return {

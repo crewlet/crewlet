@@ -105,10 +105,10 @@ const Reading = createContext<QueueCount | null>(null);
  * asks for, for the reason [InboxCountsProvider] is.
  */
 export function QueueCountProvider({ children }: { children: ReactNode }) {
-  // THE TRACKER'S QUESTION, asked only of a reader holding it — the sidebar
-  // draws My work locked for anybody else.
+  // THE TRACKER'S QUESTION, asked only of a reader holding it — for anybody
+  // else My work's Queue is locked, and its figure is the Queue's.
   const viewer = useViewer();
-  // AND OF A COMPANY RUNNING CREWLET WORKS: elsewhere My work is not drawn.
+  // AND OF A COMPANY RUNNING CREWLET WORKS: elsewhere My work draws no Queue.
   const ask = useServicesAsk();
   const claim = useQueueCountRead(viewer.handle, viewer.tracker && ask.tracker);
   const value = useMemo(() => ({ claim }), [claim]);

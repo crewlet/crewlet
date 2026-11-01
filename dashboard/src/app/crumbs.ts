@@ -453,6 +453,8 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "sign-in":
     case "storage":
       return sectionPage(where.screen);
+    case "code-settings":
+      return sectionPage("code");
     case "mcp-tools": {
       const tools = section("mcp-tools");
       if (where.server) {

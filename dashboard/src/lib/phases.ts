@@ -229,6 +229,18 @@ export interface PhaseRecord {
    */
   deliveredRefsElided: number;
   /**
+   * The refs the run moved on the engine's own code host, as ITS PUSH RECORD
+   * says — the engine's account, where `deliveredRefs` are the run's own —
+   * each with the live change it heads once the run was collected (`web!42`,
+   * empty for none). `pushedRefsElided` counts what the record names past
+   * them; `pushedRefsUnread` is why the record could not be read, which makes
+   * an empty list unknown rather than "nothing pushed". `sandbox` phases, and
+   * the resumed executor's.
+   */
+  pushedRefs: PushedRef[];
+  pushedRefsElided: number;
+  pushedRefsUnread: string;
+  /**
    * The detached coding run a record reports, on a `sandbox` phase (the run
    * itself) and on the executor that resumed from it. A turn can launch more
    * than one run in an iteration, so on a `sandbox` phase it is part of the
@@ -575,6 +587,9 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     sandboxId: "",
     deliveredRefs: [],
     deliveredRefsElided: 0,
+    pushedRefs: [],
+    pushedRefsElided: 0,
+    pushedRefsUnread: "",
     launchId: "",
     transcript: "",
     transcriptElidedLines: 0,
@@ -676,6 +691,9 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // ABSENT ON A WHOLE RECORD — the engine omits a count of zero — which
     // reads as nothing left out, which is what such a record is.
     deliveredRefsElided: num(p.delivered_refs_elided),
+    pushedRefs: pushedRefs(p.pushed_refs),
+    pushedRefsElided: num(p.pushed_refs_elided),
+    pushedRefsUnread: String(p.pushed_refs_unread ?? ""),
     launchId,
     transcript: String(p.activity_transcript ?? ""),
     transcriptElidedLines: num(p.activity_transcript_elided_lines),
@@ -763,6 +781,36 @@ export function transcriptLength(
     return `${fmtExact(kept)} of ${plural(kept + r.transcriptElidedLines, "line")}`;
   }
   return `${plural(kept, "line")}, ${fmtBytes(r.transcriptElidedBytes)} left out`;
+}
+
+/**
+ * One ref a coding run moved on the engine's own code host
+ * (`types.PushedRefRecord`): the repository by the name the run was given it
+ * under, the ref, its value before the run's first push and after its last —
+ * the zero object id where the run created or deleted it — how many of the
+ * run's pushes moved it, and the live change it heads (`web!42`), empty for
+ * none.
+ */
+export interface PushedRef {
+  repo: string;
+  ref: string;
+  old: string;
+  new: string;
+  pushes: number;
+  change: string;
+}
+
+/** A record's `pushed_refs`, each field read as what it is, or none. */
+function pushedRefs(raw: unknown): PushedRef[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as Record<string, unknown>[]).map((r) => ({
+    repo: String(r.repo ?? ""),
+    ref: String(r.ref ?? ""),
+    old: String(r.old ?? ""),
+    new: String(r.new ?? ""),
+    pushes: num(r.pushes),
+    change: String(r.change ?? ""),
+  }));
 }
 
 /**

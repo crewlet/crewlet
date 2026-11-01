@@ -10,6 +10,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE DASHBOARD KNOWS EVERY STATE A REPOSITORY CAN BE IN, in the engine's
@@ -309,6 +311,68 @@ func TestEveryCodeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 		if !slices.Contains(want, key) {
 			t.Errorf("CODE_PHRASES phrases %q, which the engine never records — a renamed reason "+
 				"leaves exactly this behind", key)
+		}
+	}
+}
+
+// THE DASHBOARD KNOWS EVERY ALARM THE CODE HOST RAISES, and no other.
+//
+// Settings › Code lists, of each node's alarms (the fleet's node rows), the
+// ones `CODE_ALARM_KINDS` (`contract/code.ts`) names: a kind the code host
+// grew that the list lacks is an alarm that page never shows an
+// administrator, and one the list keeps that the table dropped is a filter
+// for nothing. The code host's kinds are the table's `code_` block, which
+// statelog declares under one heading ("The code host's"); read from the
+// client's own source, both ways, in `statelog.Kinds()`' sorted order, so a
+// kind added on one side lands at the one place the other is checked for it.
+//
+// Mutation: drop a kind from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardKnowsEveryCodeAlarm(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "CODE_ALARM_KINDS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := clientsource.Strings(body)
+	if len(got) == 0 {
+		t.Fatal("CODE_ALARM_KINDS reads as empty, so this gate certifies nothing")
+	}
+	var want []string
+	for _, k := range statelog.Kinds() {
+		if strings.HasPrefix(string(k), "code_") {
+			want = append(want, string(k))
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CODE_ALARM_KINDS is %v, want the alarm table's code kinds, in order: %v",
+			got, want)
+	}
+}
+
+// THE DASHBOARD STATES THE CODE POLICY'S DEFAULTS AS THE ENGINE APPLIES THEM.
+//
+// Settings › Code says what an unset `code.scratch.idle_days`,
+// `code.scratch.max_per_seat` and `code.identity_domain` read as, from
+// `CODE_SCRATCH_IDLE_DAYS`, `CODE_SCRATCH_MAX_PER_SEAT` and
+// `CODE_IDENTITY_DOMAIN` (`contract/code.ts`): a default moved in the engine
+// and not there is a page telling an administrator a policy nothing enforces.
+//
+// Mutation: change any of the three on either side, and this fails.
+func TestTheDashboardStatesTheCodePolicysDefaults(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	for _, c := range []struct{ name, want string }{
+		{"CODE_SCRATCH_IDLE_DAYS", strconv.Itoa(config.DefaultCodeScratchIdleDays)},
+		{"CODE_SCRATCH_MAX_PER_SEAT", strconv.Itoa(config.DefaultCodeScratchMaxPerSeat)},
+		{"CODE_IDENTITY_DOMAIN", config.DefaultCodeIdentityDomain},
+	} {
+		got, err := clientsource.Scalar(tree, c.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != c.want {
+			t.Errorf("the dashboard's %s is %q, want the engine's default %q", c.name, got, c.want)
 		}
 	}
 }
