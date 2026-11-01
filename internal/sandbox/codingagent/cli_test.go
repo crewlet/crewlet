@@ -730,7 +730,9 @@ func TestAContinuedRunResumesTheAskingRunsSession(t *testing.T) {
 	t.Parallel()
 	continued := sandbox.RunRequest{Brief: "the answer: main", Resume: "ses_0123456789abcdef0123456789abcdef"}
 
-	cmd := claude().Command(continued, codingagent.Paths{}, "")
+	// A SCRIPT, which records the CLI's release before it execs the run
+	// (TestAContinuedClaudeRunRecordsItsRelease).
+	cmd := scriptOf(t, claude().Command(continued, codingagent.Paths{}, ""))
 	if !strings.Contains(cmd, "--resume 'ses_0123456789abcdef0123456789abcdef'") {
 		t.Errorf("Claude Code does not resume the asking run's session: %s", cmd)
 	}
