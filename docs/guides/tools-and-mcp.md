@@ -401,6 +401,51 @@ all, the reads included.
 See [Chatlet](../concepts/chatlet.md) for who a message wakes, which of them owes a
 reply, and the two things the axis deliberately does not do.
 
+### Groups, and who may call each one
+
+Holding a tool is not being allowed to call it. Every call to a built-in is
+decided against the tool's own row in the engine's authority table, so an
+agent offered `update_artifact` still edits only an artifact it holds the
+editor role on. The engine files each built-in an agent can be offered in one
+group, and names the **gate** its authority row decides:
+
+| Group | `group` | What its tools are for |
+|---|---|---|
+| Work items | `work` | Worklet, the company's tracker: read, file, discuss and move work |
+| Projects | `projects` | Each project's settings, and the files kept in it |
+| Knowledge | `knowledge` | The company's pages in Doclet, and the search over its knowledge |
+| Chat | `chat` | Chatlet rooms and direct messages |
+| Artifacts | `artifacts` | Documents, slides, sheets and dashboards agents make and share, and the data behind them |
+| Colleagues | `colleagues` | Finding a colleague, and asking another agent a question |
+| Memory and skills | `memory` | The agent's own notes, past turns and skills |
+| MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, which the engine hands every executor and onboarding pass so it can reach its MCP servers' tools |
+
+| `gate` | Who may call it |
+|---|---|
+| `everybody` | Any agent. Also the discovery pair's, which no authority row decides |
+| `self` | The calling agent, about its own diary, past turns, skills and onboarding, and nobody else's |
+| `worklet` | An agent that uses Worklet. `my_work` is here too: it reads the caller's own day and takes no name for anybody else's |
+| `worklet_asked` | An agent that uses Worklet, or one an open ask on the item names |
+| `project_lead` | The lead of the project the work item or the file is in |
+| `doclet` | An agent that uses Doclet |
+| `chatlet` | An agent that uses Chatlet |
+| `artifacts` | An agent that authors artifacts |
+| `artifact_viewer` | Anybody the artifact is shared with, as a viewer or more |
+| `artifact_editor` | The artifact's editors who also author artifacts |
+| `artifact_owner` | The artifact's owner |
+
+An administrator passes every app gate. A group whose surface the company does
+not run is not there at all: a company on Jira holds no Worklet tool, and one
+on Slack no Chatlet tool.
+
+The gate is a word for the row, never a second decision: the engine's tests
+hold each built-in's gate to its row's class, app and artifact role, so a
+change to who may call a tool changes the gate with it. `GET /tools` and the
+`tools` push carry `group` and `gate` on every row (both empty on an MCP
+server's tool, whose calls no authority row decides), and `GET /mcp-servers`
+lists the built-ins group by group, the discovery pair included (see the
+[API reference](../reference/api-endpoints.md#get-mcp-servers)).
+
 ### Per-Role MCP Servers (GitHub)
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
@@ -428,7 +473,7 @@ and, above the catalogue on the same screen, as a row of its own: every node
 re-publishes its MCP servers as they are at each beat on its presence heartbeat
 (per server, its instances counted), so **MCP servers** shows each server as
 *Running*, *Partly failing*, *Failing*, *Waiting for credentials*, *Not
-started* or *Not reported* with one cell per live node and the first failure's
+started*, *Not reported* or *Disabled* (turned off, [below](#turning-a-server-off)) with one cell per live node and the first failure's
 reason and seat, and the first waiting instance's sentence and seat
 (`GET /mcp-servers`, which takes `admin` because it shows each server's
 configured launch, as `/config` does; the heartbeat carries each reason
@@ -449,17 +494,190 @@ which the form offers as you type `$`. It checks the whole company with the
 server in it before storing, and adds it after every server already declared.
 A name the configuration already carries is refused; a name only a node still
 runs, from a revision it has not applied past yet, is free: the create is
-judged against the configuration alone.
+judged against the configuration alone. The name, the prefix, the keys and the
+address are held to [the naming rules](#naming-a-server-and-its-tools).
 Over the API it is `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [configure via the API](configure-via-api.md). A per-seat server still needs
 a seat to declare credentials for it under `mcp_env`, which is written in the
 org builder.
 
+### Turning a server off
+
+`enabled: false` on an `mcp_servers` entry turns the server off and keeps
+everything else. Nothing runs it:
+
+- the shared instance, or every seat's instance, that was running is stopped
+  on the apply that turns it off;
+- no seat is granted it, so its tools leave every seat's surface and its
+  `mcp:<server>` leaves every seat's `tool_sources`;
+- no executor box is given it, even where a seat's `sandbox.mcp.servers` lists
+  it.
+
+Everything that names it stays, and is checked as before: the entry, every
+seat's and unit's `mcp_env` block for it, and every box listing. A `${VAR}` it
+would need is nobody's concern while it is off, so one that resolves to nothing
+holds nothing back and is not reported. Its row on Settings › MCP Tools reads
+*Disabled* (`state: disabled` on [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)),
+and an integration's Agents tab says the agent's tool is not running where
+every server that reads the integration's credential is off.
+
+Set it back to `true`, or remove the key (on is the default), and the next apply
+starts it with the credentials its seats kept. Removing a server instead means
+clearing every block that names it first, and losing what they held.
+
+### Saying what a server is for
+
+`description` is one line, at most 200 characters with no line breaks or tabs,
+saying what the server is for. Each agent's prompt names its MCP servers under
+`## Tools to discover` before it shows any of their tools, and prints the
+description beside the name:
+
+```text
+- MCP server `handbook`: Searches the engineering handbook and the runbooks
+```
+
+A name like `internal` says nothing about what is behind it; the description is
+what tells an agent which server to look in before it spends a call listing
+one. Editing it reaches the next turn and restarts nothing, since no server
+process reads it. It is also on the server's row of `GET /mcp-servers`.
+
+### Naming a server and its tools
+
+An entry's name, its `tool_prefix`, the keys of the values it is started with
+and its address are each held to what every client that reads them can use. A
+write that breaks one is refused at the field, saying what to write instead:
+
+| Field | Rule | Why |
+|---|---|---|
+| `name` | Lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 32 characters; not `crewlet` | It is the origin of every tool the server serves (`mcp:<name>`), the key seats declare its credentials under, a segment of the routes that act on it, and, for a server an executor's box runs, the middle of every tool name the box's harness hands its model (`mcp__<name>__<tool>`) |
+| `tool_prefix` | Letters, digits, `_` and `-`, at most 49 characters | It is put in front of every tool the server serves, and a tool's whole name is at most 50 characters ([below](#a-tools-name)) |
+| A key of an http server's `headers`, of a seat's or a unit's `mcp_env` block for it, or of its `seat_credentials` | An HTTP header name (RFC 9110's token): letters, digits and `-`, and no space, colon or quote | The value is sent as a request header |
+| A key of a stdio server's `env`, of a block for it, or of its `seat_credentials` | An environment variable name: letters, digits and `_`, not starting with a digit | The value is an environment variable of the server's process |
+| `url` | `https`, or plain `http` only to this host or a private network, with no user name or password in it | Every request carries the server's credentials, which plain http to a public host hands to every network on the way, and an address is shown wherever the server is: a credential goes in a header |
+
+Plain http is accepted for an address the public internet does not route
+(loopback, private, link-local, shared or otherwise reserved, judged by the
+same rule every outbound dial is), a one-label name (a container's or a pod's service name), `localhost`, and
+names under `.localhost`, `.local` (a Kubernetes cluster's `svc.cluster.local`
+included), `.home.arpa` and `.internal`: by what the address says, never by
+what it resolves to. An address written with a `${VAR}` in it is judged once
+that resolves, by the same rule: a server whose resolved address breaks it is
+not started, and fails on its row with the reason (the address itself is
+never quoted, since a resolved one can carry a secret), and no executor's box
+is given it.
+
+These are admission rules: a revision stored before them still applies, and
+`crewlet validate` and the warnings on a config read name each one, at the
+path a write keeping it is refused at.
+
+#### A tool's name
+
+Every tool is filed under the server's `tool_prefix` and its own name, run
+together, in one namespace with the built-ins and every other server's tools.
+Each harness then puts its own prefix in front before its model sees the
+tool (Claude Code's `mcp__crewlet__`), and a model takes a tool name of at most
+64 characters, of letters, digits, `_` and `-` alone. So a tool is not
+offered, and never shortened to fit, since a shortened name is a new name two
+tools can share, when:
+
+| `reason` | The tool |
+|---|---|
+| `characters` | holds any other character in its name |
+| `too_long` | is longer than 50 characters with the prefix: what the longest prefix a built-in harness profile puts in front of the engine's tools leaves of 64. A profile with a longer prefix lowers it, for every company |
+| `builtin` | has a built-in tool's name, and built-ins are filed first |
+
+And a tool is **shadowed** where another server's tool of the same name is
+offered in its place: among one node's servers the first server by name keeps
+it, and in a seat's surface a shared server's tool keeps it against the seat's
+own server's. A `tool_prefix` on either server offers both.
+
+Each node reports these per server on its heartbeat, at most 8 of each with
+how many there are in all, and
+[`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers) gives each
+server's `refused_tools` and `shadowed_tools` across the fleet, each with a
+sentence saying what would offer it, beside `refused_count` and
+`shadowed_count`. The node's own log names each one as well
+(`mcp_tool_refused`, `tool_name_collision`).
+
+### The curated catalogue, and a community registry
+
+Adding a server starts from the **curated catalogue**: the MCP servers this
+build knows, each with its address or launch line, the headers or variables it
+reads, how a static credential's value is spelled, the sign-ins its vendor
+offers, what an admin has to do at the vendor first, and the day its facts
+were last read from the vendor (`read_at`). It is a table compiled into the
+engine and reviewed in pull requests, so every node answers it the same, with
+or without egress. `GET /mcp-servers/catalogue` serves it (see the
+[API reference](../reference/api-endpoints.md#get-mcp-serverscatalogue)).
+
+| Entry | Server | Sign-in |
+|---|---|---|
+| `github` | GitHub's remote server | the GitHub integration (each agent's own app token), or a token header |
+| `datadog` | Datadog's remote server, at your site's address | the Datadog integration, OAuth, or the `DD_API_KEY` and `DD_APPLICATION_KEY` headers |
+| `rovo` | Atlassian's Rovo remote server | OAuth, or an API token an organization admin has allowed |
+| `linear` | Linear's remote server | OAuth, or an API key header |
+| `notion` | Notion's remote server | OAuth |
+| `sentry` | Sentry's remote server | OAuth |
+| `stripe` | Stripe's remote server | OAuth, or an agent API key header |
+| `cloudflare` | The Cloudflare API server | OAuth, or an API token header |
+| `gitlab` | `glab mcp serve`, one per agent | the GitLab integration |
+| `slack` | `slack-mcp-server` 1.3.0, one per agent | the Slack integration |
+| `mattermost` | `mcp-server-mattermost` 0.6.1, one per agent | the Mattermost integration |
+| `atlassian` | `mcp-atlassian` 0.23.1 for Jira and Confluence, one per agent | the Atlassian integration |
+| `tavily` | `tavily-mcp` 0.2.22 | its API key variable |
+| `postgres` | Postgres MCP Pro (`postgres-mcp` 0.3.0), restricted to reads | its connection string variable |
+
+A local entry launched through a package runner names the exact release its
+facts were read against, and every page here that launches the same package
+names the same release: one test holds the catalogue and the pages together,
+so a bump moves them at once.
+
+**The same table recognises a configured server.** A server whose address or
+command matches an entry is drawn on Settings › MCP & tools with that entry's
+title and vendor mark, and `GET /mcp-servers` names it (`title`, `catalogue`,
+`vendor`). For the entries an integration serves, that recognition is also
+what binds each agent's own credential to a per-agent server (see
+[Seat credentials the engine binds](#seat-credentials-the-engine-binds)). An
+address is matched by whole host labels, never a substring.
+
+**A community registry is off until the company names one.** Set
+`mcp_registry.url` to the https address of a registry that speaks the
+[MCP Registry](https://registry.modelcontextprotocol.io) v0.1 API. That is
+usually a mirror the company curates: the official registry is a preview,
+and its own guidance is that a host reads a subregistry of it rather than it.
+
+```yaml
+mcp_registry:
+  url: https://registry.modelcontextprotocol.io
+```
+
+The add flow then offers a search of it beside the catalogue. What a registry
+lists is somebody else's description of somebody else's server, so:
+
+- every result is marked **not reviewed**, and carries no read date, no
+  integration and no fixed value; it is drawn with a vendor's mark only when
+  its address is that vendor's own host;
+- it is a draft for the same add flow, test and save as an address typed by
+  hand, and nothing it says starts a process or skips a step;
+- a result is offered only with a Streamable HTTP address that is https and
+  fixed, or a package from the public npm or PyPI registry at an exact
+  release, launched as `npx -y <package>@<release>` or
+  `uvx <package>==<release>`. A listing that needs a runner argument, a
+  package from another registry, a templated address, a field past its bound
+  or text with a direction override is left out, and the answer counts it;
+- a search reads at most a mebibyte and 20 results and gives up after 10
+  seconds, and the engine dials the registry alone: never an icon, a
+  repository or an address a listing names, and no redirect (a registry that
+  moved is reported with where it points, for you to write);
+- the address must be https, a private one included, because the launch lines
+  a registry answers are only as trustworthy as the connection they came over.
+
 ### What a tool can do
 
 Beside the origin, every catalogue row carries the **behavioural hints** the
-tool was registered with — what an MCP server advertised, plus whatever an
-operator overrode on top — and where calling it lands:
+tool was registered with (what an MCP server advertised, plus whatever an
+operator overrode on top), where calling it lands, and, for a built-in, its
+group and who may call it:
 
 | Field | What it says |
 |---|---|
@@ -468,6 +686,8 @@ operator overrode on top — and where calling it lands:
 | `annotations.idempotent` | Repeat calls have no additional effect |
 | `annotations.open_world` | The tool reaches entities outside the local system |
 | `delivers` | **Where** a call puts something in front of somebody outside the turn — empty for a tool that reaches nobody |
+| `group` | The built-in's [group](#groups-and-who-may-call-each-one), empty on an MCP server's tool |
+| `gate` | Who may [call the built-in](#groups-and-who-may-call-each-one), empty on an MCP server's tool |
 
 **Each hint is three-valued** — `yes`, `no`, `unknown` — and `unknown` is a
 first-class answer, not a soft `no`: it means the server did not advertise the
@@ -838,7 +1058,9 @@ mcp_servers:
 ```
 
 An entry that declares nothing is bound by what the engine recognises it as,
-by its command or its address:
+by its command or its address, through the
+[curated catalogue](#the-curated-catalogue-and-a-community-registry)'s
+recognition:
 
 | Server | Recognised by | Reads |
 |---|---|---|
@@ -1052,6 +1274,7 @@ mcp_servers:
   # stdio, shared by all agents; it advertises no annotations, so these say
   # its tools only read (see Tool annotation overrides below)
   - name: tavily
+    description: Searches and reads the public web
     command: npm
     args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env: { TAVILY_API_KEY: "${TAVILY_API_KEY}" }
@@ -1102,7 +1325,7 @@ A stdio server is handed an **explicit** environment, never the engine's own. Th
 
 | Layer | What | Why |
 |---|---|---|
-| The host allowlist | `PATH`, the locale (`LANG`, `LANGUAGE`, `LC_ALL`, `LC_CTYPE`, `LC_NUMERIC`), `TERM`, `TZ`, the TLS trust variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) and the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`) | What a process needs to run at all. It is the same list every child the engine starts is handed — a coding CLI and a local sandbox get it too |
+| The host allowlist | `PATH`, the locale (`LANG`, `LANGUAGE`, `LC_ALL`, `LC_CTYPE`, `LC_NUMERIC`), `TERM`, `TZ`, the TLS trust variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) and the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`) | What a process needs to run at all. It is the same list every child the engine starts is handed — a harness and a local sandbox get it too |
 | The engine user's locations | `HOME`, `USER`, `LOGNAME`, `TMPDIR` and the XDG base directories (`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`) | A server launched through `npx` or `uvx` runs as the engine's user and keeps its package cache under that user's `HOME` |
 | A container runtime's own settings — **only** when the server's `command` is `docker` or `podman` | Every `DOCKER_*`, `CONTAINER_*`, `CONTAINERS_*` and `PODMAN_*` variable, `REGISTRY_AUTH_FILE` and `DBUS_SESSION_BUS_ADDRESS` | A server published as an image (`command: docker`, `args: ["run", "-i", "--rm", …]`) *is* the runtime's CLI, and a rootless runtime finds its daemon through `DOCKER_HOST`: without it the CLI dials the system socket and fails at the daemon with a permission error that names nothing you set. It is the same rule the [local sandbox](../concepts/code-sandbox.md) drives the runtime with. What the image itself receives is what `args` passes it — a bare `-e NAME` there copies `NAME` from this environment, so name it in `env:` |
 | What the config declares | The server's `env:`, then the seat's `mcp_env` for it, which wins variable by variable | The server's settings and its identity, resolved as above — a key in `optional_keys` whose value does not resolve is not set at all |
@@ -1209,7 +1432,7 @@ Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); over
 
 ## How Tool Calls Work
 
-From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions, served together to the seat's coding CLI as the tools of one MCP server, `crewlet`, which the CLI calls in its own loop and the engine answers through the dispatch below ([Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host)). The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker. The name `crewlet` is therefore reserved: no `mcp_servers` entry may take it.
+From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions, served together to the seat's harness as the tools of one MCP server, `crewlet`, which the harness calls in its own loop and the engine answers through the dispatch below ([Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host)). The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker. The name `crewlet` is therefore reserved: no `mcp_servers` entry may take it.
 
 **Tool resolution order:**
 

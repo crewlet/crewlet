@@ -162,6 +162,10 @@ type server struct {
 	// from the same listing, so a restart that lists a different set moves
 	// both. Guarded by the BRIDGE's mu, like tools.
 	unlisted []string
+	// refused are the tools that listing named and that are not offered for
+	// their name ([Bridge.RefusedTools]), set with tools from the same
+	// listing and guarded by the same mu.
+	refused []RefusedTool
 
 	mu sync.RWMutex
 	// client is the session serving the server now, nil while it is down.

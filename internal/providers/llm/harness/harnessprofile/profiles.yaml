@@ -5,16 +5,16 @@
 # belong to vendors who rename them between releases. `written_for` is the
 # version each profile was authored against, and `crewlet llm doctor` prints
 # it beside the version actually installed — a profile that quietly stopped
-# matching its CLI is the failure this file is shaped to make visible.
+# matching its harness is the failure this file is shaped to make visible.
 #
 # Paths under credential_paths and volatile_paths are relative to the SEAT
-# HOME, so a CLI that keeps two directories can name files in both.
+# HOME, so a harness that keeps two directories can name files in both.
 
 claude-code:
   binary: claude
   written_for: "Claude Code CLI 2.1.x, measured on 2.1.303, 2.1.310 and 2.1.312 (`claude --version`); on 2.1.312 a `-p` stream-json run writes a `rate_limit_event` on every run (its `rate_limit_info` carrying `status`, `resetsAt` in epoch seconds and `rateLimitType` `five_hour` or `seven_day`), a refused key or token a result event with `api_error_status: 401`, a refused token `system` `api_retry` events with `error: authentication_failed` first, and `auth status` JSON with `loggedIn`, `authMethod`, `email` and `orgName`, exiting 0 signed in and 1 signed out; token_lifetime_days is the documented one-year `claude setup-token` token (code.claude.com/docs/en/authentication)"
   version_args: ["--version"]
-  # EVERY FLAG BELOW KEEPS THE CLI TO ITS CALL. Measured on 2.1.310 through
+  # EVERY FLAG BELOW KEEPS THE HARNESS TO ITS CALL. Measured on 2.1.310 through
   # the engine's own code path, with the state directory inside a git
   # checkout whose root holds a CLAUDE.md, CLAUDE.local.md, .claude/CLAUDE.md,
   # .claude/rules, an AGENTS.md, a skill, a custom agent, hooks in
@@ -53,7 +53,7 @@ claude-code:
   #                             could fetch would have found it could not. A
   #                             fetch is a read — it never gates delivery — and
   #                             a subscription seat must not have less reach
-  #                             than the same CLI at a terminal. The seat's own
+  #                             than the same harness at a terminal. The seat's own
   #                             tools are allowed by mcp.allow_args.
   #   --disallowedTools         beside the allowlist, the file, shell and
   #                             subagent tools, by the names these builds give
@@ -63,9 +63,9 @@ claude-code:
   #                             not listed.
   #
   # THE RECORD IS stream-json, read line by line as the run goes (requests
-  # below): every model request's prose, calls and counts, the moment the CLI
+  # below): every model request's prose, calls and counts, the moment the harness
   # writes them, which is what a phase's round budget and token budget are
-  # gated on while its CLI drives its own loop. --verbose is what stream-json
+  # gated on while its harness drives its own loop. --verbose is what stream-json
   # requires in print mode, and --include-partial-messages is what makes the
   # counts true: without it the assistant events carry an output count of 1
   # whatever the model wrote (measured on 2.1.310), and only the raw
@@ -73,7 +73,7 @@ claude-code:
   # output. A text function reads the same stream's last event, `result`,
   # which carries what `--output-format json` did.
   #
-  # A CLI editing files in its own sandbox would be invisible to the tool
+  # A harness editing files in its own sandbox would be invisible to the tool
   # registry and the permission model, which is why only the web stays on
   # among its own tools.
   complete_args:
@@ -173,7 +173,7 @@ claude-code:
   #                         is the whole instruction and whose answer is
   #                         parsed.
   #   append_system_prompt  KEEPS the default, under the identity line "You
-  #                         are Claude Code, Anthropic's official CLI for
+  #                         are Claude Code, Anthropic's official harness for
   #                         Claude, running within the Claude Agent SDK.", and
   #                         puts the engine's text after it in the same cached
   #                         block. For a seat at work. The default is the
@@ -236,19 +236,19 @@ claude-code:
     # commits to the first message of a call that keeps its own prompt. The
     # call's directory is not a repository: the engine's `.git` file there
     # names a git directory that never exists, so git reports none and the
-    # CLI an empty one ("Current branch: HEAD", "(clean)"). Before that file,
+    # harness an empty one ("Current branch: HEAD", "(clean)"). Before that file,
     # a state directory inside a checkout handed every seat that checkout's
     # branch, status and last commit. Measured on 2.1.303 and
     # 2.1.310: this switch drops that block, about 550 characters of every
     # seat's call, and leaves the system prompt byte-identical on
     # claude-opus-5-5 and claude-sonnet-4-5. The environment section still
-    # says "Is a git repository: true", which is the CLI reading the `.git`
+    # says "Is a git repository: true", which is the harness reading the `.git`
     # file and nothing more.
     CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1"
   # The two switches that keep the CLAUDE.md family out, which
   # --setting-sources "" does not (it is no setting source): without them every
   # CLAUDE.md, CLAUDE.local.md and .claude/rules file above the call's
-  # directory reached the request under the CLI's "These instructions OVERRIDE
+  # directory reached the request under the harness's "These instructions OVERRIDE
   # any default behavior" banner, and the auto-memory section named a
   # per-project path in it. Switches, not settings, so an entry's env cannot
   # turn them off (measured on 2.1.310).
@@ -340,7 +340,7 @@ claude-code:
           cache_write: [["event", "usage", "cache_creation_input_tokens"]]
   # --max-turns, where an operator adds it: the run exits 1 with a result
   # event of subtype error_max_turns and is_error set (measured on 2.1.310).
-  # That is the CLI's cap, not a failure — the run stops with what it did.
+  # That is the harness's cap, not a failure — the run stops with what it did.
   cap:
     exit_code: 1
     match: [{path: ["type"], equals: "result"}, {path: ["subtype"], equals: "error_max_turns"}]
@@ -361,7 +361,7 @@ claude-code:
     # directory accumulates one file per rotation for the life of the seat.
     - ".claude/backups"
     # The file's lock, for the same reason: pruning what it guards and leaving
-    # it behind is half a prune. It is a DIRECTORY, and one a killed CLI
+    # it behind is half a prune. It is a DIRECTORY, and one a killed harness
     # leaves held — this build reports "Could not refresh your login because
     # another Claude Code process is refreshing it" off exactly that state.
     - ".claude/.claude.json.lock"
@@ -421,7 +421,7 @@ claude-code:
   # the plan sat unused — the silent switch applyAuth deletes ANTHROPIC_API_KEY
   # to prevent.
   login_args: ["auth", "login", "--claudeai"]
-  # JSON, the CLI's own default, for the engine's reading of the login
+  # JSON, the harness's own default, for the engine's reading of the login
   # (status_fields); --text for a person reading `crewlet llm doctor` or
   # `crewlet llm status`.
   status_args: ["auth", "status"]
@@ -432,10 +432,10 @@ claude-code:
   logout_args: ["auth", "logout"]
   capture_token_args: ["setup-token"]
   # A SPENT PLAN IS RECOGNISED BY ITS STATUS FIRST, and by the vendor's words
-  # second. The CLI's result event says it plainly: `is_error: true` and
+  # second. The harness's result event says it plainly: `is_error: true` and
   # `api_error_status: 429`, with the vendor's sentence in `result`, on a
   # zero exit or not (as Claude Code 2.1.312 writes it). The status is matched as a
-  # structured field of the CLI's own event (harnessprofile.LimitEvent), where a
+  # structured field of the harness's own event (harnessprofile.LimitEvent), where a
   # model cannot write it, and it survives the rewording that retired every
   # sentinel this profile shipped before.
   #
@@ -489,19 +489,19 @@ claude-code:
         - {path: ["type"], equals: "system"}
         - {path: ["subtype"], equals: "api_retry"}
         - {path: ["error"], equals: "authentication_failed"}
-  # MEASURED AGAINST THE INSTALLED CLI, NOT REMEMBERED. The sentinel this
+  # MEASURED AGAINST THE INSTALLED HARNESS, NOT REMEMBERED. The sentinel this
   # profile first shipped ("Claude AI usage limit reached", with the reset
   # instant after a pipe) was 1.x's wording; "Usage limit reached" was 2.1.263's,
   # and 2.1.312 says "You've hit your 5-hour limit". A sentinel that cannot
-  # match is a silent hole: a spent plan the CLI reports as a failed run then
+  # match is a silent hole: a spent plan the harness reports as a failed run then
   # reaches the chain as SERVER, which never sits the entry out, so every round
-  # of every seat starts a CLI to hear the same sentence again. The status
+  # of every seat starts a harness to hear the same sentence again. The status
   # above is what closes that hole; the sentinels stay for a report that
   # arrives without the result event (a run cut short before it wrote one).
   #
   # The sentinels are matched on the terms harnessprofile.MarkerScope gives: the
-  # CLI's own line counts where it OPENS the answer of a clean run, and
-  # anywhere in a run the CLI flags failed (a non-zero exit or is_error); the
+  # harness's own line counts where it OPENS the answer of a clean run, and
+  # anywhere in a run the harness flags failed (a non-zero exit or is_error); the
   # relayed API error sits after "API Error: 429", so it counts only in a
   # failed run.
   #
@@ -516,7 +516,7 @@ claude-code:
       reset_unit: clock
     - sentinel: '"type":"rate_limit_error"'
   # "OAuth token has expired" was dead the same way. The live wording is
-  # "OAuth token has been revoked", and every other auth failure this CLI
+  # "OAuth token has been revoked", and every other auth failure this harness
   # reports — "Not logged in", "Login expired", "OAuth token revoked" — ends
   # in the same clause, so "Please run /login" covers all three at once.
   #
@@ -536,9 +536,9 @@ claude-code:
     - sentinel: "Please run /login"
     - sentinel: "Failed to authenticate"
   model_aliases:
-    - {id: "opus", name: "Opus", detail: "The CLI's latest Opus"}
-    - {id: "sonnet", name: "Sonnet", detail: "The CLI's latest Sonnet"}
-    - {id: "haiku", name: "Haiku", detail: "The CLI's latest Haiku"}
+    - {id: "opus", name: "Opus", detail: "The harness's latest Opus"}
+    - {id: "sonnet", name: "Sonnet", detail: "The harness's latest Sonnet"}
+    - {id: "haiku", name: "Haiku", detail: "The harness's latest Haiku"}
   models_docs: "https://code.claude.com/docs/en/model-config"
 
 codex:
@@ -546,7 +546,7 @@ codex:
   written_for: "Codex CLI 0.164.x (`codex --version`); measured on 0.150.1: `exec --json` writes no rate-limit event (`rate_limits` is in the session rollout only, which a plain call's --ephemeral never writes) and its 401 error event names no status field, so a limit's reset is read from its sentence, which 0.150.1 writes as `try again at` and a time of day (`%-I:%M %p`) or a date (`%b %-d<st|nd|rd|th>, %Y %-I:%M %p`) in the CLI's local zone; `login --device-auth` prints the address, a code such as `ABCD-EFGH1` and `(expires in 15 minutes)`"
   version_args: ["--version"]
   # MEASURED on 0.153.4 and 0.164.0 through this backend's own code path — the
-  # built-in profile, harness.New and Complete — with the CLI pointed at a
+  # built-in profile, harness.New and Complete — with the harness pointed at a
   # local stand-in for the Responses API, and the state directory inside a
   # repository with an AGENTS.md, an AGENTS.override.md, a CLAUDE.md, a .env,
   # skills, rules and a project config.toml above it.
@@ -654,7 +654,7 @@ codex:
     - "-"
   # Denied: no shell, and apply_patch writes nothing (above).
   #
-  # NO tools_off, so the Dashboard Assistant refuses this CLI: apply_patch has
+  # NO tools_off, so the Dashboard Assistant refuses this harness: apply_patch has
   # no switch, so the model keeps a tool of its own, and its patch check
   # answers whether a file outside the call exists and holds given lines,
   # which is a read of the engine host no request of the person's made.
@@ -781,7 +781,7 @@ codex:
   # A SEAT KEEPS CODEX'S PROMPT: the AGENTS.md in the call's directory, which
   # codex reads on every run. It arrives after codex's own prompt (21,175
   # characters for gpt-5.5 on 0.153.4, 21,299 on 0.164.0, opening "You are
-  # Codex, a coding agent based on GPT-5") and its permissions block, as the
+  # Codex, a harness based on GPT-5") and its permissions block, as the
   # first part of the context user message, wrapped as "# AGENTS.md
   # instructions for <the call's directory>" around <INSTRUCTIONS>. That
   # heading is codex's and names the per-call directory, so it is per-call text
@@ -830,7 +830,7 @@ codex:
   # THE SEAT'S TOOLS: one stdio server, declared on argv with -c, measured on
   # 0.164.0 through the engine's own code path against a local stand-in, the
   # state directory inside a checkout holding a .codex/config.toml, an
-  # .mcp.json and every other CLI's MCP configuration at each level above the
+  # .mcp.json and every other harness's MCP configuration at each level above the
   # call, and a config.toml with a server of its own in the seat's home: the
   # model was offered the crewlet server's tools beside web search, apply_patch
   # and codex's three MCP-resource readers (which reach only the servers codex
@@ -1009,7 +1009,7 @@ codex:
   # status: 429 Too Many Requests", without the API's own message.
   #
   # The plan's sentence ends "or try again at 4:31 PM." or, on another day,
-  # "Try again at Nov 3rd, 2026 4:31 PM." in the CLI's local zone, which the
+  # "Try again at Nov 3rd, 2026 4:31 PM." in the harness's local zone, which the
   # engine pins with TZ on every child, so the time needs no zone of its own
   # to be read.
   limit_markers:
@@ -1036,21 +1036,21 @@ gemini-cli:
   written_for: "Gemini CLI 0.65.x, measured on 0.58.0 and 0.65.0 (`gemini --version`)"
   version_args: ["--version"]
   # MEASURED on 0.58.0 and 0.65.0 through this backend's own code path — the
-  # built-in profile, harness.New and Complete — with the CLI pointed at a
+  # built-in profile, harness.New and Complete — with the harness pointed at a
   # local stand-in for the Gemini API, and the state directory inside a git
   # checkout holding, at every level above the call, a GEMINI.md, an AGENTS.md,
   # a CLAUDE.md, a .env and a .gemini/.env (naming another base URL, API key,
   # API version and system prompt file), and a .gemini/ with settings (hooks,
   # an MCP server, a tool list), skills, agents, commands, an extension and a
-  # policy allowing the shell. None of it reached a request or ran, the CLI
+  # policy allowing the shell. None of it reached a request or ran, the harness
   # opened no file above the state directory, and its only connection was the
   # API's. Everything that keeps it so is a file or a variable below; the argv
   # is the output format, the approval mode and the model.
   complete_args: ["--output-format", "json", "--approval-mode", "default"]
-  # Denied by the policy file below: the CLI's file, shell, sub-agent, plan and
+  # Denied by the policy file below: the harness's file, shell, sub-agent, plan and
   # skill tools are not offered at all.
   local_tools: denied
-  web_tools_note: "no web denial: removing web_fetch and google_web_search from the seeded allow list would be one, but it has not been measured against a gemini CLI, so this profile cannot serve the assistant"
+  web_tools_note: "no web denial: removing web_fetch and google_web_search from the seeded allow list would be one, but it has not been measured against a gemini harness, so this profile cannot serve the assistant"
   seed_files:
     # privacy.usageStatisticsEnabled=false: on by default, it opens a
     # connection to the vendor's logging service (play.googleapis.com) on every
@@ -1077,7 +1077,7 @@ gemini-cli:
     # model on the side (gemini-3-flash-preview on both releases), sending it
     # the call's system prompt.
     #
-    # The user tier this file sits in outranks the workspace and the CLI's
+    # The user tier this file sits in outranks the workspace and the harness's
     # defaults (priority 999 is the highest the tier takes); a machine-wide
     # policy under /etc/gemini-cli/policies, which only an administrator of the
     # host can write, outranks it.
@@ -1098,7 +1098,7 @@ gemini-cli:
     # the deny-all. A text function has no such server, and the rule allows
     # nothing there. Not passed with --policy: that flag REPLACES the policies
     # directory of the home rather than adding to it (read from 0.65.0's
-    # bundle), and with it the deny-all went and the CLI offered its file,
+    # bundle), and with it the deny-all went and the harness offered its file,
     # plan, sub-agent and topic tools beside the seat's (measured).
     - path: .gemini/policies/crewlet-mcp.toml
       content: |
@@ -1108,14 +1108,14 @@ gemini-cli:
         toolName = "*"
         decision = "allow"
         priority = 999
-    # THE CALL'S OWN ENVIRONMENT FILES, so the CLI reads none above its
+    # THE CALL'S OWN ENVIRONMENT FILES, so the harness reads none above its
     # directory. It loads ONE environment file, the first `.gemini/.env` or
     # `.env` it finds walking from its working directory to the root — not
     # stopped by the engine's `.git` marker — and takes every key in it its
     # environment lacks. Without these, an ancestor's `.gemini/.env` sent the
     # call to the base URL and API version it named, and signed a keyless call
     # in with its own GEMINI_API_KEY; with them, the walk ends where it starts
-    # and nothing is set. Both names, because the CLI looks for `.gemini/.env`
+    # and nothing is set. Both names, because the harness looks for `.gemini/.env`
     # only in a trusted directory and for `.env` in any; a comment, because a
     # seed is never empty.
     - path: .gemini/.env
@@ -1126,35 +1126,35 @@ gemini-cli:
       content: "# Written by Crewlet: this call's own environment file, so none above it is read.\n"
   # GEMINI_CLI_TRUST_WORKSPACE trusts the call's own directory, which a headless
   # run requires: untrusted, every call exited 55 before sending anything ("Gemini
-  # CLI is not running in a trusted directory"). The variable rather than
-  # --skip-trust or a settings key, because the CLI reads it before any
+  # harness is not running in a trusted directory"). The variable rather than
+  # --skip-trust or a settings key, because the harness reads it before any
   # settings file, a machine-wide one included. What trust admits is the call's
   # directory, which holds only what the engine writes there; GEMINI.md above
-  # it stays out because the engine's `.git` file there is the root the CLI's
+  # it stays out because the engine's `.git` file there is the root the harness's
   # walk for it stops at.
   #
-  # NO_BROWSER keeps a call that reaches the CLI's login flow — a subscription
+  # NO_BROWSER keeps a call that reaches the harness's login flow — a subscription
   # seat whose copied login is missing or refused — from asking to open a
-  # browser. Asked, the CLI read the call's own prompt from stdin as the
+  # browser. Asked, the harness read the call's own prompt from stdin as the
   # answer and then ran with an empty prompt (measured on 0.65.0 with a
   # display); told, it exits 41 at once, "Manual authorization is required".
   env:
     GEMINI_CLI_TRUST_WORKSPACE: "true"
     NO_BROWSER: "true"
-  # THE LOGIN IS CHOSEN BY THE ENVIRONMENT, under subscription only. The CLI
+  # THE LOGIN IS CHOSEN BY THE ENVIRONMENT, under subscription only. The harness
   # signs in with what settings name or, naming none, GOOGLE_GENAI_USE_GCA=true
   # (the Google login), else GEMINI_API_KEY — read from both bundles. A copied
   # login selects nothing, so without this every subscription call exited 41,
-  # "Please set an Auth method"; with it, the CLI read the copied
+  # "Please set an Auth method"; with it, the harness read the copied
   # oauth_creds.json and went to Google's token endpoint with it (0.58.0 and
   # 0.65.0). Not in env and not a settings seed, either of which would put
   # every api-key call on the login instead of its key.
   subscription_env:
     GOOGLE_GENAI_USE_GCA: "true"
   # THE KEY IS CHOSEN BY THE SETTINGS, under a key sign-in. Naming no sign-in
-  # in its settings, the CLI takes one from its environment, and
+  # in its settings, the harness takes one from its environment, and
   # GOOGLE_GEMINI_BASE_URL — an operator's gateway in front of the API, in the
-  # entry's env — outranks GEMINI_API_KEY there: it selects the CLI's gateway
+  # entry's env — outranks GEMINI_API_KEY there: it selects the harness's gateway
   # sign-in, which 0.65.0 then refuses, exit 41 "Invalid auth method selected",
   # before any request (read from the bundle; measured through the engine with
   # the base URL at a local stand-in). Settings outrank the environment, so a
@@ -1168,11 +1168,11 @@ gemini-cli:
   # ONE CHANNEL, AND IT REPLACES: GEMINI_SYSTEM_MD names a file whose text is
   # the request's whole systemInstruction — no identity line of the vendor's
   # and nothing per call — so a seat and a side pass both take it. NO CHANNEL
-  # KEEPS THE CLI'S OWN PROMPT in either release: no flag, setting or variable
+  # KEEPS THE HARNESS'S OWN PROMPT in either release: no flag, setting or variable
   # adds to it (GEMINI_WRITE_SYSTEM_MD only writes it out, and
   # GEMINI_PROMPT_<SECTION>=0 only drops a section of it), and a GEMINI.md
   # arrives as user content. The prompt it replaces opens "You are a
-  # non-interactive CLI agent specializing in software engineering tasks" for
+  # non-interactive harness agent specializing in software engineering tasks" for
   # gemini-2.5-pro: 23,058 characters on 0.58.0 and 23,410 on 0.65.0 with the
   # two web tools, and it carries the call's temporary directory.
   #
@@ -1181,8 +1181,8 @@ gemini-cli:
   # listing of the directory and the call's temporary directory follow in the
   # first user turn, ahead of the prompt on stdin.
   #
-  # THE CLI EDITS THE TEXT. Wherever it says ${AvailableTools}, ${AgentSkills},
-  # ${SubAgents} or ${<tool>_ToolName} for a tool the call has, the CLI writes
+  # THE HARNESS EDITS THE TEXT. Wherever it says ${AvailableTools}, ${AgentSkills},
+  # ${SubAgents} or ${<tool>_ToolName} for a tool the call has, the harness writes
   # in its tool list, its bundled skills (with their install path), its
   # sub-agents, or the tool's name; and it collapses three or more newlines to
   # two. No escape exists: `$${…}` and `\${…}` are expanded after their first
@@ -1196,7 +1196,7 @@ gemini-cli:
   # PER MODEL: stats.models.<model>.tokens, one entry for every model the call
   # used — the web tools ask a second one on the side — so each count is the
   # sum over the models (`*`). `input` is the prompt less its cached part, as
-  # the CLI computes it; `candidates` is the answer, without the reasoning,
+  # the harness computes it; `candidates` is the answer, without the reasoning,
   # which Gemini bills as output and reports as `thoughts`; and `tool` is the
   # prompt a model-side tool built (the page a URL-context fetch read, the
   # results a search grounding returned), which Gemini reports apart from the
@@ -1211,7 +1211,7 @@ gemini-cli:
   # The call's own session id, which names the run's chat record (requests,
   # below). Any word of letters, digits, dashes and underscores is accepted.
   session_args: ["--session-id", "{session}"]
-  # A POLICY FILE THE CLI CANNOT READ IS REPORTED AND SKIPPED: the CLI prints
+  # A POLICY FILE THE HARNESS CANNOT READ IS REPORTED AND SKIPPED: the harness prints
   # "[USER] Policy file error in <file>:" on stderr and carries on without the
   # file's rules — the deny-all, or the seat's allow. So the run is stopped at
   # that line and fails (measured on 0.65.0 with a broken crewlet-mcp.toml:
@@ -1222,14 +1222,14 @@ gemini-cli:
   # trusted, by GEMINI_CLI_TRUST_WORKSPACE — and --allowed-mcp-server-names
   # admitting it alone. Measured on 0.65.0 through the engine's own code path
   # against a local stand-in, the state directory inside a checkout holding a
-  # .gemini/settings.json, an .mcp.json and every other CLI's MCP
+  # .gemini/settings.json, an .mcp.json and every other harness's MCP
   # configuration at each level above the call, and an extension with a server
   # of its own in the seat's home: the model was offered the seat's tools,
   # web_fetch and google_web_search, and no other server started. Without the
   # flag, the home's extension started its server. The home's settings.json is
   # the profile's own seed, rewritten every generation.
   #
-  # The server's `timeout` is the CLI's per-call timeout, in milliseconds
+  # The server's `timeout` is the harness's per-call timeout, in milliseconds
   # (600,000 by default; 4,000 gave a slow call up at 4.0s). It re-reads the
   # server's list when told it changed — a tool activated mid-run was offered
   # from the request after the one the activation's result went back in — and
@@ -1243,7 +1243,7 @@ gemini-cli:
     tool_timeout_seconds: 600
     relists: true
     concurrency: at_once
-  # EACH REQUEST, FROM THE CHAT RECORD the CLI keeps as it goes — `json`
+  # EACH REQUEST, FROM THE CHAT RECORD the harness keeps as it goes — `json`
   # output prints nothing until the run is over. Each response is a `gemini`
   # entry with its id, prose, model and counts, written as the response
   # arrives, and written WHOLE again once its calls have run, with the calls
@@ -1255,7 +1255,7 @@ gemini-cli:
   #
   # The file is named after the first eight characters of the session id,
   # which no glob can spell, so it is told by its first line, which names
-  # the whole id (owner). The CLI sends no id of its own with a call; a call
+  # the whole id (owner). The harness sends no id of its own with a call; a call
   # is joined to its request by name and arguments.
   #
   # Measured on 0.65.0: each request's counts as it was written, their sum
@@ -1287,7 +1287,7 @@ gemini-cli:
       - match: [{path: ["type"], equals: "user"}]
         closes: true
   # model.maxSessionTurns, where an operator sets it in the settings: the run
-  # exits 53, a FatalTurnLimitedError, the CLI's code for that one cause
+  # exits 53, a FatalTurnLimitedError, the harness's code for that one cause
   # (measured on 0.65.0; its report is on stderr, not in the output).
   cap:
     exit_code: 53
@@ -1303,7 +1303,7 @@ gemini-cli:
   # needs the ambient one on a Workspace account.
   passthrough_env: ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
   login_args: []
-  # A failed call exits non-zero with the CLI's error on stderr. A spent daily
+  # A failed call exits non-zero with the harness's error on stderr. A spent daily
   # quota is a TerminalQuotaError; a per-minute limit is retried ten times and
   # then reported as a RetryableQuotaError; neither prints the API's
   # RESOURCE_EXHAUSTED on its own.
@@ -1312,7 +1312,7 @@ gemini-cli:
     - sentinel: "RetryableQuotaError"
   # A refused login is relayed with the API's UNAUTHENTICATED, a refused key
   # with the API's own sentence, and a login the call could not use — none
-  # copied, or one Google's token endpoint did not accept — with the CLI's
+  # copied, or one Google's token endpoint did not accept — with the harness's
   # own (measured on 0.58.0 and 0.65.0).
   auth_markers:
     - sentinel: "UNAUTHENTICATED"
@@ -1324,13 +1324,13 @@ qwen-code:
   written_for: "Qwen Code 0.23.x to 0.26.x, measured on 0.23.4 and 0.26.1 (`qwen --version`)"
   version_args: ["--version"]
   # Measured on 0.23.4 and 0.26.1 through the engine's own code path, the
-  # CLI pointed at a local stub, with the state directory inside a git
+  # harness pointed at a local stub, with the state directory inside a git
   # checkout and every level above the call holding a QWEN.md, AGENTS.md,
   # QWEN.local.md, .qwen/rules, skills under .qwen, .agents and .claude, a
   # subagent, a command, a .qwen/settings.json with hooks and an MCP server,
   # an .mcp.json and an .env: none of them reached a request, no hook or MCP
   # server ran, the model was offered web_fetch alone, and every connection
-  # the CLI opened was the call's own.
+  # the harness opened was the call's own.
   #
   #   --output-format stream-json  one event a line, read below. `json` prints
   #                                the same events as one JSON ARRAY, which
@@ -1394,7 +1394,7 @@ qwen-code:
   #                            0: a 429 reaches the engine in about a minute
   #                            (seven attempts, the retries that remain) and
   #                            is recognised by limit_markers below. The
-  #                            CLI's own policy — the client's retries, then
+  #                            harness's own policy — the client's retries, then
   #                            ten more rounds starting 60s and growing to
   #                            five minutes apart — held the call past the
   #                            engine's timeout, so a spent quota came back
@@ -1418,7 +1418,7 @@ qwen-code:
   # `.git` file. 0.23.4 also looks one directory above the project root,
   # which is <seat>/work: the engine's, holding nothing but call
   # directories.
-  web_tools_note: "no web denial: removing web_fetch and web_search from the seeded allow list would be one, but it has not been measured against a qwen CLI, so this profile cannot serve the assistant"
+  web_tools_note: "no web denial: removing web_fetch and web_search from the seeded allow list would be one, but it has not been measured against a qwen harness, so this profile cannot serve the assistant"
   seed_files:
     - path: .qwen/settings.json
       content: '{"general":{"chatRecording":false,"enableAutoUpdate":false,"preventSystemSleep":false},"privacy":{"usageStatisticsEnabled":false},"memory":{"enableManagedAutoMemory":false,"enableManagedAutoDream":false,"enableAutoSkill":false},"model":{"openAILoggingDir":"~/.qwen/openai-logs","generationConfig":{"maxRetries":0}},"skills":{"disabledLevels":["project","user","extension","bundled"]},"disableAllHooks":true,"tools":{"core":["web_fetch","web_search"]},"permissions":{"allow":["web_fetch","web_search"],"deny":["advisor","agent","artifact","ask_user_question","create_sub_session","cron_create","cron_delete","cron_list","display_image","edit","enter_plan_mode","enter_worktree","exec","exit_plan_mode","exit_worktree","get_goal","glob","grep_search","image_gen","list_agents","list_directory","loop_wakeup","lsp","manage_memory","monitor","notebook_edit","omni_caption_audio","omni_caption_image","omni_clip_audio","omni_clip_image","omni_clip_video","omni_convert_image","omni_downsample_audio","omni_downsample_image","omni_downscale_video","omni_extract_audio","omni_extract_keyframes","omni_ocr_image","omni_recall_media_memory","omni_transcribe_audio","omni_understand_video_segments","propose_goal","read_file","read_mcp_resource","record_artifact","record_source","report_findings","request_shutdown","run_shell_command","save_memory","search_memory","send_message","skill","structured_output","task_create","task_list","task_stop","task_update","team_create","team_delete","team_plan_approval","todo_write","tool_call","tool_search","update_goal","workflow","write_file","zoom_image"]}}'
@@ -1433,7 +1433,7 @@ qwen-code:
   #
   #   system_prompt         QWEN_SYSTEM_MD REPLACES the default: the
   #                         request's system message is the engine's text
-  #                         and then, after a `---`, the CLI's
+  #                         and then, after a `---`, the harness's
   #                         output-language rule (about 900 characters,
   #                         from the seat's home). For a side pass, whose
   #                         system prompt is the whole instruction and whose
@@ -1441,12 +1441,12 @@ qwen-code:
   #   append_system_prompt  QWEN_SYSTEM_IDENTITY_MD KEEPS the default and
   #                         puts the engine's text in place of its opening
   #                         sentence, "You are Qwen Code, a non-interactive
-  #                         CLI agent developed by Alibaba Group,
+  #                         harness agent developed by Alibaba Group,
   #                         specializing in software engineering tasks. …"
   #                         (261 characters); the rest follows byte for
   #                         byte, about 23,000 characters on 0.23.4 and
   #                         15,000 on 0.26.1, then the output-language rule.
-  #                         For a seat at work. The CLI ignores this file
+  #                         For a seat at work. The harness ignores this file
   #                         when QWEN_SYSTEM_MD is set, and refuses a
   #                         missing or empty one; the engine sets one
   #                         variable a call, and only with text to put in it.
@@ -1483,14 +1483,14 @@ qwen-code:
   # (`mcp__crewlet` is every tool of the server). Measured on 0.26.1 through
   # the engine's own code path against a local stand-in, the state directory
   # inside a checkout holding a .qwen/settings.json, an .mcp.json and every
-  # other CLI's MCP configuration at each level above the call, and an
+  # other harness's MCP configuration at each level above the call, and an
   # extension with a server of its own in the seat's home: the model was
   # offered the seat's tools and web_fetch, and no other server started.
   # Without --allowed-mcp-server-names, the home's extension started its
   # server.
   #
-  # The server's `timeout` is the CLI's per-call timeout, in milliseconds
-  # (600,000 by default; 4,000 gave a slow call up at 4.0s). The CLI does not
+  # The server's `timeout` is the harness's per-call timeout, in milliseconds
+  # (600,000 by default; 4,000 gave a slow call up at 4.0s). The harness does not
   # re-read a server's list mid-run (a tool activated mid-run was never
   # offered), and makes one response's calls at once only where every one is
   # to a tool annotated read-only: two read-only calls of 1.5s each
@@ -1515,7 +1515,7 @@ qwen-code:
   # events — its prose, then its calls with the request's counts and its stop
   # reason — each under an id of its own, so the response is not told by id:
   # it ENDS where the `user` events carrying its calls' results begin
-  # (closes), and the next `assistant` event begins the next. The CLI sends no
+  # (closes), and the next `assistant` event begins the next. The harness sends no
   # id of its own with a call; a call is joined to its request by name and
   # arguments. The init event lists the tools the model is offered.
   #
@@ -1545,7 +1545,7 @@ qwen-code:
         closes: true
   # --max-session-turns, where an operator adds it: the run exits 53 with no
   # result event, "Reached max session turns for this session." on stderr
-  # (measured on 0.26.1). The CLI's code for that one cause.
+  # (measured on 0.26.1). The harness's code for that one cause.
   cap:
     exit_code: 53
   env:
@@ -1573,11 +1573,11 @@ qwen-code:
   # tier was discontinued on 2026-04-15", read from both bundles), and
   # `qwen auth` is listed as removed, so there is no login to adopt and no
   # token. The
-  # CLI's OpenAI-compatible sign-in is what runs, chosen by --auth-type
+  # harness's OpenAI-compatible sign-in is what runs, chosen by --auth-type
   # above: the key in OPENAI_API_KEY, the endpoint in OPENAI_BASE_URL, which
   # an entry sets in env to its provider's (DashScope's, a Coding Plan's, any
-  # OpenAI-compatible one; unset, the CLI falls back to an endpoint of its
-  # own), and the model from the entry's `model`. Without --auth-type the CLI
+  # OpenAI-compatible one; unset, the harness falls back to an endpoint of its
+  # own), and the model from the entry's `model`. Without --auth-type the harness
   # chooses that sign-in only when OPENAI_MODEL or QWEN_MODEL is set as well,
   # and otherwise exits "No auth type is selected". DASHSCOPE_API_KEY, the
   # variable this profile named before, is read by neither build's model
@@ -1586,7 +1586,7 @@ qwen-code:
   # A name other vendors' keys go in too, sent to whatever OPENAI_BASE_URL
   # names: an entry names its key, and nothing falls back to this variable.
   api_key_env_shared: true
-  # The CLI's own words, measured on both builds against a stub refusing
+  # The harness's own words, measured on both builds against a stub refusing
   # every request: the call exits 1 and its result event's error reads
   # "[API Error: <status> <the provider's message>]". A call with no key is
   # refused before any request.
@@ -1710,7 +1710,7 @@ opencode:
   # `snapshots: false` stops it keeping a git snapshot of a working
   # directory that is empty by construction.
   #
-  # NO tools_off, so the Dashboard Assistant refuses this CLI. The seats'
+  # NO tools_off, so the Dashboard Assistant refuses this harness. The seats'
   # policy was measured to decide what a call is offered (the web tools and
   # nothing else, above), but the denial's deny-all has not been measured to
   # leave a call offered nothing, and the construction lives in a seeded file
@@ -1761,7 +1761,7 @@ opencode:
   # directory, the call's own `.crewlet-config` (work_config_env, above):
   # OpenCode has no system-prompt flag and no variable naming a file. Neither
   # file is interpolated — `{env:…}`, `{file:…}` and `@path` reach the model
-  # as written — so nothing a seat's prompt quotes can make the CLI read a file
+  # as written — so nothing a seat's prompt quotes can make the harness read a file
   # or a variable into it. Measured on 2.0.32 and 2.1.4 through the engine's
   # own code path, on the OpenAI-compatible and the Anthropic provider routes:
   #
@@ -1866,7 +1866,7 @@ opencode:
   # deny-all. Measured on 2.1.4 through the engine's own code path against a
   # local stand-in, the state directory inside a checkout holding an
   # opencode.json and .opencode/opencode.json with servers of their own, an
-  # .mcp.json and every other CLI's MCP configuration at each level above the
+  # .mcp.json and every other harness's MCP configuration at each level above the
   # call, and an opencode.json and opencode.jsonc in the home's global
   # configuration directory: the model was offered the seat's tools, webfetch
   # and websearch, and no other server started. With the project walk switched
@@ -1914,7 +1914,7 @@ opencode:
   # only after they ran (late_calls): a step is told once it closes or the
   # next begins. The final step prints neither step_start nor step_finish,
   # so its counts are the remainder of the session's total, asked of the
-  # server (mcp.usage_args). The CLI sends no id of its own with a call; a
+  # server (mcp.usage_args). The harness sends no id of its own with a call; a
   # call is joined to its request by name and arguments.
   #
   # NO CAP: OpenCode's own step limit (an agent's `steps`) ends a run that
@@ -2067,18 +2067,18 @@ cursor-agent:
   #             skills, transcripts, notes) from the session"), present in
   #             both builds' bundles. Measured on 2026.10.22: it sets the run
   #             request's exclude_workspace_context field, false without it,
-  #             and the CLI loads no skills or commands. What the service
+  #             and the harness loads no skills or commands. What the service
   #             then leaves out happens on Cursor's side and cannot be
   #             measured here.
   #
   # The `.git` file the engine writes into the call's directory keeps every
   # hook, cli.json and mcp.json above it from being read: with --trust no
-  # planted hook or MCP server ran. The CLI's rule loader does NOT stop
+  # planted hook or MCP server ran. The harness's rule loader does NOT stop
   # there: both builds walk from the call's directory to the filesystem root
   # and open every AGENTS.md, CLAUDE.md and .cursor/rules/*.mdc on the way
   # (measured by tracing the files opened, with and without the flag above,
   # and read from both bundles). None of them is in the run request, which
-  # carries the user message alone (measured); what the service asks the CLI
+  # carries the user message alone (measured); what the service asks the harness
   # for after that could not be measured. A state_dir outside any directory
   # holding such files keeps them out entirely.
   complete_args: ["-p", "--output-format", "json", "--trust", "--exclude-workspace-context"]
@@ -2093,7 +2093,7 @@ cursor-agent:
   # with no such server, as a text function's, matches nothing.
   #
   # THE HOME'S mcp.json, ~/.cursor/mcp.json — the os home, which is the
-  # seat's — names servers the CLI starts with no approval asked: measured on
+  # seat's — names servers the harness starts with no approval asked: measured on
   # 2026.10.22 with `cursor-agent mcp list`, which resolves what a run loads,
   # a server planted there was started; with this file in its place, none was
   # listed. Rewritten every generation, for text functions too.
@@ -2134,12 +2134,12 @@ cursor-agent:
   # auth.json is ~/.cursor/auth.json on macOS and
   # $XDG_CONFIG_HOME/cursor/auth.json on Linux — `.config/cursor/auth.json` in
   # a seat's home, where the engine points that variable (read from the
-  # 2026.10.22 bundle; on Linux the CLI opened no other, measured). With the
+  # 2026.10.22 bundle; on Linux the harness opened no other, measured). With the
   # macOS path here on Linux, a login adopted from a host or a bundle was
-  # never where a seat's CLI looked, and the one it did use was never carried
+  # never where a seat's harness looked, and the one it did use was never carried
   # back. cli-config.json follows CURSOR_CONFIG_DIR on both.
   credential_paths: [".cursor/cli-config.json", ".cursor/auth.json"]
-  # cli-config.json is the CLI's settings file too, written on every run
+  # cli-config.json is the harness's settings file too, written on every run
   # signed in or not (measured); a login adds the account it is for under
   # authInfo (read from the 2026.10.22 bundle), and it is a login only then.
   login_keys:
@@ -2154,7 +2154,7 @@ cursor-agent:
     linux:
       credential_paths: [".cursor/cli-config.json", ".config/cursor/auth.json"]
       host_credential_paths: [".cursor/cli-config.json", ".config/cursor/auth.json"]
-  # The CLI's own authentication reference (cursor.com/docs/cli/reference/
+  # The harness's own authentication reference (cursor.com/docs/cli/reference/
   # authentication) gives CURSOR_API_KEY as the recommended headless sign-in,
   # "for automation, scripts, or CI environments", beside `--api-key`. It was
   # missing here, so `auth.mode: api-key` had nowhere to put the key and a
@@ -2241,15 +2241,15 @@ cursor-agent:
   logout_args: ["logout"]
   status_args: ["status"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
-  # CLI's own sentences, safe to keep only because of WHERE they are matched
-  # — on stderr, in a run the CLI reported failed, or where one OPENS a
+  # harness's own sentences, safe to keep only because of WHERE they are matched
+  # — on stderr, in a run the harness reported failed, or where one OPENS a
   # clean run's answer, never inside it (harnessprofile.MarkerScope). A model
-  # writing about a quota is answering. If your CLI reports these
+  # writing about a quota is answering. If your harness reports these
   # differently, override them.
   limit_markers:
     - sentinel: "usage limit"
     - sentinel: "quota"
-  # The CLI's own words, which every variant in both builds opens with:
+  # The harness's own words, which every variant in both builds opens with:
   # signed out, 2026.10.22 exits 1 on "Error: Authentication required.
   # Please run 'agent login' first, or set CURSOR_API_KEY environment
   # variable." (measured).
@@ -2260,7 +2260,7 @@ copilot:
   binary: copilot
   written_for: "GitHub Copilot CLI 1.0.x, measured on 1.0.103 (`copilot --version`)"
   version_args: ["--version"]
-  # EVERY FLAG BELOW KEEPS THE CLI TO ITS CALL. Measured on 1.0.103 through
+  # EVERY FLAG BELOW KEEPS THE HARNESS TO ITS CALL. Measured on 1.0.103 through
   # the engine's own code path, on a custom provider (COPILOT_PROVIDER_BASE_URL
   # at a local stand-in), with the state directory inside a git checkout and
   # every level above the call holding an AGENTS.md, CLAUDE.md, GEMINI.md,
@@ -2270,7 +2270,7 @@ copilot:
   # tool offered.
   #
   #   -s                          stdout is the answer and nothing else.
-  #                               Without it the CLI prints a "Disabled
+  #                               Without it the harness prints a "Disabled
   #                               tools" line, a line per tool call and a
   #                               usage footer around the answer.
   #   --disable-client-telemetry  no connection but the call's own: without
@@ -2287,7 +2287,7 @@ copilot:
   #                               the system prompt (8.4k characters of
   #                               vendor prompt instead of 22.5k). It fails
   #                               closed: a name that matches no tool adds
-  #                               nothing. web_fetch is the CLI's own fetch;
+  #                               nothing. web_fetch is the harness's own fetch;
   #                               web_search does not exist on a custom
   #                               provider, and the 1.0.103 bundle lists it
   #                               among the tools of the built-in GitHub MCP
@@ -2305,7 +2305,7 @@ copilot:
   #
   # The `.git` file the engine writes into the call's directory ends the
   # walk for instruction files, hooks and repository settings there. The
-  # CLI's custom-agent discovery walks past it to the enclosing repository's
+  # harness's custom-agent discovery walks past it to the enclosing repository's
   # root and opens every .github/agents and .claude/agents file on the way;
   # none reaches a request, because the task tool that lists them is not
   # among the available tools.
@@ -2331,15 +2331,15 @@ copilot:
     - "--deny-tool"
     - "read"
   local_tools: denied
-  web_tools_note: "no web denial: --deny-tool web_fetch and web_search would be one, but it has not been measured against a copilot CLI, so this profile cannot serve the assistant"
+  web_tools_note: "no web denial: --deny-tool web_fetch and web_search would be one, but it has not been measured against a copilot harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
-  # NO REPLACE CHANNEL: the CLI has no flag, variable or file that replaces
+  # NO REPLACE CHANNEL: the harness has no flag, variable or file that replaces
   # its system prompt in prompt mode (its SDK's replace mode is not reachable
   # from the command line), so every call takes the APPEND channel and keeps
   # the vendor's prompt — a side pass included.
   #
   # The append channel is an AGENTS.md in the call's own directory, which the
-  # CLI reads on every run with nothing on argv asking for it. Measured on
+  # harness reads on every run with nothing on argv asking for it. Measured on
   # 1.0.103: its text lands inside the system prompt as a
   # <custom_instruction> block, after the vendor's identity ("You are the
   # GitHub Copilot CLI, a terminal assistant built by GitHub. You are running
@@ -2361,7 +2361,7 @@ copilot:
   # required for '--prompt <text>'".
   prompt_mode: stdin
   output: text
-  # THE CLI'S OWN USAGE REPORT, written when the run ends: the token counts
+  # THE HARNESS'S OWN USAGE REPORT, written when the run ends: the token counts
   # of the model that served the call. Its input count already holds the
   # cached tokens (measured: a reply reporting 1,000 prompt tokens, 600 of
   # them cached, was recorded as inputTokens 1000 and cacheReadTokens 600),
@@ -2375,7 +2375,7 @@ copilot:
     output: [["providerModelMetrics", "0", "metrics", "usage", "outputTokens"]]
     cache_read: [["providerModelMetrics", "0", "metrics", "usage", "cacheReadTokens"]]
     input_includes_cache: true
-  # NO SERVER OF THE HOME'S OWN: the CLI starts every server its home's
+  # NO SERVER OF THE HOME'S OWN: the harness starts every server its home's
   # mcp-config.json names on every run, beside any --additional-mcp-config —
   # measured on 1.0.103, a server planted there started — and nothing in its
   # help or settings keeps that file out, so the profile writes it, empty,
@@ -2390,15 +2390,15 @@ copilot:
   # included. Measured on 1.0.103 through the engine's own code path on a
   # custom provider against a local stand-in, the state directory inside a
   # checkout holding an .mcp.json, .github/mcp.json, .vscode/mcp.json,
-  # .copilot/mcp-config.json and every other CLI's MCP configuration at each
+  # .copilot/mcp-config.json and every other harness's MCP configuration at each
   # level above the call, and a server in the home's mcp-config.json: the
   # model was offered the seat's tools, and no other server started. (Offline,
-  # as the stand-in needs, the CLI offers no web tool and starts no built-in
+  # as the stand-in needs, the harness offers no web tool and starts no built-in
   # GitHub server; signed in to GitHub it starts that server, whose tools the
   # available-tools list holds to web_search.)
   #
-  # The server's `timeout` is the CLI's per-call timeout, in milliseconds
-  # (4,000 gave a slow call up at 4.0s). The CLI re-reads the server's list
+  # The server's `timeout` is the harness's per-call timeout, in milliseconds
+  # (4,000 gave a slow call up at 4.0s). The harness re-reads the server's list
   # when told it changed — a tool activated mid-run was offered from the
   # request after the one the activation's result went back in — and makes
   # one response's calls at once. A failed run says why on stderr.
@@ -2412,15 +2412,15 @@ copilot:
     tool_timeout_seconds: 600
     relists: true
     concurrency: at_once
-  # EACH REQUEST, FROM THE SESSION'S EVENTS FILE the CLI writes as it goes —
+  # EACH REQUEST, FROM THE SESSION'S EVENTS FILE the harness writes as it goes —
   # stdout here is the answer alone (-s). A request is a turn: turn_start
   # opens it, a usage_record carries its counts (the input count holding the
   # cached tokens, as the usage report's does), and assistant.message its
   # prose and the calls it asked for, each written before the calls run. The
-  # CLI sends no id of its own with a call; a call is joined to its request by
+  # harness sends no id of its own with a call; a call is joined to its request by
   # name and arguments, the server's tools spelled `crewlet-<name>`.
   #
-  # The session's directory is named by an id the CLI mints — --session-id
+  # The session's directory is named by an id the harness mints — --session-id
   # takes a UUID only, which the engine's session id is not — so the file is
   # told by its first line, whose session.start names the call's working
   # directory (owner).
@@ -2453,7 +2453,7 @@ copilot:
             - call: {id: ["toolCallId"], name: ["name"], args: ["arguments"]}
   env:
     # Auto-update is on by default for a standalone install, and it would
-    # download a newer CLI into each seat's own cache and run that instead
+    # download a newer harness into each seat's own cache and run that instead
     # of the one installed. Read from `copilot help environment` on 1.0.103;
     # no measured call attempted an update.
     COPILOT_AUTO_UPDATE: "false"
@@ -2467,7 +2467,7 @@ copilot:
   # entry in with `crewlet llm login`, answering yes, or give it a token
   # (api_key_env below).
   #
-  # The same file is the CLI's own record of itself — it writes
+  # The same file is the harness's own record of itself — it writes
   # `firstLaunchAt` there on its first start, signed in or not (measured) —
   # so it is a login only while it holds copilotTokens.
   credential_paths: [".copilot/config.json"]
@@ -2475,7 +2475,7 @@ copilot:
     config.json: "copilotTokens"
   # What a call leaves in the seat's home, measured on 1.0.103: a session
   # directory holding the call's events, and the session database every
-  # session is indexed in (which the CLI's own session_store_sql tool
+  # session is indexed in (which the harness's own session_store_sql tool
   # queries). The standalone binary also unpacks its 236 MB package under
   # XDG_CACHE_HOME/copilot/pkg on its first run, once per seat: the cache
   # is the seat's own, and nothing in a profile can point it elsewhere.
@@ -2490,7 +2490,7 @@ copilot:
   # `-from-host` keeps an adopted file under its file name and a seat is
   # seeded only with the names credential_paths gives, so gh's file was
   # adopted as `hosts.yml`, reported as the login found, and read by no
-  # seat. Nor does this CLI read that file: the 1.0.98 bundle reaches a gh
+  # seat. Nor does this harness read that file: the 1.0.98 bundle reaches a gh
   # sign-in by RUNNING `gh auth token` (which may answer from a keyring), and
   # handing every seat gh's own token, with gh's scopes, is not this
   # profile's decision — COPILOT_GITHUB_TOKEN below is the way to give a seat
@@ -2498,22 +2498,22 @@ copilot:
   host_credential_paths: [".copilot/config.json"]
   # Copilot authenticates with a GitHub token, read from COPILOT_GITHUB_TOKEN,
   # then GH_TOKEN, then GITHUB_TOKEN (read from the 1.0.103 bundle): this is
-  # the first of the three and the CLI's own, so it outranks the generic two,
+  # the first of the three and the harness's own, so it outranks the generic two,
   # which a code-host integration's token is kept under. Reached deliberately
   # through auth.mode api-key or inherit-env, never forwarded silently.
   api_key_env: "COPILOT_GITHUB_TOKEN"
   login_args: ["login"]
   logout_args: ["logout"]
   # NOT MEASURED, the limit markers below: generic phrases rather than this
-  # CLI's own sentences, safe to keep only because of WHERE they are matched
-  # — on stderr, in a run the CLI reported failed, or where one OPENS a
+  # harness's own sentences, safe to keep only because of WHERE they are matched
+  # — on stderr, in a run the harness reported failed, or where one OPENS a
   # clean run's answer, never inside it (harnessprofile.MarkerScope). A model
-  # writing about a rate limit is answering. If your CLI reports these
+  # writing about a rate limit is answering. If your harness reports these
   # differently, override them.
   limit_markers:
     - sentinel: "usage limit"
     - sentinel: "rate limit"
-  # The CLI's own words. Signed out, 1.0.103 exits 1 on "Error: No
+  # The harness's own words. Signed out, 1.0.103 exits 1 on "Error: No
   # authentication information found." (measured); a credential the service
   # refuses is "Authentication failed due to invalid credentials" (read from
   # the 1.0.103 bundle).
@@ -2523,7 +2523,7 @@ copilot:
 
 grok:
   binary: grok
-  # xAI'S OWN CLI (github.com/xai-org/grok-build, installed from x.ai/cli),
+  # xAI'S OWN HARNESS (github.com/xai-org/grok-build, installed from x.ai/cli),
   # NOT the same-named community package on npm. Both put a `grok` on PATH
   # and they are different programs: this profile's `.grok/auth.json`,
   # `--sandbox` and `-p` are the official one's, and the npm build has none
@@ -2537,12 +2537,12 @@ grok:
   # and MCP configurations: the request offered web_search and web_fetch and
   # no other tool, none of those files reached it, and no hook or MCP server
   # ran. Without --trust, which this profile does not pass, a headless run
-  # loads no project rules (the CLI's user guide). It still reads the
+  # loads no project rules (the harness's user guide). It still reads the
   # enclosing repository's .git/config and HEAD, past the engine's `.git`
   # file, and nothing of them reached the request.
   #
   #   --tools             the allowlist: the two web tools. It FAILS OPEN — a
-  #                       name that matches no tool makes the CLI warn "other
+  #                       name that matches no tool makes the harness warn "other
   #                       tools stay available" and apply none of the list
   #                       (measured) — so it names only tools 1.0.70 knows.
   #                       web_fetch is known whether or not it is enabled.
@@ -2580,13 +2580,13 @@ grok:
     - "--allow"
     - "WebFetch"
   local_tools: denied
-  web_tools_note: "no web denial: --disallowed-tools for its web tools would be one, but it has not been measured against a grok CLI, so this profile cannot serve the assistant"
+  web_tools_note: "no web denial: --disallowed-tools for its web tools would be one, but it has not been measured against a grok harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
   # BOTH CHANNELS, and both on argv: each flag takes the text itself, and a
   # path in its place is sent as the text (measured), so a seat's prompt is
   # readable in /proc/<pid>/cmdline and bounded by ARG_MAX.
   #
-  #   system_prompt         REPLACES the CLI's prompt: the request's system
+  #   system_prompt         REPLACES the harness's prompt: the request's system
   #                         message is the engine's text alone. The vendor's
   #                         context moves into user messages ahead of the
   #                         prompt: the working directory, the date and two
@@ -2612,18 +2612,18 @@ grok:
   prompt_args: ["--prompt-file", "{file}"]
   output: text
   env:
-    # The CLI's own fetch, which ships switched off: without it the request
+    # The harness's own fetch, which ships switched off: without it the request
     # offered web_search alone.
     GROK_WEB_FETCH: "1"
     # Background workflows: off, the 500-character list of them leaves every
-    # request (measured), and with them the scripts the CLI's user guide
+    # request (measured), and with them the scripts the harness's user guide
     # says it finds in a repository's or the home's .grok/workflows.
     GROK_WORKFLOWS: "0"
     # The "dashboard line": with it on, every call made a second model request
     # after the answer, summarising the turn; off, none.
     GROK_TURN_SUMMARY: "0"
     # Cross-session memory, off for the whole process whatever the account's
-    # remote settings say (read from the CLI's user guide; the measured runs
+    # remote settings say (read from the harness's user guide; the measured runs
     # captured no memory either way).
     GROK_MEMORY: "0"
   # One side request remains and no documented switch removes it on 1.0.70:
@@ -2639,14 +2639,14 @@ grok:
   # with tools listed the seat's server alone and a text function none;
   # without them, the three in the home started on every call (the project
   # ones never did — the engine's `.git` file ends the walk at the call's
-  # directory, and the CLI loads no project configuration it has not been
+  # directory, and the harness loads no project configuration it has not been
   # told to trust).
   #
   #   config.toml        the home's settings, rewritten every generation, so
   #                      no server written there survives into a call, and
   #                      the Claude and Cursor sources (servers and hooks)
   #                      are not scanned at all.
-  #   requirements.toml  the CLI's own MCP allowlist ("allowed_mcp_servers"),
+  #   requirements.toml  the harness's own MCP allowlist ("allowed_mcp_servers"),
   #                      which binds EVERY source — the home, a project, the
   #                      compatibility files, a plugin: one naming any other
   #                      server is dropped from the session. It only ever
@@ -2671,7 +2671,7 @@ grok:
         [[allowed_mcp_servers]]
         server_name = "crewlet"
   # THE SEAT'S TOOLS: one stdio server, declared by an AGENT FILE in the call's
-  # own directory (--agent), whose `mcpServers` the CLI starts beside its
+  # own directory (--agent), whose `mcpServers` the harness starts beside its
   # default agent's prompt and tools — an agent file with no body adds nothing
   # to the system prompt, and --rules still lands the seat's text at its end.
   # Measured on 1.0.70 through the engine's own code path against a local
@@ -2705,7 +2705,7 @@ grok:
   #   --output-format streaming-json  the record (requests, below); a text
   #                         function keeps the plain answer (mcp.output).
   #
-  # THE CLI'S OWN TIMEOUT, 6000 seconds, has no knob for a server an agent
+  # THE HARNESS'S OWN TIMEOUT, 6000 seconds, has no knob for a server an agent
   # file declares: tool_timeout_sec, toolTimeoutMs and tool_timeout_ms in the
   # frontmatter, and a `[mcp_servers.crewlet]` timeout in the home's
   # config.toml, all left it at 6000 (its event log names the timeout each
@@ -2742,14 +2742,14 @@ grok:
   # counts (`usage`), then a `tool_call` per call; the results of its calls
   # (`tool_call_update` with a final status) end it, and the next prose or
   # counts begin the next — every call of a response is printed before any of
-  # them is answered. The CLI hands the server no id of its own, so a call is
+  # them is answered. The harness hands the server no id of its own, so a call is
   # joined by name and arguments: the record's name is the one the model gave
-  # use_tool, `crewlet__<name>`, and a name without the prefix is one the CLI
+  # use_tool, `crewlet__<name>`, and a name without the prefix is one the harness
   # refused. The counts are the request's own: `input_tokens` WITHOUT the cached
   # part, and `output_tokens` with the reasoning in it (measured with a stand-in
   # reporting 40 cached and 7 reasoning tokens: 65 + 40 of a 105-token prompt,
   # 12 out). The run's `end` event repeats their sum, and is not read. The
-  # session-title request the CLI makes first is in neither, and is not
+  # session-title request the harness makes first is in neither, and is not
   # charged.
   requests:
     source: stdout
@@ -2797,17 +2797,17 @@ grok:
   # log that grows by about 28 KB a call.
   volatile_paths: [".grok/sessions", ".grok/logs"]
   host_credential_paths: [".grok/auth.json"]
-  # THE CLI'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
+  # THE HARNESS'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
   # variable". GROK_API_KEY is the community npm build's variable and this
   # is not that program.
   api_key_env: "XAI_API_KEY"
-  # The CLI's own framing of what the API refused, measured on 1.0.70 with
+  # The harness's own framing of what the API refused, measured on 1.0.70 with
   # the API at a local stand-in: a 402 reads "API error (status 402 Payment
   # Required): …", while a 429 is relayed as the service's own message with
-  # nothing of the CLI's around it, so the rest are its own sentences read
+  # nothing of the harness's around it, so the rest are its own sentences read
   # from the 1.0.70 binary ("Rate limited", "You hit your free usage limit.",
   # "…out of credits or over your spending limit."). They are matched on
-  # stderr, in a run the CLI reported failed, or where one OPENS a clean
+  # stderr, in a run the harness reported failed, or where one OPENS a clean
   # run's answer, never inside it (harnessprofile.MarkerScope).
   limit_markers:
     - sentinel: "status 402 Payment Required"
@@ -2834,7 +2834,7 @@ muse-code:
   # inside a git checkout whose root, and a directory between it and the state
   # directory, each held an AGENTS.md, a CLAUDE.md, .claude/ and .agents/
   # rules and skills, .muse/rules, a .env and an .mcp.json, and with another
-  # CLI's personal rules and skills planted in the seat's home. None of them
+  # harness's personal rules and skills planted in the seat's home. None of them
   # reached a request, the tools offered were the ones named below, the engine
   # read each answer, and a 401 and a 429 were classified as the sentinels
   # below say.
@@ -2849,17 +2849,17 @@ muse-code:
   # part of the profile rather than an operator's problem.
   #
   # --json IS NOT OPTIONAL HERE, and the reason is the failure classification
-  # rather than the answer. THIS CLI PRINTS NO FAILURE CAUSE ON STDERR: a
+  # rather than the answer. THIS HARNESS PRINTS NO FAILURE CAUSE ON STDERR: a
   # failed run writes the fixed string "run ended with Failed" there and
   # nothing else, and the real reason exists only in the `run.terminal.failed`
   # event's `payload.reason`. Without --json a spent plan and a dead login
   # reach this backend as a bare exit 1 that no marker can read. The seat's
   # chain still moves on, a failed run being a SERVER failure, but a spent
   # plan then never sits the entry out — every round of every seat starts a
-  # CLI to be refused again, the waste limit_markers exist to prevent — and
+  # harness to be refused again, the waste limit_markers exist to prevent — and
   # all the operator is told is "run ended with Failed".
   #
-  # --no-session-log is this CLI's isolation flag and the counterpart of
+  # --no-session-log is this harness's isolation flag and the counterpart of
   # claude-code's --no-session-persistence: no retained session event log, so
   # nothing on disk carries one turn's conversation into the next. It is
   # refused ALONGSIDE --session-id ("a session id needs retained logging"),
@@ -2870,7 +2870,7 @@ muse-code:
   # "A non-interactive run has no one to answer an approval prompt, so choose
   # a posture in advance." Skipping the prompt keeps the OS sandbox on and is
   # the only posture that cannot wedge — a held approval in a headless run
-  # stays unresolved, and the CLI then sits on the seat's concurrency slot
+  # stays unresolved, and the harness then sits on the seat's concurrency slot
   # until the wall-clock cap fires. Same reason opencode's seeded policy has
   # no `ask` in it and denies the tool that asks a person.
   #
@@ -2882,14 +2882,14 @@ muse-code:
   # below; these two are here so that a build whose settings file failed to
   # apply still refuses the call rather than running it.
   #
-  # --no-foreign-personal-context keeps OTHER CLIs' personal rules and skills
+  # --no-foreign-personal-context keeps OTHER HARNESSES' personal rules and skills
   # out of the call. Measured on both builds: a ~/.claude/CLAUDE.md and a
   # skill under ~/.claude/skills, planted in the seat's home, reached the
   # developer message without the flag and did not with it. The binary also
   # reads CLAUDE_CONFIG_DIR and CODEX_HOME, which an entry's env could point
-  # at another CLI's real home.
+  # at another harness's real home.
   #
-  # --disable-reminders turns off the CLI's REMINDER OBSERVERS: on 1.4.13 two
+  # --disable-reminders turns off the harness's REMINDER OBSERVERS: on 1.4.13 two
   # (goal and verify), on 1.0.3 three (skill, goal and verify), each a model
   # request of its own that re-sends the call's prompt — the engine's whole
   # transcript — under instructions of its own, beside the main request.
@@ -2902,10 +2902,10 @@ muse-code:
   #
   # NOT --sandbox-network: it governs the OS sandbox around SHELL commands,
   # and the seeded toolset leaves no shell to sandbox. Not --trust-workspace
-  # either. Untrusted, the CLI admits no project rules, skills or hooks:
+  # either. Untrusted, the harness admits no project rules, skills or hooks:
   # measured, nothing from the checkout around the state directory reached a
   # request on either build, and the engine's `.git` marker in the call's
-  # directory ends the CLI's walk for project files there besides. Trusted, it
+  # directory ends the harness's walk for project files there besides. Trusted, it
   # also adds six subagent tools past the toolset.
   #
   # Not --max-model-steps: breaching it exits 1, so a cap would DISCARD a
@@ -2920,46 +2920,46 @@ muse-code:
     - "--disable-write"
     - "--no-foreign-personal-context"
     - "--disable-reminders"
-  # Denied by REPLACING THE TOOL SURFACE, which is the only thing on this CLI
+  # Denied by REPLACING THE TOOL SURFACE, which is the only thing on this harness
   # that does: `run.toolset` is an allowlist of exact tool names, validated
   # against the real registry at startup, and it is what makes bash,
   # bash_input, read_file, write_file, edit_file, the memory, goal, cron and
   # subagent families disappear from the model's view. There is no
   # --allowed-tools, no --deny-tool and no project-level settings file.
   #
-  # The two names are the CLI's own web tools, the one local surface this
+  # The two names are the harness's own web tools, the one local surface this
   # backend never denies. Measured on 1.4.13, they are the whole tool array:
   # `web_search`, and `web_fetch` ("HTTP or HTTPS URL to fetch"). On 1.0.3
   # `web_fetch` is gated off by a remote rollout, so naming it admits nothing
   # there, and three engine-owned tools survive any toolset — read_skill,
-  # snooze_reminder and write_todos, which read the CLI's own skill catalogue,
+  # snooze_reminder and write_todos, which read the harness's own skill catalogue,
   # pause its reminders and keep its todo list; 1.4.13 offers none of them.
   #
-  # provider_retry.max_retries is 3 because the CLI's own retries otherwise
+  # provider_retry.max_retries is 3 because the harness's own retries otherwise
   # outlast the call. It retries a 429 with a delay that doubles from one
   # second up to a minute (measured on 1.4.13: nine attempts, and still
   # retrying when a four-minute wall-clock cap stopped the call), so a spent
   # plan reached this backend as a TIMEOUT after the whole of timeout_seconds,
   # which never sits the entry out, and the next call waited as long again.
   # Three retries take seven seconds, which rides out a burst, and then the
-  # CLI reports the limit itself — "API error 429: … (rate_limit_error) (after
+  # harness reports the limit itself — "API error 429: … (rate_limit_error) (after
   # 4 provider attempts)", measured on both builds — so the entry sits out for
   # the engine's one minute and the seat's chain carries on. The wait beyond a
-  # burst is the engine's to decide, not the CLI's.
+  # burst is the engine's to decide, not the harness's.
   #
   # "schema_version": 1 is MANDATORY: a settings file without it fails every
   # command at startup with `malformed settings file`.
   local_tools: denied
-  web_tools_note: "no web denial: an empty run.toolset would be one, but it has not been measured against a muse-code CLI, so this profile cannot serve the assistant"
+  web_tools_note: "no web denial: an empty run.toolset would be one, but it has not been measured against a muse-code harness, so this profile cannot serve the assistant"
   seed_files:
     - path: .config/muse/settings.json
       content: '{"schema_version":1,"run":{"toolset":["web_search","web_fetch"]},"provider_retry":{"max_retries":3}}'
   model_args: ["--model", "{model}"]
   # THE APPEND CHANNEL IS AN UNDOCUMENTED VARIABLE:
-  # TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE names a file whose text the CLI
+  # TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE names a file whose text the harness
   # appends, after a blank line, at the very end of its own instructions —
   # 48,043 characters on 1.4.13 and 37,518 on 1.0.3, opening "You are Muse
-  # Code, an agentic coding CLI (command line interface) that helps users with
+  # Code, an agentic harness (command line interface) that helps users with
   # software engineering tasks." Measured through the engine on both builds:
   # the vendor's instructions were kept whole, they were byte-identical from
   # one call to the next, so nothing per-call stands before the engine's text,
@@ -2986,7 +2986,7 @@ muse-code:
   # a phase renders is the whole flattened transcript — the conversation and
   # every tool result in it — and on argv that is
   # readable through /proc/<pid>/cmdline by every account on the machine and
-  # bounded by ARG_MAX (256 KB on macOS). This CLI is the first built-in
+  # bounded by ARG_MAX (256 KB on macOS). This harness is the first built-in
   # profile whose vendor offers a path instead, so it takes it.
   prompt_mode: file
   prompt_args: ["--prompt-file", "{file}"]
@@ -3031,11 +3031,11 @@ muse-code:
   env:
     MUSE_NO_AUTO_UPDATE: "1"
   # THE SEAT'S TOOLS: one stdio server, declared for the one run by `-c`, the
-  # CLI's per-run setting, which takes a JSON value — the only per-run channel
-  # this CLI has for a server. Its settings file names servers too, but it is
+  # harness's per-run setting, which takes a JSON value — the only per-run channel
+  # this harness has for a server. Its settings file names servers too, but it is
   # the seat's, which every call shares; its project files are read only from
   # a trusted workspace, and nothing here trusts one (measured outside the
-  # engine, which a run from inside a checkout cannot be — the CLI refuses a
+  # engine, which a run from inside a checkout cannot be — the harness refuses a
   # TMPDIR inside the repository: --trust-workspace started a checkout's
   # .mcp.json server, and without it none); and a plugin's server
   # needs an approval in that same settings file. Measured on 1.4.13 through the
@@ -3056,9 +3056,9 @@ muse-code:
   #
   # NO TIMEOUT KNOB FOR A SERVER DECLARED THIS WAY: `-c` refuses any key past
   # transport, command and args (`tool_timeout_sec` among them: "unknown key"),
-  # and the settings file that takes one is the seat's. The CLI's own is 300 s
+  # and the settings file that takes one is the seat's. The harness's own is 300 s
   # — a 700 s call ended at 300 s as "tool timed out" — and the engine answers
-  # a call still running near it itself. The CLI makes a response's calls one
+  # a call still running near it itself. The harness makes a response's calls one
   # after another ("tool action serialized"), whatever --parallel-tool-calls
   # or a read-only hint says; does not re-read the list when told it changed;
   # refuses a name without the server's prefix itself; and on arguments that
@@ -3082,19 +3082,21 @@ muse-code:
     failure_events:
       - match: [{path: ["payload_type"], equals: "run.terminal.failed"}]
         fields: [["payload", "reason"]]
-  # EACH REQUEST, FROM THE STREAM: a model request is a task the CLI proposes
+  # EACH REQUEST, FROM THE STREAM: a model request is a task the harness proposes
   # with the kind model.meta.response, its prose the run.output.delta
   # fragments after it — which no event repeats whole per request, so they
   # are its prose run together — and each call a tool task's side effect,
   # filed under the operation `tool:<name>` with the key `tool:<the model's
-  # call id>`. The CLI sends that key with the call, in `_meta`
+  # call id>`. The harness sends that key with the call, in `_meta`
   # (`idempotencyKey`, beside `callId`, the bare id), so a call is joined by
   # it; the record names no arguments. It carries no counts per request: the
-  # run's are its run.usage event (see usage).
+  # run's are its run.usage event (see usage). The operation's `tool:` is the
+  # record's and not the name's (name_prefix), so host_prefix is the
+  # `mcp__crewlet__` the model sees.
   requests:
     source: stdout
     call_id_meta: idempotencyKey
-    host_prefix: "tool:mcp__crewlet__"
+    host_prefix: "mcp__crewlet__"
     events:
       - match: [{path: ["payload_type"], equals: "task.lifecycle.proposed"}, {path: ["payload", "event", "task_kind"], equals: "model.meta.response"}]
         opens: true
@@ -3102,8 +3104,8 @@ muse-code:
       - match: [{path: ["payload_type"], equals: "run.output.delta"}]
         delta: ["payload", "text"]
       - match: [{path: ["payload_type"], equals: "task.lifecycle.side_effect_intent"}, {path: ["payload", "event", "operation"], prefix: "tool:"}]
-        call: {id: ["payload", "event", "idempotency_key"], name: ["payload", "event", "operation"]}
-  # No config_env: this CLI is XDG-native and has no relocation variable of
+        call: {id: ["payload", "event", "idempotency_key"], name: ["payload", "event", "operation"], name_prefix: "tool:"}
+  # No config_env: this harness is XDG-native and has no relocation variable of
   # its own. buildEnv already points XDG_CONFIG_HOME and XDG_DATA_HOME inside
   # the seat's home, and the binary honours both. (MUSE_AUTH_PATH looks like
   # the variable for this and is NOT: it is the LAUNCHER's, absent from the
@@ -3122,7 +3124,7 @@ muse-code:
   # because the credential lives there: trust.json accumulates one workspace
   # trust record per trusted directory, which this profile never asks for but
   # an operator's override could, and none of which will ever exist again; and
-  # .auth.json.lock is what a killed CLI leaves held — the same half-prune the
+  # .auth.json.lock is what a killed harness leaves held — the same half-prune the
   # claude-code profile's .claude.json.lock note records.
   volatile_paths:
     - ".local/share/muse"
@@ -3132,11 +3134,11 @@ muse-code:
   host_credential_paths: [".config/muse/auth.json"]
   # A Meta Model API key, so it is the METERED credential: reached through
   # auth.mode api-key or inherit-env, never forwarded silently. It takes
-  # priority over every stored credential inside the CLI itself, which is
+  # priority over every stored credential inside the harness itself, which is
   # exactly why applyAuth deletes it on a subscription call — a stray key
   # would bill pay-as-you-go while the subscription sat unused.
   #
-  # There is no token_env and no capture_token_args: this CLI mints no
+  # There is no token_env and no capture_token_args: this harness mints no
   # headless token of its own. `muse login` does mint an API key server-side,
   # but it stores it in the credential file rather than printing it, so a
   # subscription seat authenticates from that file.
@@ -3147,13 +3149,13 @@ muse-code:
   # PROMPT — the trap `claude /login` used to be.
   login_args: ["login"]
   logout_args: ["logout"]
-  # No status_args: this CLI has no status subcommand. `muse auth` takes
+  # No status_args: this harness has no status subcommand. `muse auth` takes
   # exactly one subcommand, `set` (and `muse auth set --api-key-stdin` reads a
   # key from stdin), while the credential status panel is the TUI's `/status`
   # slash command, which a headless run cannot reach.
   #
-  # THE AUTH SENTINELS ARE THE CLI'S OWN SENTENCES, and they share a clause:
-  # four of the five auth failures this CLI reports — a rejected saved key,
+  # THE AUTH SENTINELS ARE THE HARNESS'S OWN SENTENCES, and they share a clause:
+  # four of the five auth failures this harness reports — a rejected saved key,
   # no login to refresh from, an unauthorised token refresh, a login that is
   # no longer saved — all end in "run `muse login`". The fifth is the
   # environment key being rejected, "your API key from META_API_KEY was
@@ -3183,7 +3185,7 @@ muse-code:
 
 kimi-code:
   binary: kimi
-  # MOONSHOT'S OWN CLI, `@moonshot-ai/kimi-code` — NOT the unscoped `kimi-code`
+  # MOONSHOT'S OWN HARNESS, `@moonshot-ai/kimi-code` — NOT the unscoped `kimi-code`
   # package on npm, which is a community wrapper that starts an
   # anthropic-proxy and runs Claude Code behind it. Both install a `kimi` on
   # PATH and they are different programs: this profile's `--agent-file`,
@@ -3225,21 +3227,21 @@ kimi-code:
   # `--skills-dir` would widen the per-call directory this backend keeps
   # empty on purpose.
   complete_args: ["--output-format", "stream-json"]
-  # DENIED IN THE AGENT FILE, which is the only per-call channel this CLI has
+  # DENIED IN THE AGENT FILE, which is the only per-call channel this harness has
   # for it. `[tools]` and `[[permission.rules]]` live in config.toml — and
   # config.toml is where `kimi login` writes the OAuth reference and the model
   # catalogue, so it is a CREDENTIAL here (see credential_paths) and seeding a
   # policy into it would destroy the login it carries.
   #
   # An allowlist rather than a denylist, and unlike grok that is the safe
-  # direction on this CLI: a name it does not recognise "is reported with a
+  # direction on this harness: a name it does not recognise "is reported with a
   # warning" and matches nothing, so a stale entry costs one tool rather than
   # lifting the whole restriction.
   #
-  # MEASURED on both builds, by reading the tool array the CLI actually put on
+  # MEASURED on both builds, by reading the tool array the harness actually put on
   # the wire: TWENTY-FIVE tools by default, ONE with this agent file, on either
   # channel — and on the tool route that one and the crewlet server's, which
-  # the CLI offers as `mcp__crewlet__<name>` only where the allowlist names
+  # the harness offers as `mcp__crewlet__<name>` only where the allowlist names
   # them (`mcp__crewlet__*`; with no such server, as on a text function, the
   # entry matches nothing). What goes is `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, the
   # plan-mode pair, `TodoList`, `Skill`, `AskUserQuestion`, `WaitFor`, the
@@ -3255,7 +3257,7 @@ kimi-code:
   # admitted four tools nobody knew to name.
   #
   # `FetchURL` is the one that survives without more, and it is web — the one
-  # local tool this backend never denies. `WebSearch` is the other: the CLI
+  # local tool this backend never denies. `WebSearch` is the other: the harness
   # registers it only when the Moonshot search service is configured, which
   # the OAuth login provisions (`[services.moonshot_search].oauth` is
   # "injected automatically by the login flow"). Measured with that section in
@@ -3265,23 +3267,23 @@ kimi-code:
   # opposite of muse-code's gated `web_fetch` — there, naming it admitted
   # nothing ever.
   local_tools: denied
-  web_tools_note: "no web denial: dropping FetchURL from the agent file's allowlist would be one, but it has not been measured against a kimi CLI, so this profile cannot serve the assistant"
+  web_tools_note: "no web denial: dropping FetchURL from the agent file's allowlist would be one, but it has not been measured against a kimi harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
   # BOTH CHANNELS ARE `--agent-file`, and the file is the tool allowlist AND
   # the system prompt at once.
   #
-  # This CLI's per-call prompt channel is an AGENT FILE: YAML frontmatter
+  # This harness's per-call prompt channel is an AGENT FILE: YAML frontmatter
   # declaring the agent's name, its description (REQUIRED) and its tool
   # allowlist, with the BODY as the system prompt. Handed a bare prompt it
   # does not degrade — the vendor's reference says a file passed explicitly
-  # "must be valid, otherwise the CLI reports the error and exits" — so the
+  # "must be valid, otherwise the harness reports the error and exits" — so the
   # envelope below is what makes the channel usable at all. It is also why
   # the file is passed on EVERY call, including one carrying no system prompt:
   # see [SystemPromptFile]. The two channels write the same file under the
   # same name and frontmatter, and a call takes one of them; only the body
   # differs.
   #
-  # The body is a TEMPLATE the CLI renders each time it builds the prompt, and
+  # The body is a TEMPLATE the harness renders each time it builds the prompt, and
   # `${base_prompt}` in it is the vendor's own default prompt — a body without
   # it "owns the entire prompt". Measured on both builds:
   #
@@ -3295,7 +3297,7 @@ kimi-code:
   #                         characters).
   #   append_system_prompt  body `{system}` and then `${base_prompt}`: the
   #                         engine's text first, then Kimi's default under its
-  #                         identity line "You are Kimi Code CLI, an
+  #                         identity line "You are Kimi Code harness, an
   #                         interactive general AI agent running on a user's
   #                         computer." For a seat at work. The default is the
   #                         one a call with no agent file gets, less its
@@ -3314,9 +3316,9 @@ kimi-code:
   # calls sent system messages identical through the engine's text and some
   # 5,800 characters beyond it, up to the directory path. Every request also
   # carries a `prompt_cache_key` that is a session id new on every call, on
-  # either channel; that is the CLI's, and no flag sets it.
+  # either channel; that is the harness's, and no flag sets it.
   #
-  # THE CLI SUBSTITUTES ITS TEMPLATE VARIABLES ACROSS THE WHOLE BODY, the
+  # THE HARNESS SUBSTITUTES ITS TEMPLATE VARIABLES ACROSS THE WHOLE BODY, the
   # engine's text included, in one pass and with no escape: a `${cwd}` in a
   # seat's prompt — from a knowledge page, a policy, a shell snippet — reaches
   # the model as the call's directory. The names substituted are
@@ -3327,18 +3329,18 @@ kimi-code:
   # `${skills_section}` and `${plugin_sections}`, and from 2.x
   # `${todo_list_guidance}` too. Any other `${…}` stays verbatim — `${now}`
   # among them, which is not one — and a bare `$` is never special. That is the
-  # cost of the only per-call channel this CLI has.
+  # cost of the only per-call channel this harness has.
   #
-  # The CLI TRIMS the body, so the engine's text loses its leading and
+  # The harness TRIMS the body, so the engine's text loses its leading and
   # trailing whitespace, and it REFUSES a body that trims to nothing: "Missing
   # prompt body", exit 1, on both builds. The append body never is one. The
   # replace body is one only for a call with no system prompt, which keeps the
-  # CLI's own prompt and so takes the append channel, whatever its kind.
+  # harness's own prompt and so takes the append channel, whatever its kind.
   #
   # THE APPEND CHANNEL READS THE AGENTS.md CHAIN, through `${agents_md}` in
   # the default, from the working directory up to the project root, and no
   # switch turns that walk off. The engine's `.git` file in the call's
-  # directory is what ends it there: this CLI takes a `.git` FILE as the root
+  # directory is what ends it there: this harness takes a `.git` FILE as the root
   # only when its first line is `gitdir:`, which the engine's is. Before that
   # file, every AGENTS.md from a checkout above the state directory — four of
   # them in the measurement, each under its absolute path — reached a seat's
@@ -3358,7 +3360,7 @@ kimi-code:
       name: crewlet-seat.md
       # `name` is stated rather than left to the file name, so the channel does
       # not depend on what this package happens to call the file, and
-      # `description` is stated because the CLI requires it.
+      # `description` is stated because the harness requires it.
       template: |
         ---
         name: crewlet-seat
@@ -3412,12 +3414,12 @@ kimi-code:
   text_events: ["assistant"]
   text_paths: [["content"], ["content", "0", "text"]]
   # NO USAGE PATHS: the stream carries messages, not a usage report, so the
-  # counts are estimated and `crewlet llm doctor` says so. The CLI does keep
+  # counts are estimated and `crewlet llm doctor` says so. The harness does keep
   # real figures — `[token_counting]` selects the strategy behind its own
   # context display — but they reach the TUI and the session store rather than
   # this stream.
   env:
-    # The update preflight, off. Left on, the CLI checks for a release, may
+    # The update preflight, off. Left on, the harness checks for a release, may
     # install it in the background, and swaps the binary under a running fleet
     # with nothing to say so — which is precisely what `written_for` exists to
     # make visible. Upgrades are the operator's, on their schedule. Same
@@ -3434,13 +3436,13 @@ kimi-code:
     KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE: "exit"
     # THE RETRY CAP, and this one is MEASURED rather than reasoned. The
     # default is ten attempts with exponential backoff, and against a stub
-    # returning 429 the CLI slept through nine retries before giving up:
+    # returning 429 the harness slept through nine retries before giving up:
     #
     #   default (10 attempts) ......... 2 min 24 s
     #   this setting (3 attempts) ..... 5.4 s
     #
     # A spent plan is exactly when the seat's fallback chain must carry it
-    # onto a metered key, and at the default the CLI sits on the seat's
+    # onto a metered key, and at the default the harness sits on the seat's
     # concurrency slot for two and a half minutes first — on every call, until
     # the plan resets — doing nothing but sleeping. Three keeps one real retry
     # for a transient 500 or an overloaded engine (~1.8 s of backoff) and
@@ -3461,7 +3463,7 @@ kimi-code:
     KIMI_DISABLE_TELEMETRY: "1"
   config_env:
     KIMI_CODE_HOME: ".kimi-code"
-  # THE HOME STARTS NO MCP SERVER OF ITS OWN. The CLI starts every server its
+  # THE HOME STARTS NO MCP SERVER OF ITS OWN. The harness starts every server its
   # home's mcp.json names, and every server an installed plugin's manifest
   # names — on every call, a text function's included, whatever the agent
   # file allows the model — so both are rewritten every generation: the
@@ -3475,10 +3477,10 @@ kimi-code:
     - path: .kimi-code/plugins/installed.json
       content: '{"version":1,"plugins":[]}'
   # THE SEAT'S TOOLS: one stdio server, in the call's own .kimi-code/mcp.json
-  # — the project file of the directory the CLI runs in — which the CLI reads
+  # — the project file of the directory the harness runs in — which the harness reads
   # only in a TRUSTED workspace; KIMI_CODE_TRUST_WORKSPACE trusts this one
   # call's directory, and trust gates nothing on this build but a project's MCP
-  # files. The CLI takes no MCP file by flag and an agent file declares no
+  # files. The harness takes no MCP file by flag and an agent file declares no
   # server. Trust also reads the `.mcp.json` at the project root, which is the
   # call's directory itself: the engine's .git file ends the walk there, as it
   # does the AGENTS.md chain. Measured on 2.3.2 through the engine's own code
@@ -3488,9 +3490,9 @@ kimi-code:
   # between, started the checkout's root .mcp.json.
   #
   # `deferred: false`, so the tools are offered to the model by name rather
-  # than behind the CLI's tool search, whatever a login's config.toml
-  # defaults to. `toolTimeoutMs` is the CLI's per-call timeout (60 s when
-  # unset; 4 s gave a 10 s call up at 4.0 s). The CLI makes a response's
+  # than behind the harness's tool search, whatever a login's config.toml
+  # defaults to. `toolTimeoutMs` is the harness's per-call timeout (60 s when
+  # unset; 4 s gave a 10 s call up at 4.0 s). The harness makes a response's
   # calls one after another and does not re-read the list when told it
   # changed (a tool activated mid-run was never offered). A call it cannot
   # parse the arguments of reaches the server with {} — a tool validates its
@@ -3508,7 +3510,7 @@ kimi-code:
     tool_timeout_seconds: 600
     relists: false
     concurrency: in_turn
-  # EACH REQUEST, FROM THE WIRE LOG the CLI keeps for the run in the seat's
+  # EACH REQUEST, FROM THE WIRE LOG the harness keeps for the run in the seat's
   # home — sessions/wd_<directory>_<digest>/session_<id>/agents/main/wire.jsonl,
   # named after the call's working directory and a session id it mints, so the
   # run's own is told from every other call's of the seat by its profile.bind
@@ -3519,7 +3521,7 @@ kimi-code:
   # in it (measured with a stand-in reporting 40 cached and 7 reasoning tokens
   # of a 101-token prompt: 61 + 40, 12 out) — its prose and calls follow under
   # its id, the calls' results, and step.end with why it stopped and the same
-  # counts again. The CLI sends no id with a call, so a call is joined by name
+  # counts again. The harness sends no id with a call, so a call is joined by name
   # and arguments; each was in the log within 0.15 s of reaching the server.
   # Its stdout is the assistant's messages, and a failure is on stderr alone.
   requests:
@@ -3560,7 +3562,7 @@ kimi-code:
           output: [["event", "usage", "output"]]
           cache_read: [["event", "usage", "inputCacheRead"]]
           cache_write: [["event", "usage", "inputCacheCreation"]]
-  # TWO FILES, because this CLI splits its login across them: `kimi login`
+  # TWO FILES, because this harness splits its login across them: `kimi login`
   # writes the OAuth token to credentials/oauth/kimi-code.json AND injects the
   # provider's `[providers.<name>.oauth]` reference into config.toml, which
   # also carries `default_model` and the `[models]` catalogue every `--model`
@@ -3581,14 +3583,14 @@ kimi-code:
   # allowed to reach the next one through it.
   #
   # `workspaces.json` gains one entry per call, naming that call's working
-  # directory, and the CLI never removes one: two calls left two, on both
-  # builds. The CLI makes it again on its next start. Like every volatile
+  # directory, and the harness never removes one: two calls left two, on both
+  # builds. The harness makes it again on its next start. Like every volatile
   # path it is pruned only with none of the seat's calls in flight — when the
   # seat's last call releases it and when its next generation opens — so no
   # running call loses the entry it registered. Measured through the engine:
   # after each of six calls in one seat, none was left.
   #
-  # `telemetry` is where the CLI queues the events it could not send; with
+  # `telemetry` is where the harness queues the events it could not send; with
   # KIMI_DISABLE_TELEMETRY it is never made, and pruned it reaches no later
   # call where an entry turns telemetry back on.
   #
@@ -3610,16 +3612,16 @@ kimi-code:
   # There is no logout and no status subcommand — `/login` and `/status` are
   # the TUI's, which a headless run cannot reach — so neither is declared.
   login_args: ["login"]
-  # NO capture_token_args: this CLI mints no headless token. KIMI_API_KEY is
+  # NO capture_token_args: this harness mints no headless token. KIMI_API_KEY is
   # the METERED Moonshot platform key and it is not read from the shell at
   # all — the vendor is explicit that `export KIMI_API_KEY=…` gives no
   # provider its key, because credentials are read only from config.toml. So
   # there is no api_key_env either: the variable exists and setting it would
-  # do nothing, and naming a variable the CLI ignores is worse than naming
+  # do nothing, and naming a variable the harness ignores is worse than naming
   # none. A metered account is configured by writing the key into the
   # credential home's config.toml, which then travels to every seat.
   #
-  # THE SENTINELS ARE THIS CLI'S OWN CLASSIFICATION, not the vendor's prose,
+  # THE SENTINELS ARE THIS HARNESS'S OWN CLASSIFICATION, not the vendor's prose,
   # and that is what a measurement bought. A real 429 exits 1 with
   #
   #   error: failed to run prompt: provider.rate_limit: 429 You have reached
@@ -3628,7 +3630,7 @@ kimi-code:
   # and a real 401 with `provider.auth_error: 401 Invalid Authentication`.
   # Everything after the colon is the UPSTREAM provider's message and changes
   # with the plan, the endpoint and the vendor's wording; the
-  # `provider.<kind>:` prefix is the CLI's own and does not. Matching the
+  # `provider.<kind>:` prefix is the harness's own and does not. Matching the
   # prefix is therefore the sentinel that cannot go stale on a reworded error
   # — which is exactly the drift limit_markers are shaped to survive.
   #
@@ -3680,7 +3682,7 @@ hermes:
   # setting that can quietly stop applying.
   #
   # `web` resolves to exactly `web_search` and `web_extract` (toolsets.py), the
-  # CLI's own web tools and nothing else; measured, those two are the whole
+  # harness's own web tools and nothing else; measured, those two are the whole
   # tool array of every request. Everything the default `hermes-cli` platform
   # toolset carries goes with it: file, terminal, browser, code_execution,
   # delegation, cronjob, memory, skills, vision, image_gen, todo, tts,
@@ -3697,7 +3699,7 @@ hermes:
   # .hermes.md, a CLAUDE.md in the working directory, SOUL.md and the memory
   # files all reached the system prompt: the one-shot path builds its agent
   # without the skip switches, and HERMES_IGNORE_RULES is read only by `hermes
-  # chat`. What keeps this CLI to its call is the engine's `.git` marker in the
+  # chat`. What keeps this harness to its call is the engine's `.git` marker in the
   # call's directory — .hermes.md and the AGENTS.md chain are looked for from
   # there up to the nearest repository root, so nothing above the call's
   # directory is read, and CLAUDE.md and .cursorrules are read from that
@@ -3713,10 +3715,10 @@ hermes:
   # something for nothing.
   complete_args: ["--toolsets", "web"]
   local_tools: denied
-  web_tools_note: "no web denial: an empty --toolsets would be one, but it has not been measured against a hermes CLI, so this profile cannot serve the assistant"
+  web_tools_note: "no web denial: an empty --toolsets would be one, but it has not been measured against a hermes harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
-  # THE SETTINGS THAT KEEP A CALL TO ITSELF, in the CLI's own config file under
-  # HERMES_HOME, written at every generation's open and merged by the CLI over
+  # THE SETTINGS THAT KEEP A CALL TO ITSELF, in the harness's own config file under
+  # HERMES_HOME, written at every generation's open and merged by the harness over
   # its defaults:
   #
   #   - agent.coding_context "off". Any project marker in the working
@@ -3741,23 +3743,23 @@ hermes:
   #     setting is what keeps memory out of every call.
   #
   # AND THE TOOL ROUTE'S HALF OF IT (see mcp and requests below), here because
-  # this file is the only place the CLI reads either from:
+  # this file is the only place the harness reads either from:
   #
   #   - mcp_servers.crewlet, the seat's server: its relay command and socket
-  #     are `${…}`, which the CLI fills from its environment — a run with
-  #     tools sets both — and its timeout is the CLI's per-call one, in
+  #     are `${…}`, which the harness fills from its environment — a run with
+  #     tools sets both — and its timeout is the harness's per-call one, in
   #     seconds (300 unset; 4 gave a 10 s call up at 4.0 s). A literal, since
   #     the file is every call's: tool_timeout_seconds below is the same
   #     number. Only a run whose -t list names it starts it; a text function's
   #     names `web` alone.
-  #   - tools.tool_search.enabled "off". On, the CLI put the server's tools
+  #   - tools.tool_search.enabled "off". On, the harness put the server's tools
   #     behind three tools of its own (tool_search, tool_describe,
   #     tool_call) rather than offering them by name; off, the model was
   #     offered mcp__crewlet__<name> and the two web tools, on both kinds of
   #     call, and nothing else.
   #   - hooks.post_api_request, with hooks_auto_accept: every response the
-  #     CLI receives is handed to the hook on stdin, as JSON on one line,
-  #     before the CLI acts on it, and the hook appends it to a file in the
+  #     harness receives is handed to the hook on stdin, as JSON on one line,
+  #     before the harness acts on it, and the hook appends it to a file in the
   #     call's directory — the run's record (requests, below). Auto-accepted
   #     because the file is the profile's own and a headless run cannot be
   #     asked; a text function's record is written beside its own call and
@@ -3807,7 +3809,7 @@ hermes:
   #   - APPEND: a .hermes.md in the call's directory lands in the system
   #     message under "# Project Context", after the vendor's guidance and
   #     before the per-call date and working directory. It is NOT used,
-  #     because the CLI scans that file as project content and REPLACES ALL OF
+  #     because the harness scans that file as project content and REPLACES ALL OF
   #     IT with a "[BLOCKED: … Content not loaded.]" line when anything in it
   #     matches one of its patterns — silently, exiting 0 with nothing on
   #     stderr. The patterns match ordinary company prose: run through this
@@ -3836,7 +3838,7 @@ hermes:
   # output in the transcript too", and a tool transcript spliced into the
   # reply is what this backend must not have.
   #
-  # `-p` IS NOT THE PROMPT FLAG on this CLI — it selects a PROFILE. Nothing
+  # `-p` IS NOT THE PROMPT FLAG on this harness — it selects a PROFILE. Nothing
   # here uses it; it is recorded because every other profile in this file
   # spells `-p` as print or prompt, and borrowing that reflex would silently
   # run every seat against a profile named after its own transcript.
@@ -3875,22 +3877,22 @@ hermes:
   # `hermes auth add --type oauth` writes, and the provider a login chose. An
   # entry may use either or both.
   # THE SEAT'S TOOLS: the server the seeded config.yaml declares, started by
-  # naming it in the -t list beside `web` — the CLI starts only the servers
+  # naming it in the -t list beside `web` — the harness starts only the servers
   # that list names, and a run without one starts every server its config and
   # its enabled plugins name (measured: a server planted in config.yaml started
   # on a text function without -t, and on neither kind of call with it). The
   # file is rewritten every generation, a plugin runs only where that file
-  # enables it, and the CLI reads no project's config; measured on 0.21.5
+  # enables it, and the harness reads no project's config; measured on 0.21.5
   # through the engine's own code path against a local stand-in, with a
   # checkout above the call holding a .hermes/config.yaml and every other
-  # CLI's files at each level, nothing of it reached a request and no other
+  # harness's files at each level, nothing of it reached a request and no other
   # server started. The relay command and socket reach the config through
   # the environment, and HERMES_PLUGIN_PAYLOAD_MAX_CHARS lets the hook's
   # payload carry a response whole up to 8 MiB (50,000 characters unset, past
   # which it is cut to a preview the record cannot read); the payload repeats
   # it once, which stays inside the 32 MiB a record line may take.
   #
-  # The CLI makes a response's calls one after another (whatever the server's
+  # The harness makes a response's calls one after another (whatever the server's
   # supports_parallel_tool_calls says, measured in -z), does not re-read the
   # list when told it changed, and refuses a name it cannot place — but one
   # close to a listed name (difflib, a ratio of 0.7 or more) it REWRITES to
@@ -3904,7 +3906,7 @@ hermes:
   # `-z` HAS NO TURN CAP: a stand-in that always called a tool drew 948
   # requests in two minutes. The record shows every request as it is made,
   # so the phase's round budget counts them and the host ends the run when it
-  # is spent (measured: ended after five requests, the CLI was stopped).
+  # is spent (measured: ended after five requests, the harness was stopped).
   #
   # A failure is on stdout, as the vendor's sentence, in place of the answer,
   # and exits non-zero — 2 for a request the provider refused: the run's
@@ -3920,16 +3922,16 @@ hermes:
     relists: false
     concurrency: in_turn
   # EACH REQUEST, FROM THE RECORD THE post_api_request HOOK WRITES (see the
-  # seeded config.yaml): one line per response, as the CLI normalised it —
+  # seeded config.yaml): one line per response, as the harness normalised it —
   # its prose, its calls as {id, name, arguments} with the names the MODEL
   # wrote, why it stopped, and its counts, `input_tokens` WITHOUT the cached
   # part and `output_tokens` with the reasoning in it (measured with a
   # stand-in reporting 40 cached and 7 reasoning tokens of a 107-token
-  # prompt: 67 + 40, 12 out). The hook runs before the CLI repairs a name or
+  # prompt: 67 + 40, 12 out). The hook runs before the harness repairs a name or
   # makes a call, so each request was on file within 0.1 s of its first call
-  # reaching the server. Neither of the CLI's own records will do: its
+  # reaching the server. Neither of the harness's own records will do: its
   # stream-json events and its session store (state.db) both name a call as
-  # repaired, and the store is SQLite. The CLI sends no id with a call; calls
+  # repaired, and the store is SQLite. The harness sends no id with a call; calls
   # are joined by name and arguments. The --usage-file report settles the
   # run's total.
   requests:
@@ -3959,7 +3961,7 @@ hermes:
     - ".hermes/auth.json"
   # state.db is the session store — every message of every session — and
   # SQLite's two sidecars hold the tail of it, so pruning the database and
-  # leaving them behind is half a prune. memories/ is the CLI's own persistent
+  # leaving them behind is half a prune. memories/ is the harness's own persistent
   # memory (MEMORY.md, USER.md) and skills/ is what its skill_manage tool
   # writes: the seeded settings keep memory out of the prompt and the toolset
   # offers no skill tools, and pruning both between generations means nothing
@@ -3988,7 +3990,7 @@ hermes:
   # auth and platform state, so it is the status probe.
   login_args: ["auth"]
   status_args: ["status"]
-  # NO api_key_env and NO token_env. This CLI fronts thirty-odd providers and
+  # NO api_key_env and NO token_env. This harness fronts thirty-odd providers and
   # each has its own variable — OPENROUTER_API_KEY, ANTHROPIC_API_KEY,
   # NOUS_API_KEY — so there is no one key variable a profile could name, and
   # naming one would silently be wrong for every other entry. A metered key
@@ -3998,7 +4000,7 @@ hermes:
   env_sign_in: true
   #
   # FAILURES ARE PRINTED ON STDOUT, so the default scope is the right one. A
-  # turn the provider refused ends with the CLI's own explanation where the
+  # turn the provider refused ends with the harness's own explanation where the
   # answer would be, and exit 2 (measured, 401 and both kinds of 429, with
   # stderr empty); only a run that never reaches a model — no credential, no
   # valid toolset — writes to stderr. A marker scoped to stderr could
@@ -4007,7 +4009,7 @@ hermes:
   # exited 0 only where it opens the answer — see [MarkerScope] — so a seat
   # asked about rate limits cannot answer its way into sitting its entry out.
   #
-  # THE SENTINELS ARE THE CLI'S OWN SENTENCES (agent/turn_failure_copy.py,
+  # THE SENTINELS ARE THE HARNESS'S OWN SENTENCES (agent/turn_failure_copy.py,
   # agent/conversation_loop.py and hermes_cli/auth.py on 0.21.5), most with
   # the provider's label before them, which is why they start mid-sentence.
   # On stdout: a spent account, "Billing or credits exhausted: HTTP 429: …"
@@ -4020,7 +4022,7 @@ hermes:
   # "hermes -z: agent failed: Hermes is not connected to any AI provider yet.
   # …" (measured), and a provider named with no credential for it, "hermes
   # -z: agent failed: provider '<name>' resolved without credentials (…)"
-  # (measured). This CLI rotates its own credential pool and falls through to
+  # (measured). This harness rotates its own credential pool and falls through to
   # its own fallback providers first, so what reaches this backend is the
   # last provider's verdict.
   limit_markers:
@@ -4034,7 +4036,7 @@ hermes:
 
 pi:
   binary: pi
-  # `@earendil-works/pi-coding-agent`. The project moved from Mario Zechner's
+  # `@earendil-works/pi-harness`. The project moved from Mario Zechner's
   # `@mariozechner` scope to Earendil Works, so the older package name is a
   # different, frozen thing.
   #
@@ -4050,7 +4052,7 @@ pi:
   written_for: "Pi Coding Agent 1.4.x, measured on 0.85.1 and 1.4.0 (`pi --version`)"
   version_args: ["--version"]
   # `-p` is print mode: answer and exit, no TUI. The rest is the isolation, and
-  # this CLI is unusually generous with it — every discovery path it has can be
+  # this harness is unusually generous with it — every discovery path it has can be
   # switched off by name. Three of them are what keeps the call to itself, each
   # measured on both builds by taking it away:
   #
@@ -4091,7 +4093,7 @@ pi:
   #
   # --no-tools AND NOT an allowlist, which is the opposite of every other
   # profile here, because there is no web tool to keep: Web is the one local
-  # tool this backend never denies, and on this CLI there is none to deny.
+  # tool this backend never denies, and on this harness there is none to deny.
   complete_args: &pi_args
     - "-p"
     - "--no-tools"
@@ -4110,7 +4112,7 @@ pi:
   # `--no-tools` already sends the tool array empty (measured above). The
   # denial therefore names the same argv, by reference so the two cannot
   # drift, and an entry may say `web_tools: denied` truthfully.
-  web_tools_note: "no web tool in this CLI's built-in set; --no-tools sends the tool array empty (measured on 0.85.1)"
+  web_tools_note: "no web tool in this harness's built-in set; --no-tools sends the tool array empty (measured on 0.85.1)"
   model_args: ["--model", "{model}"]
   # BOTH CHANNELS ARE FILES: each flag reads its value as a path when a file
   # exists there. A seat's system prompt carries the org chart, its policies,
@@ -4119,7 +4121,7 @@ pi:
   #
   # AND A PATH THAT DOES NOT EXIST IS SENT AS THE PROMPT ITSELF, silently —
   # exit 0, nothing on stderr, the path's text as the seat's whole identity.
-  # The engine writes the file into the call's directory before the CLI
+  # The engine writes the file into the call's directory before the harness
   # starts and hands over its absolute path, so pi always finds it; an
   # override that names `{system}` instead puts the text on argv.
   #
@@ -4131,7 +4133,7 @@ pi:
   #                         1.4.0 — and nothing else. For a side pass.
   #   append_system_prompt  KEEPS pi's default under its identity line "You
   #                         are an expert coding assistant operating inside
-  #                         pi, a coding agent harness." and puts the engine's
+  #                         pi, a harness harness." and puts the engine's
   #                         text after it — bare on 0.85.1, inside an
   #                         <addendum> block on 1.4.0 — with the working
   #                         directory last. For a seat at work. The default
@@ -4145,9 +4147,9 @@ pi:
   # prompts identical up to the working directory, which follows it. That
   # directory is in the same block, though, so the block as a whole differs
   # per call. On a Claude subscription login pi adds Claude Code's identity
-  # line, "You are Claude Code, Anthropic's official CLI for Claude.", as a
+  # line, "You are Claude Code, Anthropic's official harness for Claude.", as a
   # block of its own ahead of either channel's text, and sends the request as
-  # that CLI; no flag removes it.
+  # that harness; no flag removes it.
   #
   # `SYSTEM.md` and `APPEND_SYSTEM.md` are pi's file channels of its own: the
   # working directory's `.pi/` copy when the project is trusted, which
@@ -4165,7 +4167,7 @@ pi:
   # both builds: the request is the one an argv prompt sends, less the
   # transcript's trailing newline, which pi trims.
   prompt_mode: stdin
-  # PLAIN TEXT, deliberately, although this CLI has a richer channel.
+  # PLAIN TEXT, deliberately, although this harness has a richer channel.
   # `--mode json` streams every session event and would carry real token
   # counts — but its answer lives at `message.content[N].text`, an array of
   # text, thinking and tool-call blocks whose index moves with whether the
@@ -4207,7 +4209,7 @@ pi:
     - path: .pi/agent/mcp.json
       content: '{"mcpServers":{}}'
   # THE SEAT'S TOOLS: one stdio server, REGISTERED BY AN EXTENSION written into
-  # the call's own directory and loaded by its path (-e), beside the CLI's own
+  # the call's own directory and loaded by its path (-e), beside the harness's own
   # MCP support (-e builtin:mcp) — --no-extensions turns built-in extensions
   # off with every discovered one, and an explicit -e path still loads. The
   # vendor's two configuration files cannot carry a per-run server: the agent
@@ -4220,12 +4222,12 @@ pi:
   # --tools keeps those and nothing else. Measured on 1.4.0 through the
   # engine's own code path against a local stand-in.
   #
-  # The registration's `timeout` is the CLI's per-call timeout, in seconds
+  # The registration's `timeout` is the harness's per-call timeout, in seconds
   # (60 by default; 4 gave a 10 s call up at 4.0 s). It re-reads the server's
   # list when told it changed — a tool activated mid-run was offered from the
   # request after the one the activation's result went back in — and makes
   # one response's calls at once. A call with malformed arguments is refused
-  # by the CLI itself, as is a name without the server's prefix.
+  # by the harness itself, as is a name without the server's prefix.
   #
   # THE SESSION IS THE RECORD: in place of --no-session, the run keeps its
   # session in its own directory (--session-dir), which goes with it, and
@@ -4265,17 +4267,17 @@ pi:
     complete_args: *pi_args
     # A RUN WITH TOOLS runs the mcp block's own argv, which names no web
     # tool either: restated by reference, so the denial covers every argv
-    # the CLI runs and cannot drift from it.
+    # the harness runs and cannot drift from it.
     mcp:
       complete_args: *pi_mcp_args
-  # EACH REQUEST, FROM THE SESSION FILE, which the CLI appends an entry to as
+  # EACH REQUEST, FROM THE SESSION FILE, which the harness appends an entry to as
   # each message completes: an assistant message is a response — its id, its
   # model, its prose and calls as content blocks, why it stopped, and its
   # counts, `input` WITHOUT the cached part and `output` with the reasoning in
   # it (measured with a stand-in reporting 40 cached and 7 reasoning tokens:
-  # 61 + 40 of a 101-token prompt, 12 out). The CLI sends no id with a call, so
+  # 61 + 40 of a 101-token prompt, 12 out). The harness sends no id with a call, so
   # a call is joined by name and arguments; each was in the file within 0.1 s
-  # of reaching the server. The CLI has no turn cap of its own: a run's rounds
+  # of reaching the server. The harness has no turn cap of its own: a run's rounds
   # are bounded by the phase's.
   requests:
     source: file
@@ -4303,7 +4305,7 @@ pi:
   # OAuth tokens and API keys both land here, 0600, and the file auto-refreshes
   # an expired token in place.
   credential_paths: [".pi/agent/auth.json"]
-  # --no-session already keeps the store empty, and these are what the CLI
+  # --no-session already keeps the store empty, and these are what the harness
   # writes anyway, or would with a flag dropped: sessions/ without
   # --no-session, trust.json — a project-trust decision per directory, none
   # of which --no-approve makes, each naming a call's directory that never
@@ -4321,7 +4323,7 @@ pi:
     - ".pi/agent/git"
   host_credential_paths: [".pi/agent/auth.json"]
   # THE TUI ITSELF, because `/login` is a SLASH COMMAND rather than a
-  # subcommand — this CLI has no headless login of any kind. So the broker
+  # subcommand — this harness has no headless login of any kind. So the broker
   # starts the interactive session in the credential home and the operator
   # types `/login`, completes the browser flow, then `/exit`.
   #
@@ -4329,7 +4331,7 @@ pi:
   # difference is that there it was avoidable: `claude auth login` exists and
   # `claude /login` merely LOOKED like a login. Here the REPL is the only
   # route the vendor offers, so the alternative is declaring no login at all
-  # and telling the operator, wrongly, that the CLI "authenticates on first
+  # and telling the operator, wrongly, that the harness "authenticates on first
   # use". `--no-session` keeps the sign-in from leaving a session behind.
   #
   # No logout_args and no status_args: `/logout` is a slash command too, and
@@ -4342,7 +4344,7 @@ pi:
   # which is what env_sign_in declares.
   env_sign_in: true
   #
-  # THE SENTINELS ARE THE UPSTREAM VENDOR'S, not this CLI's, and a
+  # THE SENTINELS ARE THE UPSTREAM VENDOR'S, not this harness's, and a
   # measurement is what settles that rather than a guess: a failing call
   # writes `<status>: <the provider's error JSON, verbatim>` to stderr, e.g.
   #
@@ -4371,7 +4373,7 @@ pi:
     - sentinel: "insufficient_quota"
   #
   # The auth sentinels are structural for the same reason, and deliberately
-  # NOT this CLI's own `/login` remedy: an auth marker fires KindAuth, which
+  # NOT this harness's own `/login` remedy: an auth marker fires KindAuth, which
   # exhausts the credential exactly as a spent plan does, and `/login` is
   # four characters a model writes in its own prose whenever somebody asks it
   # about signing in. The two spellings of the same failure are both listed
@@ -4384,5 +4386,5 @@ pi:
 # `custom` ships NOTHING on purpose. An operator pointing at their own wrapper
 # or a self-hosted gateway declares every field under overrides, and the
 # profile validation then names whichever one they left out — which is a far
-# better first run than defaults borrowed from an unrelated vendor's CLI.
+# better first run than defaults borrowed from an unrelated vendor's harness.
 custom: {}

@@ -16,7 +16,7 @@ import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import type { ToolAnnotations, ToolRow } from "~/protocol/index.ts";
+import type { ToolAnnotations, ToolRow } from "~/contract/tools.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -42,6 +42,8 @@ const tools: ToolRow[] = [
     source: "builtin",
     annotations: unadvertised,
     delivers: "",
+    group: "knowledge",
+    gate: "doclet",
   },
   {
     name: "create_issue",
@@ -49,6 +51,8 @@ const tools: ToolRow[] = [
     source: "mcp:github",
     annotations: unadvertised,
     delivers: "github",
+    group: "",
+    gate: "",
   },
 ];
 

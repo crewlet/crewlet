@@ -36,12 +36,12 @@ import type {
   ExecutorEntry,
   ScheduleRow,
   Snapshot,
-  ToolRow,
 } from "./types.ts";
 // RELATIVE, like every contract import in this directory: it is also built
 // alone as `protocol.js`, where the `~` alias does not exist.
 import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
+import type { ToolRow } from "../contract/tools.ts";
 import { comparePositions, type LogPosition } from "./session.ts";
 
 /**
@@ -255,7 +255,7 @@ const NOTHING_HELD: Record<string, unknown> = {
 
 /**
  * The heavy fields that are STATUS — each round's timing and tokens, and each
- * CLI run's — which a call whose body is withheld from this reader still
+ * harness run's — which a call whose body is withheld from this reader still
  * carries and versions. Every other detail is the seat's BODY
  * (`LiveCall.body_withheld`).
  */

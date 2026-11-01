@@ -162,6 +162,16 @@ feed has not acknowledged is one nobody has been woken for yet. So a feed that
 has stopped holds back its own log and no other, and `blocked_by:
 feed_ack_floor` on a domain names that domain's feed.
 
+A feed whose consumer fails (a broker that misses a heartbeat, a host that
+slept, a consumer the broker refuses) opens its group again on its own, waiting
+one second and doubling up to thirty between attempts, and is handed every
+record the group has not acknowledged, so its wakes are late rather than lost.
+Each failure is a `changefeed_interrupted` or `changefeed_open_failed` line,
+and the return a `changefeed_reopened` line carrying how long it was down. A
+feed that has held no consumer for longer than the one-minute stall grace
+raises [`feed_stopped`](../reference/alarms.md) on its node until it holds one
+again.
+
 A group name is not the broker's consumer name. The durable consumer is named
 from the group **and** the stream, as `<group>__<stream>__<digest>` — for
 example `crewlet-pages-feed__CREWLET_PAGES_LOG__e5825de86642` — so on an
@@ -1410,7 +1420,7 @@ printing an empty list.
 answers is a coordination read, and the outage that fails it is exactly when
 somebody opens this to ask why the company has gone quiet. So each log whose
 window the answering node couldn't read is named as that (the report's
-`maintenance_unread`, a line on the CLI page, a banner on the screen) and is
+`maintenance_unread`, a line on the harness page, a banner on the screen) and is
 never shown as a log with no window. So is what holds an open window: when the
 acknowledgements or the admissions couldn't be read, both surfaces say so
 rather than naming every node, or nobody. The answering node is in service
@@ -1632,7 +1642,7 @@ applied on no node, logged `statelog_record_gated` naming `overtaken`.
 
 **A reanchor that stops part-way is re-run.** Once its generation record is on
 the log, the verb rebuilds this node's consumer and commits the checkpoint on
-the node's own time rather than the caller's, and the CLI waits up to six
+the node's own time rather than the caller's, and the harness waits up to six
 minutes for it. If it stops anyway — the broker blinked, the node restarted —
 re-run the same command: it finds its own record, follows the log from one
 below it, and still names every record written after the restore beneath it.

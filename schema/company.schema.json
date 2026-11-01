@@ -1541,6 +1541,24 @@
         "null"
       ]
     },
+    "MCPRegistry": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "description": "The registry's https address; /v0.1/servers is appended to it. Absent: no community search.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "MCPServer": {
       "additionalProperties": false,
       "properties": {
@@ -1565,6 +1583,25 @@
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "What this server is for, one line of at most 200 characters; listed beside its name in each agent's prompt.",
+          "maxLength": 200,
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Run this server (default on). Off keeps the entry and everything that names it, and starts nothing.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
             "null"
           ]
         },
@@ -1601,7 +1638,16 @@
           ]
         },
         "name": {
-          "description": "Server name; the key seats declare credentials under.",
+          "anyOf": [
+            {
+              "maxLength": 32,
+              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "Server name: lowercase letters, digits and hyphens, at most 32 characters; the key seats declare credentials under.",
           "type": [
             "string",
             "number",
@@ -1740,7 +1786,16 @@
           ]
         },
         "tool_prefix": {
-          "description": "Prefix applied to this server's tool names.",
+          "anyOf": [
+            {
+              "maxLength": 49,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "Prefix put in front of every tool this server serves: letters, digits, _ and -, at most 49 characters.",
           "type": [
             "string",
             "number",
@@ -4160,6 +4215,10 @@
     },
     "learning": {
       "$ref": "#/$defs/Learning"
+    },
+    "mcp_registry": {
+      "$ref": "#/$defs/MCPRegistry",
+      "description": "The community MCP registry the dashboard searches beside the curated catalogue. Absent: none."
     },
     "mcp_servers": {
       "description": "Tool servers, stdio or http. Per-agent credentials live in role.mcp_env.",

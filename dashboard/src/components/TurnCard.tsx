@@ -142,7 +142,7 @@ export function TurnCard({
         {group.failed && <Tag variant="danger">failed</Tag>}
         {/* ZERO IS A NUMBER, AND ONLY A LIVE TURN'S ZERO IS AN ABSENCE. This
             read `totalTokens ? … : "—"`, so a turn that genuinely spent
-            nothing — every phase on a subscription CLI, which reports no
+            nothing — every phase on a subscription harness, which reports no
             usage at all, or a turn the engine stopped before its first call
             came back — rendered as "not recorded". That is the confusion
             `app/frame/cells.tsx` exists to end: absent and zero are different

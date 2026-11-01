@@ -413,9 +413,9 @@ agent_phase_started
 agent_phase_completed      # one phase's durable record: prompts, response,
                            # tool calls, and `rounds[]` — each provider call's
                            # timing, tokens and `stop_reason` (end,
-                           # tool_use or cap, the CLI's own turn cap; absent
+                           # tool_use or cap, the harness's own turn cap; absent
                            # where the backend reported none) — and
-                           # `invocations[]`, one per CLI run the phase
+                           # `invocations[]`, one per harness run the phase
                            # started (its outcome, first and last round,
                            # tokens). A failed phase carries
                            # `error_kind` — a provider kind (rate_limit,
@@ -428,10 +428,10 @@ executor_collected         # one LAUNCH of an executor's run, as its
                            # collection read it off the box — published once
                            # per launch, a person's stop and a lost host's
                            # cut-off included: its tokens and cache share,
-                           # `harness_turns` (the model turns its CLI reported),
-                           # what its CLI said it cost, its report
+                           # `harness_turns` (the model turns its harness reported),
+                           # what its harness said it cost, its report
                            # (`response`), delivered refs, activity
-                           # transcript, CLI, box, model and entry, and how
+                           # transcript, harness, box, model and entry, and how
                            # it ended (`notes`, or `failed` with `error` and
                            # error_kind launch_failed). NO PHASE: the
                            # work of the `execute` round that launched it
@@ -485,7 +485,7 @@ seat_provider_released     # a provider park lifted: the probe was answered
 subagent_batched, phase.tool_skill_blocked, skill_telemetry_write_failed
 prompt.size                # one phase's OPENING prompt, measured in BYTES
                            # plus a token approximation: the system and user
-                           # text and the tool-definition array its CLI is
+                           # text and the tool-definition array its harness is
                            # handed over MCP, under system_bytes /
                            # user_bytes / tool_bytes and tool_count. A
                            # separate row rather than a

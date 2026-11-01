@@ -51,7 +51,7 @@ A deployment's durable state lives in six places:
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload, and of each seat's sealed executor sessions, one object per capture. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, the executors' records, each human seat's chat read state, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
-| **LLM CLI homes** | Each `providers.llm` entry's state directory on the engine host (`state_dir`, or one per key under `CREWLET_LLM_HARNESS_HOME`), each CLI's files under `<state_dir>/<harness>` | The coding CLIs' logins and per-seat homes (a login is portable via `crewlet llm export`) |
+| **LLM harness homes** | Each `providers.llm` entry's state directory on the engine host (`state_dir`, or one per key under `CREWLET_LLM_HARNESS_HOME`), each harness's files under `<state_dir>/<harness>` | The harnesses' logins and per-seat homes (a login is portable via `crewlet llm export`) |
 
 Classify before you size the job:
 
@@ -484,7 +484,7 @@ exercises no recovery code at all. Use it when you want a copy that involves
 no running engine — before a risky upgrade, or when taking the deployment
 down anyway.
 
-1. **Export subscription logins first**, if any seats run on a coding CLI,
+1. **Export subscription logins first**, if any seats run on a harness,
    while the fleet is still up: `crewlet llm export <key>` packs each into one
    portable bundle. It restores the entry's configured bundle before it reads
    the login, so it reads the company's values: through the running engine,

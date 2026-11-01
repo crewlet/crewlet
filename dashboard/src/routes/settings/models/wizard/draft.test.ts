@@ -145,7 +145,7 @@ describe("the entry", () => {
 });
 
 describe("the secret's name", () => {
-  test("is the CLI's own variable while no model reads it", () => {
+  test("is the harness's own variable while no model reads it", () => {
     expect(suggestedVariable(draft(), [])).toBe("ANTHROPIC_API_KEY");
   });
 
@@ -208,9 +208,9 @@ describe("problems", () => {
       path: "providers.llm.sonnet-key.model",
       segments: ["providers", "llm", "sonnet-key", "model"],
       kind: "missing",
-      message: "providers.llm.sonnet-key.model: name the model the CLI runs",
+      message: "providers.llm.sonnet-key.model: name the model the harness runs",
     };
-    expect(messageOf(engine)).toBe("Name the model the CLI runs");
+    expect(messageOf(engine)).toBe("Name the model the harness runs");
     const local = draftProblems(draft({ model: "" }), []);
     const once = distinctProblems(local, [engine, engine], "sonnet-key");
     expect(once).toHaveLength(1);

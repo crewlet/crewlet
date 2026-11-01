@@ -591,6 +591,7 @@ func (r *Runner) executorPrompt(ctx context.Context, notes string,
 		// activate, and nothing it already holds.
 		Discoverable:   snapshot.Discoverable(built.Active()),
 		AvailableTools: built.Universe().Names(),
+		MCPServers:     built.Universe().MCPServers(),
 
 		ThreadContext:       r.cfg.Context.ThreadContext,
 		PersonalMemory:      r.cfg.Context.PersonalMemory,
@@ -766,6 +767,10 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		// parser and the docs all supported and nothing ever passed: a
 		// skill authored with `phases: [review]` reached no reviewer.
 		Skills: offer.Catalogue(),
+		// The servers the seat's registry holds, not the reviewer's own
+		// surface, which holds its submission alone: a review skill is
+		// keyed on what the work under review could reach.
+		MCPServers: snapshot.MCPServers(),
 	})
 	r.emitter().skillsInjected(ctx, phase.Review, offer.Drain())
 	user := reviewTask(r.cfg.Task)

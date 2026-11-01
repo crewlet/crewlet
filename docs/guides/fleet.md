@@ -4,7 +4,7 @@ One `crewlet run` is a whole company. Everything below is about running
 more than one, and the honest summary is: you probably do not need to.
 A single engine handles many concurrent turns — agent handlers are
 goroutines, so the practical ceiling is your model plans' and keys' rate
-limits and host memory — every model call is a coding CLI process — not the
+limits and host memory — every model call is a harness process — not the
 engine's own process count. **Scale up before you scale out.**
 
 Run a fleet when one of these is true:
@@ -117,10 +117,10 @@ took it, where a direct one records only the shell's user and no node logs it.
 the fallback every node resolves from, so a platform secret projected as env
 still works unchanged.
 
-**Every `seats` node runs its seats' models, so every one needs their CLIs.**
-A [`providers.llm` entry](../concepts/llm-backends.md) is a coding CLI that the
+**Every `seats` node runs its seats' models, so every one needs their harnesses.**
+A [`providers.llm` entry](../concepts/llm-backends.md) is a harness that the
 node holding the seat starts, and its login lives in a state directory on that
-node's own disk. So a fleet installs each CLI on every `seats` node and signs it
+node's own disk. So a fleet installs each harness on every `seats` node and signs it
 in there, and the sign-ins that reach every node at once are the ones that
 travel through the secret store: a headless token (`crewlet llm login <key>
 -capture-token` writes it into the store every node reads), an
@@ -136,7 +136,7 @@ A's tokens in `CREWLET_API_TOKEN`.
 See [LLM Backends § Authentication](../concepts/llm-backends.md#authentication).
 
 **One `CREWLET_MCP_BRIDGE_URL` on every node.** Every agent seat's executor
-is its CLI's run in a box, and the box reaches the seat's tools over the
+is its harness's run in a box, and the box reaches the seat's tools over the
 [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box):
 it dials the fleet's bridge address, whichever node a call lands on relays it
 over the broker to the node holding the seat, and that node answers it. So
@@ -615,8 +615,8 @@ to get right, which the engine cannot check for you:
 - The node holding the seat **launches** the run. For an `e2b` cell it must
   reach the sandbox provider (E2B cloud, or your self-hosted `domain`). A
   `direct` or `container` cell runs on that node's own host: `direct` needs
-  the coding CLI installed there, and `container` needs the container
-  runtime there and an image with the coding CLI in it.
+  the harness installed there, and `container` needs the container
+  runtime there and an image with the harness in it.
 - The run's box **dials the tool bridge**, and which address it dials
   depends on its cell. A `direct` box dials the launching node's own
   listener on loopback wherever that node binds `api.port` — on a node

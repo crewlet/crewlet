@@ -1,5 +1,5 @@
 /**
- * The Model step: the CLI's own aliases as choices, and "Another model" for
+ * The Model step: the harness's own aliases as choices, and "Another model" for
  * any other id.
  *
  * The invariant: an edit opens on the choice its model is, whenever the
@@ -17,9 +17,9 @@ import { emptyDraft, type Draft } from "../draft.ts";
 import { ModelStep } from "./ModelStep.tsx";
 
 const ALIASES = [
-  { id: "opus", name: "Opus", detail: "The CLI's latest Opus" },
-  { id: "sonnet", name: "Sonnet", detail: "The CLI's latest Sonnet" },
-  { id: "haiku", name: "Haiku", detail: "The CLI's latest Haiku" },
+  { id: "opus", name: "Opus", detail: "The harness's latest Opus" },
+  { id: "sonnet", name: "Sonnet", detail: "The harness's latest Sonnet" },
+  { id: "haiku", name: "Haiku", detail: "The harness's latest Haiku" },
 ];
 
 const listing = vi.hoisted(() => ({ answer: null as unknown }));
@@ -88,13 +88,13 @@ test("a full model id opens on Another model, named as the catalogue names it an
   expect(checked(/^Haiku/)).toBe(false);
   expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("claude-haiku-4-5");
   expect(screen.getByText("Claude Haiku 4.5, a fixed version.")).toBeTruthy();
-  expect(screen.queryByText("Any model id the CLI takes.")).toBeNull();
+  expect(screen.queryByText("Any model id the harness takes.")).toBeNull();
 });
 
-test("an id the catalogue does not list is described as any id the CLI takes", () => {
+test("an id the catalogue does not list is described as any id the harness takes", () => {
   openEdit("claude-experimental-x");
   expect(checked(/^Another model/)).toBe(true);
-  expect(screen.getByText("Any model id the CLI takes.")).toBeTruthy();
+  expect(screen.getByText("Any model id the harness takes.")).toBeTruthy();
   expect(screen.queryByText(/a fixed version/)).toBeNull();
 });
 

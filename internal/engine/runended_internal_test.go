@@ -124,7 +124,7 @@ func TestAnApplyKeepsASpentPlanSpent(t *testing.T) {
 		return p.(*harness.Provider)
 	}
 	before := build(600, "sk-ant-api03-spent")
-	if !before.RunEnded(t.Context(), harness.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
+	if !before.RunEnded(t.Context(), harness.RunEnd{Answer: limitReport(time.Now())}) {
 		t.Fatal("the premise: the old entry sits out")
 	}
 	if build(900, "sk-ant-api03-spent").SittingOut() == nil {
@@ -250,7 +250,7 @@ roles:
 	}
 	t.Setenv("PLAN_KEY_UNDER_TEST", "sk-ant-api03-spent")
 	e := bundleNode(t, revision(600))
-	if !entry(e).RunEnded(t.Context(), harness.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
+	if !entry(e).RunEnded(t.Context(), harness.RunEnd{Answer: limitReport(time.Now())}) {
 		t.Fatal("the premise: the running entry sits out")
 	}
 	apply(e, revision(900))

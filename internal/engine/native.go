@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -127,6 +128,11 @@ type native struct {
 	// search fan-out. Nil when there is no queue to serve on, which is
 	// every embedded engine and every test.
 	stopSlices queue.Unsubscribe
+
+	// feeds is the change feeds this node started, stored once when they
+	// start and read by every alarm evaluation ([native.feedsReading]). Nil
+	// before they start, and on a node in a mode that publishes nothing.
+	feeds atomic.Pointer[[]*changefeed.Feed]
 
 	// run is the context every goroutine this half started runs under, and
 	// stop is what ends it.
@@ -816,6 +822,7 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 	// on. A domain whose feed disagrees with its declaration gets no feed
 	// and an error naming it, rather than a trim that silently waits for
 	// ever or silently waits for nothing.
+	var started []*changefeed.Feed
 	for _, domain := range registeredDomains() {
 		running := c.log.Domain(domain.Name())
 		if running == nil {
@@ -848,21 +855,58 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 				"source", translator.Source().Name, "error", err.Error())
 			continue
 		}
+		started = append(started, feed)
+	}
+	// PUBLISHED BEFORE ANY OF THEM RUNS, so the alarm evaluation reads every
+	// feed this node started from its first beat ([native.feedsReading]),
+	// one whose first open fails included.
+	n.feeds.Store(&started)
+	for _, feed := range started {
 		n.done.Add(1)
 		go func() {
 			defer n.done.Done()
 			// THE NATIVE HALF'S OWN CONTEXT, never the caller's: this
-			// goroutine is joined by stopNative, which ends that one.
+			// goroutine is joined by stopNative, which ends that one. Run
+			// returns only then: a feed whose consumer fails opens it again
+			// on its own, and says so while it is down ([changefeed.Feed.Outage]).
 			//nolint:contextcheck // n.run is [context.WithoutCancel] of
 			// the boot context: a feed started under the CALLER's would be one
 			// [native.shutdown] can never end, and its wait would block for ever.
-			if err := feed.Run(n.run); err != nil {
-				log.ErrorContext(ctx, "changefeed_stopped",
-					"source", translator.Source().Name, "error", err.Error(),
-					"detail", "writes still land; nothing is woken by them "+
-						"until this node or a peer reopens the feed")
-			}
+			feed.Run(n.run)
 		}()
+	}
+}
+
+// feedsReading is [native.feedsReading] over this node's native half. A node
+// that has met no company has started none, and reads no feed.
+func (e *Engine) feedsReading(now time.Time, out *statelog.Reading) {
+	e.native.Load().feedsReading(now, out)
+}
+
+// feedsReading fills the change feeds' half of an alarm reading: every feed
+// this node started that is down, how long for and why.
+//
+// THIS NODE'S OWN FEEDS. A feed's group is the fleet's, so a peer whose feed
+// is up still handles the records this node's cannot; the alarm names the
+// node whose consumer is down, and on a single data node that is every wake
+// in the company.
+func (n *native) feedsReading(now time.Time, out *statelog.Reading) {
+	if n == nil {
+		return
+	}
+	feeds := n.feeds.Load()
+	if feeds == nil {
+		return
+	}
+	for _, feed := range *feeds {
+		outage, down := feed.Outage()
+		if !down {
+			continue
+		}
+		out.FeedsDown = append(out.FeedsDown, statelog.FeedOutage{
+			Source: outage.Source, For: now.Sub(outage.Since),
+			Failures: outage.Failures, Cause: outage.Cause,
+		})
 	}
 }
 
@@ -911,8 +955,8 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	}
 	if runChat {
 		// NOTHING TO CONFIGURE, and that is the record rather than a
-		// shortcut. The lead a `lead_fallback` wake names is resolved at
-		// WRITE time, inside the decide, and rides the record — so a
+		// shortcut. The seat an `answerer` wake names is resolved at
+		// WRITE time, inside the decide, and rides the record, so a
 		// parser handed a lead map here would answer with whoever holds
 		// the role now, which for a message somebody sent last week is a
 		// different person. It is the tracker's arm's reasoning rather
@@ -1700,7 +1744,7 @@ func (c liveChannels) UnitChannels() []string {
 	return out
 }
 
-// liveRoster is chat's three-method view of the company, resolved against the
+// liveRoster is chat's four-method view of the company, resolved against the
 // epoch current when the WRITE runs.
 //
 // PER CALL, for every other live seam's reason here: a chat store is built
@@ -1749,6 +1793,42 @@ func (l liveRoster) Lead(unit, room string) string {
 		return ""
 	}
 	return unitRoomLead(company.Org, unit, room)
+}
+
+// Senior names the most senior AGENT seat among handles, or empty:
+// [seniorAgent] against the CURRENT epoch.
+func (l liveRoster) Senior(handles []string) string {
+	company := l.engine.Company()
+	if company == nil {
+		return ""
+	}
+	return seniorAgent(company.Org, handles)
+}
+
+// seniorAgent is who answers for a room made by hand: the most senior AGENT
+// seat among its members' handles, by [org.Organization.Senior], or empty.
+//
+// IT IS WHAT [chatlet.Roster.Senior] ANSWERS, and the chat write path puts it
+// on the record a person's post publishes as the room's answerer
+// ([chatlet.ReasonAnswerer]). A PERSON IS NEVER IT: a person is addressable and
+// runs no turn, so a room whose most senior member is a person is answered by
+// its most senior agent. And a handle the chart no longer holds is not a seat
+// at all, so a member who has left the company is never ranked.
+func seniorAgent(chart *org.Organization, handles []string) string {
+	if chart == nil || len(handles) == 0 {
+		return ""
+	}
+	named := make(map[string]bool, len(handles))
+	for _, h := range handles {
+		named[h] = true
+	}
+	senior := chart.Senior(func(r *org.Role) bool {
+		return !r.IsHuman() && named[r.Handle()]
+	})
+	if senior == nil {
+		return ""
+	}
+	return senior.Handle()
 }
 
 // Seats is every seat handle of the CURRENT epoch's chart, people and agents

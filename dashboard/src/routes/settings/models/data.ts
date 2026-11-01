@@ -49,7 +49,7 @@ export interface ModelView {
   key: string;
   harness: string;
   model: string;
-  /** Whether its CLI can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
+  /** Whether its harness can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
   executor: boolean;
   /** The admin's reading, or the member's, which names no credential. */
   entry: ModelEntry | MemberModelEntry;

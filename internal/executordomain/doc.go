@@ -1,5 +1,5 @@
 // Package executordomain is the state log's record of each seat's EXECUTOR
-// SESSIONS (ADR-0072): one row per (seat handle, turn) whose executor captured
+// SESSIONS (ADR-0073): one row per (seat handle, turn) whose executor captured
 // its harness's session, naming the sealed object in the fleet's object
 // store that holds it (ADR-0026), on the `CREWLET_EXECUTOR_LOG` stream and
 // applied into every data node's replicated estate.
@@ -129,5 +129,5 @@
 // retention duty ends it as lost, a day after its last capture with no run of
 // it live (internal/engine's executor source). A person's removal does not
 // reach these rows in this release, as it did not reach the conversation
-// ledger they replace (ADR-0072).
+// ledger they replace (ADR-0073).
 package executordomain

@@ -93,7 +93,7 @@ type Service struct {
 	// roster, org and tools are the config-derived surfaces. See Options.
 	roster    func() []map[string]any
 	org       func() any
-	tools     func() []map[string]any
+	tools     func() any
 	schedules func() any
 
 	// placement reads the seat leases for the seat-state vocabulary's
@@ -196,11 +196,14 @@ type Options struct {
 	//
 	// Org answers `any` because its shape is an explicit public type owned
 	// by package api (the anonymous org projection), and api imports this
-	// package, so naming the type here would be an import cycle. This
-	// service only carries the value to the wire and never reads into it.
+	// package, so naming the type here would be an import cycle. Tools
+	// answers `any` too: its row is internal/api/queries' (the shape
+	// `mcp_servers_status` sends as well), and that package reaches the
+	// engine, which a transport has no reason to build against. This
+	// service only carries either value to the wire and never reads into it.
 	Roster    func() []map[string]any
 	Org       func() any
-	Tools     func() []map[string]any
+	Tools     func() any
 	Schedules func() any
 
 	// Placement is which of the company's agent seats some node in the
@@ -633,7 +636,7 @@ func (s *Service) Org() any { return s.currentOrg() }
 
 // Tools is this node's catalogue, for the same re-send. It changes on an
 // apply too — a revision that adds an MCP server adds its tools.
-func (s *Service) Tools() []map[string]any { return s.currentTools() }
+func (s *Service) Tools() any { return s.currentTools() }
 
 // Schedules is the configured rows as the `schedules` push carries them.
 //
@@ -653,7 +656,7 @@ func (s *Service) currentOrg() any { return s.org() }
 
 func (s *Service) currentSchedules() any { return s.schedules() }
 
-func (s *Service) currentTools() []map[string]any { return s.tools() }
+func (s *Service) currentTools() any { return s.tools() }
 
 // CompanyPublished re-sends every push a published company changes — the
 // roster, the org tree, the tool catalogue and the schedules — to every client

@@ -588,10 +588,26 @@
   padding: var(--spacing-2) var(--crewlet-chat-pad-x) var(--spacing-3);
 }
 
-/* Activity: the list beside the reading pane, filling the view. */
+/* Activity: the list beside the reading pane, filling the view. The list's
+   column is 20rem rather than the kit's 17rem: an activity's line names the
+   room it happened in, the part of it most worth reading, and at 17rem
+   "replied to a thread in #engineering" lost the room to the clamp. */
 .chat-activity {
+  --crewlet-list-detail-list: 20rem;
   flex: 1;
   min-height: 0;
+}
+
+/* The list keeps the view's side line: a row pads itself by the first step,
+   so the list stands that step inside the line and the faces start on it,
+   under the view's title and its first tab. It starts the shared step under
+   the tab bar (`--tab-panel-gap`), as every tabbed panel does, inside the
+   list's own column, so the hairline beside it still meets the bar. */
+.chat-activity-list {
+  display: flex;
+  flex-direction: column;
+  padding: var(--tab-panel-gap) 0 var(--spacing-3)
+    calc(var(--crewlet-chat-pad-x) - var(--spacing-2));
 }
 
 .chat-activity-context {
@@ -861,12 +877,17 @@
   border-bottom: 0;
 }
 
+/* The room's glyph stands on the view's side line, under the search field:
+   the link pads itself by the first step for its hover fill, so it starts
+   that step before the line and the fill bleeds past it, as a member row's
+   does. Inset by its own pad as well, the glyph stood 8px inside the line. */
 .chat-browse-row__main {
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: var(--spacing-1);
   min-width: 0;
+  margin-inline-start: calc(var(--spacing-2) * -1);
   padding: var(--spacing-2);
   border-radius: var(--radius-md);
   color: inherit;
@@ -882,11 +903,14 @@
   outline-offset: var(--size-focus-ring-inset-offset);
 }
 
+/* A room's name wraps rather than pushing past the row: one unbroken name
+   (a slug with no hyphen) ran over its own tag and into Join or Open. */
 .chat-browse-row__name {
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
   min-height: var(--spacing-5);
+  overflow-wrap: anywhere;
   font-size: var(--crewlet-chat-text);
   font-weight: var(--font-weight-medium);
 }

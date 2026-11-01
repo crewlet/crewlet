@@ -64,7 +64,7 @@ flowchart LR
     NODE["<b>A node</b><br/><i>crewlet run</i>"]
 
     subgraph supply["What a turn consumes"]
-        LLM["<b>Models, through coding CLIs</b><br/>Claude Code · Codex · OpenCode · …<br/><i>on a subscription or an API key —<br/>each CLI calls its own vendor</i>"]
+        LLM["<b>Models, through harnesses</b><br/>Claude Code · Codex · OpenCode · …<br/><i>on a subscription or an API key —<br/>each harness calls its own vendor</i>"]
         EMB["<b>Embeddings API</b> — OpenAI-compatible<br/><i>optional — without it, search is<br/>keyword only and nothing is<br/>recalled by similarity</i>"]
         MCPS["<b>MCP servers</b><br/><i>the agents' hands</i>"]
         BOX["<b>Code sandbox</b><br/>where every executor runs:<br/>an E2B VM, a container, or this host"]
@@ -96,7 +96,7 @@ act through, and every other one still routes end to end.
 | MCP servers | In practice | The agents' hands — chat, tracker, wiki, code host | Agents have only the [builtins](agent-runtime.md#built-in-tools) |
 | Chat · tracker · code host | No, each | Where triggers arrive and work is delivered | That surface simply routes nothing |
 | Embeddings provider | No | Vector recall over `agent_diary` and `episodes` | Recall degrades to recency; episodes render nothing |
-| Code sandbox | Yes, with agent seats and a model (a `local:` cell is the engine host itself) | Where every agent seat's executor runs: its coding CLI's own detached run | A company with agent seats and a model is refused at `providers.sandbox` |
+| Code sandbox | Yes, with agent seats and a model (a `local:` cell is the engine host itself) | Where every agent seat's executor runs: its harness's own detached run | A company with agent seats and a model is refused at `providers.sandbox` |
 | OTLP collector | No | Exported traces | Trace ids are still minted and still stored on every event row |
 | External NATS | No | The stream for a fleet that will not embed it | The process embeds its own — the default |
 
@@ -186,7 +186,7 @@ back what it wrote.
 | `/ws/stream` | The dashboard's only read channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it. It carries no write. |
 | `/operator/mcp` · `/operator/act` | The operator catalogue — the tracker, knowledge and chat tools a seat holds — served to a person's own assistant over MCP, and to the dashboard's buttons over the act route. Every call acts as the principal the guard resolved: a person writes as the seat they hold, and so does a token or service account the identity directory binds to one; a credential bound to no seat writes under its own login, and is refused every chat tool, because a room is read and spoken in only as a seat. Always guarded. |
 | `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
-| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. A session lives in the process holding the seat, which may serve no API at all, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
+| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a harness in a box. Per-run, expires with the run. A session lives in the process holding the seat, which may serve no API at all, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
 **`workers` runs the company-wide singletons, each held on its own
@@ -229,11 +229,11 @@ flowchart TB
         BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
         TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>node.max_concurrent gates every<br/>segment, a run's collection off<br/>.control included; the run holds none</i>"]
         REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED,<br/>plus this role's own MCP children"]
-        PROV["<b>Provider chain</b><br/>fallback chain over<br/>the seat's coding CLIs"]
+        PROV["<b>Provider chain</b><br/>fallback chain over<br/>the seat's harnesses"]
     end
     STREAM[("<b>Event stream</b>")]
     KV[("<b>Coordination KV</b>")]
-    RUN["<b>Executor run</b><br/>the seat's coding CLI in a box,<br/>detached from the turn"]
+    RUN["<b>Executor run</b><br/>the seat's harness in a box,<br/>detached from the turn"]
 
     STREAM --> MBOX
     MBOX --> BATCH --> TURN
@@ -258,7 +258,7 @@ gets its own cloned registry and its own bridge.
 
 **One model call has two layers of failure handling, each owning exactly one
 decision.** The backend *classifies* and does nothing else — it never retries.
-The one thing it holds of its own is a spent plan: a CLI that reported its
+The one thing it holds of its own is a spent plan: a harness that reported its
 vendor's rate limit, in its own structured status or the vendor's words, is
 `rate_limit`, and the entry then sits out on this node until the reset the
 vendor named (never more than an hour away), or, where it named none, for a
@@ -274,7 +274,7 @@ the turn. The sit-out is the node's own and is not shared with the fleet: an
 entry holds one login, every other node learns the same thing from its own
 calls once per window, and a coordination read in front of every model call
 would put the store under every turn. What a classified failure *says* — in a log line,
-`llm_unavailable`, a turn's error — is the backend's own line: how the CLI
+`llm_unavailable`, a turn's error — is the backend's own line: how the harness
 exited and the tail of what it printed, or the vendor's own sentence for a
 spent plan or an expired login.
 
@@ -477,7 +477,7 @@ every turn can outlive the process that started it.
 ```mermaid
 flowchart TB
     WHO["<b>Who is waiting?</b><br/>derived from the trigger's own type,<br/>before any model runs"]
-    EXEC["<b>Executor</b><br/>the seat's coding CLI's own run, in a box:<br/>decide, discover, act, then account for it"]
+    EXEC["<b>Executor</b><br/>the seat's harness's own run, in a box:<br/>decide, discover, act, then account for it"]
     SUSP["<b>Parked</b><br/>the executor's run, detached in its box:<br/>the turn's state, no conversation,<br/>on the run's record"]
     CHECK["<b>Engine check</b><br/>does the record support<br/>what it says it did?"]
     SKIP["<b>skipped</b><br/>nobody was asking<br/>this seat to do anything"]
@@ -514,7 +514,7 @@ flowchart TB
 **Two nested loops, not one.** The outer loop is the turn: executor → reviewer,
 re-entered on `self_iterate` up to `turn_engine.max_iterations`. The inner loop
 is the model↔tool round trip *inside each phase*, bounded by its own cap
-(the executor's coding-CLI run by `role.sandbox.max_turns`, else
+(the executor's harness run by `role.sandbox.max_turns`, else
 `providers.sandbox.default_max_turns`, 96 unless set; a constant for the
 reviewer, which holds one submission tool). A turn is therefore up to
 `max_iterations × (executor rounds + review rounds)` priced model calls, which
@@ -537,7 +537,7 @@ reviews; see [Turn Engine](turn-engine.md).
 send 15–25 KB of tool definitions with every model request, so the executor sees
 *server names* and walks `list_mcp_server_tools` → `activate_tool` to promote
 what it actually needs. From the model's side a builtin and an MCP tool are the
-same thing: two tools of the one `crewlet` server its CLI lists, which the
+same thing: two tools of the one `crewlet` server its harness lists, which the
 engine answers ([Tool calls on this host](llm-backends.md#tool-calls-on-this-host)).
 
 **A parked turn is the reason there is no parked goroutine anywhere.** Every
@@ -673,7 +673,7 @@ days keep none.
 | **`artifact_data_stores`** · `artifact_data_collections` · `artifact_data_paths` · `artifact_data_docs` · `artifact_data_fields` · `artifact_data_writes` · `artifact_data_touches` · `artifact_data_usage` | Each artifact's datastore, derived from `CREWLET_ARTIFACT_DATA_LOG`: the store's catalogue row (its schema version, its on-disk footprint and its state digest), its collections with their columns and rules, the field paths interned to compact integers, every document as its canonical body with who created and last changed it, the field index a query is compiled against, seven days of history (at most 8 MiB per store, each row carrying who wrote, the verdict, the values each changed field held before and after, and the digest the store held after it, which is what an undo and a cell's history read), which documents each history row changed, and the company's footprint the plan quota is enforced against. Every data node decides each write from the authority stamped into it and the rows alone, so a refusal is the same refusal on every data node |
 | **`assistant_conversations`** · `assistant_turns` · `assistant_messages` · `assistant_steps` · `assistant_cards` · `assistant_proposals` · `assistant_files` · … | Each person's [Ask Crewlet](assistant.md) conversations, derived from `CREWLET_ASSISTANT_LOG`: every conversation and its turns, the messages, steps and cards its owner saw, the proposals they decided, the files attached to it or delivered into it, an administrator's recorded compliance reads, and the marker a purge or a person's erasure leaves, so that a redelivered record cannot bring a conversation back. What a person said and saw is sealed under the fleet keyring before it is published, so the rows are the same bytes on every data node and say nothing without the keyring. A file's bytes are the [object store](object-store.md)'s, and `assistant_files` is declared in its references. The trash reaper purges a conversation nobody has used for the company's `assistant.retention_days` |
 | **`chat_channels`** · `chat_members` · `chat_messages` · `chat_reactions` · `chat_deletions` · `chat_verdicts` · … | The company's own chat, derived from `CREWLET_CHAT_LOG`: its rooms and who is in each, every message with its thread, mentions and reactions, the marker an erase leaves so that a redelivered post cannot bring back what the company destroyed, and what the applier decided about each message record — applied, or refused and why — which the writer reads back and keeps for the operation ledger's thirty days, beside the highest position that horizon has let go (`chat_verdicts_lost`), so a decision nobody keeps any more reads as one nobody can vouch for rather than as a message never said |
-| **`executor_sessions`** · `executor_session_tombs` · `executor_seat_removals` · … | Each seat's executor sessions, derived from `CREWLET_EXECUTOR_LOG`: one row per turn whose executor captured its harness's session, naming the sealed object in the object store that holds it, with the turn's ending (how it ended, whether its reply was delivered) and what its first launch read of its conversation — the position, and the turns that read handed out, which are what its end absorbs; the tombstone that keeps an ended or removed turn from being captured again; and where a removed seat's rows were removed, which refuses a capture or an end decided before that and landing after ([ADR-0072](https://github.com/crewlet/crewlet/blob/main/adr/0072-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)) |
+| **`executor_sessions`** · `executor_session_tombs` · `executor_seat_removals` · … | Each seat's executor sessions, derived from `CREWLET_EXECUTOR_LOG`: one row per turn whose executor captured its harness's session, naming the sealed object in the object store that holds it, with the turn's ending (how it ended, whether its reply was delivered) and what its first launch read of its conversation — the position, and the turns that read handed out, which are what its end absorbs; the tombstone that keeps an ended or removed turn from being captured again; and where a removed seat's rows were removed, which refuses a capture or an end decided before that and landing after ([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)) |
 | `statelog_cursor` · each domain's operation ledger and deferred records · `statelog_ops_lost` · `statelog_ops_lost_kind` · `statelog_estate` | Where this node is on each log, which operations have already been applied — a record that travels inside a snapshot — and how far back that record may have lost rows to the sweep, so a retry older than that is answered `unknown` rather than applied twice. A ledger that sweeps one kind of operation sooner than the rest — the identity estate's sessions, after an hour — records that kind's loss on its own, so every other kind is still vouched for over the month. Any record a newer build wrote that this one cannot decode. And the one framework row that differs on every data node: which **copy** of the estate this file is, a random name minted for every snapshot a join installs, before the install (a file the node created itself has the empty name) — so what a node derives from these rows by a walk that only moves forward, the chat keyword index, can tell its rows were replaced |
 
 **The whole company — coordination KV.**
@@ -943,7 +943,7 @@ here.
 | Live knowledge search | `internal/knowledge` | [Knowledge system](knowledge-system.md) |
 | Diary, episodes, skill induction, profiles | `internal/learning` | [Agent learning](agent-learning.md) |
 | What a seat already said in one thread | `internal/agent/ledger` | [Conversation sessions](conversation-sessions.md) |
-| Models, each a coding CLI, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
+| Models, each a harness, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
 | Every agent seat's executor run, detached in a box | `internal/sandbox`, `internal/hostbox`, `internal/agent/runner` (`agentrun.go`) | [Code sandbox](code-sandbox.md) |
 | Cron-scoped recurring work | `internal/schedule` | [Scheduling](scheduling.md) |
 | The company's sealed credentials | `internal/fleetsecrets` | [Secret store](secret-store.md) |

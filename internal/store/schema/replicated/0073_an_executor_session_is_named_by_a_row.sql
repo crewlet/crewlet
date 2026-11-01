@@ -1,5 +1,5 @@
 -- The executor domain lands: the state log's tenth domain, the record of each
--- seat's executor sessions. internal/executordomain is the domain (ADR-0072).
+-- seat's executor sessions. internal/executordomain is the domain (ADR-0073).
 --
 -- WHO HAS TO AGREE ON IT: every data node, identically, derived from the
 -- CREWLET_EXECUTOR_LOG stream by one deterministic applier. A seat's next turn

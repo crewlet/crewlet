@@ -177,7 +177,7 @@ it says the model is added there instead.
 
 ### Giving the company a model
 
-Every model is a [coding CLI](../concepts/llm-backends.md) the engine drives.
+Every model is a [harness](../concepts/llm-backends.md) the engine drives.
 [Settings › Models](../concepts/llm-backends.md#managing-models-from-the-dashboard)
 adds one from the dashboard, signed in and tested. To add it at the node's host
 instead, in a terminal beside the node's `crewlet.yaml`: the company the builder
@@ -203,7 +203,7 @@ providers:
     local: {}
     default_run_in: direct
 
-# 3. Sign its CLI in to your subscription, and check it end to end
+# 3. Sign its harness in to your subscription, and check it end to end
 #    (on a member of a cluster, add -api with a running member's URL
 #    and a Tier A token in CREWLET_API_TOKEN: a member alone cannot
 #    reach the fleet's store)
@@ -237,24 +237,24 @@ crewlet run
   a credential written inline comes out in the clear (a company the builder
   created holds none).
 - **The entry needs only its model.** `default` drives Claude Code, the
-  default CLI, on your subscription; `-capture-token` mints a headless token
+  default harness, on your subscription; `-capture-token` mints a headless token
   and stores it in the fleet's [secret store](../concepts/secret-store.md)
-  under the CLI's own token variable, which an entry that names no
+  under the harness's own token variable, which an entry that names no
   `auth.token` reads — written there directly with the node stopped, so the
   row's source is `llm-login` and its author your shell's user, and the node
   reads it when it starts.
-  `crewlet llm doctor` then makes a real call with a tool to prove the CLI is
+  `crewlet llm doctor` then makes a real call with a tool to prove the harness is
   installed, signed in and still matches the profile Crewlet drives it with.
-  For another CLI or an API key, write the entry
+  For another harness or an API key, write the entry
   [LLM Backends](../concepts/llm-backends.md) describes instead.
-- **The sandbox is this machine.** A `direct` box runs the CLI as your user
+- **The sandbox is this machine.** A `direct` box runs the harness as your user
   on the node's own host, and calls the seat's tools back through the node's
   own listener on loopback, so there is nothing else to set — the node only
   needs its `api.port`, whatever its roles. A `container` or `e2b` cell, or a
   seats node started with `api.port: 0`, instead needs
   `CREWLET_MCP_BRIDGE_URL`, the fleet's address as that box reaches it (see
   [Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
-  The CLI runs fully permissioned there, so `direct` is for a first run on
+  The harness runs fully permissioned there, so `direct` is for a first run on
   your own machine while its seats take work from you alone, a dedicated host
   you are willing to hand to an autonomous agent, or the entry that needs the
   host itself; before a seat takes work from anyone else, place the runs in
@@ -493,7 +493,7 @@ repository a pipeline applies, or the resources an operator renders it from.
 The caution waits while the panel a create leaves is on screen, which says the
 same and gives the same steps. Any write of the document adds the entry, `PATCH /config`
 included ([Configure via the API](configure-via-api.md)); what only a terminal
-does is sign its CLI in, and `crewlet llm` reads the entry it signs in from a
+does is sign its harness in, and `crewlet llm` reads the entry it signs in from a
 company file.
 
 ## Adding a unit or a seat

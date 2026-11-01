@@ -1,5 +1,5 @@
 /**
- * Where a model's executors run, as three cards in the CLI step's shape:
+ * Where a model's executors run, as three cards in the harness step's shape:
  * each place's glyph and name, one line saying what it is, and two facts,
  * whether the fleet can start one there and how isolated it is. The company
  * default is tagged; a place no node can use is unavailable, its Ready fact
@@ -22,7 +22,7 @@ import type { Draft, RunIn } from "../draft.ts";
 
 const PLACES: readonly RunnerCellName[] = ["direct", "container", "e2b"];
 
-/** Each place's line and isolation, its glyph drawn at the CLI marks' size so both card sets stand alike. */
+/** Each place's line and isolation, its glyph drawn at the harness marks' size so both card sets stand alike. */
 const PLACE_WORDS: Record<
   RunnerCellName,
   { description: string; isolation: string; media: ReactNode }
@@ -117,7 +117,7 @@ export function WhereItRuns({
   const options: ChoiceCardOption[] = PLACES.map((place) => {
     const words = PLACE_WORDS[place];
     const ready = readiness(answer, place);
-    // A CLI LOGIN STAYS ON ITS NODE, so a sandbox off the host cannot use one.
+    // A harness LOGIN STAYS ON ITS NODE, so a sandbox off the host cannot use one.
     const blocked = place === "e2b" && hostLogin;
     return {
       value: place,

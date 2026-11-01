@@ -58,8 +58,11 @@ func TestEveryPublishedWakeIsTimedFromItsRecordsStoredInstant(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- feed.Run(ctx) }()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		feed.Run(ctx)
+	}()
 	t.Cleanup(func() { cancel(); <-done })
 
 	stored := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)

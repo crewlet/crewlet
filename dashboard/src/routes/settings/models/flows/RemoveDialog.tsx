@@ -60,7 +60,7 @@ function pathOf(segments: readonly (string | number)[]): string {
     .join("");
 }
 
-/** The models a reference may move to: a seat's executor needs a CLI that can run one, the assistant a model that denies web tools. */
+/** The models a reference may move to: a seat's executor needs a harness that can run one, the assistant a model that denies web tools. */
 export function targetsFor(ref: ModelReference, removing: string, models: readonly ModelView[]) {
   return models.filter(
     (m) =>
@@ -427,7 +427,7 @@ export function RemoveDialog({
                         </span>
                         {ref.at.assistant ? (
                           <Text as="span" variant="caption" tone="tertiary">
-                            Only models that deny the CLI's web tools can run Ask Crewlet.
+                            Only models that deny the harness's web tools can run Ask Crewlet.
                           </Text>
                         ) : null}
                       </span>

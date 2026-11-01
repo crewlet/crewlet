@@ -19,7 +19,7 @@ and it deliberately follows the same doctrine one scope wider.
 ## What it is not
 
 **Not a transcript replay.** A run parked on a person's question keeps its
-transcript in its CLI's own session, in its box, and the answer continues that
+transcript in its harness's own session, in its box, and the answer continues that
 session where it stopped (Claude Code's `--resume`, OpenCode's `--session`)
 wherever the relaunch reuses that box; where it cannot, a fresh run is told the
 question and the answer instead. That is right for a run parked on one question waiting for one answer. It is
@@ -48,8 +48,8 @@ embedding, no aux LLM), so it renders there regardless.
 
 **It is not the same thing as [the thread block](agent-runtime.md#the-thread-a-turn-was-woken-in), and neither replaces the other.** `## The thread so far` is what *everyone* said on the chat surface, read back live from the vendor. A conversation session is what *this seat* said and did, across turns, recorded by the engine — the plan, the tool calls, the reply and the reviewer's verdict, none of which is visible in a chat thread. A seat reading only the thread cannot tell which of its own replies it has already reasoned through; a seat reading only the ledger does not know what the other five people in the thread have said since. Chat is also only one surface: a Jira comment, a GitHub review and a scheduled fire all have a conversation session and no thread to read.
 
-**Not a second, invisible memory.** The [coding-CLI workspace](llm-backends.md#isolation-the-part-that-actually-matters)
-deletes a coding CLI's own sessions before and after every call, precisely so
+**Not a second, invisible memory.** The [harness workspace](llm-backends.md#isolation-the-part-that-actually-matters)
+deletes a harness's own sessions before and after every call, precisely so
 that one task's context cannot leak into the next through a channel nobody can
 see. This ledger is the inverse shape of what that rule rejects: engine-owned
 rather than tool-private, scoped to one conversation rather than leaking
@@ -299,7 +299,7 @@ The same two settings bound each seat's captured **executor sessions**: the
 harness's own transcript of a turn, sealed into the
 [object store](object-store.md) and named by the turn's row of the `executor`
 log
-([ADR-0072](https://github.com/crewlet/crewlet/blob/main/adr/0072-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)),
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)),
 so a later turn of the same conversation, in any box on any node, can
 continue it. The trash reaper deletes a session untouched for
 `retention_days`, never one whose turn's run is still live, reading the value

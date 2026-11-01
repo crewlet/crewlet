@@ -1120,7 +1120,7 @@ function RunPane({
                   value={text}
                   onChange={setText}
                   onSubmit={sendWords}
-                  placeholder="Answer as the coding agent will read it"
+                  placeholder="Answer as the harness will read it"
                   disabled={!write.access.can || write.busy}
                   autoFocus={open}
                   actions={

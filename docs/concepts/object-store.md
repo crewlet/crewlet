@@ -41,7 +41,7 @@ none of them in the clear), and each seat's executor sessions: the harness's
 own transcript of a turn, kept so a later turn on the same conversation, in any
 box on any node, continues it, sealed the same way as it streams in and named
 by the turn's row of the `executor` log
-([ADR-0072](https://github.com/crewlet/crewlet/blob/main/adr/0072-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)).
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)).
 Every consumer follows the same rule: the estate names the object, and the
 store keeps its bytes.
 
@@ -454,7 +454,7 @@ bytes at all:
    reservation expires.
 2. **The transfer.** On `nats` every file streams through the engine. On `s3`,
    when the boot probe proved the bucket honours them, the intent instead hands
-   a browser or the CLI a presigned `PUT` for each file, bound to its exact
+   a browser or the harness a presigned `PUT` for each file, bound to its exact
    length, its served type, its SHA-256 as a signed checksum and
    `if-none-match: *`, so the bytes go straight to the bucket and a second put
    to the same key is refused. An agent's sandbox is never handed one: the

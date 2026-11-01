@@ -513,7 +513,7 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 		// the epoch no longer has declares nothing and so reports nothing.
 		id, _ = c.Org.AgentIDFor(seat)
 	}
-	retireUndeclared(ctx, s, specs, outcomes)
+	retireUndeclared(ctx, s, specs, outcomes, serversTurnedOff(c.Config))
 	started, retry := bringUp(ctx, s, specs, retryNow)
 	outcomes = append(outcomes, started...)
 	// A TOKEN GITHUB WOULD NOT ISSUE IS RETRIED like a child that would not
@@ -589,9 +589,10 @@ func (e *Engine) armRenewal(s *seatChildren, token *seatToken) {
 }
 
 // retireUndeclared stops every child of the seat that specs no longer names: a
-// template the revision removed or renamed, a grant the seat lost, a server
-// turned shared — or one the seat still declares whose credential has stopped
-// resolving, which held lists among the pass's outcomes.
+// template the revision removed, renamed or turned off (off names those), a
+// grant the seat lost, a server turned shared, or one the seat still declares
+// whose credential has stopped resolving, which held lists among the pass's
+// outcomes.
 //
 // FIRST, before anything starts, for the reason the shared servers retire
 // first: a rename frees the name and the tools it published before the
@@ -605,7 +606,9 @@ func (e *Engine) armRenewal(s *seatChildren, token *seatToken) {
 // stops it. Logged as the seat no longer declaring the server, it sent the
 // reader to the configuration, which still declares it, while the status beside
 // the line said what was actually missing.
-func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec, held []mcpOutcome) {
+func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec, held []mcpOutcome,
+	off map[string]struct{},
+) {
 	desired := make(map[string]struct{}, len(specs))
 	for _, spec := range specs {
 		desired[spec.Name] = struct{}{}
@@ -625,6 +628,11 @@ func retireUndeclared(ctx context.Context, s *seatChildren, specs []mcp.Spec, he
 			log.InfoContext(ctx, "mcp_server_retired", "server", name, "seat", s.handle,
 				"detail", "a value the child is started with no longer resolves, so it "+
 					"is not left acting on the one it was started with: "+missing.reason())
+			continue
+		}
+		if _, turnedOff := off[mcp.ServerName(name)]; turnedOff {
+			log.InfoContext(ctx, "mcp_server_retired", "server", name, "seat", s.handle,
+				"detail", turnedOffDetail)
 			continue
 		}
 		log.InfoContext(ctx, "mcp_server_retired", "server", name, "seat", s.handle,

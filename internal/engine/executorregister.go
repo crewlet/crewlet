@@ -23,7 +23,7 @@ import (
 // THE EXECUTOR LOG, wired: its entry in the register, its two sides over the
 // running log and the store a session's sealed bytes stream through, its
 // retention through the trash reaper, and a removed seat's sessions through
-// the mailbox retirement (ADR-0072).
+// the mailbox retirement (ADR-0073).
 //
 // EVERY DATA NODE RUNS IT, whatever its company keeps: the register runs every
 // domain or none ([register]). Nothing in this build writes a session yet;

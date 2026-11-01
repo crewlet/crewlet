@@ -73,7 +73,7 @@ export interface ToolCall {
 
 /**
  * A tool call in flight (`running_calls[]` on a live call): it has no row in
- * `tools` until it answers. A CLI may run a response's calls at once, so a
+ * `tools` until it answers. A harness may run a response's calls at once, so a
  * phase has any number of them.
  */
 export interface RunningToolCall {
@@ -109,7 +109,7 @@ export interface TimedRound {
 }
 
 /**
- * One CLI run of a phase (`types.PhaseInvocation`): one process driving its
+ * One harness run of a phase (`types.PhaseInvocation`): one process driving its
  * own loop over the phase's tools, from launch to exit.
  */
 export interface Invocation {
@@ -126,7 +126,7 @@ export interface Invocation {
    *  shares; both 0 for a run that made no request. */
   firstRound: number;
   lastRound: number;
-  /** False where its CLI's record showed no requests: the whole run is then
+  /** False where its harness's record showed no requests: the whole run is then
    *  ONE round, which nothing timed on its own. */
   requestsObserved: boolean;
   inputTokens: number;
@@ -255,7 +255,7 @@ export interface PhaseRecord {
   exhaustedRounds: boolean;
   /**
    * Rounds in which the model produced neither prose nor a tool call: the
-   * CLI handed back an empty answer and the tool loop asked again.
+   * harness handed back an empty answer and the tool loop asked again.
    *
    * Zero on a live phase, like the two flags below it: the count is settled
    * only when the phase publishes its record.
@@ -284,11 +284,11 @@ export interface PhaseRecord {
   hostPhase: string;
   /** The iteration of that host phase. */
   hostIteration: number;
-  /** The CLI an executor ran as, on the record that collected its run and on
+  /** The harness an executor ran as, on the record that collected its run and on
    *  each launch's; empty on every phase that ran on the engine host. Where a
    *  phase ran is which phase it is, so nothing else says so. */
   harness: string;
-  /** The box that ran this phase, when a coding agent did. Links a transcript
+  /** The box that ran this phase, when a harness did. Links a transcript
    *  to the detached run it suspended into. */
   sandboxId: string;
   /** The branches and pull requests the phase delivered. */
@@ -308,7 +308,7 @@ export interface PhaseRecord {
    */
   launchId: string;
   /**
-   * How many model turns a launch's CLI said its own loop took — its calls,
+   * How many model turns a launch's harness said its own loop took — its calls,
    * which the engine neither made nor timed — and 0 where it reported none,
    * and on every phase.
    */
@@ -349,9 +349,9 @@ export interface PhaseRecord {
    */
   timedRounds: TimedRound[];
   /**
-   * The phase's CLI runs that have ENDED, oldest first — on a live phase the
+   * The phase's harness runs that have ENDED, oldest first — on a live phase the
    * run in flight is not among them, and its rounds are the ones past every
-   * run's `lastRound`. Empty on a phase that ran no CLI of its own, and on a
+   * run's `lastRound`. Empty on a phase that ran no harness of its own, and on a
    * launch, whose run is its box's.
    */
   invocations: Invocation[];
@@ -373,10 +373,10 @@ export interface PhaseRecord {
    * running right now — a LIVE phase's only, "" / empty otherwise.
    */
   roundStartedAt: string;
-  /** When the CLI run in flight was launched — a LIVE phase's only, "" between
+  /** When the harness run in flight was launched — a LIVE phase's only, "" between
    *  runs and otherwise. */
   runStartedAt: string;
-  /** Every tool call running now, in the order they arrived — a CLI may run
+  /** Every tool call running now, in the order they arrived — a harness may run
    *  a response's calls at once. */
   runningCalls: RunningToolCall[];
   /**
@@ -493,7 +493,7 @@ export function runningCalls(raw: unknown): RunningToolCall[] {
     }));
 }
 
-/** Normalise the `invocations` list — the phase's CLI runs, in order. */
+/** Normalise the `invocations` list — the phase's harness runs, in order. */
 export function invocations(raw: unknown): Invocation[] {
   if (!Array.isArray(raw)) return [];
   return (raw as unknown[])
@@ -518,13 +518,13 @@ export function invocations(raw: unknown): Invocation[] {
 }
 
 /**
- * How a CLI run ended, in words: what the head of its rounds says. EXHAUSTIVE
+ * How a harness run ended, in words: what the head of its rounds says. EXHAUSTIVE
  * over the engine's four outcomes (`toolloop.InvocationOutcome`), with the
  * value itself for one this build does not know ([outcomeWords]).
  */
 export const OUTCOME_WORDS: Record<InvocationOutcome, { label: string; tone: Tone }> = {
   end: { label: "the model finished", tone: "neutral" },
-  cap: { label: "the CLI’s own turn cap stopped it", tone: "caution" },
+  cap: { label: "the harness’s own turn cap stopped it", tone: "caution" },
   stopped: { label: "the engine ended it", tone: "neutral" },
   failed: { label: "failed", tone: "critical" },
 };
@@ -625,7 +625,7 @@ export function rounds(
 }
 
 /**
- * A phase's rounds under the CLI run that made them: `run` is null for rounds
+ * A phase's rounds under the harness run that made them: `run` is null for rounds
  * no ended run claims — on a live phase, the run in flight's.
  */
 export interface RunGroup {
@@ -634,7 +634,7 @@ export interface RunGroup {
 }
 
 /**
- * Group a phase's ledger under its CLI runs, by the round span each run names
+ * Group a phase's ledger under its harness runs, by the round span each run names
  * (`first_round`–`last_round`) — the number the rounds, the calls and the
  * narration already join on, and never an instant: an unobserved run's one
  * round has none.
@@ -870,7 +870,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     hostIteration: num(p.host_iteration),
     harness: String(p.harness ?? ""),
     // WHAT A COLLECTED RUN LEAVES ON THE EXECUTOR'S RECORD: which box ran it
-    // (so the badge naming the coding agent can reach the run) and the
+    // (so the badge naming the harness can reach the run) and the
     // branches and pull requests the phase produced. What the run did and
     // spent is each launch's own record ([fromLaunchEvent]).
     sandboxId: String(p.sandbox_id ?? ""),
@@ -919,11 +919,11 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
  * One launch of an executor's run, from its durable `executor_collected`
  * event: a record of the `execute` round that launched it ([PhaseRecord.launch]).
  *
- * WHAT A LAUNCH LEAVES: the report it wrote, what it spent, its CLI's own
+ * WHAT A LAUNCH LEAVES: the report it wrote, what it spent, its harness's own
  * turns, its transcript, what it delivered, the box it ran in and, where it
  * did not finish, why — the notes of a launch that stopped to ask, was
  * stopped or was cut off, or the error of one that failed. The record also
- * carries what the run's own CLI said it cost, and that is deliberately NOT
+ * carries what the run's own harness said it cost, and that is deliberately NOT
  * read: the dashboard renders tokens and never money (rule 19 in
  * docs/reference/dashboard-design.md), and a price parsed onto the record is
  * one a component is a single line away from drawing.
@@ -950,7 +950,7 @@ function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseReco
     error: String(p.error ?? ""),
     errorKind: String(p.error_kind ?? ""),
     // NO PROMPT, NO ROUNDS AND NO DECISION: the run's prompt and its rounds
-    // were its CLI's, in its box, and what the round decided is on the
+    // were its harness's, in its box, and what the round decided is on the
     // executor's own record.
     systemPrompt: "",
     userPrompt: "",

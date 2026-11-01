@@ -236,7 +236,7 @@
   color: var(--color-feedback-warning-ink);
 }
 
-/* A PHASE'S CLI RUNS, each heading the rounds it made (`RunHead` in
+/* A PHASE'S HARNESS RUNS, each heading the rounds it made (`RunHead` in
    PhaseCard.tsx). A run is the coarser boundary of the two, so it is a HEAD
    rather than another rail: its rounds keep their own bracket and tint, and
    the run's line above them — its name, its entry, its span of rounds and how
@@ -7635,7 +7635,7 @@ a.work-cal-chip {
   max-width: 72ch;
 }
 
-/* A collected run's own report — prose the coding agent wrote, so it keeps its
+/* A collected run's own report — prose the harness wrote, so it keeps its
    line breaks and is held to a reading measure. */
 .run-report {
   margin: 0;
@@ -8391,7 +8391,7 @@ a.live-row:focus-visible {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-2xs);
 }
-/* A CONTAINER'S NAME IS WEIGHTED, its parts are not: a phase, a CLI run, a
+/* A CONTAINER'S NAME IS WEIGHTED, its parts are not: a phase, a harness run, a
    launch and the reflection pass read as the headings the rows under them
    belong to. */
 .wf-row:is(

@@ -289,16 +289,24 @@ type midTurnLimit struct {
 func (*midTurnLimit) Model() string { return "opus" }
 
 func (m *midTurnLimit) Complete(context.Context, llm.Request) (*llm.Completion, error) {
-	m.calls.Add(1)
+	call := m.calls.Add(1)
 	if m.limited.Load() {
-		return nil, m.limitedErr()
+		return nil, m.limitedErr(call)
 	}
 	return &llm.Completion{Content: "done", Model: "opus"}, nil
 }
 
-// limitedErr is the refusal the model makes while it is limited.
-func (m *midTurnLimit) limitedErr() error {
-	return &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: m.retry,
+// limitedErr is the refusal the model makes while it is limited: the first
+// names retry, and every later one an hour past it, as a vendor whose window
+// outlasts the hour the backend benches an entry for does when the probe asks
+// again. A later refusal naming a later instant is what makes the probe's
+// renewal news, which a park publishes once per change.
+func (m *midTurnLimit) limitedErr(call int32) error {
+	retry := m.retry
+	if call > 1 {
+		retry = retry.Add(time.Hour)
+	}
+	return &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: retry,
 		Err: errors.New("You've hit your 5-hour limit")}
 }
 

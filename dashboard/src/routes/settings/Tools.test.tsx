@@ -28,7 +28,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
-import type { ToolAnnotations, ToolRow } from "~/protocol/index.ts";
+import type { ToolAnnotations, ToolRow } from "~/contract/tools.ts";
 import type { McpServersStatusAnswer } from "~/contract/mcp.ts";
 import { withDerived } from "~/test/org.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
@@ -50,6 +50,8 @@ const tools: ToolRow[] = [
     source: "mcp:github",
     annotations: unadvertised,
     delivers: "github",
+    group: "",
+    gate: "",
   },
   {
     name: "search_docs",
@@ -57,6 +59,8 @@ const tools: ToolRow[] = [
     source: "mcp:docs",
     annotations: unadvertised,
     delivers: "",
+    group: "",
+    gate: "",
   },
   {
     name: "search_knowledge",
@@ -64,6 +68,8 @@ const tools: ToolRow[] = [
     source: "builtin",
     annotations: unadvertised,
     delivers: "",
+    group: "knowledge",
+    gate: "doclet",
   },
 ];
 
@@ -81,6 +87,7 @@ const org = {
 };
 
 const status: McpServersStatusAnswer = {
+  builtin: [],
   nodes: [
     { id: "node-a", reported: true },
     { id: "node-b", reported: true },
@@ -89,8 +96,13 @@ const status: McpServersStatusAnswer = {
   servers: [
     {
       name: "docs",
+      title: "docs",
+      catalogue: "",
+      vendor: "",
       configured: true,
       shared: true,
+      enabled: true,
+      description: "",
       transport: "stdio",
       command: "docs-mcp",
       args: ["--read-only"],
@@ -101,6 +113,10 @@ const status: McpServersStatusAnswer = {
       waiting: 0,
       tools: 4,
       unlisted_annotations: [],
+      refused_tools: [],
+      refused_count: 0,
+      shadowed_tools: [],
+      shadowed_count: 0,
       nodes: [
         {
           node: "node-a",
@@ -142,8 +158,13 @@ const status: McpServersStatusAnswer = {
     },
     {
       name: "github",
+      title: "github",
+      catalogue: "",
+      vendor: "",
       configured: true,
       shared: false,
+      enabled: true,
+      description: "",
       transport: "stdio",
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-github"],
@@ -154,6 +175,10 @@ const status: McpServersStatusAnswer = {
       waiting: 0,
       tools: 26,
       unlisted_annotations: ["create_pull_reqest"],
+      refused_tools: [],
+      refused_count: 0,
+      shadowed_tools: [],
+      shadowed_count: 0,
       nodes: [
         {
           node: "node-a",
@@ -197,8 +222,13 @@ const status: McpServersStatusAnswer = {
       // A SERVER THAT REGISTERED NOTHING: it failed on the one node that
       // launched it, so the catalogue has no row from it at all.
       name: "notes",
+      title: "notes",
+      catalogue: "",
+      vendor: "",
       configured: true,
       shared: true,
+      enabled: true,
+      description: "",
       transport: "stdio",
       command: "notes-mcp",
       args: [],
@@ -209,6 +239,10 @@ const status: McpServersStatusAnswer = {
       waiting: 0,
       tools: 0,
       unlisted_annotations: [],
+      refused_tools: [],
+      refused_count: 0,
+      shadowed_tools: [],
+      shadowed_count: 0,
       nodes: [
         {
           node: "node-a",
@@ -454,12 +488,18 @@ test("a server waiting for a provisioned credential names what it waits for, not
     "not started: waiting for the atlassian integration to mint ${CEO_ATLASSIAN_TOKEN}; " +
     "it starts once the seal reaches this node";
   const waiting: McpServersStatusAnswer = {
+    builtin: [],
     nodes: [{ id: "node-a", reported: true }],
     servers: [
       {
         name: "github",
+        title: "github",
+        catalogue: "",
+        vendor: "",
         configured: true,
         shared: false,
+        enabled: true,
+        description: "",
         transport: "stdio",
         command: "npx",
         args: [],
@@ -470,6 +510,10 @@ test("a server waiting for a provisioned credential names what it waits for, not
         waiting: 1,
         tools: 0,
         unlisted_annotations: [],
+        refused_tools: [],
+        refused_count: 0,
+        shadowed_tools: [],
+        shadowed_count: 0,
         nodes: [
           {
             node: "node-a",
@@ -562,6 +606,24 @@ test("the MCP tile counts the servers the engine reports, as the table does", as
   await settle();
   expect(screen.getByText("2 of 3 servers running")).toBeDefined();
   expect(screen.queryByText(/server\(s\)/)).toBeNull();
+});
+
+// A SERVER TURNED OFF READS AS OFF, in the engine's word, and is in neither
+// number on the tile: nobody expects it to run, and counted it read as a
+// server that should and does not.
+test("a server turned off reads Disabled and is left out of the tile's count", async () => {
+  const off: McpServersStatusAnswer = {
+    ...status,
+    servers: status.servers.map((s) =>
+      s.name === "docs" ? { ...s, enabled: false, state: "disabled", started: 0 } : s,
+    ),
+  };
+  mount(<Tools />, { answer: off });
+  await settle();
+  const docs = screen.getByText("Disabled").closest(".crewlet-data-grid__row") as HTMLElement;
+  expect(within(docs).getByText("docs")).toBeDefined();
+  expect(screen.getByText("1 of 2 servers running")).toBeDefined();
+  cleanup();
 });
 
 // A SERVER'S PAGE IS NOT AN EMPTY SEARCH. A row opens `servers/{name}`; for a

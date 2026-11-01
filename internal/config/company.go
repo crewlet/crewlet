@@ -105,6 +105,10 @@ type Company struct {
 	// server from one.
 	MCPServers []MCPServer `yaml:"mcp_servers,omitempty" json:"mcp_servers,omitempty" desc:"Tool servers, stdio or http. Per-agent credentials live in role.mcp_env."`
 
+	// MCPRegistry is the community registry the dashboard searches beside
+	// the curated MCP catalogue; absent, there is none. See [MCPRegistry].
+	MCPRegistry MCPRegistry `yaml:"mcp_registry,omitempty" json:"mcp_registry,omitzero" desc:"The community MCP registry the dashboard searches beside the curated catalogue. Absent: none."`
+
 	// TokenBudget is the org-wide LLM token ceiling per calendar window,
 	// across every seat; a window it does not name is uncapped. Charged
 	// before a seat's own budget, so the first completion that would cross
@@ -290,11 +294,15 @@ func (c *Company) ValidateRunnable() error {
 // `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
 // out, one http header spelled two ways where nothing says which is sent, two
 // seats declaring one email, and a reference that is shaped like neither a
-// handle nor a key. And the `assistant:` block ([Company.validateAssistant]),
+// handle nor a key. And every name and address an MCP server entry or an
+// `mcp_env` block for it holds that no client can use
+// ([Company.validateMCPNames]), the `assistant:` block ([Company.validateAssistant]),
 // whose chain is held to its rules again wherever it is handed out, and the
 // per-seat access rules ([Company.validateSeatAccess]): every seat block says
 // whether it is on, holds access the vendor offers within the company's reach,
-// and writes no credential the engine manages.
+// and writes no credential the engine manages. And the community MCP
+// registry's address ([Company.validateMCPRegistry]), which only a search
+// reads.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -306,8 +314,8 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
-		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateAssistant(),
-		c.validateSeatAccess())
+		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateMCPNames(),
+		c.validateAssistant(), c.validateSeatAccess(), c.validateMCPRegistry())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See

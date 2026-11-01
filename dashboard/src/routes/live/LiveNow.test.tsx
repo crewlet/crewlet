@@ -420,12 +420,12 @@ test("the Activity card names a node the live feed was seeded without", async ()
 
 // A LAUNCH IS THE EXECUTOR'S ROW. A collected launch of an executor's run is
 // no phase — its round's record is — so its row wears the round's phase word
-// with the CLI that ran it, its CLI's own turns where a phase has rounds, and
+// with the harness that ran it, its harness's own turns where a phase has rounds, and
 // an outcome that says it was collected, with the report it wrote on it. A
 // phase filter of `execute` keeps it beside its round's record.
 //
 // Mutation: read the launch as a phase record, and its row has no phase word
-// and a 0 for its rounds; drop the CLI badge, and the row reads as a second
+// and a 0 for its rounds; drop the harness badge, and the row reads as a second
 // executor.
 test("a collected launch is listed as the executor's row", async () => {
   const launch = {

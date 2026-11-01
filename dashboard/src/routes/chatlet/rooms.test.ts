@@ -10,7 +10,14 @@
 
 import { describe, expect, test } from "vitest";
 
-import { knownKind, roomMark, roomTitle, roomWhere, unreadLabel } from "./rooms.ts";
+import {
+  isConversationWith,
+  knownKind,
+  roomMark,
+  roomTitle,
+  roomWhere,
+  unreadLabel,
+} from "./rooms.ts";
 import type { ChatChannel } from "~/protocol/index.ts";
 
 const channel = (over: Partial<ChatChannel> = {}): ChatChannel => ({
@@ -91,5 +98,23 @@ describe("the unread badge", () => {
     // The same number WITHOUT the flag is a real count of a hundred.
     expect(unreadLabel(100, false)).toBe("100");
     expect(unreadLabel(0, false)).toBe("");
+  });
+});
+
+// A SENTENCE ABOUT WHAT SOMEBODY DID IN A CONVERSATION OF THE TWO OF YOU NAMES
+// NO ROOM: its title is their own name, so "replied to a thread in Product
+// Manager" repeated the name the line began with.
+describe("a conversation between the reader and one other", () => {
+  test("is the one-to-one conversation with the person who acted, and nothing else", () => {
+    expect(isConversationWith("dm", "pm", "ada", ["ada", "pm"])).toBe(true);
+    // Its people not in hand, a one-to-one conversation holds the reader and whoever acted.
+    expect(isConversationWith("dm", "pm", "ada")).toBe(true);
+    expect(isConversationWith("dm", "pm", "ada", ["ada", "bo"])).toBe(false);
+    expect(isConversationWith("dm", "ada", "ada", ["ada", "pm"])).toBe(false);
+    expect(isConversationWith("group", "pm", "ada", ["ada", "pm", "bo"])).toBe(false);
+    expect(isConversationWith("group", "pm", "ada", ["ada", "pm"])).toBe(false);
+    for (const kind of ["public", "private", "unit"]) {
+      expect(isConversationWith(kind, "pm", "ada", ["ada", "pm"]), kind).toBe(false);
+    }
   });
 });

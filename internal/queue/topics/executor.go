@@ -2,7 +2,7 @@ package topics
 
 // THE EXECUTOR LOG: the record of each seat's executor sessions, ordered on
 // one stream and applied into every data node's replicated estate
-// (internal/executordomain, ADR-0072). A row names the sealed object in the
+// (internal/executordomain, ADR-0073). A row names the sealed object in the
 // fleet's object store that holds one turn's captured harness session; the bytes
 // are never on this stream.
 //

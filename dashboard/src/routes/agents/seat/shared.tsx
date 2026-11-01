@@ -143,7 +143,7 @@ export function ConfigValue({ value }: { value: string | undefined }) {
 
 /**
  * A provider chain, in the order the fallback walks it. Each key opens its
- * model under Settings › Models, which says the CLI it drives and how
+ * model under Settings › Models, which says the harness it drives and how
  * it signs in.
  */
 export function ModelChain({ keys }: { keys: readonly string[] }) {

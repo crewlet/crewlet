@@ -146,7 +146,7 @@ integrations:
   with the finding that needs it.
 - **`provisioning:`** says where hooks are registered and which organization
   these agents work in, and it is read by the engine's own pass as well as by
-  the CLI. `org` is the GitHub organization holding the repositories, and it is
+  the harness. `org` is the GitHub organization holding the repositories, and it is
   also the account a [per-agent app](#one-github-app-per-agent) is registered
   under; `repos` are `owner/repo` entries to hook individually; `org_webhook`
   is `auto` / `true` / `false`, described under [Webhooks](#webhooks). The
@@ -680,9 +680,11 @@ reaches the engine perfectly well.
   through their apps, and which setting makes events arrive.
 
 What counts as reachable depends on where GitHub runs. github.com reaches only
-the public internet: a loopback, private, link-local or unspecified address, a
-single-label name and the `localhost`, `.local`, `.internal`, `.lan` and
-`.home.arpa` names are not reachable. An Enterprise Server runs inside the
+the public internet: an address it does not route (loopback, private,
+link-local, unspecified, carrier-grade NAT such as a tailnet's `100.x`
+addresses, and the documentation and other reserved ranges), a single-label
+name and the `localhost`, `.local`, `.internal`, `.lan` and `.home.arpa` names
+are not reachable. An Enterprise Server runs inside the
 company's network, so there only the server's own loopback, an unspecified
 address and `localhost` are refused.
 
@@ -1158,7 +1160,7 @@ The Copilot tools are only on the remote server, not a self-hosted one.
 ## How code authoring works
 
 Every agent seat authors code through the
-[code sandbox](../concepts/code-sandbox.md): its executor is its coding CLI's
+[code sandbox](../concepts/code-sandbox.md): its executor is its harness's
 [own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box),
 which opens a pull request **as the agent's own GitHub App**:
 `role.sandbox.env` names `${GITHUB_APP_TOKEN_<HANDLE>}`, and the git-auth
@@ -1276,7 +1278,7 @@ units:
   as an app rather than a person, so `GET /user` names nobody and the seat is
   reported unresolved.
 - **Code authoring is the executor run's job.** Every agent seat's executor
-  is its coding CLI's own run with a shell and git in its box; a pull request
+  is its harness's own run with a shell and git in its box; a pull request
   is opened from there with the token its `role.sandbox.env` declares (the
   seat's own `${GITHUB_APP_TOKEN_<HANDLE>}`, or a personal access token) and a
   git-auth setup step. A seat that declares none can still read, review and

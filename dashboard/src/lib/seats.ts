@@ -1616,7 +1616,7 @@ const PHASE_DOING: Record<string, { alone: string; on: string }> = {
  * mention. A human seat is not run by the engine and says so.
  *
  * NO WORKER COUNT, and none can be read off the row: `delegate` is the
- * executor's alone, and the executor is its coding CLI, running in its box,
+ * executor's alone, and the executor is its harness, running in its box,
  * which calls it over the bridge while its turn is parked. The engine streams
  * no call the executor makes, so the line says it is executing, and each
  * worker is on the turn's record once it finishes.

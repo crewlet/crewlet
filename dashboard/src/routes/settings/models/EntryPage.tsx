@@ -524,7 +524,7 @@ function TestCard({ model, open }: { model: ModelView; open: Open }) {
             ]}
           />
           <Text as="p" variant="caption" tone="tertiary">
-            A test runs the CLI once with a real call and costs a few tokens.
+            A test runs the harness once with a real call and costs a few tokens.
           </Text>
         </div>
       </Card.Body>

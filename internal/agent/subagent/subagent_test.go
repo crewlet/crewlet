@@ -747,6 +747,27 @@ func TestSkillsCoverWhatTheChildMayLaterActivate(t *testing.T) {
 	}
 }
 
+// A SERVER SKILL FIRES ON THE SERVERS THE WORKER'S GRANT HOLDS, the set its
+// guard arms its triggers against: research, whose read-only tool the grant
+// carries, and never slack, whose write the grant refuses however many of the
+// parent's seats declare credentials for it.
+func TestAWorkersServerSkillsAreScopedToItsGrant(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	p := &provider{name: "sub"}
+	cfg := baseConfig(t, w, p)
+	cfg.Discovery = discovery
+
+	cfg.Skills = skillOnServer{server: "research", key: "research-sources"}
+	if res := one(t, cfg, request("read_file")); !strings.Contains(res.SystemPrompt.Text, "research-sources") {
+		t.Errorf("a skill for a server the grant holds was left out:\n%s", res.SystemPrompt.Text)
+	}
+	cfg.Skills = skillOnServer{server: "slack", key: "posting-etiquette"}
+	if res := one(t, cfg, request("read_file")); strings.Contains(res.SystemPrompt.Text, "posting-etiquette") {
+		t.Errorf("a skill for a server the grant refuses reached the prompt:\n%s", res.SystemPrompt.Text)
+	}
+}
+
 func TestASubagentRunsOnTheSeatsSubagentChain(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -2868,6 +2889,18 @@ func (c skillFor) SkillsFor(_ prompts.Phase, surface prompts.Surface) []prompts.
 }
 
 func (c skillFor) Render(text string) string { return text }
+
+// skillOnServer is a catalogue of one skill keyed on an MCP server.
+type skillOnServer struct{ server, key string }
+
+func (c skillOnServer) SkillsFor(_ prompts.Phase, surface prompts.Surface) []prompts.Skill {
+	if !slices.Contains(surface.MCPServers, c.server) {
+		return nil
+	}
+	return []prompts.Skill{{Key: c.key, Summary: "how to use " + c.server}}
+}
+
+func (c skillOnServer) Render(text string) string { return text }
 
 // --- what the caller must supply, and what happens without it ---------------
 

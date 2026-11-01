@@ -16,7 +16,7 @@
  * a reader is never told the assistant is off for the second it takes to ask.
  *
  * THE MODEL'S STATE IS NOT ONE OF THEM. A model the engine knows cannot answer
- * now (signed out, its plan spent, its CLI unable to start) leaves the Ask
+ * now (signed out, its plan spent, its harness unable to start) leaves the Ask
  * button lit and the drawer open, with the conversation readable: the drawer
  * says so above its composer and keeps Send off ([assistantModelFor]), in the
  * engine's own sentence, the one a failed answer would have carried.

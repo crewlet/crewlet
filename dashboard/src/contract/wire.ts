@@ -55,7 +55,7 @@ export type PushKind =
  *
  * An `agents` push carries these only when their version moved since the last
  * push for the same call — they move once a round, once a tool call or once a
- * CLI run, while the row is pushed five times a second as a round streams —
+ * harness run, while the row is pushed five times a second as a round streams —
  * and names every version always. The store keeps the copy it holds of a field the push left
  * out, and asks for the call whole (`live_call`) when a push names a version
  * newer than the one it holds: the push that moved it was dropped. A field

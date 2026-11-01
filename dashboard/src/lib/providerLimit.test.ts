@@ -47,12 +47,12 @@ describe("an entry at its limit", () => {
     expect(limits[0]!.since).toBe("2026-10-27T23:15:00Z");
   });
 
-  test("is named by its CLI and how it signs in, never by its key", () => {
+  test("is named by its harness and how it signs in, never by its key", () => {
     const title = (over: Partial<ProviderLimit>) =>
       limitTitle(entryLimits([seat("pm", parked(over))])[0]!);
     expect(title({})).toBe("Claude Code subscription limit reached");
     expect(title({ harness: "codex", subscription: false })).toBe("Codex usage limit reached");
-    // A CLI of the company's own is called a model, never by its entry.
+    // A harness of the company's own is called a model, never by its entry.
     expect(title({ harness: "custom", subscription: false })).toBe("Model usage limit reached");
   });
 

@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -12,6 +13,20 @@ import (
 // a run it did not report failed.
 func claudeResult(said string) string {
 	return `{"type":"result","subtype":"success","is_error":false,"result":` + strconv.Quote(said) + `}`
+}
+
+// spentInBerlin is Claude Code's spent-plan sentence, with a reset named in
+// Europe/Berlin on the hour two to three hours from now. The cases run a
+// harness on the real clock. A fixed hour ("resets 3pm") would pass by less
+// than clockResetGrace for five minutes of each day, and a case run then
+// would read no reset and find no sit-out.
+func spentInBerlin(t *testing.T) string {
+	t.Helper()
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	if err != nil {
+		t.Fatalf("the zone database has no Europe/Berlin: %v", err)
+	}
+	return "Usage limit reached · resets " + time.Now().In(berlin).Add(3*time.Hour).Format("3pm") + " (Europe/Berlin)"
 }
 
 // A SENTINEL IN THE MODEL'S OWN WORDS IS AN ANSWER, ON EVERY SHIPPED PROFILE
@@ -92,7 +107,7 @@ func TestTheVendorsOwnReportStillSitsTheEntryOut(t *testing.T) {
 	}{
 		"claude-code's spent plan, standing as its answer": {
 			agent: "claude-code",
-			env:   map[string]string{"FAKE_STDOUT": claudeResult("Usage limit reached · resets 3pm (Europe/Berlin)")},
+			env:   map[string]string{"FAKE_STDOUT": claudeResult(spentInBerlin(t))},
 		},
 		"claude-code's relayed API error, in a run it reported failed": {
 			agent: "claude-code",
@@ -138,11 +153,11 @@ func TestASitOutSaysWhereTheVendorSaidIt(t *testing.T) {
 		source markerSource
 	}{
 		"standing as the answer": {
-			env:    map[string]string{"FAKE_STDOUT": claudeResult("Usage limit reached · resets 3pm (Europe/Berlin)")},
+			env:    map[string]string{"FAKE_STDOUT": claudeResult(spentInBerlin(t))},
 			source: sourceReport,
 		},
 		"on stderr": {
-			env:    map[string]string{"FAKE_EXIT": "1", "FAKE_STDERR": "Usage limit reached · resets 3pm (Europe/Berlin)\n"},
+			env:    map[string]string{"FAKE_EXIT": "1", "FAKE_STDERR": spentInBerlin(t) + "\n"},
 			source: sourceStderr,
 		},
 	} {

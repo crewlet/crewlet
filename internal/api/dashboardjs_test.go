@@ -1172,8 +1172,15 @@ const (
 	// the fill screens' scrollbars), and the entry script and the kit's
 	// shared chunks 0.2 KiB more each. It moved to 379 KiB, which is 2.07
 	// seconds on that link. A follow-up ships the conversation parts' rules
-	// as a lazy Chatlet sheet, which brings it back under.
-	initialBudget = 379 << 10
+	// as a lazy Chatlet sheet, which brings it back under. uilet 0.86.1 took
+	// it from about 378.2 KiB to 380.3 KiB (+2.1 KiB): the one sheet carries
+	// 1.5 KiB more (the inbox row's head with its time floated on the first
+	// line, a ListDetail list that scrolls, and the rules of 0.85.0 and
+	// 0.86.0's AttentionList, MemberPicker, KeyValueRows, TableTwoLineCell
+	// and RailList), the kit's shared chunks 1.0 KiB more, and the entry
+	// script 0.4 KiB less. It moved to 381 KiB, which is 2.08 seconds on that
+	// link.
+	initialBudget = 381 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1458,7 +1465,16 @@ const (
 	// took it from 5253.5 KiB to 5259.0 KiB (+5.5 KiB): the settled turn
 	// chunk +2.1 KiB, the phases module +2.1 KiB, the live screens +0.8 KiB
 	// and the wire protocol +0.6 KiB. 5260 KiB.
-	treeBudget = 5<<20 + 140<<10
+	// uilet 0.86.1 (an inbox row's head that wraps with its time floated on
+	// the first line, a leading slot that fits a 32px face and a ListDetail
+	// list that scrolls in its own column, with 0.85.0 and 0.86.0's
+	// AttentionList, MemberPicker, KeyValueRows, TableTwoLineCell and
+	// RailList) and Chatlet's Activity fixes took it from 5259.8 KiB to
+	// 5280.3 KiB (+20.5 KiB): the one sheet +11.5 KiB, the kit's chunks
+	// +8.2 KiB net (its dist chunk +6.8 KiB and shared chunks +4.0 KiB, less
+	// 2.6 KiB out of the entry script), the lazy sheets +0.3 KiB and +0.6 KiB
+	// elsewhere, Chatlet's chunk +0.1 KiB of it. 5281 KiB.
+	treeBudget = 5<<20 + 161<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

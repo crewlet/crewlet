@@ -1,7 +1,7 @@
 /**
  * Executors.
  *
- * A seat's executor is its coding CLI, running in a box. The turn parks at the
+ * A seat's executor is its harness, running in a box. The turn parks at the
  * launch, and the launch's collection resumes that same turn minutes later —
  * possibly after a restart, possibly on another node — for the engine's check
  * and the reviewer. So there are two sources and they answer different
@@ -337,7 +337,7 @@ export function AwaitingBanner({
         </strong>
         <span className="t-caption">
           {/* WHO IT IS PUT TO, as the engine resolved it when the executor
-              parked — never re-derived here from the coding agent's own label. */}
+              parked — never re-derived here from the harness's own label. */}
           {audience.length > 0
             ? `Put to ${andList(audience)}${run.audience_fallback ? `, ${seat}’s lead chain: “${run.audience}” isn’t in the chart` : ""}.`
             : "Anyone can answer."}
@@ -367,7 +367,7 @@ function doingLine(run: ExecutorRow): string {
     case "launching":
       return "Setting up the box.";
     case "running":
-      return "The coding agent is working.";
+      return "The harness is working.";
     case "answered":
       return "Answered. Resuming.";
     case "resumed":
@@ -681,7 +681,7 @@ export function Executors() {
               },
               {
                 key: "agent",
-                header: "Coding agent",
+                header: "Harness",
                 shrink: true,
                 drop: 1,
                 sortValue: (r) => r.harness,

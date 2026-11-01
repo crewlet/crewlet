@@ -1846,7 +1846,11 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 // Only the servers role.sandbox.mcp.servers names — never the seat's whole MCP
 // surface by default. A harness inside a box reaches whatever it is given
 // with no per-tool control left, so what it is given is the decision, and it
-// is made here rather than inherited.
+// is made here rather than inherited. And never one the company has turned off
+// ([config.MCPServer.IsEnabled]): the listing stays in the seat's block for the
+// day it is turned back on, and gives the box nothing until then. Nor one whose
+// address, resolved, is one the engine would not dial its own child of the
+// server at ([config.MCPAddressProblem]).
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
@@ -1899,10 +1903,31 @@ func sandboxMCP(
 			scoped = append(scoped, name)
 			continue
 		}
+		if !server.IsEnabled() {
+			// OUT OF THE SCOPE TOO, unlike an unknown name: the renderer
+			// would report one the company declares no server under, and
+			// this one is declared and turned off. Not resolved either,
+			// since a value it would need is nobody's concern while off.
+			log.Info("sandbox_mcp_server_off", "seat", seat.Handle(), "server", name,
+				"detail", "the executor is not given this server: the company has "+
+					"turned it off, and an executor launched once it is turned back on "+
+					"is given it")
+			continue
+		}
 		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, mint)
 		if missing != nil {
 			withheld = append(withheld, missing)
 			continue
+		}
+		if server.Kind() == config.TransportHTTP {
+			// THE ADDRESS AS THE BOX WOULD DIAL IT, refused by the rule
+			// that keeps the engine's own child of the server from dialling
+			// it ([serverSpec]); out of the scope, like a server turned off.
+			if problem := config.MCPAddressProblem(values.url); problem != "" {
+				log.Warn("sandbox_mcp_server_refused", "seat", seat.Handle(), "server", name,
+					"detail", "the executor is not given this server: its url "+problem)
+				continue
+			}
 		}
 		box := sandbox.MCPServer{
 			Name: server.Name, Transport: sandbox.Transport(server.Kind()),

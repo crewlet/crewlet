@@ -80,7 +80,7 @@ import { useChatFrame, useChatNav } from "./nav.tsx";
 import { matchesPerson, useChatPeople } from "./people.ts";
 import { coverageOf } from "./page.ts";
 import { useRoomDetail } from "./roomDetail.ts";
-import { roomMark, roomTitle, roomWhere } from "./rooms.ts";
+import { isConversationWith, roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { reportFor } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
@@ -274,7 +274,7 @@ const EMPTY_ACTIVITY: Record<ActivityFilter, string> = {
  */
 export function ActivityView() {
   const nav = useChatNav();
-  const { rail } = useChatFrame();
+  const { rail, viewer, channels } = useChatFrame();
   const now = useNow();
   const people = useChatPeople();
   const words = useRoomWords();
@@ -329,16 +329,17 @@ export function ActivityView() {
     if (reading.current?.offsetParent === null) open(item);
   };
 
+  // A CONVERSATION OF THE READER AND THE ACTOR ALONE IS NOT NAMED: its title
+  // is the actor's own name, which the row has just said ([isConversationWith]).
   const line = (item: ChatActivityItem) => {
-    const where = words.where({
-      id: item.channel_id,
-      kind: item.channel_kind,
-      name: item.channel_name,
-    });
+    const summary = channels.find((row) => row.channel.id === item.channel_id);
+    const where = isConversationWith(item.channel_kind, item.actor, viewer, summary?.participants)
+      ? ""
+      : ` in ${words.where({ id: item.channel_id, kind: item.channel_kind, name: item.channel_name })}`;
     if (item.kind === "mention")
-      return `${item.collective ? "notified everyone" : "mentioned you"} in ${where}`;
-    if (item.kind === "reply") return `replied to a thread in ${where}`;
-    return `reacted ${item.emoji ?? ""} to your message in ${where}`;
+      return `${item.collective ? "notified everyone" : "mentioned you"}${where}`;
+    if (item.kind === "reply") return `replied to a thread${where}`;
+    return `reacted ${item.emoji ?? ""} to your message${where}`;
   };
 
   // CHATLET OPENS HERE, so a reader in no rooms at all is told how a room
@@ -395,7 +396,7 @@ export function ActivityView() {
             <ListDetail
               className="chat-activity"
               list={
-                <>
+                <div className="chat-activity-list">
                   <InboxList label="Activity">
                     {items.map((item) => {
                       const actor = people.person(item.actor, item.actor_kind);
@@ -431,7 +432,7 @@ export function ActivityView() {
                     })}
                   </InboxList>
                   <PageFoot paged={feed} more="Older activity" />
-                </>
+                </div>
               }
             >
               <div className="chat-activity-context" ref={reading}>
