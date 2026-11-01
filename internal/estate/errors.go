@@ -114,6 +114,7 @@ var sentinels = []sentinel{
 
 	{"search.ErrIndexBuilding", search.ErrIndexBuilding},
 	{"search.ErrNoMethods", search.ErrNoMethods},
+	{"search.ErrNoViewer", search.ErrNoViewer},
 
 	// A REPOSITORY'S READERS refuse a cursor or a range their asker formed —
 	// the asker's mistake, answered by name whichever data node read it.
@@ -314,6 +315,8 @@ var typedKinds = []typedKind{
 	{"chatlet.ErrFutureVersion", reflect.TypeFor[*chatlet.ErrFutureVersion]()},
 	{"chatlet.ErrUnknownVersion", reflect.TypeFor[chatlet.ErrUnknownVersion]()},
 	{"chatlet.InvalidError", reflect.TypeFor[*chatlet.InvalidError]()},
+
+	{"inbox.Refusal", reflect.TypeFor[*inbox.Refusal]()},
 
 	{"search.ErrFutureVersion", reflect.TypeFor[*search.ErrFutureVersion]()},
 
