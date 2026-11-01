@@ -183,7 +183,7 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
     );
   };
   return (
-    <section className="code-merge col gap-2" aria-label="Merge">
+    <section className="col gap-2" aria-label="Merge">
       <p className={held ? "muted" : undefined}>
         {readiness
           ? `${readiness.met} of ${readiness.total} of its gate's conditions met${
