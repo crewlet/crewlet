@@ -62,9 +62,10 @@ func ServerURL(endpoint, server string) string {
 	return endpoint + serverSegment + url.PathEscape(server)
 }
 
-// Servers names the MCP servers an opening of surface serves under their own
-// names, sorted: the server of every tool the surface offers that an MCP server
-// serves.
+// Servers names the MCP servers an opening of a seat's surface serves under
+// their own names, sorted: the server of every tool the surface offers that an
+// MCP server serves. A surface that is not a seat's holds no MCP server's
+// tools, and its opening serves every tool as the engine's own.
 //
 // ONE RULE FOR BOTH ENDS: the engine reads it to hand the run's harness a URL
 // per server ([ServerURL]), and an opening to decide which servers it serves,
@@ -141,10 +142,12 @@ func (e *endpoint) listedName() string {
 // opening serves that server under its own name, and the engine's own
 // otherwise.
 func (o *binding) endpointOf(tool string) *endpoint {
-	if entry, ok := o.session.Surface.Universe().Lookup(tool); ok {
-		if server, fromMCP := entry.FromMCP(); fromMCP {
-			if ep, served := o.servers[server]; served {
-				return ep
+	if seat := o.session.seat(); seat != nil {
+		if entry, ok := seat.Universe().Lookup(tool); ok {
+			if server, fromMCP := entry.FromMCP(); fromMCP {
+				if ep, served := o.servers[server]; served {
+					return ep
+				}
 			}
 		}
 	}
@@ -160,6 +163,9 @@ func (o *binding) endpoint(server string) *endpoint { return o.servers[server] }
 // server's mcp_servers entry, which every tool the server serves carries: the
 // server's own MCP instructions on its endpoint.
 func instructionsOf(surface *tools.Surface, server string) string {
+	if surface == nil {
+		return ""
+	}
 	for _, entry := range surface.Universe().Entries() {
 		if s, fromMCP := entry.FromMCP(); fromMCP && s == server {
 			if description := strings.TrimSpace(entry.ServerDescription); description != "" {
