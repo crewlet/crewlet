@@ -392,14 +392,12 @@ func bridgedLedger(bridged []BridgedCall) []ledger.Call {
 // RunRecord is what a phase event says about the run an executor was, and the
 // box it ran in.
 //
-// It exists because nothing could say it. Every publisher stamped
-// [types.BackendNative] unconditionally, so a phase that spent twenty minutes
-// in a remote box and one that ran three rounds in this process were reported
-// identically: the sandbox badge could never render, and `coding_agent`,
-// `sandbox_id` and `delivered_refs` had no producer at all — despite the
-// coding agents reporting every one of them. What the run itself cost is NOT
-// here: that is the run's own fact, on the `sandbox` phase record its
-// collection publishes, which a run that parked on a question also gets.
+// It is what lets the executor's record name the CLI that did the work, the
+// box it ran in and what it delivered — `coding_agent`, `sandbox_id` and
+// `delivered_refs`, which the coding agents report and nothing else on the
+// resuming side knows. What the run itself cost is NOT here: that is the
+// run's own fact, on the `sandbox` phase record its collection publishes,
+// which a run that parked on a question also gets.
 //
 // Carried rather than re-derived, for the same reason the run's placement is:
 // the resume may be another process on another node, days later, under a
@@ -434,8 +432,9 @@ type RunRecord struct {
 	LaunchID string
 }
 
-// Sandboxed reports whether the record names the run's CLI or its box, which
-// is what makes its phase's backend a sandbox rather than this process.
+// Sandboxed reports whether the record names the run's CLI or its box: whether
+// the phase collected a run at all, rather than closing on a launch that never
+// opened one.
 func (r RunRecord) Sandboxed() bool { return r.CodingAgent != "" || r.SandboxID != "" }
 
 // Runner implements [turn.Phases] against real models and real tools.

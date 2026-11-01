@@ -74,8 +74,8 @@ func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
 		t.Fatalf("published %d phase records for one run collected twice, want 1", len(recs))
 	}
 	rec := recs[0]
-	if rec.Phase != types.PhaseSandbox || rec.Backend != types.BackendSandbox {
-		t.Errorf("phase/backend = %q/%q, want sandbox/sandbox", rec.Phase, rec.Backend)
+	if rec.Phase != types.PhaseSandbox {
+		t.Errorf("phase = %q, want sandbox", rec.Phase)
 	}
 	if rec.InputTokens != 9000 || rec.OutputTokens != 700 || rec.TotalTokens != 9700 {
 		t.Errorf("tokens = %d in / %d out / %d total, want the run's 9000/700/9700",

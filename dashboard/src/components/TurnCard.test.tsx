@@ -64,7 +64,6 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    backend: "",
     codingAgent: "",
     sandboxId: "",
     launchId: "",

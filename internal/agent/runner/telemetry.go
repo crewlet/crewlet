@@ -955,7 +955,6 @@ func (e emitter) judged(ctx context.Context, host phase.Phase, iteration, hostRo
 		// agent_phase_started, so the two-event reconstruction every
 		// consumer did could never produce a duration for one.
 		DurationMS:      int(took / time.Millisecond),
-		Backend:         types.BackendNative,
 		ConversationKey: e.turn.ConversationKey,
 	}, e.traceFor(ctx)))
 }
@@ -1059,8 +1058,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		// The grant's refusals, which is what Notes is documented to
 		// carry for this phase. A child that asked for a tool it could
 		// not have is the first thing to look at when its answer is thin.
-		Notes:   rejectedNote(res.Rejected),
-		Backend: types.BackendNative,
+		Notes: rejectedNote(res.Rejected),
 		// The task's own status — ok / no_result / timed_out / skipped —
 		// which is the one field that says what became of it. It is a
 		// phase's structured verdict, so it rides the same field the
@@ -1140,21 +1138,14 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		Notes:             rec.Notes,
 		ToolsAvailable:    rec.Available,
 		ToolCatalogue:     rec.Catalogue,
-		// Set explicitly. BackendNative is the value every consumer reads
-		// as "ran here", and it is NOT the zero value — an empty string
-		// renders as an unknown backend rather than as the normal one.
-		//
-		// It was a CONSTANT here, on every phase, which is why nothing in
-		// the tree ever produced BackendSandbox: an executor's run and three
-		// rounds in this process reported the same backend, and the two
-		// most expensive things a seat does were indistinguishable in the
-		// event log.
-		Backend:         types.BackendNative,
-		ConversationKey: e.turn.ConversationKey,
-		Failed:          rec.Failed,
+		ConversationKey:   e.turn.ConversationKey,
+		Failed:            rec.Failed,
 	}
+	// THE RUN AN EXECUTOR WAS, named on the record that collected it: the
+	// CLI, the box, what it delivered and which launch it was. Nothing else
+	// says where the phase ran — the phase does (see
+	// [types.AgentPhaseCompleted.CodingAgent]).
 	if rec.Run.Sandboxed() {
-		ev.Backend = types.BackendSandbox
 		ev.CodingAgent = rec.Run.CodingAgent
 		ev.SandboxID = rec.Run.SandboxID
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
