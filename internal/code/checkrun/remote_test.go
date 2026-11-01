@@ -74,8 +74,11 @@ func TestRemoteCellsHoldTheConcurrencyCap(t *testing.T) {
 // by nobody, while that box runs on to its own end and after it; and once the
 // next UTC midnight comes it runs.
 //
-// Mutation: start a box whatever the day's charge answers (Take ignores a
-// refused first minute) — the second check runs at once, red.
+// Mutation: charge no minute after a box's first — the sixty-first is never
+// refused, red; neither remember a refused minute nor heed one at a box's
+// first — the second check runs at once, red. (Either alone is held by
+// TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox: here the node's own
+// memory of the refusal holds the second check before its first minute.)
 func TestTheDailyBoxTimeCapHoldsNewChecks(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -200,6 +203,71 @@ func TestAnUnreachableStoreStartsNoRemoteBox(t *testing.T) {
 			f.ended(key)
 		})
 	}
+}
+
+// A NODE THAT HAS NOT SEEN THE DAY SPENT STARTS NO REMOTE BOX: a git node
+// that never had a charge refused — a second git node, or a runner restarted
+// mid-day — finds the UTC day's box-hours spent by another at its first box's
+// first minute: the slot it took for that box is given back, no box is made
+// and the check waits queued; and the refusal is remembered, so the node's
+// later walks take no slot and ask the counter nothing more.
+//
+// Mutation: start a box whatever the first minute's charge answers — a box
+// made on a spent day, red; forget a refused day between walks (daySpent
+// answers false) — a slot taken and a minute refused every walk, red.
+func TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	f.company.Code.Checks.Remote.BoxHoursPerDay = new(1)
+	clock := &clock{at: time.Now().UTC().Truncate(24 * time.Hour).Add(25 * time.Hour)}
+	// THE DAY SPENT BY ANOTHER NODE before this one's first walk: its sixty
+	// minutes charged to the fleet's counter, not through this node.
+	for range 60 {
+		if ok, err := f.counter.Allow(t.Context(), checkrun.RemoteMinutesBucket, 60, checkrun.RemoteMinutesWindow,
+			clock.now()); err != nil || !ok {
+			t.Fatalf("spend the day's minutes: allowed %t, %v", ok, err)
+		}
+	}
+	minutes := &charges{Fleet: f.counter}
+	leases := &countedLeases{Leases: f.leases}
+	o := f.options("git-b", 0, &order{nodes: []string{"git-b"}})
+	o.Now, o.Minutes, o.Leases = clock.now, minutes, leases
+	f.runner(o)
+
+	key := f.queue(oidOf("9"), remote("build", time.Hour))
+	time.Sleep(4 * fast.Backstop)
+	if row, _ := f.row(key); row.State != code.CheckStateQueued || f.e2b.count() != 0 {
+		t.Fatalf("a check on a day another node spent = %+v with %d remote boxes, want it queued and no box", row,
+			f.e2b.count())
+	}
+	if live := f.slots(); live != 0 {
+		t.Fatalf("%d remote slots are left leased on a spent day, want the one taken given back", live)
+	}
+	took, refused, allowed := leases.acquires.Load(), minutes.refused.Load(), minutes.allowed.Load()
+	if took != 1 || refused != 1 || allowed != 0 {
+		t.Fatalf("over its walks the node took %d slots and was refused %d minutes (allowed %d), want one slot "+
+			"taken and one minute refused, then nothing asked: the spent day it found is remembered", took,
+			refused, allowed)
+	}
+}
+
+// countedLeases is the company's leases, counting the listings and the
+// claims a runner made of them.
+type countedLeases struct {
+	checkrun.Leases
+	lists, acquires atomic.Int64
+}
+
+func (c *countedLeases) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	c.lists.Add(1)
+	return c.Leases.ListLive(ctx, class)
+}
+
+func (c *countedLeases) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease,
+	coord.Refusal, error) {
+
+	c.acquires.Add(1)
+	return c.Leases.TryAcquire(ctx, resource, opts)
 }
 
 // remote is a check that runs in an e2b cell.
