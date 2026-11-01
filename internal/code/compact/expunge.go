@@ -288,7 +288,8 @@ type openExpunge struct {
 //     drops may lie in any pack; the layers over them are the begin's to drop
 //     (code.LayersOver, the decide's own reading). Then the drops the grace
 //     keeps (the `expunge_tips` read, at the scan's floor, since its instant
-//     less the grace — none of a drop's for a purge, whose instant is now).
+//     less the grace — none of a drop's for a purge, whose instant is now),
+//     and what rows hold in flight, which a purge keeps too ([keptTips]).
 //  2. ADMIT the builds to the maintenance lane (cache.Cache.AdmitExpunge).
 //  3. BUILD in a scratch of the inputs leaning on a store of every other live
 //     pack, its refs linked from the copy (cache.Cache.StageExpunge): the KEPT
@@ -335,7 +336,7 @@ func (c *Compactor) cycle(ctx context.Context, cand code.ExpungeCandidate, grace
 	if at := ExpungeInputByteCap(cut); at < cap {
 		p, cap = p.recapExpunge(at), at
 	}
-	drops, err := c.dropTips(ctx, cand.ID, s.Position, c.now().Add(-grace))
+	drops, err := c.keptTips(ctx, cand.ID, s.Position, c.now().Add(-grace))
 	if err != nil {
 		return c.expungeFailed(cand, "scan", err)
 	}
@@ -756,7 +757,8 @@ func (c *Compactor) uploadExpunge(ctx context.Context, cand code.ExpungeCandidat
 //  2. RESCUE, where any pack is dropping, in a scratch of the dropping packs
 //     leaning on the copy's live packs, its refs linked from the copy
 //     (cache.Cache.StageRescue): `pack-objects --revs --local` from every ref
-//     and every drop the grace keeps, `--not` the tips the scan kept where the
+//     and every drop the grace keeps and what rows hold in flight
+//     ([keptTips]), `--not` the tips the scan kept where the
 //     cycle still holds them — what a tip reaches of the dropping packs alone,
 //     which only a push landed between the scan and the begin can reach.
 //     VALID AT ANY POSITION AT OR AFTER THE BEGIN: a push checked after the
@@ -859,7 +861,7 @@ func (c *Compactor) rescue(ctx context.Context, cand code.ExpungeCandidate, s ca
 	if len(dropping) == 0 {
 		return nil, nil, "", nil
 	}
-	drops, err := c.dropTips(ctx, cand.ID, s.Position, c.now().Add(-open.grace))
+	drops, err := c.keptTips(ctx, cand.ID, s.Position, c.now().Add(-open.grace))
 	if err != nil {
 		return nil, nil, c.expungeFailedOnly(cand, "rescue", err), err
 	}
@@ -982,10 +984,15 @@ func rescueInputs(dropping []code.PackRow) []pack {
 	return out
 }
 
-// dropTips is every object a ref drop of repoID left since since — the
-// `expunge_tips` read, every page, at session floored at at, so the drops of
-// every record the copy it is read beside holds are in it — each once.
-func (c *Compactor) dropTips(ctx context.Context, repoID string, at statelog.Position,
+// keptTips is every object an expunge of repoID keeps beside its refs — the
+// `expunge_tips` read, every page, at session floored at at, so the rows of
+// every record the copy it is read beside holds are in it — each once: what a
+// ref drop left since since, and, whatever since is, what rows hold in flight
+// (M6-D2) — every revision head of a draft or open change, every live queue
+// entry's head, every candidate's tip and every green row. So a purge, whose
+// since keeps no drop, still keeps an open change's force-pushed revisions and
+// the commit a pending landing moves its target onto.
+func (c *Compactor) keptTips(ctx context.Context, repoID string, at statelog.Position,
 	since time.Time) ([]string, error) {
 
 	q := code.ReadQuery{Kind: code.ReadExpungeTips, ExpungeTips: &code.ExpungeTipsQuery{RepoID: repoID, Since: since},

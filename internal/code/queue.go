@@ -219,14 +219,26 @@ type QueueProposal struct {
 	// Seen is the code log's position the asker read the change at — zero
 	// for one that read none. The committer DECIDES AT OR PAST IT, or refuses
 	// `behind` about itself, so the runner-up decides.
-	Seen      statelog.Position `json:"seen,omitzero"`
-	Enqueue   *Enqueue          `json:"enqueue,omitempty"`
-	Dequeue   *Dequeue          `json:"dequeue,omitempty"`
-	Candidate *Candidate        `json:"candidate,omitempty"`
-	Eject     *Eject            `json:"eject,omitempty"`
-	Land      *Land             `json:"land,omitempty"`
-	Green     *Green            `json:"green,omitempty"`
-	Broken    *Broken           `json:"broken,omitempty"`
+	Seen statelog.Position `json:"seen,omitzero"`
+	// DropEpoch is, for a candidate or a landing, the repository's drop
+	// epoch as the copy its home built it from held it (internal/code/cache's
+	// Synced.DropEpoch), as a push's is ([Proposal.DropEpoch]): the committer
+	// refuses it `expunging` where the repository's epoch is another
+	// ([MergeRefusalExpunging]) — an expunge's begin since has left dropping
+	// objects that copy held live, and a train's or a chain's commits built
+	// over them would move the target onto an object the expunge's commit
+	// retires. Zero, the epoch of a repository never expunged, on every other
+	// record: an enqueue, a dequeue, an eject, a green and a broken move no
+	// ref onto anything a build made. NEVER RECORDED, as Seen is not, so no
+	// record's format moves for it.
+	DropEpoch int64      `json:"drop_epoch,omitempty"`
+	Enqueue   *Enqueue   `json:"enqueue,omitempty"`
+	Dequeue   *Dequeue   `json:"dequeue,omitempty"`
+	Candidate *Candidate `json:"candidate,omitempty"`
+	Eject     *Eject     `json:"eject,omitempty"`
+	Land      *Land      `json:"land,omitempty"`
+	Green     *Green     `json:"green,omitempty"`
+	Broken    *Broken    `json:"broken,omitempty"`
 }
 
 // engines reports a proposal of one of the queue's OWN records, which its home
@@ -320,6 +332,16 @@ const (
 	// repository that became a mirror with entries queued sheds them, as a
 	// close sheds its live changes.
 	MergeRefusalRepoMirrored MergeRefusal = "repo_mirrored"
+	// MergeRefusalExpunging is a merge, a candidate or a landing built
+	// against the repository at another drop epoch than the repository's
+	// ([MergeProposal.DropEpoch], [QueueProposal.DropEpoch]): an expunge
+	// began on it since ([ExpungeBegin]), leaving dropping what the copy its
+	// build read held live, so the commit it moves a ref onto may reach an
+	// object the expunge's commit retires. Nothing was decided, and its
+	// builder builds it again against the repository as the begin left it
+	// ([ExpungingBuiltDetail]) — as a push checked before a begin is refused
+	// ([RefusalExpunging]).
+	MergeRefusalExpunging MergeRefusal = "expunging"
 	// MergeRefusalChangeNotFound is a change the repository does not hold.
 	MergeRefusalChangeNotFound MergeRefusal = "change_not_found"
 	// MergeRefusalChangeNotOpen is a change closed or merged.
@@ -416,7 +438,7 @@ const (
 // MergeRefusals is the closed set, in the order the decides reach them.
 func MergeRefusals() []MergeRefusal {
 	return []MergeRefusal{MergeRefusalRepoDeleted, MergeRefusalRepoArchived, MergeRefusalRepoImporting,
-		MergeRefusalRepoMirrored, MergeRefusalChangeNotFound,
+		MergeRefusalRepoMirrored, MergeRefusalExpunging, MergeRefusalChangeNotFound,
 		MergeRefusalChangeNotOpen, MergeRefusalChangeDraft, MergeRefusalStale, MergeRefusalHeadMoved,
 		MergeRefusalTargetMoved, MergeRefusalTargetMoving, MergeRefusalNotPerson, MergeRefusalQueueTarget, MergeRefusalNoQueue,
 		MergeRefusalNoAutoRevert, MergeRefusalAlreadyQueued, MergeRefusalQueueFull, MergeRefusalGateUnmet,
@@ -435,7 +457,8 @@ func (r MergeRefusal) Valid() bool { return slices.Contains(MergeRefusals(), r) 
 // accept; an enqueue's or a dequeue's asker that is no principal, or names a
 // run, and an asker on one of the queue's own records, which name nobody; a
 // Seen that is no position on the code log; a repository id that is no UUID
-// in its canonical spelling; an entry id that is no bare UUIDv7 — and an
+// in its canonical spelling; a drop epoch below zero, or set on a record
+// other than a candidate or a landing; an entry id that is no bare UUIDv7 — and an
 // enqueue's that is not [QueueEntryID] of its operation id; a change id that
 // is no bare UUIDv7; a target that is no branch a change may name; a head that
 // is no whole object id; a method this build does not know; a principal the
@@ -508,6 +531,14 @@ func (p QueueProposal) validFields() error {
 		case p.Seen.Valid() != nil:
 			return fmt.Errorf("%w: seen: %w", ErrInvalidProposal, p.Seen.Valid())
 		}
+	}
+	switch {
+	case p.DropEpoch < 0:
+		return badField("drop_epoch", "%d is no drop epoch: it counts the expunges begun on the repository, "+
+			"from 0", p.DropEpoch)
+	case p.DropEpoch != 0 && p.Candidate == nil && p.Land == nil:
+		return badField("drop_epoch", "only a candidate or a landing carries the drop epoch its build read: "+
+			"no other queue record moves a ref onto anything a build made")
 	}
 	if err := validRepoID("repo_id", p.RepoID()); err != nil {
 		return err
@@ -777,6 +808,17 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 		// became a mirror sheds its queue; a GREEN and a BROKEN record what a
 		// landing's tip checks said of a landing made before it was one.
 		return d.refuse(MergeRefusalRepoMirrored, MirroredDetail(repo.name, repo.managedBy))
+	case (p.Candidate != nil || p.Land != nil) && p.DropEpoch != repo.dropEpoch:
+		// THE DROP EPOCH, before every rule of the record's own, as a
+		// push's is: a train or a chain built against a copy at another
+		// epoch may move the target onto an object an expunge begun since
+		// left dropping, and its home builds it again.
+		what, builder := "train", "its home"
+		if p.Land != nil {
+			what = "landing"
+		}
+		return d.refuse(MergeRefusalExpunging, ExpungingBuiltDetail(repo.name, what, builder, p.DropEpoch,
+			repo.dropEpoch))
 	}
 	if p.JudgesChart() && seats.Roster == nil {
 		// THE CALLER'S BUG: the committer hands a write the chart judges on

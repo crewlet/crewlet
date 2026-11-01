@@ -414,7 +414,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref,
 		func(introduced []string, count int, unstored *code.PackRef) error {
 			if l.Merge != nil {
-				return mergeCarrying(*l.Merge, unstored).ValidateUnstored()
+				return mergeCarrying(*l.Merge, unstored, l.Synced.DropEpoch).ValidateUnstored()
 			}
 			return s.checkProposal(proposal(introduced, count, unstored))
 		})
@@ -474,7 +474,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		perr   error
 	)
 	if l.Merge != nil {
-		merged, perr = s.o.Estate.Merge(ctx, mergeCarrying(*l.Merge, ref))
+		merged, perr = s.o.Estate.Merge(ctx, mergeCarrying(*l.Merge, ref, l.Synced.DropEpoch))
 	} else {
 		res, perr = s.o.Estate.Propose(ctx, proposal(introduced, count, ref))
 	}

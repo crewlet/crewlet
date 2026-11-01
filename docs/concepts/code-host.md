@@ -2298,7 +2298,9 @@ repository, never by a node's own sweep:
   and downloads nothing again.
 - **Ref drops** — a push that force-moves a branch, or deletes a branch or a
   tag, records the object the ref held, since no ref names it any more: one
-  row an object, naming the ref, the object and when the push landed. It is
+  row an object, naming the ref, the object and when the push landed. A
+  merge or a queue's landing that deletes its change's source branch records
+  the head it held the same way. It is
   kept **14 days**, git's own `gc.pruneExpire` default, because dropping a
   repository's unreachable objects keeps what such a push left for that
   long: history force-pushed away or deleted stays fetchable by its id for
@@ -5407,7 +5409,8 @@ change as whoever enqueued it.
   account), lands **one push row `via: queue` a change**, naming the enqueuer,
   so [which push landed a commit](#which-push-landed-a-commit) names each
   change's own landing, deletes each source where the entry asked it and a
-  push deleting it as the enqueuer would be taken, and writes the branch's
+  push deleting it as the enqueuer would be taken — each deletion recording
+  its [ref drop](#retention-and-history) — and writes the branch's
   landing rows in chain order — green, and the branch's green row moved to
   the tip, where it lands `pre_land`.
 - A **green** moves a protected branch's **green row** onto a landing record
@@ -5420,6 +5423,7 @@ change as whoever enqueued it.
 | Refusal | Why |
 |---|---|
 | `repo_importing`, `repo_mirrored` | The repository is being imported from another host, which takes none of these records, or is a pull mirror, which takes no candidate and no landing: an eject, a green and a broken still land on a mirror, moving no ref, so a repository that became one sheds its queue. |
+| `expunging` | The train or the landing was built from a copy of the repository taken before an expunge of its unreachable objects began: the home builds it again. |
 | `target_moved` | The branch is no longer at the tip the train or the landing was built onto: the home builds it again. |
 | `not_queued` | An entry is not live in the branch's queue — ended since, or another branch's. |
 | `stale` | What the record names is not what the rows hold: a commit its entry's method does not make, a pack it does not need or lacks, a landing that is no prefix of the branch's train, a policy the branch does not land by. |
@@ -6079,6 +6083,7 @@ merge it refuses appends nothing:
 | `repo_deleted`, `repo_archived` | The repository is gone, or read-only. |
 | `repo_importing` | The repository is being imported from another host, and takes no write until its import is done. |
 | `repo_mirrored` | The repository is a pull mirror, which moves only by its syncs from its source: a merge its source made is recorded once a sync brings it in. |
+| `expunging` | The merge was built from a copy of the repository taken before an expunge of its unreachable objects began, so its commit may reach an object the expunge drops: nothing was decided, and its builder builds it again against the repository as the expunge left it. |
 | `change_not_found`, `change_not_open`, `change_draft` | The repository holds no such change, or it is closed or merged, or a draft. |
 | `stale`, `head_moved` | The change targets another branch, or its head moved, since its merge was built: read it again. |
 | `target_moved` | The target is no longer at the base the merge was built onto — read off the snapshot's refs, never off the proposal: its builder builds it again onto the tip the branch holds. |
@@ -6115,7 +6120,9 @@ position:
    lands.
 4. **The push**, through the one apply every push takes: the target moved from
    its base onto the commit; the source branch deleted where the merge asks it
-   — a seat's own branch by default (`delete_source: seats`); the merge's pack
+   — a seat's own branch by default (`delete_source: seats`), the head it held
+   recorded as a [ref drop](#retention-and-history) as any deletion's is; the
+   merge's pack
    (`kind: merge`); and a push row **`via: merge`** naming who merged it and
    the commit it introduced — none for a fast-forward, whose head the change's
    own pushes brought — so [which push landed a
@@ -6183,7 +6190,9 @@ person — an override's reason, at most 1 KiB.
    again onto the tip a sync at the log's head finds — at most **four
    times**; moved under the fifth build too, it is answered `target_moving`:
    the branch moves faster than a merge is built onto it, and its queue, or a
-   quieter moment, lands it.
+   quieter moment, lands it. A merge built from a copy taken before an expunge
+   of the repository began is refused `expunging` and built again the same
+   way, from a copy synced past it.
 
 A router gives a merge **102 seconds** on one git node — an engine write's 82
 with its ten seconds of build replaced by the merge's thirty — and every other

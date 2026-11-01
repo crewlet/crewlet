@@ -377,6 +377,86 @@ func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 	}
 }
 
+// expungingBuilds answers the first refusals merges it is asked refused
+// expunging, deciding nothing — as the committer refuses a merge whose
+// builder's copy held another drop epoch than the repository's, an expunge
+// having begun between its build and its decide — and hands every later one
+// to the estate.
+type expungingBuilds struct {
+	host.Estate
+	mu       sync.Mutex
+	refusals int
+	asked    int
+}
+
+func (e *expungingBuilds) wrap(inner host.Estate) host.Estate {
+	e.Estate = inner
+	return e
+}
+
+func (e *expungingBuilds) Merge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error) {
+	e.mu.Lock()
+	e.asked++
+	refused := e.asked <= e.refusals
+	e.mu.Unlock()
+	if refused {
+		return code.MergeResult{MergeID: p.Merge.MergeID, Refusal: code.MergeRefusalExpunging,
+			Detail: code.ExpungingBuiltDetail(codetest.RepoName, "merge", "its builder", p.DropEpoch,
+				p.DropEpoch+1)}, nil
+	}
+	return e.Estate.Merge(ctx, p)
+}
+
+// A MERGE REFUSED EXPUNGING IS BUILT AGAIN (M6-D4): a merge an expunge's
+// begin overtook between its build and its decide is refused expunging,
+// nothing decided, and its builder builds it again from a copy synced past the
+// begin, as it does a merge whose target moved — the rebuild counted with the
+// target_moved ones, so a merge refused under its fifth build too is answered
+// expunging in the committer's own sentence, the change left open.
+//
+// Mutation: answer the first expunging refusal as the merge's answer, rather
+// than building it again, and the merge refused once is never landed; answer
+// target_moving at the limit, and the last case's refusal is misnamed.
+func TestAMergeRefusedExpungingIsBuiltAgain(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		refusals int
+		merged   bool
+	}{
+		{"refused once", 1, true},
+		{"refused every time", code.MergeRecomputes + 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := &expungingBuilds{refusals: tc.refusals}
+			c := newMergeCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}},
+				codetest.Settings(), map[string]string{"README.md": "one\n"})
+			n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Outlive an expunge")
+			w := merge(c.repo, pat(), n, c.change(n).Head, code.MergeMethodMerge)
+			w.Override = "merging through an expunge"
+			res, err := c.write(w)
+			if !tc.merged {
+				if err != nil || res.Merge == nil || res.Merge.Refusal != code.MergeRefusalExpunging ||
+					!strings.Contains(res.Merge.Detail, "its builder builds it again") ||
+					res.Merge.Recomputes != code.MergeRecomputes || e.asked != code.MergeRecomputes+1 {
+					t.Fatalf("a merge every expunge overtook answered %+v %v (%+v) after %d records, want "+
+						"expunging after %d recomputes", res, err, res.Merge, e.asked, code.MergeRecomputes)
+				}
+				if ch := c.change(n); ch.State != code.ChangeStateOpen {
+					t.Errorf("change %d is %s, want open", n, ch.State)
+				}
+				return
+			}
+			c.requireMerged(n, res, err)
+			if res.Merge.Recomputes != 1 || e.asked != 2 {
+				t.Errorf("the merge answered %d recomputes after %d records, want 1 after 2",
+					res.Merge.Recomputes, e.asked)
+			}
+		})
+	}
+}
+
 // A QUEUE TARGET'S MERGE IS AN ENQUEUE (M5-D9): a target whose gate requires a
 // check takes a change through its queue, so a merge_change of it builds
 // nothing and enqueues the change, answering its entry and its place; main

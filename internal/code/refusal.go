@@ -427,6 +427,22 @@ func ExpungingDetail(name string, checked, holds int64) string {
 		"decided; run git push again", name, checked, holds)
 }
 
+// ExpungingBuiltDetail is the sentence of a merge, a train or a landing refused
+// expunging ([MergeRefusalExpunging]): what was built (what), who builds it
+// again (builder), the epoch its build read (built) and the repository's
+// (holds) — and that nothing of it was decided. A push's sentence
+// ([ExpungingDetail]) tells its client to push again; this one names the
+// builder, which builds the record again against the repository as the begin
+// left it.
+func ExpungingBuiltDetail(name, what, builder string, built, holds int64) string {
+	if built < holds {
+		return fmt.Sprintf("an expunge of %s's unreachable objects began after this %s was built (drop epoch "+
+			"%d, now %d): nothing was decided; %s builds it again", name, what, built, holds, builder)
+	}
+	return fmt.Sprintf("this %s was built against %s at drop epoch %d, and it is at %d: nothing was decided; "+
+		"%s builds it again", what, name, built, holds, builder)
+}
+
 // tooManyChangesDetail is the sentence of a push refused too_many_changes: how
 // many live changes it moves, how many protected branches it lands on where it
 // lands on any, the rows a record of its own would hold with their rows beside

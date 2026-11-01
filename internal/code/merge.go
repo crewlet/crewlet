@@ -30,7 +30,11 @@ import (
 // repository's home git node onto the tip it read of the target — and proposed
 // with what it was built from: the target's tip (BaseOID) and the change's head
 // (HeadOID). Its decide reads ONE snapshot and proves every precondition in
-// it: the repository active; the change open, not a draft, into the target and
+// it: the repository active; the copy the merge was built from at the
+// repository's drop epoch ([MergeProposal.DropEpoch]), since a merge built
+// before an expunge's begin may reach an object the begin left dropping
+// (expunging, which its builder answers by building again, as a push checked
+// before one is refused); the change open, not a draft, into the target and
 // at the head its builder merged; the target AT THE TIP THE MERGE WAS BUILT
 // ONTO, read from the snapshot's refs and never from the proposal, since a
 // merge built onto a tip the target has moved from merges a branch that is no
@@ -55,8 +59,10 @@ import (
 // find it live; the target moved from its base onto the merge's commit; a push
 // row `via merge` naming the merger, the commit it introduced (none for a
 // fast-forward, whose head its own pushes brought) and the pack; the source
-// branch deleted where the merge asks it (Q4: a seat's branch, by default); the
-// change's live queue entry ended, where a person's override merged a queued
+// branch deleted where the merge asks it (Q4: a seat's branch, by default),
+// and the head it held recorded as that deletion's ref drop, which an expunge
+// keeps for its grace as any deletion's ([leavesObject]); the change's live
+// queue entry ended, where a person's override merged a queued
 // change directly; the target's landing row, where a rule protects it; and its
 // green row, where its gate requires no check. Every guard of the apply is a
 // skip, never a refusal: a record that finds what its decide held untrue —
@@ -150,8 +156,19 @@ type MergeProposal struct {
 	// Seen is the code log's position the merge was built at — zero for one
 	// that read none. The committer DECIDES AT OR PAST IT, or refuses
 	// `behind` about itself, so the runner-up decides.
-	Seen  statelog.Position `json:"seen,omitzero"`
-	Merge Merge             `json:"merge"`
+	Seen statelog.Position `json:"seen,omitzero"`
+	// DropEpoch is the repository's drop epoch as the copy the merge was
+	// built from held it (internal/code/cache's Synced.DropEpoch, its
+	// landing's pinned copy), as a push's is ([Proposal.DropEpoch]): the
+	// committer refuses the merge `expunging` where the repository's epoch is
+	// another ([MergeRefusalExpunging]) — an expunge's begin since has left
+	// dropping objects that copy held live, and a merge built over them would
+	// move the target onto a commit reaching an object the expunge's commit
+	// retires — and its builder builds it again. NEVER RECORDED, as Seen is
+	// not: the decide reads it and nothing else does, so the merge record's
+	// format does not move for it.
+	DropEpoch int64 `json:"drop_epoch,omitempty"`
+	Merge     Merge `json:"merge"`
 }
 
 // MergeResult is what became of one merge proposal.
@@ -180,8 +197,8 @@ type MergeResult struct {
 // Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
 // naming the field), before it is queued: an operation id this engine does not
 // accept; an asker that is no principal, or names a coding run; a Seen that is
-// no position on the code log; a repository id that is no UUID in its
-// canonical spelling; a merge id that is not [WritePushID] of the operation
+// no position on the code log; a drop epoch below zero; a repository id that
+// is no UUID in its canonical spelling; a merge id that is not [WritePushID] of the operation
 // id; a change id that is no bare UUIDv7; a target that is no branch a change
 // may name; a method this build does not know; a base, a head or a commit
 // that is no whole object id, or a commit that is the base, which moves
@@ -260,6 +277,10 @@ func (p MergeProposal) validFields() error {
 		case p.Seen.Valid() != nil:
 			return fmt.Errorf("%w: seen: %w", ErrInvalidProposal, p.Seen.Valid())
 		}
+	}
+	if p.DropEpoch < 0 {
+		return badField("drop_epoch", "%d is no drop epoch: it counts the expunges begun on the repository, "+
+			"from 0", p.DropEpoch)
 	}
 	m := p.Merge
 	if err := validRepoID("merge.repo_id", m.RepoID); err != nil {
@@ -473,6 +494,13 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 		// from its source: a merge its source made is recorded once a sync
 		// brings it in, as a landing.
 		return d.refuse(MergeRefusalRepoMirrored, MirroredDetail(repo.name, repo.managedBy))
+	case p.DropEpoch != repo.dropEpoch:
+		// THE DROP EPOCH, before every rule of the merge's own, as a push's
+		// is: built against a copy at another epoch, its commit may reach an
+		// object an expunge begun since left dropping, and its builder builds
+		// it again against the repository as the begin left it.
+		return d.refuse(MergeRefusalExpunging, ExpungingBuiltDetail(repo.name, "merge", "its builder",
+			p.DropEpoch, repo.dropEpoch))
 	case seats.Roster == nil:
 		// THE CALLER'S BUG: the committer hands a merge to the repository's
 		// next committer before deciding it with no chart.

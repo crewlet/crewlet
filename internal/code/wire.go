@@ -922,11 +922,16 @@ const (
 	// `compaction_due` is.
 	ReadExpungeDue ReadKind = "expunge_due"
 	// ReadExpungeTips is the objects one repository's expunge keeps beside
-	// its refs ([ReadQuery.ExpungeTips]): the object each forced or deleting
-	// command left since an instant (code_ref_drops) — what the expunge's
-	// grace keeps reachable — in the order the drops' key holds them. The
-	// engine's own read, which no principal makes: a repository's maintainer
-	// reads it at its scan and at its rescue (internal/code/compact).
+	// its refs ([ReadQuery.ExpungeTips]), in phases: the object each forced
+	// or deleting command left since an instant (code_ref_drops) — what the
+	// expunge's grace keeps reachable — in the order the drops' key holds
+	// them; then, whatever the instant, what rows hold IN FLIGHT (M6-D2):
+	// every revision head of a draft or open change, every live queue
+	// entry's head, every candidate's tip and every green row, so a purge
+	// keeps the commit a landing moves its target onto and the revisions an
+	// open change's reviewers compare. The engine's own read, which no
+	// principal makes: a repository's maintainer reads it at its scan and at
+	// its rescue (internal/code/compact).
 	ReadExpungeTips ReadKind = "expunge_tips"
 	// ReadImportsDue is the repositories being imported, by id, each with
 	// its source and how many of its chunks have landed
@@ -1408,8 +1413,10 @@ type ReadAnswer struct {
 	// a runner, oldest queued first.
 	Runnable []RunnableCheck `json:"runnable,omitempty"`
 	// Tips is a page of an `expunge_tips` read: object ids, each once on the
-	// page, in the order of the drops that name them — an object a later
-	// page names again is one more drop left, which its reader keeps once.
+	// page, in the order of the rows that name them — the drops first, then
+	// the revisions, the queue's entries, its candidates and the green rows
+	// — and an object a later page names again is one more row naming it,
+	// which its reader keeps once.
 	Tips []string `json:"tips,omitempty"`
 	// BranchChanges is a `branch_changes` read's answer: each branch's live
 	// change, in the query's order, a branch heading none left out.
@@ -1499,6 +1506,7 @@ type MirrorCandidate struct {
 // of the repository whose record's broker instant is at or after Since. An
 // expunge keeping a grace asks from its scan's instant less the grace; one
 // serving a purge, which keeps nothing a drop left, from its scan's instant.
+// What rows hold in flight is listed whatever Since is ([ReadExpungeTips]).
 type ExpungeTipsQuery struct {
 	RepoID string    `json:"repo_id"`
 	Since  time.Time `json:"since"`

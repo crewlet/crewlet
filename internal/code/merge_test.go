@@ -525,3 +525,78 @@ func TestAMergeRecordFitsItsRows(t *testing.T) {
 			code.MaxRecordRows)
 	}
 }
+
+// A MERGE THAT DELETES ITS SOURCE RECORDS THE DROP (M6-D2): the head its
+// source branch held is an object no ref names once the merge's record deletes
+// the branch — a squash's commit does not reach it — so the record writes the
+// ref drop an expunge keeps for its grace, as any deletion's: one row naming
+// the source and the head, at the record's position. The target's move onto
+// the merge's commit, whose old tip the commit still reaches, leaves none.
+//
+// Mutation: hand the merge's push its source deletion with no old object, or
+// leave a deletion out of what leaves an object, and no drop names the head.
+func TestAMergeThatDeletesItsSourceRecordsTheDrop(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := mergeStream(t, n)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := mergeRepo(t, n, c, "web", code.DirectPersons, mergeGate())
+	approved(t, n, w, repo, change)
+
+	p := merging(repo, change, dev, code.MergeMethodSquash, oidOf("A"), oidOf("B"), oidOf("S"))
+	p.Merge.DeleteSource = true
+	res, err := c.ProposeMerge(t.Context(), p)
+	requireMerged(t, res, err, oidOf("S"))
+	if got := n.count(`SELECT COUNT(*) FROM code_ref_drops WHERE repo_id = ? AND position = ? AND ref = ?
+			AND old = ?`, repo, res.Position.Packed(), seatRef, oidOf("B")); got != 1 {
+		t.Fatalf("%d ref drops name the source %s the merge deleted at its head B, want one", got, seatRef)
+	}
+	if got := n.count(`SELECT COUNT(*) FROM code_ref_drops WHERE repo_id = ?`, repo); got != 1 {
+		t.Fatalf("the merge left %d ref drops, want the source's alone: the target's move leaves nothing", got)
+	}
+}
+
+// A MERGE BUILT BEFORE A BEGIN IS REFUSED EXPUNGING (M6-D4): once an expunge's
+// begin has moved its repository's drop epoch, a merge whose builder's copy
+// held the epoch before — its objects read while the begin's dropping ones
+// were live — is refused expunging, before any rule of its own, its sentence
+// naming both epochs and its builder, and nothing is appended; built again at
+// the begin's epoch, it merges. A drop epoch below zero is no proposal.
+//
+// Mutation: drop the decide's comparison of the epochs, and the merge built
+// before the begin lands a target the expunge's commit could leave reaching
+// an object it retired.
+func TestAMergeBuiltBeforeABeginIsRefusedExpunging(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := mergeStream(t, n)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := mergeRepo(t, n, c, "web", code.DirectPersons, mergeGate())
+	approved(t, n, w, repo, change)
+	b := beginFor(n, repo, 1, n.livePacks(repo), 1, 0)
+	began, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, began, err)
+
+	p := merging(repo, change, dev, code.MergeMethodMerge, oidOf("A"), oidOf("B"), oidOf("M"))
+	before := n.end()
+	res, err := c.ProposeMerge(t.Context(), p)
+	requireMergeRefused(t, n, before, res, err, code.MergeRefusalExpunging,
+		code.ExpungingBuiltDetail("web", "merge", "its builder", 0, 1))
+	if !strings.Contains(res.Detail, "(drop epoch 0, now 1)") {
+		t.Fatalf("the refusal says %q, want both epochs named", res.Detail)
+	}
+	if main := n.target(repo, mainRef); main != oidOf("A") {
+		t.Fatalf("main is at %q after a refused merge, want A", main)
+	}
+
+	p.DropEpoch = 1
+	res, err = c.ProposeMerge(t.Context(), p)
+	requireMerged(t, res, err, oidOf("M"))
+
+	p.DropEpoch = -1
+	if err := p.Validate(); !errors.Is(err, code.ErrInvalidProposal) {
+		t.Fatalf("a merge at drop epoch -1 validates: %v, want ErrInvalidProposal", err)
+	}
+}

@@ -251,8 +251,12 @@
 // finished with that grace.
 //
 // THE SCAN is the copy's refs — its packed-refs as a scratch links it, one
-// moment's with the packs the scratch holds — and the drops the grace keeps
-// (the `expunge_tips` read; none for a purge), and its INPUTS the live packs
+// moment's with the packs the scratch holds — the drops the grace keeps (the
+// `expunge_tips` read; none for a purge) and, for a purge too, what rows hold
+// IN FLIGHT (M6-D2): every revision head of a draft or open change, which its
+// reviewers compare, every live queue entry's head, every candidate's tip — a
+// candidate is rows, never a ref, and its tip is what a landing moves its
+// target onto — and every green row; and its INPUTS the live packs
 // whose content dates from before the request (code.PackRow.Content), every
 // row of each file together, oldest first and capped at
 // code.MaxExpungeInputs rows and [ExpungeInputByteCap] of the cut: a FULL pack

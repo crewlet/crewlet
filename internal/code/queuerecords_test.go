@@ -654,3 +654,199 @@ func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	}))
 	requireQueueRefused(t, n, before, res, err, code.MergeRefusalNotQueued, "is ejected")
 }
+
+// purgeTips is every object an `expunge_tips` read of repo names from since,
+// every page of it, n's reader paging every pageRows rows.
+func (n *node) purgeTips(repo string, since time.Time, pageRows int) []string {
+	n.t.Helper()
+	code.SetPageLimits(n.reader, pageRows, 1<<20)
+	var tips []string
+	q := code.ReadQuery{Kind: code.ReadExpungeTips, ExpungeTips: &code.ExpungeTipsQuery{RepoID: repo, Since: since},
+		Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+	for {
+		a, err := n.reader.Read(n.t.Context(), q)
+		if err != nil {
+			n.t.Fatalf("the expunge's tips of %s: %v", repo, err)
+		}
+		tips = append(tips, a.Tips...)
+		if a.Next == "" {
+			return tips
+		}
+		q.Cursor = a.Next
+	}
+}
+
+// A CANDIDATE'S TIP SURVIVES A PURGE (M6-D2): a candidate is rows and a pack,
+// never a ref, so its tip — the commit a pre_land landing moves its target
+// onto — is reached by no ref; a purge, which keeps no drop, keeps it all the
+// same, because the read its scan walks from names what rows hold in flight
+// whatever its instant: the candidate's tip, the live entry's head and the
+// open change's revision head, and — once a landing moves main — main's green
+// row. Read a row a page, every phase resumes after the place its cursor
+// names and nothing is skipped; once the train lands, its candidate and its
+// entry are history and name nothing.
+//
+// Mutation: drop the candidates' phase from the read, and a purge drops the
+// tip a pending landing moves main onto — a landing onto a missing tip; drop
+// the green phase, and the commit mirrors follow goes too; drop the queue's,
+// and the live entry's row is missing from the pages.
+func TestACandidateTipSurvivesAPurge(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, change)
+	enqueue := enqueueing(repo, change, ada, oidOf("B"))
+	res, err := c.ProposeQueue(t.Context(), enqueue)
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+	train := training(repo, oidOf("A"), enqueue.Enqueue.EntryID, oidOf("M"))
+	res, err = c.ProposeQueue(t.Context(), train)
+	requireRecorded(t, res, err)
+	asked := purgeOf(repo)
+	purged, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Request: &asked})
+	requireExpunged(t, purged, err)
+
+	// ONE PAGE answers each object once; A ROW A PAGE answers each phase's
+	// row on a page of its own, in the phases' order — the change's revision
+	// at B, the live entry at B, the candidate at M — so a phase left out is
+	// a row missing, though another phase names the same object.
+	now := time.Now()
+	if got := n.purgeTips(repo, now, code.MaxSnapshotItems); !slices.Equal(got, []string{oidOf("B"), oidOf("M")}) {
+		t.Fatalf("a purge's tips in one page are %v; want the head B the change's revision and the entry "+
+			"hold, then the candidate's tip M", got)
+	}
+	if got := n.purgeTips(repo, now, 1); !slices.Equal(got, []string{oidOf("B"), oidOf("B"), oidOf("M")}) {
+		t.Fatalf("a purge's tips a row a page are %v; want the revision's head B, the live entry's B and the "+
+			"candidate's tip M, in that order", got)
+	}
+
+	n.passed(repo, oidOf("M"), mainRef, "unit")
+	land := landingOf(repo, code.LandingPreLand, train.Candidate.Train, oidOf("A"),
+		code.LandEntry{EntryID: enqueue.Enqueue.EntryID, ChangeID: change, Commit: oidOf("M")})
+	res, err = c.ProposeQueue(t.Context(), land)
+	requireRecorded(t, res, err)
+	if got := n.purgeTips(repo, now, code.MaxSnapshotItems); !slices.Equal(got, []string{oidOf("M")}) {
+		t.Fatalf("after the landing a purge's tips are %v; want main's green row at M alone: the landed "+
+			"candidate, its entry and the merged change's revisions are history", got)
+	}
+}
+
+// A PURGE'S TIPS READ EVERY REVISION OF A CHANGE OPENED BETWEEN ITS PAGES
+// (M6-D2: the tip set is exact): a branch heads one live change at a time, but
+// not the same one from page to page — the change a revisions page stopped in
+// closed, and another opened on its branch, before the next page is read. The
+// cursor names the change it stopped in, so the next page reads the new
+// change from its first revision, never from the number its predecessor
+// reached.
+//
+// Mutation: resume a branch's change at the cursor's revision whichever change
+// it is, and the new change's first revision, its head C, is never named.
+func TestAPurgesTipsReadEveryRevisionOfAChangeOpenedBetweenItsPages(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	repo, first := queueRepo(t, n, c, "web")
+
+	code.SetPageLimits(n.reader, 1, 1<<20)
+	q := code.ReadQuery{Kind: code.ReadExpungeTips, ExpungeTips: &code.ExpungeTipsQuery{RepoID: repo,
+		Since: time.Now()}, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+	a, err := n.reader.Read(t.Context(), q)
+	if err != nil {
+		t.Fatalf("the first page of the tips: %v", err)
+	}
+	if !slices.Equal(a.Tips, []string{oidOf("B")}) || a.Next == "" {
+		t.Fatalf("the first page of the tips is %v (next %q); want the change's revision 1 at B, and more",
+			a.Tips, a.Next)
+	}
+
+	// BETWEEN THE PAGES the change closes, feature moves to C, a second change
+	// opens on feature at C — its revision 1 — and feature moves on to D, its
+	// revision 2.
+	closed, err := c.ProposeChange(t.Context(), closing(repo, first, dev, 1))
+	requireChanged(t, closed, err)
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf("B"), oidOf("C"))))
+	opened, err := c.ProposeChange(t.Context(), opening(repo, featureRef, mainRef, dev))
+	requireChanged(t, opened, err)
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf("C"), oidOf("D"))))
+	if got := n.revisions(opened.ChangeID); len(got) != 2 || got[0].head != oidOf("C") ||
+		got[1].head != oidOf("D") {
+		t.Fatalf("the premise: the second change's revisions are %+v, want C then D", got)
+	}
+
+	var rest []string
+	for q.Cursor = a.Next; q.Cursor != ""; q.Cursor = a.Next {
+		if a, err = n.reader.Read(t.Context(), q); err != nil {
+			t.Fatalf("a later page of the tips: %v", err)
+		}
+		rest = append(rest, a.Tips...)
+	}
+	if !slices.Equal(rest, []string{oidOf("C"), oidOf("D")}) {
+		t.Fatalf("the pages after the first name %v; want the second change's revisions C and D", rest)
+	}
+}
+
+// A TRAIN OR A LANDING BUILT BEFORE A BEGIN IS REFUSED EXPUNGING (M6-D4): the
+// queue's own records that move a ref onto what a build made carry the drop
+// epoch their home's copy held, and once an expunge's begin has moved the
+// repository's epoch, one built at the epoch before is refused expunging,
+// nothing appended, its sentence naming its home; built again at the begin's
+// epoch, it lands. No other queue record carries an epoch.
+//
+// Mutation: drop the queue decide's comparison of the epochs, and the train
+// built before the begin is recorded; compare them for a candidate alone, and
+// the landing built before the begin moves main.
+func TestATrainBuiltBeforeABeginIsRefusedExpunging(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, change)
+	enqueue := enqueueing(repo, change, ada, oidOf("B"))
+	res, err := c.ProposeQueue(t.Context(), enqueue)
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+	b := beginFor(n, repo, 1, n.livePacks(repo), 1, 0)
+	began, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, began, err)
+
+	train := training(repo, oidOf("A"), enqueue.Enqueue.EntryID, oidOf("M"))
+	before := n.end()
+	res, err = c.ProposeQueue(t.Context(), train)
+	requireQueueRefused(t, n, before, res, err, code.MergeRefusalExpunging,
+		code.ExpungingBuiltDetail("web", "train", "its home", 0, 1))
+	train.DropEpoch = 1
+	res, err = c.ProposeQueue(t.Context(), train)
+	requireRecorded(t, res, err)
+
+	// THE LANDING its home built from a copy at the epoch before the begin is
+	// refused too, main left where it was; built at the begin's epoch, it
+	// moves main onto the train's tip.
+	n.passed(repo, oidOf("M"), mainRef, "unit")
+	land := landingOf(repo, code.LandingPreLand, train.Candidate.Train, oidOf("A"),
+		code.LandEntry{EntryID: enqueue.Enqueue.EntryID, ChangeID: change, Commit: oidOf("M")})
+	before = n.end()
+	res, err = c.ProposeQueue(t.Context(), land)
+	requireQueueRefused(t, n, before, res, err, code.MergeRefusalExpunging,
+		code.ExpungingBuiltDetail("web", "landing", "its home", 0, 1))
+	if main := n.target(repo, mainRef); main != oidOf("A") {
+		t.Fatalf("main is at %q after a refused landing, want A", main)
+	}
+	land.DropEpoch = 1
+	res, err = c.ProposeQueue(t.Context(), land)
+	requireRecorded(t, res, err)
+	if main := n.target(repo, mainRef); main != oidOf("M") {
+		t.Fatalf("main is at %q after the landing at the begin's epoch, want the train's tip M", main)
+	}
+
+	dequeue := queueRecord(func(p *code.QueueProposal) {
+		p.Asker, p.Dequeue = ada, &code.Dequeue{RepoID: repo, EntryID: enqueue.Enqueue.EntryID}
+	})
+	dequeue.DropEpoch = 1
+	if err := dequeue.Validate(); err == nil || !strings.Contains(err.Error(), "drop_epoch") {
+		t.Fatalf("a dequeue carrying a drop epoch validates: %v, want drop_epoch refused", err)
+	}
+}

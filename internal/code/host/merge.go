@@ -67,12 +67,20 @@ import (
 // target_moved, and the merge is built again onto the tip a linearizable sync
 // finds — at most code.MergeRecomputes times, after which it is answered
 // target_moving: a branch moving faster than its merges are built is its
-// queue's to land, or a quieter moment's.
+// queue's to land, or a quieter moment's. A merge refused expunging — built
+// from a copy at another drop epoch than the repository's, an expunge having
+// begun since (M6-D4) — is built again the same way, from a copy a
+// linearizable sync brings past the begin, and answered expunging where
+// every rebuild meets it: a begin is rare and its sync quick, so one rebuild
+// almost always lands it.
 
-// mergeCarrying is p carrying pack — the bundle its landing stored, nil for a
-// merge that stores none — as its record names it.
-func mergeCarrying(p code.MergeProposal, pack *code.PackRef) code.MergeProposal {
+// mergeCarrying is p as its landing proposes it: carrying pack — the bundle
+// its landing stored, nil for a merge that stores none — as its record names
+// it, and the drop epoch of the copy it was built from (code.MergeProposal.
+// DropEpoch), the landing's pinned one, as a push's proposal carries it.
+func mergeCarrying(p code.MergeProposal, pack *code.PackRef, epoch int64) code.MergeProposal {
 	p.Merge.Pack = pack
+	p.DropEpoch = epoch
 	return p
 }
 
@@ -95,8 +103,8 @@ type mergeVerdict struct {
 }
 
 // runMerge is a merge_change's steps from its sync on: judged, built, landed —
-// and built again onto a target that moved under it, at most
-// code.MergeRecomputes times.
+// and built again onto a target that moved under it, or from a copy an
+// expunge's begin overtook, at most code.MergeRecomputes times.
 func (wr *writing) runMerge(ctx context.Context) (code.EngineWriteResult, error) {
 	s := wr.s
 	fresh := wr.fresh()
@@ -111,9 +119,12 @@ func (wr *writing) runMerge(ctx context.Context) (code.EngineWriteResult, error)
 			res, err := wr.enqueue(ctx, j)
 			return withRecomputes(res, recomputes), err
 		}
-		res, moved, err := wr.buildAndLandMerge(ctx, j)
-		if err != nil || !moved {
+		res, again, err := wr.buildAndLandMerge(ctx, j)
+		if err != nil || again == nil {
 			return withRecomputes(res, recomputes), err
+		}
+		if recomputes == code.MergeRecomputes && again.Refusal == code.MergeRefusalExpunging {
+			return withRecomputes(code.EngineWriteResult{Merge: again}, recomputes), nil
 		}
 		if recomputes == code.MergeRecomputes {
 			return withRecomputes(code.EngineWriteResult{Merge: &code.MergeAnswer{
@@ -347,19 +358,19 @@ func (wr *writing) enqueue(ctx context.Context, j mergeJudgement) (code.EngineWr
 // buildAndLandMerge is one round's build and landing: the merge built in its
 // scratch onto j.tip under the merge's budget and one unit of the node's seat
 // git-work share, then the deadline rule and the one landing with its record.
-// moved reports a record refused target_moved: the merge is the caller's to
-// build again.
+// again is the answer of a record refused target_moved or expunging — nil for
+// every other: the merge is the caller's to build again.
 func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res code.EngineWriteResult,
-	moved bool, err error) {
+	again *code.MergeAnswer, err error) {
 
 	s, w := wr.s, wr.w
 	wr.cmd = code.Command{Ref: w.Ref, Old: j.tip}
 	sc, err := s.o.Cache.NewScratch(ctx, wr.synced, wr.pushID)
 	if err != nil {
 		if errors.Is(err, cache.ErrStopped) {
-			return code.EngineWriteResult{}, false, s.writesStopping()
+			return code.EngineWriteResult{}, nil, s.writesStopping()
 		}
-		return code.EngineWriteResult{}, false, fmt.Errorf("host: a scratch for merge %s: %w", wr.pushID, err)
+		return code.EngineWriteResult{}, nil, fmt.Errorf("host: a scratch for merge %s: %w", wr.pushID, err)
 	}
 	defer sc.Remove()
 
@@ -367,14 +378,14 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 	commit, res, done, err := wr.buildMergeShared(ctx, sc, j)
 	wr.buildTook += s.now().Sub(buildStart)
 	if done || err != nil {
-		return res, false, err
+		return res, nil, err
 	}
 	if err := s.fault(ctx, codefault.MergeAfterBuild, 0); err != nil {
-		return code.EngineWriteResult{}, false, fmt.Errorf("host: merge %s after its build: %w", wr.pushID, err)
+		return code.EngineWriteResult{}, nil, fmt.Errorf("host: merge %s after its build: %w", wr.pushID, err)
 	}
 	wr.cmd.New = commit
 	if res, refused, err := wr.deadlineRule(ctx, sc); refused || err != nil {
-		return res, false, err
+		return res, nil, err
 	}
 	wr.landed = true
 	landStart := s.now()
@@ -386,16 +397,16 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 				DeleteSource: w.DeleteSource, Override: w.Override, Node: s.o.NodeID, ReceivedAt: s.now()}}})
 	wr.landTook += s.now().Sub(landStart)
 	if err != nil {
-		return code.EngineWriteResult{}, false, err
+		return code.EngineWriteResult{}, nil, err
 	}
 	if l.Merge == nil {
 		// REFUSED BY THE LANDING BEFORE ITS PROPOSAL — the store full or
 		// unavailable, the pack past a bound — as a push's is.
-		return code.EngineWriteResult{Command: l.Commands[0]}, false, nil
+		return code.EngineWriteResult{Command: l.Commands[0]}, nil, nil
 	}
 	m := l.Merge
-	if m.Refusal == code.MergeRefusalTargetMoved {
-		return code.EngineWriteResult{}, true, nil
+	if m.Refusal == code.MergeRefusalTargetMoved || m.Refusal == code.MergeRefusalExpunging {
+		return code.EngineWriteResult{}, &code.MergeAnswer{Refusal: m.Refusal, Detail: m.Detail}, nil
 	}
 	res = code.EngineWriteResult{Outcome: m.Outcome, Position: m.Position, Merge: &code.MergeAnswer{
 		Refusal: m.Refusal, Detail: m.Detail, Unmet: m.Unmet}}
@@ -405,7 +416,7 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 	case statelog.OutcomePending:
 		res.Commit = commit
 	}
-	return res, false, nil
+	return res, nil, nil
 }
 
 // buildMergeShared is a merge's build under one unit of the node's seat

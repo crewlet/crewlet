@@ -51,6 +51,20 @@ import (
 //     row past [QueueHistory], which its own candidates', ejections' and
 //     landings' horizons remove while its queues work (M5-D34).
 //
+// # A train and a landing are built at a drop epoch
+//
+// A candidate's and a post_land landing's commits are built by the home over
+// its copy of the repository, and a pre_land landing moves the target onto
+// commits its train built so: each proposal carries the drop epoch that copy
+// held ([QueueProposal.DropEpoch]), and its decide refuses it `expunging`
+// where an expunge has begun since ([MergeRefusalExpunging]), before every
+// rule of its own, as a push's and a merge's are — a build before a begin may
+// rely on objects the begin left dropping. And what the queue holds in flight
+// an expunge keeps, as it keeps a ref's tip: every live entry's head, every
+// candidate's tip and every target's green row are among the objects its
+// scan walks from (the `expunge_tips` read), so a purge never drops the
+// commit a landing moves its target onto.
+//
 // # Base format, as a stated condition
 //
 // Every op, payload and field here is in the base format, under the condition

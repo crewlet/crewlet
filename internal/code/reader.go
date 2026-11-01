@@ -3301,14 +3301,34 @@ func cutMirrorsCursor(cursor string) (arm, after string, at int64, ok bool) {
 }
 
 // expungeTips serves one page of an `expunge_tips` read ([ReadExpungeTips]):
-// the object each of the repository's ref drops left whose record's broker
-// instant is at or after the query's — ONE SEEK of code_ref_drops' key
-// (replicated 0061 led it with the instant for this read), a covering one, in
-// the key's order, keyset after the last drop the page read. Each object is
-// answered once a page: one force-pushed away again and again is one tip
-// however many drops name it, and a later page naming it again costs its
-// reader a map lookup. A repository with no row — purged — is
-// [ErrRepoNotFound].
+// the objects an expunge of the repository keeps beside its refs (M6-D2), in
+// five phases, each ONE SEEK of a named index in its order, keyset after the
+// last row the page read:
+//
+//  1. DROPS: the object each of the repository's ref drops left whose
+//     record's broker instant is at or after the query's — code_ref_drops'
+//     key, a covering seek (replicated 0061 led it with the instant for this
+//     read).
+//  2. REVISIONS: the head of every revision of every DRAFT OR OPEN change —
+//     code_changes_open_idx, then each change's revisions by their key — the
+//     force-pushed-away heads a reviewer still compares (an interdiff of
+//     revision 1 and 2 reads both).
+//  3. QUEUE: the head of every LIVE queue entry, waiting or testing —
+//     code_queue_live_idx, partial on exactly those.
+//  4. CANDIDATES: the tip of every candidate — code_candidates_train_idx; a
+//     candidate is rows and a pack, never a ref (M5-D12), and its tip reaches
+//     every commit its train built, the one a landing moves the target onto.
+//  5. GREEN: every protected target's green row — the table's key — what a
+//     mirror and a deploy follow.
+//
+// The phases after the first are what rows hold IN FLIGHT, kept whatever the
+// query's instant: a purge, which keeps no drop, still keeps them, or it would
+// drop the tip a pending landing moves its target onto, or the revisions an
+// open change's reviewers compare. A closed or merged change's revisions, an
+// ended entry and a landed train's candidates are history, and nothing is kept
+// for them. Each object is answered once a page: one many rows name is one tip,
+// and a later page naming it again costs its reader a map lookup. A repository
+// with no row — purged — is [ErrRepoNotFound].
 //
 // NEVER HELD TO A GRANT: the engine reads what its own expunge keeps, and the
 // objects leave this node only to the maintainer that keeps them.
@@ -3322,76 +3342,301 @@ func (r *Reader) expungeTips(ctx context.Context, tx *sql.Tx, q ReadQuery, out *
 		return fmt.Errorf("code: read repository %s: %w", in.RepoID, err)
 	}
 	since := store.EncodeTime(in.Since)
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	switch c, ok := cutTipsCursor(q.Cursor); {
-	case q.Cursor != "" && (!ok || c.at < since):
-		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
-	case q.Cursor == "":
-		rows, err = tx.QueryContext(ctx, expungeTipsSQL, in.RepoID, since, r.pageRows)
-	default:
-		rows, err = tx.QueryContext(ctx, expungeTipsAfterSQL, in.RepoID, c.at, c.position, c.ref, c.old,
-			r.pageRows)
+	from := tipsCursor{phase: tipsDrops}
+	if q.Cursor != "" {
+		c, ok := cutTipsCursor(q.Cursor)
+		if !ok || (c.phase == tipsDrops && c.at < since) {
+			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+		}
+		from = c
 	}
-	if err != nil {
-		return fmt.Errorf("code: read %s's ref drops: %w", name, err)
-	}
-	defer func() { _ = rows.Close() }()
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
 	answered := map[string]bool{}
-	for rows.Next() {
-		var c tipsCursor
-		if err := rows.Scan(&c.at, &c.position, &c.ref, &c.old); err != nil {
-			return fmt.Errorf("code: read %s's ref drops: %w", name, err)
+	phases := tipsPhases()
+	for i := slices.Index(phases, from.phase); i < len(phases); i++ {
+		phase := phases[i]
+		var after *tipsCursor
+		if phase == from.phase && q.Cursor != "" {
+			after = &from
 		}
-		// A ROW READ COUNTS whether or not its object was answered already:
-		// the page is held to what it reads as well as to what it sends.
-		size := 0
-		if !answered[c.old] {
-			answered[c.old] = true
-			out.Tips = append(out.Tips, c.old)
-			size = stringBytes(c.old) + 1
+		full, err := r.tipsOf(ctx, tx, phase, in.RepoID, since, after, &pg, answered, out)
+		if err != nil {
+			return fmt.Errorf("code: read the objects %s's expunge keeps (%s): %w", name, phase, err)
 		}
-		if pg.add(size) {
-			out.Next = c.String()
-			break
+		if full {
+			return nil
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
-// tipsCursor is one ref drop's place in its key's order — the instant as the
-// column stores it, the position, the ref and the object — and an
-// `expunge_tips` page's cursor, "<at>:<position>:<old>:<ref>": the ref last,
-// since a ref may hold every character but a colon (git's ref rules), which
-// the integers and the object id hold none of.
+// tipsOf reads one phase of an `expunge_tips` page into out — from its start,
+// or after the row after names — counting every row read against pg, whether
+// or not its object was answered already on the page, since the page is held
+// to what it reads as well as to what it sends. full reports a page that took
+// its last row, its cursor that row's place.
+func (r *Reader) tipsOf(ctx context.Context, tx *sql.Tx, phase tipsPhase, repoID string, since int64,
+	after *tipsCursor, pg *page, answered map[string]bool, out *ReadAnswer) (full bool, err error) {
+
+	if phase == tipsRevisions {
+		return r.revisionTips(ctx, tx, repoID, after, pg, answered, out)
+	}
+	var rows *sql.Rows
+	switch phase {
+	case tipsDrops:
+		if after == nil {
+			rows, err = tx.QueryContext(ctx, expungeTipsSQL, repoID, since, r.pageRows)
+		} else {
+			rows, err = tx.QueryContext(ctx, expungeTipsAfterSQL, repoID, after.at, after.position, after.ref,
+				after.old, r.pageRows)
+		}
+	case tipsQueue:
+		if after == nil {
+			rows, err = tx.QueryContext(ctx, queueTipsSQL, repoID, r.pageRows)
+		} else {
+			rows, err = tx.QueryContext(ctx, queueTipsAfterSQL, repoID, after.ref, after.position, r.pageRows)
+		}
+	case tipsCandidates:
+		if after == nil {
+			rows, err = tx.QueryContext(ctx, candidateTipsSQL, repoID, r.pageRows)
+		} else {
+			rows, err = tx.QueryContext(ctx, candidateTipsAfterSQL, repoID, after.ref, after.id, after.position,
+				r.pageRows)
+		}
+	case tipsGreen:
+		if after == nil {
+			rows, err = tx.QueryContext(ctx, greenTipsSQL, repoID, r.pageRows)
+		} else {
+			rows, err = tx.QueryContext(ctx, greenTipsAfterSQL, repoID, after.ref, r.pageRows)
+		}
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		c := tipsCursor{phase: phase}
+		var oid string
+		switch phase {
+		case tipsDrops:
+			err = rows.Scan(&c.at, &c.position, &c.ref, &c.old)
+			oid = c.old
+		case tipsQueue:
+			err = rows.Scan(&c.ref, &c.position, &oid)
+		case tipsCandidates:
+			err = rows.Scan(&c.ref, &c.id, &c.position, &oid)
+		case tipsGreen:
+			err = rows.Scan(&c.ref, &oid)
+		}
+		if err != nil {
+			return false, err
+		}
+		if tipAnswered(c, oid, pg, answered, out) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// revisionTips is the revisions phase of an `expunge_tips` page
+// ([Reader.tipsOf]): the live changes in their source branch's order over
+// code_changes_open_idx, a page's worth at a time, then each one's revisions
+// by their key — TWO SEEKS RATHER THAN ONE JOIN, because the store's planner
+// sorts a join's rows by an inner table's column however its indexes order
+// them, and a page would sort every live revision of the repository. A branch
+// heads one live change at a time (decideOpen's change_exists), so the source
+// branch orders the changes and the revision a change's rows; the cursor
+// names the change too, because the branch may head ANOTHER change by the
+// next page — the one it named closed and a new one opened on the branch
+// between two pages. The cursor's change is read again from the revision
+// after its own, and every other one, a new change on the cursor's branch
+// included, from its first: resuming a new change at the number its
+// predecessor reached would skip its first revisions.
+func (r *Reader) revisionTips(ctx context.Context, tx *sql.Tx, repoID string, after *tipsCursor, pg *page,
+	answered map[string]bool, out *ReadAnswer) (full bool, err error) {
+
+	q, args := liveChangeTipsSQL, []any{repoID, r.pageRows}
+	if after != nil {
+		q, args = liveChangeTipsFromSQL, []any{repoID, after.ref, r.pageRows}
+	}
+	for {
+		batch, err := liveChangesOf(ctx, tx, q, args...)
+		if err != nil {
+			return false, err
+		}
+		for _, ch := range batch {
+			from := int64(0)
+			if after != nil && ch.id == after.id {
+				from = after.position
+			}
+			if full, err := r.changeRevisionTips(ctx, tx, ch, from, pg, answered, out); full || err != nil {
+				return full, err
+			}
+		}
+		if len(batch) < r.pageRows {
+			return false, nil
+		}
+		q, args = liveChangeTipsAfterSQL, []any{repoID, batch[len(batch)-1].ref, r.pageRows}
+	}
+}
+
+// liveChangeTip is one live change a revisions phase reads: its id and its
+// source branch.
+type liveChangeTip struct{ id, ref string }
+
+// liveChangesOf is the live changes q names, read whole and closed before
+// their revisions are read, so no two statements are open at once on tx.
+func liveChangesOf(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]liveChangeTip, error) {
+	rows, err := tx.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []liveChangeTip
+	for rows.Next() {
+		var c liveChangeTip
+		if err := rows.Scan(&c.id, &c.ref); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// changeRevisionTips answers the heads of ch's revisions after revision from
+// into out, in their number's order, as [Reader.tipsOf] answers a row.
+func (r *Reader) changeRevisionTips(ctx context.Context, tx *sql.Tx, ch liveChangeTip, from int64, pg *page,
+	answered map[string]bool, out *ReadAnswer) (full bool, err error) {
+
+	rows, err := tx.QueryContext(ctx, changeRevisionTipsSQL, ch.id, from, r.pageRows)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		c := tipsCursor{phase: tipsRevisions, ref: ch.ref, id: ch.id}
+		var oid string
+		if err := rows.Scan(&c.position, &oid); err != nil {
+			return false, err
+		}
+		if tipAnswered(c, oid, pg, answered, out) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+// tipAnswered answers oid into out unless the page answered it already, and
+// counts its row against pg whether or not it did — the page is held to what
+// it reads as well as to what it sends — reporting a page that took its last
+// row, its cursor c.
+func tipAnswered(c tipsCursor, oid string, pg *page, answered map[string]bool, out *ReadAnswer) bool {
+	size := 0
+	if !answered[oid] {
+		answered[oid] = true
+		out.Tips = append(out.Tips, oid)
+		size = stringBytes(oid) + 1
+	}
+	if pg.add(size) {
+		out.Next = c.String()
+		return true
+	}
+	return false
+}
+
+// tipsPhase is one phase of an `expunge_tips` read ([Reader.expungeTips]): the
+// table whose rows name what an expunge keeps.
+type tipsPhase string
+
+const (
+	// tipsDrops is the ref drops since the read's instant (code_ref_drops).
+	tipsDrops tipsPhase = "drops"
+	// tipsRevisions is every revision head of a live change (code_revisions).
+	tipsRevisions tipsPhase = "revisions"
+	// tipsQueue is every live queue entry's head (code_queue).
+	tipsQueue tipsPhase = "queue"
+	// tipsCandidates is every candidate's tip (code_candidates).
+	tipsCandidates tipsPhase = "candidates"
+	// tipsGreen is every target's green row (code_green).
+	tipsGreen tipsPhase = "green"
+)
+
+// tipsPhases is the phases in the order a read serves them.
+func tipsPhases() []tipsPhase {
+	return []tipsPhase{tipsDrops, tipsRevisions, tipsQueue, tipsCandidates, tipsGreen}
+}
+
+// tipsCursor is one row's place in its phase's index order, and an
+// `expunge_tips` page's cursor, "<phase>:" then the phase's key:
+//
+//   - drops "<at>:<position>:<old>:<ref>" — the instant as the column stores
+//     it, the record's position, the object and the ref;
+//   - revisions "<n>:<change>:<source_ref>", the revision, the live change's
+//     id and its source;
+//   - queue "<seq>:<target_ref>", a live entry's target and its place;
+//   - candidates "<ordinal>:<train>:<target_ref>";
+//   - green "<target_ref>".
+//
+// The ref LAST in each, since a ref may hold every character but a colon
+// (git's ref rules), which the integers, the object ids, a change's id and a
+// train's id hold none of. position is a drop's record position, a revision's
+// number, an entry's seq or a candidate's ordinal; ref the ref each phase is
+// keyed by; id a revision's change or a candidate's train.
 type tipsCursor struct {
+	phase        tipsPhase
 	at, position int64
 	ref, old     string
+	id           string
 }
 
 // String is c as a cursor.
 func (c tipsCursor) String() string {
-	return strconv.FormatInt(c.at, 10) + ":" + strconv.FormatInt(c.position, 10) + ":" + c.old + ":" + c.ref
+	p := string(c.phase) + ":"
+	switch c.phase {
+	case tipsDrops:
+		return p + strconv.FormatInt(c.at, 10) + ":" + strconv.FormatInt(c.position, 10) + ":" + c.old + ":" + c.ref
+	case tipsRevisions, tipsCandidates:
+		return p + strconv.FormatInt(c.position, 10) + ":" + c.id + ":" + c.ref
+	case tipsGreen:
+		return p + c.ref
+	}
+	return p + strconv.FormatInt(c.position, 10) + ":" + c.ref
 }
 
 // cutTipsCursor reads a [tipsCursor].
 func cutTipsCursor(s string) (tipsCursor, bool) {
-	parts := strings.SplitN(s, ":", 4)
-	if len(parts) != 4 || parts[2] == "" || parts[3] == "" {
+	phase, rest, ok := strings.Cut(s, ":")
+	c := tipsCursor{phase: tipsPhase(phase)}
+	if !ok || !slices.Contains(tipsPhases(), c.phase) {
 		return tipsCursor{}, false
 	}
-	at, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
+	fields := map[tipsPhase]int{tipsDrops: 4, tipsRevisions: 3, tipsQueue: 2, tipsCandidates: 3, tipsGreen: 1}
+	parts := strings.SplitN(rest, ":", fields[c.phase])
+	if len(parts) != fields[c.phase] || slices.Contains(parts, "") {
 		return tipsCursor{}, false
 	}
-	position, err := strconv.ParseInt(parts[1], 10, 64)
+	c.ref = parts[len(parts)-1]
+	if c.phase == tipsGreen {
+		return c, true
+	}
+	n := 0
+	if c.phase == tipsDrops {
+		at, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			return tipsCursor{}, false
+		}
+		c.at, n = at, 1
+		c.old = parts[2]
+	}
+	position, err := strconv.ParseInt(parts[n], 10, 64)
 	if err != nil || position < 0 {
 		return tipsCursor{}, false
 	}
-	return tipsCursor{at: at, position: position, old: parts[2], ref: parts[3]}, true
+	c.position = position
+	if c.phase == tipsRevisions || c.phase == tipsCandidates {
+		c.id = parts[1]
+	}
+	return c, true
 }
 
 // publishCursor is "<published_at>/<id>", the instant as the column stores it:
@@ -4032,6 +4277,43 @@ const (
 		WHERE repo_id = ?1 AND at >= ?2
 		AND (at > ?2 OR position > ?3 OR (position = ?3 AND (ref > ?4 OR (ref = ?4 AND old > ?5))))
 		ORDER BY at, position, ref, old LIMIT ?6`
+	// AN EXPUNGE'S IN-FLIGHT TIPS (M6-D2), each phase from its start and
+	// after a place, in its index's order: every revision head of a live
+	// change, the changes over code_changes_open_idx and each one's revisions
+	// by their key; every live entry's head over code_queue_live_idx, partial on the
+	// live states; every candidate's tip over code_candidates_train_idx; and
+	// every green row by its key.
+	//
+	// A live change's revisions are TWO seeks, never a join (revisionTips
+	// says why): the live changes from the repository's first, from the
+	// cursor's branch, or after a batch's last, then one change's revisions
+	// after a number, by their key.
+	liveChangeTipsSQL = `SELECT id, source_ref FROM code_changes INDEXED BY code_changes_open_idx
+		WHERE repo_id = ?1 AND ` + liveChanges + ` ORDER BY source_ref LIMIT ?2`
+	liveChangeTipsFromSQL = `SELECT id, source_ref FROM code_changes INDEXED BY code_changes_open_idx
+		WHERE repo_id = ?1 AND source_ref >= ?2 AND ` + liveChanges + ` ORDER BY source_ref LIMIT ?3`
+	liveChangeTipsAfterSQL = `SELECT id, source_ref FROM code_changes INDEXED BY code_changes_open_idx
+		WHERE repo_id = ?1 AND source_ref > ?2 AND ` + liveChanges + ` ORDER BY source_ref LIMIT ?3`
+	changeRevisionTipsSQL = `SELECT n, head_oid FROM code_revisions WHERE change_id = ?1 AND n > ?2
+		ORDER BY n LIMIT ?3`
+	queueTipsSQL = `SELECT target_ref, seq, head_oid FROM code_queue INDEXED BY code_queue_live_idx
+		WHERE repo_id = ?1 AND state IN ('waiting', 'testing') ORDER BY target_ref, seq LIMIT ?2`
+	queueTipsAfterSQL = `SELECT target_ref, seq, head_oid FROM code_queue INDEXED BY code_queue_live_idx
+		WHERE repo_id = ?1 AND state IN ('waiting', 'testing') AND target_ref >= ?2
+			AND (target_ref > ?2 OR seq > ?3)
+		ORDER BY target_ref, seq LIMIT ?4`
+	candidateTipsSQL = `SELECT target_ref, train, ordinal, tip_oid
+		FROM code_candidates INDEXED BY code_candidates_train_idx
+		WHERE repo_id = ?1 ORDER BY target_ref, train, ordinal LIMIT ?2`
+	candidateTipsAfterSQL = `SELECT target_ref, train, ordinal, tip_oid
+		FROM code_candidates INDEXED BY code_candidates_train_idx
+		WHERE repo_id = ?1 AND target_ref >= ?2
+			AND (target_ref > ?2 OR train > ?3 OR (train = ?3 AND ordinal > ?4))
+		ORDER BY target_ref, train, ordinal LIMIT ?5`
+	greenTipsSQL = `SELECT target_ref, commit_oid FROM code_green WHERE repo_id = ?1
+		ORDER BY target_ref LIMIT ?2`
+	greenTipsAfterSQL = `SELECT target_ref, commit_oid FROM code_green WHERE repo_id = ?1 AND target_ref > ?2
+		ORDER BY target_ref LIMIT ?3`
 	// A SNAPSHOT'S LAYERS PHASE: every part of a repository's chain, in its
 	// key's order, joined to its layer (layersOfSQL) in Go.
 	layerPartsOfSQL = `SELECT layer_id, part, object, hash, size FROM code_layer_parts

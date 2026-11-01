@@ -1223,6 +1223,31 @@ func registeredStatements() map[string]statement {
 			[]string{"COVERING INDEX " + dropsKey + " (repo_id=? AND at>=?)"}},
 		"expunge tips after": {expungeTipsAfterSQL, []any{"repo-1", 100, 3, "refs/heads/x", "abc", MaxSnapshotItems},
 			[]string{"COVERING INDEX " + dropsKey + " (repo_id=? AND at>=?)"}},
+		// AND WHAT ROWS HOLD IN FLIGHT (M6-D2), each phase from its start and
+		// after a place in its index's order: the live changes over
+		// code_changes_open_idx, then each one's revisions by their key; the live entries
+		// over the index partial on the live states; the candidates over
+		// code_candidates_train_idx; and the green rows by their key.
+		"live change tips": {liveChangeTipsSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"code_changes_open_idx (repo_id=?)"}},
+		"live change tips from": {liveChangeTipsFromSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
+			[]string{"code_changes_open_idx (repo_id=? AND source_ref>=?)"}},
+		"live change tips after": {liveChangeTipsAfterSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
+			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)"}},
+		"change revision tips": {changeRevisionTipsSQL, []any{"c-1", 2, MaxSnapshotItems},
+			[]string{revisionKey + " (change_id=? AND n>?)"}},
+		"queue tips": {queueTipsSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"code_queue_live_idx (repo_id=?)"}},
+		"queue tips after": {queueTipsAfterSQL, []any{"repo-1", "refs/heads/main", 1000, MaxSnapshotItems},
+			[]string{"code_queue_live_idx (repo_id=? AND target_ref>=?)"}},
+		"candidate tips": {candidateTipsSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"code_candidates_train_idx (repo_id=?)"}},
+		"candidate tips after": {candidateTipsAfterSQL, []any{"repo-1", "refs/heads/main", "train-1", 2,
+			MaxSnapshotItems}, []string{"code_candidates_train_idx (repo_id=? AND target_ref>=?)"}},
+		"green tips": {greenTipsSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)"}},
+		"green tips after": {greenTipsAfterSQL, []any{"repo-1", "refs/heads/main", MaxSnapshotItems},
+			[]string{"sqlite_autoindex_code_green_1 (repo_id=? AND target_ref>?)"}},
 	}
 	return out
 }

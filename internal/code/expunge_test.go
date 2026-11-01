@@ -477,7 +477,8 @@ func TestAnExpungesTipsAreWhatItsDropsLeftSinceItsInstant(t *testing.T) {
 		t.Fatalf("the tips in pages of two are %v, want %v", tips, want)
 	}
 
-	early := fmt.Sprintf("%d:2:%s:refs/heads/dropped-000000", store.EncodeTime(since.Add(-time.Hour)), oidOf("x"))
+	early := fmt.Sprintf("drops:%d:2:%s:refs/heads/dropped-000000", store.EncodeTime(since.Add(-time.Hour)),
+		oidOf("x"))
 	if _, err := read(repo, early); !errors.Is(err, code.ErrBadCursor) {
 		t.Errorf("a cursor from before the instant: %v, want ErrBadCursor", err)
 	}
