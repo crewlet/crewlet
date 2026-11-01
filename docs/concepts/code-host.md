@@ -1178,8 +1178,8 @@ after it starts, and its loops wait for that rather than run a pass before it;
 a node that is draining has left the listing, and every repository it
 maintained is placed among the rest.
 
-Both of a maintainer's loops ask by that one charge, so the two
-writers of a repository's packs run on one node, and there a merge never takes
+Every loop of a maintainer asks by that one charge, so the writers of a
+repository's packs run on one node, and there a merge never takes
 a pack a publication of the repository in flight has planned over. Once the
 publication has planned, it reserves every pack its layer will name, the packs
 it repacks among them, and the repository's merges go on beside it with the
@@ -1189,7 +1189,16 @@ climbs to its pack bound. Only while the publication syncs and plans, seconds,
 does a merge of its repository wait; and a publication asked while a merge of
 its repository is running waits for it, since it would cover that merge's
 packs: either way round, one of the two would otherwise be refused `stale`
-after its whole build. Nothing
+after its whole build. An [expunge](#expunge), the third writer of a
+repository's packs, holds back the repository's merges the same way, and no
+longer: they wait only while it syncs and plans,
+then go on beside its walk, its build and its upload with every pack but the
+ones it is rewriting, and once it has begun, beside it as though it were not
+running — so a repository being purged is never the one whose pushes are
+refused `compaction_behind`. No publication of the repository builds while
+an expunge of it runs, since the expunge drops the layers over what it
+rewrites, and an expunge waits for a merge or a publication already running.
+Nothing
 leases a repository to its maintainer: two nodes whose presence views disagree
 for a moment may both build, and the committer refuses the second `stale`.
 Each pass judges every repository it lists against one reading of the
