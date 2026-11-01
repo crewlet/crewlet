@@ -1,7 +1,7 @@
 /**
- * The model the CLI runs, in its own naming: the names the CLI resolves
+ * The model the harness runs, in its own naming: the names the harness resolves
  * itself (its aliases) as choices, and "Another model" for any other id,
- * which suggests what the public catalogue lists and links the CLI's own page
+ * which suggests what the public catalogue lists and links the harness's own page
  * of model names.
  *
  * ONE CONTROL FOR ONE VALUE (design QA Minor 5). The free-text field is the
@@ -9,15 +9,15 @@
  * made, so an alias picked above is never echoed in a second field.
  *
  * AN ALIAS IS ONLY ITS OWN ID. A model on `claude-haiku-4-5` is not on the
- * `haiku` alias: the alias follows the CLI's latest Haiku, and the full id
+ * `haiku` alias: the alias follows the harness's latest Haiku, and the full id
  * stays on that release. So a full id opens under "Another model", which
  * names it as the catalogue does and says it is a fixed version, rather than
  * under the alias it resembles, which would move the model on its next save.
  *
  * WHERE THE SUGGESTIONS COME FROM (N6): `llm_models`, the models.dev
- * catalogue for the CLI's provider, read by the engine with no credential
+ * catalogue for the harness's provider, read by the engine with no credential
  * (D1). Whether a plan reaches a model is the test call's question. With no
- * catalogue the field still takes any id, and the CLI's page is linked.
+ * catalogue the field still takes any id, and the harness's page is linked.
  */
 
 import { useMemo, useState } from "react";
@@ -51,7 +51,7 @@ export function ModelStep({
   // THE READER'S OWN CHOICE, once made: "Another model" stays chosen while its
   // field is emptied, so clearing it to type a new id does not throw the
   // reader back to the list. UNTIL THEN IT IS READ FROM THE ALIASES AS THEY
-  // STAND, never decided once on the first render: the CLI's aliases arrive
+  // STAND, never decided once on the first render: the harness's aliases arrive
   // after it, and an edit of a model on `haiku` opened as "Another model"
   // with `haiku` typed in its field.
   const [chosen, setChosen] = useState<"alias" | "another" | null>(null);
@@ -70,7 +70,7 @@ export function ModelStep({
   const naming =
     draft.harness === "opencode"
       ? `Sent as ${modelId({ ...draft, model: draft.model || "<model>" })}.`
-      : "In the CLI's own naming.";
+      : "In the harness's own naming.";
   const source = listing.loading
     ? "Reading the catalogue."
     : answer?.source === "models.dev"
@@ -142,7 +142,7 @@ export function ModelStep({
             label: "Another model",
             detail: catalogued
               ? `${catalogued.name}, a fixed version.`
-              : "Any model id the CLI takes.",
+              : "Any model id the harness takes.",
             separated: true,
             panel: field,
           },

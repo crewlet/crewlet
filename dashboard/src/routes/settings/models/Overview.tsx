@@ -180,9 +180,9 @@ function RowReveal({
 }
 
 /**
- * The model's name and the model it runs, each one line, with its CLI's mark
+ * The model's name and the model it runs, each one line, with its harness's mark
  * centred beside them. The mark is not raised and does nothing of its own:
- * the row's link takes the press, and the tip names the CLI.
+ * the row's link takes the press, and the tip names the harness.
  */
 function ModelCell({ model }: { model: ModelView }) {
   return (

@@ -229,7 +229,7 @@ function RunningRecords({ name, args }: { name: string; args: string }) {
 /**
  * One tool call of a round — answered, or still running (`running`).
  *
- * ONE COMPONENT FOR BOTH, because a call is one row for its whole life: a CLI
+ * ONE COMPONENT FOR BOTH, because a call is one row for its whole life: a harness
  * runs a response's calls side by side, each listed while it runs and answered
  * when its result lands, and a row that changed component as it answered would
  * be unmounted and mounted again, closing what the reader had opened.
@@ -301,14 +301,14 @@ function ToolRow({
 }
 
 /**
- * The head of one CLI run's rounds: which entry served it, how many rounds it
+ * The head of one harness run's rounds: which entry served it, how many rounds it
  * made, how long it lived, what it spent and how it ended — or, for the run
  * still in flight, that it is running.
  *
  * A RUN IS WHAT THE ENGINE STARTS AND ENDS, where a round is one model request
- * the CLI's record shows; most phases are one run, and a phase that was
- * steered, delegated or corrected is several — each a CLI process handed the
- * conversation so far. A run whose CLI showed no requests is ONE round, and its
+ * the harness's record shows; most phases are one run, and a phase that was
+ * steered, delegated or corrected is several — each a harness process handed the
+ * conversation so far. A run whose harness showed no requests is ONE round, and its
  * head says so, since that round's timing is the run's.
  */
 function RunHead({
@@ -323,7 +323,7 @@ function RunHead({
   if (!run) {
     return (
       <div className="run-head">
-        <span className="run-name">CLI run {ordinal}</span>
+        <span className="run-name">Harness run {ordinal}</span>
         {live && <Tag variant="info">running</Tag>}
       </div>
     );
@@ -334,7 +334,7 @@ function RunHead({
   return (
     <div className="col gap-1">
       <div className="run-head">
-        <span className="run-name">CLI run {run.run}</span>
+        <span className="run-name">Harness run {run.run}</span>
         {run.providerKey && (
           <span className="t-caption mono" title="the providers.llm entry that served it">
             {run.providerKey}
@@ -348,7 +348,7 @@ function RunHead({
               : `rounds ${run.firstRound}–${run.lastRound}`}
         </span>
         {run.durationMs > 0 && (
-          <span className="t-caption t-num" title="how long the CLI ran">
+          <span className="t-caption t-num" title="how long the harness ran">
             {fmtDuration(run.durationMs)}
           </span>
         )}
@@ -363,7 +363,7 @@ function RunHead({
       </div>
       {!run.requestsObserved && made > 0 && (
         <p className="round-note">
-          Its CLI’s record showed no requests, so the whole run is one round.
+          Its harness’s record showed no requests, so the whole run is one round.
         </p>
       )}
     </div>
@@ -525,11 +525,11 @@ function Words({ text, streaming }: { text: string; streaming?: boolean }) {
 }
 
 /**
- * The sentence under a round the CLI's own turn cap ended (`stop_reason: cap`).
+ * The sentence under a round the harness's own turn cap ended (`stop_reason: cap`).
  *
  * THE ONE STOP REASON THAT ENDS A ROUND UNFINISHED, which is why the reason
  * gate (`contract/stops.ts`) asks for a sentence: an answer and a set of calls
- * are rounds that finished and say nothing, while here the CLI stopped asking
+ * are rounds that finished and say nothing, while here the harness stopped asking
  * with the model still working — the run ended for want of turns, not because
  * the model was done. CAUTION, as a declined round's last word is: the phase
  * goes on to whatever its cap decides.
@@ -537,7 +537,7 @@ function Words({ text, streaming }: { text: string; streaming?: boolean }) {
 function CapNote() {
   return (
     <p className="round-note caution">
-      <TriangleAlertGlyph size="xs" /> The CLI’s own turn cap ended its run here, with the model
+      <TriangleAlertGlyph size="xs" /> The harness’s own turn cap ended its run here, with the model
       still working.
     </p>
   );
@@ -557,7 +557,7 @@ function RoundBlock({
   /** What became of this round when it declined to call a tool; absent otherwise. */
   declined?: Declined;
   rescued: boolean;
-  /** The CLI's own turn cap ended its run at this round. */
+  /** The harness's own turn cap ended its run at this round. */
   capped: boolean;
   now: number;
 }) {
@@ -706,16 +706,16 @@ function LaunchBody({ record }: { record: PhaseRecord }) {
 }
 
 /**
- * A launch's CLI turns, as a header states a phase's rounds: the turns its
- * CLI said its own loop took, or the mark that it said none.
+ * A launch's harness turns, as a header states a phase's rounds: the turns its
+ * harness said its own loop took, or the mark that it said none.
  */
 function LaunchTurns({ record }: { record: PhaseRecord }) {
   return record.harnessTurns > 0 ? (
-    <span className="phase-meta t-num" title="the model turns its CLI's own loop took">
+    <span className="phase-meta t-num" title="the model turns its harness's own loop took">
       {plural(record.harnessTurns, "turn")}
     </span>
   ) : (
-    <span className="phase-meta" title="its CLI reported no turns">
+    <span className="phase-meta" title="its harness reported no turns">
       …
     </span>
   );
@@ -723,7 +723,7 @@ function LaunchTurns({ record }: { record: PhaseRecord }) {
 
 /**
  * The launches of an executor's round, inside the round's card: one entry
- * per launch, oldest first — the CLI it ran as, how it ended, what it spent —
+ * per launch, oldest first — the harness it ran as, how it ended, what it spent —
  * over what it left ([LaunchBody]).
  *
  * WHY INSIDE. The round is one card because it is one round: a launch is the
@@ -738,7 +738,7 @@ function Launches({ launches, now }: { launches: readonly PhaseRecord[]; now: nu
     <section className="col gap-1">
       <div className="t-label">
         {launches.length === 1 ? "Its launch" : `Its ${launches.length} launches`}
-        <span className="muted"> · what its CLI did in its box</span>
+        <span className="muted"> · what its harness did in its box</span>
       </div>
       <ol className="run-ledger">
         {launches.map((l, i) => {
@@ -815,7 +815,7 @@ export function PhaseCard({
   const [open, setOpen] = useState(!!defaultOpen);
   const now = useNow();
   const ledger = rounds(record.tools, record.narration, record.partial, record.runningCalls);
-  // THE ROUNDS UNDER THE CLI RUN THAT MADE THEM, by the round span each run
+  // THE ROUNDS UNDER THE HARNESS RUN THAT MADE THEM, by the round span each run
   // names. Headed wherever the phase's runs are known: a phase that recorded
   // its runs, and a live one, whose run in flight heads the rounds past every
   // run that has ended — so a running phase and the record it becomes are one
@@ -981,7 +981,7 @@ export function PhaseCard({
             rescued
           </Tag>
         )}
-        {/* THE BOX A RUN RAN IN, named by the CLI that ran there — on the
+        {/* THE BOX A RUN RAN IN, named by the harness that ran there — on the
             executor that collected a run and on each launch's own record. A
             phase that ran on the engine host names neither, so it has no
             badge. */}
@@ -1019,7 +1019,7 @@ export function PhaseCard({
             mark is for, fell through and rendered "0r". And the count below it
             was one short on a live phase whose rounds narrated nothing. */}
         {/* A LAUNCH'S TURNS WHERE A PHASE'S ROUNDS ARE: its rounds were its
-            CLI's own, in its box, and the engine drove none of them. */}
+            harness's own, in its box, and the engine drove none of them. */}
         {record.launch ? (
           <LaunchTurns record={record} />
         ) : record.live && !ledger.length && record.roundsUsed === 0 ? (
@@ -1033,7 +1033,7 @@ export function PhaseCard({
         )}
         {/* ZERO IS A NUMBER, AND ONLY A LIVE PHASE'S ZERO IS AN ABSENCE. This
             read `totalTokens ? … : "—"`, so a phase that genuinely spent
-            nothing — one on a subscription CLI backend, which reports no
+            nothing — one on a subscription harness backend, which reports no
             usage at all, or one the engine stopped before its first call came
             back — rendered as "not recorded" on the card an operator opens to
             find out which phase was expensive. `TurnCard` states the rule for
@@ -1166,7 +1166,7 @@ export function PhaseCard({
           )}
 
           {/* The transcript. One block per round — speech, then calls —
-              in the order they happened, under the CLI run that made them.
+              in the order they happened, under the harness run that made them.
               Rounds append, so nothing above an insertion can move, which is
               the whole point. */}
           {ledger.length > 0 && (

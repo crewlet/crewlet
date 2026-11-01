@@ -644,7 +644,7 @@ describe("a live call's heavy fields", () => {
   // A STATUS READER IS NEVER SENT A BODY, so a withheld call — every body
   // version zero, no body key, `body_withheld` — is never behind for one:
   // asked for whole, the engine would answer the same status again. Its
-  // rounds and its CLI runs are status and still merge as any call's do. The
+  // rounds and its harness runs are status and still merge as any call's do. The
   // CONTROL is the case below, where a version moved past the copy held is
   // fetched.
   // Mutation: count a withheld body field as one the tab is behind on, and a

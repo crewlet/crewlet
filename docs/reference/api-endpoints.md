@@ -2695,7 +2695,7 @@ carries its `fix`.
 
 ```json
 {"source": "models.dev", "fetched_at": "…", "provider": "anthropic",
- "aliases": [{"id": "sonnet", "name": "Sonnet", "detail": "The CLI's latest Sonnet"}],
+ "aliases": [{"id": "sonnet", "name": "Sonnet", "detail": "The harness's latest Sonnet"}],
  "models": [{"id": "claude-opus-5-5", "name": "Claude Opus 5.5", "family": "claude-opus",
    "released": "2026-…", "tool_call": true}],
  "docs_url": "https://code.claude.com/docs/en/model-config"}

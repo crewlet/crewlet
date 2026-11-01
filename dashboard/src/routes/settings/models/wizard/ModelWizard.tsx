@@ -1,12 +1,12 @@
 /**
- * Add a model, or edit one, step by step: its name and CLI, how it signs in,
+ * Add a model, or edit one, step by step: its name and harness, how it signs in,
  * the model, where it runs a seat's executor, what it is used for, its limits and a
  * test call. Review checks the whole change with the engine before anything
  * is stored, and the engine's problems land on the fields they are about,
  * each with the step that fixes it.
  *
  * EDITING IS THE SAME WIZARD, prefilled from the model (`editing`): every step
- * is reachable at once, the name and the CLI are its identity and stay, a
+ * is reachable at once, the name and the harness are its identity and stay, a
  * stored credential is shown as stored and replaced only on request, and
  * Review is a footer button away from any step (design QA Minor 13).
  *
@@ -87,14 +87,14 @@ import { WhereItRuns } from "./steps/WhereItRuns.tsx";
 
 const LEADS: Record<WizardStep, string> = {
   harness:
-    "Name the model and choose the coding CLI it runs. Seats and Ask Crewlet name it, so keep it short.",
+    "Name the model and choose the harness it runs. Seats and Ask Crewlet name it, so keep it short.",
   signin: "How this model proves who it is to the vendor.",
-  model: "The model the CLI runs, in its own naming.",
+  model: "The model the harness runs, in its own naming.",
   runs: "Where a seat's executor runs when it launches on this model.",
   assign: "What should this model do, and for which seats?",
   limits:
-    "How many CLI processes run at once, how long one may go without progress, and its web tools.",
-  test: "Run the CLI once with these settings before anything is stored. It costs a few tokens.",
+    "How many harness processes run at once, how long one may go without progress, and its web tools.",
+  test: "Run the harness once with these settings before anything is stored. It costs a few tokens.",
   review: "Everything this saves, as one revision. The engine checks it before you save it.",
 };
 
@@ -232,7 +232,7 @@ function newDraft(data: ModelsData): Draft {
  *
  * THE ADDRESS ONLY PRESELECTS, and only what the company has now: a seat it
  * no longer has (a link kept from before a seat was removed, or typed by
- * hand) is dropped without a word, and so is coding on a CLI that runs none.
+ * hand) is dropped without a word, and so is coding on a harness that runs none.
  * The person still sees every use on Use it for, and Review before a write.
  */
 function withAdded(d: Draft, add: readonly WizardAdd[], seats: ReadonlySet<string>): Draft {

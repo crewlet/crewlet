@@ -103,7 +103,7 @@ function credentialNoun(model: ModelView | undefined): string {
   if (!signIn) return "sign-in";
   if (signIn.route === "api-key" || signIn.mode === "api-key") return "API key";
   if (signIn.route === "token") return "subscription token";
-  if (signIn.route === "credentials") return "CLI login";
+  if (signIn.route === "credentials") return "harness login";
   if (signIn.route === "env") return "cloud provider sign-in";
   return "credential";
 }
@@ -171,7 +171,7 @@ function stopsOf(models: readonly ModelView[], seats: readonly Seat[]): string[]
  * NEVER BACK ONTO THE LIMIT: neither a limited model nor, unless the window is
  * the one model's own, any model on the same plan, which a session or weekly
  * limit holds too even before the engine has seen it refused. Coding goes only
- * to a CLI that runs it.
+ * to a harness that runs it.
  */
 function moveOf(models: readonly ModelView[], all: readonly ModelView[]): AlarmMove | null {
   const add: WizardAdd[] = [];

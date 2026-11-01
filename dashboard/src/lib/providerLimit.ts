@@ -3,7 +3,7 @@
  *
  * The engine holds a seat's limit steady for as long as it lasts
  * (`provider_limit`, internal/api/livestate/provider.go): what it is of (the
- * CLI and whether it signs in on a plan), whether the seat waits for it
+ * harness and whether it signs in on a plan), whether the seat waits for it
  * (`parked`) or runs on a fallback, and when the vendor said it lifts
  * (`resets_at`). What a person needs from that is one fact per limit, not one
  * per seat: "Claude Code subscription limit reached. Agents resume at
@@ -11,7 +11,7 @@
  * drawn as five rows, each flipping between "stopped" and "last turn failed"
  * as the engine retried them, they were the Inbox's flicker.
  *
- * GROUPED BY WHAT THE LIMIT IS OF, the CLI and how it signs in, in the order
+ * GROUPED BY WHAT THE LIMIT IS OF, the harness and how it signs in, in the order
  * the seats come, so the condition's id and its place in the list are steady
  * for as long as the limit lasts. Never by the `providers.llm` entry, which
  * the engine does not broadcast: which entries a company configures is an
@@ -24,9 +24,9 @@ import { fmtClock, plural, tsKey } from "./format.ts";
 
 /** One kind of limit and the seats it holds up or hands to a fallback. */
 export interface EntryLimit {
-  /** The kind's steady key: its CLI and how it signs in. */
+  /** The kind's steady key: its harness and how it signs in. */
   key: string;
-  /** The CLI the limited entries drive, and whether they sign in on a plan. */
+  /** The harness the limited entries drive, and whether they sign in on a plan. */
   harness: string;
   subscription: boolean;
   /** The seats waiting for it. */
@@ -78,14 +78,14 @@ export function entryLimits(agents: readonly AgentRow[]): EntryLimit[] {
   return [...byKey.values()];
 }
 
-/** What a limit is OF where a person reads it: its CLI's product name, or
- *  "Model" where the CLI is one of the company's own or was not said. */
+/** What a limit is OF where a person reads it: its harness's product name, or
+ *  "Model" where the harness is one of the company's own or was not said. */
 export function entryName(limit: Pick<EntryLimit, "harness">): string {
   return HARNESS_PRODUCTS[limit.harness] ?? "Model";
 }
 
 /** "Claude Code subscription limit reached": the entry's name, and the
- *  limit's kind by how its CLI signs in. */
+ *  limit's kind by how its harness signs in. */
 export function limitTitle(limit: EntryLimit): string {
   return `${entryName(limit)} ${limit.subscription ? "subscription" : "usage"} limit reached`;
 }

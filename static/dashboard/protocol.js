@@ -35,7 +35,7 @@ function sameValue(a, b) {
 *
 * An `agents` push carries these only when their version moved since the last
 * push for the same call — they move once a round, once a tool call or once a
-* CLI run, while the row is pushed five times a second as a round streams —
+* harness run, while the row is pushed five times a second as a round streams —
 * and names every version always. The store keeps the copy it holds of a field the push left
 * out, and asks for the call whole (`live_call`) when a push names a version
 * newer than the one it holds: the push that moved it was dropped. A field
@@ -307,7 +307,7 @@ var NOTHING_HELD = {
 };
 /**
 * The heavy fields that are STATUS — each round's timing and tokens, and each
-* CLI run's — which a call whose body is withheld from this reader still
+* harness run's — which a call whose body is withheld from this reader still
 * carries and versions. Every other detail is the seat's BODY
 * (`LiveCall.body_withheld`).
 */

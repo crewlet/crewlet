@@ -41,11 +41,11 @@ export const HEALTH: Record<ModelHealth, { label: string; tone: Tone }> = {
 /** How a model signs in on the answering node. */
 export const ROUTE: Record<ModelSignInRoute, string> = {
   token: "Subscription token",
-  credentials: "CLI login on the host",
+  credentials: "Harness login on the host",
   "api-key": "API key",
   env: "Cloud provider or gateway",
   "inherit-env": "The engine's own environment",
-  environment: "The CLI's environment",
+  environment: "The harness's environment",
   none: "Nothing signs it in",
 };
 
@@ -59,8 +59,8 @@ export const WINDOW: Record<ModelLimitWindow, string> = {
 
 /** One line of a model's test, by what it measured. */
 export const CHECK: Record<ModelCheckName, string> = {
-  binary: "CLI installed",
-  version: "CLI version",
+  binary: "Harness installed",
+  version: "Harness version",
   "sign-in": "Signs in",
   usage: "Reports its usage",
   smoke: "Answers a call",
@@ -138,7 +138,7 @@ export const ASSISTANT_USE = {
   label: "Ask Crewlet",
   hint: "Answers you in the dashboard.",
   tip: "Sets assistant.llm. Ask Crewlet is the company's, so no seats are picked.",
-  rule: "Ask Crewlet runs only on a model that denies the CLI's web tools, so a page it reads cannot send what it read anywhere.",
+  rule: "Ask Crewlet runs only on a model that denies the harness's web tools, so a page it reads cannot send what it read anywhere.",
 } as const;
 
 /** Every seat job at once. */
@@ -166,7 +166,7 @@ export function isFastModel(model: string): boolean {
   return /haiku|mini|nano|flash|lite/i.test(model);
 }
 
-/** A CLI's product name, or its key for a custom one. */
+/** A harness's product name, or its key for a custom one. */
 export function product(harness: string): string {
   return HARNESS_PRODUCTS[harness] ?? harness;
 }

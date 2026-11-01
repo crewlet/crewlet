@@ -391,7 +391,7 @@ export function turnTokens(
  * steps · 3 variables · up to 40 turns".
  *
  * NOT WHERE THE BOX IS, and never "not offered": every agent seat's executor
- * is its coding CLI's own run in a box, placed by the `run_in` of whichever
+ * is its harness's own run in a box, placed by the `run_in` of whichever
  * model entry launches it, which the seat's own block does not say — so this
  * says only what the block does. Every value on the setup card starts the line
  * it stands on, so each is written with its capital, as "No provider

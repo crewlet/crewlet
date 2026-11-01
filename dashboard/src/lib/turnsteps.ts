@@ -156,7 +156,7 @@ export function callWords(args: unknown): string {
  * The call a seat is making now, or the last one it made this phase, as one
  * line: `sandbox.run go test ./...`.
  *
- * SEVERAL CALLS IN FLIGHT — a CLI runs a response's calls side by side — are
+ * SEVERAL CALLS IN FLIGHT — a harness runs a response's calls side by side — are
  * the one running longest, which is the one the turn is waiting on, and how
  * many more run beside it: `sandbox.run make · 2 more running`. One line has
  * no room for every call; the turn's own page lists them all.

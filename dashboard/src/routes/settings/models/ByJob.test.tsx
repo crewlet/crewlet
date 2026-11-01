@@ -6,7 +6,7 @@
  * The invariants: a cell names the model the engine reports, and a category
  * the document split says which job runs where; a cell on a model that will
  * not answer says so (QA M19); a category with a deadline notes a slow model;
- * coding offers only a CLI that can code, and the Assistant only a model that
+ * coding offers only a harness that can code, and the Assistant only a model that
  * denies web tools; every pick opens the picked model's wizard on Use it for
  * with exactly this seat and category (the deep-link walk); a member reads
  * values, with no picker, in the type an admin's picker draws (QA Nit 7); and
@@ -43,7 +43,7 @@ const [FIRST_JOB, SECOND_JOB] = CATEGORY_JOBS[UNTIMED];
  * Backend Engineer runs every job on `default` (a strong, slow model).
  * Product Manager codes on `default` and runs every other job on `haiku`.
  * Quality Lead codes on `sonnet`, which cannot sign in; its untimed category
- * is split by hand between `sonnet` and `codex-review` (a CLI that cannot
+ * is split by hand between `sonnet` and `codex-review` (a harness that cannot
  * code); its timed one runs on `default`. The assistant chats on `guarded`,
  * the one model that denies web tools.
  */
@@ -163,7 +163,7 @@ test("a category with a deadline notes a slow model, and not a fast one", () => 
   expect(cellOf(picker("coding", "pm")).textContent).not.toContain("Fast model recommended");
 });
 
-test("each option names the model, its condition in a word and its model id, and coding offers only a CLI that can code", () => {
+test("each option names the model, its condition in a word and its model id, and coding offers only a harness that can code", () => {
   mount();
   const coding = optionsOf(picker("coding", "pm")).map((o) => o.textContent ?? "");
   expect(coding.some((t) => t.includes("codex-review"))).toBe(false);

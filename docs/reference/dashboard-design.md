@@ -5125,7 +5125,7 @@ rules fix it, and each one names a specific mechanism:
    **A round needs no sentence about how it ended.** Each round's
    `rounds[].stop_reason` is `end` or `tool_use` — an answer, or calls to run
    — which its words and its calls already show, so the card draws nothing
-   from it. There is no reason for a round cut short: a CLI whose model hit
+   from it. There is no reason for a round cut short: a harness whose model hit
    its ceiling or declined says so in its own words, which the round shows as
    it shows any words, or fails, and a failed phase carries its `error_kind`
    on the header in the danger tone, and its error text in a danger callout in
@@ -5494,16 +5494,16 @@ rules fix it, and each one names a specific mechanism:
    transcript is two header rows; what it buys is a card that can be read top
    to bottom as the story of one phase. Their own order is the request's: the
    prompt is what was sent, and the tool surface is the tools that went *with*
-   it — served to the CLI as its MCP server's for the length of each run — one
+   it — served to the harness as its MCP server's for the length of each run — one
    call described in two folds, so they belong beside each other rather than
    either side of the transcript.
 
-   **What it did is grouped by CLI run.** Most phases are one run of their
-   CLI's loop; one that was steered, delegated or corrected is several, each a
+   **What it did is grouped by harness run.** Most phases are one run of their
+   harness's loop; one that was steered, delegated or corrected is several, each a
    process handed the conversation so far. So the rounds sit under a head per
-   run (`RunHead`): *CLI run N*, the entry that served it, how many rounds it
+   run (`RunHead`): *Harness run N*, the entry that served it, how many rounds it
    made, how long it lived, what it spent and how it ended — or, for the run
-   still in flight, that it is running. A run whose CLI's record showed no
+   still in flight, that it is running. A run whose harness's record showed no
    requests is one round, and its head says so, since that round's timing is
    the run's.
 
@@ -6022,7 +6022,7 @@ Four rules replace it, and each one names what it fixes.
    **nested** call, a delegate's worker and the round-cap judge included, which
    publish no start and so could never have been given one. Zero means *not
    measured*, never *took no time*: an executor's rounds ran inside its
-   coding CLI's own loop in another process, and that run's wall clock is on
+   harness's own loop in another process, and that run's wall clock is on
    `executor_launched` / `executor_finished` instead.
 
    **And the page says where each one went.** *Relocated* is only better than
@@ -6636,7 +6636,7 @@ in the Timeline's Reflection lane instead.
 `executor_collected` — one launch, as its collection read it off the box — is
 no phase but the work of the `execute` round that launched it, so
 `groupTurns` files it under that round's record and the round's `PhaseCard`
-draws it inside, under **Its launch** (or **Its N launches**): the CLI it ran
+draws it inside, under **Its launch** (or **Its N launches**): the harness it ran
 as, how it ended, what it spent, the report it wrote and its **Activity** fold.
 One round is one card however many launches it took (an answer carries a
 parked executor on; a launch
@@ -6645,7 +6645,7 @@ round's — the executor's own record carries none — which is also what the
 Tokens fact counts as the turn's own. A launch whose round has no record in
 hand stands in the round's place on its own card, saying the same things.
 In **Recent phases** a launch is a row of its own, drawn as the executor's:
-the `execute` word with its CLI beside it, its CLI's own turns under Rounds,
+the `execute` word with its harness beside it, its harness's own turns under Rounds,
 and `collected` as its outcome, the report's first line on it.
 
 ---
@@ -7160,7 +7160,7 @@ calls the seat working — for most of the turn, and for hours on a long
 one. So while the turn is parked the Transcript
 leads with an **Executor** card: its live output (the same
 `executor_tail` poll the Timeline's launch span opens, read off the
-waterfall's own open launch span), the coding agent, and **Open the executor**
+waterfall's own open launch span), the harness, and **Open the executor**
 to its page (`#/live/executors/{turn_id}`); the executor's card it parked in is drawn open
 beneath it. A turn that parks while a reader watches therefore keeps
 something live on the page, which sending a parked turn's watch link
@@ -7228,11 +7228,11 @@ that can.
 - **Timeline is a waterfall on the engine's own clock** (`lib/waterfall.ts`).
   Every instant is one the engine measured — each round's model call, each
   tool call, a phase, the prefetch, an executor's launch — and the model only arranges
-  them: a phase's CLI runs under it, each a **CLI run N** span from its launch
+  them: a phase's harness runs under it, each a **Harness run N** span from its launch
   to its exit (`invocations[]`) and its rounds under it — the entry that served
-  it, the rounds it made, whether its CLI's record showed them, how it ended and
+  it, the rounds it made, whether its harness's record showed them, how it ended and
   what it spent in its detail, and the run still going drawn open from its
-  launch (`run_started_at`), saying what it made lands when its CLI exits —
+  launch (`run_started_at`), saying what it made lands when its harness exits —
   a round's tool calls after its model call (a
   call the engine timed but did not stamp is run serially from the model's
   answer and says it was *placed*), a delegate's workers and the round-cap
@@ -7357,7 +7357,7 @@ it, so a link to one run landed on a board with the run below the fold.
   anybody is being waited on (a source test holds every reader to it).
   - A parked executor's banner says what it asked, **who it is put to** (the
     audience the engine resolved when it parked, by name, and the lead
-    chain when the coding agent's label named nobody), how long its box is
+    chain when the harness's label named nobody), how long its box is
     held, and carries **Answer**: `answer_executor{turn_id, launch_id, choice}` for
     an option, or `{turn_id, launch_id, answer}` for words, which reaches
     it whatever launched it. `pending` is the ordinary outcome: the answer
@@ -8957,11 +8957,11 @@ and what it stops, grouping the models one credential or one plan holds, its
 vendor's sentence behind **Details**, and offering the one gesture that fixes
 it. A limit that holds seats also offers **Use a different model for these
 seats**: a menu of the models that answer now (never one on the limited plan,
-and for coding only a CLI that runs it), or a line saying none can, and **Add a
+and for coding only a harness that runs it), or a line saying none can, and **Add a
 model**, each opening the wizard on *Use it for* with every seat's category on
 the limited models added (`?add=`), for Review to show before anything is
 written. The address only preselects: a seat the company no longer has, or
-coding on a CLI that runs none, is dropped. Then a row per model: its CLI's mark, key and model; its status (one word
+coding on a harness that runs none, is dropped. Then a row per model: its harness's mark, key and model; its status (one word
 from the engine's reading, and when it changes); how it signs in and the secret
 it reads; what it is used for, by category; when it last answered; and its
 menu. **By job** is every agent seat as a row with the model it runs for each
@@ -8972,11 +8972,11 @@ under a fixed deadline is not a fast one; a pick opens that model's wizard on
 *Use it for* with the seat's category added.
 
 A model's page (`models/{id}`) has its sign-in (the route, the secret, when and
-by whom it was stored, its expiry, and on a CLI login each node's state with the
+by whom it was stored, its expiry, and on a harness login each node's state with the
 command that makes it there), its sit-out with **Retry now** and **Clear
 sit-out** for every model on its plan, its last answer and failure, its usage
 over seven days, its limits and every place that runs on it, grouped by
-category with backups apart and Ask Crewlet named. **Test** runs the CLI's
+category with backups apart and Ask Crewlet named. **Test** runs the harness's
 own checks on the answering node and says each in words. A Codex model signs
 in with a device code: the page shows the address and the code and follows the
 session until it ends. **Remove** names every place that runs on the model in
@@ -8984,9 +8984,9 @@ words, asks where each moves, checks each choice with a dry run and removes the
 model and every repoint as one revision.
 
 **Adding and editing a model is one wizard**, a page of its own in place of the
-list: the name and the coding CLI (fixed once the model exists), how it signs
-in, the model (the CLI's aliases and the public catalogue's models, or any name
-as text), where it runs a seat's executor (for a CLI with a runner), what it is used for,
+list: the name and the harness (fixed once the model exists), how it signs
+in, the model (the harness's aliases and the public catalogue's models, or any name
+as text), where it runs a seat's executor (for a harness with a runner), what it is used for,
 its limits, a test call and a review of exactly what changes. A pasted
 credential is tested before anything is stored and sealed before the document
 that names it is written; the document is checked with a dry run against the
@@ -9004,9 +9004,9 @@ last wrote the row, in that path's own word and never one a request chose
 `setup` for an integration's setup; `provision` for what a provisioning pass
 minted, the engine's own or a provisioner's `-secret-store` run made with its
 node's engine stopped; `cli` for `crewlet secrets set` and `llm-login` for a
-coding CLI's login stored by `crewlet llm`, each written to the fleet's store
+harness's login stored by `crewlet llm`, each written to the fleet's store
 directly with its node's engine stopped), drawn in the column as API,
-Integration setup, Provisioning pass, CLI and CLI login — and the credential's
+Integration setup, Provisioning pass, CLI and Harness login — and the credential's
 peek says what its word means rather than leaving it to a pointer. Those five
 are all the listing can carry, so a word outside them is said as one this
 build does not know rather than guessed at.
@@ -10578,7 +10578,7 @@ to.
 19. **Tokens, never money.** Every spend figure the dashboard draws is a token
     count — on Spend, on a seat's profile, on a task's cost, on a turn's
     phases and in the landing screen's pulse. The engine records a price where
-    one is reported, and only a subscription coding CLI reports one, so a
+    one is reported, and only a subscription harness reports one, so a
     currency figure covers the minority of calls that quote it while the token
     count beside it covers all of them: on a screen it reads as the company's
     spend and is a fraction of it. So no screen draws a price, a currency sign

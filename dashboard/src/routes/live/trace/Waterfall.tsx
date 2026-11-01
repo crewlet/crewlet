@@ -94,7 +94,7 @@ const KIND_LABEL: Record<SpanKind, string> = {
   turn: "Turn",
   context: "Context",
   phase: "Phase",
-  invocation: "CLI run",
+  invocation: "Harness run",
   model: "Model call",
   tool: "Tool call",
   worker: "Worker",
@@ -574,7 +574,7 @@ function SpanDetail({
 }
 
 /**
- * One CLI run: which entry served it, the rounds it made, whether its CLI
+ * One harness run: which entry served it, the rounds it made, whether its harness
  * showed them, how it ended and what it spent. The run in flight is on no
  * record yet, and says so.
  */
@@ -583,7 +583,7 @@ function InvocationDetail({ span, record }: { span: Span; record: PhaseRecord })
   if (!run) {
     return (
       <span className="t-caption">
-        Still running: what it made and spent lands when its CLI exits.
+        Still running: what it made and spent lands when its harness exits.
       </span>
     );
   }
@@ -604,7 +604,7 @@ function InvocationDetail({ span, record }: { span: Span; record: PhaseRecord })
         ],
         [
           "Requests",
-          run.requestsObserved ? "" : "not shown by its CLI, so the whole run is one round",
+          run.requestsObserved ? "" : "not shown by its harness, so the whole run is one round",
         ],
         [
           "Tokens",
@@ -627,17 +627,17 @@ function ModelDetail({ span, record }: { span: Span; record: PhaseRecord }) {
     <>
       <Facts
         rows={[
-          ["CLI run", span.invocation > 0 ? String(span.invocation) : ""],
+          ["Harness run", span.invocation > 0 ? String(span.invocation) : ""],
           [
             "Timed",
             run && !run.requestsObserved
-              ? "its CLI showed no requests, so this round is the whole run"
+              ? "its harness showed no requests, so this round is the whole run"
               : "",
           ],
           [
             "Ended",
             timed?.stopReason === "cap"
-              ? "the CLI’s own turn cap ended its run here, with the model still working"
+              ? "the harness’s own turn cap ended its run here, with the model still working"
               : "",
           ],
           ["Model", timed?.model || record.model],
@@ -776,7 +776,7 @@ function RunDetail({
     <>
       <Facts
         rows={[
-          ["Coding agent", span.sub],
+          ["Harness", span.sub],
           ["Box", record?.sandboxId ? <InlineCode>{record.sandboxId}</InlineCode> : ""],
           ["Launch", span.launchId ? <InlineCode>{span.launchId}</InlineCode> : ""],
           ["Delivered", record ? deliveredLine(record) : ""],

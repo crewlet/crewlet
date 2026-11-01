@@ -36,7 +36,7 @@ import type { ModelView } from "../data.ts";
 export type Harness = "claude-code" | "codex" | "opencode";
 /**
  * How a model signs in, as the wizard offers it. `unchanged` is a model on a
- * sign-in the wizard does not write (another CLI, or the engine's own
+ * sign-in the wizard does not write (another harness, or the engine's own
  * environment): an edit keeps it exactly as Configuration wrote it.
  */
 export type Method = "api-key" | "cloud" | "host-login" | "token" | "device" | "unchanged";
@@ -67,24 +67,24 @@ export interface Draft {
   intent: Intent;
 }
 
-/** The CLIs a model can be added on, in the order offered. */
+/** The harnesses a model can be added on, in the order offered. */
 export const HARNESSES: readonly Harness[] = ["claude-code", "codex", "opencode"];
 
 const isHarness = (harness: string): harness is Harness =>
   (HARNESSES as readonly string[]).includes(harness);
 
-/** Whether the draft's CLI can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
+/** Whether the draft's harness can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
 export const canExecute = (d: Pick<Draft, "harness">) =>
   (EXECUTOR_HARNESSES as readonly string[]).includes(d.harness);
 
-/** The sign-in methods each CLI offers, the one allowed on any engine first. */
+/** The sign-in methods each harness offers, the one allowed on any engine first. */
 export const METHODS: Readonly<Record<Harness, readonly Method[]>> = {
   "claude-code": ["api-key", "host-login", "token", "cloud"],
   codex: ["api-key", "device"],
   opencode: ["api-key"],
 };
 
-/** The methods the draft's CLI offers; a CLI the wizard does not add keeps its sign-in. */
+/** The methods the draft's harness offers; a harness the wizard does not add keeps its sign-in. */
 export function methodsFor(d: Pick<Draft, "harness" | "method">): readonly Method[] {
   return isHarness(d.harness) && d.method !== "unchanged" ? METHODS[d.harness] : ["unchanged"];
 }
@@ -192,13 +192,13 @@ const KEY_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 /** The secret store's grammar for a name (`secrets.CheckName`). */
 const VARIABLE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
-/** The steps a draft walks; Where it runs only for a CLI that runs coding. */
+/** The steps a draft walks; Where it runs only for a harness that runs coding. */
 export function stepsFor(d: Pick<Draft, "harness">): WizardStep[] {
   return WIZARD_STEPS.filter((s) => s !== "runs" || canExecute(d));
 }
 
 export const STEP_LABELS: Readonly<Record<WizardStep, string>> = {
-  harness: "Name and CLI",
+  harness: "Name and harness",
   signin: "Method",
   model: "Model",
   runs: "Where it runs",
@@ -248,7 +248,7 @@ export const pastesCredential = (d: Pick<Draft, "method">) =>
 export const credentialWord = (d: Pick<Draft, "method">) =>
   d.method === "token" ? "token" : "key";
 
-/** The convention a credential's secret starts from: the variable the CLI itself reads. */
+/** The convention a credential's secret starts from: the variable the harness itself reads. */
 function baseVariable(d: Pick<Draft, "harness" | "method" | "provider">): string {
   if (d.method === "token") return "CLAUDE_CODE_OAUTH_TOKEN";
   if (d.harness === "codex") return "CODEX_API_KEY";
@@ -265,7 +265,7 @@ const suffixOf = (key: string) =>
     .replace(/^_|_$/g, "");
 
 /**
- * The secret a new credential is stored under: the CLI's own variable while
+ * The secret a new credential is stored under: the harness's own variable while
  * no other model reads it, else that variable suffixed with the model's name.
  * A name that starts with the vendor's word does not say it twice
  * (ANTHROPIC_API_KEY_OPUS for anthropic-opus, design QA M15).
@@ -317,7 +317,7 @@ export function credentialValues(d: Draft): Record<string, string> {
   return out;
 }
 
-/** The model's id as its CLI takes it: OpenCode's names its provider first. */
+/** The model's id as its harness takes it: OpenCode's names its provider first. */
 export function modelId(d: Pick<Draft, "harness" | "provider" | "model">): string {
   const model = d.model.trim();
   return d.harness === "opencode" && model && !model.includes("/")
@@ -392,7 +392,7 @@ export function entityOf(d: Draft, base?: Base): Record<string, unknown> {
   );
   entity.harness = d.harness;
   entity.model = modelId(d);
-  // WHERE AN EXECUTOR RUNS is a choice only a CLI with a runner has; any other leaves it unset.
+  // WHERE AN EXECUTOR RUNS is a choice only a harness with a runner has; any other leaves it unset.
   if (d.runIn && canExecute(d)) entity.run_in = d.runIn;
   if (d.timeout.trim()) entity.timeout_seconds = wholeOrText(d.timeout);
   if (d.concurrent.trim()) entity.max_concurrent = wholeOrText(d.concurrent);
@@ -612,7 +612,7 @@ export function fieldOf(p: Pick<ConfigProblem, "segments">, key: string): string
   if (s[0] === "variable") return "Stored as";
   if (s[0] === "providers" && s[1] === "llm" && s[2] === key) {
     const words: Record<string, string> = {
-      harness: "Coding CLI",
+      harness: "Harness",
       model: "Model",
       run_in: "Where it runs",
       timeout_seconds: "Timeout",
@@ -726,7 +726,7 @@ export function draftProblems(
       );
     }
   }
-  if (!d.model.trim()) out.push(at("model", "Choose the model the CLI runs.", "missing"));
+  if (!d.model.trim()) out.push(at("model", "Choose the model the harness runs.", "missing"));
   const whole = (v: string) => v.trim() === "" || /^[1-9]\d*$/.test(v.trim());
   if (!whole(d.concurrent))
     out.push(at("max_concurrent", "Use a whole number of 1 or more, or leave it empty for 4."));

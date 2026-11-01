@@ -173,7 +173,7 @@ function RevisionState({ revision }: { revision: RevisionMeta }) {
 
 /**
  * A value as a diff draws it: JSON, so `"true"` and `true` stay two different
- * settings (the CLI's `renderValue` rule), and an object or a list in the
+ * settings (the harness's `renderValue` rule), and an object or a list in the
  * document's own indented shape rather than as one run-on line.
  *
  * ABSENT IS `null`. `configapi.Change` omits an empty side, and Go's

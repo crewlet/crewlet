@@ -1,5 +1,5 @@
 /**
- * How the model proves who it is to the vendor: the methods its CLI offers,
+ * How the model proves who it is to the vendor: the methods its harness offers,
  * the one allowed on any engine first, and what each needs.
  *
  * A STORED CREDENTIAL IS SHOWN AS STORED, never read back. An edit keeps it
@@ -45,9 +45,9 @@ export const METHOD_WORDS: Record<Method, { label: string; detail: string }> = {
       "Amazon Bedrock, Google Vertex AI, Microsoft Foundry, or your own LLM gateway, under that provider's agreement.",
   },
   "host-login": {
-    label: "CLI login on the host",
+    label: "Harness login on the host",
     detail:
-      "You sign the CLI in yourself in a terminal on the engine host. This page shows whether it is signed in.",
+      "You sign the harness in yourself in a terminal on the engine host. This page shows whether it is signed in.",
   },
   token: {
     label: "Subscription token",
@@ -272,8 +272,8 @@ export function SignInStep({
           After you create the model, run{" "}
           <span className="mono">crewlet llm login {draft.key || "<model>"}</span> in a terminal on
           the engine host and finish the vendor's sign-in in your browser. The model's page then
-          shows whether it is signed in. A CLI login stays on its node and never travels to an E2B
-          sandbox.
+          shows whether it is signed in. A harness login stays on its node and never travels to an
+          E2B sandbox.
         </Callout>
       ) : null}
 

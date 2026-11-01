@@ -20,7 +20,7 @@
  * A launch of an executor's run is no phase: it is the work of the `execute`
  * round that launched it, which the turn's own page draws inside that round's
  * card. Here it is a row of its own, drawn as the executor's — the round's
- * phase word with the CLI that ran it, its CLI's own turns where a phase has
+ * phase word with the harness that ran it, its harness's own turns where a phase has
  * rounds, what it spent, and the report it wrote back as what its outcome
  * says — so the list says what each run cost and the turn says whose round it
  * was. A phase filter of `execute` keeps both.
@@ -225,7 +225,7 @@ export function RecentPhases({
         key: "phase",
         header: "Phase",
         shrink: true,
-        // THE ROUND'S WORD, AND ON A LAUNCH THE CLI THAT RAN IT: the badge a
+        // THE ROUND'S WORD, AND ON A LAUNCH THE HARNESS THAT RAN IT: the badge a
         // phase card wears for a run in a box, so a launch row reads as the
         // executor's run rather than as a second executor.
         cell: (r) =>
@@ -289,8 +289,8 @@ export function RecentPhases({
         key: "rounds",
         // TOOL ROUNDS, the phase's own `rounds_used` — one field, the same
         // quantity from the push and from the record. A launch's are its
-        // CLI's own turns, which the engine neither made nor timed, and
-        // where its CLI reported none the cell says so rather than 0.
+        // harness's own turns, which the engine neither made nor timed, and
+        // where its harness reported none the cell says so rather than 0.
         header: "Rounds",
         align: "right",
         shrink: true,
@@ -300,7 +300,7 @@ export function RecentPhases({
           ) : r.harnessTurns > 0 ? (
             <TableNumberCell value={r.harnessTurns} format={fmtCount} />
           ) : (
-            <EmptyValue label="Its CLI reported no turns" />
+            <EmptyValue label="Its harness reported no turns" />
           ),
         sortValue: (r) => (r.launch ? r.harnessTurns : r.roundsUsed),
       },

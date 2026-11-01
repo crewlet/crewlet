@@ -133,7 +133,7 @@ describe("a settled phase's zero is a number", () => {
    * ABSENT AND ZERO ARE DIFFERENT FACTS, and a dash claims the first about the
    * second.
    *
-   * A phase run on a subscription CLI backend reports no usage at all, and one
+   * A phase run on a subscription harness backend reports no usage at all, and one
    * the engine stopped before its first call came back has a `total_tokens` of
    * 0 on a record that is settled. `totalTokens ? … : "—"` printed "not
    * recorded" for both, on the card an operator opens precisely to find out
@@ -584,16 +584,16 @@ describe("an executor round's launches", () => {
       key: "turn-1|execute|1|job-2",
       launchId: "job-2",
       failed: true,
-      error: "the coding agent exited with status 1",
+      error: "the harness exited with status 1",
       errorKind: "launch_failed",
     });
     render(<PhaseCard record={phase()} launches={[asked, broke]} defaultOpen />);
     expect(screen.getByText("stopped to ask: which branch?")).toBeDefined();
-    expect(screen.getByText("the coding agent exited with status 1")).toBeDefined();
+    expect(screen.getByText("the harness exited with status 1")).toBeDefined();
   });
 
-  // THE BADGE IS THE RUN'S OWN FACT: the card names the CLI wherever the
-  // record names a run — its CLI, or the box it ran in — and badges nothing
+  // THE BADGE IS THE RUN'S OWN FACT: the card names the harness wherever the
+  // record names a run — its harness, or the box it ran in — and badges nothing
   // that ran on the engine host. No field says where a phase ran.
   //
   // Mutation: badge only a launch, and the executor that collected a run
@@ -1117,7 +1117,7 @@ describe("a publishing call", () => {
 
 /**
  * EVERY CALL IN FLIGHT IS IN ITS ROUND, named running, after the calls of that
- * round that have answered. A CLI runs a response's calls side by side, so a
+ * round that have answered. A harness runs a response's calls side by side, so a
  * round can have several out at once; a card that drew none of them showed a
  * model's words and nothing after them for as long as the calls took, which
  * reads as a seat that stalled. And a call that answers is the SAME row, open
@@ -1207,16 +1207,16 @@ describe("the calls a running phase is making", () => {
 });
 
 /**
- * A PHASE'S CLI RUNS HEAD THE ROUNDS EACH MADE: which entry served it, the
+ * A PHASE'S HARNESS RUNS HEAD THE ROUNDS EACH MADE: which entry served it, the
  * rounds it made, how it ended — filed by the round span the run names. A run
- * whose CLI showed no requests says its one round is the whole run; a run that
+ * whose harness showed no requests says its one round is the whole run; a run that
  * made none says so; and on a live phase the rounds past every ended run are
  * the run in flight's.
  *
  * Mutation: file every round under the first run, drop a run that made no
  * request, or stop heading a live phase's rounds, and this fails.
  */
-describe("a phase's CLI runs", () => {
+describe("a phase's harness runs", () => {
   const narrated = (n: number) =>
     Array.from({ length: n }, (_, i) => ({
       round: i + 1,
@@ -1261,11 +1261,11 @@ describe("a phase's CLI runs", () => {
     const runs = [...container.querySelectorAll(".run")];
     expect(runs.map(roundsIn)).toEqual([["1", "2"], [], ["3"], ["4"]]);
     const heads = runs.map((r) => r.querySelector(".run-head")?.textContent ?? "");
-    expect(heads[0]).toMatch(/CLI run 1.*claude-max.*rounds 1–2.*the engine ended it/);
-    expect(heads[1]).toMatch(/CLI run 2.*codex.*no request.*failed/);
-    expect(heads[3]).toMatch(/CLI run 4.*round 4.*turn cap/);
+    expect(heads[0]).toMatch(/Harness run 1.*claude-max.*rounds 1–2.*the engine ended it/);
+    expect(heads[1]).toMatch(/Harness run 2.*codex.*no request.*failed/);
+    expect(heads[3]).toMatch(/Harness run 4.*round 4.*turn cap/);
     expect(runs[2]!.textContent).toContain("the whole run is one round");
-    // THE CONTROL: a run whose CLI showed its requests says nothing of it.
+    // THE CONTROL: a run whose harness showed its requests says nothing of it.
     expect(runs[0]!.textContent).not.toContain("the whole run is one round");
   });
 
@@ -1283,7 +1283,7 @@ describe("a phase's CLI runs", () => {
     );
     const runs = [...container.querySelectorAll(".run")];
     expect(runs.map(roundsIn)).toEqual([["1", "2"], ["3"]]);
-    expect(runs[1]!.querySelector(".run-head")?.textContent).toMatch(/CLI run 2.*running/);
+    expect(runs[1]!.querySelector(".run-head")?.textContent).toMatch(/Harness run 2.*running/);
   });
 
   test("a live phase whose first run has not ended is headed as that run", () => {
@@ -1293,7 +1293,7 @@ describe("a phase's CLI runs", () => {
         defaultOpen
       />,
     );
-    expect(container.querySelector(".run-head")?.textContent).toMatch(/CLI run 1.*running/);
+    expect(container.querySelector(".run-head")?.textContent).toMatch(/Harness run 1.*running/);
   });
 
   // THE CONTROL: a settled phase that recorded no runs draws its rounds as
@@ -1306,13 +1306,13 @@ describe("a phase's CLI runs", () => {
 });
 
 /**
- * A ROUND THE CLI'S OWN TURN CAP ENDED SAYS SO under its words — the one stop
+ * A ROUND THE HARNESS'S OWN TURN CAP ENDED SAYS SO under its words — the one stop
  * reason that ends a round unfinished (`contract/stops.ts`). The CONTROL is a
  * round that ended because its model was done, which says nothing.
  *
  * Mutation: drop the note, or draw it on every round, and this fails.
  */
-describe("a round the CLI's turn cap ended", () => {
+describe("a round the harness's turn cap ended", () => {
   test("says the cap ended its run with the model still working", () => {
     const timed = (round: number, stopReason: string) => ({
       round,
@@ -1337,7 +1337,7 @@ describe("a round the CLI's turn cap ended", () => {
     const [first, second] = [...container.querySelectorAll(".round")];
     expect(first!.querySelector(".round-note")).toBeNull();
     expect(second!.querySelector(".round-note.caution")?.textContent).toMatch(
-      /CLI’s own turn cap ended its run here, with the model still working/,
+      /harness’s own turn cap ended its run here, with the model still working/,
     );
   });
 });

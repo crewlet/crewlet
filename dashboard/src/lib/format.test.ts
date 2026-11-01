@@ -174,7 +174,7 @@ describe("relative time", () => {
 });
 
 describe("numbers", () => {
-  // POWERS OF 1024 ARE LABELLED AS SUCH, as the engine labels them: the CLI
+  // POWERS OF 1024 ARE LABELLED AS SUCH, as the engine labels them: the harness
   // and the node's own sentences say "8.0 GiB", and a banner that drew the same
   // size as "8.0 GB" read as a different number beside it. Mutation: put the
   // decimal labels back.

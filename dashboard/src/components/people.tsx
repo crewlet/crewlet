@@ -211,7 +211,7 @@ export function AccessTags({ grants }: { grants?: readonly string[] | null }) {
  *
  * ADMIN IS ONE SWITCH. It includes every app, so ticking it ticks every app
  * and LOCKS them — "Included with Admin" — and stores them too (the engine's
- * own CLI does the same with `-grants admin`), so taking Admin away later
+ * own harness does the same with `-grants admin`), so taking Admin away later
  * leaves the person their apps rather than nothing. Unticking it unlocks the
  * apps and keeps them ticked.
  *
@@ -256,7 +256,7 @@ export function AccessPicker({
     if (g === ADMIN) {
       // TICKED, every app the build knows is stored beside it; UNTICKED, the
       // apps stay — see the doc.
-      // A ROW STORED AS ADMIN ALONE (a Tier A file, an older CLI) is read
+      // A ROW STORED AS ADMIN ALONE (a Tier A file, an older harness) is read
       // through `expand` as it is let go, so it keeps its apps too.
       return on
         ? [...new Set([...value, ADMIN, ...APPS])]

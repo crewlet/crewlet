@@ -725,7 +725,7 @@ describe("delegated workers", () => {
   });
 
   // A LAUNCH IS READ AS THE EXECUTOR'S WORK: the round's phase word, its
-  // report, its CLI's own turns and what it spent — and no price, which the
+  // report, its harness's own turns and what it spent — and no price, which the
   // dashboard never draws.
   test("a launch is read as a record of its executor round", () => {
     const launch = fromPhaseEvent(
@@ -740,7 +740,7 @@ describe("delegated workers", () => {
       "claude-code",
     ]);
     expect([launch.failed, launch.error]).toEqual([true, "exit 1"]);
-    // NO ROUNDS AND NO DECISION: those were the CLI's, and the round's.
+    // NO ROUNDS AND NO DECISION: those were the harness's, and the round's.
     expect([launch.roundsUsed, launch.decision, launch.tools]).toEqual([0, "", []]);
   });
 
@@ -948,7 +948,7 @@ describe("a phase's duration", () => {
   });
 
   test("an unmeasured phase reports nothing rather than zero", () => {
-    // An executor run's rounds ran inside its coding CLI's own loop in
+    // An executor run's rounds ran inside its harness's own loop in
     // another process, so the engine measured no loop of its own and the
     // field is 0. Rendering that as "0ms" would put a confident number on a
     // phase that took four minutes.
@@ -1051,14 +1051,14 @@ describe("the row's column is the authority for a stored record, the payload for
 });
 
 /**
- * EVERY CALL IN FLIGHT, AND EVERY CLI RUN, reach the record from both shapes a
+ * EVERY CALL IN FLIGHT, AND EVERY HARNESS RUN, reach the record from both shapes a
  * phase arrives in — and a call keeps its own id from the moment it runs to
  * the row it answers as.
  *
  * Mutation: read one running call, drop a run's rounds or the call's id, or
  * leave a finished record holding a call in flight, and this fails.
  */
-describe("the calls in flight and the CLI runs", () => {
+describe("the calls in flight and the harness runs", () => {
   const run = {
     started_at: "2026-01-01T00:00:01Z",
     duration_ms: 4_000,
@@ -1163,7 +1163,7 @@ describe("the calls in flight and the CLI runs", () => {
  * Mutation: drop a run with no rounds, file the trailing rounds under the
  * last run, or drop an unclaimed round, and this fails.
  */
-describe("a phase's rounds under its CLI runs", () => {
+describe("a phase's rounds under its harness runs", () => {
   const ledger = (...numbers: number[]) =>
     rounds(
       [],

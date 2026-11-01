@@ -25,7 +25,7 @@ export interface ModelNode {
   reported: boolean;
 }
 
-/** A host CLI login on one node: its state as the CLI's own status command reports it. */
+/** A host harness login on one node: its state as the harness's own status command reports it. */
 export interface ModelHostLogin {
   node: string;
   state: "signed_in" | "signed_out" | "unknown" | (string & {});
@@ -188,7 +188,7 @@ export interface RunnersAnswer {
   nodes: Array<{ id: string; reported: boolean } & Record<RunnerCellName, RunnerNodeCell | null>>;
 }
 
-/** One model in the catalogue, by the id the CLI takes. */
+/** One model in the catalogue, by the id the harness takes. */
 export interface CatalogueModel {
   id: string;
   name: string;
@@ -196,7 +196,7 @@ export interface CatalogueModel {
   released?: string;
 }
 
-/** `llm_models`: the models a CLI can run, from models.dev, with its own aliases and docs. */
+/** `llm_models`: the models a harness can run, from models.dev, with its own aliases and docs. */
 export interface ModelsAnswer {
   source: "models.dev" | "none";
   fetched_at: string | null;
@@ -214,7 +214,7 @@ export interface CheckLine {
   detail: string;
   kind?: string;
   remedy?: string;
-  /** On an auth failure: the vendor refused the credential, or the CLI never used it. */
+  /** On an auth failure: the vendor refused the credential, or the harness never used it. */
   meaning?: "refused" | "unread";
 }
 

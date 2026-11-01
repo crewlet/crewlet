@@ -18,11 +18,11 @@
  *
  *  - the TURN from its opening record to its last span (or now, while it runs);
  *  - its CONTEXT — the prefetch — before the first phase;
- *  - each of its own PHASES, with each CLI RUN under it from its launch to its
+ *  - each of its own PHASES, with each harness RUN under it from its launch to its
  *    exit (`invocations[]`), each ROUND's model call under the run that made it
  *    — filed by the round span the run names, never by instant — and that
  *    round's TOOL CALLS after it, every call in flight among them. A run
- *    whose CLI showed no requests is ONE round, which nothing timed on its
+ *    whose harness showed no requests is ONE round, which nothing timed on its
  *    own: its span is the run's. The run in flight on a live phase is not on
  *    the record until it ends, so it is drawn open from the first instant
  *    measured under it. A call the engine did not stamp but did time is run
@@ -51,7 +51,7 @@
  *
  * A call whose arguments did not parse was answered rather than run, so it
  * carries no instants — unlike the calls an executor makes in its box, which
- * ran inside its CLI's own loop and are timed at the bridge they were made over. Such a call
+ * ran inside its harness's own loop and are timed at the bridge they were made over. Such a call
  * is an UNTIMED row — listed under the waterfall as "not placed on this
  * clock" — rather than a bar drawn at an invented position, or dropped. The
  * list says PLACED rather than timed because a call can be measured and
@@ -83,7 +83,7 @@ export interface Span {
   id: string;
   kind: SpanKind;
   label: string;
-  /** A second, quieter phrase: a model, a server, a coding agent. */
+  /** A second, quieter phrase: a model, a server, a harness. */
   sub: string;
   /** Nesting depth; the turn is 0. */
   depth: number;
@@ -103,7 +103,7 @@ export interface Span {
   /** The call's index in its phase's `runningCalls`, for a tool span still in
    *  flight; -1 otherwise. */
   runningIndex: number;
-  /** The CLI run's ordinal, for an invocation span — and for a model span, the
+  /** The harness run's ordinal, for an invocation span — and for a model span, the
    *  run that made the round, where the record names one; 0 otherwise. */
   invocation: number;
   /** The launch, for a launch's span; "" otherwise. */
@@ -224,7 +224,7 @@ function phaseNode(
     let start = at(r.startedAt);
     let end = start + r.durationMs;
     let sub = r.model || p.model;
-    // A RUN WHOSE CLI SHOWED NO REQUESTS IS ONE ROUND, and nothing timed that
+    // A RUN WHOSE HARNESS SHOWED NO REQUESTS IS ONE ROUND, and nothing timed that
     // round on its own: the model worked somewhere inside the run, and the
     // run's own launch and exit are the instants there are. Drawn over the
     // run, and said to be — never left untimed while its run is measured.
@@ -325,7 +325,7 @@ function phaseNode(
     (host ? host.children : children).push(node);
   });
   // THE CALLS RUNNING NOW, which have no row in `tools` until they return —
-  // every one of them, since a CLI runs a response's calls side by side. Each
+  // every one of them, since a harness runs a response's calls side by side. Each
   // is named by its own id where it has one, so a reader who opened one still
   // has it open while the others come and go.
   if (p.live) {
@@ -413,7 +413,7 @@ function runOf(runs: readonly Invocation[], round: number): Invocation | undefin
 }
 
 /**
- * A phase's CLI runs, each over the round spans it made: the round nodes in
+ * A phase's harness runs, each over the round spans it made: the round nodes in
  * `children` move under the run that names them, and the run's span is its
  * own launch and exit.
  *
@@ -426,7 +426,7 @@ function runOf(runs: readonly Invocation[], round: number): Invocation | undefin
  * open from its launch, which the live frame states (`run_started_at`), over
  * its rounds past every ended run's — and from the first instant measured
  * under it on a frame that does not say. A run launched with nothing timed
- * under it yet is drawn as the empty span it is: the CLI starting, or its
+ * under it yet is drawn as the empty span it is: the harness starting, or its
  * model writing the first request.
  */
 function cliRuns(p: PhaseRecord, children: Node[], now: number, untimed: Untimed[]) {
@@ -445,7 +445,7 @@ function cliRuns(p: PhaseRecord, children: Node[], now: number, untimed: Untimed
     }
     return taken;
   };
-  const label = (n: number) => `CLI run ${n}`;
+  const label = (n: number) => `Harness run ${n}`;
   for (const run of p.invocations) {
     const id = `${p.key}.i${run.run}`;
     const start = at(run.startedAt);

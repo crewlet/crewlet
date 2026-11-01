@@ -17,7 +17,7 @@
  * `[admin]` is reported as admin plus every app — so a screen reading the
  * viewer needs nothing more. A STORED row is another matter: a person's
  * directory row, an invitation or a token may hold `[admin]` alone (a Tier A
- * file, a CLI create), and reading it raw would draw an administrator as
+ * file, a harness create), and reading it raw would draw an administrator as
  * holding no app. Every comparison here therefore goes through [expand],
  * the engine's own `iam.Expand`, so a lock, a picker and a People row read
  * one answer however the set was stored.
@@ -103,7 +103,7 @@ export function holdsAny(held: readonly string[], needs: readonly Grant[] | unde
  *
  * Admin's sentence says it is HOST ACCESS, because it is: the configuration
  * an admin writes runs commands on every engine host (an MCP server, a coding
- * CLI, a sandbox on the host). Ticking it is giving somebody a shell there,
+ * harness, a sandbox on the host). Ticking it is giving somebody a shell there,
  * and the picker is the last place to say so before it is given.
  */
 export const ACCESS_WORDS: Record<Grant, { label: string; description: string }> = {
