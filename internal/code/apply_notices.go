@@ -14,10 +14,13 @@ import (
 // WHOM A CHANGE RECORD REACHED, PER RECIPIENT: the applier writes the answer
 // a record about a change carries ([ChangeRouting], concerns.go; none where it
 // concerns nobody, which writes no row) down as
-// ONE ROW PER (record, recipient) it reached — every handle its routing's
-// precedence keeps ([Concerns]) but the record's own actor — in
-// code_notifications (replicated 0081), as the tracker writes
-// tracker_notifications from its records. A person's code inbox is read from
+// ONE ROW PER (record, change, recipient) it reached — every handle each
+// change's routing precedence keeps ([Concerns]) but that routing's own actor
+// — in code_notifications (replicated 0081, keyed so by 0104), as the tracker
+// writes tracker_notifications from its records. The change is in the key
+// because one record can tell one handle about several: a batched push that
+// opens two changes mentioning them, a landing that merges two of their
+// changes ([NoticeID]). A person's code inbox is read from
 // these rows, a change's "whom did this wake" is answered from them, and each
 // committed batch announces whose inbox its rows moved ([inbox.Movement],
 // [Applier.Committed]). A SEAT is woken through the code log's feed, never
@@ -50,7 +53,7 @@ import (
 // recipient's horizon let this node write the row. The count is a pure
 // function of the records, so it is the same on every node, and it is never
 // below the rows any node holds of the change: a node writes at most one row
-// a hearing handle, and only the sweep and a purge delete one.
+// a handle hearing of it, and only the sweep and a purge delete one.
 //
 // # A purge takes a purged change's notices, counted
 //
@@ -125,11 +128,13 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 		}
 		kept = append(kept, notice{Concern: c, kind: kind})
 	}
-	// ONE ROW A HANDLE: [Concerns] keeps a handle once a record, so the
-	// recipient a statement answers names the one concern it wrote.
-	byHandle := make(map[string]Concern, len(kept))
+	// ONE ROW A (change, handle): [Concerns] keeps a handle once a change, so
+	// the change and recipient a statement answers name the one concern it
+	// wrote.
+	type noticeKey struct{ change, handle string }
+	byKey := make(map[noticeKey]Concern, len(kept))
 	for _, k := range kept {
-		byHandle[k.Handle] = k.Concern
+		byKey[noticeKey{k.Change.ChangeID, k.Handle}] = k.Concern
 	}
 	record := noticeRecordID(at)
 	excerpt := excerptOf(payload)
@@ -140,13 +145,13 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 				string(k.Reason), k.Addressed, k.FallbackOnly, k.FallbackRank, excerpt, at.at(), at.packed,
 				at.position.Stream, int64(at.position.Generation)}
 		}, func(rows *sql.Rows) error {
-			var handle string
-			if err := rows.Scan(&handle); err != nil {
+			var key noticeKey
+			if err := rows.Scan(&key.handle, &key.change); err != nil {
 				return err
 			}
-			c := byHandle[handle]
-			a.inboxed.Note(inbox.Note{Record: record, Handle: handle, Subject: c.Change.ChangeID,
-				Reason: string(c.Reason), Position: at.packed})
+			c := byKey[key]
+			a.inboxed.Note(inbox.Note{Record: NoticeID(record, key.change), Handle: key.handle,
+				Subject: key.change, Reason: string(c.Reason), Position: at.packed})
 			return nil
 		})
 	if err != nil {
@@ -245,7 +250,7 @@ func (a *Applier) removeCutNotices(ctx context.Context, tx *sql.Tx, changeID str
 }
 
 // removed runs one of the purge's notice deletes, whose RETURNING is the rows
-// it deleted, and notes each as removed from its recipient's inbox: ONE PASS,
+// it deleted, and notes each as removed from its recipient's inbox, by its [NoticeID]: ONE PASS,
 // the delete answering what it took, never a read of the rows and a second
 // seek of the same index to delete them.
 func (a *Applier) removed(ctx context.Context, tx *sql.Tx, stmt string, args ...any) (int, error) {
@@ -260,7 +265,7 @@ func (a *Applier) removed(ctx context.Context, tx *sql.Tx, stmt string, args ...
 			_ = rows.Close()
 			return 0, err
 		}
-		note.Removed = true
+		note.Record, note.Removed = NoticeID(note.Record, note.Subject), true
 		a.inboxed.Note(note)
 		n++
 	}
@@ -293,18 +298,18 @@ func changesOf(ctx context.Context, tx *sql.Tx, repoID string) ([]string, error)
 
 // The applier's notice statements, each with a WHERE registered in
 // plan_test.go: the write, in three parts for [store.InsertRowsReturning] —
-// a conflict on the key a skip, and the recipients it wrote its answer; a
-// change's count of them, by the change's key; the notices of a list of
-// changes removed by code_notifications_change_idx, one seek an element, and
-// the oldest of one change's by a range of it, each answering the rows it
-// deleted; and the changes a repository still holds, read for its final
+// a conflict on the key a skip, and the (recipient, change) pairs it wrote
+// its answer; a change's count of them, by the change's key; the notices of
+// a list of changes removed by code_notifications_change_idx, one seek an
+// element, and the oldest of one change's by a range of it, each answering
+// the rows it deleted; and the changes a repository still holds, read for its final
 // purge by code_changes_number_idx. The sweep's is noticesweep.go's.
 const (
 	addNoticesSQL = `INSERT INTO code_notifications (record_id, recipient, recipient_kind, repo_id, change_id,
 			change_ref, reason, addressed, fallback_only, fallback_rank, excerpt, created_at, log_seq, log_stream,
 			log_generation) VALUES `
 	noticeRowSQL      = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	addNoticesTailSQL = `ON CONFLICT (record_id, recipient) DO NOTHING RETURNING recipient`
+	addNoticesTailSQL = `ON CONFLICT (record_id, change_id, recipient) DO NOTHING RETURNING recipient, change_id`
 	countNoticesSQL   = `UPDATE code_changes SET notices = notices + ? WHERE id = ?`
 	removeNoticesSQL  = `DELETE FROM code_notifications WHERE rowid IN (SELECT n.rowid
 		FROM json_each(?) AS j CROSS JOIN code_notifications AS n INDEXED BY code_notifications_change_idx

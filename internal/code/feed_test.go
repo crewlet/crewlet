@@ -1,11 +1,14 @@
 package code_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/code"
@@ -64,12 +67,12 @@ func woken(routed []notify.Routed) []string {
 // THE CODE FEED DERIVES ONLY WAKES, AND ONLY SEATS': a record about a change
 // is relayed exactly when its routing tells a seat something, and the parser
 // wakes exactly those seats — each once, under the reason the record's routing
-// gives it, with an id derived from the record and the seat, the change's
-// name, and who wrote what it announces. A person the same record tells is
-// never queue-woken: their notice row is written all the same, and is where
-// they read it. A record that tells nobody but its actor, or only persons, is
-// acknowledged with no delivery, as is a push that moves no change and a
-// record of a newer build.
+// gives it, with an id derived from the record, the change and the seat, the
+// change's name, and who wrote what it announces. A person the same record
+// tells is never queue-woken: their notice row is written all the same, and
+// is where they read it. A record that tells nobody but its actor, or only
+// persons, is acknowledged with no delivery, as is a push that moves no
+// change and a record of a newer build.
 //
 // Mutation: drop the person filter in the parser → the open wakes founder;
 // relay a record whatever its routing tells (drop wakesASeat) → the ask of a
@@ -116,8 +119,8 @@ func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 	}
 	wake := routed[0]
 	switch {
-	case wake.WakeID != changefeed.WakeID(rec.OpID, "plat-lead"):
-		t.Errorf("the wake's id is %s, want the one derived from the record and the seat", wake.WakeID)
+	case wake.WakeID != changefeed.WakeID(code.NoticeID(rec.OpID, change), "plat-lead"):
+		t.Errorf("the wake's id is %s, want the one derived from the record, the change and the seat", wake.WakeID)
 	case !wake.WakeAt.Equal(rec.CreatedAt):
 		t.Errorf("the wake is stamped %v, want the record's own instant %v", wake.WakeAt, rec.CreatedAt)
 	case wake.Source != code.Source || wake.Metadata[code.MetaChangeRef] != "web!1" ||
@@ -191,6 +194,107 @@ func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 	if _, _, err := code.NewTranslator().Translate(t.Context(),
 		changefeed.Record{Key: "x", Payload: []byte("not a record")}); err == nil {
 		t.Error("bytes that are no record were acknowledged")
+	}
+}
+
+// A BATCHED RECORD TELLS A HANDLE ABOUT EACH OF ITS CHANGES: the committer
+// folds pushes from unrelated clients into one record, so two pushes of one
+// record each open a change that mentions the same seat and the same person.
+// The seat is woken about each change — two wakes, each about its own change,
+// each id derived from the record, that change and the seat — and the seat
+// and the person each keep a notice row a change. The person's inbox lists
+// the two apart, by ids a mark names one at a time, and a page of one notice
+// holds both, since it closes between two records and never inside one.
+//
+// Mutation: offer one record's routings to one builder (the add-once rule
+// across the record), and the second change wakes nobody and writes no row;
+// derive the wake id from the record and the seat alone, and the two wakes
+// share an id, the second collapsing into the first; name an inbox notice by
+// its record alone, and founder's two notices carry one id; end an inbox page
+// at its limit, and a page of one shows one of the record's two notices.
+func TestABatchedRecordTellsAHandleAboutEachOfItsChanges(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	// AN HOUR OLD at the harness's batch instant, inside every notice
+	// horizon, so every notice row is written and can be read.
+	storedBefore(n, time.Hour)
+	repo := changeRepo(t, n, "web")
+	// WHAT THE PUSH DECIDE STAMPS on each entry that opens a change: its
+	// routing, the pusher its actor, the options' mentions held to the chart.
+	routed := func(push, ref, title string) code.ChangeRouting {
+		return code.ChangeRouting{ChangeID: code.PushChangeID(push), ChangeRef: ref, RepoName: "web",
+			Title: title, Actor: "harness", Mentions: []string{"cto", "founder"},
+			Persons: []string{"founder", "harness"}}
+	}
+	first := entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf("B"), oidOf("C")))
+	first.Change = &code.ChangeOption{Target: mainRef, Title: "One"}
+	first.Routing = []code.ChangeRouting{routed(first.PushID, "web!1", "One")}
+	second := entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/topic", code.ZeroOID, oidOf("T")))
+	second.Change = &code.ChangeOption{Target: releaseRef, Title: "Two"}
+	second.Routing = []code.ChangeRouting{routed(second.PushID, "web!2", "Two")}
+	pushed := n.push(repo, first, second)
+	rec := n.recordAt(pushed.Position)
+	changes := []string{code.PushChangeID(first.PushID), code.PushChangeID(second.PushID)}
+
+	_, relayed, wakes := wakesOf(t, feedRecord(t, n, pushed.Position))
+	if !relayed || !slices.Equal(woken(wakes), []string{"cto:mention", "cto:mention"}) {
+		t.Fatalf("a record whose two changes mention the cto wakes %v (relayed %v), want the cto about each",
+			woken(wakes), relayed)
+	}
+	for i, change := range changes {
+		w := wakes[i]
+		if w.Metadata[code.MetaChangeID] != change ||
+			w.WakeID != changefeed.WakeID(code.NoticeID(rec.OpID, change), "cto") {
+			t.Errorf("wake %d is about %s under id %s, want change %s under the id its record, its change and "+
+				"the cto derive", i, w.Metadata[code.MetaChangeID], w.WakeID, change)
+		}
+	}
+	if len(wakes) == 2 && wakes[0].WakeID == wakes[1].WakeID {
+		t.Errorf("the two wakes share the id %s, so the second collapses into the first", wakes[0].WakeID)
+	}
+
+	var rows []string
+	if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		got, err := tx.QueryContext(t.Context(), `SELECT recipient, change_id FROM code_notifications
+			WHERE record_id = ? ORDER BY recipient, change_id`, rec.OpID)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = got.Close() }()
+		for got.Next() {
+			var recipient, change string
+			if err := got.Scan(&recipient, &change); err != nil {
+				return err
+			}
+			rows = append(rows, recipient+":"+change)
+		}
+		return got.Err()
+	}); err != nil {
+		t.Fatalf("read the record's notices: %v", err)
+	}
+	want := []string{"cto:" + changes[0], "cto:" + changes[1], "founder:" + changes[0], "founder:" + changes[1]}
+	slices.Sort(want)
+	if !slices.Equal(rows, want) {
+		t.Fatalf("the record wrote the notices %v, want one a change for the cto and for founder: %v", rows, want)
+	}
+
+	ids := []string{code.NoticeID(rec.OpID, changes[0]), code.NoticeID(rec.OpID, changes[1])}
+	page, _ := readInbox(t, n, code.InboxQuery{}, "", 1)
+	got := idsOf(page)
+	slices.Sort(got)
+	if !slices.Equal(got, slices.Sorted(slices.Values(ids))) {
+		t.Fatalf("a page of one of founder's inbox lists %v, want the record's two notices together: %v", got,
+			ids)
+	}
+	mark(t, markerOn(t, n, n.pub), marking(code.MarkGesture{Read: ids[:1]}))
+	page, _ = readInbox(t, n, code.InboxQuery{}, "", 0)
+	read := map[string]bool{}
+	for _, notice := range page.Notices {
+		read[notice.RecordID] = notice.Read
+	}
+	if len(read) != 2 || !read[ids[0]] || read[ids[1]] {
+		t.Errorf("marking %s read leaves founder's notices read %v, want it alone read", ids[0], read)
 	}
 }
 

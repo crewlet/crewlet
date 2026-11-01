@@ -566,8 +566,9 @@ through a position never moves it backwards), and each domain has its tool:
 your own record only, written as the person who holds the seat, and refused
 for anybody else whatever their authority, since marking somebody's mail read
 is a gesture nobody asked a lead to make. A code mark names the `record_id` a
-code notice carries, and is refused naming it when that record reached
-somebody else; its `read_through` is a position on the code log
+code notice carries — the record and the change it told you about, since one
+record can tell you about several changes — and is refused naming it when
+that notice is somebody else's; its `read_through` is a position on the code log
 (`CREWLET_CODE_LOG@<generation>:<sequence>`). The dashboard's **Mark all
 read** sends both, each reading its own domain through the newest of its
 notices on the page.

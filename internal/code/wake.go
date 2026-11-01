@@ -74,7 +74,7 @@ func (p *Parser) Source() string { return Source }
 
 // Parse reports which seats a code record wakes.
 //
-// # The rule, in order
+// # The rule, in order, change by change
 //
 //  1. Whom the record concerns is [Concerns] over its routings — the same set
 //     the applier writes a notice row each for — and the actor step is each
@@ -82,16 +82,20 @@ func (p *Parser) Source() string { return Source }
 //     opens, each naming its own pusher, so nobody is told of a change they
 //     made ([Concern.Hears]).
 //  2. internal/routing's [routing.Route] asks the roster about the rest, and
-//     keeps the repository lead's copy only where nobody ordinary survived.
+//     keeps the repository lead's copy only where nobody ordinary survived —
+//     PER CHANGE, as [Concerns]' add-once rule is: a record that tells of two
+//     changes is two answers, and somebody hearing of one change does not
+//     drop the lead's copy of the other.
 //  3. A PERSON is dropped last: a person reads their code inbox, composed from
 //     the notice the applier wrote them, and is never queue-woken. Dropped
 //     AFTER the roster's filter, so a change a person hears about is one
 //     somebody heard about, and the lead's fallback copy does not wake a seat
 //     for a review a person was asked for.
 //
-// THE WAKE ID IS DERIVED from the record and the recipient
-// ([changefeed.WakeID] over [RecordID]), so a redelivery — the feed's claim
-// fails open — collapses into the wake it already made.
+// THE WAKE ID IS DERIVED from the record, the change and the recipient
+// ([changefeed.WakeID] over [NoticeID]), so a redelivery — the feed's claim
+// fails open — collapses into the wake it already made, and a seat two changes
+// of one batched record concern is woken about each.
 func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Registry) ([]notify.Routed, error) {
 	record, err := recordFromBody(w.Body)
 	if err != nil {
@@ -115,40 +119,55 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	if recordID == "" {
 		recordID = w.Trigger
 	}
-	byHandle := make(map[string]Concern, len(concerns))
-	candidates := make([]routing.Candidate[Reason], 0, len(concerns))
-	for _, c := range concerns {
-		if !c.Hears() {
-			continue
+	var out []notify.Routed
+	for _, change := range byChange(concerns) {
+		byHandle := make(map[string]Concern, len(change))
+		candidates := make([]routing.Candidate[Reason], 0, len(change))
+		for _, c := range change {
+			if !c.Hears() {
+				continue
+			}
+			byHandle[c.Handle] = c
+			candidates = append(candidates, c.Candidate)
 		}
-		byHandle[c.Handle] = c
-		candidates = append(candidates, c.Candidate)
-	}
-	// NO ACTOR AND NO REASON THAT WAKES ONE: the actor step was each
-	// routing's own above (Concern.Hears), which already kept the one reason
-	// that is news to whoever made the record — a failed check of the head
-	// they pushed ([Reason.WakesActor]).
-	routed := routing.Route(candidates, registryHas(reg), "", nil)
-	out := make([]notify.Routed, 0, len(routed))
-	for _, c := range routed {
-		concern := byHandle[c.Handle]
-		if concern.Change.Person(c.Handle) {
-			continue
+		// NO ACTOR AND NO REASON THAT WAKES ONE: the actor step was each
+		// routing's own above (Concern.Hears), which already kept the one
+		// reason that is news to whoever made the record — a failed check of
+		// the head they pushed ([Reason.WakesActor]).
+		for _, c := range routing.Route(candidates, registryHas(reg), "", nil) {
+			concern := byHandle[c.Handle]
+			if concern.Change.Person(c.Handle) {
+				continue
+			}
+			out = append(out, notify.Routed{
+				Inbound: inboundOf(record, payload, recordID, concern),
+				To:      notify.Recipient{Handle: c.Handle},
+				WakeID:  changefeed.WakeID(NoticeID(recordID, concern.Change.ChangeID), c.Handle),
+				// THE RECORD'S OWN INSTANT, the same on every copy of the
+				// wake — see [notify.Routed.WakeAt].
+				WakeAt: record.CreatedAt,
+			})
 		}
-		out = append(out, notify.Routed{
-			Inbound: inboundOf(record, payload, recordID, concern),
-			To:      notify.Recipient{Handle: c.Handle},
-			WakeID:  changefeed.WakeID(recordID, c.Handle),
-			// THE RECORD'S OWN INSTANT, the same on every copy of the wake —
-			// see [notify.Routed.WakeAt].
-			WakeAt: record.CreatedAt,
-		})
 	}
 	if len(out) == 0 {
 		p.logger.DebugContext(ctx, "code_change_wakes_nobody", "record", recordID, "op", string(record.Op))
 		return nil, nil
 	}
 	return out, nil
+}
+
+// byChange is concerns cut into each change's, in [Concerns]' order: one
+// change's concerns are contiguous there, since it offers a change's reasons
+// whole before the next change's.
+func byChange(concerns []Concern) [][]Concern {
+	var out [][]Concern
+	for i, c := range concerns {
+		if i == 0 || c.Change.ChangeID != concerns[i-1].Change.ChangeID {
+			out = append(out, nil)
+		}
+		out[len(out)-1] = append(out[len(out)-1], c)
+	}
+	return out
 }
 
 // registryHas narrows the party registry to the one question routing asks:

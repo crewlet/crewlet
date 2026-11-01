@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -412,44 +413,86 @@ type Concern struct {
 	Change *ChangeRouting
 }
 
-// Concerns is every handle routings concern, in precedence order — one record's
+// Concerns is every handle routings concern, change by change in the order
+// they first appear, each change's in precedence order — one record's
 // routings, which a push record carries one of for every change it merges or
-// opens, and every other record one of. PURE OVER THE ROUTINGS: it reads no
-// row, no chart and no clock, so the applier that writes a notice row per
-// concern and the feed that wakes the seats among them, on any node and at any
-// time, derive one set.
+// opens, a queue's landing or ejection one for every entry it lands or puts
+// out, and every other record one of. PURE OVER THE ROUTINGS: it reads no row,
+// no chart and no clock, so the applier that writes a notice row per concern
+// and the feed that wakes the seats among them, on any node and at any time,
+// derive one set.
 //
-// THE REASONS ARE OFFERED IN [Reasons]' ORDER, every routing's handles for one
-// reason before any for the next, so a handle a record names under two
-// reasons, about two changes, hears under the stronger — internal/routing's
-// add-once rule across the whole record, which a notice row keyed on the
-// record and the recipient needs: a record reaches one handle once.
+// THE ADD-ONCE RULE IS PER CHANGE: a handle one change's routings name under
+// two reasons hears under the stronger (internal/routing's Builder, offered
+// in [Reasons]' order), and a handle two changes of one record name hears
+// about each. The record's identity alone cannot be the notice's: the
+// committer folds up to [MaxPushesPerRecord] pushes from unrelated clients
+// into one record, so a seat mentioned by two of them, or the author of two
+// changes one landing merges, would hear about whichever routing came first
+// and nothing of the other — the busier the repository, the more news lost. So
+// a notice is keyed on the record, the change and the recipient ([NoticeID],
+// replicated 0104), and a wake's id is derived from the same three.
+// Routings that name one change twice — a push that opens a change and a
+// later push of the same record that merges it — share one builder, so a
+// handle hears about that change once.
 func Concerns(routings []*ChangeRouting) []Concern {
 	var (
-		b   routing.Builder[Reason]
-		out []Concern
+		order  []string
+		byID   = map[string][]*ChangeRouting{}
+		out    []Concern
+		reason = Reasons()
 	)
-	for _, reason := range Reasons() {
-		for _, r := range routings {
-			if r == nil {
-				continue
-			}
-			handles := r.heard(reason)
-			if len(handles) == 0 {
-				continue
-			}
-			before := len(b.Candidates())
-			if reason == ReasonLeadFallback {
-				b.Fallback(reason, handles...)
-			} else {
-				b.AddAll(handles, reason, reason.Addressed())
-			}
-			for _, c := range b.Candidates()[before:] {
-				out = append(out, Concern{Candidate: c, Change: r})
+	for _, r := range routings {
+		if r == nil {
+			continue
+		}
+		if _, seen := byID[r.ChangeID]; !seen {
+			order = append(order, r.ChangeID)
+		}
+		byID[r.ChangeID] = append(byID[r.ChangeID], r)
+	}
+	for _, id := range order {
+		var b routing.Builder[Reason]
+		for _, why := range reason {
+			for _, r := range byID[id] {
+				handles := r.heard(why)
+				if len(handles) == 0 {
+					continue
+				}
+				before := len(b.Candidates())
+				if why == ReasonLeadFallback {
+					b.Fallback(why, handles...)
+				} else {
+					b.AddAll(handles, why, why.Addressed())
+				}
+				for _, c := range b.Candidates()[before:] {
+					out = append(out, Concern{Candidate: c, Change: r})
+				}
 			}
 		}
 	}
 	return out
+}
+
+// NoticeID is one notice's identity among its recipient's: the record that
+// reached them ([RecordID]) and the change it told them about. It is what a
+// person's mark names and an inbox notice carries as its record_id, and what a
+// wake's id is derived from ([changefeed.WakeID] over it and the seat), so a
+// record that tells one handle about two changes — a batched push, a landing
+// of two entries — leaves two notices and two wakes, and a redelivery of the
+// record still collapses into the ones it made. Separated by "/", which no
+// change id holds (a change's id is a bare UUID: [OpenChangeID], [PushChangeID]), so
+// [splitNoticeID] reads it back at the last one.
+func NoticeID(recordID, changeID string) string { return recordID + "/" + changeID }
+
+// splitNoticeID is id's record and change ([NoticeID]), and false for an id
+// that names no change.
+func splitNoticeID(id string) (record, change string, ok bool) {
+	i := strings.LastIndexByte(id, '/')
+	if i <= 0 || i == len(id)-1 {
+		return "", "", false
+	}
+	return id[:i], id[i+1:], true
 }
 
 // Hears reports whether c is told: everybody but who made the change, except
@@ -457,7 +500,7 @@ func Concerns(routings []*ChangeRouting) []Concern {
 func (c Concern) Hears() bool { return c.Candidate.Hears(c.Change.Actor, Reason.WakesActor) }
 
 // changeNotices is how many handles one record tells about one change: the
-// notices its apply may write about it.
+// notices its apply may write about it, a (change, handle) each.
 type changeNotices struct {
 	changeID string
 	notices  int
@@ -465,10 +508,11 @@ type changeNotices struct {
 
 // noticesByChange is, for every change routings tell anybody about, how many
 // handles hear of it ([Concern.Hears]), in the order each change's first
-// hearer comes in [Concerns]. PURE OVER THE ROUTINGS, as [Concerns] is: the
-// count a change's notices column takes from a record (code_changes.notices,
-// replicated 0102) is the same on every node, whatever the horizon let each
-// write.
+// hearer comes in [Concerns]. [Concerns] keeps a handle once a CHANGE, so a
+// handle two of a record's changes concern counts once under each. PURE OVER
+// THE ROUTINGS, as [Concerns] is: the count a change's notices column takes
+// from a record (code_changes.notices, replicated 0102) is the same on every
+// node, whatever the horizon let each write.
 func noticesByChange(routings ...*ChangeRouting) []changeNotices {
 	var out []changeNotices
 	for _, c := range Concerns(routings) {
@@ -486,9 +530,12 @@ func noticesByChange(routings ...*ChangeRouting) []changeNotices {
 }
 
 // noticeWrites is the rows a record's apply writes for whom routings tell —
-// a notice a handle ([Applier.writeNotices]) and, for each change they tell
-// anybody about, the one row its count is kept on — which every decide counts
-// with the record's rows.
+// a notice a (change, handle) ([Applier.writeNotices]) and, for each change
+// they tell anybody about, the one row its count is kept on — which every
+// decide counts with the record's rows. A push decide counts each entry's
+// routings apart, so a change two of a record's entries route is counted
+// twice and written once: an over-count, which only ever carries an entry to
+// the next record early.
 func noticeWrites(routings ...*ChangeRouting) int {
 	by := noticesByChange(routings...)
 	n := len(by)

@@ -40,16 +40,21 @@ func heard(concerns []code.Concern) []string {
 // once as the list [code.Concerns] offers them in — and the candidates come
 // back in it: a routing with a handle of its own in every role names each in
 // the list's order, one handle in every role hears under the first reason
-// alone, and across the routings of one record (a push's) a handle hears
-// under its strongest reason, whichever change offered it. Addressed is the
-// nine asks and re_review; the default primary reasons are another list. The
-// gate's own reasons sit where M5-D26 puts them — a failed check after a
-// request for changes, a broken target right after it, a removal from the
-// queue after a conflict — each naming the handles the gate adds: an
-// enqueuer, the owning unit's lead.
+// alone; across the routings of one record (a push's) a handle hears about
+// EACH change they name, under that change's strongest reason; and two
+// routings of one change — a push that opens it and a later push of the
+// record that merges it — tell a handle about it once, under the stronger.
+// Addressed is the nine asks and re_review; the default primary reasons are
+// another list. The gate's own reasons sit where M5-D26 puts them — a failed
+// check after a request for changes, a broken target right after it, a
+// removal from the queue after a conflict — each naming the handles the gate
+// adds: an enqueuer, the owning unit's lead.
 //
 // Mutation: swap two reasons in code.Reasons, or offer a role under another
-// reason, and the order or the reason a handle hears under is wrong.
+// reason, and the order or the reason a handle hears under is wrong; offer a
+// record's routings to one builder, and the handle hears of one change alone;
+// give each routing a builder of its own, and the change two routings name
+// tells the handle twice.
 func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 	t.Parallel()
 	want := []code.Reason{"mention", "review_requested", "changes_requested", "checks_failed", "target_broken",
@@ -150,12 +155,21 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 	}
 
 	// ACROSS A RECORD'S ROUTINGS: merged by the first, mentioned by the
-	// second, told of the second.
+	// second, told of each change.
 	merged := &code.ChangeRouting{ChangeID: "c-1", Authors: []string{"x"}, Merged: true}
 	opened := &code.ChangeRouting{ChangeID: "c-2", Mentions: []string{"x"}}
 	got := code.Concerns([]*code.ChangeRouting{merged, opened})
+	if len(got) != 2 || got[0].Reason != code.ReasonMerged || got[0].Change != merged ||
+		got[1].Reason != code.ReasonMention || got[1].Change != opened {
+		t.Fatalf("one handle across two changes' routings hears %v, want merged on c-1 and mentioned on c-2",
+			heard(got))
+	}
+	// AND ONE CHANGE TWO ROUTINGS NAME: opened mentioning x, then merged by a
+	// later push of the same record — x hears of it once, as mentioned.
+	again := &code.ChangeRouting{ChangeID: "c-2", Authors: []string{"x"}, Merged: true}
+	got = code.Concerns([]*code.ChangeRouting{opened, again})
 	if len(got) != 1 || got[0].Reason != code.ReasonMention || got[0].Change != opened {
-		t.Fatalf("one handle across two routings hears %v, want once, mentioned on c-2", heard(got))
+		t.Fatalf("one handle two routings of one change name hears %v, want once, mentioned", heard(got))
 	}
 }
 

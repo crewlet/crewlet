@@ -52,8 +52,10 @@ const FeedGroup = "crewlet-code-feed"
 // id, else its position on the log — never an id minted by whoever reads it,
 // which would differ between two nodes reading one record. ONE RULE for the
 // two readers that key on a record: the applier's notice row
-// (code_notifications.record_id) and the feed's claim and wake ids
-// ([changefeed.WakeID]), so a notice and the wake it records name one record.
+// (code_notifications.record_id) and the feed's claim, and through
+// [NoticeID] — the record and the change a notice is about — the wake ids
+// ([changefeed.WakeID]), so a notice and the wake it records name one record
+// and one change.
 func RecordID(opID string, at statelog.Position) string {
 	if opID != "" {
 		return opID

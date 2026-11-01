@@ -18,8 +18,9 @@ import (
 )
 
 // ONE PERSON'S CODE INBOX — the `inbox` read: the notices the applier wrote
-// for them, one row per record that reached them (code_notifications,
-// apply_notices.go), newest first on the code log, read beside their own
+// for them, one row per record and change that reached them
+// (code_notifications, apply_notices.go), newest first on the code log, a page
+// never closing inside one record's notices, read beside their own
 // marks (code_person_marks, marks.go) in ONE snapshot, each notice marked by
 // internal/inbox's one rule and carrying what its change says.
 //
@@ -104,7 +105,10 @@ type InboxQuery struct {
 
 // InboxNotice is one thing the code host told a person.
 type InboxNotice struct {
-	// RecordID is the record that reached them, which a mark names.
+	// RecordID is the notice's identity, which a mark names: the record that
+	// reached them and the change it told them about ([NoticeID]), since one
+	// record — a batched push, a landing of several entries — can tell one
+	// person about several changes.
 	RecordID string `json:"record_id"`
 
 	// The record's position on the code log, the triple every cursor uses.
@@ -242,43 +246,37 @@ func (r *Reader) inbox(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		return err
 	}
 	limit := min(limitOr(q.Limit, inbox.MaxRows), r.pageRows)
-	args = append(args, limit)
-	rows, err := tx.QueryContext(ctx, inboxScanSQL, args...)
+	scanned, err := scanInbox(ctx, tx, in.Handle, append(slices.Clone(args), limit))
 	if err != nil {
-		return fmt.Errorf("code: read %s's code inbox: %w", in.Handle, err)
+		return err
 	}
-	var scanned []InboxNotice
-	var repoIDs []string
-	for rows.Next() {
-		var (
-			n                   InboxNotice
-			packed, at          int64
-			reason, repoID      string
-			addressed, fallback int
-		)
-		if err := rows.Scan(&n.RecordID, &packed, &n.LogStream, &n.LogGeneration, &at, &reason, &addressed,
-			&fallback, &repoID, &n.ChangeID, &n.ChangeRef, &n.Excerpt); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("code: read %s's code inbox: %w", in.Handle, err)
-		}
-		n.LogSeq = uint64(packed) % statelog.GenerationStride
-		n.At = store.DecodeTime(at)
-		n.Reason, n.Addressed, n.Fallback = Reason(reason), addressed != 0, fallback != 0
-		n.Repo = repoID
-		scanned = append(scanned, n)
-		repoIDs = append(repoIDs, repoID)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("code: read %s's code inbox: %w", in.Handle, err)
-	}
-	_ = rows.Close()
 	// THE CURSOR IS THE LAST NOTICE SCANNED, whatever the grant keeps of
-	// the page — this file's head.
+	// the page — this file's head — and A PAGE CLOSES BETWEEN TWO RECORDS:
+	// the cursor is a position on the code log, which every notice of one
+	// record shares, so a page that ended inside a record told one person
+	// about several changes would leave the rest of it behind a cursor that
+	// resumes below it. The rest of the last record's notices are read by the
+	// same statement narrowed to its one position — at most [MaxRecordRows]
+	// of them, since every notice is a row of its record.
 	if len(scanned) == limit {
 		last := scanned[len(scanned)-1]
-		out.Next = statelog.Position{Stream: last.LogStream, Generation: last.LogGeneration,
-			Seq: last.LogSeq}.String()
+		at := statelog.Position{Stream: last.LogStream, Generation: last.LogGeneration, Seq: last.LogSeq}
+		out.Next = at.String()
+		rest := append(slices.Clone(args), MaxRecordRows)
+		rest[1], rest[2] = at.Packed()+1, at.Packed()-1
+		more, err := scanInbox(ctx, tx, in.Handle, rest)
+		if err != nil {
+			return err
+		}
+		for _, n := range more {
+			if !slices.ContainsFunc(scanned, func(s InboxNotice) bool { return s.RecordID == n.RecordID }) {
+				scanned = append(scanned, n)
+			}
+		}
+	}
+	repoIDs := make([]string, 0, len(scanned))
+	for _, n := range scanned {
+		repoIDs = append(repoIDs, n.Repo)
 	}
 	repos, err := listedReposAmong(ctx, tx, repoIDs, q.Asker, q.CeilingSeat, chart, "a page of an inbox")
 	if err != nil {
@@ -316,6 +314,39 @@ func (r *Reader) inbox(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		page.Notices = append(page.Notices, n)
 	}
 	return nil
+}
+
+// scanInbox runs [inboxScanSQL] with args — [inboxScanArgs]' and the limit —
+// for handle's inbox, each notice named by its [NoticeID].
+func scanInbox(ctx context.Context, tx *sql.Tx, handle string, args []any) ([]InboxNotice, error) {
+	rows, err := tx.QueryContext(ctx, inboxScanSQL, args...)
+	if err != nil {
+		return nil, fmt.Errorf("code: read %s's code inbox: %w", handle, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []InboxNotice
+	for rows.Next() {
+		var (
+			n                   InboxNotice
+			record              string
+			packed, at          int64
+			reason              string
+			addressed, fallback int
+		)
+		if err := rows.Scan(&record, &packed, &n.LogStream, &n.LogGeneration, &at, &reason, &addressed,
+			&fallback, &n.Repo, &n.ChangeID, &n.ChangeRef, &n.Excerpt); err != nil {
+			return nil, fmt.Errorf("code: read %s's code inbox: %w", handle, err)
+		}
+		n.RecordID = NoticeID(record, n.ChangeID)
+		n.LogSeq = uint64(packed) % statelog.GenerationStride
+		n.At = store.DecodeTime(at)
+		n.Reason, n.Addressed, n.Fallback = Reason(reason), addressed != 0, fallback != 0
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("code: read %s's code inbox: %w", handle, err)
+	}
+	return out, nil
 }
 
 // inboxScanArgs binds [inboxScanSQL]'s filters from q and the person's marks,
@@ -477,6 +508,8 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 // the snooze scope, `exclude` hiding the live snoozes and `only` keeping
 // nothing else. Each set is ONE JSON array parameter, the tracker's reason
 // (its idList): the lists are the person's own, each at most inbox.MaxEntries.
+// A mark names a notice by its [NoticeID], the record's id and the change's
+// joined by "/", which the statement spells from the two columns.
 //
 // noticeBodiesSQL reads each change's description by its key: the change's
 // row is changesByIDSQL's, which the readiness judges too, so a page reads
@@ -490,11 +523,11 @@ const (
 		FROM code_notifications AS n INDEXED BY code_notifications_inbox_idx
 		WHERE n.recipient = ? AND n.log_seq < ? AND n.log_seq > ?
 			AND (NOT ? OR n.reason IN (SELECT value FROM json_each(?)))
-			AND (NOT ? OR n.record_id IN (SELECT value FROM json_each(?))
-				OR (n.record_id NOT IN (SELECT value FROM json_each(?))
+			AND (NOT ? OR n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?))
+				OR (n.record_id || '/' || n.change_id NOT IN (SELECT value FROM json_each(?))
 					AND NOT (n.log_stream = ? AND n.log_seq <= ?)))
-			AND CASE ? WHEN 'exclude' THEN n.record_id NOT IN (SELECT value FROM json_each(?))
-				WHEN 'only' THEN n.record_id IN (SELECT value FROM json_each(?)) ELSE 1 END
+			AND CASE ? WHEN 'exclude' THEN n.record_id || '/' || n.change_id NOT IN (SELECT value FROM json_each(?))
+				WHEN 'only' THEN n.record_id || '/' || n.change_id IN (SELECT value FROM json_each(?)) ELSE 1 END
 		ORDER BY n.log_seq DESC
 		LIMIT ?`
 	noticeBodiesSQL = `SELECT b.change_id, b.body

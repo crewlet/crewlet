@@ -6449,10 +6449,14 @@ chart holds, in the snapshot, and not the asker's list beside them.
 | `lead_fallback` | The lead of the repository's owner, when nobody who may review the change is asked | A change's first facts |
 
 - **The order of the table is the precedence**: a handle a record names
-  under two reasons hears under the first — mentioned and watching is told
-  it was mentioned — and once a record, however many changes it names: a
-  push that merges one change and opens another tells somebody named in both
-  once, under the stronger reason. `mention`, `review_requested`,
+  under two reasons about one change hears under the first — mentioned and
+  watching is told it was mentioned — and once a change, however many of
+  the record's pushes route it. A record that names several changes tells
+  each handle about **each** of them: up to 64 pushes from unrelated clients
+  land in one record, so a push that merges one change and another that
+  opens a second tell somebody named in both twice — merged about the first,
+  mentioned about the second — and a landing of two of their changes tells
+  an author of both about each. `mention`, `review_requested`,
   `changes_requested`, `checks_failed`, `target_broken`, `conflicted`,
   `dequeued`, `finding_replied`, `ready_to_merge` and `re_review` **ask**
   something of whoever hears them; the rest are news to absorb.
@@ -6493,7 +6497,9 @@ chart holds, in the snapshot, and not the asker's list beside them.
   merger; where the gate lets none of them, the effective lead of the
   repository's owner, who may merge it or say who should.
 - **Every recipient is a row**: the record's applier writes one notice a
-  handle it tells, on every data node — a person's inbox reads them, a
+  handle it tells about a change, on every data node — a person's inbox reads
+  them, each named by its record and its change (the `record_id` a mark
+  names), a
   change's page says whom its records reached, and each committed batch tells
   the dashboards watching an inbox that it moved. A person's notice is kept
   the company's `inbox.retention_days`, a seat's 30 days
@@ -6537,11 +6543,13 @@ stops after its record committed loses no wake.
 - **A seat the company no longer employs is not woken**, and keeps its row:
   the chart is asked at the wake, so a reviewer who left after being asked
   hears nothing. The lead's copy (`lead_fallback`) wakes only where nobody
-  else the record tells is still employed — a person among them, whose
-  notice counts as somebody hearing.
-- **One wake per seat per record**, its id derived from the record and the
-  seat, so a record the feed handles twice — its claim fails open when the
-  coordination store cannot be reached — wakes nobody twice. Every wake
+  else the record tells about that change is still employed — a person among
+  them, whose notice counts as somebody hearing.
+- **One wake per seat per change a record names**, its id derived from the
+  record, the change and the seat, so a record the feed handles twice — its
+  claim fails open when the coordination store cannot be reached — wakes
+  nobody twice, and a batched push that tells a seat about two changes wakes
+  it about each. Every wake
   about one change is one conversation, keyed by the change's id: a rename of
   its repository splits nothing.
 - **The wake names the change's work item**, and the turn it starts is
