@@ -233,15 +233,7 @@ type previewing struct {
 
 // preview is MergePreview's work, under the context Stop cuts.
 func (p *Previews) preview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
-	began := p.now()
 	pv := &previewing{p: p, q: q}
-	outcome := mergeFailed
-	defer func() {
-		if p.o.Metrics != nil {
-			p.o.Metrics.Observe(metrics.CodeHomeMergeDuration, p.now().Sub(began),
-				metrics.Attrs{"work": workPreview, "outcome": outcome})
-		}
-	}()
 	if err := pv.judgeable(); err != nil {
 		return code.MergePreviewAnswer{}, err
 	}
@@ -260,7 +252,6 @@ func (p *Previews) preview(ctx context.Context, q code.MergePreviewQuery) (code.
 	if err != nil {
 		return code.MergePreviewAnswer{}, err
 	}
-	outcome = string(m.state)
 	a := code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: m.state,
 		Conflicts: m.conflicts.Paths, ConflictsOmitted: m.conflicts.Omitted, Position: pv.synced.Position}
 	if err := pv.audit(ctx, a); err != nil {
@@ -398,13 +389,37 @@ func (pv *previewing) mergeOnce(ctx context.Context) (merged, bool, error) {
 		return merged{}, true, err
 	}
 	defer release()
-	m, err := mergeIn(ctx, p.o.Git, sc, q.Base, q.Head, gitproc.ClassRead, p.gitBudget)
+	m, err := pv.mergeTimed(ctx, sc)
 	if err != nil && code.AnswerDue(ctx) {
 		return merged{}, true, pv.unready(code.UnreadyShare, fmt.Sprintf("%s could not merge before the "+
 			"preview's answer fell due, its asker's attempt spent; another git node answers meanwhile",
 			p.o.NodeID))
 	}
 	return m, true, err
+}
+
+// mergeTimed is step 7's merge ([mergeIn]) of the preview's two commits in sc,
+// in the read lane within one read's git, observed on
+// crewlet.code.home.merge.duration under `work` preview — ITS MERGE-TREE
+// ALONE, since only a preview that reached it merged anything: one refused
+// before it (behind its configuration, holding no chart, not held, not
+// permitted, a commit absent, an id of no commit) is a read's refusal and no
+// merge, and its sync and its wait for a unit of the share are the cache's
+// and the share's. `failed` is a merge-tree that failed, or that its asker's
+// attempt ended first.
+func (pv *previewing) mergeTimed(ctx context.Context, sc *cache.Scratch) (merged, error) {
+	p := pv.p
+	began := p.now()
+	m, err := mergeIn(ctx, p.o.Git, sc, pv.q.Base, pv.q.Head, gitproc.ClassRead, p.gitBudget)
+	if p.o.Metrics != nil {
+		outcome := mergeFailed
+		if err == nil {
+			outcome = string(m.state)
+		}
+		p.o.Metrics.Observe(metrics.CodeHomeMergeDuration, p.now().Sub(began),
+			metrics.Attrs{"work": workPreview, "outcome": outcome})
+	}
+	return m, err
 }
 
 // commits is step 6: the preview's two ids found in the copy — ONE `cat-file

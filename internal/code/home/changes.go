@@ -272,24 +272,36 @@ const (
 // recorded on the change as its MERGEABILITY. A refusal that the rows moved
 // since is the next pass's to read; one that decided nothing for a reason of
 // the log's is this turn's failure.
+//
+// crewlet.code.home.merge.duration TIMES THE MERGE ALONE — the sync, the
+// scratch, the ancestry and the merge-tree — observed the moment the ancestry
+// or the merge answers, BEFORE the landing or the record is asked: those are
+// a committer's proposal and a change writer's record through the router,
+// another node's work counted by its own instruments
+// (crewlet.code.change.proposals, crewlet.code.conversation.writes), so a
+// slow change writer never reads as slow merges on the home, and a merge
+// whose record failed still counts as the merge it was.
+// `failed` is a merge that could not run: a copy that would not sync, a
+// scratch that could not be made, git's ancestry or merge failing.
 func (c *changes) merge(ctx context.Context, repoID string, due code.ChangeDue, at statelog.Position) (bool,
 	error) {
 
 	began := c.now()
-	outcome := mergeFailed
-	defer func() {
+	observe := func(outcome string) {
 		if c.metrics != nil {
 			c.metrics.Observe(metrics.CodeHomeMergeDuration, c.now().Sub(began),
 				metrics.Attrs{"work": workMergeability, "outcome": outcome})
 		}
-	}()
+	}
 	synced, err := c.cache.Sync(ctx, repoID, freshAt(at))
 	if err != nil {
+		observe(mergeFailed)
 		return false, fmt.Errorf("home: sync repository %s to merge change %d: %w", repoID, due.Number, err)
 	}
 	defer synced.Release()
 	sc, err := c.cache.NewScratch(ctx, synced, MergeScratchID(due.ID, due.Revision, due.TipPosition))
 	if err != nil {
+		observe(mergeFailed)
 		return false, fmt.Errorf("home: a scratch to merge change %d of repository %s in: %w", due.Number, repoID,
 			err)
 	}
@@ -301,18 +313,20 @@ func (c *changes) merge(ctx context.Context, repoID string, due code.ChangeDue, 
 		Args:  []string{"merge-base", "--is-ancestor", due.Head, due.Tip},
 		Class: gitproc.ClassMaintenance, Deadline: gitproc.ReadDeadline, Answers: []int{1}})
 	if err != nil {
+		observe(mergeFailed)
 		return false, fmt.Errorf("home: ask whether change %d of repository %s is in its target: %w", due.Number,
 			repoID, err)
 	}
 	if res.Exit == 0 {
-		outcome = mergeLanded
+		observe(mergeLanded)
 		return true, c.land(ctx, repoID, due, at)
 	}
 	m, err := mergeIn(ctx, c.git, sc, due.Tip, due.Head, gitproc.ClassMaintenance, MergeabilityDeadline)
 	if err != nil {
+		observe(mergeFailed)
 		return false, fmt.Errorf("home: merge change %d of repository %s: %w", due.Number, repoID, err)
 	}
-	outcome = string(m.state)
+	observe(string(m.state))
 	return false, c.mergeability(ctx, repoID, due, m, at)
 }
 

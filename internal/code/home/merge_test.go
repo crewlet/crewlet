@@ -294,6 +294,70 @@ func TestAMergesLandingThatDecidedNothingFailsTheTurn(t *testing.T) {
 	}
 }
 
+// A MERGE IS TIMED ALONE: crewlet.code.home.merge.duration observes a home's
+// merge when the merge answers, never the record of it on the change — a
+// change writer that takes an hour on the home's clock adds nothing to it —
+// and observes a preview only once its merge-tree ran: a preview its asker's
+// grant refuses is no merge, and observes nothing.
+//
+// Mutations: observe the home's merge once its record has answered, and it
+// takes the writer's hour; observe a preview from its start, and the refused
+// one is observed as a failed merge.
+func TestAMergeIsTimedAlone(t *testing.T) {
+	t.Parallel()
+	settings := codetest.Settings()
+	settings.Visibility = code.VisibilityUnit
+	h := newGitHome(t, settings)
+	base := h.commit(map[string]string{"a.go": "a\n"}, "base")
+	h.git("checkout", "-q", "-b", "change", base)
+	head := h.commit(map[string]string{"a.go": "a, changed\n"}, "a change")
+	h.git("checkout", "-q", "main")
+	tip := h.commit(map[string]string{"b.go": "b\n"}, "main moves")
+	h.push("refs/heads/main", "refs/heads/change")
+
+	c := &clock{now: time.Now().UTC()}
+	h.e.mu.Lock()
+	h.e.recording = func() { c.advance(time.Hour) }
+	h.e.mu.Unlock()
+	h.e.owe(h.repo, h.due(head, tip))
+	_, rec := h.homeLoop(t, newNudges(), time.Hour, c.Now)
+	h.e.waitMerged(t, 1, 30*time.Second)
+	waitTurns(t, rec, 1)
+	n, sum := observed(rec, metrics.CodeHomeMergeDuration, metrics.Attrs{"work": "mergeability", "outcome": "clean"})
+	if n != 1 || sum >= float64(time.Hour.Milliseconds()) {
+		t.Errorf("the home's merge was observed %d times summing %.0f ms, want once, without its record's hour", n,
+			sum)
+	}
+
+	prec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := h.node()
+	p, err := home.NewPreviews(home.PreviewOptions{NodeID: node.ID(), Cache: node.Cache(), Git: node.Pool(),
+		Share: node.Share(), Roster: codetest.FixtureRoster, Fetched: (&fetches{}).record, Metrics: prec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.Stop(context.WithoutCancel(t.Context())) })
+	if _, err := p.MergePreview(t.Context(), code.MergePreviewQuery{RepoID: h.repo, Base: tip, Head: head,
+		Home: true, Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "outsider"}}); !errors.Is(err,
+		code.ErrNotPermitted) {
+		t.Fatalf("the outsider's preview answered %v, want %v", err, code.ErrNotPermitted)
+	}
+	if n, _ := observed(prec, metrics.CodeHomeMergeDuration, metrics.Attrs{"work": "preview"}); n != 0 {
+		t.Errorf("a preview its asker's grant refused was observed %d times as a merge, want none", n)
+	}
+	if _, err := p.MergePreview(t.Context(), code.MergePreviewQuery{RepoID: h.repo, Base: tip, Head: head,
+		Home: true, Asker: person}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := observed(prec, metrics.CodeHomeMergeDuration, metrics.Attrs{"work": "preview",
+		"outcome": "clean"}); n != 1 {
+		t.Errorf("a preview that merged was observed %d times, want once, clean", n)
+	}
+}
+
 // A CONFLICT NAMES ITS PATHS: a home's merge that leaves paths conflicted
 // records each once, in git's order — a content conflict, a modification
 // against a deletion, two adds of one path, a nested path — and never a path

@@ -64,7 +64,10 @@ type estate struct {
 	// the change left on the list as its rows would leave it.
 	landRefusal code.ChangeRefusal
 	landErr     error
-	changed     chan struct{}
+	// recording, where set, runs as each mergeability is recorded: a case's
+	// slow change writer.
+	recording func()
+	changed   chan struct{}
 }
 
 func newEstate() *estate {
@@ -192,6 +195,9 @@ func (e *estate) Converse(_ context.Context, w code.ConversationWrite) (code.Con
 		// A MERGE RECORDS THE READINESS beside it, and a refresh records it
 		// alone: either leaves the change owing no refresh.
 		e.merges = append(e.merges, *w.Mergeability)
+		if e.recording != nil {
+			e.recording()
+		}
 		e.done(w.Mergeability.RepoID, w.Mergeability.ChangeID, func(d *code.ChangeDue) {
 			d.MergeDue, d.RefreshDue = false, false
 		})
@@ -514,6 +520,30 @@ func (u unqueued) CloseWorkItem(context.Context, home.TaskClose) error {
 
 // oid is a whole object id made of c.
 func oid(c string) string { return strings.Repeat(c, 40)[:40] }
+
+// observed is how many observations rec holds of the histogram name under
+// attrs, and their sum.
+func observed(rec *metrics.Recorder, name string, attrs metrics.Attrs) (uint64, float64) {
+	var (
+		n   uint64
+		sum float64
+	)
+	for _, s := range rec.Read() {
+		if s.Name != name {
+			continue
+		}
+		match := true
+		for k, v := range attrs {
+			if s.Attrs[k] != v {
+				match = false
+			}
+		}
+		if match {
+			n, sum = n+s.Count, sum+s.Sum
+		}
+	}
+	return n, sum
+}
 
 // counted is what rec counts of name under attrs.
 func counted(rec *metrics.Recorder, name string, attrs metrics.Attrs) uint64 {
