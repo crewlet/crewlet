@@ -102,9 +102,14 @@ func TestACheckoutAsksForExactlyTheRepositoryItNames(t *testing.T) {
 			"`access` is not a string"},
 		{"a branch that is an object", map[string]any{"repo": "web", "branch": map[string]any{"name": "x"}},
 			"`branch` is not a string"},
-		{"a repo that is a bool", map[string]any{"repo": true}, "`repo` is not a string"},
-		{"paths that are not a list", map[string]any{"repo": "web", "paths": "src"}, "`paths` must be a list"},
-		{"a path that is not a string", map[string]any{"repo": "web", "paths": []any{3}}, "paths[0] is not"},
+		{"a repo that is an object", map[string]any{"repo": map[string]any{"name": "web"}},
+			"`repo` is not a string"},
+		{"paths that are not a list", map[string]any{"repo": "web", "paths": map[string]any{"dir": "src"}},
+			"`paths` must be a list"},
+		{"a path that is a list", map[string]any{"repo": "web", "paths": []any{[]any{"src"}}}, "paths[0] is not"},
+		{"a path that is null", map[string]any{"repo": "web", "paths": []any{"src", nil}}, "paths[1] is not"},
+		{"a draft that is a number", map[string]any{"repo": "web",
+			"open_change": map[string]any{"draft": 1.0}}, "open_change.draft is not true or false"},
 		{"a change beside a branch", map[string]any{"repo": "web", "change": "42", "branch": "x"},
 			"names `change` beside `branch` or `base`"},
 		{"a change beside open_change", map[string]any{"repo": "web", "change": "42",
@@ -186,5 +191,26 @@ func TestACheckoutIsAnsweredAsTheRowTookIt(t *testing.T) {
 	got = checkoutCall(t, &checkoutDesk{err: composed}, map[string]any{"repo": "web"})
 	if !got.Failed || got.Output != composed.Result.Output {
 		t.Fatalf("a refusal the desk composed reached the run as %q, want %q", got.Output, composed.Result.Output)
+	}
+}
+
+// A CHECKOUT READS WHAT THE CHECK ADMITS AS THE CHECK READS IT (ADR-0059):
+// the check at the surface lets a number or a bool through where a string
+// belongs, and one string where a list of strings does, as lossless; the
+// checkout reads each of them through argval, as the model spelt it, rather
+// than refusing a call the check passed by a rule of its own.
+//
+// Mutation: read `change` with a `case string` of its own → change 42 is
+// refused, red; read `paths` as a list only → "src, lib" is refused, red.
+func TestACheckoutReadsWhatTheCheckAdmitsAsTheCheckReadsIt(t *testing.T) {
+	t.Parallel()
+	desk := &checkoutDesk{got: webCheckout(sandbox.GrantAdded)}
+	got := checkoutCall(t, desk, map[string]any{"repo": "web", "change": 42.0, "paths": "src, lib"})
+	if got.Failed {
+		t.Fatalf("a checkout the check admits was refused: %s", got.Output)
+	}
+	if len(desk.asked) != 1 || desk.asked[0].Change != "42" ||
+		!slices.Equal(desk.asked[0].Paths, []string{"src", "lib"}) {
+		t.Fatalf("the desk was asked %+v, want change \"42\" over the paths src and lib", desk.asked)
 	}
 }

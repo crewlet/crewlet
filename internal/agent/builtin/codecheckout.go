@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -227,8 +228,9 @@ var (
 )
 
 // checkoutArgs is the call's request, read STRICTLY — a key the schema does
-// not name, a field that is not the type the schema gives it, an empty
-// `repo`, an `access` outside its two values, a `change` beside the `branch`
+// not name, a field the check at the surface would misread (a list or an
+// object where a string belongs, anything but true or false where a bool
+// does), an empty `repo`, an `access` outside its two values, a `change` beside the `branch`
 // or `base` it decides, an `open_change` beside a `change` or asked with
 // `read`, or a cone past its bound is refused naming the field, before the
 // engine is asked.
@@ -238,6 +240,12 @@ var (
 // the default access, which may be more than the model meant to ask for — and
 // so would an `"access": ["read"]` read as no access asked, which argString,
 // tolerant of a value of the wrong type by design, answers as "" (repoField).
+// Strict is not a rule of its own, though: every value is read through
+// argval, the reader the check at the surface admits it by (ADR-0059), so
+// what the check lets through as lossless — a number or a bool where a string
+// belongs, read as the model spelt it; one string where the list of `paths`
+// belongs, read as argval reads a list of strings — is what the checkout
+// asks for, and only what the check would misread is refused here.
 func checkoutArgs(args map[string]any) (RepoRequest, *tools.Result) {
 	refuse := func(format string, a ...any) (RepoRequest, *tools.Result) {
 		r := failed(CodeCheckoutTool + ": " + fmt.Sprintf(format, a...) + " Nothing was checked out.")
@@ -284,7 +292,7 @@ func checkoutArgs(args map[string]any) (RepoRequest, *tools.Result) {
 			"nothing to open a change from.")
 	}
 	if paths, ok := args["paths"]; ok && paths != nil {
-		list, ok := paths.([]any)
+		list, ok := argval.StringItems(paths)
 		if !ok {
 			return refuse("`paths` must be a list of directories.")
 		}
@@ -292,8 +300,10 @@ func checkoutArgs(args map[string]any) (RepoRequest, *tools.Result) {
 			return refuse("`paths` names %d directories; a cone names at most %d.", len(list), sandbox.MaxConePaths)
 		}
 		for k, p := range list {
-			s, ok := p.(string)
-			if !ok {
+			// A null element is no path, though argval reads it as "": a cone
+			// of "" would be the whole tree the cone was asked to narrow.
+			s, ok := argval.String(p)
+			if !ok || p == nil {
 				return refuse("paths[%d] is not a directory's path.", k)
 			}
 			req.Paths = append(req.Paths, s)
@@ -302,22 +312,22 @@ func checkoutArgs(args map[string]any) (RepoRequest, *tools.Result) {
 	return req, nil
 }
 
-// repoField is one string field of a checkout, trimmed — "" where the call
-// leaves it out or sets it null, which the resolution reads as the field's
-// default — and false where it holds it as anything but a string. A list, an
-// object, a number or a bool is REFUSED rather than read as argString reads
-// it: the default of every field is a choice made on the model's behalf (the
-// most its grant allows, the seat's own branch, the branch's own head), so a
-// value it did send in the wrong shape is a request it made, and is answered
-// as one it must make again, never as one it did not make.
+// repoField is one string field of a checkout, read by [argval.String] and
+// trimmed — "" where the call leaves it out or sets it null, which the
+// resolution reads as the field's default; a number or a bool as the model
+// spelt it (`"change": 42` is change 42), as the check at the surface admits
+// it — and false where it holds a list or an object. That is REFUSED rather
+// than read as argString reads it (""): the default of every field is a
+// choice made on the model's behalf (the most its grant allows, the seat's
+// own branch, the branch's own head), so a value it did send in the wrong
+// shape is a request it made, and is answered as one it must make again,
+// never as one it did not make.
 func repoField(fields map[string]any, key string) (string, bool) {
-	switch v := fields[key].(type) {
-	case nil:
-		return "", true
-	case string:
-		return strings.TrimSpace(v), true
+	v, ok := argval.String(fields[key])
+	if !ok {
+		return "", false
 	}
-	return "", false
+	return strings.TrimSpace(v), true
 }
 
 // openChangeField is the checkout's `open_change`, read as strictly as the
@@ -356,12 +366,12 @@ func openChangeField(fields map[string]any) (*OpenChangeRequest, *tools.Result) 
 		}
 		*f.into = value
 	}
-	switch v := ask["draft"].(type) {
-	case nil:
-	case bool:
-		out.Draft = v
-	default:
-		return refuse("open_change.draft is not true or false.")
+	if raw := ask["draft"]; raw != nil {
+		draft, ok := argval.Bool(raw)
+		if !ok {
+			return refuse("open_change.draft is not true or false.")
+		}
+		out.Draft = draft
 	}
 	return &out, nil
 }
