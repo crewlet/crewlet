@@ -117,19 +117,81 @@ type receiverParams struct{}
 // keyOf is the key of the type parameter a use of one names.
 func keyOf(id *ast.Ident) paramKey { return paramKey{id.Obj.Decl, id.Name} }
 
-// paramOf reports whether id names a type parameter where s binds them, and
-// what it is bound to.
-func paramOf(id *ast.Ident, s subst) (bound Type, isBound, isParam bool) {
+// paramOf reports whether id, spelled where t is, names a type parameter
+// where t's bindings bind them, and what it is bound to.
+//
+// A generic method's receiver parameter nothing binds is a parameter too,
+// found by the method that declares it ([receiverParam]): taken for a name of
+// the package's scope, a value of it was a type the walk could not resolve
+// — a gate refusing what it cannot type refused it (code/cache's writers
+// gate, over `func (c ListChange[T]) …`) — or, where the package declares a
+// type of that name too, that type, which the receiver's name shadows.
+func paramOf(id *ast.Ident, t Type) (bound Type, isBound, isParam bool) {
 	switch {
 	case typeParam(id):
-		bound, isBound = s[keyOf(id)]
+		bound, isBound = t.subst[keyOf(id)]
 		return bound, isBound, true
 	case id.Obj == nil:
-		if bound, isBound = s[paramKey{receiverParams{}, id.Name}]; isBound {
+		if bound, isBound = t.subst[paramKey{receiverParams{}, id.Name}]; isBound {
 			return bound, true, true
+		}
+		if receiverParam(t.file, id) {
+			return Type{}, false, true
 		}
 	}
 	return Type{}, false, false
+}
+
+// receiverParam reports whether id, a name the parser gave no object, is
+// spelled inside a generic method of f whose receiver declares a type
+// parameter of that name: the parser resolves no use of one
+// (go.dev/issue/50956), and inside its method the receiver's name shadows
+// the package's, while a local declaration shadowing it in turn would carry
+// an object of its own.
+func receiverParam(f *File, id *ast.Ident) bool {
+	if f == nil || f.AST == nil {
+		return false
+	}
+	for _, d := range f.AST.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 || id.Pos() < fn.Pos() || id.Pos() >= fn.End() {
+			continue
+		}
+		recv := fn.Recv.List[0].Type
+		if star, ok := recv.(*ast.StarExpr); ok {
+			recv = star.X
+		}
+		for _, p := range typeArgs(recv) {
+			if name, ok := p.(*ast.Ident); ok && name.Name == id.Name {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// Param reports whether t is a type parameter nothing binds where it is
+// spelled — a function's, a type's or a generic method's receiver's — through
+// the parameters that are bound to another: a value of one is a value of
+// whatever an instantiation will make it, which a gate judges where a
+// conversion or an assertion types it, never as a type it cannot resolve.
+func (w *World) Param(t Type) bool {
+	for range maxChain {
+		id, ok := ast.Unparen(t.expr).(*ast.Ident)
+		if !ok {
+			return false
+		}
+		b, isBound, isParam := paramOf(id, t)
+		switch {
+		case !isParam:
+			return false
+		case !isBound:
+			return true
+		}
+		t = b
+	}
+	return false
 }
 
 // typeParam reports whether id names a type parameter of a type parameter
@@ -281,7 +343,7 @@ func (w *World) bound(t Type) (Type, bool) {
 		if !isIdent {
 			return t, true
 		}
-		b, isBound, isParam := paramOf(id, t.subst)
+		b, isBound, isParam := paramOf(id, t)
 		switch {
 		case !isParam:
 			return t, true
@@ -311,7 +373,7 @@ func (w *World) under(t Type) (lit Type, owner *typeDecl, how Resolution, outsid
 			return Type{}, nil, Unresolved, outside
 		}
 		if id, ok := t.expr.(*ast.Ident); ok {
-			if b, isBound, isParam := paramOf(id, t.subst); isParam {
+			if b, isBound, isParam := paramOf(id, t); isParam {
 				if !isBound {
 					return Type{}, nil, Unresolved, outside
 				}

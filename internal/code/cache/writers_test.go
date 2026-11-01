@@ -1412,17 +1412,16 @@ func (m *writerMatch) handoff(call *ast.CallExpr) {
 // typed reports whether the walk knows enough of t to say whether it is a
 // Cmd: a type it resolved, one of a package it does not read (which cannot
 // be gitproc's Cmd, a type only this module can name), a value only such a
-// package can type, or a value of a type parameter nothing binds — which is
-// a Cmd only once a conversion or an assertion makes it one, a typed
-// expression this rule judges wherever it is handed on.
+// package can type, or a value of a type parameter nothing binds — a
+// function's, a type's or a generic method's receiver's ([decltype.World.Param])
+// — which is a Cmd only once a conversion or an assertion makes it one, a
+// typed expression this rule judges wherever it is handed on.
 func (m *writerMatch) typed(t decltype.Type) bool {
 	if _, unread := t.Unread(); unread {
 		return true
 	}
-	if id, ok := t.Expr().(*ast.Ident); ok && id.Obj != nil && id.Obj.Kind == ast.Typ {
-		if _, param := id.Obj.Decl.(*ast.Field); param {
-			return true
-		}
+	if m.w.Param(t) {
+		return true
 	}
 	_, how := m.w.Underlying(t)
 	return how == decltype.Resolved || how == decltype.Outside
@@ -1751,13 +1750,16 @@ func controlWriters(t *testing.T) {
 		// of a variadic parameter of Cmds, which the parameter alone says
 		// is a Cmd; and what passes on neither side because it can be no
 		// Cmd: nil, a constant an iota list continues, the type make is
-		// handed, and a value of a type parameter.
+		// handed, and a value of a type parameter — a function's, and a
+		// generic method's receiver's, which the parser gives no object.
 		"internal/code/c/untyped.go": "package c\n\nimport (\n\t\"fmt\"\n\n\tg " + gp + "\n)\n\n" +
 			"const (\n\tfirst int = iota\n\tsecond\n)\n\n" +
 			"func u(x any) {\n\tswitch v := x.(type) {\n\tcase int:\n\t\tfmt.Println(v)\n" +
 			"\tcase g.Cmd:\n\t\tmany(v)\n\t}\n" +
 			"\tfmt.Println(nil, second, make([]string, 1), smaller(1, 2))\n}\n\n" +
-			"func smaller[T int | uint](a, b T) T { return min(a, b) }\n",
+			"func smaller[T int | uint](a, b T) T { return min(a, b) }\n\n" +
+			"type names[T ~string] []T\n\n" +
+			"func (n names[T]) show() {\n\tfor _, v := range n {\n\t\tfmt.Println(v)\n\t}\n}\n",
 		// gitproc imported with a dot: its Cmd is one the walk cannot type.
 		"internal/code/d/dot.go": "package d\n\nimport . " + gp + "\n\nvar _ = Cmd{Args: []string{\"rerere\"}}\n",
 		// gitproc's own Cmd, named unqualified, and its plumbing. What
