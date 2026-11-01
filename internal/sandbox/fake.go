@@ -128,12 +128,28 @@ func (s *FakeSandbox) Job(ctx context.Context, commandID string) (JobState, erro
 // ReadFile can see it — replaced whole under the box's lock, so a read never
 // finds a write half done, as no real backend's does ([Sandbox.WriteFile]).
 func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) error {
+	return s.WriteStream(ctx, p, bytes.NewReader(content))
+}
+
+// WriteStream stores what content yields, read whole BEFORE the box's lock is
+// taken — a source is the caller's and may be slow — and only then put in the
+// file's place, so a source that fails part way leaves the file as it was, as
+// every real backend's staged write does ([Sandbox.WriteStream]). An empty
+// source stores what an empty slice always did: nothing, read as an empty file.
+func (s *FakeSandbox) WriteStream(ctx context.Context, p string, content io.Reader) error {
+	got, err := io.ReadAll(readUnder(ctx, content))
+	if err != nil {
+		return fmt.Errorf("sandbox: write %s: %w", p, err)
+	}
+	if len(got) == 0 {
+		got = nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return errors.New("sandbox: box is closed")
 	}
-	s.files[path.Clean(p)] = slices.Clone(content)
+	s.files[path.Clean(p)] = got
 	return nil
 }
 

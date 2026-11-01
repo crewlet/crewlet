@@ -340,6 +340,12 @@ func (s *E2BSandbox) WriteFile(ctx context.Context, path string, content []byte)
 	return s.envd.writeFile(ctx, path, content)
 }
 
+// WriteStream implements [Sandbox]: the same staged upload and move, its body
+// streamed to envd as it is read ([envdClient.writeStream]).
+func (s *E2BSandbox) WriteStream(ctx context.Context, path string, content io.Reader) error {
+	return s.envd.writeStream(ctx, path, content)
+}
+
 // ReadFile implements [Sandbox].
 func (s *E2BSandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return s.envd.readFile(ctx, path)

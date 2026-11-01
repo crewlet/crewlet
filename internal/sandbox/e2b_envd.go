@@ -559,6 +559,40 @@ func (c *envdClient) exchange(ctx context.Context, method, target string,
 			return io.NopCloser(sendProgress{inner: bytes.NewReader(body), idle: idle}), nil
 		}
 	}
+	return c.send(ctx, req, idle, header)
+}
+
+// streamExchange is [envdClient.exchange] for a body READ ONCE AS IT IS SENT —
+// a streamed write's upload ([envdClient.uploadStream]) — under the same bound
+// between bytes, each one the transport takes re-arming it.
+//
+// CHUNKED, AND SENT ONCE. Its length is not known until it has been read, so
+// it goes out chunked, which envd reads as any HTTP server does; and it cannot
+// be had twice, so a connection the server closes with GOAWAY before reading
+// the request fails the write rather than being retried on a fresh one, which
+// is what [envdClient.exchange]'s buffered body buys. The write is the caller's
+// to make again — a carried session's restore is one launch's step, which a
+// failed launch repeats whole.
+func (c *envdClient) streamExchange(ctx context.Context, method, target string,
+	body io.Reader, header http.Header,
+) (*http.Response, *idleReader, error) {
+	reqCtx, cancel := context.WithCancel(ctx)
+	idle := newIdleReader(nil, cancel, c.fileIdle)
+	req, err := http.NewRequestWithContext(reqCtx, method, target, sendProgress{inner: body, idle: idle})
+	if err != nil {
+		idle.stop()
+		return nil, nil, err
+	}
+	return c.send(ctx, req, idle, header)
+}
+
+// send makes one envd request built by [envdClient.exchange] or
+// [envdClient.streamExchange], its idle bound already armed: the headers, the
+// box's authorization, and the round trip, whose response body the bound then
+// watches.
+func (c *envdClient) send(ctx context.Context, req *http.Request, idle *idleReader,
+	header http.Header,
+) (*http.Response, *idleReader, error) {
 	for key, values := range header {
 		req.Header[key] = values
 	}
@@ -814,9 +848,23 @@ func keepLast(r io.Reader, n int) ([]byte, int64, error) {
 // nothing written there reaches the engine host, and the rename writes through
 // no link. The new file has the mode and owner envd gives every upload.
 func (c *envdClient) writeFile(ctx context.Context, path string, content []byte) error {
+	return c.replace(ctx, path, func(staged string) error { return c.upload(ctx, staged, content) })
+}
+
+// writeStream is [envdClient.writeFile] for content read as it is uploaded
+// ([Sandbox.WriteStream]): the same staged name, move and removal of what a
+// failure staged, the upload's body streamed ([envdClient.uploadStream]).
+func (c *envdClient) writeStream(ctx context.Context, path string, content io.Reader) error {
+	return c.replace(ctx, path, func(staged string) error { return c.uploadStream(ctx, staged, content) })
+}
+
+// replace is a write's two steps: upload puts the content at a fresh name
+// beside path, and envd's Move puts that over path — or, either failing, the
+// staged file is removed ([envdClient.discard]).
+func (c *envdClient) replace(ctx context.Context, path string, upload func(staged string) error) error {
 	path = envdPath(path)
 	staged := stagedBeside(path)
-	if err := c.upload(ctx, staged, content); err != nil {
+	if err := upload(staged); err != nil {
 		return c.discard(ctx, staged, fmt.Errorf("e2b: write %s: %w", path, err))
 	}
 	if err := c.filesystem(ctx, "Move", envdMove{Source: staged, Destination: path}); err != nil {
@@ -849,6 +897,62 @@ func (c *envdClient) upload(ctx context.Context, path string, content []byte) er
 	if err != nil {
 		return fmt.Errorf("upload: %w", err)
 	}
+	return uploaded(resp, idle)
+}
+
+// uploadStream is [envdClient.upload] for content read as it is sent: the same
+// multipart form, written through a pipe straight into the request's body, so
+// nothing here holds more of it than one piece — never the whole archive a
+// buffer would, twice over with the form around it.
+//
+// THE FORM IS WRITTEN ON A GOROUTINE OF THIS CALL'S, which the call stops and
+// waits for before it returns, whichever way the exchange ended: the reading
+// end is closed under it, so a writer the transport stopped reading — an envd
+// that answered before it read the body, an exchange abandoned for its silence
+// — fails its next write and goes, and content is never read once the call has
+// returned. A source that fails part way closes the pipe with its error, so the
+// request ends short of its form's last boundary, the upload fails, and the
+// staged file is removed rather than moved over the path. What a source
+// already blocked in a read does is the source's own, which a reader handed
+// out under the call's context answers by ending.
+func (c *envdClient) uploadStream(ctx context.Context, path string, content io.Reader) error {
+	pr, pw := io.Pipe()
+	form := multipart.NewWriter(pw)
+	header := http.Header{"Content-Type": {form.FormDataContentType()}}
+	written := make(chan struct{})
+	go func() {
+		defer close(written)
+		pw.CloseWithError(writeForm(form, baseName(path), readUnder(ctx, content)))
+	}()
+	resp, idle, err := c.streamExchange(ctx, http.MethodPost, c.host+"/files?"+filesQuery(path), pr, header)
+	pr.CloseWithError(errUploadEnded)
+	<-written
+	if err != nil {
+		return fmt.Errorf("upload: %w", err)
+	}
+	return uploaded(resp, idle)
+}
+
+// errUploadEnded is what a streamed upload's form writer meets once the
+// exchange it was writing for has ended ([envdClient.uploadStream]).
+var errUploadEnded = errors.New("the upload's exchange has ended")
+
+// writeForm writes content as an upload's one file part, named name — the
+// destination is the query's, never the part's — and closes the form.
+func writeForm(form *multipart.Writer, name string, content io.Reader) error {
+	part, err := form.CreateFormFile("file", name)
+	if err != nil {
+		return err
+	}
+	if _, copyErr := io.Copy(part, content); copyErr != nil {
+		return copyErr
+	}
+	return form.Close()
+}
+
+// uploaded reads an upload's answer: refused at 400 or more, its body drained
+// up to a bound otherwise, and released either way.
+func uploaded(resp *http.Response, idle *idleReader) error {
 	defer resp.Body.Close()
 	defer idle.stop()
 	if resp.StatusCode >= 400 {

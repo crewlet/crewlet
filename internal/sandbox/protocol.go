@@ -414,6 +414,22 @@ type Sandbox interface {
 	// what is at the path there is replaced, a link included.
 	WriteFile(ctx context.Context, path string, content []byte) error
 
+	// WriteStream puts what content yields at path whole, exactly as
+	// [Sandbox.WriteFile] puts a byte slice there — staged beside the path
+	// and renamed over it, the same refusals on the engine host — for content
+	// the engine must not hold in memory: a harness's session archive,
+	// carried into a box from the object store, which grows with the session
+	// it packs.
+	//
+	// READ ONCE, A PIECE AT A TIME, and only while ctx lasts: a write whose
+	// caller gave up stops at the next piece rather than reading its source
+	// to the end. A source that fails part way fails the write, and the file
+	// at the path is the one that was there before — the staged one is
+	// removed, never moved over it — so an archive cut short in transit is
+	// never a file the box reads as whole. The caller keeps content: the
+	// write neither closes it nor reads it once it has returned.
+	WriteStream(ctx context.Context, path string, content io.Reader) error
+
 	// ReadFile reads a file the engine means to read WHOLE — a report, a
 	// question, a marker, a result line — and REFUSES one past
 	// [MaxFileBytes] ([ErrFileTooLarge], as a [*FileTooLargeError] naming the

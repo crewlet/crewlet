@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -1007,6 +1008,15 @@ func (b *unwritableBox) WriteFile(ctx context.Context, path string, content []by
 		return b.refuse
 	}
 	return b.FakeSandbox.WriteFile(ctx, path, content)
+}
+
+// WriteStream fails as WriteFile does: a directory made read-only refuses a
+// streamed write as it refuses any other.
+func (b *unwritableBox) WriteStream(ctx context.Context, path string, content io.Reader) error {
+	if b.refuse != nil {
+		return b.refuse
+	}
+	return b.FakeSandbox.WriteStream(ctx, path, content)
 }
 
 // tokenFiles finds only whole references to the seat's own variable: a file

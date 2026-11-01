@@ -13,8 +13,10 @@ import (
 )
 
 // Box drives the FILE CONTRACT every [sandbox.Sandbox] backend keeps: the
-// three reads a harness runner is built on, and the write the suite
-// seeds them through.
+// three reads a harness runner is built on, the write the suite seeds them
+// through, and the streamed write a session archive is carried into a box with
+// ([sandbox.Sandbox.WriteStream]) — whole, empty, past the read cap, over a
+// file, and from a source that fails part way.
 //
 // ONE SUITE FOR EVERY BACKEND, the in-memory twin included, because the twin
 // is what every runner and coordinator test reads a box through. It answered
@@ -59,6 +61,11 @@ func Box(t *testing.T, readCap int, fresh func(t *testing.T) sandbox.Sandbox) {
 		{"AFileAtTheCapIsReadWhole", testAFileAtTheCapIsReadWhole},
 		{"AStreamClosedEarlyIsReleased", testAStreamClosedEarlyIsReleased},
 		{"ARewriteIsNeverReadHalfDone", testARewriteIsNeverReadHalfDone},
+		{"AStreamedWriteIsReadBackByteForByte", testAStreamedWriteIsReadBackByteForByte},
+		{"AnEmptyStreamWritesAnEmptyFile", testAnEmptyStreamWritesAnEmptyFile},
+		{"AStreamPastTheReadCapIsWrittenWhole", testAStreamPastTheReadCapIsWrittenWhole},
+		{"AStreamReplacesTheFileWhole", testAStreamReplacesTheFileWhole},
+		{"AStreamThatFailsLeavesTheFileAsItWas", testAStreamThatFailsLeavesTheFileAsItWas},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -278,6 +285,9 @@ func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox, _ int) 
 //
 // The two bodies differ in length and in every byte, so a read of the longer
 // one cut short, or of the shorter one over the longer one's end, is neither.
+// Each is written whole and streamed in turn ([sandbox.Sandbox.WriteStream]),
+// a piece at a time, so a streamed write that filled the file in place as its
+// pieces arrived is caught as a written one would be.
 func testARewriteIsNeverReadHalfDone(t *testing.T, box sandbox.Sandbox, _ int) {
 	path := pathIn(box, "github-token")
 	long := pattern(wholeReadBytes)
@@ -318,14 +328,19 @@ func testARewriteIsNeverReadHalfDone(t *testing.T, box sandbox.Sandbox, _ int) {
 		if i%2 == 1 {
 			body = long
 		}
-		if failed = box.WriteFile(t.Context(), path, body); failed != nil {
+		if (i/2)%2 == 0 {
+			failed = box.WriteFile(t.Context(), path, body)
+		} else {
+			failed = box.WriteStream(t.Context(), path, &pieces{rest: body, size: streamPiece})
+		}
+		if failed != nil {
 			break
 		}
 	}
 	close(stop)
 	end := <-ended
 	if failed != nil {
-		t.Fatalf("WriteFile %s: %v", path, failed)
+		t.Fatalf("rewriting %s: %v", path, failed)
 	}
 	switch {
 	case end.err != nil:
@@ -348,3 +363,166 @@ func testARewriteIsNeverReadHalfDone(t *testing.T, box sandbox.Sandbox, _ int) {
 // the race detector and its neighbours slow down, at well under a second for
 // E2B's two requests a write.
 const rewrites = 32
+
+// streamPiece is the most one read of a streamed write's source hands over in
+// these cases: prime, so no piece lines up with a backend's own buffer, and far
+// below [wholeReadBytes], so a file is many pieces.
+const streamPiece = 997
+
+// pieces is a source that hands rest over at most size bytes a read, as a
+// network stream does, never the whole in one.
+type pieces struct {
+	rest []byte
+	size int
+}
+
+func (p *pieces) Read(b []byte) (int, error) {
+	if len(p.rest) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(b[:min(len(b), p.size)], p.rest)
+	p.rest = p.rest[n:]
+	return n, nil
+}
+
+// patternSource is [pattern]'s first n bytes made as they are read, so a
+// source past the read cap is never a buffer of its own beside the file. It
+// fills what each read asks for: what is certified with it is the size, which
+// at the real cap is 32 MiB, and the pieces are [pieces]' to certify.
+type patternSource struct {
+	at, n int
+}
+
+func (s *patternSource) Read(b []byte) (int, error) {
+	if s.at >= s.n {
+		return 0, io.EOF
+	}
+	const period = 251
+	k := min(len(b), s.n-s.at)
+	for i := range k {
+		b[i] = byte((s.at + i) % period)
+	}
+	s.at += k
+	return k, nil
+}
+
+// errSourceBroke is a streamed write's source failing part way.
+var errSourceBroke = errors.New("sandboxtest: the source broke off part way")
+
+// brokenSource hands over head, a piece at a time, and then fails.
+type brokenSource struct{ head pieces }
+
+func (s *brokenSource) Read(b []byte) (int, error) {
+	n, err := s.head.Read(b)
+	if errors.Is(err, io.EOF) {
+		return 0, errSourceBroke
+	}
+	return n, err
+}
+
+func stream(t *testing.T, box sandbox.Sandbox, path string, content io.Reader) {
+	t.Helper()
+	if err := box.WriteStream(t.Context(), path, content); err != nil {
+		t.Fatalf("WriteStream %s: %v", path, err)
+	}
+}
+
+// A STREAMED WRITE IS THE FILE ITS SOURCE YIELDED, byte for byte, however its
+// source hands it over: a piece at a time, as an archive read from the object
+// store arrives, never the whole in one read.
+//
+// Mutation: write only the first piece a source hands over, and the file is
+// 997 bytes of the 70,000.
+func testAStreamedWriteIsReadBackByteForByte(t *testing.T, box sandbox.Sandbox, _ int) {
+	path := pathIn(box, "session-carried")
+	content := pattern(wholeReadBytes)
+	stream(t, box, path, &pieces{rest: content, size: streamPiece})
+	if got, err := box.ReadFile(t.Context(), path); err != nil || !bytes.Equal(got, content) {
+		t.Errorf("ReadFile after a streamed write = %d bytes, %v; want the %d streamed", len(got), err, len(content))
+	}
+}
+
+// A SOURCE THAT YIELDS NOTHING WRITES AN EMPTY FILE, and replaces what was at
+// the path: an empty archive is the box's to refuse, never a write that left
+// the last one in place.
+func testAnEmptyStreamWritesAnEmptyFile(t *testing.T, box sandbox.Sandbox, _ int) {
+	path := pathIn(box, "session-carried")
+	write(t, box, path, []byte("the archive before"))
+	stream(t, box, path, strings.NewReader(""))
+	if got, err := box.ReadFile(t.Context(), path); err != nil || len(got) != 0 {
+		t.Errorf("ReadFile after an empty stream = %q, %v; want an empty file", got, err)
+	}
+	if tail, err := box.ReadTail(t.Context(), path, 64); err != nil || tail.Size != 0 {
+		t.Errorf("ReadTail after an empty stream = %d bytes of %d, %v; want nothing", len(tail.Data), tail.Size, err)
+	}
+}
+
+// A STREAMED WRITE IS NOT BOUNDED BY WHAT A WHOLE READ TAKES. The read cap is a
+// refusal of a file meant to be read whole; an archive is streamed in and out,
+// and a write that held its content to the cap — or held it in a buffer the
+// cap sized — would cut the longest sessions, which are the ones worth
+// carrying. Written from a source made as it is read, past the box's own cap,
+// and read back as a stream.
+//
+// Mutation: hold the write to [sandbox.MaxFileBytes], and the file is cut at
+// the cap.
+func testAStreamPastTheReadCapIsWrittenWhole(t *testing.T, box sandbox.Sandbox, readCap int) {
+	path := pathIn(box, "session-carried")
+	n := readCap + 1
+	stream(t, box, path, &patternSource{n: n})
+
+	if got, err := box.ReadFile(t.Context(), path); !errors.Is(err, sandbox.ErrFileTooLarge) {
+		t.Errorf("ReadFile of a streamed file past the cap = %d bytes, %v; want ErrFileTooLarge", len(got), err)
+	}
+	r, err := box.OpenFile(t.Context(), path)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	got := sha256.New()
+	read, err := io.Copy(got, r)
+	_ = r.Close()
+	if err != nil || read != int64(n) {
+		t.Fatalf("the stream read back %d bytes, %v; want all %d written", read, err, n)
+	}
+	want := sha256.New()
+	if _, err := io.Copy(want, &patternSource{n: n}); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Sum(nil), want.Sum(nil)) {
+		t.Error("the file holds the right length and the wrong bytes")
+	}
+}
+
+// A STREAMED WRITE REPLACES THE FILE WHOLE: a shorter body over a longer one
+// leaves the shorter alone, never the longer one's end after it, as a write in
+// place that did not truncate would.
+func testAStreamReplacesTheFileWhole(t *testing.T, box sandbox.Sandbox, _ int) {
+	path := pathIn(box, "session-carried")
+	write(t, box, path, pattern(wholeReadBytes))
+	short := bytes.Repeat([]byte{0xab}, wholeReadBytes/7)
+	stream(t, box, path, &pieces{rest: short, size: streamPiece})
+	if got, err := box.ReadFile(t.Context(), path); err != nil || !bytes.Equal(got, short) {
+		t.Errorf("ReadFile after streaming a shorter body = %d bytes, %v; want the %d streamed", len(got), err, len(short))
+	}
+}
+
+// A SOURCE THAT FAILS PART WAY FAILS THE WRITE, AND THE FILE IS AS IT WAS. An
+// archive cut short in transit — the object store's stream broken, the engine's
+// context ended — is never a file the box reads as the session: what the source
+// had yielded is dropped with the staged file, and the file at the path is the
+// one that was there.
+//
+// Mutation: write the source over the file in place, and the file holds the
+// half the source yielded.
+func testAStreamThatFailsLeavesTheFileAsItWas(t *testing.T, box sandbox.Sandbox, _ int) {
+	path := pathIn(box, "session-carried")
+	before := []byte("the archive the box held")
+	write(t, box, path, before)
+	err := box.WriteStream(t.Context(), path, &brokenSource{head: pieces{rest: pattern(wholeReadBytes / 2), size: streamPiece}})
+	if err == nil {
+		t.Fatal("a streamed write whose source broke off succeeded")
+	}
+	if got, err := box.ReadFile(t.Context(), path); err != nil || !bytes.Equal(got, before) {
+		t.Errorf("after the failed write the file holds %d bytes, %v; want the %q it held", len(got), err, before)
+	}
+}
