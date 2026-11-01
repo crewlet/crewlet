@@ -908,6 +908,7 @@
         "id": {
           "anyOf": [
             {
+              "maxLength": 255,
               "pattern": "^[A-Za-z0-9._-]+$"
             },
             {
@@ -917,7 +918,7 @@
               "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
             }
           ],
-          "description": "Stable key id, colon-free so the envelope parses.",
+          "description": "Stable key id, colon-free so the envelope parses, at most 255 characters so a sealed stream's header can name it.",
           "type": [
             "string",
             "number",

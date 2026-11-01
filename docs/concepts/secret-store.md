@@ -139,6 +139,11 @@ secrets:
       material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
+A key's `id` is letters, digits, `.`, `_` and `-`, at most 255 of them: it is
+stamped into every value the key seals, and a sealed stream — the format a
+seat's executor session is kept in — names its key in a one-byte length, so
+`crewlet validate` refuses a longer one rather than the first capture.
+
 ### The engine's own keys share the bucket, and never the namespace
 
 The same bucket holds key material the **engine** keeps for itself: the

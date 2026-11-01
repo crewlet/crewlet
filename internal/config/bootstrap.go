@@ -2616,7 +2616,12 @@ type SecretKey struct {
 	// ID is stamped into every envelope this key seals (enc:v1:<id>:...),
 	// and is kept across a rotation so old ciphertext still names a live
 	// key.
-	ID string `yaml:"id" json:"id" js:"required;pattern=^[A-Za-z0-9._-]+$" desc:"Stable key id, colon-free so the envelope parses."`
+	//
+	// AT MOST [secrets.MaxStreamKeyIDBytes], the longest id a sealed stream's
+	// header names: the keyring seals the seats' executor sessions as streams,
+	// and an id no header can name refuses the whole keyring there, at a
+	// node's first capture or restore, long after validation passed it.
+	ID string `yaml:"id" json:"id" js:"required;pattern=^[A-Za-z0-9._-]+$;maxlen=255" desc:"Stable key id, colon-free so the envelope parses, at most 255 characters so a sealed stream's header can name it."`
 
 	// Material is a base64-encoded 32-byte key, or a ${VAR} reference to
 	// one.
@@ -2634,6 +2639,11 @@ func (s *Secrets) validate(path Path) error {
 			p.add(at(kp, "id"), ErrUnknownValue,
 				"%q must contain only letters, digits, '.', '_' or '-': it is "+
 					"stamped into every envelope this key seals", k.ID)
+		} else if len(k.ID) > secrets.MaxStreamKeyIDBytes {
+			p.add(at(kp, "id"), ErrOutOfRange,
+				"the id is %d characters and at most %d are allowed: a sealed "+
+					"stream's header names its key in one length byte", len(k.ID),
+				secrets.MaxStreamKeyIDBytes)
 		}
 		if k.Material == "" {
 			p.add(at(kp, "material"), ErrMissing,

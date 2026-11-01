@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 func TestSchemaGenerates(t *testing.T) {
@@ -1237,6 +1238,44 @@ func TestTheSchemaBoundsATokenIDWhereTheValidatorDoes(t *testing.T) {
 	if iam.ValidTokenID(strings.Repeat("a", tokenIDBound+1)) {
 		t.Errorf("the validator admits a token id of %d characters, past the "+
 			"bound it derives", tokenIDBound+1)
+	}
+}
+
+// A KEYRING KEY'S ID IS BOUNDED WHERE A SEALED STREAM CAN NAME IT, in the
+// validator and in the artifact alike: a sealed stream's header names its key
+// in one length byte (secrets.MaxStreamKeyIDBytes), and an id past it refused
+// the whole keyring at a node's first capture of an executor session, after
+// `crewlet validate` and the boot had both passed it.
+//
+// Mutation: drop the length check from Secrets.validate and a 256-character
+// id validates; drop the tag's maxlen and the artifact admits it.
+func TestAKeyringKeyIDIsBoundedWhereASealedStreamCanNameIt(t *testing.T) {
+	t.Parallel()
+	keyring := func(id string) *Secrets {
+		return &Secrets{ActiveKeyID: id, Keys: []SecretKey{{ID: id, Material: TestKeyMaterial}}}
+	}
+	if err := keyring(strings.Repeat("k", secrets.MaxStreamKeyIDBytes)).validate(Path{"secrets"}); err != nil {
+		t.Fatalf("an id of %d characters was refused: %v", secrets.MaxStreamKeyIDBytes, err)
+	}
+	err := keyring(strings.Repeat("k", secrets.MaxStreamKeyIDBytes+1)).validate(Path{"secrets"})
+	if err == nil || !strings.Contains(err.Error(), "secrets.keys[0].id") {
+		t.Fatalf("an id of %d characters: %v, want a refusal naming secrets.keys[0].id",
+			secrets.MaxStreamKeyIDBytes+1, err)
+	}
+	defs, _ := schemaDoc(t, TierBootstrap)["$defs"].(map[string]any)
+	key, _ := defs["SecretKey"].(map[string]any)
+	props, _ := key["properties"].(map[string]any)
+	id, _ := props["id"].(map[string]any)
+	var bound any
+	for _, branch := range anyOf(id) {
+		own, _ := branch.(map[string]any)
+		if _, hasPattern := own["pattern"]; hasPattern && own["maxLength"] != nil {
+			bound = own["maxLength"]
+		}
+	}
+	if got, _ := bound.(float64); int(got) != secrets.MaxStreamKeyIDBytes {
+		t.Errorf("the schema bounds a key id at %v and a sealed stream names at most %d",
+			bound, secrets.MaxStreamKeyIDBytes)
 	}
 }
 
