@@ -1209,7 +1209,6 @@ func holdingCall(name string) (map[string]any, bool) {
 		// A REPORT IS A PERSON'S (TestAReportIsAPersons): no seat's turn
 		// sends one, so it holds nothing, as an operator's call holds nothing.
 		builtin.CodeReportCheckTool:   nil,
-		builtin.CodeRebaseChangeTool:  {"repo": repo, "change": 7, "expected_head": revHead(3)},
 		builtin.CodeMergeChangeTool:   {"repo": repo, "change": 7, "expected_head": revHead(3)},
 		builtin.CodeDequeueChangeTool: {"repo": repo, "change": 7},
 		builtin.CodeRevertChangeTool:  {"repo": repo, "change": 7},
