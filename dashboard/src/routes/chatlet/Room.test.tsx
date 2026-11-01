@@ -158,6 +158,36 @@ describe("the room's intro", () => {
     expect(screen.getByLabelText("Messages in platform")).toBeTruthy();
   });
 
+  // A TEAM'S ROOM READ FROM OUTSIDE THE TEAM can be neither joined nor left
+  // (its members are the org chart's), so its bar says so and offers the star
+  // that keeps it in the reader's Rooms menu.
+  test("a team's room read from outside the team offers its star in the join's place", async () => {
+    answers.chat_channel = {
+      ...served,
+      channel: { ...channel, kind: "unit", name: "team", unit: "core" },
+      revision: 3,
+      message_seq: 2,
+      member: false,
+      members: [],
+    };
+    const probe = { nav: null, marked: [], stars: [] as { room: string; on: boolean }[] };
+    const cursors = new ReadCursors({ flush: async () => undefined });
+    mountChat(
+      <LoneRoom
+        channelID="room-1"
+        viewer="ada"
+        nameOf={(handle) => handle}
+        cursors={cursors}
+        probe={probe}
+      />,
+      { answers, viewer: ADA },
+    );
+    expect(await screen.findByText(/Star it to keep it in your Rooms menu/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^join room$/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /^add to starred$/i }));
+    expect(probe.stars).toEqual([{ room: "room-1", on: true }]);
+  });
+
   // A CONVERSATION WITH NOBODY ELSE IN IT is one the engine allows, titled
   // "Just you"; its intro said "just between you and ." and named nobody.
   test("a conversation with only the reader in it says so", async () => {
