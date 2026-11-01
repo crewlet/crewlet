@@ -3,9 +3,9 @@ package code
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -72,9 +72,10 @@ import (
 // and grouped on its leading column, so a page is read in index order and
 // never sorted; with one ([ChangesDueQuery]) it pages that repository's
 // changes owing their facts, their merge or a refresh by source branch, the
-// same index's range, each with its target's tip from code_refs' key, and the
-// repository's path owners beside them, read in the same snapshot as the
-// changes they are matched for — and on its FIRST PAGE the changes owing a
+// same index's range, each with its target's tip from code_refs' key, and —
+// on a page naming a change owing its facts, and no other — the repository's
+// path owners beside them, read in the same snapshot as the changes they are
+// matched for — and on its FIRST PAGE the changes owing a
 // recheck, at most as many as the home asks ([ChangesDueQuery.Rechecks]), THE
 // OLDEST MERGE FIRST. Every change a page names is checked against its facts'
 // key, its mergeability's and its conversation's, one seek of each a change.
@@ -235,7 +236,8 @@ func mergeSorted(a, b []string) []string {
 
 // dueChanges serves a page of a repository's changes owing their facts or
 // their merge, by source branch, after the cursor — the last source branch a
-// page named — beside the repository's path owners, and on its first page the
+// page named — beside the repository's path owners where one of them owes its
+// facts — and on its first page the
 // changes owing a recheck, oldest merge first: none at all, and no owners, for
 // a repository that is not active or not there.
 func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
@@ -252,33 +254,44 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	case RepoStatus(status) != RepoStatusActive:
 		return nil
 	}
+	// THE OWNERS RIDE ONLY A PAGE NAMING A CHANGE OWING ITS FACTS — the one
+	// thing its home matches them against — read last, in the same snapshot
+	// as the changes they are matched for. Most reads a nudge makes name
+	// none, and owners at their bound would cost every such read a quarter
+	// of a mebibyte read, encoded and, answered from another node, shipped
+	// for nothing. Their ROOM is their bound ([MaxPathOwnersBytes], which a
+	// write is held to), reserved before the changes are read, so a page
+	// that turns out to need them always fits them.
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes - MaxPathOwnersBytes}
+	if err := dueChangesPage(ctx, tx, q, &pg, r.pageRows, out); err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(out.DueChanges, func(c ChangeDue) bool { return c.FactsDue }) {
+		return nil
+	}
 	owners, err := pathOwnersIn(ctx, tx, repoID)
 	if err != nil {
 		return err
 	}
-	// THE OWNERS RIDE EVERY PAGE, so every page's changes are matched against
-	// the owners read beside them; their bytes come off the page's budget.
-	ownersBytes := 0
-	if len(owners) > 0 {
-		encoded, err := json.Marshal(owners)
-		if err != nil {
-			return fmt.Errorf("code: measure repository %s's path owners: %w", repoID, err)
-		}
-		ownersBytes = len(encoded)
-	}
 	out.PathOwners = owners
-	pg := page{maxRows: r.pageRows, maxB: r.pageBytes - ownersBytes}
+	return nil
+}
+
+// dueChangesPage is a page of a repository's due changes into out — its asks
+// due a settling and its rechecks first, on its first page — within pg.
+func dueChangesPage(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, pageRows int, out *ReadAnswer) error {
+	repoID := q.ChangesDue.RepoID
 	if q.Cursor == "" {
-		if err := dueAskSettles(ctx, tx, repoID, &pg, out); err != nil {
+		if err := dueAskSettles(ctx, tx, repoID, pg, out); err != nil {
 			return err
 		}
 	}
 	if q.Cursor == "" && q.ChangesDue.Rechecks > 0 {
-		if err := dueRechecks(ctx, tx, q, &pg, out); err != nil {
+		if err := dueRechecks(ctx, tx, q, pg, out); err != nil {
 			return err
 		}
 	}
-	rows, err := tx.QueryContext(ctx, dueChangesSQL, repoID, q.Cursor, r.pageRows)
+	rows, err := tx.QueryContext(ctx, dueChangesSQL, repoID, q.Cursor, pageRows)
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's due changes: %w", repoID, err)
 	}

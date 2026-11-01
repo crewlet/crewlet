@@ -1435,8 +1435,9 @@ type ReadAnswer struct {
 	// DueRepos is a `changes_due` listing's page of repositories, by id;
 	// DueChanges a page of one repository's due changes, by source branch,
 	// beside PathOwners, its path owners as its settings carry them, read in
-	// the same snapshot — what its home matches the touched paths against —
-	// and, on its first page, Rechecks: the changes whose merge is due again,
+	// the same snapshot — what its home matches the touched paths against,
+	// so answered only beside a change owing its facts — and, on its first
+	// page, Rechecks: the changes whose merge is due again,
 	// the oldest recorded first ([ChangesDueQuery.Rechecks]). A `checks_due`
 	// read answers in the same two fields — its repositories in DueRepos, one
 	// repository's heads owing their checks work in DueChanges, each with what
