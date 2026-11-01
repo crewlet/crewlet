@@ -199,6 +199,15 @@ type Sources struct {
 	// node holds what". Nil leaves the fleet question unregistered.
 	Coord coord.Backend
 
+	// Builtins is the engine's own tools as this node's seats are offered
+	// them, as catalogue rows: `mcp_servers_status`'s built-in groups. Nil,
+	// or a nil answer (a node with no active revision), sends no group.
+	//
+	// THIS NODE'S, and that is the fleet's answer: every node applies the
+	// same revision, so the tools a seat is offered do not depend on the
+	// node holding it.
+	Builtins func() []ToolRow
+
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 
