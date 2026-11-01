@@ -104,12 +104,11 @@ type parkNotices struct {
 
 	// held is whether publishing has failed and the retry owns every
 	// waiting notice: since when, after how many attempts, and the timer of
-	// the next. retryCtx is what the retry publishes under, ended by stop.
+	// the next. cancel ends what the retry publishes under, for stop.
 	held      bool
 	heldSince time.Time
 	attempts  int
 	timer     *time.Timer
-	retryCtx  context.Context
 	cancel    context.CancelFunc
 
 	// retrying counts the retries publishing, which stop waits for.
@@ -216,12 +215,13 @@ func (n *parkNotices) drained(ctx context.Context, retry bool, published int) {
 		"detail", "the broker took every seat's latest park notice it had held")
 	n.held, n.attempts, n.timer = false, 0, nil
 	n.cancel()
-	n.retryCtx, n.cancel = nil, nil
+	n.cancel = nil
 }
 
 // refused holds every waiting notice after a refusal and arms the next
-// attempt, saying so on the first refusal of an outage. The caller holds the
-// lock.
+// attempt, saying so on the first refusal of an outage. ctx is what the
+// refused publish ran under: a caller's on the first refusal, and the retry's
+// own on every later one. The caller holds the lock.
 func (n *parkNotices) refused(ctx context.Context, publish parkPublisher, err error) {
 	n.draining = false
 	if n.stopped {
@@ -236,7 +236,7 @@ func (n *parkNotices) refused(ctx context.Context, publish parkPublisher, err er
 		// that gave up while its notice was out holds the notice like a
 		// broker refusal does, and the retry that publishes it later must
 		// not be born ended. Only stop ends it.
-		n.retryCtx, n.cancel = context.WithCancel(context.WithoutCancel(ctx))
+		ctx, n.cancel = context.WithCancel(context.WithoutCancel(ctx))
 		n.log().WarnContext(ctx, "seat_provider_park_notices_held",
 			"seats", strings.Join(slices.Sorted(maps.Keys(n.waiting)), ","),
 			"error", err.Error(), "retry_in", wait.String(),
@@ -248,8 +248,7 @@ func (n *parkNotices) refused(ctx context.Context, publish parkPublisher, err er
 			"attempt", n.attempts, "seats", len(n.waiting), "error", err.Error(),
 			"retry_in", wait.String())
 	}
-	retryCtx := n.retryCtx
-	n.timer = time.AfterFunc(wait, func() { n.retry(retryCtx, publish) })
+	n.timer = time.AfterFunc(wait, func() { n.retry(ctx, publish) })
 }
 
 // retry is the held notices' next attempt.
