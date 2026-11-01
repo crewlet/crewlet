@@ -75,6 +75,17 @@ import (
 // and the same ending read twice is one report, which opens one window and
 // takes one step.
 //
+// AND IT IS KEPT ON THE WALL CLOCK ([onTheWall]), the clock a vendor names its
+// reset on and every reader of [SitOut.Until] compares against. An instant
+// read from [time.Now] also carries the process's monotonic reading, and Go
+// compares two instants that both carry one on that reading alone. The
+// monotonic clock stops while the host sleeps (it is mach_absolute_time on
+// macOS, CLOCK_MONOTONIC on Linux), so a window kept with one outlasted a
+// sleep by the sleep's length: the entry went on refusing while the instant
+// it named as its end, read on the wall clock, was already past. The
+// engine's probe re-armed for that instant, which is due at once, and asked
+// again, thousands of times a second, until the monotonic clock caught up.
+//
 // A LOGIN IS NOT BENCHED. `crewlet llm login` mends it — usually from another
 // process this one hears nothing from — and the very next call must find it,
 // where a window would hold a signed-in seat on its fallback for nothing; and
@@ -88,7 +99,17 @@ import (
 // fifteen minutes, which keeps a limit that has lifted from costing more than a
 // quarter of an hour, and a limit that has not from costing more than four
 // probes an hour.
-var limitBackoff = [...]time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute}
+var limitBackoff = [...]time.Duration{ShortestSitOut, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute}
+
+// ShortestSitOut is the shortest window an entry sits out for a limit: the
+// first step of [limitBackoff], taken for a report that named no reset. A
+// caller told of a limit whose end it cannot place waits no less than this
+// before asking again, since no entry is tried again sooner.
+const ShortestSitOut = time.Minute
+
+// onTheWall is t without its monotonic reading, so a comparison against it is
+// on the wall clock. See the file's doc for why a window must be.
+func onTheWall(t time.Time) time.Time { return t.Round(0) }
 
 // maxLimitBench caps a reset instant the harness named: an hour, so an operator
 // who signs in again or raises the plan has the entry back within the hour
@@ -182,7 +203,8 @@ func (b *bench) record(report limitReport) time.Time {
 		until = report.at.Add(min(report.reset.Sub(report.at), maxLimitBench))
 	}
 	if until.After(b.until) {
-		b.until, b.said, b.resetsAt, b.since = until, report.said, report.reset, report.at
+		b.until, b.said, b.resetsAt, b.since = onTheWall(until), report.said,
+			onTheWall(report.reset), onTheWall(report.at)
 		b.window = report.window
 		if !b.window.Valid() {
 			b.window = llm.LimitUnknown

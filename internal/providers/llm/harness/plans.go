@@ -240,7 +240,8 @@ func (pl *Plan) Hold(out SitOut) {
 	if !out.Until.After(b.until) {
 		return
 	}
-	b.until, b.said, b.resetsAt, b.since, b.window = out.Until, out.Said, out.ResetsAt, out.Since, out.Window
+	b.until, b.said, b.resetsAt, b.since, b.window = onTheWall(out.Until), out.Said,
+		onTheWall(out.ResetsAt), onTheWall(out.Since), out.Window
 	if !b.window.Valid() {
 		b.window = llm.LimitUnknown
 	}
