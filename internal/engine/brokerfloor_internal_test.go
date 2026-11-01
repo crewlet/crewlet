@@ -297,8 +297,11 @@ func TestTheTestBrokerSizeHoldsAFreshNode(t *testing.T) {
 // 11Gi, 320 MiB at 14Gi beside the bucket — and a ceiling that does not fit
 // refuses the boot. So the tenth log reserves its 64 MiB floor there
 // ([config.ExecutorLogMaxBytesFloor], what its register entry scales to), and a
-// fresh node of the default document still boots on either volume: no
-// operator floor moves for it.
+// fresh node of the default document still boots on either volume: the
+// operator's minimum volume classes do not move for it. What does move is the
+// least a fresh node boots in — 64 MiB more of logs, and on the nats bucket the
+// bucket's quarter beside it, 85.3 MiB in all — which crewlet-operator's own
+// fresh-node floors follow.
 //
 // Mutation: drop ScalesTo from the executor's register entry, so it holds at
 // the gibibyte every corpus-sized log does, and the 14Gi node whose nine logs
