@@ -640,7 +640,13 @@ func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, ros
 	}
 	c := d.concern
 	c.repoName, c.change, c.roster = repoName, row, roster
-	c.actor, c.actorKind = w.Asker.party()
+	// WHO WROTE IT: the asker of a write somebody asked; for the home's own
+	// records, which name no asker, the principal the decide found the record
+	// answers — a revision's facts their pusher ([decideRevise]) — and nobody
+	// for a mergeability, which nobody's act made.
+	if c.actor == "" {
+		c.actor, c.actorKind = w.Asker.party()
+	}
 	r, err := routingFor(ctx, tx, c)
 	if err != nil {
 		return conversationDecision{}, err
@@ -660,9 +666,9 @@ func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, ros
 	case w.Comment != nil, w.Review != nil:
 		d.rows += len(r.Mentions)
 	}
-	// AND A NOTICE EACH HANDLE IT TELLS, the rows its apply writes beside
-	// the conversation's (apply_notices.go).
-	d.rows += heardCount(r)
+	// AND A NOTICE EACH HANDLE IT TELLS, and the change's count of them, the
+	// rows its apply writes beside the conversation's (apply_notices.go).
+	d.rows += noticeWrites(r)
 	d.payload = withRouting(d.payload, r)
 	return d, nil
 }

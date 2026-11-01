@@ -267,6 +267,34 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  // A REPOSITORY'S LIFE (`routes/code/repo/RepoWrites.tsx`,
+  // `routes/code/ImportRepo.tsx`). Each lands on the code log, whose position
+  // raises this tab's code floor, and the repository's row and the listing
+  // are both in that domain's session set. Settings › Search mode and the
+  // mirrors, each one settings change of its own; a mirror is a person's
+  // alone, which the deciding data node holds every asker to (U49 a).
+  code_update_repo: {
+    args: ["repo", "search", "mirror_from", "mirror_to"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
+  // PURGE UNREACHABLE HISTORY, asked of the repository's maintainer once the
+  // person has read who keeps copies (a ConfirmModal): human-only, step-up.
+  code_purge_unreachable: {
+    args: ["repo"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
+  // IMPORT A REPOSITORY from another host, or follow one as a pull mirror
+  // (`mirror`): human-only. `credential` is the variable's NAME.
+  code_import_repo: {
+    args: ["name", "url", "credential", "owner", "visibility", "default_branch", "mirror"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
   // A CHANGE'S PAGE (`routes/code/change/`). Every one lands on the code log,
   // whose position raises this tab's code floor, and every question a change
   // page reads is in that domain's session set — its routing too — so none

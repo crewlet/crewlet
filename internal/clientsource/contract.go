@@ -250,6 +250,7 @@ var contract = []Entry{
 
 	// code.ts
 	{"REPO_STATUSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryRepositoryState"},
+	{"REPO_SEARCH_MODES", ReadLiteral, "internal/code.TestTheDashboardOffersEverySearchModeOfARepository"},
 	{"COMMAND_OUTCOMES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryOutcomeOfACommand"},
 	{"REPO_NAME", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
@@ -272,6 +273,7 @@ var contract = []Entry{
 	{"CodeSearchCoverage", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
 	{"CodeSearchRepoSet", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
 	{"CodeSearchNodeGap", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CODE_SEARCH_MODES", ReadLiteral, "internal/codeindex.TestTheDashboardOffersEveryModeOfASearch"},
 
 	// merge.ts
 	{"MERGE_METHODS", ReadLiteral, "internal/code.TestTheDashboardOffersEveryMergeMethod"},

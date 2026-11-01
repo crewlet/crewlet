@@ -161,6 +161,75 @@ func TestAChunkLandsOnlyInItsTurn(t *testing.T) {
 	}
 }
 
+// A REPOSITORY'S DETAIL SAYS WHERE IT STANDS WITH OTHER HOSTS: an imported
+// repository's detail names the import's source, how many of its chunks have
+// landed and, once it ended, when and why it ended short; a pull mirror's names
+// its source and its last sync's instant — what a person who imported it or
+// set the mirror reads its progress by. A repository with neither details
+// none.
+//
+// Mutations: serve no import progress (Chunks left 0) — the detail after a
+// chunk says none landed, red; drop the sync's instant from the read — the
+// mirror reads as never synced, red.
+func TestARepositorysDetailSaysWhereItStandsWithOtherHosts(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	ctx := t.Context()
+	detail := func(name string) code.RemoteState {
+		t.Helper()
+		a, err := n.reader.Read(ctx, code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: name})
+		if err != nil || a.Repo == nil {
+			t.Fatalf("read %s's detail: %+v, %v", name, a.Repo, err)
+		}
+		return a.Repo.Remotes
+	}
+	web := repoOn(t, n, "web")
+	if got := detail("web"); got.MirrorFrom != nil || got.MirrorTo != nil || got.Import != nil ||
+		!got.MirrorSyncedAt.IsZero() {
+		t.Fatalf("a repository with no other host details %+v, want none", got)
+	}
+
+	made, err := n.store.EnsureRepo(ctx, n.activate(t1), code.Declared{Name: "imported",
+		Settings: suiteSettings(), Import: importSource})
+	if err != nil || made.Status != code.RepoStatusImporting {
+		t.Fatalf("ensure imported: %+v, %v; want it created importing", made, err)
+	}
+	n.drain()
+	c, _ := committerOn(t, n, n.pub)
+	if got := detail("imported").Import; got == nil || got.Source != *importSource || got.Chunks != 0 ||
+		!got.DoneAt.IsZero() || got.Error != "" {
+		t.Fatalf("an import just begun details %+v, want its source, no chunk landed and no end", got)
+	}
+	first := chunkOf(n, made.RepoID, 1, 5, update("refs/heads/main", code.ZeroOID, oidOf("A")))
+	res, err := c.ProposeImport(ctx, code.ImportProposal{Chunk: &first})
+	requireSynced(t, "the first chunk", res, err)
+	if got := detail("imported").Import; got == nil || got.Chunks != 1 || !got.DoneAt.IsZero() {
+		t.Fatalf("an import one chunk in details %+v, want one chunk landed and no end", got)
+	}
+	short := "a blob past code.limits.max_blob_bytes"
+	done := code.ImportDone{RepoID: made.RepoID, Node: n.id, Seq: 1, Error: short}
+	res, err = c.ProposeImport(ctx, code.ImportProposal{Done: &done})
+	requireSynced(t, "the import's end", res, err)
+	if got := detail("imported").Import; got == nil || got.Chunks != 1 || got.DoneAt.IsZero() ||
+		got.Error != short {
+		t.Fatalf("an import ended short details %+v, want its end's instant and why", got)
+	}
+
+	s := suiteSettings()
+	s.MirrorFrom = mirrorSource
+	n.ensure("web", s, t2)
+	if got := detail("web"); got.MirrorFrom == nil || *got.MirrorFrom != *mirrorSource ||
+		!got.MirrorSyncedAt.IsZero() || got.Import != nil {
+		t.Fatalf("a pull mirror never synced details %+v, want its source and no sync", got)
+	}
+	sync := syncOf(n, web, 0, update("refs/heads/synced", code.ZeroOID, oidOf("A")))
+	res, err = c.ProposeMirrorSync(ctx, code.MirrorSyncProposal{Sync: sync})
+	requireSynced(t, "the sync", res, err)
+	if got := detail("web"); got.MirrorSyncedAt.IsZero() {
+		t.Fatalf("a pull mirror synced details %+v, want its last sync's instant", got)
+	}
+}
+
 // A MIRROR SYNC IS STALE AGAINST A MOVED REF: a pull mirror's sync lands its
 // refs, its pack of kind mirror, its push row `via mirror` and its sync's
 // instant; a second sync built over the ref as the first found it is refused

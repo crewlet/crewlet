@@ -768,6 +768,11 @@ func (t *codeRepoWrite) Parameters() map[string]any {
 		props["path_owners"] = map[string]any{"type": "object",
 			"description": "Globs given to or taken from a project's owners: {\"add\": [{\"owner\": …, " +
 				"\"paths\": [glob]}], \"remove\": [the same]}."}
+		props["mirror_from"] = map[string]any{"type": "object",
+			"description": "A person's: the pull mirror, {\"url\", \"credential\": \"${VAR}\"}; {} removes it."}
+		props["mirror_to"] = map[string]any{"type": "object",
+			"description": "A person's: the push mirror, {\"url\", \"credential\", \"as\": a handle, \"refs\"}; " +
+				"{} removes it."}
 		props["archived"] = map[string]any{"type": "boolean"}
 		props["rename_to"] = map[string]any{"type": "string"}
 	case CodeDeleteRepoTool:
@@ -1044,6 +1049,30 @@ func updateRequest(tool string, args map[string]any) (code.LifecycleRequest, *to
 		}
 		change.PathOwners = &owners
 	}
+	// THE MIRRORS, EACH SET WHOLE OR REMOVED ({} — no url), as the domain's
+	// change takes them ([code.RepoChange.MirrorFrom]): a person's alone (U49
+	// a), which the deciding data node holds every asker to, so an agent's
+	// call is refused there as not_permitted, never filtered here — the tool
+	// forms the request a person's dashboard or assistant makes, and the
+	// domain judges who made it.
+	if raw, ok := args["mirror_from"]; ok {
+		var from code.MirrorSource
+		if err := decodeArg(raw, &from); err != nil {
+			r := failed(fmt.Sprintf("%s: `mirror_from` is {\"url\": \"https://…\", \"credential\": "+
+				"\"${VAR}\"}, or {} to remove the pull mirror: %v.", tool, err))
+			return code.LifecycleRequest{}, &r
+		}
+		change.MirrorFrom = &from
+	}
+	if raw, ok := args["mirror_to"]; ok {
+		var to code.MirrorTarget
+		if err := decodeArg(raw, &to); err != nil {
+			r := failed(fmt.Sprintf("%s: `mirror_to` is {\"url\": \"https://…\", \"credential\": \"${VAR}\", "+
+				"\"as\": \"<handle>\", \"refs\": [pattern]}, or {} to remove the push mirror: %v.", tool, err))
+			return code.LifecycleRequest{}, &r
+		}
+		change.MirrorTo = &to
+	}
 	_, archive := args["archived"].(bool)
 	rename := strings.TrimSpace(argString(args, "rename_to"))
 	settings := change != (code.RepoChange{})
@@ -1055,7 +1084,8 @@ func updateRequest(tool string, args map[string]any) (code.LifecycleRequest, *to
 	}
 	if asked != 1 {
 		r := failed(fmt.Sprintf("%s changes ONE thing a call: its settings (any of `description`, "+
-			"`default_branch`, `visibility`, `search`, `owner`, `path_owners`), `archived`, or `rename_to` — "+
+			"`default_branch`, `visibility`, `search`, `owner`, `path_owners`, `mirror_from`, `mirror_to`), "+
+			"`archived`, or `rename_to` — "+
 			"each is a record of its own.", tool))
 		return code.LifecycleRequest{}, &r
 	}

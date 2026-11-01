@@ -26,7 +26,7 @@
  * is tokens.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -196,23 +196,21 @@ function EndedAt({ at }: { at: string | undefined }) {
 
 /**
  * One listing of attempts, paged, with the pane of the one opened beneath
- * it: the question `params` asks of `code_checks`. `narrow` keeps the rows a
- * screen draws of those the engine sent — the Checks section's window has an
- * end the engine's `since` does not.
+ * it: the question `params` asks of `code_checks`, every row of which is
+ * drawn — a narrowing, the Checks section's window's end among them, is the
+ * engine's.
  */
 export function CheckListing({
   params,
   label,
   showRepo,
   empty,
-  narrow,
   header,
 }: {
   params: CodeParams;
   label: string;
   showRepo: boolean;
   empty: { title: string; hint: string };
-  narrow?: (r: CodeCheckRow) => boolean;
   /** Drawn above the grid with every row the pager holds: a section's chart and facets. */
   header?: (rows: readonly CodeCheckRow[], more: boolean) => ReactNode;
 }) {
@@ -226,10 +224,7 @@ export function CheckListing({
     attemptKey,
     (a: CodeChecksAnswer) => a.next ?? "",
   );
-  const rows = useMemo(
-    () => (narrow ? paged.items.filter(narrow) : [...paged.items]),
-    [paged.items, narrow],
-  );
+  const rows = paged.items;
   const more = paged.more;
   const [open, setOpen] = useState<CodeCheckRow | null>(null);
   const openKey = open ? attemptKey(open) : "";

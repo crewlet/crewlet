@@ -53,7 +53,8 @@ type RepoRef struct {
 	// by its syncs, so a push and a change's every write are refused
 	// repo_mirrored — what the code host's admission and an engine write's
 	// landing read of it before the committer is asked. Never the mirror's
-	// URL or credential, which no row a read serves carries.
+	// URL or credential, which one repository's detail alone serves
+	// ([RepoDetail.Remotes]): every push and fetch reads this row.
 	//
 	// AN ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
 	// it is read from the row a record wrote. AS A STATED CONDITION, as the
@@ -1057,9 +1058,10 @@ const (
 	// own rather than a `check` read naming none, so that a principal's read
 	// that forgot its asker is refused rather than answered ungated.
 	ReadCheckBox ReadKind = "check_box"
-	// ReadChecksQueued is the attempts waiting for a runner, OLDEST QUEUED
-	// FIRST, each with its definition and its repository's name
-	// ([RunnableCheck]): a git node's CLAIM WALK (internal/code/checkrun),
+	// ReadChecksQueued is the attempts waiting for a runner whose definitions
+	// name one cell ([ChecksQueuedQuery]), OLDEST QUEUED FIRST, each with its
+	// definition and its repository's name ([RunnableCheck]): a git node's
+	// CLAIM WALK (internal/code/checkrun),
 	// every repository's whose repository a runner may still claim in. The
 	// engine's own, as `check_box` is: no principal makes it, and it is held
 	// to no grant.
@@ -1354,6 +1356,15 @@ type ReadQuery struct {
 	// node of a build that predates the kind refuses the read as a kind it
 	// does not know (ErrInvalid) — the sweep waits, never answered as none.
 	ChecksRunning *ChecksRunningQuery `json:"checks_running,omitempty"`
+	// ChecksQueued is a `checks_queued` read's question, REQUIRED for that
+	// kind and refused on every other: the cell the attempts' definitions
+	// name, which a runner's walk reads one at a time for the cells it has
+	// room in. An estate request's field and no record's, so it takes no
+	// versionedFields row: a node of a build that predates it answers the
+	// kind for every cell, which the walk still judges attempt by attempt —
+	// its cell resolved and its room taken for each — so it claims nothing
+	// it could not run, at the cost of reading what it skips.
+	ChecksQueued *ChecksQueuedQuery `json:"checks_queued,omitempty"`
 	// ExpungeTips is an `expunge_tips` read's repository and instant:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
@@ -2134,16 +2145,42 @@ type CheckQuery struct {
 	// checked for its target. A `checks` read's alone.
 	Change int64 `json:"change,omitempty"`
 	// OID is a commit's whole id: its attempts — checked for every target,
-	// or for the target of the change Change names — and the commit a
-	// `check` read's attempt is of.
+	// for the target of the change Change names, or for the Target named
+	// beside it — and the commit a `check` read's attempt is of.
 	OID string `json:"oid,omitempty"`
 	// Target, Name and Attempt are the one attempt a `check` read is of —
 	// the branch it was checked for, the check and the attempt — REQUIRED
-	// there. A `checks` read refuses a Target and an Attempt, and takes a
-	// Name as a NARROWING: the attempts of the check of that name alone.
+	// there. A `checks` read takes a Target only beside an OID and no
+	// Change — that commit's attempts checked for that branch, a range of
+	// code_checks' key, as a change's are for its own — refuses an Attempt,
+	// and takes a Name as a NARROWING: the attempts of the check of that name
+	// alone.
 	Target  string `json:"target,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Attempt int    `json:"attempt,omitempty"`
+	// Latest answers, of a change's or a commit's attempts, each check's
+	// LATEST attempt for each branch it was checked for, and no attempt a
+	// later one reran: what a check STANDS AT, which a merge gate, a queue's
+	// meter and an Inbox card read. Without it a caller rebuilt that from the
+	// whole history, which a page cuts — a check rerun across a page's end
+	// was drawn at its superseded attempt. Refused on a repository's listing
+	// and on the window, which walk the endings in time and hold a check's
+	// attempts anywhere in them, and on a `check` read, which names one.
+	//
+	// ONE WALK OF code_checks' KEY, each row kept only where the key holds no
+	// later attempt of its check (one seek of the key's next attempt), so a
+	// page of it is at most one row a check and a target: one checks file
+	// declares at most [MaxChecksPerFile], which is the page a Latest listing
+	// takes where it names no limit ([latestCheckLimit]).
+	//
+	// AN ESTATE REQUEST'S FIELD, as State is, under the same STATED
+	// CONDITION (M3-O84 §2 item 5): no build carrying the code domain has run
+	// without it. A build that predated it would decode and ignore it and
+	// answer every attempt — the history a caller then reduces wrongly only
+	// where a page cuts it — and would refuse a Target beside an OID; were
+	// such a build ever to run first, a latest listing would move to a kind of
+	// its own, which such a build refuses as one it does not know.
+	Latest bool `json:"latest,omitempty"`
 	// State narrows a `checks` read to the attempts in one state; refused on
 	// a `check` read, which names its one attempt whatever its state.
 	//
@@ -2172,6 +2209,20 @@ type CheckQuery struct {
 	// is the whole of what the rows keep ([CheckHistory]). Refused beside a
 	// repository, whose listing is its own attempts newest ended first.
 	Since time.Time `json:"since,omitzero"`
+	// Until is the window's END: the attempts that ended BEFORE it, so a
+	// window over a past interval is a seek of code_checks_recent_idx from
+	// its end down, as a cursor's next page is from its place, and its first
+	// page is that interval's newest ending — never the newest of every
+	// attempt that ended since, which a reader would page through to reach
+	// it. Zero is no end: up to the newest ending. Refused beside a
+	// repository, as Since is, at or before Since, and on a `check` read.
+	//
+	// AN ESTATE REQUEST'S FIELD, as State is, under the same STATED
+	// CONDITION (M3-O84 §2 item 5): no build carrying the code domain has run
+	// without it. A build that predated it would decode and ignore it and
+	// answer the window up to its newest ending; were such a build ever to
+	// run first, a window with an end would move to a kind of its own.
+	Until time.Time `json:"until,omitzero"`
 }
 
 // keeps reports whether row is one a `checks` listing narrowed by c keeps:
@@ -2201,6 +2252,15 @@ type ChecksDueQuery struct {
 // the attempts it sweeps.
 type ChecksRunningQuery struct {
 	RepoID string `json:"repo_id,omitempty"`
+}
+
+// ChecksQueuedQuery is a `checks_queued` read's question: the cell the queued
+// attempts' definitions name in their run_in — "" for the ones naming none,
+// which run in the company's default cell as the epoch a runner walks under
+// resolves it (config.Company.CheckCell), never as anything stored says.
+// ALWAYS SENT, "" included: it is a cell's name, and none is one.
+type ChecksQueuedQuery struct {
+	RunIn CheckCell `json:"run_in"`
 }
 
 // RunnableCheck is one attempt a `checks_queued` read lists: its row, the
@@ -2272,6 +2332,50 @@ type RepoDetail struct {
 	// last one committed — the repository's own row, read with the rest of
 	// it, so a person who asked for a purge reads its progress here.
 	Expunge ExpungeState `json:"expunge,omitzero"`
+	// Remotes is where the repository stands with other hosts
+	// ([RemoteState]): its mirrors as its settings name them, its import's
+	// progress and its pull mirror's last sync — on the detail alone, read
+	// with its expunge in one seek of its row, never on the [RepoRef] every
+	// push and fetch reads, which needs only [RepoRef.Mirrored].
+	Remotes RemoteState `json:"remotes,omitzero"`
+}
+
+// RemoteState is a repository's other hosts as its row holds them
+// (code_repos, replicated 0095): zero for a repository with no mirror that was
+// never imported. A read's answer, never a record's field, so none of it takes
+// a versionedFields row; the records that write the columns name theirs
+// (mirror.go).
+//
+// EVERY CREDENTIAL HERE IS A REFERENCE — one whole ${VAR} the domain refuses
+// any other value for — so serving one to a reader of the repository serves a
+// variable's name, as the company document does to whoever reads it, never a
+// token.
+type RemoteState struct {
+	// MirrorFrom and MirrorTo are the repository's pull and push mirrors as
+	// its settings carry them ([RepoSettings.MirrorFrom]), nil for none.
+	MirrorFrom *MirrorSource `json:"mirror_from,omitempty"`
+	MirrorTo   *MirrorTarget `json:"mirror_to,omitempty"`
+	// Import is the import its create filled it from — its own, or a pull
+	// mirror's first fetch — and how far it went; nil for a repository its
+	// create did not import.
+	Import *ImportState `json:"import,omitempty"`
+	// MirrorSyncedAt is the broker instant of a pull mirror's last sync, zero
+	// for one never synced and for a repository that is no pull mirror.
+	MirrorSyncedAt time.Time `json:"mirror_synced_at,omitzero"`
+}
+
+// ImportState is one repository's import as its row holds it: its source,
+// how many of its chunks have landed, and how it ended.
+type ImportState struct {
+	// Source is what the create imported from, fixed at the create
+	// ([CreateRepo.Import]).
+	Source ImportSource `json:"source"`
+	// Chunks is how many of its chunks have landed ([ImportChunk.Seq]).
+	Chunks int64 `json:"chunks"`
+	// DoneAt is the broker instant of the record that ended it, zero while
+	// it runs; Error is why it ended short, "" for an import that finished.
+	DoneAt time.Time `json:"done_at,omitzero"`
+	Error  string    `json:"error,omitempty"`
 }
 
 // ExpungeState is a repository's expunges as its row holds them (code_repos,

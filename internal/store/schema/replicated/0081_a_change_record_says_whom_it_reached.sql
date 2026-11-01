@@ -21,9 +21,9 @@
 -- A PERSON's notice is kept the company's inbox.retention_days (a year by
 -- default), its inbox's horizon. A SEAT's is kept store.EventHistory, thirty
 -- days (ADR-0021): past it the turn a wake started is gone from the event log,
--- so the row would name a delivery nothing can show any more, and at a
--- company's scale — hundreds of thousands of seat notices a day — a year of
--- them would be most of this table for nothing. recipient_kind says which a
+-- so the row would name a delivery nothing can show any more, and seats are
+-- most of a change's audience, so a year of their rows would be most of this
+-- table for nothing. recipient_kind says which a
 -- row is, so each sweep deletes its own kind (the swept_idx). THE APPLIER
 -- WRITES NO ROW PAST ITS HORIZON — a record whose broker instant is older
 -- than its batch's instant less the recipient's horizon writes none for them
@@ -34,9 +34,10 @@
 -- whether a row is written depends on the batch's own instant and on the
 -- horizon the epoch states, so two nodes applying one record at two moments,
 -- or on two epochs, legitimately hold different rows — which is also why
--- each node sweeps its own (maintenance.NodeLocal) and a repository's purge
--- removes a purged change's notices without counting them against its
--- bounded parts, whose counts must agree on every node.
+-- each node sweeps its own (maintenance.NodeLocal), and why a repository's
+-- purge charges a purged change's notices to its bounded parts, whose counts
+-- must agree on every node, by the count the change keeps of them rather
+-- than by these rows (0102).
 --
 -- # The columns
 --

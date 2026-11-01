@@ -13,7 +13,8 @@ import (
 
 // fakeSource is a domain's inbox over a fixed list of notices, newest first
 // in its own order, its cursor the position of the last notice a page took —
-// each page cut after its cursor, as a domain's scan is.
+// each page cut below its cursor's position, as a domain's scan is, and never
+// ending inside a position, as [inbox.Source] promises.
 type fakeSource struct {
 	name    string
 	stream  string
@@ -32,8 +33,14 @@ func (f *fakeSource) Notices(_ context.Context, q inbox.SourceQuery) (inbox.Sour
 			return inbox.SourcePage{}, fmt.Errorf("%s: no notice at %s", f.name, q.Cursor)
 		}
 		start = i + 1
+		for start < len(f.notices) && f.notices[start].Position == f.notices[i].Position {
+			start++
+		}
 	}
 	end := min(start+q.Limit, len(f.notices))
+	for end > start && end < len(f.notices) && f.notices[end].Position == f.notices[end-1].Position {
+		end++
+	}
 	page := inbox.SourcePage{Notices: slices.Clone(f.notices[start:end]),
 		SeenThrough: inbox.Position{Stream: f.stream, Generation: 1, Seq: 1}}
 	if end < len(f.notices) {
@@ -139,5 +146,47 @@ func TestACursorResumesEachSource(t *testing.T) {
 	if _, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
 		Cursor: "pages=X"}, []inbox.Source{tracker, code}); !errors.Is(err, inbox.ErrBadCursor) {
 		t.Errorf("a cursor naming another source answered %v, want ErrBadCursor", err)
+	}
+}
+
+// A PAGE CLOSES BETWEEN TWO POSITIONS OF A SOURCE: one code record told
+// founder about two changes, two notices at one position on the code log.
+// Pages of two read every notice once: the first takes the record's two
+// notices together, running past its limit by the one that shares the
+// position, since a cursor naming that position resumes below it and would
+// never show a notice the page left there.
+//
+// Mutation: take one notice a turn of the merge, and the record's second
+// notice is never read, red.
+func TestAPageClosesBetweenTwoPositionsOfASource(t *testing.T) {
+	t.Parallel()
+	tracker := noticesAt("tracker", "CREWLET_TRACKER_LOG", composeBase, 50, 30)
+	code := noticesAt("code", "CREWLET_CODE_LOG", composeBase, 40, 40, 20)
+	code.notices[0].RecordID, code.notices[1].RecordID = "code-40/one", "code-40/two"
+	code.notices[1].Position = code.notices[0].Position
+	code.notices[2].Position.Seq = code.notices[0].Position.Seq - 1
+	var all []string
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatalf("the inbox did not end after %d pages: %v", pages, all)
+		}
+		page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
+			Limit: 2, Cursor: cursor}, []inbox.Source{tracker, code})
+		if err != nil {
+			t.Fatalf("Compose at %q: %v", cursor, err)
+		}
+		if pages == 0 && !slices.Equal(ids(page), []string{"tracker-50", "code-40/one", "code-40/two"}) {
+			t.Errorf("the first page reads %v, want the record's two notices together", ids(page))
+		}
+		all = append(all, ids(page)...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	want := []string{"tracker-50", "code-40/one", "code-40/two", "tracker-30", "code-20"}
+	if !slices.Equal(all, want) {
+		t.Fatalf("paging read %v, want %v", all, want)
 	}
 }

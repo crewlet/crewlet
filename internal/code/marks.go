@@ -415,16 +415,21 @@ func marksIn(ctx context.Context, tx *sql.Tx, handle string) (inbox.Marks[Reason
 	return normalMarks(m), position, nil
 }
 
-// noticePositionsIn is the packed position of every record ids names among
-// handle's own code notices, and the first id that is none of them, "" when
-// every one is.
+// noticePositionsIn is the packed position of every notice ids names among
+// handle's own code notices — each by its [NoticeID], the record and the
+// change, as an inbox notice carries it — and the first id that is none of
+// them, "" when every one is.
 func noticePositionsIn(ctx context.Context, tx *sql.Tx, handle string, ids []string) (map[string]uint64, string,
 	error) {
 
 	out := make(map[string]uint64, len(ids))
 	for _, id := range ids {
+		record, change, ok := splitNoticeID(id)
+		if !ok {
+			return nil, id, nil
+		}
 		var packed int64
-		switch err := tx.QueryRowContext(ctx, noticePositionSQL, id, handle).Scan(&packed); {
+		switch err := tx.QueryRowContext(ctx, noticePositionSQL, record, change, handle).Scan(&packed); {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, id, nil
 		case err != nil:
@@ -444,5 +449,5 @@ const (
 	personMarksSQL = `SELECT generation, seen_stream, seen_through, read, unread, snoozed, primary_reasons,
 		position FROM code_person_marks WHERE handle = ?`
 	noticePositionSQL = `SELECT log_seq FROM code_notifications INDEXED BY sqlite_autoindex_code_notifications_1
-		WHERE record_id = ? AND recipient = ?`
+		WHERE record_id = ? AND change_id = ? AND recipient = ?`
 )

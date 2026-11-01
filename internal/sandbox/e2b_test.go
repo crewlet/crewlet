@@ -1063,6 +1063,41 @@ func TestE2BReadsATailFromAnEnvdThatIgnoresTheRange(t *testing.T) {
 	}
 }
 
+// A STREAMED END IS A SUFFIX RANGE, so keeping a failed check's log costs the
+// bytes kept and never the output before them — and an envd that ignores the
+// range, sending the whole file with no length, is still answered the end.
+func TestE2BStreamsATailAsASuffixRange(t *testing.T) {
+	t.Parallel()
+	for _, ignoreRange := range []bool{false, true} {
+		stub := newE2BStub()
+		stub.ignoreRange = ignoreRange
+		provider, _ := newE2B(t, stub)
+		box, err := provider.Create(t.Context(), sandbox.Spec{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		content := bytes.Repeat([]byte("0123456789\n"), 10_000)
+		stub.files["/home/user/.crewlet-check/output"] = content
+
+		r, size, err := box.OpenTail(t.Context(), "/home/user/.crewlet-check/output", 64)
+		if err != nil {
+			t.Fatalf("OpenTail (range ignored %v): %v", ignoreRange, err)
+		}
+		got, err := io.ReadAll(r)
+		_ = r.Close()
+		if err != nil || !bytes.Equal(got, content[len(content)-64:]) || size != int64(len(content)) {
+			t.Errorf("range ignored %v: the streamed end = %d bytes of %d, %v; want the last 64 of %d",
+				ignoreRange, len(got), size, err, len(content))
+		}
+		stub.mu.Lock()
+		if !slices.Equal(stub.ranges, []string{"bytes=-64"}) {
+			t.Errorf("range ignored %v: the download asked for %q; want one suffix range of 64", ignoreRange,
+				stub.ranges)
+		}
+		stub.mu.Unlock()
+	}
+}
+
 // THE KEEPALIVE, THE SNAPSHOT AND THE TEARDOWN each hit their own endpoint.
 func TestE2BLifecycleCallsAreDistinct(t *testing.T) {
 	t.Parallel()

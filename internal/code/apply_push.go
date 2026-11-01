@@ -1037,21 +1037,16 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		budget -= int(n)
 	}
 	if budget > 0 {
-		n, w, whole, err := purgeChanges(ctx, tx, p.RepoID, budget, weighed)
+		// AND THEIR NOTICES, charged by each change's count of them: the
+		// table is divergent, and what the part charges decides which
+		// replicated rows go after them (apply_purge_changes.go).
+		done, err := a.purgeChanges(ctx, tx, p.RepoID, budget, weighed)
 		if err != nil {
 			return 0, err
 		}
-		deleted += n
-		budget -= n
-		weighed = w
-		// AND THEIR NOTICES, which no part counts: the table is divergent,
-		// and the part's count decides which replicated rows go
-		// (apply_notices.go).
-		removed, err := a.removeNotices(ctx, tx, whole)
-		if err != nil {
-			return 0, err
-		}
-		deleted += removed
+		deleted += done.deleted
+		budget -= done.spent
+		weighed = done.weighed
 	}
 	if budget > 0 {
 		n, err := purgeChecks(ctx, tx, p.RepoID, budget, weighed)
@@ -1092,7 +1087,8 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // repository's pushes, refs, packs, retired packs, ref drops, changes'
 // revisions, authors, bodies and rows and their conversations' rows — its
 // reviewers, participants, comments, reviews, findings, revisions' facts and
-// mergeability among them — its checks and their logs, its heads' dispatches
+// mergeability among them — the changes' notices by their counts
+// (code_changes.notices, never fewer than the rows), its checks and their logs, its heads' dispatches
 // and its targets' readings, and its merge queues' entries, candidates,
 // landings and green rows remain AND the
 // pushes, the bodies, the conversations' text and the checks among them
@@ -1119,7 +1115,10 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // record, since a derived row keeps its object only while it stands.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p Purge) (int, error) {
 	// THE NOTICES OF THE CHANGES THE PURGE STILL FINDS, before their rows
-	// go: the only way to them from the repository is its changes.
+	// go: the only way to them from the repository is its changes. They
+	// are bounded with the rest, since the decide forms this record only
+	// once the rows left and the changes' counts of their notices fit one
+	// part (purge.go).
 	remaining, err := changesOf(ctx, tx, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: read %s's remaining changes at %s: %w", p.RepoID, at.position, err)

@@ -2815,6 +2815,37 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	code_update_repo: {
+		args: [
+			"repo",
+			"search",
+			"mirror_from",
+			"mirror_to"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
+	},
+	code_purge_unreachable: {
+		args: ["repo"],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
+	},
+	code_import_repo: {
+		args: [
+			"name",
+			"url",
+			"credential",
+			"owner",
+			"visibility",
+			"default_branch",
+			"mirror"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
+	},
 	code_review_change: {
 		args: [
 			"repo",

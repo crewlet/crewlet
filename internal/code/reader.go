@@ -1341,7 +1341,12 @@ func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
 //     CheckSummaryBytes, so 200 attempts summarised in a line are under
 //     200 KB, and a page of summaries at their 4 KiB ends near 950 KB, under
 //     the byte budget; the bound is on the rows a page READS, so a window a
-//     seat reads little of costs what a full page does and no more.
+//     seat reads little of costs what a full page does and no more. A
+//     listing of each check's LATEST attempt ([CheckQuery.Latest]) takes
+//     latestCheckLimit by default: MaxChecksPerFile, every check one checks
+//     file declares for a branch, so a change's head's or a queue tip's
+//     checks for its branch are one page and a reader asks once — at their
+//     4 KiB summaries and 2 KiB links about 440 KB, under the byte budget.
 //
 // The maxima are exported for a client that pages: the most a page may ask
 // for of each, which a page past them is refused naming.
@@ -1355,6 +1360,7 @@ const (
 	defaultChangeLimit   = 50
 	MaxChangesPerPage    = 200
 	defaultCheckLimit    = 50
+	latestCheckLimit     = MaxChecksPerFile
 	MaxChecksPerPage     = 200
 	defaultRevisionLimit = 200
 	MaxRevisionsPerPage  = 1_000
@@ -1700,6 +1706,9 @@ func (q ReadQuery) validate() error {
 	case q.MirrorPush != nil:
 		return fmt.Errorf("%w: mirror_push: only a mirror_push read names the repository whose push mirror "+
 			"it reads", ErrInvalid)
+	case q.ChecksQueued != nil:
+		return fmt.Errorf("%w: checks_queued: only a checks_queued read names the cell whose queued checks it "+
+			"reads", ErrInvalid)
 	case q.QueueDue != nil:
 		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
 			"in", ErrInvalid)
@@ -1881,6 +1890,8 @@ func (q ReadQuery) validateIntroduced() error {
 			"checks it reads")
 	case q.MirrorPush != nil:
 		return refused("mirror_push", "only a mirror_push read names the repository whose push mirror it reads")
+	case q.ChecksQueued != nil:
+		return refused("checks_queued", "only a checks_queued read names the cell whose queued checks it reads")
 	case q.ExpungeTips != nil:
 		return refused("expunge_tips", "only an expunge_tips read names a repository's ref drops")
 	case !q.ExpungedBefore.IsZero():
@@ -1972,6 +1983,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -2022,6 +2034,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -2063,6 +2076,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -2114,6 +2128,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, lists+", a page of MaxSnapshotItems at a time, and names nothing else")
@@ -2172,6 +2187,7 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+
@@ -2213,7 +2229,8 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"branch_changes", q.BranchChanges != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil},
+		{"branch_changes", q.BranchChanges != nil},
 		{"expunged_before", !q.ExpungedBefore.IsZero()}, {"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {
@@ -2294,7 +2311,7 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil},
 		{"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {
@@ -2590,6 +2607,12 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 		return err
 	}
 	out.Repo.Expunge = state.view()
+	// AND WHERE IT STANDS WITH OTHER HOSTS ([remotesShownIn]): a person who
+	// imported it, or set a mirror, reads the import's progress and the
+	// mirror's last sync here.
+	if out.Repo.Remotes, err = remotesShownIn(ctx, tx, id); err != nil {
+		return err
+	}
 	return nil
 }
 

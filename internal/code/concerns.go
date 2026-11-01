@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -120,7 +122,8 @@ import (
 // ([ActorSystem]): the principal is in its payload. So the routing names who
 // acted ([ChangeRouting.Actor]) — the asker, the pusher of a push's entry, the
 // enqueuer of an entry a queue landed, the pusher of the head a check
-// measured, nobody for the home's own records — and a code reason is news to
+// measured and of the revision whose facts the home records, nobody for the
+// home's other records — and a code reason is news to
 // whoever made the change only where [Reason.WakesActor] says so: a reviewer
 // is not told of their own review, a pusher of their own merge, and a pusher
 // IS told that the head they pushed fails its checks.
@@ -257,8 +260,9 @@ type ChangeRouting struct {
 	RepoName string `json:"repo_name"`
 	Title    string `json:"title"`
 	// Actor is who made the change the record records — its asker, a push
-	// entry's pusher — and "" for the home's own records, which nobody
-	// asked. Nobody hears of a change they made.
+	// entry's pusher, and for a revision's facts, which the home records,
+	// whoever pushed the revision — and "" for the home's other records,
+	// which no principal's act made. Nobody hears of a change they made.
 	Actor string `json:"actor,omitempty"`
 	// Owner is the change's owner, and OwnerKind what it is.
 	Owner     string    `json:"owner,omitempty"`
@@ -412,59 +416,134 @@ type Concern struct {
 	Change *ChangeRouting
 }
 
-// Concerns is every handle routings concern, in precedence order — one record's
+// Concerns is every handle routings concern, change by change in the order
+// they first appear, each change's in precedence order — one record's
 // routings, which a push record carries one of for every change it merges or
-// opens, and every other record one of. PURE OVER THE ROUTINGS: it reads no
-// row, no chart and no clock, so the applier that writes a notice row per
-// concern and the feed that wakes the seats among them, on any node and at any
-// time, derive one set.
+// opens, a queue's landing or ejection one for every entry it lands or puts
+// out, and every other record one of. PURE OVER THE ROUTINGS: it reads no row,
+// no chart and no clock, so the applier that writes a notice row per concern
+// and the feed that wakes the seats among them, on any node and at any time,
+// derive one set.
 //
-// THE REASONS ARE OFFERED IN [Reasons]' ORDER, every routing's handles for one
-// reason before any for the next, so a handle a record names under two
-// reasons, about two changes, hears under the stronger — internal/routing's
-// add-once rule across the whole record, which a notice row keyed on the
-// record and the recipient needs: a record reaches one handle once.
+// THE ADD-ONCE RULE IS PER CHANGE: a handle one change's routings name under
+// two reasons hears under the stronger (internal/routing's Builder, offered
+// in [Reasons]' order), and a handle two changes of one record name hears
+// about each. The record's identity alone cannot be the notice's: the
+// committer folds up to [MaxPushesPerRecord] pushes from unrelated clients
+// into one record, so a seat mentioned by two of them, or the author of two
+// changes one landing merges, would hear about whichever routing came first
+// and nothing of the other — the busier the repository, the more news lost. So
+// a notice is keyed on the record, the change and the recipient ([NoticeID],
+// replicated 0105), and a wake's id is derived from the same three.
+// Routings that name one change twice — a push that opens a change and a
+// later push of the same record that merges it — share one builder, so a
+// handle hears about that change once.
 func Concerns(routings []*ChangeRouting) []Concern {
 	var (
-		b   routing.Builder[Reason]
-		out []Concern
+		order  []string
+		byID   = map[string][]*ChangeRouting{}
+		out    []Concern
+		reason = Reasons()
 	)
-	for _, reason := range Reasons() {
-		for _, r := range routings {
-			if r == nil {
-				continue
-			}
-			handles := r.heard(reason)
-			if len(handles) == 0 {
-				continue
-			}
-			before := len(b.Candidates())
-			if reason == ReasonLeadFallback {
-				b.Fallback(reason, handles...)
-			} else {
-				b.AddAll(handles, reason, reason.Addressed())
-			}
-			for _, c := range b.Candidates()[before:] {
-				out = append(out, Concern{Candidate: c, Change: r})
+	for _, r := range routings {
+		if r == nil {
+			continue
+		}
+		if _, seen := byID[r.ChangeID]; !seen {
+			order = append(order, r.ChangeID)
+		}
+		byID[r.ChangeID] = append(byID[r.ChangeID], r)
+	}
+	for _, id := range order {
+		var b routing.Builder[Reason]
+		for _, why := range reason {
+			for _, r := range byID[id] {
+				handles := r.heard(why)
+				if len(handles) == 0 {
+					continue
+				}
+				before := len(b.Candidates())
+				if why == ReasonLeadFallback {
+					b.Fallback(why, handles...)
+				} else {
+					b.AddAll(handles, why, why.Addressed())
+				}
+				for _, c := range b.Candidates()[before:] {
+					out = append(out, Concern{Candidate: c, Change: r})
+				}
 			}
 		}
 	}
 	return out
 }
 
+// NoticeID is one notice's identity among its recipient's: the record that
+// reached them ([RecordID]) and the change it told them about. It is what a
+// person's mark names and an inbox notice carries as its record_id, and what a
+// wake's id is derived from ([changefeed.WakeID] over it and the seat), so a
+// record that tells one handle about two changes — a batched push, a landing
+// of two entries — leaves two notices and two wakes, and a redelivery of the
+// record still collapses into the ones it made. Separated by "/", which no
+// change id holds (a change's id is a bare UUID: [OpenChangeID], [PushChangeID]), so
+// [splitNoticeID] reads it back at the last one.
+func NoticeID(recordID, changeID string) string { return recordID + "/" + changeID }
+
+// splitNoticeID is id's record and change ([NoticeID]), and false for an id
+// that names no change.
+func splitNoticeID(id string) (record, change string, ok bool) {
+	i := strings.LastIndexByte(id, '/')
+	if i <= 0 || i == len(id)-1 {
+		return "", "", false
+	}
+	return id[:i], id[i+1:], true
+}
+
 // Hears reports whether c is told: everybody but who made the change, except
 // under the one reason that is news to its own actor ([Reason.WakesActor]).
 func (c Concern) Hears() bool { return c.Candidate.Hears(c.Change.Actor, Reason.WakesActor) }
 
-// heardCount is how many handles routings tell — the notice rows their
-// record's apply may write ([Applier.writeNotices]), which every decide
-// counts with the record's rows.
-func heardCount(routings ...*ChangeRouting) int {
-	n := 0
+// changeNotices is how many handles one record tells about one change: the
+// notices its apply may write about it, a (change, handle) each.
+type changeNotices struct {
+	changeID string
+	notices  int
+}
+
+// noticesByChange is, for every change routings tell anybody about, how many
+// handles hear of it ([Concern.Hears]), in the order each change's first
+// hearer comes in [Concerns]. [Concerns] keeps a handle once a CHANGE, so a
+// handle two of a record's changes concern counts once under each. PURE OVER
+// THE ROUTINGS, as [Concerns] is: the count a change's notices column takes
+// from a record (code_changes.notices, replicated 0102) is the same on every
+// node, whatever the horizon let each write.
+func noticesByChange(routings ...*ChangeRouting) []changeNotices {
+	var out []changeNotices
 	for _, c := range Concerns(routings) {
-		if c.Hears() {
-			n++
+		if !c.Hears() {
+			continue
 		}
+		i := slices.IndexFunc(out, func(n changeNotices) bool { return n.changeID == c.Change.ChangeID })
+		if i < 0 {
+			out = append(out, changeNotices{changeID: c.Change.ChangeID})
+			i = len(out) - 1
+		}
+		out[i].notices++
+	}
+	return out
+}
+
+// noticeWrites is the rows a record's apply writes for whom routings tell —
+// a notice a (change, handle) ([Applier.writeNotices]) and, for each change
+// they tell anybody about, the one row its count is kept on — which every
+// decide counts with the record's rows. A push decide counts each entry's
+// routings apart, so a change two of a record's entries route is counted
+// twice and written once: an over-count, which only ever carries an entry to
+// the next record early.
+func noticeWrites(routings ...*ChangeRouting) int {
+	by := noticesByChange(routings...)
+	n := len(by)
+	for _, c := range by {
+		n += c.notices
 	}
 	return n
 }
@@ -674,8 +753,8 @@ type concerning struct {
 	// change is the change's row as the record leaves it: its id, number,
 	// title, owner and work item.
 	change changeRow
-	// actor is who made the change, "" for the home's own records, and
-	// actorKind what it is: a person's actor is named among the routing's
+	// actor is who made the change — for a revision's facts, its pusher —
+	// "" for the home's other records, and actorKind what it is: a person's actor is named among the routing's
 	// persons, so a wake says a person wrote what it announces.
 	actor     string
 	actorKind PartyKind
@@ -926,6 +1005,20 @@ func stampedRouting(what string, r *ChangeRouting) error {
 	return nil
 }
 
+// revisionPusher is who pushed revision n of changeID, as a routing's actor
+// names them — the opener for revision 1, whoever moved the head for every
+// later one — and "" where tx holds no such revision.
+func revisionPusher(ctx context.Context, tx *sql.Tx, changeID string, n int64) (string, PartyKind, error) {
+	var pusher, kind string
+	switch err := tx.QueryRowContext(ctx, headPusherSQL, changeID, n).Scan(&pusher, &kind); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", nil
+	case err != nil:
+		return "", "", fmt.Errorf("code: read who pushed revision %d of %s: %w", n, changeID, err)
+	}
+	return pusher, PartyKind(kind), nil
+}
+
 // The routing's reads, each registered in plan_test.go: a change's authors and
 // its participants, a range of each key in its order; and a thread's newest
 // comments, a range of code_comments_thread_idx read back from its end.
@@ -935,7 +1028,8 @@ const (
 	routingWatchersSQL = `SELECT handle, kind FROM code_participants WHERE change_id = ?
 		ORDER BY handle LIMIT ?`
 	// headPusherSQL is who pushed a change's revision — the actor of a failed
-	// check of its head — one seek of the revisions' key.
+	// check of its head and of the revision's facts ([revisionPusher]) — one
+	// seek of the revisions' key.
 	headPusherSQL         = `SELECT pusher, pusher_kind FROM code_revisions WHERE change_id = ? AND n = ?`
 	threadParticipantsSQL = `SELECT author, author_kind FROM code_comments INDEXED BY code_comments_thread_idx
 		WHERE change_id = ? AND thread_id = ? ORDER BY position DESC LIMIT ?`

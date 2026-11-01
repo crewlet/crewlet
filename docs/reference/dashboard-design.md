@@ -1289,6 +1289,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/code/repos/{name}/commits/{sha}` | **A commit**, by its whole id: its header (subject, short id, repository, author, when it was authored and committed, its parents), who pushed it — the seat or the credential, when and how, and the turn, coding run and work item behind a seat's push, as the engine recorded them — the changes it belongs to (those it merged, and those whose revision it heads), and what it changed against its first parent (a root commit's from git's empty tree) in the one `DiffView` *(hidden where the company hosts no code)*. An abbreviated id is Not Found | `file=` (a path) · `layout=unified\|split` |
 | `#/code/repos/{name}/compare` | **A comparison** of two revisions: how they relate (ahead, behind, their merge base), what merging the compared into the base would do (merges cleanly, or conflicts in which paths), what it changed since the two parted in the one `DiffView`, and the page bar's **Open change**, which proposes the compared branch into the base branch, prefilled with its head's subject and the work item its push was charged to *(hidden where the company hosts no code)* | `base=` (none is the default branch) · `head=` (none asks for it) · `file=` · `layout=unified\|split` |
 | `#/code/repos/{name}/changes/{n}` | **A change**, `web!42` in full: its header (reference, title, state, repository, branches, owner, revisions, work item) and the page bar's **Approve**, **Request changes**, **Comment**, **Request review** and **Close**/**Reopen**; on a live change, the merge controls above the tabs — where its gate stands, judged with the reader as the merger, **Merge** (or **Add to queue** where the target's gate requires a check) with its method, **Delete its branch** and **Close** its work item, sending the head on screen, held with the gate's sentence while it is unmet; **Override**, a person's alone with a reason; and **Re-run checks** — each refusal said by the code host's own word; tabs **Conversation** (its readiness, description, and its reviews, threads and revisions in the order their records landed, with a comment of the reader's own), **Files** (the revision's files and one file's patch in the one `DiffView`, every finding and thread under the line it is on, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head), **Commits** (its revisions and their facts), **Checks** (the attempts that judge it: its head's, checked for its target, each opening in the check pane), **Provenance** (who opened it, from which turn and coding run, for which work item, and how it ended) and **Woke** (whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|files\|commits\|checks\|provenance\|woke` · on Files, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path), `layout=unified\|split`, `thread=` (a thread on a line, opening its file and its revision) |
+| `#/code/search` | **Code › Search**: the lines of the repositories the reader reads that match a search, by repository and then file, each line opening its file at the commit it was searched at with the line picked, under a Callout of what was not searched — asked when the reader presses Search | `q=` (the search, in the code host's grammar), `mode=literal\|regex\|word`, `repo=`, `path=`, `ref=` |
 | `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/code/queue` | **Code › Queue**: the merge queues of gated branches, a band per repository and branch, its entries in queue order — the place, the change, who enqueued it and its state — and, once a repository is named, each entry's train base, a `SegmentedMeter` of the required checks of what it is tested in, its time queued against the slowest of their declared timeouts, and what the queue put out in the last day, in the danger tone with the reason and the checks or paths the engine found | `repo=` (a repository's name; without one, every repository's live entries) |
 | `#/code/checks` | **Code › Checks**: every repository's attempts that ended in the window, newest ended first — under a `TimeRangePicker`, the state and check-name `FacetRail`s and a `Histogram` of when they ended (the failed ones its foot), each counted over the attempts loaded — each row opening the **check pane**: what it was checking, its commit and branch, how long it ran, its exit code and why it ended, its failures (each `path:line` a link into the comparison of its base and its commit on that file), its tail, and its log a page at a time on demand | `window=` (`1d` by default, `7d`, `30d`, or two instants) · `state=` · `name=` |
@@ -3062,8 +3063,10 @@ the inbox page in one snapshot (`code.NoticeChange`), the readiness judged for
 the reader at that read, so a page of fifty cards is one read and no card
 contradicts the row beside it. **Its gate** is read for the ONE card open,
 and only for a live change: `code_change` (its readiness, judged for the
-reader, and its revisions' facts) and `code_checks` of the change — the
-questions its own page asks, so the card needs nothing of the engine besides.
+reader, and its revisions' facts) and `code_checks` of the change at each
+check's latest attempt (`latest`, every page of it, drawn only once whole) —
+so the card needs nothing of the engine besides, and never rebuilds what a
+check stands at from a page of its history.
 It says what the head revision's REQUIRED checks measured, each one's state
 and duration — never tokens — and only where the readiness judges a `check`
 precondition; the head revision's change classes (how many touched paths
@@ -4045,9 +4048,9 @@ It is the design system's `CommandPalette` — the combobox, the scope tabs, the
 answer's live region and the key legend are the kit's — and `app/palette/` is
 what it searches and what a row does.
 
-### Six scopes, three sigils
+### Seven scopes, three sigils
 
-A launcher with one index answers "where do I go", and five questions do not
+A launcher with one index answers "where do I go", and six questions do not
 fit that shape, so each is a tab under the field:
 
 | Scope | Searches | Sigil |
@@ -4056,6 +4059,7 @@ fit that shape, so each is a tab under the field:
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
 | **Artifacts** | `artifacts` with the term over everything the reader can open, eight hits, each row its kind | |
+| **Code** | `code_search` (where the company hosts code), asked once the term has rested and is three characters or more — the shortest the code host's plan looks up — eight lines, each `repo:path:line` opening its file at the commit it was searched at with the line picked, and a row to Code › Search with the term | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's status glyph from the agents push, then people and teams | `@` |
 | **Actions** | the per-browser commands (Change theme…, a step listing the themes in their groups, which a query narrows by name, tag or group, whose highlight previews behind the palette, whose Enter applies and closes with an Undo toast, and from which Escape or an empty Backspace goes back to Actions; the mode; density; copy link, the one place a page's address is copied from, a refusal said in a toast; sign in as somebody else; clear recents; the key legend; Switch project…) and the three changes; the legend names who they are made as | `>` |
 
@@ -7153,9 +7157,18 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   read it, its default branch and the commit it stands at, its last push, its
   pushes, its size and how many protection rules it carries. `status=` is the
   engine's own filter (`REPO_STATUSES`, held to `code.RepoStatuses`). A row
-  opens the repository's page. Nothing here writes: a repository's settings
-  are the company document's `code.repos`, and an empty listing offers the
-  configuration to a reader who may open it.
+  opens the repository's page. A declared repository's settings are the
+  company document's `code.repos`, and an empty listing offers the
+  configuration to a reader who may open it. The listing's one write is
+  **Import a repository**, a person's alone (`code_import_repo`, which the
+  authority table refuses every seat): a new project, named in the engine's
+  grammar and owned by a unit picked from the chart, filled from an https URL
+  at another host — with the token a variable NAMES, typed as the name and
+  never as the token, which the tool refuses — or made a pull mirror of it
+  (**Keep following it**). It is drawn for every reader and held, with the
+  sentence, for one holding no human seat; the dialog's Import is held until
+  the form is one the engine takes. The new repository reads `importing`
+  until its home git node has landed the source.
 - **A repository's page**, `#/code/repos/{name}`, is its row (`code_repo`,
   read at the tab's floor and again every minute) and its CONTENT, which its
   home git node answers: a directory's listing (`code_tree`, and `code_blob`
@@ -7172,10 +7185,15 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   the revision and the lens replace it. A read by a ref answers the commit the
   ref resolved to, and the **Permalink** is the same place at that commit's
   whole id: an address that says the same thing tomorrow, which the engine
-  answers immutably. **Overview** is what the repository holds and the README
+  answers immutably. **Overview** is what the repository holds, a rail of how
+  code search reads it and where it stands with other hosts — its search mode,
+  its import's progress (the chunks landed so far, or how it ended), the pull
+  mirror it follows and its last sync, the push mirror it pushes to and as
+  which seat, each from the repository's own row (`remotes`) — and the README
   at its default branch's root, read at the commit that root was listed at
   and rendered by the dashboard's own Markdown renderer, which builds every
-  element itself. **Commits** is the history at a revision, of the path the
+  element itself. While an import runs, the header's state pill says
+  `importing`, its title how far it went. **Commits** is the history at a revision, of the path the
   address names or of every path, with who pushed each commit where the
   answering node's index holds the push — who pushed, which the commit's own
   author line is not. **Pushes** is the repository's push history, as Code ›
@@ -7183,11 +7201,29 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   protection rules with their merge gates — a gate that requires a check
   with how its queue lands a change (each change tested merged on the branch
   before it lands) —
-  and its path owners, and NEVER
-  edits them: a declared repository's are the company document's, settled by
-  every activation, and lead to Settings › Configuration; one a tool made is
-  changed by the code tools' lifecycle requests (`code_update_repo`,
-  `code_protect_branch`). Content is not polled: a reader reading a file reads
+  and its path owners, and makes three writes, each through `useAct` and a
+  WriteButton, never optimistic — the page is redrawn from the read the
+  write's position brings — and each drawn for every reader, held with the
+  sentence that says why: **Search mode** (`code_update_repo`'s `search`, a
+  button a mode of `REPO_SEARCH_MODES`, held to `code.SearchModes`: the mode
+  it has is no change, and a scratch repository is never indexed);
+  **Mirrors**, a person's alone (`code_update_repo`'s `mirror_from` and
+  `mirror_to`, each set whole from a dialog or removed — an https URL, the
+  credential as a variable's name, and a push mirror's seat and refs — and
+  refused every seat by the deciding data node); and **Unreachable
+  history**, where **Purge unreachable history** (`code_purge_unreachable`, a
+  person's alone, on a repository they maintain) opens a confirmation that
+  names, BEFORE the press, who keeps copies of what it drops — every git
+  node's copy until it syncs past the purge, every backup taken before it,
+  and the object store for a day (a versioned S3 bucket for as long as its
+  own rules keep a deleted object) — and only its Purge asks the repository's
+  maintainer; the section says where the last purge stands. A declared
+  repository's search mode and mirrors are the company document's, settled
+  by every activation: they are held with that sentence and the tab leads to
+  Settings › Configuration, while its purge, which changes none of its
+  settings, is offered. Its other settings are changed by the code tools'
+  lifecycle requests (`code_update_repo`, `code_protect_branch`), which a
+  seat or a person's assistant makes. Content is not polled: a reader reading a file reads
   the revision they opened. A commit of its history, and of a blame, opens
   the commit's page; a branch offers a comparison with the default branch.
 - **A commit's page**, `#/code/repos/{name}/commits/{sha}`, names its commit
@@ -7226,12 +7262,37 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   commit base lacks, a live change already proposes head's commit (which it
   then links), or that commit is still being read. Nothing moves until the
   engine answers, and an applied open leads to the change it opened.
+- **Search**, `#/code/search`, is the lines of the repositories the reader
+  reads that match a search (`code_search`): `q=` in the code host's one
+  grammar ([Finding code](../guides/code.md#finding-code)), its `repo:`,
+  `path:` and `ref:` filters first, and the bar's `mode=` (`CODE_SEARCH_MODES`,
+  held to `codeindex.Modes`), `repo=`, `path=` and `ref=` beside it — the same
+  filters said as controls, every one in the address, so a search is a link.
+  It is asked when the reader presses Search, never as they type: a search
+  across the company is a request to every git node. And it takes no floor:
+  it answers at the commit each repository was searched at (`tips`). The
+  lines are grouped by repository and then by file in the engine's order —
+  repository, path, line — never re-sorted; each line's number opens its file
+  on the repository's Files tab AT THAT COMMIT, by its whole id, with the line
+  picked (`ref=`, `path=`, `lines=`), so the link says tomorrow what the
+  search said today; a path that is not UTF-8 is drawn with no link, since no
+  address names it. **What was not searched is a Callout above the lines on
+  every answer, never hidden**: how many repositories were searched, then
+  each set the engine names — an index being built, a git node behind or not
+  answering, a grant a node refused, the lines cut — in the warning tone,
+  since lines may be missing, and in the quiet one what the search's own
+  terms left out: a repository read with git grep, the grep repositories a
+  search names no `repo:` for, a ref a repository does not hold, the files
+  passed over. ⌘K's **Code** scope asks the same question (see [⌘K: search,
+  answer, act](#k-search-answer-act)).
 - **Queue** is the merge queues, `code_queue`: a band per repository and
   branch, its live entries in queue order. Unnarrowed the engine answers every
   repository's live entries and no trains; what a train tests and what a
   queue put out are a NAMED repository's (`repo=`), so the train base, the
   meter of the required checks of the candidate an entry is tested in (one
-  `code_checks` of each candidate's tip, shared by every entry it tests) and
+  `code_checks` of each candidate's tip for its band's branch, at each
+  check's latest attempt and every page of it, shared by every entry it
+  tests) and
   the ejections appear once a repository is chosen. An ejection is the danger
   tone with the reason in words and the checks or paths the engine found,
   never a guess at blame. The engine answers fifty entries a page and one
@@ -7239,8 +7300,10 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   through the pager every code listing shares, the newest page held still
   from its press; each page answers the trains of the targets it reaches.
 - **Checks** is the window of `code_checks` naming no repository: the
-  attempts that ended at or after the window's start. The engine has no end,
-  so a window ending before now keeps the rows that ended inside it. A state
+  attempts that ended at or after the window's start and before its end
+  (`since=`, `until=`), which the engine seeks from the end down, so a custom
+  interval in the past reads its own newest attempts first rather than every
+  attempt that ended after it. A state
   or a check's name narrows on the ENGINE (`state=`, `name=`), and the chart
   and the chips count the pages loaded and say so. The listing, the pane and
   its log are one component every checks listing shares (`routes/code/checks`):

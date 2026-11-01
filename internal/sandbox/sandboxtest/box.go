@@ -12,8 +12,8 @@ import (
 )
 
 // Box drives the FILE CONTRACT every [sandbox.Sandbox] backend keeps: the
-// three reads a coding-agent runner is built on, and the write the suite
-// seeds them through.
+// three reads a coding-agent runner is built on, the end a check runner keeps
+// its log from (OpenTail), and the write the suite seeds them through.
 //
 // ONE SUITE FOR EVERY BACKEND, the in-memory twin included, because the twin
 // is what every runner and coordinator test reads a box through. It answered
@@ -54,6 +54,7 @@ func Box(t *testing.T, readCap int, fresh func(t *testing.T) sandbox.Sandbox) {
 		{"AWholeReadReturnsTheFileByteForByte", testAWholeReadReturnsTheFileByteForByte},
 		{"AnEmptyFileIsEmptyToEveryRead", testAnEmptyFileIsEmptyToEveryRead},
 		{"ATailIsTheFilesEndAndNamesItsWholeSize", testATailIsTheFilesEndAndNamesItsWholeSize},
+		{"AStreamedTailIsTheFilesEndAndNamesItsWholeSize", testAStreamedTailIsTheFilesEndAndNamesItsWholeSize},
 		{"AFilePastTheCapIsRefusedWholeAndReadAsAStream", testAFilePastTheCapIsRefusedWholeAndReadAsAStream},
 		{"AFileAtTheCapIsReadWhole", testAFileAtTheCapIsReadWhole},
 		{"AStreamClosedEarlyIsReleased", testAStreamClosedEarlyIsReleased},
@@ -94,6 +95,22 @@ func write(t *testing.T, box sandbox.Sandbox, path string, content []byte) {
 	}
 }
 
+// readTailStream is the stream of path's last n bytes, read to its end, and
+// the size the open named.
+func readTailStream(t *testing.T, box sandbox.Sandbox, path string, n int64) ([]byte, int64) {
+	t.Helper()
+	r, size, err := box.OpenTail(t.Context(), path, n)
+	if err != nil {
+		t.Fatalf("OpenTail %s: %v", path, err)
+	}
+	defer func() { _ = r.Close() }()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading the end of %s: %v", path, err)
+	}
+	return got, size
+}
+
 func readStream(t *testing.T, box sandbox.Sandbox, path string) []byte {
 	t.Helper()
 	r, err := box.OpenFile(t.Context(), path)
@@ -122,6 +139,9 @@ func testAMissingFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox, _ int
 	tail, err := box.ReadTail(t.Context(), path, 64)
 	if err != nil || len(tail.Data) != 0 || tail.Size != 0 {
 		t.Errorf("ReadTail of a missing file = %d bytes of %d, %v; want empty", len(tail.Data), tail.Size, err)
+	}
+	if got, size := readTailStream(t, box, path, 64); len(got) != 0 || size != 0 {
+		t.Errorf("OpenTail of a missing file streamed %d bytes of %d; want nothing", len(got), size)
 	}
 }
 
@@ -154,6 +174,30 @@ func testAnEmptyFileIsEmptyToEveryRead(t *testing.T, box sandbox.Sandbox, _ int)
 	if err != nil || len(tail.Data) != 0 || tail.Size != 0 || !tail.Whole() {
 		t.Errorf("ReadTail of an empty file = %d bytes of %d (whole %v), %v",
 			len(tail.Data), tail.Size, tail.Whole(), err)
+	}
+	if got, size := readTailStream(t, box, path, 64); len(got) != 0 || size != 0 {
+		t.Errorf("OpenTail of an empty file streamed %d bytes of %d; want nothing", len(got), size)
+	}
+}
+
+// A STREAMED END IS THE FILE'S LAST BYTES AND ITS WHOLE SIZE: what a failed
+// check's log is kept from, which costs the bytes kept and never the file
+// before them. Its bytes are the file's own from the right place, its size
+// the whole file's, and a stream asked for more than the file is the whole
+// file.
+func testAStreamedTailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox, _ int) {
+	path := pathIn(box, "output")
+	content := pattern(wholeReadBytes)
+	write(t, box, path, content)
+
+	got, size := readTailStream(t, box, path, 1000)
+	if !bytes.Equal(got, content[len(content)-1000:]) || size != int64(len(content)) {
+		t.Errorf("the streamed end is %d bytes of %d; want the last 1000 of %d", len(got), size, len(content))
+	}
+	whole, size := readTailStream(t, box, path, 2*wholeReadBytes)
+	if !bytes.Equal(whole, content) || size != int64(len(content)) {
+		t.Errorf("a streamed end longer than the file is %d bytes of %d; want the whole %d", len(whole), size,
+			len(content))
 	}
 }
 
@@ -229,6 +273,12 @@ func testAFilePastTheCapIsRefusedWholeAndReadAsAStream(t *testing.T, box sandbox
 	if !bytes.Equal(tail.Data, content[len(content)-4096:]) || tail.Size != int64(len(content)) {
 		t.Errorf("the tail past the cap is %d bytes of %d; want the last 4096 of %d",
 			len(tail.Data), tail.Size, len(content))
+	}
+
+	end, size := readTailStream(t, box, path, int64(readCap))
+	if !bytes.Equal(end, content[1:]) || size != int64(len(content)) {
+		t.Errorf("the streamed end past the cap is %d bytes of %d; want the last %d of %d", len(end), size,
+			readCap, len(content))
 	}
 }
 

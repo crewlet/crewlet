@@ -357,7 +357,8 @@
 //
 // A CHECK IS RUN BY A GIT NODE (internal/code/checkrun), which finds what it
 // may claim by a `checks_queued` read ([ReadChecksQueued]: the queued attempts
-// oldest queued first, each with its definition and its repository's name),
+// naming one cell oldest queued first, each with its definition and its
+// repository's name),
 // and a repository's home finds the attempts whose runner is gone by a
 // `checks_running` read ([ReadChecksRunning]) — both the engine's own, each
 // claim and ending they lead to decided again by the checks writer.
@@ -1580,6 +1581,18 @@
 // statelog.ApplyTxTimeBudget: the horizon is bounded by its rows' share of a
 // record, never by its time (CheckHorizonRows).
 //
+// THE NOTICES A RECORD WRITES (the push record's notices arm, two bounded
+// runs, -benchtime 3x and one count, on two E-cores of a Core Ultra 7 265U,
+// where one small push took 3.6–4.1 ms): a push merging sixty-one changes,
+// each telling [MaxRoutedParticipants] authors of its own — the widest
+// routing the decide admits beside one push, 3 904 notices and the 61 counts
+// of them — held the write lane 240 ms written one statement a row, against
+// statelog.ApplyTxTimeBudget's 250 on every data node; written as few
+// multi-row statements as the parameter limit allows, each answering the
+// recipients it wrote (store.InsertRowsReturning), 143 ms: under 37 µs a
+// notice, each four b-tree entries — its key and the inbox, change and sweep
+// indexes.
+//
 // A PURGE RECORD (BenchmarkApplyAPurgePart): 56–60 ms for a part of
 // [PurgePartRows] push rows of a kilobyte; 81–88 ms for a part over the
 // widest push rows, which [PurgePartBytes] stops at seventy-three (34 MB) —
@@ -1601,7 +1614,15 @@
 // which by their rows alone the part would take 732, 24 MB more (the review
 // that weighed them measured that shape, its bodies then on the change's
 // row, at 112 ms against 64 ms without bodies); and 23 ms for a part that
-// cuts one change of [PurgePartRows] revisions, oldest first.
+// cuts one change of [PurgePartRows] revisions, oldest first. A part of
+// changes' NOTICES, charged by each change's count of them (the notices,
+// cut+notices and final+notices arms, two bounded runs, -benchtime 3x and one
+// count, on two E-cores of a Core Ultra 7 265U, where narrow took 75 and 41
+// ms): 55–56 ms for thirty changes of a hundred rows each — 2 910 of them
+// notices with their excerpts at [MaxNoticeExcerpt] — taken whole; 49–55 ms
+// for a part that cuts one change through 2 998 of its notices, oldest first;
+// and 50–58 ms for the final purge over twenty-nine such changes, with the
+// rules — each deleted notice read back by its own delete to announce it.
 //
 // A RETIRE SWEEP (BenchmarkApplyARetireSweep, the record applied and
 // committed; BenchmarkRetireSweepStep, the whole step — the decide's read,

@@ -84,6 +84,7 @@ const WorkItem = lazyScreen("work", (m) => m.WorkItem);
 const Changes = lazyScreen("code", (m) => m.Changes);
 const ChangePage = lazyScreen("code", (m) => m.ChangePage);
 const Repositories = lazyScreen("code", (m) => m.Repositories);
+const CodeSearch = lazyScreen("code", (m) => m.Search);
 const RepositoryPage = lazyScreen("code", (m) => m.RepositoryPage);
 const CommitPage = lazyScreen("code", (m) => m.CommitPage);
 const ComparePage = lazyScreen("code", (m) => m.ComparePage);
@@ -193,6 +194,8 @@ export function screenFor(route: Resolved): ReactNode {
       );
     case "code-repos":
       return <Repositories />;
+    case "code-search":
+      return <CodeSearch />;
     case "code-repo":
       return <RepositoryPage key={route.repo} repo={route.repo} />;
     case "code-commit":

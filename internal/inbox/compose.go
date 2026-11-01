@@ -39,6 +39,19 @@ import (
 // notice and leave its second, and no single position of that source would
 // then say what was shown. Each source is asked for the whole page's limit, so
 // the merge never runs past a source's page while that source has more.
+//
+// # A page closes between two positions of a source
+//
+// A source's cursor is a position on its log, and a source may hold SEVERAL
+// notices at one position: the code host's record that tells one person about
+// two changes — a batched push, a landing of several entries — is one record,
+// one position, and a notice each change. A cursor that resumed below a
+// position the page took only part of would never show the rest. So a
+// source's page never ends inside a position (its contract, [Source]), and
+// the merge, having taken a notice, takes every notice of the same source at
+// the same position with it — a page may run past its limit by them, and by
+// no more, since a record's notices to one person are bounded where the
+// record is written.
 
 // Source is one native domain's inbox, as the composition reads it.
 type Source interface {
@@ -47,7 +60,9 @@ type Source interface {
 	Name() string
 
 	// Notices is one page of the person's notices from this source, newest
-	// first in the source's own order, after the source's own cursor.
+	// first in the source's own order, below the source's own cursor — never
+	// ending inside one position, so a page holds every notice at its last
+	// one (this file's head).
 	Notices(ctx context.Context, q SourceQuery) (SourcePage, error)
 }
 
@@ -241,14 +256,19 @@ func Compose(ctx context.Context, q Query, sources []Source) (Page, error) {
 		if next == nil {
 			break
 		}
-		n := next.page.Notices[next.taken]
-		next.taken++
-		page.Notices = append(page.Notices, n)
-		if !n.Read {
-			page.Unread++
-		}
-		if n.Primary {
-			page.Primary++
+		// EVERY NOTICE OF THE SOURCE AT THIS POSITION, the first and those
+		// that share it — this file's head.
+		at := next.page.Notices[next.taken].Position
+		for next.taken < len(next.page.Notices) && next.page.Notices[next.taken].Position == at {
+			n := next.page.Notices[next.taken]
+			next.taken++
+			page.Notices = append(page.Notices, n)
+			if !n.Read {
+				page.Unread++
+			}
+			if n.Primary {
+				page.Primary++
+			}
 		}
 	}
 	// ONE POSITION PER SOURCE: the last notice of its the page took, or the

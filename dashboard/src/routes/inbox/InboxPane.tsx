@@ -66,6 +66,7 @@ import type { Attention } from "~/lib/attention.ts";
 import { detailItem, itemAddress } from "~/lib/work.ts";
 import { changeLive } from "~/lib/code.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { useLatestChecks } from "~/lib/useLatestChecks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ChangeStateTag } from "../code/Changes.tsx";
 import type {
@@ -274,16 +275,18 @@ function OpenPane({
  * What an open change card's merge gate says ([changeGate]): what the head
  * revision's required checks measured, its change classes, and the human
  * paths that asked for this reader — each said only where it is so, so a
- * change into an ungated branch draws nothing here. Two reads, of the change
- * (its readiness, judged for this reader, and its revisions' facts) and of
- * its checks, the questions its own page asks.
+ * change into an ungated branch draws nothing here. Two questions, of the
+ * change (its readiness, judged for this reader, and its revisions' facts)
+ * and of its checks at each one's LATEST attempt, every page of them
+ * (`lib/useLatestChecks.ts`): what a check stands at is the engine's to
+ * answer, never a card's to rebuild from a page of the attempts' history.
  */
 function GateFacts({ repo, number }: { repo: string; number: number }) {
   const { handle } = useViewer();
   const change = useCodeQuery("code_change", { name: repo, change: number });
-  const checks = useCodeQuery("code_checks", { repo, change: number });
-  if (!change.data || !checks.data) return null;
-  const gate = changeGate(change.data, checks.data.checks ?? [], handle);
+  const checks = useLatestChecks({ repo, change: number });
+  if (!change.data || !checks.rows) return null;
+  const gate = changeGate(change.data, checks.rows, handle);
   if (gate.measured === null && !gate.classes && !gate.humanPaths) return null;
   return (
     <ReadingPaneSection label="Its gate">

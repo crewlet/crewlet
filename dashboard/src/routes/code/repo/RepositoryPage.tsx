@@ -16,12 +16,17 @@
  * a reader reading a file reads the revision they opened, and the Permalink
  * names it whole.
  *
- * # Nothing here writes
+ * # Its Settings tab writes, a person's
  *
  * A declared repository's settings are the company document's (`code.repos`),
  * settled by every activation, so Settings shows them and leads to Settings ›
- * Configuration, where they are changed. One a tool made is changed by the
- * tools' lifecycle requests, which a seat or a person's assistant makes.
+ * Configuration, where they are changed. One a tool made is changed here —
+ * its search mode and its mirrors (`RepoWrites.tsx`, `code_update_repo`) —
+ * and any repository's unreachable history is purged here, after a
+ * confirmation naming who keeps copies. Every write is confirmed, never
+ * optimistic: the page is redrawn from the read the write's floor brings.
+ * The header's state pill says `importing` while an import runs, and the
+ * Overview's rail how far it went and where its mirrors stand.
  */
 
 import { useId, type ReactNode } from "react";
@@ -49,12 +54,20 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import { gateLine, pushRuleLine } from "~/lib/protection.ts";
+import {
+  importStanding,
+  pullMirrorStanding,
+  purgeStanding,
+  pushMirrorStanding,
+} from "~/lib/repoWrites.ts";
+import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import type { CodeOwner, CodeRepoDetail } from "~/protocol/index.ts";
 import { PushHistory } from "../Pushes.tsx";
 import { RepoChecks } from "../checks/RepoChecks.tsx";
 import { REPO_TABS, compareHref, repoHref, type RepoTab } from "../paths.ts";
 import { Files, Readme } from "./Files.tsx";
 import { Branches, Commits } from "./History.tsx";
+import { MirrorControls, PurgeControl, SearchModeControl } from "./RepoWrites.tsx";
 
 /**
  * How often the repository's row is read again while its page is open: a
@@ -226,7 +239,13 @@ function RepoHeader({ repo }: { repo: CodeRepoDetail }) {
         state ? (
           <Tag
             appearance="outline"
-            title={repo.deleted_at ? `Deleted ${fmtDateTime(repo.deleted_at)}` : undefined}
+            title={
+              repo.deleted_at
+                ? `Deleted ${fmtDateTime(repo.deleted_at)}`
+                : repo.status === "importing"
+                  ? (importStanding(repo) ?? undefined)
+                  : undefined
+            }
           >
             {state}
           </Tag>
@@ -249,6 +268,17 @@ function FactList({ label, rows }: { label: string; rows: { label: string; value
       ))}
     </dl>
   );
+}
+
+/** How code search reads a repository, in words. */
+function searchWord(search: string): string {
+  switch (search) {
+    case "indexed":
+      return "Indexed from its default branch";
+    case "grep":
+      return "Searched only by a search naming it";
+  }
+  return search;
 }
 
 /** What decides a repository's settings and its life, in words. */
@@ -296,6 +326,20 @@ function Overview({ repo }: { repo: CodeRepoDetail }) {
           ...(repo.access ? [{ label: "Your access", value: repo.access }] : []),
         ]}
       />
+      <PropertiesRail
+        headings="sentence"
+        groups={[
+          {
+            name: "Search and other hosts",
+            properties: [
+              { label: "Search", value: searchWord(repo.search) },
+              { label: "Import", value: importStanding(repo) ?? undefined },
+              { label: "Pull mirror", value: pullMirrorStanding(repo) ?? undefined },
+              { label: "Push mirror", value: pushMirrorStanding(repo) ?? undefined },
+            ],
+          },
+        ]}
+      />
       {repo.head ? (
         <Readme repo={repo} />
       ) : (
@@ -340,11 +384,29 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
         </Callout>
       ) : (
         <Callout variant="neutral">
-          A tool made this repository, and the code tools’ lifecycle requests change its settings —{" "}
+          A tool made this repository: its search mode and its mirrors are changed below, and its
+          other settings by the code tools’ lifecycle requests —{" "}
           <span className="mono">code_update_repo</span> and{" "}
           <span className="mono">code_protect_branch</span>, which a seat or your assistant calls.
         </Callout>
       )}
+      <section aria-label="Search mode">
+        <h3 className="t-label">Search mode</h3>
+        <SearchModeControl repo={repo} />
+      </section>
+      <section aria-label="Other hosts">
+        <h3 className="t-label">Mirrors</h3>
+        <p className="muted">
+          {[pullMirrorStanding(repo), pushMirrorStanding(repo)].filter(Boolean).join(" ") ||
+            "No mirror: it follows no other host and pushes to none."}
+        </p>
+        <MirrorControls repo={repo} />
+      </section>
+      <section aria-label="Unreachable history">
+        <h3 className="t-label">Unreachable history</h3>
+        {purgeStanding(repo) && <p className="muted">{purgeStanding(repo)}</p>}
+        <PurgeControl repo={repo} />
+      </section>
       <FactList
         label="Settings"
         rows={[
@@ -357,12 +419,7 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
           { label: "Read by", value: readByWord(repo.visibility) },
           {
             label: "Search",
-            value:
-              repo.search === "indexed"
-                ? "Indexed from its default branch"
-                : repo.search === "grep"
-                  ? "Searched only by a search naming it"
-                  : repo.search,
+            value: searchWord(repo.search),
           },
         ]}
       />

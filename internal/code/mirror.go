@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // A REPOSITORY'S MIRRORS AND ITS IMPORT: what of another host a repository
@@ -328,6 +329,52 @@ func remoteOf[T any](column string) (*T, error) {
 // by its primary key — registered in plan_test.go.
 const remotesSQL = `SELECT mirror_from, mirror_to, import_source != '' AND imported_at = 0
 	FROM code_repos WHERE id = ?`
+
+// remotesShownIn reads the repository id's other hosts as its detail serves
+// them ([RemoteState]): its mirrors, its import and how far it went, and its
+// pull mirror's last sync, in tx.
+//
+// A READ OF ITS OWN, never [remotesIn]'s widened: a decide reads what a record
+// carries and nothing of the progress a detail shows, and a repository's
+// detail is read once a resolution, where this is one more seek of the row
+// its name just found, by its primary key.
+func remotesShownIn(ctx context.Context, tx *sql.Tx, id string) (RemoteState, error) {
+	var (
+		out                      RemoteState
+		from, to, source, failed string
+		chunks, doneAt, syncedAt int64
+	)
+	err := tx.QueryRowContext(ctx, remotesShownSQL, id).Scan(&from, &to, &source, &chunks, &doneAt, &failed,
+		&syncedAt)
+	if err != nil {
+		return RemoteState{}, fmt.Errorf("code: read repository %s's other hosts: %w", id, err)
+	}
+	if out.MirrorFrom, err = remoteOf[MirrorSource](from); err != nil {
+		return RemoteState{}, fmt.Errorf("code: read repository %s's mirror_from: %w", id, err)
+	}
+	if out.MirrorTo, err = remoteOf[MirrorTarget](to); err != nil {
+		return RemoteState{}, fmt.Errorf("code: read repository %s's mirror_to: %w", id, err)
+	}
+	imported, err := remoteOf[ImportSource](source)
+	if err != nil {
+		return RemoteState{}, fmt.Errorf("code: read repository %s's import_source: %w", id, err)
+	}
+	if imported != nil {
+		out.Import = &ImportState{Source: *imported, Chunks: chunks, Error: failed}
+		if doneAt != 0 {
+			out.Import.DoneAt = store.DecodeTime(doneAt)
+		}
+	}
+	if syncedAt != 0 {
+		out.MirrorSyncedAt = store.DecodeTime(syncedAt)
+	}
+	return out, nil
+}
+
+// remotesShownSQL reads what [remotesShownIn] serves, by the primary key —
+// registered in plan_test.go.
+const remotesShownSQL = `SELECT mirror_from, mirror_to, import_source, import_seq, imported_at, import_error,
+	mirror_synced_at FROM code_repos WHERE id = ?`
 
 // MirroredDetail is the sentence of a write refused repo_mirrored: which
 // repository, that it is a pull mirror — set by code.repos for a repository it

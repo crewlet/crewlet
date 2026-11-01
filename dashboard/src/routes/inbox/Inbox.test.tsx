@@ -327,10 +327,16 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
       fetched.push(String(url));
-      // A CODE QUESTION over REST, answered from the case's `rest`, by name.
+      // A CODE QUESTION over REST, answered from the case's `rest`, by name —
+      // or, where the case answers it by its URL (a page by its cursor), by
+      // the function it holds there.
       const query = /\/query\/([a-z_]+)/.exec(String(url))?.[1];
       if (query) {
-        const answer = rest[query];
+        const found = rest[query];
+        const answer =
+          typeof found === "function"
+            ? (found as (u: URL) => unknown)(new URL(String(url), "http://x"))
+            : found;
         return new Response(JSON.stringify(answer ?? {}), {
           status: answer ? 200 : 404,
           headers: { "Content-Type": "application/json" },
@@ -930,6 +936,38 @@ describe("the pane", () => {
         /touches \.crewlet\/\*\*, which refs\/heads\/main holds to a person's approval/,
       ),
     ).toBeTruthy();
+  });
+
+  // WHAT EACH CHECK STANDS AT, EVERY PAGE OF IT: the card asks the change's
+  // checks at their LATEST attempts, and draws them only once every page has
+  // answered — a required check the engine sends on a later page is measured
+  // too. Mutations: draw the first page alone (no `next` followed) → unit is
+  // missing, red; ask without `latest` → red.
+  test("a gated change's card reads every page of its checks' latest attempts", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    const gated = gatedChange({ waitsOn: "jane" });
+    const [unit, e2e] = gated.code_checks.checks;
+    rest = {
+      ...gated,
+      code_checks: (u: URL) =>
+        u.searchParams.get("cursor") === "unit/1"
+          ? { checks: [unit], position: CODE_AT, level: "session" }
+          : { checks: [e2e], next: "unit/1", position: CODE_AT, level: "session" },
+    };
+    mount({
+      services: { tracker: "native", knowledge: "native", code: "native" },
+      answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    const measured = await pane.findByRole("list", { name: "What its checks measured" });
+    expect(within(measured).getByText("e2e running")).toBeTruthy();
+    expect(await within(measured).findByText("unit failed in 1m 4s")).toBeTruthy();
+    const checks = fetched
+      .filter((url) => url.includes("/query/code_checks"))
+      .map((url) => new URL(url, "http://x"));
+    expect(checks.every((u) => u.searchParams.get("latest") === "true")).toBe(true);
+    expect(checks.map((u) => u.searchParams.get("cursor"))).toContain("unit/1");
   });
 
   // THE HUMAN PATHS NAME ONLY THE READER THEY ASK: a person the precondition

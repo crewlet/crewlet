@@ -56,6 +56,71 @@ type Execer interface {
 func InsertRows(ctx context.Context, tx Execer, maxVariables int,
 	prefix, row, suffix string, n int, args func(i int) []any) (int, error) {
 
+	return insertChunks(maxVariables, prefix, row, suffix, n, args, func(stmt string, binds []any) (int, error) {
+		res, err := tx.ExecContext(ctx, stmt, binds...)
+		if err != nil {
+			return 0, err
+		}
+		rows, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("store: read the effect of %s: %w", prefix, err)
+		}
+		return int(rows), nil
+	})
+}
+
+// Querier is the one method [InsertRowsReturning] needs of whatever it writes
+// through, declared here for [Execer]'s reason. *sql.Tx, *sql.DB and
+// *sql.Conn all satisfy it.
+type Querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// InsertRowsReturning is [InsertRows] for a statement whose suffix ends in a
+// RETURNING clause: each chunk is QUERIED rather than executed, scan is handed
+// every row a chunk answers, and it answers how many it handed.
+//
+// It exists for the writer that has to know WHICH rows it wrote, not only how
+// many: under ON CONFLICT DO NOTHING a statement answers the rows it inserted
+// and none it skipped, and a count of a chunk says how many were skipped but
+// never which. The alternative was one statement a row, read by its own
+// RowsAffected — the shape this file exists to retire, and the one
+// internal/code's notices measured at 240 ms for one record's 3 904 rows
+// against statelog.ApplyTxTimeBudget's 250.
+//
+// scan reads the current row of rows and must not advance it; an error from
+// it ends the insert, the chunk's rows closed.
+func InsertRowsReturning(ctx context.Context, tx Querier, maxVariables int,
+	prefix, row, suffix string, n int, args func(i int) []any, scan func(*sql.Rows) error) (int, error) {
+
+	return insertChunks(maxVariables, prefix, row, suffix, n, args, func(stmt string, binds []any) (int, error) {
+		rows, err := tx.QueryContext(ctx, stmt, binds...)
+		if err != nil {
+			return 0, err
+		}
+		handed := 0
+		for rows.Next() {
+			if err := scan(rows); err != nil {
+				_ = rows.Close()
+				return 0, err
+			}
+			handed++
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		return handed, rows.Close()
+	})
+}
+
+// insertChunks builds the multi-row statements of n rows — prefix, row
+// repeated as many times as the engine's parameter limit allows, suffix — and
+// hands each chunk's statement and binds to run, answering the sum of what
+// run answers.
+func insertChunks(maxVariables int, prefix, row, suffix string, n int, args func(i int) []any,
+	run func(stmt string, binds []any) (int, error)) (int, error) {
+
 	if n <= 0 {
 		return 0, nil
 	}
@@ -108,15 +173,11 @@ func InsertRows(ctx context.Context, tx Execer, maxVariables int,
 			}
 			binds = append(binds, a...)
 		}
-		res, err := tx.ExecContext(ctx, statement(end-start), binds...)
+		rows, err := run(statement(end-start), binds)
 		if err != nil {
 			return 0, err
 		}
-		rows, err := res.RowsAffected()
-		if err != nil {
-			return 0, fmt.Errorf("store: read the effect of %s: %w", prefix, err)
-		}
-		written += int(rows)
+		written += rows
 	}
 	return written, nil
 }

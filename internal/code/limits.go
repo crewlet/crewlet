@@ -286,7 +286,11 @@ const (
 	// past PruneGrace, fill what the record's own rows leave of it, so a push
 	// record reaches it exactly whenever enough of either is due —
 	// tombstones past RefTombstoneHorizon or past MaxTombstonesPerRepo,
-	// drops past PruneGrace.
+	// drops past PruneGrace. A record's NOTICES are rows of it too, each a
+	// handle its routing tells and each change's count of them
+	// (noticeWrites): at their widest — a push whose routing fills what its
+	// own rows leave, 3 904 notices — they hold the lane 143 ms (doc.go's
+	// measured section).
 	MaxRecordRows = statelog.ApplyTxRowBudget
 
 	// MaxCommandsPerPush is the most ref updates one push carries. A push's
@@ -714,9 +718,13 @@ const (
 	// MaxRecordRows with room for the record's own bookkeeping — and for
 	// the final purge's, which also removes every protection rule
 	// (MaxProtectionsPerRepo), the name claim, the repository's row and
-	// writes the marker — which the limits test pins. PurgePartBytes bounds
-	// a part's wide rows — its push rows and its changes' bodies — by what
-	// they weigh as well.
+	// writes the marker — which the limits test pins. A change's notices
+	// count among a part's rows by the count the change keeps of them
+	// (code_changes.notices), which every node agrees on and no node holds
+	// fewer rows than (apply_notices.go), so a part's deletes of
+	// code_notifications are inside it too. PurgePartBytes bounds a part's
+	// wide rows — its push rows and its changes' bodies — by what they weigh
+	// as well.
 	PurgePartRows = 3_000
 
 	// PurgePartBytes is how many BYTES of wide rows one purge step deletes

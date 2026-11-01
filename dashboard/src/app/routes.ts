@@ -216,6 +216,7 @@ export type FramedScreen =
   | { screen: "code-changes" }
   | { screen: "code-change"; repo: string; number: number }
   | { screen: "code-repos" }
+  | { screen: "code-search" }
   | { screen: "code-repo"; repo: string }
   | { screen: "code-commit"; repo: string; sha: string }
   | { screen: "code-compare"; repo: string }
@@ -469,6 +470,8 @@ function code(rest: string[], screen: Make, under: Under): Route {
   switch (first) {
     case "repos":
       return screen({ screen: "code-repos" });
+    case "search":
+      return screen({ screen: "code-search" });
     case "pushes":
       return screen({ screen: "code-pushes" });
     case "queue":

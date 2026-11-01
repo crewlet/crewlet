@@ -2131,7 +2131,11 @@ agree, and none is deleted by another. The applier writes no notice older
 than its recipient's horizon when it applies the record, so a node that
 replays the code log from far back rebuilds none the sweep would delete; and
 a repository's [purge](#a-repository) removes its changes' notices with its
-changes.
+changes, within the same bounded parts as their rows: every change keeps a
+count of the notices its records could have written, the same on every node
+whatever each one's horizon kept, and a part charges a change's notices by
+that count, so no part's single write deletes more rows than its bound on any
+node.
 
 ## The storage forecast
 

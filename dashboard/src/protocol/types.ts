@@ -7255,6 +7255,53 @@ export interface CodeRepoDetail extends CodeRepoSummary {
   created_at: string;
   path_owners?: CodePathOwner[];
   gates?: CodeRuleGate[];
+  /** Where its expunges stand (`code.ExpungeState`); absent for one never purged with none asked. */
+  expunge?: CodeExpungeState;
+  /** Where it stands with other hosts (`code.RemoteState`); absent for none. */
+  remotes?: CodeRemoteState;
+}
+
+/** A repository's expunges (`code.ExpungeState`): the one open, the purge asked, the last committed. */
+export interface CodeExpungeState {
+  open?: string;
+  /** The purge a person asked for that its maintainer has not served yet, by its id. */
+  request?: string;
+  requested?: LogPosition;
+  expunged_at?: string;
+  dropped_objects?: number;
+  dropped_bytes?: number;
+}
+
+/** A pull mirror's source (`code.MirrorSource`); `credential` is a `${VAR}` reference, never a token. */
+export interface CodeMirrorSource {
+  url: string;
+  credential?: string;
+}
+
+/** A push mirror's target (`code.MirrorTarget`): pushed as the seat `as`, the refs it names. */
+export interface CodeMirrorTarget {
+  url: string;
+  credential: string;
+  as: string;
+  /** Absent for the default: the default branch and `refs/tags/*`. */
+  refs?: string[];
+}
+
+/** A repository's other hosts (`code.RemoteState`). */
+export interface CodeRemoteState {
+  mirror_from?: CodeMirrorSource;
+  mirror_to?: CodeMirrorTarget;
+  /** The import its create filled it from, and how far it went (`code.ImportState`). */
+  import?: {
+    source: CodeMirrorSource;
+    chunks: number;
+    /** Absent while it runs. */
+    done_at?: string;
+    /** Why it ended short; absent for one that landed whole. */
+    error?: string;
+  };
+  /** A pull mirror's last sync; absent for never. */
+  mirror_synced_at?: string;
 }
 
 /** `code_repo`: one repository, by its name — or by an old one a rename left redirecting. */

@@ -574,8 +574,9 @@ type changeDecision struct {
 	unchanged *changeRow
 	payload   any
 	version   int64
-	// notices is how many handles the record tells: the notice rows its
-	// apply writes beside the change's ([withinChange]).
+	// notices is the rows the record's apply writes for whom it tells —
+	// a notice a handle and the change's count of them ([noticeWrites]) —
+	// beside the change's own ([withinChange]).
 	notices int
 }
 
@@ -615,7 +616,7 @@ func routeChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRep
 	if err != nil {
 		return changeDecision{}, err
 	}
-	d.payload, d.notices = withRouting(d.payload, r), heardCount(r)
+	d.payload, d.notices = withRouting(d.payload, r), noticeWrites(r)
 	return d, nil
 }
 

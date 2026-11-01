@@ -172,8 +172,10 @@ func classOf(t *testing.T, table string) string {
 }
 
 // changeShape is one change a case seeds: how many revisions and authors it
-// holds, and what its body weighs — 0 for none, and so no body row.
-type changeShape struct{ revisions, authors, body int }
+// holds, what its body weighs — 0 for none, and so no body row — how many
+// notices this node holds of it, and how many more its count states that a
+// sweep took (code_changes.notices is their sum).
+type changeShape struct{ revisions, authors, body, notices, swept int }
 
 // changesOf is count changes of shape.
 func changesOf(count int, shape changeShape) []changeShape {
@@ -186,20 +188,24 @@ func changesOf(count int, shape changeShape) []changeShape {
 
 // seedChanges writes a repository's changes straight into a node's estate,
 // numbered from 1 in the order given, each with the revisions, the authors and
-// the body its shape names — the bulk a purge has to clear, which opening
-// change by change would spend minutes on and assert nothing more by. It
-// answers the changes' ids.
+// the body and the notices its shape names — the bulk a purge has to clear,
+// which opening change by change would spend minutes on and assert nothing
+// more by. It answers the changes' ids.
 //
 // A BODY ROW STANDS FOR THE WIDTH ITS CHANGE STATES, as seedWeighed's push
 // rows do: a purge weighs a body by its change's body_bytes and never reads
 // the body, so a case weighs mebibytes without writing them — a body row
 // carries the width itself only up to a kilobyte.
+//
+// A NOTICE is a person's, the j-th of its change at log_seq j+1 and read by
+// one of sixteen readers named after the repository (noticeReader), so a
+// case tells one repository's inboxes from another's.
 func (n *node) seedChanges(repoID string, shapes []changeShape) []string {
 	n.t.Helper()
 	ctx := n.t.Context()
 	vars := n.db.Caps().MaxVariables
 	ids := make([]string, len(shapes))
-	var revisions, authors, bodies [][]any
+	var revisions, authors, bodies, notices [][]any
 	for i, s := range shapes {
 		ids[i] = fmt.Sprintf("%s-change-%06d", repoID, i+1)
 		for r := 1; r <= s.revisions; r++ {
@@ -211,16 +217,30 @@ func (n *node) seedChanges(repoID string, shapes []changeShape) []string {
 		if s.body > 0 {
 			bodies = append(bodies, []any{ids[i], strings.Repeat("b", min(s.body, 1<<10))})
 		}
+		for j := range s.notices {
+			notices = append(notices, []any{fmt.Sprintf("%s-record-%06d", ids[i], j), noticeReader(repoID, j),
+				repoID, ids[i], fmt.Sprintf("app!%d", i+1), j + 1})
+		}
 	}
 	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := store.InsertRows(ctx, tx, vars,
 			`INSERT INTO code_changes (id, repo_id, number, title, body_bytes, state, source_ref, target_ref,
-				head_oid, revision, owner, owner_kind, opened_at, opened_position, version, position) VALUES `,
-			`(?, ?, ?, 'a change', ?, 'open', ?, 'refs/heads/main', ?, ?, 'seat-00000', 'agent', 0, ?, 1, ?)`,
+				head_oid, revision, owner, owner_kind, opened_at, opened_position, version, position, notices)
+				VALUES `,
+			`(?, ?, ?, 'a change', ?, 'open', ?, 'refs/heads/main', ?, ?, 'seat-00000', 'agent', 0, ?, 1, ?, ?)`,
 			``, len(shapes), func(i int) []any {
 				return []any{ids[i], repoID, i + 1, shapes[i].body, fmt.Sprintf("refs/heads/change-%06d", i+1),
-					oidOf(fmt.Sprint(ids[i], shapes[i].revisions)), shapes[i].revisions, i + 1, i + 1}
+					oidOf(fmt.Sprint(ids[i], shapes[i].revisions)), shapes[i].revisions, i + 1, i + 1,
+					shapes[i].notices + shapes[i].swept}
 			}); err != nil {
+			return err
+		}
+		if _, err := store.InsertRows(ctx, tx, vars,
+			`INSERT INTO code_notifications (record_id, recipient, recipient_kind, repo_id, change_id, change_ref,
+				reason, addressed, fallback_only, fallback_rank, excerpt, created_at, log_seq, log_stream,
+				log_generation) VALUES `,
+			`(?, ?, 'person', ?, ?, ?, 'mention', 1, 0, 0, '', 0, ?, 'code', 1)`, ``, len(notices),
+			func(i int) []any { return notices[i] }); err != nil {
 			return err
 		}
 		if _, err := store.InsertRows(ctx, tx, vars,
@@ -243,6 +263,10 @@ func (n *node) seedChanges(repoID string, shapes []changeShape) []string {
 	}
 	return ids
 }
+
+// noticeReader is who the j-th notice seedChanges writes of a change of
+// repoID reached: one of sixteen readers of that repository's.
+func noticeReader(repoID string, j int) string { return fmt.Sprintf("%s-reader-%02d", repoID, j%16) }
 
 // changeRows is every row of a repository's changes this node holds — the
 // changes by their repository, and their revisions, authors and bodies by the

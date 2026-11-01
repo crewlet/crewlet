@@ -259,3 +259,165 @@ func TestTheCodeApplierAnnouncesWhoseInboxMoved(t *testing.T) {
 		t.Fatalf("an edit that mentions nobody announced %v", heard[1:])
 	}
 }
+
+// noticeCount is the count change keeps of its notices on n
+// (code_changes.notices).
+func noticeCount(t *testing.T, n *node, change string) int {
+	t.Helper()
+	return n.count(`SELECT notices FROM code_changes WHERE id = ?`, change)
+}
+
+// A CHANGE COUNTS EVERY NOTICE ITS RECORDS MAY WRITE: each record about it adds
+// every handle it tells — what its routing concerns and hears — whether or not
+// the recipient's horizon let this node write the row, so the count is a
+// function of the records alone and the same on every node, and never below
+// the rows this node holds: an open a year and more old when its batch
+// applies it writes no row and still counts its two mentions, and an ask
+// applied an hour after it was stored writes its one and counts it. An edit
+// that tells nobody counts nothing.
+//
+// Mutation: count only the rows the horizon let the apply write, or count
+// nothing, and the change's count is not what its records may write.
+func TestAChangeCountsEveryNoticeItsRecordsMayWrite(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	storedBefore(n, (inbox.RetentionDefaultDays+1)*24*time.Hour)
+	c, _ := committerOn(t, n, n.pub)
+	repo := changeRepo(t, n, "web")
+	open := opening(repo, featureRef, mainRef, dev)
+	open.Open.Mentions = []string{"founder", "cto"}
+	opened, err := c.ProposeChange(t.Context(), open)
+	requireChanged(t, opened, err)
+	change := opened.ChangeID
+	if rows := noticesOf(t, n, opened.Position); len(rows) != 0 {
+		t.Fatalf("an open past every horizon wrote %v, want no row", rows)
+	}
+	told := len(wantNotices(t, n, opened.Position))
+	if told != 2 {
+		t.Fatalf("the open tells %d handles, want its two mentions", told)
+	}
+	if got := noticeCount(t, n, change); got != told {
+		t.Fatalf("after an open that wrote no row the change counts %d notices, want the %d it tells: "+
+			"the count is the records', never the horizon's", got, told)
+	}
+	storedBefore(n, time.Hour)
+	w, _ := writerOn(t, n, n.pub)
+	asked := converse(t, w, asking(repo, change, dev, "plat-lead")).Position
+	told += len(wantNotices(t, n, asked))
+	if rows := noticesOf(t, n, asked); len(rows) != 1 {
+		t.Fatalf("the ask wrote %v, want the one reviewer's notice", rows)
+	}
+	retitle, err := c.ProposeChange(t.Context(), retitled(repo, change, dev, 1, "Retry the upload once"))
+	requireChanged(t, retitle, err)
+	if got := noticeCount(t, n, change); got != told || got != 3 {
+		t.Fatalf("after the open, the ask and an edit that tells nobody the change counts %d notices, "+
+			"want the %d its records tell", got, told)
+	}
+}
+
+// A PURGE REMOVES ITS CHANGES' NOTICES WITHIN ITS PARTS: a change's notices
+// are charged to the part that removes them by the count the change keeps of
+// them, so no record deletes more than PurgePartRows of a repository's
+// changes' rows and notices together, a part cuts the change it stops at
+// through its notices oldest first and takes exactly what it charged off its
+// count, the final purge forms only once the counts left fit one part — and
+// the purge leaves no notice of the repository behind, announces every inbox
+// it took one out of, and touches no other repository's.
+//
+// The repository's ten changes of forty notices fit the first part whole, 430
+// rows; the change after them holds PurgePartRows+100 notices and counts 50
+// more a sweep took, so the part cuts it — its revision, its author and the
+// 2 568 oldest of its notices, filling PurgePartRows — and the purge takes the
+// 532 notices left (counted 582), its row and the five small changes after
+// it, thirteen rows each.
+//
+// Mutation: leave a change's notices out of what a part charges, and the
+// first part deletes every notice in one record; leave them out of the
+// decide's bounded count, and the purge is one record over all of them;
+// remove no notice of a change taken whole, or none of the cut one, and
+// notices outlive their changes or the purge's one record takes thousands;
+// take the cut's notices off its count by none, and the parts are not these;
+// cut them newest first, and the
+// oldest outlive the part; note no removal, and no inbox is told it moved.
+func TestAPurgeRemovesItsChangesNoticesWithinItsParts(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	var (
+		mu    sync.Mutex
+		moved = map[string]bool{}
+	)
+	n.applier = code.NewApplier(func(batch []inbox.Movement) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, m := range batch {
+			if m.UnreadDelta != 0 {
+				t.Errorf("a purge announced %d unread notices for %s, want a removal's none", m.UnreadDelta,
+					m.Handle)
+			}
+			moved[m.Handle] = true
+		}
+	})
+	n.ensure("app", described("one"), t1)
+	n.ensure("other", described("two"), t1)
+	id, other := n.mustID("app"), n.mustID("other")
+	n.deleteAt(id, harnessAt.Add(-2*keep))
+	small := changeShape{revisions: 1, authors: 1, notices: 40}
+	shapes := append(changesOf(10, small),
+		changeShape{revisions: 1, authors: 1, notices: code.PurgePartRows + 100, swept: 50})
+	shapes = append(shapes, changesOf(5, changeShape{revisions: 1, authors: 1, notices: 10})...)
+	ids := n.seedChanges(id, shapes)
+	cut := ids[10]
+	n.seedChanges(other, changesOf(2, changeShape{revisions: 1, authors: 1, notices: 30}))
+	notices := func(repo string) int {
+		return n.count(`SELECT COUNT(*) FROM code_notifications WHERE repo_id = ?`, repo)
+	}
+	left := func() int {
+		changes, revisions, authors, bodies := n.changeRows(id)
+		return changes + revisions + authors + bodies + notices(id)
+	}
+	var steps []int
+	for range 4 {
+		before := left()
+		res, err := n.store.PurgeStep(t.Context(), id, keep)
+		if err != nil {
+			t.Fatalf("PurgeStep: %v", err)
+		}
+		steps = append(steps, before-left())
+		if len(steps) == 1 {
+			if got, want := noticeCount(t, n, cut), code.PurgePartRows+150-2568; got != want {
+				t.Errorf("after the first part the cut change counts %d notices, want %d: a cut takes off "+
+					"its count exactly what it charged", got, want)
+			}
+			if oldest := n.count(`SELECT MIN(log_seq) FROM code_notifications WHERE change_id = ?`,
+				cut); oldest != 2568+1 {
+				t.Errorf("after the first part the cut change's oldest notice is at %d, want %d: a cut takes "+
+					"a change's oldest notices first", oldest, 2568+1)
+			}
+		}
+		if res.Done {
+			break
+		}
+	}
+	if want := []int{code.PurgePartRows, 532 + 1 + 5*13}; !slices.Equal(steps, want) {
+		t.Fatalf("the purge removed %v rows of the changes and their notices a record, want %v: parts of "+
+			"at most PurgePartRows (%d), each change's notices charged by its count, then the purge",
+			steps, want, code.PurgePartRows)
+	}
+	if left := notices(id); left != 0 {
+		t.Fatalf("the purge left %d notices of the repository's changes", left)
+	}
+	if left := notices(other); left != 60 {
+		t.Fatalf("the neighbour holds %d notices after the purge, want the 60 it was given", left)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for j := range 16 {
+		if reader := noticeReader(id, j); !moved[reader] {
+			t.Errorf("the purge took %s's notices out of their inbox and never said it moved", reader)
+		}
+		if reader := noticeReader(other, j); moved[reader] {
+			t.Errorf("the purge announced %s's inbox, whose notices are another repository's", reader)
+		}
+	}
+}

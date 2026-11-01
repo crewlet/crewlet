@@ -19,10 +19,10 @@ import (
 //
 // # Through the act transport, as the person the token is bound to
 //
-// The tool a person's assistant calls, code_import_repo, through the operator
-// catalogue's act route (`POST /operator/act/{tool}`) — no dashboard screen
-// asks one — so an import from a terminal is the same create with the same
-// record. The credential is CREWLET_API_TOKEN
+// The tool a person's assistant and the dashboard's "Import a repository"
+// call, code_import_repo, through the operator catalogue's act route (`POST
+// /operator/act/{tool}`), so an import from a terminal is the same create
+// with the same record. The credential is CREWLET_API_TOKEN
 // and nothing else, and it must be a PERSON's own machine token: an import is
 // a person's alone (U49 a), so a token bound to nobody is refused, naming why.
 //

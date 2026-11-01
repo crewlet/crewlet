@@ -448,7 +448,8 @@ While the change is live and its branch has a merge gate, the card also says
 card):
 
 - **What its checks measured**: each check the branch requires, on the
-  change's head, with its state and how long it ran (`unit failed in 1m 4s`,
+  change's head at its latest attempt — a rerun stands in for the attempt it
+  reran — with its state and how long it ran (`unit failed in 1m 4s`,
   `e2e running`) — durations, never tokens. A branch that requires no check
   draws no list, rather than "none measured".
 - **Its change classes**: how many of the paths the head revision touches
@@ -795,7 +796,11 @@ checks](../concepts/code-host.md#reading-a-repositorys-checks)):
    fleet's object store and read a page at a time — never in a row. A passed
    check keeps its summary alone, so nothing of a green run is stored. Where
    the object store has no room, the check ends without its log and its
-   summary says so; its failures and its tail are kept either way.
+   summary says so; its failures and its tail are kept either way. Only those
+   64 MiB are read from the box, however much more the check wrote, and its
+   reports and its log are read within a minute of its end: a box slower than
+   that ends its check without what was still unread, its summary saying so,
+   rather than leaving it running.
 
 A check that ran past its `timeout_seconds` is **failed** `timed_out` — the
 time is the check's own, so it measured the commit — with its tail and its
@@ -830,13 +835,14 @@ a band per repository and branch, its entries in the order the queue lands
 them — the place, the change, who enqueued it and where it stands (`waiting`
 for a candidate, or `testing` in one). Choose a repository (`?repo=web`) and
 each entry also shows the **train base** it is tested on, a meter of the
-**required checks** of what it is tested in — passed, failed and running, the
-rest not yet a verdict — and how long it has been queued against the slowest
-of those checks' declared `timeout_seconds`, since the queue waits for its
-slowest required check. Under each of its bands, in the danger tone, is what
-the queue **put out in the last day**: the change, why (`a required check
-failed`, `its merge conflicted`, `it no longer met the branch's gate`, `its
-head moved`, `the branch moved under the queue`) and the required checks that
+**required checks** of what it is tested in, each at its latest attempt —
+passed, failed and running, the rest not yet a verdict — and how long it has
+been queued against the slowest of those checks' declared `timeout_seconds`,
+since the queue waits for its slowest required check. Under each of its
+bands, in the danger tone, is what the queue **put out in the last day**: the
+change, why (`a required check failed`, `its merge conflicted`, `it no longer
+met the branch's gate`, `its head moved`, `the branch moved under the queue`)
+and the required checks that
 failed on what it was tested in or the paths its merge conflicted on. A branch
 with nothing queued and nothing put out lately draws no band, and a company
 with nothing queued says so. The queues are read fifty entries at a time;
@@ -933,6 +939,13 @@ names repositories means those were not looked at: search them again by name,
 or ask after the node named. At most 500 lines come back, in the order of
 repository, path and line, and `truncated` says more matched. See
 [Code search](../concepts/code-host.md#code-search).
+
+**Searching from the dashboard.** **Code › Search** (`#/code/search`) takes
+the search as written above, with its mode, a repository, a path and a ref
+as controls beside it, and draws the lines by repository and file, each line
+opening its file at the commit it was searched at; what was not searched is
+said above them on every answer. In ⌘K, the **Code** tab searches the same
+way and lists the first eight lines.
 
 **Searching from a script.** The same search is the question `code_search`,
 on [`GET /code/search`](../reference/api-endpoints.md#get-codesearch):
@@ -1307,7 +1320,9 @@ time it dials. A blob past `code.limits.max_blob_bytes` or a history past
 `active` holding what landed, and the import is not tried again. A **pull mirror**
 (`-mirror`) is imported the same way and then moves only by its home's syncs
 from the source, so every push to it is refused. Your own assistant does the
-same with `code_import_repo`; no seat is offered it. Every flag is in
+same with `code_import_repo`, and so does **Import a repository** on the
+dashboard's Code › Repositories, where the repository's Overview then says
+how far the import went; no seat is offered it. Every flag is in
 [`crewlet code import`](../reference/cli.md#crewlet-code-import).
 
 #### Your machine pushes it
@@ -1583,7 +1598,9 @@ credential that was ever pushed is in every clone that fetched it, so:
    ```
 
    or `code_purge_unreachable` from your assistant ([`crewlet code
-   purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable)).
+   purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable)),
+   or **Purge unreachable history** on the repository's Settings tab in the
+   dashboard, which names who still keeps copies before you confirm.
    It is a person's alone, on your own token, and it keeps no grace: every
    object nothing reaches goes, whoever left it and however recently. The
    answer comes once the request is recorded; `crewlet code status -repo web`
