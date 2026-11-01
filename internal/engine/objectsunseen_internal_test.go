@@ -37,10 +37,11 @@ func TestOnlyACountedNodesUnknownLogIsUnseen(t *testing.T) {
 		t.Fatalf("foreignLogs = %q, want one sentence for each log a counted node runs "+
 			"and this build does not", got)
 	}
-	if !strings.Contains(got[0], "a_newer_log") || !strings.Contains(got[0], "data-b and data-c") {
+	if !strings.Contains(got[0], `data nodes "data-b" and "data-c" run the state log "a_newer_log"`) {
 		t.Errorf("the newer log is reported as %q, want it named with both counted nodes", got[0])
 	}
-	if !strings.Contains(got[1], "an_evicted_log") || strings.Contains(got[1], "data-d") {
+	if !strings.Contains(got[1], `data node "data-c" runs the state log "an_evicted_log"`) ||
+		strings.Contains(got[1], "data-d") {
 		t.Errorf("the second log is reported as %q: data-c runs it and is counted, "+
 			"data-d runs it and is not", got[1])
 	}

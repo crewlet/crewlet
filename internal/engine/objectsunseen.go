@@ -112,9 +112,13 @@ func foreignLogs(rows []coord.NodePositions, counted map[string]bool, known []st
 	for _, name := range slices.Sorted(maps.Keys(runs)) {
 		nodes := runs[name]
 		slices.Sort(nodes)
-		out = append(out, fmt.Sprintf("data node %s runs the state log %s, which "+
-			"this build does not; its rows may name objects until every data node "+
-			"runs a build that knows it", words.And(nodes), name))
+		who := "data node " + words.And(nodes) + " runs"
+		if len(nodes) > 1 {
+			who = "data nodes " + words.And(nodes) + " run"
+		}
+		out = append(out, fmt.Sprintf("%s the state log %q, which this build does not; "+
+			"its rows may name objects until every data node runs a build that knows it",
+			who, name))
 	}
 	return out
 }
