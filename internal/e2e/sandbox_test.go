@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
@@ -704,7 +705,12 @@ func TestACodingRunChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 		t.Fatalf("read the run's pushes: %v", err)
 	}
 	if len(answer.Pushes) != 1 {
-		t.Fatalf("the run is recorded as %d pushes, want its one: %+v", len(answer.Pushes), answer.Pushes)
+		// WHY, IN THE FAILURE ITSELF: the stand-in's own failure — a clone,
+		// a commit or a push the box's git refused — ends its run and reaches
+		// the turn's record, not this case's log, so a case that said only
+		// the count would leave the cause on a runner nobody can read.
+		t.Fatalf("the run is recorded as %d pushes, want its one: %+v\nthe turn settled %q; %s",
+			len(answer.Pushes), answer.Pushes, n.settledOutcome(t, run.TurnID), n.diagnose())
 	}
 	push := answer.Pushes[0]
 	branch := "refs/heads/" + run.Repos[0].Branch
@@ -747,7 +753,7 @@ func TestACodingRunChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.SetBasicAuth("run", string(token))
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpxtest.Pool(t).Do(req)
 	if err != nil {
 		t.Fatalf("ask with the ended run's token: %v", err)
 	}
