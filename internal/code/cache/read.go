@@ -110,7 +110,12 @@ type packKey struct{ packID, part string }
 //
 // A position the mark holds was one the log held when it was answered, so a
 // LINEARIZABLE answer read after it — whose barrier is appended at the log's
-// head — is at or past it on a log that never goes back. A round compares its
+// head — is at or past it on a log that never goes back, WHICHEVER NODE
+// ANSWERS: an answer's position is the checkpoint the code reader's
+// transaction is handed (code.Reader), current through the record before
+// that barrier, never the checkpoint row alone, which lags every barrier its
+// node has decoded and not committed — and so stood below an answer another
+// node had given, which read here as the log gone back. A round compares its
 // answer with the mark AS IT STOOD BEFORE ITS READ BEGAN: a position another
 // round recorded after this one's barrier is no statement about it.
 type logMark struct {

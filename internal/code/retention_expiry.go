@@ -313,13 +313,8 @@ func (r *Reader) idleSeatRefs(ctx context.Context, q idleRefsQuery) (idleRefsPag
 	var page idleRefsPage
 	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
 		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
-	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
-		page = idleRefsPage{repos: map[string]expiryRepo{}}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
-		page.through = cp.At
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
+		page = idleRefsPage{repos: map[string]expiryRepo{}, through: cp.At}
 		if err := page.readRefs(ctx, tx, q, after); err != nil {
 			return err
 		}
