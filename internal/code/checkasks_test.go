@@ -2,6 +2,7 @@ package code_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,5 +155,36 @@ func TestAReportedCheckIsItsCIsAlone(t *testing.T) {
 		if got := readingOf(rec, metrics.CodeChecksFinished, attrs).Total; got != c.want {
 			t.Errorf("crewlet.code.checks.finished%v = %v, want %v", attrs, got, c.want)
 		}
+	}
+}
+
+// A PRINCIPAL'S CHECK WRITE WEIGHS WHAT IT ASKS: a rerun or a report carries
+// no record until its decide forms one, so the checks writer's node bytes
+// weigh what it asks — a report's tail among it — and never the nothing its
+// record is before the decide, which would let a burst of the largest reports
+// past the bytes bound at a few bytes each.
+//
+// Mutation: weigh a principal's write by its record alone — the report weighs
+// four bytes, red.
+func TestAPrincipalsCheckWriteWeighsWhatItAsks(t *testing.T) {
+	t.Parallel()
+	key := code.CheckKey{RepoID: "019a0c2e-0000-7000-8000-000000000001", OID: oidOf("B"), Target: mainRef,
+		Name: "unit", Attempt: 1}
+	report := reporting(key, code.CheckStateFailed, "")
+	report.Report.Tail = strings.Repeat("x", 4<<10)
+	weight, err := code.ChecksWeight(report)
+	if err != nil {
+		t.Fatalf("weigh a report: %v", err)
+	}
+	if weight < len(report.Report.Tail) {
+		t.Errorf("a report carrying a %d-byte tail weighs %d bytes, want at least its tail", len(report.Report.Tail),
+			weight)
+	}
+	rerun := rerunning(key, ada)
+	if weight, err = code.ChecksWeight(rerun); err != nil {
+		t.Fatalf("weigh a rerun: %v", err)
+	}
+	if weight < len(key.Name)+len(key.OID)+len(key.Target) {
+		t.Errorf("a rerun of %+v weighs %d bytes, want at least its key's", key, weight)
 	}
 }

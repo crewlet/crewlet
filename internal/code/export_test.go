@@ -223,6 +223,9 @@ func SetCommitterNodeProposals(c *Committer, n int) { c.nodeProposals = n }
 // its record carries as the writer stamps it.
 func ConversationWeight(cw ConversationWrite) (int, error) { return cw.measure() }
 
+// ChecksWeight is what r weighs in its writer's node bytes.
+func ChecksWeight(r ChecksRequest) (int, error) { return r.weight() }
+
 // StandingStates is the list of states a raiser's standing findings are read
 // by, as the decide's statement is driven from it.
 func StandingStates() []string {

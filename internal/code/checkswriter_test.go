@@ -268,14 +268,14 @@ func TestABurstOfOneRepositorysCheckWritesIsRefusedAtOnce(t *testing.T) {
 	}
 	first := publish(queueing(checkOn(repo, 1), code.QueueDispatch))
 	eventually(t, "the first write reaching the publisher", func() bool { return gate.calls.Load() == 1 })
-	second := publish(queueing(code.CheckKey{RepoID: repo, OID: oidOf("A"), Name: "unit", Attempt: 1},
-		code.QueueDispatch))
+	second := publish(queueing(code.CheckKey{RepoID: repo, OID: oidOf("A"), Target: mainRef, Name: "unit",
+		Attempt: 1}, code.QueueDispatch))
 	// THE SECOND IS WAITING ITS TURN before the third arrives, or the third
 	// could take its place and the second be the one refused.
 	eventually(t, "the second write waiting its turn", func() bool { return code.ChecksWriterHolders(w, repo) == 2 })
 	select {
-	case a := <-publish(queueing(code.CheckKey{RepoID: repo, OID: oidOf("R"), Name: "unit", Attempt: 1},
-		code.QueueDispatch)):
+	case a := <-publish(queueing(code.CheckKey{RepoID: repo, OID: oidOf("R"), Target: mainRef, Name: "unit",
+		Attempt: 1}, code.QueueDispatch)):
 		requireCheckRefused(t, "a third write of the repository", a.res, a.err, code.CheckRefusalBusy)
 		if want := "2 check writes of this repository hold or wait for its turn on this node, the most one " +
 			"repository takes at once (MaxCheckWritesWaiting)"; !strings.Contains(a.res.Detail, want) {

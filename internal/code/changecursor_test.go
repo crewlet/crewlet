@@ -76,6 +76,7 @@ func TestAPageResumesAfterAnyRowItServed(t *testing.T) {
 	web := changeRepo(t, n, "web")
 	app := changeRepo(t, n, "app")
 	n.push(web, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/fix", code.ZeroOID, oidOf("F"))))
+	n.push(app, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/fix", code.ZeroOID, oidOf("F"))))
 	open := func(repo, source string, owner code.Principal) code.ChangeResult {
 		t.Helper()
 		res, err := c.ProposeChange(ctx, opening(repo, source, mainRef, owner))
@@ -91,6 +92,7 @@ func TestAPageResumesAfterAnyRowItServed(t *testing.T) {
 	web1, web2 := open(web, featureRef, dev), open(web, releaseRef, cto)
 	open(web, "refs/heads/fix", dev)
 	app1, app2 := open(app, featureRef, dev), open(app, releaseRef, cto)
+	app3 := open(app, "refs/heads/fix", cto)
 	pushedBy(t, c, web, dev, update(featureRef, oidOf("B"), oidOf("B2")))
 	pushedBy(t, c, web, dev, update(featureRef, oidOf("B2"), oidOf("B3")))
 	// WHAT WAITS ON DEV, both halves: cto's changes asking dev's review, and
@@ -99,6 +101,11 @@ func TestAPageResumesAfterAnyRowItServed(t *testing.T) {
 	converse(asking(app, app2.ChangeID, cto, "dev", "plat-lead"))
 	converse(asking(web, web1.ChangeID, cto, "plat-lead", "founder"))
 	converse(asking(app, app1.ChangeID, cto, "plat-lead"))
+	// AND ONE MORE ASK OF PLAT-LEAD ON APP, left waiting: their review of
+	// app1 below answers that ask, and a reviewer's listing walks only the
+	// asks still waiting, so app2's alone would leave nothing to resume
+	// between.
+	converse(asking(app, app3.ChangeID, cto, "plat-lead"))
 	converse(reviewing(web, web1.ChangeID, platLead, 3, code.VerdictRequestChanges, nil,
 		raising(code.SeverityBlocker, 1, "Retries forever"), raising(code.SeverityMinor, 2, "A long line"),
 		raising(code.SeverityNit, 3, "A typo")))
