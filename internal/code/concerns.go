@@ -187,7 +187,7 @@ type ChangeRouting struct {
 	// RepoName and Title are the repository's name and the change's title as
 	// the record leaves them.
 	RepoName string `json:"repo_name"`
-	Title    string `json:"title"`
+	Title    string `json:"title" untrusted:"name"`
 	// Actor is who made the change the record records — its asker, a push
 	// entry's pusher — and "" for the home's own records, which nobody
 	// asked. Nobody hears of a change they made.

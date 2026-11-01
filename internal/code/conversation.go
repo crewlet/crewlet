@@ -283,7 +283,7 @@ type Comment struct {
 	// asker sends none.
 	By Principal `json:"by,omitzero"`
 	// Body is what it says, 1 to [MaxCommentBytes] bytes.
-	Body string `json:"body"`
+	Body string `json:"body" untrusted:"fence"`
 	// Anchor is the line a thread's first comment points at; nil for none,
 	// and always nil on a reply, which is about its thread.
 	Anchor *CommentAnchor `json:"anchor,omitempty"`
@@ -441,8 +441,8 @@ type Finding struct {
 	BlobOID   string   `json:"blob_oid"`
 	Severity  Severity `json:"severity"`
 	Category  Category `json:"category"`
-	Title     string   `json:"title"`
-	Body      string   `json:"body,omitempty"`
+	Title     string   `json:"title" untrusted:"name"`
+	Body      string   `json:"body,omitempty" untrusted:"fence"`
 	// Suggestion is the lines the finding would put in place of the ones it
 	// is anchored to; nil for none, and "" a suggestion to delete them.
 	Suggestion *string `json:"suggestion,omitempty"`
@@ -466,7 +466,7 @@ type Review struct {
 	Revision int64   `json:"revision"`
 	Verdict  Verdict `json:"verdict"`
 	// Summary is what the review says, at most [MaxReviewSummaryBytes].
-	Summary  string    `json:"summary,omitempty"`
+	Summary  string    `json:"summary,omitempty" untrusted:"fence"`
 	Findings []Finding `json:"findings,omitempty"`
 	// Carries is the ids of the reviewer's own standing findings that still
 	// stand as it judges the revision, at most [MaxStandingFindings].

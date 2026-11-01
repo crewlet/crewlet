@@ -86,10 +86,10 @@ type ChangeOption struct {
 	// Title is one line, at most [MaxChangeTitleBytes]: the option's, or the
 	// subject of the commit the push set its source to, which the receiver
 	// fills in where the options name none.
-	Title string `json:"title"`
+	Title string `json:"title" untrusted:"name"`
 	// Body is the change's description, at most [MaxChangeBodyBytes] — one
 	// line, since git takes no line break in a push option.
-	Body string `json:"body,omitempty"`
+	Body string `json:"body,omitempty" untrusted:"fence"`
 	// Draft opens it as a draft, not yet asking to be merged.
 	Draft bool `json:"draft,omitempty"`
 }

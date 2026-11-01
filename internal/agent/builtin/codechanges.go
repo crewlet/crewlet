@@ -185,7 +185,7 @@ const _ = uint(code.MaxReanchors - changeFindingsPage)
 // ids and positions that are the code host's own bookkeeping.
 type codeChangeRow struct {
 	Ref         string           `json:"ref"`
-	Title       string           `json:"title"`
+	Title       string           `json:"title" untrusted:"name"`
 	State       code.ChangeState `json:"state"`
 	SourceRef   string           `json:"source_ref"`
 	TargetRef   string           `json:"target_ref"`
@@ -197,7 +197,7 @@ type codeChangeRow struct {
 	Access      string           `json:"access,omitempty"`
 	OpenedAt    time.Time        `json:"opened_at"`
 	ClosedAt    time.Time        `json:"closed_at,omitzero"`
-	CloseReason string           `json:"close_reason,omitempty"`
+	CloseReason string           `json:"close_reason,omitempty" untrusted:"name"`
 	MergedAt    time.Time        `json:"merged_at,omitzero"`
 	MergedVia   code.MergedVia   `json:"merged_via,omitempty"`
 	MergeOID    string           `json:"merge_oid,omitempty"`
@@ -375,6 +375,13 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return codeChangeList{Changes: rows[:k], Next: next, Position: answer.Position}
 	}
 	read := newForeignRead(turn, c.asker.Seat)
+	// A CHANGE'S TITLE AND CLOSE REASON ARE NAMES somebody chose — its owner
+	// at the open, or whoever edited it since, whom the row does not name —
+	// neutralised in place, and the envelope says the company's writers it
+	// does not name had a hand in them (ADR-0040).
+	if len(rows) > 0 {
+		namesBy(read)
+	}
 	k, rendered, err := read.fit(len(rows), page)
 	switch {
 	case err != nil:
@@ -690,7 +697,7 @@ func (g changeRead) floor(revs ...code.RevisionRow) statelog.Freshness {
 // says, who wrote it, and what its conversation counts.
 type codeChangeDetail struct {
 	codeChangeRow
-	Description  string            `json:"description,omitempty"`
+	Description  string            `json:"description,omitempty" untrusted:"fence"`
 	Authors      []codeAuthor      `json:"authors"`
 	Conversation *codeConversation `json:"conversation,omitempty"`
 }
@@ -813,6 +820,9 @@ func (g changeRead) summary(ctx context.Context, cursor string) (tools.Result, e
 			// change past its open may have rewritten them.
 			read.fence(fieldPath{}.key("change").key("description"), provenance.SourceChangeDescription,
 				[]provenance.Author{read.party(d.Owner, d.OwnerKind)}, d.Version > 1, d.Body)
+			// AND ITS TITLE AND CLOSE REASON, names whose writers the row
+			// does not name ([codeListChanges]'s reason).
+			namesBy(read)
 		}
 		return read, codeChangeSummary{Repo: g.repo.Name, Change: detail, Revisions: revs[:k], Next: next(k),
 			Position: answer.Position}
@@ -1033,11 +1043,11 @@ type codeFinding struct {
 	BlobOID        string            `json:"blob_oid"`
 	Severity       code.Severity     `json:"severity"`
 	Category       code.Category     `json:"category"`
-	Title          string            `json:"title"`
-	Body           string            `json:"body,omitempty"`
+	Title          string            `json:"title" untrusted:"name"`
+	Body           string            `json:"body,omitempty" untrusted:"fence"`
 	Suggestion     *string           `json:"suggestion,omitempty"`
 	State          code.FindingState `json:"state"`
-	ResolutionNote string            `json:"resolution_note,omitempty"`
+	ResolutionNote string            `json:"resolution_note,omitempty" untrusted:"name"`
 	ResolvedBy     string            `json:"resolved_by,omitempty"`
 	ResolvedCommit string            `json:"resolved_commit,omitempty"`
 	// At is where its lines are in the revision the answer is of
@@ -1090,6 +1100,13 @@ func (g changeRead) findings(ctx context.Context, call changeCall) (tools.Result
 			// would put in place of its own.
 			raiser := []provenance.Author{read.party(f.Raiser, f.RaiserKind)}
 			at := fieldPath{}.key("findings").index(i)
+			// ITS TITLE IS ITS RAISER'S NAME FOR IT, and a resolution's note
+			// its resolver's, whom the envelope names among nobody it vouches
+			// for as the only writer.
+			read.attribute(raiser, false)
+			if f.ResolutionNote != "" {
+				namesBy(read)
+			}
 			read.fence(at.key("body"), provenance.SourceChangeReview, raiser, false, f.Body)
 			if f.Suggestion != nil {
 				read.fence(at.key("suggestion"), provenance.SourceChangeReview, raiser, false, *f.Suggestion)
@@ -1160,7 +1177,7 @@ type codeReview struct {
 	Reviewer     string         `json:"reviewer"`
 	ReviewerKind code.PartyKind `json:"reviewer_kind"`
 	Verdict      code.Verdict   `json:"verdict"`
-	Summary      string         `json:"summary,omitempty"`
+	Summary      string         `json:"summary,omitempty" untrusted:"fence"`
 	Findings     int64          `json:"findings"`
 	At           time.Time      `json:"at"`
 }
@@ -1218,7 +1235,7 @@ type codeComment struct {
 	Anchor     *code.CommentAnchor `json:"anchor,omitempty"`
 	Resolved   bool                `json:"resolved,omitempty"`
 	ResolvedBy string              `json:"resolved_by,omitempty"`
-	Body       string              `json:"body"`
+	Body       string              `json:"body" untrusted:"fence"`
 	At         time.Time           `json:"at"`
 }
 

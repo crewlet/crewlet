@@ -234,8 +234,8 @@ type ChangeOpen struct {
 	Head string `json:"head,omitempty"`
 	// Title is one line, at most [MaxChangeTitleBytes]; Body the
 	// description, at most [MaxChangeBodyBytes].
-	Title string `json:"title"`
-	Body  string `json:"body,omitempty"`
+	Title string `json:"title" untrusted:"name"`
+	Body  string `json:"body,omitempty" untrusted:"fence"`
 	// Draft opens it as a draft, not yet asking to be merged.
 	Draft bool `json:"draft,omitempty"`
 	// Owner is who opened it: the change's owner and first author. STAMPED

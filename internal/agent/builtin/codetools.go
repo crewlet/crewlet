@@ -1251,7 +1251,7 @@ func (t *codeListRepos) Call(ctx context.Context, args map[string]any) (tools.Re
 // bookkeeping.
 type codeRepoRow struct {
 	Name          string          `json:"name"`
-	Description   string          `json:"description,omitempty"`
+	Description   string          `json:"description,omitempty" untrusted:"name"`
 	Status        code.RepoStatus `json:"status"`
 	Owner         code.Owner      `json:"owner"`
 	Visibility    code.Visibility `json:"visibility"`
@@ -1326,6 +1326,11 @@ func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return codeRepoList{Repos: rows[:k], Next: next, Position: answer.Position}
 	}
 	read := newForeignRead(turn, c.asker.Seat)
+	// A REPOSITORY'S DESCRIPTION IS A NAME somebody chose, whom its row does
+	// not name: neutralised in place, and the envelope says so (ADR-0040).
+	if slices.ContainsFunc(rows, func(r codeRepoRow) bool { return r.Description != "" }) {
+		namesBy(read)
+	}
 	k, rendered, err := read.fit(len(rows), page)
 	if err == nil && k == 0 && len(rows) > 0 {
 		// A REPOSITORY WHOSE RULES ALONE ARE PAST ONE ANSWER is listed without
@@ -1563,6 +1568,10 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// fit one answer with room to spare, so each list makes progress on every
 	// page (TestEveryRepositoryAtTheDomainsBoundsIsAnswered).
 	read := newForeignRead(turn, c.asker.Seat)
+	// ITS DESCRIPTION IS A NAME somebody chose ([codeListRepos]'s reason).
+	if out.Detail != nil && out.Detail.Description != "" {
+		namesBy(read)
+	}
 	oneBranch := min(1, len(branches))
 	kr, _, err := read.fit(len(rules), func(k int) any { return page(k, oneBranch) })
 	if err != nil {

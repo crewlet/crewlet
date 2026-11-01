@@ -1097,7 +1097,7 @@ type codeRepoState struct {
 	Visibility    code.Visibility `json:"visibility"`
 	Search        code.SearchMode `json:"search"`
 	DefaultBranch string          `json:"default_branch"`
-	Description   string          `json:"description,omitempty"`
+	Description   string          `json:"description,omitempty" untrusted:"name"`
 }
 
 // codeRepoWriteAnswer is a lifecycle tool's answer.
@@ -1157,7 +1157,13 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 		// is held to it and never a gate (code.LifecycleResult.Rule).
 		out.Rule = res.Rule
 	}
-	return newForeignRead(turn, c.asker.Seat).page(ctx, t.tool, out, "")
+	read := newForeignRead(turn, c.asker.Seat)
+	// THE REPOSITORY'S DESCRIPTION AS IT NOW STANDS, a name this call may not
+	// have written ([codeListRepos]'s reason).
+	if out.Repository != nil && out.Repository.Description != "" {
+		namesBy(read)
+	}
+	return read.page(ctx, t.tool, out, "")
 }
 
 // ---- refusals, in the classes every surface renders ------------------------ //

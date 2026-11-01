@@ -132,12 +132,12 @@ type InboxNotice struct {
 
 // NoticeChange is what a notice carries of its change.
 type NoticeChange struct {
-	Title    string          `json:"title"`
+	Title    string          `json:"title" untrusted:"name"`
 	State    ChangeState     `json:"state"`
 	WorkItem *types.WorkItem `json:"work_item,omitempty"`
 	// Body is the description's first [MaxNoticeBody] bytes, and BodyCut
 	// whether there is more of it.
-	Body    string `json:"body,omitempty"`
+	Body    string `json:"body,omitempty" untrusted:"fence"`
 	BodyCut bool   `json:"body_cut,omitempty"`
 	// AgentFindings counts the findings seats raised that stand open on the
 	// change, by severity; absent for none.

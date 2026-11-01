@@ -50,7 +50,9 @@ type RepoRef struct {
 	// Search is how code search reads it ([SearchMode]).
 	Search        SearchMode `json:"search"`
 	DefaultBranch string     `json:"default_branch"`
-	Description   string     `json:"description,omitempty"`
+	// Description is what the repository says about itself, a line whoever
+	// created or last changed it chose: somebody's words (ADR-0040).
+	Description string `json:"description,omitempty" untrusted:"name"`
 	// Protections are its rules AS A PUSH IS JUDGED BY THEM ([PushRule]),
 	// sorted by pattern — never a rule's merge gate. This row is what the
 	// admission of every git request reads, every page of a git node's sync
@@ -1975,9 +1977,11 @@ type ChangeRow struct {
 	RepoID string `json:"repo_id"`
 	// Number is the change's on its repository — web!42's 42 — the
 	// repository's next_change at the apply that opened it.
-	Number int64       `json:"number"`
-	Title  string      `json:"title"`
-	State  ChangeState `json:"state"`
+	Number int64 `json:"number"`
+	// Title is the line its owner opened it with, or whoever edited it since
+	// chose: somebody's words (ADR-0040).
+	Title string      `json:"title" untrusted:"name"`
+	State ChangeState `json:"state"`
 	// SourceRef is the branch whose head the change proposes, and TargetRef
 	// the branch it proposes it into, each in full (refs/heads/feature).
 	SourceRef string `json:"source_ref"`
@@ -2009,7 +2013,7 @@ type ChangeRow struct {
 	// MergedAt exactly while it is merged, with how (MergedVia) and the commit
 	// its target was merged at (MergeOID).
 	ClosedAt    time.Time `json:"closed_at,omitzero"`
-	CloseReason string    `json:"close_reason,omitempty"`
+	CloseReason string    `json:"close_reason,omitempty" untrusted:"name"`
 	MergedAt    time.Time `json:"merged_at,omitzero"`
 	MergedVia   MergedVia `json:"merged_via,omitempty"`
 	MergeOID    string    `json:"merge_oid,omitempty"`
@@ -2058,7 +2062,7 @@ type ChangeSummary struct {
 type ChangeDetail struct {
 	ChangeSummary
 	// Body is its description, "" for none.
-	Body string `json:"body,omitempty"`
+	Body string `json:"body,omitempty" untrusted:"fence"`
 	// Authors is everyone who wrote it — whoever opened it, and everyone whose
 	// push moved its head — by handle.
 	Authors []ChangeAuthor `json:"authors"`
@@ -2100,7 +2104,7 @@ type ReviewRow struct {
 	ReviewerKind PartyKind         `json:"reviewer_kind"`
 	OperatorID   string            `json:"operator_id,omitempty"`
 	Verdict      Verdict           `json:"verdict"`
-	Summary      string            `json:"summary,omitempty"`
+	Summary      string            `json:"summary,omitempty" untrusted:"fence"`
 	Findings     int64             `json:"findings"`
 	TurnID       string            `json:"turn_id,omitempty"`
 	Model        string            `json:"model,omitempty"`
@@ -2199,11 +2203,11 @@ type FindingRow struct {
 	LineEnd          int               `json:"line_end"`
 	Severity         Severity          `json:"severity"`
 	Category         Category          `json:"category"`
-	Title            string            `json:"title"`
-	Body             string            `json:"body,omitempty"`
+	Title            string            `json:"title" untrusted:"name"`
+	Body             string            `json:"body,omitempty" untrusted:"fence"`
 	Suggestion       *string           `json:"suggestion,omitempty"`
 	State            FindingState      `json:"state"`
-	ResolutionNote   string            `json:"resolution_note,omitempty"`
+	ResolutionNote   string            `json:"resolution_note,omitempty" untrusted:"name"`
 	ResolvedBy       string            `json:"resolved_by,omitempty"`
 	ResolvedByKind   PartyKind         `json:"resolved_by_kind,omitempty"`
 	ResolvedCommit   string            `json:"resolved_commit,omitempty"`
@@ -2245,7 +2249,7 @@ type CommentRow struct {
 	ResolvedBy       string            `json:"resolved_by,omitempty"`
 	ResolvedByKind   PartyKind         `json:"resolved_by_kind,omitempty"`
 	TurnID           string            `json:"turn_id,omitempty"`
-	Body             string            `json:"body"`
+	Body             string            `json:"body" untrusted:"fence"`
 	Position         statelog.Position `json:"position"`
 	At               time.Time         `json:"at"`
 }

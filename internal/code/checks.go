@@ -690,10 +690,12 @@ func (s CheckStarted) Validate() error {
 // CheckFailure is one failure an ending names: where, which test, and what
 // it said.
 type CheckFailure struct {
-	Path    string `json:"path,omitempty"`
-	Line    int    `json:"line,omitempty"`
-	TestID  string `json:"test_id,omitempty"`
-	Message string `json:"message"`
+	Path   string `json:"path,omitempty"`
+	Line   int    `json:"line,omitempty"`
+	TestID string `json:"test_id,omitempty"`
+	// Message is what the run's report said: the check's command's words,
+	// which run the change's own code (ADR-0040).
+	Message string `json:"message" untrusted:"fence"`
 }
 
 // CheckLog is a failed run's log, stored as one object a code_check_logs row
@@ -721,10 +723,11 @@ type CheckFinished struct {
 	ExitCode   *int  `json:"exit_code,omitempty"`
 	DurationMs int64 `json:"duration_ms,omitempty"`
 	// Summary is what a reader is told first, at most CheckSummaryBytes.
-	Summary string `json:"summary,omitempty"`
+	Summary string `json:"summary,omitempty" untrusted:"fence"`
 	// Tail is the run's last output, at most CheckTailBytes; a passed run
-	// carries none.
-	Tail string `json:"tail,omitempty"`
+	// carries none — the change's own code's words, as Summary is
+	// (ADR-0040).
+	Tail string `json:"tail,omitempty" untrusted:"fence"`
 	// Failures are what the run's reports named, at most MaxCheckFailures
 	// weighing at most MaxCheckFailureBytes, and FailuresOmitted how many
 	// more there were; a passed run carries none.
