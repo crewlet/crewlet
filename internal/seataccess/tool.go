@@ -2,13 +2,14 @@ package seataccess
 
 import (
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
 
 // ToolBinding is a recognised server's binding for one integration (D15). The
-// table is the org model's ([config.SeatToolBindings]), which is where a
-// seat's credential is bound, so what a lane reports and what a seat's server
-// is started with cannot disagree.
-type ToolBinding = config.SeatToolBinding
+// recognition is the MCP catalogue's ([catalogue.Bindings]), which the org
+// model binds a seat's credential by, so what a lane reports and what a
+// seat's server is started with cannot disagree.
+type ToolBinding = catalogue.Binding
 
 // ToolFor is the conventional server this build recognises for lane's
 // integration, or nil where it recognises none. A company binds any other

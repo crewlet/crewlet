@@ -381,6 +381,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
 | `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Takes `admin`** (see [below](#get-mcp-servers)) |
+| `GET` | `/mcp-servers/catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `admin`** (see [below](#get-mcp-serverscatalogue)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -9094,7 +9095,11 @@ read as "started nothing". A node that reports and started nothing is
 any a node reports that the configuration does not carry (`configured: false`
 — a node still on an older revision mid-rollout). The launch is the parts
 that are not credentials — `transport`, `command`, `args`, `url`; `env` and
-`headers` are never here. `started`, `failed` and `waiting` are summed over
+`headers` are never here. `title`, `catalogue` and `vendor` are what the
+[curated catalogue](#get-mcp-serverscatalogue) recognises the server as, by
+its address or its command: the entry's title, its key and the vendor mark
+the dashboard draws. A server the catalogue does not know is titled by its
+name, with `catalogue` and `vendor` empty. `started`, `failed` and `waiting` are summed over
 the nodes, `tools` is the most one started instance serves, and `state` is
 decided here so no screen re-derives it. `waiting` counts a seat's instances
 held back, unstarted, for a credential a
@@ -9146,7 +9151,8 @@ instance's own keys are on its `tools_discovered` log line
 {
   "nodes": [{"id": "node-1", "reported": true}, {"id": "node-2", "reported": true}],
   "servers": [
-    {"name": "github", "configured": true, "shared": false, "transport": "http",
+    {"name": "github", "title": "GitHub", "catalogue": "github", "vendor": "github",
+     "configured": true, "shared": false, "transport": "http",
      "command": "", "args": [], "url": "https://api.githubcopilot.com/mcp/",
      "state": "partial", "started": 3, "failed": 1, "waiting": 0, "tools": 26,
      "unlisted_annotations": [],
@@ -9162,6 +9168,78 @@ instance's own keys are on its `tools_discovered` log line
 
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [Per-entity read and write](#per-entity-read-and-write).
+
+### `GET /mcp-servers/catalogue`
+
+What a server is added from, for the add flow of **Settings › MCP & tools**.
+It is decided by `config.read`, so **it takes `admin`**, as adding a server
+does: an entry is the draft of a launch line every engine host runs, and the
+answer names the registry the company's configuration does. A plain read
+rather than a question: nothing in it is live, so the socket does not carry
+it.
+
+`curated` is the curated catalogue whole, in its order, whatever `q` says: a
+table compiled into the engine and reviewed in pull requests, so it answers
+the same on a node with no egress. Each entry is a vendor's server as its own
+page described it on `read_at`, and a local server launched through a package
+runner names the `package` it fetches at the exact `release` its facts were
+read against. The curated catalogue is also what the engine
+[recognises a configured server by](../guides/tools-and-mcp.md#the-curated-catalogue-and-a-community-registry).
+
+`community` is empty unless `q` is given and the company names a registry
+(`mcp_registry.url`), and then holds what that registry answered for `q`:
+the newest version of each server whose name holds `q`, at most 20, in the
+registry's order. The registry speaks the [MCP Registry](https://registry.modelcontextprotocol.io)
+v0.1 API. Every listing is `community: true` and is a draft for the same add
+flow an address typed by hand goes through: it carries no `read_at`, no
+`integration`, no `prerequisite` and no fixed `value`, and its `vendor` is set
+only when its remote address is a host the curated catalogue recognises. A
+listing is offered with a Streamable HTTP remote at a fixed https address, or
+else an npm or PyPI package from the public registry at an exact release,
+launched as `npx -y <package>@<release>` or `uvx <package>==<release>`. A
+listing the engine cannot read whole (a field past its bound, a direction
+override in its text, a templated address, a runner argument, a package from
+another registry, a deprecated or deleted listing) is left out and counted in
+`left_out`. The engine dials the registry alone, never anything a listing
+names, and follows no redirect.
+
+`registry` is the address the company names, or `""`. `reason` says why a
+search found nothing to offer: the company names no registry, or the
+registry could not be reached, refused, or answered something that is not the
+v0.1 server list. A search that fails is that `reason` beside the curated
+half, never an error in its place; only `q` itself (empty after trimming,
+over 200 characters, or holding a control character) is refused, as
+`bad_params`.
+
+```json
+{
+  "curated": [
+    {"id": "linear", "name": "linear", "title": "Linear", "vendor": "linear",
+     "description": "Issues, projects, cycles and documents.", "transport": "http",
+     "url": "https://mcp.linear.app/mcp", "command": "", "args": [],
+     "headers": [{"name": "Authorization", "description": "A Linear API key.", "required": true,
+                  "secret": true, "value": "", "format": "Bearer <API key>", "from_integration": false}],
+     "env": [], "tool_prefix": "", "tool_annotations": {}, "auth": ["oauth", "headers"],
+     "oauth_client": "cimd", "integration": "", "prerequisite": "",
+     "docs": "https://linear.app/docs/mcp", "read_at": "2026-11-01", "package": "", "release": "",
+     "community": false, "publisher": "", "version": "", "updated_at": null}
+  ],
+  "community": [
+    {"id": "com.example/weather", "name": "weather", "title": "Weather", "vendor": "",
+     "description": "Forecasts and alerts for a place.", "transport": "http",
+     "url": "https://mcp.weather.example.com/mcp", "command": "", "args": [],
+     "headers": [{"name": "X-API-Key", "description": "Your API key.", "required": true,
+                  "secret": true, "value": "", "format": "", "from_integration": false}],
+     "env": [], "tool_prefix": "", "tool_annotations": {}, "auth": ["headers"], "oauth_client": "",
+     "integration": "", "prerequisite": "", "docs": "https://weather.example.com/docs/mcp",
+     "read_at": "", "package": "", "release": "", "community": true,
+     "publisher": "com.example", "version": "2.1.0", "updated_at": "2026-10-27T08:00:00Z"}
+  ],
+  "registry": "https://registry.modelcontextprotocol.io",
+  "reason": "",
+  "left_out": 1
+}
+```
 
 ### `GET /fleet`
 

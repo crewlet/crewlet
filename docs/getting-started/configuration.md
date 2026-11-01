@@ -2254,6 +2254,21 @@ Both deadlines therefore always apply.
 A server that exceeds either deadline is logged and skipped; the rest of
 the company still starts.
 
+### MCP registry
+
+`mcp_registry` names the community registry Settings › MCP & tools searches
+beside the [curated catalogue](../guides/tools-and-mcp.md#the-curated-catalogue-and-a-community-registry)
+when somebody adds a server. Absent, there is no community search.
+
+```yaml
+mcp_registry:
+  url: https://registry.modelcontextprotocol.io   # /v0.1/servers is appended
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `url` | string | no | The address of a registry that speaks the MCP Registry v0.1 API; the API's `/v0.1/servers` path is appended to it. It must be an `https` address with no credentials, query or fragment, a private host included, because what it answers is drafted into launch lines. A result is only ever a draft for the add flow, marked as not reviewed, and the engine dials nothing a listing names |
+
 ---
 
 ## Environment Variable References

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
@@ -861,6 +862,20 @@ func New(opts Options) (*App, error) {
 	if sources.Now == nil {
 		sources.Now = now
 	}
+	// SETTINGS › MCP & TOOLS' OWN ROUTES (internal/api/mcpapi), over the
+	// company this node applied and the community registry it names, which
+	// is all they read: built here rather than handed in, because the app
+	// already holds the one company reader every answer takes it from.
+	mcpSurface, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company {
+		if sources.Company == nil {
+			return nil
+		}
+		company, _ := sources.Company()
+		return company
+	}})
+	if err != nil {
+		return nil, err
+	}
 	// Only the engine knows which parsers registered and what its ${VAR}s
 	// resolved to, so both are read off the runtime rather than taken from
 	// the caller: one source for each, and the one that actually knows.
@@ -988,6 +1003,9 @@ func New(opts Options) (*App, error) {
 		// A MODEL'S CREDENTIAL, CHECKS AND SIGN-INS, each route on its
 		// own verb (internal/api/llmapi).
 		{"models", opts.Models, logging.Get("api.llm")},
+		// WHAT AN MCP SERVER IS ADDED FROM, on the configuration's own
+		// read verb. Reads alone, so no refused write to log.
+		{"mcp", mcpSurface, nil},
 	} {
 		var mounted authz.Mux = mux
 		if surface.log != nil {
