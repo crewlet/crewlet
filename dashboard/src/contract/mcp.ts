@@ -136,10 +136,10 @@ interface BuiltinGroup {
  * leaves room for. `builtin`: a built-in tool has the name, and built-ins are
  * filed first.
  */
-export type McpToolRefusal = "characters" | "too_long" | "builtin";
+type McpToolRefusal = "characters" | "too_long" | "builtin";
 
 /** One tool not offered for its name. */
-export interface McpRefusedTool {
+interface McpRefusedTool {
   /** The name it would be filed under: the server's `tool_prefix` and its own. */
   tool: string;
   reason: McpToolRefusal;
@@ -148,7 +148,7 @@ export interface McpRefusedTool {
 }
 
 /** One tool another server's tool of the same name is offered in place of. */
-export interface McpShadowedTool {
+interface McpShadowedTool {
   tool: string;
   /** The configured name of the server whose tool is offered instead. */
   by: string;
