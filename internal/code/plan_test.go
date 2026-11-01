@@ -1356,7 +1356,7 @@ func claimedReads() map[string]statement {
 			[]any{string(SearchIndexed), "", MaxSnapshotItems},
 			[]string{"code_repos_search_idx (search=? AND name>?)"}},
 		// THE MIRRORS' AND THE IMPORTS' INDEXES THEIR LATER READERS SEEK
-		// (replicated 0082): the home's listings of the repositories being
+		// (replicated 0095): the home's listings of the repositories being
 		// imported, the pull mirrors least recently synced first and the push
 		// mirrors — each a keyset page at a time, its partial predicate
 		// repeated verbatim. Nothing in this build reads a repository by its
