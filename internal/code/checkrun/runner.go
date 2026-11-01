@@ -611,7 +611,11 @@ func (r *Runner) rank(w *walking, repoID string) int {
 // where that is still to come, and zero otherwise.
 func (r *Runner) consider(ctx context.Context, company Company, w *walking, c code.RunnableCheck) time.Time {
 	if c.Def == nil {
-		// A PERSON'S CI REPORTS IT: no runner of the engine's runs it.
+		// NO DEFINITION, NOTHING TO RUN: every queued attempt carries the
+		// one it was queued under — only one errored at its dispatch
+		// carries none, and it ends as it is queued (code.CheckQueued), and
+		// a person's CI queues nothing (code.QueueReasons) — so this is a
+		// row no runner could run, skipped rather than dereferenced.
 		return time.Time{}
 	}
 	at := r.rank(w, c.RepoID)
