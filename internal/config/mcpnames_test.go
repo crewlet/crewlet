@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
@@ -61,6 +62,35 @@ func TestAServerNameIsOneEveryClientCanSpell(t *testing.T) {
 		if !errors.Is(err, tc.want) {
 			t.Errorf("%q: refused as %v, want %v", tc.name, err, tc.want)
 		}
+	}
+}
+
+// EVERY NAME THE ENGINE READS A SERVER BY IS ONE THE RULE TAKES: the vendor
+// blocks the engine reads by name whether or not a server has it
+// (org.EngineReadMCPEnv), and the integrations and access lanes a per-seat
+// server is recognised by when it is named after one (SeatCredentialKind), so
+// a server named after its vendor, as the docs name every one, is never
+// refused for its name. The bridge's own name stays reserved.
+//
+// Mutation: bound a name below the longest of them (a MaxMCPServerName of 9
+// refuses confluence), and this is red.
+func TestEveryNameTheEngineReadsAServerByIsOneTheRuleTakes(t *testing.T) {
+	t.Parallel()
+	names := slices.Concat(org.EngineReadMCPEnv(), SeatCredentialKinds(), SeatAccessLanes())
+	if len(names) < 6 {
+		t.Fatalf("read %d names, so the case asserts nothing", len(names))
+	}
+	for _, name := range names {
+		server := MCPServer{Name: name}
+		var p problems
+		server.validateName(&p, field("name"))
+		if err := p.err(); err != nil {
+			t.Errorf("the engine reads a server by %q, and the name rule refuses it: %v", name, err)
+		}
+	}
+	if !strings.Contains(fmt.Sprint(rejects(t, namedDoc("  - name: crewlet\n    command: server\n", ""),
+		"mcp_servers[0].name")), "reserved") {
+		t.Error("crewlet is not refused as reserved")
 	}
 }
 
