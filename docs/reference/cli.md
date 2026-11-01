@@ -2025,7 +2025,8 @@ is left of the rest, the ceiling ordinary writes are refused at — so a log at
 
 A term that does not apply to a domain prints `n/a` rather than `0`: the
 vector log, the identity estate's, the artifacts log's, the artifact
-datastore's, Ask Crewlet's and the usage log have no wake feed, and an
+datastore's, Ask Crewlet's, the executor log and the usage log have no wake
+feed, and an
 absent term is a different fact from one that permits nothing. Where a log does
 have one, its `feed_ack_floor` is that log's own feed — never another domain's.
 `PER DAY` prints `-` for the same reason where nothing was measured — a
