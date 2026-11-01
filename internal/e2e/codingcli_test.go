@@ -97,6 +97,11 @@ const (
 	// keeps its git credential in, for the case to present once the run has
 	// ended.
 	codingTokenEnv = "FAKE_AGENT_TOKEN"
+	// codingPushLogEnv names a file, outside the box, a [codingModePush] run
+	// writes what its commands said and why its push failed to, for the case
+	// to print beside a push it does not find: the run's own standard error
+	// stays in its box, which is reclaimed when the turn ends.
+	codingPushLogEnv = "FAKE_AGENT_PUSH_LOG"
 )
 
 // codingVersion is the release the stand-in reports by default: 2.1.310, the
@@ -538,8 +543,8 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 			out, failed := callOverBridge(ctx, session, id, call.Name, input)
 			stream.toolResult(id, out, failed)
 			ex.Results = append(ex.Results, callResult{Name: call.Name, Content: out, Failed: failed})
-			if call.Name == builtin.CodeCheckoutTool && !failed && os.Getenv(codingModeEnv) == codingModePush {
-				if err := pushThroughCheckout(ctx, out); err != nil {
+			if call.Name == builtin.CodeCheckoutTool && os.Getenv(codingModeEnv) == codingModePush {
+				if err := pushThroughCheckout(ctx, out, failed); err != nil {
 					return err
 				}
 			}
@@ -575,8 +580,34 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 // as an agent does: the commands it gives, run in the run's working
 // directory, then one commit in the clone they made and a push of the branch
 // it is on. The credential is kept outside the box first ([codingTokenEnv]).
-// Every command's output goes to stderr: stdout is the run's stream.
-func pushThroughCheckout(ctx context.Context, answer string) error {
+// Every command's output goes to stderr, and to [codingPushLogEnv]'s file
+// with the failure itself: stdout is the run's stream. A refused checkout
+// (refused) is only said there: the run carries on to what the model does
+// next, as a CLI handed a refusal does.
+func pushThroughCheckout(ctx context.Context, answer string, refused bool) error {
+	stderr := io.Writer(os.Stderr)
+	if path := os.Getenv(codingPushLogEnv); path != "" {
+		kept, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			return fmt.Errorf("opening the push's log: %w", err)
+		}
+		defer kept.Close()
+		stderr = io.MultiWriter(os.Stderr, kept)
+	}
+	if refused {
+		fmt.Fprintf(stderr, "coding CLI: code_checkout was refused, so nothing was pushed:\n%s\n", answer)
+		return nil
+	}
+	err := pushThrough(ctx, answer, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "coding CLI: the push failed: %v\n", err)
+	}
+	return err
+}
+
+// pushThrough is [pushThroughCheckout]'s work, every command's output to
+// stderr.
+func pushThrough(ctx context.Context, answer string, stderr io.Writer) error {
 	_, fenced, ok := strings.Cut(answer, "```sh\n")
 	script, _, closed := strings.Cut(fenced, "```")
 	if !ok || !closed {
@@ -589,7 +620,7 @@ func pushThroughCheckout(ctx context.Context, answer string) error {
 	}
 	run := func(dir, name string, args ...string) error {
 		cmd := exec.CommandContext(ctx, name, args...)
-		cmd.Dir, cmd.Stdout, cmd.Stderr = dir, os.Stderr, os.Stderr
+		cmd.Dir, cmd.Stdout, cmd.Stderr = dir, stderr, stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("%s %s in %s: %w", name, strings.Join(args, " "), cmp.Or(dir, "."), err)
 		}
@@ -607,6 +638,9 @@ func pushThroughCheckout(ctx context.Context, answer string) error {
 			return err
 		}
 	}
+	// SAID, so a case that finds no push tells a push git accepted from one
+	// never made.
+	fmt.Fprintln(stderr, "coding CLI: git pushed web")
 	// HELD UNTIL THE CASE HAS READ THE ROW: the run's grants leave with it.
 	release := os.Getenv(codingReleaseEnv)
 	for deadline := time.Now().Add(2 * time.Minute); release != ""; {

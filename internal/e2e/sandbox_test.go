@@ -657,9 +657,10 @@ func TestACodingRunChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	stateDir := t.TempDir()
 	tokenPath := filepath.Join(stateDir, "git-token")
 	release := filepath.Join(stateDir, "release")
+	pushLog := filepath.Join(stateDir, "push.log")
 	base := "http://" + addr + "/box/git"
 	env := map[string]string{codingModeEnv: codingModePush, codingTokenEnv: tokenPath,
-		codingReleaseEnv: release, sandbox.BoxGitURLVar: base}
+		codingReleaseEnv: release, codingPushLogEnv: pushLog, sandbox.BoxGitURLVar: base}
 
 	model := newScriptedModel(t)
 	model.callOnExecute(builtin.CodeCheckoutTool, map[string]any{"repo": "web"})
@@ -705,11 +706,17 @@ func TestACodingRunChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 	}
 	if len(answer.Pushes) != 1 {
 		// WHY, IN THE FAILURE ITSELF: the stand-in's own failure — a clone,
-		// a commit or a push the box's git refused — ends its run and reaches
-		// the turn's record, not this case's log, so a case that said only
-		// the count would leave the cause on a runner nobody can read.
-		t.Fatalf("the run is recorded as %d pushes, want its one: %+v\nthe turn settled %q; %s",
-			len(answer.Pushes), answer.Pushes, n.settledOutcome(t, run.TurnID), n.diagnose())
+		// a commit or a push the box's git refused — ends its run in its box,
+		// whose standard error is reclaimed with it, so a case that said
+		// only the count would leave the cause on a runner nobody can read.
+		// What its commands said is kept outside the box ([codingPushLogEnv]).
+		said, err := os.ReadFile(pushLog)
+		if err != nil {
+			said = []byte(fmt.Sprintf("(no log of the push: %v)", err))
+		}
+		t.Fatalf("the run is recorded as %d pushes, want its one: %+v\nthe stand-in's push said:\n%s\n"+
+			"the turn settled %q; %s", len(answer.Pushes), answer.Pushes, said,
+			n.settledOutcome(t, run.TurnID), n.diagnose())
 	}
 	push := answer.Pushes[0]
 	branch := "refs/heads/" + run.Repos[0].Branch
