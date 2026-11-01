@@ -86,6 +86,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AStopsCollectionIsRecordedOnceAsAStepOfItsEnding", testAStopsCollectionIsRecordedOnceAsAStepOfItsEnding},
 		{"AStopOfAJobACollectionReadIsRefused", testAStopOfAJobACollectionReadIsRefused},
 		{"AJobKeepsTheInstantItWasFirstCollected", testAJobKeepsTheInstantItWasFirstCollected},
+		{"AReleaseCountsAFailedResumeOntoTheJob", testAReleaseCountsAFailedResumeOntoTheJob},
 		{"ARefusedRelaunchIsAnError", testARefusedRelaunchIsAnError},
 		{"ANewerLeasesEndingIsStillASeatNotHeld", testANewerLeasesEndingIsStillASeatNotHeld},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
@@ -1304,6 +1305,41 @@ func testAStopOfAJobACollectionReadIsRefused(t *testing.T, s sandbox.PendingStor
 	}
 	if decided, ok, err := stopIt("t3", relaunch); err != nil || !ok || decided.Stop == nil {
 		t.Fatalf("a stop of the relaunched job = %+v, %v, %v, want it decided", decided.Stop, ok, err)
+	}
+}
+
+// A RELEASE COUNTS A FAILED RESUME ONTO THE JOB, dated from the first, so the
+// give-up that bounds a resume which keeps failing holds across nodes and
+// restarts ([sandbox.ResumeGiveUp]). A release that reports no failed resume
+// (one held on a condition) counts nothing, and a relaunch's job starts with
+// no failures of the job before it.
+func testAReleaseCountsAFailedResumeOntoTheJob(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	for i, at := range []time.Time{base, base.Add(20 * time.Minute)} {
+		release := releaseOf(mustClaim(t, s, "t1"))
+		release.Collected, release.ResumeFailedAt = true, at
+		if released, err := s.ReleaseClaim(ctx, "t1", release); err != nil || !released {
+			t.Fatalf("release t1 failed resume %d = %v, %v", i+1, released, err)
+		}
+	}
+	got := mustGet(t, s, "t1")
+	if got.Launch.ResumeFailures != 2 || !got.Launch.ResumeFailingSince.Equal(base) {
+		t.Fatalf("the job counts %d failed resumes since %v, want 2 since %v",
+			got.Launch.ResumeFailures, got.Launch.ResumeFailingSince, base)
+	}
+	held := releaseOf(mustClaim(t, s, "t1"))
+	held.Collected, held.Hold = true, &sandbox.Refusal{Condition: "provider", Until: base.Add(time.Hour)}
+	if released, err := s.ReleaseClaim(ctx, "t1", held); err != nil || !released {
+		t.Fatalf("release t1 held = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Launch.ResumeFailures != 2 {
+		t.Fatalf("a held resume moved the failed count to %d, want 2", got.Launch.ResumeFailures)
+	}
+	mustLaunched(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); got.Launch.ResumeFailures != 0 ||
+		!got.Launch.ResumeFailingSince.IsZero() {
+		t.Fatal("a relaunch's job inherited the failed resumes of the job before it")
 	}
 }
 

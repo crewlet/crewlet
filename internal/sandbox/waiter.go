@@ -1023,6 +1023,19 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_poll_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
+		if run.PastDeadline(w.now()) {
+			// PAST THE TURN'S CAP A POLL THAT CANNOT SAY IS NOT A
+			// REASON TO KEEP THE JOB OUT: the box answered, so its
+			// collection can read it, and that ends the job as the
+			// deadline below does. Read as still running, a job whose
+			// poll kept failing was kept alive with no bound at all.
+			log.InfoContext(ctx, "sandbox_run_past_deadline",
+				"turn_id", run.TurnID, "agent", run.AgentHandle, "sandbox_id", run.SandboxID,
+				"deadline", run.Deadline.Format(time.RFC3339),
+				"detail", "the turn's wall-clock cap has passed and its job could not be "+
+					"polled; the run is ended and its turn resumed with what it did")
+			return pollDone
+		}
 		return pollRunning
 	}
 	switch state {
