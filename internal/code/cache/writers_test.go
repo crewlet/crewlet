@@ -544,23 +544,27 @@ var cacheWriters = []writerRow{
 		"an engine write's touched directories, written into its scratch a level at a time; freshening as above", nil},
 	{"internal/code/host/build.go", kindGit + " commit-tree",
 		"an engine write's commit — a merge_change's merge commit or squash and a rebase's replayed commits " +
-			"among them — written into its " +
-			"scratch", nil},
+			"among them, and each merged entry's of a chain (chain.go, in the chain's scratch, named its id) — " +
+			"written into its scratch", nil},
 	{"internal/code/host/build.go", kindGit + " merge-tree",
 		"a revert's or a cherry-pick's merged tree (`--write-tree`), and a merge_change's of its change into its " +
-			"target (`--allow-unrelated-histories`, as the home's mergeability merges them), and a rebase's of " +
+			"target (`--allow-unrelated-histories`, as the home's mergeability merges them) — a chain's every " +
+			"entry's onto the commit the entry before made among them — and a rebase's of " +
 			"each commit it replays onto what it rebased so far, and its conflicted " +
 			"files, written into its scratch; freshening as above", nil},
 	{"internal/code/host/build.go", kindGit + " pack-objects",
-		"an engine write's one pack (`--stdout`), of its scratch's loose objects into a file staged in its " +
-			"scratch — pack-objects writes a repository only with a base name, so the row is argued for what " +
-			"the build does with its output", nil},
+		"an engine write's one pack (`--stdout`), and a chain's, of its scratch's loose objects into a file " +
+			"staged in its scratch — pack-objects writes a repository only with a base name, so the row is " +
+			"argued for what the build does with its output", nil},
 	{"internal/code/host/build.go", kindGit + " index-pack",
-		"an engine write's pack (`--strict --stdin`) indexed into its scratch's objects/pack under the relay's " +
-			"own fsck; it enters a cache only by Adopt, once its row has applied", nil},
+		"an engine write's pack and a chain's (`--strict --stdin`) indexed into its scratch's objects/pack under " +
+			"the relay's own fsck; it enters a cache only by Adopt, once its row has applied — a chain's by its " +
+			"Settle, once its caller's record has", nil},
 	{"internal/code/host/build.go", kindOS,
 		"an engine write's staging under its scratch's write/: its new files, its edited files, the directories " +
-			"it touches as git stores them, each level's input to mktree and its pack — removed with the scratch",
+			"it touches as git stores them, each level's input to mktree and its pack — removed with the scratch; " +
+			"and a chain's prune of the loose objects a skipped entry's merge wrote into the chain's scratch " +
+			"(building.prune), never a path of the cache's",
 		nil},
 	{"internal/code/host/scan.go", kindRuntime,
 		"rev-list over a push's new values in its scratch — the path of a blob over the limit and the " +

@@ -31,6 +31,20 @@ import (
 // call, a method value, a closure handed on — is written in land or in
 // another such function.
 //
+// # The chain: a second taker of the store and the adoption, never a push
+//
+// A queue's candidate is built as a CHAIN of merges (chain.go,
+// Server.BuildChain), which stores its one pack and, once its caller's record
+// has applied, adopts it — and proposes nothing: the candidate record that
+// names the pack is its caller's, decided on the committer, and no push row
+// comes of it, so no fact the landing forms for a push is the chain's to form
+// (every head it merges was pushed through the landing already). So the
+// bundle's store and the adoption each have exactly TWO takers, each selecting
+// the door once in what it alone reaches: the landing for a push, the chain
+// for a candidate. A proposal — Estate.Propose or Estate.Merge — stays the
+// landing's alone, so a chain that proposed would be reported; and a helper
+// both reach is neither's alone, and reported, as any shared path is.
+//
 // # By declaration, never by name
 //
 // Each selector is typed through internal/sourcetree/decltype, so what is
@@ -68,7 +82,8 @@ func TestEveryPushTakesTheOneLanding(t *testing.T) {
 	for _, f := range found.findings {
 		t.Error(f)
 	}
-	t.Logf("read %d files of internal/code/host: %d function(s) only land reaches", found.files, found.reached)
+	t.Logf("read %d files of internal/code/host: %d function(s) only land reaches, %d only the chain does",
+		found.files, found.reached[landFunc], found.reached[chainFunc])
 }
 
 // modulePath is this module's import path.
@@ -77,9 +92,10 @@ const modulePath = "github.com/crewlet/crewlet"
 // hostDir is the package the gate judges, relative to the module root.
 const hostDir = "internal/code/host"
 
-// landingDoor is one step only the landing takes: a method of a declared
-// type, and — where the step has one — the function of the same package that
-// takes it whole by calling that method.
+// landingDoor is one step only the landing takes — and, for the bundle's store
+// and the adoption, the chain beside it: a method of a declared type, and —
+// where the step has one — the function of the same package that takes it
+// whole by calling that method.
 type landingDoor struct {
 	owner  decltype.TypeName
 	method string
@@ -88,6 +104,19 @@ type landingDoor struct {
 	// handed is the upload — or "" where the method is its one spelling. A
 	// reference to fn and a selection of the method are the same door.
 	fn string
+	// chain is whether the chain takes the door too, once, in what it alone
+	// reaches (chainFunc): the bundle's store and the adoption, never a
+	// proposal.
+	chain bool
+}
+
+// takers are the functions that take d, each once in what it alone reaches:
+// the landing, and the chain where d is one of its steps.
+func (d landingDoor) takers() []string {
+	if d.chain {
+		return []string{landFunc, chainFunc}
+	}
+	return []string{landFunc}
 }
 
 // String is what a finding calls the door: its function where it has one,
@@ -109,20 +138,29 @@ func doorsOf(module string) []landingDoor {
 		// its bundle stored and its pack adopted as a push's — so its record
 		// is a door only land takes, as a push's proposal is.
 		{owner: decltype.TypeName{Package: host, Name: "Estate"}, method: "Merge"},
-		{owner: decltype.TypeName{Package: domain, Name: "Putter"}, method: "Put", fn: "StoreBundle"},
-		{owner: decltype.TypeName{Package: cache, Name: "Cache"}, method: "Adopt"},
+		// The bundle's store and the adoption are the chain's steps too: a
+		// candidate's one pack, stored as it is built and adopted once its
+		// caller's record has applied (chain.go).
+		{owner: decltype.TypeName{Package: domain, Name: "Putter"}, method: "Put", fn: "StoreBundle", chain: true},
+		{owner: decltype.TypeName{Package: cache, Name: "Cache"}, method: "Adopt", chain: true},
 	}
 }
 
 // landFunc is the landing's name as the walk names a function.
 const landFunc = "Server.land"
 
+// chainFunc is the chain's build as the walk names a function: the one other
+// taker of the bundle's store and the adoption, which proposes nothing.
+const chainFunc = "Server.BuildChain"
+
 // landingWalk is what the walk concluded.
 type landingWalk struct {
-	// files is how many non-test files it read; reached how many functions
-	// only land reaches, land itself included.
-	files, reached int
-	findings       []string
+	// files is how many non-test files it read.
+	files int
+	// reached is, for the landing and the chain, how many functions it
+	// alone reaches, itself included.
+	reached  map[string]int
+	findings []string
 }
 
 // doorSite is one selection of a door.
@@ -268,48 +306,96 @@ func walkForLandings(root, module string) landingWalk {
 
 	// ONLY LAND REACHES a function every reference to which is written in
 	// land or in another function only land reaches — a fixed point from
-	// land, a function's references to itself left out.
+	// land, a function's references to itself left out — and ONLY THE CHAIN
+	// REACHES one the same way from the chain. The two sets are disjoint: a
+	// function both reach is neither's alone.
 	if !declared[landFunc] {
 		report("%s declares no %s: the one landing every push takes is gone", hostDir, landFunc)
 		return found
 	}
-	only := map[string]bool{landFunc: true}
-	for grew := true; grew; {
-		grew = false
-		for fn := range declared {
-			if only[fn] {
-				continue
-			}
-			from := slices.DeleteFunc(slices.Clone(refs[fn]), func(r string) bool { return r == fn })
-			if len(from) > 0 && !slices.ContainsFunc(from, func(r string) bool { return !only[r] }) {
-				only[fn], grew = true, true
+	if !declared[chainFunc] {
+		report("%s declares no %s: the chain a queue's candidate is built by is gone, or renamed past "+
+			"this gate", hostDir, chainFunc)
+	}
+	only := map[string]map[string]bool{}
+	found.reached = map[string]int{}
+	for _, root := range []string{landFunc, chainFunc} {
+		reach := map[string]bool{}
+		if declared[root] {
+			reach[root] = true
+		}
+		for grew := len(reach) > 0; grew; {
+			grew = false
+			for fn := range declared {
+				if reach[fn] {
+					continue
+				}
+				from := slices.DeleteFunc(slices.Clone(refs[fn]), func(r string) bool { return r == fn })
+				if len(from) > 0 && !slices.ContainsFunc(from, func(r string) bool { return !reach[r] }) {
+					reach[fn], grew = true, true
+				}
 			}
 		}
+		only[root], found.reached[root] = reach, len(reach)
 	}
-	found.reached = len(only)
 	for _, d := range doors {
 		got := sites[d]
-		switch {
-		case len(got) == 0:
+		takers := d.takers()
+		where := func(sites []doorSite) string {
+			var at []string
+			for _, s := range sites {
+				at = append(at, s.pos+" ("+orPackageLevel(s.fn)+")")
+			}
+			return strings.Join(at, ", ")
+		}
+		if len(got) == 0 {
 			report("%s selects %s nowhere: a push's step that the landing takes is gone, or this walk "+
 				"stopped seeing it", hostDir, d)
-		case len(got) > 1:
-			var where []string
+			continue
+		}
+		once, by := "", ""
+		if d.chain {
+			once, by = ", and a candidate's once, in its chain ("+chainFunc+")", ", and a candidate's by its chain"
+		}
+		if len(got) > len(takers) {
+			report("%s is selected %d times (%s): a push's step is taken once, in the one landing (%s)%s, "+
+				"or a second path forms what a push is", d, len(got), where(got), landFunc, once)
+		}
+		for _, taker := range takers {
+			var mine []doorSite
 			for _, s := range got {
-				where = append(where, s.pos+" ("+orPackageLevel(s.fn)+")")
+				if only[taker][s.fn] {
+					mine = append(mine, s)
+				}
 			}
-			report("%s is selected %d times (%s): a push's step is taken once, in the one landing "+
-				"(%s), or a second path forms what a push is", d, len(got), strings.Join(where, ", "), landFunc)
+			switch {
+			case len(mine) == 0 && declared[taker]:
+				report("%s selects %s nowhere that %s alone reaches: its step is taken by a path something "+
+					"else reaches too, or is gone from it", hostDir, d, taker)
+			case len(mine) > 1:
+				report("%s is selected %d times in what %s alone reaches (%s): its step is taken once there",
+					d, len(mine), taker, where(mine))
+			}
 		}
 		for _, s := range got {
-			if !only[s.fn] {
-				report("%s: %s is selected in %s, which %s does not reach alone: a push's step is "+
-					"taken by the landing, whoever built the push (ADR-0008)", s.pos, d, orPackageLevel(s.fn),
-					landFunc)
+			if !slices.ContainsFunc(takers, func(taker string) bool { return only[taker][s.fn] }) {
+				report("%s: %s is selected in %s, which %s: a push's step is taken by the landing, "+
+					"whoever built the push (ADR-0008)%s", s.pos, d, orPackageLevel(s.fn), notReachedAlone(takers),
+					by)
 			}
 		}
 	}
 	return found
+}
+
+// notReachedAlone says that none of takers reaches a function alone, naming
+// them: "Server.land does not reach alone", or "neither Server.land nor
+// Server.BuildChain reaches alone".
+func notReachedAlone(takers []string) string {
+	if len(takers) == 1 {
+		return takers[0] + " does not reach alone"
+	}
+	return "neither " + strings.Join(takers, " nor ") + " reaches alone"
 }
 
 // orPackageLevel names a function, or the package level for "".
@@ -348,7 +434,11 @@ func exprString(e ast.Expr) string {
 // a value outside the landing, or reached through an import of another name,
 // a helper of the landing's that something else reaches too, a step at
 // package level, a step gone, the landing gone, and a selector of a door's
-// name the walk cannot type. A test file is never read.
+// name the walk cannot type. And the chain, the one other taker of the store
+// and the adoption, each once in what it alone reaches: a proposal from it, a
+// second store in it, a helper it shares with the landing, the landing's
+// store gone with the chain's kept, and the chain gone are each reported. A
+// test file is never read.
 func TestTheLandingWalkFindsEverySecondPath(t *testing.T) {
 	t.Parallel()
 	const module = "example.com/m"
@@ -386,6 +476,14 @@ func (s *Server) land(ctx context.Context) {
 func (s *Server) store(ctx context.Context) { _ = code.StoreBundle(ctx, s.o.Objects) }
 
 func (s *Server) serveSession(ctx context.Context) { s.land(ctx) }
+
+func (s *Server) BuildChain(ctx context.Context) {
+	s.storeChain(ctx)
+	settle := func() { _ = s.o.Cache.Adopt(ctx) }
+	settle()
+}
+
+func (s *Server) storeChain(ctx context.Context) { _ = code.StoreBundle(ctx, s.o.Objects) }
 `
 	for _, tc := range []struct {
 		name  string
@@ -397,7 +495,7 @@ func (s *Server) serveSession(ctx context.Context) { s.land(ctx) }
 		{name: "the adoption taken again in the relay", edit: func(s string) string {
 			return strings.Replace(s, "func (s *Server) serveSession(ctx context.Context) { s.land(ctx) }",
 				"func (s *Server) serveSession(ctx context.Context) { s.land(ctx); _ = s.o.Cache.Adopt(ctx) }", 1)
-		}, want: []string{"Cache.Adopt is selected 2 times", "selected in Server.serveSession"}},
+		}, want: []string{"Cache.Adopt is selected 3 times", "selected in Server.serveSession"}},
 		{name: "a proposal through a second field", edit: func(s string) string {
 			return strings.Replace(s, "func (s *Server) serveSession(ctx context.Context) { s.land(ctx) }",
 				"func (s *Server) serveSession(ctx context.Context) { s.land(ctx); _, _ = s.o.Spare.Propose(ctx, 2) }", 1)
@@ -419,42 +517,62 @@ func (s *Server) sideways(ctx context.Context) {
 	var p putter = s.o.Objects
 	_ = p.Put(ctx)
 }
-`, want: []string{"code.StoreBundle is selected 2 times", "selected in Server.sideways"}},
+`, want: []string{"code.StoreBundle is selected 3 times", "selected in Server.sideways"}},
 		{name: "a put on the store beside its function", extra: `
 func (s *Server) direct(ctx context.Context) { _ = s.o.Objects.Put(ctx) }
-`, want: []string{"code.StoreBundle is selected 2 times", "selected in Server.direct"}},
+`, want: []string{"code.StoreBundle is selected 3 times", "selected in Server.direct"}},
 		{name: "the store's function called outside the landing", extra: `
 import "example.com/m/internal/code"
 
 func (s *Server) again(ctx context.Context) { _ = code.StoreBundle(ctx, s.o.Objects) }
-`, want: []string{"code.StoreBundle is selected 2 times", "selected in Server.again"}},
+`, want: []string{"code.StoreBundle is selected 3 times", "selected in Server.again"}},
 		{name: "the store's function as a value at package level", extra: `
 import "example.com/m/internal/code"
 
 var later = code.StoreBundle
-`, want: []string{"code.StoreBundle is selected 2 times", "selected in a package-level declaration"}},
+`, want: []string{"code.StoreBundle is selected 3 times", "selected in a package-level declaration"}},
 		{name: "the store's function under another name", extra: `
 import bundles "example.com/m/internal/code"
 
 func (s *Server) renamed(ctx context.Context) { _ = bundles.StoreBundle(ctx, s.o.Objects) }
-`, want: []string{"code.StoreBundle is selected 2 times", "selected in Server.renamed"}},
+`, want: []string{"code.StoreBundle is selected 3 times", "selected in Server.renamed"}},
 		{name: "no store anywhere", edit: func(s string) string {
+			return strings.ReplaceAll(s, "_ = code.StoreBundle(ctx, s.o.Objects)", "")
+		}, want: []string{"selects code.StoreBundle nowhere: a push's step"}},
+		{name: "the landing's store gone, the chain's kept", edit: func(s string) string {
 			return strings.Replace(s, "_ = code.StoreBundle(ctx, s.o.Objects)", "", 1)
-		}, want: []string{"selects code.StoreBundle nowhere"}},
+		}, want: []string{"selects code.StoreBundle nowhere that Server.land alone reaches"}},
+		{name: "a proposal from the chain", edit: func(s string) string {
+			return strings.Replace(s, "	s.storeChain(ctx)\n",
+				"	s.storeChain(ctx)\n	_, _ = s.o.Estate.Propose(ctx, 3)\n", 1)
+		}, want: []string{"Estate.Propose is selected 2 times",
+			"selected in Server.BuildChain, which Server.land does not reach alone"}},
+		{name: "the chain's store taken twice", edit: func(s string) string {
+			return strings.Replace(s, "	s.storeChain(ctx)\n",
+				"	s.storeChain(ctx)\n	_ = code.StoreBundle(ctx, s.o.Objects)\n", 1)
+		}, want: []string{"code.StoreBundle is selected 3 times",
+			"code.StoreBundle is selected 2 times in what Server.BuildChain alone reaches"}},
+		{name: "a helper the landing and the chain share", edit: func(s string) string {
+			return strings.Replace(s, "	s.storeChain(ctx)\n", "	s.store(ctx)\n", 1)
+		}, want: []string{"selected in Server.store, which neither Server.land nor Server.BuildChain reaches alone"}},
+		{name: "the chain gone", edit: func(s string) string {
+			return strings.ReplaceAll(s, "BuildChain(", "buildCandidate(")
+		}, want: []string{"declares no Server.BuildChain"}},
 		{name: "a helper something else reaches", extra: `
 func (s *Server) other(ctx context.Context) { s.store(ctx) }
-`, want: []string{"selected in Server.store, which Server.land does not reach alone"}},
+`, want: []string{"selected in Server.store, which neither Server.land nor Server.BuildChain reaches alone"}},
 		{name: "a helper handed on as a value", extra: `
 func (s *Server) later() func(context.Context) { return s.store }
-`, want: []string{"selected in Server.store, which Server.land does not reach alone"}},
+`, want: []string{"selected in Server.store, which neither Server.land nor Server.BuildChain reaches alone"}},
 		{name: "a step at package level", extra: `
 var spare Options
 
 var sneak = spare.Cache.Adopt
-`, want: []string{"Cache.Adopt is selected 2 times", "selected in a package-level declaration"}},
+`, want: []string{"Cache.Adopt is selected 3 times", "selected in a package-level declaration"}},
 		{name: "no adoption anywhere", edit: func(s string) string {
-			return strings.Replace(s, "	adopt := func() { _ = s.o.Cache.Adopt(ctx) }\n	adopt()\n", "", 1)
-		}, want: []string{"selects Cache.Adopt nowhere"}},
+			s = strings.Replace(s, "	adopt := func() { _ = s.o.Cache.Adopt(ctx) }\n	adopt()\n", "", 1)
+			return strings.Replace(s, "	settle := func() { _ = s.o.Cache.Adopt(ctx) }\n	settle()\n", "", 1)
+		}, want: []string{"selects Cache.Adopt nowhere: a push's step"}},
 		{name: "the landing gone", edit: func(s string) string {
 			return strings.ReplaceAll(s, "land(", "decide(")
 		}, want: []string{"declares no Server.land"}},

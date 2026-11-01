@@ -5406,6 +5406,49 @@ whose nudge was lost within a minute, and never reads the thirty days of green
 landings behind it. A branch whose culprit is named stays listed until a tip
 passes; its home's pass reads its window and finds nothing owed.
 
+### How a candidate is built
+
+A queue never builds its changes one merge at a time. The repository's [home
+git node](#the-home-git-node) builds a run of waiting entries as one
+**chain**: in one scratch beside its copy, each entry is merged onto the
+commit the entry before it made, the first onto the branch's tip, by the very
+build a [merge](#how-a-merge-is-built) runs — its method, its one `git
+merge-tree --write-tree` and its commit authored as a merge's is (U43,
+answered (a)): a merge commit by **who enqueued it**, a squash by **the
+change's owner** with a `Co-authored-by:` trailer for each other author. A
+chain is at most **64 entries**, the most one record lands.
+
+- **Each entry gets a merge's budget.** Every entry's merge is given the
+  thirty seconds of git a merge is given, and its commit's author date is
+  **its entry's own instant**, when it was enqueued, never the build's — its
+  committer date that or its later parent's. So a chain built again from the
+  same entries, on any git node, after any crash or as a bisect builds a
+  prefix twice, is the same commits byte for byte.
+- **A conflicting entry is skipped, and leaves nothing.** An entry that
+  conflicts with what the chain made so far is skipped, naming its paths as a
+  merge's conflict does, and the next entry is merged onto the same tip. So
+  is a `fast_forward` the branch's history refuses, a head the chain already
+  holds, and a merge that runs out its thirty seconds. Whatever the skipped
+  merge wrote into the scratch is removed before the next entry, so the
+  chain's pack holds exactly the commits it made.
+- **One pack, stored once.** Every object the chain made is packed in one
+  pack, checked by `git index-pack --strict` as every engine write's is,
+  within the time a merge is given and at most 256 MiB, 4 MiB an entry. It
+  is stored as one bundle. A chain past either bound, or one holding an
+  object git's own check refuses, is refused whole with nothing stored.
+- **Nothing enters the cache before its record applies.** The chain's
+  commits are a candidate's: the record that names them and their pack is
+  the queue's, proposed after the build. The pack is taken
+  into the home's cache only once that record has applied; a record that does
+  not apply leaves the cache as it was, and its stored bundle, which no row
+  names, is the collector's to remove. No ref names a chain:
+  `refs/crewlet/**` stays reserved and is never advertised, and a check's box
+  fetches a candidate's commit by its id.
+
+A chain holds one unit of the home's seat git-work share for its whole build,
+the one unit each of its merges would have held alone, and is logged
+`code_chain_built` with its entries, how many it skipped and its pack's size.
+
 ### Where lines are in another revision
 
 A finding or a comment is written against lines of one blob. Placed in

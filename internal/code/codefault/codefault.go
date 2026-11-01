@@ -195,6 +195,15 @@ const (
 	// ([MergePath]). Hit again by every rebuild onto a target that moved.
 	MergeAfterBuild Point = "merge.after_build"
 
+	// ChainAfterBuild: a chain's build has merged each of its entries onto the
+	// commit the one before made — or skipped it — and made its one pack,
+	// indexed in the chain's scratch, and nothing of it is stored
+	// (internal/code/host's chain.go): its bundle's upload is next, and then
+	// the record its caller proposes, which no point of the chain's own
+	// reaches. A chain killed here leaves only its scratch, which the node's
+	// next boot empties.
+	ChainAfterBuild Point = "chain.after_build"
+
 	// ExpungeAfterBuild: an expunge's build has written its kept and its
 	// dropping packs into the expunge's scratch, and nothing of them is
 	// stored or proposed (internal/code/compact).
@@ -252,6 +261,10 @@ var writePath = []Point{WriteAfterBuild}
 // landing. What it meets after them is the landing's ([MergePath]).
 var mergePath = []Point{MergeAfterBuild}
 
+// chainPath is a chain's points in the order its build reaches them: its
+// entries merged and its pack made, before its bundle is stored.
+var chainPath = []Point{ChainAfterBuild}
+
 // expungePath is an expunge's points in the order its maintainer reaches them:
 // its build, its begin applied, its rescue stored, its commit answered.
 var expungePath = []Point{ExpungeAfterBuild, ExpungeAfterBegin, ExpungeAfterRescueUpload, ExpungeAfterCommit}
@@ -297,6 +310,11 @@ func WritePath() []Point { return slices.Concat(writePath, landingPath) }
 // than a push's. A fresh copy at every call, for [PushPath]'s reason.
 func MergePath() []Point { return slices.Concat(mergePath, landingPath) }
 
+// ChainPath is a chain's points in the order its build reaches them, every
+// one hit by internal/code/host. A fresh copy at every call, for [PushPath]'s
+// reason.
+func ChainPath() []Point { return slices.Clone(chainPath) }
+
 // ExpungePath is an expunge's points in the order its maintainer reaches them,
 // every one hit by internal/code/compact. A fresh copy at every call, for
 // [PushPath]'s reason: the expunge's crash matrix walks it.
@@ -309,18 +327,19 @@ func CheckPath() []Point { return slices.Clone(checkPath) }
 
 // Points is the closed set: every point, the push path first in pipeline
 // order, then the sync's, the compaction's and the publication's, then the
-// engine write's own and the merge's, then the expunge's, then a check's
-// run's. A fresh copy at every call, so no importer can rewrite what
+// engine write's own, the merge's and the chain's, then the expunge's, then a
+// check's run's. A fresh copy at every call, so no importer can rewrite what
 // [Point.Valid] accepts.
 func Points() []Point {
-	return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath, mergePath, expungePath, checkPath)
+	return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath, mergePath, chainPath,
+		expungePath, checkPath)
 }
 
 // Valid reports whether p is one of [Points].
 func (p Point) Valid() bool {
 	return slices.Contains(pushPath, p) || slices.Contains(syncPath, p) || slices.Contains(compactPath, p) ||
 		slices.Contains(publishPath, p) || slices.Contains(writePath, p) || slices.Contains(mergePath, p) ||
-		slices.Contains(expungePath, p) || slices.Contains(checkPath, p)
+		slices.Contains(chainPath, p) || slices.Contains(expungePath, p) || slices.Contains(checkPath, p)
 }
 
 // readsOffset reports whether p is hit at an offset ([Action.At]): an upload's

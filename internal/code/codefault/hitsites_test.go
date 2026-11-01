@@ -102,7 +102,7 @@ var pointNames = map[string]codefault.Point{
 	"PublishAfterBuild": codefault.PublishAfterBuild, "PublishUpload": codefault.PublishUpload,
 	"PublishAfterUpload": codefault.PublishAfterUpload, "PublishAfterPropose": codefault.PublishAfterPropose,
 	"WriteAfterBuild": codefault.WriteAfterBuild, "MergeAfterBuild": codefault.MergeAfterBuild,
-	"ExpungeAfterBuild": codefault.ExpungeAfterBuild,
+	"ChainAfterBuild": codefault.ChainAfterBuild, "ExpungeAfterBuild": codefault.ExpungeAfterBuild,
 	"ExpungeAfterBegin": codefault.ExpungeAfterBegin, "ExpungeAfterRescueUpload": codefault.ExpungeAfterRescueUpload,
 	"ExpungeAfterCommit": codefault.ExpungeAfterCommit, "CheckAfterClaim": codefault.CheckAfterClaim,
 }

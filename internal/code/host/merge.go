@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -434,72 +435,18 @@ func (wr *writing) buildMergeShared(ctx context.Context, sc *cache.Scratch, j me
 	return commit, res, done, err
 }
 
-// buildMerge is the merge's build in sc, onto j.tip: see this file's head.
+// buildMerge is the merge's build in sc, onto j.tip: see this file's head —
+// its one merge (mergeOnto), then its pack.
 func (wr *writing) buildMerge(ctx context.Context, sc *cache.Scratch, j mergeJudgement) (string,
 	code.EngineWriteResult, bool, error) {
 
-	w := wr.w
 	b, err := wr.newBuilding(sc)
 	if err != nil {
 		return "", code.EngineWriteResult{}, true, err
 	}
-	named := code.ChangeRef(wr.repoName(), j.change.Number)
-	if j.tip == w.ExpectedHead {
-		return "", wr.changeRefused(code.WriteNothingChanged, fmt.Sprintf("%s's head is %s's tip already: it "+
-			"has nothing to merge", named, w.Ref)), true, nil
-	}
-	if w.Method == code.MergeMethodFastForward {
-		forward, err := b.ancestor(ctx, j.tip, w.ExpectedHead)
-		switch {
-		case err != nil:
-			return "", code.EngineWriteResult{}, true, err
-		case !forward:
-			return "", wr.changeRefused(code.WriteNotFastForward, fmt.Sprintf("%s's head %s does not hold %s's "+
-				"tip %s, so the branch cannot move to it without dropping what it holds: merge or squash it, or "+
-				"rebase it onto its target first", named, shortID(w.ExpectedHead), w.Ref, shortID(j.tip))), true, nil
-		}
-		return w.ExpectedHead, code.EngineWriteResult{}, false, nil
-	}
-	merged, err := b.ancestor(ctx, w.ExpectedHead, j.tip)
-	switch {
-	case err != nil:
-		return "", code.EngineWriteResult{}, true, err
-	case merged:
-		return "", wr.changeRefused(code.WriteNothingChanged, fmt.Sprintf("%s holds %s's head %s already: it "+
-			"has nothing to merge", w.Ref, named, shortID(w.ExpectedHead))), true, nil
-	}
-	tip, head := &commitHeader{}, &commitHeader{}
-	if err := b.readCommits(ctx, []string{j.tip, w.ExpectedHead}, []*commitHeader{tip, head}); err != nil {
-		return "", code.EngineWriteResult{}, true, err
-	}
-	m, err := b.merge(ctx, "", j.tip, w.ExpectedHead)
-	if err != nil {
-		return "", code.EngineWriteResult{}, true, err
-	}
-	if !m.clean {
-		res, err := b.conflicted(ctx, m, fmt.Sprintf("%s does not merge cleanly into %s at %s: %d paths "+
-			"conflict; rebase it onto its target (code_rebase_change) and resolve them in a coding box "+
-			"(run_sandbox)", named, w.Ref, shortID(j.tip), len(m.conflicts)+m.omitted))
+	commit, res, done, err := b.mergeOnto(ctx, wr.mergeOf(j))
+	if done || err != nil {
 		return "", res, true, err
-	}
-	if w.Method == code.MergeMethodSquash && m.tree == tip.tree {
-		return "", wr.changeRefused(code.WriteNothingChanged, fmt.Sprintf("%s changes nothing on %s at %s: no "+
-			"commit is made", named, w.Ref, shortID(j.tip))), true, nil
-	}
-	ident, message, err := wr.mergeIdentity(j)
-	if err != nil {
-		return "", code.EngineWriteResult{}, true, err
-	}
-	parents := []string{j.tip}
-	parentDate := tip.committed
-	if w.Method == code.MergeMethodMerge {
-		parents = append(parents, w.ExpectedHead)
-		parentDate = later(parentDate, head.committed)
-	}
-	ident.AuthorWhen, ident.CommitterWhen = commitDates(w.Instant(), parentDate)
-	commit, err := b.commitOf(ctx, m.tree, parents, ident, message)
-	if err != nil {
-		return "", code.EngineWriteResult{}, true, err
 	}
 	if res, done, err := b.pack(ctx); done || err != nil {
 		return "", res, true, err
@@ -507,16 +454,112 @@ func (wr *writing) buildMerge(ctx context.Context, sc *cache.Scratch, j mergeJud
 	return commit, code.EngineWriteResult{}, false, nil
 }
 
+// mergeOf is one change's merge as a build makes it: what its commit is
+// written from, the target's tip it is built onto, the head it merges and
+// how, who merges it and the instant they did — a merge_change's from its
+// write and the change its judgement read (writing.mergeOf), a chain entry's
+// from the entry (chain.go).
+type mergeOf struct {
+	change  code.ChainChange
+	target  string
+	tip     string
+	head    string
+	method  code.MergeMethod
+	merger  code.Principal
+	instant time.Time
+}
+
+// mergeOf is the merge_change's merge onto j.tip.
+func (wr *writing) mergeOf(j mergeJudgement) mergeOf {
+	w := wr.w
+	return mergeOf{change: code.ChainChangeOf(*j.change), target: w.Ref, tip: j.tip, head: w.ExpectedHead,
+		method: w.Method, merger: w.Principal, instant: w.Instant()}
+}
+
+// mergeOnto is ONE change's merge onto m.tip in the build's scratch, every
+// process charged to what is left of the build's budget: a fast-forward's
+// ancestry, its commit the head itself; or a merge's or a squash's one
+// merge-tree and one commit-tree, U43 (a)'s identity (mergeIdentity) at
+// commitDates of m.instant over the later parent. A head the tip already
+// holds, a fast-forward the tip's history refuses, a squash that changes
+// nothing and a merge that conflicts are answered as the change's refusal
+// (done), nothing committed — though a merge that conflicts has written its
+// tree and its marked files into the scratch. It packs nothing: a
+// merge_change packs its one commit, a chain every entry's at once.
+func (b *building) mergeOnto(ctx context.Context, m mergeOf) (string, code.EngineWriteResult, bool, error) {
+	wr := b.wr
+	named := code.ChangeRef(wr.repoName(), m.change.Number)
+	if m.tip == m.head {
+		return "", wr.changeRefused(code.WriteNothingChanged, fmt.Sprintf("%s's head is %s's tip already: it "+
+			"has nothing to merge", named, m.target)), true, nil
+	}
+	if m.method == code.MergeMethodFastForward {
+		forward, err := b.ancestor(ctx, m.tip, m.head)
+		switch {
+		case err != nil:
+			return "", code.EngineWriteResult{}, true, err
+		case !forward:
+			return "", wr.changeRefused(code.WriteNotFastForward, fmt.Sprintf("%s's head %s does not hold %s's "+
+				"tip %s, so the branch cannot move to it without dropping what it holds: merge or squash it, or "+
+				"rebase it onto its target first", named, shortID(m.head), m.target, shortID(m.tip))), true, nil
+		}
+		return m.head, code.EngineWriteResult{}, false, nil
+	}
+	merged, err := b.ancestor(ctx, m.head, m.tip)
+	switch {
+	case err != nil:
+		return "", code.EngineWriteResult{}, true, err
+	case merged:
+		return "", wr.changeRefused(code.WriteNothingChanged, fmt.Sprintf("%s holds %s's head %s already: it "+
+			"has nothing to merge", m.target, named, shortID(m.head))), true, nil
+	}
+	tip, head := &commitHeader{}, &commitHeader{}
+	if err := b.readCommits(ctx, []string{m.tip, m.head}, []*commitHeader{tip, head}); err != nil {
+		return "", code.EngineWriteResult{}, true, err
+	}
+	out, err := b.merge(ctx, "", m.tip, m.head)
+	if err != nil {
+		return "", code.EngineWriteResult{}, true, err
+	}
+	if !out.clean {
+		res, err := b.conflicted(ctx, out, fmt.Sprintf("%s does not merge cleanly into %s at %s: %d paths "+
+			"conflict; rebase it onto its target (code_rebase_change) and resolve them in a coding box "+
+			"(run_sandbox)", named, m.target, shortID(m.tip), len(out.conflicts)+out.omitted))
+		return "", res, true, err
+	}
+	if m.method == code.MergeMethodSquash && out.tree == tip.tree {
+		return "", wr.changeRefused(code.WriteNothingChanged, fmt.Sprintf("%s changes nothing on %s at %s: no "+
+			"commit is made", named, m.target, shortID(m.tip))), true, nil
+	}
+	ident, message, err := wr.mergeIdentity(m)
+	if err != nil {
+		return "", code.EngineWriteResult{}, true, err
+	}
+	parents := []string{m.tip}
+	parentDate := tip.committed
+	if m.method == code.MergeMethodMerge {
+		parents = append(parents, m.head)
+		parentDate = later(parentDate, head.committed)
+	}
+	ident.AuthorWhen, ident.CommitterWhen = commitDates(m.instant, parentDate)
+	commit, err := b.commitOf(ctx, out.tree, parents, ident, message)
+	if err != nil {
+		return "", code.EngineWriteResult{}, true, err
+	}
+	return commit, code.EngineWriteResult{}, false, nil
+}
+
 // mergeIdentity is a merge's commit's identity and message (U43 a): a merge
-// commit authored by WHO MERGED it — the write's principal — and titled by
-// the change; a squash authored by the CHANGE'S OWNER, its message the
-// change's title and description and a `Co-authored-by:` trailer for every
-// other author of it, in the order they first wrote it. Committed by the
-// engine either way. A signer that names a part git would not write as given
-// is the signer's bug, told before the commit.
-func (wr *writing) mergeIdentity(j mergeJudgement) (*gitproc.Identity, string, error) {
-	s, w, c := wr.s, wr.w, j.change
-	sig, err := s.o.Signer.Sign(w.Principal)
+// commit authored by WHO MERGED it — the write's principal, or the enqueuer
+// of a chain's entry — and titled by the change; a squash authored by the
+// CHANGE'S OWNER, its message the change's title and description and a
+// `Co-authored-by:` trailer for every other author of it, in the order they
+// first wrote it. Committed by the engine either way. A signer that names a
+// part git would not write as given is the signer's bug, told before the
+// commit.
+func (wr *writing) mergeIdentity(m mergeOf) (*gitproc.Identity, string, error) {
+	s, c := wr.s, m.change
+	sig, err := s.o.Signer.Sign(m.merger)
 	if err != nil {
 		return nil, "", err
 	}
@@ -524,9 +567,9 @@ func (wr *writing) mergeIdentity(j mergeJudgement) (*gitproc.Identity, string, e
 	id := &gitproc.Identity{AuthorName: sig.AuthorName, AuthorEmail: sig.AuthorEmail,
 		CommitterName: sig.CommitterName, CommitterEmail: sig.CommitterEmail}
 	var message string
-	if w.Method == code.MergeMethodMerge {
+	if m.method == code.MergeMethodMerge {
 		message = fmt.Sprintf("Merge %s: %s\n\nMerges %s into %s.\n", named, c.Title,
-			strings.TrimPrefix(c.SourceRef, "refs/heads/"), strings.TrimPrefix(c.TargetRef, "refs/heads/"))
+			strings.TrimPrefix(c.SourceRef, "refs/heads/"), strings.TrimPrefix(m.target, "refs/heads/"))
 	} else {
 		if id.AuthorName, id.AuthorEmail, err = s.o.Signer.Author(c.Owner); err != nil {
 			return nil, "", err
@@ -539,11 +582,11 @@ func (wr *writing) mergeIdentity(j mergeJudgement) (*gitproc.Identity, string, e
 		trailers := 0
 		seen := map[string]bool{c.Owner: true}
 		for _, a := range c.Authors {
-			if seen[a.Author] {
+			if seen[a] {
 				continue
 			}
-			seen[a.Author] = true
-			name, email, err := s.o.Signer.Author(a.Author)
+			seen[a] = true
+			name, email, err := s.o.Signer.Author(a)
 			if err != nil {
 				return nil, "", err
 			}
