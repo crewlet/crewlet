@@ -1537,10 +1537,15 @@ Small, focused PRs are much easier to review than large ones. If you are
 planning a substantial change — a new subsystem, or a reshaping of the config
 format — please open an issue first to discuss the approach.
 
-### Land a feature as a series of pull requests
+### Land a large change as a series of pull requests
 
-A feature lands as a sequence of pull requests, not as one large one. Plan the
-pieces before writing code. A piece doesn't have to deliver working
+When a change is large enough that one pull request would be hard to review,
+and it has seams where `main` can take part of it alone (a refactor the
+feature needs, a new package before the code that wires it in, a migration
+before its readers), land it as a sequence of pull requests rather than one
+large one. A small change, or one with no such seam, stays a single pull
+request; don't split it for the sake of splitting. When you do split, plan
+the pieces before writing code. A piece doesn't have to deliver working
 functionality by itself, but `main` has to be able to take it as it is: clean,
 finished code with its own tests and docs, every gate green, no existing
 behaviour broken, and nothing half-wired for a user to trip over. Code that
