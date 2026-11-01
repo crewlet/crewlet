@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -730,4 +731,264 @@ func stringLiterals(f *ast.File) []string {
 		return true
 	})
 	return out
+}
+
+// AN ENDED CHANGE WAITS ON NOBODY: a change whose stored readiness waits on a
+// person — founder alone is asked — leaves code_mergeability_waits_idx in the
+// same apply as the record that ends it, whichever that is: a close, its home's
+// landing, a push that sets its target to its head, a push that deletes its
+// source; and a mergeability decided while it was live that lands after its
+// close stores no answer either. So the index holds the changes waiting now,
+// and needs=person reads one page and finds nothing, rather than walking every
+// change that ever ended while waiting, each read and dropped.
+//
+// Mutations: leave the close's clear out of applyChangeWrite → the closed and
+// landed cases keep their row; leave it out of the push book → the push cases
+// keep theirs; store the late record's answer as stamped → the late case keeps
+// its row.
+func TestAnEndedChangeWaitsOnNobody(t *testing.T) {
+	t.Parallel()
+	closeIt := func(t *testing.T, n *node, repo, change string) {
+		t.Helper()
+		c, _ := committerOn(t, n, n.pub)
+		res, err := c.ProposeChange(t.Context(), closing(repo, change, dev,
+			int64(n.count(`SELECT version FROM code_changes WHERE id = ?`, change))))
+		requireChanged(t, res, err)
+	}
+	for name, end := range map[string]func(t *testing.T, n *node, repo, change string){
+		"closed": closeIt,
+		"landed by its home": func(t *testing.T, n *node, repo, change string) {
+			t.Helper()
+			n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("M"))))
+			chartless, _ := committerOn(t, n, n.pub, func(o *code.CommitterOptions) {
+				o.SeatRules = func() (code.SeatRules, bool) { return code.SeatRules{}, false }
+			})
+			res, err := chartless.ProposeChange(t.Context(), landing(repo, change, 1, oidOf("B"), mainRef,
+				oidOf("M")))
+			if err != nil || res.Outcome != statelog.OutcomeApplied {
+				t.Fatalf("the landing answered %+v, %v; want applied", res, err)
+			}
+		},
+		"merged by a push setting its target to its head": func(t *testing.T, n *node, repo, _ string) {
+			t.Helper()
+			n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("B"))))
+		},
+		"closed by a push deleting its source": func(t *testing.T, n *node, repo, _ string) {
+			t.Helper()
+			n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf("B"), code.ZeroOID)))
+		},
+		"closed before a mergeability judged while it was live lands": func(t *testing.T, n *node, repo,
+			change string) {
+
+			t.Helper()
+			closeIt(t, n, repo, change)
+			// THE HOME'S RECORD, decided over the live change and appended
+			// after its close: the two are on two subjects, which no
+			// arbitration orders against each other.
+			late := *n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean).Mergeability
+			late.ChangeVersion, late.ReadinessVersion, late.WaitsPerson = 1, 3, true
+			if _, err := n.publish(code.ChangeSubject(change), code.OpMergeability,
+				code.Scope{code.RepoPath(repo), code.ChangePath(change)}, late); err != nil {
+				t.Fatalf("publish the late mergeability: %v", err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n := newNode(t)
+			n.chart = testChart()
+			repo, change := discussed(t, n, "web")
+			w, _ := writerOn(t, n, n.pub)
+			converse(t, w, asking(repo, change, dev, "founder"))
+			converse(t, w, n.patched(repo, change, 1, "B", oidOf("the retry diff")))
+			converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+			if stored := n.storedReadiness(change); !stored.waitsPerson {
+				t.Fatalf("the merge stored %+v, want waiting on a person: founder alone is asked", stored)
+			}
+
+			end(t, n, repo, change)
+			if state := n.count(`SELECT COUNT(*) FROM code_changes WHERE id = ? AND state IN ('closed', 'merged')`,
+				change); state != 1 {
+				t.Fatal("the change is still live: the case ended nothing")
+			}
+			if stored := n.storedReadiness(change); stored.ready || stored.waitsPerson {
+				t.Fatalf("the ended change stores %+v, want ready for nobody and waiting on nobody", stored)
+			}
+			if waiting := n.count(`SELECT COUNT(*) FROM code_mergeability INDEXED BY code_mergeability_waits_idx
+				WHERE waits_person = 1`); waiting != 0 {
+				t.Fatalf("code_mergeability_waits_idx holds %d changes, want none: the one there has ended",
+					waiting)
+			}
+			if got, pages := listChanges(t, n, code.ReadQuery{Asker: ada, Needs: code.NeedPerson}, 0); len(got) != 0 ||
+				pages != 1 {
+				t.Fatalf("needs=person lists %q over %d pages, want nothing on one page", got, pages)
+			}
+		})
+	}
+}
+
+// A CHART CHANGE ALONE MAKES A CHANGE DUE A REFRESH (M4-D24's fourth input):
+// web!1, asked of plat-lead and of founder, is approved by plat-lead, whose
+// review tier counts; merged clean by a writer on the chart of activation e1,
+// its stored answer is ready, waits on nobody and names e1. No record moves
+// when a configuration lowers plat-lead to read_only (activation e2), yet the
+// approval no longer counts and the first unmet precondition waits on
+// founder, a person, alone. A home holding e1 finds the change due nothing;
+// one holding e2 finds it due a refresh, the listing of repositories naming
+// web, and a writer on e2 records it: the stored answer waits on a person,
+// the record names e2, and needs=person lists the change. A writer still on
+// e1, asked the same refresh, is superseded and records nothing — with
+// nothing else moved, an older chart does not overwrite a later one's
+// answer — and the home on e2 finds the change due nothing more.
+//
+// Mutations: drop the chart term from refreshDue → the home on e2 finds
+// nothing due; leave the chart out of the decide's guard → the writer on e1
+// overwrites the answer; stamp no chart on the record → the change stays due
+// at e2 after its refresh.
+func TestAChartChangeAloneMakesAChangeDueARefresh(t *testing.T) {
+	t.Parallel()
+	const e1, e2 = int64(1_762_000_000_000), int64(1_762_000_060_000)
+	lowered := testChart()
+	plat := lowered.seats["plat-lead"]
+	plat.Tier = code.TierReadOnly
+	lowered.seats["plat-lead"] = plat
+	n := newNode(t)
+	n.chart = lowered
+	repo, change := discussed(t, n, "web")
+	on := func(roster code.Roster, epoch int64) func(*code.ChangeWriterOptions) {
+		return func(o *code.ChangeWriterOptions) {
+			o.SeatRules = func() (code.SeatRules, bool) {
+				return code.SeatRules{Roster: roster, Zone: time.UTC, Epoch: epoch}, true
+			}
+		}
+	}
+	due := func(epoch int64) ([]code.ChangeDue, []string) {
+		t.Helper()
+		changes, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChangesDue, Fresh: stale,
+			ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: harnessAt, ChartEpoch: epoch}})
+		if err != nil {
+			t.Fatalf("Read(changes_due) of web at %d: %v", epoch, err)
+		}
+		repos, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChangesDue, Fresh: stale,
+			ChangesDue: &code.ChangesDueQuery{RecheckBefore: harnessAt, ChartEpoch: epoch}})
+		if err != nil {
+			t.Fatalf("Read(changes_due) of the repositories at %d: %v", epoch, err)
+		}
+		return changes.DueChanges, repos.DueRepos
+	}
+
+	w1, _ := writerOn(t, n, n.pub, on(testChart(), e1))
+	converse(t, w1, asking(repo, change, dev, "plat-lead", "founder"))
+	converse(t, w1, n.patched(repo, change, 1, "B", oidOf("the retry diff")))
+	converse(t, w1, reviewing(repo, change, platLead, 1, code.VerdictApprove, nil))
+	converse(t, w1, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	if stored := n.storedReadiness(change); !stored.ready || stored.waitsPerson {
+		t.Fatalf("the merge on e1 stored %+v, want ready: plat-lead's approval counts on e1", stored)
+	}
+	if changes, repos := due(e1); len(changes) != 0 || len(repos) != 0 {
+		t.Fatalf("a home on the chart that judged the stored answer finds %+v due in %v, want nothing", changes,
+			repos)
+	}
+	changes, repos := due(e2)
+	if len(changes) != 1 || changes[0].ID != change || !changes[0].RefreshDue || changes[0].FactsDue ||
+		changes[0].MergeDue || !slices.Equal(repos, []string{repo}) {
+		t.Fatalf("a home on a later chart finds %+v due in %v, want web!1 owing a refresh alone", changes, repos)
+	}
+
+	refresh := code.ConversationWrite{OpID: statelog.NewOpID(harnessAt, ""), Mergeability: &code.Mergeability{
+		RepoID: repo, ChangeID: change, Revision: 1, HeadOID: oidOf("B"), TargetRef: mainRef, Refresh: true,
+		Node: n.id}}
+	w2, _ := writerOn(t, n, n.pub, on(lowered, e2))
+	res := converse(t, w2, refresh)
+	if stored := n.storedReadiness(change); stored.ready || !stored.waitsPerson {
+		t.Fatalf("the refresh on e2 stored %+v, want waiting on a person: the approval no longer counts, and "+
+			"founder alone is asked", stored)
+	}
+	if record := string(n.recordAt(res.Position).Mutation); !strings.Contains(record,
+		`"chart_epoch":`+strconv.FormatInt(e2, 10)) {
+		t.Fatalf("the refresh's record carries %s, want it stamped with chart %d", record, e2)
+	}
+	if got, _ := listChanges(t, n, code.ReadQuery{Asker: ada, Needs: code.NeedPerson}, 0); !slices.Equal(got,
+		[]string{"web!1"}) {
+		t.Fatalf("needs=person lists %q after the refresh, want web!1", got)
+	}
+
+	before := n.end()
+	stale1, err := w1.Converse(t.Context(), code.ConversationWrite{OpID: statelog.NewOpID(harnessAt, ""),
+		Mergeability: refresh.Mergeability})
+	requireConversationRefused(t, n, before, stale1, err, code.ConversationRefusalSuperseded, "chart of activation")
+	if stored := n.storedReadiness(change); !stored.waitsPerson {
+		t.Fatalf("the writer on the earlier chart left %+v, want e2's answer standing", stored)
+	}
+	if changes, repos := due(e2); len(changes) != 0 || len(repos) != 0 {
+		t.Fatalf("a refreshed change is still due %+v in %v at the chart that refreshed it", changes, repos)
+	}
+}
+
+// A CHART CHANGE THAT KEEPS THE ANSWER STILL MOVES THE STORED CHART: web!1,
+// approved by plat-lead and merged clean on the chart of activation e1, is
+// stored ready. A configuration apply that changes nothing the readiness
+// reads (activation e2, the same seats) makes it due a refresh at e2 all the
+// same, and the refresh on e2 judges it ready again — the row's outcome, so
+// the writer records a mergeability_kept rather than the whole record. That
+// record names the chart alongside the versions, its apply moves the row's
+// chart to e2, the answer stays ready, and the home on e2 finds the change
+// due nothing more: a kept refresh that left the chart behind would leave
+// the change due at every pass, and one that carried the chart alone would
+// name no judgement the apply could move.
+//
+// Mutations: stamp no chart on the kept record → its apply refuses the
+// record, and the change stays due at e2; leave chart_epoch out of the kept
+// apply → the change stays due at e2.
+func TestAChartChangeThatKeepsTheAnswerMovesTheStoredChart(t *testing.T) {
+	t.Parallel()
+	const e1, e2 = int64(1_762_000_000_000), int64(1_762_000_060_000)
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	on := func(epoch int64) func(*code.ChangeWriterOptions) {
+		return func(o *code.ChangeWriterOptions) {
+			o.SeatRules = func() (code.SeatRules, bool) {
+				return code.SeatRules{Roster: testChart(), Zone: time.UTC, Epoch: epoch}, true
+			}
+		}
+	}
+	due := func(epoch int64) []code.ChangeDue {
+		t.Helper()
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChangesDue, Fresh: stale,
+			ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: harnessAt, ChartEpoch: epoch}})
+		if err != nil {
+			t.Fatalf("Read(changes_due) of web at %d: %v", epoch, err)
+		}
+		return a.DueChanges
+	}
+
+	w1, _ := writerOn(t, n, n.pub, on(e1))
+	converse(t, w1, asking(repo, change, dev, "plat-lead"))
+	converse(t, w1, n.patched(repo, change, 1, "B", oidOf("the retry diff")))
+	converse(t, w1, reviewing(repo, change, platLead, 1, code.VerdictApprove, nil))
+	converse(t, w1, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	judged := n.storedReadiness(change)
+	if !judged.ready {
+		t.Fatalf("the merge on e1 stored %+v, want ready", judged)
+	}
+	if changes := due(e2); len(changes) != 1 || !changes[0].RefreshDue {
+		t.Fatalf("a home on a later chart finds %+v due, want web!1 owing a refresh", changes)
+	}
+
+	w2, _ := writerOn(t, n, n.pub, on(e2))
+	res := converse(t, w2, code.ConversationWrite{OpID: statelog.NewOpID(harnessAt, ""),
+		Mergeability: &code.Mergeability{RepoID: repo, ChangeID: change, Revision: 1, HeadOID: oidOf("B"),
+			TargetRef: mainRef, Refresh: true, Node: n.id}})
+	if rec := n.recordAt(res.Position); rec.Op != code.OpMergeabilityKept ||
+		!strings.Contains(string(rec.Mutation), `"chart_epoch":`+strconv.FormatInt(e2, 10)) {
+		t.Fatalf("the refresh on e2 recorded %s %s, want a mergeability_kept naming chart %d", rec.Op,
+			rec.Mutation, e2)
+	}
+	if stored := n.storedReadiness(change); !stored.ready || stored.waitsPerson {
+		t.Fatalf("the kept refresh left %+v, want the answer ready as before", stored)
+	}
+	if changes := due(e2); len(changes) != 0 {
+		t.Fatalf("a change whose kept refresh judged it at e2 is still due %+v at e2", changes)
+	}
 }

@@ -457,7 +457,8 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	}
 	homeLoop, err := codehome.New(codehome.Options{
 		Estate: homeEstate, Placement: e.router, Nudges: codeNudges{log: codeLog.log, runner: codeLog.runner},
-		Cache: c, Git: pool, Chains: chains, Tasks: e.queueTasks(), Share: share, NodeID: nodeID, Metrics: e.metrics,
+		Cache: c, Git: pool, Chains: chains, Tasks: e.queueTasks(), Share: share, NodeID: nodeID,
+		Chart: e.codeChartEpoch, Metrics: e.metrics,
 	})
 	if err != nil {
 		h.Stop(context.WithoutCancel(ctx))
@@ -632,7 +633,11 @@ type codeHostParts struct {
 // repositories this node maintains sit at the pack bound, every push carrying
 // objects into them refused until a compaction lands
 // ([codecompact.Compactor.AlarmReading]), which raise code_compaction_behind on
-// the node that compacts them.
+// the node that compacts them — and from its mirrors: how many mirrors of the
+// repositories this node is home to have not been brought level within their
+// own refresh promise, and the one failing longest
+// ([mirror.Mirrors.AlarmReading]), which raise code_mirror_failing on that
+// home.
 //
 // THE CACHE JUDGED, LOGGED, COUNTED AND GAUGED EVERY REFUSAL, AND NOTHING READ
 // IT INTO A READING, so the alarm the cache's docs, the alarm reference and
@@ -701,6 +706,12 @@ func (e *Engine) codeReading(ctx context.Context, now time.Time, out *statelog.R
 		// THE MERGE RATE, from the queues this node is home to: only the
 		// home builds a queue's trains, so only it times their rounds.
 		n.home.AlarmReading(out)
+	}
+	if n.mirrors != nil {
+		// THE MIRRORS THIS NODE IS HOME TO, from its own memory of their
+		// attempts: a push to another host is no record, so only the home
+		// that pushes knows whether it can (M6-D16).
+		n.mirrors.AlarmReading(out)
 	}
 }
 

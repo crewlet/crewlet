@@ -432,9 +432,11 @@ const (
 
 	// PruneGrace is how long a ref's DROP is kept — the object a forced
 	// update or a deletion moved a ref off, a code_ref_drops row — and so how
-	// long what only that object reached still counts as reachable to
-	// whatever drops a repository's unreachable objects: history force-pushed
-	// away or deleted stays fetchable by its id for that long after the drop.
+	// long what only that object reached still counts as reachable to the
+	// maintainer's weekly expunge: history force-pushed away or deleted stays
+	// fetchable by its id for that long after the drop — unless a person
+	// purges the repository's unreachable objects, which keeps no grace
+	// (ADR-0069).
 	//
 	// FOURTEEN DAYS, git's own gc.pruneExpire default (2.weeks.ago): the
 	// grace anybody who runs git expects a repository's unreachable objects
@@ -497,8 +499,10 @@ const (
 	// hold hundreds of dead branches against MaxRefsPerRepo. A deletion is
 	// restorable from its push row's Old while the push history keeps the row
 	// ([PushHistory], 181 days) and the repository still holds the commit —
-	// which its deletion's code_ref_drops row keeps for PruneGrace at least,
-	// as for every deletion. And it is code_refs_near_limit's window
+	// which its deletion's code_ref_drops row keeps from the weekly expunge
+	// for PruneGrace, as for every deletion, and from nothing after it nor
+	// from a person's purge, which keeps no grace (ADR-0069). And it is
+	// code_refs_near_limit's window
 	// ([NearLimit]): a repository whose live refs and the refs it set within
 	// it together reach MaxRefsPerRepo reaches the bound within it at that
 	// rate, or holds it already, and the lifecycle, which deletes nothing set within it, is not

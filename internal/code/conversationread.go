@@ -66,8 +66,11 @@ import (
 // keeps those whose readiness the read judges itself, in its own snapshot
 // against its own chart, still waits on one, since a stored answer is as of
 // the record that stored it. A change that came to wait on a person since its
-// last record is listed once its home refreshes it — at the home's next pass,
-// a minute later at the most.
+// last record — a review, an ask, or a chart that changed who may approve it
+// (Mergeability.ChartEpoch) — is listed once its home refreshes it: at the
+// home's next pass, a minute later at the most once the home's node and the
+// repository's committing data node hold that chart. An ended change stores
+// no answer (clearReadiness), so the index holds the changes waiting now.
 //
 // # A part of one change
 //

@@ -111,7 +111,7 @@ func burst(b *testing.B, units, turns int) (time.Duration, []time.Duration) {
 			PatchID: oid("e"), Touched: []string{"a.go"}})
 	}
 	share := code.NewGitShare("node-a", 2*units, nil)
-	l, err := home.New(home.Options{Estate: sharedEstate{estate: e, share: share},
+	l, err := home.New(home.Options{Chart: noChart, Estate: sharedEstate{estate: e, share: share},
 		Placement: asNode{placement: &placement{homes: homes}, node: "node-a"}, Nudges: newNudges(),
 		Cache: unmerged{t: b}, Git: unmerged{t: b}, Chains: unqueued{t: b}, Tasks: unqueued{t: b},
 		Share: share, NodeID: "node-a"})

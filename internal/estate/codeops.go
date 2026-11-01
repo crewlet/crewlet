@@ -417,24 +417,37 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // requested; a repository's checks — a change's, a commit's, the
 // repository's newest ended first, or every readable repository's since a
 // moment — and one attempt whole, each held to the grant on its repository;
-// the change heads a repository's home owes a dispatch of their checks
-// (checks_due); the live entries of a repository's merge queues — of one
+// one attempt by its key (check_box), the read a check's box's admission
+// makes on every request the box sends to /box/git/ or /box/code/
+// (internal/code/host's checkadmit.go); the attempts waiting for a runner,
+// oldest queued first (checks_queued), and those runners hold
+// (checks_running); the change heads a repository's home owes a dispatch of
+// their checks (checks_due); the live entries of a repository's merge queues — of one
 // target, or of every readable repository — with their trains, a target's
 // landings above its green and a repository's green rows, each held to the
 // grant on its repository; and the repositories holding a live entry, or one
-// repository's entries, which its home's queue works from (queue_due). A
-// seat's read on a node that holds no chart is that node's
-// code.ErrNotServing — it ran nothing — so the walk asks the next.
+// repository's entries, which its home's queue works from (queue_due); and
+// a repository's push mirror with the green rows it publishes, read in one
+// snapshot by the home that pushes it (mirror_push). A seat's read on a
+// node that holds no chart is that node's code.ErrNotServing — it ran
+// nothing — so the walk asks the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
 // repositories it lists, and whether it reads one: code.JudgeRead) — and the
 // grant of the seat it reads for, which rides only beside a seat's asker
 // (code.ReadQuery.CeilingSeat), so the same declaration covers it — so a node
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
-// person's or a token's consults no chart, and a `run_pushes` page, an
-// `introduced` page and the `compaction_due`, `publication_due`,
-// `expunge_due`, `imports_due`, `mirrors_due`, `changes_due`, `checks_due` and `queue_due` listings name no
-// asker at all, so each is answered there as a last resort.
+// person's or a token's consults no chart, and the engine's own reads name no
+// asker at all — a `run_pushes` page, an `introduced` page, a
+// `branch_changes` read, a repository's `expunge_tips`, the `compaction_due`,
+// `publication_due`, `expunge_due`, `imports_due`, `mirrors_due`, `indexed`,
+// `changes_due`, `checks_due`, `checks_queued`, `checks_running` and
+// `queue_due` listings, a check's box's admission's `check_box` and a push
+// mirror's `mirror_push` — so each is answered there as a last resort: a
+// check's box's admission among them, which a node behind the company's
+// configuration may therefore answer, since the attempt's row it reads is the
+// box's authority and no chart judges it. A push mirror's read is the home's,
+// which judges the seat it pushes as itself (code.MirrorSeatRefusal).
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {

@@ -61,21 +61,32 @@ const WorkerChanges = "changes"
 // recorded on the change and its merge into its target's tip recorded beside
 // them, or the change landed where its target holds its head; its readiness
 // recorded again, merging nothing, where what it reads moved since its merge
-// judged it — a review, an ask, an answer to findings, facts, its own row —
+// judged it — a review, an ask, an answer to findings, facts, its own row, its
+// head's checks, or the chart this node holds, a later one than judged it —
 // and, a moved target's changes merged again at the refresh, within a pass's
 // budget; and, for a change live or ended, its asks for review settled with
 // its lifecycle where they no longer match it ([changes.settle]).
 type changes struct {
-	estate  Estate
-	cache   Cache
-	git     Pool
-	node    string
+	estate Estate
+	cache  Cache
+	git    Pool
+	node   string
+	// chart is the activation of the chart this node holds now
+	// ([Options.Chart]), which every listing names.
+	chart   func() int64
 	metrics *metrics.Recorder
 	log     *slog.Logger
 	now     func() time.Time
 	// rechecks is each repository's share of a pass's merges of moved
 	// targets ([MergeabilityPerPass]).
 	rechecks *recheckBudget
+	// factsRecorded is told each revision's facts this worker recorded: the
+	// repository and the position their record landed at. The record is on
+	// the CHANGE's subject, which the loop's watch does not see, and a head's
+	// checks are dispatched only once its facts are recorded — so the loop
+	// schedules the repository's check work there ([Loop.follow]) rather
+	// than leave the dispatch to its backstop, a minute later.
+	factsRecorded func(repoID string, at statelog.Position)
 }
 
 // Name is [WorkerChanges].
@@ -86,7 +97,7 @@ func (c *changes) Name() string { return WorkerChanges }
 // [MergeabilityRefresh] old.
 func (c *changes) Due(ctx context.Context, floor statelog.Position, cursor string) ([]string, string, error) {
 	a, err := c.estate.Read(ctx, code.ReadQuery{Kind: code.ReadChangesDue, Cursor: cursor, Fresh: freshAt(floor),
-		ChangesDue: &code.ChangesDueQuery{RecheckBefore: c.now().Add(-MergeabilityRefresh)}})
+		ChangesDue: &code.ChangesDueQuery{RecheckBefore: c.now().Add(-MergeabilityRefresh), ChartEpoch: c.chart()}})
 	if err != nil {
 		return nil, "", err
 	}
@@ -104,7 +115,7 @@ func (c *changes) Due(ctx context.Context, floor statelog.Position, cursor strin
 func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Position) error {
 	q := code.ReadQuery{Kind: code.ReadChangesDue, Fresh: freshAt(floor),
 		ChangesDue: &code.ChangesDueQuery{RepoID: repoID, RecheckBefore: c.now().Add(-MergeabilityRefresh),
-			Rechecks: c.rechecks.left(repoID)}}
+			Rechecks: c.rechecks.left(repoID), ChartEpoch: c.chart()}}
 	var (
 		failed  []error
 		again   []code.ChangeDue
@@ -423,6 +434,9 @@ func (c *changes) revise(ctx context.Context, repoID string, due code.ChangeDue,
 		"target", due.TargetRef, "tip", due.Tip, "touched", len(f.Touched), "touches_all", f.TouchesAll,
 		"classed", len(f.Classes.WhitespaceOnly)+len(f.Classes.CommentOnly), "classes_complete", f.Classes.Complete,
 		"owners", len(matched), "position", res.Position.String())
+	if c.factsRecorded != nil {
+		c.factsRecorded(repoID, res.Position)
+	}
 	return true, nil
 }
 

@@ -15,23 +15,31 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 )
 
-// A GIT NODE'S IMPORTS AND PULL MIRRORS (internal/code/mirror): a worker of
-// its home's loop on every git node, filling the repositories it is home to
-// from the other hosts their rows name.
+// A GIT NODE'S IMPORTS AND MIRRORS (internal/code/mirror): a worker of its
+// home's loop on every git node, filling the repositories it is home to from
+// the other hosts their rows name, and pushing their green tips to the hosts
+// their push mirrors name.
 
-// buildMirrors builds this node's imports and pull mirrors and registers them
-// with its home loop, beside the code host they write through: over the
-// router's code seam, this node's cache and git pool, the fleet's object store
-// and the one outbound dial (mirrorDial), its limits the current epoch's. The
+// buildMirrors builds this node's imports and mirrors and registers them with
+// its home loop, beside the code host they write through: over the router's
+// code seam, this node's cache and git pool, the fleet's object store and the
+// one outbound dial (mirrorDial), its limits the current epoch's, a push
+// mirror's seat judged against the published chart (Engine.codeRoster) and
+// its pushes announced on the node's event stream (Engine.codeEvents). The
 // attempts it starts run on goroutines of its own, ended by its Stop in the
 // code host's one bounded stop, after the home's loop that starts them.
 func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Cache, pool *gitproc.Pool,
 	objects code.Putter, home *codehome.Loop) (*mirror.Mirrors, error) {
 
-	m, err := mirror.New(mirror.Options{
+	o := mirror.Options{
 		Estate: e.router.Code(), Cache: c, Git: pool, Objects: objects, NodeID: nodeID, Limits: e.codeLimits,
-		Dial: mirrorDial(boot.Git.ImportAllowPrivate, e.LookupSecret), Metrics: e.metrics,
-	})
+		Dial: mirrorDial(boot.Git.ImportAllowPrivate, e.LookupSecret), Roster: e.codeRoster,
+		Events: e.codeEvents(), Metrics: e.metrics,
+	}
+	if e.mirrorSeams != nil {
+		o = e.mirrorSeams(o)
+	}
+	m, err := mirror.New(o)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +49,7 @@ func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Ca
 	return m, nil
 }
 
-// mirrorDial is the one outbound dial an import or a pull mirror makes
+// mirrorDial is the one outbound dial an import or a mirror makes
 // (M6-D18): the source's URL resolved and held to the public-address rule
 // unless Tier A git.import_allow_private lifts it (gitproc.ResolveRemote), and
 // its credential — one whole ${VAR} reference, as the record carries it

@@ -299,11 +299,10 @@ boxes](../concepts/code-host.md#coding-boxes)). A **change** proposes one
 branch into another, and people and agents review it, raising findings, a
 blocker among them holding it back until it is cleared ([Review a
 change](../guides/code.md#review-a-change)), while the repository's home git
-node queues its checks, and a change is merged as its branch's gate allows.
-What it does not do yet is land a change from its branch's merge queue, which
-a change into a branch whose gate requires a check waits in — read [What it
-does not do yet](../concepts/code-host.md#what-it-does-not-do-yet) before
-choosing it as
+node queues its checks, and a change is merged as its branch's gate allows —
+through the branch's merge queue where its gate requires a check ([The merge
+queue](../concepts/code-host.md#the-merge-queue)). Read [What it does not do
+yet](../concepts/code-host.md#what-it-does-not-do-yet) before choosing it as
 an engineering team's only host. A company that hosts
 code on it takes the [S3 object store](../concepts/object-store.md#an-s3-bucket--s3)
 in production, since its repositories grow for as long as it works in them.

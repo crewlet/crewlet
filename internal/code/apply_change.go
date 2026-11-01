@@ -106,7 +106,9 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 // merges the change at the tip its home found its head in — `push`, as one
 // whose push set the target to its head is — and applies as nothing where the
 // change is not at the head the home found, which only a record the ledger
-// would have collapsed meets.
+// would have collapsed meets. A close and a landing also CLEAR THE CHANGE'S
+// STORED READINESS ([clearReadiness]): an ended change is ready for nobody
+// and waits on nobody, and none of its home's records refreshes it again.
 func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyContext, payload any) (int, error) {
 	repoID, changeID, write, err := lifecycleWrite(payload)
 	if err != nil {
@@ -216,6 +218,13 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 		}
 		rows += ended
 	}
+	if !next.state.Live() {
+		cleared, err := clearReadiness(ctx, tx, []string{changeID})
+		if err != nil {
+			return 0, fmt.Errorf("%w (the record at %s)", err, at.position)
+		}
+		rows += cleared
+	}
 	if revision != nil {
 		by, kind := revision.By.party()
 		if _, err := tx.ExecContext(ctx, addRevisionSQL, changeID, next.revision, next.head, by, string(kind), "",
@@ -320,7 +329,9 @@ func writeChanges(ctx context.Context, tx store.Execer, maxVariables int, w chan
 // entries reached — each change's row, inserted for a change the record
 // opened and written back over every other by what the record did to it
 // ([pushWrite]), its revisions, its new authors, the descriptions of the
-// changes it opened and, where it opened any, the repository's next number —
+// changes it opened, the live queue entries and the stored readiness of the
+// changes it ended ([clearReadiness]) and, where it opened any, the
+// repository's next number —
 // and answers the rows it wrote, [changeBook.rowCount]: the push apply's half
 // of the book, here in the applier's own files, while the model it writes
 // from (revisions.go) is the decide's as much as the apply's. An insert's
@@ -416,6 +427,11 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 		if err := endEntries(ctx, tx, b.packed, b.at, end.ids, end.state, end.reason); err != nil {
 			return 0, err
 		}
+	}
+	// THE MERGED AND THE CLOSED CHANGES' STORED READINESS CLEARED, one
+	// statement for them all, counted by the book as a row each.
+	if _, err := clearReadiness(ctx, tx, b.ended()); err != nil {
+		return 0, err
 	}
 	// THE REPOSITORY'S NEXT NUMBER, moved on past every change the record
 	// opened, in the repository's own row — which the record writes anyway,

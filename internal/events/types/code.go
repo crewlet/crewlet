@@ -66,6 +66,7 @@ func init() {
 	events.Register[ReviewSubmitted]()
 	events.Register[CodeQueueEjected]()
 	events.Register[CodeTargetBroken]()
+	events.Register[CodeMirrorPushed]()
 }
 
 // CodeFetchedVia is how a unit repository's contents were read.
@@ -666,6 +667,58 @@ type CodeTargetBroken struct {
 
 // EventType is the "code_target_broken" wire type.
 func (CodeTargetBroken) EventType() string { return "code_target_broken" }
+
+// CodeMirrorPushed records that a repository's home pushed it to its PUSH
+// MIRROR (internal/code/mirror, M6-D16): which refs it set at the other host
+// and onto what, which it deleted there, and which protected branches it held
+// back, each still waiting for a commit its required checks passed
+// (code_green). Published once a push that moved something, by the home git
+// node that pushed — the code log records no push to another host, so this is
+// the one durable account of what the company published, and when.
+//
+// # Stored, not fed
+//
+// A busy repository's mirror pushes as often as once a minute, and nobody acts
+// on a push that went where it was told to: it is kept in the event log for the
+// audit, out of the activity feed. A push that FAILED is no event: it is the
+// home's state, which code_mirror_failing raises once it outlasts the
+// mirror's refresh.
+type CodeMirrorPushed struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when it was pushed.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// URL is the repository at the other host — never a credential: the
+	// mirror's is a ${VAR} reference, resolved at the dial and sent in a
+	// header — and As the seat whose own identity there the push carried.
+	URL string `json:"url"`
+	As  string `json:"as"`
+
+	// Updated are the refs the push set at the other host, each
+	// "<ref> <oid>"; Deleted the refs it deleted there, which the repository
+	// no longer has; Waiting the protected branches it left where they were,
+	// none of whose commits newer than what the other host holds is green.
+	Updated []string `json:"updated,omitempty"`
+	Deleted []string `json:"deleted,omitempty"`
+	Waiting []string `json:"waiting,omitempty"`
+}
+
+// EventType is the "code_mirror_pushed" wire type.
+func (CodeMirrorPushed) EventType() string { return "code_mirror_pushed" }
+
+// SummaryFor names the repository, the other host and what moved there.
+func (e CodeMirrorPushed) SummaryFor(actor string) string {
+	what := "pushed " + e.RepoName + " to its mirror " + e.URL + ": " + strconv.Itoa(len(e.Updated)) +
+		" ref(s) set"
+	if len(e.Deleted) > 0 {
+		what += ", " + strconv.Itoa(len(e.Deleted)) + " deleted"
+	}
+	if len(e.Waiting) > 0 {
+		what += ", " + strconv.Itoa(len(e.Waiting)) + " waiting for green"
+	}
+	return lead(actor, what)
+}
 
 // SummaryFor names the branch, the landing — its change by reference
 // (web!42), or its commit — and the checks it broke.

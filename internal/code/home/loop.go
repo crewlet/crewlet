@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -155,6 +156,12 @@ type Options struct {
 	// NodeID is this node: the home every placement answer is compared
 	// with, and the node every record the home asks names.
 	NodeID string
+	// Chart is the activation of the chart this node holds now
+	// (configplane.ActivationStamp), 0 while it holds none, read at every
+	// listing of the change work: a change whose stored readiness an earlier
+	// chart judged is due a refresh (code.ChangesDueQuery.ChartEpoch), since
+	// the chart is the one input of a readiness no record of the log moves.
+	Chart func() int64
 	// Metrics nil records nothing; Logger nil is the package's own
 	// (component code.home); Now nil is time.Now.
 	Metrics *metrics.Recorder
@@ -276,6 +283,7 @@ func New(o Options) (*Loop, error) {
 	need(o.Tasks == nil, "Tasks")
 	need(o.Share == nil || o.Share.Units() < 1, "Share")
 	need(!config.ValidNodeID(o.NodeID), "NodeID")
+	need(o.Chart == nil, "Chart")
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%w: %s missing", ErrOptions, strings.Join(missing, ", "))
 	}
@@ -294,13 +302,26 @@ func New(o Options) (*Loop, error) {
 	// the check work's facts and checks-file reads draw on the same units.
 	reads := OwnReads(o.Share.Units())
 	o.Estate = ownReads{Estate: o.Estate, reads: semaphore.NewWeighted(int64(reads)), n: reads}
-	l.changes = &changes{estate: o.Estate, cache: o.Cache, git: o.Git, node: o.NodeID, metrics: o.Metrics,
-		log: l.log, now: l.now, rechecks: newRecheckBudget()}
+	l.changes = &changes{estate: o.Estate, cache: o.Cache, git: o.Git, node: o.NodeID, chart: o.Chart,
+		metrics: o.Metrics, log: l.log, now: l.now, rechecks: newRecheckBudget()}
 	l.checks = &checks{estate: o.Estate, node: o.NodeID, log: l.log, now: l.now}
 	l.merges = &queue{estate: o.Estate, chains: o.Chains, tasks: o.Tasks, checks: l.checks, node: o.NodeID,
 		log: l.log, now: l.now}
 	l.workers = []Worker{l.changes, l.checks, l.merges}
+	l.changes.factsRecorded = func(repoID string, at statelog.Position) { l.follow(l.checks, repoID, at) }
 	return l, nil
+}
+
+// follow schedules w's work in repoID at at: one worker's record that moves
+// another's work, on a subject the watch does not see — a revision's facts,
+// on its change's subject, which a head's dispatch waits for.
+func (l *Loop) follow(w Worker, repoID string, at statelog.Position) {
+	l.mu.Lock()
+	i := slices.Index(l.workers, w)
+	l.mu.Unlock()
+	if i >= 0 {
+		l.schedule(i, repoID, at)
+	}
 }
 
 // AlarmReading fills the reading's merge-rate half from the merge queues this

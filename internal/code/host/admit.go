@@ -21,8 +21,9 @@ import (
 // request's first step. A PERSON is admitted by admit, here; a CODING BOX by
 // admitBox (boxadmit.go), and a CHECK'S BOX by admitBox too, its token telling
 // it to admitCheck (checkadmit.go). Nothing after admission asks which of the
-// three ran but through the admission's own fields and its seven accessors —
-// principal, share, refs, boxFloor, resyncKey, floorWords and engineCommitter — and a box's nil check
+// three ran but through the admission's own fields and its eight accessors —
+// principal, share, refs, objects, boxFloor, resyncKey, floorWords and
+// engineCommitter — and a box's nil check
 // where its pushes raise the run's floor and are left out of the operator
 // audit (TestNothingAfterAdmissionAsksWhichAdmitterRan).
 
@@ -268,9 +269,29 @@ func (a admission) principal() code.Principal {
 // barrier, and the run's SESSION at its floor for a box, which pays no
 // barrier because its floor already holds everything it was shown
 // (boxadmit.go, "A box reads at its run's floor"). A check's box is shown no
-// ref (admission.noRefs), so what it syncs at is its check's session, which
-// holds the commit it fetches.
+// ref (admission.noRefs), so no read of its names one: what its fetch syncs
+// at is [admission.objects].
 func (a admission) refs() statelog.Freshness { return a.fresh }
+
+// objects is the freshness a fetch's wants are first looked for at — the sync
+// that serves a fetch by id (fetch.go). STALE for a person and a coding box:
+// an object id has no level, and a want the copy lacks is what the one sync
+// at the log's head is for. A CHECK'S BOX's at its admission's freshness, its
+// check's SESSION: the position its attempt was queued at, which the push of
+// its commit precedes, so the copy it is served from holds the commit and
+// every blob of its tree. Synced stale instead, a git node whose cache had
+// not converged since that push — most of them, on a fleet of several git
+// nodes, since a cache syncs on demand and a balancer spreads boxes — lacked
+// the commit, and every check's box it served paid a barrier on the code log
+// that its session would have spared — and that the code log's day does not
+// price (internal/tracker's codeLogDay counts its git clients' barriers, a
+// push's, a person's read and CI's, and none of a box's).
+func (a admission) objects() statelog.Freshness {
+	if a.check != nil {
+		return a.fresh
+	}
+	return statelog.Freshness{Level: statelog.ReadStale}
+}
 
 // boxFloor is the run a box's ref answers raise the floor of and the floor
 // its admission read, and false for a person's request, which has none.

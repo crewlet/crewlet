@@ -1,7 +1,8 @@
 // Package compact keeps a repository's pack count bounded, its bitmap
-// published and what no ref reaches dropped when a person asks: the
-// MAINTAINER's three loops (ADR-0060, ADR-0061, and the expunge's two records
-// that internal/code decides).
+// published and what no ref reaches dropped — when a person asks, and weekly
+// once it is a quarter of the repository: the MAINTAINER's three loops
+// (ADR-0060, ADR-0061, and the expunge's two records that internal/code
+// decides, ADR-0069).
 //
 // Every push stores one pack, so a busy repository's pack count grows with
 // its pushes, and every cold sync then pays a GET a pack and every request a

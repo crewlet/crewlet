@@ -42,7 +42,13 @@
 // follows waits for this node's copy to hold the record before it reads the
 // rows, rather than reading the rows from before it and finding nothing to
 // do. A watch that may have missed records (a Gap) schedules a backstop pass
-// at the position it reaches.
+// at the position it reaches. One record the watch does not see moves another
+// worker's work, and the worker that made it schedules that work itself, at
+// its position: a revision's facts, on its change's subject, which the
+// change work records and a head's checks dispatch waits for — the check
+// work is scheduled for the repository as they land ([Loop.follow]), so a
+// new head is dispatched in the same breath as its facts rather than a
+// backstop later.
 //
 // THE BACKSTOP: every [Backstop] — a minute, and at once at Start — the loop
 // asks every worker for its listing and its placement which of the listed
@@ -114,19 +120,28 @@
 // for each change, each with what it owes (code.CheckWork), in order: the next
 // attempt of each check its head's infrastructure ended (a requeue); where its
 // DISPATCH is owed, the attempts its change moved on from ended cancelled
-// superseded, then every check the checks file at its TARGET'S TIP defines —
-// never the head's: a change is never measured by a definition it brought —
-// that the head holds no attempt of queued, or recorded skipped where what
-// the head touches against that tip matches none of its paths, one an
-// earlier dispatch errored for a file that did not run queued as its next
-// attempt, and every name the target's gate requires errored defs_invalid
-// where the file is none that runs. The page's dispatches are recorded LAST
-// (code.CheckDispatched, a target's heads in records of at most
-// code.MaxDispatchHeads), so a dispatch cut short is the next turn's, every
-// queue that landed answered from its row. The tip's file is read through the
+// superseded, then — once its head revision's facts are recorded for its
+// target, which the listing carries, and not before — every check the checks
+// file at its TARGET'S TIP defines — never the head's: a change is never
+// measured by a definition it brought — that the head holds no attempt of
+// queued, or recorded skipped where what the head touches matches none of
+// its paths, one an earlier dispatch errored for a file that did not run
+// queued as its next attempt, and every name the target's gate requires
+// errored defs_invalid where the file is none that runs. Those attempts are
+// not written one a check: each head's ride its DISPATCH RECORD
+// (code.CheckDispatched's Attempts), a target tip's heads in as few records
+// as code.MaxDispatchRows and code.MaxDispatchBytes allow, so a head's
+// attempts and the row that takes it off the list land in one append, and a
+// record's worth of heads costs one round trip to the committing data node
+// rather than one a check, which held one of the node's two home slots for
+// heads × checks of them.
+// The tip's file is read through the
 // git reads (internal/code's GitChecksFile, the engine's own read), once a
-// tip and parsed once a blob a turn; what a head touches is its revision's
-// facts, read as the change work reads them. Its refusals are the change
+// tip and parsed once a blob a turn; what a head touches is what its
+// revision's RECORDED facts say, never a git read of the worker's own. A head
+// with none recorded owes no dispatch yet: the change work, which records
+// them, schedules the repository's check work at the record's position, so
+// the head is dispatched once they land. Its refusals are the change
 // work's: the rows moving is the next pass's, a write deciding nothing the
 // turn's failure.
 //

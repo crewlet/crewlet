@@ -1114,9 +1114,10 @@
 //     update or a deletion records the object it moved its ref off
 //     (code_ref_drops, one row an object, keyed by its record's broker
 //     instant and position), because no ref names that object any more and
-//     dropping a repository's unreachable objects must keep what such a push
-//     left for the grace — history force-pushed away or deleted stays
-//     fetchable by its id. A push record forgets its repository's drops past
+//     the maintainer's weekly expunge must keep what such a push left for the
+//     grace — history force-pushed away or deleted stays fetchable by its id
+//     until a person's purge, which keeps no grace, or an expunge after it
+//     takes it. A push record forgets its repository's drops past
 //     the grace, oldest first by instant, with whatever its rows leave of
 //     [MaxRecordRows] once the tombstones have had theirs: after them, since
 //     a drop forgotten late costs a row where a tombstone's room taken costs
@@ -1373,7 +1374,8 @@
 // deletion leaves the history behind it in the repository's packs — so an
 // EXPUNGE is the one rewrite that drops objects, in two records of their own
 // on the repository's subject, each decided alone by its committer in its one
-// queue ([Committer.ProposeExpunge], decide_expunge.go), as a compaction is:
+// queue ([Committer.ProposeExpunge], decide_expunge.go), as a compaction is
+// (ADR-0069):
 //
 //   - its BEGIN ([ExpungeBegin]) rewrites some live packs — a full pack among
 //     them — into packs holding what a ref reached at its maintainer's scan,

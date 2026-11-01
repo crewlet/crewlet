@@ -88,17 +88,6 @@ This is the product's current shape, not a configuration choice:
   rename, archive, delete, restore and protect repositories through the same
   tools, a seat's own scratch repositories among them
   ([Repositories made by tools](#repositories-made-by-tools)).
-- **Nothing searches a repository's code yet.** Every repository names how it
-  is to be searched — `search: indexed` or `grep`
-  ([Declaring repositories](#declaring-repositories)) — and the mode is
-  recorded, answered on every read of the repository and changed like any
-  other setting; no git node keeps an index or answers a search in this
-  release.
-- **Nothing drops an object a push stored.** A force-push or a deletion
-  leaves the history behind it in the repository's packs, fetchable by its
-  id, for as long as the repository lives. The object each such push left is
-  recorded for two weeks ([ref drops](#retention-and-history)): the grace
-  that history keeps once a repository's unreachable objects can be dropped.
 
 ---
 
@@ -232,7 +221,9 @@ value is sent as HTTP Basic: a value holding a colon is `user:password` as
 written, and any other a token, sent as the password beside the user
 `x-access-token`, which GitHub, GitLab, Gitea and Forgejo accept; a forge that
 wants a user of its own beside a token (Bitbucket's `x-token-auth`) is given it
-in the variable. A push mirror pushes nothing yet.
+in the variable. A push mirror pushes the refs it covers, each protected branch
+at its green commit, whenever its repository moves and every 15 minutes while
+it does not ([Mirrors and imports](#mirrors-and-imports)).
 
 At most 10 000 repositories one document — a typo guard two orders of
 magnitude past a large company's, not a limit anybody is expected to meet. It
@@ -698,6 +689,79 @@ A pass's line counts `released` old names, `expired` scratch repositories and
 
 ---
 
+## Mirrors and imports
+
+A repository can be filled from another forge, kept in step with one, or
+published to one. All three are run by the repository's
+[home git node](#the-home-git-node), from the repository's rows, and dial the
+other host the same one way.
+
+| | What it moves | Which way | How often |
+|---|---|---|---|
+| **Import** (`import`, `crewlet code import`, `code_import_repo`) | Every branch and tag of the source, once, into a new repository that reads `importing` until they have landed | In | Until it is done; a restart fetches only what the landed refs do not reach |
+| **Pull mirror** (`mirror_from`) | The source's branches and tags as they are — a force-push followed, a deleted branch deleted — by the mirror's own sync records; every push to it and every change is refused `repo_mirrored` | In | Every 15 minutes (`code.MirrorInterval`), and a minute after a failure, doubling up to that |
+| **Push mirror** (`mirror_to`) | The refs it covers — its `refs` patterns, or the default branch and `refs/tags/*` — each protected branch at its **green** commit, every other ref at its tip; a covered ref the repository no longer has is deleted there | Out | At most once a minute while the repository moves, once every 15 minutes while it is idle |
+
+**A push mirror publishes what passed, never what was pushed last.** A branch
+a [protection rule](#protection-rules) protects is pushed at its
+[green commit](#tip-checks-and-code_green) — the newest commit landed on it
+whose required checks passed — and where it has none yet, it is left as the
+other host has it, `waiting`. Every move of a protected branch leaves a landing
+row, which is what makes its green commit the one to follow. A branch no rule
+protects moves with no landing and no green row, so it is pushed at its tip, as
+every tag is: a tag names one commit for good. Each push compares what the
+other host holds of the covered refs (one `git ls-remote`) with what the
+repository says it should, and pushes only the difference, forced
+(`git push --force --porcelain`), from a scratch over the cache's copy, never
+from the copy itself. A ref the other host rejects — a protection or a hook
+there refusing the force-push or the deletion — fails the attempt, naming it.
+
+**It pushes as a seat, never as a bot.** `mirror_to.as` names the seat whose own
+identity at the other host the push carries: the token the mirror's
+`credential` variable holds is that seat's own token there. The seat must read
+the repository (a person's seat reads every one, an agent's what its grant on
+the repository reads), and the home asks again before every push, against the
+chart it holds then, so a revision that takes the seat's read away stops the
+mirror rather than letting it publish what its seat can no longer see.
+
+**Box commit trailers travel as they are.** A commit a coding box made carries
+the `Crewlet-Seat`, `Crewlet-Run` and `Crewlet-Work-Item` trailers its box's
+hook wrote, and a mirror moves commits, never rewrites them: the other host
+receives them with the trailers in their messages. The mirror inherits what
+the hook wrote and decides nothing about it; the trailers stay a convention,
+and the push row on the code log stays the provenance
+([Which push landed a commit](#which-push-landed-a-commit)).
+
+**One outbound dial.** Every one of the three reaches the other host over
+HTTPS alone. The node resolves the host itself and refuses it when any address
+it resolves to is not on the public internet — unless Tier A's
+[`git.import_allow_private`](configuration.md#git) lets it
+reach the node's own network — and hands git exactly the addresses it judged, so
+git never asks DNS again; redirects are not followed. The proxy and the
+certificate authorities are the process's own (`HTTPS_PROXY`, `NO_PROXY`,
+`SSL_CERT_FILE`), as [Deployment](../guides/deployment.md#reaching-other-forges) says.
+A `credential` is always one whole `${VAR}` reference, kept as the reference
+on every data node and in every backup and resolved from the secret store,
+then the node's environment, each time the node dials; it is sent in a header,
+never on git's command line, and redacted from every line the node logs.
+
+**A failure is the home's to know.** A push to another host is no record on
+the code log, so whether a mirror is level is something only its home knows,
+in memory: each failed attempt is logged as `code_mirror_attempt_failed`
+(naming the repository, `sync` or `push`, and why), counted in
+`crewlet.code.mirror.runs` and tried again a minute later, longer after each
+failure in a row. A mirror not brought level for longer than its own refresh —
+its 15-minute interval and 15 minutes of grace for an attempt in flight —
+raises [`code_mirror_failing`](../reference/alarms.md) on its home, naming the
+repository that has waited longest; a node that is no longer a repository's
+home stops counting its mirror, and a node that restarts counts from its first
+attempt. Every push that moved something is recorded in the event log as
+`code_mirror_pushed` — the repository, the other host, the seat it pushed as,
+the refs it set and deleted and the protected branches it held back — the one
+durable account of what the company published, and when.
+
+---
+
 ## One subject per repository
 
 Everything that moves a repository's refs or packs, or governs them — a push,
@@ -1065,7 +1129,9 @@ hold took 27 seconds and the 10 000 of a history nothing merged over two
 minutes ([The cache on a git node](#the-cache-on-a-git-node)).
 
 **What it does not do.** It removes no object: what no ref reaches stays in
-the repository's packs for as long as it lives. And it never touches a
+the repository's packs until an [expunge](#expunge) drops it. And it never
+merges a full pack — an expunge is the one rewrite that takes one — and never
+touches a
 published chain: a merge takes only the tail's packs, so a copy serving from
 the chain keeps it, and its tip, through the swap. On a copy serving in own
 mode a merge drops the copy's own multi-pack index and its bitmap — the
@@ -1123,6 +1189,186 @@ pass rather than guess (`code_compaction_maintainer_unknown`,
 maintains**: each merge and publication syncs the repository into its cache,
 so a maintainer's cache budget holds the repositories it maintains, or each of
 its publications begins with a whole download of its repository.
+
+---
+
+## Expunge
+
+Nothing else removes an object a push stored. A force-push or a deletion
+moves a ref and leaves the history behind it in the repository's packs,
+fetchable by its id from every git node and counted against
+`code.limits.repo_max_bytes`, which a push is refused `repo_size` on. An
+**expunge** is the one rewrite that drops objects — what no ref reaches,
+past a grace — run by the repository's
+[maintainer](#who-maintains-a-repository) beside its compaction and its
+publication, one rewrite of a repository at a time
+([ADR-0069](https://github.com/crewlet/crewlet/blob/main/adr/0069-an-expunge-drops-only-what-no-ref-or-in-flight-row-reached-within-its-grace-in-two-records.md)).
+
+**When it runs.** Two ways, and nothing to configure:
+
+- **Weekly, on the maintainer's own schedule.** Every minute a git node lists
+  the repositories it may owe an expunge — first those with one open or a
+  purge requested, then every active or archived repository last expunged a
+  week ago or never, least recently expunged first, a seat's
+  [scratch repositories](#repositories-made-by-tools) as much as projects —
+  and for each it maintains, it **scans**: one walk of the repository's
+  history from what it keeps (below) weighs what nothing reaches. The expunge
+  is **due** once that is more than a quarter of the repository's live pack
+  bytes and at least 64 MiB; below either, rewriting the kept packs, which
+  every git node holding the repository then downloads again, costs more
+  than the bytes it frees, and the repository is not scanned again on that
+  node for a week, so a clean repository's history is walked at most once a
+  week. The 64 MiB is provisional, until the expunge's benchmark has priced a
+  cycle against what it frees.
+- **At once, when a person purges** the repository's unreachable objects —
+  `code_purge_unreachable` from your own assistant, or
+  [`crewlet code purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable).
+  The purge is a request recorded on the repository's subject and answered
+  as soon as it is, long before it is served; its maintainer serves it at its
+  next minute's look, with **no grace**: what a force-push or a deletion left
+  goes however recently it was left. A purge asked while another is open
+  widens that one. Its cycles take only the packs whose content dates from
+  before the request, so a purge of a busy repository rewrites what it was
+  asked about and nothing pushed since, and it is served once nothing from
+  before the latest request is left. A purge is a person's alone, on a fresh
+  proof of who they are: no seat may ask for one
+  ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
+
+**What it keeps.** Whatever began it, an expunge keeps what every ref
+reaches and what a row still names for work in flight, although no ref does:
+every revision head of a draft or open [change](#changes), which its
+reviewers compare however often its branch was force-pushed; every live
+[merge queue](#the-merge-queue) entry's head and every candidate's tip, which
+a landing moves its target onto; and every protected branch's
+[green](#tip-checks-and-code_green) commit. On the schedule it keeps two
+things more, for **14 days**, git's own `gc.pruneExpire` default: every
+object a force-push or a deletion left within them — the
+[ref drops](#retention-and-history) — and every pack that arrived within
+them, whole, so history force-pushed away stays fetchable by its id for two
+weeks, and no push in flight loses an object it relies on. A purge keeps
+neither: it is asked because something must go now.
+
+**Two records.** Each is decided alone by the repository's
+[committer](#the-committer) in its one queue, as a compaction is.
+
+```mermaid
+sequenceDiagram
+    participant P as Person
+    participant M as Maintainer
+    participant S as Object store
+    participant C as Committer
+    participant G as Every git node's cache
+    alt a person's purge
+        P->>C: request the purge
+        C-->>P: answered once the request is recorded
+        M->>M: the next minute's listing names the request: scan with no grace
+    else the weekly schedule
+        M->>M: the listing names the repository: scan, due past a quarter and 64 MiB
+    end
+    Note over M: the scan keeps what the refs, the drops the grace keeps and the rows in flight reach
+    M->>M: build the kept and the dropping packs in a scratch
+    M->>S: store every output, at once
+    M->>C: propose the begin
+    C-->>M: applied: inputs retired, kept packs live, the rest dropping, drop epoch moved
+    G->>G: next sync: kept packs in, dropping packs beside the copy
+    M->>M: rescue: what a push landed since the scan reaches again
+    M->>S: store the rescue
+    M->>C: propose the commit
+    C-->>M: applied: dropping packs retired, rescue live
+    G->>G: next sync: dropping packs out, with the commit-graph and seats' read answers
+    M->>M: publish the repository's layers again
+```
+
+1. **The begin keeps every object.** It rewrites some live packs — a
+   [full](#compaction) pack among them, which nothing else rewrites — into
+   packs holding what the scan kept, which stay live, and packs holding the
+   rest, which are **dropping**: still rows naming their objects, still
+   served to a clone, a fetch and a seat's read, and never a pack a push may
+   build on ([Packs an expunge is dropping](#the-cache-on-a-git-node)). To
+   every reader it is a merge. It removes the
+   [published layers](#published-layers) over the packs it rewrote, so each
+   git node serves from the layers below them, or from its own index, until
+   the maintainer publishes again after the commit. And it moves the
+   repository's **drop epoch**: a push, an engine write, a coding box's push,
+   a pull mirror's sync, a merge, a queue's candidate or its landing that was
+   built from a copy read before the begin is refused `expunging`, nothing of
+   it decided, and built again over the copy the begin left
+   ([What git prints](#what-git-prints-and-what-it-means)), since it may rely
+   on an object the begin made dropping.
+2. **Between the two**, compaction goes on with the live packs, and a
+   publication of the repository waits for the commit.
+3. **The commit retires the dropping packs** into the table of retired
+   packs, and keeps live, as a **rescue**, whatever of them a push that
+   landed between the scan and the begin reaches again. Its one precondition
+   is its own expunge, still open with exactly those dropping packs — never a
+   ref — so a repository pushed to all day still commits. Each git node then
+   drops the dropping packs at its next sync, by its copy's next directory, and
+   with them the commit-graph, the answers it keeps for seats' reads, its tip
+   over a published chain and its code index, since each may name or quote
+   what left ([What the cache writes beside the
+   packs](#the-cache-on-a-git-node)).
+
+A cycle stopped at any point — a crash, a restart, the maintainer moving to
+another git node — leaves nothing, an expunge open, which the next pass on
+whichever node then maintains the repository finishes from the rows, or an
+expunge committed; what it stored that no row names is the
+[object collector's](object-store.md#collection-and-audit). A begin takes at
+most 1 024 packs and writes at most 32, so a repository with more to rewrite
+takes several cycles, each a week apart on the schedule and back to back for
+a purge.
+
+**What still holds a purged object.** The commit takes it out of the
+repository: no row names it live, no git node serves it once it has synced,
+and no clone or fetch receives it again. It is still held:
+
+- by **every git node's cache that has not synced the repository since** — a
+  node syncs it at the next request it serves for it, or drops it with the
+  repository when its budget evicts it — and a request already reading the
+  old copy finishes on it. The purge's answer names the git nodes that may
+  hold a copy;
+- by **the object store, for a day** after the commit — the retired packs'
+  grace, so a clone already reading one finishes — then until the
+  `code-retention` duty's next quarter-hour removes their rows and the
+  collector's next hourly pass deletes the bytes
+  ([Live, retired and derived references](object-store.md#live-retired-and-derived-references)),
+  and on a **versioned** S3 bucket for as long as the bucket's own rules keep
+  a deleted object's old version ([Choosing a
+  backend](object-store.md#choosing-a-backend));
+- by **every backup taken before the commit**, for as long as the backup is
+  kept, and on the `nats` object store every backup taken before the store
+  deletes the bytes ([A purge and the backups before
+  it](../guides/backup.md#a-purge-and-the-backups-before-it));
+- by **every clone and fetch that already took it** — a person's clone, a
+  coding box's, a push mirror's target, a CI runner's checkout — which
+  nothing on the server reaches.
+
+So a secret that was ever pushed is a secret to **rotate** first, and the
+purge is what takes it off the server afterwards ([A leaked secret is
+rotated, then purged](../guides/code.md#a-leaked-secret-is-rotated-then-purged)).
+
+**Watching it.** `code_get_repo`'s `expunge` and `crewlet code status -repo
+<name>`'s `expunge:` line say whether one is open, which purge is waiting,
+and when the last commit landed and what it dropped. On the maintainer,
+`crewlet.code.expunge.runs` counts its cycles by outcome,
+`crewlet.code.expunge.duration` times their stages,
+`crewlet.code.expunge.dropped_bytes` sums what they took out, and on every
+git node `crewlet.code.cache.dropping.bytes` is what its cache holds of
+dropping packs ([metrics reference](../reference/metrics.md)); its log says
+`code_expunge_due` when a scan finds one due, `code_expunge_begun` and
+`code_expunge_committed` for its two records, and `code_expunge_refused` or
+`code_expunge_failed` with why when a cycle stops — each tried again at the
+next pass.
+
+**What it costs.** On the schedule, the scan that judges an expunge due is
+one `git rev-list --disk-usage` over the repository's whole history, and every
+build is a walk of it from every tip kept,
+admitted in the node's maintenance lane at a publication's charge — about
+600 bytes an object of the repository — so a refused expunge is a purge
+waiting, never a push refused. The begin's record writes at most 2 625 rows
+and applied in 75 ms at its widest, measured on two cores, the commit's at
+most 97 rows in 13.5 ms. Every other git node holding the repository downloads
+the kept and rescue packs once — the maintainer links its own — which is why
+the schedule waits for a quarter of the repository to be unreachable.
 
 ---
 
@@ -1377,7 +1623,11 @@ answer that holds every record the code log had committed when it was asked.
   whoever asks, a seat included. It reads the changes whose stored readiness
   waits on a person, newest first, and keeps those whose readiness the read
   judges itself still does; a change that came to wait on one since its last
-  record is listed once its home refreshes it, a minute later at the most.
+  record — a review, an ask, or a configuration that changed who may approve
+  it — is listed once its home refreshes it, at the home's next pass: a
+  minute later at the most, once the home's node and the repository's
+  committing data node have applied that configuration. A change that closed
+  or merged stores no answer, so it is never read here.
 - A need lists **live** changes alone, and is refused beside a closed or
   merged state.
 - **One change**, by its number on its repository — `web!42` — with its row
@@ -1886,7 +2136,7 @@ one head share theirs: the same commit, judged by the same file.
 | `check_started` | A runner claims the attempt — and, once it has made one, names its box — or a person's CI reports its run started, placed `external` |
 | `check_finished` | The attempt ended: its state and why, its exit status, how long it ran, its summary (at most 4 KiB), the last 16 KiB of its output, the failures its reports named (at most 200, weighing at most 64 KiB, the rest counted), the link a person's CI reported, and the log a failed run kept |
 | `checks_sweep` | The rows that ended before an instant are removed — the `code-retention` duty's, for a repository whose checks stopped ending, swept back to the 30 days once a row of it outlived them by a day ([How long a check is kept](#how-long-a-check-is-kept)) |
-| `check_dispatched` | The home read a target's checks file at its tip — or found none there — and **dispatched** the heads it names under it: their checks queued for that target, the record their dispatch's last; with no heads, a moved target's reading refreshed ([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched)) |
+| `check_dispatched` | The home read a target's checks file at its tip — or found none there — and **dispatched** the heads it names under it: the checks it queues at them for that target ride the record — each queued, skipped or errored as a `check_queued` record would set it — so a head's checks and its dispatch land together; with no heads, a moved target's reading refreshed ([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched)) |
 
 An attempt's **state** is one of seven: `queued`; `running`; and the five
 endings — `passed` and `failed`, which measured the commit (a run past its
@@ -2031,21 +2281,24 @@ judge it. Its checks are queued by its repository's
 merges it ([The home's change work](#the-homes-change-work)), working a second
 worker, `checks`, from the rows. The home reads `.crewlet/checks.yaml` at the
 tip through the git reads (`checks_file`, the engine's own read of the file
-at one commit, whole), queues every check it defines at the head for that
-target, and then records that it did: a `check_dispatched` record naming the
-target, the tip it read, the file it found there — or none — and the heads it
-dispatched under it. Two tables keep what those records say: each target's
-checks file as the home last read it, and the file each head was dispatched
-under.
+at one commit, whole), and records the dispatch in ONE record: a
+`check_dispatched` record naming the target, the tip it read, the file it
+found there — or none — the heads it dispatched under it, and every check it
+queues at those heads for that target, each joined into its own row as a
+`check_queued` record's would be. Two tables keep what the dispatch says
+beside the checks' own rows: each target's checks file as the home last read
+it, and the file each head was dispatched under.
 
 What a dispatch queues:
 
 - **every check the file defines that the head holds no attempt of** for its
   target. A check with `paths` is queued where the change touches a path one
-  of its globs matches, judged against what the head touches against that
-  tip, and recorded **skipped** where it touches none; one with no `paths`,
-  or a change touching more paths than a list holds, runs. A check the
-  target's protection rule requires is queued marked required;
+  of its globs matches, judged against the paths the head revision's
+  recorded facts say it touches — the change work's own record, read with
+  the list, never a second git read — and recorded **skipped** where it
+  touches none; one with no `paths`, or a change touching more paths than a
+  list holds, runs. A check the target's protection rule requires is queued
+  marked required;
 - where the file is **none that runs** — unparsable, or something at its
   path that is no file — every name the rule requires is recorded
   **errored**, `defs_invalid`, the file's refusal its summary, and nothing
@@ -2057,10 +2310,26 @@ What a dispatch queues:
   it was retargeted from — `cancelled`, `superseded` — unless a live change
   into that attempt's target heads its commit and shares it.
 
-The dispatch record is the **last**: a dispatch cut short leaves the head
-listed, and the next turn queues what is missing — every queue that landed
-already answered from its row — before recording it. The heads one turn
-dispatches under one target's tip share a record, up to 500 of them.
+A head's checks wait for its revision's **facts**, whatever its target's file
+defines: until the home's change work has recorded what the revision touches
+against its target, nothing is queued at the head. The facts are also how the
+home knows the head is not already in its target — a head its target holds
+records none, and is [landed](#the-homes-change-work) instead — so no check
+runs at a head nobody will merge. The change work schedules the check work
+the moment it records them, so a new change is dispatched as soon as its
+facts land, not at the next pass.
+
+A head's checks and its dispatch land **together**, in one append: never a
+head taken off the list with its checks unqueued, nor its checks queued while
+it stays listed. A head is never split between records — one record holds the
+dispatch of a head under the widest checks file there can be. The heads one
+turn dispatches under one target's tip share their records — up to 500 heads
+and checks a record, and about half a megabyte of them — so dispatching a
+hundred heads of ten checks each is a few round trips to the repository's
+committing data node, not a thousand. Each check is decided as it is
+written, from the rows: one already queued, or one the rows refuse — its
+attempts run out, or ended in a way a dispatch does not follow — is left out
+of the record, and the rest land.
 
 The home's work list is read from those rows alone. A live change's head is
 due a dispatch while no dispatch of it for its target names the file the
@@ -2488,10 +2757,13 @@ repository, never by a node's own sweep:
   row an object, naming the ref, the object and when the push landed. A
   merge or a queue's landing that deletes its change's source branch records
   the head it held the same way. It is
-  kept **14 days**, git's own `gc.pruneExpire` default, because dropping a
-  repository's unreachable objects keeps what such a push left for that
-  long: history force-pushed away or deleted stays fetchable by its id for
-  two weeks after the push. The repository's later pushes forget the rows
+  kept **14 days**, git's own `gc.pruneExpire` default, because the weekly
+  [expunge](#expunge) of a repository's unreachable objects keeps what such a
+  push left for that long: history force-pushed away or deleted stays
+  fetchable by its id for two weeks after the push, and after them only until
+  the next expunge — unless a person's purge of the repository's unreachable
+  objects, which keeps no grace, takes it sooner. The repository's later
+  pushes forget the rows
   past that, oldest first, with whatever room each push's record leaves once
   its tombstones are forgotten. That is room for at least as many as the
   push records, except behind the busiest records: two pushes of forced
@@ -2530,7 +2802,10 @@ packs stay, and declaring it again under its name restores it. Once it has been
 deleted longer than **`code.deleted_retention_days`** (1 to 365 days; unset is
 7, the trim's default `min_age`, so a deletion is undone from the same window
 the log can replay), the fleet-singleton `code-retention` duty purges it (see
-[Singleton duties](seat-ownership.md#singleton-duties)):
+[Singleton duties](seat-ownership.md#singleton-duties)) — a deleted
+repository's purge of everything it holds, which is not the purge a person
+asks of a live repository's unreachable objects
+([Expunge](#expunge)):
 
 - every 15 minutes, it first removes the rows of the packs a compaction
   retired more than a day ago, so the collector can take their objects (see
@@ -2666,7 +2941,10 @@ them. Its row in the push history — `via` `expiry`, `actor_kind` `system` —
 keeps every branch it deleted beside the commit it was at, so a branch is
 **restored** with `code_create_branch` at that commit for as long as the push
 history keeps the row (181 days) and the repository still holds the commit,
-which a deletion keeps for its [prune grace](#retention-and-history) at least.
+which is bounded by the deletion's [prune grace](#retention-and-history): the
+weekly [expunge](#expunge) keeps it for 14 days after the deletion and may
+drop it at any run after them, and a person's purge keeps no grace at all.
+Restore a branch you need within two weeks of its deletion.
 
 Each push deletes up to 1 000 branches, fewer where their names are long
 enough to fill a push's record, and a repository with more idle branches is
@@ -2928,9 +3206,8 @@ the commit-graph came along, was dropped or was never there to keep —
 layers move with it, a placement of one included
 ([Published layers](#published-layers)) — and every one that failed.
 
-**Packs an expunge is dropping.** An expunge of a repository's unreachable
-objects — which nothing in this build begins yet ([what it does not do
-yet](#what-it-does-not-do-yet)) — first rewrites the packs it takes into
+**Packs an expunge is dropping.** An [expunge](#expunge) of a repository's
+unreachable objects first rewrites the packs it takes into
 packs of what the refs reach, kept, and packs of what nothing reached when it
 read the refs, **dropping**, and only a second record takes the dropping ones
 out. Between the two, a git node keeps the repository's dropping packs in a
@@ -5482,8 +5759,10 @@ it names no asker.
   [refresh](#merge-readiness) whose readiness is the row's, ready or not and
   waiting on a person or not as before, are recorded as a
   `mergeability_kept`: the change, its revision, and only what moved — the
-  recheck's tip and the position that moved the branch there, the versions
-  and the checks position a refresh judged the readiness at. Its apply moves
+  recheck's tip and the position that moved the branch there, the versions,
+  the checks position and the chart a refresh judged the readiness at (a
+  chart alone included, since a configuration apply alone makes a change due
+  a refresh, and only the row's chart moving ends that). Its apply moves
   those columns, and a recheck's instant, under the guard the full record's
   is decided by, and nothing else, so a conflicted change is not carried
   again, paths and all, every ten minutes its target moves. Whatever turns
@@ -5492,7 +5771,7 @@ it names no asker.
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_mergeability` | each change its home merged | The revision merged, the target branch, the tip merged into and the position of the record that moved the branch there; the state; the conflicted paths it names and how many more there were; the git node that merged; the record that merged, with its broker instant, which the change's next recheck is paced by; and the change's [readiness](#merge-readiness) as the last record judged it — whether it was ready, whether it waited on a person — beside the versions of the change's row and of what its readiness reads it was judged at |
+| `code_mergeability` | each change its home merged | The revision merged, the target branch, the tip merged into and the position of the record that moved the branch there; the state; the conflicted paths it names and how many more there were; the git node that merged; the record that merged, with its broker instant, which the change's next recheck is paced by; and the change's [readiness](#merge-readiness) as the last record judged it — whether it was ready, whether it waited on a person — beside the versions of the change's row and of what its readiness reads, and the chart, it was judged at |
 
 The change's own read carries it (`mergeability` on a change's detail): of
 its head revision into its target where its home has merged that, and of an
@@ -5592,10 +5871,23 @@ merges nothing, judging the readiness again over the merge the row holds,
 which leaves the merge's own instant — what a moved target's recheck is paced
 by — as it was. A review is a record on the change's own subject, which no
 nudge names, so its refresh comes at the home's next pass, a minute later at
-the most. A refresh whose readiness is judged at its inputs already, or of a
-change whose head revision its home has not merged yet, is refused
-`superseded`, recorded nowhere. The chart moves no version: a stored answer
-is as of the chart that judged it, until the change's next record.
+the most. **The chart is an input too** — who may approve a change and who
+maintains its repository, and so clears a blocker — and no record moves it,
+so the stored answer also names the configuration activation whose chart
+judged it, and a home holding a later one finds the change due a refresh:
+every live change whose merge its home has recorded is judged again once
+after a configuration is applied, a record each, at the home's next pass. A
+refresh whose readiness is judged at its inputs already, by the same chart
+or a later one, or of a change whose head revision its home has not merged
+yet, is refused `superseded`, recorded nowhere. While the committing data
+node still holds an earlier configuration than the home, its refresh is
+judged by its own chart — or refused, where nothing else moved — and the
+home finds the change due again at its next pass, until that node holds the
+later configuration too. A change that closes or
+merges keeps no answer: the record that ends it — a close, a landing, a
+merge, a push that merges it or deletes its source — clears it in the same
+apply, and a mergeability that lands after it stores none, since an ended
+change is ready for nobody and waits on nobody.
 
 ### The merge gate
 
@@ -7352,7 +7644,7 @@ words, since git does not read the header.
 | A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once the repository's home git node has merged its packs, which the home tries every minute ([Compaction](#compaction)) — run the push again a minute later. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. Refused for longer, the home's `code_compaction_behind` alarm stands and its log says what keeps the merge from landing. |
 | A seat's push past the pushes one seat may land in a day on the company's calendar, every repository together — `code.limits.pushes_per_seat_day`, 1 000 unless set ([A seat's push](#a-seats-push)) | `(push_quota: seat <handle> has landed <n> pushes since <day> began on the company's calendar, and code.limits.pushes_per_seat_day lets a seat land <limit> pushes a day: nothing was decided; the count starts again at <the company's next midnight>)` | Nothing of the push was decided and no record carries it; run it again once the instant named has passed. A seat that meets it is pushing in a loop: look at what its turns are doing before raising the bound. A pack the push stored is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. A person's pushes are never counted. |
 | A push moving the branches of more open changes than one record can carry beside its own refs — hundreds of change branches force-pushed at once ([Revisions](#revisions)) — or a person's push landing on hundreds of protected branches, each landing a row and its green row ([The merge queue](#the-merge-queue)) | `(too_many_changes: this push moves <n> live changes[ and lands on <m> protected branches], and their rows beside its own would take its record to <rows> of the 4000 rows one record may write: nothing was decided; push their branches in fewer pushes)` | Push the branches in groups: each group's revisions are written in its own record. Nothing of the push was decided. A push whose changes fit a record of its own, but not beside the pushes batched before it, is never refused: the committer decides it first in its next record. |
-| A push its node checked against the repository just before an expunge of the repository's unreachable objects began — which nothing in this build begins yet ([what it does not do yet](#what-it-does-not-do-yet)) | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
+| A push its node checked against the repository just before an [expunge](#expunge) of the repository's unreachable objects began | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
 | Nothing took the push | `(unavailable: no data node took push <id>: …)` | Nothing landed; push again, or once the fleet has a data node serving. |
 | The object store has no room — the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](object-store.md#an-s3-bucket--s3) | `(store_full: the object store has no room for the <size> this push stores, and nothing was stored; it lands only once <room>)`, the room the store names: on NATS, `an operator makes room — moves the files to a bucket (crewlet objects migrate -to s3), raises the bucket's byte reservation on an external broker, or lets the collector remove what nothing names`; on S3, `an operator makes room in the bucket — frees space on the storage its provider keeps it on, or raises the quota the provider holds it to — or lets the collector remove what nothing names` | Nothing was stored, and pushing again is refused the same until room is made: tell an operator. The node logs `code_push_store_full` at `WARN` with the store's own answer; on NATS, the [`objects_bucket_near_ceiling`](object-store.md#alarms) alarm says how full the bucket is. |
 | The object store failed | `(unavailable: object store unavailable: …)` | Nothing was stored; push again. |

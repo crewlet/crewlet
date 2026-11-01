@@ -2,6 +2,8 @@ package builtin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"slices"
@@ -58,6 +60,28 @@ func checkWriteTools(deps CodeDeps) []tools.Callable {
 	return []tools.Callable{&codeRerunChecks{deps: deps}, &codeReportCheck{deps: deps}}
 }
 
+// bindChecksOperation settles which operation a check write is, as every code
+// write does ([CodeDeps.bindOperation]), before anything is read: on the
+// operator's surface the one minted for the call — which its answer hands back
+// as `op_id` — or the `op_id` it brought back for exactly this call, and a
+// refusal of one answered for another call, nothing written.
+//
+// UNBOUND, a check write took its schema's `op_id` and read nothing of it: an
+// operator's call minted a fresh operation each time it was made, answered no
+// `op_id` to bring back, and took one answered for another call as if it named
+// nothing.
+func (d CodeDeps) bindChecksOperation(c codeCaller, tool string, args map[string]any) (codeCaller,
+	*tools.Result) {
+
+	actor, bound := d.bindOperation(c.actor, tool, args)
+	if bound != "" {
+		r := failed(bound)
+		return codeCaller{}, &r
+	}
+	c.actor = actor
+	return c, nil
+}
+
 // CheckLogReader is the fleet's object store as a check's kept log is read
 // from: a page of one object ([objstore.Store.ReadAt]).
 type CheckLogReader interface {
@@ -73,13 +97,25 @@ const (
 	// op rule).
 	checksVerb = "code-checks"
 	// maxRerunsPerCall is the most checks one call of code_rerun_checks runs
-	// again: 16, so each rerun's operation is a ONE-BYTE STEP of the call's
-	// (a hex digit, [statelog.StepOpID]) inside the operation id bound every
-	// party holds — and a check file's every check is a few calls at most.
-	// A call naming more is refused naming the bound; all_failed reruns the
-	// first sixteen, and the same call again the rest, the first sixteen
-	// then being queued and no longer failed.
+	// again: 16. Each rerun is a write of its own, published and awaited to
+	// its outcome one after another, so a call's time grows with its count;
+	// sixteen keeps a call to a short run of writes while the most checks a
+	// file defines (code.MaxChecksPerFile, 64) is four calls. A call naming
+	// more is refused naming the bound; all_failed reruns the first sixteen,
+	// and the same call again — with the same `op_id` or none — the rest,
+	// the first sixteen then being queued and no longer failed, and each
+	// rerun's step named by its own attempt ([rerunStep]).
 	maxRerunsPerCall = 16
+	// rerunStepBytes is how long a rerun's step of its call's operation is
+	// ([rerunStep]): 7 bytes, the room the longest operation a rerun derives
+	// from leaves under [statelog.MaxCallerOpIDBytes] (128), which the checks
+	// writer holds every request's id to. That longest is an operator's
+	// brought-back `op_id` — a uuid, a dot and the call's name, 71 bytes for
+	// code_rerun_checks ([callName]) — stepped by `code-checks-` and the
+	// repository's uuid ([opIDFor]): 120 bytes, then a dot and the step. A
+	// turn's derived id is 85 bytes before its step, so it has more room
+	// than it uses.
+	rerunStepBytes = 7
 	// checkListPages is the most pages of a commit's checks one call reads
 	// to find a check's attempts: a change's head is listed by name and
 	// attempt, so four pages hold every attempt of every check a checks
@@ -132,6 +168,16 @@ func checkScopeArgs(tool string, args map[string]any) (repo string, change int64
 // attempts reads every attempt of check name of the scope's commit — of
 // every check where name is empty — for its target, or for every target where
 // the scope names none, at the seat's level, at most [checkListPages] pages.
+//
+// THE NAME NARROWS THE LISTING ON THE DATA NODE ([code.CheckQuery]'s Name),
+// which drops every other check's rows before a row is encoded, so only the
+// named check's attempts travel the estate router — at most
+// code.MaxCheckAttempts for each target — rather than every attempt of every
+// check of the commit (up to code.MaxChecksPerFile × code.MaxCheckAttempts,
+// 640 rows, each with a summary of up to 4 KiB and a link of up to 2 KiB),
+// which a report and every read of one check's failures would otherwise move
+// to keep a handful. The target stays a filter here, because a `checks` read
+// refuses one.
 func (d CodeDeps) attempts(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, s checkScope,
 	name string) ([]code.CheckRow, statelog.Position, *tools.Result) {
 
@@ -142,14 +188,15 @@ func (d CodeDeps) attempts(ctx context.Context, turn *turnctx.Turn, tool string,
 	)
 	for range checkListPages {
 		answer, err := d.read(ctx, c, code.ReadQuery{Kind: code.ReadChecks, Repo: s.repo.Name, Fresh: seatRead,
-			Checks: &code.CheckQuery{Change: s.change, OID: s.oid}, Cursor: cursor, Limit: code.MaxSnapshotItems})
+			Checks: &code.CheckQuery{Change: s.change, OID: s.oid, Name: name}, Cursor: cursor,
+			Limit: code.MaxSnapshotItems})
 		if err != nil {
 			r := d.failed(ctx, turn, tool, c.asker, s.repo, err)
 			return nil, at, &r
 		}
 		at = furthestOnLog(at, answer.Position)
 		for _, row := range answer.Checks {
-			if (name == "" || row.Name == name) && (s.target == "" || row.Target == s.target) {
+			if s.target == "" || row.Target == s.target {
 				rows = append(rows, row)
 			}
 		}
@@ -223,22 +270,63 @@ func (t *codeGetCheckFailures) Call(ctx context.Context, args map[string]any) (t
 }
 
 // checkCursor is where a call of code_get_check_failures resumes: at a
-// failure (`failures:<i>`) or at a byte of the log (`log:<offset>`).
+// failure (`failures:<attempt>:<i>:<sha>:<branch ref>`) or at a byte of the
+// log (`log:<attempt>:<offset>:<sha>:<branch ref>`) — OF THE ATTEMPT THE FIRST
+// PAGE READ, which the cursor names whole.
+//
+// # Why a cursor names its attempt
+//
+// Because "the latest attempt" and "the change's head" move while somebody
+// reads a failure a page at a time: a rerun or a CI's next attempt that ends
+// between two pages — likely while the failure is being debugged — or a push
+// to the change. A cursor holding an offset alone was resolved against
+// whatever was latest by then, so its next page was another run's log or
+// failures at the first one's offset, and nothing said the reader had crossed
+// into it. A cursor that names the attempt — its commit, the branch it was
+// checked for and its number — is read straight from that attempt's detail,
+// with no listing to find it again. It reveals nothing the call could not name
+// itself: the read is the repository's, under the asker's grant, as a `sha`
+// call's is. A ref name holds no `:` (git refuses one), so the branch is the
+// cursor's last field whole.
 type checkCursor struct {
 	log    bool
 	offset int64
+	// key is the attempt the cursor reads — its OID, Target and Attempt;
+	// zero on a first call, which has no cursor.
+	key code.CheckKey
 }
+
+// String is the cursor as an answer gives it.
+func (c checkCursor) String() string {
+	kind := "failures"
+	if c.log {
+		kind = "log"
+	}
+	return fmt.Sprintf("%s:%d:%d:%s:%s", kind, c.key.Attempt, c.offset, c.key.OID, c.key.Target)
+}
+
+// pinned reports whether the cursor names an attempt: every cursor but a first
+// call's absent one.
+func (c checkCursor) pinned() bool { return c.key.Attempt > 0 }
 
 func parseCheckCursor(s string) (checkCursor, bool) {
 	if s == "" {
 		return checkCursor{}, true
 	}
-	kind, n, ok := strings.Cut(s, ":")
-	offset, err := strconv.ParseInt(n, 10, 64)
-	if !ok || err != nil || offset < 0 || (kind != "log" && kind != "failures") {
+	parts := strings.SplitN(s, ":", 5)
+	if len(parts) != 5 || (parts[0] != "log" && parts[0] != "failures") {
 		return checkCursor{}, false
 	}
-	return checkCursor{log: kind == "log", offset: offset}, true
+	attempt, aerr := strconv.Atoi(parts[1])
+	offset, oerr := strconv.ParseInt(parts[2], 10, 64)
+	oid, target := parts[3], parts[4]
+	if aerr != nil || attempt < 1 || attempt > code.MaxCheckAttempts || oerr != nil || offset < 0 ||
+		!gitref.ValidOID(oid) || oid == code.ZeroOID || !code.ValidRef(target) ||
+		!strings.HasPrefix(target, branchRoot) {
+		return checkCursor{}, false
+	}
+	return checkCursor{log: parts[0] == "log", offset: offset,
+		key: code.CheckKey{OID: oid, Target: target, Attempt: attempt}}, true
 }
 
 // codeCheckAnswer is one attempt of a check as code_get_check_failures
@@ -300,38 +388,53 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	case cursor.log && t.deps.Logs == nil:
 		return refused(tools.RefusalUnavailable, tool+": this node reads no check's log; its failures, summary "+
 			"and tail are answered without a cursor."), nil
+	case cursor.pinned() && attempt != 0 && attempt != cursor.key.Attempt:
+		return failed(fmt.Sprintf("%s: `cursor` reads attempt %d, and `attempt` names %d; send the cursor with "+
+			"the attempt it came from, or leave `attempt` out.", tool, cursor.key.Attempt, attempt)), nil
+	case cursor.pinned() && ((oid != "" && oid != cursor.key.OID) ||
+		(target != "" && target != cursor.key.Target)):
+		return failed(fmt.Sprintf("%s: `cursor` reads commit %s checked for %s, not the `sha` and "+
+			"`checked_for` this call names; send it with the call it came from.", tool, cursor.key.OID,
+			strings.TrimPrefix(cursor.key.Target, branchRoot))), nil
 	}
 	repo, refusal := t.deps.repo(ctx, turn, tool, c, name)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	s := checkScope{repo: repo, change: change, oid: oid, target: target}
-	rows, _, refusal := t.deps.attempts(ctx, turn, tool, c, s, check)
-	if refusal != nil {
-		return *refusal, nil
-	}
-	latest, found, refusal := latestOf(tool, check, rows)
-	switch {
-	case refusal != nil:
-		return *refusal, nil
-	case !found:
-		return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: no attempt of check %s is held "+
-			"for that commit on %s.", tool, clip(check), repo.Name)), nil
-	case attempt == 0:
-		attempt = latest.Attempt
-	case attempt > latest.Attempt:
-		return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: check %s's latest attempt is "+
-			"%d.", tool, clip(check), latest.Attempt)), nil
+	key := cursor.key
+	if !cursor.pinned() {
+		// A FIRST CALL FINDS ITS ATTEMPT: the latest, or the one it names, of
+		// the check on the scope's commit. A page after it reads the attempt
+		// its cursor names, with no listing ([checkCursor]).
+		s := checkScope{repo: repo, change: change, oid: oid, target: target}
+		rows, _, refusal := t.deps.attempts(ctx, turn, tool, c, s, check)
+		if refusal != nil {
+			return *refusal, nil
+		}
+		latest, found, refusal := latestOf(tool, check, rows)
+		switch {
+		case refusal != nil:
+			return *refusal, nil
+		case !found:
+			return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: no attempt of check %s "+
+				"is held for that commit on %s.", tool, clip(check), repo.Name)), nil
+		case attempt == 0:
+			attempt = latest.Attempt
+		case attempt > latest.Attempt:
+			return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: check %s's latest "+
+				"attempt is %d.", tool, clip(check), latest.Attempt)), nil
+		}
+		key = code.CheckKey{OID: latest.OID, Target: latest.Target, Attempt: attempt}
 	}
 	answer, err := t.deps.read(ctx, c, code.ReadQuery{Kind: code.ReadCheck, Repo: repo.Name, Fresh: seatRead,
-		Checks: &code.CheckQuery{OID: latest.OID, Target: latest.Target, Name: check, Attempt: attempt}})
+		Checks: &code.CheckQuery{OID: key.OID, Target: key.Target, Name: check, Attempt: key.Attempt}})
 	if err != nil {
 		return t.deps.failed(ctx, turn, tool, c.asker, repo, err), nil
 	}
 	d := answer.Check
 	if d == nil {
 		return faulted(ctx, tool, fmt.Errorf("builtin: the code host answered check %s of %s with no detail",
-			check, latest.OID), fmt.Sprintf("%s could not read check %s: %s.", tool, clip(check), faultSaid)), nil
+			check, key.OID), fmt.Sprintf("%s could not read check %s: %s.", tool, clip(check), faultSaid)), nil
 	}
 	out := codeCheckAnswer{Repo: repo.Name, SHA: d.OID, CheckedFor: strings.TrimPrefix(d.Target, branchRoot),
 		Name: d.Name, Attempt: d.Attempt, State: d.State, Reason: d.Reason, Required: d.Required,
@@ -345,7 +448,7 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 		return t.logPage(ctx, turn, c, out, d, cursor.offset)
 	}
 	if d.Log != nil {
-		out.Log = &codeCheckLog{Size: d.Log.Size, Cursor: "log:0"}
+		out.Log = &codeCheckLog{Size: d.Log.Size, Cursor: checkCursor{log: true, key: d.CheckKey}.String()}
 	}
 	from := int(min(cursor.offset, int64(len(d.Failures))))
 	failures := d.Failures[from:]
@@ -363,7 +466,7 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 				f.Message)
 		}
 		if k < len(failures) {
-			page.Next = "failures:" + strconv.Itoa(from+k)
+			page.Next = checkCursor{offset: int64(from + k), key: d.CheckKey}.String()
 		}
 		return read, page
 	}
@@ -423,7 +526,7 @@ func (t *codeGetCheckFailures) logPage(ctx context.Context, turn *turnctx.Turn, 
 	at := offset
 	out.Log = &codeCheckLog{Size: d.Log.Size, Offset: &at, Text: text}
 	if next := offset + int64(used); next < d.Log.Size {
-		out.Log.Cursor = "log:" + strconv.FormatInt(next, 10)
+		out.Log.Cursor = checkCursor{log: true, offset: next, key: d.CheckKey}.String()
 	}
 	read := newForeignRead(turn, c.asker.Seat)
 	read.fence(fieldPath{}.key("log").key("text"), provenance.SourceCheckLog, nil, false, text)
@@ -606,11 +709,45 @@ func rerunAsks(tool string, args map[string]any) ([]rerunAsk, bool, *tools.Resul
 	return asks, false, nil
 }
 
+// rerunStep is the step of its call's operation one rerun is written under
+// ([statelog.StepOpID]): a digest of the attempt it queues — its commit, its
+// target, its check and the attempt — never its place in the call.
+//
+// # Why the attempt, and not the index
+//
+// Because the checks writer's ledger answers an operation id it already holds
+// on the repository's checks subject as that write, before any decide runs.
+// A step named by its index made a second call under the same operation — an
+// operator's brought-back `op_id`, or a request's own key, asking all_failed
+// again for the checks past the first sixteen — reuse the first call's ids for
+// OTHER checks, each answered `applied` from the first call's record while
+// nothing of it was queued. Named by its attempt, a true retry lands on the
+// same records and a call for other checks, or for a later attempt of the same
+// one, on fresh ones.
+//
+// SEVEN BYTES OF UNPADDED BASE64URL, 42 bits ([rerunStepBytes]): every byte the
+// operation's bound leaves. Two steps collide only when one operation reruns
+// both attempts; even one that reran every attempt a commit's target can hold —
+// code.MaxChecksPerFile × code.MaxCheckAttempts, 640 — collides with odds of
+// about one in twenty million (640² / 2 in 2^42).
+func rerunStep(key code.CheckKey) string {
+	h := sha256.New()
+	for _, part := range []string{key.OID, key.Target, key.Name, strconv.Itoa(key.Attempt)} {
+		_, _ = h.Write([]byte(part))
+		_, _ = h.Write([]byte{0})
+	}
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))[:rerunStepBytes]
+}
+
 func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
 	tool := t.Name()
 	c, refusal := t.deps.writeCaller(ctx, turn, tool)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	c, refusal = t.deps.bindChecksOperation(c, tool, args)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -627,22 +764,18 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	s := checkScope{repo: repo, change: change, oid: oid, target: target}
-	// EVERY ATTEMPT OF THE COMMIT'S CHECKS, read once: what each named
-	// check is keyed by — its commit and its target — and, for all_failed,
-	// which checks' latest attempts did not pass.
-	var rows []code.CheckRow
-	var seen statelog.Position
-	if all {
-		rows, seen, refusal = t.deps.attempts(ctx, turn, tool, c, s, "")
-	} else {
-		for _, a := range asks {
-			named, at, refusal := t.deps.attempts(ctx, turn, tool, c, s, a.name)
-			if refusal != nil {
-				return *refusal, nil
-			}
-			rows, seen = append(rows, named...), furthestOnLog(seen, at)
-		}
+	// THE COMMIT'S CHECKS, READ ONCE whatever the call names: what each
+	// named check is keyed by — its commit and its target — and, for
+	// all_failed, which checks' latest attempts did not pass. One listing
+	// behind one linearizable barrier, narrowed on the data node where the
+	// call names a single check ([CodeDeps.attempts]); never one listing per
+	// check named, which is as many barriers, one after another, each moving
+	// the same rows, before the first rerun is published.
+	narrow := ""
+	if !all && !slices.ContainsFunc(asks, func(a rerunAsk) bool { return a.name != asks[0].name }) {
+		narrow = asks[0].name
 	}
+	rows, seen, refusal := t.deps.attempts(ctx, turn, tool, c, s, narrow)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -697,9 +830,9 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out.Change = code.ChangeRef(repo.Name, change)
 	}
 	by := writer(ctx, turn, c)
-	for i, key := range keys {
+	for _, key := range keys {
 		key.Attempt++
-		r := code.ChecksRequest{OpID: statelog.StepOpID(op, strconv.FormatInt(int64(i), 16)), Seen: seen,
+		r := code.ChecksRequest{OpID: statelog.StepOpID(op, rerunStep(key)), Seen: seen,
 			Asker: by, Rerun: &code.CheckRerun{CheckKey: key, Ceiling: c.write}}
 		res, err := t.deps.Writer.Checks(ctx, r)
 		line := codeRerun{Name: key.Name, Attempt: key.Attempt}
@@ -796,6 +929,10 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if c.asker.Kind != code.PrincipalOperator || c.asker.Seat == "" {
 		return refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, tool+": a check is reported by a person's "+
 			"own CI, through a credential bound to their human seat."), nil
+	}
+	c, refusal = t.deps.bindChecksOperation(c, tool, args)
+	if refusal != nil {
+		return *refusal, nil
 	}
 	name, change, oid, target, refusal := checkScopeArgs(tool, args)
 	if refusal != nil {

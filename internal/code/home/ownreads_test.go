@@ -75,7 +75,8 @@ func TestAHomeLeavesItsSeatsAUnit(t *testing.T) {
 		Touched: []string{"b.go"}})
 	held := newHeldReads(e)
 	p := &placement{homes: map[string]string{repoA: "node-a", repoB: "node-a"}}
-	loopOver(t, home.Options{Estate: held, Placement: asNode{placement: p, node: "node-a"}, Nudges: newNudges(),
+	loopOver(t, home.Options{Chart: noChart,
+		Estate: held, Placement: asNode{placement: p, node: "node-a"}, Nudges: newNudges(),
 		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: "node-a",
 		Share: units(1)}, time.Hour)
 	select {

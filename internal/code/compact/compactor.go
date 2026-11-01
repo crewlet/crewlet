@@ -264,7 +264,8 @@ type holds struct {
 // three loops, each a pass every minute — COMPACTION, which merges a
 // repository's small packs ([Compactor.Poll]); PUBLICATION, which writes its
 // next published layer ([Compactor.PublishPass]); and EXPUNGE, which drops what
-// no ref reaches when a person asks ([Compactor.ExpungePass]) — so a
+// no ref reaches when a person asks, and weekly once it is a quarter of the
+// repository ([Compactor.ExpungePass]) — so a
 // publication of a large repository, minutes of its build, never delays a
 // compaction that keeps a hot repository under the pack bound, that
 // repository's own included, and neither delays a purge. Each runs one build
@@ -655,7 +656,9 @@ func (c *Compactor) unclaimPublication(repoID string) {
 // layer planned beside it would name one or sit over a layer the begin drops
 // — either refusing the begin stale after its whole build, or itself. So a
 // repository's merges wait on this node for the length of one cycle, at the
-// rate a person asks a purge: a cycle or two a request.
+// rate a person asks a purge or the weekly schedule finds an expunge due: a
+// cycle or two each, and a repository found not due takes no claim past its
+// scan.
 func (c *Compactor) claimExpunge(repoID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

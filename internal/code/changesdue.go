@@ -34,8 +34,10 @@ import (
 //     (code_mergeability.checks_position) an attempt at its head commit for
 //     its target was queued or ended past since — THE CHECK TERM: a finished
 //     head check, a requeue (code_checks' key, one seek of the commit and the
-//     target) — which the home
-//     records over the merge the row holds, running none;
+//     target) — or by a chart EARLIER than the one the home holds
+//     ([ChangesDueQuery.ChartEpoch]) — THE CHART TERM: who may approve and
+//     who maintains the repository are the chart's, which no record moves —
+//     which the home records over the merge the row holds, running none;
 //   - and a RECHECK of that merge — the change's mergeability is of its head
 //     revision against its branch, and its target has moved past the tip it
 //     merged into since, or the merge was undecided — once the mergeability
@@ -55,9 +57,16 @@ import (
 // alone, and holds an ended change's only until its home settles them.
 //
 // Every record the home makes takes its change off the list by its own row,
-// so the rows are the work list and nothing else is: a merge and a refresh
-// each store the versions they judged the readiness at, and a settling moves
-// the counts its change is found by.
+// so the rows and the home's chart are the work list and nothing else is: a
+// merge and a refresh each store the versions and the chart they judged the
+// readiness at, and a settling moves the counts its change is found by. A
+// chart apply makes every live change of a home's repositories due ONE
+// refresh, recorded at its next pass — a record a change, which the decide
+// stores whether or not the answer moved, since the row must say the later
+// chart judged it — and a refresh decided by a committing node behind that
+// chart is judged by its own, or refused superseded where nothing else
+// moved, so a home ahead of its repositories' committer finds the change due
+// again at its next pass until the committer has applied the activation too.
 //
 // A CHANGE ON AN ARCHIVED OR A DELETED REPOSITORY IS NOBODY'S WORK: every write
 // of it would be refused (repo_archived, repo_deleted), and listed it would be
@@ -144,6 +153,9 @@ func (q ReadQuery) validateChangesDue() error {
 	case d.RepoID == "" && d.Rechecks != 0:
 		return refused("changes_due.rechecks", "the listing of repositories names the repositories alone, and a "+
 			"repository's read its rechecks")
+	case d.ChartEpoch < 0:
+		return refused("changes_due.chart_epoch", fmt.Sprintf("%d; a chart's activation is a Unix millisecond, "+
+			"or 0 for a home holding none", d.ChartEpoch))
 	}
 	for _, f := range []struct {
 		field string
@@ -159,7 +171,7 @@ func (q ReadQuery) validateChangesDue() error {
 		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a changes_due read lists the repositories a home owes change work in, or "+
@@ -203,7 +215,8 @@ func (r *Reader) dueRepos(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Rea
 	// code_conversations_asked_idx — each in its index's order, at most a
 	// page of repositories after the cursor, so the first page's worth of the
 	// two merged is the first page's worth of their union.
-	live, err := reposOf(ctx, tx, dueReposSQL, q.Cursor, r.pageRows, store.EncodeTime(q.ChangesDue.RecheckBefore))
+	live, err := reposOf(ctx, tx, dueReposSQL, q.Cursor, r.pageRows, store.EncodeTime(q.ChangesDue.RecheckBefore),
+		q.ChangesDue.ChartEpoch)
 	if err != nil {
 		return err
 	}
@@ -309,7 +322,7 @@ func dueChangesPage(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, page
 			return err
 		}
 	}
-	rows, err := tx.QueryContext(ctx, dueChangesSQL, repoID, q.Cursor, pageRows)
+	rows, err := tx.QueryContext(ctx, dueChangesSQL, repoID, q.Cursor, pageRows, q.ChangesDue.ChartEpoch)
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's due changes: %w", repoID, err)
 	}
@@ -437,10 +450,12 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 // what the listing of repositories asks of every live change it walks, where a
 // repository's own read asks the two halves of it apart. A REFRESH IS DUE
 // where that mergeability's readiness was judged at versions the change's row
-// or its conversation have moved past, or at a position its head's checks
-// have moved past — [refreshDue], its conversation's readiness version read
-// by the conversations' key, its head's attempts for its target by
-// code_checks' (repo_id, commit_oid, target_ref) prefix.
+// or its conversation have moved past, at a position its head's checks have
+// moved past, or by a chart earlier than the home's, ?4 — [refreshDue], its
+// conversation's readiness version read by the conversations' key, its head's
+// attempts for its target by code_checks' (repo_id, commit_oid, target_ref)
+// prefix, its chart off the row. Both statements that ask it bind the home's
+// chart as ?4.
 const (
 	dueReposSQL = `SELECT c.repo_id FROM code_changes AS c INDEXED BY code_changes_open_idx
 		WHERE c.repo_id > ?1 AND ` + liveChanges + `
@@ -515,12 +530,13 @@ const (
 	// refreshDue is a change's mergeability, m, as one its home owes a
 	// refresh of: of the change's head revision against its branch, its
 	// readiness judged at a version of the change's row, c, or of its
-	// conversation's readiness inputs, that each has moved past since — or at
+	// conversation's readiness inputs, that each has moved past since — at
 	// a position of its head's checks an attempt at the head commit for its
-	// target was queued or ended past since (Mergeability.ChecksPosition).
+	// target was queued or ended past since (Mergeability.ChecksPosition) —
+	// or by a chart earlier than the home's, ?4 (Mergeability.ChartEpoch).
 	refreshDue = `m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref
-		AND (m.change_version < c.version OR m.readiness_version < (SELECT v.readiness_version
-			FROM code_conversations AS v WHERE v.change_id = c.id)
+		AND (m.change_version < c.version OR m.chart_epoch < ?4
+			OR m.readiness_version < (SELECT v.readiness_version FROM code_conversations AS v WHERE v.change_id = c.id)
 			OR EXISTS (SELECT 1 FROM code_checks AS k INDEXED BY ` + checksKey + `
 				WHERE k.repo_id = c.repo_id AND k.commit_oid = c.head_oid AND k.target_ref = c.target_ref
 					AND (k.queued_position > m.checks_position OR k.finished_position > m.checks_position)))`

@@ -2035,6 +2035,45 @@ cache on its own disk. What such a node needs from its host:
   code log or the object store — and one full with the CPU high is a node
   short of cores.
 
+### Reaching other forges
+
+A git node dials out for three things: a repository's **import**, its **pull
+mirror**'s syncs and its **push mirror**'s pushes, each run by the
+repository's home git node ([Mirrors and
+imports](../concepts/code-host.md#mirrors-and-imports)). Every one goes out
+the same one way, which is what the node's network has to allow:
+
+- **HTTPS alone**, to the host the repository's settings name, on its port
+  (443 unless the URL says otherwise). No other scheme is dialed, and a
+  redirect is not followed: a forge that moved a repository is given its new
+  URL in the settings.
+- **Public addresses only, by default.** The node resolves the host itself
+  before git runs and refuses it when any address it resolves to is loopback,
+  link-local, private or unique-local, then hands git exactly the addresses it
+  judged, so a name cannot resolve one way when judged and another when
+  dialed. A forge on your own network is reached by setting
+  [`git.import_allow_private: true`](../concepts/configuration.md#git)
+  in that node's Tier A — on every git node, since any of them may become a
+  repository's home. It governs all three, pull and push alike, whatever its
+  name says.
+- **A proxy, if the node needs one, is the process's own**: the proxy
+  `HTTPS_PROXY` names for the forge's URL, less what `NO_PROXY` exempts, read
+  as the engine's own HTTP clients read them, is handed to git as its
+  `http.proxy`. Through a proxy it is the proxy that resolves and dials the
+  forge, so the address rule above is then the proxy's to hold — the wall is
+  yours there, as it is for every other outbound request of the engine.
+- **The certificate authorities are the process's own**: libcurl's own store,
+  or the bundle `SSL_CERT_FILE` names and the one directory `SSL_CERT_DIR`
+  names (several are refused, since libcurl reads one), which is how a forge
+  behind a private certificate authority is trusted. TLS is always verified:
+  no setting turns it off.
+- **Credentials are variables**, never values in the company file: each
+  mirror's or import's `credential` names a variable resolved from the
+  [secret store](../concepts/secret-store.md), then the node's environment, at
+  each dial, and sent to the forge in a header, never on git's command line.
+  A push mirror's is the token of the seat it pushes as at that forge, so set
+  it on every git node's secret store or environment.
+
 ### Sizing git nodes
 
 Size ONE git node for publishing, and every other for serving. A repository's
@@ -2222,7 +2261,7 @@ from that map — a guard test fails if the two drift.
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `backup_requested`, `config_revision_activated`, `config_revision_applied`, `operator_acted`, `org_started`, `org_stopped`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `change_merged`, `change_opened`, `code_check_finished`, `code_fetched`, `code_queue_ejected`, `code_target_broken`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `review_submitted`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `change_merged`, `change_opened`, `code_check_finished`, `code_fetched`, `code_mirror_pushed`, `code_queue_ejected`, `code_target_broken`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `review_submitted`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `sandbox_clarification_requested`, `sandbox_run_answered`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned` |
 | `webhook` | `inbound_delivery` — one row per delivery presented to one seat, from a [webhook route](../reference/api-endpoints.md) or a [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet). The row is filed under the delivery's own label (`webhook:<event>`, `forge:<event>`, `socket:posted`) rather than under `inbound_delivery`, with the provider's exact bytes as its payload |
 
@@ -2288,6 +2327,7 @@ category.
 | `auxiliary_spend` | **Accounting, not activity**: what the auxiliary model cost for one key, coalesced per flush ([Budgets and spend § Auxiliary spend](budgets-and-spend.md#auxiliary-spend)). A turn writes several beside its own phases, and a compaction a burst, so in the feed they would push the turns, failures and deliveries a reader is watching out of the ring. |
 | `code_check_finished` | **Counted, not watched**: one attempt of a check of a commit that ended, as its row on the code log keeps the ending, published once by the data node that wrote it ([Code Host § Who records a check](../concepts/code-host.md#who-records-a-check)). Every push of every change ends each check its repository defines, faster than anybody reads a feed. How a change's checks ended is read where it is asked — the change's checks, the repository's. |
 | `code_fetched` | **An audit, not activity**: one reader's reads of a `visibility: unit` repository's contents — fetches whose answers carried a pack, or a code tool's answers — coalesced per fifteen-second flush, with how many and their bytes ([Code Host § Who read it](../concepts/code-host.md#who-read-it)). A busy company's readers — a CI token fetching on every build, seats reading files a line range at a time — write a record each every flush, faster than anybody reads a feed. Who read a repository is answered by `GET /code/repos/{name}/readers` and by the operator catalogue's readers tool, summed across the fleet. |
+| `code_mirror_pushed` | **An audit, not activity**: what a repository's home git node pushed to its push mirror at another forge — the refs it set and onto what, those it deleted and the protected branches it held back with no green commit — published once a push that moved something ([Code Host § Mirrors and imports](../concepts/code-host.md#mirrors-and-imports)). A busy repository's mirror pushes as often as once a minute, each where the repository's settings told it to, and nobody acts on one. A push that failed is no event: it is its home's state, which the mirror alarm ([Alarms](../reference/alarms.md)) raises once it outlasts the mirror's refresh. |
 
 #### Querying events
 

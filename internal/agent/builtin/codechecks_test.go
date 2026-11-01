@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -33,6 +34,10 @@ func (l *checkLogs) ReadAt(_ context.Context, o objstore.Object, off, n int64) (
 	}
 	return []byte(l.text[off : off+n]), nil
 }
+
+// firstLogPage is the cursor of the first page of [failedCheck]'s log: its
+// attempt, byte 0, its commit and the branch it was checked for.
+var firstLogPage = "log:1:0:" + mainOID + ":refs/heads/main"
 
 // failedCheck is attempt 1 of check `unit` of main, for main, failed with
 // its summary, tail, one failure and its kept log of size bytes.
@@ -80,12 +85,12 @@ func TestACheckLogIsFenced(t *testing.T) {
 	}
 	assertEnvelope(t, answer, provenance.TrustExternal, 0)
 	log, _ := answer["log"].(map[string]any)
-	if log["cursor"] != "log:0" {
-		t.Fatalf("the check's answer offers its log as %v, want cursor log:0", answer["log"])
+	if log["cursor"] != firstLogPage {
+		t.Fatalf("the check's answer offers its log as %v, want cursor %s", answer["log"], firstLogPage)
 	}
 
 	got = callIn(t, reg, turn, builtin.CodeGetCheckFailuresTool, map[string]any{"repo": "site", "sha": mainOID,
-		"name": "unit", "cursor": "log:0"})
+		"name": "unit", "cursor": firstLogPage})
 	seen, answer = fencesIn(t, b, got.Output)
 	assertFences(t, seen, []wantFence{{label, "check-log"}})
 	if len(seen) != 1 {
@@ -190,7 +195,7 @@ func TestACheckLogPageEndsOnAWholeCharacter(t *testing.T) {
 	turn.Lookups = turnctx.NewLookups()
 
 	var read strings.Builder
-	cursor := "log:0"
+	cursor := firstLogPage
 	for pages := 0; cursor != ""; pages++ {
 		if pages == 3 {
 			t.Fatalf("the log took more than 3 pages, at %s", cursor)
@@ -320,5 +325,311 @@ func TestARerunAsksForTheAttemptAfterTheOneRead(t *testing.T) {
 		!strings.Contains(got.Output, string(code.CheckRefusalRerunGenuine)) {
 		t.Errorf("a refused rerun answered %q as %s, want forbidden naming rerun_genuine", got.Output,
 			tools.RefusalOf(got))
+	}
+}
+
+// failedChecks is attempt 1 of each named check of main, for main, ended
+// failed.
+func failedChecks(names ...string) []code.CheckDetail {
+	out := make([]code.CheckDetail, 0, len(names))
+	for _, name := range names {
+		out = append(out, code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: siteID,
+			OID: mainOID, Target: "refs/heads/main", Name: name, Attempt: 1}, State: code.CheckStateFailed,
+			Reason: code.CheckReasonExit}})
+	}
+	return out
+}
+
+// A RERUN PAST SIXTEEN UNDER ONE OPERATION QUEUES THE REST: a person's
+// all_failed over twenty failed checks reruns the first sixteen and says to
+// make the same call again; made again with the `op_id` the first answered,
+// it queues the other four. Each rerun's step is named by the attempt it
+// queues, so none of the second call's takes an id the first wrote another
+// check's rerun under — which the writer's ledger answers as that write, with
+// nothing queued — and every id, the longest a rerun derives (an operator's
+// brought-back `op_id`) included, is within the bound the writer holds an
+// operation id to.
+//
+// Mutation: name each rerun's step by its place in the call → red.
+func TestARerunPastSixteenUnderOneOperationQueuesTheRest(t *testing.T) {
+	t.Parallel()
+	host, writer := newCodeHost(), &codeWrites{}
+	var names []string
+	for i := range 20 {
+		names = append(names, fmt.Sprintf("check-%02d", i))
+	}
+	host.checks = failedChecks(names...)
+	// THE WRITER'S LEDGER: an id it holds is answered as the write it first
+	// named, nothing queued; one it does not queues the attempt, which the
+	// commit's listing then holds as its latest.
+	held := map[string]code.CheckKey{}
+	var queued, answeredAsAnother []string
+	writer.check = func(r code.ChecksRequest) (code.ChecksResult, error) {
+		key := r.Rerun.CheckKey
+		if err := statelog.CheckCallerOpID(r.OpID); err != nil {
+			t.Errorf("the rerun of %s at attempt %d is written under %q: %v", key.Name, key.Attempt, r.OpID, err)
+		}
+		row := code.CheckRow{CheckKey: key, State: code.CheckStateQueued}
+		if first, ok := held[r.OpID]; ok {
+			if first != key {
+				answeredAsAnother = append(answeredAsAnother, key.Name)
+			}
+			row.CheckKey = first
+			return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: &row}, nil
+		}
+		held[r.OpID] = key
+		queued = append(queued, key.Name)
+		host.mu.Lock()
+		host.checks = append(host.checks, code.CheckDetail{CheckRow: row})
+		host.mu.Unlock()
+		return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: &row}, nil
+	}
+	deps := writeDeps(host, writer)
+	deps.Actor = builtin.PrincipalActor
+	tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
+		builtin.CodeRerunChecksTool)
+	var answer struct {
+		Reruns []struct {
+			Name string `json:"name"`
+		} `json:"reruns"`
+		OpID string `json:"op_id"`
+		Note string `json:"note"`
+	}
+	args := map[string]any{"repo": "site", "sha": mainOID, "all_failed": true}
+
+	got, err := tool.CallForTurn(asBoundPerson(), nil, args)
+	if err != nil || got.Failed {
+		t.Fatalf("a person's all_failed answered %v %q", err, got.Output)
+	}
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Reruns) != 16 || answer.OpID == "" || answer.Note == "" {
+		t.Fatalf("all_failed over twenty answered %d reruns under %q, noting %q; want sixteen, an op_id and the "+
+			"rest said", len(answer.Reruns), answer.OpID, answer.Note)
+	}
+
+	args["op_id"] = answer.OpID
+	got, err = tool.CallForTurn(asBoundPerson(), nil, args)
+	if err != nil || got.Failed {
+		t.Fatalf("the same call again, under its op_id, answered %v %q", err, got.Output)
+	}
+	if len(answeredAsAnother) != 0 {
+		t.Errorf("the same call again reran %v under ids the first call wrote other checks' reruns under, "+
+			"answered from those with nothing queued", answeredAsAnother)
+	}
+	slices.Sort(queued)
+	if !slices.Equal(queued, names) {
+		t.Errorf("the two calls queued %v, want each of the twenty once: %v", queued, names)
+	}
+}
+
+// A CHECK WRITE IS THE OPERATION ITS OP_ID NAMES: on the operator's surface,
+// code_rerun_checks and code_report_check each answer the operation they were
+// made as, to bring back, and refuse — writing nothing — an `op_id` answered
+// for another call, as every write that offers one does.
+//
+// Mutation: leave a check write's operation unbound → red.
+func TestACheckWriteIsTheOperationItsOpIDNames(t *testing.T) {
+	t.Parallel()
+	rerun := func(attempt int) map[string]any {
+		return map[string]any{"repo": "site", "sha": mainOID,
+			"checks": []any{map[string]any{"name": "unit", "attempt": attempt}}}
+	}
+	report := func(status string) map[string]any {
+		return map[string]any{"repo": "site", "sha": mainOID, "name": "lint", "status": status}
+	}
+	for _, c := range []struct {
+		tool       string
+		one, other map[string]any
+	}{
+		{builtin.CodeRerunChecksTool, rerun(1), rerun(2)},
+		{builtin.CodeReportCheckTool, report("running"), report("passed")},
+	} {
+		t.Run(c.tool, func(t *testing.T) {
+			t.Parallel()
+			host, writer := newCodeHost(), &codeWrites{}
+			deps := writeDeps(host, writer)
+			deps.Actor = builtin.PrincipalActor
+			tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
+				c.tool)
+			got, err := tool.CallForTurn(asBoundPerson(), nil, c.one)
+			if err != nil || got.Failed {
+				t.Fatalf("%s answered %v %q", c.tool, err, got.Output)
+			}
+			var answer struct {
+				OpID string `json:"op_id"`
+			}
+			if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+				t.Fatal(err)
+			}
+			if answer.OpID == "" {
+				t.Errorf("%s answered no op_id to bring back: %s", c.tool, got.Output)
+			}
+			sent := len(writer.checksAsked())
+
+			c.other["op_id"] = answer.OpID
+			got, err = tool.CallForTurn(asBoundPerson(), nil, c.other)
+			if err != nil || !got.Failed || len(writer.checksAsked()) != sent {
+				t.Errorf("%s brought an op_id answered for another call answered %v %q, writing %d more", c.tool,
+					err, got.Output, len(writer.checksAsked())-sent)
+			}
+		})
+	}
+}
+
+// A CHECK'S ATTEMPTS ARE LISTED BY ITS NAME: code_get_check_failures and
+// code_report_check each find one check's attempts by a `checks` read that
+// names it, so the data node drops every other check's rows before encoding
+// a row — never by the commit's whole listing filtered here, which moves
+// every attempt of every check of the commit to keep a handful.
+//
+// Mutation: drop the name from the listing's question → red.
+func TestACheckIsListedByItsName(t *testing.T) {
+	t.Parallel()
+	host, writer := newCodeHost(), &codeWrites{}
+	host.checks = append(host.checks, failedChecks("lint", "vet")...)
+	turn, _ := readerTurn(t)
+	turn.Lookups = turnctx.NewLookups()
+
+	got := callIn(t, codeRegistry(t, codeDeps(host)), turn, builtin.CodeGetCheckFailuresTool,
+		map[string]any{"repo": "site", "sha": mainOID, "name": "unit"})
+	if got.Failed {
+		t.Fatalf("a check's failures answered %q", got.Output)
+	}
+	deps := writeDeps(host, writer)
+	deps.Actor = builtin.PrincipalActor
+	report := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
+		builtin.CodeReportCheckTool)
+	got, err := report.CallForTurn(asBoundPerson(), nil, map[string]any{"repo": "site", "sha": mainOID,
+		"name": "lint", "status": "running"})
+	if err != nil || got.Failed {
+		t.Fatalf("a person's report answered %v %q", err, got.Output)
+	}
+
+	reads, _, _ := host.asked()
+	var listed []string
+	for _, q := range reads {
+		if q.Kind == code.ReadChecks {
+			listed = append(listed, q.Checks.Name)
+		}
+	}
+	if !slices.Equal(listed, []string{"unit", "lint"}) {
+		t.Errorf("the read and the report listed the commit's checks narrowed to %q, want unit's, then lint's",
+			listed)
+	}
+}
+
+// A NAMED RERUN READS THE COMMIT'S CHECKS ONCE: a rerun naming three checks
+// finds all three in one listing of the commit's checks — one barrier, one
+// read — never one listing per check named; and one naming a single check
+// lists that check's attempts alone.
+//
+// Mutation: list the commit's checks once per check named → red.
+func TestANamedRerunReadsTheCommitsChecksOnce(t *testing.T) {
+	t.Parallel()
+	host, writer := newCodeHost(), &codeWrites{}
+	host.checks = append(host.checks, failedChecks("lint", "vet")...)
+	reg := codeRegistry(t, writeDeps(host, writer))
+	listings := func() []code.ReadQuery {
+		reads, _, _ := host.asked()
+		return slices.DeleteFunc(reads, func(q code.ReadQuery) bool { return q.Kind != code.ReadChecks })
+	}
+
+	got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
+		"repo": "site", "sha": mainOID, "checks": []any{map[string]any{"name": "unit", "attempt": 1},
+			map[string]any{"name": "lint", "attempt": 1}, map[string]any{"name": "vet", "attempt": 1}}})
+	if got.Failed || len(writer.checksAsked()) != 3 {
+		t.Fatalf("a rerun of three checks answered %q, sending %d reruns", got.Output, len(writer.checksAsked()))
+	}
+	if l := listings(); len(l) != 1 || l[0].Checks.Name != "" {
+		t.Errorf("a rerun of three checks listed the commit's checks %d times (%+v), want once, whole", len(l), l)
+	}
+
+	got = callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
+		"repo": "site", "sha": mainOID, "checks": []any{map[string]any{"name": "lint", "attempt": 1}}})
+	if got.Failed {
+		t.Fatalf("a rerun of one check answered %q", got.Output)
+	}
+	if l := listings()[1:]; len(l) != 1 || l[0].Checks.Name != "lint" {
+		t.Errorf("a rerun of lint listed the commit's checks as %+v, want once, narrowed to lint", l)
+	}
+}
+
+// A CHECK'S PAGES STAY ON THE ATTEMPT THEY BEGAN: a log read a page at a
+// time, whose check's next attempt ends between two pages, reads its second
+// page from the attempt its first was of — straight from that attempt, with
+// no listing of the commit's checks to find it again — and a cursor sent with
+// another `attempt` is refused rather than read as either.
+//
+// Mutation: find a page's attempt from the listing again (the latest), or
+// read a cursor sent with another attempt → red.
+func TestACheckPageStaysOnTheAttemptItBegan(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("a", 32<<10) + strings.Repeat("b", 10)
+	host := newCodeHost()
+	host.checks = []code.CheckDetail{failedCheck("", "", "boom", "lab.go", len(text))}
+	deps := codeDeps(host)
+	deps.Logs = &checkLogs{text: text}
+	reg := codeRegistry(t, deps)
+	turn, b := readerTurn(t)
+	turn.Lookups = turnctx.NewLookups()
+	entry, ok := reg.Lookup(builtin.CodeGetCheckFailuresTool)
+	if !ok {
+		t.Fatalf("%s is not registered", builtin.CodeGetCheckFailuresTool)
+	}
+	page := func(cursor string, attempt int) (tools.Result, map[string]any, string) {
+		args := map[string]any{"repo": "site", "sha": mainOID, "name": "unit", "cursor": cursor}
+		if attempt > 0 {
+			args["attempt"] = attempt
+		}
+		got, err := entry.Tool.(tools.SeatCallable).CallForTurn(everyGrant(), turn, args)
+		if err != nil {
+			t.Fatalf("the page at %s: %v", cursor, err)
+		}
+		if got.Failed {
+			return got, nil, ""
+		}
+		seen, answer := fencesIn(t, b, got.Output)
+		if len(seen) != 1 {
+			t.Fatalf("the page at %s answered %d fences, want its text in one", cursor, len(seen))
+		}
+		return got, answer, strings.TrimSuffix(seen[0].inner, "\n")
+	}
+
+	got, answer, _ := page(firstLogPage, 0)
+	if got.Failed {
+		t.Fatalf("the log's first page answered %q", got.Output)
+	}
+	log, _ := answer["log"].(map[string]any)
+	next, _ := log["cursor"].(string)
+	if next == "" {
+		t.Fatalf("the log's first page offers no next page: %v", answer["log"])
+	}
+
+	// THE CHECK'S NEXT ATTEMPT ENDS between the two pages, failed, keeping a
+	// log of its own.
+	second := failedCheck("", "", "bang", "lab.go", 7)
+	second.Attempt = 2
+	host.mu.Lock()
+	host.checks = append(host.checks, second)
+	host.mu.Unlock()
+	reads, _, _ := host.asked()
+	listed := readsOf(reads, code.ReadChecks)
+
+	got, answer, text2 := page(next, 0)
+	if got.Failed {
+		t.Fatalf("the log's second page, once attempt 2 ended, answered %q", got.Output)
+	}
+	if answer["attempt"] != float64(1) || text2 != strings.Repeat("b", 10) {
+		t.Errorf("the log's second page is attempt %v's, reading %q; want attempt 1's last ten bytes",
+			answer["attempt"], text2)
+	}
+	if reads, _, _ := host.asked(); readsOf(reads, code.ReadChecks) != listed {
+		t.Errorf("the second page listed the commit's checks again, to find the attempt its cursor names")
+	}
+
+	if got, _, _ := page(next, 2); !got.Failed || !strings.Contains(got.Output, "`attempt` names 2") {
+		t.Errorf("a cursor of attempt 1 sent with attempt 2 answered %q, want it refused", got.Output)
 	}
 }

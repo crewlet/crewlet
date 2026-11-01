@@ -776,11 +776,12 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 
 // A DUTY LISTING NAMES NO ASKER: the compactor's `compaction_due` read, the
 // publisher's `publication_due` read, and the maintainer's `expunge_due` read
-// and its `expunge_tips` read of a repository's ref drops are the engine's
-// own, so the domain refuses each with an asker — the one place every surface
-// a principal reads the code host through meets — answers it with none, and
-// still refuses a principal's read that names none; and each takes nothing its
-// listing does not read.
+// and its `expunge_tips` read of a repository's ref drops, and a home's
+// `mirror_push` read of the push mirror and the green rows it publishes, are
+// the engine's own, so the domain refuses each with an asker — the one place
+// every surface a principal reads the code host through meets — answers it
+// with none, and still refuses a principal's read that names none; and each
+// takes nothing its listing does not read.
 //
 // Mutation: accept an asker on any duty listing, and a principal's read could
 // list every repository's packs past its grant — or the objects a
@@ -791,6 +792,7 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 	web := n.ensure("web", suiteSettings(), t1).RepoID
 	stale := statelog.Freshness{Level: statelog.ReadStale}
 	tips := &code.ExpungeTipsQuery{RepoID: web, Since: harnessAt}
+	push := &code.MirrorPushQuery{RepoID: web}
 	for name, tc := range map[string]struct {
 		q     code.ReadQuery
 		field string
@@ -835,6 +837,18 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 			Repo: "web", Fresh: stale}, "repo"},
 		"an expunge listing naming tips": {code.ReadQuery{Kind: code.ReadExpungeDue, ExpungeTips: tips,
 			Fresh: stale}, "expunge_tips"},
+		"a push mirror read naming an asker": {code.ReadQuery{Kind: code.ReadMirrorPush, MirrorPush: push,
+			Asker: asker, Fresh: stale}, "asker"},
+		"a push mirror read naming no repository": {code.ReadQuery{Kind: code.ReadMirrorPush, Fresh: stale},
+			"mirror_push"},
+		"a push mirror read naming a repository by name": {code.ReadQuery{Kind: code.ReadMirrorPush,
+			MirrorPush: &code.MirrorPushQuery{RepoID: "web"}, Fresh: stale}, "mirror_push.repo_id"},
+		"a push mirror read naming a cursor": {code.ReadQuery{Kind: code.ReadMirrorPush, MirrorPush: push,
+			Cursor: "x", Fresh: stale}, "cursor"},
+		"a push mirror read naming a commit": {code.ReadQuery{Kind: code.ReadMirrorPush, MirrorPush: push,
+			Commit: strings.Repeat("a", 40), Fresh: stale}, "commit"},
+		"a mirror listing naming a push mirror": {code.ReadQuery{Kind: code.ReadMirrorsDue, MirrorPush: push,
+			Fresh: stale}, "mirror_push"},
 		"a tips read naming a home's change work": {code.ReadQuery{Kind: code.ReadExpungeTips, ExpungeTips: tips,
 			ChangesDue: &code.ChangesDueQuery{RecheckBefore: harnessAt}, Fresh: stale}, "changes_due"},
 		"a tips read naming a home's check work": {code.ReadQuery{Kind: code.ReadExpungeTips, ExpungeTips: tips,

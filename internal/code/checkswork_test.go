@@ -114,6 +114,33 @@ func TestADueHeadSaysWhatItsDispatchOwes(t *testing.T) {
 	}
 }
 
+// A DUE HEAD CARRIES ITS RECORDED FACTS: a head owing its dispatch is listed
+// with no facts while its head revision holds none for its target — its
+// dispatch waits — and, once the change work recorded them, with exactly what
+// they say it touches, read in the listing's own snapshot: what a `paths`
+// check is matched against, with no git read of the home's.
+//
+// Mutation: answer every head with no facts — the recorded revision is listed
+// without them, and its dispatch waits for ever, red.
+func TestADueHeadCarriesItsRecordedFacts(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := gatedRepo(t, n, "web")
+	cw, _ := writerOn(t, n, n.pub)
+	work, _ := checkWork(t, n, repo)
+	if got, ok := work[change]; !ok || !got.Dispatch || got.Facts != nil {
+		t.Fatalf("a head whose revision holds no facts owes %+v, want its dispatch owed and no facts", work)
+	}
+	converse(t, cw, n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "cmd/main.go", "docs/a.md"))
+	work, _ = checkWork(t, n, repo)
+	got, ok := work[change]
+	if !ok || !got.Dispatch || got.Facts == nil || got.Facts.TouchesAll ||
+		!slices.Equal(got.Facts.Touched, []string{"cmd/main.go", "docs/a.md"}) {
+		t.Fatalf("a head whose revision's facts are recorded owes %+v (facts %+v), want its dispatch owed "+
+			"carrying cmd/main.go and docs/a.md", got, got.Facts)
+	}
+}
+
 // AN INFRASTRUCTURE'S ERROR IS QUEUED AGAIN BELOW ITS BOUND: a dispatched
 // head's attempt its runner lost lists its change owing the next attempt —
 // for the same target, under the definition it ran under — until that

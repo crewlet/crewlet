@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
@@ -83,17 +84,42 @@ func (e *Engine) codeLimits() code.Limits { return code.LimitsOf(e.codeInForce()
 // codeSeatRules is the chart and the calendar the committer judges a SEAT'S
 // push by ([code.CommitterOptions.SeatRules]) — the current epoch's roster,
 // the one a seat's code read is judged by ([Engine.codeRoster]), and the
-// company's clock its day's quota is counted on — both off ONE epoch, so a
-// revision that moves a seat and the clock together is judged by both or by
-// neither, and false where no epoch is installed yet: no chart, on which the
-// committer hands a seat's push to the repository's next committer rather
-// than judge it. Read once a batch that carries a seat's push.
+// company's clock its day's quota is counted on — and the activation the
+// chart is of, which a mergeability stamps the readiness it judges with
+// ([code.SeatRules.Epoch]) — all off ONE epoch, so a revision that moves a
+// seat and the clock together is judged by both or by neither, and false
+// where no epoch is installed yet: no chart, on which the committer hands a
+// seat's push to the repository's next committer rather than judge it. Read
+// once a batch that carries a seat's push.
 func (e *Engine) codeSeatRules() (code.SeatRules, bool) {
 	c := e.Company()
 	if c == nil || c.roster == nil {
 		return code.SeatRules{}, false
 	}
-	return code.SeatRules{Roster: c.roster(), Zone: c.Config.Location()}, true
+	return code.SeatRules{Roster: c.roster(), Zone: c.Config.Location(), Epoch: chartEpochOf(c)}, true
+}
+
+// codeChartEpoch is the activation of the chart this node holds now
+// ([chartEpochOf]), 0 while it holds none: what the home's change work names
+// in its listings ([codehome.Options.Chart]), so a chart apply makes every
+// change its records judged by an earlier chart due a refresh.
+func (e *Engine) codeChartEpoch() int64 {
+	c := e.Company()
+	if c == nil || c.roster == nil {
+		return 0
+	}
+	return chartEpochOf(c)
+}
+
+// chartEpochOf is the activation c's chart is of (configplane.ActivationStamp
+// of the instant its revision was activated), 0 for an epoch built from no
+// activation — a stamp of the zero instant is a negative millisecond, which
+// would read as earlier than every chart rather than as none.
+func chartEpochOf(c *Company) int64 {
+	if c.ActivatedAt.IsZero() {
+		return 0
+	}
+	return configplane.ActivationStamp(c.ActivatedAt)
 }
 
 // codeDeletedRetention is how long a deleted repository waits for its purge at

@@ -806,8 +806,9 @@ secret the company does not allow is `defs_invalid`, and is not queued again.
 
 A seat reads all four with `code_get_check_failures` — naming the commit by
 `change` (its head) or `sha`, and the check by `name` — its failures a page at
-a time and its log 32 KiB a page, every word of them fenced as text nobody in
-the company wrote ([Text somebody else
+a time and its log 32 KiB a page, every page from the attempt the first one
+read even once a rerun ends or the change's head moves, and every word fenced
+as text nobody in the company wrote ([Text somebody else
 wrote](../concepts/agent-runtime.md#text-somebody-else-wrote)); and
 `code_get_change`'s `checks` part lists a change's head's checks in a line
 each. **Running a check again** is `code_rerun_checks`, naming each check and
@@ -1230,9 +1231,11 @@ the push history — `GET /code/repos/{name}/pushes` and `crewlet code status
 `actor_kind` `system`) for the 181 days the history keeps it. The row says
 where the branch was; restoring it needs the commit itself, which the
 repository is held to keep only for the deletion's **14-day** prune grace
-([ref drops](../concepts/code-host.md#retention-and-history)). Restore a
+([ref drops](../concepts/code-host.md#retention-and-history)), and not even
+that once a person purges the repository's unreachable objects. Restore a
 branch you need within two weeks of its deletion: after that, it comes back
-only while the repository still holds the commit. A repository
+only until the repository's next [expunge](../concepts/code-host.md#expunge)
+drops the commit. A repository
 setting refs faster than they go idle raises `code_refs_near_limit` before it
 reaches the 100 000 live refs it may hold ([alarms](../reference/alarms.md)).
 
@@ -1261,7 +1264,19 @@ them; its answer says so. What counts as a read, how long it is kept and why
 only an admin may ask are in [Who read
 it](../concepts/code-host.md#who-read-it).
 
-## Import from GitHub or GitLab
+## Moving a repository in
+
+A repository that lives at another forge comes in one of three ways, each a
+person's to start: **imported once** by the repository's home git node, which
+then holds it like any other; imported and then kept in step with its source
+for good as a **pull mirror**, which moves only when its source does; or
+**pushed from your machine** into a repository that exists, for a source only
+your machine can reach. The first two dial the source from the node, over
+HTTPS alone and only at a public address unless Tier A says otherwise
+([Reaching other forges](deployment.md#reaching-other-forges)); what each moves, and how often, is
+[Mirrors and imports](../concepts/code-host.md#mirrors-and-imports).
+
+### Import from GitHub or GitLab
 
 There are two imports. **The node's** creates the repository and has its home
 git node fetch the source: nothing runs on your machine, and with `-mirror` the
@@ -1270,7 +1285,7 @@ repository stays in step with the source for good. **Your machine's**
 exists, for a source only your machine can reach. Either is a person's: run it
 with your own token exported ([Give each person a token](#give-each-person-a-token)).
 
-### The node imports it
+#### The node imports it
 
 ```sh
 crewlet secrets set GITHUB_TOKEN          # the source's token, where it is private
@@ -1295,7 +1310,7 @@ from the source, so every push to it is refused. Your own assistant does the
 same with `code_import_repo`; no seat is offered it. Every flag is in
 [`crewlet code import`](../reference/cli.md#crewlet-code-import).
 
-### Your machine pushes it
+#### Your machine pushes it
 
 Create or declare the repository first — `-local` fills one that exists, and
 creates none — then:
@@ -1371,6 +1386,60 @@ rule for the import and put it back after.
 
 Every step, flag and message is in
 [`crewlet code import -local`](../reference/cli.md#crewlet-code-import--local).
+
+## Mirroring to another forge
+
+A repository the company keeps here can be published to a repository at
+another forge — GitHub, GitLab, a forge on your own network — as a **push
+mirror**: its home git node pushes it there whenever it moves, and every 15
+minutes while it does not. Declare it on the repository:
+
+```yaml
+code:
+  native: true
+  repos:
+    - name: web
+      owner: {unit: eng}
+      mirror_to:
+        url: https://github.com/acme/web.git
+        credential: "${GITHUB_MIRROR_TOKEN}"   # the as seat's own token there
+        as: jane                               # a seat that reads web
+        # refs: [refs/heads/main, refs/heads/release/*, refs/tags/*]
+```
+
+```sh
+crewlet secrets set GITHUB_MIRROR_TOKEN   # a token of jane's own GitHub account, allowed to push
+```
+
+**What reaches the other forge is what passed.** A branch a protection rule
+protects is pushed at its **green** commit — the newest landed on it whose
+required checks passed — so a commit that has not passed its checks here never
+appears there, and a branch with no green commit yet is left as the other
+forge has it. Every other branch it covers, and every tag, is pushed as it is.
+Left unset, `refs` covers the default branch and every tag; the seats' own
+branches (`refs/heads/seats/…`) are never covered. The other forge's copy is
+the repository's: the mirror force-pushes onto it and deletes a covered branch
+the repository no longer has, so make it a repository nobody pushes to there,
+and allow force-pushes on its protected branches. Commits keep their messages
+as they are, a coding box's `Crewlet-Seat`, `Crewlet-Run` and
+`Crewlet-Work-Item` trailers with them.
+
+**It pushes as the seat `as` names, never as a bot**, with that seat's own token
+at the other forge: what appears there is that person's or that agent's push.
+The seat must read the repository, and is asked again before every push, so a
+chart change that takes its read away stops the mirror. The token is never
+written in the company file — `credential` names the variable that holds it,
+resolved from the secret store and then the node's environment when it
+dials. A forge that wants a particular user name with its token is given it in
+the variable itself, as `user:token`.
+
+**When it cannot push**, its home logs `code_mirror_attempt_failed` with the
+reason and tries again a minute later, longer after each failure in a row; a
+mirror that has not been brought level for half an hour raises
+[`code_mirror_failing`](../reference/alarms.md) on its home, which clears with
+its next push. Every push that moved something is in the event log as
+`code_mirror_pushed`, naming what it set, deleted and held back. The rules are
+[Mirrors and imports](../concepts/code-host.md#mirrors-and-imports).
 
 ## Status and verify
 
@@ -1484,13 +1553,52 @@ it with now. Past the window it is purged, in bounded steps, and its name is
 free again. A purge cannot be undone, which is why the window exists; see
 [Deletion and purge](../concepts/code-host.md#deletion-and-purge).
 
-## A leaked secret is rotated, not force-pushed away
+## A leaked secret is rotated, then purged
 
-A force-push moves a branch; it does not remove a commit's objects. Every push
-is stored as it arrived, a repository's packs are kept for as long as the
-repository is, and an object is fetchable by its id from any node that holds
-it. A credential that was ever pushed is a credential to **rotate** — and then
-to remove from the history you keep, for tidiness rather than for safety.
+A force-push moves a branch; it does not remove a commit's objects. What no
+branch or tag reaches stays in the repository's packs, fetchable by its id,
+until an [expunge](../concepts/code-host.md#expunge) drops it — on the
+repository's maintainer every week once a quarter of the repository, and at
+least 64 MiB, is unreachable, keeping what a force-push or a deletion left
+for two weeks. A
+credential that was ever pushed is in every clone that fetched it, so:
+
+1. **Rotate it** at whatever issued it. This is the step that makes you
+   safe; everything after is tidiness.
+2. **Take it out of the history you keep**: rewrite the branches and tags
+   that reach it (`git filter-repo` — a revert keeps the commit in the
+   history), and force-push them; a protected branch takes the push only
+   where its rule's `direct_push` lets a person push and its `allow_force`
+   lets the branch be rewritten, so loosen the rule for the push and tighten
+   it again ([Protecting a branch](#protecting-a-branch)). An expunge also keeps what work in flight
+   still names: every revision of a draft or open change, so close a change
+   that ever carried the secret and open a new one from the rewritten
+   branch; a queued change's head, so take it out of its queue; and a
+   protected branch's last green commit, until a newer commit's checks pass.
+3. **Purge the repository's unreachable objects**, so the commit goes now
+   rather than two weeks on:
+
+   ```sh
+   crewlet code purge-unreachable web
+   ```
+
+   or `code_purge_unreachable` from your assistant ([`crewlet code
+   purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable)).
+   It is a person's alone, on your own token, and it keeps no grace: every
+   object nothing reaches goes, whoever left it and however recently. The
+   answer comes once the request is recorded; `crewlet code status -repo web`
+   shows it until the maintainer has served it, then when it committed and
+   what it dropped.
+
+The answer also says what still holds the secret after the purge: each git
+node's cache until it next syncs the repository, the object store for a day,
+every backup taken before the purge (on the `nats` store, before the store
+deletes it — [A purge and the backups before
+it](backup.md#a-purge-and-the-backups-before-it)) and, on a versioned S3
+bucket, the old version its own rules keep — and nothing on the server
+reaches a clone that already fetched it. Which is why the rotation comes
+first ([What still holds a purged
+object](../concepts/code-host.md#expunge)).
 
 ## See also
 

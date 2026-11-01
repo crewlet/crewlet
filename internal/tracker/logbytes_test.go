@@ -876,6 +876,8 @@ var codeLogFields = map[code.OpKind]struct {
 					"and the reference change merges clean",
 				"conflicts_omitted": "a conflict past that bound, likewise",
 				"waits_person":      "a readiness that waits on a person, a flag, and the reference reviews are seats'",
+				"chart_epoch": "the activation of the chart a readiness was judged by, a Unix millisecond " +
+					"where the node holds one: thirty bytes on the day's most",
 			}),
 	},
 	code.OpMergeabilityKept: {
@@ -885,6 +887,10 @@ var codeLogFields = map[code.OpKind]struct {
 		payload: reflect.TypeFor[code.MergeabilityKept](),
 		carried: []string{"repo_id", "change_id", "revision", "target_oid", "target_position",
 			"change_version", "readiness_version", "checks_position"},
+		absent: map[string]string{
+			"chart_epoch": "the activation of the chart a readiness was judged by, a Unix millisecond " +
+				"where the node holds one: thirty bytes on the day's most",
+		},
 	},
 	code.OpReview: {
 		payload: reflect.TypeFor[code.Review](),

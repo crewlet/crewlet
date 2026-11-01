@@ -147,12 +147,15 @@ func mergeStream(t *testing.T, n *node) (*code.Committer, *announced) {
 // branch, as main's delete_source seats asks; lands that as a push `via merge`
 // naming dev and the commit it introduced, with its pack's row of kind merge;
 // and writes main's landing row, green, and moves main's green row to the
-// commit — every row at the one position. The node that landed it announces
-// one change_merged, naming the change, the commit and dev.
+// commit — every row at the one position — clearing the stored readiness its
+// home's merge stamped ready, since a merged change is ready for nobody. The
+// node that landed it announces one change_merged, naming the change, the
+// commit and dev.
 //
-// Mutation: land the push before marking the change merged — the source's
+// Mutations: land the push before marking the change merged — the source's
 // deletion closes the change (M4's close on a deleted source), and it reads
-// closed, red.
+// closed, red; leave the stored readiness out of the merge's apply → it still
+// reads ready, red.
 func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -161,6 +164,10 @@ func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 	w, _ := writerOn(t, n, n.pub)
 	repo, change := mergeRepo(t, n, c, "web", code.DirectPersons, mergeGate())
 	approved(t, n, w, repo, change)
+	converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	if stored := n.storedReadiness(change); !stored.ready {
+		t.Fatalf("the home's merge stored %+v, want ready: plat-lead approved, and it merges cleanly", stored)
+	}
 
 	before := n.end()
 	p := merging(repo, change, dev, code.MergeMethodMerge, oidOf("A"), oidOf("B"), oidOf("M"))
@@ -181,6 +188,9 @@ func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 	if main, branch := n.target(repo, mainRef), n.target(repo, seatRef); main != oidOf("M") || branch != "" {
 		t.Fatalf("main is at %q and dev's branch at %q, want main at the merge's commit and the branch deleted",
 			main, branch)
+	}
+	if stored := n.storedReadiness(change); stored.ready || stored.waitsPerson {
+		t.Fatalf("the merged change stores %+v, want ready for nobody and waiting on nobody", stored)
 	}
 	if pushes := n.count(`SELECT COUNT(*) FROM code_pushes WHERE push_id = ? AND repo_id = ? AND position = ?
 			AND via = 'merge' AND actor = 'dev' AND actor_kind = 'agent' AND introduced = ? AND introduced_count = 1`,

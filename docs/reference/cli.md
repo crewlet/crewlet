@@ -1714,8 +1714,7 @@ ref that differs.
 Asks the repository's maintainer — the git node that compacts and publishes
 it — to drop every object no branch or tag reaches: the commit a leaked
 secret was force-pushed away from, the history a deleted branch left. It is
-the `code_purge_unreachable` tool your own assistant and the dashboard call,
-over the same route
+the `code_purge_unreachable` tool your own assistant calls, over the same route
 ([`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface)),
 so the request is one record however it was asked.
 
@@ -1725,8 +1724,8 @@ purge of web requested (0192f6c1-…, at CREWLET_CODE_LOG@1:4821)
   served by git-2, the repository's maintainer
   until it is served and after, the purged objects are still held by:
     the caches of git-2, git-1, until each syncs past the purge
-    every backup taken before the purge commits keeps the purged objects for as long as the backup is kept; code_get_repo's expunge.expunged_at is the commit's instant
-    the object store keeps them for 24 hours after the purge commits, until the retired packs' sweep and the store's next collection take them
+    every backup taken before the purge commits keeps the purged objects for as long as the backup is kept, and on the nats object store every backup taken before the store deletes them, since its snapshot of the bucket carries every byte the bucket holds; code_get_repo's expunge.expunged_at is the commit's instant
+    the object store keeps them for 24 hours after the purge commits, until the retired packs' sweep and the store's next collection take them, and a versioned S3 bucket for as long as its own rules keep a deleted object's noncurrent version
   `crewlet code status -repo web` shows the request until it is served
 ```
 

@@ -79,7 +79,7 @@ func TestABurstOnABusyRepositoryCostsOneMoreTurn(t *testing.T) {
 	b := &busyRepo{estate: e, repo: repoA, first: make(chan struct{}), release: make(chan struct{})}
 	p := &placement{homes: map[string]string{repoA: "node-a"}}
 	n := newNudges()
-	loopOver(t, home.Options{Estate: b, Placement: asNode{placement: p, node: "node-a"}, Nudges: n,
+	loopOver(t, home.Options{Chart: noChart, Estate: b, Placement: asNode{placement: p, node: "node-a"}, Nudges: n,
 		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: "node-a",
 		Share: units(2)}, time.Hour)
 	select {
@@ -145,7 +145,8 @@ func TestATurnPastItsBoundIsCutAndListedAgain(t *testing.T) {
 	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
 		Touched: []string{"a.go"}})
 	p := &placement{homes: map[string]string{repoA: "node-a"}}
-	_, rec := loopOver(t, home.Options{Estate: stalledReads{e}, Placement: asNode{placement: p, node: "node-a"},
+	_, rec := loopOver(t, home.Options{Chart: noChart,
+		Estate: stalledReads{e}, Placement: asNode{placement: p, node: "node-a"},
 		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
 		Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2)}, 50*time.Millisecond)
 	cut := metrics.Attrs{"worker": home.WorkerChanges, "outcome": "cut"}

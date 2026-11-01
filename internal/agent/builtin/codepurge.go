@@ -47,10 +47,15 @@ import (
 // that is not done: the request, where its record landed, the git node that
 // will serve it ([CodePlacement]), and what still holds the objects after it
 // is served — every git node's cache until it syncs past the commit, every
-// backup taken before the commit for as long as it is kept, and the object
-// store for [code.RetireGrace] after the commit, until the retired rows'
-// sweep and the store's next collection take them. The repository's detail
-// (code_get_repo's `expunge`) says when the commit landed.
+// backup taken before the commit for as long as it is kept (and, on the nats
+// object store, every backup taken before the store deletes them: a nats
+// backup is a snapshot of the bucket's stream, which carries every byte the
+// bucket holds, a retired object's among them), and the object store for
+// [code.RetireGrace] after the commit, until the retired rows' sweep and the
+// store's next collection take them (and a versioned S3 bucket for as long as
+// its own rules keep a deleted object's noncurrent version). The
+// repository's detail (code_get_repo's `expunge`) says when the commit
+// landed.
 
 // CodePurgeUnreachableTool is the purge's name: its authority row's action.
 const CodePurgeUnreachableTool = string(authz.ActionCodePurgeUnreachable)
@@ -105,9 +110,12 @@ type purgeHolds struct {
 // The holds' two sentences, the same for every purge.
 var (
 	purgeBackupsBefore = "every backup taken before the purge commits keeps the purged objects for as long as " +
-		"the backup is kept; code_get_repo's expunge.expunged_at is the commit's instant"
+		"the backup is kept, and on the nats object store every backup taken before the store deletes them, " +
+		"since its snapshot of the bucket carries every byte the bucket holds; code_get_repo's " +
+		"expunge.expunged_at is the commit's instant"
 	purgeStoreUntil = fmt.Sprintf("the object store keeps them for %d hours after the purge commits, until "+
-		"the retired packs' sweep and the store's next collection take them", int(code.RetireGrace.Hours()))
+		"the retired packs' sweep and the store's next collection take them, and a versioned S3 bucket for as "+
+		"long as its own rules keep a deleted object's noncurrent version", int(code.RetireGrace.Hours()))
 )
 
 // codePurgeUnreachable is the purge.

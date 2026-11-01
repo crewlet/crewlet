@@ -118,8 +118,11 @@ func TestOnlyAPersonPurges(t *testing.T) {
 		t.Fatalf("the answer %q: %v", got.Output, err)
 	}
 	if answer.Request != r.RequestID || answer.Position == "" || answer.Maintainer != "git-2" ||
-		strings.Join(answer.Holds.GitNodes, ",") != "git-2,git-1" || answer.Holds.BackupsBefore == "" ||
-		!strings.Contains(answer.Holds.StoreUntil, "24 hours") {
+		strings.Join(answer.Holds.GitNodes, ",") != "git-2,git-1" ||
+		!strings.Contains(answer.Holds.BackupsBefore, "every backup taken before the purge commits") ||
+		!strings.Contains(answer.Holds.BackupsBefore, "nats object store every backup taken before the store deletes them") ||
+		!strings.Contains(answer.Holds.StoreUntil, "24 hours") ||
+		!strings.Contains(answer.Holds.StoreUntil, "versioned S3 bucket") {
 		t.Errorf("a person's purge answered %+v, want its request, its position, git-2 serving it, and what "+
 			"still holds the objects", answer)
 	}

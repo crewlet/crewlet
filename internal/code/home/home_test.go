@@ -54,11 +54,15 @@ type estate struct {
 	// factsRead is how many times the facts of each head were read.
 	factsRead map[string]int
 	at        statelog.Position
-	floors    []statelog.Freshness
-	asked     []code.ChangesDueQuery
-	revises   []code.Revise
-	merges    []code.Mergeability
-	landings  []code.ChangeLanded
+	// revisedAt is where a revise's record lands, e.at where it is zero;
+	// checkFloors is every floor one repository's check work was read at.
+	revisedAt   statelog.Position
+	checkFloors []statelog.Freshness
+	floors      []statelog.Freshness
+	asked       []code.ChangesDueQuery
+	revises     []code.Revise
+	merges      []code.Mergeability
+	landings    []code.ChangeLanded
 	// landRefusal and landErr are what every landing is answered while
 	// either is set — a refusal that decided nothing, or a call that failed —
 	// the change left on the list as its rows would leave it.
@@ -132,6 +136,9 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	case q.Kind == code.ReadChecksDue || q.Kind == code.ReadQueueDue:
 		// THE CHECK WORK'S AND THE QUEUE'S LISTINGS: these cases hold no
 		// change owing either.
+		if q.Kind == code.ReadChecksDue && q.ChecksDue != nil && q.ChecksDue.RepoID != "" {
+			e.checkFloors = append(e.checkFloors, q.Fresh)
+		}
 		return code.ReadAnswer{Position: e.at}, nil
 	case q.Kind != code.ReadChangesDue:
 		return code.ReadAnswer{}, errors.New("the home asked a read that is not its listing")
@@ -191,6 +198,9 @@ func (e *estate) Converse(_ context.Context, w code.ConversationWrite) (code.Con
 	case w.Revise != nil:
 		e.revises = append(e.revises, *w.Revise)
 		e.done(w.Revise.RepoID, w.Revise.ChangeID, func(d *code.ChangeDue) { d.FactsDue = false })
+		if !e.revisedAt.IsZero() {
+			return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: e.revisedAt}, nil
+		}
 	case w.Mergeability != nil:
 		// A MERGE RECORDS THE READINESS beside it, and a refresh records it
 		// alone: either leaves the change owing no refresh.
@@ -285,6 +295,18 @@ func (e *estate) wrote() ([]code.Revise, []code.ChangeLanded) {
 	defer e.mu.Unlock()
 	return slices.Clone(e.revises), slices.Clone(e.landings)
 }
+
+// listings is every listing of the change work asked so far, in the order it
+// was asked.
+func (e *estate) listings() []code.ChangesDueQuery {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.asked)
+}
+
+// noChart is a home holding no chart: its listings name none, so no change is
+// due a refresh for one.
+func noChart() int64 { return 0 }
 
 // merged is every mergeability asked so far.
 func (e *estate) merged() []code.Mergeability {
@@ -449,7 +471,7 @@ func loopOn(t *testing.T, node string, e *estate, p *placement, n *nudges,
 	backstop time.Duration) (*home.Loop, *metrics.Recorder) {
 
 	t.Helper()
-	return loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
+	return loopOver(t, home.Options{Chart: noChart, Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
 		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node,
 		Share: units(2)},
 		backstop)
@@ -650,6 +672,47 @@ func TestANudgeOnlyShortensTheWait(t *testing.T) {
 	}
 }
 
+// A REVISION'S FACTS SCHEDULE ITS CHECKS' DISPATCH: the change work's record
+// of a head revision's facts lands on the change's subject, which no watch
+// sees, and a head's checks are dispatched only once its facts are recorded —
+// so the home schedules the repository's check work at the facts' own
+// position the moment they are recorded, its listing read there, with the
+// backstop an hour away and no record on the repository told after them.
+//
+// Mutation: drop the change work's word that it recorded facts — the check
+// work is read at the nudge's position alone, and the head waits for the
+// backstop, red.
+func TestARevisionsFactsScheduleItsChecksDispatch(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	revised := statelog.Position{Stream: topics.CodeLogStream, Seq: 90}
+	e.revisedAt = revised
+	p := &placement{homes: map[string]string{repoA: "node-a"}}
+	n := newNudges()
+	loopOn(t, "node-a", e, p, n, time.Hour)
+	e.waitReads(t, 1)
+	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
+		Touched: []string{"a.go"}})
+	n.subject(t, repoA, 57)
+	e.waitDone(t, repoA, 10*time.Second)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		e.mu.Lock()
+		floors := slices.Clone(e.checkFloors)
+		e.mu.Unlock()
+		if slices.ContainsFunc(floors, func(f statelog.Freshness) bool {
+			return f.Level == statelog.ReadSession && slices.Contains(f.Floors, revised)
+		}) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the repository's check work was read at %+v, never at the facts' position %s", floors,
+				revised)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // A LOST NUDGE IS CAUGHT BY THE BACKSTOP: with no watch running at all — its
 // consumer cannot be made — a change due on a repository is found and worked
 // by the backstop's next pass; and a watch's GAP — it may have missed records
@@ -705,7 +768,7 @@ func TestAWatchThatBeginsAsTheLoopStopsIsStopped(t *testing.T) {
 	t.Parallel()
 	e := newEstate()
 	n := &slowWatch{entered: make(chan struct{}), release: make(chan struct{})}
-	l, _ := loopOver(t, home.Options{Estate: e, Placement: asNode{placement: &placement{}, node: "node-a"},
+	l, _ := loopOver(t, home.Options{Chart: noChart, Estate: e, Placement: asNode{placement: &placement{}, node: "node-a"},
 		Nudges: n, Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t},
 		Share: units(2), NodeID: "node-a"}, time.Hour)
 	select {
@@ -829,7 +892,7 @@ func TestALandingThatDecidedNothingFailsTheTurn(t *testing.T) {
 			e.mu.Unlock()
 			logs := &lines{}
 			p := &placement{homes: map[string]string{repoA: "node-a"}}
-			_, rec := loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: "node-a"},
+			_, rec := loopOver(t, home.Options{Chart: noChart, Estate: e, Placement: asNode{placement: p, node: "node-a"},
 				Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
 				Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2),
 				Logger: slog.New(slog.NewTextHandler(logs, nil))},
@@ -924,6 +987,37 @@ func TestAHomeRefreshesReadinessWithoutAMerge(t *testing.T) {
 	if len(e.merged()) != 2 {
 		t.Errorf("the home asked %d mergeabilities, want the two refreshes alone: %+v", len(e.merged()),
 			e.merged())
+	}
+}
+
+// A HOME NAMES THE CHART IT HOLDS in every listing of its change work, the
+// repositories' and its repository's due changes alike: the activation of
+// its node's chart, so a change whose stored readiness an earlier chart
+// judged is listed due a refresh (code.ChangesDueQuery.ChartEpoch).
+//
+// Mutation: leave the chart off the repository's listing → it names none,
+// red.
+func TestAHomeNamesTheChartItHoldsInEveryListing(t *testing.T) {
+	t.Parallel()
+	const chart = int64(1_762_000_060_000)
+	e := newEstate()
+	e.owe(repoA, code.ChangeDue{ID: changeID(repoA, 1), Number: 1, Revision: 1, Head: oid("b"),
+		SourceRef: "refs/heads/feature-b", TargetRef: "refs/heads/main", Tip: oid("1"),
+		TipPosition: statelog.Position{Stream: topics.CodeLogStream, Seq: 30}, RefreshDue: true})
+	loopOver(t, home.Options{Chart: func() int64 { return chart }, Estate: e,
+		Placement: asNode{placement: &placement{homes: map[string]string{repoA: "node-a"}}, node: "node-a"},
+		Nudges:    newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
+		Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2)}, time.Hour)
+	e.waitDone(t, repoA, 10*time.Second)
+	listed := map[string]bool{}
+	for _, q := range e.listings() {
+		listed[q.RepoID] = true
+		if q.ChartEpoch != chart {
+			t.Errorf("the listing %+v names chart %d, want the node's, %d", q, q.ChartEpoch, chart)
+		}
+	}
+	if !listed[""] || !listed[repoA] {
+		t.Fatalf("the home asked the listings %+v, want the repositories' and repository A's", e.listings())
 	}
 }
 

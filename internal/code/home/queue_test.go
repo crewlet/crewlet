@@ -342,7 +342,8 @@ func (q *queueTasks) CloseWorkItem(_ context.Context, c home.TaskClose) error {
 // never started: a case runs its queue's turns itself (home.QueueWork).
 func queueLoop(t *testing.T, rows *queueRows, chains home.Chains, tasks home.Tasks) *home.Loop {
 	t.Helper()
-	l, err := home.New(home.Options{Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
+	l, err := home.New(home.Options{Chart: noChart,
+		Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
 		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: chains, Tasks: tasks,
 		Share: units(2), NodeID: "git-a"})
 	if err != nil {

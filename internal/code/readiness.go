@@ -1,10 +1,12 @@
 package code
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 )
@@ -85,14 +87,16 @@ import (
 // record's decide judges it too, over its own snapshot with the merge it
 // records ([ReadinessRows.With]), and STAMPS the answer on the record, which
 // the applier stores (code_mergeability.ready and waits_person) beside the
-// versions of the inputs it was judged at: what a wake that a change became
-// ready reads, and what the needs=person listing seeks. A change whose inputs
-// moved since — its row (code_changes.version) or its conversation's
-// readiness inputs (code_conversations.readiness_version) — is due a REFRESH
-// from its home (changesdue.go), which records the answer again over the
-// merge the row holds, running no merge. The chart moves no version: a
-// stored answer is as of the chart that judged it, until the change's next
-// record — which is why no reader of a change's readiness reads it.
+// versions of the inputs it was judged at and the activation of the chart
+// that judged it: what a wake that a change became ready reads, and what the
+// needs=person listing seeks. A change whose inputs moved since — its row
+// (code_changes.version), its conversation's readiness inputs
+// (code_conversations.readiness_version), its head's checks, or the chart, a
+// later one held by its home — is due a REFRESH from its home
+// (changesdue.go), which records the answer again over the merge the row
+// holds, running no merge; and a change that ends stores no answer
+// (clearReadiness). A stored answer is still as of the record that stored
+// it — which is why no reader of a change's readiness reads it.
 
 // PreconditionKind is one thing a live change must be before it merges: a
 // precondition its readiness judges ([ReadinessOf], [JudgeGate]). A closed
@@ -720,13 +724,16 @@ type readinessSubject struct {
 // tx — ONE snapshot — in one statement a kind of row over every change at
 // once, each driven from the list of the changes' ids and a seek of a key an
 // element, so a page of changes costs a page's handful of statements and
-// never a handful a change: the conversations' counters, the authors, the
-// standing verdicts that approve, the standing asks and the mergeabilities;
-// then the facts of each head revision and of each revision an approval
-// stands on, driven from the list of those (change, revision) pairs; and the
-// standing blockers of each change holding any, the oldest raised first, at
-// most [MaxReadinessBlockers] a change. The answer is subjects' order.
-func readinessRowsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) ([]ReadinessRows, error) {
+// never a handful a change ([readinessStatements]): the conversations'
+// counters, the authors, the standing verdicts that approve, the standing asks
+// and the mergeabilities; then the facts of each head revision and of each
+// revision an approval stands on, driven from the list of those (change,
+// revision) pairs; and the standing blockers of the changes holding any,
+// driven from the list of those, the oldest raised first and at most
+// [MaxReadinessBlockers] a change, each change's a range of the partial index
+// that holds them alone up to the cut of the few holding more, read first
+// beside them. The answer is subjects' order.
+func readinessRowsIn(ctx context.Context, tx queryer, subjects []readinessSubject) ([]ReadinessRows, error) {
 	out := make([]ReadinessRows, len(subjects))
 	if len(subjects) == 0 {
 		return out, nil
@@ -741,7 +748,7 @@ func readinessRowsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubjec
 	if err != nil {
 		return nil, err
 	}
-	if err := readinessEach(ctx, tx, "counters", readinessCountersSQL, list, at,
+	if err := readinessEach(ctx, tx, "counters", readinessCountersSQL, []any{list}, at,
 		func(scan func(...any) (int, error)) error {
 			var standing int64
 			i, err := scan(&standing)
@@ -752,7 +759,7 @@ func readinessRowsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubjec
 		}); err != nil {
 		return nil, err
 	}
-	if err := readinessEach(ctx, tx, "authors", readinessAuthorsSQL, list, at,
+	if err := readinessEach(ctx, tx, "authors", readinessAuthorsSQL, []any{list}, at,
 		func(scan func(...any) (int, error)) error {
 			var handle, kind string
 			i, err := scan(&handle, &kind)
@@ -763,7 +770,7 @@ func readinessRowsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubjec
 		}); err != nil {
 		return nil, err
 	}
-	if err := readinessEach(ctx, tx, "approvals", readinessApprovalsSQL, list, at,
+	if err := readinessEach(ctx, tx, "approvals", readinessApprovalsSQL, []any{list}, at,
 		func(scan func(...any) (int, error)) error {
 			var (
 				handle, kind string
@@ -778,7 +785,7 @@ func readinessRowsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubjec
 		}); err != nil {
 		return nil, err
 	}
-	if err := readinessEach(ctx, tx, "asks", readinessAsksSQL, list, at,
+	if err := readinessEach(ctx, tx, "asks", readinessAsksSQL, []any{list}, at,
 		func(scan func(...any) (int, error)) error {
 			var handle, kind string
 			i, err := scan(&handle, &kind)
@@ -789,7 +796,7 @@ func readinessRowsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubjec
 		}); err != nil {
 		return nil, err
 	}
-	if err := readinessEach(ctx, tx, "mergeabilities", readinessMergesSQL, list, at,
+	if err := readinessEach(ctx, tx, "mergeabilities", readinessMergesSQL, []any{list}, at,
 		func(scan func(...any) (int, error)) error {
 			var (
 				m       RecordedMerge
@@ -822,7 +829,7 @@ func readinessRowsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubjec
 	if err != nil {
 		return nil, fmt.Errorf("code: encode %d revisions' keys: %w", len(pairs), err)
 	}
-	if err := readinessEach(ctx, tx, "facts", readinessFactsSQL, string(encoded), at,
+	if err := readinessEach(ctx, tx, "facts", readinessFactsSQL, []any{string(encoded)}, at,
 		func(scan func(...any) (int, error)) error {
 			var f RevisionPatch
 			i, err := scan(&f.N, &f.TargetRef, &f.BaseTree, &f.HeadTree, &f.PatchID, &f.PatchIDOmitted)
@@ -833,25 +840,111 @@ func readinessRowsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubjec
 		}); err != nil {
 		return nil, err
 	}
+	// THE STANDING BLOCKERS of the changes whose counters say they hold any:
+	// for the few holding more than a readiness names, the place of the last
+	// one it names, MaxReadinessBlockers in, read first ([blockerCutsSQL]);
+	// then every change's blockers up to its cut, one statement over them all
+	// ([standingBlockersSQL]).
+	cuts := map[string]int64{}
+	var blocked, crowded []string
 	for i := range out {
-		if out[i].Standing == 0 {
-			continue
+		switch id := subjects[i].row.id; {
+		case out[i].Standing > MaxReadinessBlockers:
+			crowded = append(crowded, id)
+			fallthrough
+		case out[i].Standing > 0:
+			blocked = append(blocked, id)
 		}
-		if out[i].Blockers, err = standingBlockersIn(ctx, tx, subjects[i].row.id); err != nil {
+	}
+	if len(blocked) == 0 {
+		return out, nil
+	}
+	if len(crowded) > 0 {
+		if list, err = jsonList(crowded); err != nil {
+			return nil, err
+		}
+		if err := readinessEach(ctx, tx, "blockers' cuts", blockerCutsSQL, []any{list}, at,
+			func(scan func(...any) (int, error)) error {
+				var cut sql.NullInt64
+				i, err := scan(&cut)
+				if err == nil && cut.Valid {
+					cuts[subjects[i].row.id] = cut.Int64
+				}
+				return err
+			}); err != nil {
 			return nil, err
 		}
 	}
+	bounds := make([][2]any, len(blocked))
+	for k, id := range blocked {
+		// A CHANGE WITH NO CUT is one whose blockers all fit: its counter
+		// says no more than a readiness names stand, or the walk for its cut
+		// found fewer standing than the counter says.
+		cut, cutting := cuts[id]
+		if !cutting {
+			cut = math.MaxInt64
+		}
+		bounds[k] = [2]any{id, cut}
+	}
+	if encoded, err = json.Marshal(bounds); err != nil {
+		return nil, fmt.Errorf("code: encode %d changes' blockers' bounds: %w", len(bounds), err)
+	}
+	raised := map[string]int64{}
+	if err := readinessEach(ctx, tx, "standing blockers", standingBlockersSQL, []any{string(encoded)}, at,
+		func(scan func(...any) (int, error)) error {
+			var (
+				b           StandingBlocker
+				kind, state string
+				position    int64
+			)
+			i, err := scan(&b.FindingID, &b.Raiser.Handle, &kind, &state, &position)
+			if err == nil {
+				b.Raiser.Kind, b.State = PartyKind(kind), FindingState(state)
+				out[i].Blockers = append(out[i].Blockers, b)
+				raised[b.FindingID] = position
+			}
+			return err
+		}); err != nil {
+		return nil, err
+	}
+	// THE OLDEST RAISED FIRST, AND NO MORE THAN A READINESS NAMES: the
+	// statement names no order, and a cut is a position, which every blocker
+	// one review raised shares — so a crowded change's read may hold the
+	// rest of its cut's review too, which are left here.
+	for i := range out {
+		slices.SortFunc(out[i].Blockers, func(a, b StandingBlocker) int {
+			if c := cmp.Compare(raised[a.FindingID], raised[b.FindingID]); c != 0 {
+				return c
+			}
+			return strings.Compare(a.FindingID, b.FindingID)
+		})
+		out[i].Blockers = out[i].Blockers[:min(len(out[i].Blockers), MaxReadinessBlockers)]
+	}
 	return out, nil
 }
+
+// readinessStatements is the most statements [readinessRowsIn] issues for a
+// page of changes, however many changes the page holds: the counters, the
+// authors, the approvals, the asks, the mergeabilities, the facts, the cuts
+// of the changes holding more blockers than a readiness names, and the
+// standing blockers.
+const readinessStatements = 8
+
+// lastBlockerOffset is MaxReadinessBlockers-1 SPELLED IN THE STATEMENT, the
+// place of the last blocker a readiness names: the pinned driver applies a
+// BOUND offset of a correlated scalar subquery to the first row it is
+// evaluated for alone, and reads every later row's first entry, which a test
+// holds this build's statement clear of; a test holds the two equal.
+const lastBlockerOffset = "15"
 
 // readinessEach runs one of [readinessRowsIn]'s statements over args, handing
 // each row to each: its scan reads the row's columns after the change's id
 // into dest and answers the index of the change the row is of — a row of a
 // change the read did not ask is one no statement here answers, and an error.
-func readinessEach(ctx context.Context, tx *sql.Tx, what, query, args string, at map[string]int,
+func readinessEach(ctx context.Context, tx queryer, what, query string, args []any, at map[string]int,
 	each func(scan func(dest ...any) (int, error)) error) error {
 
-	rows, err := tx.QueryContext(ctx, query, args)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("code: read the %s a readiness judges: %w", what, err)
 	}
@@ -874,30 +967,6 @@ func readinessEach(ctx context.Context, tx *sql.Tx, what, query, args string, at
 	return rows.Err()
 }
 
-// standingBlockersIn is changeID's standing blockers, the oldest raised
-// first, at most [MaxReadinessBlockers] — one seek of
-// code_findings_blockers_idx, partial on the blockers that stand.
-func standingBlockersIn(ctx context.Context, tx *sql.Tx, changeID string) ([]StandingBlocker, error) {
-	rows, err := tx.QueryContext(ctx, standingBlockersSQL, changeID, MaxReadinessBlockers)
-	if err != nil {
-		return nil, fmt.Errorf("code: read change %s's standing blockers: %w", changeID, err)
-	}
-	defer func() { _ = rows.Close() }()
-	var out []StandingBlocker
-	for rows.Next() {
-		var (
-			b           StandingBlocker
-			kind, state string
-		)
-		if err := rows.Scan(&b.FindingID, &b.Raiser.Handle, &kind, &state); err != nil {
-			return nil, fmt.Errorf("code: read change %s's standing blockers: %w", changeID, err)
-		}
-		b.Raiser.Kind, b.State = PartyKind(kind), FindingState(state)
-		out = append(out, b)
-	}
-	return out, rows.Err()
-}
-
 // blockersKey is code_findings_blockers_idx, (change_id, position, id) WHERE
 // [standingBlockers] (replicated 0078): a change's standing blockers alone,
 // the oldest raised first.
@@ -914,8 +983,16 @@ const standingBlockers = `severity = 'blocker' AND state IN ('open', 'resolved',
 // mergeabilities of a list of changes, each driven from the list of their ids
 // and a seek of a key an element — the asks through the reviewers' key NAMED
 // ([reviewersKey] says why); the facts of a list of (change, revision) pairs,
-// a seek of their key a pair; and one change's standing blockers, a seek of
-// the partial index that holds them alone.
+// a seek of their key a pair; the cut of each of a list of changes — the
+// position of its MaxReadinessBlockers-th oldest standing blocker, a
+// correlated scalar subquery walking the partial index that holds them alone
+// that many entries in (the pinned planner reads every finding of the company
+// to answer a `rowid IN` subquery naming a change's first sixteen); and the
+// standing blockers of a list of (change, cut) bounds, each change's a range
+// of that index up to its cut. So a change holding a thousand blockers costs
+// the read sixteen entries for its cut and at most MaxReadinessBlockers +
+// MaxFindingsPerReview - 1 rows, the rest of its cut's review the most it
+// reads past what it names — never its thousand.
 const (
 	readinessCountersSQL = `SELECT v.change_id, v.open_blockers FROM json_each(?) AS j
 		CROSS JOIN code_conversations AS v WHERE v.change_id = CAST(j.value AS TEXT)`
@@ -933,6 +1010,12 @@ const (
 			f.patch_id_omitted
 		FROM json_each(?) AS j CROSS JOIN code_revision_facts AS f
 		WHERE f.change_id = CAST(j.value ->> 0 AS TEXT) AND f.n = CAST(j.value ->> 1 AS INTEGER)`
-	standingBlockersSQL = `SELECT id, raiser, raiser_kind, state FROM code_findings INDEXED BY ` + blockersKey + `
-		WHERE change_id = ? AND ` + standingBlockers + ` ORDER BY position, id LIMIT ?`
+	blockerCutsSQL = `SELECT CAST(j.value AS TEXT), (SELECT position FROM code_findings INDEXED BY ` + blockersKey + `
+			WHERE change_id = CAST(j.value AS TEXT) AND ` + standingBlockers + `
+			ORDER BY position, id LIMIT 1 OFFSET ` + lastBlockerOffset + `)
+		FROM json_each(?) AS j`
+	standingBlockersSQL = `SELECT f.change_id, f.id, f.raiser, f.raiser_kind, f.state, f.position
+		FROM json_each(?) AS j CROSS JOIN code_findings AS f INDEXED BY ` + blockersKey + `
+		WHERE f.change_id = CAST(j.value ->> 0 AS TEXT) AND ` + standingBlockers + `
+			AND f.position <= CAST(j.value ->> 1 AS INTEGER)`
 )

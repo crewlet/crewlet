@@ -700,7 +700,7 @@ func registeredStatements() map[string]statement {
 		// repository's due rechecks, the same index's range joined to its
 		// target's row and its mergeability by their keys, sorted by when the
 		// merge was recorded (sortingStatements says why).
-		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems, int64(3000)},
+		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems, int64(3000), int64(5000)},
 			[]string{"code_changes_open_idx (repo_id>?)", factsKey + " (change_id=? AND n=?)",
 				mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)",
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
@@ -719,7 +719,7 @@ func registeredStatements() map[string]statement {
 		"reopened asks": {reopenedAsksSQL, []any{"repo-1", MaxAskSettlesPerRead},
 			[]string{"code_changes_open_idx (repo_id=?)", conversationKey + " (change_id=?)"}},
 		"due repository": {dueRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
+		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems, int64(5000)},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
 				factsKey + " (change_id=? AND n=?)", mergeabilityKey + " (change_id=?)",
 				conversationKey + " (change_id=?)",
@@ -728,16 +728,20 @@ func registeredStatements() map[string]statement {
 			[]string{"code_changes_open_idx (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
 				mergeabilityKey + " (change_id=?)"}},
 		// A CHANGE'S MERGEABILITY: its row by its key, a decide's and an
-		// apply's, and a read's whole; and a refresh's readiness written
-		// back by the same key.
+		// apply's, and a read's whole; a refresh's readiness written back by
+		// the same key; and the readiness of the changes a record ended
+		// cleared, driven from the list of their ids, a seek of the key an
+		// element.
 		"mergeability": {mergeabilitySQL, []any{"repo-1-change-000001"},
 			[]string{mergeabilityKey + " (change_id=?)"}},
 		"mergeability row": {mergeabilityRowSQL, []any{"repo-1-change-000001"},
 			[]string{mergeabilityKey + " (change_id=?)"}},
-		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, 5000, true, false, "repo-1-change-000001",
+		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, 5000, 7000, true, false, "repo-1-change-000001",
 			2, "refs/heads/main", 3000}, []string{mergeabilityKey + " (change_id=?)"}},
 		"keep mergeability": {keptMergeabilitySQL, []any{true, oid("t"), 6000, 7000, true, 5, 4, 5000,
-			"repo-1-change-000001", 2}, []string{mergeabilityKey + " (change_id=?)"}},
+			"repo-1-change-000001", 2, 1_762_000_000_000}, []string{mergeabilityKey + " (change_id=?)"}},
+		"clear readiness": {clearReadinessSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", mergeabilityKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		// THE POSITION OF A HEAD'S CHECKS a mergeability's decide stamps: every
 		// attempt at the commit for the change's target, a range of
 		// code_checks' key.
@@ -747,9 +751,10 @@ func registeredStatements() map[string]statement {
 		// standing verdicts that approve, the standing asks and the
 		// mergeabilities of a page of changes, each driven from the list of
 		// their ids, one seek of a key an element; the facts of a list of
-		// (change, revision) pairs, one seek of their key a pair; and one
-		// change's standing blockers, the oldest raised first, a seek of the
-		// partial index that holds them alone.
+		// (change, revision) pairs, one seek of their key a pair; the cut of
+		// each of a list of changes, a walk of the partial index that holds
+		// their standing blockers alone; and the standing blockers of a list
+		// of (change, cut) bounds, a range of that index up to each cut.
 		"readiness counters": {readinessCountersSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)"}},
 		"readiness authors": {readinessAuthorsSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
@@ -917,8 +922,11 @@ func registeredStatements() map[string]statement {
 		"gate checks": {gateChecksSQL, []any{`[["repo-1","` + oid("c") + `","refs/heads/main","unit"],["repo-1","` +
 			oid("c") + `","refs/heads/main","lint"]]`}, []string{"SCAN json_each AS j",
 			checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=?)"}},
-		"standing blockers": {standingBlockersSQL, []any{"repo-1-change-000001", MaxReadinessBlockers},
-			[]string{blockersKey + " (change_id=?)"}},
+		"blocker cuts": {blockerCutsSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", blockersKey + " (change_id=?)"}},
+		"standing blockers": {standingBlockersSQL,
+			[]any{`[["repo-1-change-000001",3000],["repo-1-change-000002",9223372036854775807]]`},
+			[]string{"SCAN json_each AS j", blockersKey + " (change_id=? AND position<=?)"}},
 		// A REVISION'S FACTS: one revision's by their key, a decide's and an
 		// apply's; whether a change holds any, by the key's prefix; who
 		// stands on request_changes before a revision, a range of the
@@ -1236,6 +1244,8 @@ func registeredStatements() map[string]statement {
 				checkTargetsKey + " (repo_id=? AND target_ref=?)",
 				"code_checks_requeue_idx (repo_id=? AND commit_oid=? AND target_ref=?)",
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"touched paths": {touchedPathsSQL, []any{"repo-1-change-000001", 1, "refs/heads/main"},
+			[]string{factsKey + " (change_id=? AND n=?)"}},
 		"head attempts": {headAttemptsSQL, []any{"repo-1", oid("c"), "refs/heads/main"},
 			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)"}},
 		"stale checks": {staleChecksSQL, []any{"repo-1-change-000001", oid("c"), "refs/heads/main", "repo-1"},

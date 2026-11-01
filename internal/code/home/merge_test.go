@@ -142,7 +142,7 @@ func (h *gitHome) homeLoop(t *testing.T, n *nudges, backstop time.Duration, now 
 	if err != nil {
 		t.Fatal(err)
 	}
-	o := home.Options{Estate: h.e, Placement: asNode{placement: p, node: node.ID()}, Nudges: n,
+	o := home.Options{Chart: noChart, Estate: h.e, Placement: asNode{placement: p, node: node.ID()}, Nudges: n,
 		Cache: node.Cache(), Git: node.Pool(), Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node.ID(),
 		Share:   units(2),
 		Metrics: rec, Now: now}
@@ -923,7 +923,8 @@ func BenchmarkMergeability(b *testing.B) {
 			tip := h.commit(moved, "main moves")
 			h.push("refs/heads/main", "refs/heads/change")
 			node := h.node()
-			l, err := home.New(home.Options{Estate: h.e, Placement: asNode{placement: &placement{}, node: node.ID()},
+			l, err := home.New(home.Options{Chart: noChart,
+				Estate: h.e, Placement: asNode{placement: &placement{}, node: node.ID()},
 				Nudges: newNudges(), Cache: node.Cache(), Git: node.Pool(), Chains: unqueued{t: b}, Tasks: unqueued{t: b},
 				Share: units(2), NodeID: node.ID()})
 			if err != nil {

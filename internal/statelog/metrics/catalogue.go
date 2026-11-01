@@ -816,9 +816,10 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeChecksQueued, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"purpose"},
-			Shows: "Attempts of checks this node's checks writer queued — each a " +
-				"record on its repository's checks subject that applied here, " +
-				"counted once, by the node that published it — by `purpose`: " +
+			Shows: "Attempts of checks this node's checks writer queued — each by a " +
+				"record on its repository's checks subject that applied here (a " +
+				"head's dispatch record carries all of its own), counted once, by " +
+				"the node that published it — by `purpose`: " +
 				"`head`, a change's head; `candidate`, a merge queue's candidate; " +
 				"`tip`, a protected branch's tip; `bisect`, a landing between a " +
 				"green tip and a red one. A head recorded skipped at its dispatch " +
@@ -1200,15 +1201,20 @@ func Catalogue() []Instrument {
 			Name: CodeExpungeRuns, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
 			Shows: "Expunges this node ran as the MAINTAINER of their " +
-				"repositories — a person's purge served, or an expunge left open " +
-				"finished from its rows — each one cycle: a scan of what a ref " +
+				"repositories — a person's purge served, a repository its weekly " +
+				"listing names judged, or an expunge left open finished from its " +
+				"rows — each one cycle: a scan of what a ref " +
 				"reaches, a build sorting some live packs into kept and dropping " +
 				"ones, their begin, a rescue of what a push revived meanwhile and " +
 				"their commit — by `outcome`. `applied`: its commit landed, and " +
 				"what no ref reached left the repository's live packs. `pending`, " +
 				"`unknown`: a record was appended and is not yet known to have " +
 				"applied — the next pass reads the rows and finishes it. " +
-				"`not_due`: nothing was left to rewrite. `stale`: a compaction, a " +
+				"`not_due`: nothing was left to rewrite — a purge already served, " +
+				"every live pack arrived within the two weeks' grace the weekly " +
+				"expunge keeps whole, or what no ref reaches is a quarter of the " +
+				"live bytes or less, or under 64 MiB — each but a served purge leaving the " +
+				"repository unscanned on this node for a week. `stale`: a compaction, a " +
 				"publication or a purge moved an input first, or the expunge was " +
 				"finished elsewhere. `busy`: no maintenance slot or memory room " +
 				"was free, another build of the repository was running on the " +
@@ -1732,14 +1738,21 @@ func Catalogue() []Instrument {
 			Attributes: []string{"dir", "outcome"},
 			Shows: "One attempt to bring a mirror level with the other host, " +
 				"by `dir` (`pull`: a pull mirror's sync from its source, run " +
-				"by its home every 15 minutes) and `outcome`: `synced`, a sync " +
-				"landed what the source moved; `current`, the source moved " +
-				"nothing; `failed`, the source unreachable, its credential " +
-				"refused, or a step refused or not seen applied — the mirror " +
-				"tried again a minute later, and longer after each failure in " +
-				"a row, up to its interval. A mirror whose source went away " +
-				"shows as `failed` four times an hour, every one with its " +
-				"`code_mirror_attempt_failed` line.",
+				"by its home every 15 minutes; `push`: a push mirror's push to " +
+				"its target, run by its home at most once a minute while the " +
+				"repository moves and every 15 minutes while it is idle) and " +
+				"`outcome`: `synced`, a sync landed what the source moved; " +
+				"`pushed`, a push moved refs at the target; `current`, the " +
+				"source moved nothing, or the target already held every " +
+				"covered ref as it should; `failed`, the other host " +
+				"unreachable, its credential refused, a ref it rejected, a " +
+				"push mirror's seat that no longer reads the repository, or a " +
+				"step refused or not seen applied — the mirror tried again a " +
+				"minute later, and longer after each failure in a row, up to " +
+				"its interval. A mirror whose other host went away shows as " +
+				"`failed` four times an hour, every one with its " +
+				"`code_mirror_attempt_failed` line, and raises " +
+				"`code_mirror_failing` once it has gone half an hour.",
 		},
 		{
 			Name: CodeCacheDroppingBytes, Kind: KindGauge, Unit: UnitBytes,

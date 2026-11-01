@@ -222,6 +222,16 @@ var alarmMeaning = map[Kind]string{
 		"quarter-hour tick, so every data node raises it for the same " +
 		"repositories; an archived repository, which takes no push, and a " +
 		"deleted ref are never counted.",
+	KindCodeMirrorFailing: "Mirrors of repositories this node is home to " +
+		"have not been brought level for longer than their own refresh: " +
+		"the 15 minutes a home brings a mirror level at, and 15 more of " +
+		"grace for an attempt in flight. A push mirror's target holds what " +
+		"the company published that long ago, or less (a protected branch " +
+		"there no newer than the last green commit the mirror pushed); a " +
+		"pull mirror holds what its source held that long ago. Raised by " +
+		"the home git node alone, from its own memory of its attempts: a " +
+		"node that stops being a repository's home stops counting its " +
+		"mirrors, and a node that restarts counts from its first attempt.",
 }
 
 const alarmHeader = `# Alarms

@@ -398,3 +398,54 @@ func TestACheckTokenAdmitsOneRepositoryToRead(t *testing.T) {
 		t.Errorf("a check's token was logged: %q", leaked)
 	}
 }
+
+// A CHECK'S BOX FETCHES AT ITS CHECK'S SESSION: through a git node whose cache
+// last synced before the push of the commit its attempt measures — most of a
+// fleet's git nodes, since a cache syncs on demand and a balancer spreads
+// boxes — the box's fetch of its commit and its blobless checkout's lazy
+// fetches are served from a sync at the position its attempt was queued at,
+// which holds the commit, and read the code log through no barrier.
+//
+// Mutation: look a check's box's wants up stale, as a person's are
+// (admission.objects) — the node behind lacks the commit, and the fetch
+// pays a barrier, red.
+func TestACheckBoxFetchesAtItsChecksSession(t *testing.T) {
+	t.Parallel()
+	rec := &recording{}
+	c, f, _ := unitCase(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2, WrapEstate: rec.wrap}})
+	rows := c.Rows()
+	// NODE 1 CONVERGED, then left behind: a clone through it syncs its cache,
+	// and the push of the checked commit goes through node 0.
+	p := codetest.NewPerson(t, f, "ceo")
+	work := p.Clone(c.URL(1))
+	head := p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
+	c.MustPush(p, work, "main")
+	key := code.CheckKey{RepoID: rows.Repo.ID, OID: head, Target: "refs/heads/main", Name: "lint.go", Attempt: 1}
+	queueCheck(t, f, key)
+	tokens := codetest.NewCheckTokens(t)
+	box := codetest.NewCheckBox(t, f, tokens.Mint(host.CheckRunRef{Attempt: key, Repo: codetest.RepoName},
+		10*time.Minute))
+	barriers, synced := rec.linearizable(), len(rec.seen("state"))
+
+	boxWork := box.Init()
+	box.Git().Run(t, boxWork, "remote", "add", "origin", c.BoxURL(1))
+	if _, stderr, err := box.Git().Try(t, boxWork, nil, "fetch", "--quiet", "--depth=1", "--filter=blob:none",
+		"origin", head); err != nil {
+		t.Fatalf("a check's box fetching its commit through the node behind: %v\n%s", err, stderr)
+	}
+	if _, stderr, err := box.Git().Try(t, boxWork, nil, "checkout", "--quiet", "--detach", head); err != nil {
+		t.Fatalf("a check's box checking its commit out through the node behind: %v\n%s", err, stderr)
+	}
+	if got := box.Head(boxWork); got != head {
+		t.Fatalf("a check's box checked out %s, want its commit %s", got, head)
+	}
+	if got := rec.linearizable() - barriers; got != 0 {
+		t.Errorf("a check's box's fetch through the node behind read the code log through the barrier %d "+
+			"times, want none: its check's session holds its commit", got)
+	}
+	if states := rec.seen("state")[synced:]; !slices.ContainsFunc(states, func(c call) bool {
+		return c.level == statelog.ReadSession
+	}) {
+		t.Errorf("a check's box's fetch through the node behind never synced at its check's session: %+v", states)
+	}
+}
