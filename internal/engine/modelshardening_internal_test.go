@@ -544,13 +544,14 @@ func TestAFailedRetryNowLeavesThisNodesSitOut(t *testing.T) {
 // plan, and this node's sit-out still reads from the old report.
 func TestARetryNowThatMeetsTheLimitHoldsItsWindow(t *testing.T) {
 	t.Parallel()
-	// The probe meets a window naming a reset hours ahead, so it holds
-	// longer than the one this node sits out from a minute ago.
-	resets := time.Now().UTC().Add(3 * time.Hour).Format("3pm")
+	// The probe meets a window that resets two hours after the one this node
+	// sits out from a minute ago. A plan holds a new window only when it ends
+	// later than the one it holds, so the probe's must end strictly later.
+	// With the same reset, this node would keep the old report's window.
 	cli := filepath.Join(t.TempDir(), "limited-claude")
 	script := "#!/bin/sh\n" +
 		"case \"$1\" in --version) echo '2.1.310 (Claude Code)'; exit 0;; esac\n" +
-		"echo 'Usage limit reached · resets " + resets + "'\n" +
+		"echo '" + limitReport(time.Now().Add(2*time.Hour)) + "'\n" +
 		"exit 1\n"
 	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil { //nolint:gosec // the test's own stub
 		t.Fatal(err)

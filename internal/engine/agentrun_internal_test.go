@@ -70,7 +70,7 @@ func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 	if m.spent {
 		script := filepath.Join(t.TempDir(), "spent-cli")
 		if err := os.WriteFile(script, []byte("#!/bin/sh\ncat >/dev/null\n"+
-			"echo 'Usage limit reached · resets 5pm'\n"), 0o755); err != nil {
+			"echo '"+limitReport(time.Now())+"'\n"), 0o755); err != nil {
 			t.Fatalf("writing the spent harness: %v", err)
 		}
 		overrides = map[string]any{
