@@ -56,11 +56,14 @@ func TestADeclaredSkipIsAccepted(t *testing.T) {
 
 // THE STALENESS DIRECTION, and the scoping that makes it usable.
 //
-// Both halves matter and the second is why this gate was briefly unusable: an
-// Always entry that did not fire is stale ONLY if its package ran. `make test`
-// and `make test-solo` each cover one half of the tree, so without the
-// scoping each target fails on the other's entries.
-func TestAnAlwaysEntryIsStaleOnlyWhenItsPackageRan(t *testing.T) {
+// An Always entry whose test reported nothing is judged only where its
+// package PASSED on an unnarrowed run ([coverage]): there every test ran to
+// its result, so one that did not is not there to skip. Both halves matter,
+// and the second is why this gate was briefly unusable: a run that did not
+// cover the package says nothing about the entry. `make test` and
+// `make test-solo` each cover one half of the tree, so without the scoping
+// each target fails on the other's entries.
+func TestAnAlwaysEntryIsJudgedOnlyWhereItsPackagePassedUnnarrowed(t *testing.T) {
 	t.Parallel()
 
 	var probe Allowance
@@ -74,16 +77,27 @@ func TestAnAlwaysEntryIsStaleOnlyWhenItsPackageRan(t *testing.T) {
 		t.Fatal("no Always entry to exercise; this case is asserting about nothing")
 	}
 
-	t.Run("its package ran and it did not skip", func(t *testing.T) {
+	t.Run("a passing run of every test of its package never ran it", func(t *testing.T) {
 		t.Parallel()
 		_, stale := Judge(nil, wholeRun(probe.Package))
 		if !slices.ContainsFunc(stale, func(s Skip) bool { return s.Test == probe.Test }) {
-			t.Errorf("stale = %v, want %s — its package ran and it did not skip",
-				stale, probe.Test)
+			t.Errorf("stale = %v, want %s — a passing unnarrowed run of its package "+
+				"never ran it, so it was renamed or deleted", stale, probe.Test)
 		}
 	})
 
-	t.Run("its package did not run", func(t *testing.T) {
+	t.Run("a passing run of its package narrowed away from it", func(t *testing.T) {
+		t.Parallel()
+		cov := wholeRun(probe.Package)
+		cov.narrowed = true
+		_, stale := Judge(nil, cov)
+		if slices.ContainsFunc(stale, func(s Skip) bool { return s.Test == probe.Test }) {
+			t.Errorf("%s was called stale by a run of its package that a -run or "+
+				"-skip narrowed; the filter left it out", probe.Test)
+		}
+	})
+
+	t.Run("its package was not in the run", func(t *testing.T) {
 		t.Parallel()
 		_, stale := Judge(nil, wholeRun("internal/somewhere-else"))
 		if slices.ContainsFunc(stale, func(s Skip) bool { return s.Test == probe.Test }) {
