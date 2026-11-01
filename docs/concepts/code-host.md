@@ -1,8 +1,8 @@
 # Code Host
 
 A company that sets [`code.native`](../getting-started/configuration.md#code)
-hosts its git repositories in the engine itself, beside its own tracker and
-knowledge base, and on the same footing: what a repository *is* — its
+hosts its git repositories in the engine itself, beside Worklet, Doclet and
+Chatlet, and on the same footing: what a repository *is* — its
 settings, its protection rules, its refs and the packs it holds — is
 replicated state every data node keeps whole, and the bytes of each push are
 one object in the [object store](object-store.md) the whole fleet shares.
