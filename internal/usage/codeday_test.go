@@ -120,8 +120,8 @@ func TestThePublisherCarriesASeatsCodeDay(t *testing.T) {
 	into := openStore(t)
 	p, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: oneSeatDay{}, Log: &loopback{t: t, into: into, node: "node-a"}, Estate: into.Replicated(),
-		NodeID: "node-a", Caught: caught, Zone: func() *time.Location { return time.UTC },
-		FireHistory: fireHistory,
+		NodeID: "node-a", Caught: caught, Generations: unseen,
+		Zone: func() *time.Location { return time.UTC }, FireHistory: fireHistory,
 	})
 	if err != nil {
 		t.Fatal(err)
