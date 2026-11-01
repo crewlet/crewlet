@@ -198,6 +198,11 @@ Only a person or this document sets a mirror or an import: a seat asking to
 create a repository with one, or to set or remove either mirror of one, is
 refused `not_permitted` whatever its grant, since a pull mirror and an import
 reach another host for the company and a push mirror sends its code to one.
+A person sets a repository a tool made its mirrors through `code_update_repo`'s
+`mirror_from` and `mirror_to`, each set whole or removed by `{}` — from the
+repository's Settings tab in the dashboard, or their assistant — and imports
+one with `code_import_repo`; a repository this document declares has its
+mirrors from `code.repos`, which every activation settles.
 A scratch repository takes none of the three.
 
 **An import and a pull mirror run on the repository's home** — the first live
@@ -224,6 +229,13 @@ wants a user of its own beside a token (Bitbucket's `x-token-auth`) is given it
 in the variable. A push mirror pushes the refs it covers, each protected branch
 at its green commit, whenever its repository moves and every 15 minutes while
 it does not ([Mirrors and imports](#mirrors-and-imports)).
+
+**Watching it.** A repository's detail — the `code_repo` question its page in
+the dashboard reads — carries `remotes`: its mirrors as its settings name them, each
+credential the `${VAR}` reference it is and never a token; its import's
+source, how many chunks have landed, and once it ended, when and why it ended
+short; and a pull mirror's last sync. A repository with no mirror that was
+never imported carries none.
 
 At most 10 000 repositories one document — a typo guard two orders of
 magnitude past a large company's, not a limit anybody is expected to meet. It

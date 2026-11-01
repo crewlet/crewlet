@@ -905,6 +905,69 @@ func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) 
 	}
 }
 
+// A MIRROR IS ONE SETTINGS CHANGE, SET WHOLE OR REMOVED: code_update_repo's
+// `mirror_from` and `mirror_to` send a settings change naming that mirror and
+// nothing else — the one a call names set whole, and `{}` (no url) sent as the
+// mirror's removal, which the domain reads as one — so a person's dashboard
+// and assistant set a tools repository's mirrors (U49 a; the domain refuses an
+// agent's, TestAnAgentCannotSetAMirror). A field no mirror has, or a mirror
+// beside another kind of change, is refused invalid with nothing sent.
+//
+// Mutations: read no `mirror_to` argument — the removal is refused as asking
+// nothing, red; decode a mirror without refusing an unknown field — the
+// misspelled token is sent, red.
+func TestAMirrorIsOneSettingsChangeSetWholeOrRemoved(t *testing.T) {
+	t.Parallel()
+	writer := &codeWrites{}
+	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	turn := writerTurn(t)
+	call := func(args map[string]any) (tools.Result, []code.LifecycleRequest) {
+		_, before := writer.asked()
+		got := callWrite(t, everyGrant(), reg, turn, builtin.CodeUpdateRepoTool, args)
+		_, after := writer.asked()
+		return got, after[len(before):]
+	}
+	for _, c := range []struct {
+		name string
+		args map[string]any
+		want code.RepoChange
+	}{
+		{"a pull mirror set", map[string]any{"repo": "site", "mirror_from": map[string]any{
+			"url": "https://forge.example.com/up/site.git", "credential": "${SITE_UPSTREAM_TOKEN}"}},
+			code.RepoChange{MirrorFrom: &code.MirrorSource{URL: "https://forge.example.com/up/site.git",
+				Credential: "${SITE_UPSTREAM_TOKEN}"}}},
+		{"a push mirror set", map[string]any{"repo": "site", "mirror_to": map[string]any{
+			"url": "https://forge.example.com/out/site.git", "credential": "${SITE_MIRROR_TOKEN}",
+			"as": "agent-cto", "refs": []any{"refs/heads/main"}}},
+			code.RepoChange{MirrorTo: &code.MirrorTarget{URL: "https://forge.example.com/out/site.git",
+				Credential: "${SITE_MIRROR_TOKEN}", As: "agent-cto", Refs: []string{"refs/heads/main"}}}},
+		{"a push mirror removed", map[string]any{"repo": "site", "mirror_to": map[string]any{}},
+			code.RepoChange{MirrorTo: &code.MirrorTarget{}}},
+	} {
+		got, sent := call(c.args)
+		if got.Failed || len(sent) != 1 || sent[0].Kind != code.LifecycleSettings || sent[0].Change == nil ||
+			!reflect.DeepEqual(*sent[0].Change, c.want) {
+			t.Errorf("%s answered %q and sent %+v, want one settings change naming that mirror alone", c.name,
+				got.Output, sent)
+		}
+	}
+	for name, args := range map[string]map[string]any{
+		// A WHOLE MIRROR BUT FOR ONE FIELD it does not have, so the unknown
+		// field is the only reason to refuse it.
+		"a field no mirror has": {"repo": "site", "mirror_to": map[string]any{
+			"url": "https://forge.example.com/out/site.git", "credential": "${SITE_MIRROR_TOKEN}",
+			"as": "agent-cto", "token": "glpat-not-a-reference"}},
+		"a mirror beside an archive": {"repo": "site", "archived": true,
+			"mirror_from": map[string]any{"url": "https://forge.example.com/up/site.git"}},
+	} {
+		got, sent := call(args)
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || len(sent) != 0 {
+			t.Errorf("%s answered %q as %s, with %d requests sent; want invalid and nothing sent", name,
+				got.Output, tools.RefusalOf(got), len(sent))
+		}
+	}
+}
+
 // A PROTECTION CHANGES ITS MERGE GATE A FIELD AT A TIME: code_protect_branch
 // sends each gate field a call names as a change the deciding data node
 // resolves against the gate its own rows hold — decoded by the domain's own
