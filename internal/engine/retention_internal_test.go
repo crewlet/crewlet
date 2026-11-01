@@ -1118,22 +1118,41 @@ func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recorder: %v", err)
 	}
+	// THE CEILING EACH LOG'S STREAM HOLDS, which a log whose census counts
+	// readers of its own is sized by ([clientBarriers]).
+	held := map[string]int64{}
+	for _, running := range e.core.Load().log.running() {
+		stats, err := running.log.Stats(t.Context())
+		if err != nil {
+			t.Fatalf("read %s's stream: %v", running.domain.Name(), err)
+		}
+		held[running.domain.Name()] = int64(stats.MaxBytes)
+	}
 	want := map[string]string{}
 	for _, entry := range register() {
 		if entry.Barrier == nil {
 			continue
 		}
-		want[entry.Domain.Name()] = entry.Ceiling(config.Stream{}, 0).Field
+		name := entry.Domain.Name()
+		want[name] = entry.Ceiling(config.Stream{}, 0).Field
 		// PAST TWICE THE LOG'S OWN CENSUS, which its domain declares — and
-		// past a declared zero on its first barrier.
-		recorder.Add(metrics.StatelogBarriersApplied,
-			uint64(3*statelog.Census{Reads: *entry.Reads, Seats: 1}.Expected()+1),
-			metrics.Attrs{"domain": entry.Domain.Name(), "stream": entry.Domain.Stream().Name})
+		// past a declared zero on its first barrier. The census is the
+		// whole of it, the readers the log's own sizing counts included:
+		// the code log's git clients, a share of the ceiling its stream
+		// holds, at the min_age the duty below reads. Left out, the code
+		// log is held under its census and its line is never read.
+		census := statelog.Census{Reads: *entry.Reads, Seats: 1}
+		if clients := clientBarriers(name); clients != nil {
+			census.Clients = clients(held[name], config.TrackerRetention{}.MinAge())
+		}
+		recorder.Add(metrics.StatelogBarriersApplied, uint64(3*census.Expected()+1),
+			metrics.Attrs{"domain": name, "stream": entry.Domain.Stream().Name})
 	}
-	if len(want) < 7 {
+	if len(want) < 8 {
 		t.Fatalf("%d registered log(s) take barriers, want at least the tracker's, "+
 			"the knowledge base's, the identity estate's, the artifacts log's, the "+
-			"artifact datastore's, the assistant's and chat's: %v", len(want), want)
+			"artifact datastore's, the assistant's, chat's and the code log's: %v",
+			len(want), want)
 	}
 	r := &retention{state: e.core.Load().log, fleet: e.backends.Fleet, nodeID: "node-a",
 		metrics: recorder, seats: func() int { return 1 }}
