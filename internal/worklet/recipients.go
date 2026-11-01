@@ -96,6 +96,53 @@ var addressedReasons = []Reason{
 // answer. For which reasons lead a PERSON's inbox, see [DefaultPrimaryReasons].
 func (r Reason) Addressed() bool { return slices.Contains(addressedReasons, r) }
 
+// turnReasons are the reasons whose notice starts a turn whatever the change
+// was: each says the change was put to this seat, or moved work it is
+// accountable for.
+//
+// A THIRD LIST, and not either of the two above, because it answers a third
+// question: not "must the turn answer" ([Reason.Addressed]) and not "does it
+// lead a person's inbox" ([DefaultPrimaryReasons]), but "is it worth a turn at
+// all". `answered` and `thread` are replies to something the seat wrote;
+// `unblocked`, `routed_to`, `parent_assignee` and `checklist` move work the
+// seat owns; `mention`, `prioritised` and `asked` put something to it. None of
+// these is something a seat should first learn about when it happens to read
+// the task again.
+var turnReasons = []Reason{
+	ReasonMention, ReasonPrioritised, ReasonAsked, ReasonAnswered,
+	ReasonThread, ReasonUnblocked, ReasonRoutedTo, ReasonParentAssignee,
+	ReasonChecklist,
+}
+
+// ownerReasons start a turn exactly when the change asks something of the
+// task's owner ([Notify.ownerAsked]): the assignee, and the lead who hears in
+// the owner's place when the task has nobody else ([ReasonLeadFallback]).
+//
+// One rule for both, because the fallback exists to stand in for an owner the
+// task does not have: a lead woken for an agent's status note on an unowned
+// task spends a turn the owner would not have been asked to spend.
+var ownerReasons = []Reason{ReasonAssignee, ReasonLeadFallback}
+
+// StartsTurn reports whether a notice under this reason wakes its seat into a
+// turn, given whether the change asks something of the task's owner.
+//
+// EVERY OTHER NOTICE IS STILL DELIVERED, as a row in the recipient's inbox
+// that the seat reads when it next opens the task: a watcher, a collaborator
+// or a reporter is following the work rather than being asked about it, and a
+// turn spent learning that somebody else posted a status note on it is a turn
+// that ends `turn_no_action`. Measured on a live company before this rule
+// existed: three in four of one seat's Worklet wakes in a day asked it
+// nothing, and every one of them cost an executor run.
+func (r Reason) StartsTurn(ownerAsked bool) bool {
+	switch {
+	case slices.Contains(turnReasons, r):
+		return true
+	case slices.Contains(ownerReasons, r):
+		return ownerAsked
+	}
+	return false
+}
+
 // Candidate is one handle and why it is a candidate.
 type Candidate struct {
 	Handle string
@@ -112,6 +159,12 @@ type Candidate struct {
 
 	// InboxOnly marks a candidate written to the inbox and never woken.
 	InboxOnly bool
+
+	// Wakes marks a candidate whose notice starts a turn ([Reason.StartsTurn]).
+	// One that does not is still written to the inbox, and still counts as
+	// somebody who heard about the change when [Route] decides whether a
+	// fallback lead is needed.
+	Wakes bool
 
 	// Task names the task this candidate is about when it is NOT the
 	// subject of the change — which today is the unblocked notice alone.
@@ -145,15 +198,32 @@ func Candidates(n *Notify) []Candidate {
 	if n == nil {
 		return nil
 	}
+	task := n.Kind.TaskCommit()
+	finishedEdge := n.Snapshot.PrevStatusGroup.Finished() != n.Snapshot.StatusGroup.Finished()
+	ownerAsked := n.ownerAsked(finishedEdge)
+
 	var out []Candidate
-	seen := map[string]bool{}
+	// seen is where each handle's one candidate sits, so a later reason
+	// that names the same handle can still decide its wake.
+	seen := map[string]int{}
 	add := func(handle string, reason Reason, addressed bool) {
-		if handle == "" || seen[handle] {
+		if handle == "" {
 			return
 		}
-		seen[handle] = true
+		// THE FIRST REASON IS WHAT THE HANDLE IS TOLD, AND ANY REASON
+		// WAKES IT. Precedence decides which fact a recipient reads, and
+		// a stronger fact that starts no turn must not swallow a weaker
+		// one that does: the reporter of a task who also wrote in the
+		// thread a reply lands in is told "a task you reported", and is
+		// still woken, because the reply is to something they wrote.
+		if i, ok := seen[handle]; ok {
+			out[i].Wakes = out[i].Wakes || reason.StartsTurn(ownerAsked)
+			return
+		}
+		seen[handle] = len(out)
 		out = append(out, Candidate{
 			Handle: handle, Reason: reason, Addressed: addressed,
+			Wakes: reason.StartsTurn(ownerAsked),
 		})
 	}
 	addAll := func(handles []string, reason Reason, addressed bool) {
@@ -161,9 +231,6 @@ func Candidates(n *Notify) []Candidate {
 			add(h, reason, addressed)
 		}
 	}
-
-	task := n.Kind.TaskCommit()
-	finishedEdge := n.Snapshot.PrevStatusGroup.Finished() != n.Snapshot.StatusGroup.Finished()
 
 	addAll(n.Mentions, ReasonMention, true)
 	if n.Kind == ChangePrioritised {
@@ -193,7 +260,7 @@ func Candidates(n *Notify) []Candidate {
 	add(n.Snapshot.CommentAsk, ReasonAsked, true)
 	add(n.Snapshot.AnsweredAuthor, ReasonAnswered, false)
 	if task {
-		add(n.Snapshot.Assignee, ReasonAssignee, n.assigneeAddressed(finishedEdge))
+		add(n.Snapshot.Assignee, ReasonAssignee, ownerAsked)
 	}
 	if n.Kind == ChangeAssignee {
 		add(n.Snapshot.PrevAssignee, ReasonUnassigned, false)
@@ -218,6 +285,7 @@ func Candidates(n *Notify) []Candidate {
 		}
 		out = append(out, Candidate{
 			Handle: party.Assignee, Reason: ReasonUnblocked, Task: party.Task,
+			Wakes: ReasonUnblocked.StartsTurn(ownerAsked),
 		})
 	}
 	if n.Kind == ChangeRouted {
@@ -237,10 +305,10 @@ func Candidates(n *Notify) []Candidate {
 	}
 	if n.Kind == ChangeWatchers {
 		for _, h := range n.Snapshot.RemovedWatchers {
-			if h == "" || seen[h] {
+			if _, ok := seen[h]; h == "" || ok {
 				continue
 			}
-			seen[h] = true
+			seen[h] = len(out)
 			out = append(out, Candidate{
 				Handle: h, Reason: ReasonUnwatched, InboxOnly: true,
 			})
@@ -261,25 +329,30 @@ func Candidates(n *Notify) []Candidate {
 		for rank, handle := range []string{
 			n.Snapshot.RoutingUnitLead, n.Snapshot.ProjectLead,
 		} {
-			if handle == "" || seen[handle] {
+			if _, ok := seen[handle]; handle == "" || ok {
 				continue
 			}
-			seen[handle] = true
+			seen[handle] = len(out)
 			out = append(out, Candidate{
 				Handle: handle, Reason: ReasonLeadFallback,
 				FallbackOnly: true, FallbackRank: rank,
+				Wakes: ReasonLeadFallback.StartsTurn(ownerAsked),
 			})
 		}
 	}
 	return out
 }
 
-// assigneeAddressed decides whether the assignee is being ASKED something.
+// ownerAsked decides whether the change asks something of the task's OWNER:
+// its assignee, or the lead who hears in the owner's place.
 //
 // The distinction is what a turn does with the wake: an addressed one must
-// answer, and an unaddressed one may simply absorb. A comment from a person on
-// your ticket IS the ask; the same comment from another agent is not.
-func (n *Notify) assigneeAddressed(finishedEdge bool) bool {
+// answer, and an unaddressed one may simply absorb, and it is also whether the
+// owner is woken at all ([ownerReasons]). A comment from a person on your
+// ticket IS the ask; the same comment from another agent is not, and a status
+// note another agent leaves on work you own is a row in your inbox rather than
+// a turn.
+func (n *Notify) ownerAsked(finishedEdge bool) bool {
 	switch n.Kind {
 	case ChangeCreated, ChangeAssignee:
 		return true
@@ -331,14 +404,21 @@ func (k ChangeKind) mayFallBack() bool {
 
 // Route is the post-filter: who is actually woken.
 //
-// Four steps, in this order, and the last one is the whole reason the fallback
-// is a list:
+// Five steps, in this order. The fourth is the whole reason the fallback is a
+// list, and the fifth is why it comes last:
 //
 //  1. Drop the inbox-only candidates — they are a record, not a wake.
 //  2. Drop handles the company no longer employs.
 //  3. Drop the actor, except under the one reason that wakes them.
 //  4. If no ordinary candidate survived, keep the LOWEST-RANKED surviving
 //     fallback and only that one.
+//  5. Keep only the candidates whose notice starts a turn ([Candidate.Wakes]).
+//
+// THE FIFTH STEP RUNS AFTER THE FALLBACK IS DECIDED, never before it. A task
+// whose watchers heard about a change has an audience, and that is what the
+// fallback asks; filtering the watchers out first would make every quiet
+// comment on a watched task reach a lead instead, which is the noise this
+// step exists to remove.
 //
 // ONE NAME IS THE ACTOR. A person bound to a seat writes AS that seat — the
 // author iam.ActorFor records for them — so the handle their own gestures
@@ -363,7 +443,7 @@ func Route(candidates []Candidate, registry func(string) bool, actor string) []C
 		ordinary = append(ordinary, c)
 	}
 	if len(ordinary) > 0 {
-		return ordinary
+		return waking(ordinary)
 	}
 	if len(fallback) == 0 {
 		return nil
@@ -374,5 +454,20 @@ func Route(candidates []Candidate, registry func(string) bool, actor string) []C
 			best = c
 		}
 	}
-	return []Candidate{best}
+	return waking([]Candidate{best})
+}
+
+// waking is the fifth step of [Route]: the candidates whose notice starts a
+// turn, in the order given.
+func waking(heard []Candidate) []Candidate {
+	out := heard[:0:0]
+	for _, c := range heard {
+		if c.Wakes {
+			out = append(out, c)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

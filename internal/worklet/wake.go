@@ -264,7 +264,7 @@ func (w Wake) snapshot(leads Leads) Snapshot {
 	if w.Comment != nil {
 		// WHO WROTE IT DECIDES WHETHER THE ASSIGNEE IS ADDRESSED, which
 		// is the difference between a turn that answers and one that
-		// absorbs — see [Notify.assigneeAddressed]. It was never copied
+		// absorbs (see [Notify.ownerAsked]). It was never copied
 		// here, so the field was the zero AuthorKind on every record
 		// ever written and the comparison against `human`/`operator`
 		// was false for every comment: a person asking an agent a
