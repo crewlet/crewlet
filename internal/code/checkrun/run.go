@@ -250,7 +250,7 @@ func (a *attempt) checkEnv() map[string]string {
 		"CREWLET_CHECK_SHA":     a.c.OID,
 		"CREWLET_CHECK_NAME":    a.c.Name,
 		"CREWLET_CHECK_ATTEMPT": strconv.Itoa(a.c.Attempt),
-		"CREWLET_CHECK_API":     a.r.apiBase + "/" + a.c.Repo,
+		"CREWLET_CHECK_API":     a.r.o.CodeBase + "/" + a.c.Repo,
 		"CREWLET_CHECK_SUMMARY": summaryFile,
 	}
 	if a.c.Base != "" {

@@ -33,6 +33,11 @@ import (
 // gitBase is the code host's base every case's boxes are given.
 const gitBase = "https://git.example.com/box/git"
 
+// codeBase is where every case's boxes read their commit without a clone: on
+// another host than gitBase's, so a runner that spelled its own sibling of
+// gitBase rather than taking the base it is given reads as one.
+const codeBase = "https://read.example.com/box/code"
+
 // fast is the timing every case runs its runners at: a poll of twenty
 // milliseconds, a stagger long enough to order two runners' claims, and an
 // ending read for as long as a loaded runner takes to read one from memory.
@@ -200,8 +205,8 @@ func newFleet(t *testing.T) *fleet {
 func (f *fleet) options(node string, slots int, o checkrun.Order) checkrun.Options {
 	return checkrun.Options{NodeID: node, Estate: estate{f.d}, Order: o,
 		Boxes:   func() (checkrun.Boxes, bool) { return f.manager, true },
-		Company: f.companyOf, Tokens: tokens{}, GitBase: gitBase, Slots: slots, Timing: fast, Faults: f.faults,
-		Leases: f.leases, Minutes: f.counter}
+		Company: f.companyOf, Tokens: tokens{}, GitBase: gitBase, CodeBase: codeBase, Slots: slots, Timing: fast,
+		Faults: f.faults, Leases: f.leases, Minutes: f.counter}
 }
 
 // companyOf is the case's company, its ${VAR} references resolved from env.
