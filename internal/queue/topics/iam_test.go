@@ -64,20 +64,23 @@ func TestAnIamSubjectWithNoKindIsRefusedRatherThanBuilt(t *testing.T) {
 // every domain on one broker, that includes every other domain's subjects.
 func TestTheIamPathRefusesWhatItDidNotBuild(t *testing.T) {
 	t.Parallel()
-	for _, subject := range []string{
+	subjects := []string{
 		"",
 		"crewlet.agent.alice.inbox",
 		topics.IamLogPrefix,
 		topics.IamLogPrefix + ".",
 		topics.IamLogPrefix + ".person.",
-		topics.TrackerLogPrefix + ".task.1",
-		topics.TrackerVectorsPrefix + ".source.1",
-		topics.PagesLogPrefix + ".page.1",
-		topics.UsageLogPrefix + ".seat.node-a.2026-09-23.a1",
-		topics.ArtifactsLogPrefix + ".artifact.1",
-		topics.ArtifactDataLogPrefix + ".store.1",
-		topics.ChatLogPrefix + ".message.1",
-	} {
+	}
+	// Every other log, read off the one list of them rather than written out
+	// again — a list held to the package's own constants — so a log the
+	// package gains is refused here the day it is declared, under the kind
+	// this log's own records carry.
+	for _, prefix := range everyLogPrefix() {
+		if prefix != topics.IamLogPrefix {
+			subjects = append(subjects, topics.LogSubject(prefix, "person", "1"))
+		}
+	}
+	for _, subject := range subjects {
 		if kind, id, ok := topics.IamLogPath(subject); ok {
 			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+
 				"iam log", subject, kind, id)

@@ -49,21 +49,27 @@ func TestACodeSubjectWithNoKindIsRefusedRatherThanBuilt(t *testing.T) {
 	}
 }
 
-// THE INVERSE REFUSES WHAT THE BUILDER COULD NOT HAVE PRODUCED — the other
-// four logs' subjects among them, since five domains share one broker.
+// THE INVERSE REFUSES WHAT THE BUILDER COULD NOT HAVE PRODUCED — every other
+// log's subjects among them, since every domain shares one broker.
 func TestTheCodePathRefusesWhatItDidNotBuild(t *testing.T) {
 	t.Parallel()
-	for _, subject := range []string{
+	subjects := []string{
 		"",
 		"crewlet.agent.alice.inbox",
 		topics.CodeLogPrefix,
 		topics.CodeLogPrefix + ".",
 		topics.CodeLogPrefix + ".repo.",
-		topics.TrackerLogPrefix + ".task.1",
-		topics.TrackerVectorsPrefix + ".source.1",
-		topics.PagesLogPrefix + ".page.1",
-		topics.UsageLogPrefix + ".seat.node-a.2026-09-23.a1",
-	} {
+	}
+	// Every other log, read off the one list of them rather than written out
+	// again — a list held to the package's own constants — so a log the
+	// package gains is refused here the day it is declared, under the kind
+	// this log's own records carry.
+	for _, prefix := range everyLogPrefix() {
+		if prefix != topics.CodeLogPrefix {
+			subjects = append(subjects, topics.LogSubject(prefix, "repo", "1"))
+		}
+	}
+	for _, subject := range subjects {
 		if kind, id, ok := topics.CodeLogPath(subject); ok {
 			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+
 				"code log", subject, kind, id)
