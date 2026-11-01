@@ -886,8 +886,11 @@ func codingSkills(plugins []string) ([]string, error) {
 		var manifest struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(raw, &manifest); err != nil || manifest.Name == "" {
-			return nil, fmt.Errorf("the plugin at %s names nothing: %v", dir, err)
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			return nil, fmt.Errorf("decoding the plugin at %s: %w", dir, err)
+		}
+		if manifest.Name == "" {
+			return nil, fmt.Errorf("the plugin at %s names nothing", dir)
 		}
 		files, err := filepath.Glob(filepath.Join(dir, "skills", "*", "SKILL.md"))
 		if err != nil {
