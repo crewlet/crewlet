@@ -604,11 +604,15 @@ type resolveBudgetKey struct{}
 // a position it finds itself behind — in place of the publisher's
 // [Deps.ResolveBudget]. A non-positive d changes nothing.
 //
-// NO PRODUCTION CALLER SETS IT: how long a write waits is the publisher's
-// decision, made once for every caller ([Publisher.resolveBudget]). It exists
-// for a case that makes a write it KNOWS cannot resolve here — on a node whose
-// applier it has halted — and would otherwise spend the whole default learning
-// `pending`, which is all that budget's length buys there. PER CALL rather
+// ONE PRODUCTION CALLER SETS IT: how long a write waits is the publisher's
+// decision, made once for every caller ([Publisher.resolveBudget]), and a call
+// shortens it only where it needs its record durable in the log rather than
+// applied here — a seat's executor removal (the engine's mailbox retirement),
+// which every node applies in log order whether or not this one has caught up,
+// and which spends its wait out of a budget a lease bounds. The other case is
+// a test's: a write it KNOWS cannot resolve here — on a node whose applier it
+// has halted — would otherwise spend the whole default learning `pending`,
+// which is all that budget's length buys there. PER CALL rather
 // than a shorter budget for the publisher, because the same case's other
 // writes resolve against appliers that are running or resuming, and a budget
 // short enough to hurry the first would turn those into a different answer on
