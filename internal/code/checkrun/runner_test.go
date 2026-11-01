@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/checkrun"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
@@ -422,7 +423,8 @@ func TestARunnerNeedsTheBoxGitBase(t *testing.T) {
 	t.Parallel()
 	o := checkrun.Options{NodeID: "git-a", Estate: estate{}, Order: &order{},
 		Boxes:   func() (checkrun.Boxes, bool) { return nil, false },
-		Company: func() (checkrun.Company, bool) { return checkrun.Company{}, false }, Tokens: tokens{}}
+		Company: func() (checkrun.Company, bool) { return checkrun.Company{}, false }, Tokens: tokens{},
+		Leases: memory.New(), Minutes: memory.NewFleet()}
 	for _, base := range []string{"", "https://git.example.com", "https://git.example.com/git"} {
 		o.GitBase = base
 		if _, err := checkrun.New(o); !errors.Is(err, checkrun.ErrOptions) {
@@ -432,5 +434,55 @@ func TestARunnerNeedsTheBoxGitBase(t *testing.T) {
 	o.GitBase = gitBase
 	if _, err := checkrun.New(o); err != nil {
 		t.Errorf("New with GitBase %q: %v", gitBase, err)
+	}
+}
+
+// wholeOptions are a runner's options with every one New requires.
+func wholeOptions() checkrun.Options {
+	return checkrun.Options{NodeID: "git-a", Estate: estate{}, Order: &order{},
+		Boxes:   func() (checkrun.Boxes, bool) { return nil, false },
+		Company: func() (checkrun.Company, bool) { return checkrun.Company{}, false }, Tokens: tokens{},
+		Leases: memory.New(), Minutes: memory.NewFleet(), GitBase: gitBase}
+}
+
+// A RUNNER'S TIMING IS WHOLE OR UNSET: a cadence of zero is no cadence — a
+// slot renewed every zero seconds panics its ticker — so New refuses a Timing
+// with any cadence unset, and takes a whole one or none (Production).
+func TestARunnerTakesAWholeTimingOrNone(t *testing.T) {
+	t.Parallel()
+	noRenew := fast
+	noRenew.Renew = 0
+	for name, timing := range map[string]checkrun.Timing{
+		"a poll alone": {Poll: time.Second}, "every cadence but the renewal": noRenew,
+	} {
+		o := wholeOptions()
+		o.Timing = timing
+		if _, err := checkrun.New(o); !errors.Is(err, checkrun.ErrOptions) {
+			t.Errorf("New with %s = %v, want ErrOptions", name, err)
+		}
+	}
+	for name, timing := range map[string]checkrun.Timing{"none": {}, "a whole one": fast} {
+		o := wholeOptions()
+		o.Timing = timing
+		if _, err := checkrun.New(o); err != nil {
+			t.Errorf("New with %s: %v", name, err)
+		}
+	}
+}
+
+// A RUNNER NEEDS THE COMPANY'S COORDINATION STORE: the leases a remote box's
+// slot is held on and the counter its minutes are charged to, without which no
+// remote cap could hold — New refuses either absent, naming it.
+func TestARunnerNeedsTheCoordinationStore(t *testing.T) {
+	t.Parallel()
+	for name, drop := range map[string]func(o *checkrun.Options){
+		"Leases":  func(o *checkrun.Options) { o.Leases = nil },
+		"Minutes": func(o *checkrun.Options) { o.Minutes = nil },
+	} {
+		o := wholeOptions()
+		drop(&o)
+		if _, err := checkrun.New(o); !errors.Is(err, checkrun.ErrOptions) || !strings.Contains(err.Error(), name) {
+			t.Errorf("New without %s = %v, want ErrOptions naming it", name, err)
+		}
 	}
 }

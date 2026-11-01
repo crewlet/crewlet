@@ -54,6 +54,7 @@ const (
 	CodeChecksDuration               = "crewlet.code.checks.duration"
 	CodeChecksFinished               = "crewlet.code.checks.finished"
 	CodeChecksQueued                 = "crewlet.code.checks.queued"
+	CodeChecksRemoteCapped           = "crewlet.code.checks.remote.capped"
 	CodeChecksRunning                = "crewlet.code.checks.running"
 	CodeCommitBatchSize              = "crewlet.code.commit.batch.size"
 	CodeCommitBusy                   = "crewlet.code.commit.busy"

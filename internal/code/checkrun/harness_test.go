@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -35,7 +36,7 @@ const gitBase = "https://git.example.com/box/git"
 // fast is the timing every case runs its runners at: a poll of twenty
 // milliseconds, a stagger long enough to order two runners' claims.
 var fast = checkrun.Timing{Poll: 20 * time.Millisecond, Stagger: 300 * time.Millisecond,
-	Walk: 5 * time.Millisecond, Backstop: 50 * time.Millisecond}
+	Walk: 5 * time.Millisecond, Backstop: 50 * time.Millisecond, Renew: 20 * time.Millisecond}
 
 // estate is a data node's code domain as a runner reaches it: its reads and
 // its checks writer, in process.
@@ -162,6 +163,10 @@ type fleet struct {
 	manager   *sandbox.Manager
 	company   *config.Company
 	faults    *codefault.Script
+	// leases and counter are the company's coordination store: the remote
+	// cells' slots and the fleet's counter their box-minutes are charged to.
+	leases  *memory.Backend
+	counter *memory.Fleet
 }
 
 // newFleet is a data node holding the repository web, and a catalogue of a
@@ -174,7 +179,7 @@ func newFleet(t *testing.T) *fleet {
 		t.Fatalf("open the broker: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	f := &fleet{t: t, faults: &codefault.Script{}}
+	f := &fleet{t: t, faults: &codefault.Script{}, leases: memory.New(), counter: memory.NewFleet()}
 	f.d = codetest.StartDataNode(t, codetest.DataOptions{ID: "data-a", Queue: q, Dir: dir, LogBytes: 64 << 20,
 		Faults: f.faults})
 	f.d.Declare(t, time.Now().UTC().Add(-time.Hour).Truncate(time.Second),
@@ -205,7 +210,8 @@ func newFleet(t *testing.T) *fleet {
 func (f *fleet) options(node string, slots int, o checkrun.Order) checkrun.Options {
 	return checkrun.Options{NodeID: node, Estate: estate{f.d}, Order: o,
 		Boxes:   func() (checkrun.Boxes, bool) { return f.manager, true },
-		Company: f.companyOf, Tokens: tokens{}, GitBase: gitBase, Slots: slots, Timing: fast, Faults: f.faults}
+		Company: f.companyOf, Tokens: tokens{}, GitBase: gitBase, Slots: slots, Timing: fast, Faults: f.faults,
+		Leases: f.leases, Minutes: f.counter}
 }
 
 // companyOf is the case's company, its ${VAR} references resolved from env.

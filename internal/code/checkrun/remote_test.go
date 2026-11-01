@@ -1,0 +1,335 @@
+package checkrun_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/checkrun"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
+
+// THE COMPANY'S REMOTE CELLS HOLD THE CONCURRENCY CAP: with
+// code.checks.remote.max_running unset — sixteen — and seventeen e2b checks
+// queued, two git nodes each FIRST in its own order, so both claim every
+// attempt at once, run sixteen boxes between them and leave the seventeenth
+// queued, claimed by nobody; one box ending frees its slot, and the
+// seventeenth runs.
+//
+// Mutation: grant every slot whatever the live leases (Take ignores
+// max_running) — seventeen boxes, red.
+func TestRemoteCellsHoldTheConcurrencyCap(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	f.runner(f.options("git-a", 0, &order{nodes: []string{"git-a", "git-b"}}))
+	f.runner(f.options("git-b", 0, &order{nodes: []string{"git-b", "git-a"}}))
+	var keys []code.CheckKey
+	for i := range config.CodeDefaultRemoteMaxRunning + 1 {
+		keys = append(keys, f.queue(oidOf(fmt.Sprintf("%02x", i+1)), remote("lint", time.Minute)))
+	}
+	var boxes []*sandbox.FakeSandbox
+	for range config.CodeDefaultRemoteMaxRunning {
+		boxes = append(boxes, f.e2b.box(t))
+	}
+	time.Sleep(20 * fast.Walk)
+	if n := f.e2b.count(); n != config.CodeDefaultRemoteMaxRunning {
+		t.Fatalf("two git nodes made %d remote boxes under a cap of %d", n, config.CodeDefaultRemoteMaxRunning)
+	}
+	var waiting []code.CheckKey
+	for _, key := range keys {
+		if row, _ := f.row(key); row.State == code.CheckStateQueued {
+			waiting = append(waiting, key)
+		}
+	}
+	if len(waiting) != 1 {
+		t.Fatalf("%d of %d remote checks wait queued, want exactly the one past the cap", len(waiting), len(keys))
+	}
+	if live := f.slots(); live != config.CodeDefaultRemoteMaxRunning {
+		t.Fatalf("%d remote slots are leased for %d boxes", live, config.CodeDefaultRemoteMaxRunning)
+	}
+
+	f.e2b.end(boxes[0], 0, "")
+	next := f.e2b.box(t)
+	f.await(waiting[0], "ran once a box ended", func(r code.CheckRow) bool { return r.Box == next.ID() })
+	for _, b := range append(boxes[1:], next) {
+		f.e2b.end(b, 0, "")
+	}
+	for _, key := range keys {
+		f.ended(key)
+	}
+	eventually(t, "every slot given back", func() bool { return f.slots() == 0 })
+}
+
+// THE DAILY BOX-TIME CAP HOLDS NEW CHECKS: under box_hours_per_day 1 — sixty
+// box-minutes a UTC day — a remote box held for sixty minutes spends the day,
+// each minute charged as it begins; a check queued then waits queued, claimed
+// by nobody, while that box runs on to its own end and after it; and once the
+// next UTC midnight comes it runs.
+//
+// Mutation: start a box whatever the day's charge answers (Take ignores a
+// refused first minute) — the second check runs at once, red.
+func TestTheDailyBoxTimeCapHoldsNewChecks(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	f.company.Code.Checks.MaxTimeoutSeconds = int(config.CodeCheckTimeoutCeiling / time.Second)
+	f.company.Code.Checks.Remote.BoxHoursPerDay = new(1)
+	// THE RUNNER'S CLOCK, an hour into the UTC day after today's, so every
+	// instant it reads is past every attempt's real queuing.
+	clock := &clock{at: time.Now().UTC().Truncate(24 * time.Hour).Add(25 * time.Hour)}
+	minutes := &charges{Fleet: f.counter}
+	o := f.options("git-a", 0, &order{nodes: []string{"git-a"}})
+	o.Now, o.Minutes = clock.now, minutes
+	f.runner(o)
+
+	first := f.queue(oidOf("a"), remote("build", 3*time.Hour))
+	box := f.e2b.box(t)
+	f.await(first, "named its box", func(r code.CheckRow) bool { return r.Box == box.ID() })
+	clock.advance(59 * time.Minute)
+	eventually(t, "sixty minutes charged", func() bool { return minutes.allowed.Load() == 60 })
+	if minutes.refused.Load() != 0 {
+		t.Fatalf("a day of sixty minutes refused one of its first sixty")
+	}
+	clock.advance(2 * time.Minute)
+	eventually(t, "the sixty-first minute refused", func() bool { return minutes.refused.Load() > 0 })
+	if row, _ := f.row(first); row.State != code.CheckStateRunning {
+		t.Fatalf("the box running when the day filled = %+v, want it running on", row)
+	}
+
+	second := f.queue(oidOf("b"), remote("build", 3*time.Hour))
+	time.Sleep(20 * fast.Walk)
+	f.e2b.end(box, 0, "")
+	f.ended(first)
+	time.Sleep(20 * fast.Walk)
+	if row, _ := f.row(second); row.State != code.CheckStateQueued || f.e2b.count() != 1 {
+		t.Fatalf("a check queued after the day's hours were spent = %+v with %d remote boxes, want it "+
+			"queued and no box", row, f.e2b.count())
+	}
+
+	clock.set(clock.now().Truncate(24 * time.Hour).Add(24 * time.Hour))
+	next := f.e2b.box(t)
+	f.await(second, "ran the next UTC day", func(r code.CheckRow) bool { return r.Box == next.ID() })
+	f.e2b.end(next, 0, "")
+	f.ended(second)
+	if minutes.bucket() != checkrun.RemoteMinutesBucket || minutes.window() != 24*time.Hour {
+		t.Errorf("box-minutes were charged to %q in %s windows, want %q in a day's",
+			minutes.bucket(), minutes.window(), checkrun.RemoteMinutesBucket)
+	}
+}
+
+// A REMOTE BOX IS CHARGED EVERY MINUTE IT WAS HELD, the last ones included:
+// a box that closes before a renewal reaches the minutes it began since the
+// last one is charged them as its slot is given back, so a day's hours count
+// a box's time from its slot's taking to its close.
+//
+// Mutation: charge nothing as the slot is released — two minutes of the
+// box's three go uncharged, red.
+func TestARemoteBoxIsChargedEveryMinuteItWasHeld(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	clock := &clock{at: time.Now().UTC().Truncate(24 * time.Hour).Add(25 * time.Hour)}
+	minutes := &charges{Fleet: f.counter}
+	o := f.options("git-a", 0, &order{nodes: []string{"git-a"}})
+	// NO RENEWAL WITHIN THE CASE, so every minute after the first is one
+	// only the release can charge.
+	o.Timing.Renew = time.Hour
+	o.Now, o.Minutes = clock.now, minutes
+	f.runner(o)
+
+	key := f.queue(oidOf("d"), remote("build", 3*time.Hour))
+	box := f.e2b.box(t)
+	f.await(key, "named its box", func(r code.CheckRow) bool { return r.Box == box.ID() })
+	if n := minutes.allowed.Load(); n != 1 {
+		t.Fatalf("a box just made was charged %d minutes, want its first", n)
+	}
+	clock.advance(2*time.Minute + 30*time.Second)
+	f.e2b.end(box, 0, "")
+	f.ended(key)
+	eventually(t, "the slot given back", func() bool { return f.slots() == 0 })
+	if n := minutes.allowed.Load(); n != 3 {
+		t.Fatalf("a box held into its third minute was charged %d minutes, want 3", n)
+	}
+}
+
+// AN UNREACHABLE STORE STARTS NO REMOTE BOX: while the coordination store
+// cannot list or lease the slots, or cannot count a minute, a queued e2b check
+// waits queued, claimed by nobody — a cap nobody can ask about cannot hold —
+// and no slot is left leased behind the minute it could not count; once the
+// store answers, the check runs.
+//
+// Mutation: read a store's error as room (Take answers a slot on one) — a
+// box made while the store is away, red.
+func TestAnUnreachableStoreStartsNoRemoteBox(t *testing.T) {
+	t.Parallel()
+	for name, down := range map[string]func(f *fleet, o *checkrun.Options, away *atomic.Bool){
+		"the slots": func(f *fleet, o *checkrun.Options, away *atomic.Bool) {
+			o.Leases = awayLeases{Backend: f.leases, away: away}
+		},
+		"the counter": func(f *fleet, o *checkrun.Options, away *atomic.Bool) {
+			o.Minutes = awayCounter{Fleet: f.counter, away: away}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			var away atomic.Bool
+			away.Store(true)
+			o := f.options("git-a", 0, &order{nodes: []string{"git-a"}})
+			down(f, &o, &away)
+			f.runner(o)
+			key := f.queue(oidOf("c"), remote("lint", time.Minute))
+			time.Sleep(4 * fast.Backstop)
+			if row, _ := f.row(key); row.State != code.CheckStateQueued || f.e2b.count() != 0 {
+				t.Fatalf("with %s away the check = %+v and %d remote boxes, want it queued and none", name, row,
+					f.e2b.count())
+			}
+			if live := f.slots(); live != 0 {
+				t.Fatalf("with %s away %d remote slots are left leased", name, live)
+			}
+			away.Store(false)
+			box := f.e2b.box(t)
+			f.await(key, "ran once the store answered", func(r code.CheckRow) bool { return r.Box == box.ID() })
+			f.e2b.end(box, 0, "")
+			f.ended(key)
+		})
+	}
+}
+
+// remote is a check that runs in an e2b cell.
+func remote(name string, timeout time.Duration) code.CheckDef {
+	d := def(name, timeout)
+	d.RunIn = code.CellE2B
+	return d
+}
+
+// slots is how many remote slots the company's coordination store holds live.
+func (f *fleet) slots() int {
+	f.t.Helper()
+	live, err := f.leases.ListLive(context.Background(), checkrun.RemoteSlotClass)
+	if err != nil {
+		f.t.Fatalf("list the remote slots: %v", err)
+	}
+	return len(live)
+}
+
+// eventually waits, a few seconds at most, for ok.
+func eventually(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("never %s", what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// clock is a runner's clock a case moves.
+type clock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
+}
+
+func (c *clock) set(at time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = at
+}
+
+// charges is the fleet's counter, counting the charges it allowed and
+// refused, and naming the bucket and window it was last asked about.
+type charges struct {
+	*memory.Fleet
+	allowed, refused atomic.Int64
+	mu               sync.Mutex
+	lastBucket       string
+	lastWindow       time.Duration
+}
+
+func (c *charges) Allow(ctx context.Context, bucket string, limit int, window time.Duration,
+	now time.Time) (bool, error) {
+
+	ok, err := c.Fleet.Allow(ctx, bucket, limit, window, now)
+	switch {
+	case err != nil:
+	case ok:
+		c.allowed.Add(1)
+	default:
+		c.refused.Add(1)
+	}
+	c.mu.Lock()
+	c.lastBucket, c.lastWindow = bucket, window
+	c.mu.Unlock()
+	return ok, err
+}
+
+func (c *charges) bucket() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastBucket
+}
+
+func (c *charges) window() time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastWindow
+}
+
+// errAway is a coordination store that cannot be reached.
+var errAway = errors.New("the coordination store is unreachable")
+
+// awayLeases is the company's leases, unreachable while away holds.
+type awayLeases struct {
+	*memory.Backend
+	away *atomic.Bool
+}
+
+func (a awayLeases) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	if a.away.Load() {
+		return nil, errAway
+	}
+	return a.Backend.ListLive(ctx, class)
+}
+
+func (a awayLeases) TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease,
+	coord.Refusal, error) {
+
+	if a.away.Load() {
+		return nil, "", errAway
+	}
+	return a.Backend.TryAcquire(ctx, resource, opts)
+}
+
+// awayCounter is the fleet's counter, unreachable while away holds.
+type awayCounter struct {
+	*memory.Fleet
+	away *atomic.Bool
+}
+
+func (a awayCounter) Allow(ctx context.Context, bucket string, limit int, window time.Duration,
+	now time.Time) (bool, error) {
+
+	if a.away.Load() {
+		return false, errAway
+	}
+	return a.Fleet.Allow(ctx, bucket, limit, window, now)
+}

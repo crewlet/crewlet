@@ -655,6 +655,8 @@ These names are **reserved** as the code host's are: `code.checks.env`, `role.sa
 
 **How long it runs** is its file's `timeout_seconds`, held to the company's `code.checks.max_timeout_seconds` — unset, 50 minutes: a box on E2B's smallest plan lives an hour, and a check's box is given ten minutes past its timeout for its setup, so a check at the default fits the shortest remote session. A company running its checks in containers, or on a larger plan, raises it as far as six hours, the most any checks file may ask ([Configuration → Code](../getting-started/configuration.md#code)).
 
+**How many run** is bounded per cell: a `container` box on a git node by that node's `git.max_checks`, and an `e2b` box company-wide, by `code.checks.remote` — at most `max_running` at once (unset, 16) and `box_hours_per_day` hours of them in a UTC day (unset, 192). A check either cap holds back waits queued, claimed by nobody, until there is room ([What a check costs](code-host.md#what-a-check-costs)).
+
 ---
 
 ## Credentials and the run environment

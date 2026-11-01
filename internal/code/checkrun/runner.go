@@ -95,6 +95,9 @@ type Timing struct {
 	Walk time.Duration
 	// Backstop is the longest time between two walks: [WalkBackstop].
 	Backstop time.Duration
+	// Renew is how often a remote check's slot is renewed and its box's
+	// minutes charged: [RemoteSlotRenew].
+	Renew time.Duration
 }
 
 // The production cadences.
@@ -140,7 +143,13 @@ const (
 
 // Production is the engine's timing.
 func Production() Timing {
-	return Timing{Poll: CheckPoll, Stagger: ClaimStagger, Walk: WalkGap, Backstop: WalkBackstop}
+	return Timing{Poll: CheckPoll, Stagger: ClaimStagger, Walk: WalkGap, Backstop: WalkBackstop,
+		Renew: RemoteSlotRenew}
+}
+
+// valid reports whether every cadence is one: a duration above zero.
+func (t Timing) valid() bool {
+	return t.Poll > 0 && t.Stagger > 0 && t.Walk > 0 && t.Backstop > 0 && t.Renew > 0
 }
 
 // Options build a [Runner]. Every field but Logs, Nudges, Faults, Metrics,
@@ -167,6 +176,11 @@ type Options struct {
 	// Slots is how many checks this node runs at once in container cells:
 	// git.max_checks as config.Git.MaxChecksFor resolved it, 0 none.
 	Slots int
+	// Leases and Minutes are the coordination store a remote (e2b) check's
+	// box is held to the company's caps on (code.checks.remote): a slot
+	// leased for each box, and its minutes charged to the shared counter.
+	Leases  Leases
+	Minutes Minutes
 	// Logs stores a failed run's log; nil keeps none, and a failed run's
 	// ending carries its tail and its failures alone.
 	Logs Uploader
@@ -222,6 +236,9 @@ type Runner struct {
 	// unknown is the cells this node's catalogue lacks that a queued check
 	// asked for, each said once until the catalogue holds it.
 	unknown map[config.Placement]bool
+
+	// remote is this node's side of the company's remote caps.
+	remote *RemoteSlots
 }
 
 // New builds a runner, refusing what it cannot work without. It starts
@@ -234,6 +251,7 @@ func New(o Options) (*Runner, error) {
 	}{
 		{"NodeID", !config.ValidNodeID(o.NodeID)}, {"Estate", o.Estate == nil}, {"Order", o.Order == nil},
 		{"Boxes", o.Boxes == nil}, {"Company", o.Company == nil}, {"Tokens", o.Tokens == nil},
+		{"Leases", o.Leases == nil}, {"Minutes", o.Minutes == nil},
 	} {
 		if f.absent {
 			missing = append(missing, f.name)
@@ -257,12 +275,17 @@ func New(o Options) (*Runner, error) {
 	if r.timing == (Timing{}) {
 		r.timing = Production()
 	}
+	if !r.timing.valid() {
+		return nil, fmt.Errorf("%w: Timing %+v: every cadence is above zero, or the whole of it unset for "+
+			"Production", ErrOptions, o.Timing)
+	}
 	if r.log == nil {
 		r.log = logging.Get("code.checkrun")
 	}
 	if r.now == nil {
 		r.now = func() time.Time { return time.Now().UTC() }
 	}
+	r.remote = newRemoteSlots(o.NodeID, o.Leases, o.Minutes, r.timing.Renew, r.now, r.log)
 	r.life, r.cancel = context.WithCancel(context.Background())
 	return r, nil
 }
@@ -397,9 +420,9 @@ func (r *Runner) walk(ctx context.Context) time.Time {
 	var (
 		next   time.Time
 		cursor string
-		ranks  = map[string]int{}
+		w      = &walking{ranks: map[string]int{}}
 	)
-	for !r.full(boxes) {
+	for !r.full(boxes, w) {
 		a, err := r.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChecksQueued, Cursor: cursor, Limit: WalkPage,
 			Fresh: stale})
 		if err != nil {
@@ -410,7 +433,7 @@ func (r *Runner) walk(ctx context.Context) time.Time {
 			return next
 		}
 		for _, c := range a.Runnable {
-			if due := r.consider(ctx, company, boxes, ranks, c); !due.IsZero() && (next.IsZero() || due.Before(next)) {
+			if due := r.consider(ctx, company, boxes, w, c); !due.IsZero() && (next.IsZero() || due.Before(next)) {
 				next = due
 			}
 			if ctx.Err() != nil {
@@ -425,11 +448,22 @@ func (r *Runner) walk(ctx context.Context) time.Time {
 	return next
 }
 
-// rank is this node's place in repoID's git order, -1 where it holds none —
-// read once a walk a repository, so a walk ranks every attempt of one against
-// one reading.
-func (r *Runner) rank(ranks map[string]int, repoID string) int {
-	if at, ok := ranks[repoID]; ok {
+// walking is what one walk has learned that the rest of it reads: each
+// repository's rank, and whether a remote cap has held a check back.
+type walking struct {
+	// ranks is this node's place in each repository's git order, read once
+	// a walk a repository, so a walk ranks every attempt of one against one
+	// reading.
+	ranks map[string]int
+	// remoteHeld is a remote (e2b) check left queued by a cap, or by a store
+	// that could not say: the walk tries no further remote check, since the
+	// next would ask the store the same question and hear the same answer.
+	remoteHeld bool
+}
+
+// rank is this node's place in repoID's git order, -1 where it holds none.
+func (r *Runner) rank(w *walking, repoID string) int {
+	if at, ok := w.ranks[repoID]; ok {
 		return at
 	}
 	order, err := r.o.Order.GitOrder(repoID)
@@ -437,21 +471,21 @@ func (r *Runner) rank(ranks map[string]int, repoID string) int {
 	if err != nil {
 		at = -1
 	}
-	ranks[repoID] = at
+	w.ranks[repoID] = at
 	return at
 }
 
 // consider is one queued attempt of the walk: claimed and started where this
 // node may run it now, answered the instant it falls due at this node's rank
 // where that is still to come, and zero otherwise.
-func (r *Runner) consider(ctx context.Context, company Company, boxes Boxes, ranks map[string]int,
+func (r *Runner) consider(ctx context.Context, company Company, boxes Boxes, w *walking,
 	c code.RunnableCheck) time.Time {
 
 	if c.Def == nil {
 		// A PERSON'S CI REPORTS IT: no runner of the engine's runs it.
 		return time.Time{}
 	}
-	at := r.rank(ranks, c.RepoID)
+	at := r.rank(w, c.RepoID)
 	if at < 0 {
 		return time.Time{}
 	}
@@ -465,11 +499,29 @@ func (r *Runner) consider(ctx context.Context, company Company, boxes Boxes, ran
 		r.endUnrun(ctx, c, why)
 		return time.Time{}
 	}
+	// A REMOTE CELL'S SLOT FIRST, before the claim: a check the company's
+	// caps hold back is never claimed, so it waits queued for whichever
+	// node finds room for it — never a claim that runs nothing.
+	var slot *RemoteSlot
+	if cell == config.PlacementE2B {
+		if w.remoteHeld {
+			return time.Time{}
+		}
+		// A NODE WHOSE CATALOGUE LACKS THE CELL takes no slot and charges
+		// no minute: reserve says so below and leaves the check queued.
+		if _, err := boxes.Provider(sandbox.E2B); err == nil {
+			if slot = r.takeRemote(ctx, company, w); slot == nil {
+				return time.Time{}
+			}
+		}
+	}
 	if !r.reserve(boxes, cell) {
+		slot.Release()
 		return time.Time{}
 	}
 	started := r.now()
 	if !r.claim(ctx, c, cell, started) {
+		slot.Release()
 		r.release(cell)
 		return time.Time{}
 	}
@@ -477,15 +529,38 @@ func (r *Runner) consider(ctx context.Context, company Company, boxes Boxes, ran
 	go func() {
 		defer r.wg.Done()
 		defer r.release(cell)
-		r.run(c, cell, started)
+		r.run(c, cell, started, slot)
 	}()
 	return time.Time{}
 }
 
+// takeRemote takes a slot for a remote check's box under the company's caps
+// (code.checks.remote), nil where a cap is full or the store could not say —
+// which it counts once for the walk, and which holds back every remote check
+// after it in the walk.
+func (r *Runner) takeRemote(ctx context.Context, company Company, w *walking) *RemoteSlot {
+	maxRunning, minutes := company.Config.Code.Checks.Remote.Resolved()
+	slot, hold, err := r.remote.Take(ctx, maxRunning, minutes)
+	if slot != nil {
+		return slot
+	}
+	w.remoteHeld = true
+	if r.o.Metrics != nil {
+		r.o.Metrics.Add(metrics.CodeChecksRemoteCapped, 1, metrics.Attrs{"reason": string(hold)})
+	}
+	if err != nil && ctx.Err() == nil {
+		r.log.WarnContext(ctx, "code_checks_remote_unknown", "error", err.Error(), "detail",
+			"the coordination store could not say whether the company's remote check caps have room, so no "+
+				"remote check starts until it can; each waits queued for the next walk")
+	}
+	return nil
+}
+
 // full reports a node with no room for any check: no container cell free —
-// or none configured — and no remote cell configured.
-func (r *Runner) full(boxes Boxes) bool {
-	if _, err := boxes.Provider(sandbox.E2B); err == nil {
+// or none configured — and no remote cell configured, or one this walk found
+// held by the company's caps.
+func (r *Runner) full(boxes Boxes, w *walking) bool {
+	if _, err := boxes.Provider(sandbox.E2B); err == nil && !w.remoteHeld {
 		return false
 	}
 	if _, err := boxes.Provider(sandbox.Container); err != nil {

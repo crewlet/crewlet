@@ -873,6 +873,22 @@ func Catalogue() []Instrument {
 				"a fleet whose container cells are too few for its checks.",
 		},
 		{
+			Name: CodeChecksRemoteCapped, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Walks of this git node's check runner that left a remote " +
+				"(e2b) check queued rather than start its box — one a walk, " +
+				"since a walk held back once tries no further remote check — by " +
+				"`reason`: `max_running`, the company's " +
+				"`code.checks.remote.max_running` boxes already run; " +
+				"`box_hours_per_day`, the UTC day's " +
+				"`code.checks.remote.box_hours_per_day` are spent; `unknown`, " +
+				"the coordination store could not say, which starts nothing. " +
+				"`max_running` climbing while code_checks_backlog stands is a " +
+				"company whose remote cap is below its checks; " +
+				"`box_hours_per_day` is its remote checks waiting for the next " +
+				"UTC midnight.",
+		},
+		{
 			Name: CodeChecksDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"placement"},
 			Shows: "How long the checks this git node's runner ran took, from " +

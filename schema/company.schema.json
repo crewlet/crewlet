@@ -203,6 +203,9 @@
             "null"
           ]
         },
+        "remote": {
+          "$ref": "#/$defs/CodeChecksRemote"
+        },
         "run_in": {
           "description": "The cell a check whose checks file names none runs in: container — a container on a git node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct and self are refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host, and self is a seat's own executor box, which no check has.",
           "enum": [
@@ -210,6 +213,33 @@
             "e2b",
             "",
             null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeChecksRemote": {
+      "additionalProperties": false,
+      "properties": {
+        "box_hours_per_day": {
+          "description": "How many hours of remote (e2b) box time the company spends on checks in a UTC day, each box charged a minute at a time while it runs: 0..100000; 0 starts none. Once the day's hours are spent, a new remote check waits queued until the next UTC midnight; a box already running runs to its own end. Unset is 192 (provisional): one merge queue saturated all day at ten-minute checks.",
+          "maximum": 100000,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_running": {
+          "description": "How many remote (e2b) check boxes the company runs at once, whichever git node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit.",
+          "maximum": 1024,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
           ]
         }
       },

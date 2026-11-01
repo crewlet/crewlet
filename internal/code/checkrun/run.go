@@ -64,7 +64,12 @@ const logContentType = "text/plain; charset=utf-8"
 // goroutine, under its life. It records an ending on every path but two: the
 // attempt's row ended by somebody else, which needs none, and a fault the
 // suites inject at the claim.
-func (r *Runner) run(c code.RunnableCheck, cell config.Placement, claimed time.Time) {
+//
+// slot is a remote cell's slot under the company's caps, nil for a container
+// cell: given back the moment the box is closed, before the ending is
+// recorded, since what it bounds is boxes.
+func (r *Runner) run(c code.RunnableCheck, cell config.Placement, claimed time.Time, slot *RemoteSlot) {
+	defer slot.Release()
 	ctx := r.life
 	if r.o.Faults != nil {
 		if err := r.o.Faults.Hit(ctx, codefault.CheckAfterClaim, 0); err != nil {
@@ -73,6 +78,7 @@ func (r *Runner) run(c code.RunnableCheck, cell config.Placement, claimed time.T
 	}
 	a := &attempt{r: r, c: c, cell: cell, claimed: claimed}
 	f, opID := a.run(ctx)
+	slot.Release()
 	if f == nil {
 		return
 	}

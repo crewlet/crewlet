@@ -2179,7 +2179,8 @@ container on the git node's own machine, so a node runs at most
 one; `0`, none ([Deployment](../guides/deployment.md#running-checks-on-git-nodes)).
 A node with no free container cell claims no container check, and the next node
 of the attempt's order claims it two seconds later. An `e2b` check runs on
-another machine and takes none of them.
+another machine and takes none of them: the company's own caps bound it
+instead, whichever node starts it ([What a check costs](#what-a-check-costs)).
 
 **The run.** The box is a [check box](code-sandbox.md#check-boxes): no coding
 agent, no model's sign-in, none of `providers.sandbox.setup`; exactly the
@@ -2226,6 +2227,63 @@ its `/box/code` sibling — so the address is the public listener with
 `/box/git` on the end. Such a node says so once, as `code_checks_not_run`, and
 leaves the fleet's checks to its other git nodes; a fleet where none runs them
 raises `code_checks_backlog`.
+
+### What a check costs
+
+A check spends no tokens, so what it costs is **its box's time**. A
+`container` box runs on a git node's own machine, bounded by that node's
+`git.max_checks`. An `e2b` box runs on the provider's machines and is billed to
+the company's account there, so it is bounded **company-wide**, by two caps in
+`code.checks.remote`
+([configuration](../getting-started/configuration.md#code)):
+
+| Cap | Unset | What it bounds |
+|---|---|---|
+| `max_running` | 16 | How many `e2b` check boxes run at once, whichever git node starts them |
+| `box_hours_per_day` | 192 | How many hours of `e2b` box time the company spends on checks in a UTC day, midnight to midnight |
+
+**A check past a cap waits queued.** A runner takes room under both caps
+*before* it claims an `e2b` check, so a check the caps hold back is claimed by
+nobody and stays `queued` — never errored, never a claim that runs nothing —
+until a box ends or the day turns over, when the next walk of whichever git
+node finds room claims it. Queued checks are taken oldest first, as always.
+
+**At once is a lease.** The boxes running are `max_running` slots in the
+[coordination store](coordination.md) — leases `check-remote:0` to
+`check-remote:<n-1>` — each taken for one box before its claim, renewed every
+20 seconds while the box lives and given back the moment it is closed. A slot
+whose node died holding it lapses within 60 seconds, so a dead runner never
+holds the company's cap for longer than a minute. A cap lowered while the boxes
+of the old one run holds every new box back until enough of them have ended.
+
+**A day is counted a minute at a time.** Each `e2b` box is charged one minute
+to the fleet's shared counter when its slot is taken, and one more each minute
+it is held — its making and setup included, since the provider bills those
+too — against `box_hours_per_day` × 60 minutes in the UTC day's window. Once a
+charge is refused the day is spent: no new `e2b` box starts until the next UTC
+midnight, or until the cap is raised. A box already running when the day fills
+runs to its own end, its timeout bounding it, so a day overruns its hours by at
+most what the boxes running then take to finish. A cap is the company's
+configuration, read at every walk: raising either takes effect at the next
+walk, with no restart.
+
+**A store that cannot say starts nothing.** Where the coordination store
+cannot list the slots, take one or count a minute, no `e2b` box starts — a cap
+nobody can ask about cannot hold — and the check waits queued for the next
+walk, which asks again. A box already running keeps running through it: its
+renewals and its minutes are asked again at its next renewal.
+
+`crewlet.code.checks.remote.capped` counts the walks a cap held a check back
+on, by `reason` — `max_running`, `box_hours_per_day`, or `unknown` for a store
+that could not say ([metrics](../reference/metrics.md)) — and
+`crewlet.code.checks.running{placement=e2b}` the boxes each node runs. The
+defaults are **provisional**: sixteen is a merge queue's full round of four
+candidates running two checks each, doubled for the head checks beside it,
+inside the twenty sandboxes E2B's Hobby plan runs at once; 192 hours is one
+protected branch's queue saturated all day at ten-minute checks (144 rounds ×
+4 candidates × 2 checks × ⅙ hour). A company on a larger plan raises
+`max_running` to its plan's limit, and `box_hours_per_day` to what it means to
+spend.
 
 ### How long a check is kept
 

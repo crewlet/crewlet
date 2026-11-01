@@ -209,6 +209,39 @@ const (
 	// no check requires none on its branches.
 	CodeMinCheckMaxTimeout = time.Minute
 
+	// CodeDefaultRemoteMaxRunning is an unset code.checks.remote.max_running:
+	// SIXTEEN remote (e2b) check boxes at once, company-wide. PROVISIONAL
+	// (U45 a), derived rather than measured: a full round of a merge queue at
+	// its depth of four candidates, each running two required checks, is
+	// eight boxes, doubled for the head checks of the changes waiting beside
+	// it — sixteen, inside the twenty sandboxes E2B's Hobby plan runs at once,
+	// so the company's own cap refuses a box before the provider does and a
+	// check waits queued rather than failing to get one. A company on a larger
+	// plan raises it to that plan's limit.
+	CodeDefaultRemoteMaxRunning = 16
+
+	// CodeMaxRemoteMaxRunning is the most code.checks.remote.max_running
+	// takes: 1 024 boxes at once, the bound git.max_checks holds a node's
+	// container cells to — past any provider's concurrency a company buys,
+	// and each one a lease the runner scans for a free one among.
+	CodeMaxRemoteMaxRunning = 1_024
+
+	// CodeDefaultRemoteBoxHoursPerDay is an unset
+	// code.checks.remote.box_hours_per_day: 192 hours of remote (e2b) box
+	// time a UTC day, company-wide. PROVISIONAL (U45 a), derived: one
+	// protected branch's queue saturated all day at ten-minute checks is 144
+	// rounds a day, each four candidates running two checks for a sixth of
+	// an hour — 144 × 4 × 2 × ⅙ = 192 box-hours. What a company pays for a
+	// day it cannot exceed by more than the boxes already running when the
+	// cap is reached run on to their own ends.
+	CodeDefaultRemoteBoxHoursPerDay = 192
+
+	// CodeMaxRemoteBoxHoursPerDay is the most
+	// code.checks.remote.box_hours_per_day takes: 100 000 hours, the most
+	// boxes CodeMaxRemoteMaxRunning can run in a day (24 576 hours) four
+	// times over — a bound on a typo, never on a company.
+	CodeMaxRemoteBoxHoursPerDay = 100_000
+
 	// CodeMaxDescriptionBytes bounds a repository description: one
 	// paragraph, which rides every settings record and every listing row.
 	CodeMaxDescriptionBytes = 1_024
@@ -501,6 +534,70 @@ type CodeChecks struct {
 	// ([CodeDefaultCheckMaxTimeout]); else [CodeMinCheckMaxTimeout] to
 	// [CodeCheckTimeoutCeiling], in seconds.
 	MaxTimeoutSeconds int `yaml:"max_timeout_seconds,omitempty" json:"max_timeout_seconds,omitempty" js:"min=60;max=21600" desc:"How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3000 — an e2b box on the smallest plan's one-hour session, with ten minutes of it for the box's setup."`
+
+	// Remote caps the checks the company runs in REMOTE (e2b) cells, whose
+	// boxes run on a provider's machines and are billed by the company's
+	// account there — company-wide, however many git nodes run checks.
+	// Container cells are each git node's own, bounded by its Tier A
+	// git.max_checks instead.
+	Remote CodeChecksRemote `yaml:"remote,omitempty" json:"remote,omitzero"`
+}
+
+// CodeChecksRemote is code.checks.remote: how many remote (e2b) check boxes
+// the company runs at once, and how many hours of them it starts in a UTC day
+// (internal/code/checkrun's RemoteSlots). A check either would take past its
+// cap waits QUEUED — claimed by no node — until a box ends or the day turns
+// over, and then runs. Every field unset is a valid block, its defaults
+// PROVISIONAL (U45 a).
+//
+// THE EPOCH'S, read at every walk of a runner's queue, so a revision moving
+// either cap holds from its activation.
+type CodeChecksRemote struct {
+	// MaxRunning is how many remote check boxes run at once, company-wide.
+	// A POINTER because 0 is a setting — no check runs remotely, each one
+	// naming e2b waiting queued — and unset is the default
+	// ([CodeDefaultRemoteMaxRunning]).
+	MaxRunning *int `yaml:"max_running,omitempty" json:"max_running,omitempty" js:"min=0;max=1024" desc:"How many remote (e2b) check boxes the company runs at once, whichever git node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit."`
+
+	// BoxHoursPerDay is how many hours of remote box time the company starts
+	// in a UTC day, each box charged a minute at a time from its start to
+	// its end. A POINTER for MaxRunning's reason: 0 starts none, and unset
+	// is the default ([CodeDefaultRemoteBoxHoursPerDay]).
+	BoxHoursPerDay *int `yaml:"box_hours_per_day,omitempty" json:"box_hours_per_day,omitempty" js:"min=0;max=100000" desc:"How many hours of remote (e2b) box time the company spends on checks in a UTC day, each box charged a minute at a time while it runs: 0..100000; 0 starts none. Once the day's hours are spent, a new remote check waits queued until the next UTC midnight; a box already running runs to its own end. Unset is 192 (provisional): one merge queue saturated all day at ten-minute checks."`
+}
+
+// Resolved is code.checks.remote with its defaults applied — THE ONE PLACE
+// they are applied, read by a check runner at every walk: the boxes the
+// company runs at once and the box-minutes it starts in a UTC day.
+func (r CodeChecksRemote) Resolved() (maxRunning, minutesPerDay int) {
+	maxRunning, hours := CodeDefaultRemoteMaxRunning, CodeDefaultRemoteBoxHoursPerDay
+	if r.MaxRunning != nil {
+		maxRunning = *r.MaxRunning
+	}
+	if r.BoxHoursPerDay != nil {
+		hours = *r.BoxHoursPerDay
+	}
+	return maxRunning, hours * 60
+}
+
+// zero is a block that sets nothing.
+func (r CodeChecksRemote) zero() bool { return r.MaxRunning == nil && r.BoxHoursPerDay == nil }
+
+// validate holds code.checks.remote's rules at path: each cap inside its
+// bounds.
+func (r CodeChecksRemote) validate(path Path) error {
+	var p problems
+	if n := r.MaxRunning; n != nil && (*n < 0 || *n > CodeMaxRemoteMaxRunning) {
+		p.add(at(path, "max_running"), ErrOutOfRange,
+			"%d is outside 0..%d remote check boxes at once, or unset for the default %d",
+			*n, CodeMaxRemoteMaxRunning, CodeDefaultRemoteMaxRunning)
+	}
+	if n := r.BoxHoursPerDay; n != nil && (*n < 0 || *n > CodeMaxRemoteBoxHoursPerDay) {
+		p.add(at(path, "box_hours_per_day"), ErrOutOfRange,
+			"%d is outside 0..%d hours of remote check boxes a day, or unset for the default %d",
+			*n, CodeMaxRemoteBoxHoursPerDay, CodeDefaultRemoteBoxHoursPerDay)
+	}
+	return p.err()
 }
 
 // MaxTimeout is code.checks.max_timeout_seconds as a duration, its default
@@ -515,7 +612,8 @@ func (k CodeChecks) MaxTimeout() time.Duration {
 
 // zero is a block that sets nothing.
 func (k CodeChecks) zero() bool {
-	return k.RunIn == "" && len(k.AllowRunIn) == 0 && len(k.Env) == 0 && k.MaxTimeoutSeconds == 0
+	return k.RunIn == "" && len(k.AllowRunIn) == 0 && len(k.Env) == 0 && k.MaxTimeoutSeconds == 0 &&
+		k.Remote.zero()
 }
 
 // validate holds code.checks' own rules at path: each cell one a check runs in
@@ -565,6 +663,7 @@ func (k CodeChecks) validate(path Path) error {
 				"the default %d", s, int(CodeMinCheckMaxTimeout/time.Second), int(CodeCheckTimeoutCeiling/time.Second),
 			int(CodeDefaultCheckMaxTimeout/time.Second))
 	}
+	p.wrap(k.Remote.validate(at(path, "remote")))
 	return p.err()
 }
 

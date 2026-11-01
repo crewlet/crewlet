@@ -140,7 +140,21 @@ func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 	}{
 		"nothing set": {doc: checksDoc(direct)},
 		"every field at a bound": {doc: checksDoc(both, "run_in: container", "allow_run_in: [container, e2b]",
-			"env: {NPM_TOKEN: \"${NPM_TOKEN}\", _A1: x}", "max_timeout_seconds: 21600")},
+			"env: {NPM_TOKEN: \"${NPM_TOKEN}\", _A1: x}", "max_timeout_seconds: 21600",
+			"remote: {max_running: 1024, box_hours_per_day: 100000}")},
+		"the remote caps at none": {doc: checksDoc(both, "remote: {max_running: 0, box_hours_per_day: 0}")},
+		"too many remote boxes": {doc: checksDoc(both, "remote: {max_running: 1025}"),
+			path: "code.checks.remote.max_running", kind: "out_of_range", says: []string{"1025", "0..1024", "16"}},
+		"a negative remote box count": {doc: checksDoc(both, "remote: {max_running: -1}"),
+			path: "code.checks.remote.max_running", kind: "out_of_range"},
+		"too many remote box-hours": {doc: checksDoc(both, "remote: {box_hours_per_day: 100001}"),
+			path: "code.checks.remote.box_hours_per_day", kind: "out_of_range",
+			says: []string{"100001", "0..100000", "192"}},
+		"negative remote box-hours": {doc: checksDoc(both, "remote: {box_hours_per_day: -1}"),
+			path: "code.checks.remote.box_hours_per_day", kind: "out_of_range"},
+		"remote caps with nothing hosting code": {
+			doc:  "name: Acme\ncode:\n  checks:\n    remote: {max_running: 4}\n",
+			path: "code.checks", kind: "conflict", says: []string{"code.native"}},
 		"the timeout at its floor": {doc: checksDoc(direct, "max_timeout_seconds: 60")},
 		"a catalogue only a check reaches": {doc: checksDoc(cells{local: true, image: true},
 			"run_in: container")},
@@ -338,6 +352,38 @@ func TestTheChecksBlockIsTheSchemas(t *testing.T) {
 	}
 	if got := (config.CodeChecks{MaxTimeoutSeconds: 600}).MaxTimeout(); got != 10*time.Minute {
 		t.Errorf("max_timeout_seconds: 600 is %s", got)
+	}
+}
+
+// THE REMOTE CAPS' SCHEMA ADMITS EXACTLY WHAT THE VALIDATOR DOES, and an
+// unset cap is its default while a set one — zero included — is what it
+// says: a box-hour charged as sixty minutes.
+//
+// Mutation: read an unset max_running as zero in Resolved — no remote check
+// would ever run, red.
+func TestTheRemoteCapsAreTheSchemasAndTheirDefaults(t *testing.T) {
+	t.Parallel()
+	typ := reflect.TypeFor[config.CodeChecksRemote]()
+	for name, ceiling := range map[string]int{"MaxRunning": config.CodeMaxRemoteMaxRunning,
+		"BoxHoursPerDay": config.CodeMaxRemoteBoxHoursPerDay} {
+		field, _ := typ.FieldByName(name)
+		if got, want := field.Tag.Get("js"), "min=0;max="+strconv.Itoa(ceiling); got != want {
+			t.Errorf("%s's schema is %q, validation's bounds %q", name, got, want)
+		}
+	}
+	for name, tc := range map[string]struct {
+		remote                 config.CodeChecksRemote
+		maxRunning, perDayMins int
+	}{
+		"unset":   {maxRunning: config.CodeDefaultRemoteMaxRunning, perDayMins: config.CodeDefaultRemoteBoxHoursPerDay * 60},
+		"none":    {remote: config.CodeChecksRemote{MaxRunning: new(0), BoxHoursPerDay: new(0)}},
+		"set":     {remote: config.CodeChecksRemote{MaxRunning: new(3), BoxHoursPerDay: new(5)}, maxRunning: 3, perDayMins: 300},
+		"one set": {remote: config.CodeChecksRemote{BoxHoursPerDay: new(2)}, maxRunning: config.CodeDefaultRemoteMaxRunning, perDayMins: 120},
+	} {
+		if n, m := tc.remote.Resolved(); n != tc.maxRunning || m != tc.perDayMins {
+			t.Errorf("%s remote caps resolve to %d boxes and %d minutes a day, want %d and %d", name, n, m,
+				tc.maxRunning, tc.perDayMins)
+		}
 	}
 }
 
