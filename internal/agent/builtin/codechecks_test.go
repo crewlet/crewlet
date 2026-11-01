@@ -473,3 +473,45 @@ func TestACheckWriteIsTheOperationItsOpIDNames(t *testing.T) {
 		})
 	}
 }
+
+// A CHECK'S ATTEMPTS ARE LISTED BY ITS NAME: code_get_check_failures and
+// code_report_check each find one check's attempts by a `checks` read that
+// names it, so the data node drops every other check's rows before encoding
+// a row — never by the commit's whole listing filtered here, which moves
+// every attempt of every check of the commit to keep a handful.
+//
+// Mutation: drop the name from the listing's question → red.
+func TestACheckIsListedByItsName(t *testing.T) {
+	t.Parallel()
+	host, writer := newCodeHost(), &codeWrites{}
+	host.checks = append(host.checks, failedChecks("lint", "vet")...)
+	turn, _ := readerTurn(t)
+	turn.Lookups = turnctx.NewLookups()
+
+	got := callIn(t, codeRegistry(t, codeDeps(host)), turn, builtin.CodeGetCheckFailuresTool,
+		map[string]any{"repo": "site", "sha": mainOID, "name": "unit"})
+	if got.Failed {
+		t.Fatalf("a check's failures answered %q", got.Output)
+	}
+	deps := writeDeps(host, writer)
+	deps.Actor = builtin.PrincipalActor
+	report := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
+		builtin.CodeReportCheckTool)
+	got, err := report.CallForTurn(asBoundPerson(), nil, map[string]any{"repo": "site", "sha": mainOID,
+		"name": "lint", "status": "running"})
+	if err != nil || got.Failed {
+		t.Fatalf("a person's report answered %v %q", err, got.Output)
+	}
+
+	reads, _, _ := host.asked()
+	var listed []string
+	for _, q := range reads {
+		if q.Kind == code.ReadChecks {
+			listed = append(listed, q.Checks.Name)
+		}
+	}
+	if !slices.Equal(listed, []string{"unit", "lint"}) {
+		t.Errorf("the read and the report listed the commit's checks narrowed to %q, want unit's, then lint's",
+			listed)
+	}
+}

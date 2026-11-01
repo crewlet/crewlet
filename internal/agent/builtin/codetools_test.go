@@ -93,7 +93,8 @@ type codeHost struct {
 	changes func(q code.ReadQuery) (code.ReadAnswer, error)
 	// checks is every attempt of every check the repository holds, read
 	// whole: a `checks` read answers their rows — a commit's, or every one
-	// for a change's — and a `check` read the one its question names
+	// for a change's, narrowed to the check its question names as the data
+	// node narrows them — and a `check` read the one its question names
 	// (codechecks_test.go). newCodeHost holds one: attempt 1 of `unit` at
 	// main, for main, ended errored.
 	checks []code.CheckDetail
@@ -217,6 +218,7 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 			d := h.checks[i]
 			switch {
 			case c.OID != "" && d.OID != c.OID:
+			case q.Kind == code.ReadChecks && c.Name != "" && d.Name != c.Name:
 			case q.Kind == code.ReadChecks:
 				out.Checks = append(out.Checks, d.CheckRow)
 			case d.Target == c.Target && d.Name == c.Name && d.Attempt == c.Attempt:

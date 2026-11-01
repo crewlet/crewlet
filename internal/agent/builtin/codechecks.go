@@ -168,6 +168,16 @@ func checkScopeArgs(tool string, args map[string]any) (repo string, change int64
 // attempts reads every attempt of check name of the scope's commit — of
 // every check where name is empty — for its target, or for every target where
 // the scope names none, at the seat's level, at most [checkListPages] pages.
+//
+// THE NAME NARROWS THE LISTING ON THE DATA NODE ([code.CheckQuery]'s Name),
+// which drops every other check's rows before a row is encoded, so only the
+// named check's attempts travel the estate router — at most
+// code.MaxCheckAttempts for each target — rather than every attempt of every
+// check of the commit (up to code.MaxChecksPerFile × code.MaxCheckAttempts,
+// 640 rows, each with a summary of up to 4 KiB and a link of up to 2 KiB),
+// which a report and every read of one check's failures would otherwise move
+// to keep a handful. The target stays a filter here, because a `checks` read
+// refuses one.
 func (d CodeDeps) attempts(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, s checkScope,
 	name string) ([]code.CheckRow, statelog.Position, *tools.Result) {
 
@@ -178,14 +188,15 @@ func (d CodeDeps) attempts(ctx context.Context, turn *turnctx.Turn, tool string,
 	)
 	for range checkListPages {
 		answer, err := d.read(ctx, c, code.ReadQuery{Kind: code.ReadChecks, Repo: s.repo.Name, Fresh: seatRead,
-			Checks: &code.CheckQuery{Change: s.change, OID: s.oid}, Cursor: cursor, Limit: code.MaxSnapshotItems})
+			Checks: &code.CheckQuery{Change: s.change, OID: s.oid, Name: name}, Cursor: cursor,
+			Limit: code.MaxSnapshotItems})
 		if err != nil {
 			r := d.failed(ctx, turn, tool, c.asker, s.repo, err)
 			return nil, at, &r
 		}
 		at = furthestOnLog(at, answer.Position)
 		for _, row := range answer.Checks {
-			if (name == "" || row.Name == name) && (s.target == "" || row.Target == s.target) {
+			if s.target == "" || row.Target == s.target {
 				rows = append(rows, row)
 			}
 		}
