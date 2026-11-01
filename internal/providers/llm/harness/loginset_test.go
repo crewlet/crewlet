@@ -1005,7 +1005,7 @@ func TestALoginWriteThatCommittedIsWrittenThoughAFileWasRefused(t *testing.T) {
 		if _, err := p.AdoptHostLogin(t.Context(), home); err != nil {
 			t.Fatalf("an adoption whose write committed was reported as failed: %v", err)
 		}
-		if !strings.Contains(logs.String(), "cli_agent_login_unapplied") {
+		if !strings.Contains(logs.String(), "harness_login_unapplied") {
 			t.Errorf("a login not yet put in place was not said: %q", logs.String())
 		}
 		if loggedOut(t, p) {
@@ -1034,7 +1034,7 @@ func TestALoginWriteThatCommittedIsWrittenThoughAFileWasRefused(t *testing.T) {
 		if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 			t.Fatalf("a logout whose removal committed was reported as failed: %v", err)
 		}
-		if !strings.Contains(logs.String(), "cli_agent_login_unapplied") {
+		if !strings.Contains(logs.String(), "harness_login_unapplied") {
 			t.Errorf("a removal not yet put in place was not said: %q", logs.String())
 		}
 		if !loggedOut(t, p) || epoch(t, p) == before {

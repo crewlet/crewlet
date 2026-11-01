@@ -330,7 +330,7 @@ const ModelPlanChars = 12
 // line, and a probe's fix is one sentence. A row carries text only while a
 // failure or a sit-out stands, so the bound costs a healthy entry nothing on a
 // beat re-sent every [ReconcileInterval]; the whole sentence is in the node's
-// own `cli_agent_limit_reported` line.
+// own `harness_limit_reported` line.
 const MaxModelSaidBytes = 240
 
 // MaxModelParkedSeats bounds the parked seats a model row names on the wire:

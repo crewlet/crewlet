@@ -328,7 +328,7 @@ func startCarrier(ctx context.Context, p *Provider, c *Checkout) *carrier {
 				// short is made at the release instead, which runs whatever
 				// cancelled the call.
 				if err := c.carryRefreshed(ctx); err != nil && ctx.Err() == nil {
-					log.WarnContext(ctx, "cli_agent_carry_failed", "provider", p.key,
+					log.WarnContext(ctx, "harness_carry_failed", "provider", p.key,
 						"seat", llm.SeatOf(ctx), "error", err)
 				}
 			}

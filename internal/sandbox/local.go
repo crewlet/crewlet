@@ -884,7 +884,7 @@ type LocalOptions struct {
 	StateDir string
 
 	// Image is the container image. REQUIRED for Container, and it must have
-	// the harness harness installed: there is no sensible default, and a box
+	// the harness installed: there is no sensible default, and a box
 	// without the harness fails only once an agent tries to use it.
 	Image string
 
@@ -962,7 +962,7 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 	if opts.Placement == Container {
 		if strings.TrimSpace(opts.Image) == "" {
 			return nil, localErrorf("run_in %q requires providers.sandbox.local.image, an image "+
-				"that has the harness harness installed — there is no sensible default, and a "+
+				"that has the harness installed — there is no sensible default, and a "+
 				"box without the harness fails only once an agent tries to use it", Container)
 		}
 		var path string

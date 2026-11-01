@@ -1384,7 +1384,7 @@ func (p *Provider) inCredentialHome(
 		// fails for good wedged `crewlet llm login` behind its own leftovers.
 		// It is said, on the operator's terminal and in the log, because the
 		// kept login is gone with it.
-		log.WarnContext(ctx, "cli_agent_login_discarded", "provider", p.key, "agent", p.harness,
+		log.WarnContext(ctx, "harness_login_discarded", "provider", p.key, "agent", p.harness,
 			"error", err)
 		if errOut != nil {
 			_, _ = fmt.Fprintf(errOut, "crewlet: discarding the login an earlier command left "+
@@ -1417,7 +1417,7 @@ func (p *Provider) inCredentialHome(
 		// Said on the terminal and in the log, because what was refused is
 		// gone once the login lands. A status and a vendor's own logout still
 		// refuse: neither makes a login to put in its place.
-		log.WarnContext(ctx, "cli_agent_shared_login_refused", "provider", p.key, "agent", p.harness,
+		log.WarnContext(ctx, "harness_shared_login_refused", "provider", p.key, "agent", p.harness,
 			"path", refused.path, "error", refused.err)
 		if errOut != nil {
 			_, _ = fmt.Fprintf(errOut, "crewlet: the harness refused to import the shared login %s "+

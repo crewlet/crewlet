@@ -37,7 +37,7 @@ func (p *Provider) toolCompletion(
 	}
 	failed := res.exitCode != 0 || out.failed
 	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() && !failed {
-		log.WarnContext(ctx, "cli_agent_usage_report_unreadable", "provider", p.key,
+		log.WarnContext(ctx, "harness_usage_report_unreadable", "provider", p.key,
 			"agent", p.harness, "source", usageSource(p.profile), "reason", outcome.String(),
 			"input_paths", harnessprofile.PathList(p.profile.Usage.Input),
 			"output_paths", harnessprofile.PathList(p.profile.Usage.Output),
@@ -140,7 +140,7 @@ func (p *Provider) toolCompletion(
 	if strings.TrimSpace(answer) == "" {
 		// A model outcome, the tool loop's to correct — see
 		// [Provider.completion] — said here, where the counts are in hand.
-		log.WarnContext(ctx, "cli_agent_answered_nothing", "provider", p.key, "agent", p.harness,
+		log.WarnContext(ctx, "harness_answered_nothing", "provider", p.key, "agent", p.harness,
 			"model", model, "requests", t.reader.observed(), "output_tokens", spent.Output)
 	}
 	return completion(llm.StopEnd), nil

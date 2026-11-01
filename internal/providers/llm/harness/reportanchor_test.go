@@ -152,7 +152,7 @@ func TestASitOutSaysWhereTheVendorSaidIt(t *testing.T) {
 			t.Fatalf("%s: answered %v, want a rate limit", name, err)
 		}
 		got := logs.String()
-		for _, want := range []string{"cli_agent_limit_reported", "source=" + string(tc.source), "Usage limit reached"} {
+		for _, want := range []string{"harness_limit_reported", "source=" + string(tc.source), "Usage limit reached"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s: the sit-out logged %q, want it to carry %q", name, got, want)
 			}

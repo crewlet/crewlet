@@ -121,7 +121,7 @@ var log = logging.Get("engine")
 // blob is the worse outcome. An entry `crewlet llm logout` emptied restores
 // nothing either ([harness.ErrLoggedOut]) — the logout is the operator's
 // decision and outlives every apply until a login is written again — and that
-// is warned as what it is, `cli_agent_bundle_withheld`, naming the logout and
+// is warned as what it is, `harness_bundle_withheld`, naming the logout and
 // how to sign in again, rather than as a bundle that failed.
 func (c *Company) restoreBundles(ctx context.Context) {
 	if c == nil || c.Models == nil {
@@ -136,9 +136,9 @@ func (c *Company) restoreBundles(ctx context.Context) {
 		switch {
 		case err == nil:
 		case errors.Is(err, harness.ErrLoggedOut):
-			log.WarnContext(ctx, "cli_agent_bundle_withheld", "provider", key, "detail", err.Error())
+			log.WarnContext(ctx, "harness_bundle_withheld", "provider", key, "detail", err.Error())
 		default:
-			log.WarnContext(ctx, "cli_agent_bundle_restore_failed", "provider", key, "error", err)
+			log.WarnContext(ctx, "harness_bundle_restore_failed", "provider", key, "error", err)
 		}
 	}
 }
@@ -213,7 +213,7 @@ func BuildHarness(key string, spec config.LLMProvider, r *config.Resolver,
 		// Warned rather than refused: a harness whose optional tuning
 		// variable is unset still runs, and a provider that refused to
 		// build would take the company down over it.
-		log.Warn("cli_agent_env_unresolved", "provider", key,
+		log.Warn("harness_env_unresolved", "provider", key,
 			"path", ref.Path, "variables", strings.Join(ref.Names, ","))
 	}
 

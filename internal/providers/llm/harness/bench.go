@@ -310,7 +310,7 @@ func (p *Provider) classified(ctx context.Context, hit markerHit, reason string)
 	if !hit.Reset.IsZero() {
 		resets = hit.Reset.UTC().Format(time.RFC3339)
 	}
-	log.WarnContext(ctx, "cli_agent_limit_reported", "provider", p.key, "agent", p.harness,
+	log.WarnContext(ctx, "harness_limit_reported", "provider", p.key, "agent", p.harness,
 		"source", string(hit.Source), "said", reason, "window", string(hit.Window),
 		"retry_at", until.UTC().Format(time.RFC3339), "resets_at", resets)
 	return p.limited(fmt.Errorf("%s", reason), until, hit.Reset, hit.Window)
@@ -404,7 +404,7 @@ func (p *Provider) RunEnded(ctx context.Context, end RunEnd) bool {
 	said := nonEmpty(hit.Said, firstLine(out.said))
 	until := p.bench(limitReport{reset: hit.Reset, said: said, at: at, window: hit.Window})
 	if !p.now().Before(until) {
-		log.InfoContext(ctx, "cli_agent_run_limit_report_over", "provider", p.key,
+		log.InfoContext(ctx, "harness_run_limit_report_over", "provider", p.key,
 			"agent", p.harness, "said", said, "reported_at", at.UTC().Format(time.RFC3339),
 			"retry_at", until.UTC().Format(time.RFC3339),
 			"detail", "the run's limit report is older than the window it opened, which is "+
@@ -415,7 +415,7 @@ func (p *Provider) RunEnded(ctx context.Context, end RunEnd) bool {
 	if !hit.Reset.IsZero() {
 		resets = hit.Reset.UTC().Format(time.RFC3339)
 	}
-	log.WarnContext(ctx, "cli_agent_run_limit_reported", "provider", p.key, "agent", p.harness,
+	log.WarnContext(ctx, "harness_run_limit_reported", "provider", p.key, "agent", p.harness,
 		"source", string(hit.Source), "said", said, "window", string(hit.Window),
 		"retry_at", until.UTC().Format(time.RFC3339), "resets_at", resets)
 	return true

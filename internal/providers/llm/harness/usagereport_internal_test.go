@@ -60,17 +60,17 @@ func TestAnUnreadableUsageReportIsSaidOutLoud(t *testing.T) {
 		{
 			name: "a command that printed nothing", overrides: usageCommand,
 			env:   map[string]string{"FAKE_USAGE_COMMAND": report, "FAKE_USAGE_REPORT": ""},
-			event: "cli_agent_usage_report_failed", reason: "exited 0 and printed nothing",
+			event: "harness_usage_report_failed", reason: "exited 0 and printed nothing",
 		},
 		{
 			name: "a command's report that does not decode", overrides: usageCommand,
 			env:   map[string]string{"FAKE_USAGE_COMMAND": report, "FAKE_USAGE_REPORT": "tokens: 12 in, 3 out"},
-			event: "cli_agent_usage_report_unreadable", reason: "not one JSON object",
+			event: "harness_usage_report_unreadable", reason: "not one JSON object",
 		},
 		{
 			name: "a command's report whose counts moved", overrides: usageCommand,
 			env:   map[string]string{"FAKE_USAGE_COMMAND": report, "FAKE_USAGE_REPORT": `{"usage":{"input":12,"output":3}}`},
-			event: "cli_agent_usage_report_unreadable", reason: "do not both resolve",
+			event: "harness_usage_report_unreadable", reason: "do not both resolve",
 		},
 		{
 			name: "a command's report read whole", overrides: usageCommand,
@@ -80,12 +80,12 @@ func TestAnUnreadableUsageReportIsSaidOutLoud(t *testing.T) {
 		{
 			name: "a usage file written empty", overrides: usageFile,
 			env:   map[string]string{"FAKE_USAGE_FILE": " \n"},
-			event: "cli_agent_usage_file_unreadable", reason: "the file is empty",
+			event: "harness_usage_file_unreadable", reason: "the file is empty",
 		},
 		{
 			name: "a usage file that does not decode", overrides: usageFile,
 			env:   map[string]string{"FAKE_USAGE_FILE": "garbage"},
-			event: "cli_agent_usage_report_unreadable", reason: "not one JSON object",
+			event: "harness_usage_report_unreadable", reason: "not one JSON object",
 		},
 		{
 			// The vendor writes it "even when the run fails", so its
@@ -106,7 +106,7 @@ func TestAnUnreadableUsageReportIsSaidOutLoud(t *testing.T) {
 		}
 		got := logs.String()
 		for _, event := range []string{
-			"cli_agent_usage_report_failed", "cli_agent_usage_report_unreadable", "cli_agent_usage_file_unreadable",
+			"harness_usage_report_failed", "harness_usage_report_unreadable", "harness_usage_file_unreadable",
 		} {
 			if logged := strings.Contains(got, event); logged != (event == tc.event) {
 				t.Errorf("%s: %s logged = %v, want %v:\n%s", tc.name, event, logged, event == tc.event, got)
@@ -115,7 +115,7 @@ func TestAnUnreadableUsageReportIsSaidOutLoud(t *testing.T) {
 		if tc.reason != "" && !strings.Contains(got, tc.reason) {
 			t.Errorf("%s: the warning does not say why (%q):\n%s", tc.name, tc.reason, got)
 		}
-		if tc.event == "cli_agent_usage_report_unreadable" && !strings.Contains(got, "an estimate") {
+		if tc.event == "harness_usage_report_unreadable" && !strings.Contains(got, "an estimate") {
 			t.Errorf("%s: the warning does not say what the counts fell back to:\n%s", tc.name, got)
 		}
 		if tc.reported {
@@ -157,9 +157,9 @@ func TestAFailedRunsEmptyUsageReportIsNotCalledDrift(t *testing.T) {
 		if (err != nil) != tc.failed {
 			t.Fatalf("%s: err = %v, want a failed call = %v", tc.name, err, tc.failed)
 		}
-		warned := strings.Contains(logs.String(), "cli_agent_usage_report_unreadable")
+		warned := strings.Contains(logs.String(), "harness_usage_report_unreadable")
 		if warned == tc.failed {
-			t.Errorf("%s: cli_agent_usage_report_unreadable logged = %v, want %v:\n%s",
+			t.Errorf("%s: harness_usage_report_unreadable logged = %v, want %v:\n%s",
 				tc.name, warned, !tc.failed, logs.String())
 		}
 	}

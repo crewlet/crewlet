@@ -1208,7 +1208,7 @@ func (w *Workspace) carryFailed(slug string) time.Duration {
 // into ANY seat, rather than only by that seat's.
 //
 // BEST EFFORT for the calling seat: a carry that fails is logged
-// (`cli_agent_carry_out_failed`), paced ([carryRetryFloor]) and left for the
+// (`harness_carry_out_failed`), paced ([carryRetryFloor]) and left for the
 // next attempt, and the calling seat seeds from the shared login regardless —
 // as it does while another seat is mid-call, which is the same not-knowing
 // whether that seat's harness has refreshed. Refusing it instead would turn one
@@ -1220,7 +1220,7 @@ func (w *Workspace) carryFailed(slug string) time.Duration {
 // and an unclosed `[` was a malformed pattern whose error was dropped — so
 // every seat was seeded with the token a kept refresh had rotated away. A
 // listing that fails for any reason but the seats directory not existing yet
-// is logged (`cli_agent_sweep_failed`) rather than read as nothing to sweep.
+// is logged (`harness_sweep_failed`) rather than read as nothing to sweep.
 func (w *Workspace) sweep(ctx context.Context, store loginStore, own string) {
 	who := ""
 	if store != nil {
@@ -1230,7 +1230,7 @@ func (w *Workspace) sweep(ctx context.Context, store loginStore, own string) {
 	entries, err := os.ReadDir(seats)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.WarnContext(ctx, "cli_agent_sweep_failed", "provider", who, "agent", w.harness,
+			log.WarnContext(ctx, "harness_sweep_failed", "provider", who, "agent", w.harness,
 				"error", err)
 		}
 		return
@@ -1261,7 +1261,7 @@ func (w *Workspace) sweep(ctx context.Context, store loginStore, own string) {
 			// seat's home: counted, it would pace a carry that never ran.
 			return
 		default:
-			log.WarnContext(ctx, "cli_agent_carry_out_failed", "provider", who, "agent", w.harness,
+			log.WarnContext(ctx, "harness_carry_out_failed", "provider", who, "agent", w.harness,
 				"seat", slug, "retry_in", w.carryFailed(slug).String(), "error", err)
 		}
 	}
@@ -1298,7 +1298,7 @@ func (w *Workspace) sweepOne(ctx context.Context, store loginStore, dir, record 
 // What did change is decided under the shared login's lock, by the
 // generation's [syncMode]: a refresh only over the login it was seeded from, a
 // login over anything ([Workspace.carry]). A login that lost to a newer one is
-// logged as `cli_agent_login_superseded` and dropped.
+// logged as `harness_login_superseded` and dropped.
 //
 // Neither kind of home deletes the shared directory's SEEDED COPY of a file its
 // harness REMOVED: a credential file a call removed, or a database exporting no login
@@ -1684,7 +1684,7 @@ func (w *Workspace) lockedLoginEpoch(ctx context.Context) (uint64, error) {
 // moved: "changed" or "removed" since a refresh was seeded, or "replaced" by an
 // operator since a pending login began.
 func (w *Workspace) superseded(ctx context.Context, who, dst, how string) {
-	log.WarnContext(ctx, "cli_agent_login_superseded", "provider", who, "agent", w.harness,
+	log.WarnContext(ctx, "harness_login_superseded", "provider", who, "agent", w.harness,
 		"path", dst, "shared", how)
 }
 
@@ -2030,7 +2030,7 @@ func (w *Workspace) readLoginLocked() (map[string][]byte, error) {
 // A write that COMMITTED and could not be put in place at once is written: it
 // is the login of record, and every reader puts it in place before it reads
 // ([Workspace.readLoginLocked]), so it is logged
-// (`cli_agent_login_unapplied`) rather than reported as a login that did not
+// (`harness_login_unapplied`) rather than reported as a login that did not
 // land — the caller's steps after a write (the operator epoch, the logout's
 // record) follow it, and a reader that still cannot put it in place says so
 // itself.
@@ -2049,7 +2049,7 @@ func (w *Workspace) writeLoginLocked(ctx context.Context, who string, login map[
 func (w *Workspace) commitLoginLocked(ctx context.Context, who string, names []string, files map[string][]byte) error {
 	err := hostbox.WriteCredentials(w.CredentialsDir(), names, files)
 	if err != nil && hostbox.Committed(err) {
-		log.WarnContext(ctx, "cli_agent_login_unapplied", "provider", who, "agent", w.harness,
+		log.WarnContext(ctx, "harness_login_unapplied", "provider", who, "agent", w.harness,
 			"path", w.CredentialsDir(), "error", err)
 		return nil
 	}

@@ -1062,9 +1062,9 @@ type Profile struct {
 	// when the run fails" and a broken usage write must never mask the
 	// run's own outcome. Absent is silent — the run did not get that far —
 	// while a file that cannot be read or is empty logs
-	// `cli_agent_usage_file_unreadable`, and one that does not decode, or in
+	// `harness_usage_file_unreadable`, and one that does not decode, or in
 	// which usage.input and usage.output do not both resolve, logs
-	// `cli_agent_usage_report_unreadable` — for a run the harness did not report
+	// `harness_usage_report_unreadable` — for a run the harness did not report
 	// failed: a failed call is charged nothing, and the vendor's report of one
 	// may hold no counts by design.
 	UsageFileArgs []string `yaml:"usage_file_args,omitempty"`
@@ -1102,8 +1102,8 @@ type Profile struct {
 	// A failed or unreadable report is not a failed call: the counts fall
 	// back to whatever stdout said, as for a usage file — which, for a harness
 	// that reports no usage there, is the estimate — and a warning says
-	// which: `cli_agent_usage_report_failed` for a command that failed or
-	// printed nothing, `cli_agent_usage_report_unreadable` for a report that
+	// which: `harness_usage_report_failed` for a command that failed or
+	// printed nothing, `harness_usage_report_unreadable` for a report that
 	// does not decode or in which usage.input and usage.output do not both
 	// resolve, on a run the harness did not report failed.
 	UsageArgs []string `yaml:"usage_args,omitempty"`

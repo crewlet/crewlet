@@ -173,7 +173,7 @@ func (s *harnessServer) stop() {
 			}
 		}
 		if err := procgroup.Kill(s.pgid); err != nil && !errors.Is(err, errors.ErrUnsupported) {
-			log.Warn("cli_agent_server_kill_failed", "pgid", s.pgid, "error", err)
+			log.Warn("harness_server_kill_failed", "pgid", s.pgid, "error", err)
 		}
 		<-s.exited
 	})

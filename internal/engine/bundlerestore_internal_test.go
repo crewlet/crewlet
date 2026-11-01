@@ -362,12 +362,12 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 		t.Errorf("the next epoch restored the login a logout removed: %d files (%v)", len(login), err)
 	}
 	got := logs.String()
-	for _, want := range []string{"cli_agent_bundle_withheld", "crewlet llm logout", "crewlet llm login subscription"} {
+	for _, want := range []string{"harness_bundle_withheld", "crewlet llm logout", "crewlet llm login subscription"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the epoch's warning does not carry %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "cli_agent_bundle_restore_failed") {
+	if strings.Contains(got, "harness_bundle_restore_failed") {
 		t.Errorf("a logout was warned as a bundle that failed to restore:\n%s", got)
 	}
 }
@@ -424,7 +424,7 @@ roles:
 		t.Errorf("the epoch restored pi's bundle into codex's login: %v", entries)
 	}
 	got := logs.String()
-	for _, want := range []string{"cli_agent_bundle_restore_failed", `it names \"pi\"`,
+	for _, want := range []string{"harness_bundle_restore_failed", `it names \"pi\"`,
 		"crewlet llm export subscription"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the epoch's warning does not carry %q:\n%s", want, got)

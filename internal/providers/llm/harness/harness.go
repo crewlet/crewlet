@@ -431,7 +431,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 			// is kept in the home, and the next generation to open —
 			// this seat's next call, or any seat's first — carries it
 			// out before it seeds — see [Workspace.Acquire].
-			log.WarnContext(ctx, "cli_agent_release_failed", "provider", p.key, "seat", seat, "error", err)
+			log.WarnContext(ctx, "harness_release_failed", "provider", p.key, "seat", seat, "error", err)
 		}
 	}()
 
@@ -591,7 +591,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		// classifies it by what that was.
 		return nil, p.fail(llm.KindFatal, fmt.Errorf("%w: %w", llm.ErrNotRunnable, err))
 	}
-	log.DebugContext(ctx, "cli_agent_call", "provider", p.key, "agent", p.harness, "model", p.model,
+	log.DebugContext(ctx, "harness_call", "provider", p.key, "agent", p.harness, "model", p.model,
 		"seat", seat, "exit", res.exitCode, "elapsed_ms", time.Since(started).Milliseconds())
 	connected := false
 	if tools != nil {
@@ -616,13 +616,13 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		switch {
 		case os.IsNotExist(readErr):
 		case readErr != nil:
-			log.WarnContext(ctx, "cli_agent_usage_file_unreadable", "provider", p.key,
+			log.WarnContext(ctx, "harness_usage_file_unreadable", "provider", p.key,
 				"agent", p.harness, "path", usagePath, "error", readErr)
 		case strings.TrimSpace(string(raw)) == "":
 			// Written and empty is not "the run did not get that far": the
 			// vendor began its report and wrote nothing into it, and what
 			// is read below could not tell this from no file at all.
-			log.WarnContext(ctx, "cli_agent_usage_file_unreadable", "provider", p.key,
+			log.WarnContext(ctx, "harness_usage_file_unreadable", "provider", p.key,
 				"agent", p.harness, "path", usagePath, "error", "the file is empty")
 		default:
 			usageDoc = string(raw)
@@ -664,13 +664,13 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 			report, reportErr := p.runAuxiliary(reportCtx, args, checkout.Work, env, "")
 			switch {
 			case reportErr != nil:
-				log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
+				log.WarnContext(ctx, "harness_usage_report_failed", "provider", p.key,
 					"agent", p.harness, "error", reportErr)
 			case strings.TrimSpace(report) == "":
 				// A command that succeeded and printed nothing reported
 				// nothing, and the empty string handed on below reads as no
 				// report at all — so this is the one place that can say so.
-				log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
+				log.WarnContext(ctx, "harness_usage_report_failed", "provider", p.key,
 					"agent", p.harness, "error", fmt.Sprintf("%s %s exited 0 and printed nothing",
 						p.profile.Binary, strings.Join(args, " ")))
 			default:
@@ -785,7 +785,7 @@ func (p *Provider) completion(
 		if out.reported {
 			fallback = "the counts stdout reported"
 		}
-		log.WarnContext(ctx, "cli_agent_usage_report_unreadable", "provider", p.key,
+		log.WarnContext(ctx, "harness_usage_report_unreadable", "provider", p.key,
 			"agent", p.harness, "source", usageSource(p.profile), "reason", outcome.String(),
 			"input_paths", harnessprofile.PathList(p.profile.Usage.Input),
 			"output_paths", harnessprofile.PathList(p.profile.Usage.Output),
@@ -954,7 +954,7 @@ func (p *Provider) completion(
 		// bills hundreds), and the text paths are the evidence a reader
 		// needs if it turns out to be profile drift after all. Same
 		// shape as agent/prefetch's own answered-nothing warning.
-		log.WarnContext(ctx, "cli_agent_answered_nothing", "provider", p.key,
+		log.WarnContext(ctx, "harness_answered_nothing", "provider", p.key,
 			"agent", p.harness, "model", p.model, "text_paths", harnessprofile.PathList(p.profile.TextPaths),
 			"output_tokens", comp.OutputTokens, "reported_usage", out.reported)
 	}

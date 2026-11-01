@@ -396,7 +396,7 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	// deadline as KindTimeout and a cancellation is not one.
 	reap := func(reason error) {
 		if killErr := procgroup.Kill(pgid); killErr != nil && !errors.Is(killErr, errors.ErrUnsupported) {
-			log.WarnContext(ctx, "cli_agent_group_kill_failed",
+			log.WarnContext(ctx, "harness_group_kill_failed",
 				"pgid", pgid, "reason", reason, "error", killErr)
 		}
 	}
@@ -455,14 +455,14 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 		// answer needs to know which half was cut — the caller refuses on
 		// stdout and carries on for stderr.
 		if s.dropped > 0 {
-			log.WarnContext(ctx, "cli_agent_output_truncated", "binary", in.binary,
+			log.WarnContext(ctx, "harness_output_truncated", "binary", in.binary,
 				"stream", s.stream, "dropped_bytes", s.dropped, "limit_bytes", maxOutput)
 		}
 		// And for the same reason a held one: the caller refuses an answer
 		// on a held stdout, and only this line says that a held stderr cut
 		// the diagnosis of a call that otherwise answered.
 		if s.held {
-			log.WarnContext(ctx, "cli_agent_output_held", "binary", in.binary,
+			log.WarnContext(ctx, "harness_output_held", "binary", in.binary,
 				"stream", s.stream, "grace", in.grace)
 		}
 	}

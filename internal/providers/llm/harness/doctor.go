@@ -400,7 +400,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		}
 		defer func() {
 			if rmErr := os.RemoveAll(dir); rmErr != nil {
-				log.WarnContext(ctx, "cli_agent_candidate_cleanup_failed", "dir", dir, "error", rmErr)
+				log.WarnContext(ctx, "harness_candidate_cleanup_failed", "dir", dir, "error", rmErr)
 			}
 		}()
 		home = dir
@@ -902,7 +902,7 @@ func (p *Provider) fileProbe(ctx context.Context) (verdict, problem string) {
 	}
 	defer func() {
 		if rmErr := os.RemoveAll(dir); rmErr != nil {
-			log.WarnContext(ctx, "cli_agent_file_probe_cleanup_failed", "dir", dir, "error", rmErr)
+			log.WarnContext(ctx, "harness_file_probe_cleanup_failed", "dir", dir, "error", rmErr)
 		}
 	}()
 	token := "crewlet-file-probe-" + newSessionID()
@@ -1360,7 +1360,7 @@ func (p *Provider) SandboxCredentialDocument() string {
 //
 // A BLANK VALUE IS LEFT OUT, by the rule the rest of a run's environment is
 // held to: a reference that resolved to nothing reaches no box as an empty
-// string, and its build already warned (cli_agent_env_unresolved).
+// string, and its build already warned (harness_env_unresolved).
 func (p *Provider) SandboxEnv() map[string]string {
 	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)
 	names := slices.Collect(maps.Keys(p.env))

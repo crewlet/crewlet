@@ -326,7 +326,7 @@ func (p *Provider) runDeviceLogin(
 		// if it would not go; whatever it started that survived goes now, so
 		// nothing holding the pipe outlives the sign-in.
 		if err := procgroup.Kill(pgid); err != nil && !errors.Is(err, errors.ErrUnsupported) {
-			log.WarnContext(ctx, "cli_agent_group_kill_failed", "pgid", pgid,
+			log.WarnContext(ctx, "harness_group_kill_failed", "pgid", pgid,
 				"reason", "device sign-in stopped", "error", err)
 		}
 	}

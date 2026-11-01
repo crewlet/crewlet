@@ -114,14 +114,14 @@ func TestASweepThatCannotListTheSeatsSaysSo(t *testing.T) {
 	// because it does not exist.
 	writeFile(t, filepath.Join(ws.Root(), "seats"), "not a directory")
 	ws.sweep(t.Context(), &stubStore{}, "dev")
-	if got := logs.String(); !strings.Contains(got, "cli_agent_sweep_failed") {
+	if got := logs.String(); !strings.Contains(got, "harness_sweep_failed") {
 		t.Errorf("a sweep that could not list the seats said nothing: %q", got)
 	}
 
 	logs.Reset()
 	fresh := newWorkspace(t)
 	fresh.sweep(t.Context(), &stubStore{}, "dev")
-	if got := logs.String(); strings.Contains(got, "cli_agent_sweep_failed") {
+	if got := logs.String(); strings.Contains(got, "harness_sweep_failed") {
 		t.Errorf("a workspace with no seats yet was reported as a failed sweep: %q", got)
 	}
 }
