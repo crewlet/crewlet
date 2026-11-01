@@ -2916,9 +2916,10 @@ var ACTIONS = {
 * told to sign in again, never to set anything.
 *
 * THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
-* which means "show the tool's own `detail`". Those are the two classes whose
-* sentence names the argument that was wrong (`invalid`) or the rule that
-* forbade it (`forbidden`); every other class's sentence is written for a
+* which means "show the tool's own `detail`". Those are the three classes whose
+* sentence names the argument that was wrong (`invalid`), the rule that
+* forbade it (`forbidden`) or the merge gate's every unmet precondition and
+* who clears it (`not_ready`); every other class's sentence is written for a
 * model reading a tool result, and a person reading it would be told about
 * `if_match` and record ids.
 */
@@ -2946,6 +2947,7 @@ var ACT_ERRORS = {
 	forbidden: null,
 	stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
 	conflict: "It collided with another change landing at the same moment. Look again, then retry.",
+	not_ready: null,
 	exists: "That already exists.",
 	already_answered: "Somebody has already answered it.",
 	reassignment_budget: "It has been handed between seats too many times. A person has to pick it up now.",
