@@ -139,6 +139,7 @@ var publishedRoutes = []string{
 	mcpbridge.PathPrefix + "{token}",
 	mcpbridge.ServerPattern,
 	mcpbridge.SteerPattern,
+	mcpbridge.SkillPattern,
 }
 
 // wildcard is one segment of a mux pattern that matches more than itself.

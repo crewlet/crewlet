@@ -247,6 +247,12 @@ func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, 
 	} else {
 		line(`set --`)
 	}
+	// THE RUN'S OWN SKILLS, and the hook that reports each load, in the
+	// plugin [ClaudeCode.WriteConfig] wrote — on a release that runs the hook
+	// ([claudeSkillsGate]).
+	if len(req.Skills) > 0 {
+		b.WriteString(claudeSkillsGate(paths.ClaudeSkillsPlugin(), anyRequired(req.Skills)))
+	}
 	b.WriteString(claudeSessionGate(session, paths))
 	// THE RECORD, before the harness starts, so a run killed before it reported
 	// anything still says which session it took up, and why it began again
@@ -526,6 +532,10 @@ func floorArgs(version string) string {
 // two it is started with is its box's to decide, by its harness's release
 // ([claudeNotesGate]).
 //
+// A RUN HANDED SKILLS OF ITS OWN ([sandbox.RunRequest.Skills]) has them as a
+// plugin, with the hook that reports each load ([writeClaudeSkills]), which
+// its box adds to the harness's arguments by its release ([claudeSkillsGate]).
+//
 // The settings file is written afresh, at the mode a box writes every file with
 // (0600 on a local box): a box write replaces a file whole
 // ([sandbox.Sandbox.WriteFile]), and the run's artefacts are cleared before it
@@ -535,6 +545,11 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	if req.System != "" {
 		if err := box.WriteFile(ctx, paths.System(), []byte(req.System)); err != nil {
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
+		}
+	}
+	if len(req.Skills) > 0 {
+		if err := writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
+			return "", err
 		}
 	}
 	if req.Steer.Set() {

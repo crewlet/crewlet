@@ -71,7 +71,9 @@
 // engine's phase is suspended while it runs, and those are settled when the run
 // is collected and its turn resumes. A person's notes to the turn it serves
 // from the run's note inbox, at the harness's own boundaries — see steer.go, "A
-// NOTE INBOX" — and decides nothing about them.
+// NOTE INBOX" — and decides nothing about them. A load of one of the run's own
+// skills, which its harness reports, it records as the run's own load of the
+// Tool Skill it stands for — see skills.go.
 //
 // # A run outlives the process that opened its session
 //
@@ -293,6 +295,14 @@ type Session struct {
 	// answers 404 and steer_take answers nothing, which is what a run with
 	// nothing to steer — the assistant's deep work — has.
 	Steer SteerInbox
+
+	// Skills are the skills the run's harness was handed as its OWN
+	// (internal/sandbox, RunRequest.Skills), by the name it lists each
+	// under to the key of the Tool Skill it is: a load the harness reports
+	// by that name is recorded as the run's own load of the key — see
+	// skills.go. Nil hands none: the skill route answers 404, skill_loaded
+	// records nothing, and load_tool_skill is listed as any other tool.
+	Skills map[string]string
 
 	mu sync.Mutex
 	// live is the session's current opening: what a token minted at its
@@ -1282,6 +1292,10 @@ type binding struct {
 	// unsubstituted says once, per opening, that the harness's hooks name no
 	// agent the bridge can tell apart — see [binding.takeSteer].
 	unsubstituted sync.Once
+
+	// skillUnsubstituted says once, per opening, that the harness's hook names
+	// no skill it loaded — see [binding.loadSkill].
+	skillUnsubstituted sync.Once
 }
 
 var _ toolsession.Dispatcher = (*binding)(nil)
@@ -1313,6 +1327,9 @@ func newBinding(ctx context.Context, s *Session, where route) *binding {
 	// to the run's surface, never recorded — see steer.go. On the engine's
 	// own server, where the run's hooks name it.
 	own.MCP().AddReceivingMiddleware(opened.steerMiddleware)
+	// skill_loaded, ANSWERED THE SAME WAY, for the same reason: a hook's
+	// report, never listed and never a call of the model's — see skills.go.
+	own.MCP().AddReceivingMiddleware(opened.skillMiddleware)
 	// THE ANSWER TO AN ACTIVATION WAITS FOR THE BOX'S RE-LIST
 	// ([toolsession.Server.HoldAnswersForRelist]): the harnesses that run in
 	// a box (Claude Code, OpenCode) re-read their tool list when told it
@@ -1393,11 +1410,17 @@ func (o *binding) over() bool {
 
 // Offered is what the surface offers now, with the hints the registry holds
 // for each, so a box's client can tell a read from a write.
+//
+// The bridge's own skill loader is left out for a harness that loads its
+// skills itself ([binding.offeredTool]).
 func (o *binding) Offered() []toolsession.Tool {
 	surface := o.session.Surface
 	defs := surface.ToolDefs()
 	out := make([]toolsession.Tool, 0, len(defs))
 	for _, def := range defs {
+		if !o.offeredTool(def.Name) {
+			continue
+		}
 		out = append(out, toolsession.Tool{Def: def, Annotations: surface.AnnotationsOf(def.Name)})
 	}
 	return out

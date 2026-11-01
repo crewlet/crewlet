@@ -137,10 +137,12 @@ type claudeSettings struct {
 	Hooks map[string][]claudeHookMatcher `json:"hooks"`
 }
 
-// claudeHookMatcher is one entry of an event's hooks; it names no matcher, so
-// it applies at every firing of the event.
+// claudeHookMatcher is one entry of an event's hooks. One that names no
+// matcher applies at every firing of the event, as the notes' hooks do; the
+// skill-load hook names the tool it fires after ([writeClaudeSkills]).
 type claudeHookMatcher struct {
-	Hooks []claudeHook `json:"hooks"`
+	Matcher string       `json:"matcher,omitempty"`
+	Hooks   []claudeHook `json:"hooks"`
 }
 
 // claudeHook is one hook: a call of a tool on one of the run's MCP servers.
@@ -152,12 +154,16 @@ type claudeHookMatcher struct {
 // would post every batch's tool calls and their results; and every way it can
 // fail is non-blocking, where a command hook that exits 2 — a shell's answer
 // to a syntax error — ends the run's loop.
+//
+// ITS INPUT IS THE HOOK'S OWN: the notes' hooks hand the bridge a
+// [claudeHookInput], the skill-load hook a [claudeSkillLoad] — each a set of
+// variables the harness fills in.
 type claudeHook struct {
-	Type    string          `json:"type"`
-	Server  string          `json:"server"`
-	Tool    string          `json:"tool"`
-	Input   claudeHookInput `json:"input"`
-	Timeout int             `json:"timeout"`
+	Type    string `json:"type"`
+	Server  string `json:"server"`
+	Tool    string `json:"tool"`
+	Input   any    `json:"input"`
+	Timeout int    `json:"timeout"`
 }
 
 // claudeHookInput is what the hook hands the tool: the event that fired it and
