@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -75,6 +77,21 @@ const ClaudeCodeName = "claude-code"
 // (disableAllHooks) — leaves, like that older release, a run that succeeded
 // without asking once, which the collection says (internal/sandbox,
 // steer_reader_never_ran).
+//
+// # Its session, where another box can take it up
+//
+// Every run in a box PINS where the harness keeps its sessions
+// ([claudeSessionLayout]) — the box home's `.claude`, one project directory
+// whatever the box's working directory — with auto memory off; NAMES the
+// session it runs in before the harness starts, starting one under a minted id or
+// resuming one, never both ([claudeSessionGate]); RECORDS it
+// ([Paths.SessionRecord]); and once the harness has exited, PACKS it
+// ([claudeCapture]): the transcript, its sidecars and its task list, never the
+// login or the harness's own state. A run handed a session packed in another box
+// restores it before the harness resumes it, on a release that continues one
+// ([claudeCarryFloor]); and every resumed run renders its system prompt afresh
+// ([claudeSnapshotFloor]), so a later launch's standing instructions are the
+// ones it reads.
 type ClaudeCode struct{}
 
 var _ Harness = ClaudeCode{}
@@ -93,10 +110,28 @@ func (ClaudeCode) Resumes() bool { return true }
 // settings file holds — see [ClaudeCode].
 func (ClaudeCode) NoteInstruction() string { return ClaudeCodeSteerInstruction }
 
-// Command builds the headless `claude -p` invocation.
+// Session is the session a Claude Code run works in ([Harness.Session]): the one
+// it continues, or a new one under a UUID minted for it — `--session-id` takes
+// a UUID — and, for a run that continues one, a second UUID for the session it
+// starts instead where its box holds that one neither way.
+func (ClaudeCode) Session(req sandbox.RunRequest) Session {
+	if req.Resume != "" {
+		return Session{ID: req.Resume, Continues: true, Fresh: uuid.NewString()}
+	}
+	return Session{ID: uuid.NewString()}
+}
+
+// Command builds the headless `claude -p` invocation: ONE SCRIPT, so the
+// wrapper's redirections — the brief on stdin, the stream, the error file —
+// reach every step of it alike. It reads the box's `claude --version` once
+// ([claudeRelease]) and decides by it what the harness is started with; names the
+// session the harness runs in and records it ([Paths.SessionRecord]); runs the harness;
+// and once the harness has exited, packs its session to be carried to another box
+// ([claudeCapture]), exiting with the harness's own status.
 //
-// Pure and deterministic so the exact flags can be pinned by a test. Budget
-// caps are appended only when set, so a minimal call stays minimal.
+// Pure and deterministic given its session, so the exact flags can be pinned by
+// a test. Budget caps are appended only when set, so a minimal call stays
+// minimal.
 //
 // THE BRIEF IS NOT ON IT: `-p` with no prompt reads the prompt on stdin, which
 // the wrapper points at the brief's file ([ClaudeCode.Output]) — verbatim,
@@ -132,26 +167,31 @@ func (ClaudeCode) NoteInstruction() string { return ClaudeCodeSteerInstruction }
 // every one of those tools, has no use for. The FILE variant, written by [ClaudeCode.WriteConfig]:
 // see [Paths.System] for why never argv. Passed only for a run that has system
 // text, so a run with none runs on the vendor's prompt alone.
-func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string) string {
+//
+// THE SESSION IS NAMED ON EVERY RUN ([claudeSessionGate]). A run that starts a
+// session is started under the id minted for it (`--session-id`), so its
+// record names its session from the start — a run killed before its result
+// line used to name none. A run that continues one is started with `--resume`
+// and never with both: the harness refuses `--session-id` beside `--resume` unless
+// the session is forked ("session-id can only be used with --continue or
+// --resume if --fork-session is also specified", 2.1.316). And a resumed run
+// RENDERS ITS SYSTEM PROMPT AFRESH (`--system-prompt-snapshot off`, from
+// [claudeSnapshotFloor]): by default a conversation records the system prompt
+// its first request rendered — the first launch's appended text, its prefetch
+// blocks and its box's findings path among it — and every later request and
+// resume sends that record as it is until the conversation is compacted,
+// whatever a later launch appends; so every resumed run, the same box's and
+// the assistant's deep work's included, is told what THIS launch's standing
+// instructions say.
+func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string {
 	parts := []string{
 		"claude", "-p",
 		"--output-format", "stream-json", "--verbose",
 		"--permission-mode", "bypassPermissions",
-	}
-	// THE RUN'S OWN HOOKS, which hand it a person's notes between its steps
-	// — only where its launch wired it to them ([ClaudeCode.WriteConfig]), and
-	// only on a release that reads what they answer — AND ITS SYSTEM TEXT,
-	// told of notes only where they are read: the gate below decides both,
-	// and hands the flags in as the script's own arguments.
-	if req.Steer.Set() {
-		parts = append(parts, `"$@"`)
-	}
-	// THE EARLIER RUN'S OWN CONVERSATION, carried on with the brief — an
-	// answer, an approval — as its next prompt ([sandbox.RunRequest.Resume]).
-	// Claude Code keeps its sessions under the box's home, which a
-	// continued box still has.
-	if req.Resume != "" {
-		parts = append(parts, "--resume", shellQuote(req.Resume))
+		// WHAT THE SCRIPT DECIDED BY THE HARNESS'S RELEASE, handed in as the
+		// script's own arguments: the run's hooks and its system text told of
+		// notes, where its launch wired it to them, and its session.
+		`"$@"`,
 	}
 	if req.System != "" && !req.Steer.Set() {
 		parts = append(parts, "--append-system-prompt-file", shellQuote(paths.System()))
@@ -176,31 +216,64 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 		// happens to carry, which on a reused box is the previous run's.
 		parts = append(parts, "--mcp-config", shellQuote(configPath), "--strict-mcp-config")
 	}
-	cmd := strings.Join(parts, " ")
-	var script strings.Builder
-	// THE HARNESS'S RELEASE, recorded for a run that continues a session: from
-	// [claudeTotalsRestored] its result states the session's spend, which the
-	// collection charges less what the session had already spent
-	// ([sessionTotals]). Asked of the harness the box's PATH finds, in the box,
-	// because that is the one that runs.
-	if req.Resume != "" {
-		script.WriteString("claude --version < /dev/null > " + shellQuote(paths.CLIVersion()) + " 2> /dev/null; ")
-	}
+
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	b.WriteString(claudeRelease)
+	// THE TRANSCRIPT KEPT NEAR ITS SIZE, on a release whose trim loses nothing
+	// ([claudeLocalGCFloor]) — and on an older one never, whatever set it.
+	line(`if at %s; then export CLAUDE_CODE_TRANSCRIPT_LOCAL_GC=1; else unset CLAUDE_CODE_TRANSCRIPT_LOCAL_GC; fi`,
+		floorArgs(claudeLocalGCFloor))
+	// THE RUN'S OWN HOOKS, which hand it a person's notes between its steps
+	// — only where its launch wired it to them ([ClaudeCode.WriteConfig]), and
+	// only on a release that reads what they answer — AND ITS SYSTEM TEXT,
+	// told of notes only where they are read: the gate decides both.
 	if req.Steer.Set() {
 		plain := ""
 		if req.System != "" {
 			plain = paths.System()
 		}
-		script.WriteString(claudeNotesGate(paths.ClaudeSettings(), paths.ClaudeNotesSystem(), plain))
+		b.WriteString(claudeNotesGate(paths.ClaudeSettings(), paths.ClaudeNotesSystem(), plain))
+	} else {
+		line(`set --`)
 	}
-	if script.Len() == 0 {
-		return cmd
-	}
-	// ONE SCRIPT, so the wrapper's redirections — the brief on stdin, the
-	// stream, the error file — reach the gate and the harness alike, and `exec`
-	// leaves the harness where the script was.
-	return "sh -c " + shellQuote(script.String()+"exec "+cmd)
+	b.WriteString(claudeSessionGate(session, paths))
+	// THE RECORD, before the harness starts, so a run killed before it reported
+	// anything still says which session it took up, and why it began again
+	// where it did. The release last, as the harness printed it
+	// ([parseSessionRecord]).
+	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
+		shellQuote(paths.SessionRecord()))
+	line(`%s`, strings.Join(parts, " "))
+	line(`code=$?`)
+	b.WriteString(claudeCapture(paths))
+	line(`exit "$code"`)
+	return "sh -c " + shellQuote(b.String())
 }
+
+// claudeRelease opens every Claude Code run's script: it reads the box's
+// `claude --version` once, as v, its numbers as n, and defines `at MAJOR MINOR
+// PATCH`, which answers whether that release is at or after the one given —
+// what every gate the script makes asks ([claudeNotesGate],
+// [claudeSessionGate], the transcript's trim). Asked of the harness the box's PATH
+// finds, in the box, because that is the one that runs.
+//
+// A VERSION IT CANNOT READ IS TAKEN FOR A CURRENT RELEASE: every release prints
+// `MAJOR.MINOR.PATCH (Claude Code)`, so one that prints anything else is newer
+// than this script, and a harness that is not there fails at the run itself.
+//
+// POSIX parameter expansion, case and test alone, which every box's sh has
+// (dash, bash, busybox ash): no awk, no sort -V. The version is cut at its first
+// character that is neither a digit nor a dot, so what is left is digits and
+// dots, and it is read as a release only where it has three parts, each
+// beginning with a digit — anything else reads as a current release, as
+// [releaseAtLeast] reads it on the engine's side. (Its parts were checked once
+// cut: a two-part `2.1` cut into 2, 1 and the 1 again, an old release.)
+const claudeRelease = `v=$(claude --version < /dev/null 2> /dev/null); n=${v%%[!0-9.]*}
+a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r#*.}; c=${c%%.*}
+case "$n" in [0-9]*.[0-9]*.[0-9]*) ;; *) a= ;; esac
+at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "$2" ] || { [ "$b" -eq "$2" ] && [ "$c" -ge "$3" ]; }; }; }; }
+`
 
 // claudeNotesFloor is the oldest Claude Code release a run is started with its
 // notes hooks on: 2.1.163, the first whose Stop hook's additional context
@@ -218,42 +291,204 @@ func (ClaudeCode) Command(req sandbox.RunRequest, paths Paths, configPath string
 // upgrade, where taking the notes would have told them nothing at all.
 const claudeNotesFloor = "2.1.163"
 
-// claudeNotesGate is the start of a run's script wired to its notes: it reads
-// the box's `claude --version` and sets the script's arguments. On a release at
-// or after [claudeNotesFloor] they are `--settings <settings>` and the run's
+// claudeSnapshotFloor is the oldest Claude Code release a resumed run is
+// started with `--system-prompt-snapshot off` on: 2.1.267, which added the
+// option ("Added `--system-prompt-snapshot off` to render the system prompt
+// fresh on every request instead of reusing the conversation's recorded
+// prompt"). 2.1.263, a release boxes were measured on, refuses it as an
+// unknown option, which would fail every resumed run there.
+const claudeSnapshotFloor = "2.1.267"
+
+// claudeLocalGCFloor is the oldest Claude Code release a run is started with
+// CLAUDE_CODE_TRANSCRIPT_LOCAL_GC on: 2.1.304, the release that fixed it
+// "dropping messages from the saved transcript when the disk filled up while
+// the file was being trimmed" (and 2.1.296 one "when its text held a Unicode
+// line or paragraph separator"). On, a `-p` transcript past 5 MB loses the
+// history before its last compaction — which a resume restores whether or not
+// the file was trimmed — so a session carried between boxes stays near that
+// size rather than growing with every compaction it outlives. On an older
+// release it is UNSET, whatever set it: a trim that loses messages loses them
+// from the session a later run continues.
+const claudeLocalGCFloor = "2.1.304"
+
+// claudeCarryFloor is the oldest Claude Code release a box continues a session
+// carried from ANOTHER box on: 2.1.310, the first whose results state the
+// run's own spend per model (`model_usage_since_last_result`), which a
+// continued run is charged from, whatever its session's totals say
+// ([claudeResult.SinceLastResult]) — and above every release a carried
+// session's continuation needs: 2.1.304, whose transcript trim loses nothing
+// ([claudeLocalGCFloor]); 2.1.299, which no longer runs an approved tool call
+// twice on a resume after a restart; 2.1.288, which no longer drops files a
+// compaction restored; 2.1.269, whose resumed headless sessions keep a turn's
+// replies across a model switch; 2.1.267, which renders a resumed system prompt
+// afresh ([claudeSnapshotFloor]); 2.1.265, which keeps a tool call the previous
+// process died in; and 2.1.234, which names the project directory a transcript
+// is filed under whatever the box's working directory ([claudeProjectDir]).
+const claudeCarryFloor = "2.1.310"
+
+// claudeCarriedWriterFloor is the oldest Claude Code release whose session
+// another box continues: 2.1.300, from which a compaction's summary and the
+// recent messages it kept survive a headless resume ("compactions from this
+// version on", its changelog) — a session compacted by an older release comes
+// back without its summary, or with the history before it.
+const claudeCarriedWriterFloor = "2.1.300"
+
+// claudeNotesGate is the part of a run's script wired to its notes that sets
+// the script's arguments by the harness's release ([claudeRelease]): on a release
+// at or after [claudeNotesFloor] they are `--settings <settings>` and the run's
 // standing instructions told of notes (`--append-system-prompt-file <notes>`,
 // [Paths.ClaudeNotesSystem]); on an older one, which the run's error stream
 // says, the standing instructions alone (plain, [Paths.System]) — nothing for a
-// run that has none. A version it cannot read is taken for a current release:
-// every release prints `MAJOR.MINOR.PATCH (Claude Code)`, so one that prints
-// anything else is newer than this script, and a harness that is not there fails at
-// the run itself.
+// run that has none.
 //
 // THE SYSTEM TEXT IS CHOSEN WITH THE HOOKS, because only this script knows
 // whether a note can reach the run: told of notes, a run started without the
 // hooks that read them would be told of a channel that never opens.
-//
-// POSIX parameter expansion, case and test alone, which every box's sh has
-// (dash, bash, busybox ash): no awk, no sort -V. The version is cut at its first
-// character that is neither a digit nor a dot, so each of its three parts is
-// digits or nothing, and a part that is nothing reads as the floor.
 func claudeNotesGate(settings, notes, plain string) string {
-	major, minor, patch := floorParts(claudeNotesFloor)
-	older := "set --; "
+	older := "set --"
 	if plain != "" {
-		older = "set -- --append-system-prompt-file " + shellQuote(plain) + "; "
+		older = "set -- --append-system-prompt-file " + shellQuote(plain)
 	}
-	return "set --; " +
-		`v=$(claude --version < /dev/null 2> /dev/null); v=${v%%[!0-9.]*}; ` +
-		`a=${v%%.*}; r=${v#*.}; b=${r%%.*}; c=${r#*.}; c=${c%%.*}; ` +
-		`case "$a.$b.$c" in [0-9]*.[0-9]*.[0-9]*) ;; *) a=` + major + ` b=` + minor + ` c=` + patch + `;; esac; ` +
-		`if [ "$a" -gt ` + major + ` ] || { [ "$a" -eq ` + major + ` ] && { [ "$b" -gt ` + minor + ` ] || ` +
-		`{ [ "$b" -eq ` + minor + ` ] && [ "$c" -ge ` + patch + ` ]; }; }; }; then ` +
-		`set -- --settings ` + shellQuote(settings) + ` --append-system-prompt-file ` + shellQuote(notes) + `; ` +
-		`else ` + older +
-		`echo "crewlet: this box runs Claude Code $v, older than ` + claudeNotesFloor + `, the oldest ` +
+	return "if at " + floorArgs(claudeNotesFloor) + "; then set -- --settings " + shellQuote(settings) +
+		" --append-system-prompt-file " + shellQuote(notes) + "; else " + older + "; " +
+		`echo "crewlet: this box runs Claude Code $n, older than ` + claudeNotesFloor + `, the oldest ` +
 		`that reads a note at the run's finish; the run starts without the hooks that read its notes, ` +
-		`is not told of them, and they wait for its review" >&2; fi; `
+		`is not told of them, and they wait for its review" >&2; fi` + "\n"
+}
+
+// claudeSessionGate is the part of a run's script that names the session its
+// harness runs in, as s, whether that is the one the run was asked to continue, as
+// k, and — where it was asked and could not — why, as w; and adds the flags
+// that say so to the script's arguments.
+//
+// A RUN THAT STARTS A SESSION is started under the id minted for it.
+//
+// A RUN THAT CONTINUES ONE continues the copy its box HOLDS — a transcript
+// under its id in any project directory of the box's configuration, the same
+// box's last run's included, whichever directory a release filed it under —
+// unless an archive of the session was carried in ([Paths.SessionCarried])
+// that the copy does not hold: one whose digest is not among the box's for
+// the session ([Paths.SessionDigests], and carry.go for why). That archive,
+// and one carried into a box that holds no copy, is RESTORED — unpacked in the
+// staging directory, and only its three parts moved under the pinned project
+// directory ([claudeProjectDir]), once the archive is known to hold a
+// transcript and the box's own copy of each is removed: the transcript, a
+// regular file, and the sidecar and task-list directories where it has them,
+// a link in place of any left behind — on a release that continues a carried
+// session ([claudeCarryFloor]), with tar and gzip in the box; and its digest
+// is kept. Restored or not, the archive is removed: nothing reads it again.
+// Where the session is neither held nor restored, the run starts the session
+// minted for it in its place and says why, on its error stream and in its
+// record, rather than resume a session the harness does not hold, which fails the
+// run.
+func claudeSessionGate(session Session, paths Paths) string {
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	q := shellQuote
+	if !session.Continues {
+		line(`s=%s k=no w=`, q(session.ID))
+		line(`set -- "$@" --session-id %s`, q(session.ID))
+		return b.String()
+	}
+	cfg := paths.ClaudeConfigDir()
+	project := cfg + "/projects/" + claudeProjectDir
+	staged := paths.SessionStaging()
+	carried := q(paths.SessionCarried())
+	digests := q(paths.SessionDigests())
+	in := staged + "/in"
+	from := in + "/projects/" + claudeProjectDir + "/" + session.ID
+	tasks := in + "/tasks/" + session.ID
+	restore := strings.Join([]string{
+		"rm -rf " + q(staged),
+		"mkdir -p " + q(in) + " " + q(project) + " " + q(cfg+"/tasks"),
+		"tar -xzf " + carried + " -C " + q(in) + " < /dev/null > /dev/null 2>&1",
+		"[ -f " + q(from+".jsonl") + " ]",
+		"[ ! -L " + q(from+".jsonl") + " ]",
+		// THE BOX'S OWN COPY GOES only now, once the archive is known to
+		// hold a transcript: wherever a release filed it, and its task list.
+		"rm -rf " + q(cfg) + "/projects/*/" + q(session.ID+".jsonl") + " " + q(cfg) + "/projects/*/" +
+			q(session.ID) + " " + q(cfg+"/tasks/"+session.ID),
+		"{ [ ! -d " + q(from) + " ] || [ -L " + q(from) + " ] || mv " + q(from) + " " +
+			q(project+"/"+session.ID) + "; }",
+		"{ [ ! -d " + q(tasks) + " ] || [ -L " + q(tasks) + " ] || mv " + q(tasks) + " " +
+			q(cfg+"/tasks/"+session.ID) + "; }",
+		// THE TRANSCRIPT LAST, so a box that holds it holds the whole of
+		// what was restored with it.
+		"mv " + q(from+".jsonl") + " " + q(project+"/"+session.ID+".jsonl"),
+	}, " && ")
+	line(`s=%s k=yes w= h= d=`, q(session.ID))
+	line(`for f in %s/projects/*/%s; do [ -s "$f" ] && h=1; done`, q(cfg), q(session.ID+".jsonl"))
+	// THE ARCHIVE'S DIGEST, where one was carried in and the box can take it:
+	// the box's copy is kept unless the archive is one it does not hold.
+	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
+	line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$s $d" %s 2> /dev/null; then h=; fi`, digests)
+	line(`if [ -z "$h" ]; then`)
+	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
+	line(`  elif ! at %s; then w="this box runs Claude Code $n, older than %s, the oldest that continues a session carried from another box"`,
+		floorArgs(claudeCarryFloor), claudeCarryFloor)
+	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
+	line(`  elif ! { %s; }; then w='its archive could not be restored'`, restore)
+	line(`  else [ -z "$d" ] || printf '%%s %%s\n' "$s" "$d" >> %s`, digests)
+	line(`  fi`)
+	line(`  rm -rf %s`, q(staged))
+	line(`fi`)
+	line(`rm -f %s`, carried)
+	line(`if [ -z "$w" ]; then`)
+	line(`  set -- "$@" --resume %s`, q(session.ID))
+	line(`  if at %s; then set -- "$@" --system-prompt-snapshot off; fi`, floorArgs(claudeSnapshotFloor))
+	line(`else`)
+	line(`  s=%s k=no`, q(session.Fresh))
+	line(`  printf '%%s%%s\n' %s "$w" >&2`, q("crewlet: this run was asked to continue the Claude Code session "+session.ID+
+		", and starts a new session, "+session.Fresh+", instead: "))
+	line(`  set -- "$@" --session-id %s`, q(session.Fresh))
+	line(`fi`)
+	return b.String()
+}
+
+// claudeCapture is the part of a run's script that packs the session its harness
+// ran in (s) once the harness has exited, to be continued in another box: one
+// gzipped tar of the paths under the harness's configuration directory — the
+// transcript, its sidecar directory (the subagents' transcripts and the tool
+// results spilled to files) and its task list, the last two where they are
+// there and are directories rather than links — packed in the staging
+// directory and moved over [Paths.SessionCapture] whole, its digest kept as
+// one the box's copy of the session holds ([Paths.SessionDigests]).
+//
+// NEVER ANYTHING ELSE: not the login (`.credentials.json`) or the harness's own
+// state (`.claude.json`), which the pinned configuration directory holds beside
+// them, and not `file-history/`, a checkpoint of the files the run edited,
+// which carries the checkout rather than the conversation and is off.
+//
+// NOTHING TO PACK IS SAID NOWHERE: a harness that wrote no transcript — one that
+// failed as it started, a release that files it elsewhere — has no session to
+// carry, and a line saying so would end the failure of a run that crashed at
+// its start with the engine's words rather than the harness's. A box without tar
+// and gzip, or a pack that failed, is said on the error stream, and the run's
+// own status is never the pack's.
+func claudeCapture(paths Paths) string {
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	q := shellQuote
+	cfg := paths.ClaudeConfigDir()
+	project := "projects/" + claudeProjectDir
+	staged := paths.SessionStaging()
+	line(`if [ -s %s/"$s".jsonl ]; then`, q(cfg+"/"+project))
+	line(`  if command -v tar > /dev/null 2>&1 && command -v gzip > /dev/null 2>&1; then`)
+	line(`    set -- %s/"$s".jsonl`, q(project))
+	line(`    if [ -d %s/"$s" ] && [ ! -L %s/"$s" ]; then set -- "$@" %s/"$s"; fi`,
+		q(cfg+"/"+project), q(cfg+"/"+project), q(project))
+	line(`    if [ -d %s/"$s" ] && [ ! -L %s/"$s" ]; then set -- "$@" tasks/"$s"; fi`,
+		q(cfg+"/tasks"), q(cfg+"/tasks"))
+	line(`    rm -rf %s; if mkdir -p %s && tar -czf %s -C %s "$@" < /dev/null > /dev/null 2> %s && mv -f %s %s; then d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$s" "$d" >> %s; else echo "crewlet: the session $s was not packed to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(staged), q(staged), q(staged+"/capture"), q(cfg), q(staged+"/error"),
+		q(staged+"/capture"), q(paths.SessionCapture()), q(paths.SessionCapture()),
+		q(paths.SessionDigests()), q(staged+"/error"))
+	line(`    rm -rf %s`, q(staged))
+	line(`  else`)
+	line(`    echo 'crewlet: this box has no tar and gzip, so the session was not packed to be continued in another box' >&2`)
+	line(`  fi`)
+	line(`fi`)
+	return b.String()
 }
 
 // floorParts is a MAJOR.MINOR.PATCH version's three numbers, as text.
@@ -261,6 +496,13 @@ func floorParts(version string) (major, minor, patch string) {
 	major, rest, _ := strings.Cut(version, ".")
 	minor, patch, _ = strings.Cut(rest, ".")
 	return major, minor, patch
+}
+
+// floorArgs is a MAJOR.MINOR.PATCH floor as the arguments the run's script's
+// `at` takes ([claudeRelease]): its three numbers, space-separated.
+func floorArgs(version string) string {
+	major, minor, patch := floorParts(version)
+	return major + " " + minor + " " + patch
 }
 
 // WriteConfig writes the run's system text and its settings file where
@@ -348,12 +590,90 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 // one line however long the stream grew. It exits cleanly, so the done marker
 // is its only completion signal and the poll reads nothing of the stream.
 //
-// THE BRIEF ON STDIN, for the reasons [ClaudeCode.Command] gives; and the two
+// THE BRIEF ON STDIN, for the reasons [ClaudeCode.Command] gives; the two
 // variables that switch hooks and the bridge off UNSET before the harness starts
-// ([claudeSwitchesOff]).
+// ([claudeSwitchesOff]); and the session's layout PINNED
+// ([claudeSessionLayout]).
 func (ClaudeCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result(),
-		BriefOnStdin: true, Unset: claudeSwitchesOff}
+		BriefOnStdin: true, Unset: claudeSwitchesOff, Pin: claudeSessionLayout(paths)}
+}
+
+// claudeProjectDir is the name every Claude Code run in a box files its
+// sessions under — `<config>/projects/crewlet/<session>.jsonl` — pinned as
+// CLAUDE_CODE_PROJECT_DIR_NAME ([claudeSessionLayout]). Unpinned, the harness names
+// that directory after the run's working directory, which in a `direct` box is
+// a path holding the box's own id: so a session restored into another box would
+// sit in a directory no run there looks in first, and its capture would have to
+// find it by search. One constant for every run, since every run in a box is
+// the engine's; it matches the `^[A-Za-z0-9_-]{1,64}$` the harness holds the name
+// to, and a release before 2.1.234, which reads no such variable, files the
+// session where it always did.
+const claudeProjectDir = "crewlet"
+
+// claudeSessionLayout is what the wrapper pins for every Claude Code run in a
+// box, over whatever the seat's role.sandbox.env, the image or a profile the
+// login shell sources set ([Output.Pin]):
+//
+//   - CLAUDE_CONFIG_DIR, the box home's `.claude` ([Paths.ClaudeConfigDir]):
+//     where the harness keeps its state by default, pinned because the project
+//     directory below is read only where it is set. Set, it moves the harness's
+//     own `.claude.json` from the home into that directory, and an image's
+//     own `~/.claude.json` is no longer read; the login stays where a local
+//     box is seeded with it and writes it back from
+//     (`.claude/.credentials.json`), whatever an image or a seat set the
+//     variable to;
+//   - CLAUDE_CODE_PROJECT_DIR_NAME, [claudeProjectDir], so a session's
+//     transcript is `<config>/projects/crewlet/<session>.jsonl` whatever the
+//     box's working directory (2.1.234 and later);
+//   - CLAUDE_CODE_DISABLE_AUTO_MEMORY, 1: auto memory writes notes under the
+//     session's project directory that a later run reads back without being
+//     handed them — the second, invisible memory the engine's own calls are
+//     kept from (docs/concepts/llm-backends.md, "Between turns"), which a
+//     session carried between boxes would carry too.
+//
+// The transcript's trim (CLAUDE_CODE_TRANSCRIPT_LOCAL_GC) is the script's to
+// set, by release ([claudeLocalGCFloor]).
+func claudeSessionLayout(paths Paths) []Pinned {
+	return []Pinned{
+		{Name: "CLAUDE_CONFIG_DIR", Value: paths.ClaudeConfigDir()},
+		{Name: "CLAUDE_CODE_PROJECT_DIR_NAME", Value: claudeProjectDir},
+		{Name: "CLAUDE_CODE_DISABLE_AUTO_MEMORY", Value: "1"},
+	}
+}
+
+// claudeArchiveFormat is the layout a Claude Code run packs its session in
+// ([claudeCapture]), and the one it restores ([claudeSessionGate]): one
+// gzipped tar whose members are named relative to the harness's configuration
+// directory — `projects/crewlet/<session>.jsonl`, `projects/crewlet/<session>/`
+// and `tasks/<session>/`. A change to what is packed, or where it is restored
+// to, is a new format, which a box of this build refuses rather than reads.
+const claudeArchiveFormat = 1
+
+// ArchiveFormat is the layout a Claude Code run packs its session in
+// ([carrier]).
+func (ClaudeCode) ArchiveFormat() int { return claudeArchiveFormat }
+
+// VersionCommand prints a box's Claude Code release ([carrier]).
+func (ClaudeCode) VersionCommand() string { return "claude --version" }
+
+// Continues reports whether a session written by Claude Code release writer
+// can be continued in a box whose Claude Code is release box ([carrier]): the
+// box at or after [claudeCarryFloor], the writer at or after
+// [claudeCarriedWriterFloor], and never a box older than the release that wrote
+// the session, which reads only what it and the releases before it wrote.
+func (ClaudeCode) Continues(box, writer string) (bool, string) {
+	switch {
+	case !releaseAtLeast(box, claudeCarryFloor):
+		return false, fmt.Sprintf("this box runs Claude Code %s, older than %s, the oldest that "+
+			"continues a session carried from another box", box, claudeCarryFloor)
+	case !releaseAtLeast(writer, claudeCarriedWriterFloor):
+		return false, fmt.Sprintf("the session was written by Claude Code %s, older than %s, the "+
+			"first whose compaction summaries survive a resume", writer, claudeCarriedWriterFloor)
+	case !releaseAtLeast(box, writer):
+		return false, carriedOlder("Claude Code", box, writer)
+	}
+	return true, ""
 }
 
 // claudeSwitchesOff is every variable that, set in a run's environment, starts

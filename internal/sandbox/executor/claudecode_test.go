@@ -68,20 +68,18 @@ func TestClaudesCommandCarriesNoBriefAndNamesItsSettings(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			cmd := claude().Command(sandbox.RunRequest{Brief: brief, Steer: tc.steer}, p, "")
-			for _, piece := range []string{"BRIEF-MARKER", "rm -rf", "fix it"} {
+			cmd := commandOf(claude(), sandbox.RunRequest{Brief: brief, Steer: tc.steer}, p, "")
+			// The brief's own words, never the script's: the script removes
+			// files of its own with an `rm -rf` of a quoted path.
+			for _, piece := range []string{"BRIEF-MARKER", "rm -rf / #", "fix it"} {
 				if strings.Contains(cmd, piece) {
 					t.Fatalf("the brief is on the command line (%q):\n%s", piece, cmd)
 				}
 			}
-			// A RUN WIRED TO ITS NOTES is one script, which reads the harness's
-			// version before it starts it ([claudeNotesFloor]).
-			invocation := "claude -p --output-format stream-json --verbose "
-			if tc.settings {
-				cmd = scriptOf(t, cmd)
-				invocation = "exec " + invocation
-			}
-			if !strings.HasPrefix(cmd, invocation) && !strings.Contains(cmd, "; "+invocation) {
+			// EVERY RUN is one script, which reads the harness's version before it
+			// starts it ([claudeRelease]), the harness on a line of its own.
+			cmd = scriptOf(t, cmd)
+			if !strings.Contains(cmd, "\nclaude -p --output-format stream-json --verbose ") {
 				t.Errorf("-p is not the bare print flag, with the prompt left to stdin:\n%s", cmd)
 			}
 			want := "--settings '" + p.ClaudeSettings() + "'"
@@ -118,8 +116,10 @@ func TestClaudesBriefIsReadFromStdin(t *testing.T) {
 		t.Errorf("the harness's stdin is not the brief's file (%s):\n%s", want, script)
 	}
 	// THE HARNESS'S OWN STDIN: the version the script reads first is asked with
-	// none, which is no prompt at all.
-	if _, cli, _ := strings.Cut(script, "claude -p"); strings.Contains(cli, "< /dev/null") {
+	// none, which is no prompt at all, and so is the pack after the harness has
+	// exited; the harness's own line names none.
+	_, line, _ := strings.Cut(script, "claude -p")
+	if line, _, _ = strings.Cut(line, "\n"); strings.Contains(line, "< /dev/null") {
 		t.Errorf("the harness's stdin is closed, so it runs no prompt:\n%s", script)
 	}
 }
@@ -392,7 +392,7 @@ func after(argv []string, flag string) string {
 func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/box"}
-	script := scriptOf(t, claude().Command(sandbox.RunRequest{Brief: "x", System: "be careful",
+	script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x", System: "be careful",
 		Steer: steerWiring}, p, ""))
 	standIn := `#!/bin/sh
 if [ "$1" = --version ]; then printf '%s' "$FAKE_VERSION"; exit 0; fi

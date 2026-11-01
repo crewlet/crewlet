@@ -232,7 +232,8 @@ roles:
 	}
 	// The run is a script quoted for `sh -c`; its quoting undone, the model
 	// is an argument of its own.
-	cmd := executor.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", Model: run.model}, executor.Paths{}, "")
+	req := sandbox.RunRequest{Brief: "x", Model: run.model}
+	cmd := executor.OpenCode{}.Command(req, executor.OpenCode{}.Session(req), executor.Paths{}, "")
 	if script := strings.ReplaceAll(cmd, `'\''`, "'"); !strings.Contains(script, "--model '"+text+"'") {
 		t.Errorf("the agent run gave:\n%s\nwant --model %q, the value every text call passes", cmd, text)
 	}

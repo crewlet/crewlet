@@ -503,8 +503,10 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	// asking run's own conversation, resumed in its box with the person's
 	// words as its next prompt — the last argv the box recorded.
 	argv := n.agentArgv(t)
-	if !slices.Contains(argv, "--resume") || !slices.Contains(argv, codingSession) {
-		t.Fatalf("the answered run was not resumed in its own session: argv = %v", argv)
+	if i := slices.Index(argv, "--resume"); parked.SessionID == "" || i < 0 || i+1 >= len(argv) ||
+		argv[i+1] != parked.SessionID {
+		t.Fatalf("the answered run was not resumed in the session the asking run parked in (%q): "+
+			"argv = %v", parked.SessionID, argv)
 	}
 	if brief := n.agentBrief(t); !strings.Contains(brief, "target main, please") {
 		t.Fatalf("the resumed run was not given the answer: its prompt = %q", brief)

@@ -139,9 +139,18 @@ const (
 // is handed on its argv.
 const codingModel = "claude-golden"
 
-// codingSession is the session id every stand-in run reports, as Claude Code
-// names the conversation a run was.
-const codingSession = "sess-e2e"
+// codingTranscript is where a stand-in run keeps its session's transcript, as
+// Claude Code keeps it: `<CLAUDE_CONFIG_DIR>/projects/<CLAUDE_CODE_PROJECT_DIR_NAME>/<session>.jsonl`,
+// both of which the run's wrapper pins in every box — so a run started without
+// them is one the engine started wrong, and says so.
+func codingTranscript(session string) (string, error) {
+	config, project := os.Getenv("CLAUDE_CONFIG_DIR"), os.Getenv("CLAUDE_CODE_PROJECT_DIR_NAME")
+	if config == "" || project == "" {
+		return "", fmt.Errorf("the run was started without CLAUDE_CONFIG_DIR (%q) and "+
+			"CLAUDE_CODE_PROJECT_DIR_NAME (%q), which its wrapper pins", config, project)
+	}
+	return filepath.Join(config, "projects", project, session+".jsonl"), nil
+}
 
 // codingMaxRounds bounds a run that names no --max-turns: a model that never
 // stops calling tools is a fixture bug, and an unbounded loop would hold a box
@@ -227,9 +236,10 @@ func shellQuote(s string) string {
 type codingArgs struct {
 	brief, systemFile, mcpConfig, settings string
 	// resume is the session `--resume` names: the asking run's own, which
-	// a run carrying it on with the answer continues.
-	resume   string
-	maxTurns int
+	// a run carrying it on with the answer continues; session the one
+	// `--session-id` names, which a run that starts one is started under.
+	resume, session string
+	maxTurns        int
 }
 
 // codingInvocation is what a run records of how it was started
@@ -261,6 +271,8 @@ func parseCodingArgs(args []string) (codingArgs, error) {
 			out.mcpConfig, err = value(i)
 		case "--resume":
 			out.resume, err = value(i)
+		case "--session-id":
+			out.session, err = value(i)
 		case "--max-turns":
 			var raw string
 			if raw, err = value(i); err == nil {
@@ -278,8 +290,11 @@ func parseCodingArgs(args []string) (codingArgs, error) {
 }
 
 // codingStream is the stream-json the stand-in prints: Claude Code's message
-// shapes, one object a line.
-type codingStream struct{ out io.Writer }
+// shapes, one object a line, each naming the session the run works in.
+type codingStream struct {
+	out     io.Writer
+	session string
+}
 
 func (s codingStream) line(v any) {
 	raw, _ := json.Marshal(v)
@@ -287,14 +302,14 @@ func (s codingStream) line(v any) {
 }
 
 func (s codingStream) init(tools []string) {
-	s.line(map[string]any{"type": "system", "subtype": "init", "session_id": codingSession,
+	s.line(map[string]any{"type": "system", "subtype": "init", "session_id": s.session,
 		"tools": tools})
 }
 
 // toolUse is one call as Claude Code streams it: under the name it gives an MCP
 // server's tool, `mcp__<server>__<tool>`.
 func (s codingStream) toolUse(id, name string, input map[string]any) {
-	s.line(map[string]any{"type": "assistant", "session_id": codingSession,
+	s.line(map[string]any{"type": "assistant", "session_id": s.session,
 		"message": map[string]any{"content": []map[string]any{{
 			"type": "tool_use", "id": id,
 			"name": "mcp__" + config.ToolServerName + "__" + name, "input": input,
@@ -302,14 +317,14 @@ func (s codingStream) toolUse(id, name string, input map[string]any) {
 }
 
 func (s codingStream) toolResult(id, text string, failed bool) {
-	s.line(map[string]any{"type": "user", "session_id": codingSession,
+	s.line(map[string]any{"type": "user", "session_id": s.session,
 		"message": map[string]any{"content": []map[string]any{{
 			"type": "tool_result", "tool_use_id": id, "content": text, "is_error": failed,
 		}}}})
 }
 
 func (s codingStream) text(text string) {
-	s.line(map[string]any{"type": "assistant", "session_id": codingSession,
+	s.line(map[string]any{"type": "assistant", "session_id": s.session,
 		"message": map[string]any{"content": []map[string]any{{"type": "text", "text": text}}}})
 }
 
@@ -318,7 +333,7 @@ func (s codingStream) text(text string) {
 func (s codingStream) result(subtype, text string, turns int, spent replyUsage) {
 	s.line(map[string]any{
 		"type": "result", "subtype": subtype, "is_error": false, "result": text,
-		"session_id": codingSession, "num_turns": turns,
+		"session_id": s.session, "num_turns": turns,
 		"usage": spent.claudeUsage(),
 	})
 }
@@ -371,22 +386,43 @@ func runHarness(endpoint string) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	stream := codingStream{out: os.Stdout}
+	// THE SESSION THE RUN WORKS IN, as Claude Code takes it: the one it
+	// resumes, or the one it was started under — and the runner names one
+	// on every run, so a run started with neither is one it started wrong.
+	session := cmp.Or(parsed.resume, parsed.session)
+	if session == "" {
+		return fail("the run was started with neither --resume nor --session-id")
+	}
+	transcript, err := codingTranscript(session)
+	if err != nil {
+		return fail("%v", err)
+	}
+	stream := codingStream{out: os.Stdout, session: session}
 	// A RUN CARRYING ON AN ASKING RUN, its session resumed with the answer
 	// as its prompt: whatever the mode, it does the work now, as Claude Code
 	// resuming a conversation answers its next prompt. Asking again would be
 	// a run that never reads the answer it asked for. The session it names
-	// is the one every stand-in run reports, which is what the asking run's
-	// collection recorded.
+	// must be one whose transcript the box holds, as Claude Code's must: the
+	// asking run's own, which it wrote where every run in a box files it.
 	if parsed.resume != "" {
-		if parsed.resume != codingSession {
-			return fail("asked to resume session %q, and the run that asked was %q",
-				parsed.resume, codingSession)
+		if _, err := os.Stat(transcript); err != nil {
+			return fail("No conversation found with session ID: %s (%v)", parsed.resume, err)
 		}
 		if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
 			return fail("%v", err)
 		}
 		return 0
+	}
+	// A RUN THAT STARTS ITS SESSION FILES ITS TRANSCRIPT, as Claude Code does
+	// from its first message: where a run carrying it on in this box looks
+	// for it, and where the run's script packs it from once the run exits.
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o700); err != nil {
+		return fail("filing the session's transcript: %v", err)
+	}
+	opened, _ := json.Marshal(map[string]any{"type": "user", "sessionId": session,
+		"message": map[string]any{"role": "user", "content": parsed.brief}})
+	if err := os.WriteFile(transcript, append(opened, '\n'), 0o600); err != nil {
+		return fail("filing the session's transcript: %v", err)
 	}
 	switch mode := cmp.Or(os.Getenv(codingModeEnv), codingModeWork); mode {
 	case codingModeWork:
@@ -647,7 +683,7 @@ func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event
 		if out.SystemMessage != "" {
 			stream.line(map[string]any{"type": "system", "subtype": "informational",
 				"content": event + " says: " + out.SystemMessage, "level": "notice",
-				"session_id": codingSession})
+				"session_id": stream.session})
 		}
 		if note := out.HookSpecificOutput.AdditionalContext; note != "" {
 			notes = append(notes, note)

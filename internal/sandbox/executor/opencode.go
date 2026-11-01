@@ -120,8 +120,9 @@ func NewOpenCode() *Runner { return New(OpenCode{}) }
 // Name is the harness's key in the runner registry.
 func (OpenCode) Name() string { return OpenCodeName }
 
-// Resumes says OpenCode continues a session it reported: naming the session
-// is the whole of continuing it ([openCodeSessionFor]).
+// Resumes says OpenCode continues a session it reported: naming a session its
+// database holds is the whole of continuing it ([OpenCode.Session],
+// [openCodeSessionGate]).
 func (OpenCode) Resumes() bool { return true }
 
 // NoteInstruction is the standing instruction about notes an OpenCode run is
@@ -159,9 +160,17 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 // nothing else the script runs is handed it.
 //
 // THE BRIEF ON STDIN ([Output.BriefOnStdin]), because OpenCode re-quotes an
-// argv prompt; the session NAMED, by an id minted here, so the usage report
-// asked for afterwards is this run's; a TITLE given, which stops 2.0 making a
-// second billed model call to write one.
+// argv prompt; the session NAMED, by the id the runner minted or the one the
+// run continues ([OpenCode.Session]), so the usage report asked for afterwards
+// is this run's; a TITLE given, which stops 2.0 making a second billed model
+// call to write one.
+//
+// THE SESSION, SETTLED BEFORE THE SERVER STARTS ([openCodeSessionGate]): a run
+// that continues one continues the copy the box holds, imports an export of it
+// carried into the box where the box holds no copy, or one that does not hold
+// that export, and starts a new one in its place, saying why, where neither — and
+// records which ([Paths.SessionRecord]). Once the run has ended, the session
+// is exported to be carried to another box ([openCodeCapture]).
 //
 // THE SERVER'S PASSWORD IS ITS OWN. `opencode serve` takes OPENCODE_PASSWORD
 // or OPENCODE_SERVER_PASSWORD from its environment when either is set, and
@@ -196,8 +205,8 @@ func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
 // AND, FOR A RUN WIRED TO ITS NOTES, NO STEER LEFT PENDING: once the run has
 // ended, every note the plugin admitted and OpenCode never delivered is
 // cancelled in the session, before the server stops ([openCodeLeftoverSteers]).
-func (OpenCode) Command(req sandbox.RunRequest, paths Paths, _ string) string {
-	return "sh -c " + shellQuote(openCodeScript(req, paths, openCodeSessionFor(req), openCodeTimes{
+func (OpenCode) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
+	return "sh -c " + shellQuote(openCodeScript(req, session, paths, openCodeTimes{
 		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: openCodeStopWait,
 	}))
 }
@@ -214,10 +223,10 @@ type openCodeTimes struct {
 }
 
 // newOpenCodeSession mints the id a run's session is created under: 32 lowercase
-// hexadecimal characters from crypto/rand, which the script prefixes with the
-// `ses_` 2.0 requires. Random rather than derived from the run, because
-// OpenCode CONTINUES a session it already holds, and a reused box holds the
-// last run's.
+// hexadecimal characters from crypto/rand, which [OpenCode.Session] prefixes
+// with the `ses_` 2.0 requires. Random rather than derived from the run,
+// because OpenCode CONTINUES a session it already holds, and a reused box
+// holds the last run's.
 func newOpenCodeSession() string {
 	var raw [16]byte
 	// crypto/rand.Read does not fail on the platforms this builds for: it
@@ -226,20 +235,61 @@ func newOpenCodeSession() string {
 	return hex.EncodeToString(raw[:])
 }
 
-// openCodeSessionFor is the session a run works in: the asking run's own, where
-// this one carries it on with the answer ([sandbox.RunRequest.Resume]),
-// and a fresh one otherwise. OpenCode CONTINUES a session it already holds, and
-// a continued box holds the asking run's — so naming it is the whole of
-// continuing it. The id the session report gave ([sandbox.Result.SessionID])
-// carries the `ses_` the script adds, which comes off here.
-func openCodeSessionFor(req sandbox.RunRequest) string {
-	if id := strings.TrimPrefix(req.Resume, "ses_"); id != "" {
-		return id
+// Session is the session an OpenCode run works in ([Harness.Session]), each id
+// `ses_` and a minted [newOpenCodeSession]: the one it continues
+// ([sandbox.RunRequest.Resume], `ses_` added where the id came without it), or
+// a new one — and, for a run that continues one, the new one it starts instead
+// where its box holds that one neither way. OpenCode CONTINUES a session it
+// already holds, and `run --session` on an id it does not hold CREATES one
+// under that id, so a run never names an id it was not handed or minted.
+func (OpenCode) Session(req sandbox.RunRequest) Session {
+	if req.Resume != "" {
+		return Session{ID: "ses_" + strings.TrimPrefix(req.Resume, "ses_"), Continues: true,
+			Fresh: "ses_" + newOpenCodeSession()}
 	}
-	return newOpenCodeSession()
+	return Session{ID: "ses_" + newOpenCodeSession()}
 }
 
-// openCodeScript is the run's script for one session id, exporting a login the
+// openCodeCarryFloor is the oldest OpenCode release a box continues a session
+// carried from another box on, and the oldest whose session it continues:
+// 2.0.32, the release the run's script, its session export and import, and the
+// import's refusal of an id it holds were measured and read on — the import
+// validates an export written by an earlier 2.x release, and nothing older is
+// a release this runner drives.
+const openCodeCarryFloor = "2.0.32"
+
+// openCodeArchiveFormat is the layout an OpenCode run packs its session in: the
+// document `opencode session export` prints — the session and its settled
+// messages — gzipped, which `opencode session import` reads back
+// ([openCodeScript]). A change to what is packed is a new format, which a box
+// of this build refuses rather than reads.
+const openCodeArchiveFormat = 1
+
+// ArchiveFormat is the layout an OpenCode run packs its session in
+// ([carrier]).
+func (OpenCode) ArchiveFormat() int { return openCodeArchiveFormat }
+
+// VersionCommand prints a box's OpenCode release ([carrier]).
+func (OpenCode) VersionCommand() string { return "opencode --version" }
+
+// Continues reports whether a session written by OpenCode release writer can
+// be continued in a box whose OpenCode is release box ([carrier]): both at or
+// after [openCodeCarryFloor], and never a box older than the writer.
+func (OpenCode) Continues(box, writer string) (bool, string) {
+	switch {
+	case !releaseAtLeast(box, openCodeCarryFloor):
+		return false, fmt.Sprintf("this box runs OpenCode %s, older than %s, the oldest that "+
+			"continues a session carried from another box", box, openCodeCarryFloor)
+	case !releaseAtLeast(writer, openCodeCarryFloor):
+		return false, fmt.Sprintf("the session was written by OpenCode %s, older than %s, the "+
+			"oldest whose session another box continues", writer, openCodeCarryFloor)
+	case !releaseAtLeast(box, writer):
+		return false, carriedOlder("OpenCode", box, writer)
+	}
+	return true, ""
+}
+
+// openCodeScript is the run's script for one session, exporting a login the
 // box was given every sync — see [OpenCode.Command].
 //
 // Every command but the run itself reads /dev/null rather than the brief the
@@ -261,17 +311,23 @@ func openCodeSessionFor(req sandbox.RunRequest) string {
 // not refresh prints (measured on 2.0.32: `[]`). Such an export is no reason to
 // replace the login the box came with, and the teardown would otherwise write
 // it back over the shared one.
-func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times openCodeTimes) string {
+//
+// THE SESSION IS DECIDED BEFORE THE SERVER STARTS ([openCodeSessionGate]),
+// because the server is handed it — a run wired to its notes names it to the
+// notes plugin the server loads — and the record of it is written before the
+// run ([Paths.SessionRecord]). Once the run has ended, and before its server
+// stops, the session is exported to be carried to another box
+// ([openCodeCapture]).
+func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times openCodeTimes) string {
 	doc := shellQuote(paths.CredentialDocument())
 	next := shellQuote(paths.CredentialDocument() + ".next")
 	loop := shellQuote(paths.CredentialDocument() + ".sync")
 	srv := shellQuote(paths.WorkDir() + "/opencode-server")
 	vrr := shellQuote(paths.WorkDir() + "/opencode-version")
 	cfg := shellQuote(paths.OpenCodeConfig())
-	sid := "ses_" + session
 
 	run := []string{"opencode", "run", "--server", `"$url"`, "--format", "json",
-		"--title", "crewlet", "--session", shellQuote(sid)}
+		"--title", "crewlet", "--session", `"$sid"`}
 	// THE ENTRY'S MODEL AS WRITTEN. It is the string every run on the host on
 	// the same providers.llm entry hands `opencode run --model`, which
 	// OpenCode splits at its first slash into a provider and a model — so
@@ -324,6 +380,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`  opencode auth import --standalone < %s > /dev/null || { echo 'crewlet: OpenCode refused the login this box was given — sign the engine in again with crewlet llm login' >&2; exit 1; }`, doc)
 	line(`  imported=1`)
 	line(`fi`)
+	b.WriteString(openCodeSessionGate(session, paths))
 
 	// ON THE SERVER ALONE: it runs the session, so it is the one process
 	// that reads the run's configuration — and, for a run wired to its notes,
@@ -332,7 +389,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	// export, which run before it or beside it, are handed none of it.
 	steered := ""
 	if req.Steer.Set() {
-		steered = "CREWLET_STEER_SESSION=" + shellQuote(sid) + " "
+		steered = `CREWLET_STEER_SESSION="$sid" `
 	}
 	line(`OPENCODE_CONFIG_CONTENT="$config" %sopencode serve --hostname 127.0.0.1 --port 0 < /dev/null > %s 2>&1 &`,
 		steered, srv)
@@ -368,26 +425,169 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	}
 
 	// WHAT THE CONTINUED SESSION HAD SPENT, asked of the server that runs it
-	// just before the run takes it up ([openCodeUsageBefore]). A run that
-	// starts a session of its own needs none: its session's totals begin at
-	// the run.
-	if req.Resume != "" {
-		line(`before=$(opencode api --server "$url" session.get --param sessionID=%s < /dev/null 2> /dev/null) && case "$before" in '{'*) printf '{"type":"%s","report":%%s}\n' "$before";; esac`,
-			shellQuote(sid), openCodeUsageBefore)
+	// just before the run takes it up ([openCodeUsageBefore]) — after an
+	// import, so the totals it restored are among what is taken off. A run
+	// that starts a session of its own needs none: its session's totals begin
+	// at the run.
+	if session.Continues {
+		line(`if [ "$k" = yes ]; then before=$(opencode api --server "$url" session.get --param sessionID="$sid" < /dev/null 2> /dev/null) && case "$before" in '{'*) printf '{"type":"%s","report":%%s}\n' "$before";; esac; fi`,
+			openCodeUsageBefore)
 	}
+	// THE RECORD, before the run, so a run killed before it reported anything
+	// still says which session it took up, and why it began again where it
+	// did. The release last, as the harness printed it ([parseSessionRecord]).
+	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$sid" "$k" "$w" "$v" > %s`,
+		shellQuote(paths.SessionRecord()))
 	line(`%s`, strings.Join(run, " "))
 	line(`code=$?`)
 	// NOTHING THE PLUGIN ADMITTED IS LEFT IN THE SESSION once the run has
 	// ended: see [openCodeLeftoverSteers].
 	if req.Steer.Set() {
-		line(`%s`, openCodeLeftoverSteers(sid))
+		line(`%s`, openCodeLeftoverSteers())
 	}
-	line(`report=$(opencode api --server "$url" session.get --param sessionID=%s < /dev/null 2> /dev/null) && case "$report" in '{'*) printf '{"type":"%s","report":%%s}\n' "$report";; esac`,
-		shellQuote(sid), openCodeUsageEvent)
+	line(`report=$(opencode api --server "$url" session.get --param sessionID="$sid" < /dev/null 2> /dev/null) && case "$report" in '{'*) printf '{"type":"%s","report":%%s}\n' "$report";; esac`,
+		openCodeUsageEvent)
+	b.WriteString(openCodeCapture(paths))
 	line(`unsync`)
 	line(`[ -z "$imported" ] || keep %s --server "$url"`, next)
 	line(`stop; trap - EXIT TERM INT HUP`)
 	line(`exit "$code"`)
+	return b.String()
+}
+
+// openCodeSessionGate is the part of a run's script that decides, before the
+// run's server starts, the session the run works in, as sid, whether that is
+// the one it was asked to continue, as k, and — where it was asked and could
+// not — why, as w.
+//
+// A RUN THAT STARTS A SESSION works in the id minted for it.
+//
+// A RUN THAT CONTINUES ONE continues the copy the box's database HOLDS — the
+// session answers `session.get` under its id, as it does in the box its last
+// run ran in — unless an export of the session was carried in
+// ([Paths.SessionCarried]) that the copy does not hold: one whose digest is
+// not among the box's for the session ([Paths.SessionDigests], and carry.go
+// for why). That export, and one carried into a box that holds no copy, is
+// IMPORTED: unpacked in the staging directory, the box's own copy deleted
+// (`opencode session delete`, which takes its child sessions with it) only
+// once the export unpacked, and handed to `opencode session import --directory
+// "$PWD"`, which files it under the directory `opencode run` works in (its
+// `$PWD`, as run reads it), keeps its id, and restores its totals; and its
+// digest is kept. The import has to SAY it imported that session — `Imported
+// session: <id>` — because it answers an id the database already holds with
+// "Session already exists" and success, and imports nothing; and `run
+// --session` on an id OpenCode does not hold creates an empty session under
+// it, which the brief would then be answered in as if it remembered. Restored
+// or not, the archive is removed: nothing reads it again. Where the session is
+// neither held nor imported, the run starts the session minted for it in its
+// place, and says why on its error stream and in its record, the words
+// OpenCode answered with put on one line.
+//
+// ALL ASKED OF A PRIVATE SERVER OF THEIR OWN (`--standalone`), as the login's
+// import is, before the run's server starts — never the background service a
+// bare command reaches, which every box on a host shares and which keeps the
+// environment of whichever run started it — because the run's server is
+// handed the session it runs, which a run wired to its notes names to the
+// notes plugin it loads, and so the session is settled before that server
+// exists.
+//
+// ITS INSTRUCTION STATE STARTS AGAIN. OpenCode keeps, per session, the
+// instructions it last told the model: the system prompt is rendered from the
+// state's baseline, and a model whose instruction file changed since is handed
+// an "instruction update" message in the conversation instead
+// (instructions.mdx). The state is a row of its own, and a session with none
+// has its instructions read as INITIAL — the baseline, rendered into the
+// system prompt, with no update (core/src/session/instruction-state.ts at
+// 2.0.32 and 2.2.5). An import writes the session and its messages and no
+// such row (core/src/session/transfer.ts at the same two) — so the session's
+// first request in the box it was carried into reads the run's instructions
+// as its first. So the run's standing instructions stay its system prompt,
+// written to the instruction file on every run as on a fresh one: a session
+// carried into a new box each turn is told that turn's, and no turn's
+// instructions pile up in the conversation as updates after the first's. In
+// the box that already holds the session — the same turn's runs — the state
+// is kept, and an instruction file that changed between them is handed over
+// once, as an update, which is what OpenCode does for any session whose
+// instructions change under it.
+//
+// ONLY THE SESSION ITSELF, never its children: a subagent's session is a child
+// of the run's, and its work reaches the run's own conversation as the result
+// of the task that ran it, which the parent's export carries. A child's import
+// needs its parent first (transfer.ts), and a continued run starts its own
+// tasks; a task that would take up a child the box no longer holds starts
+// another.
+func openCodeSessionGate(session Session, paths Paths) string {
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	q := shellQuote
+	if !session.Continues {
+		line(`sid=%s k=no w=`, q(session.ID))
+		return b.String()
+	}
+	staged := paths.SessionStaging()
+	carried := q(paths.SessionCarried())
+	digests := q(paths.SessionDigests())
+	export := q(staged + "/export.json")
+	line(`sid=%s k=yes w= h= d= own=`, q(session.ID))
+	line(`held=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2> /dev/null) || held=`)
+	line(`case "$held" in *%s*) h=1;; esac`, q(`"id":"`+session.ID+`"`))
+	// THE EXPORT'S DIGEST, where one was carried in and the box can take it:
+	// the box's copy is kept unless the export is one it does not hold, which
+	// then replaces it.
+	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
+	line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$sid $d" %s 2> /dev/null; then h= own=1; fi`, digests)
+	line(`if [ -z "$h" ]; then`)
+	line(`  if [ ! -s %s ]; then w='it is not in this box, and no export of it was carried here'`, carried)
+	line(`  elif ! command -v gzip > /dev/null 2>&1; then w='this box has no gzip to unpack its export with'`)
+	line(`  else`)
+	line(`    rm -rf %s`, q(staged))
+	line(`    if ! { mkdir -p %s && gzip -dc < %s > %s 2> /dev/null; }; then w='its export could not be unpacked'`,
+		q(staged), carried, export)
+	line(`    elif [ -n "$own" ] && ! out=$(opencode session delete --standalone "$sid" < /dev/null 2>&1); then w="OpenCode did not delete the box's own copy, which the export carried here replaces: $(printf '%%s' "$out" | tr '\n' ' ')"`)
+	line(`    else`)
+	line(`      out=$(opencode session import --standalone --directory "$PWD" %s < /dev/null 2>&1)`, export)
+	line(`      case "$out" in *%s*) [ -z "$d" ] || printf '%%s %%s\n' "$sid" "$d" >> %s;; *) w="OpenCode did not import it: $(printf '%%s' "$out" | tr '\n' ' ')";; esac`,
+		q("Imported session: "+session.ID), digests)
+	line(`    fi`)
+	line(`    rm -rf %s`, q(staged))
+	line(`  fi`)
+	line(`fi`)
+	line(`rm -f %s`, carried)
+	line(`if [ -n "$w" ]; then sid=%s k=no; printf '%%s%%s\n' %s "$w" >&2; fi`, q(session.Fresh),
+		q("crewlet: this run was asked to continue the OpenCode session "+session.ID+
+			", and starts a new session, "+session.Fresh+", instead: "))
+	return b.String()
+}
+
+// openCodeCapture is the part of a run's script that exports the session the
+// run worked in (sid) once the run has ended — after the steers it left are
+// cancelled, and before its server stops — to be continued in another box:
+// `opencode session export` through the run's own server, which holds the
+// password the script read, gzipped in the staging directory and moved over
+// [Paths.SessionCapture] whole, and only where the export said it succeeded;
+// its digest kept as one the box's copy of the session holds
+// ([Paths.SessionDigests]).
+//
+// NEVER THE DATABASE: OpenCode keeps its logins in the same file as its
+// sessions, and a file carried to another box would carry the login with it —
+// to a remote box, which is never handed one. The export is the session and its
+// settled messages, and nothing of the login.
+//
+// A BOX WITHOUT GZIP, or an export that failed, is said on the error stream,
+// and the run's own status is never the export's.
+func openCodeCapture(paths Paths) string {
+	var b strings.Builder
+	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
+	q := shellQuote
+	staged := paths.SessionStaging()
+	line(`if command -v gzip > /dev/null 2>&1; then`)
+	line(`  rm -rf %s; if mkdir -p %s && xs=$( { { opencode session export --server "$url" "$sid" < /dev/null 2> %s; echo $? >&4; } | gzip -c > %s; } 4>&1 ) && [ "$xs" = 0 ] && mv -f %s %s; then d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$sid" "$d" >> %s; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(staged), q(staged), q(staged+"/error"), q(staged+"/capture"), q(staged+"/capture"),
+		q(paths.SessionCapture()), q(paths.SessionCapture()), q(paths.SessionDigests()), q(staged+"/error"))
+	line(`  rm -rf %s`, q(staged))
+	line(`else`)
+	line(`  echo 'crewlet: this box has no gzip, so the session was not exported to be continued in another box' >&2`)
+	line(`fi`)
 	return b.String()
 }
 
@@ -484,8 +684,9 @@ func openCodeExporter(sync time.Duration, file string) string {
 }
 
 // openCodeLeftoverSteers is the script's line that cancels every steer the run's
-// notes plugin admitted to session sid and OpenCode never delivered, run once
-// `opencode run` has exited and before the server is stopped.
+// notes plugin admitted to the run's session (the script's sid) and OpenCode
+// never delivered, run once `opencode run` has exited and before the server is
+// stopped.
 //
 // A NOTE ADMITTED AS THE SESSION SETTLED STAYS IN ITS INBOX. The plugin admits
 // with `resume: false` and stops at the execution's settle, and a note whose
@@ -507,11 +708,10 @@ func openCodeExporter(sync time.Duration, file string) string {
 // own text cannot match it: its quotes are escaped in the listing. A failed
 // listing or cancel costs nothing more than the duplicate it was there to
 // prevent.
-func openCodeLeftoverSteers(sid string) string {
-	session := shellQuote(sid)
-	return `pending=$(opencode api --server "$url" session.inbox.list --param sessionID=` + session +
+func openCodeLeftoverSteers() string {
+	return `pending=$(opencode api --server "$url" session.inbox.list --param sessionID="$sid"` +
 		` < /dev/null 2> /dev/null) && for id in $(printf '%s\n' "$pending" | grep -o '"id":"msg_[0-9a-f]\{32\}"' | sed 's/^"id":"//; s/"$//' | sort -u); do ` +
-		`opencode api --server "$url" session.inbox.cancel --param sessionID=` + session +
+		`opencode api --server "$url" session.inbox.cancel --param sessionID="$sid"` +
 		` --param inboxID="$id" < /dev/null > /dev/null 2>&1; done`
 }
 

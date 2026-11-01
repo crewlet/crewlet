@@ -118,7 +118,7 @@ func TestAHarnessGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 			if text, _ := b.ReadFile(t.Context(), p.System()); text != nil {
 				t.Errorf("a run with no system text wrote one: %q", text)
 			}
-			if cmd := cli.Command(req, p, config); strings.Contains(cmd, p.System()) ||
+			if cmd := commandOf(cli, req, p, config); strings.Contains(cmd, p.System()) ||
 				strings.Contains(cmd, "system-prompt") {
 				t.Errorf("a run with no system text passes one:\n%s", cmd)
 			}

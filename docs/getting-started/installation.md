@@ -80,7 +80,12 @@ USER crewlet
 person's notes through need Claude Code 2.1.163 or later (an older release runs
 without them) and were measured on 2.1.263 and 2.1.310, and the `claude-code` profile's flags, output paths and
 limit sentences on 2.1.303 and 2.1.310; take a newer one when
-`crewlet llm doctor` passes against it. Give the container a volume for the state directory
+`crewlet llm doctor` passes against it. A box continues a Claude Code session
+packed in another box only on 2.1.310 or later (OpenCode 2.0.32), and packs and
+restores one with `tar` and `gzip`, which the published image carries for a
+`direct` cell and a `container` image or an `e2b` template must carry too
+([Bring your own image](../concepts/code-sandbox.md#bring-your-own-image)).
+Give the container a volume for the state directory
 (`CREWLET_LLM_HARNESS_HOME=/var/lib/crewlet/llm-harness`, say), so a login survives a
 restart. A login made on another machine reaches the container as a
 credential bundle or a headless token in the secret store — see

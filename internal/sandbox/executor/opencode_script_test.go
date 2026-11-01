@@ -32,11 +32,28 @@ import (
 //     the case read the refused run as a login never refreshed;
 //   - every call to the server is refused unless it presents the server's
 //     password, read as 2.0.32's client reads it: OPENCODE_PASSWORD, and
-//     OPENCODE_SERVER_PASSWORD only where that is unset;
+//     OPENCODE_SERVER_PASSWORD only where that is unset; a call with
+//     `--standalone` is answered by a private server of its own, and
+//     presents none;
 //   - `api mcp.list` lists nothing at first — the workspace's servers start as
 //     it is first asked about — then the bridge pending, then connected, or
 //     always FAKE_MCP_LIST where that is set;
-//   - `api session.get` prints a session's usage report on one line;
+//   - its database HOLDS a session it ran, imported, or found under
+//     `sessions/` in the case's directory as the case started — a box that
+//     already holds one;
+//   - `api session.get` prints a held session's usage report on one line, and
+//     fails for any other, as OpenCode answers an id it does not hold;
+//   - `session export` prints a held session's export document — its info
+//     and its messages — and fails for any other, recording in `exported` the
+//     session and whether the server was still serving; `session import` keeps the
+//     file it was handed (`imported-session`) and the directory it was told
+//     (`import-directory`), and holds the session the file names and prints
+//     `Imported session: <id>`, as 2.0.32 does — or, where FAKE_IMPORT is
+//     `409`, says "Session already exists" on stderr and imports nothing, and
+//     where it is `empty`, says nothing and imports nothing, each with
+//     success, as OpenCode's import answers a conflict; `session delete`
+//     drops a held session and says so, as 2.0.32 does, and fails for any
+//     other — or for every one, where FAKE_DELETE is `fail`;
 //   - `api session.inbox.list` prints FAKE_INBOX, or an empty inbox, and
 //     `api session.inbox.cancel` records in `cancelled` the session, the item
 //     and whether the server was still serving — `serving` or `stopped`;
@@ -44,8 +61,10 @@ import (
 //     prints that database, whether through the server or beside it — taking
 //     FAKE_EXPORT_SLEEP seconds over it where that is set, the file
 //     `exporting` saying it has begun;
-//   - `run` keeps its stdin and the password it presented, puts FAKE_REFRESH
-//     in the database where that is set — a login refreshed mid-run — and
+//   - `run` holds the session it names, as `run --session` creates one it
+//     does not hold; keeps its stdin and the password it presented, puts
+//     FAKE_REFRESH in the database where that is set — a login refreshed
+//     mid-run — and
 //     then works for FAKE_RUN_SLEEP seconds, and until the case's directory holds
 //     the file FAKE_RUN_UNTIL names, before it exits. Where only FAKE_RUN_SLEEP
 //     is set, the run BECOMES the sleep (`exec`), because every case that sets
@@ -75,6 +94,8 @@ authed() {
   [ "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" = "$(cat "$d/server-password" 2> /dev/null)" ] && return 0
   echo "Error: Server at http://127.0.0.1:4242 rejected the password" >&2; exit 1
 }
+hold() { mkdir -p "$d/sessions" && : > "$d/sessions/$1"; }
+held() { [ -n "$1" ] && [ -e "$d/sessions/$1" ]; }
 case "$1" in
 --version)
   [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
@@ -105,8 +126,8 @@ serve)
   [ -z "$minted" ] || echo "server password $pw"
   exec sleep 60 ;;
 api)
-  authed
-  case "$4" in
+  if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; fi
+  case "$1" in
   mcp.list)
     n=$(cat "$d/polls" 2> /dev/null || echo 0); n=$((n+1)); echo "$n" > "$d/polls"
     if [ -n "${FAKE_MCP_LIST:-}" ]; then printf '%s\n' "$FAKE_MCP_LIST"; exit 0; fi
@@ -115,17 +136,44 @@ api)
     2) echo '{"data":[{"name":"crewlet-bridge","status":{"status":"pending"}}]}' ;;
     *) echo '{"data":[{"name":"crewlet-bridge","status":{"status":"connected"}}]}' ;;
     esac ;;
-  session.get) echo '{"data":{"id":"'"${6#sessionID=}"'","cost":0.5,"tokens":{"input":10,"output":2,"reasoning":3,"cache":{"read":40,"write":1}}}}' ;;
+  session.get)
+    held "${3#sessionID=}" || { echo "Error: Session not found: ${3#sessionID=}" >&2; exit 1; }
+    echo '{"data":{"id":"'"${3#sessionID=}"'","cost":0.5,"tokens":{"input":10,"output":2,"reasoning":3,"cache":{"read":40,"write":1}}}}' ;;
   session.inbox.list)
     inbox=${FAKE_INBOX-}
     [ -n "$inbox" ] || inbox='{"data":[]}'
     printf '%s\n' "$inbox" ;;
   session.inbox.cancel)
     if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then served=serving; else served=stopped; fi
-    echo "${6#sessionID=} ${8#inboxID=} $served" >> "$d/cancelled" ;;
+    echo "${3#sessionID=} ${5#inboxID=} $served" >> "$d/cancelled" ;;
+  esac ;;
+session)
+  case "$2" in
+  export)
+    [ "$3" != --server ] || authed
+    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then echo "$5 serving" >> "$d/exported"; else echo "$5 stopped" >> "$d/exported"; fi
+    held "$5" || { echo "Error: Session not found: $5" >&2; exit 1; }
+    printf '{"info":{"id":"%s","title":"crewlet"},"messages":[{"id":"msg_1","type":"user","text":"fix the flake"}]}\n' "$5" ;;
+  import)
+    shift 2; dir=
+    while [ $# -gt 1 ]; do case "$1" in --directory) dir=$2; shift 2;; *) shift;; esac; done
+    printf '%s' "$dir" > "$d/import-directory"; cp "$1" "$d/imported-session"
+    sid=$(sed -n 's/^{"info":{"id":"\([^"]*\)".*/\1/p' "$1")
+    case "${FAKE_IMPORT:-}" in
+    409) echo "Session already exists" >&2 ;;
+    empty) ;;
+    *) hold "$sid"; echo "Imported session: $sid" ;;
+    esac ;;
+  delete)
+    shift 2
+    while [ $# -gt 1 ]; do shift; done
+    [ "${FAKE_DELETE:-}" != fail ] || { echo "Error: database is locked" >&2; exit 1; }
+    held "$1" || { echo "Error: Session not found: $1" >&2; exit 1; }
+    rm -f "$d/sessions/$1"; echo "Session $1 deleted" ;;
   esac ;;
 run)
   authed
+  sid= prev=; for a; do [ "$prev" != --session ] || sid=$a; prev=$a; done; hold "$sid"
   cat > "$d/brief"
   printf '%s' "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" > "$d/run-password"
   if [ -n "${FAKE_REFRESH+set}" ]; then printf '%s' "$FAKE_REFRESH" > "$d/db"; fi
@@ -153,6 +201,20 @@ type scriptOpts struct {
 	// [executor.Paths.OpenCodeConfig] names it; every other case finds
 	// [scriptConfig] there, as WriteConfig would have left one.
 	unconfigured bool
+	// session, where set, is the session the run works in, rather than the
+	// one [executor.OpenCode.Session] names for req.
+	session *executor.Session
+	// held is every session the box's database holds as the case starts, as
+	// a box a run already worked in holds its own.
+	held []string
+	// carried, where set, is the export of a session carried into the box,
+	// gzipped where [executor.Paths.SessionCarried] names it as a run's
+	// start would have written it.
+	carried string
+	// ownsCarried keeps the carried export's digest among the box's own for
+	// the session ([executor.Paths.SessionDigests]), as a box that packed
+	// or restored that export keeps it.
+	ownsCarried bool
 }
 
 // scriptConfig is the run configuration a case's script finds, as
@@ -230,9 +292,30 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			t.Fatal(err)
 		}
 	}
-	command := executor.OpenCode{}.Command(o.req, paths, "")
+	session := executor.OpenCode{}.Session(o.req)
+	if o.session != nil {
+		session = *o.session
+	}
+	for _, id := range o.held {
+		if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "sessions", id), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if o.carried != "" {
+		packed := gzipped(t, o.carried)
+		if err := os.WriteFile(paths.SessionCarried(), packed, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if o.ownsCarried {
+			keepDigest(t, paths, session.ID, packed)
+		}
+	}
+	command := executor.OpenCode{}.Command(o.req, session, paths, "")
 	if o.times != nil {
-		command = executor.OpenCodeCommandTimed(o.req, paths, *o.times)
+		command = executor.OpenCodeCommandTimed(o.req, session, paths, *o.times)
 	}
 	script := o.shell.prelude + scriptOf(t, command)
 	argv := o.shell.argv
@@ -539,6 +622,20 @@ func forEachShell(t *testing.T, test func(t *testing.T, sh boxShell)) {
 			test(t, sh)
 		})
 	}
+}
+
+// loginFree reports whether name, in a box's work directory, is one of the
+// files a run's script leaves there that holds no login: the run's
+// configuration ([scriptConfig], as WriteConfig would have left it), its record
+// of its session, its session's export and the digests of the exports the box
+// holds.
+func loginFree(p executor.Paths, name string) bool {
+	for _, path := range []string{p.OpenCodeConfig(), p.SessionRecord(), p.SessionCapture(), p.SessionDigests()} {
+		if name == filepath.Base(path) {
+			return true
+		}
+	}
+	return false
 }
 
 var bridgeOnly = map[string]sandbox.MCPServer{
@@ -1331,15 +1428,15 @@ func TestAStoppedExportLeavesNoCopyOfTheLogin(t *testing.T) {
 		if run.document != refreshedLogin {
 			t.Errorf("the box's login is %q, want the refreshed export", run.document)
 		}
-		// Besides the document, the directory holds only the run's
-		// configuration ([scriptConfig]), as WriteConfig would have left it.
-		doc, config := j.paths.CredentialDocument(), j.paths.OpenCodeConfig()
+		// Besides the document, the directory holds only what a run's own
+		// artefacts are ([loginFree]).
+		doc := j.paths.CredentialDocument()
 		entries, err := os.ReadDir(filepath.Dir(doc))
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, e := range entries {
-			if e.Name() != filepath.Base(doc) && e.Name() != filepath.Base(config) {
+			if e.Name() != filepath.Base(doc) && !loginFree(j.paths, e.Name()) {
 				t.Errorf("the run left %s beside the box's login", e.Name())
 			}
 		}
@@ -1374,15 +1471,15 @@ func TestAnExportTheStopOutlastsLeavesNoCopy(t *testing.T) {
 		if run.code != 0 {
 			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
 		}
-		// Besides the document, the directory holds only the run's
-		// configuration ([scriptConfig]), as WriteConfig would have left it.
-		doc, config := j.paths.CredentialDocument(), j.paths.OpenCodeConfig()
+		// Besides the document, the directory holds only what a run's own
+		// artefacts are ([loginFree]).
+		doc := j.paths.CredentialDocument()
 		entries, err := os.ReadDir(filepath.Dir(doc))
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, e := range entries {
-			if e.Name() != filepath.Base(doc) && e.Name() != filepath.Base(config) {
+			if e.Name() != filepath.Base(doc) && !loginFree(j.paths, e.Name()) {
 				t.Errorf("the run left %s beside the box's login", e.Name())
 			}
 		}
