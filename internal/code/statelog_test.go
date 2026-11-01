@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -66,23 +67,38 @@ func suiteSettings() code.RepoSettings {
 	}
 }
 
-// suiteWrite is one write through the domain's own lifecycle store, which
+// suiteWrite is the writes through the domain's own lifecycle store, which
 // reaches the builder every write path shares ([code.Store] and the committer
-// alike) — where the framework's stamp is kept or lost.
+// alike) — where the framework's stamp is kept or lost — each decided from the
+// rows the ones before it made, since the suite applies what its publisher
+// appends.
 //
-// THE ACTIVATION'S FENCE AND NOTHING AFTER IT: a repository is decided only
-// once this node has APPLIED its activation's fence (the decide's session
-// floor), and the suite's publisher appends to a log nothing applies — so a
-// create after it would be refused as an activation Activate never made,
-// which is the rule working. The create's stamp is the same builder's, and
-// the round-trip harness publishes and applies it (store_test.go).
+// THE ACTIVATION'S FENCE, the store's configuration path; its create's stamp
+// is the same builder's, and the round-trip harness publishes and applies it
+// (store_test.go).
 //
-// AND A TOOL'S LIFECYCLE REQUEST, the store's other write path: a seat's
-// create of its own scratch repository, decided by the chart and the policy
-// the store is handed. No activation fences a tool's record, so it is decided
-// at once, and its record is the lifecycle's own builder's.
+// AND EVERY RECORD A TOOL'S LIFECYCLE MAKES, in the sequence a seat's own
+// scratch repository lives through, each decided by the chart and the policy
+// the store is handed and published by the lifecycle's own builder: its
+// create; its rename, which leaves the old name redirecting; a settings change
+// the tool makes; a live turn's hold on it, every field at its bound — the
+// turn's id at MaxProvenanceBytes, decided at the create's own position, as a
+// turn's hold is decided at its read; and, the store's clock past
+// code.RedirectWindow, the release of the old name the retention pass asks
+// (Store.ReleaseName). Its apply frees nothing here — the suite's broker
+// stamps a record seconds after the rename, and a release frees a name only
+// past the redirect's end by the record's own broker instant — but the record
+// is the builder's, which is what the stamp is certified on. A ref hold is the
+// one hold field left out: it holds a seat's branch, whose row only a push
+// makes, and a push is the committer's write path, whose records the push
+// candidate (suitePush) carries.
+//
+// Every request must be answered applied: a refusal, or one left pending, is a
+// sequence the steps after it would decide from rows that never held it.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
+	now := suiteAt
 	s, err := code.NewStore(code.StoreOptions{Publisher: pub, DB: db, NodeID: "suite-node",
+		Now:       func() time.Time { return now },
 		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart()}, true },
 		Policy:    func() code.LifecyclePolicy { return code.ScratchOf(config.Code{}) },
 	})
@@ -92,16 +108,48 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 	if _, err = s.Activate(ctx, suiteAt); err != nil {
 		return err
 	}
-	res, err := s.Lifecycle(ctx, code.LifecycleRequest{Kind: code.LifecycleCreate,
-		OpID: statelog.NewOpID(time.Now(), "code.suite"), Actor: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"},
-		Name: "dev.suite", Create: &code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoScratch,
+	dev := code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}
+	ask := func(what string, req code.LifecycleRequest) (code.LifecycleResult, error) {
+		req.OpID, req.Actor = statelog.NewOpID(time.Now(), "code.suite"), dev
+		res, err := s.Lifecycle(ctx, req)
+		switch {
+		case err != nil:
+			return res, fmt.Errorf("the suite's %s: %w", what, err)
+		case res.Refusal != "":
+			return res, fmt.Errorf("the suite's %s was refused %s: %s", what, res.Refusal, res.Detail)
+		case res.Outcome != statelog.OutcomeApplied:
+			return res, fmt.Errorf("the suite's %s was answered %q, not applied", what, res.Outcome)
+		}
+		return res, nil
+	}
+	made, err := ask("scratch create", code.LifecycleRequest{Kind: code.LifecycleCreate, Name: "dev.suite",
+		Create: &code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoScratch,
 			Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Visibility: code.VisibilityCompany,
 			Search: code.SearchGrep, DefaultBranch: "main"}})
-	switch {
-	case err != nil:
+	if err != nil {
 		return err
-	case res.Refusal != "":
-		return fmt.Errorf("the suite's scratch create was refused %s: %s", res.Refusal, res.Detail)
+	}
+	id := made.Repo.ID
+	if _, err = ask("rename", code.LifecycleRequest{Kind: code.LifecycleRename, RepoID: id,
+		Name: "dev.suite-renamed"}); err != nil {
+		return err
+	}
+	description := "the suite's scratch repository"
+	if _, err = ask("settings change", code.LifecycleRequest{Kind: code.LifecycleSettings, RepoID: id,
+		Change: &code.RepoChange{Description: &description}}); err != nil {
+		return err
+	}
+	if _, err = ask("hold", code.LifecycleRequest{Kind: code.LifecycleHold, RepoID: id,
+		TurnID: strings.Repeat("t", code.MaxProvenanceBytes), Seen: made.Position}); err != nil {
+		return err
+	}
+	now = suiteAt.Add(code.RedirectWindow + time.Hour)
+	switch released, err := s.ReleaseName(ctx, "dev.suite", id); {
+	case err != nil:
+		return fmt.Errorf("the suite's release of the old name: %w", err)
+	case !released:
+		return errors.New("the suite's release of the old name published no record, its clock past " +
+			"code.RedirectWindow")
 	}
 	return nil
 }
