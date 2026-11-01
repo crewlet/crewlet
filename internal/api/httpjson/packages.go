@@ -23,7 +23,7 @@ var goPackages = map[string]bool{
 	"authevents": true, "authz": true, "auxspend": true, "backoff": true,
 	"backup": true, "brandformat": true, "brokertest": true, "builtin": true, "chain": true, "changefeed": true,
 	"canon": true, "canvasformat": true, "catalogue": true, "caveat": true, "caveattest": true, "chatlet": true, "edits": true,
-	"harness": true, "clientsource": true,
+	"harness": true, "clientsource": true, "clocktest": true,
 	"harnessprofile": true, "executor": true, "colleague": true, "collect": true,
 	"compact": true, "config": true, "configapi": true, "configplane": true, "crewlet": true,
 	"confluence": true, "coord": true,
