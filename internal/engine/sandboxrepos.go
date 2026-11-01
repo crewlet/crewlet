@@ -51,8 +51,12 @@ type launchRepos struct {
 // the resolution reads at the seat's level and takes the turn's holds, which
 // a launch a local check refused would have taken for nothing — and before
 // the turn's holds are sealed for the row, since a hold the resolution takes
-// must be in the set the row is opened with. placement is the cell the box
-// runs in, as the launch's spec resolved it.
+// must be in the set the row is opened with. And it takes them FOR THE LAUNCH
+// ([turnctx.Holds.ForLaunch]): into the set the launch writes on its row,
+// never through the writer a resumed executor's row has attached — so a
+// relaunch's holds ride the BeginLaunch it makes anyway, rather than one
+// compare-and-set on the same row per key before it (M3-boxes §10.6.5).
+// placement is the cell the box runs in, as the launch's spec resolved it.
 func (l *launcher) resolveRunRepos(ctx context.Context, t *turnctx.Turn, reqs []builtin.RepoRequest,
 	placement sandbox.Placement) (launchRepos, error) {
 
@@ -80,7 +84,7 @@ func (l *launcher) resolveRunRepos(ctx context.Context, t *turnctx.Turn, reqs []
 			"base a box dials for /box/git/, a git node's public listener); nothing was launched",
 			sandbox.BoxGitURLVar, node)
 	}
-	resolved, err := l.code.ResolveRunRepos(ctx, t, reqs, func(asker code.Principal, repo code.RepoRef) code.Grant {
+	resolved, err := l.code.ResolveRunRepos(t.Holding().ForLaunch(ctx), t, reqs, func(asker code.Principal, repo code.RepoRef) code.Grant {
 		return code.GrantOf(asker, repo, e.codeRoster())
 	})
 	if err != nil {

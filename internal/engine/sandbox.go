@@ -1560,9 +1560,14 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, req builtin.Sand
 // in between waits, and the row's writer is attached the moment the row
 // exists ([sandbox.LaunchRequest.Opened], called after the store opened the
 // job and before any box exists) — from then on every hold is on the row
-// before its request. A launch that fails before the row existed unseals the
-// set, and one that fails after it detaches the writer: the coordinator
-// abandons that row, and the turn runs on holding in memory.
+// before its request. A RELAUNCH, its row's writer already attached, reads the
+// set unsealed — the row exists, and its reset unions what it is handed —
+// with the keys its resolution took for it owed to the row
+// ([turnctx.Holds.ForLaunch]), which that union writes and the Opened
+// settles. A launch that fails before the row existed unseals the set,
+// leaving any key it owed still owed, and one that fails after it detaches
+// the writer: the coordinator abandons that row, and the turn runs on holding
+// in memory.
 type launchHold struct {
 	set     *turnctx.Holds
 	pending sandbox.PendingStore

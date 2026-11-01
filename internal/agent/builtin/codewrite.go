@@ -452,7 +452,7 @@ func (t *codeBranchWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// THE BRANCH'S HOLD, before the write is sent: a write naming its head
 	// is held as a read is, and a branch it creates with no read.
-	if refusal := t.deps.branch(ctx, turn, tool, c, repo, w.Ref, w.ExpectedHead != ""); refusal != nil {
+	if refusal := t.deps.branch(ctx, turn, tool, c, repo, w.ExpectedHead != "", w.Ref); refusal != nil {
 		return *refusal, nil
 	}
 	w.RepoID, w.Principal, w.Fresh = repo.ID, writer(ctx, turn, c), t.deps.writeFresh(turn, c, repo)

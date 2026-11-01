@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -380,6 +381,79 @@ func TestAChangeWriteHoldsTheSeatBranchItDependsOn(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A CALL'S SEAT BRANCHES ARE HELD IN ONE ROW WRITE (M3-boxes §10.6.5): a turn
+// with a run row — a resumed executor, an agent-mode run's bridged calls —
+// whose call depends on two seats' branches (a comparison's base and head, a
+// commit and the branch it asks about, a change's source and target) writes
+// both keys on its row in ONE compare-and-set, not one each, before the
+// request; and an open between the two resolves them in one read — two
+// branches neither of which exists yet included, which it holds with no
+// read.
+//
+// Mutations: refsOf leaving each ref's Take to its HoldRef → two writes for
+// compare and landed_in, red; the open holding its branches one call of
+// CodeDeps.branch each → two writes and two resolves, red; CodeDeps.branch
+// leaving each unread branch's Take to its HoldRef → two writes for the open
+// of two new branches, red.
+func TestACallsSeatBranchesAreHeldInOneRowWrite(t *testing.T) {
+	t.Parallel()
+	const (
+		other      = "refs/heads/seats/qa/y"
+		otherShort = "seats/qa/y"
+	)
+	for _, c := range []struct {
+		name, tool string
+		args       map[string]any
+		// unborn: neither branch exists, and both are held with no read.
+		unborn bool
+	}{
+		{name: "compare", tool: builtin.CodeCompareTool,
+			args: map[string]any{"repo": "site", "base": seatBranchShort, "head": otherShort}},
+		{name: "landed_in", tool: builtin.CodeLandedInTool,
+			args: map[string]any{"repo": "site", "commit": seatBranchShort, "target": otherShort}},
+		{name: "open", tool: builtin.CodeOpenChangeTool, args: map[string]any{"repo": "site",
+			"branch": seatBranchShort, "target": otherShort, "title": "Fix the lab"}},
+		{name: "open/unborn", tool: builtin.CodeOpenChangeTool, unborn: true, args: map[string]any{"repo": "site",
+			"branch": seatBranchShort, "target": otherShort, "title": "Fix the lab"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			host := newChangeHost(suggestedChange())
+			if !c.unborn {
+				withSeatBranch(host, "qa", time.Hour)
+				host.refs[other] = mainOID
+				host.seats[other] = "qa"
+				host.ats[other] = time.Now().Add(-time.Hour)
+			}
+			writer, turn := &codeWrites{}, writerTurn(t)
+			ev := watch(host, writer, nil)
+			var mu sync.Mutex
+			var written [][]string
+			turn.Holds.Attach(func(_ context.Context, keys []string) error {
+				mu.Lock()
+				defer mu.Unlock()
+				written = append(written, slices.Clone(keys))
+				return nil
+			})
+			got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn, c.tool, c.args)
+			if got.Failed {
+				t.Fatalf("%s answered %q", c.tool, got.Output)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			want := []string{seatBranchKey, code.RefHoldKey(siteID, other)}
+			if len(written) != 1 ||
+				!slices.Equal(slices.Sorted(slices.Values(written[0])), slices.Sorted(slices.Values(want))) {
+				t.Errorf("%s wrote %v on the turn's row, want ONE write of both branches' keys %v", c.tool,
+					written, want)
+			}
+			if n := count(ev.list(), "resolve_ref"); n != 1 {
+				t.Errorf("%s resolved its branches in %d reads, want one", c.tool, n)
+			}
+		})
 	}
 }
 

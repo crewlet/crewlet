@@ -970,3 +970,83 @@ func TestEveryRefALaunchResolvesIsHeldOnItsRow(t *testing.T) {
 		t.Errorf("the parked run's branches read %v, want both held from its row", held)
 	}
 }
+
+// countedHolds is a run store that counts the code-hold writes the engine
+// makes on a row beside a launch — its holds' writer's compare-and-sets
+// (AddCodeHolds) — each with the keys it carried.
+type countedHolds struct {
+	sandbox.PendingStore
+	mu   sync.Mutex
+	adds [][]string
+}
+
+func (c *countedHolds) AddCodeHolds(ctx context.Context, turnID string, keys []string) (bool, error) {
+	c.mu.Lock()
+	c.adds = append(c.adds, slices.Clone(keys))
+	c.mu.Unlock()
+	return c.PendingStore.AddCodeHolds(ctx, turnID, keys)
+}
+
+func (c *countedHolds) written() [][]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.adds)
+}
+
+// A RELAUNCH'S HOLDS RIDE ITS BeginLaunch (M3-boxes §10.6.5): a resumed
+// executor, its row's writer attached, relaunches on two repositories its
+// turn had not named — a project whose seat's branch an earlier turn pushed,
+// and a scratch repository whose branch does not exist yet — and makes NO
+// hold write of its own on its row: every key its resolution takes (the
+// project's branch, the scratch repository, its branch) reaches the row
+// through the launch's own reset, and the run's row holds all three. Once
+// the launch has opened, a call of the turn naming one of them writes
+// nothing either: the row the launch reset holds it.
+//
+// Mutation: resolve without ForLaunch → a write per key before BeginLaunch
+// (three), red.
+func TestARelaunchsHoldsRideItsBeginLaunch(t *testing.T) {
+	t.Parallel()
+	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
+	counted := &countedHolds{PendingStore: rig.pending}
+	rig.e.useSandbox(counted, rig.e.sandbox.Load().coordinator)
+	swe := rig.c.Org.AgentSeatByHandle("swe")
+	api := project("api", "Engineering", code.VisibilityCompany)
+	web := project("web", "Engineering", code.VisibilityCompany)
+	lab := scratchOf(swe, "lab")
+	const branch = "refs/heads/seats/swe/ENG-42"
+	rig.host.add(api, map[string]string{"refs/heads/main": mainHead})
+	rig.host.add(web, map[string]string{"refs/heads/main": mainHead, branch: seatHead})
+	rig.host.add(lab, map[string]string{})
+	item := &types.WorkItem{Backend: types.WorkNative, ID: "task-42", Key: "ENG-42"}
+
+	turn := rig.turn(t, "swe", item)
+	first, err := rig.launch(t, turn, builtin.RepoRequest{Repo: api.Name})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	resumed := &turnctx.Turn{RunID: turn.RunID, Seat: swe, Org: rig.c.Org, Lookups: turnctx.NewLookups(),
+		Holds: rig.e.rowHolds(first), WorkItem: item}
+	before := len(counted.written())
+	again, err := rig.launch(t, resumed, builtin.RepoRequest{Repo: web.Name},
+		builtin.RepoRequest{Repo: lab.Name, Access: "read"})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	if adds := counted.written()[before:]; len(adds) != 0 {
+		t.Errorf("the relaunch wrote %v on its row beside its BeginLaunch, want nothing: its holds ride "+
+			"the launch's own row write", adds)
+	}
+	keys := []string{code.RefHoldKey(web.ID, branch), lab.ID, code.RefHoldKey(lab.ID, branch)}
+	for _, key := range keys {
+		if !slices.Contains(again.CodeHolds, key) {
+			t.Errorf("the relaunch's row holds %v, want %s among them", again.CodeHolds, key)
+		}
+	}
+	if err := resumed.Holds.Take(t.Context(), keys...); err != nil {
+		t.Fatalf("a later call's take: %v", err)
+	}
+	if adds := counted.written()[before:]; len(adds) != 0 {
+		t.Errorf("a call naming what the relaunch's row holds wrote %v, want nothing", adds)
+	}
+}

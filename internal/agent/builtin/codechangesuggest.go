@@ -147,7 +147,7 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	// and an apply that moves nothing — every suggestion outdated — appends no
 	// record a deletion of it would be ordered against. It names the head
 	// (expected_head is required), so it is held as a read is.
-	if refusal := t.deps.branch(ctx, turn, tool, cv.g.c, repo, w.Ref, true); refusal != nil {
+	if refusal := t.deps.branch(ctx, turn, tool, cv.g.c, repo, true, w.Ref); refusal != nil {
 		return *refusal, nil
 	}
 	res, err := t.deps.Writer.GitWrite(ctx, w)

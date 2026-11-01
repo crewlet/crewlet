@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -141,7 +142,7 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 		// and its order are done, and nothing more is sent.
 		return nil
 	}
-	if _, err := holds.Take(ctx, repo.ID); err != nil {
+	if err := holds.Take(ctx, repo.ID); err != nil {
 		return fmt.Errorf("builtin: hold scratch repository %s for turn %s: %w", repo.Name, turn.RunID, err)
 	}
 	// A READ OF THE REPOSITORY is what a hold is confirmed from: a
@@ -201,7 +202,9 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 // rather than sent through a seat's branch unheld ([turnctx.ErrNoHolds]).
 //
 // The key ([code.RefHoldKey]) goes into the turn's [turnctx.Holds] — written
-// first to its run row where the turn has one. Then, where seen — the ref's
+// first to its run row where the turn has one; the ref read takes every key of
+// its answer in one Take first ([takeRefHolds]), so its HoldRefs find theirs
+// held and write nothing. Then, where seen — the ref's
 // row as the turn's read answered it, at the checkpoint read — is a SEAT'S
 // branch (seen.Seat set) last set at least [code.RefHoldRecordAfter] before
 // now, the clock read AFTER the hold was taken, the hold is RECORDED on the
@@ -241,7 +244,7 @@ func HoldRef(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor A
 	if holds.Confirmed(key) {
 		return nil
 	}
-	if _, err := holds.Take(ctx, key); err != nil {
+	if err := holds.Take(ctx, key); err != nil {
 		return fmt.Errorf("builtin: hold %s of %s for turn %s: %w", ref, repo.Name, turn.RunID, err)
 	}
 	if seen == nil {
@@ -281,6 +284,44 @@ func HoldRef(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor A
 	// has ordered it against any deletion of the ref.
 	holds.Confirm(key)
 	return nil
+}
+
+// takeRefHolds takes, in ONE Take, turn's hold on every ref of refs that
+// [HoldRef] would take one on — each [code.Holdable] admits and the turn has
+// not confirmed — before the HoldRef of each, which then finds its key held
+// and goes straight on to its record and its confirmation. So a call that
+// depends on several seats' branches — a comparison's base and head, a commit
+// and the branch it is asked to have landed in, a change's source and target
+// — writes them on the turn's run row in one compare-and-set rather than one
+// each. Its callers are the ref read, with every ref its answer holds
+// ([CodeDeps.refsOf]), and a write's branches, with those it holds with no
+// read ([CodeDeps.branch]). What HoldRef takes nothing for — an operator's
+// call, a person's, no turn — it takes nothing for either. It answers the
+// refs it was taking, joined, for a refusal to name.
+func takeRefHolds(ctx context.Context, turn *turnctx.Turn, actor Actor, repo code.RepoRef,
+	refs []string) (string, error) {
+
+	if turn == nil || len(refs) == 0 || CodeAskerOf(actor).Kind != code.PrincipalAgent {
+		return "", nil
+	}
+	holds := turn.Holding()
+	var keys, names []string
+	for _, ref := range refs {
+		if !code.Holdable(ref) {
+			continue
+		}
+		if key := code.RefHoldKey(repo.ID, ref); !holds.Confirmed(key) {
+			keys, names = append(keys, key), append(names, ref)
+		}
+	}
+	if len(keys) == 0 {
+		return "", nil
+	}
+	taking := strings.Join(names, ", ")
+	if err := holds.Take(ctx, keys...); err != nil {
+		return taking, fmt.Errorf("builtin: hold %s of %s for turn %s: %w", taking, repo.Name, turn.RunID, err)
+	}
+	return taking, nil
 }
 
 // refDeletedError is a hold on a seat's branch the code host answered

@@ -378,11 +378,10 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE BRANCHES' HOLDS, before the open is sent ([CodeDeps.branch]): the
 	// change proposes what its source names onto what its target names, so
 	// each — where it is a seat's branch — is held as a read is, and a source
-	// the resolve finds missing is held with no read, as a write's is.
-	for _, ref := range []string{open.SourceRef, open.TargetRef} {
-		if refusal := t.deps.branch(ctx, turn, tool, c, repo, ref, true); refusal != nil {
-			return *refusal, nil
-		}
+	// the resolve finds missing is held with no read, as a write's is: both in
+	// one read and one Take.
+	if refusal := t.deps.branch(ctx, turn, tool, c, repo, true, open.SourceRef, open.TargetRef); refusal != nil {
+		return *refusal, nil
 	}
 	op := opIDFor(actor, tool, changeVerb, repo.ID, args)
 	open.RepoID, open.ChangeID = repo.ID, code.OpenChangeID(op)
@@ -707,7 +706,7 @@ func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c 
 		held = change.detail.SourceRef
 	}
 	if held != "" {
-		if refusal := d.branch(ctx, turn, tool, c, repo, held, true); refusal != nil {
+		if refusal := d.branch(ctx, turn, tool, c, repo, true, held); refusal != nil {
 			return *refusal, nil
 		}
 	}

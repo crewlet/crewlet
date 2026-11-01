@@ -25,6 +25,15 @@ import (
 // BEFORE that request is sent, so no request reaches a repository the expiry
 // could already be deciding about unheld.
 //
+// ONE WRITE A CALL, NOT ONE A KEY: [Holds.Take] takes every key it is handed
+// in one write through the attached writer — a call that resolves several
+// seats' branches (a comparison's base and head, a change's source and
+// target) pays one compare-and-set on its run row, not one each — and a
+// launch's resolution of its repositories takes its keys for the launch's
+// own row write ([Holds.ForLaunch]), so a relaunch's holds ride the
+// BeginLaunch it makes anyway and write nothing of their own (M3-boxes
+// §10.6.5).
+//
 // KEPT WHERE THE TURN LIVES: in this value, in the memory of the process
 // running the turn, which that node answers for when an expiry asks it (the
 // engine's crewlet.code.holds); and, once the turn has a run row, ALSO on the
@@ -55,6 +64,16 @@ type Holds struct {
 	// keys is the set, in the order each was first taken, and has its index.
 	keys []string
 	has  map[string]bool
+	// owed is the keys of the set the attached row does not hold yet: taken
+	// by a launch's resolution ([Holds.ForLaunch]) for the row write that
+	// launch is about to make. A Take naming one outside that resolution
+	// writes it first, since its request may outlive the launch; the
+	// launch's Attach settles the ones its row write carried (carried).
+	owed map[string]bool
+	// carried is the owed keys a launch read with the set ([Holds.Seal]),
+	// which its row write unions onto the row: settled by its Attach,
+	// forgotten by its Unseal or Detach.
+	carried []string
 	// confirmed is the keys of the set this process has confirmed
 	// ([Holds.Confirm]): never written to the row, never seeded.
 	confirmed map[string]bool
@@ -112,21 +131,64 @@ func closed() chan struct{} {
 	return c
 }
 
-// Take adds key to the set and answers whether it was NEW. A new key is
-// written through the attached writer first, where there is one, and is NOT
-// added where that write fails: the error is returned, and the request it was
-// taken for is refused with nothing sent. While a launch's seal is in force,
-// Take waits for it to end — [Holds.Attach] or [Holds.Unseal] — bounded by
-// ctx, so a key taken in that window reaches the row the launch is opening.
-func (h *Holds) Take(ctx context.Context, key string) (bool, error) {
+// launchKey is the context key [Holds.ForLaunch] sets: the set whose Takes
+// under that context are a launch's.
+type launchKey struct{}
+
+// ForLaunch is ctx for a launch's resolution of the repositories its run is
+// granted (internal/engine's resolveRunRepos): a Take on h under it adds its
+// new keys to the set WITHOUT writing them through the attached row's writer,
+// marked owed, because the launch writes the set it reads ([Holds.Seal]) on
+// its row as it opens it — BeginLaunch unions it with what the row holds — and
+// its Attach settles them (M3-boxes §10.6.5: a launch's branches ride the
+// BeginLaunch it already makes). Without it a resumed executor's relaunch, its
+// row's writer attached, wrote one compare-and-set per key it resolved and
+// then the same keys again in BeginLaunch.
+//
+// SAFE BECAUSE THE LAUNCH'S REQUEST IS ITS BOX, sent only once the row holds
+// the set: what the resolution sends before that — its reads, a hold's record
+// — is the turn's own while it runs, and the running turn is asked from memory
+// (an owed key is in [Holds.IDs]), exactly as a first launch, which has no row
+// to write to, holds its resolution's keys. And an owed key never goes
+// unwritten behind ANOTHER request: a Take outside the resolution naming it
+// writes it first, and a launch that fails before its row write leaves it owed
+// for the next.
+//
+// Only a launch that writes the set it reads on its row may resolve under it.
+func (h *Holds) ForLaunch(ctx context.Context) context.Context {
 	if h == nil {
-		return false, ErrNoHolds
+		return ctx
 	}
+	return context.WithValue(ctx, launchKey{}, h)
+}
+
+// launching reports whether ctx is a launch's resolution on h ([Holds.ForLaunch]).
+func (h *Holds) launching(ctx context.Context) bool {
+	set, _ := ctx.Value(launchKey{}).(*Holds)
+	return set == h
+}
+
+// Take adds keys to the set, every one it does not hold yet in ONE write
+// through the attached writer where there is one — a call's every key in one
+// compare-and-set on its run row — and NONE of them where that write fails:
+// the error is returned, and the request they were taken for is refused with
+// nothing sent. The bound ([MaxHolds]) is judged over the whole call: a Take
+// that would carry the set past it adds none of its keys. A key the set holds
+// owed ([Holds.ForLaunch]) is written in the same write, outside a launch's
+// resolution. While a launch's seal is in force, Take waits for it to end —
+// [Holds.Attach] or [Holds.Unseal] — bounded by ctx, so a key taken in that
+// window reaches the row the launch is opening.
+func (h *Holds) Take(ctx context.Context, keys ...string) error {
+	if h == nil {
+		return ErrNoHolds
+	}
+	launch := h.launching(ctx)
 	for {
 		h.mu.Lock()
-		if h.has[key] {
+		fresh, owed := h.needs(keys, launch)
+		if len(fresh)+len(owed) == 0 {
 			h.mu.Unlock()
-			return false, nil
+			return nil
 		}
 		seal := h.sealed
 		select {
@@ -140,52 +202,87 @@ func (h *Holds) Take(ctx context.Context, key string) (bool, error) {
 			case <-seal:
 				continue
 			case <-ctx.Done():
-				return false, ctx.Err()
+				return ctx.Err()
 			}
 		}
-		if len(h.keys) >= MaxHolds {
+		if len(h.keys)+len(fresh) > MaxHolds {
 			h.mu.Unlock()
-			return false, ErrHoldsFull
+			return ErrHoldsFull
 		}
-		if h.write == nil {
-			h.add(key)
+		if h.write == nil || launch {
+			// IN MEMORY: no row yet, or a launch's resolution, whose keys
+			// its own row write carries — owed to the row until it does.
+			for _, key := range fresh {
+				h.add(key)
+				if h.write != nil {
+					h.owe(key)
+				}
+			}
 			h.mu.Unlock()
-			return true, nil
+			return nil
 		}
 		h.mu.Unlock()
-		if taken, again, err := h.takeWritten(ctx, key); !again {
-			return taken, err
+		if again, err := h.takeWritten(ctx, keys); !again {
+			return err
 		}
 	}
 }
 
-// takeWritten takes key through the attached writer: WRITTEN BEFORE IT IS
-// HELD, one write at a time, so the set never holds a key the row was refused
-// — the row is the set's durable copy, and a key it does not hold is no hold
-// at all once this process is gone. again reports a set that changed under
-// the wait for the write's turn — a seal in force, the writer detached, the
-// set at its bound — which Take decides afresh.
-func (h *Holds) takeWritten(ctx context.Context, key string) (taken, again bool, err error) {
+// needs is what a Take of keys must do: the keys the set does not hold, once
+// each in their first order, and — outside a launch's resolution, with a
+// writer attached — the keys it holds owed, which the Take's write carries.
+// Called under mu.
+func (h *Holds) needs(keys []string, launch bool) (fresh, owed []string) {
+	for i, key := range keys {
+		switch {
+		case slices.Contains(keys[:i], key):
+		case !h.has[key]:
+			fresh = append(fresh, key)
+		case h.owed[key] && h.write != nil && !launch:
+			owed = append(owed, key)
+		}
+	}
+	return fresh, owed
+}
+
+// takeWritten takes keys through the attached writer: WRITTEN BEFORE THEY ARE
+// HELD, in one write, one write at a time, so the set never holds a key the
+// row was refused — the row is the set's durable copy, and a key it does not
+// hold is no hold at all once this process is gone. again reports a set that
+// changed under the wait for the write's turn — a seal in force, the writer
+// detached, the set at its bound — which Take decides afresh.
+func (h *Holds) takeWritten(ctx context.Context, keys []string) (again bool, err error) {
 	h.writing.Lock()
 	defer h.writing.Unlock()
 	h.mu.Lock()
 	write := h.write
+	fresh, owed := h.needs(keys, false)
 	switch {
-	case h.has[key]:
+	case len(fresh)+len(owed) == 0:
 		h.mu.Unlock()
-		return false, false, nil
-	case write == nil || len(h.keys) >= MaxHolds:
+		return false, nil
+	case write == nil || len(h.keys)+len(fresh) > MaxHolds:
 		h.mu.Unlock()
-		return false, true, nil
+		return true, nil
 	}
 	h.mu.Unlock()
-	if err := write(ctx, []string{key}); err != nil {
-		return false, false, err
+	written := append(fresh, owed...)
+	if err := write(ctx, written); err != nil {
+		return false, err
 	}
 	h.mu.Lock()
-	h.add(key)
-	h.mu.Unlock()
-	return true, false, nil
+	defer h.mu.Unlock()
+	for _, key := range fresh {
+		// A launch's resolution may have taken it, owed, while the write
+		// was in flight: the write carried it, so it is held and settled.
+		if !h.has[key] {
+			h.add(key)
+		}
+	}
+	for _, key := range written {
+		delete(h.owed, key)
+	}
+	return false, nil
 }
 
 // add puts key in the set. Called under mu.
@@ -194,12 +291,21 @@ func (h *Holds) add(key string) {
 	h.keys = append(h.keys, key)
 }
 
+// owe marks key owed to the attached row. Called under mu.
+func (h *Holds) owe(key string) {
+	if h.owed == nil {
+		h.owed = map[string]bool{}
+	}
+	h.owed[key] = true
+}
+
 // Seal answers the set and, where no writer is attached, makes every Take
 // wait: a launch's window, from reading the set — it becomes the run row's —
 // to the row existing ([Holds.Attach]) or the launch failing first
 // ([Holds.Unseal]). With a writer attached Seal only answers the set: the row
 // exists, and the launch's reset unions what it is handed with what the row
-// holds.
+// holds — the keys owed to it among them ([Holds.ForLaunch]), which the
+// launch's Attach then settles.
 func (h *Holds) Seal() []string {
 	if h == nil {
 		return nil
@@ -213,13 +319,20 @@ func (h *Holds) Seal() []string {
 		default:
 		}
 	}
+	h.carried = nil
+	for _, key := range h.keys {
+		if h.owed[key] {
+			h.carried = append(h.carried, key)
+		}
+	}
 	return slices.Clone(h.keys)
 }
 
 // Attach installs write — a compare-and-set of new keys onto the turn's run
 // row — and ends a seal: called by a launch's Opened, once the row exists and
 // before any box does, and for a turn the engine builds from a row it already
-// has (a resumed one, a bridged run's session).
+// has (a resumed one, a bridged run's session). A launch's Attach settles the
+// owed keys its Seal read, which its row write carried.
 func (h *Holds) Attach(write func(ctx context.Context, keys []string) error) {
 	if h == nil {
 		return
@@ -227,17 +340,24 @@ func (h *Holds) Attach(write func(ctx context.Context, keys []string) error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.write = write
+	for _, key := range h.carried {
+		delete(h.owed, key)
+	}
+	h.carried = nil
 	h.unseal()
 }
 
-// Unseal ends a seal with no writer: the launch failed before any row was
-// opened, and the turn runs on, holding in memory.
+// Unseal ends a seal and opens no row: the launch failed before any row was
+// opened, and the turn runs on — holding in memory, or with the row it
+// already had, which still owes what the launch's resolution took
+// ([Holds.ForLaunch]).
 func (h *Holds) Unseal() {
 	if h == nil {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.carried = nil
 	h.unseal()
 }
 
@@ -260,11 +380,15 @@ func (h *Holds) Detach() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.write = nil
+	// NO ROW IS ATTACHED, so nothing is owed to one: the next launch writes
+	// the whole set on the row it opens.
+	h.owed, h.carried = nil, nil
 	h.unseal()
 }
 
-// IDs answers the set, in the order each key was first taken: what this
-// node answers an expiry with for a running turn.
+// IDs answers the set, in the order each key was first taken — the keys owed
+// to the row included ([Holds.ForLaunch]): what this node answers an expiry
+// with for a running turn.
 func (h *Holds) IDs() []string {
 	if h == nil {
 		return nil

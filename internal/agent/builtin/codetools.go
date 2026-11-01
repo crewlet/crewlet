@@ -687,8 +687,10 @@ func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool strin
 // AND THE TURN'S HOLD on every seat's branch it resolved ([HoldRef]), taken
 // here — after the read whose answer a hold is decided from, and before the
 // answer goes back to whatever sends a request through it — so no caller can
-// read a ref for a turn and forget its hold. A hold that fails refuses the
-// call with nothing sent.
+// read a ref for a turn and forget its hold. Every key of the answer is taken
+// in ONE Take first ([takeRefHolds]): a call that resolves a comparison's two
+// seats' branches writes one compare-and-set on its run row, not two. A hold
+// that fails refuses the call with nothing sent.
 func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo code.RepoRef, names ...string) (code.RefAnswer, *tools.Result) {
 
@@ -708,6 +710,16 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 		return code.RefAnswer{}, &r
 	}
 	noteRefsRead(turn, repo.ID, answer.Refs)
+	var held []string
+	for _, resolved := range answer.Refs {
+		if resolved.Missing == "" {
+			held = append(held, resolved.Ref)
+		}
+	}
+	if taking, err := takeRefHolds(ctx, turn, c.actor, repo, held); err != nil {
+		r := refHoldFailure(ctx, tool, repo, taking, err)
+		return code.RefAnswer{}, &r
+	}
 	for i := range answer.Refs {
 		resolved := &answer.Refs[i]
 		if resolved.Missing != "" {
@@ -722,10 +734,15 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 	return answer, nil
 }
 
-// branch holds ref — the branch a write tool's call names, refs/heads/ and its
-// `branch`, or the source branch of the change a suggestions apply commits to —
-// for turn BEFORE the write is sent ([HoldRef]): THE ONE PLACE a write's branch
-// is held, which every engine write calls before its GitWrite.
+// branch holds refs — the branch a write tool's call names, refs/heads/ and its
+// `branch`, the source branch of the change a suggestions apply commits to, or
+// the source and the target of a change it opens — for turn BEFORE the write
+// is sent ([HoldRef]): THE ONE PLACE a write's branch is held, which every
+// engine write calls before its GitWrite. ALL OF A CALL'S BRANCHES AT ONCE:
+// one ref read for every branch it resolves, and one Take for every branch it
+// holds with no read ([takeRefHolds]), so a change between two seats' branches
+// pays one barrier and one compare-and-set on the turn's run row, not two of
+// each.
 // A WRITE IS HELD AS A READ IS, because only a write that MOVES the branch is
 // ordered against a deletion of it by its own head compare: one that moves
 // nothing — refused, a revert or a pick that conflicts, a no-op — appends no
@@ -742,24 +759,43 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 // branch this turn's read already confirmed — reads nothing here; its own
 // head compare decides it, unchanged.
 func (d CodeDeps) branch(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo code.RepoRef,
-	ref string, existing bool) *tools.Result {
+	existing bool, refs ...string) *tools.Result {
 
-	if turn == nil || c.asker.Kind != code.PrincipalAgent || !code.Holdable(ref) ||
-		turn.Holding().Confirmed(code.RefHoldKey(repo.ID, ref)) {
+	if turn == nil || c.asker.Kind != code.PrincipalAgent {
 		return nil
 	}
+	var held []string
+	for _, ref := range refs {
+		if code.Holdable(ref) && !slices.Contains(held, ref) &&
+			!turn.Holding().Confirmed(code.RefHoldKey(repo.ID, ref)) {
+			held = append(held, ref)
+		}
+	}
+	if len(held) == 0 {
+		return nil
+	}
+	unread := held
 	if existing {
-		answer, refusal := d.refsOf(ctx, turn, tool, c, repo, ref)
+		answer, refusal := d.refsOf(ctx, turn, tool, c, repo, held...)
 		if refusal != nil {
 			return refusal
 		}
-		if answer.Refs[0].Missing == "" {
-			return nil
+		unread = nil
+		for i, resolved := range answer.Refs {
+			if resolved.Missing != "" {
+				unread = append(unread, held[i])
+			}
 		}
 	}
-	if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, ref, nil, statelog.Position{}, d.Now); err != nil {
-		r := refHoldFailure(ctx, tool, repo, ref, err)
+	if taking, err := takeRefHolds(ctx, turn, c.actor, repo, unread); err != nil {
+		r := refHoldFailure(ctx, tool, repo, taking, err)
 		return &r
+	}
+	for _, ref := range unread {
+		if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, ref, nil, statelog.Position{}, d.Now); err != nil {
+			r := refHoldFailure(ctx, tool, repo, ref, err)
+			return &r
+		}
 	}
 	return nil
 }
