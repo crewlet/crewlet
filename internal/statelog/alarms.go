@@ -21,7 +21,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/toolname"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The thresholds an alarm fires at.
@@ -1681,23 +1680,34 @@ var table = []rule{
 			if r.ClockSkewBound <= 0 {
 				return "", false
 			}
+			//
+			// TWO CLAUSES, NOT A LIST: each names its own clock and has its
+			// own verb, and the second reads the first's fleet as "it", so
+			// both together are a compound sentence joined by ", and".
+			// words.And says a list ("a and b") and would run the two
+			// clauses together without the comma.
 			fleet := fleetClock(r.ClockSkewNodes)
-			var off []words.Said
+			var off string
 			if magnitude(r.ClockSkew) > r.ClockSkewBound {
-				off = append(off, words.Said(fmt.Sprintf("this node's clock runs %s %s %s",
-					spoken(r.ClockSkew), clockSide(r.ClockSkew), fleet)))
+				off = fmt.Sprintf("this node's clock runs %s %s %s",
+					spoken(r.ClockSkew), clockSide(r.ClockSkew), fleet)
 				fleet = "it"
 			}
 			if magnitude(r.BrokerClockSkew) > r.ClockSkewBound {
-				off = append(off, words.Said(fmt.Sprintf("the clock of the broker member leading the "+
+				broker := fmt.Sprintf("the clock of the broker member leading the "+
 					"position register runs %s %s %s", spoken(r.BrokerClockSkew),
-					clockSide(r.BrokerClockSkew), fleet)))
+					clockSide(r.BrokerClockSkew), fleet)
+				if off == "" {
+					off = broker
+				} else {
+					off = fmt.Sprintf("%s, and %s", off, broker)
+				}
 			}
-			if len(off) == 0 {
+			if off == "" {
 				return "", false
 			}
 			return fmt.Sprintf("%s, past the %s every deletion that judges one machine's "+
-				"instant by another machine's clock assumes", words.And(off),
+				"instant by another machine's clock assumes", off,
 				spoken(r.ClockSkewBound)), true
 		},
 		remedy: "Run an NTP client (chrony, systemd-timesyncd) on the machine whose clock " +
