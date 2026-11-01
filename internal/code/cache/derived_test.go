@@ -75,6 +75,11 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 			// it, or the tree's name under objects/, is none of its.
 			{rel: "crewlet/memo", owner: cache.DerivedMemo},
 			{rel: "crewlet/memo/" + strings.Repeat("ab", 32)}, {rel: "crewlet/memo.1"},
+			// The code index's files, numbered from one, under its directory.
+			{rel: "crewlet/codeindex/seg.1", owner: cache.DerivedCodeIndex},
+			{rel: "crewlet/codeindex/tip.12", owner: cache.DerivedCodeIndex},
+			{rel: "crewlet/codeindex/seg.0"}, {rel: "crewlet/codeindex/tip.01"}, {rel: "crewlet/codeindex"},
+			{rel: "crewlet/seg.1"},
 			{rel: "objects/info/memo"},
 			// The installed published chain (layers.go): each layer's
 			// multi-pack-index and bitmap and the chain file the cache writes
@@ -185,11 +190,17 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 			t.Fatalf("the maintainer ran %v, want %s's tip", ran, chained)
 		}
 		tip := derivedOnDisk(t, tipped)
+		// And the code index of the branch's tip, built over that copy.
+		copied := w.sync(t, c, chained)
+		if got, err := c.Index(t.Context(), copied); err != nil || got != cache.IndexBuilt {
+			t.Fatalf("the code index's build = (%q, %v), want built", got, err)
+		}
+		indexed := derivedOnDisk(t, copied.Dir)
 		t.Logf("the suite's git and the cache wrote, of the derived files: %v after the round, %v after the "+
-			"maintainer and a delta, %v of a published layer, %v where the cache installed it and %v with the "+
-			"node's tip", roundWrote, maintained, published, installed, tip)
+			"maintainer and a delta, %v of a published layer, %v where the cache installed it, %v with the "+
+			"node's tip and %v with its code index", roundWrote, maintained, published, installed, tip, indexed)
 		owned := map[cache.DerivedName]int{}
-		for _, rel := range slices.Concat(maintained, published, installed, tip) {
+		for _, rel := range slices.Concat(maintained, published, installed, tip, indexed) {
 			got := cache.OwnersOf(rel)
 			if len(got) != 1 {
 				t.Errorf("real git wrote %s, owned by %v: a file under objects/ that is no row's pack is one "+

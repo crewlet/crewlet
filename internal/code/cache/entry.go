@@ -425,6 +425,10 @@ type incarnation struct {
 	provGen     uint64
 	provNext    uint64
 	retiredRuns []string
+	// codeIndex is the code index its record names, opened by the first
+	// reader (Cache.CodeIndex) and kept for the next while the record is
+	// inc's; nil until then, and set nil by every change of the record.
+	codeIndex *openedCodeIndex
 	// THE MEMO'S IN-MEMORY HALF (memo.go), whose record — its cohorts and
 	// their bytes — is derived[DerivedMemo]; nothing of it is an entry's.
 	// memoMu is the memo's own lock, under which an answer is placed into its
@@ -1331,6 +1335,9 @@ func (c *Cache) setDerived(inc *incarnation, name DerivedName, d derivedState, p
 			// is held to (MemoShare), with no walk of the node's copies.
 			c.memoBytes.Add(d.Bytes - was)
 		}
+		if name == DerivedCodeIndex {
+			c.codeIndexBytes.Add(d.Bytes - was)
+		}
 	}
 	inc.metaBytes += d.Bytes - was
 }
@@ -1412,6 +1419,7 @@ func (c *Cache) discard(inc *incarnation) string {
 	c.heldBytes.Add(-(inc.diskBytes + inc.metaBytes))
 	c.droppingBytes.Add(-inc.droppingBytes)
 	c.memoBytes.Add(-inc.derived[DerivedMemo].Bytes)
+	c.codeIndexBytes.Add(-inc.derived[DerivedCodeIndex].Bytes)
 	// No reader holds it, so every run of its index mapped goes now.
 	c.forgetRuns(inc)
 	return inc.dir

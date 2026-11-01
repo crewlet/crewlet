@@ -740,6 +740,8 @@ func (s *swapping) carryDerived() error {
 			// layer by layer as the chain the next incarnation holds says —
 			// never by its patterns, which would carry a layer the chain
 			// leaves and the chain file naming it.
+		case d.Name == DerivedCodeIndex:
+			carried, err = s.carryCodeIndex(d)
 		case d.inProcess() && !d.hasMain():
 			carried, err = s.carryIndex(d)
 		default:
@@ -1168,6 +1170,11 @@ func (s *swapping) promote() {
 	// no memo yet: the move below counts it as it moves it (setMemo).
 	next.discarded = false
 	c.heldBytes.Add(next.diskBytes + next.metaBytes)
+	// The code index carryCodeIndex linked in is counted in the indexes' own
+	// total too (setDerived counts nothing of a discarded incarnation, which
+	// next was until now), as inc's count of it goes to nothing below: the
+	// share the janitor holds them to sees the index once, as next's.
+	c.codeIndexBytes.Add(next.derived[DerivedCodeIndex].Bytes)
 	c.droppingBytes.Add(next.droppingBytes)
 	c.setSize(inc, max(inc.diskBytes-s.shared, 0))
 	c.setDropping(inc, max(inc.droppingBytes-s.sharedDropping, 0))
@@ -1434,6 +1441,8 @@ var swapFields = []swapField{
 		carry: func(s *swapping) { s.next.provNext = max(s.next.provNext, s.inc.provNext) }},
 	{name: "retiredRuns", class: notCarried, why: "inc's runs its index stopped naming, on inc's disk and gone " +
 		"with inc's directory: next links only the runs its record names (carryIndex)"},
+	{name: "codeIndex", class: notCarried, why: "inc's code index as its readers opened it; next opens the " +
+		"record carryCodeIndex links in at its first reader"},
 	{name: "memoMu", class: own, why: "the memo's lock of next's own"},
 	{name: "memoListed", class: own, why: "false, or inc's as carryMemo moves the memo's tree in whole as next " +
 		"is promoted: the cohorts on next's disk are those inc's record named, listed or not"},

@@ -965,9 +965,12 @@ const (
 	BackfillRetryCeiling = 5 * time.Minute
 )
 
-// MappedRunShare bounds the runs of the indexes of pushes the cache holds
+// MappedRunShare bounds the runs of the indexes of pushes — and the files of
+// the code indexes, which share the bound (codeindex.go) — the cache holds
 // mapped at once (runmaps.go): the process's count of mappings
-// (vm.max_map_count, read at Open) over this.
+// (vm.max_map_count, read at Open) over this. A search holds the at most
+// codeindex.MaxSegments+1 files of one index for the length of one read, so
+// the few hundred reads of one node still hold a small part of it.
 //
 // A QUARTER: every mapping the engine's process makes counts against the one
 // sysctl — the Go heap's, the store's library and its threads', every run's —

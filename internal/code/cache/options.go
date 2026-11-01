@@ -37,6 +37,16 @@ type Fetcher interface {
 // which the pace reads as one of each.
 type Fleet func() (gitNodes, dataNodes int, err error)
 
+// Placement is where a `search: indexed` repository's code index is kept
+// (M6-D12): the first code.IndexHolders of Order — its rendezvous order over
+// the live git nodes, estate.Router.GitOrder — keep one, and Node is this
+// node's id as that order names it. An Order that fails decides nothing: the
+// indexer keeps what it holds and asks again at its next look.
+type Placement struct {
+	Node  string
+	Order func(repoID string) ([]string, error)
+}
+
 // Objects is the object store's read of one pack bundle, verified against
 // the row that names it: *objstore.Store satisfies it.
 type Objects interface {
@@ -68,6 +78,11 @@ type Options struct {
 	// Fleet counts the live git nodes and data nodes the backfill paces its
 	// reads by: the engine's placements, read again after every page.
 	Fleet Fleet
+
+	// Placement is where this node keeps code indexes: nil keeps none — a
+	// harness with no fleet, which never searches by index — and the engine
+	// sets it on every git node over its estate router.
+	Placement *Placement
 
 	// Limits is the current epoch's code.limits.
 	Limits func() code.Limits
@@ -147,6 +162,10 @@ type knobs struct {
 	// maintTicks, when set, is where the maintainer takes its ticks from, in
 	// place of a ticker of MidxDebounce.
 	maintTicks <-chan time.Time
+	indexTicks <-chan time.Time
+	// indexReading is told how many blobs a build of a code index reads
+	// through its cat-file, before it starts it.
+	indexReading func(blobs int)
 	// installWake, when set, is what the installer waits on for the earliest
 	// of its repositories' waits to end — told when, on Options.Now's clock —
 	// in place of a timer: a case moves its clock and wakes it.
@@ -302,6 +321,9 @@ func (o Options) validate() error {
 	case o.Fleet == nil:
 		return refuse("Fleet is nil: the backfill paces its reads of the estate by the fleet's live git and " +
 			"data nodes")
+	case o.Placement != nil && (o.Placement.Node == "" || o.Placement.Order == nil):
+		return refuse("Placement names no node or no order: a node keeping code indexes knows its own id " +
+			"and its repositories' git order (estate.Router.GitOrder); leave Placement nil to keep none")
 	case o.Limits == nil:
 		return refuse("Limits is nil: a cache serves under the current epoch's code.limits")
 	case o.Now == nil:

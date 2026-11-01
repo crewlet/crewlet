@@ -931,6 +931,13 @@ const (
 	// oldest first. The engine's own read, as `compaction_due` is: what its
 	// home polls and is nudged into reading.
 	ReadChangesDue ReadKind = "changes_due"
+	// ReadIndexed is the active and archived repositories searched by index
+	// ([SearchIndexed]), BY NAME, each by its id and name, a page of
+	// MaxSnapshotItems after the [ReadQuery.Cursor] — the last name a page
+	// served, "" from the start: the listing a git node's indexer polls for
+	// the repositories whose code index it may keep (M6-D12). The engine's
+	// own read, as `compaction_due` is.
+	ReadIndexed ReadKind = "indexed"
 	// ReadChecks lists attempts of checks ([CheckRow]), held to the asker's
 	// grant: one repository's, newest ended first and every attempt not yet
 	// ended after them; one change's of it, or one commit's, by commit, name
@@ -1029,7 +1036,7 @@ func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadBranchChanges,
-		ReadChangesDue,
+		ReadChangesDue, ReadIndexed,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
 		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox}
 }
@@ -1048,8 +1055,8 @@ type ReadQuery struct {
 	// would be a reader nobody named, and an optional asker is a hole any
 	// caller that forgot it opens. REFUSED on `introduced`, on `run_pushes`
 	// and on the duty listings `compaction_due`, `publication_due`,
-	// `expunge_due`, `changes_due` and `checks_due`, which no principal
-	// makes: an asker there would be judged by nothing.
+	// `expunge_due`, `changes_due`, `checks_due` and `indexed`, which no
+	// principal makes: an asker there would be judged by nothing.
 	Asker Principal `json:"asker"`
 	// CeilingSeat is the handle of the seat the asking seat's turn is acting
 	// FOR — the colleague whose ask woke it — and "" for a read made for its
@@ -1351,7 +1358,9 @@ type ReadAnswer struct {
 	// repository's first page, DueTargets: its target branches due a reading
 	// of their checks file again, and DueTips: its protected targets owing
 	// tip work ([TipDue], tipwork.go).
-	DueRepos   []string         `json:"due_repos,omitempty"`
+	DueRepos []string `json:"due_repos,omitempty"`
+	// Indexed is an `indexed` listing's page of repositories, by name.
+	Indexed    []IndexedRepo    `json:"indexed,omitempty"`
 	DueChanges []ChangeDue      `json:"due_changes,omitempty"`
 	DueTargets []CheckTargetDue `json:"due_targets,omitempty"`
 	DueTips    []TipDue         `json:"due_tips,omitempty"`
@@ -1390,6 +1399,14 @@ type ReadAnswer struct {
 	Next     string             `json:"next,omitempty"`
 	Position statelog.Position  `json:"position"`
 	Level    statelog.ReadLevel `json:"level"`
+}
+
+// IndexedRepo is one repository an `indexed` read lists: its id, which its
+// git order and its copy are keyed by, and its name, which the listing's
+// cursor is.
+type IndexedRepo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // ExpungeCandidate is one repository an `expunge_due` read lists: the expunge

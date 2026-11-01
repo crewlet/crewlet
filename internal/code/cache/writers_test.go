@@ -477,6 +477,11 @@ var cacheWriters = []writerRow{
 			"made for its first run, and a rebuild's links of the runs of the copy it replaces into its own — " +
 			"every run itself staged in tmp/ and renamed in through durable.go, and retired through layout.go's " +
 			"toTrash", []cache.DerivedName{cache.DerivedProvenance}},
+	{"internal/code/cache/codeindex.go", kindOS,
+		"the code index, the cache's own derived file under the incarnation's crewlet/codeindex: the directory " +
+			"made for its first file, a swap's and a rebuild's links of the files the record of the copy it " +
+			"replaces names — every segment and tip map itself staged in tmp/ and renamed in through durable.go, " +
+			"and retired through layout.go's toTrash", []cache.DerivedName{cache.DerivedCodeIndex}},
 	{"internal/code/cache/memo.go", kindOS,
 		"the memo of answers by object id, the cache's own derived file under the incarnation's crewlet/memo: " +
 			"each answer staged in tmp/ — with no sync, since every read holds an entry to its digest — " +

@@ -138,6 +138,14 @@ const (
 	// write of each kind, because both are graph-<checksum>.graph under one
 	// chain file, which ownership by name cannot divide.
 	DerivedGraphLayers DerivedName = "graph-layers"
+	// DerivedCodeIndex is the trigram index of the repository's default
+	// branch's tip (codeindex.go, internal/codeindex): the SEGMENTS, each the
+	// trigrams of a batch of blobs keyed by blob id, and the TIP MAP naming
+	// the tip's every file and its blob, kept by the git nodes a
+	// `search: indexed` repository's search is placed on (code.IndexHolders)
+	// under the incarnation's crewlet/codeindex — the cache's own write,
+	// which no git process reads.
+	DerivedCodeIndex DerivedName = "codeindex"
 )
 
 // engineRoot is the one directory of an incarnation's root besides objects/
@@ -211,10 +219,16 @@ const (
 	// before it answers, and otherwise by the cache's installer, behind the
 	// serving, once a delta has named a layer the copy does not hold.
 	TriggerInstall Trigger = "install"
+	// TriggerIndexer is the cache's indexer (codeindex.go): on a git node a
+	// `search: indexed` repository's search is placed on, behind the
+	// serving, once the repository's default branch has moved past the tip
+	// its index was read at.
+	TriggerIndexer Trigger = "indexer"
 )
 
 // Triggers is every Trigger.
-var Triggers = []Trigger{TriggerRound, TriggerMaintainer, TriggerBackfill, TriggerRead, TriggerInstall}
+var Triggers = []Trigger{TriggerRound, TriggerMaintainer, TriggerBackfill, TriggerRead, TriggerInstall,
+	TriggerIndexer}
 
 // Valid reports whether t is one of Triggers.
 func (t Trigger) Valid() bool { return slices.Contains(Triggers, t) }
@@ -246,10 +260,16 @@ const (
 	// git reads every pack outside the chain beside it, and a pack's own
 	// index where there is no chain at all.
 	FreshInstalled Freshness = "installed"
+	// FreshAtTip is current at the tip it names, and only there: an index
+	// answers for the commit its tip map was read at (Cache.IndexTip), which
+	// a reader compares with the tip it was asked about — a search of any
+	// other commit is read with git grep instead, so an index behind its
+	// branch answers nothing wrong, only less of it from the index.
+	FreshAtTip Freshness = "at-tip"
 )
 
 // Freshnesses is every Freshness.
-var Freshnesses = []Freshness{FreshDebounced, FreshAtRound, FreshImmutable, FreshInstalled}
+var Freshnesses = []Freshness{FreshDebounced, FreshAtRound, FreshImmutable, FreshInstalled, FreshAtTip}
 
 // Valid reports whether f is one of Freshnesses.
 func (f Freshness) Valid() bool { return slices.Contains(Freshnesses, f) }
@@ -496,10 +516,16 @@ const (
 	// refused for memory either: it runs no git, and what it holds is a
 	// part's copy buffer and a fetch slot, as a pack's download does.
 	StepLayer Step = "layer"
+	// StepCodeIndex is the trigram index of the default branch's tip: a
+	// segment of the blobs the tip brought, a merge of segments, and the
+	// tip map (codeindex.go). Never refused for memory either: the git it
+	// runs only reads, and what it holds is one segment's postings.
+	StepCodeIndex Step = "codeindex"
 )
 
 // Steps is every Step, in the order a line or a count names them.
-var Steps = []Step{StepBitmap, StepIndex, StepGraph, StepTipGraph, StepProvenance, StepMemo, StepLayer}
+var Steps = []Step{StepBitmap, StepIndex, StepGraph, StepTipGraph, StepProvenance, StepMemo, StepLayer,
+	StepCodeIndex}
 
 // Valid reports whether s is one of Steps.
 func (s Step) Valid() bool { return slices.Contains(Steps, s) }
@@ -749,6 +775,11 @@ var (
 	// is renamed graph-<checksum>.graph.
 	graphChainLock = lazyPattern(`^commit-graph-chain\.lock$`)
 	tmpGraph       = lazyPattern(`^tmp_graph_[A-Za-z0-9]{6}$`)
+	// The code index's files under crewlet/codeindex (codeIndexDir): a
+	// segment, seg.<n>, and a tip map, tip.<n>, n each file's number in
+	// decimal from 1, as the index's record names it (codeIndexState).
+	codeIndexSegName = lazyPattern(`^seg\.[1-9][0-9]*$`)
+	codeIndexTipName = lazyPattern(`^tip\.[1-9][0-9]*$`)
 )
 
 // lazyPattern is expr compiled at its first use and shared from then on
@@ -1018,6 +1049,46 @@ func DerivedFiles() []Derived {
 		// The published graph layers only, with their layers (rebuild.go's
 		// seedLayers): no row names the node's tip, so a rebuild writes it
 		// again over its new copy's tail, at once.
+		Seed: SeedLink,
+	}, {
+		Name:   DerivedCodeIndex,
+		Inputs: []Input{InputRefs, InputOID},
+		Writes: []Write{{Step: StepCodeIndex, Trigger: TriggerIndexer, Writer: Writer{File: codeIndexFile},
+			Charge: "one segment's postings: at most codeindex.SegmentSourceBytes of source read through one " +
+				"cat-file, each blob's bytes held only while its trigrams are taken, and the tip's every path " +
+				"and blob, about 60 bytes a file, while its tip map is written; a merge holds the segments it " +
+				"merges and two buffers of one trigram's postings"}},
+		// Its files by name, with NO MAIN: the index is there by its record
+		// (codeIndexState), which names each segment and the tip map, as the
+		// index of pushes is there by its runs'. And NOT a tree moved whole:
+		// its files are few (codeindex.MaxSegments segments and one tip map),
+		// and S18 carries them across incarnations by HARD LINK — the same
+		// inodes, never read again — which a tree's one rename at the
+		// promotion is not (Validate refuses a linked tree).
+		Owns: []Owned{
+			{FilePattern: FilePattern{codeIndexDir, codeIndexSegName()}, File: "codeindex-segment"},
+			{FilePattern: FilePattern{codeIndexDir, codeIndexTipName()}, File: "codeindex-tip"},
+		},
+		// Each file carries a SHA-256 trailer over every byte before it
+		// (internal/codeindex's formats): the provenance run's rule.
+		Check:     CheckRunTrailer,
+		Freshness: FreshAtTip,
+		// Its inputs are the default branch's tip and the blobs it names: an
+		// object id names one object for ever, so no pack added, removed or
+		// RETIRED changes a posting — a compaction keeps every object of the
+		// packs it retires — and the refs moving leave the postings standing
+		// while the tip map says which tip they answer for (the indexer
+		// writes the next one, indexing only the blobs it brings). A report
+		// names no file of it, since no git process reads one, and no layer
+		// moves a blob. A log gone back is another history, whose tip may
+		// name what this one never held. An EXPUNGE'S COMMIT drops it whole:
+		// a posting would keep a purged blob's trigrams, and a search would
+		// answer that the purged text was there (M6-D5).
+		OnPackAdded: Keep, OnPackRemoved: Keep, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Drop,
+		OnPackRetired: Keep, OnPackExpunged: Drop, OnLayersMoved: Keep,
+		// A function of blob ids alone, so a rebuild — which repairs packs —
+		// and a compaction's swap link every file its record names into the
+		// copy they promote: no re-index after a compaction (S18).
 		Seed: SeedLink,
 	}}
 }

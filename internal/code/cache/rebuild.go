@@ -1170,6 +1170,7 @@ func (c *Cache) queueRebuild(e *entry, inc *incarnation, reason RebuildReason, w
 // does not seed, can afford, and it seeds no layer it did not check.
 func (c *Cache) seedRebuild(ctx context.Context, e *entry, replaced, inc *incarnation, whole []string) error {
 	c.seedIndex(e, replaced, inc)
+	c.seedCodeIndex(e, replaced, inc)
 	// EACH PACK WHERE THE COPY REPLACED KEPT IT: a dropping pack into the
 	// new incarnation's dropping view, every other into objects/pack. The
 	// rebuild's own full round holds each to where its rows place it, and

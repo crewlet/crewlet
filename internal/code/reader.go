@@ -1495,6 +1495,12 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// again from its writer's own snapshot.
 		query = q.changesDueQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.changesDue(ctx, tx, q, &out) }
+	case ReadIndexed:
+		// A SET READ OF THE DOMAIN, as the compaction's listing is: the
+		// indexer reads each repository it lists from its own copy, and a
+		// mode a deferred record changed is read again at the next poll.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.indexed(ctx, tx, q, &out) }
 	case ReadChecks:
 		// A SET READ, of the repository it names or of the domain for the
 		// window (checksread.go).
@@ -1614,6 +1620,8 @@ func (q ReadQuery) validate() error {
 		return q.validateExpungeDue()
 	case ReadChangesDue:
 		return q.validateChangesDue()
+	case ReadIndexed:
+		return q.validateIndexed()
 	case ReadChecksDue:
 		return q.validateChecksDue()
 	case ReadExpungeTips:
@@ -2050,6 +2058,19 @@ func (q ReadQuery) validateExpungeDue() error {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
 				"purge requested, a page of MaxSnapshotItems at a time, and names nothing else")
 		}
+	}
+	return nil
+}
+
+// validateIndexed is [ReadQuery.validate] for an `indexed` read: the
+// engine's own — a git node's indexer listing the repositories it may keep
+// an index of — so it names NO asker, for an `introduced` read's reason, and
+// nothing but its cursor: exactly what an `expunge_due` read names, whose
+// rule it is held to.
+func (q ReadQuery) validateIndexed() error {
+	if err := q.validateExpungeDue(); err != nil {
+		return fmt.Errorf("%w (an indexed read is held to the same: it lists the repositories searched "+
+			"by index, a page of MaxSnapshotItems at a time, after its cursor)", err)
 	}
 	return nil
 }
@@ -3074,6 +3095,38 @@ func (r *Reader) expungeDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	return rows.Err()
 }
 
+// indexed serves one page of an `indexed` read ([ReadIndexed]): the active
+// and archived repositories searched by index, by name after the cursor —
+// ONE SEEK of code_repos_search_idx (replicated 0079), its partial predicate
+// repeated verbatim, which holds exactly the repositories a git node's
+// indexer may keep an index of. A FULL LISTING, never a delta from the last
+// poll's, for the compaction's listing's reason.
+func (r *Reader) indexed(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	// THE CURSOR IS THE LAST NAME SERVED, and "" before the first: a name
+	// is never empty, so one statement serves every page.
+	if q.Cursor != "" && !ValidName(q.Cursor) {
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	}
+	rows, err := tx.QueryContext(ctx, indexedSQL, string(SearchIndexed), q.Cursor, r.pageRows)
+	if err != nil {
+		return fmt.Errorf("code: list the repositories searched by index: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	for rows.Next() {
+		var c IndexedRepo
+		if err := rows.Scan(&c.ID, &c.Name); err != nil {
+			return fmt.Errorf("code: list the repositories searched by index: %w", err)
+		}
+		out.Indexed = append(out.Indexed, c)
+		if pg.add(2 + field("id", stringBytes(c.ID), true) + field("name", stringBytes(c.Name), false)) {
+			out.Next = c.Name
+			break
+		}
+	}
+	return rows.Err()
+}
+
 // expungeTips serves one page of an `expunge_tips` read ([ReadExpungeTips]):
 // the object each of the repository's ref drops left whose record's broker
 // instant is at or after the query's — ONE SEEK of code_ref_drops' key
@@ -3776,6 +3829,11 @@ const (
 		live_packs, live_bytes, live_objects, version FROM code_repos INDEXED BY code_repos_expunging_idx
 		WHERE (expunge_id != '' OR expunge_request != '') AND status IN ('active', 'archived') AND id > ?
 		ORDER BY id LIMIT ?`
+	// THE REPOSITORIES SEARCHED BY INDEX, by name over code_repos_search_idx
+	// — its partial predicate repeated verbatim — after the cursor, "" from
+	// its start.
+	indexedSQL = `SELECT id, name FROM code_repos INDEXED BY code_repos_search_idx
+		WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`
 	// AN EXPUNGE'S TIPS: a repository's ref drops from an instant, in the
 	// order of code_ref_drops' key, which leads with the instant — the first
 	// page from the instant, a later one after the last drop read.

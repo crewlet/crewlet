@@ -30,9 +30,16 @@ import (
 // holds it and nobody can take it again — gone, decided under the lock — so
 // the munmap itself runs holding none.
 
+// THE CODE INDEX'S FILES COUNT HERE TOO (codeindex.go): a code index's tip
+// map and segments are mapped as a run is, held by a search's reader for as
+// long as its Synced is, kept idle for the next and unmapped past the bound
+// alike — one bound, since the sysctl it guards is one count of the
+// process's. A search that finds the bound held whole reads the tip with git
+// grep instead.
+//
 // errMapsFull is a mapping the node's bound on mapped runs has no room for:
 // every run mapped is held by a reader.
-var errMapsFull = errors.New("cache: the node maps as many runs of its indexes of pushes as it may, " +
+var errMapsFull = errors.New("cache: the node maps as many files of its indexes as it may, " +
 	"and its readers hold every one")
 
 // runMaps is the node's mapped runs, counted against its bound.

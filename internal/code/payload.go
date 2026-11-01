@@ -202,6 +202,15 @@ const (
 // TestEveryDeclaredSearchModeIsOneTheDomainRecords) are read against.
 func SearchModes() []SearchMode { return []SearchMode{SearchIndexed, SearchGrep} }
 
+// IndexHolders is how many git nodes keep a `search: indexed` repository's
+// code index: the first IndexHolders of its rendezvous order over the live
+// git nodes (estate.Router.GitOrder), so a search has a runner-up holding a
+// built index when the first is gone or still building (M6-D12). Two, not
+// one: a single holder's restart would send every search of its
+// repositories to git grep until it rebuilt; not three, because every holder
+// pays the index's bytes against its cache budget and its build's cat-file.
+const IndexHolders = 2
+
 // Valid reports a mode this build knows. EMPTY IS NOT ONE, for [Visibility]'s
 // reason: whoever forms a record applies its default first — the
 // configuration indexed, a tool grep.

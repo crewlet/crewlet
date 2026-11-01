@@ -1094,6 +1094,10 @@ func registeredStatements() map[string]statement {
 		"begin dropped layers": {beginDroppedLayersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"commit counters":      {commitCountersSQL, []any{1, 1, 1, 1, 1, 1, "", 0, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"expunge due":          {expungeDueSQL, []any{"", MaxSnapshotItems}, []string{"code_repos_expunging_idx (id>?)"}},
+		// THE REPOSITORIES SEARCHED BY INDEX, a git node's indexer's
+		// listing, by name over code_repos_search_idx.
+		"indexed": {indexedSQL, []any{string(SearchIndexed), "", MaxSnapshotItems},
+			[]string{"code_repos_search_idx (search=? AND name>?)"}},
 		// A REPOSITORY'S CHECKS': the join's read of one row by its whole
 		// key, and its log's by the same; the oldest rows past a cutoff —
 		// the horizon's, a sweep's decide's and a purge part's — weighed by
@@ -1368,10 +1372,6 @@ func claimedReads() map[string]statement {
 		"code_landings_change_idx": {`SELECT repo_id, target_ref, position, ordinal FROM code_landings
 			INDEXED BY code_landings_change_idx WHERE change_id = ? AND change_id != ''`,
 			[]any{"repo-1-change-000001"}, []string{"code_landings_change_idx (change_id=?)"}},
-		"code_repos_search_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_search_idx
-			WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`,
-			[]any{string(SearchIndexed), "", MaxSnapshotItems},
-			[]string{"code_repos_search_idx (search=? AND name>?)"}},
 		// THE MIRRORS' AND THE IMPORTS' INDEXES THEIR LATER READERS SEEK
 		// (replicated 0095): the home's listings of the repositories being
 		// imported, the pull mirrors least recently synced first and the push

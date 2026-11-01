@@ -187,6 +187,11 @@ func (c *Cache) writeRefs(ctx context.Context, e *entry, inc *incarnation, snap 
 	if err := syncDir(inc.dir); err != nil {
 		return false, fmt.Errorf("cache: sync %s: refs: %w", e.id, err)
 	}
+	if refsMove {
+		// The default branch may have moved: the indexer looks at the
+		// repository now rather than at its next poll (codeindex.go).
+		c.nudgeIndex(e.id)
+	}
 	return true, nil
 }
 

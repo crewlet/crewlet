@@ -301,11 +301,14 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 
 	// 6. THE CACHE, which takes over the layout's claim — its rows read
 	// through the router, and its indexes' backfill paced by the fleet's
-	// live git and data nodes as the router's placements count them.
+	// live git and data nodes as the router's placements count them. Its
+	// code indexes are kept for the repositories this node is among the
+	// first code.IndexHolders of, in the router's git order (M6-D12).
 	seam := e.router.Code()
 	c, err := cache.Open(ctx, cache.Options{
 		Layout: layout, MaxBytes: size.budget, Git: pool, Objects: objects, Fetch: seam, Fleet: e.codeFleet,
-		Limits: e.codeLimits, HookCommand: hook, Metrics: e.metrics, Now: time.Now,
+		Placement: &cache.Placement{Node: nodeID, Order: e.router.GitOrder},
+		Limits:    e.codeLimits, HookCommand: hook, Metrics: e.metrics, Now: time.Now,
 	})
 	if err != nil {
 		return codeHostParts{}, fmt.Errorf("engine: open the code cache at %s: %w", layout.Dir, err)

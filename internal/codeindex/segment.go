@@ -105,6 +105,28 @@ const (
 // derived file, so the remedy is to drop it and build it again.
 var ErrMalformed = errors.New("codeindex: a file this build does not write; drop it and the index is built again")
 
+// SegmentSourceBytes is the most source one segment is built from: a
+// builder takes blobs until it has read this much (Builder.SourceBytes) and
+// the segment is written then, so what an index build holds is one segment's
+// postings — a byte or two for each distinct trigram of each blob, in lists
+// grown by doubling, and a table entry and a list header for each distinct
+// trigram of the segment — and the blob being read beside it: ESTIMATED at
+// about 256 MiB at its peak (M6's sizing), never measured yet. 64 MiB is
+// PROVISIONAL: BenchmarkCodeIndex (build seconds a gigabyte, index bytes a
+// source byte, query p50 and p99 at 120k files; code search's measuring
+// commit) re-derives it.
+const SegmentSourceBytes = 64 << 20
+
+// MaxSegments is the most segments one repository's index keeps: past it the
+// smaller ones are merged (MergeSegments), keeping only the blobs the tip
+// still names, so a search reads at most this many tables a trigram and an
+// index gives back what its branch no longer holds. Merged GEOMETRICALLY —
+// the newest segments while each is at least half the one before it — so a
+// blob is rewritten a logarithmic number of times over the index's life
+// rather than at every tip. 32 is PROVISIONAL, re-derived with
+// SegmentSourceBytes by BenchmarkCodeIndex.
+const MaxSegments = 32
+
 // blobEntry is one row of a segment's blob table.
 type blobEntry struct {
 	oid   OID

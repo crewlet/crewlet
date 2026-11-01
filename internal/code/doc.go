@@ -1038,8 +1038,10 @@
 // for good: [RepoSettings.Validate] refuses its index, and a settings change
 // asking for one is refused not_permitted naming why, a person's included. The
 // rows carry the mode in code_repos.search, beside code_repos_search_idx over
-// the active and archived repositories by mode and then name — the walk of
-// whatever lists the indexed ones. This package records the mode, serves it and
+// the active and archived repositories by mode and then name — the walk of the
+// [ReadIndexed] listing, by which a git node's indexer finds the repositories
+// whose code index it may keep, the first [IndexHolders] of each one's git
+// order (internal/code/cache). This package records the mode, serves it and
 // lets a maintainer change it; it indexes and searches nothing.
 //
 // # What this package does not do

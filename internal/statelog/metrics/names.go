@@ -80,6 +80,8 @@ const (
 	CodeHostSpoolWaits               = "crewlet.code.host.spool.waits"
 	CodeHostWriteDuration            = "crewlet.code.host.write.duration"
 	CodeHostWrites                   = "crewlet.code.host.writes"
+	CodeIndexBuilds                  = "crewlet.code.index.builds"
+	CodeIndexBytes                   = "crewlet.code.index.bytes"
 	CodePublishBytes                 = "crewlet.code.publish.bytes"
 	CodeQueueProposals               = "crewlet.code.queue.proposals"
 	CodeMergeOutcomes                = "crewlet.code.merge.outcomes"

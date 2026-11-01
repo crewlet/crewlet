@@ -1290,7 +1290,11 @@ func Catalogue() []Instrument {
 				"of the node's index of which push introduced each commit, " +
 				"which no git reads, held to its own SHA-256 trailer — a run " +
 				"a previous process left before anything first reads it, " +
-				"behind the serving, and every run by a scrub; `idx`, `rev`: a " +
+				"behind the serving, and every run by a scrub; " +
+				"`codeindex-segment`, `codeindex-tip`: a segment and a tip " +
+				"map of a repository's code index, which no git reads " +
+				"either, held to their own SHA-256 trailers by a scrub; " +
+				"`idx`, `rev`: a " +
 				"pack's index and reverse index, stored with its push; " +
 				"`pack`, the pack itself, read only by a scrub), `outcome` " +
 				"(`sound`; `damaged` — a derived file dropped to be written " +
@@ -1608,6 +1612,36 @@ func Catalogue() []Instrument {
 				"less what is being cut; falling to nothing at once is a " +
 				"history restored or recreated under the node, which drops " +
 				"every answer read from it.",
+		},
+		{
+			Name: CodeIndexBuilds, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Looks this node's indexer took at the code index of a " +
+				"`search: indexed` repository — each one every minute, and one " +
+				"whose refs a round moved at once — by `outcome`. `built`: the " +
+				"index now answers for the " +
+				"default branch's tip, only the blobs the tip brought read. " +
+				"`current`: it already did, or another build stored first. " +
+				"`none`: the repository keeps no index here — its search is " +
+				"grep, its default branch names no commit, or this node is not " +
+				"among the first two git nodes of its order, which keep it " +
+				"(an index this node kept then dropped), so on a fleet of more " +
+				"than two git nodes most looks are `none`. " +
+				"`failed`: the copy could not be synced or read, and the next " +
+				"look tries again (`code_cache_index_failed` says why). A " +
+				"steady `built` on a quiet company is an index the share keeps " +
+				"trimming: see `crewlet.code.index.bytes`.",
+		},
+		{
+			Name: CodeIndexBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "What this node's git cache holds of code indexes — the " +
+				"trigram segments and tip maps of the repositories searched by " +
+				"index that it holds — part of `crewlet.code.cache.bytes`. Held " +
+				"to a quarter of the cache's budget before any repository is " +
+				"evicted, by dropping the index of the copy used least recently " +
+				"whole; the indexer builds a dropped one again at its next look, " +
+				"so a gauge pinned at the quarter is a node keeping more " +
+				"indexes than its budget holds.",
 		},
 		{
 			Name: CodeCacheDroppingBytes, Kind: KindGauge, Unit: UnitBytes,

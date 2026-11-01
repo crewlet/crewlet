@@ -155,7 +155,10 @@ code:
 - **`search`** — how code search reads it: `indexed` (unset), from an index of
   its default branch, which a search across the company's repositories reads
   as well as one naming the repository; or `grep`, with git grep over a copy,
-  and only by a search that names it. An index costs each git node keeping one
+  and only by a search that names it. The index is kept by the first two git
+  nodes of the repository's order over the live git nodes — each fills a copy
+  of its own for it, and builds it again within a minute of a push, reading
+  only the files the push brought — and an index costs each git node keeping one
   its disk and a build at every new tip, and a `grep` repository costs nothing
   until somebody asks it. A repository a tool makes starts at `grep`
   ([Repositories made by tools](#repositories-made-by-tools)). Any other value
@@ -2763,7 +2766,7 @@ that text climbs back out of `refs/`, as the file it leads to.
 `crewlet code verify` names any of them. Each is declared once in the engine,
 and this table is that list; the steps are what
 `code_cache_maintenance_refused` and its counter name when the node's memory
-refuses one — never `provenance`, `memo` or `layer`, which the engine's own
+refuses one — never `provenance`, `memo`, `layer` or `codeindex`, which the engine's own
 code writes, holding no git slot and charged against no memory budget. The
 `layers` and `graph-layers` files are git's own, written once by the
 repository's maintainer and installed byte for byte from the object store
@@ -2781,6 +2784,7 @@ written again at once.
 | `commit-graph`, the commit-graph | `objects/info/commit-graph` | the background indexing: `graph` | kept | dropped first | dropped first |
 | `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept | kept | kept |
 | `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept | dropped first | kept |
+| `codeindex`, the trigram index of the default branch's tip of a repository searched by index, on the first two git nodes of its git order — its segments, keyed by blob, and its tip map | `crewlet/codeindex/seg.<n>`, `crewlet/codeindex/tip.<n>` | the indexer of code indexes: `codeindex` | kept | dropped first | kept |
 | `layers`, the installed published multi-pack-index chain — each layer's index and bitmap, and the chain file the node writes from the rows | `objects/pack/multi-pack-index.d/multi-pack-index-chain`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.midx`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.bitmap` | the install of the maintainer's published layers: `layer` | cut first, below the layer that names it | kept, no layer naming a pack an expunge drops | cut first, below the layer that names it |
 | `graph-layers`, the installed published commit-graph layers, one a layer, the node's tip over them, and their chain file | `objects/info/commit-graphs/commit-graph-chain`, `objects/info/commit-graphs/graph-<checksum>.graph` | the install of the maintainer's published layers: `layer`; the background indexing: `tip-graph` | cut first, below the layer that names it | kept, but for the node's tip, dropped first | cut first, below the layer that names it |
 
