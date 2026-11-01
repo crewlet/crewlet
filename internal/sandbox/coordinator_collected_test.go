@@ -369,7 +369,7 @@ func TestEveryCollectedLaunchIsPublishedWithItsOutcome(t *testing.T) {
 		t.Fatalf("published %d launch records, want 2", len(recs))
 	}
 	if !recs[1].Failed || !strings.Contains(recs[1].Error, "no such file") ||
-		recs[1].ErrorKind != "coding_run_failed" {
+		recs[1].ErrorKind != "launch_failed" {
 		t.Errorf("a launch that did not succeed reads failed=%v error=%q kind=%q",
 			recs[1].Failed, recs[1].Error, recs[1].ErrorKind)
 	}

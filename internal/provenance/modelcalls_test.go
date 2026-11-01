@@ -122,7 +122,7 @@ var modelCalls = map[string]modelCall{
 	// note a person sends the turn. Each is a person's instruction to this
 	// turn, given by somebody the engine let direct it (an answer, by the
 	// run's requester, its seat's lead or an administrator,
-	// authz.ActionRunAnswer and ADR-0068; a note, by somebody whose authority
+	// authz.ActionExecutorAnswer and ADR-0068; a note, by somebody whose authority
 	// was decided on the seat's sealed anchor, ADR-0067), and sealed on the
 	// run's record under the fleet keyring with who gave it (ADR-0031's
 	// amendments), so the run is told whose it is; a fence would tell the run

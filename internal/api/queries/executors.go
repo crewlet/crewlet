@@ -499,7 +499,7 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
 		"answerable_in_chat": answerableInChat(run.ConversationKey),
 		// THE ANSWERS THE QUESTION LET GO OF, by the id of the delivery each
-		// arrived in (answer_run answers it as `answer_id`): a person who
+		// arrived in (answer_executor answers it as `answer_id`): a person who
 		// answered is told from here that the run could not take their
 		// answer and is waiting on its question again, rather than left
 		// looking at a question that never changes. Always an array.

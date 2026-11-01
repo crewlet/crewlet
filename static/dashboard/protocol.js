@@ -3972,7 +3972,7 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
-	answer_run: {
+	answer_executor: {
 		args: [
 			"turn_id",
 			"launch_id",

@@ -132,7 +132,7 @@ func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
 func TestACompanyWithNoNativeHalfIsStillServedItsSeatControls(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{})})
-	want := []string{builtin.AnswerRunTool, builtin.PauseSeatTool,
+	want := []string{builtin.AnswerExecutorTool, builtin.PauseSeatTool,
 		builtin.ResumeSeatTool, builtin.SteerTurnTool}
 	slices.Sort(want)
 	got := s.Tools()

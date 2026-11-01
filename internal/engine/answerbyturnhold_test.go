@@ -126,7 +126,7 @@ func (s *busySeat) parks(t *testing.T, turnID, question string) sandbox.PendingR
 	return run
 }
 
-// answer is a person answering run through answer_run's own desk.
+// answer is a person answering run through answer_executor's own desk.
 func (s *busySeat) answer(t *testing.T, run sandbox.PendingRun, text string) {
 	t.Helper()
 	given := types.ExecutorAnswerGiven{
@@ -355,7 +355,7 @@ func (r *relaunchingResumer) count() int {
 }
 
 // answerAgainst is an operator's answer to the question run is waiting on, as
-// answer_run puts it on the seat's control topic.
+// answer_executor puts it on the seat's control topic.
 func answerAgainst(run sandbox.PendingRun, answer string) *events.Event {
 	ev := events.New(types.ExecutorAnswerGiven{
 		TurnID: run.TurnID, Agent: run.AgentID, AgentHandle: run.AgentHandle,

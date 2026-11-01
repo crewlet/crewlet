@@ -180,10 +180,10 @@ const (
 	// what the arguments state: a typed handle resolves through the org
 	// (`@sre`), a turn names the seat only the node running it can say,
 	// and a run names the seat its row recorded.
-	ActionSeatPause  Action = "pause_seat"
-	ActionSeatResume Action = "resume_seat"
-	ActionTurnSteer  Action = "steer_turn"
-	ActionRunAnswer  Action = "answer_run"
+	ActionSeatPause      Action = "pause_seat"
+	ActionSeatResume     Action = "resume_seat"
+	ActionTurnSteer      Action = "steer_turn"
+	ActionExecutorAnswer Action = "answer_executor"
 
 	// ActionKnowledgeAnswer is a person's question answered from what the
 	// company has written down, by a model, at the company's expense. A
@@ -1088,7 +1088,7 @@ var rules = map[Action]rule{
 	// caller is that requester (the self arm), and about the run's seat
 	// otherwise — so the person who asked for the work answers what it
 	// asks them, and nobody who merely leads them does.
-	ActionRunAnswer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
+	ActionExecutorAnswer: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
 
 	// A SEAT'S TRAIL IS ITS LEAD'S TO READ, and admin's: its diary, its

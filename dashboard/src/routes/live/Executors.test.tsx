@@ -1,0 +1,885 @@
+/**
+ * What a bridged run's tool log claims.
+ *
+ * This is the one tool log with nowhere else to live — a bridged run's calls
+ * are made by a process outside the engine, minutes apart and possibly across
+ * a restart — so what the screen says about it is the whole record a reviewer
+ * gets. Two claims have to be exactly right: that a run made no calls, and
+ * that the log in front of them is complete.
+ */
+
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
+import type { ReactElement } from "react";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
+
+import { Router } from "~/app/router.tsx";
+import { FrameReadings } from "~/app/Shell.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
+import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
+import { overflowing } from "~/testing.tsx";
+import { BridgeLog, ExecutorScreen } from "./Executors.tsx";
+import type { ExecutorRow } from "~/protocol/index.ts";
+import { healthFrame } from "~/test/health.ts";
+import { withDerived } from "~/test/org.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  location.hash = "";
+});
+
+function render(ui: ReactElement) {
+  return rtlRender(<Router>{ui}</Router>);
+}
+
+function run(extra: Partial<ExecutorRow> = {}): ExecutorRow {
+  return {
+    turn_id: "turn-1",
+    agent_handle: "ada",
+    role: "SWE",
+    status: "running",
+    coding_agent: "claude",
+    placement: "direct",
+    task_description: "Ship it",
+    question: "",
+    question_context: "",
+    audience: "",
+    audience_handles: [],
+    audience_fallback: false,
+    branch: "",
+    trace_id: "",
+    owner: "node-0",
+    box_exists: true,
+    paused_at: "",
+    pause_ttl_seconds: 0,
+    started_at: "2026-06-15T12:00:00Z",
+    updated_at: "2026-06-15T12:05:00Z",
+    answerable_in_chat: false,
+    ...extra,
+  };
+}
+
+test("a run whose log this reader was not sent draws no tool-call panel", () => {
+  // ABSENT IS NOT EMPTY. A live entry whose row is not read yet, or a body
+  // withheld from this reader, is a log nobody here can speak for — and "it
+  // called nothing" is exactly the shape the delivery check reads as a turn
+  // that did not act.
+  render(<BridgeLog run={run()} />);
+  expect(screen.queryByText("Tool calls")).toBeNull();
+});
+
+test("a bridged run's calls are listed, and a failure is marked", () => {
+  render(
+    <BridgeLog
+      run={run({
+        bridge_calls: [
+          {
+            name: "read_file",
+            args: '{"path":"a.go"}',
+            output: "package a",
+            at: "2026-06-15T12:01:00Z",
+          },
+          {
+            name: "write_file",
+            args: '{"path":"b.go"}',
+            output: "denied",
+            failed: true,
+            at: "2026-06-15T12:02:00Z",
+          },
+        ],
+      })}
+    />,
+  );
+  expect(screen.getByText("Tool calls")).toBeTruthy();
+  expect(screen.getByText("read_file")).toBeTruthy();
+  expect(screen.getByText("write_file")).toBeTruthy();
+  expect(screen.getByText("failed")).toBeTruthy();
+  expect(screen.getByText("1 failure")).toBeTruthy();
+});
+
+test("an elided middle is said out loud, never left to be inferred", () => {
+  // The engine bounds the log at 200 and drops the MIDDLE rather than the
+  // start — how a run began and how it ended are what explain it. A log that
+  // silently skips is a log that lies about what the run did.
+  render(
+    <BridgeLog
+      run={run({
+        bridge_calls: [{ name: "read_file", at: "2026-06-15T12:01:00Z" }],
+        bridge_calls_elided: 47,
+      })}
+    />,
+  );
+  expect(screen.getByText("47 calls from the middle aren’t shown.")).toBeTruthy();
+});
+
+test("a run that made no calls says so", () => {
+  // EVERY RUN IS BRIDGED, so an empty log is a fact about the run: one that
+  // stopped having called nothing — not even its submission — is the run a
+  // reader opened the page to understand, and a panel that vanished for it
+  // read as a page with nothing to show. While the job runs it is "yet".
+  const { unmount } = render(
+    <BridgeLog run={run({ status: "awaiting_clarification", bridge_calls: [] })} />,
+  );
+  expect(screen.getByText("Tool calls")).toBeTruthy();
+  expect(
+    screen.getByText("Made no calls through the MCP bridge, not even its submission"),
+  ).toBeTruthy();
+  unmount();
+  render(<BridgeLog run={run({ status: "running", bridge_calls: [] })} />);
+  expect(screen.getByText("No calls through the MCP bridge yet")).toBeTruthy();
+});
+
+// THE ROW MOUNTS ITS BLOCKS ON OPENING, so a case about what a block does has
+// to open it — and it has to open it while `overflowing`'s measurement fake is
+// still installed, or the block measures a box jsdom reports as zero and the
+// branch under test never runs. That is what the callback is for.
+function openFirstCall(container: HTMLElement): void {
+  fireEvent.click(container.querySelector("button")!);
+}
+
+function longLog() {
+  return run({
+    bridge_calls: [
+      {
+        name: "read_file",
+        args: '{"path":"a.go"}',
+        output: "package a\n".repeat(400),
+        at: "2026-06-15T12:01:00Z",
+      },
+    ],
+  });
+}
+
+// A BLOCK THAT SCROLLS IS REACHABLE. Under a ceiling the block is
+// `overflow: auto`, and in Chrome and Safari a scroll container with no
+// tabindex cannot be scrolled by keyboard at all — so a bridged run's output,
+// which is the longest machine text this dashboard shows, was readable by
+// pointer and by nothing else.
+test("a tool block long enough to scroll is a named, focusable region", () => {
+  const container = overflowing(
+    <Router>
+      <BridgeLog run={longLog()} />
+    </Router>,
+    "height",
+    openFirstCall,
+  );
+  const region = container.querySelector('[role="region"][tabindex="0"]');
+  expect(region).not.toBeNull();
+  expect(region?.getAttribute("aria-label")).toContain("read_file");
+});
+
+// …AND IT STILL DOES NOT SWALLOW ⌘A. `focusWhenScrollable` and `selectable`
+// are two different doors onto the same tab stop, and this screen goes
+// through the first: a bridged tool's arguments are not the record the screen
+// is about, so select-all keeps meaning what it means everywhere else.
+// Switching this call to `selectable` would keep every assertion above green
+// and silently change what the chord does on a screen with two hundred blocks
+// on it, which is why the refusal is asserted rather than assumed.
+test("a scrolling tool block leaves select-all to the browser", () => {
+  const container = overflowing(
+    <Router>
+      <BridgeLog run={longLog()} />
+    </Router>,
+    "height",
+    openFirstCall,
+  );
+  const region = container.querySelector('[role="region"][tabindex="0"]')!;
+  const event = new KeyboardEvent("keydown", {
+    code: "KeyA",
+    key: "a",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  region.dispatchEvent(event);
+  expect(event.defaultPrevented).toBe(false);
+});
+
+test("a bridged call's arguments are shown as the JSON document they are", () => {
+  // The engine writes them with a plain `json.Marshal`, so what arrives is the
+  // whole call on one line. Indented rather than re-encoded — lib/jsontext.ts
+  // has the reason — so an id too wide for a double survives the trip.
+  const container = overflowing(
+    <Router>
+      <BridgeLog
+        run={run({
+          bridge_calls: [
+            {
+              name: "read_file",
+              args: '{"path":"a.go","id":9007199254740993}',
+              output: "package a",
+              at: "2026-06-15T12:01:00Z",
+            },
+          ],
+        })}
+      />
+    </Router>,
+    "height",
+    openFirstCall,
+  );
+  const block = container.querySelector('[aria-label="read_file arguments"]');
+  expect(block?.textContent).toContain('{\n  "path": "a.go",\n  "id": 9007199254740993\n}');
+});
+
+// ---------------------------------------------------------------------------
+// A run's own page
+// ---------------------------------------------------------------------------
+
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
+
+const JANE = {
+  login: "U0FOUNDER",
+  grants: ["admin", "worklet", "doclet"],
+  handle: "jane",
+  owner: "jane",
+  name: "Jane Founder",
+  kind: "human",
+  acts: ["answer_executor"],
+};
+
+const ORG = {
+  name: "Nimbus",
+  roles: [
+    { name: "Jane Founder", handle: "jane", kind: "human" },
+    { name: "Ada Engineer", handle: "ada", kind: "agent", role: "SWE" },
+  ],
+  units: [],
+};
+
+/**
+ * Mount `#/live/executors/turn-1` over stubbed answers, recording every question
+ * and every write; `outcome` is what the engine answers a write with.
+ */
+function mountPage(answers: Record<string, unknown>, outcome = "pending") {
+  location.hash = "#/live/executors/turn-1";
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  const asked: { what: string; params: Record<string, unknown> }[] = [];
+  const posted: { tool: string; args: Record<string, unknown> }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      posted.push({ tool, args: body.args });
+      return new Response(JSON.stringify({ tool, outcome, position: "", receipt: {} }), {
+        status: 200,
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+      });
+    }),
+  );
+  const store = new Store();
+  store.applyHealth(healthFrame());
+  store.applyOrg(withDerived(ORG) as never);
+  const socket = new LiveSocket(store);
+  socket.query = ((what: string, params?: Record<string, unknown>) => {
+    asked.push({ what, params: params ?? {} });
+    const all: Record<string, unknown> = {
+      viewer: JANE,
+      work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
+      ...answers,
+    };
+    // A FUNCTION ANSWERS FROM THE QUESTION, for a case whose answers move.
+    const given = all[what];
+    const answer =
+      typeof given === "function"
+        ? (given as (p: Record<string, unknown>) => unknown)(params ?? {})
+        : given;
+    // AN `Error` STANDS FOR A READ THAT FAILED: the socket rejects with the
+    // refusal's code, which is what `useQuery` surfaces as `error`.
+    if (answer instanceof Error) return Promise.reject(answer);
+    return Promise.resolve(answer ?? {});
+  }) as typeof socket.query;
+  rtlRender(
+    <ToastProvider>
+      <LayerHost>
+        <ClientContext.Provider value={{ store, socket }}>
+          <FrameReadings>
+            <Router>
+              <ExecutorScreen turnId="turn-1" />
+            </Router>
+          </FrameReadings>
+        </ClientContext.Provider>
+      </LayerHost>
+    </ToastProvider>,
+  );
+  return { asked, posted };
+}
+
+async function settle() {
+  await act(async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+  });
+}
+
+// A PARKED RUN IS ANSWERED ON ITS PAGE, BY ITS TURN.
+//
+// The banner said how a run could be answered and offered nothing to press —
+// and a run a schedule or an assignment launched stored no conversation, so
+// there was no reply path at all. `answer_executor` names the run by its turn, and
+// a `pending` outcome (the answer is on the seat's inbox, the owning node
+// resumes the run) closes the dialog like an applied one.
+//
+// Mutation: drop the Answer button from the banner, and there is nothing to
+// press; send `run_id` for `turn_id`, and the write names no run.
+test("a parked run's page answers it by its turn", async () => {
+  const { posted } = mountPage({
+    executors: {
+      runs: [
+        run({
+          status: "awaiting_clarification",
+          launch_id: "q1",
+          question: "Which retry ceiling?",
+          audience: "requester",
+          audience_handles: ["jane"],
+        }),
+      ],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  const banner = screen.getByText("Which retry ceiling?").closest(".run-awaiting") as HTMLElement;
+  expect(within(banner).getByText(/Put to Jane Founder\./)).toBeTruthy();
+  fireEvent.click(within(banner).getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("Your answer"), {
+    target: { value: "Thirty seconds." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answer" }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "answer_executor",
+      args: { turn_id: "turn-1", launch_id: "q1", answer: "Thirty seconds." },
+    },
+  ]);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+// A RUN'S QUESTION IS ITS TITLE AND ITS CONTEXT IS ITS OWN. The banner names
+// the question; the answer dialog reads the context under it as Markdown, by
+// the Inbox's `checked` rule: a link only where the dashboard built it, on a
+// host the company configured, and any other address drawn inert, as written.
+//
+// Mutation: draw the context in the banner, quote it in the dialog, or render
+// it with live links, and this fails.
+test("a parked run's question heads the banner and its dialog reads the context checked", async () => {
+  const { posted } = mountPage({
+    executors: {
+      runs: [
+        run({
+          status: "awaiting_clarification",
+          launch_id: "q1",
+          question: "Which retry ceiling?",
+          question_context:
+            "The API allows **five**. See https://evil.example.net/c?q=secret and " +
+            "https://github.com/gophrase/backend/pull/11.",
+          audience_handles: ["jane"],
+        }),
+      ],
+    },
+    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  const banner = document.querySelector(".run-awaiting") as HTMLElement;
+  expect(banner.querySelector("strong")?.textContent).toBe("Which retry ceiling?");
+  expect(banner.textContent).not.toContain("The API allows");
+  fireEvent.click(within(banner).getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  await settle();
+  expect(dialog.querySelector("blockquote")).toBeNull();
+  expect(dialog.textContent?.split("Which retry ceiling?")).toHaveLength(2);
+  const prose = dialog.querySelector(".prose") as HTMLElement;
+  expect(prose.querySelector("strong")?.textContent).toBe("five");
+  expect([...prose.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
+    "https://github.com/gophrase/backend/pull/11",
+  ]);
+  expect(prose.textContent).toContain("https://evil.example.net/c?q=secret");
+  fireEvent.change(within(dialog).getByLabelText("Your answer"), {
+    target: { value: "Three." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answer" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "answer_executor", args: { turn_id: "turn-1", launch_id: "q1", answer: "Three." } },
+  ]);
+});
+
+// AN OLDER BUILD'S FREE-TEXT QUESTION runs past the title's cap: the banner
+// cuts it to one line, and the dialog draws it whole and clamped, with every
+// word a press away, rather than split into a title and a context.
+//
+// Mutation: split it on its first sentence, or draw it unclamped, and this
+// fails.
+test("a parked run's question past the title's cap is clamped, never split", async () => {
+  const question =
+    "Which retry ceiling? The API allows five. " +
+    "The client used three, and the gateway retries twice on its own before either. ".repeat(4);
+  mountPage({
+    executors: {
+      runs: [run({ status: "awaiting_clarification", launch_id: "q1", question })],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  const banner = document.querySelector(".run-awaiting") as HTMLElement;
+  const line = banner.querySelector("strong .crewlet-text--truncate");
+  expect(line?.textContent).toBe(question.trim());
+  fireEvent.click(within(banner).getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  await settle();
+  expect(dialog.querySelector(".prose")).toBeNull();
+  const clamped = dialog.querySelector(".crewlet-text--clamp-3");
+  expect(clamped?.textContent).toBe(question.trim());
+  fireEvent.click(within(dialog).getByRole("button", { name: "Show all" }));
+  expect(dialog.querySelector(".crewlet-text--clamp-3")).toBeNull();
+  expect(within(dialog).getByRole("button", { name: "Show less" })).toBeTruthy();
+});
+
+// AN ANSWER NAMES THE QUESTION THE DIALOG DREW. A run that moved on to
+// another question refuses it `stale_version`; the dialog says it changed
+// and, asked again by the refusal, draws the question it asks now.
+//
+// Mutation: send no `launch_id`, or keep the old question drawn, and this
+// fails.
+test("an answer to a question the run moved on from says so and draws the new one", async () => {
+  let refused = false;
+  const parked = (launch: string, question: string) =>
+    run({ status: "awaiting_clarification", launch_id: launch, question });
+  mountPage({
+    executors: () => ({
+      runs: [
+        refused
+          ? parked("q2", "May I move the fixtures under testdata?")
+          : parked("q1", "Which retry ceiling?"),
+      ],
+    }),
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  const sent: Record<string, unknown>[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init: RequestInit) => {
+      sent.push((JSON.parse(init.body as string) as { args: Record<string, unknown> }).args);
+      refused = true;
+      return new Response(JSON.stringify({ error: "stale_version", tool: "answer_executor" }), {
+        status: 409,
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+      });
+    }),
+  );
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  await settle();
+  fireEvent.change(within(dialog).getByLabelText("Your answer"), {
+    target: { value: "Three." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answer" }));
+  await settle();
+  await settle();
+  expect(sent).toEqual([{ turn_id: "turn-1", launch_id: "q1", answer: "Three." }]);
+  expect(within(dialog).getByText(ACT_ERRORS.stale_version)).toBeTruthy();
+  expect(dialog.textContent).toContain("May I move the fixtures under testdata?");
+  expect(dialog.textContent).not.toContain("Which retry ceiling?");
+});
+
+// A PARKED RUN'S QUESTION OPENS ONLY WHAT THE DASHBOARD BUILT. Its context and
+// the run's reasoning are a model's words, which may carry what it read, so
+// the Answer dialog reads them `checked` as the Inbox reads an ask (ADR-0061):
+// an address there opens only as it is rebuilt on the company's own host, and
+// any other is its words, whole and never a control.
+//
+// Mutation: read the context with `scoped` alone, or the reasoning as
+// `anchor`, and an address to evil.example.net is a control.
+test("a parked run's question opens only what the dashboard built", async () => {
+  mountPage({
+    executors: {
+      runs: [
+        run({
+          status: "awaiting_clarification",
+          question: "Which retry ceiling?",
+          question_context:
+            "The client used three. See https://evil.example.net/c?q=secret and " +
+            "https://github.com/gophrase/backend/pull/11?x=1.",
+          decision: {
+            question: "Which retry ceiling?",
+            options: [
+              { id: "three", label: "Three" },
+              { id: "five", label: "Five" },
+            ],
+            recommended: "three",
+            rationale: "The API allows five: https://evil.example.net/r?q=secret",
+            role: "approver",
+          },
+          audience_handles: ["jane"],
+        }),
+      ],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] },
+  });
+  await settle();
+  const banner = document.querySelector(".run-awaiting") as HTMLElement;
+  fireEvent.click(within(banner).getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  const hrefs = await waitFor(() => {
+    const found = [...dialog.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    if (!found.some((href) => href?.startsWith("https://github.com/"))) {
+      throw new Error("the address on the company's host is not linked yet");
+    }
+    return found;
+  });
+  expect(hrefs.filter((href) => href?.includes("evil.example.net"))).toEqual([]);
+  expect(hrefs).toContain("https://github.com/gophrase/backend/pull/11");
+  expect(dialog.textContent).toContain("https://evil.example.net/c?q=secret");
+  expect(dialog.textContent).toContain("https://evil.example.net/r?q=secret");
+});
+
+// A RUNNING JOB'S OUTPUT IS ASKED OF ITS OWNER, by the job the row holds.
+//
+// Mutation: ask without `launch_id`, and the engine refuses every read.
+test("a running run's page polls the live output of the job it holds", async () => {
+  const { asked } = mountPage({
+    executors: { runs: [run({ status: "running", launch_id: "job-2" })] },
+    turn: { turn_id: "turn-1", events: [] },
+    executor_tail: {
+      outcome: "tail",
+      turn_id: "turn-1",
+      launch_id: "job-2",
+      node: "node-a",
+      output: liveOutput("running the tests"),
+    },
+  });
+  await settle();
+  expect(asked.find((a) => a.what === "executor_tail")?.params).toEqual({
+    turn_id: "turn-1",
+    launch_id: "job-2",
+  });
+  expect(await screen.findByText("running the tests")).toBeTruthy();
+});
+
+// A JOB STILL BEING SET UP IS NOT A STOPPED ONE. The run's row exists, with its
+// launch id, from before its box does, and it stays `launching` through the
+// box's creation and provisioning. The page took that answer as final and
+// never asked again — the view of a run opened in its first minute stayed on
+// "no longer running" for the whole run.
+//
+// Mutation: treat `launching` as terminal, and the page asks once.
+test("a run's page keeps asking about a job still being set up", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+  const { asked } = mountPage({
+    executors: { runs: [run({ status: "launching", launch_id: "job-1" })] },
+    turn: { turn_id: "turn-1", events: [] },
+    executor_tail: {
+      outcome: "launching",
+      turn_id: "turn-1",
+      launch_id: "job-1",
+      status: "launching",
+    },
+  });
+  await settle();
+  expect(await screen.findByText("Setting up. Output appears when the agent starts.")).toBeTruthy();
+  expect(screen.queryByText(/no longer running|Stopped\. Output appears/)).toBeNull();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS * 2);
+  });
+  expect(asked.filter((a) => a.what === "executor_tail").length).toBeGreaterThan(1);
+  vi.useRealTimers();
+});
+
+// A LATER JOB ON THE SAME RUN IS FOLLOWED, IN A VIEW OF ITS OWN. A `replaced`
+// answer reads the board again, the row names the new job, and the view of it
+// starts empty rather than with the old job's output above the new one's —
+// the view is keyed by the job, not by the run.
+//
+// Mutation: let a view outlive its job — no key, and no reset of the hook's
+// view when its job changes — and the old job's text is still on screen after
+// the switch; drop the refetch, and the page waits out the board's poll on
+// "replaced".
+test("a run's page follows a later job into a view of its own", async () => {
+  let job = "job-1";
+  const { asked } = mountPage({
+    executors: () => ({ runs: [run({ status: "running", launch_id: job })] }),
+    turn: { turn_id: "turn-1", events: [] },
+    executor_tail: (params: Record<string, unknown>) => {
+      if (params.launch_id === "job-1") {
+        if (job === "job-1") {
+          job = "job-2";
+          return {
+            outcome: "tail",
+            turn_id: "turn-1",
+            launch_id: "job-1",
+            output: liveOutput("the first job's output\n"),
+          };
+        }
+        return {
+          outcome: "not_running",
+          turn_id: "turn-1",
+          launch_id: "job-1",
+          status: "replaced",
+        };
+      }
+      return {
+        outcome: "tail",
+        turn_id: "turn-1",
+        launch_id: "job-2",
+        output: liveOutput("the second job's output\n"),
+      };
+    },
+  });
+  vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+  expect(await screen.findByText(/the first job's output/)).toBeTruthy();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS * 2);
+  });
+  await settle();
+  expect(await screen.findByText(/the second job's output/)).toBeTruthy();
+  expect(screen.queryByText(/the first job's output/)).toBeNull();
+  expect(asked.some((a) => a.what === "executor_tail" && a.params.launch_id === "job-2")).toBe(
+    true,
+  );
+  vi.useRealTimers();
+});
+
+/** An output that is the whole of what a job has said: a reset at its start. */
+function liveOutput(text: string) {
+  return {
+    text,
+    source: "transcript",
+    cut: false,
+    as_of: new Date().toISOString(),
+    finished: false,
+    reset: true,
+    epoch: "transcript@0",
+    start: 0,
+    end: text.length,
+    digest: "d",
+  };
+}
+
+// A SETTLED RUN STILL HAS A PAGE: its record is gone from the board, and what
+// it did is its launch's own `executor_collected` record, with the transcript
+// on it. It used to answer "no coding run" to a link to a run that had
+// finished.
+//
+// Mutation: drop the collected records, and the page claims there is no run.
+test("a collected run's page shows what its job did, off its turn", async () => {
+  mountPage({
+    executors: { runs: [] },
+    turn: {
+      turn_id: "turn-1",
+      events: [
+        {
+          id: "s-1",
+          type: "executor_launched",
+          timestamp: "2026-06-15T12:00:00Z",
+          source: "SWE",
+          actor: "SWE",
+          summary: "",
+          category: "system",
+          trace_id: "tr-1",
+          span_id: "",
+          parent_span_id: "",
+          topic: "",
+          payload: { turn_id: "turn-1", task: "Add retry to the webhook client" },
+        },
+        {
+          id: "p-1",
+          type: "executor_collected",
+          timestamp: "2026-06-15T12:10:00Z",
+          source: "SWE",
+          actor: "SWE",
+          summary: "",
+          category: "system",
+          trace_id: "tr-1",
+          span_id: "",
+          parent_span_id: "",
+          topic: "",
+          payload: {
+            turn_id: "turn-1",
+            iteration: 1,
+            role: "SWE",
+            coding_agent: "claude",
+            launch_id: "job-1",
+            activity_transcript: "edited retry.go; tests pass",
+            delivered_refs: ["crewlet/ada/retry"],
+          },
+        },
+        // THE ROUND'S OWN RECORD names the launch it collected too, and is no
+        // job of the run's: the page lists the launch once.
+        {
+          id: "p-2",
+          type: "agent_phase_completed",
+          timestamp: "2026-06-15T12:10:05Z",
+          source: "SWE",
+          actor: "SWE",
+          summary: "",
+          category: "system",
+          trace_id: "tr-1",
+          span_id: "",
+          parent_span_id: "",
+          topic: "",
+          payload: {
+            turn_id: "turn-1",
+            phase: "execute",
+            iteration: 1,
+            role: "SWE",
+            coding_agent: "claude",
+            launch_id: "job-1",
+          },
+        },
+      ],
+    },
+  });
+  await settle();
+  expect(screen.getByText("edited retry.go; tests pass")).toBeTruthy();
+  // NAMED BY ITS TASK, off the launch the turn holds — the row that carried
+  // it is gone once the run is collected.
+  expect(screen.getByRole("heading", { name: /Add retry to the webhook client/ })).toBeTruthy();
+  expect(screen.getByText("collected")).toBeTruthy();
+  expect(screen.getByText("crewlet/ada/retry")).toBeTruthy();
+  // ONE JOB: the round's own record is not a second one.
+  expect(screen.queryByText(/What job \d+ of/)).toBeNull();
+  expect(screen.queryByText("No coding run for this turn")).toBeNull();
+});
+
+// WHAT A RUN DELIVERED IS NOT CUT SHORT UNSAID. The record lists its refs up
+// to a byte bound and counts the rest, so the property names how many more
+// the run's report holds rather than showing the listed part as all of it.
+//
+// Mutation: join `deliveredRefs` alone, as the page did, and the count is
+// gone.
+test("a collected run's delivered refs say how many the record does not list", async () => {
+  mountPage({
+    executors: { runs: [] },
+    turn: {
+      turn_id: "turn-1",
+      events: [
+        {
+          id: "p-1",
+          type: "executor_collected",
+          timestamp: "2026-06-15T12:10:00Z",
+          source: "SWE",
+          actor: "SWE",
+          summary: "",
+          category: "system",
+          trace_id: "tr-1",
+          span_id: "",
+          parent_span_id: "",
+          topic: "",
+          payload: {
+            turn_id: "turn-1",
+            iteration: 1,
+            role: "SWE",
+            coding_agent: "claude",
+            launch_id: "job-1",
+            activity_transcript: "opened the pull requests",
+            delivered_refs: ["https://github.com/acme/api/pull/1"],
+            delivered_refs_elided: 3,
+          },
+        },
+      ],
+    },
+  });
+  await settle();
+  expect(
+    screen.getByText("https://github.com/acme/api/pull/1 (+3 more its report names)"),
+  ).toBeTruthy();
+});
+
+// "COULD NOT READ" IS NOT "NONE". The page is drawn from two reads, and a run
+// found in neither is absent only when both answered. It said "Neither the
+// run record nor the turn holds a coding run" whenever ONE read failed — a
+// claim about a record it never read — and headed the page "No task was
+// recorded" as though a run existed.
+//
+// Mutation: gate the empty state on `!run && collected.length === 0` alone
+// (as it was), and the failed board reads as an absent run.
+test("a failed run record is named rather than read as no run", async () => {
+  mountPage({
+    executors: new Error("unavailable"),
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.queryByText(/The id may be wrong, or the turn is too old/)).toBeNull();
+  expect(
+    screen.getByText("Couldn’t read the run record. Showing what the turn holds."),
+  ).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "No coding run" })).toBeNull();
+});
+
+test("a failed turn is named rather than read as no run", async () => {
+  mountPage({
+    executors: { runs: [] },
+    turn: new Error("timeout"),
+  });
+  await settle();
+  expect(screen.queryByText(/The id may be wrong, or the turn is too old/)).toBeNull();
+  expect(screen.getByText("Couldn’t read the turn. Showing the run record.")).toBeTruthy();
+});
+
+// A TURN WITH NO RUN IS HEADED AS HAVING NONE. "No task was recorded" is a
+// fact about a run whose launch carried no task, and over a turn with no run
+// at all it asserted a run that does not exist.
+//
+// Mutation: fall back to "No task was recorded" for every run-less page.
+test("a turn with no coding run is headed as having none", async () => {
+  mountPage({ executors: { runs: [] }, turn: { turn_id: "turn-1", events: [] } });
+  await settle();
+  expect(screen.getByRole("heading", { name: "No coding run" })).toBeTruthy();
+  expect(screen.queryByText("No task was recorded")).toBeNull();
+  expect(screen.getByText("No coding run for this turn")).toBeTruthy();
+});
+
+// A RUN'S PAGE NAMES THE MEMBER IT WAS LAUNCHED ON, and its model: a fallback
+// at launch runs the job on an entry other than the seat's chain head, and
+// which entry's plan a long run is spending is what a person watching it asks.
+//
+// Mutation: drop the fact, and the page names no entry.
+test("a run's page names the member its job was launched on", async () => {
+  mountPage({
+    executors: { runs: [run({ provider_key: "spare", model: "claude-haiku" })] },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.getByText("Launched on")).toBeTruthy();
+  expect(screen.getByText("spare")).toBeTruthy();
+  expect(screen.getByText(/claude-haiku/)).toBeTruthy();
+});
+
+// THE ENTRY IS AN ADMIN'S, THE MODEL EVERYBODY'S: the engine sends a run's
+// `provider_key` to an admin alone, and every other reader the model the job
+// runs under, which the page still names rather than dropping the fact.
+//
+// Mutation: draw the fact only where the entry is present, and a reader who
+// is not an admin is told nothing about what the run runs on.
+test("a run's page names its model to a reader the entry is withheld from", async () => {
+  mountPage({
+    executors: { runs: [run({ model: "claude-haiku" })] },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.getByText("Launched on")).toBeTruthy();
+  expect(screen.getByText("claude-haiku")).toBeTruthy();
+});

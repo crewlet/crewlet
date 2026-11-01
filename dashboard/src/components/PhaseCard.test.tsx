@@ -587,7 +587,7 @@ describe("an executor round's launches", () => {
       launchId: "job-2",
       failed: true,
       error: "the coding agent exited with status 1",
-      errorKind: "coding_run_failed",
+      errorKind: "launch_failed",
     });
     render(<PhaseCard record={phase()} launches={[asked, broke]} defaultOpen />);
     expect(screen.getByText("stopped to ask: which branch?")).toBeDefined();

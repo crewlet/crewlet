@@ -589,7 +589,7 @@ type BridgeCall struct {
 	Failed bool   `json:"failed,omitempty"`
 
 	// At is when the row recorded the call, on the store's clock — what the
-	// runs board lists a run's calls by. Always set: the store stamps it.
+	// Executors board lists a run's calls by. Always set: the store stamps it.
 	// It is the order the calls FINISHED in, and a CLI making several calls
 	// at once finishes them in whatever order their tools take.
 	At time.Time `json:"at"`

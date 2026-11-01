@@ -51,7 +51,7 @@ const JANE = {
   owner: "jane",
   name: "Jane Founder",
   kind: "human",
-  acts: ["answer_run"],
+  acts: ["answer_executor"],
 };
 
 /** Two unit seats stamped from ONE template: two seats, and the phases they

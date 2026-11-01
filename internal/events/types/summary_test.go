@@ -138,8 +138,8 @@ func TestSummaries(t *testing.T) {
 		want: "Dev's executor launch was collected (claude-code, 9700 tokens)",
 	}, {
 		name:    "a failed launch names its error kind",
-		payload: ExecutorCollected{RoleName: "Dev", Failed: true, ErrorKind: "coding_run_failed"},
-		want:    "Dev's executor launch failed (?, coding_run_failed)",
+		payload: ExecutorCollected{RoleName: "Dev", Failed: true, ErrorKind: "launch_failed"},
+		want:    "Dev's executor launch failed (?, launch_failed)",
 	}, {
 		name:    "a guard breach names the invariant",
 		payload: TurnGuardBreach{RoleName: "Dev", Kind: GuardStall, Detail: "unchanged artifact"},

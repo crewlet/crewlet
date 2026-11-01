@@ -794,7 +794,7 @@ export interface ExecutorRow {
   turn_id: string;
   /** The job the row holds NOW — a turn can launch more than one — and what
    *  `executor_tail` is asked by. On a parked run it names the question the
-   *  run waits on, which `answer_run` answers by. Empty on a run the live
+   *  run waits on, which `answer_executor` answers by. Empty on a run the live
    *  projection knows of before its durable row is read. */
   launch_id?: string;
   /** The unit of work behind that run. Absent on a turn with no ledgerable
@@ -851,7 +851,7 @@ export interface ExecutorRow {
   answerable_in_chat: boolean;
   /**
    * The answers the run's question let go of, by the id of the delivery each
-   * arrived in (`answer_run` answers it as `answer_id`): an answer here was
+   * arrived in (`answer_executor` answers it as `answer_id`): an answer here was
    * not used, and the run waits on its question again. Absent on a row from an
    * engine that does not say.
    */

@@ -1920,7 +1920,7 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		if rec.Error == "" {
 			rec.Error = "the coding run did not succeed and gave no reason"
 		}
-		rec.ErrorKind = "coding_run_failed"
+		rec.ErrorKind = "launch_failed"
 	}
 	return rec
 }
@@ -2241,7 +2241,7 @@ func (c *Coordinator) owes(turnID string) bool {
 //
 // An answer is given against the question the person READ, and it reaches
 // the seat some time later: after a seat handoff, after a NAK's backoff, or as
-// a second copy of a retried `answer_run`. By then the run may have been
+// a second copy of a retried `answer_executor`. By then the run may have been
 // answered by somebody else, resumed, relaunched its executor, and parked on a
 // NEW question — and an answer that claimed whatever the run is waiting on now
 // resumed it a second time with the first question's answer presented as the
@@ -2398,7 +2398,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 		}
 		words, answer, err := answerGivenOf(run, given, trigger, c.now())
 		if err != nil {
-			// A CHOICE THE QUESTION DOES NOT OFFER, which `answer_run`
+			// A CHOICE THE QUESTION DOES NOT OFFER, which `answer_executor`
 			// checked against this same question before it delivered:
 			// spent and said under an outcome of its own, never handed to
 			// the run as an option nobody offered, and never told as a

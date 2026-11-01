@@ -512,18 +512,18 @@ describe("what a change came to", () => {
   });
 
   // AN ANSWER TO A QUESTION THE RUN MOVED ON FROM ASKS FOR THE ONE IT ASKS
-  // NOW. `answer_run` names the question it answers (`launch_id`), and a run
+  // NOW. `answer_executor` names the question it answers (`launch_id`), and a run
   // that went on to another refuses it `stale_version`: the screen drew a
   // question that is gone, so the refusal asks the run board and the
   // decisions again and the question waiting now is the one drawn.
   //
   // Mutation: refresh nothing on a stale answer, and the old question stays.
   test("an answer to a question that moved on asks for the one asked now", async () => {
-    stub(async () => json({ error: "stale_version", tool: "answer_run" }, 409));
+    stub(async () => json({ error: "stale_version", tool: "answer_executor" }, 409));
     const floors = new SessionFloors();
     const heard: [string | null, readonly string[]][] = [];
     floors.onWritten((domain, refreshes) => heard.push([domain, refreshes]));
-    const result = await act("answer_run", { turn_id: "t-1", launch_id: "q1" }, { floors });
+    const result = await act("answer_executor", { turn_id: "t-1", launch_id: "q1" }, { floors });
     expect(result).toMatchObject({ kind: "refused", code: "stale_version" });
     expect(heard).toEqual([[null, ["executors", "decisions"]]]);
   });

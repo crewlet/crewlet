@@ -263,7 +263,7 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
   EditProjectButton: "write_project",
   PinButton: "set_pins",
   AnswerAsk: "comment_on_work_item",
-  AnswerRunButton: "answer_run",
+  AnswerRunButton: "answer_executor",
   SaveViewButton: "save_work_view",
   MessageSeatButton: "create_work_item",
   AssignToSeatButton: "update_work_item",

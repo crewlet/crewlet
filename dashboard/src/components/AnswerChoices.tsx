@@ -38,7 +38,7 @@ function choiceOptions(options: readonly Option[]): ChoiceButtonOption[] {
  *
  * ONE COPY for both things a person is asked to choose on: a work item's ask
  * (`AnswerAsk`'s `buttons` layout, `comment_on_work_item{choice}`) and a
- * parked coding run (`answer_run{choice}`). The write is the caller's, so
+ * parked coding run (`answer_executor{choice}`). The write is the caller's, so
  * the same buttons send either, and nothing here is pressable while it is in
  * flight.
  */

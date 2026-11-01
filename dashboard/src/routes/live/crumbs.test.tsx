@@ -27,7 +27,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TurnScreen } from "./Turn.tsx";
 import { TraceScreen } from "./Trace.tsx";
 import { EventScreen } from "./Event.tsx";
-import { RunScreen } from "./Runs.tsx";
+import { ExecutorScreen } from "./Executors.tsx";
 import { ChannelScreen } from "./Conversations.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
@@ -298,7 +298,7 @@ test("an event with no summary is named by its type", async () => {
 const RUN = "85e7b505-6dc9-478f-8501-1f2e3d4c5b6a";
 
 test("a coding run is named by the task it was given", async () => {
-  mount(`#/live/runs/${RUN}`, <RunScreen turnId={RUN} />, {
+  mount(`#/live/executors/${RUN}`, <ExecutorScreen turnId={RUN} />, {
     executors: {
       runs: [
         {

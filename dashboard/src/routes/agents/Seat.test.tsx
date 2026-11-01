@@ -175,7 +175,7 @@ const EVERY_ACT = [
   "update_work_item",
   "pause_seat",
   "resume_seat",
-  "answer_run",
+  "answer_executor",
   "open_dm",
 ];
 
@@ -2549,7 +2549,7 @@ test("a parked run is answered from its seat with its context and options", asyn
   fireEvent.click(within(dialog).getByRole("button", { name: /Three/ }));
   await waitFor(() => expect(posted).toHaveLength(1));
   expect(posted[0]).toEqual({
-    tool: "answer_run",
+    tool: "answer_executor",
     args: { turn_id: "t-7", launch_id: "q-7", choice: "three" },
   });
 });

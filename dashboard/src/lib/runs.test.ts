@@ -1,7 +1,7 @@
 /**
  * ONE POLL FOR THE DURABLE CODING-RUN RECORD.
  *
- * The runs board polled `executors` every 20 s and the attention queue
+ * The Executors board polled `executors` every 20 s and the attention queue
  * every 30 s, so a run that parked on a question reached the board and then,
  * up to ten seconds later, the Inbox — two screens disagreeing about whether
  * anybody was being waited on. Every reader now names `RUNS_POLL_MS`, and this

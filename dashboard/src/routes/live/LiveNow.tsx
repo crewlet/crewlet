@@ -73,7 +73,7 @@ import { DecisionRow } from "~/components/DecisionRow.tsx";
 import { LiveDot, LiveTurnRow } from "~/components/LiveTurnRow.tsx";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { mergeRuns, RunStatus, runTitle } from "./Runs.tsx";
+import { mergeRuns, RunStatus, runTitle } from "./Executors.tsx";
 import { RecentPhases } from "./RecentPhases.tsx";
 import { useAgents, useEngineHealth, useEvents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -224,7 +224,7 @@ export function LiveNow() {
   );
 
   // --- coding runs -------------------------------------------------------
-  // THE DURABLE ROWS AND THE PUSH, folded by the Runs screen's own function:
+  // THE DURABLE ROWS AND THE PUSH, folded by the Executors screen's own function:
   // the push is a reconcile behind a box that came up two seconds ago, the
   // store a poll behind it, and neither alone is "right now".
   const runs = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
@@ -416,7 +416,7 @@ export function LiveNow() {
               icon={<SquareTerminalGlyph size="sm" />}
               count={boxed.length}
               actions={
-                <a className="t-link" href={href(["live", "runs"])}>
+                <a className="t-link" href={href(["live", "executors"])}>
                   All runs
                 </a>
               }
@@ -439,7 +439,7 @@ export function LiveNow() {
                 {/* WHAT IS NOT SHOWN, said: a list cut at eight with no note
                     reads as a company with eight runs. */}
                 {boxed.length > IN_BOX_ROWS && (
-                  <a className="list-row clickable" href={href(["live", "runs"])}>
+                  <a className="list-row clickable" href={href(["live", "executors"])}>
                     <span className="t-caption">
                       {plural(boxed.length - IN_BOX_ROWS, "more run")} · all runs
                     </span>

@@ -11,7 +11,7 @@ import type { AskAnswer } from "~/components/writes.tsx";
 import type { ExecutorRow } from "~/protocol/types.ts";
 
 /**
- * An answer a person gave a parked run by its turn (`answer_run`): the option
+ * An answer a person gave a parked run by its turn (`answer_executor`): the option
  * they chose or what they wrote, the question it answers (`launch_id`) and the
  * answer's own id (`answer_id`), as the engine answered them.
  */
@@ -24,7 +24,7 @@ export interface GivenAnswer {
 /**
  * What became of a given answer, read off the run's own record.
  *
- * `answer_run` answers `pending`: the answer is on its way to the node holding
+ * `answer_executor` answers `pending`: the answer is on its way to the node holding
  * the run's seat, which records it on the run when it takes it. So "sent" is
  * all the press itself can say, and the RECORD says the rest:
  *
@@ -46,7 +46,7 @@ export interface GivenAnswer {
  * nothing is known yet, and nothing is claimed.
  *
  * NO `unoffered` FATE. The engine announces an answer by turn whose choice
- * the question does not offer as `unoffered`, but `answer_run` checks the
+ * the question does not offer as `unoffered`, but `answer_executor` checks the
  * choice against the very question it names (`launch_id`) before it sends
  * anything, and refuses it there: a press this pane made is refused at once,
  * and never becomes an answer that fate could be read for.

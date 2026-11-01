@@ -255,7 +255,7 @@ type ExecutorCollected struct {
 	// question it stopped to ask, who stopped it, or what cut it off.
 	Notes string `json:"notes"`
 	// Failed, Error and ErrorKind are a launch that did not succeed, with its
-	// reason, redacted; the kind is `coding_run_failed`.
+	// reason, redacted; the kind is `launch_failed`.
 	Failed    bool   `json:"failed"`
 	Error     string `json:"error"`
 	ErrorKind string `json:"error_kind"`
@@ -623,7 +623,7 @@ type ExecutorAnswerGiven struct {
 	// REQUIRED. An answer naming no question cannot be told from one given
 	// against a question the run has since moved past, so the node holding
 	// the seat spends it without resuming the run (internal/sandbox's
-	// Coordinator.AnswerByTurn); `answer_run` stamps it off the row it
+	// Coordinator.AnswerByTurn); `answer_executor` stamps it off the row it
 	// checked, and the answer desk will not deliver one without it.
 	LaunchID string `json:"launch_id"`
 }
@@ -684,7 +684,7 @@ const (
 
 	// AnswerUnoffered is an answer by turn whose choice is not an option of
 	// the question it names (ADR-0068): spent without being recorded, the
-	// question still waiting. `answer_run` checks the choice against the
+	// question still waiting. `answer_executor` checks the choice against the
 	// question before it delivers, so one arriving here names a question
 	// that is not the one the answer was checked against.
 	AnswerUnoffered AnswerOutcome = "unoffered"

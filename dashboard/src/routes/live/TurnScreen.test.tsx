@@ -1240,7 +1240,7 @@ test("a parked turn's transcript draws its coding run live, with a way to the ru
   const run = screen.getByText("Coding run").closest(".crewlet-card") as HTMLElement;
   expect(run.textContent).toContain("claude-code");
   expect(within(run).getByRole("link", { name: "Open the run" }).getAttribute("href")).toBe(
-    "#/live/runs/t-77",
+    "#/live/executors/t-77",
   );
 });
 

@@ -4,7 +4,7 @@ import type { ExecutorRow } from "~/protocol/index.ts";
 /**
  * How often the durable coding-run record is asked again.
  *
- * ONE VALUE for every reader of `executors` — the runs board, a run's own
+ * ONE VALUE for every reader of `executors` — the Executors board, a run's own
  * page and rail, and the attention queue Home and the Inbox draw. It was two:
  * the board polled every 20 s and the queue every 30 s, so a run that parked
  * on a question appeared on the board and then, up to ten seconds later, as
@@ -41,7 +41,7 @@ export function runAskTexts(
  * Why a run's question cannot be answered from what a screen holds, or
  * undefined where it can.
  *
- * AN ANSWER NAMES THE QUESTION IT ANSWERS (`answer_run{launch_id}`), the one
+ * AN ANSWER NAMES THE QUESTION IT ANSWERS (`answer_executor{launch_id}`), the one
  * the reader saw, so a run that moved on to another question refuses it
  * rather than taking it as an answer to that one. A live entry the screen
  * read before the run's durable row carries no launch yet, and an answer

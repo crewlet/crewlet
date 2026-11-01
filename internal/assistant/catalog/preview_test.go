@@ -480,7 +480,7 @@ func TestARunsAnswerIsPreviewedAgainstItsQuestion(t *testing.T) {
 	read := reader(assistanttest.World())
 	var tool catalog.Tool
 	for _, one := range catalog.Tools() {
-		if one.Name == "answer_coding_run" {
+		if one.Name == "answer_executor" {
 			tool = one
 		}
 	}

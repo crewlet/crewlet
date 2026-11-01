@@ -155,7 +155,7 @@ func everyOperatorOnlyTool(t *testing.T) []string {
 			only = append(only, tool.Name())
 		}
 	}
-	for _, name := range append([]string{builtin.AnswerRunTool, builtin.PauseSeatTool,
+	for _, name := range append([]string{builtin.AnswerExecutorTool, builtin.PauseSeatTool,
 		builtin.ResumeSeatTool, builtin.SteerTurnTool, builtin.AnswerKnowledgeTool},
 		chatlet.OperatorOnlyTools()...) {
 		if !slices.Contains(only, name) {

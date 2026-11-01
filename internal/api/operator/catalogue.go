@@ -201,7 +201,7 @@ type Options struct {
 	// refusal [builtin.OperatorTools] makes of a nil one on every call.
 	Authorize builtin.Authorizer
 
-	// Runs answers a parked coding run by its turn (`answer_run`). Its
+	// Runs answers a parked coding run by its turn (`answer_executor`). Its
 	// Actor is set per call. REQUIRED (its Desk): see [Options.Steer].
 	Runs builtin.RunDeps
 
@@ -299,7 +299,7 @@ func New(opts Options) (*Server, error) {
 	case opts.Audit == nil:
 		return nil, ErrNoAudit
 	case opts.Runs.Desk == nil:
-		return nil, fmt.Errorf("%w: Options.Runs.Desk (%s) is nil", ErrNoSeatControls, builtin.AnswerRunTool)
+		return nil, fmt.Errorf("%w: Options.Runs.Desk (%s) is nil", ErrNoSeatControls, builtin.AnswerExecutorTool)
 	case opts.Pauses.Pauses == nil:
 		return nil, fmt.Errorf("%w: Options.Pauses.Pauses (%s, %s) is nil",
 			ErrNoSeatControls, builtin.PauseSeatTool, builtin.ResumeSeatTool)

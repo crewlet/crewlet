@@ -521,7 +521,7 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 // (ADR-0068). The run asks through `ask_and_wait` over its bridge, with its
 // options as options; the board the Inbox reads carries the question as a
 // decision; a person answers by choosing one, through the route the Inbox's
-// option button presses (`answer_run` with `choice`); and the run resumes in
+// option button presses (`answer_executor` with `choice`); and the run resumes in
 // its own session told the option it was given, in its own words and by its
 // id, then submits its work.
 //
@@ -557,12 +557,12 @@ func TestARunsStructuredQuestionIsAnsweredWithAChoiceAndResumes(t *testing.T) {
 		t.Fatalf("the board carries %v, want the question with its decision", row)
 	}
 
-	status, raw := bearer(t, n.node, http.MethodPost, "/operator/act/"+builtin.AnswerRunTool,
+	status, raw := bearer(t, n.node, http.MethodPost, "/operator/act/"+builtin.AnswerExecutorTool,
 		map[string]any{"args": map[string]any{"turn_id": parked.TurnID,
 			"launch_id": parked.LaunchID, "choice": "main"}},
 		map[string]string{opkey.Header: uuid.Must(uuid.NewV7()).String()})
 	if status != http.StatusOK {
-		t.Fatalf("POST /operator/act/%s answered %d: %s", builtin.AnswerRunTool, status, raw)
+		t.Fatalf("POST /operator/act/%s answered %d: %s", builtin.AnswerExecutorTool, status, raw)
 	}
 	waitFor(t, "the answered run to settle", func() bool {
 		return len(n.activeRuns(t)) == 0
