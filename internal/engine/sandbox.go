@@ -1909,8 +1909,8 @@ func sandboxMCP(
 			// this one is declared and turned off. Not resolved either,
 			// since a value it would need is nobody's concern while off.
 			log.Info("sandbox_mcp_server_off", "seat", seat.Handle(), "server", name,
-				"detail", "the coding agent is not given this server: the company has "+
-					"turned it off, and a coding run launched once it is turned back on "+
+				"detail", "the executor is not given this server: the company has "+
+					"turned it off, and an executor launched once it is turned back on "+
 					"is given it")
 			continue
 		}
