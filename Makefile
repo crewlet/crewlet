@@ -789,10 +789,11 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # operations on two E-cores, BenchmarkBoxWorktree's eleven sessions of an
 # agent's commands about twelve more at one, and their gigabyte arms twenty at one, the
 # million-file tree's unmeasured (BENCH_TIME=10x, or 1x, each figure says
-# which); its engine writes' two benchmarks, BenchmarkEngineWrite and
-# BenchmarkEngineCommit, took nine to eleven minutes at BENCH_TIME=10x on two
-# cores, the 100 000-file tree and directory included, and at the default
-# three seconds take several rounds an arm more. A fixture is built once a
+# which); its engine writes' BenchmarkEngineWrite took nine and a half
+# minutes at BENCH_TIME=10x on two cores once it compacted its repositories
+# between rounds (one run of each store), and BenchmarkEngineCommit, the
+# 100 000-file tree and directory included, adds its own; at the default
+# three seconds both take several rounds an arm more. A fixture is built once a
 # run whatever BENCH_COUNT says,
 # since go test repeats only a leaf benchmark a count: the gigabyte's is ten
 # minutes and its arms four a count, the tree's eleven and its clones eight.

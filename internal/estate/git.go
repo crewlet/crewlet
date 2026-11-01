@@ -208,19 +208,24 @@ const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadD
 // write on a data node: a turn's deadline minutes away, waited out whole on a
 // wedged home, would leave the runner-up never asked.
 //
-// MEASURED, EVERY TERM INSIDE ITS BUDGET (BenchmarkEngineWrite and
-// BenchmarkEngineCommit, internal/code/host; two cores, in-process object
-// stores, the S3 fake up to 200 ms a first byte; two runs): the sync's p99 at
-// most 1.5 s of its 2 s, sixty-four writes at once on two cores the nearest
-// any term came; the build's git 0.24 s at the p99 for a hundred files at
-// depth six and 1.2 s for the dearest, a put into a directory of 100 000
-// entries, of 10 s; the upload 221 ms of 30 s; the proposal and the wait for
-// its row 1.9 s of 33 s. The share's wait is the one term a write reaches
-// whole — sixty-four at once on a node whose share is one unit — and that is
-// the bound at work, the write answered unready rather than waiting longer.
-// So no term is re-derived and the sum stands, the benchmark never setting
-// it; the whole write's p99 is 2.9 s at the most, a twenty-eighth of the
-// attempt. TestProductionsGitWriteAttemptHoldsAWritesWaits holds the sum.
+// MEASURED, EVERY TERM'S p99 BESIDE ITS BUDGET (M3-decisions M3-O43;
+// BenchmarkEngineWrite and BenchmarkEngineCommit, internal/code/host; two
+// cores, so a one-unit share; in-process object stores, the S3 fake up to
+// 200 ms a first byte; the repositories kept compacted between rounds, every
+// answer a write's tool gave counted, refusals included): the share's wait,
+// as code.GitShare times it, at most 0.57 s at the p99 with eight writes at
+// once — what its one unit serves inside its 2 s, none refused — and its
+// whole 2 s at sixty-four, where 20–33% of the writes (40–50% beside a
+// person's pushes) waited it out and were answered unready: the one term a write reaches whole, and that is the
+// bound at work, the write sent on rather than held longer, so it is judged
+// reached rather than missed; the sync's 0.56 s at the most of its 2 s; the
+// build's git 0.24 s at the p99 for a hundred files at depth six and 1.2 s
+// for the dearest, a put into a directory of 100 000 entries, of 10 s; the
+// upload 265 ms of 30 s; the proposal and the wait for its row 0.35 s of 33
+// s. So no term is re-derived and the sum stands, the benchmark never
+// setting it; every answer's p99 — an unready one after 2.7–3.2 s — is 3.2 s
+// at the most, about a twenty-sixth of the attempt.
+// TestProductionsGitWriteAttemptHoldsAWritesWaits holds the sum.
 const GitWriteAttempt = code.GitShareWait + 3*statelog.ReadBudget + code.WriteBuildDeadline +
 	code.WriteUploadAllowance + minWriteAttempt + code.ReplyMargin
 

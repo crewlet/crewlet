@@ -584,8 +584,9 @@ const (
 	// PUT: objstore.MiBPace, one mebibyte at the pace floor every object
 	// transfer is held to. A write's bundle is a few kilobytes in the common
 	// case, and its one PUT a first byte's wait (BenchmarkEngineWrite: a p99
-	// of 221 ms against the S3 fake answering 200 ms late, sixty-four writes
-	// at once, under a hundredth of this); a larger one on a bucket at the floor is
+	// of 265 ms at the most against the S3 fake answering 200 ms late,
+	// sixty-four writes at once, under a hundredth of this); a larger one on a
+	// bucket at the floor is
 	// answered busy BEFORE its upload when the caller's deadline cannot hold
 	// it and the proposal after it (internal/code/host's deadline rule), so a
 	// slow bucket costs a refusal, never a PUT nobody proposes.

@@ -772,32 +772,54 @@
 // and the wait for its row 9–17 ms and the pack's adoption 0.7–1.5 ms;
 // against the fake one PUT, the bundle's, which is the first byte and a
 // few milliseconds (a p99 of 221 ms at the most at 200 ms, however many
-// writes are in flight). Every write that stores a pack makes ONE PUT and
-// no write a GET — its adoption links what it stored. Eight at once are
-// 153–517 ms at the p50 and at most 2.5 s at the p99; sixty-four at once
-// hold the write lane's every slot (sixty-four in flight, none queued for
-// one) and are 1.2–1.8 s at the p50 and 2.4–3.7 s at the p99, the build
-// waiting for the one unit of the share: over one repository 50–62% of
-// them waited past code.GitShareWait and were answered unready, the walk's
-// word for "ask again", and over sixty-four repositories up to 39%; the
-// copy's sync, its p99 at most 1.5 s, comes nearest its own budget there.
-// So the whole write's p99 is at most 2.9 s at a 200 ms first byte, a
-// twenty-eighth of estate.GitWriteAttempt, and its upload's a hundredth of
-// code.WriteUploadAllowance: every term of the attempt measured inside its
-// budget (estate.GitWriteAttempt), none re-derived.
+// writes are in flight; 265 ms in the later run below). Every write that stores a pack makes ONE PUT and
+// no write alone a GET — its adoption links what it stored; beside a
+// person's pushes a sync of the copy that had begun to download a write's
+// pack before its adoption could hand it over downloaded 5–10 of 320–384.
+//
+// MANY AT ONCE, measured again once each arm kept its repositories
+// compacted between rounds as a home that keeps up does (one run of ten
+// rounds over each store, 2026-11-01, the same machine and git), and over
+// EVERY ANSWER a write's tool gave, since a turn waits for a refusal as long
+// as it took and then makes a model round and asks again. Eight at once are
+// within what the share's one unit serves inside code.GitShareWait
+// (writesAUnitServes), and none was refused: 0.32–0.53 s at the p50, at most
+// 1.4 s at the p99, the share's wait at most 0.57 s at its p99. Sixty-four at
+// once hold the write lane's every slot (sixty-four in flight, none queued
+// for one), and the share's wait is the one term of estate.GitWriteAttempt
+// they reach whole: its p99 2.01–2.02 s of its 2 s, and over one repository
+// 28–33% of the writes, over sixty-four repositories 20–26%, and beside a
+// person's pushes 40–50% (from memory and the fake at 100 ms) waited it out
+// and were answered unready, the walk's word for "ask again", at 2.7–3.2 s
+// at their p99. Every answer was 2.2–2.6 s at the p50 and at most 3.2 s at
+// the p99 (the writes that applied: 1.7–2.1 s and 3.2 s); the copy's sync at
+// most 0.56 s of its 2 s at the p99, the
+// upload 265 ms of 30 s, the proposal and the wait for its row 0.35 s of
+// 33 s. So every answer's p99 at a 200 ms first byte is about a twenty-sixth
+// of estate.GitWriteAttempt and the upload's about a hundredth of
+// code.WriteUploadAllowance: every term measured inside its budget, the
+// share's reached whole at sixty-four writes on a one-unit share — the bound
+// at work, the write sent on rather than held longer — and none re-derived.
 //
 // A PERSON'S PUSH to the same repository every 100 ms beside sixty-four
-// writes at once is NOT held within twice its p99 alone on these two cores:
-// 0.95–1.4 s at the p99 against 0.1–0.3 s alone (one alone run of the fake
-// at 100 ms read 1.5 s and passed), while its p50 moved from 92–289 ms to
-// 186–361 ms. Timed alone again once the writes had stopped, its p99 stayed
-// at 1.2–1.5 s against the fake: most of that tail is the hundreds of packs
-// the writes left in the one repository, which nothing in the arm compacts,
-// and not the writes beside it. From memory it fell back to 0.29 s, so the
-// rest is the two cores' CPU — sixty-four landings beside the share's one
-// build — which the share, a bound on read-lane slots, does not divide: the
-// person's scans kept their slot. The bound is the benchmark's, and fails
-// it on two cores.
+// writes at once is NOT held within twice its p99 alone on these two cores,
+// over a repository at the one pack state the compaction keeps (two or three
+// live packs at each phase's start): 0.92–1.64 s at the p99 beside them
+// against 0.24–0.38 s alone, and 0.25–0.51 s alone again once they stopped,
+// in four runs over the three stores — so the tail is the writes running
+// beside the push, never what they leave. It is not a read-lane slot: the
+// person was refused nothing. The copy's syncs a push waits for ran on the
+// two cores the writes' builds and landings used (their p99 0.25–0.39 s
+// beside them against 0.05–0.13 s alone), and its proposal waited in the
+// repository's one commit queue behind theirs (0.09–1.25 s at the p99
+// against 34–82 ms alone); neither is what the share bounds. Over the
+// repository left UNCOMPACTED (the arms as they stood before, 129 live
+// packs alone and some 410 after the writes, one run of each store), the
+// push's p99 after the writes was 0.80 s against the fake at 200 ms and
+// 0.89 s from memory, their syncs' p99 up to 0.71 s: that tail follows the
+// packs, alike over either store, whose part in a push was its one PUT —
+// the earlier runs' 1.2–1.5 s against the fake and 0.29 s from memory did
+// not recur. The bound is the benchmark's, and fails it on two cores.
 //
 // AN ENGINE COMMIT'S BUILD ALONE (BenchmarkEngineCommit; the same machine,
 // git and runs) follows the change and never the tree: a commit put along a

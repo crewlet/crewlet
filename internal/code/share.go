@@ -83,15 +83,20 @@ func (w SeatWork) Valid() bool { return slices.Contains(SeatWorks(), w) }
 // round's peel and a fetch's check of its wants wait in.
 //
 // HALF STANDS, MEASURED AGAINST (internal/code/host's BenchmarkEngineWrite,
-// beside=push): on two cores the share is its floor of one unit, and
-// sixty-four engine writes at once still took a person's push to the same
-// repository from 0.1–0.3 s at the p99 to 0.95–1.4 s, past the twice the
-// benchmark holds — yet timed alone once the writes had stopped the push's
-// p99 stayed 1.2–1.5 s against the S3 fake, the packs the writes left
-// rather than the writes, and what remained from memory was the cores' CPU,
-// which a bound on slots does not divide. A narrower share has no unit to
-// give at one, and a wider node's half leaves more slots, not fewer: the
-// figure decides the node's cores, never this fraction.
+// beside=push, its repository kept compacted between rounds so the person's
+// push alone, beside the writes and after them meet one pack state): on two
+// cores the share is its floor of one unit, and sixty-four engine writes at
+// once into the person's repository took the push's p99 from 0.24–0.38 s
+// alone to 0.92–1.64 s, past the twice the benchmark holds, and back to
+// 0.25–0.51 s once they stopped (four runs over the three object stores).
+// What the writes added is not a read-lane slot — the person was refused
+// nothing: the copy's syncs a push waits for ran on the two cores the
+// writes' builds and landings used (their p99 0.25–0.39 s beside the writes,
+// 0.05–0.13 s alone), and the person's proposal waited in the repository's
+// one commit queue behind theirs (its p99 0.09–1.25 s beside them, 34–82 ms
+// alone). A narrower share has no unit to give at one and would shorten
+// neither, and a wider node's half leaves more slots, not fewer: the figure
+// decides the node's cores, never this fraction.
 func ShareOf(slots int) int { return max(1, slots/2) }
 
 // The outcomes of a take: crewlet.code.seatwork.waits' `outcome`.

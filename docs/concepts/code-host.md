@@ -6473,19 +6473,32 @@ of it is one unit.
   and its row and about a millisecond adopting the pack. Against a bucket,
   the one added wait is the bundle's single upload, a first byte's worth.
 - **One upload, no downloads.** Every write that stores a pack makes one PUT,
-  and no write reads anything back from the object store: the node adopts the
-  pack it built. A branch created stores nothing.
-- **Many at once.** Eight writes at once take 0.15–0.5 s at the median;
-  sixty-four at once fill the node's write lane, every one in flight and
-  none queued, and take 1.2–1.8 s at the median and up to 3.7 s at the p99.
-  With a share of one unit, 50–62% of sixty-four writes into one repository
-  waited past the share's two seconds and were answered unready — the
-  tool's signal to ask again — and up to 39% of sixty-four spread over as
-  many repositories. A node with more cores has a wider share.
-- **Far inside the attempt.** The slowest p99 at a 200 ms first byte was
-  2.9 s, a twenty-eighth of the [82 seconds](#which-git-node-builds-a-write)
-  a write may take on one git node, and every stage stayed inside its own
-  budget, so none of them was changed.
+  and a write reads nothing back from the object store: the node adopts the
+  pack it built. A branch created stores nothing. Beside a person's pushes, a
+  sync of the copy that had already begun downloading a write's pack fetched
+  5–10 of some 350.
+
+The figures for many writes at once come from a later run of each store,
+with every repository [compacted](#compaction) between rounds as a home that
+keeps up leaves it, and count **every answer** a write's tool gave — a write
+answered unready is a turn that waited that long, then asks again:
+
+- **Many at once.** Eight writes at once take 0.3–0.55 s at the median and
+  none is refused: one unit of the share serves eight builds inside its two
+  seconds. Sixty-four at once fill the node's write lane, every one in flight
+  and none queued, and their answers take 2.2–2.6 s at the median and up to
+  3.2 s at the p99. With a share of one unit, 28–33% of sixty-four writes
+  into one repository waited out the share's two seconds and were answered
+  unready — the tool's signal to ask again — after 2.7–3.2 s at the p99, as
+  were 20–26% of sixty-four spread over as many repositories. A node with
+  more cores has a wider share.
+- **Far inside the attempt.** The slowest p99 of every answer at a 200 ms
+  first byte was 3.2 s, about a twenty-sixth of the
+  [82 seconds](#which-git-node-builds-a-write) a write may take on one git
+  node. Every stage stayed inside its own budget, and the share's wait —
+  two seconds of the 82 — is the one a write reaches whole: at sixty-four
+  writes on a one-unit share that is the bound sending writes on rather than
+  holding them longer, so none of the budgets was changed.
 
 The build alone follows the change, never the tree: in a tree of 10 000 files
 and of 100 000, git is asked the same requests, and a commit six directories
@@ -6498,15 +6511,23 @@ into a directory of 10 000 entries, 0.6–0.85 s and 2.3 MB into one of
 100 000.
 
 **Beside a person's pushes.** A person pushing one commit to the same
-repository every 100 ms took 0.1–0.3 s at the p99 alone and 0.95–1.4 s
-beside sixty-four writes at once. Most of that tail stayed once the writes
-had stopped (1.2–1.5 s against the S3 fake): it is the hundreds of packs a
-burst like this leaves in one repository until its next
-[compaction](#compaction), not the writes running beside the push. What
-remained from memory is CPU: the share keeps the person's scans a read slot,
-and on two cores the writes' landings still take the processor, which no
-slot bounds. A git node expected to take bursts of engine writes beside
-people's pushes wants more than two cores.
+repository every 100 ms, with the repository kept compacted, took 0.24–0.38 s
+at the p99 alone, 0.92–1.64 s beside sixty-four writes at once, and
+0.25–0.51 s again once the writes had stopped — so the tail is the writes
+running beside the push, not anything they leave. The person was refused
+nothing: the share keeps their git its read slots. What slowed the push is
+what the share does not bound — the syncs of the copy each push waits for
+ran on the two cores the writes' builds and landings were using (0.25–0.39 s
+at the p99, against 0.05–0.13 s alone), and the push's proposal waited in
+the repository's one commit queue behind the writes' (up to 1.25 s at the
+p99, against 34–82 ms alone). Left uncompacted, the some 400 packs such a
+burst leaves kept the push's p99 near 0.8–0.9 s after it, alike over the
+in-memory store and the S3 fake: what that costs follows the packs, which
+a home merges at its next [compaction](#compaction), never the object
+store, whose part in a push is its one upload. A git node expected to take
+bursts of engine writes beside people's pushes wants more than two cores:
+on two, the syncs waited for the processor; the commit queue is the
+repository's whatever the node.
 
 ---
 
