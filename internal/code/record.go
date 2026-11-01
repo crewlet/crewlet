@@ -460,9 +460,11 @@ const (
 	OpChecksSweep OpKind = "checks_sweep"
 
 	// OpCheckDispatched records a repository's home's reading of a target's
-	// checks file at its tip and the change heads it dispatched under it
-	// ([CheckDispatched]), on the repository's checks subject: what the
-	// home's due listing converges on (checksdispatch.go).
+	// checks file at its tip and the change heads it dispatched under it,
+	// with the attempts that dispatch queues at them ([CheckDispatched]), on
+	// the repository's checks subject: what the home's due listing converges
+	// on, and code_checks' rows the attempts make, each as a check_queued
+	// record's would (checksdispatch.go).
 	//
 	// BASE FORMAT, AS A STATED CONDITION, as [OpCheckQueued] states it; once
 	// a build without it has run, it takes {Name: "MutationRecord.Op

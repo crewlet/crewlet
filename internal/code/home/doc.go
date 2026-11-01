@@ -122,16 +122,20 @@
 // DISPATCH is owed, the attempts its change moved on from ended cancelled
 // superseded, then — once its head revision's facts are recorded for its
 // target, which the listing carries, and not before — every check the checks
-// file at its TARGET'S TIP defines —
-// never the head's: a change is never measured by a definition it brought —
-// that the head holds no attempt of queued, or recorded skipped where what
-// the head touches against that tip matches none of its paths, one an
-// earlier dispatch errored for a file that did not run queued as its next
-// attempt, and every name the target's gate requires errored defs_invalid
-// where the file is none that runs. The page's dispatches are recorded LAST
-// (code.CheckDispatched, a target's heads in records of at most
-// code.MaxDispatchHeads), so a dispatch cut short is the next turn's, every
-// queue that landed answered from its row. The tip's file is read through the
+// file at its TARGET'S TIP defines — never the head's: a change is never
+// measured by a definition it brought — that the head holds no attempt of
+// queued, or recorded skipped where what the head touches matches none of
+// its paths, one an earlier dispatch errored for a file that did not run
+// queued as its next attempt, and every name the target's gate requires
+// errored defs_invalid where the file is none that runs. Those attempts are
+// not written one a check: each head's ride its DISPATCH RECORD
+// (code.CheckDispatched's Attempts), a target tip's heads in as few records
+// as code.MaxDispatchRows and code.MaxDispatchBytes allow, so a head's
+// attempts and the row that takes it off the list land in one append, and a
+// record's worth of heads costs one round trip to the committing data node
+// rather than one a check, which held one of the node's two home slots for
+// heads × checks of them.
+// The tip's file is read through the
 // git reads (internal/code's GitChecksFile, the engine's own read), once a
 // tip and parsed once a blob a turn; what a head touches is what its
 // revision's RECORDED facts say, never a git read of the worker's own. A head

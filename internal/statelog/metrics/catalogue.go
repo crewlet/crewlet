@@ -816,9 +816,10 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeChecksQueued, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"purpose"},
-			Shows: "Attempts of checks this node's checks writer queued — each a " +
-				"record on its repository's checks subject that applied here, " +
-				"counted once, by the node that published it — by `purpose`: " +
+			Shows: "Attempts of checks this node's checks writer queued — each by a " +
+				"record on its repository's checks subject that applied here (a " +
+				"head's dispatch record carries all of its own), counted once, by " +
+				"the node that published it — by `purpose`: " +
 				"`head`, a change's head; `candidate`, a merge queue's candidate; " +
 				"`tip`, a protected branch's tip; `bisect`, a landing between a " +
 				"green tip and a red one. A head recorded skipped at its dispatch " +

@@ -57,8 +57,9 @@ var ReproducibleTables = []string{
 	// with the repository by its purge. Beside them what the repository's
 	// home dispatched: each target's checks file as the home last read it,
 	// and the file each change head was dispatched under — written by the
-	// check_dispatched records on the same subject, each apply a join, and
-	// removed with the repository by its purge.
+	// check_dispatched records on the same subject (which write the attempts
+	// they queue into code_checks too), each apply a join, and removed with
+	// the repository by its purge.
 	"code_checks", "code_check_logs", "code_check_targets", "code_check_dispatches",
 
 	// A repository's merge queues — each entry a change's enqueue made, the

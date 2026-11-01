@@ -3,6 +3,7 @@ package code_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -799,6 +800,126 @@ func TestAHeadLeavesTheDueListingOnceItsDispatchIsRecorded(t *testing.T) {
 	res, err = w.Publish(t.Context(), dispatching(repo, oidOf("A"), tip, defs, head))
 	applied("the head's dispatch under the checks file", res, err)
 	none("once its dispatch under the target's checks file is recorded,")
+}
+
+// A DISPATCH QUEUES ITS ATTEMPTS IN ITS OWN RECORD: a head's dispatch
+// carrying the attempts it queues is ONE record — the head taken off the
+// due listing and its attempts' rows written by the same apply, each as a
+// check_queued would write it: unit queued to run, docs recorded skipped and
+// announced as an ending — counted and announced by the writer as the single
+// queues were. Asked again it is answered unchanged, appending nothing; and
+// a dispatch carrying an attempt the rows already hold and one they do not is
+// appended with the new one alone, the held one's row untouched. A dispatch
+// carrying an attempt it cannot — one queued twice, one for another target,
+// one under another checks file, one at a head it does not name, past its
+// rows — is no write at all.
+//
+// Mutations: keep an attempt the rows already hold in the record — the
+// dispatch asked again appends, red; apply the dispatch without its attempts
+// — no row is queued, red; announce none of the attempts a dispatch ended —
+// docs' skip is never announced, red.
+func TestADispatchQueuesItsAttemptsInItsOwnRecord(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := discussed(t, n, "web")
+	w, counter, stream, rec := checksWriterOn(t, n)
+	ctx := t.Context()
+	_, heads, _ := checksDue(t, n, repo, harnessAt)
+	if len(heads) != 1 {
+		t.Fatalf("web's due heads are %+v, want its change's", heads)
+	}
+	defs := oidOf("checks-file")
+	attempt := func(name string, skipped bool) code.CheckQueued {
+		return code.CheckQueued{CheckKey: code.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef,
+			Name: name, Attempt: 1}, Purpose: code.PurposeHead, ChangeID: change, Revision: 1, DefsOID: defs,
+			Def: defOf(name), Reason: code.QueueDispatch, Skipped: skipped, QueuedAt: harnessAt}
+	}
+	head := code.DispatchedHead{OID: oidOf("B"), ChangeID: change, Revision: 1}
+	dispatch := func(attempts ...code.CheckQueued) code.ChecksRequest {
+		req := dispatching(repo, heads[0].Tip, heads[0].TipPosition, defs, head)
+		req.Dispatched.Attempts = attempts
+		return req
+	}
+	rowOf := func(name string) *code.CheckRow {
+		t.Helper()
+		one, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadCheck, Asker: ada, Repo: "web",
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}, Checks: &code.CheckQuery{OID: oidOf("B"),
+				Target: mainRef, Name: name, Attempt: 1}})
+		if errors.Is(err, code.ErrCheckNotFound) {
+			return nil
+		}
+		if err != nil {
+			t.Fatalf("read %s at the head: %v", name, err)
+		}
+		if one.Check == nil {
+			return nil
+		}
+		return &one.Check.CheckRow
+	}
+
+	before := counter.appended.Load()
+	res, err := w.Publish(ctx, dispatch(attempt("unit", false), attempt("docs", true)))
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Unchanged ||
+		counter.appended.Load() != before+1 {
+		t.Fatalf("the head's dispatch with its attempts answered (%+v, %v) appending %d records, want applied "+
+			"in one", res, err, counter.appended.Load()-before)
+	}
+	unit, docs := rowOf("unit"), rowOf("docs")
+	if unit == nil || unit.State != code.CheckStateQueued || unit.Queued.Packed() != res.Position.Packed() ||
+		docs == nil || docs.State != code.CheckStateSkipped || docs.Queued.Packed() != res.Position.Packed() {
+		t.Fatalf("after the dispatch unit is %+v and docs %+v, want unit queued and docs skipped by its record",
+			unit, docs)
+	}
+	if _, due, _ := checksDue(t, n, repo, harnessAt); len(due) != 0 {
+		t.Fatalf("a head whose dispatch landed with its attempts is still due: %+v", due)
+	}
+	waitAnnouncedOf(t, stream, "code_check_finished", 1)
+	if e, ok := stream.of("code_check_finished")[0].Data.(*types.CodeCheckFinished); !ok || e.Name != "docs" ||
+		e.State != string(code.CheckStateSkipped) {
+		t.Fatalf("the dispatch announced %+v, want docs' skip", stream.of("code_check_finished")[0].Data)
+	}
+	if got := readingOf(rec, metrics.CodeChecksQueued, metrics.Attrs{"purpose": "head"}).Total; got != 1 {
+		t.Fatalf("crewlet.code.checks.queued{purpose=head} = %v after a dispatch queuing unit, want 1", got)
+	}
+
+	appended := counter.appended.Load()
+	res, err = w.Publish(ctx, dispatch(attempt("unit", false), attempt("docs", true)))
+	if err != nil || !res.Unchanged || counter.appended.Load() != appended {
+		t.Fatalf("the dispatch asked again answered (%+v, %v), want unchanged with no record", res, err)
+	}
+	res, err = w.Publish(ctx, dispatch(attempt("unit", false), attempt("lint", false)))
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Unchanged ||
+		counter.appended.Load() != appended+1 {
+		t.Fatalf("a dispatch adding lint beside the held unit answered (%+v, %v), want applied in one record",
+			res, err)
+	}
+	if lint, again := rowOf("lint"), rowOf("unit"); lint == nil || lint.Queued.Packed() != res.Position.Packed() ||
+		again == nil || again.Queued.Packed() != unit.Queued.Packed() {
+		t.Fatalf("after the second dispatch lint is %+v and unit %+v, want lint queued by it and unit's queue "+
+			"the first's", lint, again)
+	}
+
+	other := attempt("e2e", false)
+	other.Target = releaseRef
+	underAnother := attempt("e2e", false)
+	underAnother.DefsOID = oidOf("another-file")
+	unnamed := attempt("e2e", false)
+	unnamed.OID = oidOf("C")
+	crowd := make([]code.CheckQueued, 0, code.MaxDispatchRows)
+	for i := range code.MaxDispatchRows {
+		crowd = append(crowd, attempt(fmt.Sprintf("c%03d", i), false))
+	}
+	for what, attempts := range map[string][]code.CheckQueued{
+		"an attempt queued twice":           {attempt("e2e", false), attempt("e2e", true)},
+		"an attempt for another target":     {other},
+		"an attempt under another file":     {underAnother},
+		"an attempt at a head it names not": {unnamed},
+		"more attempts than a record rows":  crowd,
+	} {
+		if _, err := w.Publish(ctx, dispatch(attempts...)); !errors.Is(err, code.ErrInvalidProposal) {
+			t.Errorf("a dispatch carrying %s answered %v, want code.ErrInvalidProposal", what, err)
+		}
+	}
 }
 
 // A TARGET THAT MOVES IS READ AGAIN AT THE HOME'S PACE: once web's head is

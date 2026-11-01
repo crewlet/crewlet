@@ -161,14 +161,26 @@ func checksFile(defs ...string) string {
 	return b.String()
 }
 
-// queuedOf is every attempt writes queue, by name, and dispatchesOf the
-// dispatches they record, in order.
+// attemptsOf is every attempt writes queue — a check_queued's alone, or a
+// dispatch's — in order; queuedOf is them by name, and dispatchesOf the
+// dispatches the writes record, in order.
+func attemptsOf(writes []code.ChecksRequest) []code.CheckQueued {
+	var out []code.CheckQueued
+	for _, w := range writes {
+		switch {
+		case w.Queued != nil:
+			out = append(out, *w.Queued)
+		case w.Dispatched != nil:
+			out = append(out, w.Dispatched.Attempts...)
+		}
+	}
+	return out
+}
+
 func queuedOf(writes []code.ChecksRequest) map[string]code.CheckQueued {
 	out := map[string]code.CheckQueued{}
-	for _, w := range writes {
-		if w.Queued != nil {
-			out[w.Queued.Name] = *w.Queued
-		}
+	for _, q := range attemptsOf(writes) {
+		out[q.Name] = q
 	}
 	return out
 }
@@ -264,13 +276,11 @@ func TestAPathsCheckIsSkippedWhereNothingMatches(t *testing.T) {
 		t.Fatalf("the check work read the tip's checks file %d times in one turn, want once", len(read))
 	}
 	skipped := map[string]map[string]bool{}
-	for _, w := range writes {
-		if q := w.Queued; q != nil {
-			if skipped[q.OID] == nil {
-				skipped[q.OID] = map[string]bool{}
-			}
-			skipped[q.OID][q.Name] = q.Skipped
+	for _, q := range attemptsOf(writes) {
+		if skipped[q.OID] == nil {
+			skipped[q.OID] = map[string]bool{}
 		}
+		skipped[q.OID][q.Name] = q.Skipped
 	}
 	if d := dispatchesOf(writes); len(d) != 1 || !slices.Equal(headsOf(d[0]), []string{narrow, wide}) {
 		t.Fatalf("the dispatches recorded are %+v, want one naming both heads under their target's tip", d)
@@ -330,8 +340,8 @@ func TestAHeadWaitsForItsFactsWhateverItsFileDefines(t *testing.T) {
 // A SUPERSEDED HEAD'S CHECKS ARE CANCELLED: a change dispatched again for a
 // new head first ends every attempt the listing names still queued or running
 // at the head it moved on from, or for the target it left — cancelled,
-// superseded, saying what it moved on to — and only then queues the new
-// head's checks and records the dispatch.
+// superseded, saying what it moved on to — and only then records the new
+// head's dispatch with the checks it queues.
 //
 // Mutation: dispatch the new head without ending the old head's attempts —
 // they run on for a head nobody merges, red.
@@ -348,9 +358,9 @@ func TestASupersededHeadsChecksAreCancelled(t *testing.T) {
 		t.Fatalf("the check work: %v", err)
 	}
 	writes, _ := e.asked()
-	if len(writes) != 4 {
-		t.Fatalf("the check work wrote %d records, want two cancellations, the new head's unit and its "+
-			"dispatch", len(writes))
+	if len(writes) != 3 {
+		t.Fatalf("the check work wrote %d records, want two cancellations and the new head's dispatch with its "+
+			"unit", len(writes))
 	}
 	for i, key := range stale {
 		f := writes[i].Finished
@@ -359,9 +369,10 @@ func TestASupersededHeadsChecksAreCancelled(t *testing.T) {
 			t.Fatalf("write %d is %+v, want attempt %+v cancelled superseded, naming the new head", i, f, key)
 		}
 	}
-	if q := writes[2].Queued; q == nil || q.OID != head || q.Name != "unit" || writes[3].Dispatched == nil {
-		t.Fatalf("after the cancellations the check work wrote %+v and %+v, want the new head's unit queued "+
-			"and its dispatch", writes[2], writes[3])
+	if d := writes[2].Dispatched; d == nil || len(d.Attempts) != 1 || d.Attempts[0].OID != head ||
+		d.Attempts[0].Name != "unit" || !slices.Equal(headsOf(*d), []string{head}) {
+		t.Fatalf("after the cancellations the check work wrote %+v, want the new head's dispatch with its unit",
+			writes[2])
 	}
 }
 
@@ -426,11 +437,11 @@ func TestARequiredCheckAddedAtTheTargetReachesAWaitingHead(t *testing.T) {
 	queued := queuedOf(writes)
 	lint, ok := queued["lint"]
 	d := dispatchesOf(writes)
-	if len(writes) != 2 || !ok || !lint.Required || lint.DefsOID != blobOf(e.files[after]) ||
+	if len(writes) != 1 || !ok || !lint.Required || lint.DefsOID != blobOf(e.files[after]) ||
 		lint.Def == nil || lint.Def.Run != "make lint" || len(d) != 1 ||
 		!slices.Equal(headsOf(d[0]), []string{head}) || d[0].DefsOID != blobOf(e.files[after]) {
 		t.Fatalf("the waiting head's turn wrote %+v, want lint alone queued Required under the new tip's file, "+
-			"then the head's dispatch under it", writes)
+			"in the head's dispatch under it", writes)
 	}
 }
 
@@ -504,29 +515,109 @@ func TestAMendedChecksFileReachesTheHeadsItErrored(t *testing.T) {
 	}
 }
 
-// A TURN'S DISPATCH NAMES AT MOST code.MaxDispatchHeads HEADS: the heads one
-// turn dispatches under one target's tip share its records, one more past
-// every MaxDispatchHeads of them, each head named once.
+// A HEAD'S DISPATCH LANDS IN ONE RECORD: a head owed three checks of its
+// target's file — one skipped by its paths — is dispatched in ONE write, its
+// dispatch record carrying the three attempts beside the head, never a write
+// a check: the queues and the row that takes the head off its home's list
+// land together, in one append.
 //
-// Mutation: record a target's heads in one record whatever their number —
-// the writer refuses it past the bound, red.
-func TestATurnsDispatchNamesAtMostMaxDispatchHeads(t *testing.T) {
+// Mutation: queue each attempt in a write of its own before the dispatch, as
+// the home once did — four writes, red.
+func TestAHeadsDispatchLandsInOneRecord(t *testing.T) {
 	t.Parallel()
-	tip := oid("2")
+	head, tip := oid("1"), oid("2")
 	e := newCheckEstate()
-	for i := range code.MaxDispatchHeads + 1 {
-		c := owing(int64(i+1), fmt.Sprintf("%040x", i+1), tip, code.CheckWork{Dispatch: true})
-		c.ID = fmt.Sprintf("01920000-0000-7000-8000-%012x", i+1)
-		e.due = append(e.due, c)
-	}
+	e.files[tip] = checksFile("unit", "lint", `docs paths: ["docs/**"]`)
+	e.due = []code.ChangeDue{owing(1, head, tip, code.CheckWork{Dispatch: true})}
 	l := checkLoop(t, e)
 	if err := home.CheckWork(t.Context(), l, repoA, statelog.Position{}); err != nil {
 		t.Fatalf("the check work: %v", err)
 	}
 	writes, _ := e.asked()
-	d := dispatchesOf(writes)
-	if len(writes) != 2 || len(d) != 2 || len(d[0].Heads) != code.MaxDispatchHeads || len(d[1].Heads) != 1 {
-		t.Fatalf("%d heads under one tip were recorded in %d writes, %d dispatches; want two records of %d and 1",
-			code.MaxDispatchHeads+1, len(writes), len(d), code.MaxDispatchHeads)
+	if len(writes) != 1 || writes[0].Dispatched == nil {
+		t.Fatalf("the head's dispatch was %d writes (%+v), want one dispatch record", len(writes), writes)
+	}
+	d := *writes[0].Dispatched
+	names := map[string]bool{}
+	for _, a := range d.Attempts {
+		names[a.Name] = a.Skipped
+	}
+	if !slices.Equal(headsOf(d), []string{head}) || len(d.Attempts) != 3 || names["unit"] || names["lint"] ||
+		!names["docs"] {
+		t.Fatalf("the dispatch record is %+v, want the head beside unit and lint queued and docs skipped", d)
+	}
+}
+
+// A TURN'S DISPATCH IS BOUNDED BY ITS ROWS AND ITS BYTES: the heads one turn
+// dispatches under one target's tip share their records, each holding at
+// most code.MaxDispatchRows heads and attempts and code.MaxDispatchBytes of
+// them encoded — the writer's stand-in refuses a record past either, as the
+// writer does — every head named once, by the record carrying its attempts,
+// whether a record fills by its rows (many heads of three short checks) or
+// by its bytes (a few heads of ten long ones).
+//
+// Mutation: open no second record whatever a record holds — the writer
+// refuses the first past its bound, red.
+func TestATurnsDispatchIsBoundedByItsRowsAndBytes(t *testing.T) {
+	t.Parallel()
+	long := func(name string) string {
+		return "  - name: " + name + "\n    run: make " + name + " " + strings.Repeat("x", code.MaxCheckRunBytes-64) +
+			"\n    timeout_seconds: 60\n"
+	}
+	var wide strings.Builder
+	wide.WriteString("checks:\n")
+	for i := range 10 {
+		wide.WriteString(long(fmt.Sprintf("long-%d", i)))
+	}
+	for name, c := range map[string]struct {
+		file  string
+		heads int
+	}{
+		"by its rows":  {checksFile("unit", "lint", "docs"), code.MaxDispatchRows/4 + 1},
+		"by its bytes": {wide.String(), 20},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			tip := oid("2")
+			e := newCheckEstate()
+			e.files[tip] = c.file
+			for i := range c.heads {
+				due := owing(int64(i+1), fmt.Sprintf("%040x", i+1), tip, code.CheckWork{Dispatch: true})
+				due.ID = fmt.Sprintf("01920000-0000-7000-8000-%012x", i+1)
+				e.due = append(e.due, due)
+			}
+			l := checkLoop(t, e)
+			if err := home.CheckWork(t.Context(), l, repoA, statelog.Position{}); err != nil {
+				t.Fatalf("the check work: %v", err)
+			}
+			writes, _ := e.asked()
+			d := dispatchesOf(writes)
+			if len(d) < 2 || len(d) != len(writes) {
+				t.Fatalf("%d heads under one tip were recorded in %d writes, %d dispatches; want more than one "+
+					"dispatch record and nothing else", c.heads, len(writes), len(d))
+			}
+			named := map[string]int{}
+			for i, rec := range d {
+				if rows := len(rec.Heads) + len(rec.Attempts); rows > code.MaxDispatchRows {
+					t.Fatalf("record %d holds %d rows, past code.MaxDispatchRows", i, rows)
+				}
+				for _, h := range rec.Heads {
+					named[h.OID]++
+				}
+				for _, a := range rec.Attempts {
+					if !slices.Contains(headsOf(rec), a.OID) {
+						t.Fatalf("record %d carries an attempt of %s and does not name it", i, a.OID[:8])
+					}
+				}
+			}
+			if len(named) != c.heads {
+				t.Fatalf("the records name %d heads, want %d", len(named), c.heads)
+			}
+			for head, n := range named {
+				if n != 1 {
+					t.Fatalf("head %s is named %d times, want once", head[:8], n)
+				}
+			}
+		})
 	}
 }

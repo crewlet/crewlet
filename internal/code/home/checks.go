@@ -2,6 +2,7 @@ package home
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -81,10 +82,11 @@ func (k *checks) Due(ctx context.Context, floor statelog.Position, cursor string
 // target's tip work worked ([checks.tip], tips.go); then each change owing
 // its checks work, worked in the order the listing names them
 // ([checks.change]) — a failure of one left for the next pass while the
-// others are worked — and then the page's dispatches RECORDED, each target's
-// heads in as few records as [code.MaxDispatchHeads] allows, after every
-// write of theirs: a dispatch cut short is the next turn's, which finds what
-// it queued answered from its rows. The checks file of each target tip the
+// others are worked — and then the page's dispatches RECORDED, each head's
+// dispatch WITH THE ATTEMPTS IT QUEUES in one record, a target's heads in as
+// few records as [code.MaxDispatchRows] and [code.MaxDispatchBytes] allow:
+// one append a record's worth of heads, never one a check, each landing a
+// head's attempts and its dispatch together. The checks file of each target tip the
 // turn meets is read once, and parsed once a blob ([defsMemo]).
 func (k *checks) Work(ctx context.Context, repoID string, floor statelog.Position) error {
 	q := code.ReadQuery{Kind: code.ReadChecksDue, Fresh: freshAt(floor), ChecksDue: k.due(repoID)}
@@ -107,7 +109,7 @@ func (k *checks) Work(ctx context.Context, repoID string, floor statelog.Positio
 					due.TargetRef, short(due.Tip), err))
 				continue
 			}
-			page.of(repoID, due.TargetRef, due.Tip, due.TipPosition, defs)
+			page.of(repoID, due.TargetRef, due.Tip, due.TipPosition, defs, k.now().UTC())
 		}
 		for _, due := range a.DueTips {
 			if err := ctx.Err(); err != nil {
@@ -124,12 +126,12 @@ func (k *checks) Work(ctx context.Context, repoID string, floor statelog.Positio
 			if due.Checks == nil {
 				continue
 			}
-			defs, err := k.change(ctx, repoID, due, memo, a.Position)
+			defs, attempts, err := k.change(ctx, repoID, due, memo, a.Position)
 			switch {
 			case err != nil:
 				failed = append(failed, err)
 			case defs != nil:
-				page.dispatched(repoID, due, defs)
+				page.dispatched(repoID, due, defs, attempts, k.now().UTC())
 			}
 		}
 		failed = append(failed, k.record(ctx, page, a.Position)...)
@@ -153,30 +155,32 @@ func (k *checks) Work(ctx context.Context, repoID string, floor statelog.Positio
 //     none that runs, every name the target's gate requires that the head
 //     holds no attempt of errored defs_invalid.
 //
-// It answers the checks file the head was dispatched under — nil where it owes
-// no dispatch, or none yet, its facts not recorded — which its page records
-// once every write of it was decided.
+// The requeues and the cancellations are written here, each a record of its
+// own — seldom more than one a head. The dispatch is NOT: it answers the
+// checks file the head is dispatched under and the attempts that dispatch
+// queues — nil where it owes none, or none yet, its facts not recorded —
+// which its page records with the head, in one record ([checks.record]).
 //
 // A refusal saying the rows moved — the repository deleted or archived, an
 // attempt already past where this one would follow — is the rows answering,
 // left to the next listing; one that decided nothing for a reason of the
 // writer's or the log's fails the change, listed again by the next pass.
 func (k *checks) change(ctx context.Context, repoID string, due code.ChangeDue, memo *defsMemo,
-	at statelog.Position) (*checksDefs, error) {
+	at statelog.Position) (*checksDefs, []code.CheckQueued, error) {
 
 	w := due.Checks
 	about := fmt.Sprintf("change %d", due.Number)
 	for _, q := range w.Requeue {
 		if err := k.queue(ctx, about, q, at); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if !w.Dispatch {
-		return nil, nil
+		return nil, nil, nil
 	}
 	for _, key := range w.Stale {
 		if err := k.cancel(ctx, due, key, at); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if w.Facts == nil {
@@ -190,32 +194,25 @@ func (k *checks) change(ctx context.Context, repoID string, due code.ChangeDue, 
 		// this worker where it records them ([Loop.follow]).
 		k.log.Debug("code_check_dispatch_awaits_facts", "repo", repoID, "change", due.Number,
 			"revision", due.Revision, "target", due.TargetRef)
-		return nil, nil
+		return nil, nil, nil
 	}
 	defs, err := memo.at(ctx, k.estate, repoID, due.Tip, at)
 	if err != nil {
-		return nil, fmt.Errorf("home: read the checks file of change %d's target %s at %s: %w", due.Number,
+		return nil, nil, fmt.Errorf("home: read the checks file of change %d's target %s at %s: %w", due.Number,
 			due.TargetRef, short(due.Tip), err)
 	}
-	if err := k.dispatch(ctx, repoID, due, defs, at); err != nil {
-		return nil, err
-	}
-	return defs, nil
+	return defs, k.owed(repoID, due, defs), nil
 }
 
-// dispatch queues what the head owes of defs, the checks file at its target's
-// tip: every check the file defines that the head holds no attempt of for its
-// target — the NEXT attempt of one an earlier dispatch errored for a file that
-// did not run, the first of any other — queued, or skipped where the head's
-// recorded facts touch none of its paths, a name its target's gate requires
-// marked required; and where the file is none
-// that runs, every name the gate requires that the head holds no attempt of
-// errored.
-func (k *checks) dispatch(ctx context.Context, repoID string, due code.ChangeDue, defs *checksDefs,
-	at statelog.Position) error {
-
+// owed is what the head's dispatch under defs, the checks file at its target's
+// tip, queues: every check the file defines that the head holds no attempt of
+// for its target — the NEXT attempt of one an earlier dispatch errored for a
+// file that did not run, the first of any other — queued, or skipped where the
+// head's recorded facts touch none of its paths, a name its target's gate
+// requires marked required; and where the file is none that runs, every name
+// the gate requires that the head holds no attempt of errored.
+func (k *checks) owed(repoID string, due code.ChangeDue, defs *checksDefs) []code.CheckQueued {
 	w := due.Checks
-	about := fmt.Sprintf("change %d", due.Number)
 	// next is the attempt the dispatch queues of a check, and false where the
 	// head holds one it queues nothing after.
 	next := func(name string) (int, bool) {
@@ -229,7 +226,8 @@ func (k *checks) dispatch(ctx context.Context, repoID string, due code.ChangeDue
 	}
 	base := code.CheckQueued{CheckKey: code.CheckKey{RepoID: repoID, OID: due.Head, Target: due.TargetRef},
 		Purpose: code.PurposeHead, ChangeID: due.ID, Revision: int(due.Revision), DefsOID: defs.oid,
-		Reason: code.QueueDispatch}
+		Reason: code.QueueDispatch, QueuedAt: k.now().UTC()}
+	var out []code.CheckQueued
 	if defs.invalid != "" {
 		// NO FILE THAT RUNS: every required name the head holds no attempt
 		// of is errored, saying why — a gate waiting on a check nobody can
@@ -241,11 +239,9 @@ func (k *checks) dispatch(ctx context.Context, repoID string, due code.ChangeDue
 			}
 			q := base
 			q.Name, q.Attempt, q.Required, q.Invalid = name, 1, true, defs.invalid
-			if err := k.queue(ctx, about, q, at); err != nil {
-				return err
-			}
+			out = append(out, q)
 		}
-		return nil
+		return out
 	}
 	for _, def := range defs.file.Checks {
 		attempt, owed := next(def.Name)
@@ -255,11 +251,9 @@ func (k *checks) dispatch(ctx context.Context, repoID string, due code.ChangeDue
 		q := base
 		q.Name, q.Attempt, q.Def, q.Required = def.Name, attempt, &def, slices.Contains(w.Required, def.Name)
 		q.Skipped = len(def.Paths) > 0 && !touches(*w.Facts, def)
-		if err := k.queue(ctx, about, q, at); err != nil {
-			return err
-		}
+		out = append(out, q)
 	}
-	return nil
+	return out
 }
 
 // touches reports whether a head whose recorded facts are f touches a path
@@ -303,10 +297,47 @@ func (k *checks) cancel(ctx context.Context, due code.ChangeDue, key code.CheckK
 }
 
 // dispatches is one page's dispatch records: each target's reading at a tip,
-// and the heads dispatched under it, in the order the page met them.
+// and the heads dispatched under it with the attempts each queues, in the
+// order the page met them.
 type dispatches struct {
 	order []dispatchKey
-	by    map[dispatchKey]*code.CheckDispatched
+	by    map[dispatchKey]*dispatchRecords
+}
+
+// dispatchRecords is one target tip's records, the last of them still taking
+// heads: each within [code.MaxDispatchRows] rows and [code.MaxDispatchBytes]
+// bytes, by what each head and attempt encodes to (open holds the last's),
+// each head named once, in the record carrying all of its attempts — which
+// one record always holds ([code.MaxDispatchBytes]).
+type dispatchRecords struct {
+	reading code.CheckDispatched
+	records []code.CheckDispatched
+	open    struct{ rows, bytes int }
+	heads   map[string]bool
+}
+
+// dispatchFrame is what a record's frame around its heads and attempts may
+// encode to beyond the reading's own fields: the two lists' keys and brackets
+// (`,"heads":[]`, `,"attempts":[]`) and a dispatch instant written out to the
+// nanosecond, where the one measured may have trimmed its trailing zeros — 64
+// bytes, more than either takes.
+const dispatchFrame = 64
+
+// start opens a record of the reading alone.
+func (r *dispatchRecords) start() {
+	r.records = append(r.records, r.reading)
+	r.open.rows, r.open.bytes = 0, encodedLen(r.reading)+dispatchFrame
+}
+
+// encodedLen is what v encodes to, as the writer weighs a record's payload.
+// Everything a dispatch carries encodes; an error is a broken encoder, which
+// the writer refuses the record over, so it weighs past any bound here.
+func encodedLen(v any) int {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return code.MaxDispatchBytes + 1
+	}
+	return len(b)
 }
 
 // dispatchKey is a target's tip as a dispatch reads it: the branch, its tip
@@ -316,48 +347,71 @@ type dispatchKey struct {
 	at          statelog.Position
 }
 
-func newDispatches() *dispatches { return &dispatches{by: map[dispatchKey]*code.CheckDispatched{}} }
+func newDispatches() *dispatches { return &dispatches{by: map[dispatchKey]*dispatchRecords{}} }
 
-// of is the record of target's reading at tip — with no heads, a refresh of
-// the reading alone — made where the page has none.
-func (p *dispatches) of(repoID, target, tip string, at statelog.Position, defs *checksDefs) *code.CheckDispatched {
+// of is target's records at tip — with no heads, a refresh of the reading
+// alone — made where the page has none, its reading stamped now.
+func (p *dispatches) of(repoID, target, tip string, at statelog.Position, defs *checksDefs,
+	now time.Time) *dispatchRecords {
+
 	key := dispatchKey{target: target, tip: tip, at: at}
-	d, ok := p.by[key]
+	r, ok := p.by[key]
 	if !ok {
-		d = &code.CheckDispatched{RepoID: repoID, Target: target, Tip: tip, TipPosition: at, DefsOID: defs.oid}
-		p.by[key] = d
+		r = &dispatchRecords{reading: code.CheckDispatched{RepoID: repoID, Target: target, Tip: tip,
+			TipPosition: at, DefsOID: defs.oid, DispatchedAt: now}, heads: map[string]bool{}}
+		p.by[key] = r
 		p.order = append(p.order, key)
 	}
-	return d
+	return r
 }
 
-// dispatched names due's head among those dispatched under its target's tip —
-// once: two changes into one target sharing a head share its dispatch.
-func (p *dispatches) dispatched(repoID string, due code.ChangeDue, defs *checksDefs) {
-	d := p.of(repoID, due.TargetRef, due.Tip, due.TipPosition, defs)
-	if slices.ContainsFunc(d.Heads, func(h code.DispatchedHead) bool { return h.OID == due.Head }) {
+// dispatched adds due's head to those dispatched under its target's tip, with
+// the attempts its dispatch queues, ahead of it — once: two changes into one
+// target sharing a head share its dispatch and its attempts, the first's.
+func (p *dispatches) dispatched(repoID string, due code.ChangeDue, defs *checksDefs, attempts []code.CheckQueued,
+	now time.Time) {
+
+	r := p.of(repoID, due.TargetRef, due.Tip, due.TipPosition, defs, now)
+	if r.heads[due.Head] {
 		return
 	}
-	d.Heads = append(d.Heads, code.DispatchedHead{OID: due.Head, ChangeID: due.ID, Revision: int(due.Revision)})
+	r.heads[due.Head] = true
+	head := code.DispatchedHead{OID: due.Head, ChangeID: due.ID, Revision: int(due.Revision)}
+	rows, bytes := len(attempts)+1, encodedLen(head)+1
+	for _, a := range attempts {
+		bytes += encodedLen(a) + 1
+	}
+	// A HEAD IS NEVER SPLIT: one the open record cannot take whole opens the
+	// next, so its attempts and its name land in one append. A record of its
+	// own always holds it (code.MaxDispatchBytes), and one that somehow did
+	// not would be refused by the writer whole, never landed in part.
+	if len(r.records) == 0 || (r.open.rows > 0 &&
+		(r.open.rows+rows > code.MaxDispatchRows || r.open.bytes+bytes > code.MaxDispatchBytes)) {
+		r.start()
+	}
+	rec := &r.records[len(r.records)-1]
+	rec.Attempts = append(rec.Attempts, attempts...)
+	rec.Heads = append(rec.Heads, head)
+	r.open.rows += rows
+	r.open.bytes += bytes
 }
 
 // record asks the repository's checks writer to record each of the page's
-// dispatches: a target's heads in records of at most [code.MaxDispatchHeads],
-// and a reading with none in one. A record refused for the rows' reason is the
-// next pass's to read; one that decided nothing fails, and its heads are
-// listed again.
+// dispatches: a target's heads with their attempts in as few records as the
+// bounds allow, and a reading with none in one. A record refused for the
+// rows' reason is the next pass's to read; one that decided nothing fails,
+// and its heads are listed again.
 func (k *checks) record(ctx context.Context, p *dispatches, at statelog.Position) []error {
 	var failed []error
 	for _, key := range p.order {
-		d := *p.by[key]
-		heads := d.Heads
-		for first := true; first || len(heads) > 0; first = false {
-			n := min(len(heads), code.MaxDispatchHeads)
-			rec := d
-			rec.Heads, heads = heads[:n:n], heads[n:]
-			rec.DispatchedAt = k.now().UTC()
-			what := fmt.Sprintf("record the dispatch of %d heads", len(rec.Heads))
-			if len(rec.Heads) == 0 {
+		r := p.by[key]
+		if len(r.records) == 0 {
+			r.start()
+		}
+		for _, rec := range r.records {
+			what := fmt.Sprintf("record the dispatch of %d heads and %d attempts", len(rec.Heads),
+				len(rec.Attempts))
+			if len(rec.Heads)+len(rec.Attempts) == 0 {
 				what = "record its reading of the checks file"
 			}
 			if err := k.write(ctx, fmt.Sprintf("target %s at %s", key.target, short(key.tip)),

@@ -3,6 +3,7 @@ package code
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -87,4 +88,58 @@ func TestTwoDispatchesOfOneTargetConvergeInEitherOrder(t *testing.T) {
 		t.Fatalf("the rows keep\n%s\nwant the later tip's checks file, %s, on the target and the head", got,
 			oid("defs-2"))
 	}
+}
+
+// THE WIDEST HEAD'S DISPATCH FITS ONE RECORD, so the home never splits a head
+// between records: a checks file of MaxChecksPerFile checks of the longest
+// name, filling its MaxChecksFileBytes with text JSON writes six bytes a byte
+// (`<`, as <), queued at one head of a long target, as the attempts of
+// one dispatch record naming that head, encodes within MaxDispatchBytes and
+// is a dispatch Validate passes.
+//
+// Mutation: halve MaxDispatchBytes — the widest head's dispatch no longer
+// fits one record, red.
+func TestTheWidestHeadsDispatchFitsOneRecord(t *testing.T) {
+	t.Parallel()
+	const perCheck = 64 // a check's YAML beside its run and name: its keys, indentation and timeout
+	run := strings.Repeat("<", (MaxChecksFileBytes-len("checks:\n"))/MaxChecksPerFile-MaxCheckNameBytes-perCheck)
+	var b strings.Builder
+	b.WriteString("checks:\n")
+	for i := range MaxChecksPerFile {
+		name := fmt.Sprintf("%s%02d", strings.Repeat("n", MaxCheckNameBytes-2), i)
+		fmt.Fprintf(&b, "  - name: %s\n    run: m%s\n    timeout_seconds: 60\n", name, run)
+	}
+	raw := b.String()
+	if len(raw) > MaxChecksFileBytes || len(raw) < MaxChecksFileBytes-MaxChecksPerFile*perCheck {
+		t.Fatalf("the widest checks file is %d bytes, want it within %d of MaxChecksFileBytes (%d)", len(raw),
+			MaxChecksPerFile*perCheck, MaxChecksFileBytes)
+	}
+	file, err := ParseChecks([]byte(raw))
+	if err != nil || len(file.Checks) != MaxChecksPerFile {
+		t.Fatalf("the widest checks file parsed to %d checks (%v), want %d", len(file.Checks), err,
+			MaxChecksPerFile)
+	}
+	target := "refs/heads/" + strings.Repeat("t", 200)
+	head := DispatchedHead{OID: oid("head"), ChangeID: "0190f3c4-0000-7000-8000-00000000c0de", Revision: 1}
+	at := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: statelog.MaxSeq}
+	d := CheckDispatched{RepoID: checkRepo, Target: target, Tip: oid("tip"), TipPosition: at, DefsOID: oid("defs"),
+		Heads: []DispatchedHead{head}, DispatchedAt: applyClock}
+	for _, def := range file.Checks {
+		d.Attempts = append(d.Attempts, CheckQueued{CheckKey: CheckKey{RepoID: checkRepo, OID: head.OID,
+			Target: target, Name: def.Name, Attempt: MaxCheckAttempts}, Purpose: PurposeHead,
+			ChangeID: head.ChangeID, Revision: head.Revision, DefsOID: d.DefsOID, Def: &def, Required: true,
+			Reason: QueueDispatch, QueuedAt: applyClock})
+	}
+	encoded, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > MaxDispatchBytes {
+		t.Fatalf("the widest head's dispatch encodes to %d bytes, past MaxDispatchBytes (%d)", len(encoded),
+			MaxDispatchBytes)
+	}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("the widest head's dispatch is refused: %v", err)
+	}
+	t.Logf("the widest head's dispatch encodes to %d of MaxDispatchBytes' %d", len(encoded), MaxDispatchBytes)
 }

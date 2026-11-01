@@ -2057,7 +2057,7 @@ one head share theirs: the same commit, judged by the same file.
 | `check_started` | A runner claims the attempt — and, once it has made one, names its box — or a person's CI reports its run started, placed `external` |
 | `check_finished` | The attempt ended: its state and why, its exit status, how long it ran, its summary (at most 4 KiB), the last 16 KiB of its output, the failures its reports named (at most 200, weighing at most 64 KiB, the rest counted), the link a person's CI reported, and the log a failed run kept |
 | `checks_sweep` | The rows that ended before an instant are removed — the `code-retention` duty's, for a repository whose checks stopped ending, swept back to the 30 days once a row of it outlived them by a day ([How long a check is kept](#how-long-a-check-is-kept)) |
-| `check_dispatched` | The home read a target's checks file at its tip — or found none there — and **dispatched** the heads it names under it: their checks queued for that target, the record their dispatch's last; with no heads, a moved target's reading refreshed ([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched)) |
+| `check_dispatched` | The home read a target's checks file at its tip — or found none there — and **dispatched** the heads it names under it: the checks it queues at them for that target ride the record — each queued, skipped or errored as a `check_queued` record would set it — so a head's checks and its dispatch land together; with no heads, a moved target's reading refreshed ([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched)) |
 
 An attempt's **state** is one of seven: `queued`; `running`; and the five
 endings — `passed` and `failed`, which measured the commit (a run past its
@@ -2202,12 +2202,13 @@ judge it. Its checks are queued by its repository's
 merges it ([The home's change work](#the-homes-change-work)), working a second
 worker, `checks`, from the rows. The home reads `.crewlet/checks.yaml` at the
 tip through the git reads (`checks_file`, the engine's own read of the file
-at one commit, whole), queues every check it defines at the head for that
-target, and then records that it did: a `check_dispatched` record naming the
-target, the tip it read, the file it found there — or none — and the heads it
-dispatched under it. Two tables keep what those records say: each target's
-checks file as the home last read it, and the file each head was dispatched
-under.
+at one commit, whole), and records the dispatch in ONE record: a
+`check_dispatched` record naming the target, the tip it read, the file it
+found there — or none — the heads it dispatched under it, and every check it
+queues at those heads for that target, each joined into its own row as a
+`check_queued` record's would be. Two tables keep what the dispatch says
+beside the checks' own rows: each target's checks file as the home last read
+it, and the file each head was dispatched under.
 
 What a dispatch queues:
 
@@ -2239,10 +2240,17 @@ runs at a head nobody will merge. The change work schedules the check work
 the moment it records them, so a new change is dispatched as soon as its
 facts land, not at the next pass.
 
-The dispatch record is the **last**: a dispatch cut short leaves the head
-listed, and the next turn queues what is missing — every queue that landed
-already answered from its row — before recording it. The heads one turn
-dispatches under one target's tip share a record, up to 500 of them.
+A head's checks and its dispatch land **together**, in one append: never a
+head taken off the list with its checks unqueued, nor its checks queued while
+it stays listed. A head is never split between records — one record holds the
+dispatch of a head under the widest checks file there can be. The heads one
+turn dispatches under one target's tip share their records — up to 500 heads
+and checks a record, and about half a megabyte of them — so dispatching a
+hundred heads of ten checks each is a few round trips to the repository's
+committing data node, not a thousand. Each check is decided as it is
+written, from the rows: one already queued, or one the rows refuse — its
+attempts run out, or ended in a way a dispatch does not follow — is left out
+of the record, and the rest land.
 
 The home's work list is read from those rows alone. A live change's head is
 due a dispatch while no dispatch of it for its target names the file the
