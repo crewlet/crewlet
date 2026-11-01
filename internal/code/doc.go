@@ -134,11 +134,13 @@
 // version a record, pure over the record and the rows it finds — the changes,
 // and the authors its pushers already are of them ([changeBook]). The push
 // decide moves the same model by each entry it admits, so it counts exactly
-// the rows the apply will write about changes beside the entries' own and
-// holds the record to [MaxRecordRows] with them: a push whose changes cannot
-// fit even a record of its own is refused [RefusalTooManyChanges], and one
-// that fits only alone is carried, with the pushes behind it, to lead the
-// committer's next batch.
+// the rows the apply will write about changes beside the entries' own — save
+// the stored readiness of each change it merges or closes, which the apply
+// clears only where it holds an answer and the decide counts a row whether
+// or not — and holds the record to [MaxRecordRows] with them: a push whose
+// changes cannot fit even a record of its own is refused
+// [RefusalTooManyChanges], and one that fits only alone is carried, with the
+// pushes behind it, to lead the committer's next batch.
 //
 // A PUSH MAY OPEN ONE, IN ITS OWN RECORD (pushchange.go). `git push -o change`
 // asks for a change on the one branch the push sets ([ParseChangeOptions],

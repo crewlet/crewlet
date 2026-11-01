@@ -73,13 +73,17 @@ import (
 // record's apply will write about changes beside its entries' own — the apply
 // reads the same rows, which the broker's arbitration on the repository's
 // subject guarantees, and writes what the same model makes of the same
-// entries — and holds the record to [MaxRecordRows] with them. It tries each
-// entry on the book itself, journaled, and takes back one the record cannot
-// hold ([bookTrial]): what an entry costs a round is what its own commands
-// reach. A push whose changes' rows would take its record past the bound
-// beside the entries before it is CARRIED, decided by none of its batch's
-// rounds, to lead the committer's next batch; one whose rows would take even
-// a record of its own past it is refused [RefusalTooManyChanges].
+// entries — save the stored readiness of each change the record merges or
+// closes: the apply clears it only where it holds an answer, and the book,
+// which reads no mergeability, counts it a row whether or not, so the count
+// is never short ([changeBook.rowCount]). It holds the record to
+// [MaxRecordRows] with them. It tries each entry on the book itself,
+// journaled, and takes back one the record cannot hold ([bookTrial]): what an
+// entry costs a round is what its own commands reach. A push whose changes'
+// rows would take its record past the bound beside the entries before it is
+// CARRIED, decided by none of its batch's rounds, to lead the committer's
+// next batch; one whose rows would take even a record of its own past it is
+// refused [RefusalTooManyChanges].
 //
 // # The record's format does not move
 //
