@@ -1714,8 +1714,7 @@ ref that differs.
 Asks the repository's maintainer — the git node that compacts and publishes
 it — to drop every object no branch or tag reaches: the commit a leaked
 secret was force-pushed away from, the history a deleted branch left. It is
-the `code_purge_unreachable` tool your own assistant and the dashboard call,
-over the same route
+the `code_purge_unreachable` tool your own assistant calls, over the same route
 ([`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface)),
 so the request is one record however it was asked.
 
