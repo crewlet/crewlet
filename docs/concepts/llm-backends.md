@@ -734,6 +734,11 @@ sentence, until the window ends:
   the window ends, before the first of them answers); every call queued behind
   them is refused as soon as one reports the plan still spent.
 
+The window is kept on the wall clock, the clock a vendor names its reset on.
+A host that sleeps through the window's end wakes with the entry tried again,
+rather than refusing for the length of the sleep while naming an end that has
+already passed.
+
 **A seat whose whole chain is limited is parked, not retried.** When every
 entry of the chain a turn ran on refused for a rate limit, the engine holds the
 seat's inbox until the first entry is tried again (`seat_provider_parked`), the

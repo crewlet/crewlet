@@ -242,3 +242,54 @@ func TestARejectedLoginDoesNotSitTheEntryOut(t *testing.T) {
 		t.Errorf("a rejected login sat the entry out: %v", err)
 	}
 }
+
+// A WINDOW IS KEPT ON THE WALL CLOCK, the clock its end is named on.
+//
+// An instant read from time.Now carries a monotonic reading as well, and two
+// instants that both carry one compare on it alone. The monotonic clock stops
+// while the host sleeps, so a window kept with one outlasted a sleep by the
+// sleep's length: the entry went on refusing while the end it named, which
+// every reader compares on the wall clock, was already past, and the engine's
+// probe, armed for that end, asked again at once, thousands of times a second.
+// So a window holds no monotonic reading, whether its own report opened it or
+// another provider's ([Plan.Hold]), and every comparison against it is on the
+// wall clock.
+//
+// Mutation: store the report's own instant in record, and the window keeps
+// its monotonic reading.
+func TestAWindowIsKeptOnTheWallClock(t *testing.T) {
+	t.Parallel()
+	monotonic := func(t time.Time) bool { return strings.Contains(t.String(), " m=") }
+	at := time.Now()
+	if !monotonic(at) {
+		t.Fatal("control: time.Now carries no monotonic reading here, so nothing below can fail")
+	}
+	for name, report := range map[string]limitReport{
+		"a named reset": {reset: at.Add(30 * time.Minute), said: "usage limit reached",
+			at: at, window: llm.LimitSession},
+		"no reset named": {said: "usage limit reached", at: at},
+	} {
+		var b bench
+		until := b.record(report)
+		for field, instant := range map[string]time.Time{
+			"end": b.until, "start": b.since, "reset": b.resetsAt, "answer": until,
+		} {
+			if monotonic(instant) {
+				t.Errorf("%s: the window's %s %s carries a monotonic reading", name, field, instant)
+			}
+		}
+		if out, held := b.sitOut(until.Add(-time.Second), ""); !held || !out.Until.Equal(until) {
+			t.Errorf("%s: the window is not in force a second before its end", name)
+		}
+		if _, held := b.sitOut(until, ""); held {
+			t.Errorf("%s: the window is still in force at its end on the wall clock", name)
+		}
+	}
+
+	plan := newPlan()
+	plan.Hold(SitOut{Until: at.Add(time.Hour), ResetsAt: at.Add(time.Hour), Since: at,
+		Window: llm.LimitSession})
+	if monotonic(plan.wide.until) || monotonic(plan.wide.since) || monotonic(plan.wide.resetsAt) {
+		t.Errorf("a window held for another provider carries a monotonic reading: %+v", plan.wide)
+	}
+}
