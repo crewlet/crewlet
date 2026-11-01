@@ -326,3 +326,86 @@ func TestAnImportAndAPullMirrorKeepWhatTheyFollow(t *testing.T) {
 			"mirror_to.as", got)
 	}
 }
+
+// NOTHING MERGES INTO A PULL MIRROR OR A REPOSITORY BEING IMPORTED: a merge
+// moves its target, and a pull mirror moves only by its syncs from its
+// source, so a merge of a change that meets its gate is refused repo_mirrored,
+// and so is each of a queue's steps toward one — an enqueue, a train's
+// candidate, a landing of a train built before the repository became a mirror
+// — in the domain's one sentence for a pull mirror, nothing appended; an EJECT
+// still lands, moving no ref, so a repository that became a mirror sheds its
+// queue. A repository being imported takes no write at all: the same merge and
+// enqueue are refused repo_importing.
+//
+// Mutation: drop the mirror arm from decideMerge — the merge lands, red; drop
+// the enqueue, the candidate or the landing from decideQueue's — that record
+// lands or is refused for another reason, red; refuse every queue record on a
+// mirror — the queue can never be shed, red; drop either importing arm, red at
+// its write.
+func TestNothingMergesIntoAPullMirror(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	ctx := t.Context()
+	c, _ := mergeStream(t, n)
+	w, _ := writerOn(t, n, n.pub)
+
+	// web merges into main directly, its change meeting main's gate; api
+	// merges through its queue, one change queued and another open.
+	web, change := mergeRepo(t, n, c, "web", code.DirectPersons, mergeGate())
+	approved(t, n, w, web, change)
+	api, queuedChange := queueRepo(t, n, c, "api")
+	ready(t, n, w, api, queuedChange)
+	enqueue := enqueueing(api, queuedChange, ada, oidOf("B"))
+	entered, err := c.ProposeQueue(ctx, enqueue)
+	requireQueued(t, entered, err, code.QueueWaiting, 1)
+	entryID := enqueue.Enqueue.EntryID
+	train := training(api, oidOf("A"), entryID, oidOf("M"))
+	built, err := c.ProposeQueue(ctx, train)
+	requireRecorded(t, built, err)
+	n.passed(api, oidOf("M"), mainRef, "unit")
+	other, err := c.ProposeChange(ctx, opening(api, releaseRef, mainRef, dev))
+	requireChanged(t, other, err)
+
+	for _, name := range []string{"web", "api"} {
+		s := suiteSettings()
+		s.Owner, s.MirrorFrom = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}, mirrorSource
+		if name == "web" {
+			s.Protections[0].DirectPush, s.Protections[0].Gate = code.DirectPersons, mergeGate()
+		} else {
+			s.Protections[0].Gate = queueGate()
+		}
+		n.ensure(name, s, t2)
+	}
+
+	before := n.end()
+	res, err := c.ProposeMerge(ctx, merging(web, change, ada, code.MergeMethodSquash, oidOf("A"), oidOf("B"),
+		oidOf("S")))
+	requireMergeRefused(t, n, before, res, err, code.MergeRefusalRepoMirrored,
+		code.MirroredDetail("web", code.ManagedConfig))
+	queued, err := c.ProposeQueue(ctx, enqueueing(api, other.ChangeID, ada, oidOf("R")))
+	requireQueueRefused(t, n, before, queued, err, code.MergeRefusalRepoMirrored,
+		code.MirroredDetail("api", code.ManagedConfig))
+	queued, err = c.ProposeQueue(ctx, training(api, oidOf("A"), entryID, oidOf("N")))
+	requireQueueRefused(t, n, before, queued, err, code.MergeRefusalRepoMirrored,
+		code.MirroredDetail("api", code.ManagedConfig))
+	queued, err = c.ProposeQueue(ctx, landingOf(api, code.LandingPreLand, train.Candidate.Train, oidOf("A"),
+		code.LandEntry{EntryID: entryID, ChangeID: queuedChange, Commit: oidOf("M")}))
+	requireQueueRefused(t, n, before, queued, err, code.MergeRefusalRepoMirrored,
+		code.MirroredDetail("api", code.ManagedConfig))
+	if main := n.target(api, mainRef); main != oidOf("A") {
+		t.Fatalf("the pull mirror's main is at %q, want A: nothing but a sync moves it", main)
+	}
+	shed, err := c.ProposeQueue(ctx, queueRecord(func(p *code.QueueProposal) {
+		p.Eject = &code.Eject{RepoID: api, Entries: []code.Ejection{{EntryID: entryID, Reason: code.EjectConflict}}}
+	}))
+	requireRecorded(t, shed, err)
+
+	n.exec(`UPDATE code_repos SET status = 'importing' WHERE id IN (?, ?)`, web, api)
+	before = n.end()
+	res, err = c.ProposeMerge(ctx, merging(web, change, ada, code.MergeMethodSquash, oidOf("A"), oidOf("B"),
+		oidOf("S")))
+	requireMergeRefused(t, n, before, res, err, code.MergeRefusalRepoImporting, code.ImportingDetail("web"))
+	queued, err = c.ProposeQueue(ctx, enqueueing(api, other.ChangeID, ada, oidOf("R")))
+	requireQueueRefused(t, n, before, queued, err, code.MergeRefusalRepoImporting, code.ImportingDetail("api"))
+}

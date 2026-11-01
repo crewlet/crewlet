@@ -309,6 +309,17 @@ const (
 	// MergeRefusalRepoArchived is a write to an archived, read-only
 	// repository.
 	MergeRefusalRepoArchived MergeRefusal = "repo_archived"
+	// MergeRefusalRepoImporting is a write to a repository being imported
+	// from another host ([RepoStatusImporting]), which takes no write until
+	// its import is done ([ImportingDetail]).
+	MergeRefusalRepoImporting MergeRefusal = "repo_importing"
+	// MergeRefusalRepoMirrored is a merge, an enqueue, a candidate or a
+	// landing on a PULL MIRROR ([RepoRef.Mirrored]): it moves only by its
+	// syncs from its source, so nothing merges into it ([MirroredDetail]). A
+	// dequeue and an eject still land — neither moves a ref — so a
+	// repository that became a mirror with entries queued sheds them, as a
+	// close sheds its live changes.
+	MergeRefusalRepoMirrored MergeRefusal = "repo_mirrored"
 	// MergeRefusalChangeNotFound is a change the repository does not hold.
 	MergeRefusalChangeNotFound MergeRefusal = "change_not_found"
 	// MergeRefusalChangeNotOpen is a change closed or merged.
@@ -404,7 +415,8 @@ const (
 
 // MergeRefusals is the closed set, in the order the decides reach them.
 func MergeRefusals() []MergeRefusal {
-	return []MergeRefusal{MergeRefusalRepoDeleted, MergeRefusalRepoArchived, MergeRefusalChangeNotFound,
+	return []MergeRefusal{MergeRefusalRepoDeleted, MergeRefusalRepoArchived, MergeRefusalRepoImporting,
+		MergeRefusalRepoMirrored, MergeRefusalChangeNotFound,
 		MergeRefusalChangeNotOpen, MergeRefusalChangeDraft, MergeRefusalStale, MergeRefusalHeadMoved,
 		MergeRefusalTargetMoved, MergeRefusalTargetMoving, MergeRefusalNotPerson, MergeRefusalQueueTarget, MergeRefusalNoQueue,
 		MergeRefusalNoAutoRevert, MergeRefusalAlreadyQueued, MergeRefusalQueueFull, MergeRefusalGateUnmet,
@@ -756,6 +768,15 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 	case repo.status == RepoStatusArchived:
 		return d.refuse(MergeRefusalRepoArchived, fmt.Sprintf("repository %s is archived and read-only "+
 			"(code.repos archived: true): nothing merges into it", repo.name))
+	case repo.status == RepoStatusImporting:
+		return d.refuse(MergeRefusalRepoImporting, ImportingDetail(repo.name))
+	case repo.mirrored && (p.Enqueue != nil || p.Candidate != nil || p.Land != nil):
+		// AN ENQUEUE, A CANDIDATE AND A LANDING ARE A MERGE'S STEPS, which a
+		// pull mirror never takes: it moves only by its syncs. A DEQUEUE and
+		// an EJECT move no ref, so they still land, and a repository that
+		// became a mirror sheds its queue; a GREEN and a BROKEN record what a
+		// landing's tip checks said of a landing made before it was one.
+		return d.refuse(MergeRefusalRepoMirrored, MirroredDetail(repo.name, repo.managedBy))
 	}
 	if p.JudgesChart() && seats.Roster == nil {
 		// THE CALLER'S BUG: the committer hands a write the chart judges on

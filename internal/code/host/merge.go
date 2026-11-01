@@ -193,6 +193,10 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoDeleted, detail: words}, nil
 	case code.RefusalRepoArchived:
 		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoArchived, detail: words}, nil
+	case code.RefusalRepoImporting:
+		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoImporting, detail: words}, nil
+	case code.RefusalRepoMirrored:
+		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoMirrored, detail: words}, nil
 	}
 	floor := statelog.FloorAt(statelog.ReadSession, wr.synced.Position)
 	ans, err := s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChange, Asker: w.Principal, Repo: repo.Name,

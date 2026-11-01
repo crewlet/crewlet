@@ -5234,6 +5234,7 @@ hands it to the repository's next committer.
 
 | Refusal | Why |
 |---|---|
+| `repo_importing`, `repo_mirrored` | The repository is being imported from another host, or is a pull mirror, which nothing merges into: a dequeue of a pull mirror's entry still lands, so a repository that became a mirror sheds its queue. |
 | `gate_unmet` | The change does not meet its target's gate: the answer names every precondition not met and whom each waits on. |
 | `change_not_open`, `change_draft` | The change is closed or merged, or a draft, which merges nowhere. |
 | `stale`, `head_moved` | The change targets another branch, or its head moved, since its asker read it: read it again. |
@@ -5304,6 +5305,7 @@ change as whoever enqueued it.
 
 | Refusal | Why |
 |---|---|
+| `repo_importing`, `repo_mirrored` | The repository is being imported from another host, which takes none of these records, or is a pull mirror, which takes no candidate and no landing: an eject, a green and a broken still land on a mirror, moving no ref, so a repository that became one sheds its queue. |
 | `target_moved` | The branch is no longer at the tip the train or the landing was built onto: the home builds it again. |
 | `not_queued` | An entry is not live in the branch's queue — ended since, or another branch's. |
 | `stale` | What the record names is not what the rows hold: a commit its entry's method does not make, a pack it does not need or lacks, a landing that is no prefix of the branch's train, a policy the branch does not land by. |
@@ -5853,6 +5855,8 @@ merge it refuses appends nothing:
 | Refusal | Why |
 |---|---|
 | `repo_deleted`, `repo_archived` | The repository is gone, or read-only. |
+| `repo_importing` | The repository is being imported from another host, and takes no write until its import is done. |
+| `repo_mirrored` | The repository is a pull mirror, which moves only by its syncs from its source: a merge its source made is recorded once a sync brings it in. |
 | `change_not_found`, `change_not_open`, `change_draft` | The repository holds no such change, or it is closed or merged, or a draft. |
 | `stale`, `head_moved` | The change targets another branch, or its head moved, since its merge was built: read it again. |
 | `target_moved` | The target is no longer at the base the merge was built onto — read off the snapshot's refs, never off the proposal: its builder builds it again onto the tip the branch holds. |

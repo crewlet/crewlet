@@ -780,7 +780,8 @@ func Catalogue() []Instrument {
 				"`change_not_found`, `not_queued`, `not_permitted`, " +
 				"`not_green`, `not_red`, `no_landing`, `record_full`, " +
 				"`upload_expired`, `repo_size`, `compaction_behind`, " +
-				"`repo_archived`, `repo_deleted`, `busy`, `not_applied`, " +
+				"`repo_archived`, `repo_importing`, `repo_mirrored`, " +
+				"`repo_deleted`, `busy`, `not_applied`, " +
 				"`unavailable` — which decided nothing; `handed_on`, one this " +
 				"node decided nothing of for a reason about itself, which the " +
 				"estate asks the repository's runner-up; and `failed`, any " +
@@ -803,7 +804,8 @@ func Catalogue() []Instrument {
 				"`target_moved`, `head_moved`, `stale`, `queue_target`, " +
 				"`not_person`, `source_refused`, `upload_expired`, `repo_size`, " +
 				"`compaction_behind`, `change_not_open`, `change_draft`, " +
-				"`change_not_found`, `repo_archived`, `repo_deleted`, `busy`, " +
+				"`change_not_found`, `repo_archived`, `repo_importing`, " +
+				"`repo_mirrored`, `repo_deleted`, `busy`, " +
 				"`not_applied`, `unavailable` — which decided nothing; " +
 				"`handed_on`, one this node decided nothing of for a reason " +
 				"about itself, which the estate asks the repository's runner-up; " +

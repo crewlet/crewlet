@@ -805,17 +805,17 @@ func (d CodeDeps) converse(ctx context.Context, w code.ConversationWrite) (code.
 
 // changeClass is the class a refusal of a change's lifecycle is answered in —
 // chosen by what each class tells its reader, as a push's are ([pushClass]):
-// a rule of the repository or the change refusing the caller FORBIDDEN; a
-// change that moved since the caller read it STALE_VERSION; a branch already
+// a rule of the repository or the change refusing the caller FORBIDDEN — a
+// pull mirror's among them, as a push's repo_mirrored is; a change that moved since the caller read it STALE_VERSION; a branch already
 // heading a live change EXISTS; a write naming branches no change can be
 // about INVALID — the fix is another call; a write only a live change takes,
 // of one that is not, CONFLICT; a repository or a change gone NOT_FOUND; and
-// what waiting clears UNAVAILABLE, the same call again being the same write.
-// The two only a push's receiver answers (ambiguous_source, bad_option) are
+// what waiting clears UNAVAILABLE, the same call again being the same write —
+// an import finishing among it, as a push's repo_importing is. The two only a push's receiver answers (ambiguous_source, bad_option) are
 // INVALID on the same reading, though no tool's write is ever refused either.
 func changeClass(r code.ChangeRefusal) (tools.Refusal, bool) {
 	switch r {
-	case code.ChangeRefusalNotPermitted, code.ChangeRefusalRepoArchived:
+	case code.ChangeRefusalNotPermitted, code.ChangeRefusalRepoArchived, code.ChangeRefusalRepoMirrored:
 		return tools.RefusalForbidden, true
 	case code.ChangeRefusalStale:
 		return tools.RefusalStaleVersion, true
@@ -828,7 +828,8 @@ func changeClass(r code.ChangeRefusal) (tools.Refusal, bool) {
 		return tools.RefusalConflict, true
 	case code.ChangeRefusalRepoDeleted, code.ChangeRefusalChangeNotFound:
 		return tools.RefusalNotFound, true
-	case code.ChangeRefusalBusy, code.ChangeRefusalNotApplied, code.ChangeRefusalUnavailable:
+	case code.ChangeRefusalBusy, code.ChangeRefusalNotApplied, code.ChangeRefusalUnavailable,
+		code.ChangeRefusalRepoImporting:
 		return tools.RefusalUnavailable, true
 	}
 	return "", false

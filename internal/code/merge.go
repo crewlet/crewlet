@@ -466,6 +466,13 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 	case repo.status == RepoStatusArchived:
 		return d.refuse(MergeRefusalRepoArchived, fmt.Sprintf("repository %s is archived and read-only "+
 			"(code.repos archived: true): nothing merges into it", repo.name))
+	case repo.status == RepoStatusImporting:
+		return d.refuse(MergeRefusalRepoImporting, ImportingDetail(repo.name))
+	case repo.mirrored:
+		// A MERGE MOVES ITS TARGET, and a pull mirror moves only by its syncs
+		// from its source: a merge its source made is recorded once a sync
+		// brings it in, as a landing.
+		return d.refuse(MergeRefusalRepoMirrored, MirroredDetail(repo.name, repo.managedBy))
 	case seats.Roster == nil:
 		// THE CALLER'S BUG: the committer hands a merge to the repository's
 		// next committer before deciding it with no chart.
