@@ -332,7 +332,7 @@ function SeatPeekBody({
         // THE ONE THING A READER CAN ACT ON from here: an executor parked on
         // a question holds the seat until somebody answers it.
         <Callout variant="warning">
-          Its executor is waiting on a question:{" "}
+          This seat's executor is waiting on a question:{" "}
           <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
         </Callout>
       )}

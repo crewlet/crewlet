@@ -739,7 +739,7 @@ function Notices({
           icon={<CircleQuestionMarkGlyph size="md" />}
           action={<AnswerRunButton run={sandbox} seat={seat.name} />}
         >
-          Its executor is waiting on a question:{" "}
+          This seat's executor is waiting on a question:{" "}
           <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
         </Callout>
       )}
