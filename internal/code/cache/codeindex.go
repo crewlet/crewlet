@@ -522,7 +522,7 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 	if err := b.segments(ctx, s, files); err != nil {
 		return "", err
 	}
-	if err := b.merge(files); err != nil {
+	if err := b.merge(); err != nil {
 		return "", err
 	}
 	if err := b.tipMap(tip, files); err != nil {
@@ -605,6 +605,8 @@ type indexBuild struct {
 	// opened; skipped is every blob the index skips, by id.
 	segs    []builtSegment
 	skipped map[codeindex.OID]bool
+	// tip is every blob the tip names, by id: what a merge keeps.
+	tip     map[codeindex.OID]bool
 	tipPart codeIndexPart
 	wrote   []string
 	next    uint64
@@ -664,6 +666,10 @@ func (b *indexBuild) place(rel string, write func(io.Writer) error) (int64, []by
 // read codeindex.SegmentSourceBytes.
 func (b *indexBuild) segments(ctx context.Context, s Synced, files []treeFile) error {
 	b.skipped = map[codeindex.OID]bool{}
+	b.tip = make(map[codeindex.OID]bool, len(files))
+	for _, f := range files {
+		b.tip[f.blob] = true
+	}
 	if b.view != nil {
 		for i, seg := range b.view.Segments {
 			b.segs = append(b.segs, builtSegment{part: b.prior.Segments[i], seg: seg})
@@ -709,6 +715,10 @@ func (b *indexBuild) segments(ctx context.Context, s Synced, files []treeFile) e
 	}
 	blobs, finish := b.c.catBlobs(ctx, s, read, readBytes)
 	defer finish()
+	segmentBytes := int64(codeindex.SegmentSourceBytes)
+	if k := b.c.knobs; k != nil && k.indexSegmentBytes > 0 {
+		segmentBytes = k.indexSegmentBytes
+	}
 	builder := &codeindex.Builder{}
 	flush := func() error {
 		if builder.Len() == 0 {
@@ -727,7 +737,7 @@ func (b *indexBuild) segments(ctx context.Context, s Synced, files []treeFile) e
 		}
 		b.segs = append(b.segs, builtSegment{part: codeIndexPart{N: n, Bytes: size}, seg: seg})
 		builder = &codeindex.Builder{}
-		return nil
+		return b.merge()
 	}
 	for _, oid := range fresh {
 		if err := ctx.Err(); err != nil {
@@ -751,7 +761,7 @@ func (b *indexBuild) segments(ctx context.Context, s Synced, files []treeFile) e
 		if err := builder.Add(oid, data); err != nil {
 			return err
 		}
-		if builder.SourceBytes() >= codeindex.SegmentSourceBytes {
+		if builder.SourceBytes() >= segmentBytes {
 			if err := flush(); err != nil {
 				return err
 			}
@@ -821,25 +831,27 @@ func (c *Cache) catBlobs(ctx context.Context, s Synced, oids []codeindex.OID, to
 	return blob, finish
 }
 
-// merge keeps the index's segments few and geometric: while the newest
-// segment holds at least half what the one before it does, or the index is
-// past codeindex.MaxSegments, the two newest are merged into one, keeping
+// merge keeps the index's segments few and geometric: while
+// codeindex.MergeNewest says so, the two newest are merged into one, keeping
 // only the blobs the tip names — so a blob is rewritten a logarithmic number
 // of times, and a blob the branch no longer holds leaves at its next merge.
-func (b *indexBuild) merge(files []treeFile) error {
-	tip := make(map[codeindex.OID]bool, len(files))
-	for _, f := range files {
-		tip[f.blob] = true
-	}
+// It is called after EACH segment the build writes (flush), as MergeNewest
+// asks: called once after a build of many, it folded them into one from the
+// end, rewriting what it had merged at every step.
+func (b *indexBuild) merge() error {
 	for n := len(b.segs); n >= 2; n = len(b.segs) {
-		older, newer := b.segs[n-2], b.segs[n-1]
-		if n <= codeindex.MaxSegments && 2*newer.part.Bytes < older.part.Bytes {
+		sizes := make([]int64, n)
+		for i, g := range b.segs {
+			sizes[i] = g.part.Bytes
+		}
+		if !codeindex.MergeNewest(sizes) {
 			return nil
 		}
+		older, newer := b.segs[n-2], b.segs[n-1]
 		num := b.alloc()
 		size, data, err := b.place(codeIndexSegRel(num), func(w io.Writer) error {
 			return codeindex.MergeSegments(w, []*codeindex.Segment{older.seg, newer.seg},
-				func(oid codeindex.OID) bool { return tip[oid] })
+				func(oid codeindex.OID) bool { return b.tip[oid] })
 		})
 		if err != nil {
 			return err

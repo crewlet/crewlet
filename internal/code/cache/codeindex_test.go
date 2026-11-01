@@ -132,6 +132,41 @@ func TestANewTipIndexesOnlyItsNewBlobs(t *testing.T) {
 	indexOf(t, c, s, cache.IndexCurrent)
 }
 
+// AN INDEX BUILD MERGES AS IT WRITES, never once at its end
+// (codeindex.MergeNewest). Four files of disjoint text at a segment a file
+// write four equal segments; merged as each is written they settle as one
+// of three and the fourth — the fourth is less than half the three, so it
+// stays — where one merge pass after the fourth folds all four into one
+// from the end, rewriting what it merged at every step: k²/2 segments'
+// writes for k, which a repository of a gigabyte at 64 MiB a segment
+// paid nineteen times over.
+//
+// Mutation: merge only after the last segment (flush returns nil rather
+// than merging) — the index holds one segment.
+func TestAnIndexBuildMergesAsItWritesNotOnceAtTheEnd(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	files := map[string]string{}
+	for i, word := range []string{"alpha", "bravo", "charlie", "delta"} {
+		files[word+".txt"] = strings.Repeat(word+" "+strings.Repeat(string(rune('k'+i)), 3)+"\n", 8)
+	}
+	w.push(t, repo, "refs/heads/main", files)
+	c := w.open(t, cache.IndexSegmentBytesWith(1))
+	s := w.sync(t, c, repo)
+	indexOf(t, c, s, cache.IndexBuilt)
+	view, ok := c.CodeIndex(s)
+	if !ok {
+		t.Fatal("the built index cannot be read")
+	}
+	if got := len(view.Segments); got != 2 {
+		t.Fatalf("the index holds %d segments, want 2: three merged as they were written, and the fourth", got)
+	}
+	if a, b := view.Segments[0].Len(), view.Segments[1].Len(); a != 3 || b != 1 {
+		t.Errorf("the segments hold %d and %d blobs, want 3 and 1", a, b)
+	}
+}
+
 // THE INDEX SKIPS BINARIES AND LARGE FILES (M6-D12), by the one rule git grep
 // -I keeps too: a file past codeindex.MaxFileBytes is never read — its size,
 // from ls-tree -l, is enough — and a binary one is read and recorded skipped,

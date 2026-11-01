@@ -65,6 +65,18 @@ func IndexReadingWith(fn func(blobs int)) func(*Options) {
 	}
 }
 
+// IndexSegmentBytesWith makes each build of a code index by the cache Open
+// builds write a segment once it has read n bytes of source, in place of
+// codeindex.SegmentSourceBytes (knobs.indexSegmentBytes).
+func IndexSegmentBytesWith(n int64) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.indexSegmentBytes = n
+	}
+}
+
 // IndexTicksWith makes the indexer of the cache Open builds look at every
 // repository on ticks rather than every IndexPoll (knobs.indexTicks).
 func IndexTicksWith(ticks <-chan time.Time) func(*Options) {

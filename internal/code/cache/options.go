@@ -166,6 +166,10 @@ type knobs struct {
 	// indexReading is told how many blobs a build of a code index reads
 	// through its cat-file, before it starts it.
 	indexReading func(blobs int)
+	// indexSegmentBytes, when above zero, is the source a build of a code
+	// index writes a segment at, in place of codeindex.SegmentSourceBytes:
+	// a case builds an index of many segments from a few small files.
+	indexSegmentBytes int64
 	// installWake, when set, is what the installer waits on for the earliest
 	// of its repositories' waits to end — told when, on Options.Now's clock —
 	// in place of a timer: a case moves its clock and wakes it.

@@ -127,6 +127,26 @@ const SegmentSourceBytes = 64 << 20
 // SegmentSourceBytes by BenchmarkCodeIndex.
 const MaxSegments = 32
 
+// MergeNewest says whether the two newest segments of an index are to be
+// merged into one, where sizes is what each of its segments holds, oldest
+// first: when there are more than MaxSegments, or when the newest holds at
+// least half what the one before it does. A writer asks it again after each
+// merge, and AFTER EACH SEGMENT IT APPENDS — never once over a batch of
+// them. Asked as each is appended, every segment stays more than twice the
+// one after it, so an index of k segments' worth of source keeps at most
+// 2·log2(k) segments, and a merge grows the segment a blob is in by at
+// least half, so each blob is written at most log base 1.5 of k times.
+// Asked once over a batch of equal segments, the merged one is always the
+// newest and always at least half the one before it, so the batch folds
+// into one segment from its end, rewriting what it merged at every step:
+// k²/2 segments' worth of writes for k segments' source — 189 for a
+// repository of nineteen segments, where asking as each is appended writes
+// 62 and keeps three.
+func MergeNewest(sizes []int64) bool {
+	n := len(sizes)
+	return n >= 2 && (n > MaxSegments || 2*sizes[n-1] >= sizes[n-2])
+}
+
 // blobEntry is one row of a segment's blob table.
 type blobEntry struct {
 	oid   OID
