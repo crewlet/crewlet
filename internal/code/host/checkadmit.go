@@ -24,7 +24,7 @@ import (
 // # In order, each refusal its own answer
 //
 //  1. NAME and 2. CREDENTIAL — admitBox's: git's Basic, user name
-//     [CheckUser], the check's token ([CheckTokens]) as the password.
+//     [code.CheckUser], the check's token ([CheckTokens]) as the password.
 //  3. A FETCH, OVER PROTOCOL v2 — on its git: a push is refused (a check
 //     measures its commit and changes nothing), and so is a request in
 //     protocol v0, whose fetch serves only what an advertisement named,
@@ -119,9 +119,9 @@ func (s *Server) AdmitCheck(ctx context.Context, w http.ResponseWriter, r *http.
 	}, s.log) {
 		return CheckAdmitted{}, false
 	}
-	if user != CheckUser {
+	if user != code.CheckUser {
 		boxRefusal{s: s, w: w, r: r, ref: run, name: name}.refuse("not_a_check", "this route answers a "+
-			"check's box, which authenticates as `"+CheckUser+"` with its check's token; a coding box reads "+
+			"check's box, which authenticates as `"+code.CheckUser+"` with its check's token; a coding box reads "+
 			"its repositories through its clone and its tools")
 		return CheckAdmitted{}, false
 	}

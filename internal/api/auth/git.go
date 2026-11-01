@@ -27,7 +27,7 @@ const (
 
 // BoxGitPrefix is where a BOX reaches the code host's git with its own
 // credential: HTTP Basic, the user name host.BoxUser (`run`) with a coding
-// run's token as the password (ADR-0063), or host.CheckUser (`check`) with a
+// run's token as the password (ADR-0063), or code.CheckUser (`check`) with a
 // check's.
 //
 // A PUBLIC prefix ([publicPrefixes]), unlike [GitPrefix]: a box holds no
@@ -44,7 +44,7 @@ const BoxGitPrefix = "/box/git/"
 // BoxCodePrefix is where a CHECK'S BOX reads the one commit its check
 // measures by object id — its tree, a file of it, its diff — through the API
 // rather than a clone (a check whose checks file says `checkout: none`), with
-// the credential it fetches with: HTTP Basic, host.CheckUser and its check's
+// the credential it fetches with: HTTP Basic, code.CheckUser and its check's
 // token.
 //
 // PUBLIC AND UNGUARDED for [BoxGitPrefix]'s reasons, its admission the code
