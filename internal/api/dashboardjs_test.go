@@ -1172,8 +1172,15 @@ const (
 	// the fill screens' scrollbars), and the entry script and the kit's
 	// shared chunks 0.2 KiB more each. It moved to 379 KiB, which is 2.07
 	// seconds on that link. A follow-up ships the conversation parts' rules
-	// as a lazy Chatlet sheet, which brings it back under.
-	initialBudget = 379 << 10
+	// as a lazy Chatlet sheet, which brings it back under. uilet 0.86.1 took
+	// it from about 378.2 KiB to 380.3 KiB (+2.1 KiB): the one sheet carries
+	// 1.5 KiB more (the inbox row's head with its time floated on the first
+	// line, a ListDetail list that scrolls, and the rules of 0.85.0 and
+	// 0.86.0's AttentionList, MemberPicker, KeyValueRows, TableTwoLineCell
+	// and RailList), the kit's shared chunks 1.0 KiB more, and the entry
+	// script 0.4 KiB less. It moved to 381 KiB, which is 2.08 seconds on that
+	// link.
+	initialBudget = 381 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
