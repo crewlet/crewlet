@@ -30,6 +30,19 @@
 // large degrades only itself. See stream.go for the reasons, and what each
 // used to cost.
 //
+// # A run's harness session, carried between boxes
+//
+// Every run names the harness session it works in before the harness starts
+// ([Harness.Session]), records which it took up ([Paths.SessionRecord]), and packs
+// it once the harness exits ([Paths.SessionCapture], [Runner.OpenCapture]); a run
+// handed a session packed in another box restores it before its harness takes it
+// up, never over a box whose own copy already holds that archive
+// ([Paths.SessionDigests]), and starts a session of its own, saying why, where
+// it can do neither. Whether a box can continue a carried session at all is
+// its harness's release, asked of the box ([Runner.CheckCarry]).
+// What each harness's archive holds, and never holds, is the harness's own: see
+// carry.go, [ClaudeCode] and [OpenCode].
+//
 // It touches only the [sandbox.Sandbox] interface, so the in-process fake is a
 // faithful substitute and every runner is testable without a real harness.
 package executor
@@ -83,11 +96,57 @@ func (p Paths) Stream() string { return p.WorkDir() + "/stream.jsonl" }
 // again.
 func (p Paths) BaseResult() string { return p.WorkDir() + "/base-result.json" }
 
-// CLIVersion is where a run that continues a session records its harness's own
-// `--version`, which says whether that harness's result states the session's spend
-// or the run's ([sessionTotals]). Written by the run's script in the box,
-// because the harness that answers is the one the box's PATH finds there.
-func (p Paths) CLIVersion() string { return p.WorkDir() + "/cli-version" }
+// SessionRecord is where a run's script records, before its harness starts,
+// the session the harness runs in, whether that is the one the run was asked
+// to continue, why not where it was asked and could not, and the harness's own
+// `--version` — one `<key> <value>` line each ([sessionRecord]): what the
+// collection reports the run did ([sandbox.Result.Continued]) and whether its
+// harness's result states the session's spend or the run's ([sessionTotals]).
+// Written in the box, because only the run's script knows which session it
+// took up, and the harness that answers `--version` is the one the box's PATH
+// finds there; before the harness starts, so a run killed before it reported
+// anything still names its session.
+func (p Paths) SessionRecord() string { return p.WorkDir() + "/session" }
+
+// SessionCapture is where a run's script packs the session its harness ran in
+// once the harness has exited ([sandbox.Result.Captured]), in its harness's own
+// archive format ([carrier]): moved into place whole from
+// [Paths.SessionStaging], so a reader finds the last whole capture or none.
+func (p Paths) SessionCapture() string { return p.WorkDir() + "/session-capture" }
+
+// SessionCarried is where a run that continues a session carried from another
+// box has that session's archive written as it starts
+// ([sandbox.RunRequest.Carried]), for its script to restore before the harness
+// takes the session up. Removed by the script once it has been read.
+func (p Paths) SessionCarried() string { return p.WorkDir() + "/session-carried" }
+
+// SessionStaging is the DIRECTORY a run's script packs a capture and unpacks a
+// carried session in before it moves either into place — so neither is ever
+// found half written where it is read — removed whole when the script is done
+// with it, and by the clear before every run ([Runner.ClearArtifacts]).
+func (p Paths) SessionStaging() string { return p.WorkDir() + "/session-staging" }
+
+// SessionDigests is where a box keeps the digest of every archive of a session
+// its own copy holds — one line, `<session> <cksum of the archive>`, for each
+// archive a run's script packed there ([Paths.SessionCapture]) or restored
+// there ([Paths.SessionCarried]) — so a run handed an archive of a session the
+// box already holds can tell an archive its copy holds, which it never writes
+// over, from one its copy does not, which replaces it (see carry.go).
+//
+// KEPT FOR THE BOX'S LIFE: the clear before every run leaves it
+// ([Runner.ClearArtifacts]), since the copy it describes outlives every run,
+// and nothing else reads it. Every pack of a box's session records here, so a
+// pack made any other way is one this box would otherwise take for another
+// box's.
+func (p Paths) SessionDigests() string { return p.WorkDir() + "/session-digests" }
+
+// ClaudeConfigDir is the directory a Claude Code run keeps its state in, which
+// the run pins as CLAUDE_CONFIG_DIR ([claudeSessionLayout]): the box home's
+// `.claude`, where the harness keeps it by default and where a local box is
+// seeded with the entry's login (`.claude/.credentials.json`). Named by the
+// box's own home, as every path the runner hands the box is, so no profile the
+// login shell sources can move it.
+func (p Paths) ClaudeConfigDir() string { return p.Home + "/.claude" }
 
 // Brief is where the brief is written for a harness that reads it on stdin
 // ([Output.BriefOnStdin]) rather than on its argv.

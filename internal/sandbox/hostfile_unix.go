@@ -158,6 +158,14 @@ func openRegularIn(root *os.Root, name string) (*os.File, error) {
 // new content is never handed a mode the box widened. name's directory must
 // exist.
 func replaceIn(root *os.Root, name string, content []byte) error {
+	return replaceFrom(root, name, bytes.NewReader(content))
+}
+
+// replaceFrom is [replaceIn] for content read as it is written: a streamed
+// write ([Sandbox.WriteStream]), copied into the staged file a piece at a time.
+// A source that fails part way fails the write before anything is renamed, so
+// the file at name is the one that was there.
+func replaceFrom(root *os.Root, name string, content io.Reader) error {
 	return replaceWith(root, name, content, hostbox.ReplaceFileIn)
 }
 
@@ -171,12 +179,12 @@ func replaceIn(root *os.Root, name string, content []byte) error {
 // down between the two.
 type boxReplace func(root *os.Root, name string, content io.Reader) error
 
-// replaceWith is [replaceIn] with its replacement handed in ([boxReplace]).
-func replaceWith(root *os.Root, name string, content []byte, replace boxReplace) error {
+// replaceWith is [replaceFrom] with its replacement handed in ([boxReplace]).
+func replaceWith(root *os.Root, name string, content io.Reader, replace boxReplace) error {
 	if refused := notRegularAt(root, name); refused != nil {
 		return refused
 	}
-	if err := replace(root, name, bytes.NewReader(content)); err != nil {
+	if err := replace(root, name, content); err != nil {
 		if refused := notRegularAt(root, name); refused != nil {
 			return refused
 		}

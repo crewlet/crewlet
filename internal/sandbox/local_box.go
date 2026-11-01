@@ -522,6 +522,13 @@ func (b *directBox) escapeError(path string) error {
 }
 
 func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) error {
+	return b.WriteStream(ctx, path, bytes.NewReader(content))
+}
+
+// WriteStream implements [Sandbox]: the write [directBox.WriteFile] makes, its
+// content read a piece at a time into the file staged beside the path
+// ([writeHomeFile]).
+func (b *directBox) WriteStream(ctx context.Context, path string, content io.Reader) error {
 	rel, err := b.homeRel(path)
 	if err != nil {
 		return err
@@ -530,7 +537,7 @@ func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) 
 		return b.explain(path, rel, localErrorf("local sandbox %s could not create %s: %v",
 			b.layout.id, filepath.Join(b.layout.home(), filepath.Dir(rel)), err))
 	}
-	return b.explain(path, rel, writeHomeFile(b.layout, rel, path, content))
+	return b.explain(path, rel, writeHomeFile(b.layout, rel, path, readUnder(ctx, content)))
 }
 
 // ReadFile is EMPTY-ON-MISSING: the detached runner polls for marker and
@@ -908,6 +915,12 @@ func trailingPID(output string) string {
 }
 
 func (b *containerBox) WriteFile(ctx context.Context, path string, content []byte) error {
+	return b.WriteStream(ctx, path, bytes.NewReader(content))
+}
+
+// WriteStream implements [Sandbox]: on the host side of the mount, as every
+// other access to the box's files is.
+func (b *containerBox) WriteStream(ctx context.Context, path string, content io.Reader) error {
 	rel, err := b.homeRel(path)
 	if err != nil {
 		return err
@@ -916,7 +929,7 @@ func (b *containerBox) WriteFile(ctx context.Context, path string, content []byt
 		return b.explain(path, rel, localErrorf("container sandbox %s could not create %s: %v",
 			b.layout.id, filepath.Join(b.layout.home(), filepath.Dir(rel)), err))
 	}
-	return b.explain(path, rel, writeHomeFile(b.layout, rel, path, content))
+	return b.explain(path, rel, writeHomeFile(b.layout, rel, path, readUnder(ctx, content)))
 }
 
 func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
@@ -1041,13 +1054,17 @@ func readHomeFile(l boxLayout, rel, path string, limit int) ([]byte, error) {
 // of the path leads the write out of the box; and anything at the path that
 // is not a regular file — a link, a named pipe, a directory — is refused as a
 // [NotRegularFileError] naming what is there, and left as the box made it.
-func writeHomeFile(l boxLayout, rel, path string, content []byte) error {
+//
+// The content is read as it is copied into the staged file, so a source that
+// fails part way leaves the staged file to be removed and the one at rel as it
+// was ([hostbox.ReplaceFileIn]).
+func writeHomeFile(l boxLayout, rel, path string, content io.Reader) error {
 	home, err := l.openHome()
 	if err != nil {
 		return fmt.Errorf("local sandbox: open %s for writing: %w", path, err)
 	}
 	defer func() { _ = home.Close() }()
-	if err := replaceIn(home, rel, content); err != nil {
+	if err := replaceFrom(home, rel, content); err != nil {
 		return fmt.Errorf("local sandbox: write %s: %w", path, err)
 	}
 	return nil

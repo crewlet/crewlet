@@ -236,8 +236,12 @@ git merge -q --no-ff -m "merge side" side`,
 			if err := b.WriteFile(t.Context(), b.Home()+"/scenario.sh", []byte(scenarioPrelude+tc.script+scenarioEnd)); err != nil {
 				t.Fatalf("write the scenario: %v", err)
 			}
+			// It answers `--version` as the harness does, without running the
+			// scenario: every run's script asks the release first, and a
+			// scenario run twice finds its commits already made.
 			writeBoxStandIn(t, b, p.BinDir()+"/claude",
-				"#!/bin/sh\nsh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n")
+				"#!/bin/sh\ncase \"$1\" in --version) echo '2.1.310 (Claude Code)'; exit 0;; esac\n"+
+					"sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n")
 
 			handle, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "commit",
 				Env: tc.env, Attribution: tc.attribution})

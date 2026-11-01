@@ -51,12 +51,21 @@ type OpenCodeTimes struct {
 // OpenCodeCommandTimed is [OpenCode.Command] with the script run at times —
 // for the cases about a wait running out, a sync coming round or a stop that
 // must not wait, at lengths a test can tell apart.
-func OpenCodeCommandTimed(req sandbox.RunRequest, paths Paths, times OpenCodeTimes) string {
-	return "sh -c " + shellQuote(openCodeScript(req, paths, newOpenCodeSession(), openCodeTimes{
+func OpenCodeCommandTimed(req sandbox.RunRequest, session Session, paths Paths, times OpenCodeTimes) string {
+	return "sh -c " + shellQuote(openCodeScript(req, session, paths, openCodeTimes{
 		listen: cmp.Or(times.Listen, openCodeListenWait), mcp: cmp.Or(times.MCP, openCodeMCPWait),
 		sync: cmp.Or(times.Sync, openCodeLoginSync), stop: cmp.Or(times.Stop, openCodeStopWait),
 	}))
 }
+
+// ClaudeProjectDir is the project directory every Claude Code run in a box
+// files its sessions under, and the archive formats each harness's run packs its
+// session in: what a test reads a box's layout and a capture by.
+const (
+	ClaudeProjectDir      = claudeProjectDir
+	ClaudeArchiveFormat   = claudeArchiveFormat
+	OpenCodeArchiveFormat = openCodeArchiveFormat
+)
 
 // OpenCodeStops is a run's script's stops ([openCodeStops]) at stop, and
 // OpenCodeExporter its login exporter ([openCodeExporter]) at sync into file:

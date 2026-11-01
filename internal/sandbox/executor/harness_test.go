@@ -14,13 +14,19 @@ import (
 func claude() executor.Harness   { return executor.ClaudeCode{} }
 func opencode() executor.Harness { return executor.OpenCode{} }
 
+// commandOf is h's command for req, in the session h names for it as a
+// run's start does ([executor.Harness.Session]).
+func commandOf(h executor.Harness, req sandbox.RunRequest, paths executor.Paths, config string) string {
+	return h.Command(req, h.Session(req), paths, config)
+}
+
 // ---------------------------------------------------------------------
 // claude-code: the invocation
 // ---------------------------------------------------------------------
 
 func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 	t.Parallel()
-	cmd := claude().Command(sandbox.RunRequest{Brief: "fix the flake"}, executor.Paths{}, "")
+	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "fix the flake"}, executor.Paths{}, ""))
 	for _, want := range []string{
 		"claude -p ", // headless
 		// A STREAM, so a run says what it is doing while it does it; and
@@ -37,7 +43,7 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 // A minimal call stays minimal: an unset cap must not become a flag.
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 	t.Parallel()
-	cmd := claude().Command(sandbox.RunRequest{Brief: "x"}, executor.Paths{}, "")
+	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, ""))
 	for _, absent := range []string{"--max-turns", "--max-budget-usd", "--model", "--mcp-config", "--settings"} {
 		if strings.Contains(cmd, absent) {
 			t.Fatalf("%q was added for an unset value:\n%s", absent, cmd)
@@ -47,11 +53,11 @@ func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 
 func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 	t.Parallel()
-	cmd := claude().Command(sandbox.RunRequest{
+	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{
 		Brief:  "x",
 		Limits: sandbox.Limits{MaxTurns: 30, MaxBudgetUSD: 2.5},
 		Model:  "claude-opus-5",
-	}, executor.Paths{}, "/box/.crewlet/mcp.json")
+	}, executor.Paths{}, "/box/.crewlet/mcp.json"))
 	for _, want := range []string{
 		"--max-turns 30", "--max-budget-usd 2.5", "--model 'claude-opus-5'",
 		"--mcp-config '/box/.crewlet/mcp.json'",
@@ -190,15 +196,20 @@ func scriptOf(t *testing.T, cmd string) string {
 func TestTheOpenCodeInvocationRunsAgainstItsOwnServer(t *testing.T) {
 	t.Parallel()
 	h := opencode()
-	cmd := h.Command(sandbox.RunRequest{Brief: `fix "zebra-17"`}, executor.Paths{Home: "/box"}, "")
-	script := scriptOf(t, cmd)
+	req := sandbox.RunRequest{Brief: `fix "zebra-17"`}
+	session := h.Session(req)
+	script := scriptOf(t, h.Command(req, session, executor.Paths{Home: "/box"}, ""))
 	for _, want := range []string{
+		"sid='" + session.ID + "' k=no",
 		"opencode serve --hostname 127.0.0.1 --port 0",
-		`opencode run --server "$url" --format json --title crewlet --session 'ses_`,
+		`opencode run --server "$url" --format json --title crewlet --session "$sid"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q:\n%s", want, script)
 		}
+	}
+	if !strings.HasPrefix(session.ID, "ses_") || session.Continues || session.Fresh != "" {
+		t.Errorf("a fresh run's session is %+v, want a new ses_ id of its own", session)
 	}
 	if strings.Contains(script, "zebra-17") {
 		t.Errorf("the brief is on the run's argv, which OpenCode re-quotes:\n%s", script)
@@ -208,7 +219,7 @@ func TestTheOpenCodeInvocationRunsAgainstItsOwnServer(t *testing.T) {
 	}
 	// A fresh session every run: OpenCode CONTINUES a session it already
 	// holds, and a reused box holds the last run's.
-	if again := h.Command(sandbox.RunRequest{}, executor.Paths{Home: "/box"}, ""); again == cmd {
+	if again := h.Session(req); again.ID == session.ID {
 		t.Error("two runs were given one session")
 	}
 }
@@ -227,7 +238,7 @@ func TestAnOpenCodeEntrysModelIsPassedAsWritten(t *testing.T) {
 		"anthropic/claude-sonnet-5",
 		"openrouter/anthropic/claude-sonnet-5",
 	} {
-		script := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x", Model: model}, executor.Paths{}, ""))
+		script := scriptOf(t, commandOf(opencode(), sandbox.RunRequest{Brief: "x", Model: model}, executor.Paths{}, ""))
 		if !strings.Contains(script, "--model '"+model+"'") {
 			t.Errorf("%q gave:\n%s\nwant the model as written", model, script)
 		}
@@ -730,21 +741,21 @@ func TestAContinuedRunResumesTheAskingRunsSession(t *testing.T) {
 	t.Parallel()
 	continued := sandbox.RunRequest{Brief: "the answer: main", Resume: "ses_0123456789abcdef0123456789abcdef"}
 
-	// A SCRIPT, which records the harness's release before it execs the run
-	// (TestAContinuedClaudeRunRecordsItsRelease).
-	cmd := scriptOf(t, claude().Command(continued, executor.Paths{}, ""))
+	// A SCRIPT, which decides the session where the box holds it
+	// (TestAContinuedRunWhoseSessionIsMissingStartsANewOneAndSaysSo).
+	cmd := scriptOf(t, commandOf(claude(), continued, executor.Paths{}, ""))
 	if !strings.Contains(cmd, "--resume 'ses_0123456789abcdef0123456789abcdef'") {
 		t.Errorf("Claude Code does not resume the asking run's session: %s", cmd)
 	}
-	if fresh := claude().Command(sandbox.RunRequest{Brief: "x"}, executor.Paths{}, ""); strings.Contains(fresh, "--resume") {
+	if fresh := commandOf(claude(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, ""); strings.Contains(fresh, "--resume") {
 		t.Errorf("a fresh Claude Code run resumes something: %s", fresh)
 	}
 
-	script := scriptOf(t, opencode().Command(continued, executor.Paths{}, ""))
-	if !strings.Contains(script, "--session 'ses_0123456789abcdef0123456789abcdef'") {
+	script := scriptOf(t, commandOf(opencode(), continued, executor.Paths{}, ""))
+	if !strings.Contains(script, "sid='ses_0123456789abcdef0123456789abcdef' k=yes") {
 		t.Errorf("OpenCode does not work in the asking run's session:\n%s", script)
 	}
-	if fresh := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x"}, executor.Paths{}, "")); strings.Contains(fresh, "0123456789abcdef0123456789abcdef") {
+	if fresh := scriptOf(t, commandOf(opencode(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, "")); strings.Contains(fresh, "0123456789abcdef0123456789abcdef") {
 		t.Errorf("a fresh OpenCode run works in the asking run's session:\n%s", fresh)
 	}
 }

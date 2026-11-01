@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/crewlet/crewlet/internal/envfile"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -127,13 +128,21 @@ type Harness interface {
 	// Name is the harness's config name: "claude-code", "opencode".
 	Name() string
 
-	// Command builds the headless invocation. The brief and the system text
-	// are already final — the report instruction is appended to the system
-	// text by the base — but for the instruction about notes, which a harness
-	// that reads them adds where a note can reach its run ([noteReader]); and
-	// a harness given system text puts it on the channel that adds to its own
-	// system prompt, never in the prompt it runs.
-	Command(req sandbox.RunRequest, paths Paths, configPath string) string
+	// Session is the session req's run works in ([Session]), its ids in the
+	// harness's own form and minted where they are new. The runner settles it
+	// before the harness starts, so a run's session is known from its start — a
+	// run killed before it reported anything included
+	// ([sandbox.RunHandle.SessionID]).
+	Session(req sandbox.RunRequest) Session
+
+	// Command builds the headless invocation of a run that works in session.
+	// The brief and the system text are already final — the report
+	// instruction is appended to the system text by the base — but for the
+	// instruction about notes, which a harness that reads them adds where a note
+	// can reach its run ([noteReader]); and a harness given system text puts it
+	// on the channel that adds to its own system prompt, never in the prompt
+	// it runs.
+	Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string
 
 	// Output is where the harness's stdout lands and how its result is read
 	// back — DECLARED, so the shared wrapper and the shared reads follow it
@@ -157,8 +166,52 @@ type Harness interface {
 	WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error)
 }
 
+// Session is the harness session one run works in, as [Runner.Start] settles it
+// before the harness starts ([Harness.Session]).
+type Session struct {
+	// ID is the session the run works in: the one it continues
+	// ([sandbox.RunRequest.Resume]), or one minted for it.
+	ID string
+
+	// Continues says ID is an earlier run's session, which the run takes up,
+	// rather than one it creates.
+	Continues bool
+
+	// Fresh is, for a run that continues ID, the session it starts in ID's
+	// place where its box neither holds ID nor can restore it — minted with
+	// ID, so that start is a new conversation under a new id rather than an
+	// empty one under the old id, which a harness asked to continue a session it
+	// does not hold creates and then answers as if it remembered
+	// ([sandbox.Result.Continued]). "" for a run that continues nothing.
+	Fresh string
+}
+
 // resumer is a harness that continues a session an earlier run reported.
 type resumer interface{ Resumes() bool }
+
+// carrier is a harness whose session the runner carries between boxes
+// ([sandbox.SessionArchive]): its run's script packs the session it ran into
+// [Paths.SessionCapture] once the harness exits, and restores one carried into
+// [Paths.SessionCarried] before the harness starts.
+//
+// OPTIONAL, as [resumer] is: a harness not taught to pack and restore its session
+// carries none, and a run handed one is refused rather than started in a
+// conversation its caller believes is the old one.
+type carrier interface {
+	// ArchiveFormat is the version of the layout the harness's script packs a
+	// session in — the only one it restores.
+	ArchiveFormat() int
+
+	// VersionCommand is the command that prints the harness's release in a box.
+	VersionCommand() string
+
+	// Continues reports whether a session written by release writer, carried
+	// from another box, can be continued by release box — as each harness's
+	// `--version` gave it — and, where it cannot, why, in a person's words.
+	// A release that cannot be read is taken for a current one, as the
+	// notes gate takes it ([claudeNotesGate]).
+	Continues(box, writer string) (bool, string)
+}
 
 // sessionTotals is a harness whose result, on a run that continues a session, can
 // state the SESSION's spend rather than the run's own: from the release
@@ -241,11 +294,11 @@ type Output struct {
 	Stdout string
 
 	// Events says Stdout is an EVENT STREAM, decoded a line at a time by
-	// [harness.Events] — never read whole, because it grows with every tool
+	// [Harness.Events] — never read whole, because it grows with every tool
 	// call the run makes.
 	Events bool
 
-	// Result is the file the harness's RESULT is read from, whole ([harness.Parse]),
+	// Result is the file the harness's RESULT is read from, whole ([Harness.Parse]),
 	// or "" when the result is the stream's own. When it names a file other
 	// than Stdout, the wrapper writes it after the harness exits: the stream's
 	// last line, which is where a harness that streams puts its result — and
@@ -270,7 +323,19 @@ type Output struct {
 	// after the login shell has sourced its profile, because that is the
 	// one place every source has already been read.
 	Unset []string
+
+	// Pin is every variable the wrapper sets for the harness to a value of its
+	// own, OVER whatever the seat's role.sandbox.env, the image or a profile
+	// the login shell sources set it to: one whose value the run depends on —
+	// where Claude Code keeps the session a later run continues
+	// ([claudeSessionLayout]). Exported in the wrapper after the unsets, for
+	// their reason.
+	Pin []Pinned
 }
+
+// Pinned is one variable the wrapper exports for its harness ([Output.Pin]): its
+// name, and its value as it is written, which the wrapper quotes.
+type Pinned struct{ Name, Value string }
 
 // Runner drives one harness through the detached lifecycle.
 type Runner struct {
@@ -366,22 +431,33 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // credits nothing must leave no hook, and one that names another run must not
 // credit the last one. THE CHECKOUT IS LEFT INTACT — that disk state is the
 // continued context, and it is the whole reason to reuse a box.
+//
+// AND THE SESSION'S PIECES: the previous run's record of its session, its
+// capture and a carried archive it left — each this run's to write again or
+// to have none of, so a run that packs nothing is never collected with the
+// last run's capture as its own — and the staging directory a script that was
+// killed part way left. NOT THE HARNESS'S OWN SESSION STORE, which is the session
+// a run in this box continues, nor the digests of the archives that store's
+// copy holds ([Paths.SessionDigests]), which describe it for as long as it is
+// there.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.harness.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.System(),
-		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(), p.BaseResult(), p.CLIVersion()}
+		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(), p.BaseResult(),
+		p.SessionRecord(), p.SessionCapture(), p.SessionCarried()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
 	if out.Stdout != p.Result() {
 		files = append(files, out.Stdout)
 	}
-	// The three directories alone are removed recursively; every other target
-	// is a file, removed as it always was. Two statements rather than one
-	// joined by `&&`, so a file that will not go never keeps a directory.
+	// The directories alone are removed recursively; every other target is a
+	// file, removed as it always was. Two statements rather than one joined
+	// by `&&`, so a file that will not go never keeps a directory.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
-		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution()})
+		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
+			p.SessionStaging()})
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
@@ -412,6 +488,17 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		return sandbox.RunHandle{}, fmt.Errorf("executor: %s cannot continue an earlier "+
 			"session, and this run asks it to", r.harness.Name())
 	}
+	// A SESSION ID NAMES FILES IN THE BOX — the transcript a run resumes and
+	// restores, the archive it packs — and it was read back from a box a run's
+	// own agent could write, so one that is no id a harness mints is refused
+	// rather than handed to the run's script as a path.
+	if req.Resume != "" && !validSessionID(req.Resume) {
+		return sandbox.RunHandle{}, fmt.Errorf("executor: the session this run continues, %q, is "+
+			"not a session id a harness names", req.Resume)
+	}
+	if err := r.refuseCarried(req); err != nil {
+		return sandbox.RunHandle{}, err
+	}
 	paths := PathsFor(box)
 	// WHAT THE SESSION HAD SPENT, read before the clear removes it: the
 	// result the job before this one left in the box, where this run
@@ -433,6 +520,23 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 			return sandbox.RunHandle{}, fmt.Errorf("executor: keeping the session's spend so far: %w", err)
 		}
 	}
+	// THE SESSION CARRIED FROM ANOTHER BOX, written after the clear — which
+	// removes the previous run's carried archive with its capture — and
+	// STREAMED, never held here: an archive grows with its session, and a
+	// node restoring many seats' sessions at once would hold every one whole.
+	// The run's own script restores it, or leaves a box that already holds
+	// the session as it is.
+	if c := req.Carried; c != nil {
+		if err = box.WriteStream(ctx, paths.SessionCarried(), c.Body); err != nil {
+			return sandbox.RunHandle{}, fmt.Errorf("executor: writing the session carried "+
+				"into the box: %w", err)
+		}
+	}
+	// THE SESSION THE RUN WORKS IN, named before the harness starts: the one it
+	// continues, or a new one minted for it — and, for a run that continues
+	// one, the new one it starts instead where its box turns out to hold the
+	// session neither way.
+	session := r.harness.Session(req)
 	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a harness writes the
 	// system text from — all but the instruction about notes, which a harness
 	// that reads them adds itself, where a note can reach its run
@@ -465,13 +569,16 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		hooks = paths.GitHooks()
 	}
 	out := r.harness.Output(paths)
+	inner := withBoxBin(r.harness.Command(req, session, paths, configPath), paths)
+	script, err := wrapperScript(inner, out, paths, hooks)
+	if err != nil {
+		return sandbox.RunHandle{}, err
+	}
 	if out.BriefOnStdin {
 		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief: %w", err)
 		}
 	}
-	inner := withBoxBin(r.harness.Command(req, paths, configPath), paths)
-	script := wrapperScript(inner, out, paths, hooks)
 
 	// A LOGIN SHELL, and the -l is load-bearing: a harness is commonly
 	// installed through nvm, asdf or a similar version manager, whose PATH
@@ -487,8 +594,41 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: starting %s: %w", r.harness.Name(), err)
 	}
-	log.InfoContext(ctx, "harness_started", "harness", r.harness.Name(), "pid", pid)
-	return sandbox.RunHandle{CommandID: pid}, nil
+	log.InfoContext(ctx, "harness_started", "harness", r.harness.Name(), "pid", pid,
+		"session", session.ID, "continues", session.Continues, "carried", req.Carried != nil)
+	return sandbox.RunHandle{CommandID: pid, SessionID: session.ID}, nil
+}
+
+// refuseCarried is why req's carried session ([sandbox.RunRequest.Carried])
+// cannot be restored by this runner, or nil where there is none or it can: a
+// harness that carries no session, an archive another harness wrote or another format
+// lays out, one that is not the session the run continues, or one with no
+// bytes. Refused rather than started: a run handed a session to continue, that
+// could only start a new one, would be answered as if it remembered.
+func (r *Runner) refuseCarried(req sandbox.RunRequest) error {
+	c := req.Carried
+	if c == nil {
+		return nil
+	}
+	carries, ok := r.harness.(carrier)
+	switch {
+	case !ok:
+		return fmt.Errorf("executor: %s carries no session between boxes, and this run was "+
+			"handed one", r.harness.Name())
+	case c.Archive.Harness != r.harness.Name():
+		return fmt.Errorf("executor: the carried session was written by %q, and this run is on "+
+			"%s: a session is continued only by the harness that wrote it", c.Archive.Harness, r.harness.Name())
+	case c.Archive.Format != carries.ArchiveFormat():
+		return fmt.Errorf("executor: the carried session's archive is format %d, and this build "+
+			"restores %s's format %d alone", c.Archive.Format, r.harness.Name(), carries.ArchiveFormat())
+	case req.Resume == "" || c.Archive.SessionID != req.Resume:
+		return fmt.Errorf("executor: the carried session %q is not the one this run continues (%q)",
+			c.Archive.SessionID, req.Resume)
+	case c.Body == nil:
+		return fmt.Errorf("executor: the carried session %q has no archive to restore",
+			c.Archive.SessionID)
+	}
+	return nil
 }
 
 // baseResult is the result the job before req left in box, for a run that
@@ -500,6 +640,13 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 // then the one its harness states, logged so that an overcharge has a cause on
 // record. A read that failed outright fails the start, as every other read
 // of Start's does, for the launch to try again.
+//
+// NONE IS EXPECTED of a box a session was carried into
+// ([sandbox.RunRequest.Carried]) that holds no result: the job before ran in
+// the box the session was packed in, and a box restores a carried session only
+// on a release that states each run's own spend ([claudeCarryFloor]), which no
+// base is taken off. Logged as an overcharge, every carried session's first run
+// in a new box would be one that was never charged twice.
 func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Paths, req sandbox.RunRequest) (string, error) {
 	if _, totals := r.harness.(sessionTotals); !totals || req.Resume == "" {
 		return "", nil
@@ -512,8 +659,11 @@ func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Path
 	if err != nil {
 		return "", fmt.Errorf("executor: reading what the continued session had spent: %w", err)
 	}
+	if refusal == "" && strings.TrimSpace(raw) == "" && req.Carried != nil {
+		return "", nil
+	}
 	if refusal != "" || strings.TrimSpace(raw) == "" {
-		log.WarnContext(ctx, "coding_agent_session_spend_unread", "agent", r.harness.Name(),
+		log.WarnContext(ctx, "harness_session_spend_unread", "harness", r.harness.Name(),
 			"detail", "this run continues a session, and the result the job before it left "+
 				"could not be read, so the run is charged the spend its harness states, which counts "+
 				"the session's earlier jobs again", "refusal", refusal)
@@ -528,14 +678,19 @@ func (r *Runner) baseResult(ctx context.Context, box sandbox.Sandbox, paths Path
 // session's totals, the result less what the session had spent when the run
 // took it up ([Paths.BaseResult]); else the result as its harness stated it, which
 // is the run's own.
+//
+// ONLY A RUN THAT DID CONTINUE ITS SESSION took up its totals, as its script
+// recorded ([sessionRecord]): one asked to continue a session that its box
+// neither held nor could restore started a new one, whose totals begin at the
+// run, and less the base it kept it would be charged below nothing.
 func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
-	result sandbox.Result, streamed *runSpend) (sandbox.Result, error) {
+	result sandbox.Result, streamed *runSpend, rec sessionRecord) (sandbox.Result, error) {
 
 	if streamed != nil {
 		return streamed.on(result), nil
 	}
 	totals, ok := r.harness.(sessionTotals)
-	if !ok {
+	if !ok || !rec.continued {
 		return result, nil
 	}
 	raw, refusal, err := readWhole(ctx, box, paths.BaseResult(), "what the continued session had spent")
@@ -547,11 +702,7 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 		// base could not be kept ([Runner.baseResult] said so).
 		return result, nil
 	}
-	version, _, err := readWhole(ctx, box, paths.CLIVersion(), "its harness's version")
-	if err != nil {
-		return sandbox.Result{}, err
-	}
-	if !totals.TotalsRestored(strings.TrimSpace(version)) {
+	if !totals.TotalsRestored(rec.release) {
 		return result, nil
 	}
 	return less(result, r.harness.Parse(raw)), nil
@@ -568,8 +719,9 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 //
 // hooks is the directory the run's git takes its hooks from — the run's
 // commit attribution ([attributionExports]) — or "" for a run that credits
-// nothing.
-func wrapperScript(inner string, out Output, paths Paths, hooks string) string {
+// nothing. A pin whose value no assignment can carry
+// ([envfile.FormatAssignment]) refuses the run: its job is never started.
+func wrapperScript(inner string, out Output, paths Paths, hooks string) (string, error) {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
 		stdin = shellQuote(paths.Brief())
@@ -579,6 +731,18 @@ func wrapperScript(inner string, out Output, paths Paths, hooks string) string {
 	// command could only add to its environment, never remove from it.
 	if len(out.Unset) > 0 {
 		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
+	}
+	// AND THE PINS AFTER THE UNSETS, for their reason: exported here, every
+	// value an earlier source gave the same name is replaced. Each is written
+	// as envfile writes an assignment, the one form a dotenv reader and
+	// `source` agree on, so a value with a quote or a newline in it is refused
+	// rather than written in a form one of them would misread.
+	for _, pin := range out.Pin {
+		line, err := envfile.FormatAssignment(pin.Name, pin.Value)
+		if err != nil {
+			return "", fmt.Errorf("executor: pinning %s for the harness: %w", pin.Name, err)
+		}
+		b.WriteString(line + "; ")
 	}
 	// AFTER THE PROFILE, BEFORE THE HARNESS, for the reason the unset is: an
 	// entry exported around the shell would be replaced by a profile that
@@ -593,7 +757,7 @@ func wrapperScript(inner string, out Output, paths Paths, hooks string) string {
 	}
 	fmt.Fprintf(&b, "echo $code > %s; echo $code > %s",
 		shellQuote(paths.ExitCode()), shellQuote(paths.Done()))
-	return b.String()
+	return b.String(), nil
 }
 
 // finalSystem appends the report instruction, addressed at THIS box, to the
@@ -791,10 +955,31 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 	}
 
+	// WHICH SESSION THE RUN TOOK UP, as its script recorded before its harness
+	// started ([Paths.SessionRecord]): the session a harness that reported none
+	// ran in, whether it was the one the run was asked to continue, and the
+	// harness's release. A record the box refused is a piece the run did not
+	// report, as any other is.
+	recorded, recordRefusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
+	if err != nil {
+		return sandbox.Result{}, err
+	}
+	if recordRefusal != "" {
+		refused = append(refused, recordRefusal)
+	}
+	rec := parseSessionRecord(recorded)
+	if result.SessionID == "" {
+		result.SessionID = rec.id
+	}
+	result.Continued, result.FellBack, result.HarnessVersion = rec.continued, rec.why, releaseOf(rec.release)
+	if result.Captured, err = r.captured(ctx, box, paths, rec); err != nil {
+		return sandbox.Result{}, fmt.Errorf("executor: reading the session the box packed: %w", err)
+	}
+
 	// WHAT THIS RUN SPENT, never its session's: a harness that continued a
 	// session can state the session's spend, and charged as it is, every
 	// continued run would pay for the jobs before it again ([Runner.ownSpend]).
-	result, err := r.ownSpend(ctx, box, paths, result, spent)
+	result, err = r.ownSpend(ctx, box, paths, result, spent, rec)
 	if err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading what the run itself spent: %w", err)
 	}

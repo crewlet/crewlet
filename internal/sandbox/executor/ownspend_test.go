@@ -111,20 +111,26 @@ func TestAFreshClaudeRunOnAnOlderReleaseIsChargedItsResult(t *testing.T) {
 // job before it saved, and before 2.1.310 its result states no per-run
 // figures: the run keeps the job before's result as it starts, before its own
 // artefacts are cleared, and the collection takes it off. A release before
-// 2.1.277 starts the session's totals at zero, so its result is the run's own.
+// 2.1.277 starts the session's totals at zero, so its result is the run's own;
+// and so is a run whose script found the session neither in its box nor
+// restorable, and started a new one in its place, which its record says.
 //
-// Mutation: keep no base at Start, or subtract it whatever the release, and a
-// case below is charged the session's earlier jobs, or a negative spend.
+// Mutation: keep no base at Start, subtract it whatever the release, or
+// whether the run continued its session or not, and a case below is charged
+// the session's earlier jobs, or a negative spend.
 func TestAContinuedClaudeRunIsChargedOnlyWhatItAddedToTheSession(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		version string
-		want    spend
+		version   string
+		continued string
+		want      spend
 	}{
-		"a release that restores the totals": {version: "2.1.290 (Claude Code)",
+		"a release that restores the totals": {version: "2.1.290 (Claude Code)", continued: "yes",
 			want: spend{input: (130 + 1600 + 70) - (100 + 1000 + 50), output: 15, cacheRead: 600,
 				cacheWrite: 20, cost: 0.60}},
-		"a release that starts them at zero": {version: "2.1.263 (Claude Code)",
+		"a release that starts them at zero": {version: "2.1.263 (Claude Code)", continued: "yes",
+			want: spend{input: 130 + 1600 + 70, output: 25, cacheRead: 1600, cacheWrite: 70, cost: 1.60}},
+		"a run that started a session in its place": {version: "2.1.290 (Claude Code)", continued: "no",
 			want: spend{input: 130 + 1600 + 70, output: 25, cacheRead: 1600, cacheWrite: 70, cost: 1.60}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -148,7 +154,8 @@ func TestAContinuedClaudeRunIsChargedOnlyWhatItAddedToTheSession(t *testing.T) {
 			line := claudeResultLine(130, 25, 1600, 70, 1.60, "")
 			b.Put(p.Stream(), line+"\n")
 			b.Put(p.Result(), line)
-			b.Put(p.CLIVersion(), tc.version)
+			b.Put(p.SessionRecord(), "id 5e55f1d0-0000-4000-8000-00000000c1a0\ncontinued "+tc.continued+
+				"\nrelease "+tc.version+"\n")
 			b.Put(p.ExitCode(), "0")
 
 			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
@@ -182,25 +189,35 @@ func TestAFreshRunKeepsNoBase(t *testing.T) {
 	}
 }
 
-// A CONTINUED CLAUDE CODE RUN RECORDS ITS HARNESS'S RELEASE before the harness starts,
-// asked of the harness the box's PATH finds, which the collection reads to know
-// whether the result states the session's spend. A fresh run records none.
+// A CLAUDE CODE RUN RECORDS ITS HARNESS'S RELEASE before the harness starts, asked
+// once, first, of the harness the box's PATH finds — the release every gate of the
+// script decides by, which the collection reads to know whether a continued
+// run's result states the session's spend, and reports as the run's own
+// ([sandbox.Result.HarnessVersion]) — beside the session the run took up.
 //
-// Mutation: drop the record, and a continued run on 2.1.277–2.1.309 is read as
-// a current release with nothing to say otherwise — or, recorded for every
-// run, a fresh run asks its harness twice for nothing.
-func TestAContinuedClaudeRunRecordsItsRelease(t *testing.T) {
+// Mutation: drop the record, or write it after the harness, and a continued run on
+// 2.1.277–2.1.309 is read as a current release with nothing to say otherwise;
+// ask the version twice, and every run asks its harness once for nothing.
+func TestAClaudeRunRecordsItsRelease(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/box"}
-	continued := scriptOf(t, claude().Command(sandbox.RunRequest{Brief: "x", Resume: "sess"}, p, ""))
-	if want := "claude --version < /dev/null > '" + p.CLIVersion() + "' 2> /dev/null; "; !strings.HasPrefix(continued, want) {
-		t.Errorf("a continued run does not record its release first:\n%s", continued)
-	}
-	if !strings.Contains(continued, "exec claude -p ") || !strings.Contains(continued, "--resume 'sess'") {
-		t.Errorf("a continued run does not then resume its session:\n%s", continued)
-	}
-	if fresh := claude().Command(sandbox.RunRequest{Brief: "x"}, p, ""); strings.Contains(fresh, "--version") {
-		t.Errorf("a fresh run records a release:\n%s", fresh)
+	for name, req := range map[string]sandbox.RunRequest{
+		"fresh":     {Brief: "x"},
+		"continued": {Brief: "x", Resume: "sess"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			script := scriptOf(t, commandOf(claude(), req, p, ""))
+			if !strings.HasPrefix(script, "v=$(claude --version < /dev/null 2> /dev/null)") ||
+				strings.Count(script, "--version") != 1 {
+				t.Errorf("the run does not ask its harness's release once, first:\n%s", script)
+			}
+			record := strings.Index(script, `"$s" "$k" "$w" "$v" > '`+p.SessionRecord()+"'")
+			start := strings.Index(script, "\nclaude -p ")
+			if record < 0 || start < 0 || record > start {
+				t.Errorf("the run does not record its session and release before its harness starts:\n%s", script)
+			}
+		})
 	}
 }
 
@@ -259,17 +276,20 @@ func TestAContinuedOpenCodeRunIsChargedWhatItsSessionGained(t *testing.T) {
 func TestAContinuedOpenCodeRunReadsItsSessionBeforeTheRun(t *testing.T) {
 	t.Parallel()
 	const session = "0123456789abcdef0123456789abcdef"
-	continued := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x", Resume: "ses_" + session},
+	continued := scriptOf(t, commandOf(opencode(), sandbox.RunRequest{Brief: "x", Resume: "ses_" + session},
 		executor.Paths{}, ""))
 	before := strings.Index(continued, `"type":"crewlet.usage_before"`)
 	run := strings.Index(continued, `opencode run --server "$url"`)
 	if before < 0 || run < 0 || before > run {
 		t.Fatalf("a continued run does not read its session's report before the run:\n%s", continued)
 	}
-	if !strings.Contains(continued[:run], "session.get --param sessionID='ses_"+session+"'") {
+	// OF THE SESSION THE RUN TOOK UP, and only where it did take it up: one
+	// that started a session in its place has no earlier totals to take off.
+	if !strings.Contains(continued, "sid='ses_"+session+"' k=yes") ||
+		!strings.Contains(continued[:run], `if [ "$k" = yes ]; then before=$(opencode api --server "$url" session.get --param sessionID="$sid"`) {
 		t.Errorf("the report before is not the continued session's:\n%s", continued[:run])
 	}
-	fresh := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x"}, executor.Paths{}, ""))
+	fresh := scriptOf(t, commandOf(opencode(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, ""))
 	if strings.Contains(fresh, "crewlet.usage_before") {
 		t.Errorf("a fresh run reads a report before its run:\n%s", fresh)
 	}

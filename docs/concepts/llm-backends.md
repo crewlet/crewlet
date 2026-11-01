@@ -1270,6 +1270,22 @@ poll collects it, and the *same turn* resumes — possibly in another process
 on another node, days later; see
 [Code Sandbox](code-sandbox.md#how-a-coding-task-runs).
 
+**The run keeps its harness's session; a call on this host keeps none.** A call
+here runs with session persistence off, and its seat's volatile paths are
+deleted between generations ([Isolation](#isolation-the-part-that-actually-matters)).
+An executor's run keeps its harness's own session in its box — the conversation a
+person's answer carries on, which a run can also pack when it ends and
+restore in another box — so the runner pins where it is kept rather than
+leaving it to the profile: Claude Code's `CLAUDE_CONFIG_DIR` is the **box
+home's** `.claude`, never a seat's home on this host (which `config_env` names
+here, and which never reaches a box), and its project directory is one name
+whatever the box's working directory. What a call here switches off for the
+same reason stays off there: auto memory (`CLAUDE_CODE_DISABLE_AUTO_MEMORY`,
+here an `isolation_env`, in a box pinned by the run's wrapper), so no notes the
+harness wrote for itself ride a session into a later run unseen. See [A Claude
+Code run's session](code-sandbox.md#a-claude-code-runs-session) and [An
+OpenCode run's session](code-sandbox.md#an-opencode-runs-session).
+
 **The run is prompted in the two halves a phase on this host sends.** The
 seat's system prompt — its identity, policies, roster and memory — goes on the
 in-box harness's **append channel**, after the harness's own system prompt, which

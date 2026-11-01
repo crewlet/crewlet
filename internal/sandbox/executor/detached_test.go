@@ -48,6 +48,8 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 		p.MCPConfig(), p.Findings(), p.BinDir(),
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(),
 		p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
+		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
+		p.ClaudeConfigDir(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())
@@ -165,6 +167,10 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		// The previous run's instructions, which are not this run's — its
 		// hooks name a bridge session its end closed.
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(),
+		// And its session's pieces: a run that packs nothing must never be
+		// collected with the last run's capture as its own, nor restore the
+		// last run's carried archive.
+		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(),
 	} {
 		if !strings.Contains(cleared, want) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)
@@ -176,15 +182,25 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	// commit attribution: a run that credits nothing leaves no hook behind,
 	// and one naming another run never credits the last one.
 	_, removed, _ := strings.Cut(cleared, "; rm -rf ")
-	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution()} {
+	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
+		p.SessionStaging()} {
 		if !strings.Contains(removed, "'"+dir+"'") {
 			t.Fatalf("the directory %q was not removed whole: %s", dir, cleared)
 		}
 	}
 	// The CHECKOUT is left alone — that disk state is the whole reason to
-	// reuse a box.
+	// reuse a box — and so is the harness's own session store, which is the
+	// session a run in this box continues, and the digests of the archives
+	// that store's copy holds, without which an archive the box packed
+	// itself would be restored over the copy that ran on past it.
 	if strings.Contains(cleared, "/"+sandbox.WorkspaceSubdir) {
 		t.Fatalf("the clear reached into the checkout: %s", cleared)
+	}
+	if strings.Contains(cleared, p.ClaudeConfigDir()) {
+		t.Fatalf("the clear reached into the harness's own sessions: %s", cleared)
+	}
+	if strings.Contains(cleared, p.SessionDigests()) {
+		t.Fatalf("the clear removed the digests of the sessions the box holds: %s", cleared)
 	}
 }
 

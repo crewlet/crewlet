@@ -101,6 +101,15 @@
 // what the job spent where its box is left and resumes the turn to relaunch the
 // same round, at most [MaxRoundLosses] times a round. See lost.go.
 //
+// AND A RUN'S HARNESS SESSION CAN LEAVE ITS BOX: a run names its session before
+// its harness starts ([RunHandle.SessionID]), says whether it continued the one it
+// was asked to, and why not where it did not ([Result.Continued],
+// [Result.FellBack]), and packs it when the harness exits
+// ([Result.Captured]); a run handed a session packed in another box
+// ([RunRequest.Carried]) restores it before its harness takes it up, and a box
+// takes the archive streamed rather than whole ([Sandbox.WriteStream]). See
+// carry.go.
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 
@@ -253,6 +262,14 @@ type Spec struct {
 type RunHandle struct {
 	CommandID string
 	PID       int
+
+	// SessionID is the harness session the job was started in, named by the
+	// runner BEFORE the harness starts — the one the job continues
+	// ([RunRequest.Resume]), or the id it minted for a new one — so a job
+	// killed before it reported anything still names its session. The job
+	// itself says which it ran ([Result.SessionID], [Result.Continued]): one
+	// asked to continue a session its box neither held nor could restore
+	// starts a new one instead.
 	SessionID string
 }
 
@@ -272,7 +289,43 @@ type Result struct {
 	CacheReadTokens  int
 	CacheWriteTokens int
 	CostUSD          float64
-	SessionID        string
+
+	// SessionID is the harness session the run worked in, as its harness reported it
+	// or, where it reported nothing, as the run's script recorded it before
+	// the harness started.
+	SessionID string
+
+	// Continued says the run continued the session it was asked to
+	// ([RunRequest.Resume]): its box held that session, or restored it from
+	// the archive carried into it ([RunRequest.Carried]), and the harness took it
+	// up. False for a run that started a session of its own — one asked to,
+	// and one whose script found the session neither in its box nor
+	// restorable, which starts a new one under another id and says why
+	// ([Result.FellBack]) rather than let its harness create an empty session
+	// under the old id and answer the brief as if it remembered.
+	Continued bool
+
+	// FellBack says why a run asked to continue a session started a new one
+	// in its place, in the words its script said it in on its error stream —
+	// the session was not in its box and none was carried in, the box's harness
+	// is older than the release that continues a carried one, the archive
+	// carried in could not be restored — so whoever reads what the run did
+	// learns why it began again rather than finding a new session id alone.
+	// "" for a run that continued its session, and for one asked to start
+	// one.
+	FellBack string
+
+	// HarnessVersion is the release of the harness that ran, as its `--version` gave
+	// it ("2.1.310"), read by the run's script in the box; "" where it
+	// recorded none this build can read.
+	HarnessVersion string
+
+	// Captured is the run's session as its box packed it when the harness
+	// exited, to be carried into another box ([SessionArchive]); nil where
+	// the box holds none — a run killed before its harness exited, a harness that
+	// wrote no session, a box without the tools to pack one, which the run's
+	// error stream says.
+	Captured *SessionArchive
 
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
@@ -413,6 +466,22 @@ type Sandbox interface {
 	// never opened to be waited on. A remote box is a machine of its own, so
 	// what is at the path there is replaced, a link included.
 	WriteFile(ctx context.Context, path string, content []byte) error
+
+	// WriteStream puts what content yields at path whole, exactly as
+	// [Sandbox.WriteFile] puts a byte slice there — staged beside the path
+	// and renamed over it, the same refusals on the engine host — for content
+	// the engine must not hold in memory: a harness's session archive,
+	// carried into a box from the object store, which grows with the session
+	// it packs.
+	//
+	// READ ONCE, A PIECE AT A TIME, and only while ctx lasts: a write whose
+	// caller gave up stops at the next piece rather than reading its source
+	// to the end. A source that fails part way fails the write, and the file
+	// at the path is the one that was there before — the staged one is
+	// removed, never moved over it — so an archive cut short in transit is
+	// never a file the box reads as whole. The caller keeps content: the
+	// write neither closes it nor reads it once it has returned.
+	WriteStream(ctx context.Context, path string, content io.Reader) error
 
 	// ReadFile reads a file the engine means to read WHOLE — a report, a
 	// question, a marker, a result line — and REFUSES one past
@@ -686,12 +755,28 @@ type RunRequest struct {
 	// THE HARNESS'S SESSION AND NOT A SUMMARY OF IT, because the run that asked
 	// knew what it had read, tried and decided, and a fresh conversation
 	// told only the question and the answer starts that work again. It holds
-	// only in the box the session lives in, which is why a seat's launch
-	// sets it only where the job continues in the asking job's box
-	// ([LaunchRequest.Continue]). A runner whose harness cannot continue a
+	// in the box the session lives in, which is why a seat's launch sets it
+	// only where the job continues in the asking job's box
+	// ([LaunchRequest.Continue]) — or in a box the session is carried into
+	// ([RunRequest.Carried]). A runner whose harness cannot continue a
 	// session refuses a run that asks it to, rather than start a new
-	// conversation its caller believes is the old one.
+	// conversation its caller believes is the old one; and a run whose box
+	// turns out to hold the session neither way starts a new one and says so
+	// ([Result.Continued]).
 	Resume string
+
+	// Carried is the session Resume names, packed in another box
+	// ([SessionArchive]), for this run's box to restore before its harness takes
+	// it up: written into the box as the run starts, after the previous
+	// run's artefacts are cleared, and restored by the run's own script — or
+	// not, in a box whose own copy of the session already holds this archive
+	// (one the box packed, or restored before), which is never written over:
+	// that copy is the archive's or newer. A box holding a copy that does
+	// not hold the archive has it replaced by the archive. Nil for a run that
+	// continues a session its box already holds, or none. Its session must
+	// be Resume's, and its harness and format the runner's, or the run is
+	// refused.
+	Carried *CarriedSession
 
 	Env    map[string]string
 	Limits Limits

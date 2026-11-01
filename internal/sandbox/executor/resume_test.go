@@ -13,12 +13,12 @@ import (
 // same box, so the brief is the next message in it rather than a new task.
 func TestAClaudeRunContinuesTheSessionItIsGiven(t *testing.T) {
 	t.Parallel()
-	cmd := scriptOf(t, claude().Command(sandbox.RunRequest{Brief: "approved", Resume: "4f1c-session"},
+	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "approved", Resume: "4f1c-session"},
 		executor.Paths{}, ""))
 	if !strings.Contains(cmd, "--resume '4f1c-session'") {
 		t.Fatalf("the session to continue was not passed:\n%s", cmd)
 	}
-	if fresh := claude().Command(sandbox.RunRequest{Brief: "x"}, executor.Paths{}, ""); strings.Contains(fresh, "--resume") {
+	if fresh := commandOf(claude(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, ""); strings.Contains(fresh, "--resume") {
 		t.Fatalf("a fresh run asked to continue a session:\n%s", fresh)
 	}
 }
@@ -30,10 +30,16 @@ func TestAClaudeRunContinuesTheSessionItIsGiven(t *testing.T) {
 func TestAnOpenCodeRunContinuesTheSessionItIsGiven(t *testing.T) {
 	t.Parallel()
 	const session = "0123456789abcdef0123456789abcdef"
-	cmd := executor.OpenCode{}.Command(sandbox.RunRequest{Brief: "approved", Resume: "ses_" + session},
+	cmd := commandOf(opencode(), sandbox.RunRequest{Brief: "approved", Resume: "ses_" + session},
 		executor.Paths{}, "")
 	if !strings.Contains(cmd, session) {
 		t.Fatalf("the session to continue was not passed:\n%s", cmd)
+	}
+	// AND WITHOUT IT, the same session: the id a run's report gave carries the
+	// `ses_` OpenCode requires, and one handed on without it is the same id.
+	if bare := (executor.OpenCode{}).Session(sandbox.RunRequest{Resume: session}); bare.ID != "ses_"+session ||
+		!bare.Continues {
+		t.Fatalf("a session named without its ses_ = %+v, want ses_%s continued", bare, session)
 	}
 	if !(executor.OpenCode{}).Resumes() {
 		t.Fatal("OpenCode says it cannot continue a session, so the runner refuses every continued run")
