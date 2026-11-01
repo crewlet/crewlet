@@ -212,8 +212,9 @@ func TestARecordPastItsHorizonWritesNoRow(t *testing.T) {
 
 // THE CODE APPLIER ANNOUNCES WHOSE INBOX MOVED: after a committed batch whose
 // notices it wrote, the applier tells its listener one movement a recipient —
-// the code domain as its source, a notice each, the change and the reason —
-// and a batch that wrote none tells nothing.
+// the code domain as its source, a notice each, the change and the reason,
+// timed from the broker's instant the record was stored, which the socket's
+// push is timed from — and a batch that wrote none tells nothing.
 //
 // Mutation: announce from inside the transaction, or drop the source, and the
 // movements are not these.
@@ -246,9 +247,10 @@ func TestTheCodeApplierAnnouncesWhoseInboxMoved(t *testing.T) {
 	open.Open.Mentions = []string{"founder", "cto"}
 	opened, err := c.ProposeChange(t.Context(), open)
 	requireChanged(t, opened, err)
+	stored := harnessAt.Add(-time.Hour)
 	want := []inbox.Movement{
-		{Source: "code", Handle: "cto", UnreadDelta: 1, Subject: opened.ChangeID, Reason: "mention"},
-		{Source: "code", Handle: "founder", UnreadDelta: 1, Subject: opened.ChangeID, Reason: "mention"},
+		{Source: "code", Handle: "cto", UnreadDelta: 1, Subject: opened.ChangeID, Reason: "mention", At: stored},
+		{Source: "code", Handle: "founder", UnreadDelta: 1, Subject: opened.ChangeID, Reason: "mention", At: stored},
 	}
 	if heard := told(); len(heard) != 1 || !slices.Equal(heard[0], want) {
 		t.Fatalf("the open announced %v, want one batch %v", heard, want)
