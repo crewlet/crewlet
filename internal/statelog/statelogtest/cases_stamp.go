@@ -71,7 +71,7 @@ func Stamped(t *testing.T, new Factory) error {
 		return fmt.Errorf("%s supplies no read seam for its write path to "+
 			"decide through", name)
 	}
-	db := openEstate(t, c)
+	node, db := openNodeEstate(t, c)
 	stream := c.spec().Name
 	at := statelog.Position{Stream: stream, Generation: SuiteGeneration}
 	if err := seedCheckpoint(t.Context(), db, at); err != nil {
@@ -92,11 +92,25 @@ func Stamped(t *testing.T, new Factory) error {
 	if err != nil {
 		t.Fatalf("build a verifier for %s: %v", name, err)
 	}
+	// A NODE WHOSE APPLIER RUNS, over the log the publisher appends to: a write
+	// path of more than one step decides each from the rows the step before it
+	// made, as it does on every node — a rename from the create's row, a
+	// release from the rename's. Over a log nothing applied, every step after
+	// the first was decided from an estate that never held the first, so a
+	// candidate could certify only the first record of a sequence.
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain: c.Domain, Spec: c.spec(), Applier: c.Applier, Verifier: verifier,
+		Fetch: log, Log: log, Node: node, DB: db, Checkpoint: at,
+	})
+	if err != nil {
+		t.Fatalf("build %s's applier: %v", name, err)
+	}
+	startLoop(t, runner)
 	deps := statelog.Deps{
 		Domain: c.Domain, Spec: c.spec(),
 		Log: log, Signer: signer, Rows: rows,
 		Fence: openFence{}, Gates: openGates{},
-		Waiter: suiteWaiter{at: at}, Voids: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
+		Waiter: runner, Voids: runner, Identity: runner,
 		NodeID:     SuiteWriter,
 		Generation: func() uint32 { return SuiteGeneration },
 		// THE SAME LOG READ BACK THROUGH THE VERIFIER, because what it

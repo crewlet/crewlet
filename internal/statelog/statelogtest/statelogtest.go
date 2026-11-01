@@ -133,8 +133,10 @@ type Candidate struct {
 	// Write performs at least one write through the domain's OWN
 	// production write path — the writer every caller reaches, not a
 	// fixture — over the publisher the suite hands it, which decides from
-	// db. It is how [Stamped] reaches the one builder that can forget the
-	// framework's stamp.
+	// db, and whose records the candidate's Applier applies to db as they
+	// are appended, so a path of several steps decides each from the rows
+	// the steps before it made. It is how [Stamped] reaches the one builder
+	// that can forget the framework's stamp.
 	Write func(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error
 
 	// EncodeGate builds the record that evicts nodeID from this domain's log
