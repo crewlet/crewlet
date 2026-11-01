@@ -1104,8 +1104,14 @@ const (
 	// newly in it — the code screens reach the peek rail through the grid and
 	// nothing of the lazy-screen table beside it, so the two are compressed
 	// apart where they were one chunk. 326 KiB, still under two seconds on
-	// that link.
-	initialBudget = 326 << 10
+	// that link. The code host's change, repository and commit pages took it
+	// to 327.6 KiB: the search-term highlighter the first paint already
+	// loaded in the work chunk moved, with the change page, into a chunk of
+	// its own the first paint loads beside it (markdown.js, 3.1 KiB), the two
+	// compressed apart, and the frame gained the code screens' routes,
+	// trails and contract. 328 KiB, still under two seconds on that link,
+	// whose two seconds are 366 KiB.
+	initialBudget = 328 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1137,8 +1143,15 @@ const (
 	// gallery's selection about 50 KB, and the design system's new rules in
 	// the one sheet about 41 KB raw. Each of those screens is fetched only
 	// when it is opened, and it moved to 4.25 MiB then, which still refuses a
-	// doubled baseline.
-	treeBudget = 4<<20 + 256<<10
+	// doubled baseline. The code host's screens took it from about 4.22 MiB
+	// (the Code workspace) to about 4.31 MiB: the changes listing about
+	// 12 KiB, a change's own page about 34 KiB, a repository's files,
+	// branches and commits about 24 KiB and a commit and a comparison about
+	// 18 KiB, each fetched only when it is opened. It moved to 4.375 MiB
+	// then (4,587,520 bytes), the most that still refuses a doubled 2.3 MB
+	// baseline (4.6 MB): the next screen past it is the decision this
+	// budget was set to force, a smaller bundle or a new bound for it.
+	treeBudget = 4<<20 + 384<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
