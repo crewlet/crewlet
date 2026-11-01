@@ -1032,7 +1032,7 @@ stream:
                                     #   opens, reviews, comments, merges, each
                                     #   revision's facts and mergeability, and
                                     #   its queue's and checks' — take about
-                                    #   twice to seven times the
+                                    #   twice to seven and a half times the
                                     #   bytes a day its tracker writes and its
                                     #   seats' reads do: set this to the ratio
                                     #   the two logs' bytes_per_day show in

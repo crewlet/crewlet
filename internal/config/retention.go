@@ -237,7 +237,7 @@ const (
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
 	//     sized at, tracker.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
-	//   - the code log 24.7–87.3 MB a day: 3 000 pushes at 1 604 bytes,
+	//   - the code log 24.7–91.3 MB a day: 3 000 pushes at 1 604 bytes,
 	//     MEASURED for a seat's coding box's push alone in its record, the
 	//     most a seat's push takes, at which every one of the reference
 	//     company's is priced (internal/code's BenchmarkPushLogBytes, its
@@ -262,7 +262,7 @@ const (
 	//     seat's push three times, 9 000 a day, beside thirty people fetching
 	//     every three minutes of a working day (4 800) and, where one runs, a
 	//     CI polling ten repositories a minute (14 400); and the records of
-	//     its 300 changes a day, 16.8–73.5 MB — every push a revision of its
+	//     its 300 changes a day, 16.8–77.5 MB — every push a revision of its
 	//     coding run's change, ten a change, each change opened by a seat's
 	//     tool, asked of one reviewer, reviewed asking for changes with two
 	//     findings, answered, commented on twice, a thread resolved, approved
@@ -271,16 +271,19 @@ const (
 	//     the answer, each record MEASURED as its writer forms it at the
 	//     reference company's text (internal/code's
 	//     TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt); at the
-	//     most beside them a queue entry a change, a recheck at every
-	//     ten-minute pass of its home over a working day while its target
-	//     moves, three checks of every revision, each queued, claimed, its
-	//     box named and ended, and every change's landing checked on its tip
-	//     by its home — its three checks queued, claimed, their boxes named
-	//     and ended — and its target's green row moved onto it.
+	//     most beside them a queue entry a change, taken on by its home's
+	//     queue worker — a train of its own, its three checks queued on the
+	//     train's candidate, claimed, their boxes named and ended, and its
+	//     landing — a recheck at every ten-minute pass of its home over a
+	//     working day while its target moves, three checks of every revision,
+	//     each queued, claimed, its box named and ended, and every change's
+	//     landing checked on its tip by its home — its three checks queued,
+	//     claimed, their boxes named and ended — and its target's green row
+	//     moved onto it.
 	//
 	// Every figure is of SIGNED records (ADR-0031).
 	//
-	// So the code log takes 2.04–7.20 of the mutation log's day — 0.40 on
+	// So the code log takes 2.04–7.53 of the mutation log's day — 0.40 on
 	// its push records alone (0.49 of the tracker's records) — and TWO
 	// THIRDS IS BELOW THAT RANGE: under a blocked trim a code log at two
 	// thirds of the mutation log's ceiling fills in 0.33 of the mutation
