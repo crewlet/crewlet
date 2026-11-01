@@ -65,8 +65,12 @@ func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 	// prefix, so the exemption, the public listener, the drain and the access
 	// log's redaction that cover the bridge cover it.
 	mux.Handle(mcpbridge.SteerPattern, bridge.SteerHandler())
+	// AND ITS SKILL ROUTE, the same way: a harness's plugin reports each of
+	// the run's own skills it loads there (internal/api/mcpbridge, skills.go).
+	mux.Handle(mcpbridge.SkillPattern, bridge.SkillHandler())
 	log.Info("mcp_bridge_mounted", "path", mcpbridge.PathPrefix+"{token}",
-		"servers", mcpbridge.ServerPattern, "notes", mcpbridge.SteerPattern)
+		"servers", mcpbridge.ServerPattern, "notes", mcpbridge.SteerPattern,
+		"skills", mcpbridge.SkillPattern)
 }
 
 // mountOperator registers the operator surface's two transports — MCP for an

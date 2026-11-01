@@ -826,11 +826,116 @@ type RunRequest struct {
 	// launch is handed its own.
 	Steer SteerWiring
 
+	// Skills are skills the run's harness is handed as its OWN — see [Skill]:
+	// written where the harness reads skills of its own, listed to its model
+	// beside the ones the box and the checkout hold, and loaded with the
+	// harness's own skill tool. Nil hands none. A runner refuses a run handed
+	// skills that its harness cannot take, or with nowhere to report a load
+	// ([RunRequest.SkillLoads]).
+	Skills []Skill
+
+	// SkillLoads is where the run's harness reports loading one of Skills —
+	// see [SkillWiring]. NEVER PERSISTED, for the reason Steer is not: it
+	// names the job's own endpoint.
+	SkillLoads SkillWiring
+
 	// Attribution is the credit every commit the run authors as itself
 	// carries — see [CommitAttribution]. Nil credits nothing: the run's git
 	// is left exactly as the box and the repository configure it.
 	Attribution *CommitAttribution
 }
+
+// SkillNamespace is what a run's harness lists every skill of
+// [RunRequest.Skills] under: `crewlet:<name>` ([Skill.Listed]).
+//
+// ONE NAME ON EVERY HARNESS. Claude Code names a plugin's skill
+// `<plugin>:<skill>`, and the plugin a runner hands it its skills in is named
+// this; OpenCode names a skill by its directory, and a runner names each
+// directory in full. So the engine can tell a run's model which skill to load
+// without knowing which harness runs it, and a load the harness reports is
+// read back by the name it listed. And NOT A NAME A REPOSITORY'S OR AN IMAGE'S
+// OWN SKILL TAKES by accident, which, sharing one, the harness would run in
+// the company's place or the company's in its.
+const SkillNamespace = "crewlet"
+
+// Skill is one skill a run's harness is handed as its own.
+type Skill struct {
+	// Name is the skill's own name ([ValidSkillName]), which the harness
+	// lists it under in [SkillNamespace] ([Skill.Listed]).
+	Name string
+
+	// Description is what the harness lists beside the name, for its model
+	// to choose by: the harness hands a model a skill's body only when the
+	// model loads it.
+	Description string
+
+	// Body is the skill's text, which the harness hands its model once the
+	// model loads the skill — AS THE HARNESS READS A SKILL OF ITS OWN, since
+	// that is what it is: Claude Code reads a skill's file as a template, in
+	// which a line's `` !`command` `` runs as the skill loads and
+	// `$ARGUMENTS` is a placeholder, where OpenCode hands its model the text
+	// as written.
+	Body string
+
+	// Required says the run's calls to the tools this skill covers are
+	// refused until the harness reports loading it. A runner refuses a run
+	// with a required skill on a harness release that cannot report a load:
+	// it could never call those tools.
+	Required bool
+}
+
+// Listed is the name the run's harness lists the skill under, and its model
+// loads it by.
+func (s Skill) Listed() string { return SkillNamespace + ":" + s.Name }
+
+// maxSkillName is the longest [Skill.Name]: the Agent Skills specification's
+// bound on a skill's name, which both harnesses read a skill's name by.
+const maxSkillName = 64
+
+// ValidSkillName reports whether name can be a [Skill.Name]: one to
+// [maxSkillName] lowercase ASCII letters and digits, in runs joined by single
+// hyphens — the Agent Skills specification's grammar. It is a directory's
+// name in the box on either harness, and part of what the harness lists; a
+// name outside it is one a harness may refuse to load, or one that names a
+// path rather than a skill.
+func ValidSkillName(name string) bool {
+	if name == "" || len(name) > maxSkillName || name[0] == '-' || name[len(name)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		case c == '-' && name[i-1] != '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// SkillWiring is where a run's harness reports loading one of its skills
+// ([RunRequest.Skills]): one tool of the MCP server the run's tool bridge is
+// ([RunRequest.MCPServers]), which a hook of the harness's calls once its skill
+// tool has answered (Claude Code), and the URL of the bridge's skill route,
+// which a plugin of the harness's own posts each load to (OpenCode). The
+// engine fills it from the same names its bridge serves, so the box and the
+// bridge cannot disagree about them (internal/api/mcpbridge).
+type SkillWiring struct {
+	// Server is the name the bridge is listed under in the run's MCP
+	// configuration, and Tool the tool a hook calls on it — never listed,
+	// so no model is offered it, and no model can unlock a skill it never
+	// read.
+	Server string
+	Tool   string
+
+	// URL is the job's skill route: the bridge endpoint the box already
+	// dials, with the route's suffix.
+	URL string
+}
+
+// Set reports whether the wiring names anything a harness could reach.
+func (w SkillWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL != "" }
 
 // CommitAttribution asks a run's runner to credit Crewlet on every commit the
 // run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.ai>`, the

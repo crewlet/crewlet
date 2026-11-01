@@ -10,7 +10,7 @@ Prerequisites: **Go 1.27+** and
 `make check` runs and CI's own job downloads for itself. **A current Node**
 (npm ships with it) for the dashboard — its build output is committed, so
 building and running the ENGINE needs neither, but changing the dashboard,
-running `internal/e2e`'s client replay or the probe of OpenCode's notes plugin
+running `internal/e2e`'s client replay or the probes of OpenCode's plugins
 does. Nothing in the tree pins a node version; CI installs the latest — see
 *Which node* under
 [A skip is not a pass](#a-skip-is-not-a-pass). **Docker** only for the vendor
@@ -304,15 +304,17 @@ What follows are the prerequisites that legitimately vary by machine.
   directory above the script holding a `go.mod` — rather than the directory it
   is run from.
 
-  `node` also runs the **OpenCode notes plugin** the engine embeds
-  (`internal/sandbox/executor/opencode_steer.js`): the plugin is
-  JavaScript an OpenCode run's server loads, and `opencode_steer_test.go`
-  drives it — as the engine writes it into a real box — under plain `node`,
-  through `opencode_steer_probe.mjs` beside it, against a stand-in of the
-  bridge's notes route and against a real bridge's. That package is in the
-  parallel half, so `make test`
-  requires node too and CI's `test (race)` job installs it, and its skip has
-  no allowlist entry either. It needs no npm either: the plugin imports
+  `node` also runs the **two OpenCode plugins** the engine embeds
+  (`internal/sandbox/executor/opencode_steer.js` and `opencode_skills.js`):
+  each is JavaScript an OpenCode run's server loads. `opencode_steer_test.go`
+  drives the notes plugin — as the engine writes it into a real box — under
+  plain `node`, through `opencode_steer_probe.mjs` beside it, against a
+  stand-in of the bridge's notes route and against a real bridge's;
+  `opencode_skills_test.go` drives the skill-load plugin through
+  `opencode_skills_probe.mjs`, against a stand-in of the bridge's skill route.
+  That package is in the parallel half, so `make test`
+  requires node too and CI's `test (race)` job installs it, and its skips have
+  no allowlist entry either. They need no npm either: the plugins import
   nothing.
 
 - **`npm`** builds and tests the dashboard itself. Its assertions — the
@@ -573,9 +575,10 @@ release are on the way of every real call. Test
 files sit beside what they cover, as Go expects, and a test file that is not Go
 is no exception: the dashboard's Vitest suites sit beside their modules in
 `dashboard/src`, `internal/e2e`'s client replay is `internal/e2e/replay.mjs`,
-beside the `golden_test.go` that runs it, and the OpenCode notes plugin's probe
-is `internal/sandbox/executor/opencode_steer_probe.mjs`, beside the
-`opencode_steer_test.go` that runs it. There is no top-level `tests/` tree.
+beside the `golden_test.go` that runs it, and the OpenCode plugins' probes
+are `internal/sandbox/executor/opencode_steer_probe.mjs` and
+`opencode_skills_probe.mjs`, beside the `opencode_steer_test.go` and
+`opencode_skills_test.go` that run them. There is no top-level `tests/` tree.
 
 A test that opens a store on a fresh path opens it through
 `storetest.OpenNode` or `storetest.OpenEstate`, and one that boots an engine on

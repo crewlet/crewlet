@@ -842,8 +842,12 @@ func jsonStringify(s string) string {
 // 2.0.32 and 2.1.4 with a repository whose own opencode.json and .opencode/
 // remove the plugin: it loaded, with its option read from its file.
 //
+// THE RUN'S OWN SKILLS ([sandbox.RunRequest.Skills]) in a directory its
+// `skills` names, and the plugin that reports each load beside the notes
+// plugin, the same way ([writeOpenCodeSkills], opencode_skills.js).
+//
 // EVERY PATH THE CONFIGURATION NAMES IS UNDER THE BOX'S WORK DIRECTORY — the
-// instruction file, the plugin, every value — and OpenCode replaces `{env:…}`
+// instruction file, the plugins, the skills, every value — and OpenCode replaces `{env:…}`
 // and `{file:…}` in the configuration's text before it parses it, so a box
 // whose home that text cannot name is refused before anything is written
 // ([openCodeReferable]).
@@ -854,7 +858,7 @@ func jsonStringify(s string) string {
 // file — the clear removed that ([Runner.ClearArtifacts]) — but not at all: the
 // script refuses to start a server it has no configuration for.
 func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
-	if req.System != "" || len(req.MCPServers) > 0 || req.Steer.Set() {
+	if req.System != "" || len(req.MCPServers) > 0 || req.Steer.Set() || len(req.Skills) > 0 {
 		if err := openCodeReferable(paths.WorkDir()); err != nil {
 			return "", fmt.Errorf("executor: this box's home %q cannot be named in an OpenCode "+
 				"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
@@ -923,14 +927,36 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	if len(req.MCPServers) > 0 {
 		cfg["mcp"] = map[string]any{"servers": openCodeMCP(req.MCPServers, values)}
 	}
+	var plugins []map[string]any
 	if req.Steer.Set() {
 		if err := box.WriteFile(ctx, paths.OpenCodeSteerPlugin()+"/"+openCodeSteerEntry, openCodeSteerPlugin); err != nil {
 			return "", fmt.Errorf("executor: writing OpenCode's notes plugin: %w", err)
 		}
-		cfg["plugins"] = []map[string]any{{
+		plugins = append(plugins, map[string]any{
 			"package": paths.OpenCodeSteerPlugin(),
 			"options": map[string]string{"url": values.ref(req.Steer.URL)},
-		}}
+		})
+	}
+	// THE RUN'S OWN SKILLS, in a directory its `skills` names — an entry
+	// OpenCode adds to every other document's, as it does `instructions` —
+	// and the plugin that reports each load to the run's bridge, with the
+	// skill route as its one option, as the notes plugin takes its own
+	// ([writeOpenCodeSkills], opencode_skills.js).
+	if len(req.Skills) > 0 {
+		if err := writeOpenCodeSkills(ctx, box, req.Skills, paths); err != nil {
+			return "", err
+		}
+		cfg["skills"] = []string{paths.OpenCodeSkills()}
+		if err := box.WriteFile(ctx, paths.OpenCodeSkillsPlugin()+"/"+openCodeSteerEntry, openCodeSkillsPlugin); err != nil {
+			return "", fmt.Errorf("executor: writing OpenCode's skill-load plugin: %w", err)
+		}
+		plugins = append(plugins, map[string]any{
+			"package": paths.OpenCodeSkillsPlugin(),
+			"options": map[string]string{"url": values.ref(req.SkillLoads.URL)},
+		})
+	}
+	if len(plugins) > 0 {
+		cfg["plugins"] = plugins
 	}
 	for _, v := range values.files {
 		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {

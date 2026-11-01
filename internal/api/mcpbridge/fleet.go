@@ -98,6 +98,7 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 	mux.Handle(PathPrefix+"{token}", b.streamable)
 	mux.Handle(ServerPattern, b.streamable)
 	mux.Handle(SteerPattern, b.heldOnly(b.serveSteer))
+	mux.Handle(SkillPattern, b.heldOnly(b.serveSkill))
 	relay, err := httprelay.New(httprelay.Options{
 		Fabric: opts.Fabric, Name: RelayName, Node: opts.Node, Owner: opts.Owner,
 		Keyring: opts.Keyring, Admit: b.admitRelayed, Handler: mux,
