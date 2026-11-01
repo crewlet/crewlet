@@ -417,6 +417,12 @@ type stopped struct{}
 
 func (stopped) Stop() {}
 
+// units is a seat git-work share of so many units, as a loop sizes its own
+// reads by it.
+type units int
+
+func (u units) Units() int { return int(u) }
+
 // loopOn is node's loop over e, p and n, its backstop backstop, started, with
 // a recorder of its own; stopped when the case ends. Its cache and pool are
 // stand-ins no merge reaches ([unmerged]): every change its cases hold owes
@@ -426,7 +432,8 @@ func loopOn(t *testing.T, node string, e *estate, p *placement, n *nudges,
 
 	t.Helper()
 	return loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
-		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node},
+		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node,
+		Share: units(2)},
 		backstop)
 }
 
@@ -452,7 +459,7 @@ func loopOver(t *testing.T, o home.Options, backstop time.Duration) (*home.Loop,
 // unmerged is the cache and the pool of a loop whose cases hold no change that
 // owes a merge: whatever reaches either is the case's failure, since nothing
 // the case holds asks one.
-type unmerged struct{ t *testing.T }
+type unmerged struct{ t testing.TB }
 
 func (u unmerged) Holds(string) bool {
 	u.t.Error("a loop whose changes owe no merge asked whether its cache holds a copy")

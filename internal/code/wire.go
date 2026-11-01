@@ -2878,6 +2878,17 @@ func (k GitReadKind) Unstampable() bool {
 // of all three.
 func (q GitQuery) EnginesOwn() bool { return q.Kind.EnginesOwn() || q.Check != nil }
 
+// SeatWork is the unit of the answering node's seat git-work share q's git
+// takes ([GitShare.Take]): the engine's own ([SeatWorkEngine]) for a read the
+// engine makes on its own account, a seat's read ([SeatWorkRead]) for every
+// other.
+func (q GitQuery) SeatWork() SeatWork {
+	if q.EnginesOwn() {
+		return SeatWorkEngine
+	}
+	return SeatWorkRead
+}
+
 // GitQuery is one read of a repository by object id: exactly the sub-query of
 // its Kind is set.
 type GitQuery struct {

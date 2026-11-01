@@ -344,7 +344,7 @@ func queueLoop(t *testing.T, rows *queueRows, chains home.Chains, tasks home.Tas
 	t.Helper()
 	l, err := home.New(home.Options{Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
 		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: chains, Tasks: tasks,
-		NodeID: "git-a"})
+		Share: units(2), NodeID: "git-a"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

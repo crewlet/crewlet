@@ -17,6 +17,10 @@ func SetBackstop(l *Loop, d time.Duration) {
 	l.changes.rechecks.window = d
 }
 
+// SetConcurrency sets how many turns l runs at once, so BenchmarkHomeLoop
+// measures the values [Concurrency] is chosen among. Before Start.
+func SetConcurrency(l *Loop, n int) { l.turnsAtOnce = n }
+
 // SetMergesPerPass sets how many merges of its moved targets one repository's
 // window holds on l, so a suite proves the budget with a few changes rather
 // than [MergeabilityPerPass] of them. Before Start.

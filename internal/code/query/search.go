@@ -95,7 +95,7 @@ func (r *read) searchRead(ctx context.Context) (code.GitAnswer, error) {
 	if a, ok, err := r.await(ctx, whole, cursor{}); err != nil || ok {
 		return a, err
 	}
-	release, err := r.s.o.Share.Take(ctx, code.SeatWorkRead)
+	release, err := r.s.o.Share.Take(ctx, r.q.SeatWork())
 	if err != nil {
 		if code.AnswerDue(ctx) {
 			return code.GitAnswer{}, r.unready(code.UnreadyShare, fmt.Sprintf("%s's seat git work held its whole "+

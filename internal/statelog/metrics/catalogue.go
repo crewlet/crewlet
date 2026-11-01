@@ -2117,8 +2117,9 @@ func Catalogue() []Instrument {
 			Shows: "Seat git work running at once on this git node, of half its " +
 				"read lane: the units of the node's seat git-work share held " +
 				"now — server-side reads of a repository by object id running " +
-				"their git, and the builds of engine writes, a seat's or a " +
-				"person's commit made through a tool. The share is half of " +
+				"their git, the engine's own among them, and the builds of " +
+				"engine writes, a seat's or a person's commit made through a " +
+				"tool. The share is half of " +
 				"`git.max_processes` " +
 				"(at least one), and the other half of the read lane stays the " +
 				"node's own and its persons' — a push's scans, a sync's peel, " +
@@ -2134,9 +2135,12 @@ func Catalogue() []Instrument {
 				"share asked for waited, by `outcome` — `granted`, taken " +
 				"within two seconds; `unready`, none free in two seconds, " +
 				"answered so the asker is served by another git node, its " +
-				"wait the whole two — and by `work` (`read`: a server-side " +
-				"read of a repository by object id; `write`: the build of an " +
-				"engine write, a commit made through a tool). One whose " +
+				"wait the whole two — and by `work` (`read`: a seat's or a " +
+				"person's server-side read of a repository by object id; " +
+				"`write`: the build of an engine write, a commit made through " +
+				"a tool; `engine`: the engine's own read — a revision's facts " +
+				"or a checks file a repository's home reads, or a read made " +
+				"for a check). One whose " +
 				"caller went away while it waited is not counted. The wait " +
 				"is a whole term of the attempt a seat's read or write is " +
 				"given on one git node, so the `granted` tail nearing two " +

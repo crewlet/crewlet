@@ -4569,9 +4569,15 @@ commit](#engine-built-commits) takes its unit of the same share — one share a
 node, so seats' reads and writes between them never hold more than half —
 and gives it back before its push lands. What the share holds is the read's
 or the build's own git; the short checks of what either names, before it,
-wait in the lane's queue like any short read. `crewlet.code.seatwork.held` is
-the share held now and `crewlet.code.seatwork.waits` how long every unit asked
-for waited, by the `work` it was for and whether it came free in time — the
+wait in the lane's queue like any short read. The engine's own reads — a
+revision's facts and a checks file a repository's home reads, and a read made
+for a check — run the same git, so they take their unit of the same share,
+and a home leaves its node's seats at least one unit wherever the share holds
+two or more ([The home's change work](#the-homes-change-work)).
+`crewlet.code.seatwork.held` is the share held now and
+`crewlet.code.seatwork.waits` how long every unit asked for waited, by the
+`work` it was for (`read`, `write`, or `engine` for the engine's own) and
+whether it came free in time — the
 wait is a term of the attempt a read or a write is given on one git node
 ([Metrics](../reference/metrics.md)).
 
@@ -5398,7 +5404,13 @@ Two things put a repository's work in front of its home:
   pass.
 
 There is no lease: two nodes that each take themselves for a repository's
-home both read, and the records' own guards take one. A node works two
+home both read, and the records' own guards take one. A node's own git
+reads — a revision's facts, a checks file — each hold a unit of its [seat
+git-work share](#server-side-reads), so the home
+runs at most all but one of the share's units of them at once, at least one:
+its seats keep a unit wherever the share has two (a node of four cores or
+more), and on a smaller node a seat's read waits behind one of the home's at
+the most. A node works two
 repositories at once, one turn of a minute at the most each, a repository
 with more due work than a turn finishing it at the passes that follow.
 `crewlet.code.home.passes` counts the turns by what became of them,
