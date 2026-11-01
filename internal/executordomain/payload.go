@@ -66,9 +66,23 @@ type Capture struct {
 	Workspace string `json:"workspace,omitempty"`
 
 	// ReadThrough is the packed log position the turn's first launch read
-	// its conversation's head at, zero where it read none: what the turn's
-	// `end` absorbs up to. Kept from the first capture that carries one.
-	ReadThrough int64 `json:"read_through,omitempty"`
+	// its conversation's head at, zero where it read none, and Absorbs the
+	// turns that read handed out in full ([Head.Absorbs]): the head it
+	// continued, the endings it was told and the siblings it was offered.
+	// They are what the turn's `end` absorbs, and nothing else: a turn the
+	// read left out (past [MaxEndings], or ended after it) was never shown
+	// to this one, so its ending and its session stay for the next turn to
+	// be shown. Both are kept from the first capture that carries a read,
+	// because a turn's later launches read its own row, not the head.
+	ReadThrough int64    `json:"read_through,omitempty"`
+	Absorbs     []string `json:"absorbs,omitempty"`
+
+	// SeenRemoval is the position of the seat's last removal this capture's
+	// decide saw ([SeatDelete]), zero where it saw none. A capture decided
+	// before a removal it did not see, and landing after it, writes nothing:
+	// it is a turn of the seat the company removed, and a turn that had no
+	// row when the seat was removed has no tombstone to refuse it.
+	SeenRemoval int64 `json:"seen_removal,omitempty"`
 
 	// SeatBudget is the most object bytes the seat may hold once this
 	// capture lands: the company's `max_bytes_per_seat`, read by the writer
@@ -90,12 +104,24 @@ type End struct {
 	AskExcerpt string `json:"ask_excerpt,omitempty"`
 
 	Ending Ending `json:"ending"`
+
+	// SeenRemoval is [Capture.SeenRemoval] for the end: an end decided
+	// before a removal of its seat it did not see writes nothing once it
+	// lands after it, unless the turn has a row the removal did not take
+	// (one a capture of the seat's next tenure wrote since).
+	SeenRemoval int64 `json:"seen_removal,omitempty"`
 }
 
-// Delete removes one turn's row and tombstone past the retention. Cutoff is
-// the instant the row's own last instant (its end's, else its newest
-// capture's, else its tombstone's) must be at or before for the delete to
-// apply, so a turn captured again since the duty nominated it stays.
+// Delete removes one turn's row and tombstone past the retention, on the
+// turn's conversation's subject. Cutoff is the instant the row's own last
+// instant (its end's, else its newest capture's, else its tombstone's) must be
+// at or before for the delete to apply, so a turn captured again since the
+// duty nominated it stays.
+//
+// ON A SEAT'S SUBJECT, with no turn and no conversation, it is the retention
+// of the seat's removal ([SeatDelete]) instead: the record of where the seat's
+// rows were last removed goes once that removal is past the cutoff, by which
+// time no record decided before it can still land.
 type Delete struct {
 	V int `json:"v"`
 
@@ -106,7 +132,9 @@ type Delete struct {
 }
 
 // SeatDelete removes every row a seat holds here, after the company removed
-// the seat, and tombstones the turns that had not ended.
+// the seat, tombstones the turns that had not ended, and records the position
+// it applied at, which every later capture or end of the seat is held to
+// ([Capture.SeenRemoval]).
 type SeatDelete struct {
 	V      int    `json:"v"`
 	Handle string `json:"handle"`
@@ -153,6 +181,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Delete](rec)
 	case k == KindSeat && op == OpSeatDelete:
 		return decodePayload[SeatDelete](rec)
+	case k == KindSeat && op == OpDelete:
+		return decodePayload[Delete](rec)
 	case k == KindEviction && op == OpEviction:
 		return decodePayload[Eviction](rec)
 	case k == KindGeneration && op == OpGeneration:

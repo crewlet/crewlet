@@ -31,7 +31,7 @@ func (e *estate) decide(n NewCapture, at time.Time) error {
 	e.t.Helper()
 	var decided error
 	if err := e.db.Read(e.t.Context(), func(tx *sql.Tx) error {
-		decided = decideCapture(e.t.Context(), tx, n, at)
+		_, decided = decideCapture(e.t.Context(), tx, n, at)
 		return nil
 	}); err != nil {
 		e.t.Fatalf("read the snapshot: %v", err)
@@ -129,6 +129,69 @@ func TestEveryRecordIsPublishedUnderAnOperationDerivedPerExecution(t *testing.T)
 		if err := statelog.CheckCallerOpID(id); err != nil {
 			t.Errorf("derived operation %q is not one a call accepts: %v", id, err)
 		}
+	}
+}
+
+// A TURN IS KEYED BY ITS ONE SPELLING: a run id the engine mints is a UUID in
+// canonical lowercase form, and every other spelling uuid.Parse accepts — the
+// braced, the uppercase, the URN and the undashed — is refused rather than
+// keyed on, since each would be a second row, a second conversation subject and
+// a second associated data for one run, and the retention's check of the run's
+// liveness would miss it.
+//
+// Mutation: check the turn with uuid.Parse alone and every spelling here is
+// accepted.
+func TestATurnIsKeyedByItsOneSpelling(t *testing.T) {
+	t.Parallel()
+	turn := newTurn()
+	if err := checkTurn("ana", turn, "", ""); err != nil {
+		t.Fatalf("a canonical run id was refused: %v", err)
+	}
+	for name, spelling := range map[string]string{
+		"braced":    "{" + turn + "}",
+		"uppercase": strings.ToUpper(turn),
+		"a URN":     "urn:uuid:" + turn,
+		"undashed":  strings.ReplaceAll(turn, "-", ""),
+	} {
+		if err := checkTurn("ana", spelling, "", ""); !errors.Is(err, ErrInvalid) {
+			t.Errorf("the %s spelling %q: %v, want ErrInvalid", name, spelling, err)
+		}
+	}
+}
+
+// A RECORD ABOUT A TURN NAMES THE TURN'S ONE UNIT OF WORK: a capture or an end
+// naming another work key than the one the turn's row already carries is
+// refused at the decide, as one naming another conversation is, while one
+// naming none contradicts nothing.
+//
+// Mutation: drop the work-key arm from decideCapture or decideEnd and a turn's
+// records disagree about which attempt at which work it is.
+func TestARecordNamingAnotherUnitOfWorkIsRefused(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	run := newTurn()
+	keyed := capturing("ana", "task:ENG-7", run, 1, 1, 100, budget)
+	keyed.WorkKey = "work-1"
+	e.capture(keyed)
+
+	other := newCapture("ana", "task:ENG-7", run, 1, 2, 100, monday)
+	other.WorkKey = "work-2"
+	if err := e.decide(other, monday); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a capture naming another unit of work: %v, want ErrInvalid", err)
+	}
+	if err := e.decide(newCapture("ana", "task:ENG-7", run, 1, 2, 100, monday), monday); err != nil {
+		t.Errorf("a capture naming no unit of work was refused: %v", err)
+	}
+	var decided error
+	if err := e.db.Read(t.Context(), func(tx *sql.Tx) error {
+		_, decided = decideEnd(t.Context(), tx, NewEnd{Handle: "ana", Turn: run,
+			ConversationKey: "task:ENG-7", WorkKey: "work-2"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(decided, ErrInvalid) {
+		t.Errorf("an end naming another unit of work: %v, want ErrInvalid", decided)
 	}
 }
 

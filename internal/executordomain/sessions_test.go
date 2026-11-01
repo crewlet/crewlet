@@ -2,9 +2,11 @@ package executordomain_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -70,9 +72,14 @@ func readAll(t *testing.T, store *executordomain.SessionStore, s executordomain.
 }
 
 // storedBytes is what the backend holds under name, read past every check.
+//
+// UNDER A DEADLINE, which every backend's read refuses to go without
+// (objstore.CheckRead): a stream with none could hang on a stalled store.
 func storedBytes(t *testing.T, backend *memobj.Backend, name string) []byte {
 	t.Helper()
-	body, err := backend.Get(t.Context(), name, 0, -1)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	body, err := backend.Get(ctx, name, 0, -1)
 	if err != nil {
 		t.Fatalf("read %s off the backend: %v", name, err)
 	}
@@ -97,7 +104,7 @@ func TestASessionOpensOnlyWhereItsRowNamesIt(t *testing.T) {
 	store, backend := sessionStore(t, "k1")
 	turn := statelog.NewOpID(time.Now(), "")
 	plain := archive(t, 3*secrets.StreamChunkBytes+17)
-	put, err := store.Put(t.Context(), "ana", turn, bytes.NewReader(plain))
+	put, err := store.Put(t.Context(), "ana", turn, io.NopCloser(bytes.NewReader(plain)))
 	if err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -113,13 +120,75 @@ func TestASessionOpensOnlyWhereItsRowNamesIt(t *testing.T) {
 	if err != nil || !bytes.Equal(got, plain) {
 		t.Fatalf("the session read back (%d bytes, %v), want the archive", len(got), err)
 	}
+	// THE SAME BYTES UNDER ANOTHER KEY: what a row naming another capture's
+	// object of the very same seat and turn would open, were the object's
+	// own key not bound in.
+	moved := objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC))
+	if err := backend.Put(t.Context(), moved.Name(), bytes.NewReader(stored), objstore.PutMeta{}); err != nil {
+		t.Fatal(err)
+	}
 	for name, other := range map[string]executordomain.Session{
 		"another turn": {Handle: "ana", Turn: statelog.NewOpID(time.Now(), ""), Object: put.Object},
 		"another seat": {Handle: "ben", Turn: turn, Object: put.Object},
+		"another capture's key": {Handle: "ana", Turn: turn, Object: objstore.Object{
+			Key: moved, Hash: put.Object.Hash, Size: put.Object.Size}},
 	} {
 		if _, err := readAll(t, store, other); !errors.Is(err, executordomain.ErrUnreadable) {
 			t.Errorf("the object named by %s: %v, want ErrUnreadable", name, err)
 		}
+	}
+}
+
+// stalled is an archive whose reads block until it is closed: a box's stream
+// that stopped sending, which no check of a context between reads interrupts.
+type stalled struct {
+	reading, closed chan struct{}
+	once, entered   sync.Once
+}
+
+func newStalled() *stalled {
+	return &stalled{reading: make(chan struct{}), closed: make(chan struct{})}
+}
+
+func (s *stalled) Read([]byte) (int, error) {
+	s.entered.Do(func() { close(s.reading) })
+	<-s.closed
+	return 0, errors.New("the stream was closed under the read")
+}
+
+func (s *stalled) Close() error {
+	s.once.Do(func() { close(s.closed) })
+	return nil
+}
+
+// A PUT ENDS WITH ITS CONTEXT EVEN WHILE THE ARCHIVE IS BLOCKED: the caller
+// giving up closes the archive, which is what ends a read blocked on it, so
+// the sealing goroutine Put owns never outlives the call.
+//
+// Mutation: drop the context.AfterFunc that closes the archive and Put waits
+// on its goroutine for ever, blocked in the archive's read.
+func TestAPutEndsWithItsContextWhileTheArchiveIsBlocked(t *testing.T) {
+	t.Parallel()
+	store, _ := sessionStore(t, "k1")
+	archive := newStalled()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		<-archive.reading
+		cancel()
+	}()
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.Put(ctx, "ana", statelog.NewOpID(time.Now(), ""), archive)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a put whose archive never finished answered success")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Put outlived its context while the archive's read was blocked")
 	}
 }
 
@@ -138,7 +207,7 @@ func TestASessionNobodyCanReadIsNoSession(t *testing.T) {
 	}
 	store := over(t, objects, "k1")
 	turn := statelog.NewOpID(time.Now(), "")
-	put, err := store.Put(t.Context(), "ana", turn, bytes.NewReader(archive(t, 100)))
+	put, err := store.Put(t.Context(), "ana", turn, io.NopCloser(bytes.NewReader(archive(t, 100))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +237,7 @@ func TestASessionNobodyCanReadIsNoSession(t *testing.T) {
 func TestAnArchivePastItsBoundIsRefused(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionStore(t, "k1")
-	big := io.LimitReader(zeros{}, executordomain.SessionMaxBytes+1)
+	big := io.NopCloser(io.LimitReader(zeros{}, executordomain.SessionMaxBytes+1))
 	if _, err := store.Put(t.Context(), "ana", statelog.NewOpID(time.Now(), ""), big); !errors.Is(err,
 		executordomain.ErrSessionTooLarge) {
 		t.Fatalf("an archive a byte past its bound: %v, want ErrSessionTooLarge", err)

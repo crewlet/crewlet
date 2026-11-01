@@ -31,6 +31,12 @@
 -- as columns: the outcome to list by, and `delivered` because a later attempt
 -- at the same unit of work merges into it. `last_at` is the row's own last
 -- instant (its end's, else its newest capture's), what the retention measures.
+-- `read_through` and `absorbs` are what the turn's first launch read of its
+-- conversation: the position, and the turns that read handed out in full,
+-- which are what the turn's end may absorb. `first_seq` is the position of the
+-- record that first wrote the row, set once and never moved, which is what a
+-- seat's sessions are paged by: every other position here moves with a
+-- capture, an end or a release.
 CREATE TABLE executor_sessions (
     agent_handle     TEXT    NOT NULL,
     turn_id          TEXT    NOT NULL,
@@ -50,6 +56,7 @@ CREATE TABLE executor_sessions (
     workspace        TEXT    NOT NULL DEFAULT '',
     captured_at      INTEGER NOT NULL DEFAULT 0,
     read_through     INTEGER NOT NULL DEFAULT 0,
+    absorbs          TEXT    NOT NULL DEFAULT '',
     ended_at         INTEGER,
     end_seq          INTEGER,
     outcome          TEXT    NOT NULL DEFAULT '',
@@ -57,18 +64,22 @@ CREATE TABLE executor_sessions (
     ending           TEXT    NOT NULL DEFAULT '',
     ask_excerpt      TEXT    NOT NULL DEFAULT '',
     last_at          INTEGER NOT NULL DEFAULT 0,
+    first_seq        INTEGER NOT NULL,
     version          INTEGER NOT NULL,
     PRIMARY KEY (agent_handle, turn_id)
 );
 CREATE INDEX executor_sessions_object_idx ON executor_sessions (object);                                  -- the collector, the audit and the backup
-CREATE INDEX executor_sessions_conversation_idx ON executor_sessions (agent_handle, conversation_key, end_seq); -- a conversation's head, its absorption and its dedupe
-CREATE INDEX executor_sessions_seat_idx ON executor_sessions (agent_handle, version, turn_id);          -- a seat's sessions, newest first, and its budget
+CREATE INDEX executor_sessions_conversation_idx ON executor_sessions (agent_handle, conversation_key, end_seq); -- a conversation's head, its endings and its dedupe
+CREATE INDEX executor_sessions_ended_idx ON executor_sessions (agent_handle, end_seq);                  -- the seat budget's release, oldest end first
+CREATE INDEX executor_sessions_seat_idx ON executor_sessions (agent_handle, first_seq);                 -- a seat's sessions, newest first
 CREATE INDEX executor_sessions_expiry_idx ON executor_sessions (last_at, agent_handle, turn_id);       -- the retention duty's nomination
+CREATE INDEX executor_sessions_unended_idx ON executor_sessions (last_at, agent_handle, turn_id) WHERE end_seq IS NULL; -- the retention duty's lost ends
 
 -- executor_session_tombs: a turn that takes no further record: ended by its
 -- own `end`, or live when its seat was removed. It outlives the row an
 -- absorption or a seat's removal deletes, so a capture decided before either
--- recreates nothing, and goes with the retention.
+-- recreates nothing, and goes with the retention, which deletes the row and
+-- its tombstone together.
 CREATE TABLE executor_session_tombs (
     agent_handle     TEXT    NOT NULL,
     turn_id          TEXT    NOT NULL,
@@ -79,6 +90,19 @@ CREATE TABLE executor_session_tombs (
     PRIMARY KEY (agent_handle, turn_id)
 );
 CREATE INDEX executor_session_tombs_at_idx ON executor_session_tombs (at, agent_handle, turn_id); -- the retention duty's nomination
+
+-- executor_seat_removals: the position a seat's rows were last removed at, by
+-- the mailbox retirement. A capture or an end carries the removal its decide
+-- saw, and one decided before a removal it did not see writes nothing when it
+-- lands after it: so a turn that had no row when its seat was removed, and so
+-- no tombstone, is not recreated for a seat that is gone. It goes with the
+-- retention, past which no record decided before it can still land.
+CREATE TABLE executor_seat_removals (
+    agent_handle TEXT    NOT NULL PRIMARY KEY,
+    at_seq       INTEGER NOT NULL,
+    at           INTEGER NOT NULL
+);
+CREATE INDEX executor_seat_removals_at_idx ON executor_seat_removals (at, agent_handle); -- the retention duty's nomination
 
 -- executor_evictions: a node's removal from THIS log, or its readmission.
 CREATE TABLE executor_evictions (

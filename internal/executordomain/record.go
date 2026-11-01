@@ -58,7 +58,8 @@ const (
 	OpEnd OpKind = "end"
 
 	// OpDelete removes one turn's row and tombstone past the retention, on
-	// its conversation's subject.
+	// its conversation's subject, or a removed seat's record of its removal
+	// past the retention, on the seat's subject.
 	OpDelete OpKind = "delete"
 
 	// OpSeatDelete removes every row a removed seat holds, on the seat's

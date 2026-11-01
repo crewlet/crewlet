@@ -63,6 +63,13 @@ var (
 	// ErrInvalid reports a write whose input the domain refuses, naming the
 	// field and what to change.
 	ErrInvalid = errors.New("executordomain: invalid")
+
+	// ErrIncomplete reports a listing this node's rows cannot answer whole:
+	// it holds a record of the log it could not decode, whose rows may be
+	// the very ones asked about. Another node, or this one once a build that
+	// reads the record has applied it, answers.
+	ErrIncomplete = errors.New("executordomain: this node may be missing rows the " +
+		"answer needs")
 )
 
 // invalid is an [ErrInvalid] naming what to change.

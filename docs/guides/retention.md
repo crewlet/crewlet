@@ -1999,17 +1999,27 @@ The chat transcript is the third, and its horizon is the company's to set: see
 [the chat transcript's horizon](#the-chat-transcripts-horizon) below.
 The seats' **executor sessions** are the fourth: one row per turn, naming the
 sealed object its coding CLI's session is kept in, and every way a row goes is
-a record every data node applies. A turn's end deletes the ended rows of its
-conversation that its first launch read, since its own session holds what
-they held; past a seat's `turn_engine.conversation_session.max_bytes_per_seat`
-(64 MiB by default) a capture releases the seat's oldest ended sessions,
-keeping how each turn ended and dropping only its object; the trash reaper
-deletes a row untouched for the company's
-`turn_engine.conversation_session.retention_days`, 30 days by default, never
-while its turn's run is live; and a seat that leaves the company takes its
-rows with it once its [mailbox is retired](../concepts/seat-ownership.md#the-removed-seat).
-A person's removal does not reach them yet, as it did not reach the
-conversation ledger they replace.
+a record every data node applies. A turn's end deletes exactly the ended turns
+of its conversation that its first launch was handed — the session it
+continued, the endings it was told and the sessions it was offered beside it
+— since its own session and account now hold them; a turn its launch was not
+shown (one that ended beside it, or one past the sixteen endings a launch is
+told) stays, and the next turn is shown it. Past a seat's
+`turn_engine.conversation_session.max_bytes_per_seat` (64 MiB by default) a
+capture releases the seat's oldest ended sessions, keeping how each turn ended
+and dropping only its object. The trash reaper deletes a row untouched for the
+company's `turn_engine.conversation_session.retention_days`, 30 days by
+default, ended or not, never while its turn's run is live — and takes the
+row's tombstone with it, since no record decided before the delete can land
+that late. It also ends a turn as `lost` when the turn never ended, a day has
+passed since its last capture, and no run of it is live: the turn's own end was
+lost, and until it is ended its session holds the seat's budget, which only
+ever releases ended turns' sessions. A seat that leaves the company takes its
+rows with it once its [mailbox is retired](../concepts/seat-ownership.md#the-removed-seat),
+by one record every node applies in order, which also refuses a capture or an
+end decided before it and landing after; that record of the removal goes with
+the same retention. A person's removal does not reach the sessions yet, as it
+did not reach the conversation ledger they replace.
 
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each data node applies the log into its own copy, so a fleet

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -102,6 +103,53 @@ func (e *estate) end(p End) (statelog.Position, int) {
 	e.t.Helper()
 	return e.apply(ConversationSubject(p.Handle, p.ConversationKey, p.Turn), OpEnd,
 		ScopeSet{Subject: true}, p)
+}
+
+// removeSeat applies a removal of handle, and answers its position.
+func (e *estate) removeSeat(handle string) statelog.Position {
+	e.t.Helper()
+	at, _ := e.apply(SeatSubject(handle), OpSeatDelete, ScopeSet{Subject: true},
+		SeatDelete{V: 1, Handle: handle})
+	return at
+}
+
+// at is the position of the last record e applied.
+func (e *estate) at() statelog.Position {
+	return statelog.Position{Stream: Domain{}.Stream().Name, Generation: 1, Seq: e.seq}
+}
+
+// reader is the domain's reader over e's rows, served at the position of the
+// last record applied: the shipped reader through the framework's read
+// authority, as a node caught up to that position serves it.
+func (e *estate) reader() *Reader {
+	e.t.Helper()
+	authority, err := statelogtest.LocalReader(Domain{}, e.db, e.at())
+	if err != nil {
+		e.t.Fatalf("build the read authority: %v", err)
+	}
+	r, err := NewReader(ReaderOptions{DB: e.db.Reader(), Log: authority})
+	if err != nil {
+		e.t.Fatalf("build the reader: %v", err)
+	}
+	return r
+}
+
+// head is a conversation's head as a launch reads it, here at `stale`.
+func (e *estate) head(handle, conversationKey string) Head {
+	e.t.Helper()
+	h, err := e.reader().Head(e.t.Context(), handle, conversationKey,
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		e.t.Fatalf("read %s's head of %s: %v", handle, conversationKey, err)
+	}
+	return h
+}
+
+// launching is a capture of turn that began from h: its read's position and
+// what the read handed out.
+func launching(h Head, c Capture) Capture {
+	c.ReadThrough, c.Absorbs = h.Position.Packed(), h.Absorbs()
+	return c
 }
 
 // session is one turn's row, and false where there is none.

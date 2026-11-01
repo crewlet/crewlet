@@ -55,13 +55,42 @@
 //   - `end` stamps the turn ended with the engine's account of how it ended
 //     ([Ending]) and tombstones it. With no row (nothing was captured) it
 //     writes an ended row naming no object, so the next turn is still told how
-//     this one ended. With a row it ABSORBS every other ended row of the
-//     conversation whose end is at or below the position the turn's first
-//     launch read the conversation's head at, and DEDUPES on a non-empty work
-//     key, merging what the older attempt delivered.
+//     this one ended. With a row it ABSORBS exactly the ended turns its first
+//     launch's read of the conversation handed out ([Head.Absorbs], which the
+//     turn's captures carry), and DEDUPES on a non-empty work key, merging
+//     what the older attempt delivered. The end is authoritative for the
+//     turn's work key where its captures carried none.
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
-//     own instant against it), or every row of a seat the company removed.
+//     own instant against it), or, on a seat's subject, the record of where a
+//     removed seat's rows were removed, past the same retention.
+//   - `seat_delete` removes every row of a seat the company removed,
+//     tombstones its live turns, and records the position it applied at.
+//
+// # What a conversation still holds is what no ended turn was shown
+//
+// A turn's first launch reads the conversation ([Reader.Head]): its HEAD (the
+// newest ended turn that left a session, which the launch continues) and every
+// OTHER ended turn the conversation still holds, which the launch is told of —
+// and, of those that still name a session, the SIBLINGS it is offered. The
+// turns that read handed out in full are carried on the turn's captures, and
+// the turn's end absorbs exactly them. So every ended row a conversation holds
+// is one no ended turn was shown, and the next read shows every one of them,
+// whether it ended before the head or after it: a turn that ran beside a turn
+// parked on a person's answer ends before the parked one does, and is still
+// shown to the turn after both. A read bounded at [MaxEndings] leaves the
+// oldest out, and they stay for the turn after it rather than being absorbed
+// by an end that was never shown them.
+//
+// # A removed seat stays removed
+//
+// The mailbox retirement removes a removed seat's rows with one `seat_delete`,
+// always published, which every node applies in log order. Its position is
+// recorded, and every capture and end carries the removal its decide saw
+// ([Capture.SeenRemoval]): one decided before a removal it did not see lands
+// after it as nothing. That is what refuses the turn a tombstone cannot — one
+// that had no row yet when its seat was removed — while a capture of the
+// seat's next tenure, decided once its node applied the removal, lands.
 //
 // The eviction, the generation and the barrier are the framework's records.
 // THE TOMBSTONE IS A GUARD, NOT AN APPLY GATE, and deliberately: every record
@@ -78,16 +107,27 @@
 // ([secrets.StreamSealer]), its associated data binding it to
 // `executor/<seat handle>/<turn id>/<object key>` ([AAD]), so a capture
 // streams box → seal → put and a restore streams get → open → box, each
-// holding one chunk. An object that is missing, corrupt or sealed under a key
-// the keyring no longer holds is [ErrUnreadable], which a restorer reads as no
-// session. Every bound is this package's ([SessionMaxBytes],
-// [CompletedWorkMaxBytes] and the rest), and the largest record they admit is
-// held under the domain's declaration ([MaxRecordBytes]).
+// holding two chunk buffers rather than the session. What a restore hands out
+// is provisional until it reads to the end ([SessionStore.Open]). An object
+// that is missing, corrupt or sealed under a key the keyring no longer holds
+// is [ErrUnreadable], which a restorer reads as no session. Every bound is
+// this package's ([SessionMaxBytes], [CompletedWorkMaxBytes] and the rest),
+// and the largest record they admit is held under the domain's declaration
+// ([MaxRecordBytes]).
 //
-// A row lives until the company's conversation retention passes its own last
-// instant (`turn_engine.conversation_session.retention_days`, read off the
-// fleet's revision by the engine's retention duty, which never ages out a
-// turn whose run is still live) or until the mailbox retirement removes its
-// seat. A person's removal does not reach these rows in this release, as it
-// did not reach the conversation ledger they replace (ADR-0072).
+// # How long a row lives
+//
+// Until the company's conversation retention passes its own last instant
+// (`turn_engine.conversation_session.retention_days`, read off the fleet's
+// revision by the engine's retention duty, which never ages out a turn whose
+// run is still live), or until the mailbox retirement removes its seat. The
+// retention takes a row whether or not its turn ended — a turn with no end and
+// no live run is one whose end was lost — and takes its tombstone with it,
+// which is a departure from the rule that a delete leaves one: by the retention
+// no record decided before the delete can still land ([removeTurn]). A turn
+// whose end was lost holds its session against the seat's budget until the
+// retention duty ends it as lost, a day after its last capture with no run of
+// it live (internal/engine's executor source). A person's removal does not
+// reach these rows in this release, as it did not reach the conversation
+// ledger they replace (ADR-0072).
 package executordomain

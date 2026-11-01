@@ -12,7 +12,9 @@ import (
 )
 
 // THE SESSION'S BYTES: one sealed object per capture in the fleet's object
-// store, streamed in and out a chunk at a time.
+// store, streamed in and out a chunk at a time — two chunk buffers a side
+// (secrets.StreamChunkBytes), and below them whatever the object store's
+// backend buffers per upload.
 //
 // # Sealed, and bound to where it belongs
 //
@@ -82,13 +84,25 @@ func NewSessionStore(objects *objstore.Store, sealer *secrets.StreamSealer) (*Se
 // [ErrSessionTooLarge] and leaves nothing behind but what the store's own
 // failed put cleans up.
 //
+// PUT CLOSES THE ARCHIVE, and the close is what bounds it: when ctx ends, when
+// the upload fails, and before it returns. A box's stream that stalls blocks a
+// read for as long as it stalls, which no check of ctx between reads can
+// interrupt; closing the stream is what ends a read blocked on it, so the
+// archive's Close must be safe to call while a Read is in flight, as it is for
+// a pipe, a file and a network stream.
+//
 // ONE GOROUTINE, owned here: it seals the archive into the pipe the upload
 // reads, and Put waits for it to end before it returns, whatever the upload
 // answered, so nothing outlives the call.
-func (s *SessionStore) Put(ctx context.Context, handle, turn string, archive io.Reader) (SealedObject, error) {
+func (s *SessionStore) Put(ctx context.Context, handle, turn string, archive io.ReadCloser) (SealedObject, error) {
+	closeArchive := sync.OnceFunc(func() { _ = archive.Close() })
+	defer closeArchive()
 	if err := checkTurn(handle, turn, "", ""); err != nil {
 		return SealedObject{}, err
 	}
+	// UNBLOCK A STALLED SOURCE the moment the caller gives up on it.
+	stop := context.AfterFunc(ctx, closeArchive)
+	defer stop()
 	key := s.objects.Mint()
 	read, write := io.Pipe()
 	var (
@@ -106,8 +120,11 @@ func (s *SessionStore) Put(ctx context.Context, handle, turn string, archive io.
 		objstore.PutMeta{ContentType: "application/octet-stream"})
 	// UNBLOCK THE SEALER whatever the upload answered: a put that failed
 	// stopped reading, and a sealer still writing would wait on the pipe
-	// for ever.
+	// for ever; and one still reading the archive is ended by its close.
 	_ = read.CloseWithError(putErr)
+	if putErr != nil {
+		closeArchive()
+	}
 	wg.Wait()
 	switch {
 	case errors.Is(sealErr, ErrSessionTooLarge):
@@ -144,6 +161,11 @@ func (s *SessionStore) seal(dst io.Writer, archive io.Reader, aad []byte) (strin
 // streams: the object checked byte for byte against its row by the object
 // store, and every chunk authenticated against the session's own associated
 // data before a byte of it is handed out. The caller closes what it answers.
+//
+// WHAT IT HANDS OUT IS PROVISIONAL UNTIL io.EOF. Every byte is from a chunk
+// that authenticated, but a stream cut short is known to be cut only when the
+// read past its last whole chunk fails, so a restorer that unpacks as it reads
+// stages what it unpacks and keeps none of it unless the reader ended at EOF.
 //
 // A row that names no object, an object the store no longer holds, and bytes
 // that are not the ones sealed for this turn or that no key of this keyring

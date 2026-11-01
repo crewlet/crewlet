@@ -303,7 +303,10 @@ log
 so a later turn of the same conversation, in any box on any node, can
 continue it. The trash reaper deletes a session untouched for
 `retention_days`, never one whose turn's run is still live, reading the value
-off the revision the fleet runs at every hourly pass rather than at start.
+off the revision the fleet runs at every hourly pass rather than at start; a
+turn that never ended, a day past its last capture with no run of it live, it
+first ends as `lost`, so a lost end holds the seat's budget for a day rather
+than for the whole retention.
 `max_bytes_per_seat` is the most one seat's sessions may hold: past it a
 capture releases the seat's oldest ended sessions first, keeping how each turn
 ended, and a capture the seat's live turns leave no room for is refused, so

@@ -46,7 +46,8 @@ const ExecutorLogMaxBytes = 512 << 20
 // [FailureMaxBytes], [AskExcerptMaxBytes], eleven KiB between them) encode to
 // about 66 KiB once JSON escapes every `<`, `>` and `&` to six bytes, and the
 // conversation key, the work key, the short fields and the envelope bring the
-// whole to about 74 KiB; a `capture` at its caps is about 20 KiB. The bound
+// whole to about 74 KiB; a `capture` at its caps, its [MaxAbsorbs] absorbed
+// turns included, is about 21 KiB. The bound
 // keeps the headroom chat's and the assistant's keep over their worst case,
 // and the gate reserve on this log is sized by it, so a declaration far above
 // the records would hold back room no append could use: at 128 KiB the

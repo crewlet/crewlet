@@ -98,8 +98,10 @@ import (
 //     and what its sessions hold (a coding CLI's whole transcript, sealed in
 //     the fleet's object store) would otherwise wait out the company's whole
 //     conversation retention with nobody able to continue it. A retirement
-//     that cannot remove them is undone and retried like one whose runs
-//     cannot be ended.
+//     whose node cannot tell which sessions are the seat's is undone and
+//     retried like one whose runs cannot be ended; one whose removal the
+//     executor log cannot take now completes, and leaves the sessions to
+//     that retention, which bounds them where a held mailbox is not bounded.
 //
 // Memory is NOT retired. A seat's diary and onboarding markers are keyed by
 // its agent id, and its episodes, synthesized skills and counterparty
@@ -134,7 +136,14 @@ const MailboxRetirementGrace = 24 * time.Hour
 // every one of them timing out with room to spare. A seat that left executors
 // behind adds a box kill and a record delete per run; a retirement whose runs
 // do not all end inside the budget is undone and resumes on the next tick,
-// where the runs it already ended are gone. It is load-bearing for the
+// where the runs it already ended are gone. Removing the seat's executor
+// sessions adds a read of the fleet's activation pointer and one publish to
+// the executor log, each as quick on a healthy fleet; the publish waits at
+// most a second for this node to apply it (a removal durable in the log
+// applies on every node in log order, whether this one has caught up or not).
+// A removal the log refuses leaves the sessions to the retention rather than
+// the mailbox held; one that runs the budget out is undone with the rest of
+// the retirement, like everything else here. It is load-bearing for the
 // registering side as well: a node that finds a retirement in flight waits
 // twice this long before it takes the record over, so by then the retiring
 // sweep can no longer issue a delete that lands on the subscription the node is
@@ -228,18 +237,22 @@ type SeatRunRetirer func(ctx context.Context, seat uuid.UUID, handle, owner stri
 
 // SeatSessionRetirer removes every executor session a seat whose mailbox is
 // being retired holds, after its runs are ended and while the retirement holds
-// the seat's lease. absentSince is when the seat's absence was first observed,
-// which a retirement of that one absence derives its operation from, so a
-// retried retirement removes the sessions once.
+// the seat's lease. retiring is the instant this attempt marked the retirement
+// at, which the removal derives its operation from: the attempt's own instant,
+// so an operation minted at it is one every node's ledger can vouch for however
+// late the retirement runs, and a retried retirement — marked anew — publishes
+// the removal again, which applies idempotently.
 //
 // THE SEAT'S ID selects the seat, for [SeatRunRetirer]'s reason, and handle is
 // the record's label — empty for a mailbox the broker's listing alone found.
 //
-// An error means the sessions were not removed (the node could not tell which
-// seat's they are, or the removal's outcome is unknown), and the retirement is
-// undone and retried: a seat whose mailbox is gone is one no later sweep
-// retires again, so its sessions would be left for the retention alone.
-type SeatSessionRetirer func(ctx context.Context, seat uuid.UUID, handle string, absentSince time.Time) error
+// An error means this node cannot tell which sessions are the seat's (it
+// cannot read the revision the fleet runs, or its copy of the executor log
+// cannot answer which seats hold sessions), and the retirement is undone and
+// retried. A removal the log cannot take now is NOT an error: the retirer
+// leaves those sessions to the company's conversation retention, which bounds
+// them, rather than hold a mailbox for as long as the log is unhealthy.
+type SeatSessionRetirer func(ctx context.Context, seat uuid.UUID, handle string, retiring time.Time) error
 
 // SeatRoster reads the agent seats of the company the fleet is running: the
 // revision the activation pointer names.
@@ -769,7 +782,7 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	}
 	// AND ITS SESSIONS, once nothing can capture another: its runs are
 	// ended, and the lease keeps any node from starting one.
-	if sessionsErr := m.sessions(work, rec.Seat, rec.Handle, rec.AbsentSince); sessionsErr != nil {
+	if sessionsErr := m.sessions(work, rec.Seat, rec.Handle, marked.RetiringSince); sessionsErr != nil {
 		m.unmark(ctx, marked)
 		return false, fmt.Errorf("remove the executor sessions of retired seat %q: %w",
 			handle, sessionsErr)

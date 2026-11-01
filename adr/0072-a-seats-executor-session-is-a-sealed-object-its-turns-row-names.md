@@ -2,8 +2,8 @@
 
 - **Status:** accepted
 - **Authority:** `internal/executordomain`
-- **Enforced-by:** `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/executordomain.TestTheExecutorDomainIsACertifiedDomain`, `internal/executordomain.TestASessionOpensOnlyWhereItsRowNamesIt`, `internal/executordomain.TestACaptureOfAnObjectPastRecordWithinIsRefused`, `internal/executordomain.TestALateCaptureNeverRollsASessionBack`, `internal/executordomain.TestAnEndedTurnTakesNoFurtherCapture`, `internal/executordomain.TestAnEndAbsorbsWhatItsTurnsFirstLaunchRead`, `internal/executordomain.TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst`, `internal/engine.TestTheExecutorLogFitsBesideTheNineAtTheOperatorsSmallestVolumes`
-- **Measured:** a coding CLI's session of a day's work compresses to one or two mebibytes and is bounded here at 32 MiB; at the reference company's 3 000 turns a day the log that names the sessions grows about 29 MB a day, while the sessions themselves would be gigabytes; crewlet-operator's smallest data volumes leave 704 MiB (11Gi, objects in S3) and 320 MiB (14Gi, beside the nats bucket) above the nine logs before this one, and this log takes 64 MiB of it
+- **Enforced-by:** `internal/objstore/references.TestEveryTableThatNamesAnObjectIsDeclared`, `internal/objstore/references.TestTheGraceOutlastsTheLongestUnrecordedUpload`, `internal/executordomain.TestTheExecutorDomainIsACertifiedDomain`, `internal/executordomain.TestASessionOpensOnlyWhereItsRowNamesIt`, `internal/executordomain.TestACaptureOfAnObjectPastRecordWithinIsRefused`, `internal/executordomain.TestALateCaptureNeverRollsASessionBack`, `internal/executordomain.TestAnEndedTurnTakesNoFurtherCapture`, `internal/executordomain.TestAnEndAbsorbsExactlyWhatItsFirstReadHandedOut`, `internal/executordomain.TestAHeadShowsEveryTurnNoEndedTurnWasShown`, `internal/executordomain.TestARemovedSeatStaysRemoved`, `internal/executordomain.TestTheSeatBudgetReleasesTheOldestEndedSessionsFirst`, `internal/engine.TestTheExecutorSourceNeverEndsOrAgesOutALiveRun`, `internal/engine.TestTheExecutorLogFitsBesideTheNineAtTheOperatorsSmallestVolumes`
+- **Measured:** a coding CLI's session of a day's work compresses to one or two mebibytes and is bounded here at 32 MiB; at the reference company's 3 000 turns a day the log that names the sessions grows about 29 MB a day, while the sessions themselves would be gigabytes; crewlet-operator's smallest data volumes leave 704 MiB (11Gi, objects in S3) and 320 MiB (14Gi, beside the nats bucket) above the nine logs before this one, and this log, scaled to its 64 MiB floor there, still fits both — the minimum classes do not move, but the least a fresh node boots in rises by 64 MiB of logs (10916375210 bytes of broker on nats, up 85.3 MiB with the bucket's quarter beside it, and 64 MiB on S3), which is what the operator's own floors follow. At that floor the log holds about two days at the reference company's rate, under the seven-day `min_age` a healthy trim keeps, so a company above about thirty seats on those volumes sets `stream.executor_log_max_bytes` or a larger volume, and `log_ceiling_short` says so
 - **Tag-status:** unreleased
 
 ## The decision
@@ -25,13 +25,32 @@ object older than `objstore.RecordWithin` is refused, a capture whose
 ended turn is terminal.
 
 What happens to a row is the domain's and nothing else's: a later turn's `end`
-absorbs the conversation's ended rows its first launch read, a seat's byte
-budget releases the oldest ended sessions, the company's conversation retention
-deletes a row past its last instant (never one whose run is live), and the
-mailbox retirement deletes a removed seat's rows. A person's removal does not
-reach these rows yet, as it did not reach the conversation ledger they
-replace; later records amend this one with the erasure, the capture and the
-restore.
+absorbs exactly the ended turns its first launch's read handed out — the head
+it continued, the endings it was told and the siblings it was offered, carried
+on its captures — so what a conversation still holds is what no ended turn was
+shown, and the next read shows all of it; a seat's byte budget releases the
+oldest ended sessions; the company's conversation retention deletes a row past
+its last instant, ended or not but never one whose run is live, and first ends
+as `lost` a turn whose end never came, a day past its last capture with no run
+live, so a lost end holds the seat's budget for a day rather than the whole
+retention; and the mailbox retirement deletes a removed seat's rows with one
+record, always published, whose position every capture and end is held to, so
+one decided before the removal never recreates a row for a seat that is gone.
+
+Two departures from the plan this piece was cut from are deliberate. A
+retention delete takes the turn's tombstone with its row rather than leaving
+one, because a tombstone refuses a record decided before its row went and by
+the retention none can still land: every capture is past
+`objstore.RecordWithin`, and the duty never nominates a turn whose run is live;
+a late `end` writes an ending-only row the retention takes in its turn. And an
+end absorbs only what its turn was handed rather than every ended row at or
+below the position its launch read at, because a read bounded at sixteen
+endings and eight offered sessions would otherwise have its end delete turns
+nobody was ever shown.
+
+A person's removal does not reach these rows yet, as it did not reach the
+conversation ledger they replace; later records amend this one with the
+erasure, the capture and the restore.
 
 ## Why the obvious alternatives are wrong
 

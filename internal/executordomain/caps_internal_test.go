@@ -39,6 +39,10 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 	if !ending.within() {
 		t.Fatal("the premise: an ending fitted to its caps is outside them")
 	}
+	absorbs := make([]string, MaxAbsorbs)
+	for i := range absorbs {
+		absorbs[i] = statelog.NewOpID(monday, "")
+	}
 	records := map[string]struct {
 		subject Subject
 		op      OpKind
@@ -48,7 +52,7 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 		"an end": {ConversationSubject(handle, conversation, turn), OpEnd, ScopeSet{Subject: true},
 			End{V: 1, Handle: handle, Turn: turn, ConversationKey: conversation,
 				WorkKey: worst(WorkKeyMaxBytes), AskExcerpt: worst(AskExcerptMaxBytes),
-				Ending: ending}},
+				Ending: ending, SeenRemoval: 1 << 62}},
 		"a capture": {ConversationSubject(handle, conversation, turn), OpCapture, seatScope(handle),
 			Capture{V: 1, Handle: handle, Turn: turn, ConversationKey: conversation,
 				WorkKey: worst(WorkKeyMaxBytes), CLI: worst(CLIMaxBytes),
@@ -57,10 +61,15 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 				ObjectSize: SealedMaxBytes, ContentKey: worst(secrets.MaxStreamKeyIDBytes),
 				ArchiveFormat: 1 << 30, LaunchSeq: 1 << 62, CaptureSeq: 1 << 62,
 				Home: worst(PathMaxBytes), Workspace: worst(PathMaxBytes),
-				ReadThrough: 1 << 62, SeatBudget: 1 << 62}},
+				ReadThrough: 1 << 62, Absorbs: absorbs, SeenRemoval: 1 << 62,
+				SeatBudget: 1 << 62}},
 		"a delete": {ConversationSubject(handle, conversation, turn), OpDelete,
 			ScopeSet{Subject: true}, Delete{V: 1, Handle: handle, Turn: turn,
 				ConversationKey: conversation, Cutoff: monday}},
+		"a seat's removal": {SeatSubject(handle), OpSeatDelete, ScopeSet{Subject: true},
+			SeatDelete{V: 1, Handle: handle}},
+		"a removal's retention": {SeatSubject(handle), OpDelete, ScopeSet{Subject: true},
+			Delete{V: 1, Handle: handle, Cutoff: monday}},
 	}
 	largest := 0
 	stamp := statelog.Stamp{Writer: strings.Repeat("n", 128), Gen: 1 << 22}

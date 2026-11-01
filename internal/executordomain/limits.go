@@ -2,6 +2,7 @@ package executordomain
 
 import (
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -86,26 +87,48 @@ const (
 	// room for the kind.
 	ActorMaxBytes = 128
 
-	// MaxEndings is how many endings newer than the head [Reader.Head]
-	// returns, the newest first, beside a count of the rest: the account a
-	// next turn is told of turns that ended without leaving a session. A
-	// conversation whose every turn failed to capture keeps them until
-	// retention, and sixteen is more than any next turn needs to read to know
-	// what happened; the count says how many more there were.
+	// MaxEndings is how many endings [Reader.Head] returns beside the head,
+	// the newest of them, with a count of the rest: the account a next turn
+	// is told of the conversation's ended turns no ended turn was shown. A
+	// conversation whose turns keep failing before they capture keeps them
+	// until a turn that was shown them ends, and sixteen is more than any
+	// next turn needs to read to know what happened; the count says how many
+	// more there were, and the ones left out are shown to the turn after it,
+	// because only what a read handed out is absorbed ([MaxAbsorbs]).
 	MaxEndings = 16
 
-	// MaxSiblings is how many sibling sessions [Reader.Head] returns, the
-	// newest first, beside a count of the rest: ended turns of the
-	// conversation, with sessions, that no later turn absorbed because they
-	// ran at once. Each is a session a launch may restore beside the head,
-	// so the bound is on what a launch opens: eight.
+	// MaxSiblings is how many of the endings [Reader.Head] returns may also
+	// be offered as sibling sessions, the newest of them, beside a count of
+	// the rest: ended turns of the conversation, with sessions, that no
+	// ended turn was shown because they ran beside the head. Each is a
+	// session a launch may restore beside the head, so the bound is on what
+	// a launch opens: eight.
 	MaxSiblings = 8
+
+	// MaxAbsorbs is the most turns a capture may name as its first read's
+	// ([Capture.Absorbs]): the head and every ending the read handed out.
+	MaxAbsorbs = 1 + MaxEndings
 
 	// MaxPageSize is the most rows [Reader.Sessions] returns at once, and
 	// DefaultPageSize what a page that names none takes.
 	MaxPageSize     = 100
 	DefaultPageSize = 25
 )
+
+// LostAfter is how long after its last capture a turn that never ended, and of
+// which the fleet holds no live run, is taken for one whose end was lost, and
+// ended `lost` by the retention duty ([Writer.EndLost]).
+//
+// A DAY. A turn's run record is held for as long as its executor runs or is
+// parked on a person's answer, and once the run is collected the turn's review
+// ends it within minutes; so a day past its last capture with no run left is a
+// turn whose end was never recorded — its process lost between the run and
+// the record, or an end that answered unknown and was never asked again. Until
+// it is ended its session holds the seat's byte budget, which releases only
+// ended turns', and two such sessions near the archive's bound fill the default
+// budget: so a day bounds how long a lost end can keep a seat from capturing,
+// where waiting for the retention would be the whole conversation retention.
+const LostAfter = 24 * time.Hour
 
 // SealedMaxBytes is the largest object a session is stored as: an archive of
 // [SessionMaxBytes] sealed under a keyring key of the longest id a sealed

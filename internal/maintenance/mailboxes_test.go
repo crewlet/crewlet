@@ -212,22 +212,22 @@ type sessionRetirements struct {
 }
 
 type sessionRetirement struct {
-	seat        uuid.UUID
-	handle      string
-	absentSince time.Time
+	seat     uuid.UUID
+	handle   string
+	retiring time.Time
 	// runsEnded is how many run retirements had been made when the
 	// sessions were removed.
 	runsEnded int
 }
 
 func (r *sessionRetirements) retire(_ context.Context, seat uuid.UUID, handle string,
-	absentSince time.Time) error {
+	retiring time.Time) error {
 
 	ended := len(r.runs.recorded())
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, sessionRetirement{seat: seat, handle: handle,
-		absentSince: absentSince, runsEnded: ended})
+		retiring: retiring, runsEnded: ended})
 	return r.failure
 }
 
@@ -1164,25 +1164,27 @@ func TestARetirementThatCannotEndTheSeatsRunsIsRetried(t *testing.T) {
 }
 
 // A RETIREMENT REMOVES THE SEAT'S EXECUTOR SESSIONS ONCE ITS RUNS ARE ENDED, by
-// the seat's id and under the absence the retirement acts on, so a retried
-// retirement of that one absence removes them under one operation.
+// the seat's id and under the instant the retirement was marked at: the
+// attempt's own, so the removal's operation is one every ledger can vouch for
+// however long after the absence the retirement runs.
 //
 // Mutation: remove the sessions before the runs are ended and this fails on the
-// call's order; pass the retirement's own clock rather than the absence and it
-// fails on the instant.
+// call's order; pass the absence's instant rather than the mark's and it fails
+// on the instant.
 func TestARetirementRemovesTheSeatsSessionsAfterItsRuns(t *testing.T) {
 	h := newMailboxHarness(t, nil)
 	h.removed()
-	if n := h.mustTick(base.Add(grace + time.Minute)); n != 1 {
+	marked := base.Add(grace + time.Minute)
+	if n := h.mustTick(marked); n != 1 {
 		t.Fatalf("the sweep after the grace period retired %d mailboxes, want 1", n)
 	}
 	calls := h.sessions.recorded()
 	if len(calls) != 1 || calls[0].seat != seatID("swe") || calls[0].handle != "swe" {
 		t.Fatalf("sessions were removed for %+v, want once for the retired seat swe", calls)
 	}
-	if !calls[0].absentSince.Equal(base) {
-		t.Errorf("the removal was asked under the absence of %s, want the one observed at %s",
-			calls[0].absentSince, base)
+	if got := calls[0].retiring; got.Before(marked) || got.Sub(marked) > time.Minute {
+		t.Errorf("the removal was asked under %s, want the instant the retirement was "+
+			"marked at, the tick's %s (the absence began at %s)", got, marked, base)
 	}
 	if calls[0].runsEnded != 1 {
 		t.Errorf("the sessions were removed after %d run retirements, want after the seat's runs "+
@@ -1190,10 +1192,10 @@ func TestARetirementRemovesTheSeatsSessionsAfterItsRuns(t *testing.T) {
 	}
 }
 
-// A SEAT WHOSE SESSIONS CANNOT BE REMOVED KEEPS ITS MAILBOX: the retirement is
-// undone and retried on the next tick, because a seat whose mailbox is gone is
-// one no later sweep retires again, and its sessions would be left for the
-// retention alone.
+// A SEAT WHOSE SESSIONS THE NODE CANNOT TELL APART KEEPS ITS MAILBOX: the
+// retirer's error (it cannot read the fleet's revision, or which seats hold
+// sessions) undoes the retirement, and the next tick retries it, because a
+// seat whose mailbox is gone is one no later sweep retires again.
 //
 // Mutation: ignore the session retirer's error and the mailbox is deleted with
 // the seat's sessions left behind.
@@ -1216,6 +1218,12 @@ func TestARetirementThatCannotRemoveTheSeatsSessionsIsRetried(t *testing.T) {
 	h.sessions.fail(nil)
 	if n := h.mustTick(base.Add(grace + time.Hour)); n != 1 {
 		t.Fatalf("the retry retired %d mailboxes, want 1", n)
+	}
+	// A RETRY IS MARKED ANEW, and removes under its own instant: the first
+	// attempt's operation may be one whose outcome nobody can learn.
+	if calls := h.sessions.recorded(); len(calls) != 2 || !calls[1].retiring.After(calls[0].retiring) {
+		t.Errorf("the removals were asked under %+v, want the retry under a later instant "+
+			"than the attempt it retried", calls)
 	}
 }
 

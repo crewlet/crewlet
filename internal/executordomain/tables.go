@@ -12,9 +12,10 @@ import "slices"
 // rebuild: what a replay from zero into an empty database has to end up with,
 // byte for byte, on every node.
 var ReproducibleTables = []string{
-	// The sessions and the tombstones that keep an ended or removed turn
-	// from being captured again.
-	"executor_sessions", "executor_session_tombs",
+	// The sessions, the tombstones that keep an ended or removed turn from
+	// being captured again, and the removals that keep a removed seat's
+	// turns from being recreated by a record decided before the removal.
+	"executor_sessions", "executor_session_tombs", "executor_seat_removals",
 
 	// The node gate's table and the reanchor's audit row.
 	"executor_evictions", "executor_log_generations",
