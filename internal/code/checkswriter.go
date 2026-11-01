@@ -520,6 +520,13 @@ func busyChecks(detail string) ChecksResult {
 	return ChecksResult{Refusal: CheckRefusalBusy, Detail: detail}
 }
 
+// Close refuses every new write [ErrNotServing], and every one waiting for its
+// repository's turn, leaving the publishes in flight to run — the first half of
+// [ChecksWriter.Stop], which a teardown stopping several writers under one bound
+// takes for all of them before it drains any (internal/engine's
+// stopTogether). Safe to call more than once.
+func (w *ChecksWriter) Close() { w.flights.close() }
+
 // Stop refuses every new write [ErrNotServing], and every one waiting for its
 // repository's turn — a node that decided nothing, so the router asks the
 // runner-up — and waits for the publishes in flight, which are FINISHED rather

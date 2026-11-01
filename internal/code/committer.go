@@ -819,6 +819,20 @@ func (c *Committer) enqueue(q *queued) (string, busyReason) {
 	}
 }
 
+// Close refuses every new proposal [ErrNotServing] and answers every queued
+// one the same, leaving the batches in flight to run — the first half of
+// [Committer.Stop], which a teardown stopping several writers under one bound
+// takes for all of them before it drains any (internal/engine's
+// stopTogether). Safe to call more than once.
+func (c *Committer) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.stopped {
+		c.stopped = true
+		close(c.stopping)
+	}
+}
+
 // Stop refuses every new proposal [ErrNotServing], answers every queued one
 // the same — a node that decided nothing, so the router asks the runner-up —
 // and waits for the batches in flight, which are FINISHED rather than
@@ -826,12 +840,7 @@ func (c *Committer) enqueue(q *queued) (string, busyReason) {
 // batches are cancelled and answered from what their publish returned. Safe
 // to call more than once.
 func (c *Committer) Stop(ctx context.Context) {
-	c.mu.Lock()
-	if !c.stopped {
-		c.stopped = true
-		close(c.stopping)
-	}
-	c.mu.Unlock()
+	c.Close()
 	done := make(chan struct{})
 	go func() {
 		c.wg.Wait()

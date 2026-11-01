@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -225,21 +226,66 @@ func (e *Engine) stopCommitter(ctx context.Context) { e.native.Load().stopCommit
 // reasons: a write of a change's conversation or of a repository's checks
 // waiting its turn is answered "not serving" and taken to the runner-up, and a
 // publish in flight finishes before the estate subject cancels its answer and
-// before the admission is withdrawn. One bound for all three, the writers'
-// stops after the committer's.
+// before the admission is withdrawn. All three are CLOSED FIRST and then
+// drained TOGETHER under the one bound ([stopTogether]).
 func (n *native) stopCommitter(ctx context.Context) {
 	if n == nil || n.committer == nil {
 		return
 	}
-	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), statelog.DefaultResolveBudget)
-	defer cancel()
-	n.committer.Stop(bounded)
+	stopTogether(ctx, statelog.DefaultResolveBudget, n.proposalWriters()...)
+}
+
+// proposalWriters is every writer of this node's code half that answers on the
+// estate's proposal lane — its committer, and its change writer and checks
+// writer where it built them — each a [closingWriter] only where it is set,
+// never a nil pointer behind a non-nil interface.
+func (n *native) proposalWriters() []closingWriter {
+	writers := []closingWriter{n.committer}
 	if n.changeWriter != nil {
-		n.changeWriter.Stop(bounded)
+		writers = append(writers, n.changeWriter)
 	}
 	if n.checksWriter != nil {
-		n.checksWriter.Stop(bounded)
+		writers = append(writers, n.checksWriter)
 	}
+	return writers
+}
+
+// closingWriter is a writer as the teardown stops it: Close refuses every new
+// write, and every one still waiting for its turn, as a node that ran nothing,
+// leaving the publishes in flight to run; Stop closes it and waits for those
+// publishes, cancelling them once its context ends. [code.Committer],
+// [code.ChangeWriter] and [code.ChecksWriter] satisfy it.
+type closingWriter interface {
+	Close()
+	Stop(ctx context.Context)
+}
+
+// stopTogether stops writers under ONE bound, CLOSING EVERY ONE FIRST and only
+// then draining them ALL AT ONCE.
+//
+// CLOSED FIRST, because a writer still open admits and publishes new work on a
+// node that is stopping: stopped one after another, the change writer took
+// conversation writes for as long as the committer's stop waited on a batch
+// a broker election held — the whole bound — and published them, records the
+// estate subject's withdrawal and the admission's then cut short.
+//
+// DRAINED TOGETHER, because the bound is the teardown's, not each writer's:
+// stopped one after another, a writer whose turn came after a committer that
+// spent the bound got a context already ended and cancelled its publishes in
+// flight at once, answering their askers from a cancelled publish, where it
+// would have finished them inside the very bound it was handed. Each now
+// drains with the whole of it, beside the others.
+func stopTogether(ctx context.Context, bound time.Duration, writers ...closingWriter) {
+	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+	defer cancel()
+	for _, w := range writers {
+		w.Close()
+	}
+	var drained sync.WaitGroup
+	for _, w := range writers {
+		drained.Go(func() { w.Stop(bounded) })
+	}
+	drained.Wait()
 }
 
 // clientTerm is one log's census term of readers that are neither seats nor

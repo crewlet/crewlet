@@ -560,6 +560,67 @@ func TestOneChangesWritesAreTakenOneAtATime(t *testing.T) {
 	}
 }
 
+// A CLOSED WRITER TAKES NOTHING NEW AND FINISHES WHAT IT STARTED — the first
+// half of its stop, which a teardown takes for every writer of the node before
+// it drains any: once closed, a write arriving and one waiting its change's
+// turn are each answered ErrNotServing, appending nothing, so the router asks
+// the runner-up; and the publish already in flight is not cut short, landing
+// and answered applied once its record goes through.
+//
+// Mutation: make Close a no-op, and the write arriving after it waits its turn
+// and lands; cancel the publishes in Close, and the one in flight is answered
+// from a cancelled publish.
+func TestAClosedWriterTakesNothingNewAndFinishesWhatItStarted(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := discussed(t, n, "web")
+	gate := newGate(n.pub)
+	w, _ := writerOn(t, n, gate)
+	type answer struct {
+		res code.ConversationResult
+		err error
+	}
+	converse := func(cw code.ConversationWrite) <-chan answer {
+		out := make(chan answer, 1)
+		go func() {
+			res, err := w.Converse(t.Context(), cw)
+			out <- answer{res, err}
+		}()
+		return out
+	}
+	inFlight := converse(saying(repo, change, ada, "", "In flight."))
+	eventually(t, "the first write reaching the publisher", func() bool { return gate.calls.Load() == 1 })
+	waiting := converse(saying(repo, change, ada, "", "Waiting."))
+	eventually(t, "the second write waiting its turn", func() bool { return code.ChangeWriterHolders(w, change) == 2 })
+
+	before := n.end()
+	w.Close()
+	notServing := func(what string, ch <-chan answer) {
+		t.Helper()
+		select {
+		case a := <-ch:
+			if !errors.Is(a.err, code.ErrNotServing) {
+				t.Fatalf("%s on a closed writer answered %+v, %v; want ErrNotServing", what, a.res, a.err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s on a closed writer was not answered in 10 s", what)
+		}
+	}
+	notServing("the write waiting its turn", waiting)
+	notServing("a write arriving", converse(saying(repo, change, ada, "", "Arriving.")))
+	if got := n.end(); got != before {
+		t.Fatalf("the log moved from %d to %d while the closed writer's publish was held", before, got)
+	}
+
+	gate.open()
+	select {
+	case a := <-inFlight:
+		requireConversed(t, a.res, a.err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the publish in flight was not answered in 30 s once its record went through")
+	}
+}
+
 // A BURST PAST THE WRITER'S BOUNDS IS REFUSED BUSY AT ONCE, the committer's
 // rule for a proposal: a write of a change that already has as many writes
 // holding or waiting for its turn as one change takes, a write of any change
