@@ -251,6 +251,66 @@ func TestANodeThatHasNotSeenTheDaySpentStartsNoRemoteBox(t *testing.T) {
 	}
 }
 
+// A REMOTE BOX WHOSE SLOT LAPSED IS COUNTED AGAIN: a git node whose renewals
+// did not reach the store for longer than a slot's TTL — a host asleep, a
+// store away — has its running box's slot lapse, and another node fills the
+// cap meanwhile. Once its node reaches the store again the box takes a slot
+// again, past the cap, so the company counts it: no further box starts while
+// it runs, even after the box that filled the cap ends, and the queued check
+// runs only once the box over the cap has ended too.
+//
+// Mutation: leave a lost renewal as it is (no slot taken again) — the box is
+// never counted again, red; take a slot again only under the cap — the cap
+// is full, so it is never counted, red.
+func TestARemoteBoxWhoseSlotLapsedIsCountedAgain(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	f.company.Code.Checks.Remote.MaxRunning = new(1)
+	var away atomic.Bool
+	a := f.options("git-a", 0, &order{nodes: []string{"git-a"}})
+	a.Leases = awayLeases{Backend: f.leases, away: &away}
+	f.runner(a)
+	first := f.queue(oidOf("e"), remote("build", 3*time.Hour))
+	boxA := f.e2b.box(t)
+	f.await(first, "named its box", func(r code.CheckRow) bool { return r.Box == boxA.ID() })
+
+	// GIT-A'S SLOT LAPSES, and its node can neither list nor claim: its
+	// renewals still reach the store, which answers that the tenure is gone.
+	away.Store(true)
+	f.leases.Advance(checkrun.RemoteSlotTTL + time.Second)
+	if live := f.slots(); live != 0 {
+		t.Fatalf("%d remote slots live once git-a's lapsed, want none", live)
+	}
+	// GIT-B FILLS THE CAP meanwhile.
+	f.runner(f.options("git-b", 0, &order{nodes: []string{"git-b"}}))
+	second := f.queue(oidOf("f"), remote("build", 3*time.Hour))
+	boxB := f.e2b.box(t)
+	f.await(second, "named its box", func(r code.CheckRow) bool { return r.Box == boxB.ID() })
+
+	away.Store(false)
+	eventually(t, "git-a's box counted again", func() bool { return f.slots() == 2 })
+	third := f.queue(oidOf("8"), remote("build", time.Hour))
+	time.Sleep(4 * fast.Backstop)
+	if row, _ := f.row(third); row.State != code.CheckStateQueued || f.e2b.count() != 2 {
+		t.Fatalf("with two boxes running under a cap of one the third check = %+v with %d remote boxes, want it "+
+			"queued", row, f.e2b.count())
+	}
+	f.e2b.end(boxB, 0, "")
+	f.ended(second)
+	time.Sleep(4 * fast.Backstop)
+	if row, _ := f.row(third); row.State != code.CheckStateQueued || f.e2b.count() != 2 {
+		t.Fatalf("with git-a's box still running under a cap of one the third check = %+v with %d remote boxes, "+
+			"want it queued", row, f.e2b.count())
+	}
+	f.e2b.end(boxA, 0, "")
+	f.ended(first)
+	next := f.e2b.box(t)
+	f.await(third, "ran once the box over the cap ended", func(r code.CheckRow) bool { return r.Box == next.ID() })
+	f.e2b.end(next, 0, "")
+	f.ended(third)
+	eventually(t, "every slot given back", func() bool { return f.slots() == 0 })
+}
+
 // countedLeases is the company's leases, counting the listings and the
 // claims a runner made of them.
 type countedLeases struct {

@@ -2317,8 +2317,22 @@ walk, with no restart.
 **A store that cannot say starts nothing.** Where the coordination store
 cannot list the slots, take one or count a minute, no `e2b` box starts — a cap
 nobody can ask about cannot hold — and the check waits queued for the next
-walk, which asks again. A box already running keeps running through it: its
-renewals and its minutes are asked again at its next renewal.
+walk, which asks again. A box already running keeps running through it: a
+renewal or a minute the store left unanswered is asked again at its next
+renewal.
+
+**A box whose slot lapsed is counted again.** A node whose renewals do not
+reach the store for 60 seconds — an outage that long, its host asleep, a
+stall — has its running boxes' slots lapse, and from that moment the company's
+cap stops counting those boxes, so other git nodes may start boxes in their
+room. A lapsed lease cannot be renewed, so each such box takes a slot again,
+at every renewal until it holds one: a slot the store lists as free, or else
+one past `check-remote:<n-1>`, which no new box is offered and every count
+includes. The cap then holds every new box back at once, and the overrun lasts
+only until the boxes started in the gap have ended, never for the lapsed
+boxes' whole lives. The node logs the lapse once, as
+`code_check_remote_slot_lost`, and the slot taken again as
+`code_check_remote_slot_retaken`, whose `over_cap` says it is one past the cap.
 
 `crewlet.code.checks.remote.capped` counts the walks a cap held a check back
 on, by `reason` — `max_running`, `box_hours_per_day`, or `unknown` for a store
