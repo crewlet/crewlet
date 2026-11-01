@@ -1003,20 +1003,20 @@ creates its bot and seals its token.
 
 ### First run, end to end
 
-The example org in [`examples/nimbus-claude-cli.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-cli.company.yaml)
+The example org in [`examples/nimbus-claude-code.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-code.company.yaml)
 **is** the shortest way to try this. It is the same seven-seat company as
 [`examples/nimbus.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus.company.yaml)
 beside it — the full-stack reference, on GitLab and a metered key — with
 everything but chat taken out.
 
-Its only integration is Mattermost and its only model is a coding CLI you
+Its only integration is Mattermost and its only model is a harness you
 already subscribe to, so there is no code host to stand up, no metered API
 key, and nothing that has to reach the engine from outside. It still has a
 work tracker and a knowledge base: both are the engine's own, so its seats
 file work and publish pages from the first turn with nothing to sign up
-for. Every seat still runs code: its executor *is* the coding CLI's own
+for. Every seat still runs code: its executor *is* the harness's own
 agentic run, in a `direct` [sandbox](../concepts/code-sandbox.md) box on the
-engine host that reuses the same CLI login and dials this node's own listener
+engine host that reuses the same harness login and dials this node's own listener
 for the seat's tools — so that costs nothing extra to set up either.
 
 Add a code host afterwards, once you have seen the loop work; it has its own
@@ -1035,12 +1035,12 @@ Two things the config expects of you, both once:
   `agent-`, and a prefix would produce `@agent-agent-ceo`.
 - **A model.** `providers.llm.default` is a
   [Claude Code entry](../concepts/llm-backends.md) driving the
-  `claude` CLI on your own Claude subscription, so the binary has to be on
+  `claude` harness on your own Claude subscription, so the binary has to be on
   the machine running `crewlet run` and Crewlet needs its own copy of the
   login. Set its `auth.mode: api-key` if you would rather spend a metered
   key — `ANTHROPIC_API_KEY`, read from the secret store or the environment —
-  or point it at OpenCode, the other CLI that runs a seat's executor
-  ([Picking a CLI](../concepts/llm-backends.md#picking-a-cli)).
+  or point it at OpenCode, the other harness that runs a seat's executor
+  ([Picking a harness](../concepts/llm-backends.md#picking-a-harness)).
 
 Then, from the repo root:
 
@@ -1059,7 +1059,7 @@ scripts/mattermost-dev-bootstrap.sh
 #    browser probe there. Its seat checks pass once the engine has created
 #    the agents' bots, after step 5 and the Agents tab.
 set -a; . ./.env; set +a
-crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml
+crewlet mattermost doctor examples/nimbus-claude-code.company.yaml
 
 # 4. Authenticate the model — once, on this machine. `-from-host` copies
 #    the login `claude` already has here into Crewlet's own directory; plain
@@ -1070,15 +1070,15 @@ crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml
 export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 crewlet llm login default -from-host \
-    -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml
+    -company examples/nimbus-claude-code.company.yaml -config examples/nimbus-claude-code.config.yaml
 crewlet llm doctor default \
-    -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml
+    -company examples/nimbus-claude-code.company.yaml -config examples/nimbus-claude-code.config.yaml
 
 # 5. Boot — one websocket per agent seat. Every seat's executor runs in
 #    a direct box on this host and dials this node's own api.port on
 #    loopback for its tools, so there is no bridge URL to set.
-crewlet run -config examples/nimbus-claude-cli.config.yaml \
-            -company examples/nimbus-claude-cli.company.yaml
+crewlet run -config examples/nimbus-claude-code.config.yaml \
+            -company examples/nimbus-claude-code.company.yaml
 ```
 
 Step 3's `--dry-run --print` prints one line per seat — handle, bot
@@ -1104,8 +1104,8 @@ values](../reference/cli.md#where-a-command-reads-the-companys-values)).
 Step 4 is the one a company's first model always needs, and
 `crewlet llm doctor` is the half that matters: a `providers.llm` entry can be
 configured perfectly and still not work — a missing binary, a profile whose
-flags drifted from the installed CLI, an expired login, or the one nothing
-else catches, a CLI that never reaches the seat's tools — its MCP server
+flags drifted from the installed harness, an expired login, or the one nothing
+else catches, a harness that never reaches the seat's tools — its MCP server
 configuration ignored, its tools left unallowed, a model that answers prose
 instead of calling one. Only a real run with a real tool proves the last one,
 so `doctor` runs one, and running it before the first turn is the difference
@@ -1115,11 +1115,11 @@ without its submission whenever the model never makes the call.
 `-capture-token` — which mints a headless `CLAUDE_CODE_OAUTH_TOKEN` and
 avoids the shared refresh token `-from-host` leaves you with — writes into
 the [encrypted secret store](../concepts/secret-store.md), sealed under the
-Tier A keyring `examples/nimbus-claude-cli.config.yaml` already declares
+Tier A keyring `examples/nimbus-claude-code.config.yaml` already declares
 (every node needs one: `crewlet secrets keygen -key-id 2026-01` prints the
 key to export). Worth doing before you run this anywhere but a laptop. See [LLM
 Backends](../concepts/llm-backends.md#authentication) for the
-other login shapes (a token on stdin, a username/password where the CLI has
+other login shapes (a token on stdin, a username/password where the harness has
 one, a bundle moved onto another host).
 
 To watch it work, sign in as `founder` / `crewlet-dev-password` at the URL
@@ -1134,19 +1134,19 @@ should follow, in order:
 2. `@agent-pm` replies **in a thread** on your message. Reply in that thread
    without mentioning anyone — it answers again, because it is now following
    the thread.
-3. The engine's dashboard shows the turn. `examples/nimbus-claude-cli.config.yaml`
+3. The engine's dashboard shows the turn. `examples/nimbus-claude-code.config.yaml`
    serves it on <http://localhost:8000> — the **Event log** carries the
    inbound notification with its source, and **Turns** carries the
    turn it woke: each phase, the rounds it took, and the tools each round
    called.
 
-Expect a subscription CLI to be **slower to first token** than an API call:
+Expect a subscription harness to be **slower to first token** than an API call:
 each phase launches a process, so the indicator sits there for a few seconds
 before anything happens. That is what it is for.
 
 If a bot stays silent, check in this order:
 
-0. `crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml` — this is what it
+0. `crewlet mattermost doctor examples/nimbus-claude-code.company.yaml` — this is what it
    is for; checks 1 and 2 below are what it automates. It never starts the
    tool server, so check 3 is yours.
 1. The Mattermost integration's Agents tab: is the agent on, is its bot
@@ -1159,11 +1159,11 @@ If a bot stays silent, check in this order:
    is the one failure mode where the agent reasons about a reply and then has
    no tool to send it with, so the logs show a complete turn and the channel
    stays quiet.
-4. `crewlet llm doctor default -company examples/nimbus-claude-cli.company.yaml -config examples/nimbus-claude-cli.config.yaml`,
+4. `crewlet llm doctor default -company examples/nimbus-claude-code.company.yaml -config examples/nimbus-claude-code.config.yaml`,
    with `CREWLET_API_TOKEN` set to `$CREWLET_API_TOKEN_FOUNDER` — the engine is
    running, so the doctor reads the company's values through it — on a
-   coding-CLI entry this is the other half of the same symptom: a turn
-   that never reached a model, or one whose CLI never called the seat's
+   harness entry this is the other half of the same symptom: a turn
+   that never reached a model, or one whose harness never called the seat's
    tools, ends with nothing posted.
 
 Two settings the compose service sets are load-bearing rather than

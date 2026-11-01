@@ -97,7 +97,30 @@ const (
 	// chatDirectOthers is everybody a direct message reaches beside the
 	// person, whom chatlet.MaxDMParticipants counts as well.
 	chatDirectOthers = 7
+	// chatChannelWakes is how many agents one `@channel` asks.
+	chatChannelWakes = 32 // chatlet.MaxCollectiveRecipients
 )
+
+// chatWakes is who a person's chat message wakes, said in the two tools a
+// model reaches for when the question is whether an agent will see a message:
+// the one that posts it and the one that reads the room it lands in.
+//
+// STATED, because a model left to guess says what it would expect of a person
+// in a room: that the agents there "read the room on their next turn". They do
+// not. An agent hears a message only when the routing wakes it, and one that
+// is not woken never reads it later, so a person told otherwise waits on an
+// answer nobody owes them. The rules are internal/chatlet's routing
+// (`Resolve`), which a person's message reaches through the same write the
+// chat screen makes.
+var chatWakes = fmt.Sprintf("Who a message wakes: a mention (@handle) wakes the agent "+
+	"it names, and a direct message wakes everybody in it. A person's @channel asks "+
+	"every agent in the room to answer, up to %d. A reply in a thread wakes whoever "+
+	"started it and, as news, the others in it. Members who follow every message (a "+
+	"unit's own agents in its room) are woken as news. A person's message that names "+
+	"nobody and wakes no other agent wakes one agent to answer it: the unit's lead in a "+
+	"unit's room, otherwise the room's most senior agent member. A message that names "+
+	"a person wakes no agent: it is for that person. An agent that is not woken never "+
+	"reads the message later.", chatChannelWakes)
 
 // chatApp is the app every chat read needs: chat's questions answer a holder
 // of Chatlet, and a card drawn from one is withheld from a person who no longer
@@ -185,7 +208,8 @@ func chatReads() []Tool {
 		{
 			Name: "get_chat_room", Phrase: "read this chat room",
 			Description: "Read one chat room: its topic and purpose, what kind of room it is " +
-				"and who is in it. Its messages are read_chat_messages.",
+				"and who is in it, each member who follows every message marked so. Its " +
+				"messages are read_chat_messages. " + chatWakes,
 			schema: object([]string{"channel"}, map[string]*schema{"channel": room}),
 			Routes: []string{chatRoomRoute}, Apps: chatApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
@@ -204,7 +228,12 @@ func chatReads() []Tool {
 					fact("Purpose", "purpose", tText), fact("Unit", "unit", tText),
 					fact("Created", "created_at", tDatetime),
 					fact("Archived", "archived_at", tDatetime)},
+				// WHO FOLLOWS EVERY MESSAGE is the half of the routing a
+				// room's own rows decide, so the card says it per member:
+				// without it a model asked whether an agent will see a
+				// message has only the membership, which wakes nobody.
 				Items: &cards.Items{Path: "members", ID: "handle", Label: "handle",
+					Fact: "follow_all", Flag: "follows every message",
 					Noun: wire.Noun{One: "member", Many: "members"}},
 				Open: &cards.Open{Screen: "chatlet", Params: map[string]string{"id": "id"}}}}),
 			Label: func(a map[string]any) string {
@@ -464,7 +493,7 @@ func chatWrites() []Tool {
 		chatWrite("post_chat_message", authz.ActionChatPost, false, "post in chat rooms",
 			"Propose a message in a chat room. The person sees the room and who can read it "+
 				"before anything is posted. To answer a message, reply in its thread with "+
-				"reply_in_chat_thread.",
+				"reply_in_chat_thread. "+chatWakes,
 			object([]string{"channel", "body"}, map[string]*schema{
 				"channel": room,
 				"body": text("The message, in Markdown. Name somebody with @handle to "+

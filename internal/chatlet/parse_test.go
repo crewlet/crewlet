@@ -410,6 +410,64 @@ func TestAWakeCarriesBothTheRoomsOwnKindAndTheCanonicalOne(t *testing.T) {
 	}
 }
 
+// A RECORD WRITTEN BEFORE THE ANSWERER STILL TRANSLATES AND STILL WAKES.
+//
+// The chat log holds records an earlier build wrote, whose snapshot named the
+// fallback seat under `lead` and routed it as `lead_fallback`. The feed naks
+// a record it cannot translate, and a nak comes back for ever and holds every
+// wake behind it, so such a record must decode, be relayed and be parsed on
+// this build. It may route differently, and does: `lead` is no field here and
+// is passed over, and `lead_fallback` is a reason this build does not know,
+// which is still a wake, carried unaddressed. Nothing reads the old names, so
+// nothing has to keep them.
+//
+// Mutation: refuse an unknown reason in the parser, or decode the snapshot
+// strictly, and this fails.
+func TestARecordWrittenBeforeTheAnswererStillTranslates(t *testing.T) {
+	t.Parallel()
+	rec := aPost()
+	rec.Notify.ChannelKind = chatlet.KindUnit
+	payload, err := chatlet.Encode(rec)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatalf("read the encoded record: %v", err)
+	}
+	snapshot, _ := raw["notify"].(map[string]any)
+	if snapshot == nil {
+		t.Fatalf("the encoded record carries no snapshot: %s", payload)
+	}
+	// THE OLD SHAPE, written as an earlier build wrote it.
+	snapshot["lead"] = "eng-lead"
+	snapshot["recipients"] = []any{map[string]any{"h": "eng-lead", "r": "lead_fallback"}}
+	old, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("encode the old shape: %v", err)
+	}
+
+	delivery, wake := translate(t, changefeed.Record{Payload: old, Key: rec.Subject.Wire()})
+	if !wake {
+		t.Fatal("the feed declined to relay a record an earlier build wrote")
+	}
+	routed, err := chatlet.NewParser().Parse(t.Context(),
+		types.RawWebhook{Body: delivery.Body}, company(t, []string{"jane", "eng-lead"}))
+	if err != nil {
+		t.Fatalf("an earlier build's record does not parse, which the feed would "+
+			"nak for ever: %v", err)
+	}
+	if len(routed) != 1 || routed[0].To.Handle != "eng-lead" {
+		t.Fatalf("an earlier build's record woke %+v, want the seat it routed", routed)
+	}
+	meta := routed[0].Inbound.Metadata
+	if meta[notify.FollowReasonField] != "lead_fallback" || meta[chatlet.MetaAddressed] != "false" {
+		t.Errorf("the old reason arrives as %q (addressed %q), want it carried "+
+			"as a reason this build does not know, unaddressed",
+			meta[notify.FollowReasonField], meta[chatlet.MetaAddressed])
+	}
+}
+
 // THE INDICATOR AND THE DELIVERY GATE CANNOT DISAGREE.
 //
 // Three subsystems ask "is somebody waiting on this seat?" and none of them
@@ -422,9 +480,10 @@ func TestAWakeCarriesBothTheRoomsOwnKindAndTheCanonicalOne(t *testing.T) {
 // Here they are one evaluation read twice: the parser evaluates
 // [chatlet.AddressRule] once and stamps the verdict, the prompt reads the stamp,
 // and the indicator evaluates the same rule over the same metadata. The case
-// that proves it is a reason notify has never heard of — `reply_to_own_root`
-// and `lead_fallback` are not follows on any vendor — which a rule that fell
-// back to the vendor vocabulary would read as "does not address".
+// that proves it is a reason notify has never heard of (`reply_to_own_root`,
+// `collective_request` and `answerer` are not follows on any vendor), which a
+// rule that fell back to the vendor vocabulary would read as "does not
+// address".
 func TestTheStampedVerdictIsTheRuleTheIndicatorEvaluates(t *testing.T) {
 	t.Parallel()
 	prompt := chatlet.NewPrompt()
@@ -437,7 +496,7 @@ func TestTheStampedVerdictIsTheRuleTheIndicatorEvaluates(t *testing.T) {
 			rec := aPost()
 			rec.Notify.ChannelKind = chatlet.KindPublic
 			rec.Notify.ThreadRoot = "msg-0"
-			rec.Notify.Lead = "eng"
+			rec.Notify.Answerer = "eng"
 			rec.Notify.AuthorKind = chatlet.AuthorHuman
 			rec.Notify.Recipients = []chatlet.Recipient{{Handle: "eng", Reason: reason}}
 			routed := wakes(t, rec, company(t, []string{"jane", "eng"}))

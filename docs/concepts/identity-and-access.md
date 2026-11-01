@@ -458,7 +458,7 @@ it confers rather than a side effect of it. It is one permission by decision,
 and the configuration it writes runs code — a stdio `mcp_servers` entry is a
 `command` the engine starts as its own user on every node that runs seats; a
 seat's per-phase model keys (`llm_*`) name `providers.llm` entries, each a
-coding CLI the engine runs; every agent seat's executor is its coding CLI's own
+harness the engine runs; every agent seat's executor is its harness's own
 fully permissioned run, which a `providers.llm` entry's `run_in: direct` (or
 `providers.sandbox.default_run_in: direct`) runs, with every setup step, on the
 engine host as that user; a seat's `mcp_env` decides which credentials its children are
@@ -486,7 +486,7 @@ and a lead may change every field of a seat in their team but a credential and
 a keyed field — its model chain among them, which also places its executor run
 (the cell is the `run_in` of the entry a launch picks). What they choose from
 is what the settings declare, which stay admin's: every `providers.llm` entry
-is a coding CLI that runs on the engine host, or places its executor runs in a
+is a harness that runs on the engine host, or places its executor runs in a
 cell there by its `run_in`, so a lead who points their own seats at an entry
 runs code there. Declare those
 only where every lead may use them.
@@ -562,7 +562,7 @@ token_refused` — because a token is what an attacker holding a pipeline's
 environment already has, and deciding who may do anything needs a person at a
 keyboard. It sits beside the authority table's own [presence
 rows](#some-gestures-ask-how-recently-you-proved-who-you-are), at the record,
-so a CLI, a duty or a test is held to it exactly as a route is.
+so a harness, a duty or a test is held to it exactly as a route is.
 
 Whether **anybody exists yet** is one predicate — a person or a machine that is
 enrolled and not removed; a suspended person is somebody — and it is asked in
@@ -573,7 +573,7 @@ two places, both about the first person: `GET
 is the restore runbook's last step, and it ends every person's authority at
 once — every session and every machine token — and cannot be taken back. A
 Tier A token holds `admin`, is its own credential rather than a machine token
-and is fresh by construction, so the runbook's CLI step still runs on the day
+and is fresh by construction, so the runbook's harness step still runs on the day
 nobody can sign in; a machine token is refused it twice, by the row and by the
 record.
 
@@ -819,7 +819,7 @@ Both are directory writes, so both take `admin` and a [recent
 proof](#some-gestures-ask-how-recently-you-proved-who-you-are) from a person
 present, and both confer only what their writer holds. Both **state** what
 they confer — `grants` is required, `[]` meaning the overview alone, and the
-dashboard's dialogs and the CLI each state a default out loud before they send
+dashboard's dialogs and the harness each state a default out loud before they send
 ([Nobody confers what they do not hold](#nobody-confers-what-they-do-not-hold)).
 Both name a **human**
 seat of the company the node runs: a handle the company does not hold, or an
@@ -1003,7 +1003,7 @@ enrolled then, as for anybody. The screen knows which it is (`first` on `GET
 Until it is spent nobody can sign in as them.
 
 - **It is shown once**, to whoever created the person — in the dialog, under
-  **Password link**, and printed once by the CLI — and the engine never sends
+  **Password link**, and printed once by the harness — and the engine never sends
   it. So a create needs `api.external_url`, and a node with none refuses a
   person's create naming the setting. Whoever is shown it could spend it
   themselves, which is why a create, like an invitation, confers only
@@ -1803,7 +1803,7 @@ for a person's token is told that only that person may mint it, not to ask
 for access. A request through a machine token is `403 token_refused`.
 
 A Tier A token minting one names the service account (`?person=`, or
-`-person` on the CLI): it is the deployment's credential and owns no tokens
+`-person` on the harness): it is the deployment's credential and owns no tokens
 itself, and a person's are theirs to mint.
 
 **What ends one.** Revoking it (`crewlet iam revoke-credential <id> -person
@@ -2516,7 +2516,7 @@ declares it again, since a lead may not. It takes authority away and gives
 none. A seat edited within the lead's subtree may otherwise change anything —
 its model chain, its sandbox settings, its schedules — among what the
 company's settings offer, which stay admin's: which `providers.llm` entries —
-each a coding CLI on the engine host — exist, and which cell each entry runs
+each a harness on the engine host — exist, and which cell each entry runs
 its executors in (`run_in`, or the default), is the administrator's decision,
 and a lead who points a seat at an entry takes its cell with it.
 

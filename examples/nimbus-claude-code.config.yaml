@@ -1,8 +1,8 @@
 # yaml-language-server: $schema=../schema/bootstrap.schema.json
-# Tier A bootstrap config for the SUBSCRIPTION-CLI Nimbus example.
+# Tier A bootstrap config for the Nimbus example on a harness SUBSCRIPTION.
 #
-# Pairs with examples/nimbus-claude-cli.company.yaml (Tier B) — a CHAT-ONLY
-# company on a coding-CLI subscription, so this node needs no API key, no
+# Pairs with examples/nimbus-claude-code.company.yaml (Tier B) — a CHAT-ONLY
+# company on a harness subscription, so this node needs no API key, no
 # broker, no database and no public URL.  `nimbus.config.yaml` beside it is
 # the Tier A file for the full-stack example, which does.
 #
@@ -17,9 +17,9 @@
 #
 #     # 1. Chat: the server, an admin, the team, the channels, the bots.
 #     docker compose --profile mattermost up -d --wait
-#     COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
+#     COMPANY=examples/nimbus-claude-code.company.yaml scripts/mattermost-dev-bootstrap.sh
 #
-#     # 2. The model: authenticate the `claude` CLI inside Crewlet's own
+#     # 2. The model: authenticate the `claude` harness inside Crewlet's own
 #     #    directory (-capture-token in place of -from-host mints a headless
 #     #    token instead), then prove it end to end BEFORE the first turn.
 #     #    With this node's engine stopped both reach the fleet's secret
@@ -27,17 +27,17 @@
 #     #    ./nimbus-data/stream (which nimbus.config.yaml shares); once the
 #     #    engine runs, they go through it, with
 #     #    CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER".
-#     crewlet llm login  default -from-host -company examples/nimbus-claude-cli.company.yaml \
-#                                           -config  examples/nimbus-claude-cli.config.yaml
-#     crewlet llm doctor default            -company examples/nimbus-claude-cli.company.yaml \
-#                                           -config  examples/nimbus-claude-cli.config.yaml
+#     crewlet llm login  default -from-host -company examples/nimbus-claude-code.company.yaml \
+#                                           -config  examples/nimbus-claude-code.config.yaml
+#     crewlet llm doctor default            -company examples/nimbus-claude-code.company.yaml \
+#                                           -config  examples/nimbus-claude-code.config.yaml
 #
 #     # 3. Go.  Every seat's executor run is a `direct` box on this
 #     #    machine and dials api.port below on loopback for its tools.
 #     set -a; . ./.env; set +a          # MATTERMOST_URL + the bot tokens
 #                                       #   the bootstrap wrote
-#     crewlet run -config examples/nimbus-claude-cli.config.yaml \
-#                 -company examples/nimbus-claude-cli.company.yaml
+#     crewlet run -config examples/nimbus-claude-code.config.yaml \
+#                 -company examples/nimbus-claude-code.company.yaml
 #
 # THERE ARE NO EXTERNAL SERVICES HERE apart from the chat server the
 # compose file starts.  The stream is a NATS JetStream server embedded in
@@ -178,10 +178,10 @@ node:
                                        #   single-node company.  NOT the same
                                        #   knob as the providers.llm entry's own
                                        #   max_concurrent in the company YAML
-                                       #   (4), which caps that entry's CLI
+                                       #   (4), which caps that entry's harness
                                        #   processes on this host: a reviewer,
                                        #   worker or side pass past it waits
-                                       #   in this process for a CLI slot,
+                                       #   in this process for a harness slot,
                                        #   while executor runs are not counted.
 
 api:
@@ -191,7 +191,7 @@ api:
   # dashboard at http://localhost:8000/ once it is up.
   #
   # IT ALSO SERVES THE MCP TOOL BRIDGE every agent seat needs: each seat's
-  # executor runs as its coding CLI's own agentic loop in a box, and the
+  # executor runs as its harness's own agentic loop in a box, and the
   # seat's tools reach that box back over /mcp/{token} here.  A `direct`
   # box on this machine dials this port on loopback, which the node
   # derives from the socket it binds — nothing to set, and `port: 0`

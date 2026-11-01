@@ -278,20 +278,21 @@ func TestThePromptSaysWhyThisSeatWasWoken(t *testing.T) {
 		// the shared verdict's.
 		own bool
 	}{
-		chatlet.ReasonDM:              {chatlet.KindDM, "**Addressed to you:** this is a direct message", false},
-		chatlet.ReasonMention:         {chatlet.KindUnit, "**Addressed to you:** the message names you", false},
-		chatlet.ReasonReplyToOwnRoot:  {chatlet.KindUnit, "thread YOU started", true},
-		chatlet.ReasonLeadFallback:    {chatlet.KindUnit, "unit's lead", true},
-		chatlet.ReasonReply:           {chatlet.KindUnit, "spoken in this thread", true},
-		chatlet.ReasonCollective:      {chatlet.KindUnit, "whole room", true},
-		chatlet.ReasonFollow:          {chatlet.KindUnit, "follow this thread", true},
-		chatlet.ReasonFollowAll:       {chatlet.KindUnit, "everything said in this room", true},
-		chatlet.Reason("newer-build"): {chatlet.KindUnit, "newer build routed this to you", true},
+		chatlet.ReasonDM:                {chatlet.KindDM, "**Addressed to you:** this is a direct message", false},
+		chatlet.ReasonMention:           {chatlet.KindUnit, "**Addressed to you:** the message names you", false},
+		chatlet.ReasonReplyToOwnRoot:    {chatlet.KindUnit, "thread YOU started", true},
+		chatlet.ReasonCollectiveRequest: {chatlet.KindPublic, "request to every seat", true},
+		chatlet.ReasonAnswerer:          {chatlet.KindUnit, "you lead the unit this room belongs to", true},
+		chatlet.ReasonReply:             {chatlet.KindUnit, "spoken in this thread", true},
+		chatlet.ReasonCollective:        {chatlet.KindUnit, "whole room", true},
+		chatlet.ReasonFollow:            {chatlet.KindUnit, "follow this thread", true},
+		chatlet.ReasonFollowAll:         {chatlet.KindUnit, "everything said in this room", true},
+		chatlet.Reason("newer-build"):   {chatlet.KindUnit, "newer build routed this to you", true},
 	} {
 		t.Run(string(reason), func(t *testing.T) {
 			t.Parallel()
 			in := trigger(t, "eng", func(n *chatlet.Notify) {
-				n.ChannelKind, n.ThreadRoot, n.Lead = tc.kind, "msg-0", "eng"
+				n.ChannelKind, n.ThreadRoot, n.Answerer = tc.kind, "msg-0", "eng"
 				n.AuthorKind = chatlet.AuthorHuman
 				n.Recipients = []chatlet.Recipient{{Handle: "eng", Reason: reason}}
 			})
@@ -409,6 +410,70 @@ func TestAChatletMessageIsFencedUnderWhoWroteIt(t *testing.T) {
 			if opening := strings.SplitN(fences[0], "\n", 2)[0]; !strings.HasSuffix(opening,
 				" source=chat_thread "+c.label) {
 				t.Errorf("the message is fenced as %q, want %q", opening, c.label)
+			}
+		})
+	}
+}
+
+// A PERSON'S `@channel` ASKS EVERY SEAT IT REACHES; AN AGENT'S TELLS THEM.
+//
+// The whole path a broadcast takes: the routing the writer runs, the record it
+// carries, the parser's verdict per recipient and the prompt each seat reads.
+// A person who addresses the room is asking it something, so every seat is
+// told it is addressed, how many seats share the question and to answer for
+// its own role; an agent that does the same is reporting, and every seat is
+// told it is news. Mutation: route a person's `@channel` under the agent's
+// reason and the first half fails on the verdict; drop the count and it
+// fails on the prompt.
+func TestAPersonsChannelAddressIsARequestAndAnAgentsIsNews(t *testing.T) {
+	t.Parallel()
+	prompt := chatlet.NewPrompt()
+	seats := []string{"eng", "ops", "qa"}
+	for _, tc := range []struct {
+		author    chatlet.AuthorKind
+		addressed bool
+		says      []string
+		never     string
+	}{
+		{chatlet.AuthorHuman, true, []string{"request to every seat in it",
+			"you are one of 3 seats it asked to answer",
+			"Answer for your own role only", "Answer where you were asked"},
+			"news, not a request"},
+		{chatlet.AuthorAgent, false, []string{"to tell it something, not to ask you anything",
+			"news, not a request"}, "Answer where you were asked"},
+	} {
+		t.Run(string(tc.author), func(t *testing.T) {
+			t.Parallel()
+			routing := chatlet.Routing{ChannelKind: chatlet.KindPublic,
+				AuthorKind: tc.author, Members: members(seats...), Collective: true}
+			candidates, _ := chatlet.Resolve(routing)
+			rec := aPost()
+			rec.ActorKind = tc.author
+			rec.Notify.AuthorKind = tc.author
+			rec.Notify.Recipients = chatlet.RecipientsOf(
+				chatlet.Route(candidates, agents().Seat, rec.Notify.Author))
+			routed := wakes(t, rec, company(t, append([]string{"jane"}, seats...)))
+			if len(routed) != len(seats) {
+				t.Fatalf("a `@channel` in a room of %d agents woke %d", len(seats), len(routed))
+			}
+			for _, r := range routed {
+				in := r.Inbound
+				in.Metadata[notify.RecipientField] = r.To.Handle
+				if got := prompt.Addressed(in); got != tc.addressed {
+					t.Errorf("%s: a %s's `@channel` addresses the seat = %v, want %v",
+						r.To.Handle, tc.author, got, tc.addressed)
+				}
+				built := prompt.Build(in, nil)
+				for _, want := range tc.says {
+					if !strings.Contains(built, want) {
+						t.Errorf("%s: a %s's `@channel` never says %q:\n%s",
+							r.To.Handle, tc.author, want, built)
+					}
+				}
+				if strings.Contains(built, tc.never) {
+					t.Errorf("%s: a %s's `@channel` says %q:\n%s",
+						r.To.Handle, tc.author, tc.never, built)
+				}
 			}
 		})
 	}

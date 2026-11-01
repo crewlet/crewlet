@@ -316,7 +316,7 @@ started would report a turn as timed out having done nothing, which is a
 misconfiguration rather than a slow turn.
 
 **The cap spans the whole turn, its executor's run included.** An agent
-seat's executor is its coding CLI's own [run in a box](code-sandbox.md), and
+seat's executor is its harness's own [run in a box](code-sandbox.md), and
 the turn parks while the run works, so a turn is several segments — the
 launch, then one per collection — and a reviewer that sends the work back
 launches the run again. The cap is an instant, measured from when the fire's
@@ -338,7 +338,7 @@ container's within the two minutes its runtime is given, a cold image pull
 included) and the seat's
 [setup](code-sandbox.md#setup-steps--provisioning-the-box) applied, then the
 run itself — for a standup, reading what it needs, posting once and
-submitting: some five to ten of its CLI's own rounds, ten minutes at the slow
+submitting: some five to ten of its harness's own rounds, ten minutes at the slow
 end — and the reviewer. A slow ritual that is not stuck takes about a quarter
 of an hour. Half an hour is twice that, so a reviewer's send-back still fits
 and a turn that reaches the cap is stuck rather than slow. It stops there
