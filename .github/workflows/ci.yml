@@ -7,7 +7,10 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    # claude/crewlet-code-ci* carries the Crewlet Code lanes' work (pull request #298's base of
+    # work, and its merges of main) so its whole suite runs here without a pull request.
+    # It is never merged: this line lives only on those branches.
+    branches: [main, 'claude/crewlet-code-ci*']
   pull_request:
 
 permissions:
