@@ -624,6 +624,10 @@ func registeredStatements() map[string]statement {
 		"review row": {reviewRowSQL, []any{"review-1"}, []string{"sqlite_autoindex_code_reviews_1 (id=?)"}},
 		"live change on": {liveChangeOnSQL, []any{"repo-1", "refs/heads/f000001"},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		// A FAILED CHECK A PERSON'S CI REPORTED finds the live change at
+		// its head on its target (checkswriter.go's headChangeIn).
+		"live change at head": {liveChangeAtHeadSQL, []any{"repo-1", "refs/heads/main", oid("head-1-3")},
+			[]string{"code_changes_target_idx (repo_id=? AND target_ref=? AND head_oid=?)"}},
 		// THE LIVE CHANGES A PUSH RECORD MOVES — a decide's and an apply's —
 		// driven from the list of its branches, and from the list of the
 		// targets and heads its commands set: one seek of an index partial on

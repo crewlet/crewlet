@@ -48,10 +48,12 @@ import (
 //   - changes_requested, review_submitted: the change's authors, by the
 //     review's verdict.
 //   - checks_failed: the authors and the record's actor — the pusher of the
-//     head the check measured — on the ending of a check of the change's
-//     head that failed, or errored past the home's own requeue: the one
-//     reason that is news to its actor too ([Reason.WakesActor]), since a
-//     pusher learns that their commit fails its checks only from this.
+//     head the check measured, or the person whose CI reported it — on the
+//     ending of a check of the change's current head that failed, or errored
+//     past the home's own requeue, whether the engine ran it or a person's
+//     CI reported it onto the same rows: the one reason that is news to its
+//     actor too ([Reason.WakesActor]), since a pusher learns that their
+//     commit fails its checks only from this.
 //   - target_broken: the authors and the effective lead of the repository's
 //     owner, on the broken record naming the landing that merged the change
 //     — never an enqueuer, since only a landing ahead of its checks, which

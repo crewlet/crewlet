@@ -750,8 +750,9 @@ type CheckFinished struct {
 	// its reporter's writer's.
 	FinishedAt time.Time `json:"finished_at"`
 	// Routing is whom the record concerns ([ChangeRouting]): the authors of
-	// the change whose head a failed head check measured, and its actor, the
-	// head's pusher — STAMPED BY THE CHECKS WRITER, nil for any other ending.
+	// the live change whose current head the ending fails, and its actor —
+	// the head's pusher, or the person whose CI reported it — STAMPED BY THE
+	// CHECKS WRITER, nil for any other ending.
 	// Under the condition the checks subject states, it takes {Name:
 	// "CheckFinished.Routing", Since: 2, Op: "check_finished", Path:
 	// []string{"mutation", "routing"}} once a build without it has run.

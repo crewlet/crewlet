@@ -606,7 +606,13 @@ func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, er
 				!last.row.Finished.IsZero() && last.row.Attempt == r.Key().Attempt {
 				replacing = last.row.State
 			}
-			return w.applied(ctx, r, res, replacing)
+			// WHOM THE RECORD TELLS, which names the change a person's CI's
+			// failure is of: its row names none.
+			var told *ChangeRouting
+			if f, ok := last.payload.(CheckFinished); decided && ok {
+				told = f.Routing
+			}
+			return w.applied(ctx, r, res, replacing, told)
 		}
 		// NOTHING WAS APPENDED: the decide refused the write or found it
 		// unchanged, and its last round says which.
@@ -666,7 +672,16 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 	case r.Rerun != nil:
 		return decideRerun(ctx, tx, *r.Rerun, r.Asker, repo, seats, d, named, now)
 	case r.Report != nil:
-		return decideReport(ctx, tx, *r.Report, r.Asker, d, named, now)
+		d, err := decideReport(ctx, tx, *r.Report, r.Asker, d, named, now)
+		if err != nil || d.payload == nil {
+			return d, err
+		}
+		// A PERSON'S CI's FAILURE of a change's head gates its merge as the
+		// engine's own does (the gate reads every row of the head), so it
+		// tells the change's authors as the engine's own does, the person
+		// whose CI reported it its actor.
+		reporter := r.Asker
+		return routeFailedHead(ctx, tx, repo.name, d, &reporter)
 	}
 	row, held, err := checkRowIn(ctx, tx, key)
 	if err != nil {
@@ -685,44 +700,100 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 	if err != nil || d.payload == nil {
 		return d, err
 	}
-	return routeFailedHead(ctx, tx, repo.name, d)
+	return routeFailedHead(ctx, tx, repo.name, d, nil)
 }
 
 // routeFailedHead stamps whom an ending d records concerns: a check of a live
 // change's CURRENT head that failed, or errored past the home's own requeue,
-// tells the change's authors and the head's pusher, its actor — the one
-// reason that is news to its actor too ([Reason.WakesActor]). Every other
-// ending concerns nobody: a passed check is what readiness reads (the home's
-// next mergeability record announces a change ready, never a check record:
+// tells the change's authors and the record's actor — the one reason that is
+// news to its actor too ([Reason.WakesActor]). Every other ending concerns
+// nobody: a passed check is what readiness reads (the home's next
+// mergeability record announces a change ready, never a check record:
 // concerns.go's head), a requeued one is not over, and a check of a head the
 // change has moved past measures code nobody is asked to fix.
-func routeFailedHead(ctx context.Context, tx *sql.Tx, repoName string, d checksDecision) (checksDecision, error) {
+//
+// KEYED ON THE CHANGE AND ITS HEAD, never on the row's queue purpose
+// ([headChangeIn]): the engine's runner ends a head check queued for one
+// change, and a person's CI (reporter, nil for the runner's) reports onto a
+// row that names no change at all — and either one failing leaves the gate's
+// `check` term unmet. THE ACTOR is whoever made the failure news: the pusher
+// of the head the runner measured, and the person whose CI reported it, told
+// in their inbox as every person is. The routing's owner is also whose day
+// the ending counts on ([ChecksWriter.applied]), so a failure is counted
+// exactly where it is told.
+func routeFailedHead(ctx context.Context, tx *sql.Tx, repoName string, d checksDecision,
+	reporter *Principal) (checksDecision, error) {
+
 	f, ok := d.payload.(CheckFinished)
-	if !ok || d.row == nil || d.row.Purpose != PurposeHead || d.row.ChangeID == "" || !f.failsItsHead() {
+	if !ok || !f.failsItsHead() {
 		return d, nil
 	}
-	change, found, err := changeRowIn(ctx, tx, d.row.ChangeID)
-	switch {
-	case err != nil:
-		return checksDecision{}, err
-	case !found || change.head != f.OID || (change.state != ChangeStateOpen && change.state != ChangeStateDraft):
-		return d, nil
+	change, found, err := headChangeIn(ctx, tx, f.CheckKey, d.row, reporter != nil)
+	if err != nil || !found {
+		return d, err
 	}
 	c := concerning{repoName: repoName, change: change, authors: true, checksFailed: true}
-	var pusher, kind string
-	switch err := tx.QueryRowContext(ctx, headPusherSQL, change.id, change.revision).Scan(&pusher, &kind); {
-	case errors.Is(err, sql.ErrNoRows):
-	case err != nil:
-		return checksDecision{}, fmt.Errorf("code: read who pushed revision %d of %s: %w", change.revision,
-			change.id, err)
-	default:
-		c.actor, c.actorKind = pusher, PartyKind(kind)
+	if reporter != nil {
+		c.actor, c.actorKind = reporter.party()
+	} else {
+		var pusher, kind string
+		switch err := tx.QueryRowContext(ctx, headPusherSQL, change.id, change.revision).Scan(&pusher,
+			&kind); {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return checksDecision{}, fmt.Errorf("code: read who pushed revision %d of %s: %w", change.revision,
+				change.id, err)
+		default:
+			c.actor, c.actorKind = pusher, PartyKind(kind)
+		}
 	}
 	if f.Routing, err = routingFor(ctx, tx, c); err != nil {
 		return checksDecision{}, err
 	}
 	d.payload = f
 	return d, nil
+}
+
+// headChangeIn is the live change whose CURRENT head an ending of the attempt
+// keyed key measures, and false for none. An ending a person's CI reported
+// (reported) is on a row that names no change, so it is the live change into
+// key.Target whose head is key.OID — one seek of code_changes_target_idx
+// ([liveChangeAtHeadSQL]), the first the index holds where two live changes
+// share the head, as a head check the home queues names one change and its
+// record carries one routing ([CheckFinished.Routing]). The engine's own ending is
+// the change the head check row holds was queued for, still live and still at
+// key.OID; a check of a tip, a candidate or a landing measures no change's
+// head — a fast-forward candidate's commit can BE a change's head, and its
+// failure ejects that change rather than telling its authors their head fails.
+func headChangeIn(ctx context.Context, tx *sql.Tx, key CheckKey, row *CheckRow, reported bool) (changeRow,
+	bool, error) {
+
+	var (
+		change changeRow
+		found  bool
+		err    error
+	)
+	switch {
+	case reported:
+		change, err = scanChange(tx.QueryRowContext(ctx, liveChangeAtHeadSQL, key.RepoID, key.Target,
+			key.OID).Scan)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return changeRow{}, false, nil
+		case err != nil:
+			return changeRow{}, false, fmt.Errorf("code: read the live change into %s at %s: %w", key.Target,
+				key.OID, err)
+		}
+		found = true
+	case row != nil && row.Purpose == PurposeHead && row.ChangeID != "":
+		if change, found, err = changeRowIn(ctx, tx, row.ChangeID); err != nil {
+			return changeRow{}, false, err
+		}
+	}
+	if !found || change.head != key.OID || !change.state.Live() {
+		return changeRow{}, false, nil
+	}
+	return change, true, nil
 }
 
 // refuse is d refused with code and its sentence.
@@ -896,9 +967,10 @@ func decideFinished(f CheckFinished, d checksDecision, held bool, named func(Che
 // earlier landing, and an ending the row KEEPS of its own is the one this node
 // announces — naming the ending it replaced, where its decide read one on the
 // row (replacing), so the announcement is a correction of that one and never
-// a second ending of the attempt.
+// a second ending of the attempt. told is whom the record tells (its
+// routing, nil for none: routeFailedHead).
 func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelog.Result,
-	replacing CheckState) (ChecksResult, error, checksLanded) {
+	replacing CheckState, told *ChangeRouting) (ChecksResult, error, checksLanded) {
 
 	key, at := r.Key(), res.Position
 	var (
@@ -920,16 +992,24 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 			return err
 		}
 		// THE OWNER OF THE CHANGE WHOSE HEAD THE ENDING FAILS, whose day
-		// counts it (types.CodeCheckFinished.Owner): one seek of the
-		// changes' key, for that ending alone.
-		if row.Purpose != PurposeHead || row.ChangeID == "" || !row.failsItsHead() {
-			return nil
+		// counts it (types.CodeCheckFinished.Owner). Of a head check the
+		// engine ran, the owner of the change it was queued for, whatever
+		// that change did since: one seek of the changes' key, for a failing
+		// ending alone. Of one a person's CI reported, whose row names no
+		// change, the owner of the live change at its head that the record
+		// told (routeFailedHead) — so a CI's failure counts where it is told.
+		switch {
+		case !row.failsItsHead():
+		case row.Purpose == PurposeHead && row.ChangeID != "":
+			change, found, err := changeRowIn(ctx, tx, row.ChangeID)
+			if found {
+				owner = Party{Handle: change.owner, Kind: change.ownerKind}
+			}
+			return err
+		case row.Queued.IsZero() && told != nil:
+			owner = Party{Handle: told.Owner, Kind: told.OwnerKind}
 		}
-		change, found, err := changeRowIn(ctx, tx, row.ChangeID)
-		if found {
-			owner = Party{Handle: change.owner, Kind: change.ownerKind}
-		}
-		return err
+		return nil
 	}); err != nil {
 		readError = fmt.Errorf("code: the record of operation %s applied at %s and its attempt's row could not "+
 			"be read: %w", r.OpID, at, err)
@@ -976,6 +1056,11 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 			Target: row.Target, Required: row.Required, DurationMs: row.DurationMs, Replaces: string(replacing),
 			Owner: owner.Handle, OwnerKind: string(owner.Kind)}
 		own.ending.Agent = agentOf(w.agentIDs, owner.Handle, owner.Kind)
+		if row.Queued.IsZero() && told != nil {
+			// A REPORTED FAILURE'S ROW NAMES NO CHANGE: the event names the
+			// one it was told of, whose owner it counts on.
+			own.ending.ChangeID = told.ChangeID
+		}
 	}
 	return out, nil, own
 }

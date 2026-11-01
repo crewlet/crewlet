@@ -57,6 +57,15 @@ func correctedToPass(name, oid string) types.CodeCheckFinished {
 	return c
 }
 
+// reportedFailure is a failure a person's CI reported of check name at oid,
+// the head of a change owned by owner (ownerAgent): its row names no purpose
+// and no change, and its writer names the change at that head and its owner.
+func reportedFailure(name, oid, owner, ownerAgent string) types.CodeCheckFinished {
+	c := failedCheck(name, 1, oid, "failed", owner, ownerAgent)
+	c.Purpose, c.Reason, c.Placement = "", "reported", "external"
+	return c
+}
+
 // ejected is entry of a change owned by owner (ownerAgent), queued by
 // enqueuer, put out of main's queue.
 func ejected(entry, owner, ownerAgent, enqueuer string) types.CodeQueueEjected {
@@ -69,8 +78,9 @@ func ejected(entry, owner, ownerAgent, enqueuer string) types.CodeQueueEjected {
 		EnqueuedBy: enqueuer, EnqueuedByKind: "agent", Owner: owner, OwnerKind: kind, OwnerAgent: ownerAgent}
 }
 
-// A FAILED CHECK COUNTS ON ITS OWNER'S DAY: three checks that failed the heads
-// of dev's changes count three on dev's day — once each by their attempt, so
+// A FAILED CHECK COUNTS ON ITS OWNER'S DAY: four checks that failed the heads
+// of dev's changes — one of them reported by a person's CI, whose row is of no
+// purpose — count four on dev's day — once each by their attempt, so
 // an ending announced twice is still one, and an attempt errored past the
 // home's requeue that a slow runner's exit then corrects to a pass STAYS
 // counted, since a day's figures only grow (the CodeCheckFinished type's doc)
@@ -85,7 +95,8 @@ func ejected(entry, owner, ownerAgent, enqueuer string) types.CodeQueueEjected {
 // usageRecords — the fingerprint does not move, red; drop the check's
 // predicate from usageRecords — the passes move the fingerprint, red; decide
 // on the payload's agent rather than the column — the unnamed ending counts,
-// red.
+// red; count a head check's ending alone (its purpose head) — the CI's
+// failure is not counted, red.
 func TestAFailedCheckCountsOnItsOwnersDay(t *testing.T) {
 	t.Parallel()
 	db := open(t)
@@ -109,14 +120,18 @@ func TestAFailedCheckCountsOnItsOwnersDay(t *testing.T) {
 		// to a pass naming none: counted once, and kept.
 		gateRecord(t, "c-7", at(6), erroredPastRequeue("e2e", "oid-b", "dev", "a-dev")),
 		gateRecord(t, "c-8", at(7), correctedToPass("e2e", "oid-b")),
+		// A FAILURE A PERSON'S CI REPORTED of dev's head, a row of no
+		// purpose: dev's code failed it all the same.
+		gateRecord(t, "c-12", at(11), reportedFailure("ci", "oid-b", "dev", "a-dev")),
 	} {
 		if err := log.Append(t.Context(), rec); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
-	if got := codeOf(t, db, w); len(got) != 1 || got["a-dev"] != (store.UsageCode{ChecksFailed: 3}) {
-		t.Fatalf("the day counts %+v, want three failed checks on dev's day alone: each attempt once, a "+
-			"corrected one kept, none for a pass, a person's change or another day", got)
+	if got := codeOf(t, db, w); len(got) != 1 || got["a-dev"] != (store.UsageCode{ChecksFailed: 4}) {
+		t.Fatalf("the day counts %+v, want four failed checks on dev's day alone: each attempt once, a "+
+			"corrected one kept, a person's CI's report counted, none for a pass, a person's change or "+
+			"another day", got)
 	}
 	after, err := db.UsageMark(t.Context(), w)
 	if err != nil {
@@ -146,8 +161,8 @@ func TestAFailedCheckCountsOnItsOwnersDay(t *testing.T) {
 			t.Fatalf("append the ending %d no day counts: %v", i, err)
 		}
 	}
-	if got := codeOf(t, db, w); len(got) != 1 || got["a-dev"] != (store.UsageCode{ChecksFailed: 3}) {
-		t.Fatalf("after endings naming no seat on its column the day counts %+v, want dev's three still", got)
+	if got := codeOf(t, db, w); len(got) != 1 || got["a-dev"] != (store.UsageCode{ChecksFailed: 4}) {
+		t.Fatalf("after endings naming no seat on its column the day counts %+v, want dev's four still", got)
 	}
 	if again, err := db.UsageMark(t.Context(), w); err != nil || again != after {
 		t.Fatalf("endings naming no seat moved the day's fingerprint from %+v to %+v (%v): every pass "+

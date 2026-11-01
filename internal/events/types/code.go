@@ -246,8 +246,10 @@ type CodeCheckFinished struct {
 	Attempt int    `json:"attempt"`
 
 	// Purpose is what the attempt was for (internal/code's CheckPurpose:
-	// head, candidate, tip, bisect); ChangeID a head check's change, and
-	// Target the branch the commit was checked for.
+	// head, candidate, tip, bisect; empty for a check a person's CI
+	// reported); ChangeID a head check's change, or the change a reported
+	// failure fails the head of (Owner, below), and Target the branch the
+	// commit was checked for.
 	Purpose  string `json:"purpose"`
 	ChangeID string `json:"change_id,omitempty"`
 	Target   string `json:"target"`
@@ -274,7 +276,11 @@ type CodeCheckFinished struct {
 	// an ending that FAILS that head — failed, or errored past the home's own
 	// requeue (internal/code's checks_failed wake) — and empty on every
 	// other: a seat by its handle, or a person by the human seat they hold,
-	// OwnerKind which (internal/code's PartyKind: agent, person).
+	// OwnerKind which (internal/code's PartyKind: agent, person). A head check
+	// the engine ran names the change it was queued for; one a person's CI
+	// reported (Placement external) names no change of its own, so its
+	// failure names — in ChangeID too — the live change into Target whose
+	// head is OID when it was reported, the one its checks_failed wake tells.
 	Owner     string `json:"owner,omitempty"`
 	OwnerKind string `json:"owner_kind,omitempty"`
 

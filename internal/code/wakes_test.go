@@ -62,12 +62,17 @@ func heardSorted(concerns []code.Concern) []string {
 // infrastructure, which the home queues again, tells nobody until the attempt
 // the home's own requeue stops at; a passing check tells nobody — readiness is
 // the home's next mergeability record's to announce; and a failed check of
-// the head the change has moved past measures code nobody is asked to fix.
+// the head the change has moved past measures code nobody is asked to fix. A
+// failure a person's CI reports (M5-D24) is the same failure of the same head
+// — the gate leaves the merge unmet on it alike — so it tells the same
+// authors, the reporting person as its actor.
 //
 // Mutations: Reason.WakesActor false for checks_failed — ada, the actor, is
 // not told, red; route every ending of a head check, whatever its state — the
 // passing one tells the authors, red; drop the attempt bound from
-// failsItsHead — the third errored attempt tells nobody, red.
+// failsItsHead — the third errored attempt tells nobody, red; route no
+// reported ending (decideChecks returns decideReport's decision as it is) —
+// the CI's failure tells nobody, red.
 func TestAFailedCheckWakesItsAuthorsAndItsActor(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -112,6 +117,36 @@ func TestAFailedCheckWakesItsAuthorsAndItsActor(t *testing.T) {
 	if got := heardSorted(code.Concerns(routingAt(t, n, last))); !slices.Equal(got,
 		[]string{"ada:checks_failed", "dev:checks_failed"}) {
 		t.Fatalf("the attempt the home's requeue stops at tells %v, want the authors and ada", got)
+	}
+
+	// A PERSON'S CI's FAILURE OF THE HEAD tells the same authors: its row
+	// names no change, and the gate reads it as the engine's own, so the
+	// change is the live one into main at B2 — and its actor is the person
+	// whose CI reported it, founder, told as the head's pusher is. Their CI's
+	// pass tells nobody, and its failure of the head the change moved past
+	// measures code nobody is asked to fix.
+	report := func(name, oid string, state code.CheckState) statelog.Position {
+		res, err := w.Publish(t.Context(), reporting(key(name, oid, 1), state, "https://ci.example.com/1"))
+		requireChecked(t, name+" reported "+string(state), res, err)
+		return res.Position
+	}
+	reported := routingAt(t, n, report("ci", "B2", code.CheckStateFailed))
+	if len(reported) != 1 || reported[0].ChangeID != change || !reported[0].ChecksFailed ||
+		reported[0].Actor != "founder" {
+		t.Fatalf("the failure founder's CI reported carries %+v, want web!1's checks failed, its actor founder",
+			reported)
+	}
+	if got := heardSorted(code.Concerns(reported)); !slices.Equal(got,
+		[]string{"ada:checks_failed", "dev:checks_failed", "founder:checks_failed"}) {
+		t.Fatalf("the failure founder's CI reported tells %v, want the authors and founder", got)
+	}
+	for name, p := range map[string]statelog.Position{
+		"a reported pass": report("ci-lint", "B2", code.CheckStatePassed),
+		"a reported failure of the head the change moved past": report("ci", "B", code.CheckStateFailed),
+	} {
+		if routings := routingAt(t, n, p); len(routings) != 0 {
+			t.Fatalf("%s carries %+v, want no routing: it tells nobody", name, routings)
+		}
 	}
 }
 

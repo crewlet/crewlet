@@ -6066,7 +6066,7 @@ record.
 | `mention` | Every handle the text names that the chart holds — at most 32 a write | An open, an edit, a review, a comment; a push's options |
 | `review_requested` | A reviewer asked who was not asked already; a path owner a revision's facts ask | An ask for review; a revision's facts |
 | `changes_requested` | The change's authors | A review asking for changes |
-| `checks_failed` | The change's authors, and whoever pushed the head the check measured | The ending of a check of the change's current head that failed, or that errored past the home's own requeue (its third attempt, or an error its infrastructure did not cause) |
+| `checks_failed` | The change's authors, and whoever pushed the head the check measured — or, for a check a person's CI reported, that person | The ending of a check of the change's current head that failed, or that errored past the home's own requeue (its third attempt, or an error its infrastructure did not cause) — run by the engine, or reported by a person's CI ([External CI](../guides/code.md#external-ci)), whose report names no change and fails the head of the live change (open or draft) into its target at that commit |
 | `target_broken` | The change's authors and the effective lead of the repository's owner — never an enqueuer: a queue's landing lands green, so only a landing ahead of its checks, a person's override merge or push, can be broken | The broken record that names the landing that merged the change — a check the target requires fails on the landed tip |
 | `conflicted` | The change's authors | The merge that **turns** into a conflict — not every recheck that finds it one still; the queue's ejection of the change for a merge that conflicts |
 | `dequeued` | The change's authors, and whoever put it in the queue | A record that put the change's entry out of its target's queue: an ejection, or a dequeue somebody asked |
@@ -6093,7 +6093,8 @@ record.
   the queue lands an entry on its enqueuer's account. A check of a head that
   fails is the one exception: it is news to whoever pushed that head above
   all, since nothing else they did tells them, so they hear it as the
-  record's actor.
+  record's actor — and where a person's CI reported the failure, that person
+  is its actor and hears it, in their inbox, beside the authors.
 - **A record of several changes keeps what fits.** A queue's ejection and a
   landing name every change they put out or land, each with its own audience,
   and a record must land whatever it would tell: where the audiences of all

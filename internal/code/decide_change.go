@@ -1299,7 +1299,8 @@ func bodyOf(ctx context.Context, tx *sql.Tx, changeID string) (string, error) {
 // The lifecycle's reads, each registered in plan_test.go: a change by its key —
 // a decide's, an apply's and an answer's — the live change a source branch
 // heads, by code_changes_open_idx with its predicate spelled as the index
-// declares it ([liveChanges]), and a change's body by its key.
+// declares it ([liveChanges]), the live change into a target at a head, by
+// code_changes_target_idx the same way, and a change's body by its key.
 const (
 	// changeColumns is every column of a change [scanChange] reads, in its
 	// order: every column code_changes holds, so a decide, an apply and a read
@@ -1311,5 +1312,11 @@ const (
 	changeRowSQL    = `SELECT ` + changeColumns + ` FROM code_changes WHERE id = ?`
 	liveChangeOnSQL = `SELECT number FROM code_changes WHERE repo_id = ? AND source_ref = ? AND ` +
 		liveChanges + ` LIMIT 1`
+	// liveChangeAtHeadSQL is the live change into a target at a head — a
+	// failed check a person's CI reported, which names no change
+	// ([headChangeIn]) — one seek of code_changes_target_idx, its predicate
+	// spelled as the index declares it.
+	liveChangeAtHeadSQL = `SELECT ` + changeColumns + ` FROM code_changes WHERE repo_id = ? AND target_ref = ? ` +
+		`AND head_oid = ? AND ` + liveChanges + ` LIMIT 1`
 	changeBodySQL = `SELECT body FROM code_change_bodies WHERE change_id = ?`
 )

@@ -267,7 +267,7 @@ domain as the spend, for the same 181 days, and summed across every node.
 | `changes_opened` | A change is opened — by a change tool, the API, or a push's `-o change` options | The change's owner, the seat that opened it |
 | `reviews_given` | A review of a change lands | The seat that gave it |
 | `findings_received` | A review that raised findings lands | The seat that owns the change it judged, whoever reviewed it — a person included |
-| `checks_failed` | A check of a change's head ends failing it — failed, or errored past the home's own requeue (its third attempt, or an error its infrastructure did not cause) | The seat that owns the change, whoever pushed the head |
+| `checks_failed` | A check of a change's head ends failing it — failed, or errored past the home's own requeue (its third attempt, or an error its infrastructure did not cause) — whether the engine ran it or a person's CI reported it, which counts on the live change (open or draft) into its target at the commit reported | The seat that owns the change, whoever pushed the head or reported the check |
 | `ejections` | A merge queue puts a change's entry out (a check failed, a conflict, the gate no longer met, the head moved) | The seat that owns the change, whoever queued it |
 
 Each is counted once, by the data node whose record landed it, from the
