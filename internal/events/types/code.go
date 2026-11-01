@@ -65,6 +65,7 @@ func init() {
 	events.Register[ChangeOpened]()
 	events.Register[ReviewSubmitted]()
 	events.Register[CodeQueueEjected]()
+	events.Register[CodeTargetBroken]()
 }
 
 // CodeFetchedVia is how a unit repository's contents were read.
@@ -563,4 +564,61 @@ func (e CodeQueueEjected) SummaryFor(actor string) string {
 		what += ": " + strconv.Itoa(len(e.Paths)) + " paths conflicted"
 	}
 	return lead(actor, what)
+}
+
+// CodeTargetBroken records that a protected branch's tip checks found the
+// FIRST landing they failed on (internal/code's Broken, ADR-0068): a red tip
+// bisected over the branch's landing rows down to the landing whose commit the
+// named required checks failed on, the landing before it having passed them.
+// Published ONCE a landing, by the data node whose committer landed the broken
+// record, on that record's apply — never by an applier, which every data node
+// runs.
+//
+// # Fed, and stored
+//
+// A broken branch is what its team stops for — revert the landing or fix
+// forward — and a bisect names few, so it joins the activity feed beside the
+// merge or the push that broke it, in the `system` category. What it carries
+// is what a reader acts on: which branch, which landing and how it landed, the
+// change it landed and who landed it, and the checks it broke.
+type CodeTargetBroken struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when the broken record applied.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// Target is the protected branch, Commit the landing's commit, and Kind
+	// how it landed (internal/code's LandingKinds: pre_land, post_land,
+	// direct, push).
+	Target string `json:"target"`
+	Commit string `json:"commit"`
+	Kind   string `json:"kind"`
+
+	// ChangeID is the change the landing landed and Number its number on the
+	// repository — web!42's 42 — each empty for a person's push that landed
+	// no change; LandedBy who landed it (its merger, or its pusher), by the
+	// seat they hold.
+	ChangeID string `json:"change_id,omitempty"`
+	Number   int64  `json:"number,omitempty"`
+	LandedBy string `json:"landed_by,omitempty"`
+
+	// Checks are the required checks that failed on Commit.
+	Checks []string `json:"checks"`
+}
+
+// EventType is the "code_target_broken" wire type.
+func (CodeTargetBroken) EventType() string { return "code_target_broken" }
+
+// SummaryFor names the branch, the landing — its change by reference
+// (web!42), or its commit — and the checks it broke.
+func (e CodeTargetBroken) SummaryFor(actor string) string {
+	landing := e.Commit
+	if len(landing) > 12 {
+		landing = landing[:12]
+	}
+	if e.ChangeID != "" {
+		landing = e.RepoName + "!" + strconv.FormatInt(e.Number, 10)
+	}
+	return lead(actor, "found "+strings.TrimPrefix(e.Target, "refs/heads/")+" broken by "+landing+": "+
+		strings.Join(e.Checks, ", ")+" failed")
 }

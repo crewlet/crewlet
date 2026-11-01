@@ -571,7 +571,8 @@ type CheckQueued struct {
 	Skipped bool `json:"skipped,omitempty"`
 	// Invalid records the attempt ERRORED at its dispatch rather than queued
 	// — a check the target's gate requires, which its checks file defines
-	// in no form that runs ([CheckReasonDefsInvalid]): the file unparsable,
+	// in no form that runs ([CheckReasonDefsInvalid]), at a change's head
+	// or at a protected target's tip (ADR-0068): the file unparsable,
 	// or something at its path that is no file — and says why, at most
 	// CheckSummaryBytes, which the row keeps as its summary. Such an attempt
 	// carries no definition, there being none that runs.
@@ -613,9 +614,10 @@ func (q CheckQueued) Validate() error {
 	case (q.Def == nil) != (q.Reason == QueueReport || q.Invalid != ""):
 		return checkField("def", "every attempt the engine runs carries its definition, and one a "+
 			"person's CI reports, or one errored at its dispatch for want of one, carries none")
-	case q.Invalid != "" && (q.Purpose != PurposeHead || q.Reason != QueueDispatch || q.Skipped || !q.Required):
-		return checkField("invalid", "only a change head's required check is errored at its dispatch, for a "+
-			"checks file defining it in no form that runs")
+	case q.Invalid != "" && ((q.Purpose != PurposeHead && q.Purpose != PurposeTip) || q.Reason != QueueDispatch ||
+		q.Skipped || !q.Required):
+		return checkField("invalid", "only a change head's or a protected tip's required check is errored at "+
+			"its dispatch, for a checks file defining it in no form that runs")
 	case len(q.Invalid) > CheckSummaryBytes || !utf8.ValidString(q.Invalid):
 		return checkField("invalid", "%d bytes: at most %d of valid UTF-8 (code.CheckSummaryBytes)",
 			len(q.Invalid), CheckSummaryBytes)

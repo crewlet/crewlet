@@ -474,6 +474,17 @@ code_queue_ejected         # a merge queue put an entry OUT: repository
                            # applier, never for a retry its operation ledger
                            # collapsed. STORED AND FED (code-host.md, "The
                            # merge queue")
+code_target_broken         # a protected branch's tip checks found the
+                           # FIRST landing they failed on: repository by id
+                           # and name, the branch, the landing's commit and
+                           # kind, the change it landed and its number
+                           # (none for a person's push), who landed it, and
+                           # the checks it broke. Published ONCE a landing,
+                           # by the data node whose committer landed the
+                           # broken record — never by an applier, never for
+                           # a retry its operation ledger collapsed. STORED
+                           # AND FED (code-host.md, "Tip checks and
+                           # code_green")
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its

@@ -5341,6 +5341,71 @@ checks passed. The repository's home reads a fourth, `queue_due` — the active
 repositories holding a live entry, and one repository's entries — which no
 person or seat may read.
 
+### Tip checks and code_green
+
+**Every protected tip is checked.** A `pre_land` landing proved its branch's
+required checks on its candidate before it landed, and lands green; a merge or
+a push into a branch whose gate requires no check is green as it lands. Every
+other landing — a merge a person's override landed, a person's own push under
+`direct_push: persons` — lies **above the branch's green row** until a check
+of a tip proves it: two changes each green on its own head can land a merged
+result nothing tested, and a person's push was tested by nobody at all. The
+repository's [home git node](#the-home-git-node) owes each such branch its
+**tip work**, read from the rows in one snapshot — the branch's green row, the
+checks its gate requires, and its landings above the green, oldest first, each
+with the latest attempt of each required check on its commit for the branch —
+and worked by its `checks` worker:
+
+1. **The newest landing is dispatched**, and only the newest: a required
+   check it holds no attempt of is queued there (purpose `tip`). Landings that
+   are no longer the newest are never dispatched, so a burst of pushes costs
+   one round of checks. A fast-forward landing is the very commit its change's
+   head checks measured, and its head's attempts count.
+2. **Every required check passed there**: a `green` record moves the branch's
+   green row onto it — and every landing below it green with it. A branch whose
+   gate requires no check is green at its newest landing as it stands.
+3. **One failed there**: the failed checks are **bisected over the landing
+   rows** — never over git's history, whose merge commits lead into change
+   branches the target never held. Each round probes the landing midway between
+   the last one they passed on (the green, at first) and the first they failed
+   on (purpose `bisect`, those checks alone), until the two are adjacent; a
+   `broken` record then marks the first red landing broken, naming the checks,
+   and the node that landed it announces one `code_target_broken` event. The
+   green row stays where it was: it **only ever advances on green**. The next
+   landing — a revert, or a fix forward — is dispatched as step 1, and its
+   green tip moves the green row past the broken landing.
+
+An attempt its infrastructure ended is queued again up to three attempts, as a
+head's is; one still queued or running, or ended in a way only a person's rerun
+moves (`cancelled`, errored past its requeues), waits.
+
+**What a tip check runs is the base's file.** Every tip check and every probe
+is defined by `.crewlet/checks.yaml` at the **base of the first landing above
+the green** — the green itself, or before any tip passed, the commit the first
+landing moved the branch from — never at the tip, which holds every landing's
+edits: a landing that rewrote the file would otherwise define the check its own
+tip is judged by ([ADR-0068](https://github.com/crewlet/crewlet/blob/main/adr/0068-a-check-is-a-measurement-of-a-commit-defined-by-the-target-branch-and-run-where-no-author-can-reach-it.md)).
+Each attempt records the file's blob (`defs_oid`) and its diff base. A base
+whose file does not run, or defines no check the gate requires, errors that
+check on the tip (`errored`, `defs_invalid`) and keeps the green where it is
+until the green moves — a queue's green landing, or the gate changed: fix the
+file through the queue, or have a person change the gate. A required check
+that ran and failed beside it is bisected all the same, so the landing that
+broke it is still named.
+
+**A bisect reads 256 landings above the green at most** (eight rounds). A
+branch holding more is read as its oldest 256 and its newest: its newest is
+still dispatched, and a culprit past those 256 is named once a green tip clears
+the landings before it — or a person reverts to the last green; the home logs
+`code_tip_culprit_past_the_window` meanwhile.
+
+**The home finds the work from the rows.** A repository with a landing
+neither green nor broken is listed by the home's `checks_due` read, over an
+index holding exactly those landings, so its backstop pass finds a branch
+whose nudge was lost within a minute, and never reads the thirty days of green
+landings behind it. A branch whose culprit is named stays listed until a tip
+passes; its home's pass reads its window and finds nothing owed.
+
 ### Where lines are in another revision
 
 A finding or a comment is written against lines of one blob. Placed in

@@ -18,19 +18,22 @@ import (
 )
 
 // THE CHECK WORK OVER STAND-INS: one repository's changes owing their checks
-// work and its targets due a reading of their checks file, as the
-// `checks_due` listing answers them (checkEstate.due, .targets), the checks
-// file each commit holds and what each head touches, as a git node answers
-// them — and every write the worker asks of the repository's checks writer,
-// in the order it asks them.
+// work, its targets due a reading of their checks file and its protected
+// targets owing tip work, as the `checks_due` listing answers them
+// (checkEstate.due, .targets, .tips), the checks file each commit holds and
+// what each head touches, as a git node answers them — and every write the
+// worker asks of the repository's checks writer and of its committer, in the
+// order it asks them.
 type checkEstate struct {
 	mu      sync.Mutex
 	due     []code.ChangeDue
 	targets []code.CheckTargetDue
+	tips    []code.TipDue
 	files   map[string]string
 	facts   map[string]code.RevisionFactsAnswer
 	read    []string
 	writes  []code.ChecksRequest
+	records []code.QueueProposal
 }
 
 func newCheckEstate() *checkEstate {
@@ -52,7 +55,7 @@ func (e *checkEstate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer
 		return code.ReadAnswer{DueRepos: []string{repoA}}, nil
 	}
 	return code.ReadAnswer{DueChanges: slices.Clone(e.due), DueTargets: slices.Clone(e.targets),
-		Position: statelog.Position{Stream: topics.CodeLogStream, Seq: 50}}, nil
+		DueTips: slices.Clone(e.tips), Position: statelog.Position{Stream: topics.CodeLogStream, Seq: 50}}, nil
 }
 
 func (e *checkEstate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -89,6 +92,16 @@ func (e *checkEstate) Checks(_ context.Context, r code.ChecksRequest) (code.Chec
 	e.writes = append(e.writes, r)
 	return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: statelog.Position{
 		Stream: topics.CodeLogStream, Seq: uint64(60 + len(e.writes))}}, nil
+}
+
+// Queue records a green or a broken the tip work asks of the repository's
+// committer, in order.
+func (e *checkEstate) Queue(_ context.Context, p code.QueueProposal) (code.QueueResult, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.records = append(e.records, p)
+	return code.QueueResult{Outcome: statelog.OutcomeApplied, Position: statelog.Position{
+		Stream: topics.CodeLogStream, Seq: uint64(90 + len(e.records))}}, nil
 }
 
 func (e *checkEstate) Converse(context.Context, code.ConversationWrite) (code.ConversationResult, error) {

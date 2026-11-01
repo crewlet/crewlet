@@ -853,6 +853,52 @@ func (c *Committer) announceEjected(e Eject, at statelog.Position) {
 	}
 }
 
+// announceBroken publishes ONE code_target_broken event for the landing the
+// broken at at named (ADR-0068), on this node's event stream, bounded by
+// [checkEventBudget] under the committer's own lifetime, as an ejection's is:
+// the landing's kind, its change by its repository and number and who landed
+// it, read from this node's rows, and a stream that does not take it logged —
+// the landing's row still says it is broken.
+func (c *Committer) announceBroken(b Broken, at statelog.Position) {
+	if c.events == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.life, checkEventBudget)
+	defer cancel()
+	ev := types.CodeTargetBroken{RepoID: b.RepoID, RepoName: b.RepoID, Target: b.TargetRef, Commit: b.OID,
+		Checks: b.Checks}
+	if err := c.db.Read(ctx, func(tx *sql.Tx) error {
+		switch err := tx.QueryRowContext(ctx, repoNameSQL, b.RepoID).Scan(&ev.RepoName); {
+		case errors.Is(err, sql.ErrNoRows):
+			ev.RepoName = b.RepoID
+		case err != nil:
+			return err
+		}
+		if err := tx.QueryRowContext(ctx, landingNamedSQL, b.RepoID, b.TargetRef, b.Position.Packed(),
+			b.Ordinal).Scan(&ev.Kind, &ev.ChangeID, &ev.LandedBy); err != nil {
+			return err
+		}
+		if ev.ChangeID == "" {
+			return nil
+		}
+		numbers, err := changeNumbersIn(ctx, tx, b.RepoID, []string{ev.ChangeID})
+		ev.Number = numbers[ev.ChangeID]
+		return err
+	}); err != nil {
+		c.log.WarnContext(ctx, "code_target_broken_unpublished", "repo", b.RepoID, "position", at.String(),
+			"error", err.Error(), "detail", "the activity feed and the event log do not hold this broken "+
+				"landing; its row on the code log still does")
+		return
+	}
+	e := events.New(ev, events.TraceContext{})
+	e.Source = c.nodeID
+	if err := c.events.Publish(ctx, topics.Event(e.Type), e); err != nil {
+		c.log.WarnContext(ctx, "code_target_broken_unpublished", "repo", b.RepoID, "position", at.String(),
+			"error", err.Error(), "detail", "the activity feed and the event log do not hold this broken "+
+				"landing; its row on the code log still does")
+	}
+}
+
 // ejectedDetail is an ejection's detail as code_queue.ejected keeps it: its
 // checks and its paths, JSON, "" for an ejection naming neither.
 func ejectedDetail(x Ejection) (string, error) {
@@ -870,7 +916,8 @@ func ejectedDetail(x Ejection) (string, error) {
 // entries by their key, driven from the list; a train's candidates at a
 // record's position, over code_candidates_train_idx; a landing record's tip,
 // its last landing by the landings' key; a landing by its key, its commit and
-// whether it is broken; and the landings a green marks, counted over the key's
+// whether it is broken, and what a broken one announces; and the landings a
+// green marks, counted over the key's
 // range above the target's green row.
 const (
 	entriesNamedSQL = `SELECT ` + qualifiedEntryColumns + ` FROM json_each(?1) AS j
@@ -882,6 +929,8 @@ const (
 	landingSQL = `SELECT commit_oid FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`
 	landingBrokenSQL = `SELECT broken FROM code_landings
+		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`
+	landingNamedSQL = `SELECT kind, change_id, merged_by FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`
 	landingsGreenedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position > ? AND position <= ? LIMIT ?)`

@@ -48,6 +48,9 @@ type Reader struct {
 	// MaxPageBytes, and a test's smaller values (export_test.go).
 	pageRows  int
 	pageBytes int
+	// tipWindow bounds the landings one target's tip work reads above its
+	// green: MaxTipLandings, and a test's smaller value (export_test.go).
+	tipWindow int
 }
 
 // ReaderOptions configure a reader.
@@ -84,7 +87,7 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 			"without it every read level is a label rather than a guarantee")
 	}
 	r := &Reader{log: o.Log, limits: o.Limits, roster: o.Roster, now: o.Now, pageRows: MaxSnapshotItems,
-		pageBytes: MaxPageBytes}
+		pageBytes: MaxPageBytes, tipWindow: MaxTipLandings}
 	if r.limits == nil {
 		r.limits = DefaultLimits
 	}

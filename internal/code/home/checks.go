@@ -77,7 +77,8 @@ func (k *checks) Due(ctx context.Context, floor statelog.Position, cursor string
 }
 
 // Work is one repository's check work, every page: on the first, each target
-// due a reading of its checks file read at its tip; then each change owing
+// due a reading of its checks file read at its tip, and each protected
+// target's tip work worked ([checks.tip], tips.go); then each change owing
 // its checks work, worked in the order the listing names them
 // ([checks.change]) — a failure of one left for the next pass while the
 // others are worked — and then the page's dispatches RECORDED, each target's
@@ -107,6 +108,14 @@ func (k *checks) Work(ctx context.Context, repoID string, floor statelog.Positio
 				continue
 			}
 			page.of(repoID, due.TargetRef, due.Tip, due.TipPosition, defs)
+		}
+		for _, due := range a.DueTips {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(failed, err)...)
+			}
+			if err := k.tip(ctx, repoID, due, memo, a.Position); err != nil {
+				failed = append(failed, err)
+			}
 		}
 		for _, due := range a.DueChanges {
 			if err := ctx.Err(); err != nil {

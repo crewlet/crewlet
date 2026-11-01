@@ -346,6 +346,7 @@ var categories = map[string]placement{
 	// become. AUTHENTICATED-rated: every one ends an enqueue a seat's or a
 	// person's credential asked, at most one ejection an enqueue.
 	"code_queue_ejected": {"system", RateAuthenticated},
+	"code_target_broken": {"system", RateAuthenticated},
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that

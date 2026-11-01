@@ -1349,10 +1349,12 @@ type ReadAnswer struct {
 	// repository's heads owing their checks work in DueChanges, each with what
 	// it owes ([ChangeDue.Checks]), with no owners and no rechecks — and, on a
 	// repository's first page, DueTargets: its target branches due a reading
-	// of their checks file again.
+	// of their checks file again, and DueTips: its protected targets owing
+	// tip work ([TipDue], tipwork.go).
 	DueRepos   []string         `json:"due_repos,omitempty"`
 	DueChanges []ChangeDue      `json:"due_changes,omitempty"`
 	DueTargets []CheckTargetDue `json:"due_targets,omitempty"`
+	DueTips    []TipDue         `json:"due_tips,omitempty"`
 	Rechecks   []ChangeDue      `json:"rechecks,omitempty"`
 	PathOwners []PathOwner      `json:"path_owners,omitempty"`
 	// Checks is a page of a `checks` read — and a `check_box` read's one

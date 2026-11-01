@@ -358,6 +358,19 @@
 // `checks_running` read ([ReadChecksRunning]) — both the engine's own, each
 // claim and ending they lead to decided again by the checks writer.
 //
+// A CHECK IS A MEASUREMENT OF A COMMIT, DEFINED BY THE TARGET BRANCH AND RUN
+// WHERE NO AUTHOR CAN REACH IT (ADR-0068): a head's checks are defined by the
+// checks file at its target's tip, and a protected branch's TIP checks by the
+// file at the base of its first landing above its green row — never by the
+// commit measured, which may have rewritten the file. Every landing a record
+// did not prove lies above its target's green until a tip passes, and the
+// repository's home owes the target its tip work (tipwork.go: a `checks_due`
+// read's [ReadAnswer.DueTips], listed by code_landings_unjudged_idx): the
+// newest landing dispatched, coalesced; the green row moved onto it on pass
+// ([Green]); a red tip's failed checks bisected over the landing rows down to
+// the first landing they failed on, recorded broken ([Broken]) and announced
+// once as code_target_broken.
+//
 // # Group commit
 //
 // Because every push to a repository contends on its one subject, a

@@ -973,6 +973,11 @@ func (c *Committer) queueWrite(repoID string, q *queued) {
 	if p.Eject != nil && answerErr == nil && out.Outcome == statelog.OutcomeApplied && !res.Collapsed {
 		c.announceEjected(*p.Eject, out.Position)
 	}
+	// A BROKEN LANDING IS ANNOUNCED the same way, once its own record applied
+	// here: the one event a red tip's bisect leaves (ADR-0068).
+	if p.Broken != nil && answerErr == nil && out.Outcome == statelog.OutcomeApplied && !res.Collapsed {
+		c.announceBroken(*p.Broken, out.Position)
+	}
 }
 
 // scope is the scope p's record names: WHAT ITS DECIDE READS (M5-D33), stated

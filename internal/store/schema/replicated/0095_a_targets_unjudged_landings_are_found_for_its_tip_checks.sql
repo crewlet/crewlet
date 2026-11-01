@@ -1,0 +1,25 @@
+-- A target's unjudged landings are found for its tip checks.
+--
+-- A landing on a protected branch (code_landings, 0082) lies above its
+-- target's green row until a check of a tip proves it — a merge a person's
+-- override landed, a person's own push — and the repository's home owes the
+-- target its TIP WORK until then (internal/code's tipwork.go, ADR-0068): a
+-- check of the newest landing, the green row moved onto it, or a bisect of a
+-- red tip over the landings down to the first one its checks failed on. 0082
+-- left the landings to their key alone, which answers ONE target's landings
+-- above its green and nothing across repositories: the home's backstop
+-- listing, which must find every repository owing that work whatever nudge
+-- was lost, would have walked every landing every target keeps — thirty days
+-- of green ones behind each — every minute on every git node.
+--
+-- code_landings_unjudged_idx holds exactly the landings tip work is owed for,
+-- partial on a landing neither green nor broken, in the key's order: the
+-- repositories owing tip work, and one repository's targets owing it, are a
+-- walk of it grouped on its leading columns, and a landing leaves it when a
+-- green moves past it or a bisect names it broken.
+--
+-- Class: code_landings stays REPRODUCIBLE: an index adds no row, and the
+-- table is written only by the applier from the records on a repository's own
+-- subject.
+CREATE INDEX code_landings_unjudged_idx ON code_landings (repo_id, target_ref, position, ordinal)
+    WHERE green = 0 AND broken = 0;    -- the landings tip work is owed for: the home's backstop listing, a repository's targets

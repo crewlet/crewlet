@@ -842,6 +842,8 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
 		"a landing broken": {landingBrokenSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
+		"a broken landing announced": {landingNamedSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
 		"break a landing": {brokenLandingSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
 		"landings a green marks": {landingsGreenedSQL, []any{"repo-1", "refs/heads/main", 1000, 2000, 2001},
@@ -1170,6 +1172,19 @@ func registeredStatements() map[string]statement {
 		"due check targets": {dueCheckTargetsSQL, []any{"repo-1", 1000, MaxSnapshotItems},
 			[]string{checkTargetsKey + " (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
 				"code_changes_target_idx (repo_id=? AND target_ref=?)"}},
+		// A PROTECTED TARGET'S TIP WORK (tipwork.go): the repositories, and
+		// one repository's targets, holding a landing neither green nor
+		// broken, by the index partial on exactly those rows, each repository
+		// tested by its key; a target's window above its green, a range of
+		// the landings' key, and its newest, the key read backwards.
+		"due tip repositories": {dueTipReposSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_landings_unjudged_idx (repo_id>?)", repoKey + " (id=?)"}},
+		"due tip targets": {dueTipTargetsSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"code_landings_unjudged_idx (repo_id=?)"}},
+		"tip landings": {tipLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, MaxTipLandings + 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>=?)"}},
+		"newest landing": {newestLandingSQL, []any{"repo-1", "refs/heads/main"},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=?)"}},
 		// THE HOME'S DISPATCHES (checksdispatch.go): a target's reading and
 		// a head's dispatch, each by its whole key — the join's read and the
 		// decide's — and a purge's, by the repository's prefix of each key.

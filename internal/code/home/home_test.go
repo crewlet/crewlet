@@ -170,6 +170,11 @@ func (e *estate) Checks(context.Context, code.ChecksRequest) (code.ChecksResult,
 	return code.ChecksResult{}, errors.New("a case owing no check work was asked a write of its checks")
 }
 
+// Queue is no write these cases' targets owe: they owe no tip work.
+func (e *estate) Queue(context.Context, code.QueueProposal) (code.QueueResult, error) {
+	return code.QueueResult{}, errors.New("a case owing no tip work was asked a green or a broken record")
+}
+
 func (e *estate) Change(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
 	if err := p.Validate(); err != nil {
 		return code.ChangeResult{}, err

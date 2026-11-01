@@ -28,6 +28,11 @@ func SetShareWait(s *GitShare, d time.Duration) { s.wait = d }
 // thousands of rows. The shipped limits are MaxSnapshotItems and MaxPageBytes.
 func SetPageLimits(r *Reader, rows, bytes int) { r.pageRows, r.pageBytes = rows, bytes }
 
+// SetTipWindow has r read at most landings landings above a target's green
+// for its tip work — the cases that reach a window's bound without landing
+// MaxTipLandings pushes.
+func SetTipWindow(r *Reader, landings int) { r.tipWindow = landings }
+
 // SetRetentionPace has r measure and pace its steps by clock and sleep, take
 // steps for budget, and read the listing page repositories at a time, rather
 // than the monotonic clock, a timer, RetentionPassBudget and retentionPage —
