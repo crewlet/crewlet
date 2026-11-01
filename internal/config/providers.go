@@ -1005,7 +1005,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 	if l.Auth.APIKey != "" && mode != AuthAPIKey {
 		p.add(at(path, "auth.api_key"), ErrConflict,
 			"an API key is read only under auth.mode api-key, which puts it in the "+
-				"Harness's key variable; under %s it reaches nothing. Set auth.mode: "+
+				"harness's key variable; under %s it reaches nothing. Set auth.mode: "+
 				"api-key, or drop auth.api_key", mode)
 	}
 
@@ -1124,7 +1124,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 				"%s is the zone the engine hands every harness it starts (its own TZ, else "+
 					"UTC), and reads the harness's limit resets in; it is not set per entry. "+
 					"Drop it, and set TZ in the engine's own environment to move every "+
-					"Harness's zone", name)
+					"harness's zone", name)
 		case profile.APIKeyEnv:
 			p.add(entry(at(path, "env"), name), ErrConflict,
 				"%s is this harness's key variable, which auth owns: whether a value "+
