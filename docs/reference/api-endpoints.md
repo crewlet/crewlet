@@ -6479,7 +6479,7 @@ signed under the fleet keyring and bound to that one request, and a note on a
 run's record is sealed under the same keyring, bound to its turn and its id —
 so nothing else reaches a turn
 ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md),
-[ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
+[ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)).
 An answer the asking node cannot believe is no answer, so it reads as
 `unknown`. A running node that does not hold the key the note is signed under
 takes nothing and says so, and a run's record whose seat is sealed under a key

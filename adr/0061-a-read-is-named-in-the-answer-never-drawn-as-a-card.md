@@ -30,7 +30,7 @@ checked by the dashboard as every card's was.
 
 **No address the model writes is opened; a link the dashboard builds is.** The
 answer's words are read with `links: "checked"` (`lib/inlineTokens.ts`,
-`LinkMode`), the rule the Inbox reads an agent's words by too, a coding run's
+`LinkMode`), the rule the Inbox reads an agent's words by too, an executor's
 Answer dialog its question, and Chatlet a message's links, whoever wrote the
 message: a link is live only where the dashboard BUILT it, from parts it
 checked, to a place that is the company's. A key whose project is the
@@ -51,10 +51,10 @@ The threat is a prompt injection that has the model write
 host's owner, where a click on a link the dashboard built carries only a
 validated name or number to the company's own place.
 
-**Deliberately, the assistant, the Inbox, a coding run's question and a chat
+**Deliberately, the assistant, the Inbox, an executor's question and a chat
 message's links only.** A run's question is read so wherever it is answered:
-its Answer dialog (`components/writes.tsx`), opened from Live › Runs, a seat's
-page and every decision row, draws its context and the run's reasoning
+its Answer dialog (`components/writes.tsx`), opened from Live › Executors, a
+seat's page and every decision row, draws its context and the run's reasoning
 `checked`. Doclet pages, a work item's description and comments read anywhere
 but the Inbox still open any safe address as written (`links: "anchor"`);
 whether those surfaces read `checked` too is an open question for the owner,
