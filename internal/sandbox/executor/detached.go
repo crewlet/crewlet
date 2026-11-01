@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/crewlet/crewlet/internal/envfile"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -568,13 +569,16 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		hooks = paths.GitHooks()
 	}
 	out := r.harness.Output(paths)
+	inner := withBoxBin(r.harness.Command(req, session, paths, configPath), paths)
+	script, err := wrapperScript(inner, out, paths, hooks)
+	if err != nil {
+		return sandbox.RunHandle{}, err
+	}
 	if out.BriefOnStdin {
 		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
 			return sandbox.RunHandle{}, fmt.Errorf("executor: writing the brief: %w", err)
 		}
 	}
-	inner := withBoxBin(r.harness.Command(req, session, paths, configPath), paths)
-	script := wrapperScript(inner, out, paths, hooks)
 
 	// A LOGIN SHELL, and the -l is load-bearing: a harness is commonly
 	// installed through nvm, asdf or a similar version manager, whose PATH
@@ -715,8 +719,9 @@ func (r *Runner) ownSpend(ctx context.Context, box sandbox.Sandbox, paths Paths,
 //
 // hooks is the directory the run's git takes its hooks from — the run's
 // commit attribution ([attributionExports]) — or "" for a run that credits
-// nothing.
-func wrapperScript(inner string, out Output, paths Paths, hooks string) string {
+// nothing. A pin whose value no assignment can carry
+// ([envfile.FormatAssignment]) refuses the run: its job is never started.
+func wrapperScript(inner string, out Output, paths Paths, hooks string) (string, error) {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
 		stdin = shellQuote(paths.Brief())
@@ -728,13 +733,16 @@ func wrapperScript(inner string, out Output, paths Paths, hooks string) string {
 		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
 	}
 	// AND THE PINS AFTER THE UNSETS, for their reason: exported here, every
-	// value an earlier source gave the same name is replaced.
-	if len(out.Pin) > 0 {
-		b.WriteString("export")
-		for _, pin := range out.Pin {
-			fmt.Fprintf(&b, " %s=%s", pin.Name, shellQuote(pin.Value))
+	// value an earlier source gave the same name is replaced. Each is written
+	// as envfile writes an assignment, the one form a dotenv reader and
+	// `source` agree on, so a value with a quote or a newline in it is refused
+	// rather than written in a form one of them would misread.
+	for _, pin := range out.Pin {
+		line, err := envfile.FormatAssignment(pin.Name, pin.Value)
+		if err != nil {
+			return "", fmt.Errorf("executor: pinning %s for the harness: %w", pin.Name, err)
 		}
-		b.WriteString("; ")
+		b.WriteString(line + "; ")
 	}
 	// AFTER THE PROFILE, BEFORE THE HARNESS, for the reason the unset is: an
 	// entry exported around the shell would be replaced by a profile that
@@ -749,7 +757,7 @@ func wrapperScript(inner string, out Output, paths Paths, hooks string) string {
 	}
 	fmt.Fprintf(&b, "echo $code > %s; echo $code > %s",
 		shellQuote(paths.ExitCode()), shellQuote(paths.Done()))
-	return b.String()
+	return b.String(), nil
 }
 
 // finalSystem appends the report instruction, addressed at THIS box, to the
