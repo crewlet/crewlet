@@ -255,7 +255,7 @@ func (r CheckRow) encodedBytes() int {
 	for _, s := range []struct {
 		key, value string
 	}{
-		{"purpose", string(r.Purpose)}, {"change_id", r.ChangeID},
+		{"repo", r.Repo}, {"purpose", string(r.Purpose)}, {"change_id", r.ChangeID},
 	} {
 		if s.value != "" {
 			n += field(s.key, stringBytes(s.value), false)

@@ -1963,6 +1963,14 @@ type ChecksResult struct {
 // the one attempt ([CheckDetail]): its definition, its tail and its failures.
 type CheckRow struct {
 	CheckKey
+	// Repo is its repository's name, which every read a person or a seat
+	// asks — a listing and a `check` — names, so a reader links the attempt
+	// to its repository, change and commit, each addressed by name; a box
+	// admission's read ([ReadCheckBox]) addresses the row by id and leaves it
+	// out. AN ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields
+	// row, under M3-O84 §2 item 5's stated condition: no build carrying the
+	// code domain has answered a listing without it.
+	Repo    string       `json:"repo,omitempty"`
 	State   CheckState   `json:"state"`
 	Purpose CheckPurpose `json:"purpose,omitempty"`
 	// ChangeID and Revision are a head check's change and revision;

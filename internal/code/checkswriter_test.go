@@ -938,8 +938,8 @@ func checkNames(rows []code.CheckRow) []string {
 // every target, a change's — its head's, checked for ITS target — the
 // repository's newest ended first and the window's — each a keyset that
 // resumes where its page ended — and one attempt whole, with the failures its
-// ending named; and a reader the repository's grant shuts out reads none of
-// them.
+// ending named and its repository's name; and a reader the repository's grant
+// shuts out reads none of them.
 //
 // TWO CHANGES SHARE A HEAD, into two branches ([checksOfEveryShape]): each is
 // checked for its own target — main's lint, unit and vet, release's own unit
@@ -963,7 +963,8 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("one attempt: %v", err)
 	}
-	if c := one.Check; c == nil || c.State != code.CheckStateFailed || c.Def == nil || c.Def.Run != "make unit" ||
+	if c := one.Check; c == nil || c.Repo != "web" || c.State != code.CheckStateFailed || c.Def == nil ||
+		c.Def.Run != "make unit" ||
 		c.Tail != "--- FAIL" || len(c.Failures) != 1 || c.Failures[0].TestID != "TestA" {
 		t.Fatalf("one attempt read %+v, want main's unit's failure whole", one.Check)
 	}
@@ -1002,9 +1003,12 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 // row at a time reaches every kept row. A repository's own listing narrowed
 // by state keeps that state's, and one of a repository the grant shuts out is
 // refused not_permitted, however narrow — and a state that is no check's is
-// refused before anything is read.
+// refused before anything is read. Every row listed names its repository by
+// name, the window's as a repository's own, since a reader links an attempt
+// to its repository, change and commit by name.
 //
-// Mutations: keep a window's row by the narrowing alone (checksWindow
+// Mutations: leave the window's rows unnamed (checksWindow not filling Repo)
+// → every window row names "", red; keep a window's row by the narrowing alone (checksWindow
 // dropping `listed`) → vp-sales lists plat-private's unit, red; ignore the
 // narrowing on a repository's listing (pageChecks kept everything there) →
 // sales-private's passed listing holds its failed unit, red; name the next
@@ -1045,6 +1049,10 @@ func TestTheChecksListingIsHeldToTheGrant(t *testing.T) {
 				return all, err
 			}
 			for _, row := range got.Checks {
+				if row.Repo != repoOf[row.RepoID] {
+					t.Errorf("%s's %s was listed naming repository %q, want %q", row.RepoID, row.Name, row.Repo,
+						repoOf[row.RepoID])
+				}
 				all = append(all, repoOf[row.RepoID]+"/"+row.Name)
 			}
 			if got.Next == "" {

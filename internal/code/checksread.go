@@ -614,6 +614,9 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's checks: %w", repo.ref.Name, err)
 	}
+	for i := range scanned {
+		scanned[i].Repo = repo.ref.Name
+	}
 	r.pageChecks(scanned, c.keeps, limit, checksWalk(q), out)
 	return nil
 }
@@ -656,6 +659,11 @@ func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c Ch
 	listed, err := listedReposAmong(ctx, tx, ids, q.Asker, q.CeilingSeat, chart, "a page of checks")
 	if err != nil {
 		return err
+	}
+	for i, row := range scanned {
+		if repo, ok := listed[row.RepoID]; ok {
+			scanned[i].Repo = repo.ref.Name
+		}
 	}
 	r.pageChecks(scanned, func(row CheckRow) bool { _, ok := listed[row.RepoID]; return ok && c.keeps(row) },
 		limit, checksWalk(q), out)
@@ -722,6 +730,7 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	case err != nil:
 		return fmt.Errorf("code: read check %s of %s: %w", key.Name, key.OID, err)
 	}
+	d.Repo = repo.ref.Name
 	d.Tail = tail
 	if def != "" {
 		d.Def = &CheckDef{}
