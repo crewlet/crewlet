@@ -880,12 +880,13 @@ func (b *Bootstrap) Warnings() []Warning {
 	// mutation log's alone: the backup term is evaluated per log, and the
 	// ordered logs — the tracker's, the knowledge base's, the artifacts'
 	// and their datastore's, the identity estate's, the Dashboard
-	// Assistant's and chat's — carry no age bound, so nothing else ever
-	// removes a record from them. Naming one field sent an operator to the
-	// wrong ceiling whenever another log filled first: a full identity log
-	// refuses every sign-in and every change to who may do what, a full
-	// assistant log every question somebody asks the assistant, since it
-	// cannot record the turn, and a full chat log a message somebody typed.
+	// Assistant's, chat's and the executor log — carry no age bound, so
+	// nothing else ever removes a record from them. Naming one field sent an
+	// operator to the wrong ceiling whenever another log filled first: a
+	// full identity log refuses every sign-in and every change to who may do
+	// what, a full assistant log every question somebody asks the assistant,
+	// since it cannot record the turn, a full chat log a message somebody
+	// typed, and a full executor log every capture of a seat's session.
 	//
 	// NO COUNT IN THE SENTENCE: the fields are listed by name, and a test
 	// reads them off [Stream] and holds the message to every one, so a log

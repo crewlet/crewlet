@@ -148,7 +148,12 @@ less than 1 GiB, so setting them only moves the figure up.
   sign-ins, Ask Crewlet's with how many people ask it (a month of a ten-person
   company's questions fits in 64 MiB), the executor log with the turns the
   seats run (it names each turn's session rather than holding it, so about
-  three weeks of a ten-seat company's turns fit in 64 MiB), and the usage log
+  three weeks of a ten-seat company's turns fit in 64 MiB — but only about
+  two days of the hundred-seat reference company's, short of the seven days
+  of `min_age` the trim keeps, so a company of more than about thirty seats
+  on a host this small sets `stream.executor_log_max_bytes` itself, which no
+  scaling moves, or gives the broker the room for the default; the
+  `log_ceiling_short` alarm names the log that is short), and the usage log
   is a census of node-days — about 12 MB for a ten-seat node's 181 days — and a ceiling is
   granted in full at create time, so a log at a disk-sized floor costs free
   space a node needs before it can start, for a log that will not fill it.

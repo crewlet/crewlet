@@ -1225,7 +1225,9 @@ stream:
                                     #   scaled down as far as 64 MiB where the
                                     #   broker is short: about eighteen days of
                                     #   a completely blocked trim at the
-                                    #   reference company's ~29 MB a day.
+                                    #   reference company's ~29 MB a day, and
+                                    #   at 64 MiB about two, short of min_age —
+                                    #   past ~30 seats on a small host, set it.
                                     #   Crossing it refuses the append, and the
                                     #   top of it is kept for gate records. How
                                     #   long a session is kept is the company

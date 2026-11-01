@@ -321,10 +321,21 @@ const (
 	//
 	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor] records:
 	// ten seats write a tenth of the reference rate, for which 64 MiB is about
-	// three weeks; the reference company at the floor keeps about two days,
-	// past the one `min_age` window a healthy trim keeps. THE CEILING IS A
-	// TYPO GUARD: sixty-four times the default is far past any modelled
-	// company.
+	// three weeks. IT IS NOT THE REFERENCE COMPANY'S: at its 29 MB a day the
+	// floor holds about two days, short of the seven-day `min_age` window a
+	// healthy trim keeps, so a log scaled down to it fills with every term of
+	// the trim satisfied for a company of more than about thirty-three seats
+	// (64 MiB over seven days of 0.29 MB a seat). That is a floor where the
+	// broker is short, not the default: `log_ceiling_short` names the log,
+	// and the remedy is this field set outright, which no scaling moves, or a
+	// broker with the room for the default — the docs say so where a small
+	// host is sized (deployment's floors). Scaling it no lower than 256 MiB
+	// instead would hold about nine days of the reference company, and would
+	// raise the least a fresh node boots in by 192 MiB more of logs, to within
+	// a few tens of mebibytes of the 14Gi volume crewlet-operator admits: a choice
+	// about which companies the smallest volumes serve, not about this log.
+	// THE CEILING IS A TYPO GUARD: sixty-four times the default is far past
+	// any modelled company.
 	DefaultExecutorLogMaxBytes int64 = 512 << 20
 	ExecutorLogMaxBytesFloor   int64 = 64 << 20
 	ExecutorLogMaxBytesCeiling int64 = 64 << 30
@@ -418,11 +429,12 @@ const (
 	// THE FLOOR IS SIX GIBIBYTES, a bound on what the field may say rather
 	// than what a node of a given configuration needs. Every node reserves
 	// every state-log domain's ceiling whatever it runs, and left unset the
-	// nine come to 7.5625 GiB at their smallest: the tracker's, the
-	// vectors', the knowledge base's, the artifacts', the datastore's and the
-	// chat log's at the gibibyte scaling stops at, the usage log's 1 GiB
-	// default and the identity log's 512 MiB one (neither scaled below what
-	// it asks), and the assistant's 64 MiB, where its own scaling stops. The
+	// ten come to 7.625 GiB at their smallest: the tracker's, the vectors',
+	// the knowledge base's, the artifacts', the datastore's and the chat
+	// log's at the gibibyte scaling stops at, the usage log's 1 GiB default
+	// and the identity log's 512 MiB one (neither scaled below what it asks),
+	// and the assistant's and the executor log's 64 MiB each, where their own
+	// scaling stops. The
 	// object store's nats bucket is reserved beside them. So a value this
 	// floor admits can be short of what a configuration boots in, and that is
 	// said where it can be acted on: engine.BrokerFloorFor computes the least
@@ -440,8 +452,8 @@ const (
 	// an order of magnitude above the largest estate the domain ceilings can
 	// describe (1 TiB of mutation log, 2 TiB of vectors, 512 GiB of artifact
 	// datastore, 256 GiB each of knowledge base, artifacts and chat, 64 GiB
-	// each of usage and assistant, and 16 GiB of identity — about 4.4 TiB
-	// together), so anything past it is a unit mistake rather than a
+	// each of usage, assistant and executor, and 16 GiB of identity — about
+	// 4.45 TiB together), so anything past it is a unit mistake rather than a
 	// deployment. The object bucket's own bound is this one, and its
 	// reservation has to fit inside whatever limit is set, beside the logs'.
 	StoreMaxBytesFloor   int64 = 6 << 30
