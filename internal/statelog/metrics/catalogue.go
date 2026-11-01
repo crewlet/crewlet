@@ -37,8 +37,6 @@ package metrics
 
 import (
 	"fmt"
-
-	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Kind is what an instrument measures.
@@ -2174,7 +2172,8 @@ func Catalogue() []Instrument {
 				"holds 2048 while the broker refuses them and drops the oldest " +
 				"past that, so no seat is woken by those. Any rise is a broker " +
 				"this node could not publish to for a long while; " +
-				"`" + toolname.FleetHealth + "` still reads what is firing now.",
+				"`GET /fleet` and the seats' health tools still read what is " +
+				"firing now.",
 		},
 		// ---- the object store's bucket ----------------------------------
 		{
