@@ -302,8 +302,8 @@ func (q ReadQuery) validateQueueDue() error {
 		{"check_box", q.CheckBox != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"expunge_tips", q.ExpungeTips != nil},
 		{"expunged_before", !q.ExpungedBefore.IsZero()},
-		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""},
-		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a queue_due read lists the repositories holding a live entry, or one "+

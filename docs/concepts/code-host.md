@@ -2425,9 +2425,9 @@ grant on the repository as every other read of it is:
   naming an attempt's key is refused, so no read that forgot whom it asks for
   is answered held to no grant;
 - **`checks_queued`**: the engine's own — a git node's [claim
-  walk](#who-runs-a-check): every repository's queued attempts, oldest queued
-  first, each with the definition it was queued under and its repository's
-  name, a page at a time;
+  walk](#who-runs-a-check): every repository's queued attempts whose checks
+  name one cell (or none), oldest queued first, each with the definition it
+  was queued under and its repository's name, a page at a time;
 - **`checks_running`**: the engine's own — a repository's home's sweep of a
   runner that is gone: the repositories holding a running attempt, or one
   repository's running attempts.
@@ -2572,6 +2572,16 @@ container cells full, or none — and so on down the order. Every node computes
 the same order from the same set of git nodes; there is no lease and no
 coordinator. A node walks the queue when a check record lands on the code log,
 at most once a second, and every fifteen seconds whatever happens.
+
+**A node reads only what it can claim.** The queue is read by the cell each
+check names, and a node reads the cells it can start a check in now: ones the
+company lets a check run in, that its own sandbox catalogue configures, and
+that have room — a container slot free, or an `e2b` cell the company's caps
+have not held back. A node whose container slots are full reads nothing of the
+container backlog, whatever else its catalogue holds, and one cell's backlog
+never costs a walk in another. Within a cell the attempts are taken oldest
+queued first, whether a check names the cell or falls to it as the company's
+default.
 
 **The claim comes before the box.** A runner claims an attempt — a
 `check_started` record naming itself, decided by the repository's checks

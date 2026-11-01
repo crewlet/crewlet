@@ -1058,9 +1058,10 @@ const (
 	// own rather than a `check` read naming none, so that a principal's read
 	// that forgot its asker is refused rather than answered ungated.
 	ReadCheckBox ReadKind = "check_box"
-	// ReadChecksQueued is the attempts waiting for a runner, OLDEST QUEUED
-	// FIRST, each with its definition and its repository's name
-	// ([RunnableCheck]): a git node's CLAIM WALK (internal/code/checkrun),
+	// ReadChecksQueued is the attempts waiting for a runner whose definitions
+	// name one cell ([ChecksQueuedQuery]), OLDEST QUEUED FIRST, each with its
+	// definition and its repository's name ([RunnableCheck]): a git node's
+	// CLAIM WALK (internal/code/checkrun),
 	// every repository's whose repository a runner may still claim in. The
 	// engine's own, as `check_box` is: no principal makes it, and it is held
 	// to no grant.
@@ -1355,6 +1356,15 @@ type ReadQuery struct {
 	// node of a build that predates the kind refuses the read as a kind it
 	// does not know (ErrInvalid) — the sweep waits, never answered as none.
 	ChecksRunning *ChecksRunningQuery `json:"checks_running,omitempty"`
+	// ChecksQueued is a `checks_queued` read's question, REQUIRED for that
+	// kind and refused on every other: the cell the attempts' definitions
+	// name, which a runner's walk reads one at a time for the cells it has
+	// room in. An estate request's field and no record's, so it takes no
+	// versionedFields row: a node of a build that predates it answers the
+	// kind for every cell, which the walk still judges attempt by attempt —
+	// its cell resolved and its room taken for each — so it claims nothing
+	// it could not run, at the cost of reading what it skips.
+	ChecksQueued *ChecksQueuedQuery `json:"checks_queued,omitempty"`
 	// ExpungeTips is an `expunge_tips` read's repository and instant:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
@@ -2202,6 +2212,15 @@ type ChecksDueQuery struct {
 // the attempts it sweeps.
 type ChecksRunningQuery struct {
 	RepoID string `json:"repo_id,omitempty"`
+}
+
+// ChecksQueuedQuery is a `checks_queued` read's question: the cell the queued
+// attempts' definitions name in their run_in — "" for the ones naming none,
+// which run in the company's default cell as the epoch a runner walks under
+// resolves it (config.Company.CheckCell), never as anything stored says.
+// ALWAYS SENT, "" included: it is a cell's name, and none is one.
+type ChecksQueuedQuery struct {
+	RunIn CheckCell `json:"run_in"`
 }
 
 // RunnableCheck is one attempt a `checks_queued` read lists: its row, the

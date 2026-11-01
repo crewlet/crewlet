@@ -1700,6 +1700,9 @@ func (q ReadQuery) validate() error {
 	case q.MirrorPush != nil:
 		return fmt.Errorf("%w: mirror_push: only a mirror_push read names the repository whose push mirror "+
 			"it reads", ErrInvalid)
+	case q.ChecksQueued != nil:
+		return fmt.Errorf("%w: checks_queued: only a checks_queued read names the cell whose queued checks it "+
+			"reads", ErrInvalid)
 	case q.QueueDue != nil:
 		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
 			"in", ErrInvalid)
@@ -1881,6 +1884,8 @@ func (q ReadQuery) validateIntroduced() error {
 			"checks it reads")
 	case q.MirrorPush != nil:
 		return refused("mirror_push", "only a mirror_push read names the repository whose push mirror it reads")
+	case q.ChecksQueued != nil:
+		return refused("checks_queued", "only a checks_queued read names the cell whose queued checks it reads")
 	case q.ExpungeTips != nil:
 		return refused("expunge_tips", "only an expunge_tips read names a repository's ref drops")
 	case !q.ExpungedBefore.IsZero():
@@ -1972,6 +1977,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -2022,6 +2028,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -2063,6 +2070,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -2114,6 +2122,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, lists+", a page of MaxSnapshotItems at a time, and names nothing else")
@@ -2172,6 +2181,7 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+
@@ -2213,7 +2223,8 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"branch_changes", q.BranchChanges != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil},
+		{"branch_changes", q.BranchChanges != nil},
 		{"expunged_before", !q.ExpungedBefore.IsZero()}, {"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {
@@ -2294,7 +2305,7 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil},
 		{"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {

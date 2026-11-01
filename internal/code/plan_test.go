@@ -1234,11 +1234,12 @@ func registeredStatements() map[string]statement {
 				repoKey + " (id=?)"}},
 		"checks backlog": {checksBacklogSQL, []any{1000, BacklogScan + 1}, []string{"code_checks_overdue_idx (overdue_at>? AND overdue_at<?)", repoKey + " (id=?)"}},
 		// A RUNNER'S CLAIM WALK and A HOME'S SWEEP (checksread.go): the
-		// queued attempts oldest queued first after a place, each tested and
-		// named by its repository's key; the repositories holding a running
-		// attempt after an id; and one repository's running attempts.
-		"queued checks": {queuedChecksSQL, []any{0, "", "", "", "", 0, MaxSnapshotItems},
-			[]string{"code_checks_queued_idx (queued_at>=?)", repoKey + " (id=?)"}},
+		// queued attempts naming one cell oldest queued first after a place,
+		// each tested and named by its repository's key; the repositories
+		// holding a running attempt after an id; and one repository's running
+		// attempts.
+		"queued checks": {queuedChecksSQL, []any{"container", 0, "", "", "", "", 0, MaxSnapshotItems},
+			[]string{"code_checks_queued_idx (run_in=? AND queued_at>=?)", repoKey + " (id=?)"}},
 		"running check repositories": {runningReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"code_checks_running_idx (repo_id>?)"}},
 		"running checks": {runningChecksSQL, []any{"repo-1", MaxSnapshotItems},
