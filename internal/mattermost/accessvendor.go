@@ -36,9 +36,10 @@ type accessVendor struct{}
 
 func (accessVendor) Kind() integration.Kind { return integration.KindMattermost }
 
-// Catalog is Mattermost's per-seat offer. There is no tool binding: the
-// engine's own chat transport reads the seat's token directly, so there is no
-// server to bind it to ([config.SeatToolBindings]).
+// Catalog is Mattermost's per-seat offer. The seat's token has two readers:
+// the engine's own chat transport, and a per-seat mcp-server-mattermost, which
+// the MCP catalogue's recognition binds it to as MATTERMOST_TOKEN
+// (internal/mcp/catalogue).
 func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
 		Kind:        integration.KindMattermost,

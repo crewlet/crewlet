@@ -1532,6 +1532,24 @@
         "null"
       ]
     },
+    "MCPRegistry": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "description": "The registry's https address; /v0.1/servers is appended to it. Absent: no community search.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "MCPServer": {
       "additionalProperties": false,
       "properties": {
@@ -4170,6 +4188,10 @@
     },
     "learning": {
       "$ref": "#/$defs/Learning"
+    },
+    "mcp_registry": {
+      "$ref": "#/$defs/MCPRegistry",
+      "description": "The community MCP registry the dashboard searches beside the curated catalogue. Absent: none."
     },
     "mcp_servers": {
       "description": "Tool servers, stdio or http. Per-agent credentials live in role.mcp_env.",

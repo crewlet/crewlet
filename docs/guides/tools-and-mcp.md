@@ -540,6 +540,79 @@ what tells an agent which server to look in before it spends a call listing
 one. Editing it reaches the next turn and restarts nothing, since no server
 process reads it. It is also on the server's row of `GET /mcp-servers`.
 
+### The curated catalogue, and a community registry
+
+Adding a server starts from the **curated catalogue**: the MCP servers this
+build knows, each with its address or launch line, the headers or variables it
+reads, how a static credential's value is spelled, the sign-ins its vendor
+offers, what an admin has to do at the vendor first, and the day its facts
+were last read from the vendor (`read_at`). It is a table compiled into the
+engine and reviewed in pull requests, so every node answers it the same, with
+or without egress. `GET /mcp-servers/catalogue` serves it (see the
+[API reference](../reference/api-endpoints.md#get-mcp-serverscatalogue)).
+
+| Entry | Server | Sign-in |
+|---|---|---|
+| `github` | GitHub's remote server | the GitHub integration (each agent's own app token), or a token header |
+| `datadog` | Datadog's remote server, at your site's address | the Datadog integration, OAuth, or the `DD_API_KEY` and `DD_APPLICATION_KEY` headers |
+| `rovo` | Atlassian's Rovo remote server | OAuth, or an API token an organization admin has allowed |
+| `linear` | Linear's remote server | OAuth, or an API key header |
+| `notion` | Notion's remote server | OAuth |
+| `sentry` | Sentry's remote server | OAuth |
+| `stripe` | Stripe's remote server | OAuth, or an agent API key header |
+| `cloudflare` | The Cloudflare API server | OAuth, or an API token header |
+| `gitlab` | `glab mcp serve`, one per agent | the GitLab integration |
+| `slack` | `slack-mcp-server` 1.3.0, one per agent | the Slack integration |
+| `mattermost` | `mcp-server-mattermost` 0.6.1, one per agent | the Mattermost integration |
+| `atlassian` | `mcp-atlassian` 0.23.1 for Jira and Confluence, one per agent | the Atlassian integration |
+| `tavily` | `tavily-mcp` 0.2.22 | its API key variable |
+| `postgres` | Postgres MCP Pro (`postgres-mcp` 0.3.0), restricted to reads | its connection string variable |
+
+A local entry launched through a package runner names the exact release its
+facts were read against, and every page here that launches the same package
+names the same release: one test holds the catalogue and the pages together,
+so a bump moves them at once.
+
+**The same table recognises a configured server.** A server whose address or
+command matches an entry is drawn on Settings › MCP & tools with that entry's
+title and vendor mark, and `GET /mcp-servers` names it (`title`, `catalogue`,
+`vendor`). For the entries an integration serves, that recognition is also
+what binds each agent's own credential to a per-agent server (see
+[Seat credentials the engine binds](#seat-credentials-the-engine-binds)). An
+address is matched by whole host labels, never a substring.
+
+**A community registry is off until the company names one.** Set
+`mcp_registry.url` to the https address of a registry that speaks the
+[MCP Registry](https://registry.modelcontextprotocol.io) v0.1 API. That is
+usually a mirror the company curates: the official registry is a preview,
+and its own guidance is that a host reads a subregistry of it rather than it.
+
+```yaml
+mcp_registry:
+  url: https://registry.modelcontextprotocol.io
+```
+
+The add flow then offers a search of it beside the catalogue. What a registry
+lists is somebody else's description of somebody else's server, so:
+
+- every result is marked **not reviewed**, and carries no read date, no
+  integration and no fixed value; it is drawn with a vendor's mark only when
+  its address is that vendor's own host;
+- it is a draft for the same add flow, test and save as an address typed by
+  hand, and nothing it says starts a process or skips a step;
+- a result is offered only with a Streamable HTTP address that is https and
+  fixed, or a package from the public npm or PyPI registry at an exact
+  release, launched as `npx -y <package>@<release>` or
+  `uvx <package>==<release>`. A listing that needs a runner argument, a
+  package from another registry, a templated address, a field past its bound
+  or text with a direction override is left out, and the answer counts it;
+- a search reads at most a mebibyte and 20 results and gives up after 10
+  seconds, and the engine dials the registry alone: never an icon, a
+  repository or an address a listing names, and no redirect (a registry that
+  moved is reported with where it points, for you to write);
+- the address must be https, a private one included, because the launch lines
+  a registry answers are only as trustworthy as the connection they came over.
+
 ### What a tool can do
 
 Beside the origin, every catalogue row carries the **behavioural hints** the
@@ -926,7 +999,9 @@ mcp_servers:
 ```
 
 An entry that declares nothing is bound by what the engine recognises it as,
-by its command or its address:
+by its command or its address, through the
+[curated catalogue](#the-curated-catalogue-and-a-community-registry)'s
+recognition:
 
 | Server | Recognised by | Reads |
 |---|---|---|

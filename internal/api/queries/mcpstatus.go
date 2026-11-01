@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -116,6 +117,15 @@ type MCPStatusNode struct {
 // nodes did with it.
 type MCPServerRow struct {
 	Name string `json:"name"`
+	// Title, Catalogue and Vendor are what the curated catalogue recognises
+	// the server as, by its address or its command
+	// ([catalogue.Recognise]): the entry's title, its key and the vetted
+	// mark the dashboard draws. A server it does not recognise is titled by
+	// its name, with "" for the other two, which is also a server the
+	// configuration does not carry.
+	Title     string `json:"title"`
+	Catalogue string `json:"catalogue"`
+	Vendor    string `json:"vendor"`
 	// Configured is whether this node's active configuration declares
 	// it. False only for a server a node reports and the configuration no
 	// longer (or does not yet) carries.
@@ -261,7 +271,7 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	for _, r := range reports {
 		for name, m := range r.servers {
 			if _, known := rows[name]; !known {
-				rows[name] = &MCPServerRow{Name: name, Shared: m.Shared, Enabled: true, Args: []string{}}
+				rows[name] = &MCPServerRow{Name: name, Title: name, Shared: m.Shared, Enabled: true, Args: []string{}}
 			}
 		}
 	}
@@ -330,8 +340,9 @@ func instanceSeat(organization *org.Organization, id uuid.UUID) string {
 // configuredRow is a server's launch as the configuration declares it, with
 // no credential in it.
 func configuredRow(m *config.MCPServer) *MCPServerRow {
-	return &MCPServerRow{
+	row := &MCPServerRow{
 		Name:        m.Name,
+		Title:       m.Name,
 		Configured:  true,
 		Shared:      m.IsShared(),
 		Enabled:     m.IsEnabled(),
@@ -341,6 +352,10 @@ func configuredRow(m *config.MCPServer) *MCPServerRow {
 		Args:        append([]string{}, m.Args...),
 		URL:         m.URL,
 	}
+	if entry, ok := catalogue.Recognise(m.Launch()); ok {
+		row.Title, row.Catalogue, row.Vendor = entry.Title, entry.ID, entry.Vendor
+	}
+	return row
 }
 
 // mcpState is the ONE reading of a server's counts.
