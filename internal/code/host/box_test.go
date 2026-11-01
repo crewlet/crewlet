@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -1381,6 +1382,10 @@ func TestNeitherTransportTakesTheOthersCredential(t *testing.T) {
 	}))
 	t.Cleanup(signedIn.Close)
 
+	// A POOL OF ITS OWN: the rows ask the node's real listener and the
+	// signed-in server alike, and http.DefaultClient's pool is swept by
+	// every httptest.Server.Close in the binary (httpx's guard).
+	client := httpxtest.Pool(t)
 	do := func(base, path string, set func(*http.Request)) (*http.Response, string) {
 		t.Helper()
 		req, err := http.NewRequestWithContext(c.Ctx, http.MethodGet, base+path, nil)
@@ -1388,7 +1393,7 @@ func TestNeitherTransportTakesTheOthersCredential(t *testing.T) {
 			t.Fatal(err)
 		}
 		set(req)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1506,7 +1511,7 @@ func TestEveryBoxIsOneSpoolCredential(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", host.UploadPackRequestType)
 	req.Header.Set("Git-Protocol", v2)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := runsLogin.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
