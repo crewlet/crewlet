@@ -303,10 +303,10 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 	if ref != nil && undecided(cmds) {
 		if l.EngineCommitter != "" {
-			if commits, err = newPackCommits(l.Scratch.Dir); err != nil {
+			if commits, err = newPackCommits(s.o.Cache); err != nil {
 				return landed{}, unchecked(err)
 			}
-			defer commits.remove()
+			defer commits.close()
 		}
 		oid, size, found, berr := s.largestBlob(ctx, l.Scratch, idx, ref.PackBytes(), limits.MaxBlobBytes,
 			commits)

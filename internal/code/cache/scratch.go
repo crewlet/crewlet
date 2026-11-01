@@ -797,7 +797,9 @@ func (s *Scratch) discard() {
 // fetch's negotiation past the host's in-memory share, which a partial clone's
 // checkout reaches by naming every blob it lacks in one request. And the file
 // a revision's facts write a change's patch into, for `git patch-id` to read
-// back as the next process of the read lane (internal/code/query).
+// back as the next process of the read lane (internal/code/query). And the
+// ids of a coding box's push's commits, which the push's blob scan spools for
+// its committer scan to read back (internal/code/host's packCommits).
 //
 // IT HAS NO NAME. It is created under scratch/ — on the cache's volume, never
 // a TMPDIR that may be memory — and unlinked at once, so it is the OPEN FILE
@@ -808,7 +810,8 @@ func (s *Scratch) discard() {
 // counts one against the cache's budget. That is deliberate: a spool draws on
 // its caller's own bound — a fetch's on the host's allowance
 // (internal/code/host), a patch on the bound its patch-id is taken under
-// (query.MaxPatchIDDiffBytes) — and counted here, one reader's large request
+// (query.MaxPatchIDDiffBytes), a push's commit ids on the pack they are read
+// from (code.MaxPackBytes) — and counted here, one reader's large request
 // would make the budget evict warm repositories that every other reader then
 // downloads again. The caller closes it.
 func (c *Cache) Spool() (*os.File, error) {

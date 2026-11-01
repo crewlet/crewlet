@@ -236,16 +236,20 @@ func (s *Server) largestBlob(ctx context.Context, sc *cache.Scratch, idxPath str
 
 // packCommits is the ids of the commits a coding box's pack holds, in the
 // order its index lists them, as the blob scan meets them (largestBlob): a
-// spool in the push's scratch, one "<hex>\n" line a commit, which the
-// committer scan (committedAs) reads back as its standard input — so the
-// pack's trees and blobs, nearly all of its objects, are asked about once.
+// spool, one "<hex>\n" line a commit, which the committer scan (committedAs)
+// reads back as its standard input — so the pack's trees and blobs, nearly
+// all of its objects, are asked about once.
 //
 // ON DISK, NEVER IN MEMORY: a pack of code.MaxPackBytes may hold millions of
 // commits, whose ids alone would be hundreds of mebibytes of a push's heap;
 // on disk they are at most twice the bytes the pack's own index spends on
-// them, beside the pack, and removed with the landing (remove), or with the
-// scratch should that fail. Written without an fsync: nothing outlives the
-// request, as nothing of the scratch does.
+// them, a bound the push's own pack sets. THE CACHE'S SPOOL (cache.Spool),
+// never a file of this package's own: nothing under internal/code but the
+// cache's own steps writes the cache's volume (cache's
+// TestNothingButSyncWritesACache), and a spool is the file that step makes —
+// on that volume, with no name, so the kernel frees it when the landing
+// closes it (close) or however the process ends, and no boot or janitor ever
+// meets one. Written without an fsync: nothing outlives the request.
 type packCommits struct {
 	f *os.File
 	w *bufio.Writer
@@ -256,10 +260,9 @@ type packCommits struct {
 	listed bool
 }
 
-// newPackCommits is an empty spool of a pack's commits, in dir, the push's
-// scratch.
-func newPackCommits(dir string) (*packCommits, error) {
-	f, err := os.CreateTemp(dir, "commits-*")
+// newPackCommits is an empty spool of a pack's commits, a spool of c's.
+func newPackCommits(c *cache.Cache) (*packCommits, error) {
+	f, err := c.Spool()
 	if err != nil {
 		return nil, fmt.Errorf("host: make the spool of the push's commits: %w", err)
 	}
@@ -300,12 +303,10 @@ func (p *packCommits) input() io.Reader {
 	return io.NewSectionReader(p.f, 0, p.n*(gitref.OIDHexLen+1))
 }
 
-// remove closes and removes the spool. A failure leaves a file the scratch's
-// own removal takes with it, so nothing reports one.
-func (p *packCommits) remove() {
-	_ = p.f.Close()
-	_ = os.Remove(p.f.Name())
-}
+// close closes the spool, which frees it: it has no name to remove. Nothing
+// reports a failure, since the spool is only read, and a close that failed
+// still releases the descriptor.
+func (p *packCommits) close() { _ = p.f.Close() }
 
 // committedAs is the commits of a coding box's pack (commits, as the blob scan
 // spooled them) whose committer's address is committer — the first
