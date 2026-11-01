@@ -182,13 +182,13 @@ func TestAFreshRunKeepsNoBase(t *testing.T) {
 	}
 }
 
-// A CONTINUED CLAUDE CODE RUN RECORDS ITS CLI'S RELEASE before the CLI starts,
-// asked of the CLI the box's PATH finds, which the collection reads to know
+// A CONTINUED CLAUDE CODE RUN RECORDS ITS HARNESS'S RELEASE before the harness starts,
+// asked of the harness the box's PATH finds, which the collection reads to know
 // whether the result states the session's spend. A fresh run records none.
 //
 // Mutation: drop the record, and a continued run on 2.1.277–2.1.309 is read as
 // a current release with nothing to say otherwise — or, recorded for every
-// run, a fresh run asks its CLI twice for nothing.
+// run, a fresh run asks its harness twice for nothing.
 func TestAContinuedClaudeRunRecordsItsRelease(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/box"}
@@ -205,7 +205,7 @@ func TestAContinuedClaudeRunRecordsItsRelease(t *testing.T) {
 }
 
 // THE RELEASE THAT RESTORES A CONTINUED SESSION'S TOTALS is read off what the
-// CLI printed: from 2.1.277 on, and a release this code cannot read is taken
+// harness printed: from 2.1.277 on, and a release this code cannot read is taken
 // for a current one, as the notes gate takes it.
 func TestTheReleaseThatRestoresTotalsIsReadOffTheHarness(t *testing.T) {
 	t.Parallel()

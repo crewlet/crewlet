@@ -730,7 +730,7 @@ func TestAContinuedRunResumesTheAskingRunsSession(t *testing.T) {
 	t.Parallel()
 	continued := sandbox.RunRequest{Brief: "the answer: main", Resume: "ses_0123456789abcdef0123456789abcdef"}
 
-	// A SCRIPT, which records the CLI's release before it execs the run
+	// A SCRIPT, which records the harness's release before it execs the run
 	// (TestAContinuedClaudeRunRecordsItsRelease).
 	cmd := scriptOf(t, claude().Command(continued, executor.Paths{}, ""))
 	if !strings.Contains(cmd, "--resume 'ses_0123456789abcdef0123456789abcdef'") {

@@ -26,7 +26,7 @@ import (
 //
 // EVERY MOVING PART HERE ALREADY EXISTED, which is the point of the shape. The
 // detachment, the durable row, the completion poll, the claim and the re-entry
-// are the sandbox layer's — an executor is its coding CLI's own run, whose
+// are the sandbox layer's — an executor is its harness's own run, whose
 // brief is the turn's ask, with the seat's system prompt as its standing
 // instructions. The tool surface is the bridge's. What this file adds is the
 // choice of member, the wiring, and the refusals that wiring makes possible.
