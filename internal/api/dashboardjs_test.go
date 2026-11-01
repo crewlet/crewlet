@@ -1188,8 +1188,9 @@ const (
 	// 0.3 KiB of the entry, and about 1.4 KiB of the bundler regrouping what
 	// the first paint already loaded: the code screens reach the peek rail
 	// through the grid and nothing of the lazy-screen table beside it, so the
-	// two are compressed apart). From 378.5 KiB that is about 381.5 KiB, so
-	// it moved to 382 KiB, which is 2.08 seconds on that link.
+	// two are compressed apart). Merged, the load measured 381.7 KiB
+	// (390,899 bytes), so it moved to 382 KiB, which is 2.08 seconds on that
+	// link.
 	initialBudget = 382 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
