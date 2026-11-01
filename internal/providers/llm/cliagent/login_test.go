@@ -325,7 +325,7 @@ func TestABundleThatDoesNotSayWhoseItIsIsRefused(t *testing.T) {
 	manifest := func(body string) bundleFile {
 		return bundleFile{name: cliprofile.BundleManifest, data: []byte(body)}
 	}
-	ours := manifest(`{"agent":"custom"}`)
+	ours := manifest(`{"harness":"custom"}`)
 	for name, tc := range map[string]struct {
 		entries []bundleFile
 		// foreign is whether it is refused as naming no CLI.
@@ -343,7 +343,7 @@ func TestABundleThatDoesNotSayWhoseItIsIsRefused(t *testing.T) {
 			entries: []bundleFile{manifest(`{}`), creds}, foreign: true, say: "names no agent",
 		},
 		"two manifests": {
-			entries: []bundleFile{ours, creds, manifest(`{"agent":"codex"}`)},
+			entries: []bundleFile{ours, creds, manifest(`{"harness":"codex"}`)},
 			say:     `holds "` + cliprofile.BundleManifest + `" twice`,
 		},
 		"a login file twice": {
@@ -382,7 +382,7 @@ func TestABundleThatDoesNotSayWhoseItIsIsRefused(t *testing.T) {
 
 	p := loginProvider(t)
 	if err := p.RestoreBundle(t.Context(), rawBundle(t,
-		manifest(`{"agent":"custom","exported_by":"a later build"}`), creds)); err != nil {
+		manifest(`{"harness":"custom","exported_by":"a later build"}`), creds)); err != nil {
 		t.Fatalf("a manifest carrying a key this build does not know: %v", err)
 	}
 	if got := readCreds(t, p); got != `{"token":"k-bundled"}` {
@@ -397,7 +397,7 @@ func TestARejectedBundleLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
 	// A good entry FIRST, then one the name check refuses.
-	blob, err := packBundle(bundleManifest{Agent: p.agent}, []bundleFile{
+	blob, err := packBundle(bundleManifest{Harness: p.agent}, []bundleFile{
 		{name: "creds.json", data: []byte(`{"token":"real"}`)},
 		{name: "../../.ssh/authorized_keys", data: []byte("pwned")},
 	})
@@ -772,7 +772,7 @@ func TestNoBuiltinProfileShipsACredentialLogin(t *testing.T) {
 // as the CLI it was exported from, through the export's own writer.
 func bundleOf(t *testing.T, agent, name, body string) string {
 	t.Helper()
-	blob, err := packBundle(bundleManifest{Agent: agent}, []bundleFile{{name: name, data: []byte(body)}})
+	blob, err := packBundle(bundleManifest{Harness: agent}, []bundleFile{{name: name, data: []byte(body)}})
 	if err != nil {
 		t.Fatal(err)
 	}

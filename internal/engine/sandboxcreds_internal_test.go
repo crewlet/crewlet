@@ -427,7 +427,7 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 			t.Fatalf("NewRegistry: %v", err)
 		}
 		cfg := &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
-			"sub": {Agent: config.CLIOpenCode, Model: "anthropic/claude-sonnet-4", Env: env},
+			"sub": {Harness: config.HarnessOpenCode, Model: "anthropic/claude-sonnet-4", Env: env},
 		}}}
 		return &Company{Models: models, Config: cfg},
 			&org.Role{Name: "SWE", LLM: org.ProviderKeys{"sub"}}

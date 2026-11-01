@@ -55,8 +55,8 @@ func deepCompany(t *testing.T) *Company {
 			Name: "Acme",
 			Providers: config.Providers{
 				LLM: map[string]config.LLMProvider{"deep": {
-					Agent: config.CLIClaudeCode, Model: "sonnet",
-					Auth: config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY}"},
+					Harness: config.HarnessClaudeCode, Model: "sonnet",
+					Auth: config.HarnessAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY}"},
 				}},
 				Sandbox: &config.SandboxProvider{E2B: &config.E2BSandbox{}},
 			},

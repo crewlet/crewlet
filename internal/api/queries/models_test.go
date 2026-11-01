@@ -32,7 +32,7 @@ providers:
     default:
       model: claude-opus-5-5
     codex-review:
-      agent: codex
+      harness: codex
       model: gpt-6.1-sol
 roles:
   - name: PM
@@ -376,14 +376,14 @@ func (fakeCatalogue) Provider(_ context.Context, provider string) (modelcatalog.
 func TestAModelStepIsOfferedTheCataloguesModels(t *testing.T) {
 	t.Parallel()
 	s := queries.Sources{Catalogue: fakeCatalogue{}}
-	got := answer(t, s, "llm_models", map[string]any{"agent": "claude-code"}).(queries.ModelsAnswer)
+	got := answer(t, s, "llm_models", map[string]any{"harness": "claude-code"}).(queries.ModelsAnswer)
 	if got.Provider != "anthropic" || got.Source != "models.dev" || len(got.Models) != 1 ||
 		got.DocsURL == "" || !slices.ContainsFunc(got.Aliases, func(a queries.ModelAliasRow) bool {
 		return a.ID == "sonnet"
 	}) {
 		t.Errorf("claude-code = %+v", got)
 	}
-	got = answer(t, s, "llm_models", map[string]any{"agent": "opencode",
+	got = answer(t, s, "llm_models", map[string]any{"harness": "opencode",
 		"provider": "openrouter"}).(queries.ModelsAnswer)
 	if got.Models[0].ID != "openrouter/m-1" {
 		t.Errorf("opencode's model id = %q, want <provider>/<id>", got.Models[0].ID)
@@ -391,12 +391,12 @@ func TestAModelStepIsOfferedTheCataloguesModels(t *testing.T) {
 
 	r := queries.NewRegistry()
 	queries.Register(r, s)
-	for _, params := range []map[string]any{{"agent": "gemini-cli"}, {"agent": "opencode"}, {}} {
+	for _, params := range []map[string]any{{"harness": "gemini-cli"}, {"harness": "opencode"}, {}} {
 		if _, err := r.Answer(everyGrant(t), "llm_models", params); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%v = %v, want bad params", params, err)
 		}
 	}
-	if _, err := r.Answer(everyGrant(t), "llm_models", map[string]any{"agent": "opencode",
+	if _, err := r.Answer(everyGrant(t), "llm_models", map[string]any{"harness": "opencode",
 		"provider": "nowhere"}); !errors.Is(err, queries.ErrUnknownProvider) {
 		t.Errorf("an unknown provider = %v", err)
 	}

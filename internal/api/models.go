@@ -101,7 +101,7 @@ func (m modelEngine) CheckModel(ctx context.Context, key string, draft *config.L
 		// own timeout capped at the credential budget.
 		smoke = true
 		budget = min(llmapi.CredentialBudget, time.Duration(spec.Timeout()*float64(time.Second)))
-		profile, err := cliprofile.Load(spec.AgentName(), spec.Overrides)
+		profile, err := cliprofile.Load(spec.HarnessName(), spec.Overrides)
 		if err != nil {
 			out.Failure, out.Said = "fatal", err.Error()
 			return out, nil

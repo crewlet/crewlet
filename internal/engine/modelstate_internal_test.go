@@ -134,8 +134,8 @@ func TestTheLoginWatcherSaysWhatTheCLISaysOfItsLogin(t *testing.T) {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	c.Models = models
-	c.Config.Providers.LLM["host"] = config.LLMProvider{Agent: "claude-code", Model: "opus"}
-	c.Config.Providers.LLM["gone"] = config.LLMProvider{Agent: "claude-code", Model: "opus"}
+	c.Config.Providers.LLM["host"] = config.LLMProvider{Harness: "claude-code", Model: "opus"}
+	c.Config.Providers.LLM["gone"] = config.LLMProvider{Harness: "claude-code", Model: "opus"}
 	e := epochEngine(c)
 
 	if _, err := e.CheckHostLogin(t.Context(), "keyed"); !errors.Is(err, ErrNoHostLogin) {

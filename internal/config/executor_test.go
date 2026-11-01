@@ -99,22 +99,22 @@ func TestTheExecutorChainIsTheOneALaunchWalks(t *testing.T) {
 
 // THE RUNNERS CONFIG ADMITS ARE THE RUNNERS THAT EXIST.
 //
-// A seat's executor is its coding CLI's own run, which only a CLI with an
+// A seat's executor is its harness's own run, which only a harness with an
 // in-box runner has. A runner added there and not here refuses entries that
 // would run; one listed here with no runner admits chains every launch then
 // refuses.
-func TestTheExecutorCLIsAreTheInBoxRunners(t *testing.T) {
+func TestTheExecutorHarnessesAreTheInBoxRunners(t *testing.T) {
 	t.Parallel()
 	var got []string
-	for _, cli := range CodingAgents {
-		got = append(got, string(cli))
+	for _, harness := range ExecutorHarnesses {
+		got = append(got, string(harness))
 	}
 	if want := codingagent.Names(); !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
-		t.Errorf("config.CodingAgents = %v, the in-box runners are %v", got, want)
+		t.Errorf("config.ExecutorHarnesses = %v, the in-box runners are %v", got, want)
 	}
-	for _, cli := range CodingAgents {
-		if !cli.Valid() {
-			t.Errorf("%q can run an executor but is not a CLI an entry may name", cli)
+	for _, harness := range ExecutorHarnesses {
+		if !harness.Valid() {
+			t.Errorf("%q can run an executor but is not a harness an entry may name", harness)
 		}
 	}
 }
@@ -127,20 +127,20 @@ func executorCompany(llmEntries, roles string) string {
 
 const (
 	ccEntry    = "    cc:\n      model: sonnet\n"
-	ocEntry    = "    oc:\n      model: anthropic/claude-sonnet-5\n      agent: opencode\n"
-	codexEntry = "    codex:\n      model: gpt-5\n      agent: codex\n"
+	ocEntry    = "    oc:\n      model: anthropic/claude-sonnet-5\n      harness: opencode\n"
+	codexEntry = "    codex:\n      model: gpt-5\n      harness: codex\n"
 )
 
 // A SEAT WHOSE EXECUTOR CHAIN HAS NO MEMBER THAT CAN RUN IS REFUSED, where the
 // remedy is written, and a chain that holds one is not.
 //
-// Every executor is its coding CLI's own run, which only claude-code and
+// Every executor is its harness's own run, which only claude-code and
 // opencode have: a launch skips any other member, so a chain of nothing else
 // never launches — the seat takes its work and fails every turn. RUNNABLE,
 // because no turn of that seat runs. A seat's own `llm` is refused at that
 // `llm`; a seat naming nothing falls to the company's fallback entry, which is
 // one entry for every such seat, so it is refused once, at that entry,
-// counting them. And another CLI stays valid wherever a text phase reads it.
+// counting them. And another harness stays valid wherever a text phase reads it.
 func TestAnExecutorChainWithNoRunnerIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -149,7 +149,7 @@ func TestAnExecutorChainWithNoRunnerIsRefused(t *testing.T) {
 		says             []string
 	}{
 		{
-			name: "a seat's own chain of another CLI",
+			name: "a seat's own chain of another harness",
 			llm:  ccEntry + codexEntry, roles: "  - name: SWE\n    llm: codex\n",
 			path: "roles[0].llm",
 			says: []string{"providers.llm.codex (codex)", `only "claude-code" and "opencode" have`,
@@ -163,26 +163,26 @@ func TestAnExecutorChainWithNoRunnerIsRefused(t *testing.T) {
 			path: "units[0].roles[0].llm",
 		},
 		{
-			name: "silent seats falling to a default of another CLI",
-			llm:  "    default:\n      model: gpt-5\n      agent: codex\n" + ccEntry,
+			name: "silent seats falling to a default of another harness",
+			llm:  "    default:\n      model: gpt-5\n      harness: codex\n" + ccEntry,
 			roles: "  - name: CEO\n  - name: PM\n  - name: Ops\n" +
 				"  - name: SWE\n    llm: cc\n",
-			path: "providers.llm.default.agent",
+			path: "providers.llm.default.harness",
 			says: []string{`the one called "default"`, "codex", `only "claude-code" and "opencode" have`,
 				`seat "ceo"`, "2 more seats", "point those seats' `llm`"},
 		},
 		{
 			name: "a silent seat falling to the first declared entry",
 			llm:  codexEntry + ccEntry, roles: "  - name: CEO\n",
-			path: "providers.llm.codex.agent",
+			path: "providers.llm.codex.harness",
 			says: []string{"the first one declared", `seat "ceo"`},
 		},
 		{
-			name: "a chain that holds a runner beside another CLI",
+			name: "a chain that holds a runner beside another harness",
 			llm:  ccEntry + codexEntry, roles: "  - name: SWE\n    llm: [codex, cc]\n",
 		},
 		{
-			name: "another CLI on a text phase only",
+			name: "another harness on a text phase only",
 			llm:  ccEntry + codexEntry, roles: "  - name: SWE\n    llm: cc\n    llm_review: codex\n",
 		},
 		{
@@ -234,26 +234,26 @@ func TestASeatNamingOnlyUnknownKeysIsNotCountedAsNamingNone(t *testing.T) {
 	if !errors.Is(err, ErrUnknownValue) {
 		t.Errorf("want ErrUnknownValue, got %v", err)
 	}
-	if strings.Contains(err.Error(), "providers.llm.codex.agent") ||
+	if strings.Contains(err.Error(), "providers.llm.codex.harness") ||
 		strings.Contains(err.Error(), "names no `llm`") {
 		t.Errorf("the seat that named a missing key is also counted as naming none:\n%v", err)
 	}
 	// AND A SEAT THAT NAMED NOTHING STILL IS, beside it.
 	err = rejects(t, executorCompany(codexEntry,
-		"  - name: SWE\n    llm: nowhere\n  - name: CEO\n"), "providers.llm.codex.agent")
+		"  - name: SWE\n    llm: nowhere\n  - name: CEO\n"), "providers.llm.codex.harness")
 	if !strings.Contains(err.Error(), `seat "ceo" names no `+"`llm`") ||
 		strings.Contains(err.Error(), "1 more seat") {
 		t.Errorf("the fallback refusal does not count the silent seat alone:\n%v", err)
 	}
 }
 
-// A CHAIN THAT HOLDS ANOTHER CLI BESIDE A RUNNER IS ADVISED ABOUT, AT THE
+// A CHAIN THAT HOLDS ANOTHER HARNESS BESIDE A RUNNER IS ADVISED ABOUT, AT THE
 // SEAT'S `llm`, naming the member a launch skips and the one it runs on.
 //
 // Valid, because the member still serves every text phase that falls back to
 // `llm`; worth saying, because a chain written as "Claude, then Codex once
 // Claude's plan is spent" falls back to nothing at all for the executor. A
-// chain of runners only, and one whose other CLI sits on a text phase's own
+// chain of runners only, and one whose other harness sits on a text phase's own
 // field, are said nothing about.
 func TestAMixedExecutorChainIsAdvisedAbout(t *testing.T) {
 	t.Parallel()
@@ -285,7 +285,7 @@ func TestAMixedExecutorChainIsAdvisedAbout(t *testing.T) {
 // AN AGENT SEAT WITH A MODEL TO RUN ON NEEDS THE CATALOGUE ITS EXECUTOR RUNS
 // IN, and nothing else does.
 //
-// Every executor is its coding CLI's own run, in a box, so without the
+// Every executor is its harness's own run, in a box, so without the
 // catalogue every such seat takes its work and fails every turn at launch.
 // One refusal, at the missing block, naming the first seat and counting the
 // rest. A company with no providers.llm is an org chart written before its
@@ -343,7 +343,7 @@ func TestAnAgentSeatNeedsTheCatalogue(t *testing.T) {
 // that member runs in the cell its own `run_in` names. Asked of the head
 // alone, a fallback member's cell would have no backend built and no image
 // required, so the launch the fallback exists for would fail with a backend
-// nobody had been asked to configure. A member no launch can pick — another CLI, or an entry
+// nobody had been asked to configure. A member no launch can pick — another harness, or an entry
 // no seat's executor holds — launches nothing, and its cell is reached by
 // nothing.
 func TestEveryEntryALaunchCanLandOnIsPlaced(t *testing.T) {
@@ -395,10 +395,10 @@ func TestEveryEntryALaunchCanLandOnIsPlaced(t *testing.T) {
 	t.Run("a member no launch can pick reaches nothing", func(t *testing.T) {
 		t.Parallel()
 		// The codex member names no cell of its own — it may not (see
-		// TestARunInOnACLIThatLaunchesNoRunIsRefused) — so counted it would
+		// TestARunInOnAHarnessThatLaunchesNoRunIsRefused) — so counted it would
 		// open a box in the catalogue's default beside the head's.
 		cfg := mustCompany(t, company("    local: {}\n    default_run_in: direct\n",
-			entry("head", "")+"    codex:\n      model: gpt-5\n      agent: codex\n",
+			entry("head", "")+"    codex:\n      model: gpt-5\n      harness: codex\n",
 			"  - name: SWE\n    llm: [head, codex]\n"))
 		for box := range cfg.SeatBoxes() {
 			if box.Executor != "head" {
@@ -488,19 +488,19 @@ func TestAnEntrysRunInIsACatalogueCell(t *testing.T) {
 }
 
 // A RUN_IN NO LAUNCH CAN READ IS REFUSED. Only claude-code and opencode have an
-// in-box runner; an entry on any other CLI serves text phases, so every launch
+// in-box runner; an entry on any other harness serves text phases, so every launch
 // passes over it and its placement is read by nothing — whether or not it is a
 // seat's executor-chain member, and whatever cell it names, configured or not.
 // Admitted, it read as a setting that placed the entry's runs while it did
 // nothing at all.
-func TestARunInOnACLIThatLaunchesNoRunIsRefused(t *testing.T) {
+func TestARunInOnAHarnessThatLaunchesNoRunIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, agent := range []string{"codex", "gemini-cli", "custom"} {
-		t.Run(agent, func(t *testing.T) {
+	for _, harness := range []string{"codex", "gemini-cli", "custom"} {
+		t.Run(harness, func(t *testing.T) {
 			t.Parallel()
 			err := rejects(t, executorCompany(
 				"    sub:\n      model: sonnet\n"+
-					"    other:\n      agent: "+agent+"\n      model: m-1\n      run_in: e2b\n",
+					"    other:\n      harness: "+harness+"\n      model: m-1\n      run_in: e2b\n",
 				"  - name: SWE\n    llm: [sub, other]\n    llm_review: other\n"),
 				"providers.llm.other.run_in")
 			if !errors.Is(err, ErrConflict) {

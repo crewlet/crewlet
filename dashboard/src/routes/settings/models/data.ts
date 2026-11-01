@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { EXECUTOR_CLI_AGENTS } from "~/contract/models.ts";
+import { EXECUTOR_HARNESSES } from "~/contract/models.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -47,9 +47,9 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 /** One model as the page draws it: the engine's reading, and for an admin the document's entry. */
 export interface ModelView {
   key: string;
-  agent: string;
+  harness: string;
   model: string;
-  /** Whether its CLI can run a seat's coding (`EXECUTOR_CLI_AGENTS`, held to the engine). */
+  /** Whether its CLI can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
   executor: boolean;
   /** The admin's reading, or the member's, which names no credential. */
   entry: ModelEntry | MemberModelEntry;
@@ -122,9 +122,9 @@ export function modelViews(
     const overrides = raw && isRecord(raw.overrides) ? raw.overrides : {};
     return {
       key: entry.key,
-      agent: entry.agent,
+      harness: entry.harness,
       model: entry.model,
-      executor: (EXECUTOR_CLI_AGENTS as readonly string[]).includes(entry.agent),
+      executor: (EXECUTOR_HARNESSES as readonly string[]).includes(entry.harness),
       entry,
       admin: answer?.reading === "admin" ? (entry as ModelEntry) : null,
       uses: usesOf(entry.used_by),

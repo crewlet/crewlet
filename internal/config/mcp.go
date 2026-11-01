@@ -24,14 +24,14 @@ const (
 // MCPTransports is the closed set.
 var MCPTransports = []MCPTransport{TransportStdio, TransportHTTP}
 
-// ToolServerName is the name a seat's coding CLI sees the seat's own tools
-// under, wherever the CLI runs: the MCP server a phase on this host dials
+// ToolServerName is the name a seat's harness sees the seat's own tools
+// under, wherever the harness runs: the MCP server a phase on this host dials
 // through `crewlet mcp-relay`, and the tool bridge the seat's executor — its
-// CLI's own run in a box — dials over HTTP. One name, so a seat's tools are
+// harness's own run in a box — dials over HTTP. One name, so a seat's tools are
 // spelled one way in every phase — the prefix its model sees
 // (`mcp__crewlet__reply`) is the same for the reviewer on this host and the
-// executor in its box — and the built-in CLI profiles, which write it into
-// each CLI's own configuration grammar, are held to it by a test in cliagent.
+// executor in its box — and the built-in harness profiles, which write it into
+// each harness's own configuration grammar, are held to it by a test in cliagent.
 //
 // RESERVED: an `mcp_servers` entry may not take it. The engine writes the
 // bridge into every executor box's server list under this key, so a company
@@ -40,7 +40,7 @@ var MCPTransports = []MCPTransport{TransportStdio, TransportHTTP}
 // rather than beside either server because this is where the reservation is
 // enforced, and every reader takes the one value.
 //
-// "crewlet" rather than the seat's handle because it reaches the CLI's own
+// "crewlet" rather than the seat's handle because it reaches the harness's own
 // prompt: a tool called `mcp__swe__reply` reads as somebody else's tool, where
 // `mcp__crewlet__reply` reads as the agent's own.
 const ToolServerName = "crewlet"

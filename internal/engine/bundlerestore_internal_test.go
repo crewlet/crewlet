@@ -29,7 +29,7 @@ import (
 // node's boot and every apply make before the epoch is published — the cases
 // below hold those two call sites; this one holds the helper.
 func TestAnEpochRestoresItsBundlesOnlyWhenItIsRun(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	profile, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +44,7 @@ providers:
   llm:
     subscription:
       model: sonnet
-      agent: claude-code
+      harness: claude-code
 roles:
   - name: CEO
     handle: ceo
@@ -236,7 +236,7 @@ func firstCall(fn *ast.FuncDecl, name string) token.Pos {
 // one claude-code login, and returns where that login lands.
 func bundledLogin(t *testing.T) string {
 	t.Helper()
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	profile, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -286,7 +286,7 @@ providers:
   llm:
     subscription:
       model: sonnet
-      agent: claude-code
+      harness: claude-code
       run_in: e2b
   sandbox:
     e2b:
@@ -320,7 +320,7 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 	logs := &bundleLog{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	stubVendorCLI(t, "claude")
 	profile, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
@@ -389,7 +389,7 @@ func TestAnEntryMovedToAnotherCLIDoesNotRestoreTheOldCLIsBundle(t *testing.T) {
 	logs := &bundleLog{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, "pi", "auth.json", `{"token":"pi"}`))
 	c := parseBundled(t, `
 name: Acme
@@ -398,7 +398,7 @@ providers:
   llm:
     subscription:
       model: gpt-5
-      agent: codex
+      harness: codex
 roles:
   # A person's seat: codex can run no seat's executor, and the bundle
   # restored is the entry's whoever runs on it.
@@ -470,7 +470,7 @@ providers:
   llm:
     subscription:
       model: sonnet
-      agent: claude-code
+      harness: claude-code
 roles:
   - name: CEO
     handle: ceo

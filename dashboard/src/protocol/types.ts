@@ -463,7 +463,7 @@ export interface ProviderLimit {
   /** When the condition began, in UTC. */
   since: string;
   /** The CLI the limited entry drives (`claude-code`), a key of
-   *  `CLI_PRODUCTS`; empty where the report did not say. */
+   *  `HARNESS_PRODUCTS`; empty where the report did not say. */
   cli: string;
   /** Whether that CLI signs in on a plan rather than a metered key. */
   subscription: boolean;

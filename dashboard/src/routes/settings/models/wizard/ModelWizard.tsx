@@ -69,14 +69,14 @@ import {
   stepsFor,
   storedCloudSecrets,
   suggestedVariable,
-  type Agent,
+  type Harness,
   type Draft,
   type Kept,
   type NextDocument,
 } from "./draft.ts";
 import { MODEL_DRAFT_HELP, modelDraftFields } from "./assistantDraft.ts";
 import { findOpener, firstInvalid, focusWhenShown, openerNow, pageHeading } from "./focus.ts";
-import { CliStep } from "./steps/CliStep.tsx";
+import { HarnessStep } from "./steps/HarnessStep.tsx";
 import { LimitsStep } from "./steps/LimitsStep.tsx";
 import { ModelStep } from "./steps/ModelStep.tsx";
 import { Review, type ReviewCheck } from "./steps/Review.tsx";
@@ -86,7 +86,8 @@ import { UseItFor } from "./steps/UseItFor.tsx";
 import { WhereItRuns } from "./steps/WhereItRuns.tsx";
 
 const LEADS: Record<WizardStep, string> = {
-  cli: "Name the model and choose the coding CLI it runs. Seats and Ask Crewlet name it, so keep it short.",
+  harness:
+    "Name the model and choose the coding CLI it runs. Seats and Ask Crewlet name it, so keep it short.",
   signin: "How this model proves who it is to the vendor.",
   model: "The model the CLI runs, in its own naming.",
   runs: "Where a seat's executor runs when it launches on this model.",
@@ -269,7 +270,7 @@ export function ModelWizard({
   const [draft, setDraft] = useState<Draft>(initial);
   const steps = stepsFor(draft);
   const [step, setStep] = useState<WizardStep>(() =>
-    target && stepsFor(initial).includes(target.step) ? target.step : "cli",
+    target && stepsFor(initial).includes(target.step) ? target.step : "harness",
   );
   // WHAT IS BEING SET UP reaches the Dashboard Assistant, read-only and with no credential (assistantDraft.ts).
   const draftFields = useMemo(
@@ -377,12 +378,12 @@ export function ModelWizard({
     [original, variableTouched, taken],
   );
 
-  const changeAgent = (agent: Agent) => {
-    const executor = canExecute({ agent });
+  const changeHarness = (harness: Harness) => {
+    const executor = canExecute({ harness });
     const dropsCoding = !executor && (draft.intent === "all" || draft.intent === "coding");
     set({
-      agent,
-      method: METHODS[agent][0]!,
+      harness,
+      method: METHODS[harness][0]!,
       credential: "",
       model: "",
       ...(executor ? {} : { runIn: "" }),
@@ -737,18 +738,18 @@ export function ModelWizard({
         stepsLabel={original ? `Steps to edit ${draft.key}` : "Steps to add a model"}
         heading={STEP_LABELS[step]}
         lead={LEADS[step]}
-        wide={step === "cli" || step === "runs" || step === "assign" || reviewing}
+        wide={step === "harness" || step === "runs" || step === "assign" || reviewing}
         footer={footer}
         primaryAction={primary}
       >
         <div className="models-stack">
-          {step === "cli" ? (
-            <CliStep
+          {step === "harness" ? (
+            <HarnessStep
               draft={draft}
               editing={!!original}
-              error={errorWhere((s) => s[0] === "key" || field("agent")(s))}
+              error={errorWhere((s) => s[0] === "key" || field("harness")(s))}
               onName={(key) => set({ key })}
-              onAgent={changeAgent}
+              onHarness={changeHarness}
             />
           ) : null}
           {step === "signin" ? (

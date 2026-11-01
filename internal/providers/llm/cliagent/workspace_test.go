@@ -281,7 +281,7 @@ func TestAVolatilePathCannotEscapeTheSeatHome(t *testing.T) {
 }
 
 // TWO CLIs ON ONE STATE DIRECTORY NEVER MEET EACH OTHER'S FILES. Each keeps
-// its share under <state dir>/<agent>: its own login, its own seat homes. Keyed
+// its share under <state dir>/<harness>: its own login, its own seat homes. Keyed
 // by the directory alone, the second CLI was refused for the life of the
 // process, so moving a providers.llm key from claude-code to codex produced a
 // revision every running node refused while a restarted one applied it — and

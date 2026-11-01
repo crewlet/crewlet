@@ -655,7 +655,7 @@ func (p *Provider) ExportBundle(ctx context.Context) (string, error) {
 	for _, name := range slices.Sorted(maps.Keys(login)) {
 		packed = append(packed, bundleFile{name: name, data: login[name]})
 	}
-	manifest := bundleManifest{Agent: p.agent}
+	manifest := bundleManifest{Harness: p.agent}
 	if !install.IsZero() {
 		manifest.Login = &install
 	}
@@ -670,11 +670,11 @@ func (p *Provider) ExportBundle(ctx context.Context) (string, error) {
 // one that refused it would run the entry signed out over a bundle that is
 // its CLI's.
 type bundleManifest struct {
-	// Agent is the CLI the bundle was exported from: the provider's agent,
-	// which is the directory its files are kept in under the state directory
-	// (`<state_dir>/<agent>`, [Shared]) — so an entry that leaves `agent`
-	// out, and drives claude-code, writes "claude-code".
-	Agent string `json:"agent"`
+	// Harness is the harness the bundle was exported from: the provider's
+	// harness, which is the directory its files are kept in under the state
+	// directory (`<state_dir>/<harness>`, [Shared]) — so an entry that leaves
+	// `harness` out, and drives claude-code, writes "claude-code".
+	Harness string `json:"harness"`
 	// Login is the install record of the login the bundle carries
 	// ([LoginInstall]), nil for a login exported with none. It is how a node
 	// tells a newer login from the one it holds ([Provider.RestoreBundle]),
@@ -1242,9 +1242,9 @@ func (p *Provider) checkBundleCLI(manifest []byte, found bool) (bundleManifest, 
 		switch {
 		case err != nil:
 			none = fmt.Sprintf("its %s does not parse: %v", cliprofile.BundleManifest, err)
-		case named.Agent == "":
+		case named.Harness == "":
 			none = fmt.Sprintf("its %s names no agent", cliprofile.BundleManifest)
-		case named.Agent == p.agent:
+		case named.Harness == p.agent:
 			return named, nil
 		default:
 			// A BUNDLE IS KEYED BY THE ENTRY (CREWLET_LLM_CLI_<KEY>_CREDENTIALS,
@@ -1257,7 +1257,7 @@ func (p *Provider) checkBundleCLI(manifest []byte, found bool) (bundleManifest, 
 				"the CLI it was exported from, so one exported before %q moved to %q, or for "+
 				"another entry, is refused until it is replaced: sign %q in and export its "+
 				"bundle again (`crewlet llm export %s`)",
-				ErrForeignBundle, named.Agent, p.key, p.agent, p.key, p.agent, p.agent, p.key)
+				ErrForeignBundle, named.Harness, p.key, p.agent, p.key, p.agent, p.agent, p.key)
 		}
 	}
 	return bundleManifest{}, fmt.Errorf("%w: it names none (%s), and a bundle restores only into the CLI it was "+

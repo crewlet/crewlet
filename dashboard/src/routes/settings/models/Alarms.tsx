@@ -345,11 +345,11 @@ function words(
   // A LIMIT: the plan's, or the one model's where the window is the model's.
   const out = models.find((m) => m.entry.sitting_out)?.entry.sitting_out ?? null;
   const window = out?.window ?? "unknown";
-  const agent = first?.agent ?? "";
+  const harness = first?.harness ?? "";
   const subject =
     window === "model"
       ? theModels(keys, false)
-      : `the ${product(agent)} ${first?.admin?.sign_in.mode === "api-key" ? "API key" : "plan"}`;
+      : `the ${product(harness)} ${first?.admin?.sign_in.mode === "api-key" ? "API key" : "plan"}`;
   const waiting = waitingOf(models, seats);
   const pause = out ? (
     <>
@@ -430,7 +430,7 @@ function MoveMenu({ move, onFlow }: { move: AlarmMove; onFlow: OnFlow }) {
         {
           key: "add",
           label: "Add a model",
-          onSelect: () => onFlow("add", undefined, { step: "cli", add: move.add }),
+          onSelect: () => onFlow("add", undefined, { step: "harness", add: move.add }),
         },
       ]}
     />

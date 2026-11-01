@@ -243,7 +243,7 @@ func bundleEntries(t *testing.T, blob string) []string {
 // installed with g writes one.
 func installedLoginOf(t *testing.T, body string, g LoginInstall) string {
 	t.Helper()
-	blob, err := packBundle(bundleManifest{Agent: "custom", Login: &g},
+	blob, err := packBundle(bundleManifest{Harness: "custom", Login: &g},
 		[]bundleFile{{name: "creds.json", data: []byte(body)}})
 	if err != nil {
 		t.Fatal(err)
@@ -398,7 +398,7 @@ func TestABundleThatReplacesALoginReplacesItWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob, err := packBundle(bundleManifest{Agent: "custom", Login: new(recordAt(t, time.Now()))},
+	blob, err := packBundle(bundleManifest{Harness: "custom", Login: new(recordAt(t, time.Now()))},
 		[]bundleFile{{name: "auth.json", data: []byte(`{"token":"k-bundled"}`)}})
 	if err != nil {
 		t.Fatal(err)

@@ -3048,7 +3048,7 @@ holds one — so a logout killed part way never leaves one file of the login it
 was removing, and a settings file the CLI keeps beside it, holding none, stays
 — and
 **records the logout** in the CLI's share of the state directory
-(`<state_dir>/<agent>/logged-out`), so the configured bundle below is not
+(`<state_dir>/<harness>/logged-out`), so the configured bundle below is not
 restored into the directory it emptied —
 not by the engine's next boot or apply, and not by `list`, `status`, `export`
 or `doctor`, which each say why instead — until a login is written into that

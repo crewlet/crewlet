@@ -13,7 +13,7 @@ import (
 // assistantEntry is a providers.llm entry the assistant may run on: Claude
 // Code, whose profile denies its local tools, with its web tools turned off.
 const assistantEntry = "    assistant:\n" +
-	"      agent: claude-code\n      model: sonnet\n" +
+	"      harness: claude-code\n      model: sonnet\n" +
 	"      overrides: {web_tools: denied}\n"
 
 // assistantCompany is a company running the assistant on entries, with the
@@ -56,7 +56,7 @@ func TestTheAssistantIsOffUntilTurnedOn(t *testing.T) {
 // A CHAIN THAT KEEPS EVERY RULE IS HANDED OUT, in order.
 func TestASafeAssistantChainIsHandedOut(t *testing.T) {
 	t.Parallel()
-	second := "    backup:\n      agent: pi\n      model: sonnet\n      overrides: {web_tools: denied}\n"
+	second := "    backup:\n      harness: pi\n      model: sonnet\n      overrides: {web_tools: denied}\n"
 	cfg := mustCompany(t, assistantCompany(assistantEntry+second, "  enabled: true\n  llm: [assistant, backup]\n"))
 	chain, err := cfg.AssistantChain()
 	if err != nil {
@@ -71,7 +71,7 @@ func TestASafeAssistantChainIsHandedOut(t *testing.T) {
 // person's own requests did not return: one whose local tools are not denied
 // (a shell reads what the engine user can), one that keeps its web tools (a page no
 // authority decision saw, and a way out for the person's data), and one on a
-// CLI with no measured way to turn them off. Each is refused at the chain
+// harness with no measured way to turn them off. Each is refused at the chain
 // member, naming the entry's own field to change, and AssistantChain refuses
 // the same document, so the two can never disagree.
 //
@@ -85,7 +85,7 @@ func TestTheAssistantRefusesAnEntryThatReachesTheWeb(t *testing.T) {
 		want  string
 	}{
 		"local tools not denied": {
-			entry: "    assistant:\n      agent: custom\n      model: m\n      overrides:\n" +
+			entry: "    assistant:\n      harness: custom\n      model: m\n      overrides:\n" +
 				"        binary: mycli\n        complete_args: [run]\n        model_args: [--model, '{model}']\n" +
 				"        output: text\n        local_tools: vendor-default\n" +
 				"        local_tools_note: no denial flag\n        web_tools: denied\n" +
@@ -93,11 +93,11 @@ func TestTheAssistantRefusesAnEntryThatReachesTheWeb(t *testing.T) {
 			kind: ErrConflict, want: "local_tools: denied",
 		},
 		"web allowed": {
-			entry: "    assistant:\n      agent: claude-code\n      model: sonnet\n",
+			entry: "    assistant:\n      harness: claude-code\n      model: sonnet\n",
 			kind:  ErrConflict, want: "providers.llm.assistant.overrides: {web_tools: denied}",
 		},
 		"web undeniable": {
-			entry: "    assistant:\n      agent: gemini-cli\n      model: gemini-2.5-pro\n",
+			entry: "    assistant:\n      harness: gemini-cli\n      model: gemini-2.5-pro\n",
 			kind:  ErrConflict, want: "no measured web denial",
 		},
 	}
@@ -146,16 +146,16 @@ func TestTheAssistantRefusesAnEntryThatCanRunLocalTools(t *testing.T) {
 		return "[" + strings.Join(quoted, ", ") + "]"
 	}
 	claude := func(args string) string {
-		return "    assistant:\n      agent: claude-code\n      model: sonnet\n      overrides:\n" +
+		return "    assistant:\n      harness: claude-code\n      model: sonnet\n      overrides:\n" +
 			"        web_tools: denied\n        web_denial: {complete_args: " + args + "}\n"
 	}
 	cases := map[string]struct{ entry, want string }{
 		"codex keeps apply_patch": {
-			entry: "    assistant:\n      agent: codex\n      model: gpt-5\n      overrides: {web_tools: denied}\n",
+			entry: "    assistant:\n      harness: codex\n      model: gpt-5\n      overrides: {web_tools: denied}\n",
 			want:  "no measured way to run the CLI with no tool of its own",
 		},
 		"opencode is unmeasured": {
-			entry: "    assistant:\n      agent: opencode\n      model: openrouter/qwen\n      overrides: {web_tools: denied}\n",
+			entry: "    assistant:\n      harness: opencode\n      model: openrouter/qwen\n      overrides: {web_tools: denied}\n",
 			want:  "no measured way to run the CLI with no tool of its own",
 		},
 		"claude-code without the empty allow list": {
@@ -174,7 +174,7 @@ func TestTheAssistantRefusesAnEntryThatCanRunLocalTools(t *testing.T) {
 				t.Errorf("the refusal does not say %q:\n%v", tc.want, err)
 			}
 			if !strings.Contains(err.Error(), "claude-code, pi") {
-				t.Errorf("the refusal does not name the CLIs that qualify:\n%v", err)
+				t.Errorf("the refusal does not name the harnesses that qualify:\n%v", err)
 			}
 			stored, decodeErr := ParseCompanyDocument([]byte(doc))
 			if decodeErr != nil {
@@ -284,7 +284,7 @@ func TestTheAssistantBlockValidatesEveryRange(t *testing.T) {
 func TestABrokenAssistantNeverStopsTheCompanyFromApplying(t *testing.T) {
 	t.Parallel()
 	stored, err := ParseCompanyDocument([]byte(assistantCompany(
-		"    assistant:\n      agent: claude-code\n      model: sonnet\n",
+		"    assistant:\n      harness: claude-code\n      model: sonnet\n",
 		"  enabled: true\n  llm: [assistant]\n  max_steps: 99\n")))
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +308,7 @@ func TestABrokenAssistantNeverStopsTheCompanyFromApplying(t *testing.T) {
 // the reachable web passes.
 func TestACandidateAssistantModelIsJudgedAsAChainMember(t *testing.T) {
 	t.Parallel()
-	open := "    open:\n      agent: claude-code\n      model: sonnet\n"
+	open := "    open:\n      harness: claude-code\n      model: sonnet\n"
 	cfg := mustCompany(t, assistantCompany(assistantEntry+open, "  enabled: false\n"))
 	if err := cfg.AssistantEntryProblems("assistant"); err != nil {
 		t.Errorf("an entry with its web tools denied was refused: %v", err)

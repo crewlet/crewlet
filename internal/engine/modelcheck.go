@@ -64,7 +64,7 @@ func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMPr
 	var agent *cliagent.Provider
 	if draft == nil {
 		var ok bool
-		if agent, ok = e.cliEntry(key); !ok {
+		if agent, ok = e.harnessEntry(key); !ok {
 			return cliagent.Diagnosis{}, fmt.Errorf("%w: %q", ErrNoModel, key)
 		}
 	} else {
@@ -123,7 +123,7 @@ func (e *Engine) draftAgent(ctx context.Context, c *Company, key string, draft c
 	if err != nil {
 		return nil, fmt.Errorf("engine: the draft's state_dir: %w", err)
 	}
-	if liveKey, live, ok := e.loginKeptIn(c, dir, draft.AgentName()); ok {
+	if liveKey, live, ok := e.loginKeptIn(c, dir, draft.HarnessName()); ok {
 		own := e.bundleOf(key, draft)
 		if own == "" || own == e.bundleOf(liveKey, live) {
 			return BuildCLIAgent(key, draft, e.resolver(), nil)
@@ -149,10 +149,10 @@ func (e *Engine) loginKeptIn(c *Company, dir, agent string) (string, config.LLMP
 	}
 	for _, key := range slices.Sorted(maps.Keys(c.Config.Providers.LLM)) {
 		spec := c.Config.Providers.LLM[key]
-		if got, err := spec.ResolvedStateDir(key); err != nil || got != dir || spec.AgentName() != agent {
+		if got, err := spec.ResolvedStateDir(key); err != nil || got != dir || spec.HarnessName() != agent {
 			continue
 		}
-		if _, ok := e.cliEntry(key); ok {
+		if _, ok := e.harnessEntry(key); ok {
 			return key, spec, true
 		}
 	}

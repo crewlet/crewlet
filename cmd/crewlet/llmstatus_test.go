@@ -19,7 +19,7 @@ providers:
   sandbox: {fake: true}
   llm:
     sub:
-      agent: custom
+      harness: custom
       model: m
       state_dir: %q
       overrides:

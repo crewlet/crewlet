@@ -498,7 +498,7 @@ func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string, se
 	case reflect.Struct:
 		return g.ref(t, secret)
 	case reflect.Interface:
-		// A deliberately open value — the CLI profile overrides, whose
+		// A deliberately open value — the harness profile overrides, whose
 		// shape belongs to the profile being overridden.
 		return map[string]any{}
 	default:

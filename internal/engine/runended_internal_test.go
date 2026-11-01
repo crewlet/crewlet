@@ -112,8 +112,8 @@ func TestAnApplyKeepsASpentPlanSpent(t *testing.T) {
 	build := func(timeout float64, key string) *cliagent.Provider {
 		t.Helper()
 		cfg := &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
-			"plan": {Agent: "claude-code", Model: "opus", StateDir: dir, TimeoutSeconds: timeout,
-				Auth:      config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${PLAN_KEY}"},
+			"plan": {Harness: "claude-code", Model: "opus", StateDir: dir, TimeoutSeconds: timeout,
+				Auth:      config.HarnessAuth{Mode: config.AuthAPIKey, APIKey: "${PLAN_KEY}"},
 				Overrides: map[string]any{"binary": filepath.Join(dir, "no-cli-here")}},
 		}}}
 		models, err := buildProviders(cfg, config.NewResolver(config.MapSource{"PLAN_KEY": key}), plans)
@@ -223,7 +223,7 @@ providers:
   sandbox: {fake: true}
   llm:
     k:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       state_dir: %q
       timeout_seconds: %d

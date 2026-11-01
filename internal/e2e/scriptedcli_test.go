@@ -228,7 +228,7 @@ func scriptedEntry(key, endpoint, stateDir string) string {
 		overrides.WriteString("        " + line + "\n")
 	}
 	return fmt.Sprintf(`    %s:
-      agent: custom
+      harness: custom
       model: claude-golden
       state_dir: %q
       env:

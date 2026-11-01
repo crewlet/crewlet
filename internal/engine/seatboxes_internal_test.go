@@ -38,10 +38,10 @@ providers:
       - {name: shared, brief: b}
   llm:
     main: {model: claude-golden, state_dir: %q}
-    remote: {agent: claude-code, model: sonnet, run_in: e2b, state_dir: %q}
-    near: {agent: claude-code, model: haiku, run_in: direct, state_dir: %q}
-    boxed: {agent: opencode, model: anthropic/claude-sonnet-5, run_in: container, state_dir: %q}
-    codex: {agent: codex, model: gpt-golden, state_dir: %q}
+    remote: {harness: claude-code, model: sonnet, run_in: e2b, state_dir: %q}
+    near: {harness: claude-code, model: haiku, run_in: direct, state_dir: %q}
+    boxed: {harness: opencode, model: anthropic/claude-sonnet-5, run_in: container, state_dir: %q}
+    codex: {harness: codex, model: gpt-golden, state_dir: %q}
 roles:
   - name: Founder
     handle: founder
