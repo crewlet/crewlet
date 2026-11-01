@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -181,6 +182,47 @@ func TestAnEntityIsOneRecordFromItsAnswer(t *testing.T) {
 	}
 	if e.ItemsNoun == nil || *e.ItemsNoun != (wire.Noun{One: "comment", Many: "comments"}) {
 		t.Errorf("the items are called %+v", e.ItemsNoun)
+	}
+}
+
+// A FLAG READS AS WORDS WHERE IT IS SET AND AS NOTHING WHERE IT IS NOT.
+//
+// A room's member list says which members follow every message: a bare "true"
+// beside a handle tells neither the person nor the model what it means, and
+// "false" on every other line is noise. Mutation: render the fact as its raw
+// value and the first item reads "true".
+func TestAFlagReadsAsWordsOnlyWhereItIsSet(t *testing.T) {
+	t.Parallel()
+	spec := cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceRoom, ID: "id", Key: "name",
+		KeyPrefix: "#", Title: "name",
+		Items: &cards.Items{Path: "members", ID: "handle", Label: "handle",
+			Fact: "follow_all", Flag: "follows every message",
+			Noun: wire.Noun{One: "member", Many: "members"}}}}
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	answer, _ := json.Marshal(map[string]any{"id": "r1", "name": "engineering",
+		"members": []any{
+			map[string]any{"handle": "amir", "follow_all": true},
+			map[string]any{"handle": "dev", "follow_all": false},
+			map[string]any{"handle": "jane"},
+		}})
+	built, err := cards.Build(spec, answer, evals.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, it := range built.Card.Entity.Items {
+		got = append(got, it.Label+"="+it.Fact)
+	}
+	want := []string{"amir=follows every message", "dev=", "jane="}
+	if !slices.Equal(got, want) {
+		t.Errorf("the members read %v, want %v", got, want)
+	}
+	// A FLAG WITH NOTHING TO READ is a spec error, not a silent blank.
+	spec.Entity.Items.Fact = ""
+	if spec.Validate() == nil {
+		t.Error("a flag with no fact path validated")
 	}
 }
 

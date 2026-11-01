@@ -124,6 +124,7 @@ func richExecutorInput() ExecutorInput {
 		RelevantKnowledge:   "## Runbook: deploys\n1. tag\n2. ship 🚢",
 		ThreadContext:       "- Ana: ## not a heading of ours\n- Bo: ok",
 		Skills:              richSkills(),
+		MCPServers:          []string{"atlassian", "github"},
 	}
 }
 
@@ -139,6 +140,7 @@ func richReviewInput() ReviewInput {
 		Delivered:         DeliveredRefs([]string{"acme/api#41 — fix the flake 🧪"}, 2),
 		OffersA2A:         true,
 		Skills:            richSkills(),
+		MCPServers:        []string{"atlassian", "github"},
 	}
 }
 
@@ -149,6 +151,7 @@ func richSubagentInput() SubagentInput {
 		Discoverable:       "- `read_file` — read a file",
 		Submits:            true,
 		Skills:             richSkills(),
+		MCPServers:         []string{"atlassian", "github"},
 	}
 }
 

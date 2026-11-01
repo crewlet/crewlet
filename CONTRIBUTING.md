@@ -566,7 +566,7 @@ What follows are the prerequisites that legitimately vary by machine.
   ```
 
 Tests never call real LLM APIs — use the fakes in `internal/providers`. A
-phase that offers tools plays its model as a scripted CLI run over the real
+phase that offers tools plays its model as a scripted harness run over the real
 tool session (`internal/providers/llm/llmtest`), never by calling the
 dispatcher around it: the socket, the tool list, the withheld answers and the
 release are on the way of every real call. Test
@@ -882,12 +882,16 @@ line, not in a manifest. [`internal/config/toolservers_test.go`](internal/config
 holds them instead. Every package a page or a skill fetches by name — an
 `mcp_servers` entry, a `uvx`, `npx`, `npm exec` or `pip install` it tells
 somebody to run — names an exact release; every server a document launches is
-listed in `pinnedToolServers` with `readAt`, the release what the documents
-say about it (its tool names, its variables) was read against; and every
-document that names a release names that one. So moving one means reading the
-new release first, correcting whatever moved, and setting `readAt` in the same
-change — and since nothing proposes the move, check the registry whenever you
-touch those pages. Reading it includes running the documented launch through
+an entry of the curated MCP catalogue
+([`internal/mcp/catalogue`](internal/mcp/catalogue)), whose `Package` and
+`Release` are the package and the release what the documents and the
+catalogue say about it (its tool names, its variables) was read against; and
+every document that names a release names that one. The catalogue's own
+launches are held by the same test, so the release the dashboard offers and
+the release a page launches are one. So moving one means reading the new
+release first, correcting whatever moved, and setting the entry's `Release`
+in the same change. Since nothing proposes the move, check the registry
+whenever you touch those pages. Reading it includes running the documented launch through
 `initialize` and `tools/list`: a runner pins the package it is given and
 resolves every dependency the package leaves unbounded at its newest, so a
 release whose source reads right can still fail to start — `mcp-linear` 0.1.1
@@ -1301,8 +1305,8 @@ renders, calls, copies, runs or links:
 - **A table or a function it copies a decision from.** Its
   `internal/render/mirror_test.go` fingerprints engine functions by file and
   name — the coding-run launch, the address checks the boot refuses to start on
-  and the Atlassian host rule among them — and its CRD suite reads the CLI
-  profiles (`harnessprofile`: each CLI's token and key variables and the
+  and the Atlassian host rule among them — and its CRD suite reads the harness
+  profiles (`harnessprofile`: each harness's token and key variables and the
   variables that keep it inside a seat's home) from the engine's own refusals. A
   change to one, or a rename or a move, fails it until it has been read against
   the files that copy it.
@@ -1495,7 +1499,7 @@ with no chance to sign it, and it carries no change of its own to certify.
 ```
 feat(sandbox): reuse a paused box when a clarification is answered
 fix(confluence): relax the CQL query when the server returns no hits
-perf(providers): bench a spent plan rather than relaunch the CLI each round
+perf(providers): bench a spent plan rather than relaunch the harness each round
 docs(secret-store): document that the keyring is required
 build: stamp the version into the binary at link time
 ci(docs-publish): rebuild the docs site when a release ships

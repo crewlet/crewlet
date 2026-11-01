@@ -93,7 +93,7 @@ type Channel struct {
 	Purpose string `json:"purpose,omitempty" untrusted:"fence"`
 
 	// Unit is the unit whose room this is, empty for every other kind. It
-	// is IDENTITY — what the lead fallback resolves through — and never a
+	// is IDENTITY (what the room's answerer resolves through) and never a
 	// read scope and never a credential. It is the org chart's, like the
 	// room's membership: recorded at the create and moved only by the
 	// chart's own write, to the unit that declares the room now

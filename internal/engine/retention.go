@@ -151,6 +151,11 @@ type retention struct {
 	// condition across the fleet. Nil reads as nothing to report.
 	models func(ctx context.Context, now time.Time, out *statelog.Reading)
 
+	// feeds fills the change feeds' half of a reading: every feed this
+	// node started that is down ([native.feedsReading]). Nil reads as
+	// nothing to report.
+	feeds func(now time.Time, out *statelog.Reading)
+
 	// seats is the running company's agent-seat count, which the census a
 	// log's read rate is held against scales with
 	// ([statelog.Census]). READ AT EVERY EVALUATION, because a
@@ -259,6 +264,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		index:       e.indexReading,
 		objects:     e.objectsReading,
 		models:      e.modelsReading,
+		feeds:       e.feedsReading,
 		seats:       func() int { return seatCount(e.Company()) },
 		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},

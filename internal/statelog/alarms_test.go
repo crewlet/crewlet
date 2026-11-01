@@ -135,6 +135,15 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{FeedUnreadable: 3},
 			"could not be translated",
 		},
+		"a change feed down past the stall grace": {
+			statelog.KindFeedStopped,
+			statelog.Reading{FeedsDown: []statelog.FeedOutage{{Source: "chat",
+				For: 3 * time.Minute, Failures: 7,
+				Cause: "changefeed: read the chat feed: nats: no heartbeat received"}}},
+			"the chat change feed has held no consumer for 3m, after 7 failed " +
+				"attempt(s), the latest: changefeed: read the chat feed: nats: no " +
+				"heartbeat received",
+		},
 		"maintenance nobody finished": {
 			statelog.KindMaintenanceOpen,
 			statelog.Reading{MaintenanceOpenFor: 2 * time.Hour,
@@ -1121,5 +1130,79 @@ func TestTheBurnAlarmFiresOnWhatTheObjectivesJudge(t *testing.T) {
 		if !strings.Contains(alarm.Detail, want) {
 			t.Errorf("detail %q does not name %q", alarm.Detail, want)
 		}
+	}
+}
+
+// A FEED WITH NO CONSUMER IS NAMED ONCE IT HAS BEEN DOWN FOR THE STALL GRACE,
+// and not before: the feed reopens on its own inside the grace once its broker
+// answers ([statelog.FeedReopenCeiling]), so a blip a feed rode out is not an
+// alarm, and a feed still down past it is a broker or a consumer still
+// refusing. One alarm names every feed past the grace, each with its own
+// cause, and none that is not; the alarm clears the beat its feeds hold
+// consumers again.
+//
+// Mutation: fire on any feed in the list, and the blip a feed is reopening
+// from raises the alarm.
+func TestAFeedIsNamedOnceItHasBeenDownForTheStallGrace(t *testing.T) {
+	t.Parallel()
+	if statelog.FeedReopenCeiling >= statelog.StallGrace {
+		t.Fatalf("a feed waits up to %s between attempts, which is not inside the "+
+			"%s grace the alarm fires at", statelog.FeedReopenCeiling, statelog.StallGrace)
+	}
+	blip := statelog.FeedOutage{Source: "work", For: statelog.StallGrace,
+		Failures: 2, Cause: "nats: no heartbeat received"}
+	if _, fired := find(statelog.Evaluate(statelog.Reading{
+		FeedsDown: []statelog.FeedOutage{blip}}), statelog.KindFeedStopped); fired {
+		t.Error("a feed down for exactly the grace raised the alarm")
+	}
+
+	down := []statelog.FeedOutage{
+		blip,
+		{Source: "page", For: 4 * time.Minute, Failures: 9,
+			Cause: "changefeed: open the page feed: context deadline exceeded"},
+		{Source: "chat", For: 2 * time.Minute},
+	}
+	alarm, fired := find(statelog.Evaluate(statelog.Reading{FeedsDown: down}),
+		statelog.KindFeedStopped)
+	if !fired {
+		t.Fatal("two feeds down past the grace raised nothing")
+	}
+	for _, want := range []string{
+		"the page change feed has held no consumer for 4m, after 9 failed " +
+			"attempt(s), the latest: changefeed: open the page feed: context " +
+			"deadline exceeded",
+		// A FEED WHOSE FIRST OPEN HAS NOT ANSWERED has no cause to give,
+		// and says so rather than naming an empty one.
+		"the chat change feed has held no consumer for 2m, and its first open " +
+			"has not answered",
+	} {
+		if !strings.Contains(alarm.Detail, want) {
+			t.Errorf("detail %q does not say %q", alarm.Detail, want)
+		}
+	}
+	if strings.Contains(alarm.Detail, "work") {
+		t.Errorf("detail %q names the feed still inside the grace", alarm.Detail)
+	}
+
+	// RAISED ON THE BEAT IT PASSES THE GRACE AND CLEARED ON THE BEAT ITS
+	// FEEDS HOLD CONSUMERS AGAIN, by the one tracker every alarm goes
+	// through.
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	clock := time.Date(2026, 11, 1, 0, 1, 14, 0, time.UTC)
+	tracker := statelog.NewTracker(rec, func() time.Time { return clock })
+	tracker.Observe(t.Context(), statelog.Evaluate(statelog.Reading{FeedsDown: down}))
+	if got := gauge(t, rec, statelog.KindFeedStopped); got != 1 {
+		t.Errorf("the gauge reads %v while feeds are down, want 1", got)
+	}
+	clock = clock.Add(statelog.AlarmInterval)
+	tracker.Observe(t.Context(), statelog.Evaluate(statelog.Reading{}))
+	if _, still := tracker.Firing()[statelog.KindFeedStopped]; still {
+		t.Error("the alarm still stands after every feed holds a consumer again")
+	}
+	if got := gauge(t, rec, statelog.KindFeedStopped); got != 0 {
+		t.Errorf("the gauge reads %v after the feeds reopened, want 0", got)
 	}
 }

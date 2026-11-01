@@ -43,6 +43,20 @@
 // processpool_guard_test.go is what keeps all three halves true: written down
 // and checked by nobody, this rule had four prose copies and seven packages
 // violating it.
+//
+// A URL A REMOTE PARTY NAMED is the one request that does not ride [Client]:
+// it goes through [Guarded], the same transport cloned with a dialer that
+// connects to a public address ([Public]) and nothing else, and that judges
+// the address the socket opens rather than the name, so a resolver answering
+// twice cannot slip an internal address past it (ADR-0072). Who named the URL
+// decides which client sends it, not which package: a page an agent wrote, a
+// server's metadata and a redirect are remote parties; an address the
+// operator configured is not, and stays on [Client], because a private or
+// loopback address there is the deployment the operator chose. The rule of
+// which addresses the public internet routes lives here once, for the same
+// reason the transport does: the artifact CDN fetch and GitHub's reachability
+// check each carried a copy, and the two had already drifted apart, the second
+// admitting carrier-grade NAT and the documentation ranges.
 package httpx
 
 import (
@@ -102,14 +116,16 @@ func Client(timeout time.Duration) *http.Client {
 // Customized is a client on a CLONE of [Transport] with opts applied — the one
 // way to build an outbound client whose transport differs from the shared one.
 //
-// IT EXISTS FOR A CLIENT WHOSE TLS GENUINELY DIFFERS, and for nothing else: an
-// S3 bucket behind a private certificate authority (`AWS_CA_BUNDLE`) needs
-// that bundle in the transport's root pool, which is a property of a
-// transport and cannot ride the shared one without changing every other
-// client's trust. The clone keeps
-// the proxy, HTTP/2 and pool settings the shared transport has, and is a pool
-// of its own — the cost [Transport]'s doc counts against a per-client clone,
-// paid only where the TLS genuinely differs.
+// IT EXISTS FOR A CLIENT WHOSE TLS OR DIALER GENUINELY DIFFERS, and for
+// nothing else: an S3 bucket behind a private certificate authority
+// (`AWS_CA_BUNDLE`) needs that bundle in the transport's root pool, and
+// [Guarded] needs a dialer that refuses every address that is not public.
+// Each is a property of a transport and cannot ride the shared one without
+// changing every other client's trust, or refusing the operator's own private
+// addresses. The clone keeps the proxy, HTTP/2 and pool settings the shared
+// transport has, and is a pool of its own: the cost [Transport]'s doc counts
+// against a per-client clone, paid only where the transport genuinely
+// differs.
 func Customized(timeout time.Duration, opts ...func(*http.Transport)) *http.Client {
 	base, ok := Transport().(*http.Transport)
 	if !ok {

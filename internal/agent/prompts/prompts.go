@@ -82,7 +82,6 @@
 package prompts
 
 import (
-	"maps"
 	"slices"
 	"strings"
 
@@ -188,20 +187,6 @@ func (s Seat) unit() *org.Unit {
 	return s.Org.UnitFor(s.Role)
 }
 
-// mcpServers is the role's MCP-server set, sorted.
-//
-// Sorted because the source is a map: unsorted, the argument handed to a
-// skill catalogue would differ between two builds of the same prompt, and a
-// catalogue that ordered its answer by the surface it was given would emit a
-// different prefix on every round.
-func (s Seat) mcpServers() []string {
-	if !s.ok() {
-		return nil
-	}
-	names := slices.Sorted(maps.Keys(s.Role.MCPEnv))
-	return names
-}
-
 // Skill is one entry in a phase's tool-skill catalogue.
 //
 // Only the three fields the catalogue renders: the body is deliberately
@@ -226,6 +211,18 @@ type Skill struct {
 // Surface is the tool surface a phase will actually have. It scopes which
 // skills the catalogue offers — a skill for a tool this phase cannot call is
 // noise the model has to read past.
+//
+// MCPServers is the servers the seat's tool registry holds a tool of
+// ([github.com/crewlet/crewlet/internal/tools.Snapshot.MCPServers]), which is
+// what the skill guard arms its server triggers against: the two read one set,
+// so a skill the prompt offers is a skill the guard holds the seat to, and the
+// other way round. NEVER the keys of the seat's mcp_env: a block there says
+// which credentials the seat holds, not which servers it reaches. A shared
+// server reaches every agent with no block at all, a vendor's block is read by
+// the engine with no server behind it, and a server the company turned off
+// keeps its blocks while it reaches nobody, so a catalogue read off the keys
+// offered skills for servers the seat could not call and missed the shared
+// servers it could.
 type Surface struct {
 	Tools      []string
 	MCPServers []string

@@ -115,6 +115,9 @@ test("the tool reads as one value", () => {
   expect(toolWords(DATADOG_LANE, { ...sre(), tool: "no_server" })).toBe(
     "Not set up: no datadog tool server is declared",
   );
+  expect(toolWords(DATADOG_LANE, { ...sre(), tool: "server_off" })).toBe(
+    "Not running: the datadog tool server is turned off",
+  );
 });
 
 test("what the vendor holds is said in the vendor's words", () => {

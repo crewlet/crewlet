@@ -173,11 +173,16 @@ type ReviewInput struct {
 
 	// Skills is the tool-skill registry. Review-phase skills are
 	// operator-scoped: a skill listing the review phase surfaces here,
-	// keyed on the role's MCP servers, even though Review has no domain
-	// tools — guidance an operator wants the reviewer to weigh stays
-	// available. Required skills render unmarked here; see
+	// keyed on the seat's MCP servers (MCPServers), even though Review has
+	// no domain tools: guidance an operator wants the reviewer to weigh
+	// stays available. Required skills render unmarked here; see
 	// skillCatalogue.
 	Skills SkillCatalogue
+
+	// MCPServers is every MCP server the seat's registry holds a tool of,
+	// sorted: the servers the work under review could reach, which the
+	// catalogue's server triggers are matched against (see [Surface]).
+	MCPServers []string
 }
 
 // BuildReview renders the Review-phase system prompt, and its outline.
@@ -200,7 +205,7 @@ func BuildReview(seat Seat, in ReviewInput) Prompt {
 	b.Lead("identity", "Identity", BuildIdentityLine(seat))
 	b.Heading("review_phase", reviewHeader(in))
 	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseReview, Surface{
-		MCPServers: seat.mcpServers(),
+		MCPServers: in.MCPServers,
 	})...)
 	// Evidence runs oldest-first so the reviewer reads the turn
 	// top-to-bottom as one timeline: earlier rounds, then this round's

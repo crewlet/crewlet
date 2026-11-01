@@ -320,9 +320,9 @@ seat. See
   every agent turn passes through, and it is per node — so an org's ceiling is
   N × the configured value. Size it per node, not per company. This is the one
   knob a fleet genuinely changes the meaning of. (A `providers.llm` entry's own
-  `max_concurrent` is a different knob: it caps that entry's CLI processes,
+  `max_concurrent` is a different knob: it caps that entry's harness processes,
   also per node.)
-- **A spent plan's sit-out.** An entry whose CLI reported a spent plan or a rate
+- **A spent plan's sit-out.** An entry whose harness reported a spent plan or a rate
   limit sits out on the node that heard it, until the reset the vendor named
   (never more than an hour away) or, where it named none, for a window of 1,
   2, 5, then 15 minutes that steps up with each probe the limit refuses.
@@ -476,7 +476,7 @@ What each one decides:
   makes an agent company different from a human one — a person in a busy room
   reads passively and an agent has no passive read, so every wake is the
   seat's own executor in a [box](code-sandbox.md), whose first request
-  carries the CLI's whole harness even where the seat decides the message was
+  carries the harness's whole harness even where the seat decides the message was
   not for it. `max_concurrent` does not bound those runs, since a wake holds a
   slot only while it launches and while its run is collected and reviewed:
   the cap does, and the seats it reaches, each running one at a time. So one

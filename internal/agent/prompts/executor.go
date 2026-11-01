@@ -88,6 +88,11 @@ type ExecutorInput struct {
 	// (escalation, workers).
 	AvailableTools []string
 
+	// MCPServers is every MCP server the surface's universe holds a tool
+	// of, sorted: what the skill catalogue's server triggers are matched
+	// against, as the guard matches them (see [Surface]).
+	MCPServers []string
+
 	// Workers is the rendered `## Your workers` block: one line per
 	// delegate template this seat may name, with what it is for and what
 	// it returns.
@@ -243,7 +248,7 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// section.
 	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseExecute, Surface{
 		Tools:      in.AvailableTools,
-		MCPServers: seat.mcpServers(),
+		MCPServers: in.MCPServers,
 	})...)
 	b.Heading(KeyDiscoverableTools, discoverableSection(in.Discoverable)...)
 	return b.Build()

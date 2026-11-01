@@ -296,7 +296,7 @@ and audit.
   few tens of GiB of objects, prefer `s3`.
 - On **`s3`** the bucket holds the bytes once and the provider replicates them.
   When the bucket honours signed checksums and conditional puts, browsers and
-  the CLI upload straight to it; give the bucket a CORS rule admitting `PUT`
+  the harness upload straight to it; give the bucket a CORS rule admitting `PUT`
   from the dashboard's origin. An S3-compatible service you run yourself
   works the same way. See
   [Choosing a backend](../concepts/object-store.md#choosing-a-backend).

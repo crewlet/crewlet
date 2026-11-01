@@ -116,7 +116,7 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 		{"AccessToolState", strs(
 			string(seataccess.ToolLive), string(seataccess.ToolBuiltin),
 			string(seataccess.ToolWaiting), string(seataccess.ToolNoServer),
-			string(seataccess.ToolOff),
+			string(seataccess.ToolServerOff), string(seataccess.ToolOff),
 		), nil},
 		{"AccessOp", strs(
 			string(seataccess.OpCreate), string(seataccess.OpEnable), string(seataccess.OpLevel),

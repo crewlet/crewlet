@@ -28,7 +28,7 @@ A useful mental model: for each integration there is usually
    For Mattermost, Slack, and GitLab a provisioning CLI creates
    these idempotently; for Atlassian and GitHub you create them by hand,
    because neither third-party app issues a credential on a provisioner's behalf.
-   Those two still have a CLI — it reports which account each seat's own
+   Those two still have a harness — it reports which account each seat's own
    credential turned out to be, and registers the webhooks.
 3. **A webhook back to the engine** — so external activity wakes the right
    agent. Self-registered where the API allows it, manual where it doesn't.
@@ -39,27 +39,27 @@ A useful mental model: for each integration there is usually
 
 ## LLM provider (required)
 
-**Every model is reached through a coding CLI** the engine drives as a process —
+**Every model is reached through a harness** the engine drives as a process —
 the vendor's own harness, which follows every model the vendor ships, signed in
 with your plan or your key. So the choice is which vendor's models you want,
 and how you pay for them:
 
 | Models | Config | Pay with | Notes |
 |---|---|---|---|
-| **Anthropic's** (Claude) | `model: sonnet` — Claude Code is the default `harness` | a Claude Pro / Max plan, or an Anthropic API key (`auth.mode: api-key`) | The one CLI that mints a headless token (`crewlet llm login -capture-token`), the best sign-in for a container. Runs a seat's executor as [its own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box). |
+| **Anthropic's** (Claude) | `model: sonnet` — Claude Code is the default `harness` | a Claude Pro / Max plan, or an Anthropic API key (`auth.mode: api-key`) | The one harness that mints a headless token (`crewlet llm login -capture-token`), the best sign-in for a container. Runs a seat's executor as [its own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box). |
 | **OpenAI's** (GPT) | `harness: codex` | a ChatGPT Plus / Pro plan, or an OpenAI API key (`auth.mode: api-key`) | No executor: its own loop on this host, the seat's tools as its only working tools, for a seat's reviewer, workers and side passes; the seat's `llm` points at a Claude Code or OpenCode entry for its executor. |
 | **Open models** — OpenRouter, a hosted provider, your own server | `harness: opencode`, `model: <provider>/<model>` | the provider's key in `env`, or a login of OpenCode's own; nothing at all for a server that takes no key | OpenCode 2. Fully self-hostable: a vLLM, llama.cpp or Ollama server is a provider declared in OpenCode's own configuration ([how](../concepts/llm-backends.md#open-models-openrouter-and-local-servers-opencode)). Runs a seat's executor, like Claude Code. |
-| **Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi** | `harness:` the profile's name | the vendor's login or key | No executor: a seat's reviewer, workers and side passes. [Supported CLIs](../concepts/llm-backends.md#supported-clis) pairs each profile with its binary (`gemini-cli` drives `gemini`, `kimi-code` drives `kimi`, …). |
+| **Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi** | `harness:` the profile's name | the vendor's login or key | No executor: a seat's reviewer, workers and side passes. [Supported harnesses](../concepts/llm-backends.md#supported-harnesses) pairs each profile with its binary (`gemini-cli` drives `gemini`, `kimi-code` drives `kimi`, …). |
 
-Whichever you pick, the CLI's binary has to be installed on the engine host —
-the container image ships none, see [Installation](installation.md#a-coding-cli)
-— and each seat gets an isolated home in it, so agents never share a CLI's
+Whichever you pick, the harness's binary has to be installed on the engine host —
+the container image ships none, see [Installation](installation.md#a-harness)
+— and each seat gets an isolated home in it, so agents never share a harness's
 memory. See [LLM Backends](../concepts/llm-backends.md) for the whole design.
 
 You can configure several named entries and pick per role (`role.llm`), plus
 a cheap auxiliary model per role (`role.llm_auxiliary`) for reflection and
 summarisation work — worth choosing deliberately, because each of those calls
-pays a CLI launch under a fixed deadline
+pays a harness launch under a fixed deadline
 ([why](../concepts/llm-backends.md#auxiliary-work-and-latency)). `role.llm` also
 accepts a **list**, which is how a plan and a key compose: `llm: [plan, key]`
 runs on the flat-rate plan and falls through to the metered key while the
@@ -69,31 +69,31 @@ plan's window is spent. See [Quickstart § LLM options](quickstart.md#llm-option
 always available: it is billed per token and throttled far less than a plan.
 A plan is the better answer when you are developing, evaluating, or running a
 small company yourself and want predictable cost — check its terms, which are
-generally written for interactive use by the subscriber. Both are the same CLI,
+generally written for interactive use by the subscriber. Both are the same harness,
 so the choice is one `auth.mode` and can change at any time. A plan can also
 back the [code sandbox](../concepts/code-sandbox.md) — via a headless token on
 any backend, or via a local cell (`providers.sandbox.local` plus `run_in:
-direct`), which runs the coding agent on the engine host against the same
+direct`), which runs the harness on the engine host against the same
 login.
 
-**And the CLI runs the turn itself.** Every agent seat's executor is its CLI's
+**And the harness runs the turn itself.** Every agent seat's executor is its harness's
 own agentic loop — a real shell, a real editor, a real checkout — with the
 seat's tools reaching it over an MCP bridge, as a detached run that outlives
-the turn. It needs more than a sign-in: a CLI with a coding-agent runner
+the turn. It needs more than a sign-in: a harness with a harness runner
 (`claude-code` or `opencode`) in the seat's chain, a `providers.sandbox`
 catalogue to place the run in, and a bridge its box can dial — a `direct` box
 dials the node's own listener on loopback wherever the node binds `api.port`,
 while a `container` or `e2b` box, or a `direct` one on a node started with
 `api.port: 0`, needs `CREWLET_MCP_BRIDGE_URL`, the fleet's address. `crewlet llm doctor` checks all three. Every other phase —
-the reviewer, delegated workers and the side passes — runs the same CLI on this
+the reviewer, delegated workers and the side passes — runs the same harness on this
 host, its shell and editor denied, calling the seat's tools over MCP. See
-[LLM Backends § Where the CLI runs](../concepts/llm-backends.md#where-the-cli-runs).
+[LLM Backends § Where the harness runs](../concepts/llm-backends.md#where-the-harness-runs).
 
 **Embeddings** (`providers.embeddings`) power the semantic half of a Doclet
 or Worklet search (the company's own pages and work items, embedded once for
 the whole fleet, and each search's query) and the agent-learning subsystem's
 similarity recall (personal diary + episode recall). They are the one model
-call the engine makes itself, since a coding CLI computes no vectors: any
+call the engine makes itself, since a harness computes no vectors: any
 OpenAI-compatible embeddings endpoint works via `base_url`, including a
 self-hosted one; a model
 this build does not know states its width and its limits (the tokens one input
@@ -433,7 +433,7 @@ Details (scopes, Events API, thread routing, the working-status indicator):
 
 ## Code sandbox (where every executor runs)
 
-Every agent seat's executor is its coding CLI's own run — Claude Code or
+Every agent seat's executor is its harness's own run — Claude Code or
 OpenCode — fully permissioned, with a shell, a filesystem and a git checkout,
 in a box from this catalogue, which a company with an agent seat and a model
 must configure. `direct` is the engine host itself; `container` and `e2b` keep
@@ -445,8 +445,8 @@ page.
 | **None** | omit `providers.sandbox` | Only for a company with no agent seat, or no `providers.llm` entry yet; any other is refused at `providers.sandbox`. |
 | **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` + `CREWLET_MCP_BRIDGE_URL` | Sign up at <https://e2b.dev>, create an API key in the dashboard. The run is on E2B's network and calls its seat's tools back at `CREWLET_MCP_BRIDGE_URL`, so the engine's API has to be published where E2B's cloud reaches it — see the caveat below. |
 | **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` + `CREWLET_MCP_BRIDGE_URL` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`, and the bridge address has to be one your cluster reaches. |
-| **Local — container** (recommended on one host) | `local: {image: …}` + an entry's `run_in: container` (or `default_run_in`) + `CREWLET_MCP_BRIDGE_URL` | Docker/Podman on the engine host. Real host isolation, no E2B account. You [bring the image](../concepts/code-sandbox.md#bring-your-own-image), with the coding CLI in it, or a stock one plus a setup step that installs it. A loopback `CREWLET_MCP_BRIDGE_URL` reaches the box under the runtime's name for the engine host, and on Linux `api.host` must not be loopback. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
-| **Local — direct** | `local: {}` + an entry's `run_in: direct` (or `default_run_in`) | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for an entry signed in on a plan — but the coding agent runs fully permissioned as the engine user, so it isolates *state*, not the host: it can read whatever your account can. Only on a dedicated host you are willing to hand to an autonomous agent, for the entry that needs the host itself, or for a first run on your own machine while its seats take work from you alone. |
+| **Local — container** (recommended on one host) | `local: {image: …}` + an entry's `run_in: container` (or `default_run_in`) + `CREWLET_MCP_BRIDGE_URL` | Docker/Podman on the engine host. Real host isolation, no E2B account. You [bring the image](../concepts/code-sandbox.md#bring-your-own-image), with the harness in it, or a stock one plus a setup step that installs it. A loopback `CREWLET_MCP_BRIDGE_URL` reaches the box under the runtime's name for the engine host, and on Linux `api.host` must not be loopback. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
+| **Local — direct** | `local: {}` + an entry's `run_in: direct` (or `default_run_in`) | A process tree on the engine host, using the harness (and login) already installed there. Fastest to stand up and the natural pair for an entry signed in on a plan — but the harness runs fully permissioned as the engine user, so it isolates *state*, not the host: it can read whatever your account can. Only on a dedicated host you are willing to hand to an autonomous agent, for the entry that needs the host itself, or for a first run on your own machine while its seats take work from you alone. |
 
 For any other local instance, a workstation included, and before a seat takes work from anyone else, put code work in a container:
 
@@ -454,7 +454,7 @@ For any other local instance, a workstation included, and before a seat takes wo
 providers:
   sandbox:
     local:
-      image: node:22-bookworm       # plus the setup step that installs the CLI:
+      image: node:22-bookworm       # plus the setup step that installs the harness:
                                     #   see "Bring your own image"
     default_run_in: container
 ```
@@ -471,14 +471,14 @@ offers two); a company whose every such entry names its own needs none — as
 long as *something* names a cell, since a backend is only built for a cell
 that is reached.
 
-Coding-agent choice: the coding agent **is** the CLI of the entry the seat's
+Coding-agent choice: the harness **is** the harness of the entry the seat's
 executor launches on (the first member of its `llm` chain that can run one),
 with that entry's model, its `env` and its sign-in, so it needs no extra secret.
 **Claude Code** runs a `claude-code` entry; **OpenCode** — version 2, the
 `@opencode/cli` package, in the box — runs an `opencode` entry and so any model
 OpenCode reaches. A seat whose `llm` chain holds no `claude-code` or `opencode`
-entry is [refused](../concepts/code-sandbox.md#failure-modes); a CLI with no
-coding-agent runner — Codex, Gemini CLI, the rest — serves the seat's reviewer,
+entry is [refused](../concepts/code-sandbox.md#failure-modes); a harness with no
+harness runner — Codex, Gemini CLI, the rest — serves the seat's reviewer,
 workers and side passes instead. A sign-in the seat carries itself in `role.sandbox.env` — a Claude Code
 token, say — counts toward the check that refuses a remote box its entry's login
 cannot follow.
@@ -515,26 +515,26 @@ see what a full stack looks like written out, and
 [Jira](../integrations/jira.md) / [Confluence](../integrations/confluence.md)
 for the blocks that move those two halves to Atlassian.
 
-`examples/nimbus-claude-cli.company.yaml` + `examples/nimbus-claude-cli.config.yaml`
+`examples/nimbus-claude-code.company.yaml` + `examples/nimbus-claude-code.config.yaml`
 is the **short path**: every pick that costs nothing extra to stand up — chat
 on **Mattermost**, the model **Claude Code on your own Claude plan**, the
 tracker and knowledge base the **engine's own**, and the code sandbox on the
 **engine host** (`run_in: direct`), which reuses that same plan login
 rather than needing an account of its own — a first run on your own machine
-while its seats take work from you alone. Every seat runs that CLI's
+while its seats take work from you alone. Every seat runs that harness's
 [own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box) as
-its executor, so the executor *is* the CLI's own agentic loop with a real shell. The rows that need
+its executor, so the executor *is* the harness's own agentic loop with a real shell. The rows that need
 somebody else's service are deliberately empty, which is what lets the whole
 thing run from one compose profile and one `crewlet llm login`:
 
 ```bash
 docker compose --profile mattermost up -d --wait
-COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
+COMPANY=examples/nimbus-claude-code.company.yaml scripts/mattermost-dev-bootstrap.sh
 crewlet llm login default -from-host \
-    -company examples/nimbus-claude-cli.company.yaml \
-    -config examples/nimbus-claude-cli.config.yaml
-crewlet run -config examples/nimbus-claude-cli.config.yaml \
-            -company examples/nimbus-claude-cli.company.yaml
+    -company examples/nimbus-claude-code.company.yaml \
+    -config examples/nimbus-claude-code.config.yaml
+crewlet run -config examples/nimbus-claude-code.config.yaml \
+            -company examples/nimbus-claude-code.company.yaml
 ```
 
 **Both examples run chat on a vendor, and that is now the deliberate part

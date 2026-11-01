@@ -119,6 +119,12 @@ var alarmMeaning = map[Kind]string{
 		"recoverable by nothing.",
 	KindFeedUnreadable: "A change record no build on this node can read. It " +
 		"redelivers for ever, so every wake behind it is waiting too.",
+	KindFeedStopped: "A change feed on this node has held no consumer for " +
+		"longer than the one-minute stall grace, so this node publishes no " +
+		"wake from it. It opens its group again on its own and is handed every " +
+		"record the group has not acknowledged, so the wakes are late rather " +
+		"than lost; on a single data node nobody in the company is woken until " +
+		"it does. One alarm names every feed that is down, with its cause.",
 	KindMaintenanceOpen: "A capacity window has been open for an hour. While " +
 		"it's open no node starts in service, and every node restarted for it " +
 		"publishes nothing. A window this node last read open and can't read " +

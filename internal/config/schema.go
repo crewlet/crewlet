@@ -530,14 +530,15 @@ func (g *schemaGen) textSchema(directives map[string]string) map[string]any {
 		return map[string]any{"anyOf": []any{closed, reference}}
 	}
 	out := map[string]any{"type": textTypes}
-	// maxlen is a BYTE bound the validator already enforces, stated where an
+	// maxlen is a bound the validator already enforces, stated where an
 	// editor can see it: a bound that lived only in a field's description
 	// was prose to a schema, so an editor accepted a value `crewlet validate`
-	// then refused. JSON Schema counts characters rather than bytes, and the
-	// two agree on every value a bounded field here admits, because each such
-	// field's own pattern admits ASCII alone. It bounds the field's OWN
-	// spelling and never the reference beside it, whose length says nothing
-	// about the value it resolves to.
+	// then refused. JSON Schema counts characters (code points), so a field
+	// of free text is bounded in characters by its validator too (an MCP
+	// server's description, [MaxMCPDescription]); a field whose own pattern
+	// admits ASCII alone may count bytes, since there the two units agree.
+	// It bounds the field's OWN spelling and never the reference beside it,
+	// whose length says nothing about the value it resolves to.
 	own := map[string]any{}
 	if v, ok := directives["maxlen"]; ok {
 		if n, err := strconv.Atoi(v); err == nil {

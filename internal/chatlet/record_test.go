@@ -237,8 +237,8 @@ func TestEveryRecordThatDeletesOrFencesInstallsAGate(t *testing.T) {
 // noise, and nothing downstream could tell.
 func TestThePrecedenceOrderPutsEveryAddressedReasonFirst(t *testing.T) {
 	t.Parallel()
-	if len(chatlet.Reasons) != 8 {
-		t.Fatalf("the vocabulary has %d reasons, want 8", len(chatlet.Reasons))
+	if len(chatlet.Reasons) != 9 {
+		t.Fatalf("the vocabulary has %d reasons, want 9", len(chatlet.Reasons))
 	}
 	seenUnaddressed := false
 	for _, r := range chatlet.Reasons {
@@ -255,11 +255,11 @@ func TestThePrecedenceOrderPutsEveryAddressedReasonFirst(t *testing.T) {
 		}
 		seenUnaddressed = true
 	}
-	// THE ADDRESSED SET IS EXACTLY FOUR, written out rather than counted
+	// THE ADDRESSED SET IS EXACTLY FIVE, written out rather than counted
 	// off the method that is under test.
 	want := []chatlet.Reason{
 		chatlet.ReasonDM, chatlet.ReasonMention, chatlet.ReasonReplyToOwnRoot,
-		chatlet.ReasonLeadFallback,
+		chatlet.ReasonCollectiveRequest, chatlet.ReasonAnswerer,
 	}
 	var got []chatlet.Reason
 	for _, r := range chatlet.Reasons {
@@ -268,13 +268,17 @@ func TestThePrecedenceOrderPutsEveryAddressedReasonFirst(t *testing.T) {
 		}
 	}
 	if !slices.Equal(got, want) {
-		t.Fatalf("the addressed reasons are %v, want %v — a seat that treats a "+
-			"collective address or a standing follow as addressed answers every "+
-			"remark in every room it follows", got, want)
+		t.Fatalf("the addressed reasons are %v, want %v: a seat that treats an "+
+			"agent's collective address or a standing follow as addressed answers "+
+			"every remark in every room it follows", got, want)
+	}
+	// A PERSON'S `@channel` IS ADDRESSED AND AN AGENT'S IS NOT: that split
+	// is why one address carries two reasons.
+	if !chatlet.ReasonCollectiveRequest.Addressed() || chatlet.ReasonCollective.Addressed() {
+		t.Error("a person's `@channel` must oblige an answer and an agent's must not")
 	}
 	// A REPLY AS A PARTICIPANT IS NOT ADDRESSED AND A REPLY TO YOUR OWN
-	// ROOT IS: that split is the whole reason the vocabulary has eight
-	// values rather than seven.
+	// ROOT IS: the same split, on the thread rather than the author.
 	if chatlet.ReasonReply.Addressed() {
 		t.Error("a plain reply obliges an answer, which would make every busy " +
 			"thread oblige every past speaker to answer again")
@@ -469,7 +473,7 @@ func TestEveryRecordAtEveryCapFitsTheDeclaredBound(t *testing.T) {
 	notify.ChannelName = name
 	notify.Excerpt = worst(chatlet.MaxExcerpt)
 	notify.Author = wide(1)[0]
-	notify.Lead = wide(1)[0]
+	notify.Answerer = wide(1)[0]
 	notify.WakesTruncated = true
 	for _, h := range wide(chatlet.MaxRecipients) {
 		notify.Recipients = append(notify.Recipients,

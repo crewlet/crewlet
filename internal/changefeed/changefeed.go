@@ -39,6 +39,30 @@
 // notifications for a lease TTL — for work that is stateless and needs no
 // ownership at all.
 //
+// # A feed outlives its consumer
+//
+// [Feed.Run] returns only when its context ends. A consumer that fails to
+// open, fails a read or closes underneath the feed is stopped and its durable
+// group opened again, on a doubling, jittered wait ([reopenBase] to
+// [reopenCeiling]), and the reopened group hands it every record the group
+// has not acknowledged, so nothing it owed is lost.
+//
+// THE LOOP IS HERE rather than in whatever starts a feed, because the
+// failure it answers is the consumer's and every caller has it: a broker
+// that drops a heartbeat (a host that slept, a leader election, a client
+// reconnect) ends a read with an error that the next open would not see.
+// Before the loop, Run returned on that error, the engine logged it and the
+// goroutine exited, so a node that had lost its broker for a second routed
+// no wake for hours, until the process restarted. A supervisor in the engine
+// would have to restate which outcomes end a feed and which do not, which
+// this package already decides, and every other caller would be one more
+// place to forget it.
+//
+// AND A FEED THAT IS DOWN SAYS SO ([Feed.Outage]). A feed that cannot reach
+// its consumer publishes no wake, so `wake_latency`, which judges the wakes
+// that were published, sees nothing at all; the engine reads each feed's
+// outage into the alarm table instead (`feed_stopped`).
+//
 // # Two independent dedupe layers, and why both
 //
 // A feed message can be redelivered (a node that died after publishing but
@@ -59,10 +83,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -90,6 +116,27 @@ const ClaimTTL = 5 * time.Minute
 // that a person waiting on a notification does not notice. The consumer's own
 // redelivery cap is what ends a change that keeps failing.
 const nakDelay = 2 * time.Second
+
+// The reopen schedule: how long a feed waits before each attempt to bring its
+// consumer back.
+const (
+	// reopenBase is the first wait. One second, the interval the broker
+	// connection's own reconnect attempts are spaced by, so a feed whose
+	// read failed across a client reconnect does not try again before the
+	// client has had one attempt at its broker.
+	reopenBase = time.Second
+
+	// reopenCeiling is the longest wait, and how long a consumer must stay
+	// open for its failure to begin a new series at [reopenBase]. It is
+	// [statelog.FeedReopenCeiling], half the grace `feed_stopped` fires
+	// at, declared there because the alarm's remedy states it.
+	reopenCeiling = statelog.FeedReopenCeiling
+
+	// reopenJitter spreads each wait by a fifth either way, the spread the
+	// engine's other retry schedules use, so the feeds a broker outage
+	// stopped together do not all ask it again in the same second.
+	reopenJitter = 0.2
+)
 
 // Source identifies the estate a feed reads.
 //
@@ -141,7 +188,10 @@ type Records interface {
 	// Next blocks for the next message until the context ends.
 	//
 	// A nil Message with a nil error means the consumer has closed, which
-	// is how a caller tells a shutdown from a failure.
+	// is how a caller tells a shutdown from a failure. A feed whose
+	// context is still live reads that close as a failure and opens the
+	// group again, because a consumer closed by anything but its own
+	// shutdown is one the feed still has to read.
 	Next(ctx context.Context) (*Message, error)
 
 	// Stop ends the consumer. The DURABLE POSITION survives, which is what
@@ -274,6 +324,53 @@ type Feed struct {
 
 	// judge is the node's objective meter; nil records nothing.
 	judge Objectives
+
+	// reopenBase is the reopen schedule's first wait, [reopenBase] in every
+	// feed [New] builds, and it scales the whole schedule: the ceiling stays
+	// the same multiple of it. Only a test changes it, so a schedule plays
+	// out in milliseconds.
+	reopenBase time.Duration
+
+	// mu guards the outage below, which [Feed.Run] writes and
+	// [Feed.Outage] reads from the alarm evaluation's goroutine.
+	mu sync.Mutex
+
+	// running is whether Run is consuming or trying to, open whether it
+	// holds a consumer now, and held whether it has held one since Run
+	// began, which tells its first open from a reopen.
+	running, open, held bool
+
+	// down is when the feed last stopped holding a consumer, or when Run
+	// began for a feed that has never held one. failures counts the
+	// failed attempts since, and cause is what the latest said.
+	down     time.Time
+	failures int
+	cause    string
+
+	// series counts the attempts the schedule has waited for, which sets
+	// the next wait. It OUTLIVES ONE OUTAGE on purpose: a consumer that
+	// opens and fails again at once is a flapping broker, which the
+	// doubling exists to back off from, so only a consumer that stayed
+	// open for the ceiling begins a new series.
+	series int
+}
+
+// Outage is a feed that is not consuming.
+type Outage struct {
+	// Source is the estate the feed reads ([Source.Name]).
+	Source string
+
+	// Since is when the feed last stopped holding a consumer, or when it
+	// began, for a feed that has never opened one.
+	Since time.Time
+
+	// Failures counts the failed attempts since: the read that ended the
+	// consumer, and each open that failed after it. Zero for a feed whose
+	// first open has not answered yet.
+	Failures int
+
+	// Cause is what the latest failure said, empty when none has failed.
+	Cause string
 }
 
 // Objectives is the node's service objective meter, as the feed records into
@@ -335,6 +432,7 @@ func New(opts Options) (*Feed, error) {
 		opener: opts.Opener, publisher: opts.Publisher,
 		claims: opts.Claims, translator: opts.Translator, now: opts.Now,
 		metrics: opts.Metrics, judge: opts.Objectives,
+		reopenBase: reopenBase,
 	}
 	if f.now == nil {
 		f.now = func() time.Time { return time.Now().UTC() }
@@ -342,25 +440,166 @@ func New(opts Options) (*Feed, error) {
 	return f, nil
 }
 
-// Run consumes the feed until the context ends.
-func (f *Feed) Run(ctx context.Context) error {
+// Run consumes the feed until the context ends, and returns only then. A feed
+// runs once: Run is not called twice on one feed.
+//
+// A consumer that cannot be opened, fails a read or closes while the context
+// is live is stopped, and its group is opened again on the reopen schedule
+// (see the package doc). SETTLEMENT IS UNTOUCHED BY IT: a reopen happens
+// between two messages and never inside [Feed.handle], so every message a
+// consumer handed over was acked or naked before that consumer stopped, and
+// the group hands whatever it delivered and nobody settled to the next
+// consumer that reads it, on this node or another.
+func (f *Feed) Run(ctx context.Context) {
 	src := f.translator.Source()
+	f.begin()
+	defer f.end()
+	for {
+		opened, err := f.consume(ctx, src)
+		if ctx.Err() != nil {
+			return
+		}
+		down, series := f.failed(err, opened)
+		wait := f.wait(series)
+		if opened.IsZero() {
+			log.WarnContext(ctx, "changefeed_open_failed", "source", src.Name,
+				"group", src.Group, "attempt", series, "retry_in", wait.String(),
+				"down_for", f.now().Sub(down).String(), "error", err.Error(),
+				"detail", "this node publishes no wake from this feed until it "+
+					"opens, and tries again on its own; `feed_stopped` is raised "+
+					"once it has been down for the stall grace")
+		} else {
+			log.WarnContext(ctx, "changefeed_interrupted", "source", src.Name,
+				"group", src.Group, "attempt", series, "retry_in", wait.String(),
+				"error", err.Error(),
+				"detail", "the feed opens its group again on its own and is handed "+
+					"every record the group has not acknowledged, so no wake is lost; "+
+					"until then this node publishes none from it, and any other node "+
+					"consuming the group still does")
+		}
+		if !sleep(ctx, wait) {
+			return
+		}
+	}
+}
+
+// consume opens the feed's group and handles what it delivers until the
+// consumer ends, returning when it opened (zero when the open failed) and
+// why it ended. A nil error is a consumer that ended with the context.
+func (f *Feed) consume(ctx context.Context, src Source) (time.Time, error) {
 	records, err := f.opener.Open(ctx, src.Group)
 	if err != nil {
-		return fmt.Errorf("changefeed: open the %s feed: %w", src.Name, err)
+		return time.Time{}, fmt.Errorf("changefeed: open the %s feed: %w", src.Name, err)
 	}
 	defer func() { _ = records.Stop() }()
 
-	log.InfoContext(ctx, "changefeed_started", "source", src.Name, "group", src.Group)
+	opened := f.now()
+	if was, first := f.opened(); first {
+		log.InfoContext(ctx, "changefeed_started", "source", src.Name, "group", src.Group)
+	} else {
+		log.InfoContext(ctx, "changefeed_reopened", "source", src.Name,
+			"group", src.Group, "down_for", opened.Sub(was.Since).String(),
+			"failures", was.Failures, "was", was.Cause)
+	}
 	for {
 		msg, err := records.Next(ctx)
 		if err != nil {
-			return fmt.Errorf("changefeed: read the %s feed: %w", src.Name, err)
+			return opened, fmt.Errorf("changefeed: read the %s feed: %w", src.Name, err)
 		}
 		if msg == nil {
-			return nil
+			if ctx.Err() != nil {
+				return opened, nil
+			}
+			return opened, fmt.Errorf("changefeed: the %s feed's consumer closed "+
+				"while the feed was running", src.Name)
 		}
 		f.handle(ctx, msg)
+	}
+}
+
+// Outage reports whether the feed is down, and since when: from the moment it
+// stopped holding a consumer, or began without one, until it holds one again.
+// False while it holds one, and before Run starts or after it returns.
+func (f *Feed) Outage() (Outage, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.running || f.open {
+		return Outage{}, false
+	}
+	return Outage{Source: f.translator.Source().Name, Since: f.down,
+		Failures: f.failures, Cause: f.cause}, true
+}
+
+// begin marks the feed running without a consumer, from now.
+func (f *Feed) begin() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.running, f.open, f.held = true, false, false
+	f.down, f.failures, f.cause, f.series = f.now(), 0, "", 0
+}
+
+// end marks the feed stopped, which is no outage: nothing is meant to be
+// consuming.
+func (f *Feed) end() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.running, f.open = false, false
+}
+
+// opened marks the feed holding a consumer, and reports the outage it ends
+// and whether this is the feed's first consumer.
+func (f *Feed) opened() (Outage, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	was := Outage{Since: f.down, Failures: f.failures, Cause: f.cause}
+	first := !f.held
+	f.open, f.held, f.failures, f.cause = true, true, 0, ""
+	return was, first
+}
+
+// failed records one failed attempt, given when its consumer opened (zero for
+// an open that failed), beginning the outage if the feed held a consumer
+// until now. It returns when the outage began and the attempt's place in its
+// series.
+func (f *Feed) failed(err error, opened time.Time) (time.Time, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := f.now()
+	if !opened.IsZero() && now.Sub(opened) >= f.ceiling() {
+		f.series = 0
+	}
+	f.series++
+	if f.open {
+		f.open, f.down, f.failures = false, now, 0
+	}
+	f.failures++
+	f.cause = err.Error()
+	return f.down, f.series
+}
+
+// wait is how long the feed waits before attempt n of a series to bring its
+// consumer back, counting from one: [reopenBase] doubling to the ceiling,
+// spread by [reopenJitter].
+func (f *Feed) wait(n int) time.Duration {
+	return backoff.Jitter(backoff.Doubling(n, f.reopenBase, f.ceiling()), reopenJitter)
+}
+
+// ceiling is the schedule's longest wait before its spread: [reopenCeiling]
+// in every feed [New] builds.
+func (f *Feed) ceiling() time.Duration {
+	return f.reopenBase * (reopenCeiling / reopenBase)
+}
+
+// sleep waits d, and reports whether the context is still live: a feed told
+// to stop while it waits stops at once rather than after the wait.
+func sleep(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
 	}
 }
 

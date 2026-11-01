@@ -15,7 +15,8 @@
 // host, a body of at most [MaxFileBytes] within [FetchTimeout], a type the page
 // can load the reference as, the page's subresource integrity value checked
 // against the bytes, and a dialer that refuses every address that is not
-// public ([Guarded]). A file whose URL names one release is reused until the
+// public ([httpx.Guarded], the one guard for a URL a remote party names,
+// ADR-0072). A file whose URL names one release is reused until the
 // cache evicts it; one that names none (a web font's stylesheet) is fetched
 // again past [MutableTerm].
 package vendor

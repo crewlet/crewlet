@@ -34,7 +34,7 @@ Monday, a month runs from the 1st. Every model round on the engine host — the
 reviewer's, a worker's, the onboarding pass's, a side pass's — is charged in all
 three windows it falls in at once, against the company and against its seat, as
 soon as its reply arrives, and what it asked for runs only while every capped
-window of both had room for it. A seat's executor is its coding CLI's own run in
+window of both had room for it. A seat's executor is its harness's own run in
 a box, whose requests the engine never sees one by one, so its whole spend is
 charged in those windows once, when the run is collected: a **post-charge**,
 which never refuses and can take a window past its ceiling
@@ -180,7 +180,7 @@ screen folds a phase differently from the next:
 
 | Band | What spent it |
 |---|---|
-| **Execute** | The seat's own turn doing its work — the executor, which is its coding CLI's own run in a box. What the run spent is recorded from the box once per launch (`executor_collected`), which names no phase and is filed here: the executor's own record carries no tokens |
+| **Execute** | The seat's own turn doing its work — the executor, which is its harness's own run in a box. What the run spent is recorded from the box once per launch (`executor_collected`), which names no phase and is filed here: the executor's own record carries no tokens |
 | **Review** | The reviewer's pass over that work |
 | **Workers** | The short-lived workers an executor delegated tasks to |
 | **Auxiliary** | Everything that is not the turn's own work: the seats' [auxiliary model](#auxiliary-spend) — the turn-start context, every compaction rewrite, the reflection workers, the background passes and a person's answered questions — the round-cap judge and the first-turn onboarding |
@@ -238,8 +238,8 @@ learning cost. A compaction of
 seventy rewrites is one record of seventy calls. So the live window trails the
 counter by up to one flush, and a named window by up to two (the flush, and the
 usage publisher's own tick). Every figure's **calls** are provider calls — a
-phase's model rounds, an executor launch's own turns as its CLI reported them
-(one per launch where the CLI reports none, as OpenCode does), an auxiliary
+phase's model rounds, an executor launch's own turns as its harness reported them
+(one per launch where the harness reports none, as OpenCode does), an auxiliary
 record's coalesced calls — never records. The executor's own record counts
 none, since its run's calls are its launches'.
 
@@ -294,16 +294,16 @@ known size:
 Every figure carries the prompt cache's share of its input: `cache_read_tokens`
 (served from the cache) and `cache_write_tokens` (stored into it). They are a
 **breakdown** of `input_tokens`, never an addition to it — the cache is the
-coding CLI's own, and the backend adds the cache counts the CLI reports back
+harness's own, and the backend adds the cache counts the harness reports back
 into its input total — so the share of input a cache served is
 `cache_read_tokens / input_tokens`, and `total_tokens` is input plus output. A
-CLI that reports no cache counts carries zero for both, and one that reports no
+harness that reports no cache counts carries zero for both, and one that reports no
 usage at all is charged an estimate, four characters a token, which
 `crewlet llm doctor` names on its `token usage` line.
 
 ## Tokens, never money
 
 The dashboard measures spend in tokens only. A price is reported only by an
-executor's launch — in its CLI's own figure — and by no
+executor's launch — in its harness's own figure — and by no
 call on this host, so a currency figure would leave out every reviewer,
 worker and auxiliary call while reading as the company's spend.

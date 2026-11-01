@@ -4,6 +4,8 @@ import (
 	"net/textproto"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -73,6 +75,20 @@ type MCPServer struct {
 	// told it had tools that behave nothing like the ones it got.
 	Name string `yaml:"name" json:"name" js:"required" desc:"Server name; the key seats declare credentials under."`
 
+	// Enabled turns the server off without removing it: off, nothing starts
+	// it, no seat is granted it and no executor box is given it, while the
+	// entry, its seats' mcp_env blocks and its box listings stay in the
+	// document, validated as ever, for the day it is turned back on. See
+	// [MCPServer.IsEnabled].
+	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Run this server (default on). Off keeps the entry and everything that names it, and starts nothing."`
+
+	// Description says what the server is for, in the operator's words. The
+	// executor's prompt lists it beside the server's name, which is all a
+	// model is shown of a server before it asks for its tools, so it is
+	// what tells the model which server to look in. See
+	// [MaxMCPDescription] for its bound.
+	Description string `yaml:"description,omitempty" json:"description,omitempty" js:"maxlen=200" desc:"What this server is for, one line of at most 200 characters; listed beside its name in each agent's prompt."`
+
 	Transport MCPTransport `yaml:"transport,omitempty" json:"transport,omitempty" js:"enum=stdio|http" desc:"stdio (default) or http."`
 
 	// Shared launches one instance for the company. False makes this a
@@ -100,8 +116,8 @@ type MCPServer struct {
 	// SeatCredentials declares which integration's per-seat credential a
 	// per-seat server reads, and under which key, so the engine binds each
 	// seat's own sealed credential to it (D15). Absent, a server this build
-	// recognises by its command or address reads what [SeatToolBindings]
-	// says; see toolbinding.go.
+	// recognises by its command or address reads what the MCP catalogue's
+	// recognition says ([catalogue.SeatKeysFor]); see toolbinding.go.
 	SeatCredentials []SeatCredential `yaml:"seat_credentials,omitempty" json:"seat_credentials,omitempty" desc:"Per-seat credentials this server reads: integration, field, and the variable or header it reads each under. Absent for a server the engine recognises."`
 
 	// OptionalKeys names the keys whose value may resolve to nothing: of
@@ -174,9 +190,35 @@ func (m MCPServer) IdentityKey() string { return m.Name }
 // true default.
 func (m *MCPServer) IsShared() bool { return m.Shared.Or(true) }
 
+// IsEnabled reports whether the server runs at all, applying the true
+// default.
+//
+// OFF IS NOT REMOVED. A removal has to clear every block that names the
+// server first (a seat's mcp_env, a box's listing), which loses the
+// credentials and the scoping somebody wrote for it; off keeps all of that and
+// costs the server alone. So everything that DECLARES the server reads it as
+// ever (its mcp_env blocks name a declared server and are held to every rule
+// a running server's are), and everything that RUNS it reads this: nothing
+// starts it, [MCPServer.Grants] grants it to nobody, and no executor box is
+// given it.
+func (m *MCPServer) IsEnabled() bool { return m.Enabled.Or(true) }
+
+// MaxMCPDescription is the most characters a server's description may hold.
+//
+// ONE LINE OF THE EXECUTOR'S PROMPT: the description is listed beside the
+// server's name on every turn of every agent the server reaches, where it is
+// paid for on each request and read beside every other server's. 200
+// characters is two sentences, enough to say what a server reaches and when
+// to look in it, and short enough that a company with a dozen servers keeps
+// that list to a screen. Counted in characters (Unicode code points), the
+// unit the schema's maxLength counts in, so an editor and this validator
+// agree on a description in any script.
+const MaxMCPDescription = 200
+
 // Grants reports whether seat's turns are offered this server's tools.
 //
-// A shared server serves every AGENT seat; a per-seat template serves only a
+// A server turned off ([MCPServer.IsEnabled]) is granted to nobody. Otherwise
+// a shared server serves every AGENT seat; a per-seat template serves only a
 // seat that declares credentials for it under mcp_env — its own or its unit's,
 // which is why this takes the seat AS THE ENGINE RUNS IT ([org.Organization]
 // as the engine built it, where a unit's credentials are already layered under
@@ -188,7 +230,7 @@ func (m *MCPServer) IsShared() bool { return m.Shared.Or(true) }
 // two cannot answer differently. What it describes is the GRANT: whether the
 // server actually started is the heartbeat's report, not this.
 func (m *MCPServer) Grants(seat *org.Role) bool {
-	if seat == nil || !seat.IsAgent() {
+	if seat == nil || !seat.IsAgent() || !m.IsEnabled() {
 		return false
 	}
 	if m.IsShared() {
@@ -241,6 +283,7 @@ func (m *MCPServer) validate(path Path) error {
 			"a server needs a name: it is the key seats declare credentials "+
 				"under and how its tools are labelled in every prompt")
 	}
+	m.validateDescription(&p, at(path, "description"))
 	if m.Transport != "" && !slices.Contains(MCPTransports, m.Transport) {
 		p.add(at(path, "transport"), ErrUnknownValue, "%q (want %s)",
 			m.Transport, words.Or(MCPTransports))
@@ -297,6 +340,30 @@ func (m *MCPServer) validate(path Path) error {
 			"must be 0 (the default) or positive, got %v", m.RequestTimeoutSeconds)
 	}
 	return p.err()
+}
+
+// validateDescription holds the description to one line of the executor's
+// prompt ([MaxMCPDescription]).
+//
+// A LINE BREAK IS REFUSED, not folded: the prompt lists one server per line,
+// so a description carrying a newline would start a line of its own that reads
+// as something else in the list, and a tab or another control character is
+// nothing a reader of the list can see. Refused rather than rewritten, because
+// a description the engine silently reflowed is not the one the operator reads
+// back from the configuration.
+func (m *MCPServer) validateDescription(p *problems, path Path) {
+	if i := strings.IndexFunc(m.Description, unicode.IsControl); i >= 0 {
+		control, _ := utf8.DecodeRuneInString(m.Description[i:])
+		p.add(path, ErrUnknownValue,
+			"holds %q at character %d: a description is one line beside the server's "+
+				"name in each agent's prompt, so write it without line breaks or tabs",
+			control, utf8.RuneCountInString(m.Description[:i])+1)
+	}
+	if n := utf8.RuneCountInString(m.Description); n > MaxMCPDescription {
+		p.add(path, ErrOutOfRange,
+			"is %d characters, and a description is at most %d: it is one line "+
+				"beside the server's name in each agent's prompt", n, MaxMCPDescription)
+	}
 }
 
 // ToolAnnotations are the behavioural hints the engine reasons about a tool

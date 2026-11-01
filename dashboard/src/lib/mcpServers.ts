@@ -27,6 +27,11 @@ export const SERVER_STATE_WORDS: Record<
   McpServerState,
   { label: string; tone: "success" | "warning" | "danger" | "neutral"; hint: string }
 > = {
+  disabled: {
+    label: "Disabled",
+    tone: "neutral",
+    hint: "Turned off. Nothing starts it and no agent gets its tools until it is turned back on.",
+  },
   running: {
     label: "Running",
     tone: "success",
@@ -95,11 +100,13 @@ export function reachOf(server: { name: string }, seats: readonly Seat[]): strin
  * registry, a company with four configured servers all failing read "0 server(s)"
  * directly above a table listing the four — two answers to one question on one
  * screen. A server is up where at least one instance STARTED, which is what
- * `running` and `partial` both mean.
+ * `running` and `partial` both mean. A server turned off is not counted at all:
+ * nobody expects it to run, and counted it read as one that should and does not.
  */
-export function serversUpLine(servers: readonly { started: number }[]): string {
-  const up = servers.filter((s) => s.started > 0).length;
-  const total = servers.length;
+export function serversUpLine(servers: readonly { started: number; enabled: boolean }[]): string {
+  const on = servers.filter((s) => s.enabled);
+  const up = on.filter((s) => s.started > 0).length;
+  const total = on.length;
   return `${up} of ${total} ${total === 1 ? "server" : "servers"} running`;
 }
 

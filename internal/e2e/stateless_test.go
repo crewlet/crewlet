@@ -492,8 +492,12 @@ func TestASeatWokenInAThreadOnAStatelessNodeIsHandedTheThread(t *testing.T) {
 	waitForSeat(t, p.agent, "ceo")
 	alices := signedIn(t, p.data, alice)
 
+	// NO AGENT IN THE ROOM, so the thread's opening below wakes nobody: a
+	// person's line in a room with an agent member wakes its answerer. The
+	// seat is reached by being named, which a public room carries to a seat
+	// that has not joined.
 	made := openRoomAs(t, p.data, alices, map[string]any{
-		"channel": "releases", "kind": string(chatlet.KindPublic), "members": []any{"ceo"},
+		"channel": "releases", "kind": string(chatlet.KindPublic),
 	})
 	// THE THREAD'S OPENING, addressed to nobody: nothing wakes for it, and
 	// the only way the seat can be shown it is the thread block.

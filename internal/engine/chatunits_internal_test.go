@@ -858,8 +858,8 @@ func TestARoomTheChartNoLongerNamesIsEmptied(t *testing.T) {
 // it back at every later activation — a durable unit reference, which
 // [org.Organization.UnitByRef] is the one resolver of: an id or a name, under
 // the fold the admission rule claims a key with. The reconcile used to match
-// it exactly, so a unit whose name changed only in case — one team, to the
-// chart and to the room's own lead fallback — was refused its room with an
+// it exactly, so a unit whose name changed only in case (one team, to the
+// chart and to the room's own answerer) was refused its room with an
 // ERROR and had it emptied by the sweep, on every pass.
 func TestEverySpellingOfAUnitKeepsItsRoom(t *testing.T) {
 	t.Parallel()
@@ -949,7 +949,7 @@ func TestAnIDOwnsTheRoomOverAnotherUnitsName(t *testing.T) {
 // wakes the lead of the unit that owns it.
 //
 // The sweep empties a room whose unit stopped declaring it, and the room's
-// lead fallback used to resolve that unit's lead regardless — so every
+// answerer used to resolve that unit's lead regardless, so every
 // message a person posted there woke the old lead under a reason that obliges
 // an answer, from a room no prompt names as theirs: the cost the sweep was
 // written to remove. Both now ask [unitRoomOwner], and this holds them to one
@@ -996,20 +996,62 @@ func TestARoomsLeadIsTheLeadOfTheUnitThatStillDeclaresIt(t *testing.T) {
 			t.Errorf("#%s's lead is %q, want %q", name, lead, want)
 		}
 		if released[name] != (lead == "") {
-			t.Errorf("#%s: released=%v with lead %q — the sweep and the lead "+
-				"fallback answered two different owners", name, released[name], lead)
+			t.Errorf("#%s: released=%v with lead %q: the sweep and the room's "+
+				"answerer answered two different owners", name, released[name], lead)
 		}
 		var fallback []string
 		candidates, _ := chatlet.Resolve(chatlet.Routing{ChannelKind: chatlet.KindUnit,
-			AuthorKind: chatlet.AuthorHuman, Lead: lead})
+			AuthorKind: chatlet.AuthorHuman, Answerer: lead})
 		for _, c := range candidates {
-			if c.Reason == chatlet.ReasonLeadFallback {
+			if c.Reason == chatlet.ReasonAnswerer {
 				fallback = append(fallback, c.Handle)
 			}
 		}
 		if wake := want != ""; wake != (len(fallback) == 1) {
-			t.Errorf("a person's post in #%s wakes %v under the lead fallback, "+
+			t.Errorf("a person's post in #%s wakes %v as its answerer, "+
 				"want a lead woken = %v", name, fallback, wake)
+		}
+	}
+}
+
+// A ROOM MADE BY HAND IS ANSWERED BY ITS MOST SENIOR AGENT MEMBER.
+//
+// The chart is the only thing that says who in a room answers for the others,
+// and the routing reads it here: the agent member with the fewest managers
+// above it, never a person (who runs no turn, however senior), never a seat
+// the chart no longer holds, and never a seat that is not in the room, so a
+// private room's answerer can always read it. Mutation: admit people, or rank
+// by the unit tree rather than the management chain, and a row fails.
+func TestARoomMadeByHandIsAnsweredByItsMostSeniorAgentMember(t *testing.T) {
+	t.Parallel()
+	chart := &org.Organization{Name: "acme",
+		Roles: []*org.Role{
+			{Name: "Founder", DeclaredHandle: "founder", Kind: org.KindHuman,
+				Manages: []string{"ceo"}},
+			{Name: "CEO", DeclaredHandle: "ceo", Kind: org.KindAgent, Manages: []string{"vp"}},
+		},
+		Units: []*org.Unit{{Name: "engineering", Lead: "vp", Roles: []*org.Role{
+			{Name: "VP", DeclaredHandle: "vp", Kind: org.KindAgent, Manages: []string{"dev", "qa"}},
+			{Name: "Dev", DeclaredHandle: "dev", Kind: org.KindAgent},
+			{Name: "QA", DeclaredHandle: "qa", Kind: org.KindAgent},
+		}}},
+	}
+	chart.Normalize()
+	for _, tc := range []struct {
+		name    string
+		members []string
+		want    string
+	}{
+		{"the manager of the others", []string{"dev", "qa", "vp"}, "vp"},
+		{"a person outranks everybody and runs no turn", []string{"founder", "dev", "ceo"}, "ceo"},
+		{"peers resolve by the chart's order", []string{"qa", "dev"}, "dev"},
+		{"a seat the chart no longer holds is no seat", []string{"retired", "qa"}, "qa"},
+		{"a room of people has no answerer", []string{"founder"}, ""},
+		{"an empty room has no answerer", nil, ""},
+	} {
+		if got := seniorAgent(chart, tc.members); got != tc.want {
+			t.Errorf("%s: the answerer of a room of %v is %q, want %q", tc.name,
+				tc.members, got, tc.want)
 		}
 	}
 }

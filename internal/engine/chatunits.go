@@ -270,8 +270,8 @@ type unitRoomResult struct {
 // every later activation, so it is a DURABLE unit reference, and every one of
 // those goes through the chart's one resolver: it matches an id or a name,
 // folds case the way the admission rule claims a key, and lets an id win an
-// ambiguity. A private exact match here used to disagree with it — and with
-// the room's own lead fallback, which already resolved through it — so a
+// ambiguity. A private exact match here used to disagree with it, and with
+// the room's own answerer, which already resolved through it, so a
 // unit whose name changed only in case (the same team, to the chart) was
 // refused its own room and had it emptied on every pass, and a stored chart
 // where one unit's id is another's name had the per-unit pass staff a room
@@ -424,7 +424,7 @@ func applyUnitRoom(ctx context.Context, rooms unitRoomWriter,
 	}
 
 	// THE ROOM EXISTS AND MAY NOT BE THIS UNIT'S — by [unitRoomOwner],
-	// the one rule the sweep and the room's lead fallback ask too. A unit
+	// the one rule the sweep and the room's answerer ask too. A unit
 	// room it names THIS unit for is this unit's to staff, whoever it is
 	// recorded under: a room its recorded unit no longer declares follows
 	// its channel here, and the write below re-homes it.
@@ -513,13 +513,13 @@ func heldElsewhere(held heldRoom, unit, owner *org.Unit, name string) error {
 // nil only when no unit in the chart declares the room at all.
 //
 // ONE RULE, ASKED BY EVERYTHING THAT DECIDES ON A ROOM'S OWNER: the per-unit
-// pass staffing a room, the sweep emptying one, and the room's lead fallback
-// ([unitRoomLead]). The sweep used to decide "nobody's" while the fallback
+// pass staffing a room, the sweep emptying one, and the room's answerer
+// ([unitRoomLead]). The sweep used to decide "nobody's" while the answerer
 // still resolved the stored unit's lead regardless, so a unit that dropped
 // its channel had its room emptied and its lead woken — under a reason that
 // obliges an answer — by every message a person posted there, from a room no
 // prompt names as theirs: the very cost the sweep exists to remove. And the
-// fallback asking the second step too is what has a person's post reach the
+// answerer asking the second step too is what has a person's post reach the
 // new owner's lead before this node's re-home has landed.
 //
 // The stored key goes through [org.Organization.UnitByRef], the chart's one
@@ -545,7 +545,8 @@ func unitRoomOwner(chart *org.Organization, stored, room string) *org.Unit {
 // [unitRoomOwner] says it belongs to, or empty where none does.
 //
 // IT IS WHAT [chatlet.Roster.Lead] ANSWERS, and the chat write path puts it on
-// the record a person's post publishes, where the lead fallback reads it.
+// the record a person's post publishes as the unit room's answerer
+// ([chatlet.ReasonAnswerer]).
 func unitRoomLead(chart *org.Organization, stored, room string) string {
 	return leadOfUnit(chart, unitRoomOwner(chart, stored, chatlet.NormalizeName(room)))
 }

@@ -105,6 +105,10 @@ type Company struct {
 	// server from one.
 	MCPServers []MCPServer `yaml:"mcp_servers,omitempty" json:"mcp_servers,omitempty" desc:"Tool servers, stdio or http. Per-agent credentials live in role.mcp_env."`
 
+	// MCPRegistry is the community registry the dashboard searches beside
+	// the curated MCP catalogue; absent, there is none. See [MCPRegistry].
+	MCPRegistry MCPRegistry `yaml:"mcp_registry,omitempty" json:"mcp_registry,omitzero" desc:"The community MCP registry the dashboard searches beside the curated catalogue. Absent: none."`
+
 	// TokenBudget is the org-wide LLM token ceiling per calendar window,
 	// across every seat; a window it does not name is uncapped. Charged
 	// before a seat's own budget, so the first completion that would cross
@@ -294,7 +298,9 @@ func (c *Company) ValidateRunnable() error {
 // whose chain is held to its rules again wherever it is handed out, and the
 // per-seat access rules ([Company.validateSeatAccess]): every seat block says
 // whether it is on, holds access the vendor offers within the company's reach,
-// and writes no credential the engine manages.
+// and writes no credential the engine manages. And the community MCP
+// registry's address ([Company.validateMCPRegistry]), which only a search
+// reads.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -307,7 +313,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateAssistant(),
-		c.validateSeatAccess())
+		c.validateSeatAccess(), c.validateMCPRegistry())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See

@@ -91,7 +91,11 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	var outcomes []mcpOutcome
 	for i := range c.Config.MCPServers {
 		server := &c.Config.MCPServers[i]
-		if !server.IsShared() {
+		// A SERVER TURNED OFF is not resolved either: its references are
+		// nobody's concern until it is turned back on, and one that does
+		// not resolve is not a missing credential to report. Retired below
+		// if it was running.
+		if !server.IsShared() || !server.IsEnabled() {
 			continue
 		}
 		// HELD TO ITS REFERENCES like a seat's child (toolcredentials.go):
@@ -131,6 +135,7 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		desired[spec.Name] = struct{}{}
 	}
 	withheld := withheldByInstance(outcomes)
+	off := serversTurnedOff(c.Config)
 	for _, name := range e.mcp.Servers() {
 		if _, keep := desired[name]; keep {
 			continue
@@ -154,6 +159,10 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 					"is not left running on the one it was started with: "+missing.reason())
 			continue
 		}
+		if _, turnedOff := off[name]; turnedOff {
+			log.InfoContext(ctx, "mcp_server_retired", "server", name, "detail", turnedOffDetail)
+			continue
+		}
 		log.InfoContext(ctx, "mcp_server_retired", "server", name,
 			"detail", "the revision no longer declares this shared server")
 	}
@@ -170,6 +179,47 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	e.mcpShared = outcomes
 	e.mcpMu.Unlock()
 }
+
+// serversTurnedOff names the servers cfg declares and turns off
+// ([config.MCPServer.IsEnabled]), by their configured name.
+//
+// FOR THE RETIREMENT'S SENTENCE ALONE: what a pass starts is decided by
+// [config.MCPServer.IsEnabled] and [config.MCPServer.Grants] where each spec is
+// built, and a server turned off simply gets none. Which reason a child that is
+// no longer wanted is retired for is a question only the retirement asks, and
+// "the revision no longer declares it" would send the reader looking for an
+// entry that is still there.
+func serversTurnedOff(cfg *config.Company) map[string]struct{} {
+	if cfg == nil {
+		return nil
+	}
+	off := map[string]struct{}{}
+	for i := range cfg.MCPServers {
+		if !cfg.MCPServers[i].IsEnabled() {
+			off[cfg.MCPServers[i].Name] = struct{}{}
+		}
+	}
+	return off
+}
+
+// serverDescriptions is what each server cfg declares is for, by its name, for
+// the epoch's registry to stamp on the server's tools
+// ([tools.Registry.DescribeServers]); a server with no description is left
+// out.
+func serverDescriptions(cfg *config.Company) map[string]string {
+	out := map[string]string{}
+	for i := range cfg.MCPServers {
+		if d := cfg.MCPServers[i].Description; d != "" {
+			out[cfg.MCPServers[i].Name] = d
+		}
+	}
+	return out
+}
+
+// turnedOffDetail is what a child retired because its server was turned off
+// is logged with.
+const turnedOffDetail = "the revision turns this server off: its entry and everything " +
+	"naming it are kept, and nothing runs it until it is turned back on"
 
 // stopSharedServers tears down what startSharedServers brought up.
 //
@@ -485,7 +535,7 @@ func file(ctx context.Context, reg *tools.Registry, server string, change mcp.Ch
 // Keyed off [config.MCPServer.Grants], the rule the org projection publishes
 // too: a `shared: false` server the seat declares no credentials for gets no
 // child, because a template with nobody's identity in it is a server nobody
-// can act through.
+// can act through, and a server turned off gets none for anybody.
 //
 // A child one of whose values references a variable that resolves to nothing
 // — the seat's block or the template's own, under a key not declared optional
@@ -502,7 +552,8 @@ func seatSpecs(
 	for i := range c.Config.MCPServers {
 		server := &c.Config.MCPServers[i]
 		// The epoch runs the shared ones; a template this seat is not
-		// granted has nobody's identity to run as.
+		// granted has nobody's identity to run as, and one turned off is
+		// granted to nobody.
 		if server.IsShared() || !server.Grants(seat) {
 			continue
 		}

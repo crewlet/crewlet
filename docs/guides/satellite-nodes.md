@@ -443,9 +443,9 @@ the dependency surface before choosing a host for it:
   in a store deleted at its next boot), so `GET /events` on that data node
   shows it; its seats' memory rides the compacted changelog every seat's
   memory does and is rehydrated after a restart.
-- **The coding CLI of every model its seats name, installed and signed in
+- **The harness of every model its seats name, installed and signed in
   on that host.** Each [`providers.llm` entry](../concepts/llm-backends.md)
-  is a CLI the node runs, and it calls its own vendor over outbound HTTPS. A
+  is a harness the node runs, and it calls its own vendor over outbound HTTPS. A
   network with no egress at all can still work if the role's models are
   OpenCode entries whose model names an on-premises server.
 - **The MCP servers its role declares, installed on that host** — the
@@ -532,8 +532,8 @@ for you:
 - The satellite **launches** the run. For an `e2b` cell it must reach the
   sandbox provider (E2B cloud, or your self-hosted `domain`); a `direct` or
   `container` cell runs on the satellite's own host, where `direct` needs
-  the coding CLI installed, and `container` the container runtime and an
-  image with the coding CLI in it.
+  the harness installed, and `container` the container runtime and an
+  image with the harness in it.
 - Whichever node holds the `sandbox-waiter` duty **polls** an `e2b`
   box. On a satellite (`roles: [seats]`) that duty is on a core node by
   construction — so check that node's reachability too, not just the

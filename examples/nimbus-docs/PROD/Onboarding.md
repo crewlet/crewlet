@@ -150,7 +150,7 @@ docs.nimbus.example/
 │   └── (added on demand from FAQ Backlog)
 ├── Reference/
 │   ├── Python SDK (auto-generated from docstrings)
-│   ├── CLI (auto-generated)
+│   ├── harness (auto-generated)
 │   └── REST API (auto-generated from nimbuscore Swagger)
 └── Blog                   ← launch posts, changelog deep-dives
 ```

@@ -749,6 +749,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		// covering a tool the worker may later activate is in the prompt
 		// before the first call rather than after the guard blocks it.
 		AvailableTools: union(surface.Active(), grant.Universe.Names()),
+		MCPServers:     grant.Universe.MCPServers(),
 		Discoverable:   discoverable,
 		Submits:        submit != nil,
 		Skills:         cfg.Skills,

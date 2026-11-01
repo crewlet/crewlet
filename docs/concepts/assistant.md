@@ -186,7 +186,7 @@ your own conversation, shown on the card as a thumbnail before you approve.
 images you attached, or many steps, where your company turns it on: for
 example "look through last month's work and propose how to redefine our teams
 and roles", or "redesign our brand assets". Ask Crewlet decides on its own
-when a task needs it, says so, and hands it to a deep-work run: a coding agent
+when a task needs it, says so, and hands it to a deep-work run: a harness
 with its own shell, files, web search and image reading, working in a sandbox.
 The panel shows the run as one step marked **Deep work**, with its goal, its
 time and step limits, how much of its budget it has used, the latest of what it
@@ -384,4 +384,4 @@ An administrator sees the command that fixes it instead.
   choosing its model, compliance reads, audit and evaluation
 - [Identity and Access](identity-and-access.md): the permissions that decide
   what Ask Crewlet can read and propose
-- [LLM backends](llm-backends.md): how models are reached through coding CLIs
+- [LLM backends](llm-backends.md): how models are reached through harnesses

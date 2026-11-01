@@ -96,6 +96,42 @@ func TestAncestorsClimbToTheTop(t *testing.T) {
 	}
 }
 
+// THE MOST SENIOR SEAT IS THE ONE WITH THE FEWEST MANAGERS ABOVE IT, among
+// the seats the caller admits. A chat room made by hand is answered by it, so
+// a wrong answer here wakes a junior seat to answer for a room its manager is
+// in, or no seat at all.
+func TestSeniorIsTheFewestManagersAbove(t *testing.T) {
+	t.Parallel()
+	o := hierarchyOrg()
+	among := func(handles ...string) func(*Role) bool {
+		return func(r *Role) bool { return slices.Contains(handles, r.Handle()) }
+	}
+	for _, tc := range []struct {
+		name    string
+		handles []string
+		want    string
+	}{
+		{"the manager outranks its reports", []string{"junior-engineer", "tech-lead"}, "Tech Lead"},
+		{"the top of a chain outranks everybody in it",
+			[]string{"senior-engineer-a", "vp-engineering", "tech-lead"}, "VP Engineering"},
+		// Two seats with no manager above either: the chart's own order
+		// decides, and the Engineering subtree is declared first.
+		{"a tie goes to the seat the chart declares first",
+			[]string{"product-manager", "vp-engineering"}, "VP Engineering"},
+		{"peers tie on depth and resolve by chart order",
+			[]string{"senior-engineer-b", "senior-engineer-a"}, "Senior Engineer A"},
+		{"a lone seat is its own senior", []string{"junior-engineer"}, "Junior Engineer"},
+	} {
+		got := o.Senior(among(tc.handles...))
+		if got == nil || got.Name != tc.want {
+			t.Errorf("%s: Senior(%v) = %v, want %s", tc.name, tc.handles, got, tc.want)
+		}
+	}
+	if got := o.Senior(among("nobody-here")); got != nil {
+		t.Errorf("Senior over seats the chart does not hold = %s, want nil", got.Name)
+	}
+}
+
 // TestAncestorsSurviveACycle: a config can express a cycle, and a prompt
 // builder that looped forever on one would take the whole turn with it.
 func TestAncestorsSurviveACycle(t *testing.T) {

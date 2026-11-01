@@ -10,7 +10,7 @@ labels: enhancement
 
 ## Proposed solution
 
-<!-- How do you imagine it working — config shape, CLI, behavior? -->
+<!-- How do you imagine it working — config shape, harness, behavior? -->
 
 ## Alternatives considered
 

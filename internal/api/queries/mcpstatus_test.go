@@ -40,6 +40,7 @@ mcp_servers:
     args: ["-y", "@modelcontextprotocol/server-github"]
   - name: linear
     transport: http
+    description: Reads and files Linear issues
     url: https://mcp.example.com
     headers:
       Authorization: Bearer literal-linear-secret
@@ -340,6 +341,57 @@ func TestAServerOnlyANodeReportsIsListedAsUnconfigured(t *testing.T) {
 	}
 }
 
+// A SERVER TURNED OFF IS DISABLED, decided before anything a node reports: a
+// node still on the revision before it, running the server, shows that in its
+// own cell, and the row reads as the configuration's decision rather than as a
+// server that runs. One that runs says so, and each row carries the
+// description its prompt line does.
+func TestAServerTurnedOffIsDisabledWhateverANodeStillRuns(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+mcp_servers:
+  - name: docs
+    enabled: false
+    description: Searches the engineering handbook
+    command: docs-mcp
+  - name: search
+    command: search-mcp
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{
+			{Server: "docs", Shared: true, Started: 1, Tools: 4},
+			{Server: "search", Shared: true, Started: 1, Tools: 2},
+		},
+	})
+	got := askMCPStatus(t, queries.Sources{Coord: backend, Company: companySource(t, cfg)})
+
+	docs := serverRow(t, got, "docs")
+	if docs.State != queries.MCPDisabled || docs.Enabled {
+		t.Errorf("docs = %s, enabled %v; want disabled, whatever node-a still runs", docs.State, docs.Enabled)
+	}
+	if docs.Description != "Searches the engineering handbook" {
+		t.Errorf("docs carries the description %q", docs.Description)
+	}
+	if cell := docs.Nodes[0]; cell.Started != 1 {
+		t.Errorf("node-a's cell = %+v: the node still running it is not shown", cell)
+	}
+	if search := serverRow(t, got, "search"); search.State != queries.MCPRunning || !search.Enabled {
+		t.Errorf("search = %s, enabled %v; want running and enabled", search.State, search.Enabled)
+	}
+
+	// ON A FLEET THAT HAS NOT SAID, the configuration still has: a server
+	// turned off is disabled rather than unreported.
+	silent := askMCPStatus(t, queries.Sources{Coord: coordmemory.New(), Company: companySource(t, cfg)})
+	if docs := serverRow(t, silent, "docs"); docs.State != queries.MCPDisabled {
+		t.Errorf("with no node reporting, docs = %s, want disabled", docs.State)
+	}
+}
+
 // NO CREDENTIAL REACHES THE ANSWER: `env`, `headers` and a seat's `mcp_env`
 // are what a server authenticates with, and the launch is shown without them.
 func TestTheServerStatusCarriesNoCredential(t *testing.T) {
@@ -426,4 +478,41 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// A SERVER IS DRAWN AS THE CATALOGUE ENTRY IT IS, by its address or its
+// command, and by its own name with no mark where the catalogue knows it not.
+func TestAServerRowNamesTheCatalogueEntryItIs(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+mcp_servers:
+  - name: code
+    transport: http
+    shared: false
+    url: https://api.githubcopilot.com/mcp/
+  - name: db
+    command: uvx
+    args: ["postgres-mcp==0.3.0", "--access-mode=restricted"]
+  - name: wiki
+    transport: http
+    url: https://wiki.example.com/mcp
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", nil)
+	answer := askMCPStatus(t, queries.Sources{Coord: backend, Company: companySource(t, cfg)})
+	for _, want := range []queries.MCPServerRow{
+		{Name: "code", Title: "GitHub", Catalogue: "github", Vendor: "github"},
+		{Name: "db", Title: "PostgreSQL", Catalogue: "postgres", Vendor: "postgresql"},
+		{Name: "wiki", Title: "wiki"},
+	} {
+		row := serverRow(t, answer, want.Name)
+		if row.Title != want.Title || row.Catalogue != want.Catalogue || row.Vendor != want.Vendor {
+			t.Errorf("%s is drawn as %q, %q, %q; want %q, %q, %q", want.Name, row.Title, row.Catalogue,
+				row.Vendor, want.Title, want.Catalogue, want.Vendor)
+		}
+	}
 }
