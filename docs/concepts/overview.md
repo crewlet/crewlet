@@ -223,7 +223,8 @@ internal/
 ├── textindex/            # The analyzer and the BM25 arithmetic, as pure
 │                         #   functions: Turso has no fts5
 ├── changefeed/           # How a committed record becomes a WAKE, derived by
-│                         #   something that outlives the writer
+│                         #   something that outlives the writer, over a
+│                         #   consumer it opens again whenever it fails
 ├── seat/                 # Which seats this node runs, and the watchdog
 ├── store/                # The two local files: this node's own estate, and
 │                         #   the replicated one a state log's applier writes

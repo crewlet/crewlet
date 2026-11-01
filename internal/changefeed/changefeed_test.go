@@ -168,8 +168,11 @@ func run(t *testing.T, docs *estate, pub *capture, cl *claims, tr changefeed.Tra
 		t.Fatalf("new feed: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- feed.Run(ctx) }()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		feed.Run(ctx)
+	}()
 	t.Cleanup(func() {
 		cancel()
 		select {

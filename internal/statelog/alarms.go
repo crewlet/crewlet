@@ -66,6 +66,23 @@ const (
 	// named within a minute.
 	StallGrace = 60 * time.Second
 
+	// FeedReopenCeiling is the longest a change feed waits between two
+	// attempts to open its consumer again (internal/changefeed), and HALF
+	// THE STALL GRACE, which `feed_stopped` fires at: a feed whose broker
+	// answers again is reopened inside the grace however long the outage
+	// was, so the alarm names a broker or a consumer that is still
+	// refusing, never a feed waiting out its own schedule. Longer, and a
+	// three-minute broker outage would leave every feed dark for up to a
+	// minute after the broker came back; shorter buys little, since each
+	// attempt is a consumer create with its own provisioning deadline, and
+	// at this ceiling a feed down for a day logs two attempts a minute.
+	//
+	// DECLARED HERE rather than beside the loop that waits on it, for
+	// [AlarmInterval]'s reason: the alarm's remedy states it, and two
+	// spellings of one number in two packages agree only until one is
+	// retuned.
+	FeedReopenCeiling = StallGrace / 2
+
 	// AlarmInterval is how often a node running a state log — every data
 	// node — evaluates the table: on its [PositionHeartbeat], and it IS that
 	// constant rather than a second spelling of its number. The two were
@@ -328,6 +345,7 @@ const (
 	KindIVFRecallBelowFloor Kind = "ivf_recall_below_floor"
 	KindRecordsGated        Kind = "records_gated"
 	KindFeedUnreadable      Kind = "feed_unreadable"
+	KindFeedStopped         Kind = "feed_stopped"
 	KindMaintenanceOpen     Kind = "maintenance_open"
 	KindVolumeLow           Kind = "volume_low"
 	KindWALLarge            Kind = "wal_large"
@@ -520,6 +538,19 @@ type Reading struct {
 	// circling for ever behind everything queued after it.
 	RecordsGated, FeedUnreadable int
 
+	// FeedsDown is every change feed on this node that holds no consumer:
+	// which feed, how long for, how many attempts to bring it back have
+	// failed and what the latest said. Empty on a node whose feeds all
+	// hold one, and on a node that runs none.
+	//
+	// THE OUTAGES THEMSELVES rather than a count of them, because what an
+	// operator acts on is which feed and why: a broker that cannot be
+	// reached stops every feed at once, and a consumer the broker refuses
+	// stops one. And a FACT OF ITS OWN, because nothing else can see it: a
+	// feed that cannot reach its consumer publishes no wake, and
+	// `objective_burn` judges the wakes that were published.
+	FeedsDown []FeedOutage
+
 	// MaintenanceOpenFor is how long the oldest capacity window has been
 	// open, with the log it is on and the phase it is stuck in.
 	//
@@ -635,6 +666,23 @@ type Reading struct {
 	// [ModelCondition.NoSignIn] is the gathering node's own reading.
 	Models   []ModelCondition
 	ModelsAt time.Time
+}
+
+// FeedOutage is one change feed that holds no consumer.
+type FeedOutage struct {
+	// Source is the estate the feed reads: `work`, `page` or `chat`.
+	Source string
+
+	// For is how long it has held none: since its consumer failed, or
+	// since it began, for a feed that has never opened one.
+	For time.Duration
+
+	// Failures counts the failed attempts in that time (the read that
+	// ended the consumer, and each open after it), and Cause is what the
+	// latest said. Zero and empty for a feed whose first open has not
+	// answered yet.
+	Failures int
+	Cause    string
 }
 
 // ModelCondition is one model entry's condition, gathered across the fleet.
@@ -1198,6 +1246,36 @@ var table = []rule{
 			"Upgrade the node past it, or the feed stops moving.",
 	},
 	{
+		// THE FEED THAT IS NOT RUNNING, beside the feed that is stuck:
+		// `feed_unreadable` is a consumer that delivers one record for
+		// ever, and this is a node with no consumer at all.
+		//
+		// AT THE STALL GRACE (ADR-0015), the grace past which a node that
+		// has stopped is named, and the feed's own schedule is held to it
+		// ([FeedReopenCeiling]), so a feed still down past it is one whose
+		// broker or consumer is still refusing.
+		kind: KindFeedStopped,
+		fires: func(r Reading) (string, bool) {
+			var parts []string
+			for _, f := range r.FeedsDown {
+				if f.For > StallGrace {
+					parts = append(parts, feedOutageDetail(f))
+				}
+			}
+			return strings.Join(parts, "; "), len(parts) > 0
+		},
+		remedy: "Nothing is lost: the feed opens its group again on its own, at " +
+			"most every " + spoken(FeedReopenCeiling) + ", and is handed every " +
+			"record the group has not acknowledged, so the wakes it owes are late " +
+			"rather than dropped, and any other data node consuming the group " +
+			"delivers them meanwhile. Read the cause. A timeout, a missed heartbeat or no " +
+			"responders is the broker, and the alarm clears at the first attempt " +
+			"after the broker answers again: check the broker, or the members of " +
+			"an external cluster. A refusal that names the consumer or the stream " +
+			"is the broker answering and saying no, and each attempt's " +
+			"`changefeed_open_failed` line carries it.",
+	},
+	{
 		kind: KindMaintenanceOpen,
 		fires: func(r Reading) (string, bool) {
 			fires := r.MaintenanceOpenFor > MaintenanceAlarmAfter
@@ -1437,6 +1515,17 @@ var table = []rule{
 			"(a model on another sign-in), raise the plan, or wait for the reset the " +
 			"vendor named; Settings › Models › the entry › Retry asks the vendor once."),
 	},
+}
+
+// feedOutageDetail is one down feed in the alarm's sentence.
+func feedOutageDetail(f FeedOutage) string {
+	if f.Failures == 0 {
+		return fmt.Sprintf("the %s change feed has held no consumer for %s, and "+
+			"its first open has not answered", f.Source, spoken(f.For))
+	}
+	return fmt.Sprintf("the %s change feed has held no consumer for %s, after "+
+		"%d failed attempt(s), the latest: %s", f.Source, spoken(f.For),
+		f.Failures, f.Cause)
 }
 
 // day is the unit the credential thresholds are written in.

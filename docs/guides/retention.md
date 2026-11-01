@@ -162,6 +162,16 @@ feed has not acknowledged is one nobody has been woken for yet. So a feed that
 has stopped holds back its own log and no other, and `blocked_by:
 feed_ack_floor` on a domain names that domain's feed.
 
+A feed whose consumer fails (a broker that misses a heartbeat, a host that
+slept, a consumer the broker refuses) opens its group again on its own, waiting
+one second and doubling up to thirty between attempts, and is handed every
+record the group has not acknowledged, so its wakes are late rather than lost.
+Each failure is a `changefeed_interrupted` or `changefeed_open_failed` line,
+and the return a `changefeed_reopened` line carrying how long it was down. A
+feed that has held no consumer for longer than the one-minute stall grace
+raises [`feed_stopped`](../reference/alarms.md) on its node until it holds one
+again.
+
 A group name is not the broker's consumer name. The durable consumer is named
 from the group **and** the stream, as `<group>__<stream>__<digest>` — for
 example `crewlet-pages-feed__CREWLET_PAGES_LOG__e5825de86642` — so on an
