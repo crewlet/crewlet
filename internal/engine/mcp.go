@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -296,17 +297,32 @@ func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 // the seat's pass stored with the outcome, not the previous beat's; one with
 // nothing waiting reads nothing ([Engine.mintingStates]).
 //
+// AND WHAT EACH INSTANCE'S TOOLS LOST TO THEIR NAMES ([unfiled]), read off
+// its bridge and the surface it is filed into at the beat, as its tools are:
+// a restart that lists differently, or a refile, moves both.
+//
 // Sorted by server, and a server's reported error is its first failure by the
 // seat's agent id — its reported wait likewise — so a beat that re-sends the
 // same facts sends the same bytes.
 func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
+	// The surface each instance is filed into: the epoch's registry for a
+	// shared server, the seat's own for a seat's child.
+	var epoch *tools.Registry
+	if c := e.Company(); c != nil {
+		epoch = c.Tools
+	}
 	e.mcpMu.Lock()
-	all := slices.Clone(e.mcpShared)
-	for _, outcomes := range e.mcpSeats {
-		all = append(all, outcomes...)
+	all := make([]filedOutcome, 0, len(e.mcpShared))
+	for _, o := range e.mcpShared {
+		all = append(all, filedOutcome{mcpOutcome: o, surface: epoch})
+	}
+	for handle, outcomes := range e.mcpSeats {
+		for _, o := range outcomes {
+			all = append(all, filedOutcome{mcpOutcome: o, surface: e.seatTools[handle]})
+		}
 	}
 	e.mcpMu.Unlock()
-	slices.SortFunc(all, func(a, b mcpOutcome) int {
+	slices.SortFunc(all, func(a, b filedOutcome) int {
 		return cmp.Or(cmp.Compare(a.server, b.server), cmp.Compare(a.seat.String(), b.seat.String()))
 	})
 	var withheld []*credentialMissing
@@ -319,13 +335,16 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 	states := e.mintingStates(ctx, withheld)
 	var out []coord.MCPServerStatus
 	// unlistedBy counts, per key, the started instances of the current row
-	// that do not list it.
+	// that do not list it, and notes gathers what the row's instances lost
+	// to their names.
 	var unlistedBy map[string]int
+	var notes toolNotes
 	settle := func() {
 		if len(out) == 0 {
 			return
 		}
 		row := &out[len(out)-1]
+		notes.settle(row)
 		// A KEY IS UNLISTED BY THE SERVER only where NO started instance
 		// lists it. One instance's listing is not the server's: a child
 		// serves what its seat's credentials reach, so a key one seat's
@@ -342,14 +361,18 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 			settle()
 			out = append(out, coord.MCPServerStatus{Server: o.server, Shared: o.seat == uuid.Nil})
 			unlistedBy = map[string]int{}
+			notes = toolNotes{}
 		}
 		row := &out[len(out)-1]
 		tools, unlisted, failure := o.tools, o.unlisted, o.err
-		if health, ok := mcpHealth(o); ok {
+		if health, ok := mcpHealth(o.mcpOutcome); ok {
 			// THE LISTING NOW, like its tools: a restart can come back
 			// listing a different set, so the keys it leaves out are read
-			// off the same record.
+			// off the same record. And so are the tools it lost to their
+			// names, which a server that is down keeps from its last
+			// listing, as it keeps its tools.
 			tools, unlisted, failure = health.Tools, o.bridge.UnlistedOverrides(o.instance), nil
+			notes.add(unfiled(o.mcpOutcome, o.surface))
 			if !health.Serving {
 				failure = errors.New(health.Down)
 			}
@@ -381,6 +404,95 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 	}
 	settle()
 	return out
+}
+
+// filedOutcome is a start's outcome beside the surface its instance's tools
+// are filed into, for [Engine.mcpStatus].
+type filedOutcome struct {
+	mcpOutcome
+	surface *tools.Registry
+}
+
+// unfiled is every tool of o's instance that is not offered under its name:
+// the ones its bridge refused ([mcp.Bridge.RefusedTools]) or shadowed for
+// another server's ([mcp.Bridge.ShadowedTools]), and the ones surface, the
+// registry the instance is filed into, holds another tool under. A built-in
+// there is [mcp.NameBuiltin], since built-ins are filed first; another
+// server's tool there (a shared server's, against a seat's own child) shadows
+// it.
+//
+// READ AT THE BEAT, never kept: a registry is refiled by an apply, a restart
+// and a catalogue change alike, and whichever tool holds a name now is the
+// answer. A name surface holds for a tool of the same server is that server's
+// own tool not refiled yet, not a collision.
+func unfiled(o mcpOutcome, surface *tools.Registry) ([]mcp.RefusedTool, []mcp.ShadowedTool) {
+	refused := o.bridge.RefusedTools(o.instance)
+	shadowed := o.bridge.ShadowedTools(o.instance)
+	if surface == nil {
+		return refused, shadowed
+	}
+	onBridge := make(map[string]struct{}, len(shadowed))
+	for _, s := range shadowed {
+		onBridge[s.Name] = struct{}{}
+	}
+	for _, t := range o.bridge.ServerTools(o.instance) {
+		if _, lost := onBridge[t.Name()]; lost {
+			continue
+		}
+		entry, filed := surface.Lookup(t.Name())
+		if !filed || entry.Tool == mcp.Callable(t) {
+			continue
+		}
+		server, fromMCP := entry.FromMCP()
+		switch {
+		case !fromMCP:
+			refused = append(refused, mcp.RefusedTool{Name: t.Name(), Reason: mcp.NameBuiltin})
+		case server != o.server:
+			shadowed = append(shadowed, mcp.ShadowedTool{Name: t.Name(), By: server})
+		}
+	}
+	return refused, shadowed
+}
+
+// toolNotes gathers what one row's instances lost to their names, each tool
+// once per reason or server however many instances lost it.
+type toolNotes struct {
+	refused  map[mcp.RefusedTool]struct{}
+	shadowed map[mcp.ShadowedTool]struct{}
+}
+
+func (n *toolNotes) add(refused []mcp.RefusedTool, shadowed []mcp.ShadowedTool) {
+	for _, r := range refused {
+		if n.refused == nil {
+			n.refused = map[mcp.RefusedTool]struct{}{}
+		}
+		n.refused[r] = struct{}{}
+	}
+	for _, s := range shadowed {
+		if n.shadowed == nil {
+			n.shadowed = map[mcp.ShadowedTool]struct{}{}
+		}
+		n.shadowed[s] = struct{}{}
+	}
+}
+
+// settle writes the notes onto row: sorted by tool, at most
+// [coord.MaxMCPToolNotes] of each, and how many there are in all.
+func (n *toolNotes) settle(row *coord.MCPServerStatus) {
+	refused := slices.SortedFunc(maps.Keys(n.refused), func(a, b mcp.RefusedTool) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.Reason, b.Reason))
+	})
+	for _, r := range refused[:min(len(refused), coord.MaxMCPToolNotes)] {
+		row.Refused = append(row.Refused, coord.MCPToolRefusal{Tool: r.Name, Reason: string(r.Reason)})
+	}
+	row.RefusedCount = len(refused)
+	shadowed := slices.SortedFunc(maps.Keys(n.shadowed), func(a, b mcp.ShadowedTool) int {
+		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.By, b.By))
+	})
+	for _, s := range shadowed[:min(len(shadowed), coord.MaxMCPToolNotes)] {
+		row.Shadowed = append(row.Shadowed, coord.MCPToolShadow{Tool: s.Name, By: s.By})
+	}
+	row.ShadowedCount = len(shadowed)
 }
 
 // SharedServers names the company-wide MCP servers this node's bridge
@@ -642,9 +754,22 @@ func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutco
 // remote GitHub server a seat reaches with its own `Authorization: Bearer …` —
 // connected with the template's headers alone. A harness's box is given
 // the same server from the same values ([sandboxMCP]).
+//
+// AND AT THE ADDRESS IT WILL BE DIALLED AT, held to the rule a document is
+// ([config.MCPAddressProblem]): an address written with a ${VAR} in it is
+// only seen here, resolved, and one the rule refuses is not dialled, so the
+// server's credentials never travel over plain http to a public host
+// whatever the variable held. Said without the address, which can carry a
+// secret once resolved.
 func serverSpec(server *config.MCPServer, instance string, v serverValues) (mcp.Spec, error) {
 	if instance == "" {
 		return mcp.Spec{}, fmt.Errorf("engine: mcp server %q has no instance name", server.Name)
+	}
+	if server.Kind() == config.TransportHTTP {
+		if problem := config.MCPAddressProblem(v.url); problem != "" {
+			return mcp.Spec{}, fmt.Errorf("engine: mcp server %q is not dialled: its url %s",
+				server.Name, problem)
+		}
 	}
 	spec := mcp.Spec{
 		Name:                instance,

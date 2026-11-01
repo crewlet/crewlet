@@ -864,6 +864,11 @@ type Requests struct {
 	// model — `mcp__crewlet__` for `mcp__crewlet__search`. A call so named is
 	// the host's, reported by its own name; any other is one of the harness's own
 	// tools (its web search, its fetch).
+	//
+	// THE MODEL'S SPELLING, never the record's: what a record writes around
+	// the name is the call rule's [CallPaths.NamePrefix]. The longest tool
+	// name the engine files ([ToolNameMax]) is what the longest of these
+	// leaves of a model's 64 characters.
 	HostPrefix string `yaml:"host_prefix,omitempty"`
 
 	// HostNamespace is the namespace the harness files the server's tools under,
@@ -946,6 +951,14 @@ type CallPaths struct {
 	Name      Path `yaml:"name,omitempty"`
 	Args      Path `yaml:"args,omitempty"`
 	Namespace Path `yaml:"namespace,omitempty"`
+
+	// NamePrefix is what the record writes before every call's name that is
+	// no part of the name the model called: Muse Code files a call under the
+	// operation `tool:<name>`. Cut off before the name is read, so
+	// [Requests.HostPrefix] is the model's own spelling on every harness, which
+	// is what the engine's longest tool name is computed from
+	// ([ToolNameMax]). A name the record writes without it is read whole.
+	NamePrefix string `yaml:"name_prefix,omitempty"`
 }
 
 // Blocks is an array of content blocks in an event, and the rules each block is
@@ -1014,7 +1027,7 @@ func (c *CallPaths) clone() *CallPaths {
 		return nil
 	}
 	return &CallPaths{ID: slices.Clone(c.ID), Name: slices.Clone(c.Name), Args: slices.Clone(c.Args),
-		Namespace: slices.Clone(c.Namespace)}
+		Namespace: slices.Clone(c.Namespace), NamePrefix: c.NamePrefix}
 }
 
 func (u UsagePaths) clone() UsagePaths {

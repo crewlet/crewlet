@@ -15,6 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // mcpCompany declares a shared server, a per-seat template and a server no
@@ -38,6 +40,7 @@ mcp_servers:
     shared: false
     command: npx
     args: ["-y", "@modelcontextprotocol/server-github"]
+    tool_prefix: gh_
   - name: linear
     transport: http
     description: Reads and files Linear issues
@@ -97,17 +100,76 @@ func mcpFleet(t *testing.T) coord.Backend {
 	backend := coordmemory.New()
 	presentNode(t, backend, "node-a", &coord.NodeStatus{
 		MCP: []coord.MCPServerStatus{
-			{Server: "docs", Shared: true, Started: 1, Tools: 4},
-			{Server: "github", Started: 2, Tools: 26},
+			{Server: "docs", Shared: true, Started: 1, Tools: 4,
+				Shadowed: []coord.MCPToolShadow{{Tool: "search", By: "linear"}}, ShadowedCount: 1},
+			{Server: "github", Started: 2, Tools: 26,
+				Refused: []coord.MCPToolRefusal{
+					{Tool: longGitHubTool, Reason: "too_long"},
+					{Tool: "gh_read.file", Reason: "characters"},
+				}, RefusedCount: 12},
 		},
 	})
 	presentNode(t, backend, "node-b", &coord.NodeStatus{
 		MCP: []coord.MCPServerStatus{
-			{Server: "github", Started: 1, Failed: 1, Tools: 25, Error: "401 Bad credentials", ErrorSeat: backendDev},
+			{Server: "github", Started: 1, Failed: 1, Tools: 25, Error: "401 Bad credentials", ErrorSeat: backendDev,
+				Refused: []coord.MCPToolRefusal{
+					{Tool: "gh_lookup_colleague", Reason: "builtin"},
+					{Tool: "gh_read.file", Reason: "characters"},
+				}, RefusedCount: 3},
 		},
 	})
 	presentNode(t, backend, "node-c", nil)
 	return backend
+}
+
+// longGitHubTool is a name github's tool_prefix pushes one character over
+// the longest a harness can hand its model.
+var longGitHubTool = "gh_" + strings.Repeat("x", harnessprofile.ToolNameMax()-2)
+
+// A SERVER'S TOOLS LOST TO THEIR NAMES ARE ONE LIST ACROSS THE FLEET, each
+// tool once however many nodes name it, sorted, each with the engine's
+// sentence worded for the server's own prefix, and counted as the node
+// counting the most counts them: a node names at most eight. A server whose
+// tools are all offered sends two empty lists and two zeros.
+//
+// Mutation: keep one node's list, sum the counts, or word a sentence without
+// the configured prefix, and this is red.
+func TestAServersToolsLostToTheirNamesAreOneListAcrossTheFleet(t *testing.T) {
+	t.Parallel()
+	got := askMCPStatus(t, mcpSources(t, mcpFleet(t)))
+
+	github := serverRow(t, got, "github")
+	refused := []queries.MCPRefusedTool{
+		{Tool: longGitHubTool, Reason: mcp.NameTooLong},
+		{Tool: "gh_lookup_colleague", Reason: mcp.NameBuiltin},
+		{Tool: "gh_read.file", Reason: mcp.NameCharacters},
+	}
+	slices.SortFunc(refused, func(a, b queries.MCPRefusedTool) int { return strings.Compare(a.Tool, b.Tool) })
+	for i := range refused {
+		refused[i].Message = refused[i].Reason.Sentence(refused[i].Tool, "gh_")
+	}
+	if !slices.Equal(github.RefusedTools, refused) || github.RefusedCount != 12 {
+		t.Errorf("github refused %+v of %d, want %+v of 12", github.RefusedTools, github.RefusedCount, refused)
+	}
+	if i := slices.IndexFunc(github.RefusedTools, func(r queries.MCPRefusedTool) bool { return r.Tool == longGitHubTool }); i < 0 ||
+		!strings.Contains(github.RefusedTools[i].Message, `Shorten the tool_prefix "gh_" by 1`) {
+		t.Errorf("the long name's sentence does not say how much to shorten the prefix: %+v", github.RefusedTools)
+	}
+	if len(github.ShadowedTools) != 0 || github.ShadowedCount != 0 {
+		t.Errorf("github shadowed %+v of %d, want none", github.ShadowedTools, github.ShadowedCount)
+	}
+
+	docs := serverRow(t, got, "docs")
+	shadowed := []queries.MCPShadowedTool{{Tool: "search", By: "linear", Message: mcp.ShadowSentence("search", "linear")}}
+	if !slices.Equal(docs.ShadowedTools, shadowed) || docs.ShadowedCount != 1 {
+		t.Errorf("docs shadowed %+v of %d, want %+v of 1", docs.ShadowedTools, docs.ShadowedCount, shadowed)
+	}
+
+	linear := serverRow(t, got, "linear")
+	if linear.RefusedTools == nil || linear.ShadowedTools == nil || len(linear.RefusedTools)+len(linear.ShadowedTools) != 0 ||
+		linear.RefusedCount+linear.ShadowedCount != 0 {
+		t.Errorf("linear = %+v, want two empty lists and two zeros", linear)
+	}
 }
 
 func askMCPStatus(t *testing.T, s queries.Sources) queries.MCPStatusAnswer {
@@ -447,6 +509,23 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	}
 	holdShape(t, "McpServerNode", cells, false)
 	holdShape(t, "BuiltinGroup", rowsOf(t, body["builtin"]), false)
+
+	var refused, shadowed []map[string]any
+	for _, s := range servers {
+		refused = append(refused, rowsOf(t, s["refused_tools"])...)
+		shadowed = append(shadowed, rowsOf(t, s["shadowed_tools"])...)
+	}
+	holdShape(t, "McpRefusedTool", refused, false)
+	holdShape(t, "McpShadowedTool", shadowed, false)
+
+	reasons, err := clientsource.Union(clientsource.Tree(t), "McpToolRefusal")
+	if err != nil {
+		t.Fatalf("%v: this gate cannot run without the client's declaration", err)
+	}
+	slices.Sort(reasons)
+	if want := slices.Sorted(slices.Values(stringsOf(mcp.NameRefusals))); !slices.Equal(reasons, want) {
+		t.Errorf("the dashboard's McpToolRefusal is %v; the engine sends %v", reasons, want)
+	}
 
 	got, err := clientsource.Union(clientsource.Tree(t), "McpServerState")
 	if err != nil {

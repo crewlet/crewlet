@@ -72,8 +72,10 @@ type MCPServer struct {
 	//
 	// It must be non-empty. An empty name silently mis-categorised a
 	// seat's MCP tools into the prompt's builtin block, so an agent was
-	// told it had tools that behave nothing like the ones it got.
-	Name string `yaml:"name" json:"name" js:"required" desc:"Server name; the key seats declare credentials under."`
+	// told it had tools that behave nothing like the ones it got. And it is
+	// held to one spelling every place it lands can take ([mcpServerName],
+	// [MaxMCPServerName]), which the schema states too.
+	Name string `yaml:"name" json:"name" js:"required;pattern=^[a-z0-9]([a-z0-9-]*[a-z0-9])?$;maxlen=32" desc:"Server name: lowercase letters, digits and hyphens, at most 32 characters; the key seats declare credentials under."`
 
 	// Enabled turns the server off without removing it: off, nothing starts
 	// it, no seat is granted it and no executor box is given it, while the
@@ -101,8 +103,9 @@ type MCPServer struct {
 	Env     map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Environment for the subprocess (stdio); ${VAR} supported."`
 
 	// ToolPrefix disambiguates tools whose bare names would collide with
-	// another server's.
-	ToolPrefix string `yaml:"tool_prefix,omitempty" json:"tool_prefix,omitempty" desc:"Prefix applied to this server's tool names."`
+	// another server's. Held to a model's tool-name characters and to
+	// [MaxMCPToolPrefix], which the schema's bound is held to by a test.
+	ToolPrefix string `yaml:"tool_prefix,omitempty" json:"tool_prefix,omitempty" js:"pattern=^[A-Za-z0-9_-]+$;maxlen=49" desc:"Prefix put in front of every tool this server serves: letters, digits, _ and -, at most 49 characters."`
 
 	// The http fields.
 	//
@@ -348,11 +351,13 @@ func (m *MCPServer) validate(path Path) error {
 // A LINE BREAK IS REFUSED, not folded: the prompt lists one server per line,
 // so a description carrying a newline would start a line of its own that reads
 // as something else in the list, and a tab or another control character is
-// nothing a reader of the list can see. Refused rather than rewritten, because
-// a description the engine silently reflowed is not the one the operator reads
-// back from the configuration.
+// nothing a reader of the list can see. Unicode's own line and paragraph
+// separators (U+2028, U+2029) are line breaks too, to every reader that
+// follows the standard, though no control character. Refused rather than
+// rewritten, because a description the engine silently reflowed is not the
+// one the operator reads back from the configuration.
 func (m *MCPServer) validateDescription(p *problems, path Path) {
-	if i := strings.IndexFunc(m.Description, unicode.IsControl); i >= 0 {
+	if i := strings.IndexFunc(m.Description, breaksALine); i >= 0 {
 		control, _ := utf8.DecodeRuneInString(m.Description[i:])
 		p.add(path, ErrUnknownValue,
 			"holds %q at character %d: a description is one line beside the server's "+
@@ -364,6 +369,13 @@ func (m *MCPServer) validateDescription(p *problems, path Path) {
 			"is %d characters, and a description is at most %d: it is one line "+
 				"beside the server's name in each agent's prompt", n, MaxMCPDescription)
 	}
+}
+
+// breaksALine reports whether r is a character a one-line description may not
+// hold ([MCPServer.validateDescription]): a control character, or a line or
+// paragraph separator.
+func breaksALine(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp)
 }
 
 // ToolAnnotations are the behavioural hints the engine reasons about a tool

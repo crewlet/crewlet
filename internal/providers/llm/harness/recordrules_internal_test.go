@@ -216,13 +216,13 @@ func TestACallInTheHostsNamespaceIsTheHosts(t *testing.T) {
 // condition, and the model's own side effect is read as a call.
 func TestAResponsesProseIsWhatItsDeltasSpelled(t *testing.T) {
 	t.Parallel()
-	r, host, deltas := readerOver(t, map[string]any{"host_prefix": "tool:mcp__crewlet__", "events": []any{
+	r, host, deltas := readerOver(t, map[string]any{"host_prefix": "mcp__crewlet__", "events": []any{
 		map[string]any{"match": []any{is([]any{"type"}, "proposed"), is([]any{"kind"}, "model")}, "opens": true,
 			"id": []any{"task"}},
 		map[string]any{"match": []any{is([]any{"type"}, "delta")}, "delta": []any{"text"}},
 		map[string]any{"match": []any{is([]any{"type"}, "intent"),
 			map[string]any{"path": []any{"operation"}, "prefix": "tool:"}},
-			"call": map[string]any{"id": []any{"key"}, "name": []any{"operation"}}},
+			"call": map[string]any{"id": []any{"key"}, "name": []any{"operation"}, "name_prefix": "tool:"}},
 	}}, nil)
 	feed(t, r,
 		map[string]any{"type": "proposed", "kind": "model", "task": "m1"},

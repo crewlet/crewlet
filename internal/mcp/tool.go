@@ -147,8 +147,13 @@ var _ Callable = (*Tool)(nil)
 // that came back exactly as it went down. A tool whose description, schema
 // or hints moved IS rebuilt, so a registry is told to take the new one.
 //
+// A tool whose name, prefix included, no model can be handed is REFUSED here
+// and returned beside the rest, never built ([nameRefusal]): left out of the
+// server's contribution, it is not offered, not callable, and shadows no
+// tool of another server that could be.
+//
 // The caller holds the bridge's lock.
-func (s *server) toolsFor(defs []toolDef) []*Tool {
+func (s *server) toolsFor(defs []toolDef) ([]*Tool, []RefusedTool) {
 	kept := make(map[string]*Tool, len(s.tools))
 	for _, t := range s.tools {
 		kept[t.raw] = t
@@ -158,10 +163,18 @@ func (s *server) toolsFor(defs []toolDef) []*Tool {
 		excluded[name] = struct{}{}
 	}
 	out := make([]*Tool, 0, len(defs))
+	var refused []RefusedTool
 	for _, def := range defs {
 		// Excludes match the SERVER's name, before the prefix: an operator
 		// writing them has the server's listing in front of them.
 		if _, skip := excluded[def.Name]; skip {
+			continue
+		}
+		name := s.spec.ToolPrefix + def.Name
+		if reason := nameRefusal(name); reason != "" {
+			refused = append(refused, RefusedTool{Name: name, Reason: reason})
+			s.b.log.Warn("mcp_tool_refused", "server", s.spec.Name, "tool", name,
+				"reason", string(reason), "detail", reason.Sentence(name, s.spec.ToolPrefix))
 			continue
 		}
 		fresh := newTool(s, def, s.spec)
@@ -171,7 +184,8 @@ func (s *server) toolsFor(defs []toolDef) []*Tool {
 		}
 		out = append(out, fresh)
 	}
-	return out
+	sortRefused(refused)
+	return out, refused
 }
 
 // sameAs reports whether two tools would put the same thing in front of a

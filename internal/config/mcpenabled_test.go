@@ -85,8 +85,12 @@ func TestAServerTurnedOffKeepsItsBlocksAndTheirRules(t *testing.T) {
 
 // A DESCRIPTION IS ONE LINE OF AT MOST 200 CHARACTERS, counted as the schema
 // counts them (code points, not bytes), because it is one line of every
-// agent's prompt. A line break or a tab is refused rather than folded, so what
-// the operator reads back is what the prompt says.
+// agent's prompt. A line break, Unicode's line and paragraph separators
+// included, or a tab is refused rather than folded, so what the operator
+// reads back is what the prompt says.
+//
+// Mutation: hold a description to unicode.IsControl alone, and the two
+// separators are accepted.
 func TestADescriptionIsOneLineOfAtMost200Characters(t *testing.T) {
 	t.Parallel()
 	described := func(text string) string {
@@ -112,6 +116,8 @@ func TestADescriptionIsOneLineOfAtMost200Characters(t *testing.T) {
 		{"201 two-byte characters", strings.Repeat("é", MaxMCPDescription+1), ErrOutOfRange},
 		{"a line break", `Reads the handbook\nand files pages`, ErrUnknownValue},
 		{"a tab", `Reads the handbook\tquickly`, ErrUnknownValue},
+		{"a line separator", `Reads the handbook\u2028and files pages`, ErrUnknownValue},
+		{"a paragraph separator", `Reads the handbook\u2029and files pages`, ErrUnknownValue},
 	} {
 		err := rejects(t, described(tc.text), "mcp_servers[0].description")
 		if !errors.Is(err, tc.want) {

@@ -494,7 +494,8 @@ which the form offers as you type `$`. It checks the whole company with the
 server in it before storing, and adds it after every server already declared.
 A name the configuration already carries is refused; a name only a node still
 runs, from a revision it has not applied past yet, is free: the create is
-judged against the configuration alone.
+judged against the configuration alone. The name, the prefix, the keys and the
+address are held to [the naming rules](#naming-a-server-and-its-tools).
 Over the API it is `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [configure via the API](configure-via-api.md). A per-seat server still needs
 a seat to declare credentials for it under `mcp_env`, which is written in the
@@ -539,6 +540,64 @@ A name like `internal` says nothing about what is behind it; the description is
 what tells an agent which server to look in before it spends a call listing
 one. Editing it reaches the next turn and restarts nothing, since no server
 process reads it. It is also on the server's row of `GET /mcp-servers`.
+
+### Naming a server and its tools
+
+An entry's name, its `tool_prefix`, the keys of the values it is started with
+and its address are each held to what every client that reads them can use. A
+write that breaks one is refused at the field, saying what to write instead:
+
+| Field | Rule | Why |
+|---|---|---|
+| `name` | Lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 32 characters; not `crewlet` | It is the origin of every tool the server serves (`mcp:<name>`), the key seats declare its credentials under, a segment of the routes that act on it, and, for a server an executor's box runs, the middle of every tool name the box's harness hands its model (`mcp__<name>__<tool>`) |
+| `tool_prefix` | Letters, digits, `_` and `-`, at most 49 characters | It is put in front of every tool the server serves, and a tool's whole name is at most 50 characters ([below](#a-tools-name)) |
+| A key of an http server's `headers`, of a seat's or a unit's `mcp_env` block for it, or of its `seat_credentials` | An HTTP header name (RFC 9110's token): letters, digits and `-`, and no space, colon or quote | The value is sent as a request header |
+| A key of a stdio server's `env`, of a block for it, or of its `seat_credentials` | An environment variable name: letters, digits and `_`, not starting with a digit | The value is an environment variable of the server's process |
+| `url` | `https`, or plain `http` only to this host or a private network, with no user name or password in it | Every request carries the server's credentials, which plain http to a public host hands to every network on the way, and an address is shown wherever the server is: a credential goes in a header |
+
+Plain http is accepted for an address the public internet does not route
+(loopback, private, link-local, shared or otherwise reserved, judged by the
+same rule every outbound dial is), a one-label name (a container's or a pod's service name), `localhost`, and
+names under `.localhost`, `.local` (a Kubernetes cluster's `svc.cluster.local`
+included), `.home.arpa` and `.internal`: by what the address says, never by
+what it resolves to. An address written with a `${VAR}` in it is judged once
+that resolves, by the same rule: a server whose resolved address breaks it is
+not started, and fails on its row with the reason (the address itself is
+never quoted, since a resolved one can carry a secret), and no executor's box
+is given it.
+
+These are admission rules: a revision stored before them still applies, and
+`crewlet validate` and the warnings on a config read name each one, at the
+path a write keeping it is refused at.
+
+#### A tool's name
+
+Every tool is filed under the server's `tool_prefix` and its own name, run
+together, in one namespace with the built-ins and every other server's tools.
+Each harness then puts its own prefix in front before its model sees the
+tool (Claude Code's `mcp__crewlet__`), and a model takes a tool name of at most
+64 characters, of letters, digits, `_` and `-` alone. So a tool is not
+offered, and never shortened to fit, since a shortened name is a new name two
+tools can share, when:
+
+| `reason` | The tool |
+|---|---|
+| `characters` | holds any other character in its name |
+| `too_long` | is longer than 50 characters with the prefix: what the longest prefix a built-in harness profile puts in front of the engine's tools leaves of 64. A profile with a longer prefix lowers it, for every company |
+| `builtin` | has a built-in tool's name, and built-ins are filed first |
+
+And a tool is **shadowed** where another server's tool of the same name is
+offered in its place: among one node's servers the first server by name keeps
+it, and in a seat's surface a shared server's tool keeps it against the seat's
+own server's. A `tool_prefix` on either server offers both.
+
+Each node reports these per server on its heartbeat, at most 8 of each with
+how many there are in all, and
+[`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers) gives each
+server's `refused_tools` and `shadowed_tools` across the fleet, each with a
+sentence saying what would offer it, beside `refused_count` and
+`shadowed_count`. The node's own log names each one as well
+(`mcp_tool_refused`, `tool_name_collision`).
 
 ### The curated catalogue, and a community registry
 
