@@ -966,12 +966,12 @@ what a company whose seats work through changes writes to it**. At the
 reference company — 3 000 pushes a day, every one a seat's, priced as its
 coding box's, 1 604 bytes alone in its record, and 300
 [changes](../concepts/code-host.md#changes) a day, ten pushes each — the code
-log takes 24.6–83.9 MB a day against the 12.1 MB its tracker writes and its
+log takes 24.6–87.2 MB a day against the 12.1 MB its tracker writes and its
 seats' reads take: about twice to about seven times what its tracker
 writes and its seats' reads take a day. Its pushes are 4.8 MB of that, the
 records that [compact](../concepts/code-host.md#compaction) their packs, publish
 their layers and sweep what each compaction retired 0.6–4.0 MB, its git
-clients' barriers 2.4–5.0 MB, and its changes' records 16.7–70.1 MB: each
+clients' barriers 2.4–5.0 MB, and its changes' records 16.7–73.4 MB: each
 change's open, its ask of a reviewer, a review asking for changes with two
 findings and the answer to them, two comments and a thread resolved, an
 approving review and its merge, and every revision's facts and mergeability
@@ -980,8 +980,10 @@ asking for changes with two findings 5 030, an approving review 2 340, a
 comment 2 280, a merge 1 640, a revision's facts 1 640, its mergeability
 1 340) — the most adding a queue entry a change, a recheck of every change at
 each of its home's ten-minute passes over a working day while its target
-moves, and three checks of every revision, each queued, claimed, its box named
-and ended. So under a blocked trim a code log at two thirds of the mutation
+moves, three checks of every revision, each queued, claimed, its box named and
+ended, and every change's landing checked on its tip by its home, its three
+checks queued, claimed, their boxes named and ended, and its target's green row
+moved onto it. So under a blocked trim a code log at two thirds of the mutation
 log's ceiling fills **in about a third of the mutation log's time where its
 seats open changes, and in about a tenth where its checks run and its targets
 move**. A company whose seats work through changes reads the two logs'

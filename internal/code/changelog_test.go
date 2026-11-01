@@ -48,6 +48,16 @@ import (
 //     check_finished: one check of a head, as its home queues it (its
 //     definition carried) and records the head's dispatch, its runner claims
 //     it and names its box, and the runner ends it passed;
+//   - tip_check_queued: one check of a landing's tip, as its home's tip work
+//     queues it (purpose tip, naming the base whose checks file defines it,
+//     its definition carried, and no change); its claim, its box and its
+//     ending carry the very keys a head's do, a check's key and nothing of
+//     its purpose, so check_started, check_named and check_finished price
+//     them;
+//   - broken and green: the same change landed ahead of its checks on a
+//     lane, as its home's tip work asks its committer to judge it — broken,
+//     naming the one required check that failed on its tip, then green once
+//     the check passed there;
 //   - publication_tail and publication_one: a repository's maintainer
 //     publishing a multi-pack-index layer, through the committer's compact
 //     path, over a tail of compact.PublishPacks (64) packs — a busy
@@ -77,6 +87,9 @@ var changeRecordBytes = map[string]int64{
 	"check_started":    780,
 	"check_named":      840,
 	"check_finished":   840,
+	"tip_check_queued": 960,
+	"broken":           830,
+	"green":            800,
 	"publication_tail": 3_830,
 	"publication_one":  1_110,
 }
@@ -243,6 +256,39 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	checked("check_finished", code.OpCheckFinished, code.CheckFinished{CheckKey: key,
 		State: code.CheckStatePassed, Reason: code.CheckReasonExit, ExitCode: &exit, DurationMs: 41_200,
 		Summary: "exit 0 after 41s", FinishedAt: harnessAt.Add(41 * time.Second)})
+	// ONE CHECK OF A LANDING'S TIP, as the home's tip work queues it: the
+	// merge's commit on main, under the checks file at the base it landed
+	// on.
+	checked("tip_check_queued", code.OpCheckQueued, code.CheckQueued{CheckKey: code.CheckKey{RepoID: repo,
+		OID: oidOf("M"), Target: mainRef, Name: "unit", Attempt: 1}, Purpose: code.PurposeTip,
+		Base: oidOf("A"), DefsOID: defs, Def: &code.CheckDef{Name: "unit", Run: "go test ./...",
+			TimeoutSeconds: 600}, Required: true, Reason: code.QueueDispatch})
+
+	// THE SAME CHANGE LANDED AHEAD OF ITS CHECKS, on a lane: its tip judged
+	// broken where its required check failed, then green once it passed.
+	tipped, landing := laneRepo(t, n, c, "tip")
+	ready(t, n, w, tipped, landing)
+	lined := enqueueing(tipped, landing, dev, oidOf("B"))
+	queuedRes, err := c.ProposeQueue(t.Context(), lined)
+	requireQueued(t, queuedRes, err, code.QueueWaiting, 1)
+	queuedRes, err = c.ProposeQueue(t.Context(), landingOf(tipped, code.LandingPostLand, "", oidOf("A"),
+		code.LandEntry{EntryID: lined.Enqueue.EntryID, ChangeID: landing, Commit: oidOf("M")}))
+	landed := requireRecorded(t, queuedRes, err)
+	judged := func(name string, set func(*code.QueueProposal)) {
+		took(name, func() {
+			res, err := c.ProposeQueue(t.Context(), queueRecord(set))
+			requireRecorded(t, res, err)
+		})
+	}
+	n.checked(tipped, oidOf("M"), mainRef, "unit", 1, code.CheckStateFailed)
+	judged("broken", func(p *code.QueueProposal) {
+		p.Broken = &code.Broken{RepoID: tipped, TargetRef: mainRef, Position: landed, Ordinal: 1,
+			OID: oidOf("M"), Checks: []string{"unit"}}
+	})
+	n.checked(tipped, oidOf("M"), mainRef, "unit", 2, code.CheckStatePassed)
+	judged("green", func(p *code.QueueProposal) {
+		p.Green = &code.Green{RepoID: tipped, TargetRef: mainRef, OID: oidOf("M"), Through: landed}
+	})
 
 	// A REPOSITORY'S PUBLICATIONS, a busy one's tail of sixty-four packs and
 	// a young one's single pack, each a layer of one part.

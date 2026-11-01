@@ -134,6 +134,9 @@ const (
 	codeCheckStartedBytes    = 780
 	codeCheckNamedBytes      = 840
 	codeCheckFinishedBytes   = 840
+	codeTipCheckQueuedBytes  = 960
+	codeGreenBytes           = 800
+	codeBrokenBytes          = 830
 	codePublicationTailBytes = 3_830
 	codePublicationOneBytes  = 1_110
 )
@@ -154,7 +157,17 @@ const (
 // working day of eight hours), and its target's checks file defines three
 // checks, each of every revision queued, claimed, its box named and ended,
 // beside the head's dispatch. A queued change's landing is priced as its
-// merge: this build appends no land record (codeLogUnwritten).
+// merge: this build appends no land record (codeLogUnwritten). And at the
+// most every change's landing lies above its target's green row — landed
+// ahead of its checks, as a post_land lane or a merge into a branch whose
+// gate requires them lands — so its home's tip work checks it: the three
+// checks queued on the landed commit (purpose tip, no dispatch record),
+// each claimed, its box named and ended, and a green moving the target's
+// green row onto it. One a change is the most, since each landing is the
+// newest when its tip is judged; a burst landing faster than its checks
+// coalesces onto its newest and costs less. A broken is a red tip's, at the
+// rate a merged result fails a check both heads passed, which the reference
+// company's day has none of (codeLogNegligible).
 //
 // A PUBLICATION names every pack its layer covers. At the least the
 // reference company's packs are each named once, in a busy repository's tail
@@ -169,6 +182,7 @@ const (
 	referenceRefreshesAChange = 4
 	referenceRechecksAChange  = 8 * 60 / 10
 	referenceChecksAHead      = 3
+	referenceChecksATip       = referenceChecksAHead
 	referencePublishPacks     = 64
 )
 
@@ -197,12 +211,14 @@ type codeLogTerm struct {
 // the merges retired, its git clients' barriers at code.BarrierRecordBytes,
 // and every record of the reference company's changes: their lifecycle,
 // their conversation, their home's facts, merges and readiness, their merges,
-// and at the most their queue and their checks. What the day is summed from,
+// and at the most their queue, their checks, and their landings' tip checks
+// and green. What the day is summed from,
 // so a term priced here is a term of every figure
 // TestTheDocsPrintTheMeasuredDay holds.
 func codeLogDay() []codeLogTerm {
 	changes, revisions := float64(referenceChangesADay), float64(referenceRevisionsADay)
 	checks := revisions * referenceChecksAHead
+	tips := changes * referenceChecksATip
 	git := float64((referencePushReads + referencePeopleReads) * code.BarrierRecordBytes)
 	day := []codeLogTerm{{op: code.OpBarrier, shape: "a git client's linearizable read",
 		least: git, most: git + float64(referenceCIReads*code.BarrierRecordBytes)}}
@@ -255,6 +271,16 @@ func codeLogDay() []codeLogTerm {
 		{code.OpCheckStarted, "a check's box named by its runner, three a push", checks,
 			codeCheckNamedBytes, true},
 		{code.OpCheckFinished, "a check ended, three a push", checks, codeCheckFinishedBytes, true},
+		{code.OpCheckQueued, "a check of a landing's tip queued by its home's tip work, naming the base " +
+			"its checks file is read at, three a change", tips, codeTipCheckQueuedBytes, true},
+		{code.OpCheckStarted, "a tip check claimed by its runner, three a change — a head's claim's keys",
+			tips, codeCheckStartedBytes, true},
+		{code.OpCheckStarted, "a tip check's box named by its runner, three a change — a head's box's keys",
+			tips, codeCheckNamedBytes, true},
+		{code.OpCheckFinished, "a tip check ended, three a change — a head's ending's keys", tips,
+			codeCheckFinishedBytes, true},
+		{code.OpGreen, "a target's green row moved onto a change's landing once its tip checks passed, " +
+			"one a change", changes, codeGreenBytes, true},
 	} {
 		bytes := t.records * t.bytes
 		least := bytes
@@ -392,6 +418,18 @@ var codeLogNegligible = map[code.OpKind]string{
 	code.OpChecksSweep: "the code-retention pass's sweep of an idle repository's check attempts past " +
 		"code.CheckHistory once they have outlived it by code.CheckSweepGrace: a record an idle " +
 		"repository holding them, a day at most, as a pack sweep's",
+	// A BROKEN is a red tip's: a merged result failing a required check its
+	// changes' heads each passed, which the reference company's day has none
+	// of, and which a revert or a fix forward then moves past. Every change's
+	// landing broken once would append under a twentieth of the day's least
+	// (TestTheCodeLogsDayPricesEveryRecordItTakes holds that bound).
+	code.OpBroken: "a landing above its target's green row marked broken by its home's tip work, a " +
+		"required check having failed on it: once a red tip at most, each a record naming the landing " +
+		"and its failed checks (codeBrokenBytes, measured) — under a twentieth of the day's least were " +
+		"every change's landing broken once. The bisect that names it probes the landings between the " +
+		"last green and the red tip, each probe the failed checks queued, claimed and ended, at the rate " +
+		"of the red tips too; the reference company's landings are each judged before the next lands, so " +
+		"its red tip is its culprit, probed by nothing",
 	code.OpQueueSweep: "the code-retention pass's sweep of an idle repository's ended queue entries " +
 		"and its landings below their green rows past code.QueueHistory once they have outlived it by " +
 		"code.QueueSweepGrace: a record an idle repository holding them, a day at most, as a pack " +
@@ -440,10 +478,12 @@ var codeLogUnwritten = map[code.OpKind]struct {
 	// A QUEUE'S OWN RECORDS, decided by its repository's committer since the
 	// committer's queue records landed, are appended by no node while nothing
 	// asks for them: the home git node's queue worker, which builds a train
-	// and lands what it tested, and its tip checks, which green or break what
-	// landed, are their first writers, through the estate's code.queue — a
-	// few records a change landed through a queue, which those writers are
-	// the ones to price. Until they run, a change queued by code_merge_change
+	// and lands what it tested, is their first writer, through the estate's
+	// code.queue — a few records a change landed through a queue, which that
+	// writer is the one to price. (Its tip checks' green and broken have their
+	// writer, the home's checks worker: the day prices the green at its most
+	// and argues the broken out, codeLogNegligible.) Until the queue worker
+	// runs, a change queued by code_merge_change
 	// (an enqueue, which the day prices at its most) waits in its queue and
 	// lands by no record of this build; the day prices its landing as its
 	// merge.
@@ -453,11 +493,6 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"put out are ejected by their repository's home git node, through the estate's code.queue"},
 	code.OpLand: {payload: reflect.TypeFor[code.Land](), how: "a train's tested prefix, or a lane's chain, " +
 		"is landed by its repository's home git node, through the estate's code.queue"},
-	code.OpGreen: {payload: reflect.TypeFor[code.Green](), how: "a protected branch's green row is moved " +
-		"onto a landing its tip checks passed by its repository's home git node, through the estate's " +
-		"code.queue"},
-	code.OpBroken: {payload: reflect.TypeFor[code.Broken](), how: "a landing its tip checks failed is " +
-		"marked broken by its repository's home git node, through the estate's code.queue"},
 }
 
 // codeLogPushVias is every way a push's pack is built (code.PushVias), and
@@ -828,7 +863,7 @@ var codeLogFields = map[code.OpKind]struct {
 	code.OpCheckQueued: {
 		payload: reflect.TypeFor[code.CheckQueued](),
 		carried: []string{"repo_id", "oid", "target", "name", "attempt", "purpose", "change_id", "revision",
-			"defs_oid", "def.name", "def.run", "def.timeout_seconds", "required", "reason", "queued_at"},
+			"base", "defs_oid", "def.name", "def.run", "def.timeout_seconds", "required", "reason", "queued_at"},
 		absent: absent(
 			map[string]string{
 				"by": "who queued an attempt again by hand, and the reference checks are queued by " +
@@ -836,7 +871,6 @@ var codeLogFields = map[code.OpKind]struct {
 				"candidate_id": "a train's check, which only the queue worker's candidates queue, and no " +
 					"node of this build builds a train (codeLogUnwritten)",
 				"entry_id": "likewise",
-				"base":     "likewise",
 				"def.paths": "the paths a check runs for, where its definition names some: a few dozen " +
 					"bytes a pattern",
 				"def.report":   "the reports a check writes, where its definition names some",
@@ -846,6 +880,10 @@ var codeLogFields = map[code.OpKind]struct {
 				"skipped":      "a check its paths skip, a flag",
 				"invalid":      "a checks file that does not run, its sentence",
 			}),
+	},
+	code.OpGreen: {
+		payload: reflect.TypeFor[code.Green](),
+		carried: []string{"repo_id", "target_ref", "oid", "through"},
 	},
 	code.OpCheckDispatched: {
 		payload: reflect.TypeFor[code.CheckDispatched](),
@@ -886,8 +924,9 @@ var codeLogKinds = map[code.ObjectKind]string{
 		"(codeLogNegligible, by its manager: codeLogManagers), a live turn's hold on it, a " +
 		"person's purge of its unreachable objects and the expunge's begin and commit that serve " +
 		"it (codeLogNegligible), a change's open and its merge (codeLogDay), its other gestures and " +
-		"its landing outside a merge (codeLogNegligible), its queue entry (codeLogDay at the most) and " +
-		"what the queue worker records (codeLogUnwritten)",
+		"its landing outside a merge (codeLogNegligible), its queue entry (codeLogDay at the most), the " +
+		"green its landing's tip checks move (codeLogDay at the most) and a red tip's broken " +
+		"(codeLogNegligible), and what the queue worker records (codeLogUnwritten)",
 	code.KindBarrier: "a git client's read (codeLogDay)",
 	code.KindName: "a repository's create and a tool's rename of it, each on the name it " +
 		"claims (codeLogNegligible, by its manager: codeLogManagers), and an old name's release " +
@@ -900,7 +939,8 @@ var codeLogKinds = map[code.ObjectKind]string{
 		"resolutions, its reviews and the answers to their findings — and its revisions' facts and its " +
 		"mergeability, on the change (codeLogDay)",
 	code.KindChecks: "a repository's checks: an attempt queued, a head's dispatch, an attempt's claim and " +
-		"its box named, and its ending (codeLogDay at the most), and the sweep of an idle repository's " +
+		"its box named, and its ending, of a head's checks and of a landing's tip checks (codeLogDay at " +
+		"the most), a bisect's probes (codeLogNegligible, with the broken they name), and the sweep of an idle repository's " +
 		"past the history (codeLogNegligible)",
 	code.KindPerson: "a person's marks over their own code notices (codeLogNegligible)",
 }
@@ -1413,7 +1453,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		{"the keys a five-year-old project writes are under a tenth of one percent of the day",
 			keyBytes / records, 0, 0.001},
 		{"the code log takes about twice this log's day at its least", codeLeast, 1.9, 2.2},
-		{"and about seven times it at its most", codeMost, 6.75, 7.1},
+		{"and about seven times it at its most", codeMost, 6.75, 7.25},
 		{"two thirds is below that range", share / codeLeast, 0, 1},
 		{"so a code log at two thirds of this log's ceiling fills in about a third of this log's " +
 			"time at its least", share / codeLeast, 0.29, 0.36},
@@ -1691,6 +1731,15 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 			"against a least of %.1f MB: price them into codeLogDay, or restate the bound",
 			codeChangeEditBytes, edits/1e6, least/1e6)
 	}
+	// A RED TIP'S BROKEN stays out of the day on the same bound: every one of
+	// the reference company's changes' landings broken once appends under a
+	// twentieth of the day's least.
+	if brokens := float64(referenceChangesADay * codeBrokenBytes); brokens >= least/20 {
+		t.Errorf("codeLogNegligible leaves a red tip's broken out of the day on a bound of a twentieth "+
+			"of its least, and a broken a change at %d bytes (codeBrokenBytes) appends %.2f MB a day "+
+			"against a least of %.1f MB: price them into codeLogDay, or restate the bound",
+			codeBrokenBytes, brokens/1e6, least/1e6)
+	}
 	// A CHANGE'S RECORDS ARE PRICED AT WHAT internal/code MEASURES THEM AT:
 	// its changeRecordBytes is the figure each record is held to there, and
 	// this package cannot import a test file's map, so it reads the map's
@@ -1706,6 +1755,7 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 		"check_dispatched": codeCheckDispatchedBytes, "check_started": codeCheckStartedBytes,
 		"check_named": codeCheckNamedBytes, "check_finished": codeCheckFinishedBytes,
 		"publication_tail": codePublicationTailBytes, "publication_one": codePublicationOneBytes,
+		"tip_check_queued": codeTipCheckQueuedBytes, "green": codeGreenBytes, "broken": codeBrokenBytes,
 	} {
 		line := fmt.Sprintf("%q: %s,", name, strings.ReplaceAll(spaced(bytes), " ", "_"))
 		if !strings.Contains(measured, line) {
