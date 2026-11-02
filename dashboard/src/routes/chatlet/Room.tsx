@@ -46,7 +46,7 @@ import { usePageCoverage, usePageInView } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { ActivityLine, Button, Callout, Skeleton } from "@crewlethq/ui";
-import { CompassGlyph } from "@crewlethq/icons/glyphs";
+import { CompassGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { useChatRead } from "~/lib/chatLive.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
@@ -75,6 +75,7 @@ import { useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
 import { coverageOf, PAGE } from "./page.ts";
 import { useChatPeople } from "./people.ts";
 import { ARCHIVED, RoomScopeProvider, useRoomScope } from "./scope.tsx";
+import { useRoomStar } from "./star.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { Transcript, type EntryUnread, type TranscriptHandle } from "./Transcript.tsx";
@@ -343,18 +344,32 @@ function Conversation({ channelID }: { channelID: string }) {
       )}
 
       <footer className="chat-room-foot">
-        {scope.rules.post || (channel && !scope.member) ? (
+        {/*
+          THE BOX IS OFFERED WHEREVER THE ENGINE TAKES THE POST, by the one
+          rule the room reads (`scope.tsx`'s `roomRules`, the engine's write
+          gate mirrored): an archived room, a private room or a direct
+          conversation the reader is not in, and a kind this build cannot
+          classify refuse it, and nothing else does. Somebody outside a
+          public room or a team's room may say something there, and a team's
+          lead answers a person nobody else is following; the bar above the
+          box says where they stand and what they can do about it, and never
+          stands in for the box.
+        */}
+        {scope.rules.post ? (
           <JoinBar channelID={channelID} where={where} />
         ) : (
-          <Composer
-            key={channelID}
-            channelID={channelID}
-            label={placeholder}
-            placeholder={placeholder}
-            onTyping={typing}
-            onSent={() => transcript.current?.scrollToLatest()}
-            {...(lastMine ? { onEditLast: () => scope.setEditing(lastMine.message.id) } : {})}
-          />
+          <>
+            {channel && !scope.member && <JoinBar channelID={channelID} where={where} />}
+            <Composer
+              key={channelID}
+              channelID={channelID}
+              label={placeholder}
+              placeholder={placeholder}
+              onTyping={typing}
+              onSent={() => transcript.current?.scrollToLatest()}
+              {...(lastMine ? { onEditLast: () => scope.setEditing(lastMine.message.id) } : {})}
+            />
+          </>
         )}
         <ActivityLine
           typing={
@@ -385,18 +400,23 @@ function Conversation({ channelID }: { channelID: string }) {
 }
 
 /**
- * In place of the composer, where the reader cannot post: why, and what they
- * can do about it. An archived room is read for ever and offers the rooms
- * that take messages; a room the reader may read but is not in offers to join
- * it where the engine would take the join, and says why there is no button
- * where it would not (the org chart keeps a team's room, a private room is
- * joined by being added). A room not yet read, or one this build cannot
- * classify, says that.
+ * Where the reader stands in the room. In place of the composer where the
+ * engine takes no post from them: why, and what they can do about it (an
+ * archived room is read for ever and offers the rooms that take messages; a
+ * room not yet read, or one this build cannot classify, says that). Above the
+ * composer where they may post and are not in the room: a room that takes a
+ * join offers one, and says what joining adds, since posting does not need it.
+ *
+ * A TEAM'S ROOM SOMEBODY OUTSIDE THE TEAM IS READING offers a star in place of
+ * the join it cannot take: its membership is the org chart's, and a starred
+ * room the reader may read stays in their Rooms menu, which is how they come
+ * back to it without Browse rooms.
  */
 function JoinBar({ channelID, where }: { channelID: string; where: string }) {
   const scope = useRoomScope();
   const nav = useChatNav();
   const open = useOpenRoom();
+  const star = useRoomStar(channelID);
   const join = useAct("join_channel");
   const [report, setReport] = useState<StartReport | null>(null);
   const channel = scope.channel;
@@ -414,7 +434,7 @@ function JoinBar({ channelID, where }: { channelID: string; where: string }) {
     // QUIET: what the press came to is the room's own note (`start.ts`),
     // rather than a toast saying "joined" over a room this node has not
     // applied the join to yet. A join that landed is confirmed by the room,
-    // read again at the join's floor: the composer takes this bar's place.
+    // read again at the join's floor: the bar goes and the composer stays.
     const result = await join.run({ channel: channelID }, { done: "Joined the room", quiet: true });
     if (result === null) return;
     const answer = reportFor("join", result);
@@ -442,7 +462,7 @@ function JoinBar({ channelID, where }: { channelID: string; where: string }) {
   } else if (standing && !standing.member && !scope.rules.post && canJoin(standing)) {
     words = (
       <>
-        You are viewing <strong>{where}</strong>. Join to post and react.
+        You’re not in <strong>{where}</strong>. Join it to keep it in your Rooms menu.
       </>
     );
     actions = (
@@ -464,6 +484,25 @@ function JoinBar({ channelID, where }: { channelID: string; where: string }) {
           {join.busy ? "Joining" : "Join room"}
         </WriteButton>
       </>
+    );
+  } else if (standing && !standing.member && standing.kind === "unit" && !scope.rules.post) {
+    words = (
+      <>
+        {membershipNote(standing)}{" "}
+        {star.starred ? "It’s in your Starred rooms." : "Star it to keep it in your Rooms menu."}
+      </>
+    );
+    actions = star.starred ? null : (
+      <Button
+        size="small"
+        variant="secondary"
+        leadingIcon={<StarGlyph size="sm" />}
+        disabledReason={star.held || undefined}
+        title={star.held || undefined}
+        onClick={() => star.set(true)}
+      >
+        Add to Starred
+      </Button>
     );
   } else {
     // WHY THERE IS NO BUTTON, said rather than left to an absence: a person

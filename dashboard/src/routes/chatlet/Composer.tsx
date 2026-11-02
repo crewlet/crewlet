@@ -31,7 +31,7 @@
  *
  * # The room closes the box; the browser holds the button
  *
- * A ROOM that takes no messages (archived, a private room the reader is
+ * A ROOM that takes no messages (archived, a members-only room the reader is
  * outside, a kind this build cannot classify) is a fact nothing on this
  * screen changes, so the room draws a bar in place of the box. A BROWSER that
  * cannot send now (offline, a credential acting as no seat) is the reason
