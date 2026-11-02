@@ -1527,7 +1527,11 @@ const (
 	// view) took it from 5338.8 KiB to 5340.1 KiB (+1.4 KiB): the settings
 	// chunk +0.7 KiB, the entry script +0.4 KiB and the Access chunk
 	// +0.3 KiB. 5341 KiB.
-	treeBudget = 5<<20 + 221<<10
+	// The changed-tools alarm (its kind and review fix in the Inbox's and the
+	// page's words, and the page's alarm row) took it from 5341.0 KiB to
+	// 5341.7 KiB (+0.8 KiB): the settings chunk +0.5 KiB, the entry script
+	// +0.2 KiB and the Access chunk +0.1 KiB. 5342 KiB.
+	treeBudget = 5<<20 + 222<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

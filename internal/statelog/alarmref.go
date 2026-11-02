@@ -201,6 +201,10 @@ var alarmMeaning = map[Kind]string{
 	KindMCPOAuthExpiring: "An MCP server's OAuth sign-in runs out within seven days, where its " +
 		"vendor said when. The engine renews the access the sign-in grants, but only a person " +
 		"signing in again renews the sign-in itself.",
+	KindMCPToolsChanged: "An MCP server changed one of its tools since its level was " +
+		"decided (its description, schema, annotations or title), or added one after its " +
+		"first listing, and the tool's level would let it run without asking. It asks a " +
+		"person before each call until somebody accepts the change.",
 	KindMCPApprovalWaiting: "An agent's run called one of an MCP server's tools at Needs " +
 		"approval, and the call has waited for a person's answer for longer than a third " +
 		"of the default pause TTL. The run is parked and its seat free; its work waits on " +
@@ -292,9 +296,13 @@ tool no agent can be handed under its name raises ` + "`mcp_tools_refused`" + ` 
 soon as a node lists it. A call an agent's run holds for a person's approval
 raises ` + "`mcp_approval_waiting`" + ` once it has waited %s (a third of the default
 pause TTL a parked run's box is kept for), read off the runs' own records rather
-than the heartbeat, its entry naming the seat whose run waits. The MCP servers
-answer (` + "`GET /mcp-servers`" + `) carries the five with the gesture that fixes
-each.
+than the heartbeat, its entry naming the seat whose run waits. A tool a server
+changed since its level was decided, or added after its first listing, that its
+level would let run unasked raises ` + "`mcp_tools_changed`" + ` as soon as the fleet's
+listings name it, read off the listings and what was accepted of them rather than
+the heartbeat; a removal, or a change to a tool that asks anyway, raises nothing.
+The MCP servers answer (` + "`GET /mcp-servers`" + `) carries each of them with the
+gesture that fixes it.
 `
 
 const alarmFooter = `

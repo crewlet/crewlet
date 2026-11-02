@@ -394,6 +394,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `POST` | `/mcp-servers/{name}/oauth` | Start signing the company in to a remote MCP server with OAuth: answers the address the person's browser is sent to, once. **Takes `secrets.write`**: an administrator, a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are), never Ask Crewlet (see [below](#post-mcp-serversnameoauth)) |
 | `GET` | `/mcp-sign-ins/{id}` | Where a sign-in is: `pending`, `completing`, `approved` or `failed`, and why. **Takes `config.read`** (see [below](#get-mcp-sign-insid)) |
 | `DELETE` | `/mcp-servers/{name}/oauth` | Sign the company out of an MCP server: the grant is revoked at its vendor where it offers that, forgotten here, and the server stopped on every node. **Takes `secrets.write`**, as the start does (see [below](#delete-mcp-serversnameoauth)) |
+| `POST` | `/mcp-servers/{name}/changes` | Accept, or keep blocked, tools an MCP server changed since their levels were decided, each by the digest of the definition reviewed. **Takes `config.write`**, at a recent step-up (see [below](#post-mcp-serversnamechanges)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -9664,6 +9665,7 @@ longest began; `null` for a refused name, which carries no instant), `seat`
 | `edit` | `mcp_tools_refused` | The server's configuration: a shorter `tool_prefix`, or one, as each name's `message` in `refused_tools` says |
 | `sign_in` | `mcp_oauth_needs_sign_in` and `mcp_oauth_expiring` | Signing the company in to `fix.server` again: [`POST /mcp-servers/{name}/oauth`](#post-mcp-serversnameoauth) |
 | `approve` | `mcp_approval_waiting` | The calls `fix.seat`'s run holds for approval on `fix.server`, each answered with [`POST /mcp-approvals/{id}`](#post-mcp-approvalsid) by its id in `approvals` |
+| `review` | `mcp_tools_changed` | The changes in `fix.server`'s [detail](#get-mcp-serversname) `changes`, each accepted or kept blocked with [`POST /mcp-servers/{name}/changes`](#post-mcp-serversnamechanges) |
 
 The list is always present, and empty on a node that runs no state log, which
 evaluates no alarm: ask a data node.
@@ -9861,7 +9863,12 @@ it under, so a node that drained, died or restarted stops counting at once.
   it: `allow`, `approve` (offered, and each call held for a person's answer)
   or `blocked`. A blocked tool is listed here and offered to no agent ([Tools and MCP › Setting each tool's level](../guides/tools-and-mcp.md#setting-each-tools-level));
   for a server the configuration does not declare, `level` says what the nodes
-  did.
+  did. `held` is a tool its level would run unasked whose definition changed
+  since that level was decided, or that the server added after its first
+  listing: its `level` answers `approve`, and each call asks a person until
+  somebody accepts the change (`changes`). `removed` is a tool the server no
+  longer lists, kept, named by the definition accepted for it, with no
+  instances or nodes, until somebody accepts that it went.
 - `tool_count` is how many tools the server lists, never fewer than `tools`
   holds: a node's listing names at most 256 of them.
 - `baseline` is the level of every tool `tools.levels` does not name: the
@@ -9872,6 +9879,25 @@ it under, so a node that drained, died or restarted stops counting at once.
   that decides nothing, most often a name written with the `tool_prefix` or
   spelled otherwise than the server spells it. Empty where the listings cannot
   say: no live node lists the server, or one lists more than its 256.
+- `changes` is every change the server made to its tools since their levels
+  were decided ([Tools and MCP › When a server changes a tool](../guides/tools-and-mcp.md#when-a-server-changes-a-tool)),
+  by `tool` (the server's own name), then by definition: one for each tool it
+  lists under a definition nobody accepted (two nodes listing two such
+  definitions make two changes), and one for each accepted tool no live node
+  lists, judged only where every live listing is whole. `kinds` is `added` or
+  `removed` alone, or the parts of the definition that moved: `title`,
+  `description`, `schema`, `annotations`. `before` is the definition accepted
+  (`null` for an added tool) and `after` the one listed now (`null` for a
+  removed tool), each `{digest, title, description, annotations, risk,
+  risk_declared, external, input_schema, output_schema}` read off the hints
+  the server declared, `before` with `accepted_by` (`null` for the server's
+  first listing), `accepted_at` and `first_listing`, `after` with
+  `instances`. `loosened` is a change whose hints claim less risk than the
+  accepted ones; `held` whether it holds the tool at Needs approval now;
+  `seen_at` when the fleet first stored the definition listed now (`null` for
+  a removal, or a definition whose schemas are not kept). Empty for a server
+  whose first listing has not been accepted yet. The administrator's reading
+  only.
 - `server_info` (`name`, `title`, `version`, `protocol`) and `instructions`
   are what the server said of itself in its handshake, from the listing that
   changed last; `null` and `""` where no live node's listing carries them. Both
@@ -10065,7 +10091,8 @@ configuration's grants, as a seat's `tool_sources` on the org chart is, which
 no other reader is given either.
 
 A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
-(every field), `tool_count`, `server_info`, `last_success` and:
+(every field, `held` and `removed` included), `tool_count`, `server_info`,
+`last_success` and:
 
 - `instances`, each without its `wait` (the variables a waiting instance waits
   for), and each `failure` and `last_failure` as `{class, at, node, seat}`,
@@ -10082,7 +10109,8 @@ A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
   the `seats` that called it: how often a tool is used tells a member whether
   it is, and who called it is the trail of that seat's work.
 
-It leaves out `instructions`, `dependants`, `calls` and `reaches`.
+It leaves out `instructions`, `dependants`, `calls`, `reaches` and `changes`:
+a change is reviewed by who may decide it.
 
 ```json
 {
@@ -10504,6 +10532,47 @@ is one `mcp_server_acted` with the action `set_tools`, a check marked
 `dry_run`; the revision names the levels.
 
 
+### `POST /mcp-servers/{name}/changes`
+
+Decides changes an MCP server made to its tools since their levels were
+decided, from the server's Drift review
+([Tools and MCP › When a server changes a tool](../guides/tools-and-mcp.md#when-a-server-changes-a-tool)):
+
+```json
+{"accept": {"search_issues": "9f2c…", "close_issue": null}, "block": {"delete_repository": "41aa…"}}
+```
+
+Each key is the server's own name for a tool, and each value the digest of
+the definition reviewed, the change's `after.digest` in the
+[detail](#get-mcp-serversname)'s `changes`, or `null` for a removal. **Accept**
+records the definition as the one the tool's level holds for, so an allowed
+tool runs unasked again; a removal accepted keeps a record of it, and the
+tool listed again after is one the server added. **Block** sets the tool's
+level to `blocked` on the server's entry, as one revision under the request's
+`_summary` (one naming the tools is written where none is sent), and records
+the definition the decision was taken on. Decided as `config.write` at a recent
+step-up, since accepting a change can let a tool run unasked again; a block on
+an operator-managed document is refused `403 config_managed`.
+
+Refused `409 stale_version`, with `tools` naming them, when a named definition
+is not one the fleet lists for the tool now and nobody has accepted (the
+server swapped it since the review, somebody decided it, or a removal is
+named for a tool still listed): nothing is decided, the rest of the body
+included. Read the changes again. `400 invalid_body` for a body that decides
+nothing or decides one tool twice, `404 not_found` for a server the company
+does not declare, `503 unavailable` where this node cannot read the fleet's
+listing of the server.
+
+```json
+{"server": "github", "accepted": ["close_issue", "search_issues"], "blocked": ["delete_repository"], "moved": [], "revision": {"revision_id": "…", "epoch": 7, "warnings": []}}
+```
+
+`accepted` and `blocked` are the tools decided, sorted; `moved` the ones
+somebody else decided between this node's read and its write, for which
+nothing was written; `revision` the configuration's answer to the block, `null`
+where nothing was blocked. Every call is one `mcp_server_acted` with the action
+`review_changes`, naming the tools accepted and kept blocked.
+
 ### `POST /mcp-approvals/{id}`
 
 Answers a call an agent's run made to an MCP tool at Needs approval
@@ -10530,6 +10599,10 @@ call is read. `always` is also a configuration write, decided as
 `config.write` at its recent step-up (`403 step_up_required` otherwise), and
 written as [`PUT /mcp-servers/{name}/tools`](#put-mcp-serversnametools)
 writes a level, before the answer is sent, so a refused write answers nothing.
+Where the server changed the tool since its level was decided and lists the
+definition the call was made under, `always` also accepts that definition, as
+[`POST /mcp-servers/{name}/changes`](#post-mcp-serversnamechanges) would, so
+a tool held only for its change runs unasked from then on.
 
 `202 Accepted` with:
 

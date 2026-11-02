@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"sync"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -80,6 +81,12 @@ type client struct {
 	// identity is what the server said of itself in the handshake, set
 	// once by connect before the client is handed to anybody.
 	identity Identity
+
+	// listChanged is signalled when the server says its tool list changed
+	// (`notifications/tools/list_changed`), for the supervisor to list the
+	// session again (relist.go). One slot: two notifications before the
+	// supervisor reads one are one request.
+	listChanged chan struct{}
 }
 
 // connect starts (or reaches) a server and completes the MCP handshake.
@@ -109,7 +116,8 @@ func connectWith(ctx context.Context, spec Spec, log *slog.Logger, d dialing) (*
 		log = logging.Get("mcp.client")
 	}
 
-	c := &client{name: spec.Name, spec: spec, log: log, hints: newHintTable(), end: make(chan struct{})}
+	c := &client{name: spec.Name, spec: spec, log: log, hints: newHintTable(), end: make(chan struct{}),
+		listChanged: make(chan struct{}, 1)}
 
 	var (
 		transport sdk.Transport
@@ -139,7 +147,10 @@ func connectWith(ctx context.Context, spec Spec, log *slog.Logger, d dialing) (*
 
 	sdkClient := sdk.NewClient(
 		&sdk.Implementation{Name: "crewlet", Version: version.String()},
-		&sdk.ClientOptions{Logger: log},
+		// LISTENING FOR A CHANGED TOOL LIST, which also subscribes to it on
+		// a server that speaks the 2026-07-28 revision: the supervisor lists
+		// the session again, no sooner than its floor (relist.go).
+		&sdk.ClientOptions{Logger: log, ToolListChangedHandler: c.toolsChanged},
 	)
 
 	startCtx, cancel := context.WithTimeout(ctx, spec.startupTimeout())
@@ -318,6 +329,24 @@ func (c *client) deathStory() string {
 	return c.endCause
 }
 
+// toolsChanged takes a server's word that its tool list changed: a request
+// that the supervisor list the session again, which it does no sooner than its
+// floor (relist.go). Never blocks the SDK's reader.
+func (c *client) toolsChanged(context.Context, *sdk.ToolListChangedRequest) {
+	select {
+	case c.listChanged <- struct{}{}:
+	default:
+	}
+}
+
+// relistAfter is how long after its last listing the session is listed again:
+// the `ttlMs` that listing stated, held to the schedule floor sets
+// ([RelistAfter]).
+func (c *client) relistAfter(floor time.Duration) time.Duration {
+	ttl, stated := c.hints.listingTTL()
+	return RelistAfter(ttl, stated, floor)
+}
+
 // listTools walks the whole listing, following pagination.
 //
 // It answers to the STARTUP budget rather than the per-call one: discovery is
@@ -337,6 +366,8 @@ func (c *client) listTools(ctx context.Context) ([]toolDef, error) {
 		seen   = map[string]struct{}{}
 		params = &sdk.ListToolsParams{}
 	)
+	// THIS WALK'S HINT, read off its pages as the probe sees them.
+	c.hints.beginListing()
 	for range maxToolPages {
 		res, err := session.ListTools(listCtx, params)
 		if err != nil {

@@ -20,11 +20,17 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 )
 
-// fakeListings is the fleet's listings as a node's watched copy holds them.
+// fakeListings is the fleet's listings as a node's watched copy holds them,
+// and what was accepted of them.
 type fakeListings struct {
 	listings []coord.MCPListing
 	schemas  map[string]coord.MCPToolSchema
+	accepted []coord.MCPAcceptedTool
 	err      error
+}
+
+func (f fakeListings) MCPAccepted(context.Context) ([]coord.MCPAcceptedTool, error) {
+	return f.accepted, f.err
 }
 
 func (f fakeListings) MCPListings(context.Context) ([]coord.MCPListing, error) {

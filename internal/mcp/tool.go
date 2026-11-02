@@ -147,8 +147,10 @@ type Definition struct {
 	parameters  map[string]any
 	output      map[string]any // the output schema, nil where it gives none
 	annotations Annotations
-	digest      string // the server's definition, hashed ([digestOf])
-	level       Level  // what its entry, or else its hints, set it at ([Levels.Of])
+	declared    Annotations // the hints as the server declared them, no override applied
+	digest      string      // the server's definition, hashed ([digestOf])
+	parts       Parts       // each part of it, hashed apart ([partsOf])
+	level       Level       // what its entry, or else its hints, set it at ([Levels.Of])
 }
 
 var _ Callable = (*Tool)(nil)
@@ -244,7 +246,9 @@ func definitionOf(def toolDef, spec Spec) Definition {
 		parameters:  maps.Clone(def.InputSchema),
 		output:      maps.Clone(def.OutputSchema),
 		annotations: ann,
+		declared:    def.Annotations,
 		digest:      digestOf(def),
+		parts:       partsOf(def),
 		// THE HINTS THE OPERATOR'S OVERRIDES LEAVE, so the level a tool
 		// starts at is read from the same hints its risk is shown by.
 		level: spec.Levels.Of(def.Name, ann),
@@ -305,11 +309,35 @@ func (d *Definition) OutputSchema() map[string]any { return d.output }
 // were listed.
 func (d *Definition) Digest() string { return d.digest }
 
+// Declared are the hints as the server declared them, before any override the
+// operator laid over them: the server's own claim about the tool, which is
+// what its definition's digest covers and what a change to it is judged by.
+func (d *Definition) Declared() Annotations { return d.declared }
+
+// Parts names each part of the server's definition apart ([Parts]): which of
+// them differ between two definitions of the tool is what the server changed.
+func (d *Definition) Parts() Parts { return d.parts }
+
 // Level is the level the tool runs at: its own in the entry's levels, else the
 // entry's default, else the level its hints start it at ([Levels.Of]). A
 // filed [Tool] is at [LevelAllow] or [LevelApprove]; only a blocked
 // Definition reads [LevelBlocked].
 func (d *Definition) Level() Level { return d.level }
+
+// Unreviewed reports whether the definition the server lists for this tool is
+// not the one its level was decided on (ADR-0078): one it changed, or added
+// after its first listing, that nobody has accepted since. Such a tool asks a
+// person before each call until somebody does, whatever level it is at. The
+// bridge's owner decides it ([Supervision.Unreviewed]); false where it decides
+// nothing.
+//
+// ASKED AT EACH CALL, never fixed when the tool is filed: the decision moves
+// when a person accepts the change, which files nothing, and a tool filed
+// once must not keep the answer it was filed with.
+func (t *Tool) Unreviewed() bool {
+	unreviewed := t.srv.b.sup.Unreviewed
+	return unreviewed != nil && unreviewed(t.Server(), t.raw, t.digest)
+}
 
 // Instance is the full instance name of the server serving this tool —
 // "github::Engineer" for a per-role child. It identifies the PROCESS.

@@ -902,7 +902,8 @@ func New(opts Options) (*App, error) {
 		return company
 	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Checker: opts.Runtime.MCPChecker(),
 		Drafts: drafts, Documents: documents, Tools: toolDocuments, Values: opts.Runtime.MCPValues(), Now: now,
-		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(), Audit: opts.Audit,
+		SignIns: opts.Runtime.MCPSignIns(), Approvals: opts.Runtime.MCPApprovals(),
+		Reviews: reviewDesk(sources, opts.Runtime.MCPAccepted()), Audit: opts.Audit,
 		// OVER THE CHART, which an approval asks: whether the caller leads
 		// the seat whose run made the held call.
 		Guard: authz.ContextGuard(sources.Chart)})
@@ -1884,4 +1885,20 @@ func servedOverHTTPS(b *config.Bootstrap, public bool) bool {
 	default:
 		return strings.HasPrefix(b.API.ExternalBase(), "https://")
 	}
+}
+
+// mcpReviews is the review route's reads and writes: a server's changes as
+// the sources read them, and the fleet's accepted definitions.
+type mcpReviews struct {
+	queries.Sources
+	AcceptedStore
+}
+
+// reviewDesk is the review route's [mcpapi.Reviews] over sources and store,
+// untyped nil without a store, which answers a review unavailable.
+func reviewDesk(sources queries.Sources, store AcceptedStore) mcpapi.Reviews {
+	if store == nil {
+		return nil
+	}
+	return mcpReviews{Sources: sources, AcceptedStore: store}
 }

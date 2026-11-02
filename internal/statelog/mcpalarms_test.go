@@ -113,6 +113,9 @@ func TestEachMCPKindRaisesAfterItsSpanAndClears(t *testing.T) {
 		"a sign-in that ran out": {statelog.MCPServerCondition{Server: "github", Started: 1,
 			SignIn: &statelog.MCPSignInCondition{Held: true, Expiry: mcpAt.Add(-time.Hour)}},
 			[]statelog.Kind{statelog.KindMCPOAuthExpiring}},
+		"a changed tool held, at once": {statelog.MCPServerCondition{Server: "github", Started: 1,
+			Changes: 1, Change: statelog.MCPChangeNote{Tool: "get_issue", Kind: "changed"}},
+			[]statelog.Kind{statelog.KindMCPToolsChanged}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -293,5 +296,33 @@ func TestAnMCPSignInAlarmSaysWhyAndStandsInPlaceOfFailing(t *testing.T) {
 	if len(entries) != 1 || !strings.Contains(entries[0].Detail, statelog.Spoken(3*24*time.Hour)) ||
 		!entries[0].Since.Equal(mcpAt.Add(3*24*time.Hour-statelog.MCPSignInNotice)) {
 		t.Fatalf("entry = %+v, want when it runs out", entries)
+	}
+}
+
+// A CHANGED TOOL'S ENTRY SAYS WHICH TOOL, HOW, AND WHETHER IT LOOSENED: the tool
+// the change seen first names, whether it was added or changed, how many tools
+// wait in all, and that a change claims less risk than before, dated by when
+// the fleet first saw it (ADR-0078).
+//
+// Mutation: drop the loosened clause or the count, and this fails.
+func TestAChangedToolsEntrySaysWhichToolAndWhetherItLoosened(t *testing.T) {
+	t.Parallel()
+	seen := mcpAt.Add(-time.Hour)
+	got := statelog.Evaluate(servers(statelog.MCPServerCondition{Server: "github", Started: 1,
+		Changes: 3, Loosened: 1, ChangeSince: seen,
+		Change: statelog.MCPChangeNote{Tool: "get_issue", Kind: "changed", Loosened: true}}))
+	changed, ok := find(got, statelog.KindMCPToolsChanged)
+	if !ok || len(changed.Entries) != 1 {
+		t.Fatalf("raised %+v, want mcp_tools_changed on github", got)
+	}
+	e := changed.Entries[0]
+	for _, says := range []string{"get_issue on github changed since its level was decided",
+		"3 of its tools wait so in all", "it now claims to be less risky than before"} {
+		if !strings.Contains(e.Detail, says) {
+			t.Errorf("the entry says %q, want it to say %q", e.Detail, says)
+		}
+	}
+	if !e.Since.Equal(seen) {
+		t.Errorf("the entry is dated %s, want when the fleet first saw the change (%s)", e.Since, seen)
 	}
 }

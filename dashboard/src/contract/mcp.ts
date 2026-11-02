@@ -274,6 +274,8 @@ interface McpShadowedTool {
  * `mcp_oauth_expiring`: a sign-in runs out within seven days.
  * `mcp_approval_waiting`: an agent's run has waited past the grace for a
  * person to approve a call to one of the server's tools.
+ * `mcp_tools_changed`: a tool the server changed, or added after its first
+ * listing, asks a person before each call until somebody accepts the change.
  */
 export type McpAlarmKind =
   | "mcp_server_failing"
@@ -282,7 +284,8 @@ export type McpAlarmKind =
   | "mcp_tools_refused"
   | "mcp_oauth_needs_sign_in"
   | "mcp_oauth_expiring"
-  | "mcp_approval_waiting";
+  | "mcp_approval_waiting"
+  | "mcp_tools_changed";
 
 /**
  * The one gesture that fixes a server's alarm. `restart`: restart its
@@ -292,8 +295,9 @@ export type McpAlarmKind =
  * configuration, its `tool_prefix`. `sign_in`: sign the company in to the
  * server again (`POST /mcp-servers/{name}/oauth`). `approve`: the calls the
  * named agent's run holds for approval on the server, each in `approvals`.
+ * `review`: the server's changed tools, each in its detail's `changes`.
  */
-export type McpFixKind = "restart" | "integration" | "edit" | "sign_in" | "approve";
+export type McpFixKind = "restart" | "integration" | "edit" | "sign_in" | "approve" | "review";
 
 /** The gesture that fixes one server's alarm, and what it acts on. */
 interface McpFix {
@@ -517,6 +521,10 @@ export interface McpToolView {
   level: McpToolLevel;
   /** Whether the server's `tools.levels` names it, rather than leaving it at the baseline. */
   custom: boolean;
+  /** Its definition changed since its level allowed it, so it asks first until the change is accepted; `level` reads approve. */
+  held: boolean;
+  /** The server no longer lists it; kept, named by its accepted definition, until somebody accepts that it went. */
+  removed: boolean;
 }
 
 /**
@@ -772,6 +780,53 @@ export interface McpServerAnswer {
   values: McpValueState[];
   /** Every agent seat the server's grant reaches, and why, whether or not it is on. */
   reaches: McpReach[];
+  /** Every change the server made to its tools since their levels were decided, by tool. */
+  changes: McpChangeView[];
+}
+
+/** One definition of a tool, in the server's words, read off the hints it declared. */
+interface McpDefinitionView {
+  digest: string;
+  title: string;
+  description: string;
+  annotations: ToolAnnotations;
+  risk: McpRisk;
+  risk_declared: boolean;
+  external: boolean;
+  input_schema: Record<string, unknown> | null;
+  output_schema: Record<string, unknown> | null;
+}
+
+/** The definition a tool's level was decided on. */
+interface McpAcceptedView extends McpDefinitionView {
+  /** Null for the server's first listing, accepted as it was listed. */
+  accepted_by: string | null;
+  accepted_at: string;
+  first_listing: boolean;
+}
+
+/** The definition a server lists for a tool now. */
+interface McpListedView extends McpDefinitionView {
+  instances: number;
+}
+
+/**
+ * One change to a server's tools since their levels were decided: `kinds` is
+ * `added` or `removed` alone, or the parts that moved (`title`,
+ * `description`, `schema`, `annotations`). Decided with
+ * `POST /mcp-servers/{name}/changes` by `after.digest` (null for a removal).
+ */
+interface McpChangeView {
+  tool: string;
+  kinds: string[];
+  before: McpAcceptedView | null;
+  after: McpListedView | null;
+  /** Its declared hints claim less risk than the accepted ones. */
+  loosened: boolean;
+  /** It holds the tool at Needs approval now. */
+  held: boolean;
+  /** When the fleet first stored the definition listed now, or null. */
+  seen_at: string | null;
 }
 
 /**
