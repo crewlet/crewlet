@@ -27,22 +27,18 @@
 // RELATIVE, not through `~`: protocol/ is also built alone as protocol.js,
 // where the alias does not exist.
 import { SESSION_QUERIES } from "../contract/domains.ts";
+import type { LogPosition } from "../contract/positions.ts";
 
 /** A log a write lands in and a read can wait on. */
 export type SessionDomain = keyof typeof SESSION_QUERIES;
 
 /**
- * A point on one of the engine's state logs: the three fields
- * `internal/statelog.Position` marshals, and the parsed form of the string the
- * engine spells it as, `<stream>@<generation>:<sequence>` ([parsePosition]).
- * The ONE declaration — `types.ts` re-exports it for the answers that carry
- * one.
+ * A point on one of the engine's state logs, which a floor is ([parsePosition]
+ * reads one off a write's answer). DECLARED in `contract/positions.ts`, where
+ * the answers declared there can import it too; `types.ts` re-exports it for
+ * the answers that carry one.
  */
-export interface LogPosition {
-  stream: string;
-  generation: number;
-  seq: number;
-}
+export type { LogPosition };
 
 /**
  * A position off the wire, or null for one this client cannot read.

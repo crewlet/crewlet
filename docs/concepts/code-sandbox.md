@@ -1186,6 +1186,76 @@ sequenceDiagram
 - **The dashboard asks every three seconds, and only while somebody is looking**: while a running run's span is open on the turn trace, or while the run's own page (Live › Executors, `#/live/executors/{turn_id}`) is open on a running job. Each request is chained after the last answer, so one open view has one request in flight; closing it or the run ending stops the poll, and so does a failed read the engine says no wait clears (a sandbox setup somebody has to fix, a refused key) until the socket reconnects or the view is opened again. The run's page asks by the `launch_id` the run board names (`executors` serves it), so it shows the job the row holds now, and when a later job replaces it the page reads the board again and follows the new one.
 - **After collection the record is the turn's.** A collected run's row is deleted, and its page reads the turn instead: every `executor_collected` the turn's launches published — what each job reported, what it delivered, its tokens and its transcript — under the task its `executor_launched` carried. A link to a run that has finished still lands on what it did.
 
+### Reading a seat's sessions
+
+**A run's session is kept after it, and read back as its transcript.** Every
+capture a collection takes — the archive the run packed when its harness
+exited ([Claude Code](#a-claude-code-runs-session),
+[OpenCode](#an-opencode-runs-session)) — is sealed into the fleet's
+[object store](object-store.md) and named by its turn's row of the `executor`
+log
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md),
+and [Conversation Sessions](conversation-sessions.md#configuration) for how
+long and how much is kept). That archive is the whole record of what the run
+read, called and wrote, and a seat's **Sessions** — under its profile's Memory
+tab on the dashboard ([A seat's profile](../reference/dashboard-design.md#a-seats-profile)),
+or [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions)
+— list them, the latest first: how each turn ended (the engine's own account,
+which the transcript cannot know), what it was asked, and whether its session
+is still kept.
+
+**One session opens as its transcript**
+([`GET /agents/{id}/sessions/{turn_id}`](../reference/api-endpoints.md#get-agentsidsessionsturn_id)):
+its object is streamed out of the store and opened under its own associated
+data, and the archive is read by the runner that packs it, which alone knows
+its layout — Claude Code's transcript, one record a line, then each subagent's
+own from its sidecar; OpenCode's export, a message at a time. The entries are
+what the run was briefed, the notes a person sent it while it worked, what its
+model wrote, every tool call and what answered it, and the compaction summaries
+the harness wrote in place of what came before them; the model's thinking and
+the harness's bookkeeping are none. A note is known by the heading the engine
+opens every note with, wherever the harness filed it — OpenCode as a person's
+message, Claude Code as a hook's context in a record of its own — and the line
+the run's own hook prints as it hands notes over is a note entry too. It is
+read a page at a time and bounded — 200 entries and 1 MiB of text a page,
+16 KiB an entry, and 256 MiB a read of the archive as it inflates and, apart,
+of what a tar's members hand out, so an archive a box packed to inflate without
+end, or with a sparse member that declares more than it holds, stops there —
+and every entry's text is **redacted at this read before it is cut**, whatever
+the capture did, and is always an opening of what its whole text redacts to:
+all of it that can reach the entry's bound and a private key's length past it
+is redacted inside as much again, so a credential that begins inside the bound
+is redacted whole, and nothing the read could not settle is handed out however
+much the redaction shrinks what comes before it.
+An object the store no longer holds, one that does not open under the fleet's
+keyring, an archive that is not one its format describes and one this build
+does not read are each said as such, in the engine's own words, beside the
+turn's ending, which the row still holds.
+
+**A node decodes two transcripts at a time.** One read can hold a line of the
+harness's record at its 32 MiB bound, as much again while the buffer gathering
+it grows, and the copy decoding it makes — on the order of 100 MiB — and a node
+answers every dashboard tab open on it and every REST caller, each with a read
+of its own. So each node decodes at most two transcripts at once
+(`TranscriptReadsAtOnce`), about 200 MiB at their worst, whichever socket or
+route asks. A read past them waits for a slot before the session's object is
+opened — an opened object would hold its store's connection while it waited —
+for as long as its caller waits, holding no decoder meanwhile, and a slot frees
+within one bounded read; a caller that leaves first is answered nothing, and
+nothing was opened for it.
+
+**It is the seat's trail, and it holds more than the run's live output
+showed.** It is read by exactly who reads that output — the seat, whoever leads
+it, and an administrator, `audit.seat.read`
+([Identity and Access](identity-and-access.md#the-authority-table-one-function-decides))
+— and by nobody it was withheld from. But the live output names a call's
+subject on one line and a failed result's first line, and never a successful
+result's body; a session's transcript holds every call's whole input and each
+result's text to an entry's bound — the contents of the files the run read and
+what its commands printed — and every subagent's thread. The redaction matches
+the credential shapes the engine knows, not values, so a secret of no
+recognisable shape that a run read is in its transcript as the run read it.
+
 ---
 
 ## Budgets

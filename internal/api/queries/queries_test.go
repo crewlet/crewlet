@@ -323,6 +323,10 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"agent_episode":   "decided_by:" + string(authz.ActionSeatTrailRead),
 		"memory_overview": "decided_by:" + string(authz.ActionSeatTrailRead),
 		"conversations":   "decided_by:" + string(authz.ActionSeatTrailRead),
+		// A SEAT'S EXECUTOR SESSIONS AND ONE TRANSCRIPT, the seat's trail as
+		// its run's live output is.
+		"executor_sessions": "decided_by:" + string(authz.ActionSeatTrailRead),
+		"executor_session":  "decided_by:" + string(authz.ActionSeatTrailRead),
 
 		// THE ARTIFACTS: the listing and the folder tree are everybody's and
 		// filtered row by row and folder by folder;

@@ -1,0 +1,153 @@
+/**
+ * A seat's executor sessions, as `executor_sessions` and `executor_session`
+ * send them: every turn whose executor captured its harness's session — how
+ * the turn ended, what it was asked, whether its session is still kept — and
+ * one session's transcript, a page at a time.
+ *
+ * EXACTLY WHAT `internal/api/queries` SENDS, held there by
+ * `TestTheSessionsScreenReadsWhatTheAnswersSend` in both directions: every
+ * member declared here is a key an answer carries, every key an answer carries
+ * is declared, and the four unions are the engine's own closed sets — so a
+ * screen keyed by them (`routes/agents/seat/Sessions.tsx`) has a word for
+ * every value the engine sends.
+ *
+ * Every text a harness, a model or a person wrote — an entry's text, the ask's
+ * excerpt, an ending's prose — reaches the client REDACTED: the engine runs its
+ * one redaction pass over each at the read, whatever the capture did.
+ */
+
+import type { LogPosition } from "./positions.ts";
+
+/** How a turn ended, in the engine's four words (`executordomain.Outcomes`). */
+export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";
+
+/**
+ * The engine's account of how a turn ended (`executordomain.Ending`): what a
+ * harness's transcript cannot know. Every member but the outcome is sent only
+ * where the way the turn ended establishes it.
+ */
+interface SessionEnding {
+  outcome: SessionOutcome;
+  /** The reviewer's final decision word. */
+  decision?: string;
+  /** The turn's reply reached the party waiting on it, on `delivered_to`. */
+  delivered?: boolean;
+  delivered_to?: string;
+  /** The engine's own outcome of a colleague's ask the turn answered. */
+  answer?: string;
+  /** The reviewer's account of what landed — a model's words. */
+  completed_work?: string;
+  /** The executor's own evidence of what stopped a blocked round. */
+  blocked_on?: string;
+  /** Who stopped the turn, and the reason they gave in their own words. */
+  stopped_by?: string;
+  stop_reason?: string;
+  /** The engine's account of the guard, the budget or the loss that ended it. */
+  failure?: string;
+}
+
+/** One turn's executor session. */
+export interface ExecutorSessionRow {
+  turn_id: string;
+  /** The surface-scoped conversation the turn served, "" for none. */
+  conversation_key: string;
+  work_key: string;
+  /** The harness that wrote the session, and its release as the box printed it. */
+  harness: string;
+  harness_version: string;
+  /** When the turn's newest capture was recorded; null where nothing was. */
+  captured_at: string | null;
+  /** When the turn's end was recorded; null while the turn runs. */
+  ended_at: string | null;
+  ending: SessionEnding | null;
+  /** The opening of what the turn was asked. */
+  ask_excerpt: string;
+  /** The row still names a session's object, of `object_bytes` sealed. */
+  kept: boolean;
+  object_bytes: number;
+}
+
+/** A page of a seat's executor sessions, the latest begun first. */
+export interface ExecutorSessionsAnswer {
+  handle: string;
+  sessions: ExecutorSessionRow[];
+  /** The cursor of the page after this one; absent on the last. */
+  next_cursor?: string;
+  read_level: string;
+  position: LogPosition;
+  /** False where the answering copy holds a record of the log it could not
+   *  read, which may hold rows missing from this page. */
+  complete: boolean;
+}
+
+/** What reading a session's object came to (`queries.TranscriptStates`). */
+export type TranscriptState =
+  "read" | "none" | "missing" | "unreadable" | "malformed" | "unsupported";
+
+/** Who an entry of a transcript is from (`executor.EntryKinds`): a note is
+ *  one a person sent the run while it worked. */
+export type TranscriptEntryKind =
+  "brief" | "note" | "model" | "tool_call" | "tool_result" | "summary" | "unread";
+
+/**
+ * Why a page of a transcript ends before the transcript does
+ * (`executor.TranscriptCuts`): at the most entries or bytes a page holds, with
+ * more after it, or at the most one read takes, with nothing a later page could
+ * add. Composed into the answer alone: the screen reads it off a page.
+ */
+type TranscriptCut = "entries" | "bytes" | "read";
+
+/** One entry of a transcript, in the order the harness recorded it. */
+export interface TranscriptEntry {
+  kind: TranscriptEntryKind;
+  /** When the harness recorded it, where its record says. */
+  at?: string;
+  /** The subagent whose transcript holds it; absent for the run's own. */
+  thread?: string;
+  /** The tool a call or a result is of. */
+  tool?: string;
+  /** A tool result the harness recorded as an error. */
+  failed?: boolean;
+  /** Redacted, and cut to the entry's bound where `cut` says so. */
+  text: string;
+  /** The whole text's size as the harness recorded it. */
+  bytes: number;
+  cut?: boolean;
+}
+
+/** What every read of a transcript is held to. */
+interface TranscriptBounds {
+  entries: number;
+  bytes: number;
+  entry_bytes: number;
+  line_bytes: number;
+  read_bytes: number;
+}
+
+/** One turn's session and a page of its transcript. */
+export interface ExecutorSessionAnswer {
+  handle: string;
+  session: ExecutorSessionRow;
+  state: TranscriptState;
+  /** Why no transcript is shown, wherever `state` is not `read`: the engine's
+   *  own sentence, never anything the archive held. */
+  why?: string;
+  entries: TranscriptEntry[];
+  /** The ordinal of the first of `entries` among the transcript's. */
+  from: number;
+  cut?: TranscriptCut;
+  /**
+   * The cursor the entries after these are read from; absent where none
+   * follow. It names the capture it was read from and how the engine counts
+   * entries, so the engine refuses it (`bad_params`) once the session is
+   * captured again or a build counting otherwise answers: read the transcript
+   * again from its start. A later page of a session whose object was released
+   * since is answered as the first page would be, `none`.
+   */
+  next_cursor?: string;
+  bounds: TranscriptBounds;
+  /** How the session's row was read, as the list says it of its page. */
+  read_level: string;
+  position: LogPosition;
+  complete: boolean;
+}

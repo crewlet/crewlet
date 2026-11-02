@@ -2,6 +2,8 @@ package executor
 
 import (
 	"cmp"
+	"context"
+	"io"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -88,3 +90,28 @@ func JSONStringify(s string) string { return jsonStringify(s) }
 const ClaudeHookContext = claudeHookContext
 
 var ClaudeNoteEvents = []string{claudeEventToolBatch, claudeEventFinish}
+
+// The sentences a malformed archive is said in ([MalformedArchiveError.Why]),
+// one for each way an archive is not what its format describes.
+const (
+	WhyNotGzip   = whyNotGzip
+	WhyCorrupt   = whyCorrupt
+	WhyCutShort  = whyCutShort
+	WhyNotTar    = whyNotTar
+	WhyNotExport = whyNotExport
+)
+
+// ReadTranscriptWithin is [ReadTranscript] held to bounds: the cases about a
+// bound run at one they can fill — a page of three entries, a read budget of a
+// few kibibytes — and leave the engine's own to
+// [TestTheTranscriptBoundsAreTheEnginesOwn].
+func ReadTranscriptWithin(ctx context.Context, harness string, format int,
+	open func(context.Context) (io.ReadCloser, error), from int,
+	bounds TranscriptBounds) (Transcript, error) {
+	return readTranscript(ctx, harness, format, open, from, bounds)
+}
+
+// TranscriptReadsHeld is how many of the process's [TranscriptReadsAtOnce]
+// slots reads hold now: what a case reads to see a slot taken before an
+// archive opens and given back only once it is closed.
+func TranscriptReadsHeld() int { return len(transcriptReads) }

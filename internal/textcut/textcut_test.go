@@ -131,6 +131,45 @@ func TestWithinUnderTheMarkersOwnLength(t *testing.T) {
 	}
 }
 
+// AN OPENING IS MARKED WHETHER OR NOT IT FITS. A caller that kept a text
+// short of its whole for a reason of its own hands over an opening that may be
+// well inside the budget, and it is still not the whole: marked, within the
+// budget with its marker, on a rune boundary, a prefix of what it was handed —
+// and the marker alone under a budget too small to hold it, as [Within] does.
+//
+// Mutation: hand back an opening that fits unmarked, as Within does a value
+// that fits, or count the marker outside the budget, and a row goes red.
+func TestAnOpeningIsMarkedWhetherOrNotItFits(t *testing.T) {
+	t.Parallel()
+	const max = 12
+	for name, in := range map[string]string{
+		"well inside it":   "abc",
+		"exactly at it":    strings.Repeat("a", max),
+		"past it":          strings.Repeat("a", 100),
+		"multi-byte past":  "aé" + strings.Repeat("漢", 100),
+		"empty, kept none": "",
+	} {
+		got := textcut.Opening(in, max)
+		kept, marked := strings.CutSuffix(got, "…")
+		if !marked {
+			t.Errorf("%s: Opening(%q, %d) = %q, which does not say it is an opening", name, in, max, got)
+		}
+		if len(got) > max {
+			t.Errorf("%s: Opening(%d bytes, %d) = %d bytes, over the budget its marker counts in",
+				name, len(in), max, len(got))
+		}
+		if !utf8.ValidString(kept) || !strings.HasPrefix(in, kept) {
+			t.Errorf("%s: Opening(%q, %d) kept %q, which is not a prefix of the input on a "+
+				"rune boundary", name, in, max, kept)
+		}
+	}
+	for _, max := range []int{0, 1, 2} {
+		if got := textcut.Opening("hello", max); got != "…" {
+			t.Errorf("Opening(%q, %d) = %q, want the marker alone", "hello", max, got)
+		}
+	}
+}
+
 // TAIL KEEPS THE END, CUTS ON A BOUNDARY AND SAYS SO. Every cut position
 // across a string of 1-, 2-, 3- and 4-byte runes: the kept text is valid
 // UTF-8, is a suffix of the input, is within the budget, and carries the

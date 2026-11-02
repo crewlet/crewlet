@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"regexp"
@@ -211,6 +212,13 @@ type carrier interface {
 	// A release that cannot be read is taken for a current one, as the
 	// notes gate takes it ([claudeNotesGate]).
 	Continues(box, writer string) (bool, string)
+
+	// transcript reads an archive of ArchiveFormat, already decompressed, as
+	// the entries of the session's transcript, handing each to b in the
+	// order the harness recorded it, until ctx is done ([ReadTranscript]):
+	// what the archive holds is the harness's own record, so reading it is
+	// the same knowledge as packing it, kept beside it.
+	transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error
 }
 
 // mcpHolder is a harness that can be held to the MCP servers a run hands it,

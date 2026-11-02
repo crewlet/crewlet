@@ -51,6 +51,7 @@ import type {
 } from "../contract/integrations.ts";
 import type { AgentEpisode, AgentMemory, MemoryOverview } from "../contract/memory.ts";
 import type { BackupsAnswer } from "../contract/backups.ts";
+import type { ExecutorSessionAnswer, ExecutorSessionsAnswer } from "../contract/sessions.ts";
 import type {
   LinkedFromStatus,
   PageBacklinks,
@@ -3764,10 +3765,11 @@ export interface PageDetail {
 
 /**
  * A point on one of the engine's state logs, as an answer reports it —
- * DECLARED ONCE, in `session.ts`, beside the floor that parses the same point
- * off a write's answer: a position this file declared again would be a second
- * shape for one value, and the floor and a chat cursor would be free to come
- * to mean different things by it.
+ * DECLARED ONCE, in `contract/positions.ts`, which the floor that parses the
+ * same point off a write's answer (`session.ts`) and the answers declared in
+ * the contract import too: a position this file declared again would be a
+ * second shape for one value, and the floor and a chat cursor would be free to
+ * come to mean different things by it.
  *
  * Chatlet needs the shape by name for a reason the other answers do not: a READ
  * CURSOR is the PACKED form of one (`(generation << 40) | seq`), so the client
@@ -7812,6 +7814,11 @@ export interface QueryMap {
   link_hosts: LinkHostsAnswer;
   executors: { runs: ExecutorRow[] };
   executor_tail: ExecutorTailAnswer;
+  /** A seat's executor sessions, a page at a time — its trail, as the run's
+   *  live output is. */
+  executor_sessions: ExecutorSessionsAnswer;
+  /** One turn's session and a page of its transcript. */
+  executor_session: ExecutorSessionAnswer;
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
   limits: LimitsAnswer;
