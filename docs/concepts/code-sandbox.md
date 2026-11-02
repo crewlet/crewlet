@@ -1193,17 +1193,16 @@ capture a collection takes — the archive the run packed when its harness
 exited ([Claude Code](#a-claude-code-runs-session),
 [OpenCode](#an-opencode-runs-session)) — is sealed into the fleet's
 [object store](object-store.md) and named by its turn's row of the `executor`
-log, so a later turn of the conversation, in any box on any node, can continue
-it
+log
 ([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md),
 and [Conversation Sessions](conversation-sessions.md#configuration) for how
-long and how much is kept). The same archive is the one whole record of what
-the run read and wrote, and a seat's **Sessions** — under its profile's Memory
+long and how much is kept). That archive is the whole record of what the run
+read, called and wrote, and a seat's **Sessions** — under its profile's Memory
 tab on the dashboard ([A seat's profile](../reference/dashboard-design.md#a-seats-profile)),
 or [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions)
 — list them, the latest first: how each turn ended (the engine's own account,
-which the transcript cannot know), what it was asked, and whether a later
-launch could take the session up.
+which the transcript cannot know), what it was asked, and whether its session
+is still kept.
 
 **One session opens as its transcript**
 ([`GET /agents/{id}/sessions/{turn_id}`](../reference/api-endpoints.md#get-agentsidsessionsturn_id)):
@@ -1241,7 +1240,6 @@ result's text to an entry's bound — the contents of the files the run read and
 what its commands printed — and every subagent's thread. The redaction matches
 the credential shapes the engine knows, not values, so a secret of no
 recognisable shape that a run read is in its transcript as the run read it.
-
 
 ---
 

@@ -24,18 +24,17 @@ import (
 // A captured session, read back as the transcript a person reads.
 //
 // A collection keeps the archive a run packed when its harness exited
-// ([Runner.OpenCapture]) so a later turn can continue the session; the same
-// archive is the only whole record of what the run read and wrote, so a seat's
-// trail reads it too. It is read HERE, beside the scripts that pack it, because
-// what it holds is the harness's own record and only the runner knows its
-// layout: Claude Code's archive is a gzipped tar of the session's transcript
-// (`projects/crewlet/<session>.jsonl`, one JSON record a line), its sidecar
-// directory — each subagent's transcript under `subagents/`, and the tool
-// results spilled to files — and its task list ([claudeArchiveFormat]);
-// OpenCode's is the document `opencode session export` prints, gzipped: the
-// session and its settled messages, each a list of parts
-// ([openCodeArchiveFormat]). A format this build does not pack is not read
-// ([Carries]).
+// ([Runner.OpenCapture]), and that archive is the whole record of what the run
+// read, called and wrote, so a seat's trail reads it. It is read HERE, beside
+// the scripts that pack it, because what it holds is the harness's own record
+// and only the runner knows its layout: Claude Code's archive is a gzipped tar
+// of the session's transcript (`projects/crewlet/<session>.jsonl`, one JSON
+// record a line), its sidecar directory — each subagent's transcript under
+// `subagents/`, and the tool results spilled to files — and its task list
+// ([claudeArchiveFormat]); OpenCode's is the document
+// `opencode session export` prints, gzipped: the session and its settled
+// messages, each a list of parts ([openCodeArchiveFormat]). A format this
+// build does not pack is not read ([Carries]).
 //
 // # Entries, in the order the harness recorded them
 //
@@ -406,9 +405,9 @@ var (
 	errValuePastBound = errors.New("executor: a value of the export is past the bound one may hold")
 )
 
-// Carries reports whether this build reads, and restores, a session archive
-// harness wrote in format — the one format each harness's runner packs
-// ([carrier]) — and, where it does not, why in a person's words.
+// Carries reports whether this build reads a session archive harness wrote in
+// format — the one format each harness's runner packs ([carrier]) — and, where
+// it does not, why in a person's words.
 func Carries(harness string, format int) (bool, string) {
 	c, why := carried(harness, format)
 	return c != nil, why

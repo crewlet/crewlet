@@ -196,8 +196,8 @@ var plantedKey = "ghp_" + strings.Repeat("Qx7Rb2", 6)
 // and handed on as asked; another seat's rows are never on the page, and a
 // cursor the domain refuses is the caller's to change, told without the
 // domain's package name. Each row says how its turn ended, what it was asked
-// (redacted), whether a session is kept and how large, and whether a later
-// launch could continue it.
+// (redacted), and whether a session is kept and how large: a turn whose
+// session the budget released, or which captured nothing, keeps none.
 //
 // Mutation: sort the rows, drop the cursor on its way to the reader, list every
 // seat's rows, or pass the domain's refusal through as a failure, and a check
@@ -233,14 +233,14 @@ func TestASeatsSessionsAreListedInTheReadersOrderAPageAtATime(t *testing.T) {
 		t.Fatalf("the first page is %v with next %q, want %v and a cursor", got, page.Next, turns[:2])
 	}
 	kept, released := page.Sessions[0], page.Sessions[1]
-	if !kept.Kept || kept.ObjectBytes != 4096 || !kept.Continuable || kept.NotContinuable != "" ||
-		kept.CapturedAt == nil || kept.EndedAt != nil || kept.Ending != nil {
+	if !kept.Kept || kept.ObjectBytes != 4096 || kept.CapturedAt == nil || kept.EndedAt != nil ||
+		kept.Ending != nil {
 		t.Errorf("the live, kept session reads %+v", kept)
 	}
 	if strings.Contains(kept.AskExcerpt, plantedKey) || !strings.Contains(kept.AskExcerpt, redact.Marker) {
 		t.Errorf("the ask's excerpt reads %q, want it redacted", kept.AskExcerpt)
 	}
-	if released.Kept || released.Continuable || !strings.Contains(released.NotContinuable, "budget") ||
+	if released.Kept || released.ObjectBytes != 0 || released.CapturedAt == nil ||
 		released.Ending == nil || released.Ending.Outcome != executordomain.OutcomeFailed {
 		t.Errorf("the released session reads %+v", released)
 	}
@@ -256,8 +256,8 @@ func TestASeatsSessionsAreListedInTheReadersOrderAPageAtATime(t *testing.T) {
 		t.Errorf("the second page is %v with next %q, asked from %q, want %v and the end",
 			got, rest.Next, reads.cursor, turns[2:])
 	}
-	if len(rest.Sessions) == 1 && (rest.Sessions[0].Continuable ||
-		!strings.Contains(rest.Sessions[0].NotContinuable, "nothing of this turn's session was captured")) {
+	if len(rest.Sessions) == 1 && (rest.Sessions[0].Kept || rest.Sessions[0].CapturedAt != nil ||
+		rest.Sessions[0].Ending == nil) {
 		t.Errorf("a turn that captured nothing reads %+v", rest.Sessions[0])
 	}
 
@@ -379,7 +379,7 @@ func TestASessionsTranscriptIsReadThroughItsSealedObject(t *testing.T) {
 		!strings.Contains(brief.Text, redact.Marker) {
 		t.Errorf("the first entry reads %+v, want the brief with its token redacted", brief)
 	}
-	if !first.Session.Continuable || first.Session.Ending == nil || first.Session.Turn != row.Turn {
+	if !first.Session.Kept || first.Session.Ending == nil || first.Session.Turn != row.Turn {
 		t.Errorf("the answer's row reads %+v", first.Session)
 	}
 

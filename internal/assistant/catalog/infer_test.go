@@ -72,7 +72,6 @@ func realAnswers(t *testing.T) map[string]any {
 		"captured_at": "2026-10-24T09:04:00Z", "ended_at": "2026-10-24T09:05:00Z",
 		"ending":      map[string]any{"outcome": "completed", "completed_work": "Filed ENG-7."},
 		"ask_excerpt": "Ana asked: fix the flaky cache test", "kept": true, "object_bytes": 41234,
-		"continuable": true,
 	}
 	return map[string]any{
 		"GET /agents/{id}/sessions": map[string]any{

@@ -50,7 +50,6 @@ function session(over: Partial<ExecutorSessionRow> = {}): ExecutorSessionRow {
     ask_excerpt: "## Task\n\nFix the **flaky** cache test.",
     kept: true,
     object_bytes: 41234,
-    continuable: true,
     ...over,
   };
 }

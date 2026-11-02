@@ -20,11 +20,11 @@ import (
 // A SEAT'S EXECUTOR SESSIONS, read by a person (ADR-0073).
 //
 // Every turn whose executor captured its harness's session leaves a row in the
-// executor log naming the sealed object that holds it, so a later turn of the
-// conversation can continue it — and that object is the only whole record of
-// what the run read and wrote. Two questions read it: `executor_sessions`, a
-// seat's rows newest first, a page at a time, each with how its turn ended and
-// whether a later launch could continue it; and `executor_session`, one turn's
+// executor log naming the sealed object that holds the session its harness
+// kept when its run ended — the whole record of what the run read, called and
+// wrote — and how the turn ended. Two questions read it: `executor_sessions`,
+// a seat's rows newest first, a page at a time, each with how its turn ended
+// and whether its session is still kept; and `executor_session`, one turn's
 // transcript, its object opened and read as the entries its harness recorded.
 //
 // # The seat's trail, decided as the run's live output is
@@ -117,15 +117,6 @@ type SessionRow struct {
 	// the seat's budget released it.
 	Kept        bool  `json:"kept"`
 	ObjectBytes int64 `json:"object_bytes"`
-
-	// Continuable says a later launch could take the session up: it is kept,
-	// in a format this build restores, and either its turn is still live —
-	// whose own next launch continues it — or it is on a conversation a
-	// later turn continues. Whether a box's own harness release can take it
-	// is decided as that run starts. NotContinuable says why not, in a
-	// person's words.
-	Continuable    bool   `json:"continuable"`
-	NotContinuable string `json:"not_continuable,omitempty"`
 }
 
 // SessionsAnswer is one page of a seat's executor sessions, the latest begun
@@ -440,24 +431,7 @@ func sessionRowOf(s executordomain.Session) SessionRow {
 		ending.Failure = redact.Secrets(ending.Failure)
 		row.Ending = &ending
 	}
-	row.Continuable, row.NotContinuable = continuable(s)
 	return row
-}
-
-// continuable reports whether a later launch could take s's session up, and
-// why not where it could not.
-func continuable(s executordomain.Session) (bool, string) {
-	switch {
-	case !s.HasObject():
-		return false, notKept(s)
-	case s.Ended() && s.ConversationKey == "":
-		// A TURN ON NO CONVERSATION IS CONTINUED ONLY BY ITS OWN NEXT
-		// LAUNCH, which an ended turn has none of: no later turn reads the
-		// head of a conversation that has no key.
-		return false, "the turn was on no conversation, and no later turn continues the " +
-			"session of a turn on none"
-	}
-	return executor.Carries(s.Harness, s.ArchiveFormat)
 }
 
 // notKept is why a row names no object.

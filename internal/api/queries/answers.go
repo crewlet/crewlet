@@ -815,11 +815,12 @@ func Register(r *Registry, s Sources) {
 		r.Register("executor_tail", DecidedBy(authz.ActionSeatTrailRead), s.executorTail)
 	}
 	if s.ExecutorSessions != nil {
-		// A SEAT'S EXECUTOR SESSIONS, each turn's harness transcript kept so
-		// a later turn can continue it: the seat's TRAIL, decided per seat by
-		// the verb the run's live output is — what a harness wrote is what it
-		// printed, so the seat, its lead and an admin read it and nobody else
-		// (see executorsessions.go).
+		// A SEAT'S EXECUTOR SESSIONS, the session each turn's harness kept
+		// when its run ended — the whole record of what the run read, called
+		// and wrote: the seat's TRAIL, decided per seat by the verb the run's
+		// live output is — what a harness wrote is what it printed, so the
+		// seat, its lead and an admin read it and nobody else (see
+		// executorsessions.go).
 		r.Register("executor_sessions", DecidedBy(authz.ActionSeatTrailRead), s.executorSessions)
 		if s.SessionObjects != nil {
 			r.Register("executor_session", DecidedBy(authz.ActionSeatTrailRead), s.executorSession)

@@ -6,7 +6,7 @@ package executor
 // ONE LIST FOR BOTH, because a second one — a map of the harnesses whose
 // session this build reads — is a list nothing keeps beside this one: a harness
 // added here and missed there would have every session it captured read as
-// one this build does not carry, and no later launch would be offered it.
+// one this build does not carry.
 var harnesses = []Harness{ClaudeCode{}, OpenCode{}}
 
 // Names is every harness this build can drive, in a stable order.

@@ -1,8 +1,8 @@
 /**
  * A seat's executor sessions, as `executor_sessions` and `executor_session`
  * send them: every turn whose executor captured its harness's session — how
- * the turn ended, what it was asked, whether a later launch could take the
- * session up — and one session's transcript, a page at a time.
+ * the turn ended, what it was asked, whether its session is still kept — and
+ * one session's transcript, a page at a time.
  *
  * EXACTLY WHAT `internal/api/queries` SENDS, held there by
  * `TestTheSessionsScreenReadsWhatTheAnswersSend` in both directions: every
@@ -63,12 +63,6 @@ export interface ExecutorSessionRow {
   /** The row still names a session's object, of `object_bytes` sealed. */
   kept: boolean;
   object_bytes: number;
-  /**
-   * A later launch could take the session up — whether a box's own harness
-   * release can is decided as that run starts — and, where it could not, why.
-   */
-  continuable: boolean;
-  not_continuable?: string;
 }
 
 /** Where on the executor log an answer's rows were read. */

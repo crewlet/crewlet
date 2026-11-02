@@ -446,13 +446,14 @@ everybody did:
   anybody's saved view.
 
 **A lead reads their own agents' trail.** One seat's diary, episodes, threads,
-memory overview, turns, phases, live bodies and executor sessions — each
-turn's harness transcript, kept so a later turn can continue it — are its
-**lead's** to read as well as an administrator's — a lead steers, pauses and
-answers for their agents, and could do none of it well without reading what
-those agents did. It is `audit.seat.read`, decided per seat, and it is limited
-to questions about **one seat** (a seat page's own turns and phases, its
-memory, the executor that seat launched, and that executor's sessions). An
+memory overview, turns, phases, live bodies and executor sessions — the
+session each turn's harness kept when its run ended, the whole record of what
+the run read, called and wrote — are its **lead's** to read as well as an
+administrator's — a lead steers, pauses and answers for their agents, and
+could do none of it well without reading what those agents did. It is
+`audit.seat.read`, decided per seat, and it is limited to questions about
+**one seat** (a seat page's own turns and phases, its memory, the executor
+that seat launched, and that executor's sessions). An
 executor session reaches nobody the executor's live output did not, but it
 holds **more** than that output showed: the live output names a tool call's
 subject on one line and a failed result's first line, and a session's

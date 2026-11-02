@@ -203,7 +203,6 @@ function sessionRow(over: Record<string, unknown> = {}) {
     ask_excerpt: "Fix the flaky provisioner test.",
     kept: true,
     object_bytes: 41234,
-    continuable: true,
     ...over,
   };
 }
