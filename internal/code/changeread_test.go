@@ -204,6 +204,66 @@ func TestAChangesDetailIsReadAloneWhenAskedAlone(t *testing.T) {
 	}
 }
 
+// A CHANGE READ IN BRIEF ANSWERS ITS ROW ALONE (ReadQuery.Brief): web!1's
+// first page in brief carries the very row, repository and access its
+// detail's summary carries, and its revisions as the full first page pages
+// them — and nothing the detail reads besides: no detail at all, so no
+// description, authors, conversation or mergeability, and no readiness, which
+// a person's read judges against a chart. So a reader that holds no chart,
+// which refuses a person's full first page about itself, answers that
+// person's brief one.
+//
+// Mutations: answer the detail in brief as well → Change is set beside the
+// brief row; judge the readiness in brief → the chartless reader refuses the
+// brief read; put a readiness on the brief row → it carries one.
+func TestAChangeReadInBriefAnswersItsRowAlone(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	ctx := t.Context()
+	web := changeRepo(t, n, "web")
+	first := opening(web, featureRef, mainRef, dev)
+	first.Open.Body = "Retries the upload once a minute."
+	opened, err := c.ProposeChange(ctx, first)
+	requireChanged(t, opened, err)
+	pushedBy(t, c, web, dev, update(featureRef, oidOf("B"), oidOf("B2")))
+	pushedBy(t, c, web, cto, update(featureRef, oidOf("B2"), oidOf("B3")))
+
+	full, err := readChange(t, n, ada, "", "web", 1, 2, "")
+	if err != nil || full.Change == nil || full.Change.Readiness == nil {
+		t.Fatalf("web!1's first page = %+v, %v; want its detail, judged", full, err)
+	}
+	unrostered, err := code.NewReader(code.ReaderOptions{Log: n.authority})
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	brief := code.ReadQuery{Asker: ada, Kind: code.ReadChange, Repo: "web", Change: 1, Limit: 2, Brief: true,
+		Fresh: stale}
+	if _, err = unrostered.Read(ctx, code.ReadQuery{Asker: ada, Kind: code.ReadChange, Repo: "web", Change: 1,
+		Fresh: stale}); !errors.Is(err, code.ErrNotServing) {
+		t.Fatalf("a chartless reader's full first page of web!1 = %v, want ErrNotServing about itself", err)
+	}
+	for name, r := range map[string]*code.Reader{"the node's reader": n.reader, "a chartless reader": unrostered} {
+		got, err := r.Read(ctx, brief)
+		want := full.Change.ChangeSummary
+		want.Readiness = nil
+		switch {
+		case err != nil || got.ChangeBrief == nil:
+			t.Errorf("%s: web!1 in brief = %+v, %v; want its row", name, got, err)
+		case got.Change != nil:
+			t.Errorf("%s: web!1 in brief came with its detail %+v, which a brief read never reads", name,
+				got.Change)
+		case !reflect.DeepEqual(*got.ChangeBrief, want):
+			t.Errorf("%s: web!1 in brief is %+v, want its detail's row without a readiness %+v", name,
+				*got.ChangeBrief, want)
+		case !reflect.DeepEqual(got.Revisions, full.Revisions) || got.Next != full.Next:
+			t.Errorf("%s: web!1's revisions in brief are %+v (next %q), want the full page's %+v (next %q)",
+				name, got.Revisions, got.Next, full.Revisions, full.Next)
+		}
+	}
+}
+
 // grantedChanges is a node judging seats by [testChart], with one change open
 // on each of three repositories — sales-private (`visibility: unit`, Sales'),
 // plat-private (`visibility: unit`, Platform's) and platform (`visibility:
@@ -563,6 +623,10 @@ func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 		"a later page's detail alone":   {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, DetailOnly: true, Cursor: "2"}, "detail_only:"},
 		"a detail alone of a limit":     {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, DetailOnly: true, Limit: 1}, "detail_only:"},
 		"a history of a part":           {code.ReadQuery{Kind: code.ReadPushes, Repo: "web", Part: code.PartReviewers}, "part:"},
+		"a part in brief":               {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Brief: true, Part: code.PartRevisions}, "brief:"},
+		"a later page in brief":         {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Brief: true, Cursor: "2"}, "brief:"},
+		"a detail alone in brief":       {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Brief: true, DetailOnly: true}, "brief:"},
+		"a repository in brief":         {code.ReadQuery{Kind: code.ReadRepo, Repo: "web", Brief: true}, "brief:"},
 		"comments past their page": {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1,
 			Part: code.PartComments, Limit: code.MaxCommentsPerPage + 1}, "limit:"},
 		"reviewers past their page": {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1,

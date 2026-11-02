@@ -1228,12 +1228,29 @@ type ReadQuery struct {
 	// import's or a mirror's push of up to MaxCommandsPerPush refs, with its
 	// introduced ids, is 140 to 460 kilobytes of row a listing never shows,
 	// sent again on every poll of the page; [ReadQuery.Push] reads one push
-	// whole. Pushes only, refused on every other kind.
+	// whole.
+	//
+	// It asks a `change` read's first page for its change IN BRIEF too: the
+	// change's own row ([ReadAnswer.ChangeBrief]) beside the page of its
+	// revisions, and none of what its detail reads besides — no description
+	// (up to [MaxChangeBodyBytes], on rows of its own), no authors, no
+	// conversation, no mergeability and its conflicting paths, and no
+	// readiness, whose judgement is six statements and a chart. A read that
+	// needs a change's state, its revision, its head and its branches — a
+	// seat's read of a revision's files, a patch or the findings, a write of
+	// its conversation — sets it; a read that presents the change, or acts on
+	// its readiness, does not. Refused beside a part, a cursor or DetailOnly,
+	// which read no first page of revisions; refused on every other kind.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row: a build that predates it decodes and ignores it,
-	// and answers the rows whole — a heavier answer, never a wrong one: a
-	// whole row's commands are every one it carried, and it omits none.
+	// and answers a push history's rows whole — a heavier answer, never a
+	// wrong one: a whole row's commands are every one it carried, and it
+	// omits none. On a change read, AS A STATED CONDITION, as
+	// [ReadQuery.Push]'s: no build that carries the code domain has run
+	// without a change read in brief — none of the domain is on main — and a
+	// build that refused it would refuse the read as invalid, never answer a
+	// change around it.
 	Brief bool `json:"brief,omitempty"`
 	// Push narrows a push history to ONE push, by its id, read whole: every
 	// command it carried and every commit it introduced. A push the
@@ -1489,32 +1506,41 @@ type ReadQuery struct {
 }
 
 // ReadAnswer is a [ReadQuery]'s answer: Changes is a `changes` listing's page;
-// Change a `change` read's detail, on the first page of its revisions alone;
-// Revisions a page of that change's revisions, newest first, on every page of
-// them; Reviewers, Comments, Reviews and Findings a page of the part of its
-// conversation a `change` read names ([ReadQuery.Part]) — Reviews a `reviews`
-// listing's page too, each naming its change; and Routed a `change_routing`
-// read's page.
+// Change a `change` read's detail, on the first page of its revisions alone,
+// and ChangeBrief its row in its place, for a first page read in brief
+// ([ReadQuery.Brief]); Revisions a page of that change's revisions, newest
+// first, on every page of them; Reviewers, Comments, Reviews and Findings a
+// page of the part of its conversation a `change` read names
+// ([ReadQuery.Part]) — Reviews a `reviews` listing's page too, each naming its
+// change; and Routed a `change_routing` read's page.
 type ReadAnswer struct {
 	Repos []RepoSummary `json:"repos,omitempty"`
 	Repo  *RepoDetail   `json:"repo,omitempty"`
 	// Pushes is a page of a repository's history, newest first, or of one
 	// coding run's pushes, oldest first — each repository the run was given
 	// in its query's order, and each one's pushes in log order.
-	Pushes     []PushRow              `json:"pushes,omitempty"`
-	Refs       []RefRow               `json:"refs,omitempty"`
-	Changes    []ChangeSummary        `json:"changes,omitempty"`
-	Change     *ChangeDetail          `json:"change,omitempty"`
-	Revisions  []RevisionRow          `json:"revisions,omitempty"`
-	Reviewers  []ReviewerRow          `json:"reviewers,omitempty"`
-	Comments   []CommentRow           `json:"comments,omitempty"`
-	Reviews    []ReviewRow            `json:"reviews,omitempty"`
-	Findings   []FindingRow           `json:"findings,omitempty"`
-	Routed     *RoutedPage            `json:"routed,omitempty"`
-	Introduced []IntroducedRow        `json:"introduced,omitempty"`
-	Due        []CompactionCandidate  `json:"due,omitempty"`
-	Publish    []PublicationCandidate `json:"publish,omitempty"`
-	Expunge    []ExpungeCandidate     `json:"expunge,omitempty"`
+	Pushes  []PushRow       `json:"pushes,omitempty"`
+	Refs    []RefRow        `json:"refs,omitempty"`
+	Changes []ChangeSummary `json:"changes,omitempty"`
+	Change  *ChangeDetail   `json:"change,omitempty"`
+	// ChangeBrief is a `change` read's change IN BRIEF ([ReadQuery.Brief]):
+	// its row, its repository's name and the asker's access, with no
+	// readiness judged — never "no longer live", which a nil readiness says
+	// on a listing's row and a detail.
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row, under [ReadQuery.Brief]'s stated condition.
+	ChangeBrief *ChangeSummary         `json:"change_brief,omitempty"`
+	Revisions   []RevisionRow          `json:"revisions,omitempty"`
+	Reviewers   []ReviewerRow          `json:"reviewers,omitempty"`
+	Comments    []CommentRow           `json:"comments,omitempty"`
+	Reviews     []ReviewRow            `json:"reviews,omitempty"`
+	Findings    []FindingRow           `json:"findings,omitempty"`
+	Routed      *RoutedPage            `json:"routed,omitempty"`
+	Introduced  []IntroducedRow        `json:"introduced,omitempty"`
+	Due         []CompactionCandidate  `json:"due,omitempty"`
+	Publish     []PublicationCandidate `json:"publish,omitempty"`
+	Expunge     []ExpungeCandidate     `json:"expunge,omitempty"`
 	// Imports is an `imports_due` read's page, Mirrors a `mirrors_due`
 	// read's.
 	Imports []ImportCandidate `json:"imports,omitempty"`
@@ -2546,7 +2572,8 @@ type ChangeSummary struct {
 	// transaction against its one chart ([ReadinessOf]) — every row of a
 	// listing and one change's detail alike, never the answer its last
 	// mergeability stored ([MergeabilityRow.Ready]) — and nil for a change
-	// that is no longer live, which merges nothing.
+	// that is no longer live, which merges nothing. A change read in brief
+	// judges none ([ReadAnswer.ChangeBrief]), and its row carries none.
 	Readiness *Readiness `json:"readiness,omitempty"`
 }
 

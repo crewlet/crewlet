@@ -528,7 +528,9 @@ func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Princ
 // revision the page before served, its revisions alone; its detail with no
 // revision for a read asking it alone ([ReadQuery.DetailOnly]); and a page of
 // the part of its conversation the read names ([ReadQuery.Part]) — every page
-// judged against the grant from the repository's row ([readableIn]).
+// judged against the grant from the repository's row ([readableIn]). A first
+// page read in brief ([ReadQuery.Brief]) answers the change's row in place of
+// its detail, and reads nothing else of it.
 func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	repo, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
 	if err != nil {
@@ -553,7 +555,15 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	}
 	limit := min(limitOr(q.Limit, defaultRevisionLimit), r.pageRows)
 	var rows *sql.Rows
-	if q.Cursor == "" {
+	switch {
+	case q.Brief:
+		// IN BRIEF: the change's own row, read above by its number, and
+		// nothing its detail reads besides — no body on rows of its own, no
+		// authors, conversation or mergeability, no readiness judged.
+		brief := repo.summary(row)
+		out.ChangeBrief = &brief
+		rows, err = tx.QueryContext(ctx, revisionsSQL, row.id, limit)
+	case q.Cursor == "":
 		body, bodyErr := bodyOf(ctx, tx, row.id)
 		if bodyErr != nil {
 			return bodyErr
@@ -584,7 +594,7 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			return nil
 		}
 		rows, err = tx.QueryContext(ctx, revisionsSQL, row.id, limit)
-	} else {
+	default:
 		n, parseErr := strconv.ParseInt(q.Cursor, 10, 64)
 		if parseErr != nil || n < 1 {
 			return fmt.Errorf("%w: %q is not a revision's number", ErrBadCursor, q.Cursor)

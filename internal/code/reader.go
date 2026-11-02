@@ -144,7 +144,7 @@ func (r *Reader) chartFor(asker Principal, readiness bool) (Roster, error) {
 // which the chart judges: a listing of changes, and a change's first page of
 // its revisions, which carries its detail.
 func (q ReadQuery) judgesReadiness() bool {
-	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.Part.detailed()
+	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.Part.detailed() && !q.Brief
 }
 
 // inTx is one open transaction as a statelog.ReadEstate, so the checkpoint is
@@ -1625,7 +1625,8 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 // principal can be, a repository that cannot be one, a limit past its bound —
 // refused naming it, never clamped — or a field outside the kind that reads
 // it: a status filter outside a listing of repositories, a prefix outside a
-// refs listing, a brief or one push outside a push history, a change's number
+// refs listing, one push outside a push history, a brief outside a push
+// history and a change's first page, a change's number
 // or a part of it outside a change read, a state, an owner, a work item, a
 // reviewer or a need outside a listing of changes, a range outside an
 // `introduced` read, a run outside a `run_pushes` read, a floor of live packs
@@ -1727,8 +1728,12 @@ func (q ReadQuery) validate() error {
 	case q.Prefix != "" && !validRefPrefix(q.Prefix):
 		return fmt.Errorf("%w: prefix: %q is not refs/heads/ or refs/tags/ or a directory of refs under "+
 			"either, ending in /", ErrInvalid, q.Prefix)
-	case q.Brief && q.Kind != ReadPushes:
-		return fmt.Errorf("%w: brief: only a push history is read in brief", ErrInvalid)
+	case q.Brief && q.Kind != ReadPushes && q.Kind != ReadChange:
+		return fmt.Errorf("%w: brief: only a push history and a change's first page are read in brief",
+			ErrInvalid)
+	case q.Brief && q.Kind == ReadChange && (q.Part != "" || q.Cursor != "" || q.DetailOnly):
+		return fmt.Errorf("%w: brief: only a change's first page of its revisions is read in brief — named "+
+			"by no part, cursor or detail_only", ErrInvalid)
 	case q.Push != "" && q.Kind != ReadPushes:
 		return fmt.Errorf("%w: push: only a push history is narrowed to one push", ErrInvalid)
 	case q.PathOwners && q.Kind != ReadRepo:
