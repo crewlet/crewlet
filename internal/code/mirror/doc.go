@@ -126,7 +126,10 @@
 // code.MirrorInterval plus [AttemptDeadline] (ADR-0015), which raises
 // code_mirror_failing on that home. A push mirror is pushed at most once a
 // [PushPace] (a minute) when its repository's records nudge it, and once a
-// code.MirrorInterval by the backstop while it is idle.
+// code.MirrorInterval by the backstop while it is idle; an attempt dials the
+// other host only where what the mirror covers moved since the last left it
+// level, or that was an interval ago (Mirrors.stillLevel), so a seat's pushes
+// to its own branches and a check's results dial nobody.
 //
 // # Its bounds
 //

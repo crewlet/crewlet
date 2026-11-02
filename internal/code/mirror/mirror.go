@@ -115,10 +115,14 @@ const eventBudget = 5 * time.Second
 
 // PushPace is the soonest a push mirror is pushed again after its last
 // attempt ended: ONE MINUTE, the home loop's backstop. A busy repository's
-// every record nudges its home, and a push a record would dial the other host
-// once a push; at most once a minute keeps a mirror a minute behind a green
-// that moved, for one ls-remote a minute while the repository is busy and
-// none while it is idle, when the backstop lists it once a MirrorInterval.
+// every record nudges its home, and a push a record would read the rows once
+// a record; at most once a minute keeps a mirror a minute behind a green that
+// moved, for one read of its rows and its copy a minute while the repository
+// is busy. The other host is dialed only where what the mirror covers moved —
+// a green, a covered tip, its target or its patterns — or once an interval
+// whatever moved ([Mirrors.stillLevel]): a seat's pushes to its own branches
+// and a check's results dial nobody, and an idle repository is listed by the
+// backstop once a MirrorInterval.
 const PushPace = time.Minute
 
 // AttemptDeadline is the GRACE code_mirror_failing gives an attempt in flight
@@ -256,6 +260,9 @@ type Mirrors struct {
 	running map[mirrorKey]bool
 	memory  map[mirrorKey]memory
 	health  map[mirrorKey]health
+	// levels is what each push mirror's last attempt left the other host
+	// level with ([level]).
+	levels map[mirrorKey]level
 	// queued is every attempt due while [MaxAttempts] ran, started as one
 	// ends ([Mirrors.startQueued]); arrivals numbers them.
 	queued   map[mirrorKey]queuedAttempt
@@ -284,7 +291,8 @@ func New(o Options) (*Mirrors, error) {
 		return nil, fmt.Errorf("%w: missing %s", ErrOptions, strings.Join(slices.Sorted(slices.Values(missing)), ", "))
 	}
 	m := &Mirrors{o: o, log: o.Logger, now: o.Now, known: map[mirrorKey]listed{}, running: map[mirrorKey]bool{},
-		memory: map[mirrorKey]memory{}, health: map[mirrorKey]health{}, queued: map[mirrorKey]queuedAttempt{}}
+		memory: map[mirrorKey]memory{}, health: map[mirrorKey]health{}, levels: map[mirrorKey]level{},
+		queued: map[mirrorKey]queuedAttempt{}}
 	if m.log == nil {
 		m.log = logging.Get("code.mirror")
 	}
@@ -409,8 +417,9 @@ func (m *Mirrors) remember(key mirrorKey, l listed) {
 
 // prune ends a listing that ran from its first page to its last: everything
 // this node remembers of a mirror the listing did not name and that is not
-// running — what a listing said of it, its attempts' memory, its health and
-// its queued attempt — is dropped. So the worker holds what its last whole
+// running — what a listing said of it, its attempts' memory, its health, what
+// its push last left the other host level with and its queued attempt — is
+// dropped. So the worker holds what its last whole
 // listing named — the company's imports and mirrors, as every git node lists
 // them before its placement says which are its own — never every repository
 // any listing ever named: one deleted, one whose mirror went, an import that
@@ -429,6 +438,7 @@ func (m *Mirrors) prune() {
 	maps.DeleteFunc(m.known, func(key mirrorKey, _ listed) bool { return gone(key) })
 	maps.DeleteFunc(m.memory, func(key mirrorKey, _ memory) bool { return gone(key) })
 	maps.DeleteFunc(m.health, func(key mirrorKey, _ health) bool { return gone(key) })
+	maps.DeleteFunc(m.levels, func(key mirrorKey, _ level) bool { return gone(key) })
 	maps.DeleteFunc(m.queued, func(key mirrorKey, _ queuedAttempt) bool { return gone(key) })
 }
 
@@ -613,6 +623,7 @@ func (m *Mirrors) forget(key mirrorKey) {
 	defer m.mu.Unlock()
 	delete(m.known, key)
 	delete(m.health, key)
+	delete(m.levels, key)
 }
 
 // AlarmReading fills the reading's mirror half at the worker's clock: how

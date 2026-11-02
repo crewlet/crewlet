@@ -110,12 +110,12 @@ func (m *Mirrors) RefsOf(ctx context.Context, dir string) (map[string]string, er
 }
 
 // Remembered is how many entries the worker holds of the repositories its
-// listings named: what they said, its attempts' memory, its health and its
-// queued attempts, together.
+// listings named: what they said, its attempts' memory, its health, what its
+// pushes left level and its queued attempts, together.
 func (m *Mirrors) Remembered() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.known) + len(m.memory) + len(m.health) + len(m.queued)
+	return len(m.known) + len(m.memory) + len(m.health) + len(m.levels) + len(m.queued)
 }
 
 // FailingWhileQueued is what [Mirrors.AlarmReading] counts a second after the

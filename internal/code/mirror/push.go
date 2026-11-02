@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -41,16 +43,79 @@ type pushed struct {
 	updated, deleted, waiting []string
 }
 
+// level is what a push mirror's last attempt left the other host level with,
+// as a digest ([coverage]), and when it read — or pushed — the other host so:
+// what lets a nudge that moved nothing the mirror covers end without dialing
+// ([Mirrors.stillLevel]). A digest rather than the refs themselves: a mirror
+// of a repository of code.MaxRefsPerRepo refs would keep megabytes here.
+type level struct {
+	digest [sha256.Size]byte
+	at     time.Time
+}
+
+// coverage is the digest of what a push mirror holds the other host to: the
+// other host's URL, the patterns it covers — a pattern added can delete
+// refs there with nothing of the copy's moving — every covered ref with the
+// commit it is to hold, and every branch held back.
+func coverage(url string, patterns []string, want map[string]string, waiting []string) [sha256.Size]byte {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00", url)
+	for _, p := range patterns {
+		fmt.Fprintf(h, "%s\n", p)
+	}
+	h.Write([]byte{0})
+	for _, ref := range slices.Sorted(maps.Keys(want)) {
+		fmt.Fprintf(h, "%s %s\n", ref, want[ref])
+	}
+	h.Write([]byte{0})
+	for _, ref := range waiting {
+		fmt.Fprintf(h, "%s\n", ref)
+	}
+	var sum [sha256.Size]byte
+	h.Sum(sum[:0])
+	return sum
+}
+
+// stillLevel reports whether key's push mirror covers what its last attempt
+// left the other host level with (sum), read so within an interval of now:
+// a nudge that moved nothing it covers — a seat's push to its own branches,
+// a check's result, a change's record — then dials nobody, where it dialed
+// the other host once a [PushPace] while the repository was busy. Once an
+// interval the other host is read again whatever moved, so a writer there
+// that is not the mirror is undone within code.MirrorInterval.
+func (m *Mirrors) stillLevel(key mirrorKey, sum [sha256.Size]byte, now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.levels[key]
+	return ok && l.digest == sum && now.Sub(l.at) < code.MirrorInterval
+}
+
+// leveled records that the other host was read, or pushed, level with sum at
+// read, before its listing ran.
+func (m *Mirrors) leveled(key mirrorKey, sum [sha256.Size]byte, read time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.levels[key] = level{digest: sum, at: read}
+}
+
+// unlevel forgets what key's push mirror last left the other host level with.
+func (m *Mirrors) unlevel(key mirrorKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.levels, key)
+}
+
 // push is one attempt of repoID's PUSH MIRROR (M6-D16): the push mirror and
 // the repository's green rows read in one snapshot (`mirror_push`), this
 // node's copy synced at or past it, the seat it pushes as judged against the
 // chart this node holds (code.MirrorSeatRefusal), the refs it covers chosen —
 // each protected branch at its GREEN commit, and held where it has none, every
-// other ref at its tip — and compared with what the other host holds
-// (`ls-remote`), and the difference pushed, forced, from a scratch over the
-// copy's incarnation. A nil error is a mirror the other host now holds level,
-// or found level; the push's account is published (code_mirror_pushed) where
-// it moved anything.
+// other ref at its tip — and, unless they are what the last attempt left the
+// other host level with within an interval ([Mirrors.stillLevel]), compared
+// with what the other host holds (`ls-remote`), and the difference pushed,
+// forced, from a scratch over the copy's incarnation. A nil error is a mirror
+// the other host now holds level, or found or was left level; the push's
+// account is published (code_mirror_pushed) where it moved anything.
 func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor statelog.Position) (err error) {
 	outcome := "current"
 	defer func() {
@@ -58,6 +123,9 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 			return
 		}
 		if err != nil {
+			// What the other host holds after a failure is not known here,
+			// so the next attempt dials it whatever it covers.
+			m.unlevel(mirrorKey{repo: repoID, out: true})
 			outcome = "failed"
 			m.log.Warn("code_mirror_attempt_failed", "repo", repoID, "attempt", "push", "error", err,
 				"detail", "the other host holds what the last push left there; the next attempt reads the "+
@@ -101,6 +169,13 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 	if err != nil {
 		return err
 	}
+	key, sum, read := mirrorKey{repo: repoID, out: true}, coverage(to.URL, patterns, want, waiting), m.now()
+	if m.stillLevel(key, sum, read) {
+		// NOTHING IT COVERS MOVED since the other host was last level with
+		// it, an interval ago at most: a nudge from a seat's push, a check's
+		// result or a change's record dials nobody.
+		return nil
+	}
 	remote, err := m.o.Dial(ctx, to.URL, to.Credential)
 	if err != nil {
 		return fmt.Errorf("mirror: dial %s's push mirror: %w", s.Repo.Name, err)
@@ -111,6 +186,7 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 	}
 	specs, out := diffRefs(want, waiting, have)
 	if len(specs) == 0 {
+		m.leveled(key, sum, read)
 		return nil
 	}
 	sc, err := m.o.Cache.NewScratch(ctx, s, statelog.NewOpID(m.now(), ""))
@@ -123,6 +199,7 @@ func (m *Mirrors) push(ctx context.Context, repoID string, l listed, floor state
 			return fmt.Errorf("mirror: push %s to %s: %w", s.Repo.Name, remote, err)
 		}
 	}
+	m.leveled(key, sum, read)
 	outcome = "pushed"
 	m.announcePushed(ctx, types.CodeMirrorPushed{RepoID: repoID, RepoName: s.Repo.Name, URL: to.URL, As: to.As,
 		Updated: out.updated, Deleted: out.deleted, Waiting: out.waiting})

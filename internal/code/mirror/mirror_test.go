@@ -931,6 +931,69 @@ func TestAPushMirrorLandsBesideAForgesOtherRefs(t *testing.T) {
 	}
 }
 
+// A PUSH MIRROR DIALS ONLY WHEN WHAT IT COVERS MOVED: once its first push
+// has left the other host level, a nudge of its repository a minute later
+// that moved no ref it covers — a push of a branch beside main — reads the
+// rows and dials nobody; once an interval has passed, a nudge reads the other
+// host again whatever moved, and puts back what another writer moved there;
+// and a nudge after main itself moved dials and pushes it.
+//
+// Mutation: dial on every nudge (drop the comparison with what the last
+// attempt left level), and the push beside main dials; never read the other
+// host again (drop the interval), and the other writer's main stays.
+func TestAPushMirrorDialsOnlyWhenWhatItCoversMoved(t *testing.T) {
+	h, p, wt, push := pushMirrored(t, func(url string) code.RepoSettings { return mirroredTo(url) })
+	var dials atomic.Int64
+	h.dial = func(ctx context.Context, url, _ string) (gitproc.Remote, error) {
+		dials.Add(1)
+		return gitproc.ResolveRemote(ctx, url, true)
+	}
+	m := h.mirrors()
+	a := p.Commit(wt, map[string]string{"a": "a\n"}, "first")
+	push("HEAD:refs/heads/main")
+	h.pass(m)
+	if got := h.src.held()["refs/heads/main"]; got != a || dials.Load() != 1 {
+		t.Fatalf("the first push left the other host's main at %q after %d dials; want %s after one", got,
+			dials.Load(), a)
+	}
+	id := h.rows("pushed").Repo.ID
+	nudge := func(after time.Duration) {
+		t.Helper()
+		h.advance(after)
+		if err := m.Work(t.Context(), id, statelog.Position{}); err != nil {
+			t.Fatalf("nudge %s: %v", id, err)
+		}
+		m.Wait()
+	}
+
+	// NOTHING IT COVERS MOVED: a branch beside main.
+	b := p.Commit(wt, map[string]string{"b": "b\n"}, "second")
+	push("HEAD:refs/heads/feature")
+	nudge(mirror.PushPace + time.Second)
+	if got := dials.Load(); got != 1 {
+		t.Errorf("a nudge after a push of nothing the mirror covers dialed the other host (%d dials); want "+
+			"none", got-1)
+	}
+
+	// AN INTERVAL ON: another writer moved main at the other host, and the
+	// next nudge reads it and puts main back.
+	h.src.commit(map[string]string{"x": "x\n"}, "somebody else's")
+	h.src.push("+HEAD:refs/heads/main")
+	nudge(code.MirrorInterval)
+	if got := h.src.held()["refs/heads/main"]; got != a || dials.Load() != 2 {
+		t.Errorf("an interval on, the other host's main is %q after %d dials; want %s put back after two",
+			got, dials.Load(), a)
+	}
+
+	// MAIN MOVED: dialed, and pushed.
+	push("HEAD:refs/heads/main")
+	nudge(mirror.PushPace + time.Second)
+	if got := h.src.held()["refs/heads/main"]; got != b || dials.Load() != 3 {
+		t.Errorf("after main moved the other host's main is %q after %d dials; want %s after three", got,
+			dials.Load(), b)
+	}
+}
+
 // busyLane is the git node's pool with every refusal of a maintenance slot
 // told on refused: the moment an attempt's cut finds the lane full.
 type busyLane struct {

@@ -1437,8 +1437,9 @@ Every step, flag and message is in
 
 A repository the company keeps here can be published to a repository at
 another forge — GitHub, GitLab, a forge on your own network — as a **push
-mirror**: its home git node pushes it there whenever it moves, and every 15
-minutes while it does not. Declare it on the repository:
+mirror**: its home git node pushes it there within a minute of a ref it
+covers moving, and reads it there again every 15 minutes, putting back what
+anybody else changed. Declare it on the repository:
 
 ```yaml
 code:

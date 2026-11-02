@@ -749,7 +749,7 @@ other host the same one way.
 |---|---|---|---|
 | **Import** (`import`, `crewlet code import`, `code_import_repo`) | Every branch and tag of the source, once, into a new repository that reads `importing` until they have landed | In | Until it is done; a restart fetches only what the landed refs do not reach |
 | **Pull mirror** (`mirror_from`) | The source's branches and tags as they are — a force-push followed, a deleted branch deleted — by the mirror's own sync records; every push to it and every change is refused `repo_mirrored` | In | Every 15 minutes (`code.MirrorInterval`), and a minute after a failure, doubling up to that |
-| **Push mirror** (`mirror_to`) | The refs it covers — its `refs` patterns, or the default branch and `refs/tags/*` — each protected branch at its **green** commit, every other ref at its tip; a covered ref the repository no longer has is deleted there | Out | At most once a minute while the repository moves, once every 15 minutes while it is idle |
+| **Push mirror** (`mirror_to`) | The refs it covers — its `refs` patterns, or the default branch and `refs/tags/*` — each protected branch at its **green** commit, every other ref at its tip; a covered ref the repository no longer has is deleted there | Out | At most once a minute while a ref it covers moves — a minute's records that move none of them (a seat's pushes to its own branches, a check's results) dial nobody — and the other host read again every 15 minutes whatever moved |
 
 **A push mirror publishes what passed, never what was pushed last.** A branch
 a [protection rule](#protection-rules) protects is pushed at its
@@ -759,11 +759,16 @@ other host has it, `waiting`. Every move of a protected branch leaves a landing
 row, which is what makes its green commit the one to follow. A branch no rule
 protects moves with no landing and no green row, so it is pushed at its tip, as
 every tag is: a tag names one commit for good. Each push compares what the
-other host holds of the covered refs (one `git ls-remote`) with what the
+other host holds of the covered refs (one `git ls-remote` of its branches and
+tags alone, so a forge's pull-request refs are never sent) with what the
 repository says it should, and pushes only the difference, forced
 (`git push --force --porcelain`), from a scratch over the cache's copy, never
 from the copy itself. A ref the other host rejects — a protection or a hook
 there refusing the force-push or the deletion — fails the attempt, naming it.
+An attempt whose covered refs, target and patterns are what the last one left
+the other host level with, within 15 minutes, ends there without dialing it;
+once 15 minutes have passed it reads the other host whatever moved, so a
+writer there that is not the mirror is undone within the interval.
 
 **It pushes as a seat, never as a bot.** `mirror_to.as` names the seat whose own
 identity at the other host the push carries: the token the mirror's

@@ -1779,7 +1779,10 @@ func Catalogue() []Instrument {
 				"`outcome`: `synced`, a sync landed what the source moved; " +
 				"`pushed`, a push moved refs at the target; `current`, the " +
 				"source moved nothing, or the target already held every " +
-				"covered ref as it should; `failed`, the other host " +
+				"covered ref as it should — or nothing the push mirror " +
+				"covers had moved since its last attempt left the target " +
+				"level, within 15 minutes, and the target was not dialed; " +
+				"`failed`, the other host " +
 				"unreachable, its credential refused, a ref it rejected, a " +
 				"push mirror's seat that no longer reads the repository, or a " +
 				"step refused or not seen applied — the mirror tried again a " +
