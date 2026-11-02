@@ -1586,7 +1586,10 @@ func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 //
 // Mutation: change any published figure, a corpus's rate or text,
 // MaxTurnSummary, a term of the code log's day, code.BarrierRecordBytes or
-// config.DefaultMinAge, and a page no longer says what this package measures.
+// config.DefaultMinAge, and a page no longer says what this package measures;
+// tell a company to set the code log from its two logs' bytes_per_day before
+// its first boot, on any page that sizes the code log, and it fails naming the
+// sentence.
 func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	t.Parallel()
 	whole, half := referenceCorpus.cost, halfTextCorpus.cost
@@ -1888,6 +1891,65 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			}
 		}
 	}
+
+	// THE CODE LOG IS SIZED IN TWO STEPS, AND NEITHER NAMES WHAT IS NOT THERE
+	// YET. Before the first boot neither log exists, so no bytes_per_day has
+	// been measured: a page telling a company whose seats work through changes
+	// to set the code log from its two logs' bytes_per_day before its first
+	// boot gives it a step nobody can follow, and it boots on the derived two
+	// thirds, far below its day (above). So every page that sizes the code log
+	// gives the step before the first boot from the reference company's day —
+	// the ratio's least, and what a ceiling set at it costs — and the measured
+	// ratio only once the streams exist, and no sentence of any of them names
+	// a first boot and bytes_per_day together. The YAML reference's comment is
+	// read with its markers off, as a reader reads it. A page that names
+	// both words and gives no step of its own (deployment.md, retention.md)
+	// is scanned all the same.
+	steps := map[string]string{
+		"internal/config/retention.go": "Before the first boot neither log exists and nothing of its own " +
+			"has been measured, so the reference company's day above is the figure it has: it sets " +
+			"stream.code_log_max_bytes at twice the mutation log's ceiling, that day's least",
+		"internal/config/bootstrap.go": "Before the first boot neither log exists, so it sets this field " +
+			"from the reference company's day: twice the mutation log's ceiling, that day's least",
+		"docs/guides/replication.md": "Before the first boot neither log exists, so the company has no " +
+			"day of its own to measure and the reference company's is the figure there is: set " +
+			"`stream.code_log_max_bytes` at twice the mutation log's ceiling, that day's least",
+		"docs/getting-started/configuration.md": "Before the first boot neither log exists, so such a " +
+			"company sets this from that day: twice the mutation log's ceiling, its least",
+		"docs/concepts/scaling.md": "sets it from the reference company's day before its streams exist " +
+			"and, once they do, moves it to the ratio the two logs' `bytes_per_day` show",
+	}
+	for _, file := range []string{"internal/config/retention.go", "internal/config/bootstrap.go",
+		"docs/guides/replication.md", "docs/getting-started/configuration.md", "docs/concepts/scaling.md",
+		"docs/guides/deployment.md", "docs/guides/retention.md"} {
+		page := uncommented(prose(t, file))
+		if step, gives := steps[file]; gives && !strings.Contains(page, step) {
+			t.Errorf("%s does not say %q", file, step)
+		}
+		for _, sentence := range strings.Split(page, ". ") {
+			lower := strings.ToLower(sentence)
+			if strings.Contains(lower, "first boot") && strings.Contains(lower, "bytes_per_day") {
+				t.Errorf("%s names a first boot and bytes_per_day in one sentence, a step nobody can "+
+					"follow, since no log exists before it to have measured a day: give the step "+
+					"before the first boot from the reference company's day, and the measured "+
+					"ratio once the streams exist: %q", file, sentence)
+			}
+		}
+	}
+}
+
+// uncommented is a page's prose with a YAML comment's markers taken off, as
+// a reader reads a commented block: every "#" standing alone, which
+// configuration.md's reference sets before each line of a field's comment.
+func uncommented(page string) string {
+	fields := strings.Fields(page)
+	kept := fields[:0]
+	for _, field := range fields {
+		if field != "#" {
+			kept = append(kept, field)
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 // THE CODE LOG'S DAY PRICES EVERY RECORD THE LOG TAKES, or says why one is not

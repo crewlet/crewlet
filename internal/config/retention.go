@@ -400,14 +400,29 @@ const (
 	// publications of a young repository's every push and a CI's polls are
 	// the width of it — and two thirds is at the least of that range: such
 	// a code log fills in 1.02 of the mutation log's time at the least and
-	// 0.59 at the most. A company whose seats work through changes, or
-	// whose repositories publish every push or a CI polls, READS THE RATIO
-	// IT NEEDS from the two logs'
+	// 0.59 at the most.
+	//
+	// A COMPANY WHOSE SEATS WILL WORK THROUGH CHANGES, or whose
+	// repositories publish every push or a CI polls, SIZES THE CODE LOG IN
+	// TWO STEPS. Before the first boot neither log exists and nothing of
+	// its own has been measured, so the reference company's day above is
+	// the figure it has: it sets stream.code_log_max_bytes at twice the
+	// mutation log's ceiling, that day's least — a company whose checks run
+	// and whose targets move writes up to about eight times it, which its
+	// own day then shows. A ceiling set comes off the logs' share whole, so
+	// the derived logs pay for it: at 100 GiB free a code log set at twice
+	// the mutation log beside it is 13.4 GiB, and the mutation log and the
+	// vector changelog are each created at 6.7 GiB, too small for a
+	// year-five re-embedding, which a larger stream volume buys back
+	// (docs/guides/replication.md, "What the code log's reservation costs";
+	// internal/engine's
+	// TestAShareAtTheCodeLogsByteRateCostsEveryCompanyFarMore computes
+	// both). Once the streams exist, its own ratio is the two logs'
 	// crewlet.statelog.log.bytes_per_day, domain code against domain
-	// tracker, which count every record each log takes, and gives the code
-	// log that share of the mutation log's ceiling: stream.code_log_max_bytes
-	// before the first boot, or `crewlet retention set-capacity` once the
-	// streams exist, since a log keeps the ceiling it was created with.
+	// tracker, which count every record each log takes, and `crewlet
+	// retention set-capacity` moves the code log to that share of the
+	// mutation log's ceiling, since a log keeps the ceiling it was created
+	// with.
 	//
 	// A HALF SUFFICES WHILE THE CODE LOG TAKES AT MOST HALF OF WHAT THE
 	// MUTATION LOG TAKES A DAY, the same two bytes_per_day side by side, so

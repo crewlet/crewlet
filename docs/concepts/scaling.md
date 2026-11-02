@@ -588,7 +588,8 @@ changes those pushes revise append their opens, reviews, comments, merges and
 every revision's facts and mergeability — several times the push records'
 bytes — which is why the log's ceiling is derived from the mutation log's
 rather than from its pushes alone, and why a company whose seats open changes
-sets it to the ratio the two logs' `bytes_per_day` show
+sets it from the reference company's day before its streams exist and, once
+they do, moves it to the ratio the two logs' `bytes_per_day` show
 ([how the ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized),
 [what the code log's reservation costs](../guides/replication.md#what-the-code-logs-reservation-costs)).
 The push records fit the ceiling a first boot derives from 50 GiB free or more

@@ -1244,11 +1244,18 @@ stream:
                                     #   its queue's and checks' — take nearly
                                     #   twice to about eight times the
                                     #   bytes a day its tracker writes and its
-                                    #   seats' reads do: set this to the ratio
-                                    #   the two logs' bytes_per_day show in
-                                    #   `crewlet retention status` before the
-                                    #   first boot, or raise it later with
-                                    #   `crewlet retention set-capacity`
+                                    #   seats' reads do. Before the first
+                                    #   boot neither log exists, so such a
+                                    #   company sets this from that day:
+                                    #   twice the mutation log's ceiling, its
+                                    #   least, which comes out of the other
+                                    #   logs' share whole (at 100 GiB free,
+                                    #   13.4 GiB beside a mutation log of
+                                    #   6.7 GiB). Once the streams exist, the
+                                    #   ratio the two logs' bytes_per_day
+                                    #   show in `crewlet retention status` is
+                                    #   its own, and `crewlet retention
+                                    #   set-capacity` moves this log to it
                                     #   (guides/replication.md, "What the code
                                     #   log's reservation costs"). A push
                                     #   record names its pack and never
