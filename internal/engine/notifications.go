@@ -530,6 +530,34 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 		"conflicts", len(rec.Conflicts))
 }
 
+// ensureInboundMailbox makes the inbound edge's mailbox, the router's fleet
+// group on [topics.NotificationsInbound], before anything on this node
+// publishes onto it.
+//
+// THE NOTIFICATIONS STREAM KEEPS ONLY WHAT A CONSUMER COVERS, like a seat's
+// inbox: a delivery published before the group's durable exists is discarded
+// by the broker and reported to its publisher as sent. The router's own
+// attachment creates that durable ([notify.Service.Start]), and it is the last
+// thing on the edge to start: the change feeds start ahead of it so that no
+// record committed in between goes unheard, and the Mattermost transport
+// starts ahead of it inside [Engine.startNotifications]. On a broker that has
+// never held the group, whatever either published in that window reached
+// nobody. So each path that starts one of them makes the mailbox first: boot
+// before anything that publishes, [Engine.startNativeFor] before an apply's
+// feeds, and [Engine.startNotifications] before its transports. A mailbox the
+// broker already holds costs a lookup.
+//
+// An error is the caller's to refuse on, for the reason a failed router
+// subscribe is: a node that cannot hold its inbound mail routes nothing while
+// looking healthy.
+func (e *Engine) ensureInboundMailbox(ctx context.Context) error {
+	if _, err := e.backends.Queue.EnsureSubscription(ctx,
+		topics.NotificationsInbound, notify.InboundGroup); err != nil {
+		return fmt.Errorf("ensure the inbound edge's mailbox: %w", err)
+	}
+	return nil
+}
+
 // startNotifications brings up the inbound edge for the applied company.
 //
 // It runs after the node, because the service subscribes to a fleet-wide
@@ -544,6 +572,11 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if c == nil {
 		return nil
+	}
+	// THE MAILBOX BEFORE THE TRANSPORTS: the Mattermost transport below
+	// publishes onto the edge before the router attaches to it.
+	if err := e.ensureInboundMailbox(ctx); err != nil {
+		return fmt.Errorf("engine: %w", err)
 	}
 
 	var (
@@ -673,7 +706,10 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		return nil
 	}
 	svc, err := notify.New(notify.Options{
-		Queue:     e.backends.Queue,
+		// THE NODE'S WAKE QUEUE, so a delivery routed to a seat whose
+		// mailbox is not complete yet is NAKed and redelivered rather than
+		// published onto a subject the stream discards. See [Engine.wakes].
+		Queue:     e.wakes(),
 		Registry:  e.Registry,
 		Prompts:   notify.NewPrompts(prompts...),
 		Parsers:   parsers,

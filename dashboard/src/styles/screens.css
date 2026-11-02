@@ -9387,47 +9387,6 @@ a.live-row:focus-visible {
   }
 }
 
-/* A NODE'S FAILURE under its chip: secondary prose, clamped by `.clamp` to two
-   lines. The chip above it carries the danger tone; the reason in danger ink
-   too was the same alarm twice, in running text. Whole on the server's page.
-   What a waiting instance waits for sits there the same way, and is no alarm
-   at all. */
-.mcp-failure,
-.mcp-wait {
-  color: var(--color-text-secondary);
-  max-width: 32rem;
-}
-/* THE SERVER'S PAGE says a launch and each failure WHOLE — the one place a
-   reason the grid clamps can be read without a pointer — so a command line or
-   a URL wraps anywhere rather than running off the column. */
-.mcp-failures {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-/* THE KEYS WHOLE, one per line: each is a name somebody matches against the
-   configuration, so a long one wraps rather than being cut. */
-.mcp-unlisted {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  overflow-wrap: anywhere;
-}
-.mcp-launch-whole,
-.mcp-failure-whole {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.mcp-failure-whole {
-  color: var(--color-text-secondary);
-}
-
 /* ---- Signing in ----------------------------------------------------------
    The screens a browser is on BEFORE it holds a session the frame can use
    (`#/login`, `#/invite/…`, `#/enrol`), drawn outside the frame on

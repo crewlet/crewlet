@@ -102,13 +102,26 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 			batch = append(batch, d)
 		}
 	}
-	//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
-	if err := a.fetch(1, a.q.fetchWait(), collect); err != nil {
-		a.logFetchErr(ctx, err)
-		return nil
+	// THE PRIORITY LANE FIRST, and all of it the cap allows, without
+	// waiting: this is what puts a person's message in the drain while the
+	// topic's own head is a backlog of work nobody is waiting for. What it
+	// takes is dispatched ahead of the rest ([queue.OrderForDispatch]), and
+	// the topic fills the drain behind it as before. The cap is read here,
+	// ahead of the first message, because the lane is asked before anything
+	// is known to be waiting; the window below is still read once a message
+	// is in hand.
+	if err := a.fetchLane(opts.EffectiveMaxBatch(), collect); err != nil {
+		a.logLaneFetchErr(ctx, err)
 	}
 	if len(batch) == 0 {
-		return nil
+		//nolint:contextcheck // a fetch runs on the attachment's fetch scope, never the loop's: see [attachment.fetching]
+		if err := a.fetch(1, a.q.fetchWait(), collect); err != nil {
+			a.logFetchErr(ctx, err)
+			return nil
+		}
+		if len(batch) == 0 {
+			return nil
+		}
 	}
 	maxBatch := opts.EffectiveMaxBatch()
 	linger := opts.EffectiveLinger()

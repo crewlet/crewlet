@@ -323,7 +323,10 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 		under("last_failure", failure),
 		under("resolved", []string{"auth", "runs_on", "timeouts", "timeouts.startup_seconds",
 			"timeouts.request_seconds", "timeouts.startup_default", "timeouts.request_default", "binding",
-			"binding.vendor", "binding.by"}))
+			"binding.vendor", "binding.by"}),
+		under("usage", []string{"since", "until", "days", "elided", "tools"}),
+		under("usage.tools[]", []string{"tool", "calls", "failed", "unavailable", "refused", "total_ms",
+			"last_at"})[1:])
 
 	for _, tc := range []struct {
 		name    string
@@ -337,7 +340,7 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 				"alarms[].entries[].detail"}},
 		{"a server's detail", detail, queries.MemberMCPServer(detail), detailKeys,
 			[]string{"dependants", "instructions", "resolved.box_seats", "resolved.binding.keys",
-				"instances[].failure.said", "instance_nodes[].reason"}},
+				"instances[].failure.said", "instance_nodes[].reason", "usage.tools[].seats", "calls"}},
 	} {
 		admin, member := keyPaths(asMap(t, tc.admin)), keyPaths(asMap(t, tc.member))
 		for _, key := range tc.without {
@@ -363,6 +366,42 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 		}
 		if got := asMap(t, tc.member)["reading"]; got != queries.ReadingMember {
 			t.Errorf("%s: a member's reading says it is %v", tc.name, got)
+		}
+	}
+}
+
+// A MEMBER READS HOW OFTEN EACH TOOL WAS CALLED AND NEVER WHO CALLED IT: a
+// server's usage reaches a member's reading figure by figure, so the page can
+// say which tools are in use, while the seats that made the calls and the calls
+// themselves (each naming a seat and a turn) stay the administrator's.
+//
+// Mutation: copy a tool's seats, or one call, onto a member's reading, or drop
+// a tool's failures from it, and this is red.
+func TestAMembersReadingCountsEachToolsCallsAndNamesNobodyWhoCalled(t *testing.T) {
+	t.Parallel()
+	last := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	ran := int64(25)
+	admin := queries.MCPServerAnswer{Reading: queries.ReadingAdmin,
+		Usage: queries.MCPServerUsage{Since: "2026-10-26", Until: "2026-11-01", Days: queries.MCPUsageDays,
+			Elided: 2, Tools: []queries.MCPToolUsage{{Tool: "gh_get_issue", Calls: 5, Failed: 1, Unavailable: 1,
+				Refused: 1, TotalMS: 350, LastAt: &last, Seats: []string{"seat-sentinel"}}}},
+		Calls: queries.MCPServerCalls{Calls: []queries.MCPCallRow{{At: last, Seat: "seat-sentinel",
+			TurnID: "turn-sentinel", Tool: "gh_get_issue", Outcome: mcp.CallAnswered, DurationMS: &ran}}},
+	}
+	member := queries.MemberMCPServer(admin)
+	want := queries.MemberMCPServerUsage{Since: "2026-10-26", Until: "2026-11-01", Days: queries.MCPUsageDays,
+		Elided: 2, Tools: []queries.MemberMCPToolUsage{{Tool: "gh_get_issue", Calls: 5, Failed: 1,
+			Unavailable: 1, Refused: 1, TotalMS: 350, LastAt: &last}}}
+	if !reflect.DeepEqual(member.Usage, want) {
+		t.Errorf("a member's usage is %+v, want every figure of the administrator's: %+v", member.Usage, want)
+	}
+	raw, err := json.Marshal(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"seat-sentinel", "turn-sentinel", `"seats":`, `"calls":{`} {
+		if strings.Contains(string(raw), leak) {
+			t.Errorf("a member's reading carries %s: %s", leak, raw)
 		}
 	}
 }

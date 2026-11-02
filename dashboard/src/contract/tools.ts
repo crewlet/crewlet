@@ -8,6 +8,8 @@
  * words, the groups and the gates included.
  */
 
+import type { McpRisk } from "./mcp.ts";
+
 /**
  * One tool's behavioural hints, as the engine recorded them AT REGISTRATION.
  *
@@ -22,7 +24,7 @@
  * registry gives: a rolling upgrade puts a newer node's value on an older
  * node's screen.
  */
-export type ToolHint = "yes" | "no" | "unknown";
+type ToolHint = "yes" | "no" | "unknown";
 
 export interface ToolAnnotations {
   read_only: ToolHint;
@@ -46,7 +48,7 @@ type BuiltinGroupKey =
  * the least role on the one artifact the call names (an editor also authors
  * artifacts).
  */
-type BuiltinGate =
+export type BuiltinGate =
   | "everybody"
   | "self"
   | "worklet"
@@ -67,6 +69,12 @@ export interface ToolRow {
   /** A human-readable name the server advertised, when it advertised one. */
   title?: string;
   annotations: ToolAnnotations;
+  /** How much a call can change, the engine's one reading of `annotations`. */
+  risk: McpRisk;
+  /** Whether a hint the tool carries decided `risk`; false reads as destructive by default. */
+  risk_declared: boolean;
+  /** Whether a call may reach past the company (its open-world hint is not `no`). */
+  external: boolean;
   /**
    * WHERE calling this puts something in front of somebody outside the turn,
    * empty for a tool that reaches nobody. The registry's own predicate, not
