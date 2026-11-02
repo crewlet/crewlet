@@ -314,7 +314,7 @@ func TestEveryReadOfAPostingListRefusesWhatIsNotTheFormat(t *testing.T) {
 		o := s.ordinals(c.list)
 		for o.delta() || o.next() {
 		}
-		if refused := o.err; refused != nil && (o.delta() || o.next() || o.err != refused) {
+		if refused := o.err; refused != nil && (o.delta() || o.next() || !errors.Is(o.err, refused)) {
 			t.Errorf("%s: a read refused (%v) reads on, to %d (%v)", c.name, refused, o.at, o.err)
 		}
 	}
