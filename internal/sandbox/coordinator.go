@@ -2468,8 +2468,10 @@ func (c *Coordinator) owes(turnID string) bool {
 //   - [AnswerNotMine] — the run is not waiting for this answer (another
 //     answer was recorded first, it is running a job, or it has moved on to a
 //     question of its own), the question let this very answer go
-//     (`declined`, below), or the run is gone. Spent: announced as such, and
-//     there is nothing else for the delivery to become.
+//     (`declined`, below), or the run is gone: its record deleted, or its
+//     ending decided, which takes no answer whatever its record still waits
+//     on. Spent: announced as such, and there is nothing else for the
+//     delivery to become.
 //   - [AnswerDeferred] — the run IS waiting and the answer could not be
 //     recorded against it: the row could not be read, or the record could not
 //     be confirmed. Handed back with a NAK, so the queue's own backoff spaces
@@ -2561,8 +2563,10 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			// THIS VERY ANSWER, ALREADY RECORDED: a redelivery whose
 			// acknowledgement was lost, or the node that recorded it
 			// stopping before it acked. Spent as the answer it is — and if
-			// this node is not already driving its resume, it starts.
-			if run.Status == StatusAnswered && !c.owes(run.TurnID) {
+			// this node is not already driving its resume, it starts, unless
+			// the run's ending is decided: an ending takes no resume, and
+			// lets the answer go back to the seat, whose copy says so.
+			if run.Status == StatusAnswered && run.Ending == nil && !c.owes(run.TurnID) {
 				c.queueOwed(ctx, run)
 			}
 			return AnswerConsumed, nil
@@ -2582,6 +2586,20 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnsw
 			if declinedCopy(run.DeclinedAnswers, delivery) {
 				answered(run, types.AnswerDeclined)
 			}
+			return AnswerNotMine, nil
+		}
+		if run.Ending != nil {
+			// THE RUN IS OVER, though its record is not gone yet: a decided
+			// ending takes no answer ([ErrRunEnding]), and the record waits
+			// only for the ending's last steps — on a coordinator that
+			// records every turn's end, the end's write and the delete after
+			// it, which are its retry's. That is the window the copy of an
+			// answer the ending let go of arrives in, published at the
+			// ending's second step: read as a live run that is not waiting,
+			// it was announced `not_awaiting`, and the person was never told
+			// their answer reached a run that had ended without it — the one
+			// announcement the attempt that ended it leaves to the copy.
+			answered(run, types.AnswerGone)
 			return AnswerNotMine, nil
 		}
 		if !slices.Contains(Awaiting, run.Status) || given.LaunchID != run.LaunchID {
