@@ -464,9 +464,10 @@ func (d CodeDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string) (
 // repository such a call reads is read for its requester as a code tool's is;
 // what the tool reads beyond the repositories is its own row's, which the
 // call's gate has already decided for the seat, and deciding that row again
-// for the requester would make a ceiling of the tool's family that the family
-// does not keep (fleet_health, its sibling, reads no repository and keeps
-// none).
+// for the requester would refuse every turn anybody woke: a requester holds no
+// admin and a colleague seat no grant of the asker's. Its sibling fleet_health
+// reads no repository and decides the requester likewise on a row everybody
+// of the company who may act holds ([fleetHealth.forRequester]).
 func (d CodeDeps) callerOn(ctx context.Context, turn *turnctx.Turn, tool string,
 	action authz.Action) (codeCaller, *tools.Result) {
 

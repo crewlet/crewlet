@@ -134,21 +134,35 @@ func healthChart(t *testing.T) (*org.Organization, authz.Chart) {
 	return o, orgchart.Of(o)
 }
 
+// healthRequesters is who a health tool's turn may be acting for, composed as
+// the engine composes them: dev, a colleague seat; the founder, a person of
+// the company who holds every app and not admin; and "departed", a person
+// whose seat's holder was removed, who acts as nobody now. Any other handle is
+// a requester this node cannot compose.
+func healthRequesters() requesters {
+	return requesters{
+		"dev":     {Kind: iam.KindSeat, Seat: "dev", Stage: iam.StageActive, Grants: iam.Apps},
+		"founder": founderPrincipal(iam.Apps...),
+		"departed": {Kind: iam.KindPerson, Login: "departed@example.com", Seat: "departed",
+			Stage: iam.StageRetired, Grants: iam.Apps},
+	}
+}
+
+// healthFleet is fleet_health's deps over leases, wired as every surface wires
+// them: who a turn may be acting for with the chart that decides them (the
+// requester ceiling), without which no fleet_health is served.
+func healthFleet(leases builtin.LeaseLister, chart authz.Chart) builtin.HealthDeps {
+	return builtin.HealthDeps{Leases: leases, Self: "node-a", Requesters: healthRequesters(), Chart: chart}
+}
+
 // healthCode is the code tools' deps code_status reads through, wired as every
 // surface wires them: the code host, the caller named by the request's
 // principal, and who a turn may be acting for with the chart that decides them
 // (the requester ceiling), without which no code read — and no code_status —
-// is served. The requesters: dev, a colleague seat; the founder, a person of
-// the company who holds every app and not admin; and "departed", a person
-// whose seat's holder was removed, who acts as nobody now.
+// is served.
 func healthCode(host builtin.CodeReader, chart authz.Chart) builtin.CodeDeps {
 	return builtin.CodeDeps{Code: host, Actor: builtin.PrincipalActor, Chart: chart,
-		Requesters: requesters{
-			"dev":     {Kind: iam.KindSeat, Seat: "dev", Stage: iam.StageActive, Grants: iam.Apps},
-			"founder": founderPrincipal(iam.Apps...),
-			"departed": {Kind: iam.KindPerson, Login: "departed@example.com", Seat: "departed",
-				Stage: iam.StageRetired, Grants: iam.Apps},
-		}}
+		Requesters: healthRequesters()}
 }
 
 // asSeat is a context carrying the seat handle as a turn's principal: every
@@ -262,7 +276,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 	node(t, backend, "node-c", map[string]any{"roles": []string{"seats"}}, &coord.NodeStatus{InFlight: 2})
 	node(t, backend, "node-d", nil, nil)
 	_, chart := healthChart(t)
-	catalogue := healthTools(builtin.HealthDeps{Leases: backend, Self: "node-a"}, chart)
+	catalogue := healthTools(healthFleet(backend, chart), chart)
 
 	answer := healthAnswer(t, callTool(asAdmin(), t, catalogue[builtin.FleetHealthTool], nil))
 	if got := keysOf(t, answer); !slices.Equal(got, []string{"nodes", "this_node"}) {
@@ -396,8 +410,8 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 	node(t, backend, "node-a", nil, &coord.NodeStatus{AlarmsEvaluated: true})
 	deps := fullDeps(t)
 	deps.Authorize = builtin.Decide(chart)
-	deps.Health = builtin.HealthDeps{Leases: backend, Self: "node-a", Status: &statusAsker{},
-		Code: deps.Code}
+	deps.Health = healthFleet(backend, chart)
+	deps.Health.Status, deps.Health.Code = &statusAsker{}, deps.Code
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, deps); err != nil {
 		t.Fatalf("register: %v", err)
@@ -731,16 +745,18 @@ func TestACodeStatusAnswerCostsTheReadsItAnswers(t *testing.T) {
 // THE HEALTH TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
 // built over the same deps, hold the same two tools with byte-identical
 // descriptions and schemas, each a proven read; deps that reach no lease
-// table and no code host serve neither; and code_status is served on the code
-// reads' own terms — never over a code host wired without the requester
-// ceiling's halves, whose reads would be made for nobody whoever woke a turn.
+// table and no code host serve neither; and each is served only with the
+// requester ceiling's halves beside it — fleet_health never over the leases
+// alone, and code_status on the code reads' own terms, never over a code host
+// wired without them — since either would read for whoever woke a turn.
 //
 // Mutation: OperatorTools omitting healthCandidates, a health tool annotated
-// as a write, or code_status served over the code host alone → red.
+// as a write, fleet_health served over the leases alone or code_status over
+// the code host alone → red.
 func TestTheHealthToolsAreOneList(t *testing.T) {
 	t.Parallel()
-	deps := builtin.HealthDeps{Leases: coordmem.New(), Status: &statusAsker{},
-		Code: codeDeps(&grantHost{})}
+	deps := builtin.HealthDeps{Leases: coordmem.New(), Requesters: codeRequesters(), Chart: chartLeads,
+		Status: &statusAsker{}, Code: codeDeps(&grantHost{})}
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, gated(builtin.Deps{Health: deps})); err != nil {
 		t.Fatalf("register: %v", err)
@@ -770,6 +786,27 @@ func TestTheHealthToolsAreOneList(t *testing.T) {
 	}
 	if got := builtin.HealthTools(builtin.HealthDeps{}); len(got) != 0 {
 		t.Errorf("deps reaching nothing serve %d health tools, want none", len(got))
+	}
+	fleetServed := func(deps builtin.HealthDeps) bool {
+		for _, tool := range builtin.HealthTools(deps) {
+			if tool.Name() == builtin.FleetHealthTool {
+				return true
+			}
+		}
+		return false
+	}
+	if !fleetServed(builtin.HealthDeps{Leases: deps.Leases, Requesters: deps.Requesters, Chart: deps.Chart}) {
+		t.Fatalf("fleet_health is not served over the leases and the ceiling's halves, so this case proves nothing")
+	}
+	for name, half := range map[string]builtin.HealthDeps{
+		"the leases alone":              {Leases: deps.Leases},
+		"the leases without Chart":      {Leases: deps.Leases, Requesters: deps.Requesters},
+		"the leases without Requesters": {Leases: deps.Leases, Chart: deps.Chart},
+	} {
+		if fleetServed(half) {
+			t.Errorf("fleet_health is served over %s, which would read the deployment for whoever woke "+
+				"a turn", name)
+		}
 	}
 	served := func(code builtin.CodeDeps) bool {
 		for _, tool := range builtin.HealthTools(builtin.HealthDeps{Status: &statusAsker{}, Code: code}) {
@@ -946,6 +983,98 @@ func TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo(t *testing.T) {
 			if s.repos.reads != 0 || len(s.asker.asked) != 0 {
 				t.Errorf("the refused calls read %d repositories and asked the git nodes %v, want nothing",
 					s.repos.reads, s.asker.asked)
+			}
+		})
+	}
+}
+
+// countingLeases is a lease table that counts the listings it is asked.
+type countingLeases struct {
+	builtin.LeaseLister
+	lists atomic.Int64
+}
+
+func (l *countingLeases) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	l.lists.Add(1)
+	return l.LeaseLister.ListLive(ctx, class)
+}
+
+// A FLEET HEALTH ANSWER IN A TURN SOMEBODY WOKE IS READ ONLY FOR THE COMPANY.
+//
+// The seat's grant opens an administrator's view of the deployment, and a seat
+// that read it out for whoever messaged it would hand that view to anybody on
+// a chat surface it listens on: in a turn a stranger woke, or a person who may
+// not act in the company now, fleet_health answers nothing — refused with the
+// ceiling's reason, before the presence leases are read — and a requester this
+// node cannot compose is undecidable, never a turn nobody woke. A turn nobody
+// woke, a colleague seat's and that of a person of the company who holds no
+// admin are answered the seat's whole view: whoever woke the turn is decided
+// on fleet.health.read, which everybody of the company who may act holds, never
+// on the health row, which no requester holds.
+//
+// Mutation: drop the ceiling, and the stranger's turn is answered; decide the
+// requester on fleet_health's own row, and the colleague's and the person's
+// turns are refused.
+func TestAFleetHealthInATurnSomebodyWokeIsReadOnlyForTheCompany(t *testing.T) {
+	t.Parallel()
+	o, chart := healthChart(t)
+	backend := coordmem.New()
+	node(t, backend, "node-a", nil, &coord.NodeStatus{AlarmsEvaluated: true})
+	unknown := []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
+	speaker := func(handle string) []types.CanonicalIdentity {
+		return []types.CanonicalIdentity{{Handle: handle}}
+	}
+	for _, c := range []struct {
+		name      string
+		requester string
+		senders   []types.CanonicalIdentity
+		refusal   tools.Refusal // none where the turn is answered
+		says      string
+	}{
+		{name: "a turn nobody woke"},
+		{name: "a turn a colleague seat woke", requester: "dev", senders: speaker("dev")},
+		{name: "a turn a person woke who holds no admin", requester: "founder", senders: speaker("founder")},
+		{name: "a turn a stranger woke", senders: unknown, refusal: tools.RefusalForbidden,
+			says: "woken by somebody the company does not know"},
+		{name: "a turn a departed person woke", requester: "departed", senders: speaker("departed"),
+			refusal: tools.RefusalForbidden, says: "may not act in the company now"},
+		{name: "a turn whose requester this node cannot compose", requester: "ghost",
+			senders: speaker("ghost"), refusal: tools.RefusalUnavailable,
+			says: "could not establish who this turn's work is for"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			leases := &countingLeases{LeaseLister: backend}
+			tool, ok := healthTools(healthFleet(leases, chart), chart)[builtin.FleetHealthTool].(tools.SeatCallable)
+			if !ok {
+				t.Fatal("fleet_health is not seat-callable, so no turn's requester reaches it")
+			}
+			turn := &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: o.AgentSeatByHandle("sre"), Org: o,
+				Lookups: turnctx.NewLookups(), Requester: c.requester, Senders: c.senders}
+			got, err := tool.CallForTurn(asSeat("sre"), turn, nil)
+			if err != nil {
+				t.Fatalf("fleet_health: %v", err)
+			}
+			if c.refusal == "" {
+				if nodes, _ := healthAnswer(t, got)["nodes"].([]any); len(nodes) != 1 {
+					t.Errorf("answered %d nodes, want the one live node", len(nodes))
+				}
+				return
+			}
+			if tools.RefusalOf(got) != c.refusal || !strings.Contains(got.Output, c.says) {
+				t.Errorf("answered (%v) %q, want %v saying %q", tools.RefusalOf(got), got.Output,
+					c.refusal, c.says)
+			}
+			var refused *builtin.DecisionRefused
+			if c.refusal == tools.RefusalForbidden &&
+				(!errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonCeiling) {
+				t.Errorf("the refusal's cause %v carries no ceiling reason", got.Cause)
+			}
+			if c.refusal == tools.RefusalUnavailable && !errors.Is(got.Cause, builtin.ErrUndecidable) {
+				t.Errorf("the refusal's cause %v is not undecidable", got.Cause)
+			}
+			if n := leases.lists.Load(); n != 0 {
+				t.Errorf("a refused call read the presence leases %d times, want none", n)
 			}
 		})
 	}

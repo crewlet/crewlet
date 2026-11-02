@@ -4756,7 +4756,11 @@ The same holds for the repositories a seat with the
 tools read them, so in a colleague's turn the hot list leaves out what the
 colleague may not read as well, and a stranger's turn is answered nothing. Who
 woke the turn is asked only what a code read asks of them — the deployment's
-view beside the repositories is the seat's own grant.
+view beside the repositories is the seat's own grant, read for anybody of the
+company who may act. So is `fleet_health`'s, which reads no repository: the
+last two rows of the table above are answered nothing by either tool, and
+every other row the seat's whole view
+([The health tools](../guides/fleet.md#the-health-tools)).
 
 And for a [coding run](#coding-boxes) the seat launches in such a turn: its
 repositories are resolved for whoever woke it, so a stranger's turn is given

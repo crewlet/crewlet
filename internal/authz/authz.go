@@ -192,7 +192,11 @@
 // rather than by a permission: the chart says whether its role carries the
 // grant ([Chart.SeatGranted]), and that is the agent's whole answer, while a
 // person is decided by the class as on every row. The grant is the role's,
-// which the company document states and only an administrator writes.
+// which the company document states and only an administrator writes. Inside
+// a turn somebody woke, the seat reads the deployment's health for them only
+// where they are somebody of the company who may act ([ActionFleetHealthRead],
+// asked through [DecideWithin]): never for a stranger, and never on the
+// grant's own row, which no requester holds.
 //
 // # An artifact is decided per object, by its shares
 //

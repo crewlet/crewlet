@@ -939,13 +939,23 @@ may not read is refused, as the code tools refuse it. Each repository is a
 read of the code host's rows, so the list is judged hottest first and only as
 far as its cut: a seat's call reads the twenty of each window it is answered
 and the hotter ones it may not read, however many git nodes the fleet has,
-and the first read that fails answers the call `unavailable` at once. Those repository reads are code reads, so in a turn
-somebody woke they are made for them too, as every code read is
-([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)):
-in a colleague seat's turn the answer also leaves out what the colleague may
-not read, and a turn a stranger woke is answered nothing. Whoever woke the
-turn need not hold `admin` themselves — the deployment's view is the seat's
-grant, as `fleet_health`'s whole answer is.
+and the first read that fails answers the call `unavailable` at once.
+
+**Who they are read for.** In a turn somebody woke, a granted seat reads the
+deployment for them, and both tools hold it to the company: a colleague seat
+or a person of the company is answered the seat's whole view — they need not
+hold `admin` themselves, the view being the seat's grant — while a turn woken
+by somebody the company does not know (a chat sender no seat or person maps
+to), or by a person who may not act in the company now, is answered nothing,
+so a seat that watches the deployment never relays it outside the company.
+`fleet_health` decides whoever woke the turn on `fleet.health.read`, which
+everybody of the company who may act holds, and `code_status` on the code
+host's read verb; its repository reads are code reads besides, made for that
+somebody as every code read is
+([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)),
+so in a colleague seat's turn its answer also leaves out what the colleague
+may not read. An alarm's wake is nobody's errand, so in the turn it starts
+both tools read on the seat's own grant.
 
 **A granted seat is also woken by the alarms.** Each time an alarm fires or
 clears on a node — or a node's first evaluation since it started finds one

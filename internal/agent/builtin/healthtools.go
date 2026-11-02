@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -68,18 +69,27 @@ import (
 // fleet ([codeStatus.hottest]). A person reads every repository, so a person's
 // answer leaves nothing out.
 //
-// # And, in a turn somebody woke, theirs too
+// # And, in a turn somebody woke, read only for the company
 //
-// Those repository reads are code reads, which the requester ceiling holds
-// (ADR-0081, [CodeDeps.callerOn]): in a turn a colleague seat woke, each is
-// read for that seat as well, so the hot list leaves out what the colleague
-// may not read and counts it withheld, and the one-repository form is refused
-// as the code tools refuse a read above the ceiling; a turn a stranger woke,
-// or a person who may not act in the company now, is answered nothing, as
-// every code read is. Whoever woke the turn is decided on the code host's read
-// verb, never on the health row: the requester ceiling holds a repository
-// read, and the rest of the answer is the health grant's, as fleet_health's
-// whole answer is.
+// A granted seat reads the deployment's view FOR whoever woke its turn, and
+// the requester ceiling ([ceilingOf], ceiling.go) holds both tools to it. A
+// turn a stranger woke — a chat sender the company does not know — or a
+// person who may not act in the company now is answered nothing by either: the
+// view is an administrator's, and the grant lets a seat watch the deployment,
+// not relay it to whoever can message the seat. fleet_health decides that
+// somebody on [authz.ActionFleetHealthRead] ([fleetHealth.forRequester]) and
+// code_status on the code host's read verb, both rows everybody of the company
+// who may act holds, never on the health row: a requester holds no admin and a
+// colleague seat no grant of the asker's, so the health row would refuse every
+// turn anybody woke. A colleague or a person of the company is answered the
+// seat's whole view.
+//
+// code_status's repository reads are code reads besides, which the requester
+// ceiling holds further (ADR-0081, [CodeDeps.callerOn]): in a turn a colleague
+// seat woke, each is read for that seat as well, so the hot list leaves out
+// what the colleague may not read and counts it withheld, and the
+// one-repository form is refused as the code tools refuse a read above the
+// ceiling.
 
 // The health tools' names: each is its authority row's action.
 const (
@@ -118,6 +128,16 @@ type HealthDeps struct {
 	// Leases is the fleet's live leases. Nil omits fleet_health.
 	Leases LeaseLister
 
+	// Requesters composes who a seat's turn is acting for, and Chart is the
+	// chart the authority table decides them by: fleet_health in a turn
+	// somebody woke reads only for somebody of the company who may act
+	// ([fleetHealth.forRequester]). REQUIRED beside Leases — nil omits
+	// fleet_health — so a surface that left the ceiling out serves no view of
+	// the deployment rather than one to whoever messages a granted seat.
+	// code_status takes its own from Code, as the code reads do.
+	Requesters Requesters
+	Chart      authz.Chart
+
 	// Self is this node's id, which fleet_health's answer marks.
 	Self string
 
@@ -140,13 +160,14 @@ type HealthDeps struct {
 // HealthTools are the health tools a seat and an operator share: ONE list, so
 // a schema and a refusal's words are written once. Every one reads.
 //
-// code_status ON THE CODE TOOLS' TERMS ([CodeDeps.serves]): its repository
-// reads are theirs, made for whoever woke the turn, so deps wired without the
-// requester ceiling's halves serve it no more than they serve a code read —
-// never one that reads for whoever messaged a seat whatever the seat may.
+// EACH ONLY WITH THE REQUESTER CEILING'S HALVES BESIDE IT: fleet_health over
+// the leases with Requesters and Chart, and code_status ON THE CODE TOOLS'
+// TERMS ([CodeDeps.serves]), its repository reads being theirs. Deps wired
+// without them serve neither — never a tool that reads the deployment for
+// whoever messaged a seat whatever the seat may.
 func HealthTools(deps HealthDeps) []tools.Callable {
 	var out []tools.Callable
-	if deps.Leases != nil {
+	if deps.Leases != nil && deps.Requesters != nil && deps.Chart != nil {
 		out = append(out, &fleetHealth{deps: deps})
 	}
 	if deps.Status != nil && deps.Code.serves() {
@@ -208,7 +229,7 @@ func Withheld(ctx context.Context, authorize Authorizer, snapshot tools.Snapshot
 
 type fleetHealth struct{ deps HealthDeps }
 
-var _ tools.Callable = (*fleetHealth)(nil)
+var _ tools.SeatCallable = (*fleetHealth)(nil)
 
 func (t *fleetHealth) Name() string { return FleetHealthTool }
 
@@ -266,7 +287,16 @@ type alarmMark struct {
 	Since time.Time `json:"since,omitzero"`
 }
 
-func (t *fleetHealth) Call(ctx context.Context, _ map[string]any) (tools.Result, error) {
+func (t *fleetHealth) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *fleetHealth) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	_ map[string]any) (tools.Result, error) {
+
+	if refusal := t.forRequester(ctx, turn); refusal != nil {
+		return *refusal, nil
+	}
 	leases, err := t.deps.Leases.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return refusedBy(tools.RefusalUnavailable, err, FleetHealthTool+" could not read the fleet's "+
@@ -288,6 +318,74 @@ func (t *fleetHealth) Call(ctx context.Context, _ map[string]any) (tools.Result,
 	slices.SortFunc(answer.Nodes, func(a, b nodeHealth) int { return cmp.Compare(a.ID, b.ID) })
 	return newForeignRead(nil, "").answer(ctx, t.Name(), answer,
 		"The fleet is too large to read whole in one answer.")
+}
+
+// forRequester is nil where this call may read the deployment's health for
+// whoever its turn is acting for, and otherwise the refusal it is answered
+// with, before anything is read.
+//
+// A SEAT'S CALL IN A TURN SOMEBODY WOKE IS THEIR ERRAND: the seat's grant opens
+// an administrator's view of the deployment — every node, its roles, labels and
+// config posture, every alarm firing and since when — and a seat that read it
+// out for whoever could message it would hand that view to anybody on a chat
+// surface the seat listens on. So whoever the turn is acting for ([ceilingOf],
+// the one composition every family's ceiling reads) is decided AGAIN, by the
+// authority table ([authz.DecideWithin]), on [authz.ActionFleetHealthRead]: a
+// stranger is answered nothing, and so is a person who may not act in the
+// company now; a colleague seat or a person of the company is answered the
+// seat's whole view, which the row admits them to — the product's decision,
+// recorded on the row. A requester this node could not compose or decide is
+// undecidable, never a turn nobody woke. A person's or a token's own call is
+// no deputy, and a turn nobody woke — a schedule, an alarm's wake — reads for
+// nobody but the seat.
+func (t *fleetHealth) forRequester(ctx context.Context, turn *turnctx.Turn) *tools.Result {
+	// WHO CALLS, as the gate decided them: the context's answer, or the
+	// turn's seat where nothing has answered (turnctx.WithPrincipal).
+	p, _ := iam.From(turnctx.WithPrincipal(ctx, turn))
+	if p.Kind != iam.KindSeat {
+		return nil
+	}
+	ceiling, err := ceilingOf(ctx, turn, p.Seat, t.deps.Requesters)
+	if err != nil {
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
+			fmt.Sprintf("%s could not establish who this turn's work is for, and the deployment's health "+
+				"is read only for somebody of the company who may act. Nothing was read. Try again shortly.",
+				t.Name()))
+		return &r
+	}
+	if ceiling.Kind == authz.CeilingNone {
+		return nil
+	}
+	dec := authz.DecideWithin(ctx, p, ceiling, authz.ActionFleetHealthRead, authz.Object{}, t.deps.Chart,
+		time.Now().UTC())
+	switch {
+	case dec.Unknown():
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, dec.Err),
+			fmt.Sprintf("%s could not decide right now whether whoever this turn is working for may act in "+
+				"the company. Nothing was read. Try again shortly.", t.Name()))
+		return &r
+	case !dec.Allowed && dec.Reason == authz.ReasonCeiling:
+		r := authorityRefusal(t.Name(), DecisionError(authz.ActionFleetHealthRead, dec))
+		r.Output = healthCeilingRefused(t.Name(), ceiling.Kind)
+		return &r
+	case !dec.Allowed:
+		r := authorityRefusal(t.Name(), DecisionError(authz.ActionFleetHealthRead, dec))
+		return &r
+	}
+	return nil
+}
+
+// healthCeilingRefused is what a health tool refused for whoever its turn is
+// acting for is answered with, by who that is: a stranger, or a requester who
+// may not act in the company.
+func healthCeilingRefused(tool string, kind authz.CeilingKind) string {
+	if kind == authz.CeilingStranger {
+		return fmt.Sprintf("%s didn't run: this turn was woken by somebody the company does not know, and "+
+			"the deployment's health is read for nobody outside the company. A person or a seat of the "+
+			"company has to ask for it.", tool)
+	}
+	return fmt.Sprintf("%s didn't run: whoever this turn is working for may not act in the company now, "+
+		"and the deployment's health is read only for somebody who may.", tool)
 }
 
 // nodeHealthOf is one presence lease as fleet_health reports it.
