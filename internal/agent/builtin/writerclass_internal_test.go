@@ -362,6 +362,9 @@ var domainErrors = map[string]map[string]classRow{
 		"ErrBadLayer":     {err: code.ErrBadLayer, why: "a stored layer that is not what its row says, a fault of the store"},
 		"ErrBadBundle":    {err: code.ErrBadBundle, why: "a stored pack that is not what its row says, a fault of the store"},
 		"BadBundle":       {err: &code.BadBundle{Err: code.ErrBadBundle}, why: "a stored pack that is not what its row says, a fault of the store"},
+		"ErrMisplaced": {err: code.ErrMisplaced,
+			why: "a re-anchoring answer placing another set than its anchors, which no git node of this build " +
+				"gives: the asking node's own fault, never a caller's request"},
 		"ErrFutureVersion": {err: &code.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
 	},

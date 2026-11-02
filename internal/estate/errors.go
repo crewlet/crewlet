@@ -122,11 +122,13 @@ var sentinels = []sentinel{
 	{"usage.ErrBadRange", usage.ErrBadRange},
 
 	// THE CODE HOST'S, every one of them — ErrBadBundle, ErrBadLayer,
-	// ErrSuperseded and ErrAnswerDue included, though none is answered across
-	// the wire today (a bad bundle never leaves the receiving node, nor a bad
-	// layer the git node that checked it; a superseded reconcile is the
-	// deciding node's own; a read whose answer fell due is answered unready
-	// by the git node it fell due on) — for the reason the list is complete
+	// ErrSuperseded, ErrAnswerDue and ErrMisplaced included, though none is
+	// answered across the wire today (a bad bundle never leaves the receiving
+	// node, nor a bad layer the git node that checked it; a superseded
+	// reconcile is the deciding node's own; a read whose answer fell due is
+	// answered unready by the git node it fell due on; a re-anchoring answer
+	// placing another set than its anchors is refused on the node that asked
+	// for it, as that node's own fault) — for the reason the list is complete
 	// at all.
 	{"code.ErrAboveCeiling", code.ErrAboveCeiling},
 	{"code.ErrAnswerDue", code.ErrAnswerDue},
@@ -140,6 +142,7 @@ var sentinels = []sentinel{
 	{"code.ErrInvalid", code.ErrInvalid},
 	{"code.ErrInvalidLayer", code.ErrInvalidLayer},
 	{"code.ErrInvalidProposal", code.ErrInvalidProposal},
+	{"code.ErrMisplaced", code.ErrMisplaced},
 	{"code.ErrNoActivation", code.ErrNoActivation},
 	{"code.ErrNotABlob", code.ErrNotABlob},
 	{"code.ErrNotATree", code.ErrNotATree},
