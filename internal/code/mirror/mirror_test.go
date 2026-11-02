@@ -1251,3 +1251,27 @@ func TestAMirrorQueuedPastItsPromiseIsFailing(t *testing.T) {
 			got)
 	}
 }
+
+// AN ATTEMPT RUNNING PAST ITS PROMISE IS FAILING: two push mirrors whose
+// attempts — first pushes of large repositories, say — hold both of a node's
+// slots for longer than the promise, and a pull mirror queued behind them,
+// are all three counted by code_mirror_failing: each is asked for at every
+// pass, which is what says the node is still its home, whether the ask found
+// its attempt running or queued it. Where an attempt's start stood for "still
+// home", the two running past the promise went uncounted, and a node whose
+// every mirror was stalled behind them read none failing.
+//
+// Mutation: record an ask only where it starts or queues an attempt, and the
+// two running attempts count none.
+func TestAnAttemptRunningPastItsPromiseIsFailing(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	var turns []time.Time
+	for d := time.Duration(0); d <= code.MirrorInterval+mirror.AttemptDeadline; d += time.Minute {
+		turns = append(turns, at.Add(d))
+	}
+	if got, want := mirror.FailingPastThePromise(turns), mirror.MaxAttempts+1; got != want {
+		t.Fatalf("%d attempts running and a mirror queued behind them for %v count %d failing; want %d",
+			mirror.MaxAttempts, turns[len(turns)-1].Sub(at), got, want)
+	}
+}

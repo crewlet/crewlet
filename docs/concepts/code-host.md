@@ -811,8 +811,11 @@ failure in a row. A mirror not brought level for longer than its own refresh —
 its 15-minute interval and 15 minutes of grace for an attempt in flight —
 raises [`code_mirror_failing`](../reference/alarms.md) on its home, naming the
 repository that has waited longest; a node that is no longer a repository's
-home stops counting its mirror, and a node that restarts counts from its first
-attempt. Every push that moved something is recorded in the event log as
+home stops counting its mirror, and a node that restarts counts from the
+first pass that asks it for the mirror. A mirror whose attempt waits behind
+others for one of the node's two slots, or is still running — a first push of
+a large repository — is not level either, and is counted all the same. Every
+push that moved something is recorded in the event log as
 `code_mirror_pushed` — the repository, the other host, the seat it pushed as,
 the refs it set and deleted and the protected branches it held back — the one
 durable account of what the company published, and when.

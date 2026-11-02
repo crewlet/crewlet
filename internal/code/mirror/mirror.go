@@ -212,15 +212,16 @@ type mirrorKey struct {
 }
 
 // health is THE HOME'S FAILURE STATE of one mirror (M6-D16): when it was
-// last brought level — or when this node first tried it, where it never has
-// been here — when a turn of this node last asked for it, starting an attempt
-// of it or queueing one ([Mirrors.claim]), and the name of its repository. In
+// last brought level — or when this node first was asked for it, where it
+// never has been here — when a turn of this node last asked for it, whatever
+// the ask became: an attempt started or queued, or none while one runs or
+// waits its pace ([Mirrors.claim]) — and the name of its repository. In
 // memory alone: a push to another host is no record, and the node that pushes
 // is the one that knows whether it can.
 type health struct {
-	name    string
-	level   time.Time
-	started time.Time
+	name  string
+	level time.Time
+	asked time.Time
 }
 
 // queuedAttempt is an attempt due while [MaxAttempts] ran: the furthest floor
@@ -478,7 +479,16 @@ func (m *Mirrors) Work(_ context.Context, repoID string, floor statelog.Position
 	for _, out := range []bool{false, true} {
 		key := mirrorKey{repo: repoID, out: out}
 		l, ok := m.known[key]
-		if !ok || m.running[key] || m.waiting(key, now, pace(l.kind)) {
+		if !ok {
+			continue
+		}
+		// ASKED FOR, whatever becomes of the ask: a turn of this node's home
+		// loop asks only for a repository this node is home to, so a mirror
+		// asked for here is still this node's to raise code_mirror_failing
+		// for — its attempt running past the promise, queued behind attempts
+		// holding every slot, or waiting out a RetryAfter.
+		m.claim(key, l, now)
+		if m.running[key] || m.waiting(key, now, pace(l.kind)) {
 			continue
 		}
 		if len(m.running) < MaxAttempts {
@@ -486,7 +496,6 @@ func (m *Mirrors) Work(_ context.Context, repoID string, floor statelog.Position
 			m.start(key, l, floor, now)
 			continue
 		}
-		m.claim(key, l, now)
 		q, held := m.queued[key]
 		if !held {
 			m.arrivals++
@@ -507,10 +516,15 @@ func further(a, b statelog.Position) statelog.Position {
 	return a
 }
 
-// claim records that a turn of this node asked for key's mirror now — started
-// or queued — in its health: so a mirror queued here behind attempts that
-// hold every slot is still this node's to raise code_mirror_failing for
-// ([Mirrors.AlarmReading]). An import has no health. Called with mu held.
+// claim records that a turn of this node asked for key's mirror now —
+// whether the ask started an attempt, queued one, or found one running or
+// within its pace — in its health: so a mirror whose attempt runs past the
+// promise, or that is queued here behind attempts holding every slot, is
+// still this node's to raise code_mirror_failing for
+// ([Mirrors.AlarmReading]). Where the attempt STARTED was the proxy for
+// "still home", the attempts that held both slots past the promise went
+// uncounted with every mirror queued behind them that had not been asked
+// for since. An import has no health. Called with mu held.
 func (m *Mirrors) claim(key mirrorKey, l listed, now time.Time) {
 	if l.kind == kindImport {
 		return
@@ -522,7 +536,7 @@ func (m *Mirrors) claim(key mirrorKey, l listed, now time.Time) {
 		// gives it the whole promise before it is failing.
 		h.level = now
 	}
-	h.name, h.started = l.name, now
+	h.name, h.asked = l.name, now
 	m.health[key] = h
 }
 
@@ -631,17 +645,17 @@ func (m *Mirrors) forget(key mirrorKey) {
 // home to have not been brought level for longer than their own refresh
 // promise, code.MirrorInterval plus [AttemptDeadline] (ADR-0015), and the one
 // failing longest, by its repository's name — what raises
-// code_mirror_failing. A mirror no turn of this node has asked for within
-// that promise — neither started nor queued — is no longer this node's — its
-// repository's home moved, or its mirror went — and is left out: the home
-// asks for a mirror at least once an interval, a failing one sooner
-// ([RetryAfter]), and one queued behind attempts holding every slot is asked
-// for again each pass, so a node home to more mirrors than it brings level is
-// counted. So is one whose attempt
+// code_mirror_failing. A mirror no turn of this node has ASKED for within
+// that promise is no longer this node's — its repository's home moved, or
+// its mirror went — and is left out: the home loop asks only for the
+// repositories this node is home to, and asks for every mirror that is not
+// brought level at least once an interval (the listing names it again once
+// its last attempt is an interval old, a failing one's a [RetryAfter], at
+// most an interval) — whatever the ask then finds: so a mirror queued behind
+// attempts holding every slot is counted, and so is one whose own attempt
 // has run longer than the promise — a first push of a large repository —
 // until that attempt ends: an attempt is bounded by what it moves
-// (gitproc.RemoteDeadline), never by this alarm, and a failed one's retry, a
-// [RetryAfter] later, counts it again. Assigned here, field by
+// (gitproc.RemoteDeadline), never by this alarm. Assigned here, field by
 // field, so the reading's producers gate reaches each one through this
 // concrete method (internal/engine's TestEveryAlarmReadingFieldHasAProducer).
 func (m *Mirrors) AlarmReading(out *statelog.Reading) {
@@ -653,7 +667,7 @@ func (m *Mirrors) AlarmReading(out *statelog.Reading) {
 		worst   health
 	)
 	for _, h := range m.health {
-		if now.Sub(h.started) > promise || now.Sub(h.level) <= promise {
+		if now.Sub(h.asked) > promise || now.Sub(h.level) <= promise {
 			continue
 		}
 		failing++
