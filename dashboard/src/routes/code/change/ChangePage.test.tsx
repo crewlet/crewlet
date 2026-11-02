@@ -728,10 +728,10 @@ test("a target whose gate requires a check is merged by adding the change to its
 
 // A REFUSAL IN THE CONTROLS' OWN WORDS, keyed on the code host's word beside
 // the class: a head that moved is said as a push since the page was read,
-// never as the class's "changed by somebody else"; and the gate's every
-// unmet precondition (`not_ready`) is the engine's own sentence. Mutation:
-// draw the class's sentence for head_moved, or ours for not_ready, and this
-// fails.
+// never as the class's "changed by somebody else"; and a gate the change does
+// not meet yet (`not_ready`) is the engine's words, which name what it still
+// waits for and whom. Mutation: draw the class's sentence for head_moved, or
+// ours for not_ready, and this fails.
 test.each([
   [
     "head_moved",
@@ -744,10 +744,11 @@ test.each([
     {
       error: "not_ready",
       refusal: "gate_unmet",
-      detail: "web!42 does not yet meet main's merge gate. Unmet: approval — waits on cto;",
+      detail:
+        "It does not meet its target's merge gate yet, so nothing was merged or queued. It still waits for an approval of its latest revision. @cto can move it forward.",
     },
     409,
-    /Unmet: approval — waits on cto/,
+    /It still waits for an approval of its latest revision\. @cto can move it forward\./,
   ],
 ])("a %s refusal is drawn in its own words", async (_word, body, status, said) => {
   stubEngine(detail(ready()), () => json(body, status));

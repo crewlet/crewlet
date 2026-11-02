@@ -1,14 +1,20 @@
 package caveat
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/words"
+)
 
 // THE REFUSAL CATALOG: the person's words for the refusals a person meets most
 // often on the dashboard, answering a decision, filing or editing a work item,
-// publishing an artifact an assistant drafted, and writing its data past a
-// limit on what the data may hold. Every other refusal is
-// answered with its code's own sentence until it has a phrasing here
-// (ADR-0060 names the rest). Each names only what a person sees: a handle as
-// `@handle`, a question, an option, a title.
+// publishing an artifact an assistant drafted, writing its data past a limit
+// on what the data may hold, and merging a change the code host refuses for a
+// reason the change page's controls cannot say in words of their own. Every
+// other refusal is answered with its code's own sentence until it has a
+// phrasing here (ADR-0060 names the rest). Each names only what a person
+// sees: a handle as `@handle`, a question, an option, a title.
 
 // TitleMissing is a work item filed with no title.
 func TitleMissing() Refusal {
@@ -116,6 +122,110 @@ func DatastoreQuotaReached() Refusal {
 	return Refusal{person: "This artifact's data has reached a limit on what " +
 		"it can hold, so nothing was saved. Remove what is no longer needed, " +
 		"or ask whoever sets the limit to raise it."}
+}
+
+// GateCondition is one condition of a merge gate that a change does not meet
+// yet, as the code host judged it: its kind, by the host's own name for it
+// (internal/code's PreconditionKind), and the handles of whoever it waits on.
+//
+// THE WORDS ARE THIS CATALOG'S: a kind is a value off the host's closed set,
+// said here as what the change still waits for, and a kind this build does
+// not know is said as another condition of its target's gate, so no text a
+// caller hands over becomes a person's words. A handle is said as `@handle`,
+// as every handle in this catalog is.
+type GateCondition struct {
+	Kind    string
+	WaitsOn []string
+}
+
+// gateWaitsFor is what a change still waits for while each condition of its
+// merge gate is unmet, keyed by the code host's name for the condition: the
+// checklist the change's page draws, said as what is missing.
+// builtin.TestEveryGateConditionHasAPersonsWords holds it to the host's set.
+var gateWaitsFor = map[string]string{
+	"draft":           "its owner to mark it ready for review",
+	"facts":           "its measure against its target",
+	"approval":        "an approval of its latest revision",
+	"human_approval":  "a person's approval for the paths its target keeps for people",
+	"owners_approval": "an approval for every path owner it touches",
+	"blocker":         "its standing blockers to be cleared",
+	"check":           "its required checks to pass on its latest commit",
+	"mergeable":       "a clean merge into its target",
+	"merge_authority": "somebody who may merge into its target",
+	"queue":           "its target's queue to land it",
+}
+
+// gateWaitsForUnknown is a condition of a kind this build does not know, which
+// a newer code host judges.
+const gateWaitsForUnknown = "another condition its target's gate sets"
+
+// MergeGateUnmet is a merge, or a place in its target's queue, refused because
+// the change does not meet its target's merge gate yet: what it still waits
+// for, each condition once, and whoever can move it forward, each once. The
+// change's page names every condition with where it stands; these words say
+// what stopped this press, which a page read before the gate moved may not.
+func MergeGateUnmet(unmet []GateCondition) Refusal {
+	const lead = "It does not meet its target's merge gate yet, so nothing was merged or queued."
+	var needs, who []words.Said
+	for _, c := range unmet {
+		need, known := gateWaitsFor[c.Kind]
+		if !known {
+			need = gateWaitsForUnknown
+		}
+		if !slices.Contains(needs, words.Said(need)) {
+			needs = append(needs, words.Said(need))
+		}
+		for _, handle := range c.WaitsOn {
+			if at := words.Said("@" + handle); handle != "" && !slices.Contains(who, at) {
+				who = append(who, at)
+			}
+		}
+	}
+	if len(needs) == 0 {
+		return Refusal{person: lead + " The change's page names what it still waits for."}
+	}
+	person := lead + " It still waits for " + words.And(needs) + "."
+	if len(who) > 0 {
+		person += " " + words.And(who) + " can move it forward."
+	}
+	return Refusal{person: person}
+}
+
+// MergeWouldDeleteAKeptBranch is a merge asked to delete its branch where that
+// deletion is refused: a protection rule keeps the branch, or whoever merges
+// may not delete it. ONE PHRASING FOR BOTH, and true of each, for
+// [DatastoreQuotaReached]'s reason: which one it was the code host names only
+// in its sentence for a model, which is never parsed for a person's words.
+func MergeWouldDeleteAKeptBranch() Refusal {
+	return Refusal{person: "Nothing was merged, because this merge would also delete its " +
+		"branch, and a protection rule keeps that branch or you may not delete it. Merge it " +
+		"keeping its branch."}
+}
+
+// RepositoryFull is a merge whose commits would take its repository past the
+// most the company lets a repository hold. NO REMEDY beside it, as
+// [ArtifactQuotaReached] has none: no dashboard screen edits the company's code
+// limits, so the words name who raises it.
+func RepositoryFull() Refusal {
+	return Refusal{person: "Merging it would take its repository past the most a repository " +
+		"may hold, so nothing was merged. Ask an admin to raise the limit."}
+}
+
+// MergeAskedForSomebodyWhoMayNot is a merge, or a place in its target's queue,
+// asked on behalf of somebody who may not make it: a seat's work for whoever
+// started its turn, who may not change the company's code, read the
+// repository or merge into the target.
+func MergeAskedForSomebodyWhoMayNot() Refusal {
+	return Refusal{person: "This merge was asked for somebody who may not make it, so nothing " +
+		"was merged or queued. Somebody who may merge into its target can."}
+}
+
+// QueueEntryNotYours is a change taken off its target's queue by somebody who
+// may not: whoever queued it, the change's owner, somebody who maintains its
+// repository or a person takes it out, and nobody else.
+func QueueEntryNotYours() Refusal {
+	return Refusal{person: "Only whoever queued it, the change's owner, somebody who " +
+		"maintains its repository or a person may take it off the queue, so it is still queued."}
 }
 
 // ArtifactTrashed is a change to an artifact that is in the trash.

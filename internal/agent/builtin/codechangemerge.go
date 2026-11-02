@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -303,13 +304,18 @@ func (t *codeMergeChange) closeTask(ctx context.Context, cv conversing, op strin
 // mergeRefused answers a merge, an enqueue or a dequeue its committer or its
 // git node refused, in the refusal's class ([mergeRefusalClass]): a gate the
 // change does not meet yet as not_ready, naming every unmet precondition and
-// whom it waits on.
+// whom it waits on. A person's words ride beside the sentence for a model
+// wherever the catalog has them ([mergeRefusalWords], [caveat.MergeGateUnmet]).
 func mergeRefused(tool, change, target string, refusal code.MergeRefusal, detail string,
 	unmet []code.Precondition) tools.Result {
 
 	cause := writeRefusalError(string(refusal), detail)
 	if refusal != code.MergeRefusalGateUnmet {
-		return refusedBy(mergeRefusalClass(refusal), cause, fmt.Sprintf("%s: %s (%s).", tool, detail, refusal))
+		r := refusedBy(mergeRefusalClass(refusal), cause, fmt.Sprintf("%s: %s (%s).", tool, detail, refusal))
+		if words := mergeRefusalWords(tool, refusal); !words.IsZero() {
+			r = toPerson(r, words)
+		}
+		return r
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s: %s does not yet meet %s's merge gate, so nothing was merged or queued. Unmet:", tool,
@@ -326,7 +332,45 @@ func mergeRefused(tool, change, target string, refusal code.MergeRefusal, detail
 		b.WriteString(";")
 	}
 	b.WriteString(" a ready_to_merge wake follows once it does, so end the turn rather than ask again.")
-	return refusedBy(tools.RefusalNotReady, cause, b.String())
+	return toPerson(refusedBy(tools.RefusalNotReady, cause, b.String()), caveat.MergeGateUnmet(gateConditions(unmet)))
+}
+
+// gateConditions is unmet as the refusal catalog takes it: each precondition's
+// kind and the handles of whoever it waits on, and nothing of its sentence,
+// which is written for a model.
+func gateConditions(unmet []code.Precondition) []caveat.GateCondition {
+	out := make([]caveat.GateCondition, 0, len(unmet))
+	for _, p := range unmet {
+		c := caveat.GateCondition{Kind: string(p.Kind)}
+		for _, party := range p.WaitsOn {
+			c.WaitsOn = append(c.WaitsOn, party.Handle)
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// mergeRefusalWords is a person's words for the merge refusals the change
+// page's controls leave to the engine (the dashboard's
+// MERGE_REFUSAL_SENTENCES draws the engine's words for them): a merge that
+// would delete a branch it may not, a repository at its size, and a merge or
+// a dequeue asked by or for somebody who may not make it. The gate's own is
+// [caveat.MergeGateUnmet]. Every other merge refusal is answered in the
+// controls' own words on the change page, by the host's word beside its class,
+// and in its code's own sentence everywhere else: the floor ADR-0060 sets.
+func mergeRefusalWords(tool string, refusal code.MergeRefusal) caveat.Refusal {
+	switch refusal {
+	case code.MergeRefusalSourceRefused:
+		return caveat.MergeWouldDeleteAKeptBranch()
+	case code.MergeRefusalRepoSize:
+		return caveat.RepositoryFull()
+	case code.MergeRefusalNotPermitted:
+		if tool == CodeDequeueChangeTool {
+			return caveat.QueueEntryNotYours()
+		}
+		return caveat.MergeAskedForSomebodyWhoMayNot()
+	}
+	return caveat.Refusal{}
 }
 
 // mergeRefusalClass is the class a merge refusal is answered in, by what

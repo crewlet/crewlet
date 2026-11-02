@@ -527,9 +527,12 @@ engine's answer:
 A refusal is said beside the controls in words of its own: a head that moved
 ("somebody pushed to it since you loaded it"), a target that moved under every
 rebuild of the merge, a change that does not merge cleanly onto the target's
-tip, a full queue; and in the engine's own words where those say more — a gate
-the change does not meet yet (`not_ready`), which sends you to the change's
-readiness for every unmet condition and who clears it, or why you may not.
+tip, a full queue; and in the engine's words, written for a person, where only
+the engine knows what to say — a gate the change does not meet yet
+(`not_ready`), named by what it still waits for and who can move it forward;
+a merge that would delete a branch a protection rule keeps, or one you may
+not delete; a repository at the most it may hold; and a merge asked for
+somebody who may not make it.
 
 ## Protecting a branch
 

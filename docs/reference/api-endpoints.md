@@ -7196,8 +7196,7 @@ And the tool's own refusal, carrying its person's words as `detail` where it
 has them, never the tool's sentence, which is written for a model and names
 the tool to call next. A `conflict` or an `exists` a native domain decided (a
 room archived, an item in the trash, a label another tag carries, a write that
-lost its race), a write about something deleted, a change its target's merge
-gate does not allow yet (`not_ready`), and an `unavailable` about a
+lost its race), a write about something deleted, and an `unavailable` about a
 condition of the node or the fleet (a node behind its log, a full log, a store
 that didn't answer, a note the node running a turn couldn't verify, or a coding
 run's record whose seat this node couldn't open, because the fleet's nodes don't
@@ -7256,8 +7255,10 @@ is about** and **what would make the same request land**:
 - **A change that does not meet its target's merge gate yet** is `not_ready`
   (`409`): nothing is wrong with the request or the change, and the same
   request lands once every precondition is met. A tool's sentence names each
-  unmet one and who clears it; this route answers no `detail` for it, and the
-  change's readiness (`code_get_change`, or the change's page) names them.
+  unmet one and who clears it, and this route's `detail` says the same in a
+  person's words: what the change still waits for, and who can move it
+  forward. The change's readiness (`code_get_change`, or the change's page)
+  names every precondition with where it stands.
 - **A limit with a class of its own** is that class, because what lifts it is
   not a change of the object and a surface names the remedy:
   `quota_exceeded` (the company's plan), `inbox_full` (a person's marks),
@@ -7273,7 +7274,9 @@ beside the class in `error`. Several share one class: a change whose head
 moved and a train whose base moved are both `stale_version`, a target still
 moving and a full queue both `conflict`. So a client that answers each in its
 own words reads `refusal` rather than parsing `detail`: the change page's
-merge controls do. A refusal that is not the code
+merge controls do, and draw the `detail` the engine writes for the merge
+refusals only it can word for a person — `gate_unmet`, `source_refused`,
+`repo_size` and `not_permitted`. A refusal that is not the code
 host's carries no `refusal`.
 
 Every `503` carries a `Retry-After` where waiting can clear it and **none**
