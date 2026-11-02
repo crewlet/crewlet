@@ -139,7 +139,8 @@ roles:
 `)
 	fleet := coordmem.NewFleet()
 	now := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
-	e := &Engine{backends: &Backends{Fleet: fleet}, testNode: "node-a", clock: func() time.Time { return now }}
+	e := &Engine{backends: &Backends{Fleet: fleet}, testNode: "node-a", clock: func() time.Time { return now },
+		cipher: valueRing(t, "k1")}
 	e.epoch.current.Store(company)
 
 	result, err := e.CheckMCPServer(t.Context(), MCPCheckRequest{Server: "search", By: checkingJane})
@@ -157,7 +158,8 @@ roles:
 	draft.Enabled = org.Off()
 	draft.Command = "crewlet-test-no-such-command"
 	e.clock = func() time.Time { return now.Add(time.Minute) }
-	result, err = e.CheckMCPServer(t.Context(), MCPCheckRequest{Server: "search", Draft: &draft, By: checkingJane})
+	result, err = e.CheckMCPServer(t.Context(), MCPCheckRequest{Server: "search", Entry: &draft, Draft: true,
+		By: checkingJane})
 	if err != nil || result.OK || !result.Draft || result.Nodes[0].Report.Failure == nil ||
 		result.Nodes[0].Report.Failure.Class != mcp.FailCommandNotFound {
 		t.Fatalf("a draft's check = %+v, %v; want its own launch tested, turned off or not", result, err)
@@ -167,7 +169,8 @@ roles:
 	}
 
 	plain := config.MCPServer{Name: "remote", Transport: config.TransportHTTP, URL: "http://mcp.example.com/mcp"}
-	result, err = e.CheckMCPServer(t.Context(), MCPCheckRequest{Server: "remote", Draft: &plain, By: checkingJane})
+	result, err = e.CheckMCPServer(t.Context(), MCPCheckRequest{Server: "remote", Entry: &plain, Draft: true,
+		By: checkingJane})
 	if err != nil || result.OK {
 		t.Fatalf("a draft at a refused address = %+v, %v", result, err)
 	}

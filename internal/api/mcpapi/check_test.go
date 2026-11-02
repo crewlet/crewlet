@@ -41,7 +41,7 @@ func (f *fakeChecker) CheckServer(_ context.Context, req mcpapi.CheckRequest) (m
 	if err, refused := f.refusals[req.Server+"/"+req.Seat]; refused {
 		return mcpapi.Check{}, err
 	}
-	return mcpapi.Check{Server: req.Server, Seat: req.Seat, Draft: req.Draft != nil, By: req.By.Name,
+	return mcpapi.Check{Server: req.Server, Seat: req.Seat, Draft: req.Draft, By: req.By.Name,
 		At: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), Node: "node-a", OK: true,
 		Nodes: []mcpapi.CheckedNode{servingNode("node-a"), {Node: "node-b", Reason: "did not answer within 4m15s"}}}, nil
 }
@@ -225,7 +225,7 @@ func TestASavedServerIsTestedAndEveryCallAudited(t *testing.T) {
 	if code, _ := send(t, svc, admin, "/mcp-servers/tracker/check", `{"seat":"ceo"}`); code != http.StatusOK {
 		t.Errorf("a test for a seat answered %d", code)
 	}
-	if got := checker.requests(); got[len(got)-1].Seat != "ceo" || got[len(got)-1].Draft != nil {
+	if got := checker.requests(); got[len(got)-1].Seat != "ceo" || got[len(got)-1].Entry != nil {
 		t.Errorf("asked %+v, want the saved server for the seat", got[len(got)-1])
 	}
 	for _, tc := range []struct {
@@ -292,7 +292,7 @@ func TestADraftIsDecidedAsTheWriteItStandsForBeforeItIsRead(t *testing.T) {
 		t.Fatalf("a new draft = %d %v", code, body)
 	}
 	got := checker.requests()
-	if len(got) != 1 || got[0].Draft == nil || got[0].Draft.Command != "wiki-mcp" {
+	if len(got) != 1 || !got[0].Draft || got[0].Entry == nil || got[0].Entry.Command != "wiki-mcp" {
 		t.Fatalf("asked %+v, want the draft as the dry run left it", got)
 	}
 	if code, _ := send(t, svc, fresh, "/mcp-checks", `{"entity":{"name":"tracker","command":"tracker-mcp-2"}}`); code != http.StatusOK {

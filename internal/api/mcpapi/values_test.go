@@ -468,3 +468,37 @@ func TestAPointerRefusedAfterTheSealSaysWhatIsStored(t *testing.T) {
 		t.Fatalf("the same request again = %d %s", code, raw)
 	}
 }
+
+// A VALUE IS TESTED WITH ITS ENTRY AS THE FLEET'S ACTIVE REVISION STATES IT,
+// sent with the test, even where the company this node applied does not have
+// the server yet: a value stored straight after its entry's write is not
+// refused for a server the node has not started. Mutation: send no entry, or
+// the applied company's, and this is red.
+func TestAValueIsTestedWithItsEntryAsTheActiveRevisionStatesIt(t *testing.T) {
+	t.Parallel()
+	checker := &valueChecker{}
+	docs := newDocuments(t)
+	applied, err := config.ParseCompany([]byte("name: Acme\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return applied },
+		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: checker,
+		Documents: docs, Values: valueStore(t), Audit: &recordedAudit{},
+		Now: func() time.Time { return time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, raw := put(t, svc, proved(time.Minute), "/mcp-servers/sentry/values/Authorization", valueBody(theValue))
+	if code != http.StatusOK {
+		t.Fatalf("a value for an entry the node has not applied = %d %s", code, raw)
+	}
+	asked := checker.requests()
+	if len(asked) != 1 || asked[0].Entry == nil || asked[0].Entry.Name != "sentry" ||
+		asked[0].Entry.URL != "https://mcp.sentry.dev/mcp" || asked[0].Draft {
+		t.Fatalf("tested %+v, want the active revision's sentry entry sent with the test", asked)
+	}
+	if strings.Contains(raw, theValue) {
+		t.Errorf("the answer carries the value: %s", raw)
+	}
+}

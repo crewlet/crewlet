@@ -680,11 +680,9 @@ sent write-only. Its steps:
 
 Saving writes the entry (`PUT /config/mcp-servers/{name}` with
 `If-None-Match: *` for a new name, see
-[configure via the API](configure-via-api.md)), waits for the node serving
-the page to apply that revision (the values route tests the entry as the node
-runs it), then stores each value you typed through
-[the values route](#storing-a-header-or-variable): tested, sealed write-only,
-and the key pointed at the variable the engine chooses. So no value
+[configure via the API](configure-via-api.md)), then stores each value you
+typed through [the values route](#storing-a-header-or-variable): tested, sealed
+write-only, and the key pointed at the variable the engine chooses. So no value
 is ever written into the entry, and a value the server refuses stores nothing:
 the entry stays saved and the wizard open on what is left, and saving again
 sends only that. A per-agent server's own value is stored untested, since the
@@ -1499,8 +1497,9 @@ it. Each test is recorded in the runtime audit as `mcp_server_acted`.
 **Before you save.** The add and edit flows test the entry you are writing
 ([`POST /mcp-checks`](../reference/api-endpoints.md#post-mcp-checks)) as the
 configuration would run it once saved, with the values you typed for it and
-not stored yet: each is read through the variable it will be stored under, and
-crosses the fleet sealed, as a value the values route tests does. Since a draft
+not stored yet: each is read through the variable it will be stored under. The
+entry and every value cross the fleet sealed under its keyring, bound to the
+one test. Since a draft
 runs a command on the engine host or dials an address with your values, it asks
 for the same rights a write does (`config.write` and `secrets.write`, with a
 recent step-up), and it is held to the configuration's own checks first. A
@@ -1538,6 +1537,9 @@ says (`Bearer <API key>`, for one).
 
 1. **Tested first.** The server is tested as it would run with the new value,
    where it runs, before anything is stored ([Testing a server](#testing-a-server)).
+   The test is sent the server's entry as the fleet's active configuration
+   states it, so a value stored straight after its entry is written is tested
+   before any node has applied that write.
    A value the server refuses stores nothing, and you are told the stage and
    the reason. You can store a value untested, for a server you cannot reach
    yet.

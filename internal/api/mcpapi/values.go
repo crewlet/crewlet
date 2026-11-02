@@ -184,8 +184,13 @@ func (s *Service) testValue(w http.ResponseWriter, r *http.Request, company *con
 				"or store it untested with test=false"})
 		return CheckAnswer{}, false
 	}
+	// THE ENTRY AS THE FLEET'S ACTIVE REVISION STATES IT, sent with the test:
+	// a value stored straight after its entry's write is tested on nodes that
+	// have not applied that write yet, rather than refused by one whose
+	// company does not have the server.
+	entry := activeEntry(company, slot.Server)
 	done, err := s.checker.CheckServer(r.Context(), CheckRequest{Server: slot.Server, Seat: slot.Seat,
-		Values: []ValueTry{{Key: slot.Key, Variable: slot.Variable, Value: value}}, By: by})
+		Entry: entry, Values: []ValueTry{{Key: slot.Key, Variable: slot.Variable, Value: value}}, By: by})
 	if err != nil {
 		s.refuseServerGesture(w, r, slot.Server, slot.Seat, err, "mcp_value_test_failed",
 			"this node could not ask the fleet to test the value; nothing was stored; ask again")
@@ -221,6 +226,18 @@ func (s *Service) testValue(w http.ResponseWriter, r *http.Request, company *con
 		"problems": []config.Problem{{Path: path.String(), Segments: path, Kind: "invalid", Message: message}},
 	})
 	return CheckAnswer{}, false
+}
+
+// activeEntry is a copy of the entry called name in the active company, nil
+// where it declares none (the slot that named it read the same company).
+func activeEntry(company *config.Company, name string) *config.MCPServer {
+	for i := range company.MCPServers {
+		if company.MCPServers[i].Name == name {
+			entry := company.MCPServers[i]
+			return &entry
+		}
+	}
+	return nil
 }
 
 // sharedServer reports whether the server called name runs one instance.

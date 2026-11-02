@@ -82,8 +82,13 @@ var ErrSeatRequired = errors.New("mcpapi: a per-agent MCP server is tested for o
 // CheckRequest is a test somebody asked for.
 type CheckRequest struct {
 	Server string
-	// Draft is the entry as a write would leave it, nil for the saved one.
-	Draft *config.MCPServer
+	// Entry is the entry to test, sent with the test so that no node needs to
+	// have applied it: a draft, or for a value under test the entry as the
+	// fleet's active revision states it. Nil tests the saved server each node
+	// runs, which is recorded as its latest test.
+	Entry *config.MCPServer
+	// Draft is whether Entry is not written yet.
+	Draft bool
 	Seat  string
 	// Values are the values tested before they are stored, each its own
 	// key's; none for a test of what is stored.
@@ -320,7 +325,8 @@ func (s *Service) serveDraftCheck(w http.ResponseWriter, r *http.Request, rec *t
 		}
 		tried = append(tried, ValueTry{Key: slot.Key, Variable: slot.Variable, Value: v.value})
 	}
-	s.check(w, r, CheckRequest{Server: named.Name, Draft: draft, Seat: req.Seat, Values: tried, By: by})
+	s.check(w, r, CheckRequest{Server: named.Name, Entry: draft, Draft: true, Seat: req.Seat, Values: tried,
+		By: by})
 }
 
 // typedValue is one value typed for a draft's key.

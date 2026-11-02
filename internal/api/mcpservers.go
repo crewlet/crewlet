@@ -34,7 +34,7 @@ func (m mcpChecker) CheckServer(ctx context.Context, req mcpapi.CheckRequest) (m
 	for _, v := range req.Values {
 		tried = append(tried, engine.MCPValueTry{Key: v.Key, Variable: v.Variable, Value: v.Value})
 	}
-	r, err := m.e.CheckMCPServer(ctx, engine.MCPCheckRequest{Server: req.Server, Draft: req.Draft,
+	r, err := m.e.CheckMCPServer(ctx, engine.MCPCheckRequest{Server: req.Server, Entry: req.Entry, Draft: req.Draft,
 		Seat: req.Seat, Values: tried, By: req.By})
 	if err != nil {
 		return mcpapi.Check{}, restartErr(err)
