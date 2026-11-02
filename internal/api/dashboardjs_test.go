@@ -1527,8 +1527,11 @@ const (
 	// wizard is the first settings screen to draw), and 5.6 KiB less of
 	// shared code Rollup moved between chunks and of the Add dialog's rules
 	// out of the one sheet. The page is all in the settings chunk, so the
-	// initial load did not grow. 5382 KiB.
-	treeBudget = 5<<20 + 262<<10
+	// initial load did not grow. 5382 KiB. The wizard's save waiting for this
+	// node to apply the entry before it stores the values (the after-save
+	// strip's nodeStanding, now in the settings chunk too) took it to
+	// 5382.2 KiB (+0.7 KiB). 5383 KiB.
+	treeBudget = 5<<20 + 263<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
