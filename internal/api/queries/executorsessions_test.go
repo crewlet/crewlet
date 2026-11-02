@@ -412,6 +412,52 @@ func TestASessionsTranscriptIsReadThroughItsSealedObject(t *testing.T) {
 	}
 }
 
+// A LATER PAGE OF A SESSION THE BUDGET RELEASED SAYS SO, never that it was
+// captured again. The seat's session budget releases an ended turn's object,
+// and an ended turn is never captured again: a cursor handed out before the
+// release is answered as the first page now is — no session kept, the
+// release said in the engine's sentence, no entries and no cursor on — rather
+// than refused as a page of a capture the session has moved on from, which
+// sent the reader to a first page saying something else.
+//
+// Mutation: refuse a cursor of a row that names no object as one of an older
+// capture, and the reader is told the session was captured again.
+func TestALaterPageOfASessionTheBudgetReleasedSaysSo(t *testing.T) {
+	t.Parallel()
+	store, _ := sessionObjectStore(t)
+	texts := make([]string, executor.TranscriptMaxEntries+1)
+	for i := range texts {
+		texts[i] = fmt.Sprintf("message %d", i)
+	}
+	row := sealedSession(t, store, "ana", gzipText(t, openCodeExport(texts...)))
+	reads := &stubSessions{rows: []executordomain.Session{row}}
+	s := sessionSources(t, reads, store)
+	got, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": row.Turn})
+	if err != nil {
+		t.Fatalf("executor_session: %v", err)
+	}
+	cursor := got.(queries.SessionAnswer).Next
+	if cursor == "" {
+		t.Fatal("the first page handed out no cursor, so this proves nothing about one")
+	}
+	// THE BUDGET RELEASES THE OBJECT: the row keeps its ending and when it
+	// was captured, and names no object.
+	reads.rows[0].Object = objstore.Object{}
+	got, err = askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": row.Turn,
+		"cursor": cursor})
+	if err != nil {
+		t.Fatalf("a later page of a released session answered %v (%q), want an answer saying so",
+			err, queries.RefusalDetail(err))
+	}
+	answer := got.(queries.SessionAnswer)
+	if answer.State != queries.TranscriptNone || !strings.Contains(answer.Why, "budget released") ||
+		len(answer.Entries) != 0 || answer.Next != "" || answer.Session.Kept {
+		t.Errorf("a later page of a released session reads %s (%q) with %d entries, next %q, kept %v; "+
+			"want none, saying the budget released it", answer.State, answer.Why, len(answer.Entries),
+			answer.Next, answer.Session.Kept)
+	}
+}
+
 // AN ARCHIVE THAT IS NOT ITS FORMAT IS SAID IN THE ENGINE'S WORDS, never its
 // own. A box's agent can write what its run packs: an OpenCode session whose
 // document is a token followed by a mebibyte of its own words reads as

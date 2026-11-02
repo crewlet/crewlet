@@ -9369,9 +9369,13 @@ archive does rather than what is behind it. **The cursor names the object it
 was read from, and how this build counts a transcript's entries**: a live
 turn's session moves to a newer object with every capture, and a rolling
 upgrade can answer one page on a build that counts entries otherwise, so a
-cursor of an object the row no longer names, or of another count, is
-`400 bad_params` — read the transcript again from its start — rather than a
-page continued in another archive, or at an ordinal that names another entry.
+cursor of an object the row has since replaced with a newer capture, or of
+another count, is `400 bad_params` — read the transcript again from its start —
+rather than a page continued in another archive, or at an ordinal that names
+another entry. A cursor of a row that names no object any more is answered as
+its first page would be, `state: none` with the engine's sentence: the seat's
+session budget released the object, which it does only to a turn that ended,
+and an ended turn is never captured again.
 
 **Two transcripts at a time on each node.** One read can hold a line at
 `bounds.line_bytes`, as much again while the buffer gathering it grows, and the

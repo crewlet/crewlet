@@ -382,8 +382,17 @@ func transcriptCursor(key objstore.Key, next int) string {
 
 // transcriptFrom is the ordinal a page of row's transcript starts at: 0 for no
 // cursor, and the cursor's own for one the row's object handed out under this
-// build's count of entries. A cursor of an object the row no longer names, or
-// of another count, is refused, saying to read again from the start.
+// build's count of entries. A cursor of an object the row has since replaced
+// with a newer capture, or of another count, is refused, saying to read again
+// from the start.
+//
+// A ROW THAT NAMES NO OBJECT ANY MORE IS NOT CAPTURED AGAIN: the seat's
+// session budget released its object, which it does to an ended turn alone,
+// and an ended turn is never captured again. So its cursor is the page's to
+// answer, as the first page is answered — no session kept, and why
+// ([Sources.readTranscript]) — where a refusal saying the session was captured
+// since, and to read it from its start, said what was false and sent the
+// reader to a first page saying something else.
 func transcriptFrom(cursor string, row executordomain.Session) (int, error) {
 	if cursor == "" {
 		return 0, nil
@@ -401,7 +410,7 @@ func transcriptFrom(cursor string, row executordomain.Session) (int, error) {
 		return 0, fmt.Errorf("%w: the cursor %q was handed out by a build of the engine that "+
 			"counts a transcript's entries otherwise: read the transcript again from its start",
 			ErrBadParams, cursor)
-	case !row.HasObject() || parts[0] != row.Object.Key.String():
+	case row.HasObject() && parts[0] != row.Object.Key.String():
 		return 0, fmt.Errorf("%w: the turn %s's session was captured again since the cursor "+
 			"%q was handed out: read its transcript again from the start", ErrBadParams,
 			row.Turn, cursor)
