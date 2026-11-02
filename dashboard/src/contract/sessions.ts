@@ -7,7 +7,7 @@
  * EXACTLY WHAT `internal/api/queries` SENDS, held there by
  * `TestTheSessionsScreenReadsWhatTheAnswersSend` in both directions: every
  * member declared here is a key an answer carries, every key an answer carries
- * is declared, and the four unions are the engine's own closed sets — so a
+ * is declared, and the five unions are the engine's own closed sets — so a
  * screen keyed by them (`routes/agents/seat/Sessions.tsx`) has a word for
  * every value the engine sends.
  *
@@ -20,6 +20,13 @@ import type { LogPosition } from "./positions.ts";
 
 /** How a turn ended, in the engine's four words (`executordomain.Outcomes`). */
 export type SessionOutcome = "completed" | "failed" | "stopped" | "lost";
+
+/**
+ * Where a relaunch of a turn would continue its session (`sandbox.ContinuesIns`):
+ * from the turn's kept capture, in whichever box the relaunch gets; or only in
+ * the box the turn's run parked in, while that box is held.
+ */
+export type SessionContinuesIn = "any_box" | "parked_box";
 
 /**
  * The engine's account of how a turn ended (`executordomain.Ending`): what a
@@ -69,12 +76,20 @@ export interface ExecutorSessionRow {
    * Whether a relaunch of the turn would continue this session, as far as the
    * engine can know before a box is chosen: decided as a relaunch decides it,
    * and never for an ended turn, whose session no later turn continues yet.
-   * Null where it could not be decided (the turn's run record could not be
-   * read), which `not_continuable` then says: an unknown is never sent as a no.
+   * Whether the box a relaunch gets takes the session up, and whether the
+   * seat's budget can carry it, are the launch's to find out. Null where it
+   * cannot be decided now — a run record or a log row that could not be read,
+   * a job still working or being collected, a capture still being kept, every
+   * member of the seat's chain sitting out its plan — which `not_continuable`
+   * then says: an unknown is never sent as a no.
    */
   continuable: boolean | null;
-  /** Why a relaunch would not continue it, or why that cannot be said now: the
-   *  engine's own sentence, redacted. Absent where it would. */
+  /** Where a relaunch would continue it; present only where it would. */
+  continues_in?: SessionContinuesIn;
+  /** Why a relaunch would not continue it, why that cannot be said now, or —
+   *  where it would only in the box the run parked in — why no other box
+   *  would: the engine's own sentence, redacted. Absent where a relaunch would
+   *  continue it in any box. */
   not_continuable?: string;
 }
 

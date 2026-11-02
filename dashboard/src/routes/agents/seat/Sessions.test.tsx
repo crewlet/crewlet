@@ -153,11 +153,17 @@ test("a session no longer kept states no size kept", () => {
   expect(screen.queryByText(/B kept/)).toBeNull();
 });
 
+/** Why a parked turn's kept capture is continued in no other box. */
+const OLDER_WHY = "the session was written by Claude Code 2.1.265, older than 2.1.300";
+
 // WHETHER A RELAUNCH CONTINUES THE SESSION IS SAID UNDER ITS ACCOUNT, as the
-// engine decided it: that one does, and where one would not, the engine's own
-// reason. And AN UNKNOWN IS NEVER DRAWN AS A NO: a session the engine could not
-// decide (its turn's run record could not be read) may well be continued, so
-// it says that this cannot be said now, and why.
+// engine decided it and no more: that one would, in whichever box it gets,
+// where that box and the seat's budget can take it — which only the launch
+// finds out — or only in the box its run parked in, and why no other; and
+// where one would not, the engine's own reason. And AN UNKNOWN IS NEVER DRAWN
+// AS A NO: a session the engine could not decide (its turn's run record could
+// not be read) may well be continued, so it says that this cannot be said now,
+// and why.
 test("a session's account says whether a relaunch would continue it", () => {
   const { unmount } = render(
     <Router>
@@ -166,13 +172,38 @@ test("a session's account says whether a relaunch would continue it", () => {
           ending: null,
           ended_at: null,
           continuable: true,
+          continues_in: "any_box",
           not_continuable: undefined,
         })}
       />
     </Router>,
   );
-  expect(screen.getByText("A relaunch of this turn continues this session.")).toBeTruthy();
+  const anyBox =
+    "A relaunch of this turn would continue this session in whichever box it gets, " +
+    "where that box can take it up and the seat's budget can carry it.";
+  expect(screen.getByText(anyBox)).toBeTruthy();
   unmount();
+
+  const parked = render(
+    <Router>
+      <SessionAccount
+        row={session({
+          ending: null,
+          ended_at: null,
+          continuable: true,
+          continues_in: "parked_box",
+          not_continuable: OLDER_WHY,
+        })}
+      />
+    </Router>,
+  );
+  const onlyThere =
+    "A relaunch of this turn would continue this session only in the box its run parked " +
+    "in, while that box is held and where the seat's budget can carry it; no other box " +
+    `would: ${OLDER_WHY}.`;
+  expect(screen.getByText(onlyThere)).toBeTruthy();
+  expect(screen.queryByText(/would not continue/)).toBeNull();
+  parked.unmount();
 
   const ended = render(
     <Router>
@@ -200,7 +231,7 @@ test("a session's account says whether a relaunch would continue it", () => {
     "could not be read; ask again shortly.";
   expect(screen.getByText(unknown)).toBeTruthy();
   expect(screen.queryByText(/would not continue/)).toBeNull();
-  expect(screen.queryByText(/continues this session\./)).toBeNull();
+  expect(screen.queryByText(/would continue this session/)).toBeNull();
 });
 
 // THE ENGINE'S REASON IS ONE SENTENCE OF THE SCREEN'S, closed once: a reason

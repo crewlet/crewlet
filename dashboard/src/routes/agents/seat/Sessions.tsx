@@ -572,17 +572,32 @@ export function readCutWords(readBytes: number, shown: number): string {
 
 /**
  * Whether a relaunch of the session's turn would continue it, as a sentence:
- * the engine's decision (`continuable`), and where it would not, its own reason
- * (`not_continuable`), or that it cannot be said now where the engine could not
- * decide.
+ * the engine's decision (`continuable`) and where (`continues_in`), with its
+ * own reason (`not_continuable`) where it would not, where it would only in the
+ * box the turn's run parked in, and where it cannot be said now.
+ *
+ * NO MORE THAN THE ENGINE DECIDED: a relaunch WOULD continue the session where
+ * the box it gets can take it up and the seat's budget can carry it, which only
+ * the launch finds out — so the sentence says so rather than that it does.
  *
  * AN UNKNOWN IS NEVER DRAWN AS A NO: a session the engine could not decide may
  * well be continued, and "would not" would send a reader after a fresh start
  * that need not happen.
  */
 export function continuableWords(row: ExecutorSessionRow): string {
-  if (row.continuable) return "A relaunch of this turn continues this session.";
   const why = (row.not_continuable ?? "").replace(/\.\s*$/, "");
+  if (row.continuable) {
+    if (row.continues_in === "parked_box") {
+      const lead =
+        "A relaunch of this turn would continue this session only in the box its run " +
+        "parked in, while that box is held and where the seat's budget can carry it";
+      return why ? `${lead}; no other box would: ${why}.` : `${lead}.`;
+    }
+    return (
+      "A relaunch of this turn would continue this session in whichever box it gets, " +
+      "where that box can take it up and the seat's budget can carry it."
+    );
+  }
   const lead =
     row.continuable === null
       ? "Whether a relaunch continues this session cannot be said now"
