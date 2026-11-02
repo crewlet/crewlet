@@ -1453,17 +1453,17 @@ update, which fires before the provider is called at all: a publish error
 returned there would end a phase that had not yet run.
 
 Every **executor** phase is one phase in two segments. The launch publishes
-its `agent_phase_started`, carrying the fresh brief — the prompt a run that starts
-a session of its own is sent; a relaunch that continues a session publishes the
-continuation it handed its run as the phase's opening frame once it has its box,
-before the run starts — and parks
-without an `agent_phase_completed` of its own; the collection publishes the
+its `agent_phase_started`, carrying the fresh brief — the prompt a run that
+starts a session of its own is sent; a relaunch that continues a session
+publishes the continuation it handed its run as the phase's opening frame once
+it has its box, before the run starts — and parks without an
+`agent_phase_completed` of its own; the collection publishes the
 phase's completion, covering both: **one round**, from the launch to the
 collection, with the run's bridged calls inside it at the instants the bridge
 measured them, and a duration that is both segments' work and never the run
 between them (the launching segment's half travels on the parked state). The
-collected record carries no prompt — the launch's started record already has
-it — and no tokens of the run: the run's own turns and tokens are on each
+collected record carries no prompt — the launch's records already have it —
+and no tokens of the run: the run's own turns and tokens are on each
 launch's own `executor_collected` record, which is **no phase** but the
 round's work. Every spend reader files it under `execute`, and the dashboard
 draws a round's launches inside its card ([each launch is published as its own
