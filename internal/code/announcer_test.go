@@ -227,3 +227,44 @@ func requireNoMore(t *testing.T, stream *announced, eventType string, n int) {
 		t.Fatalf("the stream holds %d %s events, want %d", got, eventType, n)
 	}
 }
+
+// A MERGE'S ANNOUNCEMENT HOLDS NO PUSH OF ITS REPOSITORY: the merge is where
+// the defect began — mergeWrite answers its asker and then announces — so it
+// is held to the announcer on its own: with the stream holding every publish,
+// dev's merge of web's change is answered merged, a push to web proposed
+// behind it is answered while the merge's change_merged is still held, and,
+// released, the stream takes the merge once, at its commit.
+//
+// Mutation: announce the merge inline in mergeWrite (announceMerged in place
+// of announceLater) — the push waits behind a publish the stream never
+// acknowledges, red.
+func TestAMergesAnnouncementHoldsNoPushOfItsRepository(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	stream := newHeldStream()
+	c := heldCommitter(t, n, stream, code.CommitterAnnouncements)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := mergeRepo(t, n, c, "web", code.DirectPersons, mergeGate())
+	stream.waitHeld(t)
+	approved(t, n, w, repo, change)
+	converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+
+	res, err := c.ProposeMerge(t.Context(), merging(repo, change, dev, code.MergeMethodMerge, oidOf("A"),
+		oidOf("B"), oidOf("M")))
+	requireMerged(t, res, err, oidOf("M"))
+
+	requireOK(t, await(t, proposeAsync(t.Context(), c, proposal(repo,
+		update("refs/heads/kept", code.ZeroOID, oidOf("K"))))))
+	if got := len(stream.all()); got != 0 {
+		t.Fatalf("the stream took %d events while it held the opening's, want none", got)
+	}
+
+	stream.release()
+	waitAnnouncedOf(t, &stream.announced, "change_merged", 1)
+	requireNoMore(t, &stream.announced, "change_merged", 1)
+	if got := stream.of("change_merged")[0].Data.(*types.ChangeMerged); got.ChangeID != change ||
+		got.Commit != oidOf("M") {
+		t.Fatalf("the merge was announced as %+v, want web's change merged at its commit", got)
+	}
+}
