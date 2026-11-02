@@ -11,6 +11,8 @@ import {
   Button,
   Callout,
   ChoiceCards,
+  ChoiceList,
+  Copyable,
   DescriptionList,
   Disclosure,
   FormField,
@@ -27,28 +29,32 @@ import {
   CircleDashedGlyph,
   InfoGlyph,
   KeyGlyph,
+  LogInGlyph,
+  ShieldUserGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import type {
-  McpAuthMethod,
   McpCheckAnswer,
   McpCheckedTool,
+  McpOAuthClient,
   McpToolLevel,
 } from "~/contract/mcp.ts";
 import type { Seat } from "~/lib/seats.ts";
 import { listed, plural } from "~/lib/format.ts";
 import type { ConfigProblem } from "~/protocol/types.ts";
 import { Testing, TestResult } from "../flows/TestDialog.tsx";
+import { CLIENT_SECRET } from "../api.ts";
 import { GrantPicker } from "../GrantPicker.tsx";
 import { BaselineSelect, LevelSelect, RiskChips, ServerMark } from "../parts.tsx";
-import { BASELINE, LEVEL, SIGN_IN } from "../words.ts";
+import { BASELINE, LEVEL, OAUTH_CLIENT, SIGN_IN, type SignInChoice } from "../words.ts";
 import {
   argsOf,
   fixedValues,
   newRow,
   problemAt,
   rowsOf,
+  signsInWithOAuth,
   valuesOf,
   type Draft,
   type ValueRow,
@@ -57,7 +63,9 @@ import {
 type Set = (patch: Partial<Draft>) => void;
 
 /** A field the step needs before it can go on, said on the field once Continue is pressed. */
-export type Missing = Partial<Record<"name" | "url" | "command" | "rows", string>> & {
+export type Missing = Partial<
+  Record<"name" | "url" | "command" | "rows" | "clientId" | "clientSecret", string>
+> & {
   /** Per row, by its id. */
   row?: Record<string, string>;
 };
@@ -81,12 +89,20 @@ export function missingIn(d: Draft, step: string): Missing {
     }
     if (Object.keys(row).length > 0) out.row = row;
   }
+  if (step === "signin" && d.transport === "http") {
+    const own = d.signIn === "oauth" && d.oauthClient === "own";
+    const service = d.signIn === "client_credentials";
+    if ((own || service) && !d.clientId.trim())
+      out.clientId = "Give the id the client was registered under at the vendor.";
+    if (service && !d.secretStored && !d.clientSecret.trim())
+      out.clientSecret = "Give the client's secret: a service identity signs in with it.";
+  }
   return out;
 }
 
 /** Whether a step's needs are met. */
 export function isComplete(m: Missing): boolean {
-  return !m.name && !m.url && !m.command && !m.row;
+  return !m.name && !m.url && !m.command && !m.row && !m.clientId && !m.clientSecret;
 }
 
 // ---- name ----------------------------------------------------------------------
@@ -341,8 +357,10 @@ export function ConnectionStep({
 const isVendor = (v: string): v is Vendor => (VENDORS as readonly string[]).includes(v);
 
 /** The methods this step offers, each a card: what a person picks between. */
-const METHOD: Record<"headers" | "none", { line: string; icon: ReactNode }> = {
+const METHOD: Record<Exclude<SignInChoice, "integration">, { line: string; icon: ReactNode }> = {
+  oauth: { line: "Sign in once at the vendor", icon: <LogInGlyph size="lg" /> },
   headers: { line: "A token or key", icon: <KeyGlyph size="lg" /> },
+  client_credentials: { line: "A service identity", icon: <ShieldUserGlyph size="lg" /> },
   none: { line: "No sign-in", icon: <CircleDashedGlyph size="lg" /> },
 };
 
@@ -353,7 +371,9 @@ function detectedWords(draft: Draft): string | null {
   const what =
     d.auth === "integration"
       ? `the ${draft.catalogue?.title ?? "vendor"} integration`
-      : SIGN_IN[d.auth].noun;
+      : d.auth === "oauth" && d.client
+        ? `OAuth, ${OAUTH_CLIENT[d.client].noun}`
+        : SIGN_IN[d.auth].noun;
   return `${d.from === "server" ? "Detected from the server" : "From the catalogue"}: ${what}`;
 }
 
@@ -380,18 +400,115 @@ function IntegrationNote({ draft }: { draft: Draft }) {
   );
 }
 
+/**
+ * The company's own client: its id, and its secret, write-only. A secret the
+ * entry reads already is kept unless a new one is typed.
+ */
+function ClientFields({
+  draft,
+  set,
+  problems,
+  missing,
+  secretHelper,
+}: {
+  draft: Draft;
+  set: Set;
+  problems: readonly ConfigProblem[];
+  missing: Missing;
+  secretHelper: string;
+}) {
+  return (
+    <div className="mcp-field-group">
+      <FormField
+        label="Client ID"
+        error={missing.clientId ?? problemAt(problems, "oauth", "client_id")}
+      >
+        {(f) => (
+          <Input
+            id={f.id}
+            aria-describedby={f.describedBy}
+            aria-invalid={f.invalid || undefined}
+            error={f.invalid}
+            className="mono"
+            spellCheck={false}
+            value={draft.clientId}
+            onChange={(e) => set({ clientId: e.target.value })}
+          />
+        )}
+      </FormField>
+      <FormField
+        label="Client secret"
+        helper={secretHelper}
+        error={
+          missing.clientSecret ??
+          problemAt(problems, "values", CLIENT_SECRET) ??
+          problemAt(problems, "oauth", "client_secret")
+        }
+      >
+        {(f) => (
+          <Input
+            id={f.id}
+            aria-describedby={f.describedBy}
+            aria-invalid={f.invalid || undefined}
+            error={f.invalid}
+            type="password"
+            autoComplete="new-password"
+            spellCheck={false}
+            placeholder={draft.secretStored ? "Stored. Type a new secret to replace it" : undefined}
+            value={draft.clientSecret}
+            onChange={(e) => set({ clientSecret: e.target.value })}
+          />
+        )}
+      </FormField>
+    </div>
+  );
+}
+
+/** The scopes asked for, space separated. */
+function ScopesField({
+  draft,
+  set,
+  problems,
+}: {
+  draft: Draft;
+  set: Set;
+  problems: readonly ConfigProblem[];
+}) {
+  return (
+    <FormField
+      label="Scopes"
+      helper="Space separated. Empty asks for the server's default."
+      error={problemAt(problems, "oauth", "scopes")}
+    >
+      {(f) => (
+        <Input
+          id={f.id}
+          aria-describedby={f.describedBy}
+          className="mono"
+          spellCheck={false}
+          value={draft.scopes}
+          onChange={(e) => set({ scopes: e.target.value })}
+        />
+      )}
+    </FormField>
+  );
+}
+
 export function SignInStep({
   draft,
   set,
   problems,
   missing,
   editing,
+  callbackUrl,
 }: {
   draft: Draft;
   set: Set;
   problems: readonly ConfigProblem[];
   missing: Missing;
   editing: boolean;
+  /** Where a vendor sends a person's browser back after a sign-in. */
+  callbackUrl: string;
 }) {
   const entry = draft.catalogue;
   if (draft.transport === "stdio") {
@@ -403,29 +520,92 @@ export function SignInStep({
       </Text>
     );
   }
-  // A SERVER ALREADY SIGNED IN WITH OAUTH keeps its sign-in as it is: this
-  // wizard does not set OAuth up, and writes its `oauth` block back untouched.
-  if (draft.signIn === "oauth") {
-    return (
-      <Callout variant="info" title={`${entry?.title ?? draft.name} signs in with OAuth`}>
-        Its sign-in is kept as it is, set in the server's configuration rather than here. A test
-        here runs without the sign-in, which is used only for the saved server, so it may stop
-        there; test the saved server from its page.
-      </Callout>
-    );
-  }
   const supported = draft.supported;
-  const offers = (m: McpAuthMethod) => !supported || supported.includes(m);
+  // CLIENT CREDENTIALS ARE AN OAUTH GRANT, offered wherever OAuth is.
+  const offers = (m: SignInChoice) =>
+    !supported || supported.includes(m === "client_credentials" ? "oauth" : m);
   const vendor = draft.detected?.title ?? entry?.title ?? "The server";
-  const choose = (m: McpAuthMethod) =>
+  const choose = (m: SignInChoice) =>
     set({
       signIn: m,
-      // A new server an integration signs in for runs one instance per agent; an edit keeps what it says.
-      ...(editing ? {} : { shared: m !== "integration" }),
+      // AN OAUTH SIGN-IN IS THE COMPANY'S, so it runs one instance; a new
+      // server an integration signs in for runs one per agent; an edit
+      // otherwise keeps what its entry says.
+      ...(m === "oauth" || m === "client_credentials"
+        ? { shared: true }
+        : editing
+          ? {}
+          : { shared: m !== "integration" }),
       ...(m === "headers" && draft.headers.length === 0
         ? { headers: [newRow("Authorization", { required: true })] }
         : {}),
     });
+  // HOW THE ENGINE REGISTERS, as the vendor's metadata or the catalogue
+  // says: a published identity only where it reads one, a registration
+  // wherever it offers one, the company's own client always.
+  const found = draft.detected?.auth === "oauth" ? draft.detected.client : "";
+  const clientOption = (c: McpOAuthClient) => {
+    const refused =
+      c === "cimd" && found && found !== "cimd"
+        ? `${vendor} does not read a published identity.`
+        : c === "dcr" && found === "own"
+          ? `${vendor} does not register clients automatically.`
+          : "";
+    return {
+      value: c,
+      label: OAUTH_CLIENT[c].label,
+      detail: OAUTH_CLIENT[c].detail,
+      ...(c === (found || "cimd") ? { tag: "Recommended" } : {}),
+      ...(refused ? { disabled: true, disabledReason: refused } : {}),
+      ...(c === "own"
+        ? {
+            panel: (
+              <ClientFields
+                draft={draft}
+                set={set}
+                problems={problems}
+                missing={missing}
+                secretHelper="Only where the client has one. Sent when the sign-in renews, never shown again."
+              />
+            ),
+          }
+        : {}),
+    };
+  };
+  const oauthDetail = (
+    <div className="mcp-stack">
+      <ChoiceList
+        label="OAuth client"
+        value={draft.oauthClient}
+        onChange={(v) => set({ oauthClient: v as McpOAuthClient })}
+        options={(["cimd", "dcr", "own"] as const).map(clientOption)}
+      />
+      <ScopesField draft={draft} set={set} problems={problems} />
+      <FormField
+        as="fieldset"
+        label="Callback address"
+        helper={
+          entry?.prerequisite
+            ? `${vendor}'s administrator allowlists it first.`
+            : "For a vendor that allowlists redirects."
+        }
+      >
+        <Copyable value={callbackUrl} variant="block" monospace />
+      </FormField>
+    </div>
+  );
+  const serviceDetail = (
+    <div className="mcp-stack">
+      <ClientFields
+        draft={draft}
+        set={set}
+        problems={problems}
+        missing={missing}
+        secretHelper="Tested by signing in with it, then sealed. Never shown again."
+      />
+      <ScopesField draft={draft} set={set} problems={problems} />
+    </div>
+  );
   const methods = [
     ...(entry?.integration
       ? [
@@ -442,7 +622,7 @@ export function SignInStep({
           },
         ]
       : []),
-    ...(["headers", "none"] as const).map((m) => ({
+    ...(["oauth", "headers", "client_credentials", "none"] as const).map((m) => ({
       value: m,
       label: SIGN_IN[m].label,
       media: METHOD[m].icon,
@@ -456,6 +636,8 @@ export function SignInStep({
                 ? `${vendor} asks for a sign-in.`
                 : `${vendor} does not offer ${SIGN_IN[m].noun}.`,
           }),
+      ...(m === "oauth" ? { detail: oauthDetail } : {}),
+      ...(m === "client_credentials" ? { detail: serviceDetail } : {}),
     })),
   ];
   const detected = detectedWords(draft);
@@ -468,18 +650,12 @@ export function SignInStep({
           <span>{detected}</span>
         </p>
       ) : null}
-      {draft.detected?.auth === "oauth" ? (
-        <Callout variant="warning" title={`${vendor} asks for an OAuth sign-in`}>
-          This wizard does not set one up. Give it a header it accepts, or its test stops at the
-          sign-in; an OAuth sign-in is set in the server's configuration.
-        </Callout>
-      ) : null}
       <ChoiceCards
         label="Sign-in"
         minCardWidth="sm"
         density="compact"
         value={draft.signIn}
-        onChange={(v) => choose(v as McpAuthMethod)}
+        onChange={(v) => choose(v as SignInChoice)}
         options={methods}
       />
       {draft.signIn === "integration" ? <IntegrationNote draft={draft} /> : null}
@@ -496,9 +672,22 @@ export function SignInStep({
             </li>
           ) : null}
           <li>
+            <span className="mcp-lead">OAuth.</span> An administrator signs the company in once at
+            the vendor, from the server's page once it is saved, and approves the access it asks
+            for. The engine keeps the grant sealed and renews it, and the agents use it for the
+            company. A published identity needs no registration at the vendor; registering
+            automatically creates a client there at the first sign-in; your own client is one you
+            registered yourself.
+          </li>
+          <li>
             <span className="mcp-lead">Header.</span> A token or key sent with every request. It is
             tested before it is sealed and never shown again.
             {header ? ` ${vendor} reads it from ${header.name}: ${header.format}.` : ""}
+          </li>
+          <li>
+            <span className="mcp-lead">Client credentials.</span> A service identity with no person
+            behind it, for a vendor that offers one: the engine signs in with the client's id and
+            secret whenever the server needs a token.
           </li>
           {entry?.prerequisite ? (
             <li>
@@ -527,6 +716,7 @@ export function TestStep({
   agents,
   seat,
   onSeat,
+  ofDraft,
 }: {
   draft: Draft;
   test: TestState;
@@ -535,10 +725,18 @@ export function TestStep({
   agents: readonly Seat[];
   seat: string;
   onSeat: (handle: string) => void;
+  /** Whether the test is of the draft rather than of the saved server as it runs. */
+  ofDraft: boolean;
 }) {
   const stale = test.kind !== "idle" && test.kind !== "running" && test.for !== current;
   return (
     <div className="mcp-stack">
+      {ofDraft && draft.signIn === "oauth" ? (
+        <Callout variant="info" title="Tested before anyone signs in">
+          A draft is never sent the company's sign-in, so its test stops where the server asks for
+          one. Sign in on the server's page once it is saved.
+        </Callout>
+      ) : null}
       {!draft.shared ? (
         <FormField
           label="Test as"
@@ -628,7 +826,7 @@ export function AccessStep({ draft, set }: { draft: Draft; set: Set }) {
               label: "Per agent",
               media: <UserGlyph size="lg" />,
               description: "Each agent its own instance",
-              ...(draft.signIn === "oauth"
+              ...(signsInWithOAuth(draft)
                 ? { disabled: true, disabledReason: "An OAuth sign-in is the company's." }
                 : {}),
             },

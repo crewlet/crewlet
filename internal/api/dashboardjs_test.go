@@ -1558,7 +1558,15 @@ const (
 	// Rollup moved into it, and the writes chunk +1.5 KiB and the decision
 	// row's +1.4 KiB (the held call's answers and row). The initial load did
 	// not grow. 5423 KiB.
-	treeBudget = 5<<20 + 303<<10
+	// Signing MCP servers in with OAuth and client credentials (the Sign in
+	// and Revoke dialogs, the Connection tab's sign-in card, a client's
+	// secret named as one, the sign-in alarm opening the dialog, and the
+	// wizard's OAuth and client-credentials choices) took it from 5422.9 KiB
+	// to 5436.1 KiB (+13.2 KiB): the settings chunk +11.8 KiB and its sheet
+	// +0.1 KiB, and useLatestHandlers, which the Sign in dialog is the first
+	// settings screen to read, became a chunk of its own (+1.5 KiB) as Rollup
+	// moved 1.2 KiB of shared settings code into the Access chunk. 5437 KiB.
+	treeBudget = 5<<20 + 317<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

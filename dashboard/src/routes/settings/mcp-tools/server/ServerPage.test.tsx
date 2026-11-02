@@ -20,9 +20,12 @@ import {
   LINEAR_CHANGES,
   LINEAR_DETAIL,
   LINEAR_MEMBER_DETAIL,
+  LINEAR_OAUTH,
   MCP_NOW,
   MCP_ORG,
+  SERVICE_OAUTH,
   mcpData,
+  withOAuth,
 } from "../fixtures.ts";
 import { ServerPage } from "./ServerPage.tsx";
 
@@ -170,6 +173,68 @@ test("the connection names the address and the headers to an administrator alone
   expect(screen.queryByText("https://mcp.linear.app/mcp")).toBeNull();
   expect(screen.queryByText("Authorization")).toBeNull();
   expect(screen.getByText("Values the configuration sets")).toBeDefined();
+});
+
+// A SIGN-IN IS ITS OWN CARD: where it is, who made it and when, when access
+// ends, the authorization server, the client and the scopes, never a token. A
+// person's sign-in is made again and given up here; a service identity names
+// its client and its secret, write-only, and offers neither; the secret is the
+// sign-in's, never a request header. Mutation: offer Revoke on a sign-in nobody
+// holds, Sign in on a service identity, or list the secret among the headers,
+// and this is red.
+test("the connection's sign-in card says where an OAuth sign-in is and offers what it can do", () => {
+  detail = LINEAR_DETAIL;
+  const onFlow = vi.fn();
+  mountAt("connection", withOAuth(mcpData("admin"), "linear", LINEAR_OAUTH), onFlow);
+  expect(screen.getByText("Connected")).toBeDefined();
+  expect(screen.getByText(/by jane\.doe on/)).toBeDefined();
+  expect(screen.getByText("https://auth.linear.app")).toBeDefined();
+  expect(screen.getByText("Register automatically")).toBeDefined();
+  expect(screen.getByText("read write")).toBeDefined();
+  expect(screen.getByText("https://crewlet.example.com/webhooks/mcp-oauth")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+  expect(onFlow).toHaveBeenLastCalledWith("revoke", "linear");
+  fireEvent.click(screen.getByRole("button", { name: "Sign in again" }));
+  expect(onFlow).toHaveBeenLastCalledWith("signin", "linear");
+  cleanup();
+
+  mountAt(
+    "connection",
+    withOAuth(mcpData("admin"), "linear", { ...LINEAR_OAUTH, status: "needs_sign_in" }),
+  );
+  expect(screen.getByText("Needs sign-in")).toBeDefined();
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
+  cleanup();
+
+  detail = {
+    ...LINEAR_DETAIL,
+    values: [
+      {
+        key: "oauth.client_secret",
+        as: "oauth",
+        variable: "MCP_LINEAR_OAUTH_CLIENT_SECRET",
+        set: true,
+        stored_at: "2026-11-01T11:00:00Z",
+        stored_by: "jane.doe",
+        optional: false,
+        bound_by: null,
+      },
+    ],
+  };
+  mountAt("connection", withOAuth(mcpData("admin"), "linear", SERVICE_OAUTH), onFlow);
+  expect(
+    screen.getByText("OAuth client credentials, the company's service identity"),
+  ).toBeDefined();
+  expect(screen.getByText("crewlet-agents")).toBeDefined();
+  expect(screen.queryByRole("button", { name: /^Sign in/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
+  expect(screen.queryByText("oauth.client_secret")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Replace the client secret" }));
+  expect(onFlow).toHaveBeenLastCalledWith("value", "linear", { key: "oauth.client_secret" });
+  // AN OAUTH SERVER WITH NO HEADER has no headers card: the wizard draws no
+  // header rows for it, so an empty card's Edit would lead nowhere.
+  expect(screen.queryByText("Request headers")).toBeNull();
 });
 
 // THE TOOLS: each with the risk the engine read, a tool that declares nothing

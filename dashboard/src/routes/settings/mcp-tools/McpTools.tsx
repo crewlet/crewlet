@@ -186,8 +186,11 @@ export function McpTools({
         editing={editing}
         step={flow.step}
         onClose={flow.close}
-        onSaved={(name) => {
-          nav.to(["settings", "mcp-tools", "servers", name]);
+        onSaved={(name, signInNext) => {
+          nav.to(
+            ["settings", "mcp-tools", "servers", name],
+            signInNext ? { tab: "connection", flow: "signin" } : undefined,
+          );
           data.reload();
         }}
       />

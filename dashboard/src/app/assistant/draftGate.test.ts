@@ -141,6 +141,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/settings/SecretDialog.tsx":
     "modal: a sealed secret's value, a credential and never a draft",
   "routes/settings/TakeBackupDialog.tsx": "modal: a backup's note, in its dialog",
+  "routes/settings/mcp-tools/flows/SignInDialog.tsx":
+    "modal: a sign-in's consent at the vendor; its one field is the callback address, read-only",
   "routes/settings/mcp-tools/flows/RemoveDialog.tsx":
     "modal: which stored values go with a server being removed, in its dialog",
   "routes/settings/mcp-tools/flows/TestDialog.tsx":

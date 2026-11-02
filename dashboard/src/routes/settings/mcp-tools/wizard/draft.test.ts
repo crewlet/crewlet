@@ -12,9 +12,11 @@ import {
   problemAt,
   readPasted,
   stepOf,
+  testsValue,
   valuesOf,
   type Draft,
 } from "./draft.ts";
+import { missingIn } from "./steps.tsx";
 
 /** A curated entry, as `GET /mcp-catalogue` sends one. */
 function entry(over: Partial<McpCatalogueEntry> = {}): McpCatalogueEntry {
@@ -129,10 +131,20 @@ describe("a catalogue entry", () => {
     });
   });
 
-  test("starts on its header where OAuth is not the only way in", () => {
-    const d = fromCatalogue(entry(), emptyDraft());
-    expect(d.signIn).toBe("headers");
+  // THE CATALOGUE ORDERS ITS METHODS BY WHAT IT RECOMMENDS, and the draft
+  // starts on the first, registering as the client the catalogue names; the
+  // header it offers waits as a row in case the person picks it. Mutation:
+  // skip OAuth, or ignore the catalogue's client, and this is red.
+  test("starts on the method it lists first, as the client it names", () => {
+    const d = fromCatalogue(entry({ oauth_client: "dcr" }), emptyDraft());
+    expect(d.signIn).toBe("oauth");
+    expect(d.oauthClient).toBe("dcr");
     expect(d.headers).toMatchObject([{ key: "Authorization", required: true, stored: false }]);
+    expect(entityOf(d, null)).toMatchObject({ oauth: { client: "dcr" } });
+    expect(entityOf(d, null)).not.toHaveProperty("headers");
+    expect(fromCatalogue(entry({ auth: ["headers", "oauth"] }), emptyDraft()).signIn).toBe(
+      "headers",
+    );
   });
 });
 
@@ -140,11 +152,10 @@ describe("the entry a new server writes", () => {
   // A VALUE NEVER RIDES THE ENTRY. Mutation: write the typed value, or a
   // pointer the page chose, into the headers, and this is red.
   test("leaves a key with a new value out, for the values route to add with its value", () => {
-    const d = typed(
-      fromCatalogue(entry(), emptyDraft()),
-      "Authorization",
-      "  Bearer lin_not_real  ",
-    );
+    const d = {
+      ...typed(fromCatalogue(entry(), emptyDraft()), "Authorization", "  Bearer lin_not_real  "),
+      signIn: "headers" as const,
+    };
     const written = entityOf(d, null);
     expect(written).not.toHaveProperty("headers");
     expect(JSON.stringify(written)).not.toContain("lin_not_real");
@@ -231,12 +242,12 @@ describe("an edit", () => {
 
   // Mutation: write an OAuth server's headers from its rows, which it has
   // none of, and its other headers and its sign-in are lost.
-  test("of a server signed in to with OAuth keeps its sign-in and its headers", () => {
+  test("of a server signed in to with OAuth writes its sign-in and its headers back as they are", () => {
     const saved = {
       name: "notion",
       transport: "http",
       url: "https://mcp.example.com/mcp",
-      oauth: { scopes: ["read"] },
+      oauth: { client: "dcr", scopes: ["read"] },
       headers: { "X-Workspace": "${NOTION_WORKSPACE}" },
     };
     const d = fromServer(saved, [], null, "oauth");
@@ -391,5 +402,99 @@ describe("who gets it and each tool's level", () => {
     expect(
       entityOf({ ...d, access: { every: true, units: [], seats: [], except: [] } }, base),
     ).not.toHaveProperty("access");
+  });
+});
+
+describe("an OAuth sign-in", () => {
+  const linear = () => fromCatalogue(entry(), emptyDraft());
+
+  // A PERSON'S SIGN-IN NAMES HOW THE ENGINE REGISTERS: the company's own
+  // client with its id, and the scopes. Its secret is a value, stored
+  // untested after the entry (a test never renews the grant that sends it),
+  // and never written into it. Mutation: write the typed secret, or test it,
+  // and this is red.
+  test("writes the company's own client and its scopes, and stores its secret untested", () => {
+    const d: Draft = {
+      ...linear(),
+      oauthClient: "own",
+      clientId: " crewlet-app ",
+      clientSecret: " own-secret-not-real ",
+      scopes: "read  write",
+    };
+    const written = entityOf(d, null);
+    expect(written.oauth).toEqual({
+      client: "own",
+      client_id: "crewlet-app",
+      scopes: ["read", "write"],
+    });
+    expect(JSON.stringify(written)).not.toContain("own-secret-not-real");
+    expect(valuesOf(d)).toEqual({ "oauth.client_secret": "own-secret-not-real" });
+    expect(testsValue(d, "oauth.client_secret")).toBe(false);
+    // A published identity or a registration is a public client: no id, no secret.
+    const published = { ...d, oauthClient: "cimd" as const };
+    expect(entityOf(published, null).oauth).toEqual({ client: "cimd", scopes: ["read", "write"] });
+    expect(valuesOf(published)).toEqual({});
+  });
+
+  // A SERVICE IDENTITY NAMES ITS GRANT AND ITS CLIENT'S ID, and leaves its
+  // secret for the engine to point where it stores it; the secret is tested
+  // by signing in with it. Mutation: name a variable for the secret, or skip
+  // its test, and this is red.
+  test("writes a service identity's grant and client, and leaves its secret to the engine", () => {
+    const d: Draft = {
+      ...linear(),
+      signIn: "client_credentials",
+      clientId: "crewlet-agents",
+      clientSecret: "svc-secret-not-real",
+      scopes: "read",
+    };
+    const written = entityOf(d, null);
+    expect(written.oauth).toEqual({
+      grant: "client_credentials",
+      client_id: "crewlet-agents",
+      scopes: ["read"],
+    });
+    expect(written).not.toHaveProperty("headers");
+    expect(valuesOf(d)).toEqual({ "oauth.client_secret": "svc-secret-not-real" });
+    expect(testsValue(d, "oauth.client_secret")).toBe(true);
+  });
+
+  // AN EDIT KEEPS THE SECRET ITS ENTRY READS: the pointer is written back,
+  // and nothing is stored again unless a new secret is typed. Mutation: drop
+  // the pointer, or ask for the secret again, and this is red.
+  test("an edit keeps the secret its entry reads", () => {
+    const saved = {
+      name: "vendor",
+      transport: "http",
+      url: "https://mcp.vendor.example.com/mcp",
+      oauth: {
+        grant: "client_credentials",
+        client_id: "crewlet-agents",
+        client_secret: "${MCP_VENDOR_OAUTH_CLIENT_SECRET}",
+        scopes: ["read"],
+      },
+    };
+    const secret: McpValueState = {
+      key: "oauth.client_secret",
+      as: "oauth",
+      variable: "MCP_VENDOR_OAUTH_CLIENT_SECRET",
+      set: true,
+      stored_at: null,
+      stored_by: null,
+      optional: false,
+      bound_by: null,
+    };
+    const d = fromServer(saved, [secret], null, "oauth");
+    expect(d.signIn).toBe("client_credentials");
+    expect(d.secretStored).toBe(true);
+    // NAMED BY THE ENTRY is kept, whatever the store holds for it now.
+    expect(fromServer(saved, [{ ...secret, set: false }], null, "oauth").secretStored).toBe(true);
+    expect(entityOf(d, saved)).toEqual(saved);
+    expect(valuesOf(d)).toEqual({});
+    expect(missingIn(d, "signin")).toEqual({});
+    expect(missingIn({ ...d, secretStored: false, clientId: "" }, "signin")).toEqual({
+      clientId: "Give the id the client was registered under at the vendor.",
+      clientSecret: "Give the client's secret: a service identity signs in with it.",
+    });
   });
 });

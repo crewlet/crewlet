@@ -97,13 +97,9 @@ function Fix({
       );
     case "sign_in":
       return (
-        <ButtonLink
-          size="small"
-          variant="secondary"
-          href={href(["settings", "mcp-tools", "servers", server], { tab: "connection" })}
-        >
+        <Button size="small" variant="secondary" onClick={() => onFlow("signin", server)}>
           {FIX.sign_in}
-        </ButtonLink>
+        </Button>
       );
     case "approve":
       return (
@@ -188,7 +184,7 @@ function itemFor(
     case "mcp_oauth_needs_sign_in":
       meta = <>No agent can call its tools{since ? <>, {since}</> : null}</>;
       body =
-        "An administrator signs the company in to it again from its Connection tab, and the engine renews the sign-in from then on.";
+        "An administrator signs the company in to it, and the engine renews the sign-in from then on.";
       break;
     case "mcp_oauth_expiring":
       meta = <>Its vendor set when the sign-in runs out</>;

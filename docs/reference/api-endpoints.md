@@ -9746,7 +9746,11 @@ fleet's listings yet, a moment after it starts, which is not an agent holding
 no tools.
 
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
-see [Per-entity read and write](#per-entity-read-and-write).
+see [Per-entity read and write](#per-entity-read-and-write). A service identity
+(`oauth.grant: client_credentials`) written with no `oauth.client_secret` is
+written reading `${MCP_<SERVER>_OAUTH_CLIENT_SECRET}`, where
+[storing its secret](#put-mcp-serversnamevalueskey) puts it, on an add and on a
+replacement alike.
 
 ### `GET /mcp-catalogue`
 
@@ -10427,7 +10431,10 @@ tested by signing in with it. A person's sign-in sends its client's secret only
 when the grant renews, which a test does not do, so `test=true` is refused
 `400 invalid_query` there: store it with `test=false`. A server whose sign-in
 has no secret (no `oauth` block, `client: cimd` or `dcr`) is refused `409
-conflict`, and so is a `seat`: a sign-in is the company's.
+conflict`, and so is a `seat`: a sign-in is the company's. A service
+identity added through `PUT /config/mcp-servers/{name}` with no `client_secret`
+is written reading the variable this route stores it under (refused, as here,
+where another field reads that variable), so storing it next points nothing.
 
 **Which variable.** The key's own variable where it already reads exactly one
 that nothing else in the document reads, so rotating it changes nobody else's

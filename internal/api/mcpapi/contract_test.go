@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
@@ -272,4 +273,31 @@ func TestTheReviewReadsWhatTheRouteSends(t *testing.T) {
 			Moved: []string{"close_issue"}, Revision: map[string]any{"revision_id": "r2", "epoch": 3}}),
 	}
 	holdDeclared(t, "McpChangesAnswer", rows, false)
+}
+
+// THE SIGN IN AND REVOKE DIALOGS READ WHAT THE SIGN-IN ROUTES SEND: the start
+// (`POST /mcp-servers/{name}/oauth`), the read the dialog polls
+// (`GET /mcp-sign-ins/{id}`) and the sign-out (`DELETE`), each as declared, and
+// a sign-in's status in the engine's own words. Mutation: drop
+// `authorize_url` from McpSignIn or `said` from McpSignOut, or declare a status
+// the engine never sends, and this is red.
+func TestTheSignInReadsWhatTheRoutesSend(t *testing.T) {
+	t.Parallel()
+	svc := signInSurface(t, &fakeSignIns{}, &recordedAudit{})
+	fresh := proved(time.Minute)
+	code, started := call(t, svc, fresh, http.MethodPost, "/mcp-servers/linear/oauth")
+	if code != http.StatusCreated {
+		t.Fatalf("the start answered %d %v", code, started)
+	}
+	code, read := call(t, svc, fresh, http.MethodGet, "/mcp-sign-ins/"+signInID.String())
+	if code != http.StatusOK {
+		t.Fatalf("the read answered %d %v", code, read)
+	}
+	holdDeclared(t, "McpSignIn", []map[string]any{started, read}, false)
+	holdUnion(t, "McpSignInStatus", coord.MCPSignInStatuses)
+	code, ended := call(t, svc, fresh, http.MethodDelete, "/mcp-servers/linear/oauth")
+	if code != http.StatusOK {
+		t.Fatalf("the sign-out answered %d %v", code, ended)
+	}
+	holdDeclared(t, "McpSignOut", []map[string]any{ended}, false)
 }

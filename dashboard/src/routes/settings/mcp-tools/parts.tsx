@@ -36,12 +36,23 @@ import { BASELINE, failureWords, LEVEL, LEVELS, RISK, STATE } from "./words.ts";
 /**
  * The flows the page opens, by the `flow` parameter. `add` and `edit` are the
  * wizard (`step` names where an edit opens); `test` the Test dialog; `value`
- * the dialog that stores one header or variable (`key`); `approve` the calls
+ * the dialog that stores one header or variable (`key`); `signin` and
+ * `revoke` a server's OAuth sign-in, made and given up; `approve` the calls
  * a server's tools hold for a person's answer; `drift` the review of the tools
  * a server changed.
  */
 export type Flow =
-  "add" | "edit" | "test" | "value" | "disable" | "remove" | "restart" | "approve" | "drift";
+  | "add"
+  | "edit"
+  | "test"
+  | "value"
+  | "disable"
+  | "remove"
+  | "restart"
+  | "signin"
+  | "revoke"
+  | "approve"
+  | "drift";
 
 const FLOWS: readonly Flow[] = [
   "add",
@@ -51,6 +62,8 @@ const FLOWS: readonly Flow[] = [
   "disable",
   "remove",
   "restart",
+  "signin",
+  "revoke",
   "approve",
   "drift",
 ];

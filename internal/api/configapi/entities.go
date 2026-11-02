@@ -403,7 +403,10 @@ var entityKinds = map[string]entityAccess{
 					return identityMismatch("name", id, incoming.Name)
 				}
 				c.MCPServers[i] = incoming
-				return nil
+				// A SERVICE IDENTITY'S SECRET, written by its own route after
+				// the entry, is read from the variable that route stores it
+				// under ([config.Company.PointUnwrittenClientSecret]).
+				return c.PointUnwrittenClientSecret(id)
 			}
 			return ErrNoSuchEntity
 		},
@@ -432,7 +435,7 @@ var entityKinds = map[string]entityAccess{
 				return identityMismatch("name", id, incoming.Name)
 			}
 			c.MCPServers = append(c.MCPServers, incoming)
-			return nil
+			return c.PointUnwrittenClientSecret(id)
 		},
 		place: func(root map[string]any, _ string, element map[string]any) {
 			list, _ := root["mcp_servers"].([]any)

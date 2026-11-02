@@ -168,7 +168,7 @@ export interface McpMemberServerStatus {
  * server is used. `needs_sign_in`: nobody has signed in. `expired`: past the
  * end its vendor stated. `refresh_failed`: its vendor refused to renew it.
  */
-type McpOAuthStatus = "connected" | "needs_sign_in" | "expired" | "refresh_failed";
+export type McpOAuthStatus = "connected" | "needs_sign_in" | "expired" | "refresh_failed";
 
 /** A renewal a vendor refused for good, in its own words. */
 interface McpOAuthFailure {
@@ -180,7 +180,7 @@ interface McpOAuthFailure {
  * A server's OAuth sign-in as an administrator reads it: never a token, never
  * the client's secret, and never on a member's reading.
  */
-interface McpOAuthView {
+export interface McpOAuthView {
   /**
    * `authorization_code`: a person signs the company in. `client_credentials`:
    * the engine signs in as the company's service identity, nobody signs in,
@@ -1030,6 +1030,35 @@ interface McpGrantRevocation {
 }
 
 /**
+ * Where a sign-in is: `pending` until the person consents at the vendor,
+ * `completing` while the engine exchanges what the vendor sent back, then
+ * `approved` or `failed` (with `detail`).
+ */
+type McpSignInStatus = "pending" | "completing" | "approved" | "failed";
+
+/**
+ * A sign-in to a server's OAuth: what `POST /mcp-servers/{name}/oauth` answers
+ * and `GET /mcp-sign-ins/{id}` reads. Never a token.
+ */
+export interface McpSignIn {
+  id: string;
+  server: string;
+  status: McpSignInStatus;
+  /** Why it failed, in the engine's or the vendor's words; "" otherwise. */
+  detail: string;
+  started_at: string;
+  /** When the person's consent stops being taken. */
+  expires_at: string;
+  /** Where the person's browser consents: on the start's answer alone, "" on every read. */
+  authorize_url: string;
+}
+
+/** What `DELETE /mcp-servers/{name}/oauth` did with the server's grant. */
+export interface McpSignOut extends McpGrantRevocation {
+  server: string;
+}
+
+/**
  * A restart as recorded (`202`): every node restarts each instance whose
  * state began before `at`, or the node holding `seat` that agent's instance.
  */
@@ -1055,7 +1084,7 @@ export type McpAuthMethod = "integration" | "oauth" | "headers" | "none";
  * publishes its own client metadata, which the vendor reads. `dcr`: it
  * registers a client on first use. `own`: an administrator registered one.
  */
-type McpOAuthClient = "cimd" | "dcr" | "own";
+export type McpOAuthClient = "cimd" | "dcr" | "own";
 
 /** One header or variable a catalogue entry reads, and how to fill it. */
 interface McpCatalogueInput {

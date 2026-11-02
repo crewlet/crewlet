@@ -396,6 +396,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         // the disclosure for whoever is fixing it.
         technical: entry.detail,
         path: ["settings", "mcp-tools", "servers", entry.key],
+        // AN ALARM THE ENGINE FIXES WITH A SIGN-IN OPENS IT, on the server's page.
+        ...(entry.fix.kind === "sign_in" ? { query: { flow: "signin" } } : {}),
         ...(entry.since ? { at: entry.since } : {}),
         ...(entry.seat ? { who: entry.seat } : {}),
       });
