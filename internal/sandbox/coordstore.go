@@ -709,20 +709,28 @@ func (s *CoordStore) MarkHeldCall(ctx context.Context, turnID, launch string, fe
 	return held, won, nil
 }
 
-// RecordHeldResult records what a marked held call returned. See the contract on
-// [PendingStore].
-func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch, sealed string, fence Fence) (bool, error) {
-	claimed, made := false, false
+// RecordHeldResult records what a marked held call came to: its result, and the
+// call in its round's log. See the contract on [PendingStore].
+func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch string, made HeldMade,
+	fence Fence) (bool, error) {
+
+	claimed, already := false, false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if claimed = heldClaim(*run, launch, fence) && run.HeldCall.Calling(); !claimed {
 			return false
 		}
-		if made = run.HeldCall.Made(); made {
+		if already = run.HeldCall.Made(); already {
 			return false
 		}
+		now := s.clock()
 		held := *run.HeldCall
-		held.Result, held.MadeAt = sealed, s.clock()
+		held.Result, held.MadeAt = made.Result, now
 		run.HeldCall = &held
+		call := made.Call
+		call.Name, call.Approved, call.At = held.Tool, true, now
+		call.Args, call.Output, call.Held = "", "", false
+		call.Seq = run.LastBridgeSeq() + 1
+		run.BridgeCalls, run.BridgeCallsElided = appendBounded(run.BridgeCalls, run.BridgeCallsElided, call)
 		return true
 	})
 	switch {
@@ -731,7 +739,7 @@ func (s *CoordStore) RecordHeldResult(ctx context.Context, turnID, launch, seale
 	case !claimed:
 		return false, fmt.Errorf("%w: run %s, launch %s", ErrHeldCallUnclaimed, turnID, launch)
 	}
-	return won || made, nil
+	return won || already, nil
 }
 
 // OweHandBack lets go of the recorded answer a run whose ending is decided still

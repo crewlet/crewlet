@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -52,7 +53,7 @@ func (l *ledgerCommit) Begin(context.Context) (HeldPrior, error) {
 	return HeldPrior{}, nil
 }
 
-func (l *ledgerCommit) Record(_ context.Context, result sandbox.HeldResult) error {
+func (l *ledgerCommit) Record(_ context.Context, result sandbox.HeldResult, _ toolloop.ToolResult) error {
 	if l.result == nil {
 		l.result = &result
 	}

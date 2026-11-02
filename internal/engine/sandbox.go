@@ -1558,14 +1558,19 @@ func (h heldCommit) Begin(ctx context.Context) (runner.HeldPrior, error) {
 	return runner.HeldPrior{Made: true, Result: result}, nil
 }
 
-// Record seals and records what the held call returned; see
+// Record seals and records what the held call returned, and the call itself as
+// a call of its run's round, as the surface that made it answered it; see
 // [runner.HeldCommit].
-func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult) error {
+func (h heldCommit) Record(ctx context.Context, result sandbox.HeldResult, answered toolloop.ToolResult) error {
 	sealed, err := h.seal.SealResult(h.held.TurnID, h.held.Call, result)
 	if err != nil {
 		return err
 	}
-	return h.held.Record(ctx, sealed)
+	return h.held.Record(ctx, sandbox.HeldMade{Result: sealed, Call: sandbox.BridgeCall{
+		Name: h.held.Call.Tool, Failed: answered.Failed,
+		Origin: answered.Origin, Server: answered.Server, Source: answered.Source,
+		Refusal: string(answered.Refusal()),
+	}})
 }
 
 // runnerLost is the coordinator's account of a lost job in the runner's terms,

@@ -643,6 +643,15 @@ type BridgeCall struct {
 	// ([BridgeCall.Ends]).
 	Held bool `json:"held,omitempty"`
 
+	// Approved marks the call a person then let be made: made by the run's
+	// resume on the engine host rather than by the job over its bridge, and
+	// recorded in the write that recorded its result
+	// ([PendingStore.RecordHeldResult]). A call of its round like any other,
+	// which is what the readers of whether the turn replied need of it; its
+	// arguments and output are never here, and ride the row sealed on the
+	// held call until the next job opens.
+	Approved bool `json:"approved,omitempty"`
+
 	// Extra is every key of the call this build does not know, kept verbatim
 	// and written back by every write of the record (wirekeys.go). Filled by
 	// the decode, never by a caller.
@@ -2028,11 +2037,19 @@ type PendingStore interface {
 	// attempt at the same answer finds it.
 	MarkHeldCall(ctx context.Context, turnID, launch string, fence Fence) (HeldCall, bool, error)
 
-	// RecordHeldResult records what the held call a resume marked returned,
-	// sealed ([CallSeal.SealResult]), on the same terms as
-	// [PendingStore.MarkHeldCall], once: a call whose result is recorded is
-	// not written again, and answers true.
-	RecordHeldResult(ctx context.Context, turnID, launch, sealed string, fence Fence) (bool, error)
+	// RecordHeldResult records what the held call a resume marked came to
+	// ([HeldMade]), on the same terms as [PendingStore.MarkHeldCall], once: a
+	// call whose result is recorded is not written again, and answers true.
+	//
+	// THE RESULT AND THE CALL IN ONE WRITE: its result, sealed
+	// ([CallSeal.SealResult]), on the held call, and the call appended to the
+	// round's log ([PendingRun.BridgeCalls]) as the job's own calls are —
+	// named the held call's tool, placed after every call the log holds,
+	// stamped with the store's clock and marked [BridgeCall.Approved], with no
+	// arguments and no output — so the job that carries the work on keeps it
+	// with its round, and a call made is never on the row without its result,
+	// nor its result without the call.
+	RecordHeldResult(ctx context.Context, turnID, launch string, made HeldMade, fence Fence) (bool, error)
 
 	// ReviveAnswer gives a claim no resume holds back to the recorded answer
 	// it was taken for: the run returns to [StatusAnswered], owed the resume
