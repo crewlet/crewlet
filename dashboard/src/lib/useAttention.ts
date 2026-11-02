@@ -9,12 +9,39 @@
  */
 
 import { useMemo } from "react";
-import { attentionQueue, type Attention } from "./attention.ts";
+import { settingsSectionOpen } from "~/app/nav.ts";
+import type { McpAlarm } from "~/contract/mcp.ts";
+import { attentionQueue, type Attention, type Subject } from "./attention.ts";
 import { useQuery } from "./useQuery.ts";
 import { useNow } from "./clock.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg, useOrgBudget } from "./store-hooks.ts";
 import { indexOrg, nameOfIn } from "./seats.ts";
 import { RUNS_POLL_MS } from "./runs.ts";
+import { MCP_STATUS_POLL_MS } from "./mcpServers.ts";
+import { useViewer } from "./viewer.ts";
+
+/** No MCP alarm: a reader who is not asked them, or an answer not in yet. */
+const NO_MCP_ALARMS: readonly McpAlarm[] = [];
+
+/**
+ * Whether this reader is asked the MCP alarms: a reader the MCP section opens
+ * for, by the rule its lock is drawn by, since `mcp_servers_status` is that
+ * section's answer and a refusal on a timer is a refusal nobody reads. False
+ * while the frame has not said who the reader is.
+ */
+function useReadsMcpAlarms(): boolean {
+  const viewer = useViewer();
+  return !viewer.loading && settingsSectionOpen("mcp-tools", viewer.grants);
+}
+
+/**
+ * The subjects the attention queue does not watch for this reader, for the
+ * quiet band that says what it watched (`watchedIn`): the MCP servers, for a
+ * reader who is not asked their alarms.
+ */
+export function useUnwatched(): readonly Subject[] {
+  return useReadsMcpAlarms() ? [] : ["tools"];
+}
 
 export function useAttention(): Attention[] {
   const now = useNow();
@@ -30,6 +57,14 @@ export function useAttention(): Attention[] {
   // window only the durable record carries. On the Executors board's own poll, so
   // the queue and the board cannot disagree about a run — see RUNS_POLL_MS.
   const { data: runs } = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
+  // THE MCP ALARMS ON THE MCP PAGE'S OWN POLL, asked only of a reader that
+  // page opens for, so the Inbox and the page cannot disagree about a server.
+  const readsMcp = useReadsMcpAlarms();
+  const { data: mcp } = useQuery("mcp_servers_status", undefined, {
+    pollMs: MCP_STATUS_POLL_MS,
+    enabled: readsMcp,
+  });
+  const mcpAlarms = readsMcp ? (mcp?.alarms ?? NO_MCP_ALARMS) : NO_MCP_ALARMS;
   return useMemo(
     () =>
       attentionQueue({
@@ -41,7 +76,8 @@ export function useAttention(): Attention[] {
         authRejected,
         now,
         nameOf,
+        mcpAlarms,
       }),
-    [agents, runs, budget, engine, connected, authRejected, now, nameOf],
+    [agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms],
   );
 }

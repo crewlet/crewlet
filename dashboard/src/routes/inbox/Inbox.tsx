@@ -90,7 +90,7 @@ import { useNow } from "~/lib/clock.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { conditionsToDecide, watchedIn } from "~/lib/attention.ts";
-import { useAttention } from "~/lib/useAttention.ts";
+import { useAttention, useUnwatched } from "~/lib/useAttention.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { useStableList } from "~/lib/useStableList.ts";
@@ -252,6 +252,7 @@ export function Inbox() {
     enabled: notices,
   });
   const attention = useAttention();
+  const unwatched = useUnwatched();
 
   const rows = useMemo(
     () =>
@@ -490,7 +491,7 @@ export function Inbox() {
     bound: notices,
     error: Boolean(updatesRead.error || decisions.error),
     shown: needs.length + updates.length,
-    watched: watchedIn("seat"),
+    watched: watchedIn("seat", unwatched),
   });
   const showList = !single || !named;
   const showPane = !single || named !== null;
