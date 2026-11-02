@@ -201,10 +201,10 @@ export type McpAlarmKind =
  * agent's credential, which the server's binding names. `edit`: the server's
  * configuration, its `tool_prefix`.
  */
-export type McpFixKind = "restart" | "integration" | "edit";
+type McpFixKind = "restart" | "integration" | "edit";
 
 /** The gesture that fixes one server's alarm, and what it acts on. */
-export interface McpFix {
+interface McpFix {
   kind: McpFixKind;
   server: string;
   /** The one agent's instance it acts on, by handle; "" acts on every instance. */
