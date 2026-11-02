@@ -1266,7 +1266,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/artifacts/new` | Not a page: an earlier link, rewritten in place to its kind's page when it carries `kind=`, and to the gallery when it does not | `kind=` (read once, then dropped) |
 | `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back (to the folder it is kept in, named, where the reader can see it), the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say, and the Folder it is kept in, a link where the reader can see it, with Move…), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
 | `#/settings/models` · `#/settings/models/{id}` | **Settings › Models**, the column's landing and the Settings row's address, open to every member: every model with its condition, how it signs in and what it is used for (`llm_entries`), the model alarms and, as the *By job* lens (`?view=jobs`), every seat's model for each category of work; one model's page with its sign-in, sit-out, usage and uses. Every change is an admin's: the wizard (`?flow=add`, or `?flow=edit&step=…` on a model; `&add=` lists the uses it opens with added, each `category:handle` or `assistant`), and the test, retry, device sign-in and removal flows (`?flow=`). `{id}` is the model's key, the name a seat's `llm:` writes | |
-| `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP & tools**, the engine's runtime beside the models: every MCP server with its condition, its alarms, who it reaches and what last went wrong, a server's own page, and the engine's built-in tools by group *(every member's, in a reading that names no launch line, header, failure sentence or call; every action is an admin's)*. ONE tail segment is a tool, opened where the page shows it, and two are a server's page, discriminated on LENGTH, because a tool name is a third party's string | `view=` · `tab=` · `flow=` (`add`, `restart`, `disable`, `remove`, with `server=` and `seat=`) · `q=` · `cap=` · `group=` · `peek=` |
+| `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP & tools**, the engine's runtime beside the models: every MCP server with its condition, its alarms, who it reaches and what last went wrong, a server's own page, and the engine's built-in tools by group *(every member's, in a reading that names no launch line, header, failure sentence or call; every action is an admin's)*. ONE tail segment is a tool, opened where the page shows it, and two are a server's page, discriminated on LENGTH, because a tool name is a third party's string | `view=` · `tab=` · `flow=` (`add`, `edit` with `step=`, `test`, `value` with `key=`, `restart`, `disable`, `remove`, with `server=` and `seat=`) · `q=` · `cap=` · `group=` · `peek=` |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
 | `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds on a first turn, delegation depth), delegation, notifications and a scheduled turn's timeout, one read-only settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it *(needs Admin access)*. Read-only | |
 | `#/settings/spend` | **Settings › Token spend**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across Settings' sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
@@ -8939,7 +8939,7 @@ decides a server's state, a tool's risk, a failure's class or an alarm's fix:
 the engine answers each, and the page names it in its words (`words.ts`).
 
 The page names itself in a header (its title, one plain line, and **Add
-server** for an admin, which opens the add form below) and its two views are
+server** for an admin, which opens the wizard below) and its two views are
 underline tabs under it (`?view=`), drawn as a server's own tabs are:
 **Servers** and **Built-in tools**. **Servers** leads, for an admin, with
 **Needs attention**: one row for each server an MCP alarm stands on (the
@@ -8947,7 +8947,8 @@ engine's `alarms[].entries[]`), its tone, the server's mark, what is wrong in a
 line and its failure's class or the refused names under it, and the one fix
 the engine names in a quiet button: **Restart** (every instance, or the named
 agent's), **See its sign-in** (the server's Connection tab, where its
-integration's Agents tab is linked) or **See which tools** (its Tools tab).
+integration's Agents tab is linked) or **Change its prefix** (the wizard at
+its Connection step, where the tool prefix is).
 The engine's measurement and the remedy open under the row; past three rows
 the rest fold to a summary. A member reads *Read-only. Changes take Admin
 access.* instead. Four figures follow (three for a member): the servers and how
@@ -8962,24 +8963,31 @@ many are not offered); **Used by** (the first agent the engine grants it and
 *+n*, from each agent seat's `tool_sources`, every agent on hover); **Last
 error** (the longest-down node's failure in its class's few words, the agent
 and when under it, the engine's sentence on hover for an admin); and, for an
-admin, the server's menu: **Restart**, **Disable** or **Enable**, **Remove**.
+admin, a pencil that opens the wizard on the server (shown on hover or focus,
+and always where there is no hover) and the server's menu: **Test**, **Edit**,
+**Restart**, **Disable** or **Enable**, **Remove**.
 
 A row opens the **server's page** (`servers/{name}`): an object header (its
-mark, title, name, state, connection, tool count and reach) and four tabs
-(`?tab=`). **Overview** says a disabled server is off with **Enable**, the
+mark, title, name, state, connection, tool count and reach, the connection kept
+on one line), **Edit** beside the menu in the page bar for an admin (the menu
+folds into the bar's *More* on a phone, which carries the same actions), and
+four tabs (`?tab=`). **Overview** says a disabled server is off with **Enable**, the
 server's own alarms, each instance (the agent it runs for or *The company*, its
 node, its state, its tools or what is wrong in a few words, the class's title
 on hover), a line naming any node that did not answer the instance read, when
-it last answered and its last failure, what it reported itself as and its
+it last answered, its last failure and for an admin its latest test (passed or
+failed, by whom, when) with **Test now**, what it reported itself as and its
 protocol, and for an admin the instructions it reports, said not to be the
 agents' (a seat's harness is handed the entry's `description`). **Connection**
-is read only: for an admin the address or the command, then the transport,
-where it runs, its instances, the start and call timeouts with which are the
-default, its tool prefix; how the engine signs in (and an integration's link
-to its Agents tab); and for an admin every header or variable the entry sends,
-by name, with the `${VAR}` it reads where its value is that reference alone
-(the engine masks every other value, so it reads *Set in the configuration*),
-never a value. A member's org carries no agent's grants (the engine pushes
+is for an admin the address or the command, then the transport, where it
+runs, its instances, the start and call timeouts with which are the default,
+its tool prefix (from the entry as written), with **Edit**; how the engine
+signs in (and an integration's link to its Agents tab); and every header or
+variable it is sent, from the engine's `values`: its name and the `${VAR}` it
+reads (*Set in the configuration* for a value written there, *Each agent's
+own* for a key an integration fills), whether the store holds it, who stored
+it and when, **Replace** or **Set** for each key an integration does not fill,
+and **Edit**; never a value. A member's org carries no agent's grants (the engine pushes
 `tool_sources` to an admin alone), so for a member the list draws no **Used
 by** and a server's page no reach, rather than *No agent*. **Tools** lists the names no agent is offered under them with
 the engine's reason, then every tool the fleet lists with its description, the
@@ -8988,8 +8996,41 @@ declared nothing) and its calls over the week, with a search and the risk's
 chips. **Activity** is the week's calls per tool, every reader's, and for an
 admin the newest calls (when, the agent, the tool, how it ended and how long it
 took, never its arguments or its result) with any data node that did not
-answer. Flows are the address (`?flow=restart`, `disable`, `remove`, with
-`server` and `seat`), so an alarm's fix and a menu item open one dialog.
+answer. Flows are the address (`?flow=test`, `value` with `key`, `restart`,
+`disable`, `remove`, with `server` and `seat`), so an alarm's fix and a menu
+item open one dialog. **Test** runs on open and on **Test again**, and nothing
+else starts one: on every node that runs the server, or a per-agent one as
+the first agent the engine grants it (another chosen in **Test as**), each
+stage in the kit's step list with its time and what it found, the stages
+never reached said so, and where one failed, its class's title and remedy; it
+never calls a tool. **Replace** (or **Set**) takes a new value write-only and
+sends it to the engine, which tests the server with it before it seals it
+and points the key at it: a value the server refuses is said on the field
+with what the test found under it, and stores nothing; where no node answered
+the test, **Save untested** stores it anyway; a per-agent server's own value
+is stored untested, since it is tested as each agent. Both ask the engine's
+recent step-up, which the dashboard's one ceremony answers and replays.
+
+**Adding and editing** is a wizard, a page of its own in the list's place
+(`?flow=add`, or `?flow=edit&server=` with `step=` for the step an action is
+about): **Source** (the curated catalogue, with what the company already runs
+standing apart as *Added*; an address the engine checks before anything is
+added, saying what answers there, the sign-in it asks for and its tools; a
+pasted `mcpServers`, VS Code `servers` or registry `server.json`, read and
+never run, its values left out; or a community search, sent when asked and
+each result marked *Not reviewed*), **Name**, **Connection** (an address, or a
+command, its arguments and variables), **Sign-in** (the vendor's integration
+where the catalogue names one, a header, or none, with what the address check
+or the catalogue found said above them), **Test** (the draft as it would be
+written, run as it opens and again on request) and **Review** (the engine's
+dry run of the entry, its problems on the fields they name and the steps that
+hold them marked). An edit has no Source, keeps the server's name, opens at
+the step its action names and writes back every field of the entry it does
+not draw. A value typed in the wizard is never written into the entry: it is
+tested with the draft, sealed across the fleet, and stored write-only after
+the entry is written, each through the same route as **Replace**; a value the
+server refuses leaves the entry saved and the wizard open on what is left.
+Enter moves on from a single-line field, a choice or a step's heading.
 **Remove** first asks the engine's dry run what names the server (an agent's
 or a team's `mcp_env`, a box's `sandbox.mcp.servers`) and which stored values
 nothing else reads, holds **Remove server** until the reader clears those in
