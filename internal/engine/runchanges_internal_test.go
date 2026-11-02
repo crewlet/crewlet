@@ -20,15 +20,20 @@ import (
 // changeHost is the code host as a collection asks it of the changes a run's
 // branches head: each repository's live changes by branch, an open that
 // lands one — numbered from 7 — unless its branch heads one, and a read by
-// object id answering one commit's subject; every question recorded.
+// object id answering one commit's subject; every question recorded. Set to
+// answer opens together, it holds each until that many are being asked at
+// once ([changeHost.meet]).
 type changeHost struct {
-	mu      sync.Mutex
-	heads   map[pushKey]code.BranchChange
-	next    int64
-	subject string
-	reads   []code.ReadQuery
-	writes  []code.ChangeProposal
-	gits    []code.GitQuery
+	mu       sync.Mutex
+	heads    map[pushKey]code.BranchChange
+	next     int64
+	subject  string
+	reads    []code.ReadQuery
+	writes   []code.ChangeProposal
+	gits     []code.GitQuery
+	together int
+	arrived  int
+	met      chan struct{}
 }
 
 func newChangeHost() *changeHost {
@@ -69,7 +74,10 @@ func atTheRecord(q code.ReadQuery) bool {
 	return q.Fresh.Level == statelog.ReadSession && q.Fresh.Floor(topics.CodeLogStream) == pushRecordAt
 }
 
-func (h *changeHost) Change(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+func (h *changeHost) Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+	if err := h.meet(ctx); err != nil {
+		return code.ChangeResult{}, err
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.writes = append(h.writes, p)
@@ -91,6 +99,27 @@ func (h *changeHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer
 	h.gits = append(h.gits, q)
 	return code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Log: &code.LogAnswer{
 		Commits: []code.LogCommit{{OID: q.Log.Rev, Subject: h.subject}}}}, nil
+}
+
+// meet holds an open, where the host is set to answer opens together, until
+// that many have arrived — or ctx ends, answered as the write's failure.
+func (h *changeHost) meet(ctx context.Context) error {
+	h.mu.Lock()
+	if h.together == 0 {
+		h.mu.Unlock()
+		return nil
+	}
+	if h.arrived++; h.arrived == h.together {
+		close(h.met)
+	}
+	met := h.met
+	h.mu.Unlock()
+	select {
+	case <-met:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // asked is what the host was asked, copied under its lock.
@@ -229,6 +258,46 @@ func TestARunsChangeIsTitledWhateverItsBranchIsNamed(t *testing.T) {
 	}
 	if title := writes[0].Open.Title; title != "seats/swe/a b" || code.TitleProblem(title) != "" {
 		t.Fatalf("the open is titled %q, want its branch's name made a title, %q", title, "seats/swe/a b")
+	}
+}
+
+// A RUN'S ASKS ARE OPENED AT ONCE: each ask is its own repository's, under its
+// own operation and decided by that repository's committer, so a collection
+// asks every open together and waits for its slowest — never for the sum of
+// writes that may each wait for their record to apply while the run's seat is
+// held — and each ref it delivered names the change opened from it.
+//
+// Mutation: open the asks one after another — the first open waits for a
+// second that never comes until the case's deadline, unopened, red.
+func TestARunsAsksAreOpenedAtOnce(t *testing.T) {
+	t.Parallel()
+	run := openingRun()
+	run.Repos[2].Open = &sandbox.OpenChange{Target: "refs/heads/main", Title: "Fix the api"}
+	branch := "refs/heads/seats/swe/ENG-42"
+	pushed := []sandbox.PushedRef{
+		{Repo: "web", Ref: branch, Old: code.ZeroOID, New: oidOf("1"), Pushes: 1},
+		{Repo: "api", Ref: branch, Old: code.ZeroOID, New: oidOf("2"), Pushes: 1},
+	}
+	host := newChangeHost()
+	host.together, host.met = 2, make(chan struct{})
+	// THE DEADLINE IS ONLY EVER REACHED BY OPENS ASKED ONE AFTER ANOTHER,
+	// whose first waits for a second that is not asked until it answers: asked
+	// together, both are answered as soon as both have arrived.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	named, opened, err := readerOf(host).Changes(ctx, run, recordOf(pushed), true)
+	if err != nil || len(opened) != 2 {
+		t.Fatalf("Changes = %+v, %v; want both asks answered", opened, err)
+	}
+	for i, repo := range []string{"web", "api"} {
+		if o := opened[i]; o.Repo != repo || !o.Opened || !strings.HasPrefix(o.Change, repo+"!") ||
+			named[i].Change != o.Change {
+			t.Errorf("%s's ask: %+v, its ref %+v; want a change of %s opened and its ref naming it", repo, o,
+				named[i], repo)
+		}
+	}
+	if _, writes, _ := host.asked(); len(writes) != 2 {
+		t.Errorf("the collection asked %d opens, want one a repository", len(writes))
 	}
 }
 

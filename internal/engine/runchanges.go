@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -101,26 +102,53 @@ func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, record s
 	if !open {
 		return named, nil, nil
 	}
-	var opened []sandbox.OpenedChange
+	// THE ASKS ARE OPENED AT ONCE, one goroutine an ask, each owned and
+	// awaited here and stopped with ctx: each is its own repository's, under
+	// its own operation (openOpID) and decided by that repository's
+	// committer, so none waits on another, and in turn a collection waits for
+	// its slowest open rather than for the sum of them — a title read by
+	// object id and a committer write that may wait up to statelog.StallGrace
+	// for its record to apply, each, while the run's seat is held for its
+	// collection. Bounded by the run's repositories, sandbox.MaxRunRepos (8)
+	// at most, which a run's grant is held to; one ask a repository.
+	type ask struct {
+		repo      sandbox.RunRepo
+		delivered int // the index in named of the branch it is opened from, -1 for none
+	}
+	var asks []ask
 	for _, r := range repos {
 		if r.Open == nil {
 			continue
 		}
 		source := branchRef(r.Branch)
-		var delivered *sandbox.PushedRef
-		if i := slices.IndexFunc(named, func(ref sandbox.PushedRef) bool {
+		asks = append(asks, ask{repo: r, delivered: slices.IndexFunc(named, func(ref sandbox.PushedRef) bool {
 			return ref.Repo == r.Repo && ref.Ref == source
-		}); i >= 0 {
-			delivered = &named[i]
+		})})
+	}
+	if len(asks) == 0 {
+		return named, nil, nil
+	}
+	opened := make([]sandbox.OpenedChange, len(asks))
+	var wg sync.WaitGroup
+	for i, a := range asks {
+		// A COPY OF THE DELIVERED REF, which the open only reads: named is
+		// written below, once every open has answered.
+		var delivered *sandbox.PushedRef
+		if a.delivered >= 0 {
+			ref := named[a.delivered]
+			delivered = &ref
 		}
-		bc, heading := heads[pushKey{repo: r.RepoID, ref: source}]
-		o := p.openOne(ctx, reader, run, r, delivered, bc, heading, at)
-		if delivered != nil && delivered.Change == "" && o.Opened && strings.Contains(o.Change, "!") {
+		bc, heading := heads[pushKey{repo: a.repo.RepoID, ref: branchRef(a.repo.Branch)}]
+		wg.Go(func() { opened[i] = p.openOne(ctx, reader, run, a.repo, delivered, bc, heading, at) })
+	}
+	wg.Wait()
+	for i, a := range asks {
+		if o := opened[i]; a.delivered >= 0 && named[a.delivered].Change == "" && o.Opened &&
+			strings.Contains(o.Change, "!") {
 			// THE CHANGE IT OPENED NAMES THE REF IT WAS OPENED FROM, as
 			// every change a delivered ref heads does.
-			delivered.Change = o.Change
+			named[a.delivered].Change = o.Change
 		}
-		opened = append(opened, o)
 	}
 	return named, opened, nil
 }
