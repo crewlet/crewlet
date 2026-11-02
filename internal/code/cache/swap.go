@@ -1446,6 +1446,8 @@ var swapFields = []swapField{
 		"with inc's directory: next links only the runs its record names (carryIndex)"},
 	{name: "codeIndex", class: notCarried, why: "inc's code index as its readers opened it; next opens the " +
 		"record carryCodeIndex links in at its first reader"},
+	{name: "codeIndexOpening", class: notCarried, why: "a reader's opening of inc's files, which ends as " +
+		"inc's; next's readers open next's"},
 	{name: "memoMu", class: own, why: "the memo's lock of next's own"},
 	{name: "memoListed", class: own, why: "false, or inc's as carryMemo moves the memo's tree in whole as next " +
 		"is promoted: the cohorts on next's disk are those inc's record named, listed or not"},

@@ -387,3 +387,97 @@ func TestAnIndexBuildSyncsItsDirectoryOnce(t *testing.T) {
 			want)
 	}
 }
+
+// holding is a Placement that makes the cache git-1 and the first holder of
+// every repository: what a case whose indexer it drives needs.
+func holding(o *cache.Options) {
+	o.Placement = &cache.Placement{Node: "git-1", Order: func(string) ([]string, error) {
+		return []string{"git-1", "git-2"}, nil
+	}}
+}
+
+// indexHashes counts the code index files a cache held to their trailers, by path.
+type indexHashes struct {
+	mu   sync.Mutex
+	seen map[string]int
+}
+
+// on is an Options mutation that counts every code index file a check of
+// the cache hashes.
+func (h *indexHashes) on(o *cache.Options) {
+	cache.WhileHashing(o, func(path string) {
+		if filepath.Base(filepath.Dir(path)) != "codeindex" {
+			return
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.seen == nil {
+			h.seen = map[string]int{}
+		}
+		h.seen[path]++
+	})
+}
+
+func (h *indexHashes) counts() map[string]int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return maps.Clone(h.seen)
+}
+
+// A SEARCH NEVER HASHES A CODE INDEX. After a restart nothing in the process
+// has held an index's files to their trailers, and holding them is a cold
+// read of every byte of the index: a search that finds it so reads the tip
+// with git grep — however many search at once — and the indexer's next look
+// verifies it, each file once, off every request's path; the searches after
+// it read the index and hash nothing.
+//
+// Mutation: let a search verify (codeindex.go's CodeIndex asks codeIndex with
+// verify) — the searches hash the files; or verify nothing in the indexer
+// (Index's codeIndexVouched check skipped) — the index stays unopened.
+func TestASearchNeverHashesACodeIndex(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", map[string]string{"a.go": "package a\n", "b.go": "package b\n"})
+	first := w.open(t, holding)
+	cache.IndexPass(t.Context(), first)
+	_, paths, ok := cache.CodeIndexFiles(first, repo)
+	if !ok {
+		t.Fatal("the indexer built no index")
+	}
+	var h indexHashes
+	c := w.reopen(t, first, holding, h.on)
+	s := w.sync(t, c, repo)
+	if _, after, ok := cache.CodeIndexFiles(c, repo); !ok || !slices.Equal(after, paths) {
+		t.Fatalf("the restarted copy keeps the index %v (%t), want the one built, %v", after, ok, paths)
+	}
+	searches := func() []bool {
+		var wg sync.WaitGroup
+		got := make([]bool, 4)
+		for i := range got {
+			wg.Go(func() { _, got[i] = c.CodeIndex(t.Context(), s) })
+		}
+		wg.Wait()
+		return got
+	}
+	if got := searches(); slices.Contains(got, true) {
+		t.Errorf("searches of an index nothing has verified read it (%v), want each to grep", got)
+	}
+	if got := h.counts(); len(got) != 0 {
+		t.Errorf("the searches hashed the index's files %v, want none", got)
+	}
+	cache.IndexPass(t.Context(), c)
+	want := map[string]int{}
+	for _, p := range paths {
+		want[p] = 1
+	}
+	if got := h.counts(); !maps.Equal(got, want) {
+		t.Errorf("the indexer's look hashed %v, want each of the index's files once: %v", got, want)
+	}
+	if got := searches(); slices.Contains(got, false) {
+		t.Errorf("searches after the indexer verified the index answer %v, want each to read it", got)
+	}
+	if got := h.counts(); !maps.Equal(got, want) {
+		t.Errorf("the searches after the verification hashed %v, want nothing more than %v", got, want)
+	}
+}

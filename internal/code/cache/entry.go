@@ -429,7 +429,11 @@ type incarnation struct {
 	// codeIndex is the code index its record names, opened by the first
 	// reader (Cache.CodeIndex) and kept for the next while the record is
 	// inc's; nil until then, and set nil by every change of the record.
-	codeIndex *openedCodeIndex
+	// codeIndexOpening is the opening of it a reader is making now, closed
+	// once it is installed or has failed: every other reader waits on it
+	// rather than map the same files again (Cache.codeIndex).
+	codeIndex        *openedCodeIndex
+	codeIndexOpening chan struct{}
 	// THE MEMO'S IN-MEMORY HALF (memo.go), whose record — its cohorts and
 	// their bytes — is derived[DerivedMemo]; nothing of it is an entry's.
 	// memoMu is the memo's own lock, under which an answer is placed into its

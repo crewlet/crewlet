@@ -225,14 +225,36 @@ func (c *Cache) indexHolder(repoID string) (holder, passesOn bool) {
 	return slices.Contains(holders, c.placement.Node), len(holders) > 1 && holders[0] == c.placement.Node
 }
 
-// CodeIndex is the code index of s's copy, mapped and opened — its files
-// held to their trailers once each, the first time a reader of this process
-// opens them — and VALID WHILE s IS HELD: its files stay mapped for s's
-// reader until s is released (openedCodeIndex). False where the copy keeps
-// none, where the node's bound on mappings is held whole by readers, or where
-// a file of it cannot be read — which also drops the index for the indexer to
-// build again; a search answers each by reading the tip with git grep.
+// CodeIndex is the code index of s's copy, mapped and opened, as a SEARCH
+// reads it — VALID WHILE s IS HELD: its files stay mapped for s's reader
+// until s is released (openedCodeIndex). False where the copy keeps none,
+// where the node's bound on mappings is held whole by readers, where a file
+// of it cannot be read — which also drops the index for the indexer to build
+// again — and where a file of it is not yet one this process wrote or held to
+// its trailer: a search answers each by reading the tip with git grep.
+//
+// A SEARCH NEVER HASHES AN INDEX. After a restart nothing has vouched for an
+// index's files, and the first open of one hashes every byte of every file —
+// a cold read of an index of a gigabyte or more and seconds of a core — which
+// on a search's path ran outside its budget (code.SearchBudget), and once for
+// each of the concurrent first searches that each found it unopened. A
+// search that finds the index unverified greps and NUDGES THE INDEXER, whose
+// look verifies it (Index), one look at a time, off every request's path;
+// and an opening in progress is waited on by every other reader of the
+// incarnation (incarnation.codeIndexOpening), so the mappings it reserves are
+// made once.
 func (c *Cache) CodeIndex(ctx context.Context, s Synced) (*CodeIndexView, bool) {
+	return c.codeIndex(ctx, s, false)
+}
+
+// errUnverified is an opening of a code index a file of which this process
+// has neither written nor held to its trailer, by a reader that does not
+// verify (CodeIndex).
+var errUnverified = errors.New("cache: a file of the code index is not yet held to its trailer")
+
+// codeIndex is CodeIndex, and with verify — the indexer's — the opening that
+// holds every file nothing has vouched for to its trailer.
+func (c *Cache) codeIndex(ctx context.Context, s Synced, verify bool) (*CodeIndexView, bool) {
 	if c.handedOut(s, "a read of the code index") != nil {
 		return nil, false
 	}
@@ -253,22 +275,42 @@ func (c *Cache) CodeIndex(ctx context.Context, s Synced) (*CodeIndexView, bool) 
 			// file of while nobody held it: opened again.
 			c.forgetCodeIndex(inc)
 		}
+		if opening := inc.codeIndexOpening; opening != nil {
+			// Another reader is opening it: this one takes that opening.
+			e.mu.Unlock()
+			select {
+			case <-opening:
+				continue
+			case <-ctx.Done():
+				return nil, false
+			}
+		}
+		opening := make(chan struct{})
+		inc.codeIndexOpening = opening
 		e.mu.Unlock()
-		o, err := c.openCodeIndex(e, inc, rec)
+		o, err := c.openCodeIndex(e, inc, rec, verify)
+		e.mu.Lock()
+		inc.codeIndexOpening = nil
+		close(opening)
 		switch {
+		case errors.Is(err, errUnverified):
+			e.mu.Unlock()
+			c.nudgeIndex(e.id)
+			return nil, false
 		case errors.Is(err, errMapsFull):
 			// Every mapping the node may make is a reader's: this search
 			// reads the tip with git grep, and the index stays.
+			e.mu.Unlock()
 			return nil, false
 		case err != nil:
+			e.mu.Unlock()
 			c.log.Warn("code_cache_codeindex_unreadable", "repo", e.id, "incarnation", inc.n, "error", err)
 			c.dropCodeIndex(ctx, e, inc, rec)
 			return nil, false
 		}
-		e.mu.Lock()
 		if inc.codeIndexRecord() != rec || inc.discarded || inc.codeIndex != nil {
-			// The record moved, or another reader installed its own
-			// opening, while this one mapped: this one is nobody's.
+			// The record moved, or was dropped, while this one mapped: this
+			// opening is nobody's.
 			e.mu.Unlock()
 			c.unmapCodeIndex(o)
 			continue
@@ -349,8 +391,12 @@ func (c *Cache) unmapCodeIndex(o *openedCodeIndex) {
 
 // openCodeIndex maps every file rec names, each held to its SHA-256 trailer
 // unless this process wrote or checked it at the identity it has (vouch),
-// and opens them. errMapsFull where the node's bound on mappings has no room.
-func (c *Cache) openCodeIndex(e *entry, inc *incarnation, rec *codeIndexState) (*openedCodeIndex, error) {
+// and opens them — or, without verify, answers errUnverified for one nothing
+// has vouched for, before it maps it. errMapsFull where the node's bound on
+// mappings has no room.
+func (c *Cache) openCodeIndex(e *entry, inc *incarnation, rec *codeIndexState, verify bool) (*openedCodeIndex,
+	error) {
+
 	o := &openedCodeIndex{rec: rec, view: &CodeIndexView{}}
 	mapFile := func(rel string, size int64) ([]byte, error) {
 		path := filepath.Join(inc.dir, rel)
@@ -368,6 +414,13 @@ func (c *Cache) openCodeIndex(e *entry, inc *incarnation, rec *codeIndexState) (
 		if info.Size() != size || size == 0 {
 			return nil, fmt.Errorf("%s is %d bytes, and the index names it at %d", rel, info.Size(), size)
 		}
+		id := idOf(info)
+		e.mu.Lock()
+		vouched := vouchedAt(inc, rel, id)
+		e.mu.Unlock()
+		if !vouched && !verify {
+			return nil, fmt.Errorf("%w: %s", errUnverified, rel)
+		}
 		if err = c.maps.reserve(); err != nil {
 			return nil, err
 		}
@@ -377,11 +430,10 @@ func (c *Cache) openCodeIndex(e *entry, inc *incarnation, rec *codeIndexState) (
 			return nil, fmt.Errorf("mapping %s: %w", rel, err)
 		}
 		o.maps = append(o.maps, &mappedRun{data: data})
-		id := idOf(info)
-		e.mu.Lock()
-		vouched := vouchedAt(inc, rel, id)
-		e.mu.Unlock()
 		if !vouched {
+			if k := c.knobs; k != nil && k.hashing != nil {
+				k.hashing(path)
+			}
 			if err := runTrailerHolds(data); err != nil {
 				return nil, fmt.Errorf("%s: %w", rel, err)
 			}
@@ -427,6 +479,25 @@ func runTrailerHolds(data []byte) error {
 		return errors.New("its trailer is not the SHA-256 of its bytes")
 	}
 	return nil
+}
+
+// codeIndexVouched reports whether every file rec names is one this process
+// wrote or held to its trailer at the identity it has now (vouch): an index
+// a search may open (CodeIndex).
+func (c *Cache) codeIndexVouched(e *entry, inc *incarnation, rec *codeIndexState) bool {
+	rels := rec.rels()
+	ids := make([]fileID, len(rels))
+	for i, rel := range rels {
+		ids[i] = lstatID(filepath.Join(inc.dir, rel))
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i, rel := range rels {
+		if !vouchedAt(inc, rel, ids[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // setCodeIndex stores rec as inc's code index — nil drops it — its files
@@ -493,7 +564,9 @@ type treeFile struct {
 // geometric, and the tip map written — then the record stored as one step,
 // where the copy is still the entry's and its index still the one the build
 // read. A copy whose repository is searched with grep keeps none, and one it
-// keeps is dropped.
+// keeps is dropped. An index nothing in this process has held to its
+// trailers yet — a boot's — is verified and opened here first, so no search
+// pays for it (CodeIndex).
 func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 	if err := c.handedOut(s, "a build of the code index"); err != nil {
 		return "", err
@@ -508,6 +581,14 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 		}
 		return IndexNone, nil
 	}
+	var view *CodeIndexView
+	if rec != nil && !c.codeIndexVouched(e, inc, rec) {
+		if view, _ = c.codeIndex(ctx, s, true); view == nil {
+			e.mu.Lock()
+			rec = inc.codeIndexRecord()
+			e.mu.Unlock()
+		}
+	}
 	tip, err := c.indexTip(ctx, s)
 	if err != nil || tip == "" {
 		return IndexNone, err
@@ -519,9 +600,8 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 	if err != nil {
 		return "", err
 	}
-	var view *CodeIndexView
-	if rec != nil {
-		if view, _ = c.CodeIndex(ctx, s); view == nil {
+	if rec != nil && view == nil {
+		if view, _ = c.codeIndex(ctx, s, true); view == nil {
 			e.mu.Lock()
 			rec = inc.codeIndexRecord()
 			e.mu.Unlock()
