@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -352,17 +353,35 @@ func liveNode(t *testing.T, backend coord.Backend, node string) int64 {
 // epoch it was written under, and the surfaces rendering the catalogue are
 // told when what they would render moved.
 //
-// Mutation: count a listing whatever its node's presence, or skip the notice,
-// and this is red.
+// What is held is what a surface reads WHEN IT IS TOLD. The notice follows the
+// state it announces, on the goroutine that stored it, so that state can be
+// read a moment before any surface hears of it; the promise is only that a
+// surface told reads what it was told of.
+//
+// Mutation: count a listing whatever its node's presence, skip the notice, or
+// send it before the schemas the listing names are read, and this is red.
 func TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	fleet := coordmemory.NewFleet()
 	backend := coordmemory.New()
 	e := &Engine{backends: &Backends{Fleet: fleet, Coord: backend}}
-	var notices atomic.Int32
-	notify := func(context.Context) { notices.Add(1) }
-	e.SetOnCatalogueChanged(notify)
+	var (
+		mu       sync.Mutex
+		readings []catalogueReading
+	)
+	e.SetOnCatalogueChanged(func(context.Context) {
+		live, _ := e.LiveMCPListings()
+		r := catalogueReading{live: live, schemas: e.HeldMCPToolSchemas()}
+		mu.Lock()
+		readings = append(readings, r)
+		mu.Unlock()
+	})
+	told := func() []catalogueReading {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(readings)
+	}
 
 	epochB := liveNode(t, backend, "node-b")
 	listing := fakeListing("github", "node-b", epochB, "get_issue")
@@ -379,31 +398,51 @@ func TestAnotherNodesListingReachesThisNodesCatalogueWhileItsNodeIsLive(t *testi
 
 	// The publisher's first beat reads the presence; this engine has no
 	// node, so it publishes nothing of its own.
-	pollUntil(t, 10*time.Second, "node-b's listing counted", func() bool {
-		live, ok := e.LiveMCPListings()
-		return ok && len(live) == 1 && live[0].Node == "node-b"
+	pollUntil(t, 10*time.Second, "the catalogue's surfaces told of node-b's listing", func() bool {
+		return len(told()) > 0
 	})
-	if notices.Load() == 0 {
-		t.Error("the catalogue's surfaces were not told of node-b's listing")
+	first := told()[0]
+	if len(first.live) != 1 || first.live[0].Node != "node-b" {
+		t.Errorf("a surface told of the catalogue read %+v, want node-b's listing", first.live)
 	}
-	schemas := e.HeldMCPToolSchemas()
-	if _, ok := schemas[testDigest("github/get_issue")]; !ok {
-		t.Errorf("the schema node-b's listing names was not read: %v", schemas)
+	if _, ok := first.schemas[testDigest("github/get_issue")]; !ok {
+		t.Errorf("a surface told of the catalogue could not read the schema node-b's listing names: %v",
+			first.schemas)
 	}
+
+	// ONE BEAT AT A TIME, as a node runs them on its publisher's goroutine
+	// alone: the loop stops, and the case's beat stands in for its next one.
+	// Left running, a tick between the release and the case's beat would
+	// announce the drain before the count below is taken, and two beats
+	// reading the presence either side of the release could store their
+	// readings in the opposite order.
+	e.listings.cancel()
+	<-e.listings.done
 
 	// NODE-B DRAINS: its presence goes, and its listing stops counting at
 	// the next reading of the presence, though its record is still there.
 	if released, err := backend.Release(ctx, coord.NodeResource("node-b"), "node-b:1", epochB); err != nil || !released {
 		t.Fatalf("release node-b: %v %v", released, err)
 	}
-	before := notices.Load()
+	before := len(told())
 	e.publishMCPListings(ctx)
 	if live, ok := e.LiveMCPListings(); !ok || len(live) != 0 {
 		t.Errorf("a drained node's listing still counts: %+v", live)
 	}
-	if notices.Load() == before {
-		t.Error("the catalogue's surfaces were not told that a drained node's tools went")
+	after := told()
+	if len(after) == before {
+		t.Fatal("the catalogue's surfaces were not told that a drained node's tools went")
 	}
+	if last := after[len(after)-1]; len(last.live) != 0 {
+		t.Errorf("a surface told that node-b drained read %+v, want no listing", last.live)
+	}
+}
+
+// catalogueReading is what a surface rendering the catalogue reads when it is
+// told the catalogue moved.
+type catalogueReading struct {
+	live    []coord.MCPListing
+	schemas map[string]coord.MCPToolSchema
 }
 
 // THE SWEEP REMOVES WHAT READERS NO LONGER COUNT, AND NOTHING ELSE: a listing

@@ -1224,6 +1224,37 @@ session ends are refused as possibly having taken effect, as for any server
 that goes down. A restart is never logged as the server failing, and it is
 recorded in the runtime audit as `mcp_server_acted`, refused ones included.
 
+### A server's alarms
+
+A server that stays down, an agent whose instance waits too long for its
+credential, and a tool no agent can be handed each raise an
+[alarm](../reference/alarms.md), one per kind listing every server it stands
+on. Every data node judges them from every live node's heartbeat, so they read
+the same whichever node you ask, and a server turned off raises none.
+
+| Alarm | Raised when |
+|---|---|
+| `mcp_server_failing` | No instance of the server is serving, and one has been down for longer than the restart schedule's ceiling plus a heartbeat (5m 15s) |
+| `mcp_server_partial` | Some instances serve, and one that does not has been down that long: one node, one agent's credentials or one child that keeps dying, rather than the server |
+| `mcp_server_waiting_long` | An agent's instance has been held back, unstarted, for longer than an integration waits between two passes plus a heartbeat (5m 15s), for a credential that integration mints |
+| `mcp_tools_refused` | A tool the server lists cannot be offered under its name ([A tool's name](#a-tools-name)): raised as soon as a node lists it, since no wait changes a name |
+
+The outage is measured from the instance that went down first, kept across
+every retry of it, so a server whose last serving instance goes down moves from
+`mcp_server_partial` to `mcp_server_failing` at once rather than waiting the
+span again; the wait is measured likewise across the passes that hold the
+instance back. Inside those spans the engine is still bringing the instance
+back on its own, or the integration is still minting.
+
+Each alarm reaches you as every alarm does: the `crewlet.alarm.active` gauge,
+an `alarm_raised` and an `alarm_cleared` log line for each server (the server
+named as `entry`), and the health count. [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)
+carries the standing ones in `alarms`, each server with the one gesture that
+fixes it: a restart (of the whole server where nothing serves, of the one
+agent's instance where the rest serve), the integration minting the agent's
+credential, or the server's `tool_prefix`. An administrator's Inbox lists each
+one under **Needs you**, linked to the server's page.
+
 ---
 
 ## Per-agent identity

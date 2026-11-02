@@ -93,7 +93,7 @@ func opencodeServer(script fakeScript) {
 		os.Exit(73)
 	}
 	code := playAs(script, &opencodeRecorder{out: events}, cs, nil)
-	_ = os.WriteFile(fakeDoneFile, []byte(strconv.Itoa(code)), 0o600)
+	writeWhole(fakeDoneFile, []byte(strconv.Itoa(code)))
 	park(false)
 }
 
@@ -148,8 +148,7 @@ func opencodeReport(script fakeScript) {
 func opencodeClient() {
 	opencodeServerOrExit()
 	prompt, _ := io.ReadAll(os.Stdin)
-	_ = os.WriteFile(fakeGoFile+".tmp", prompt, 0o600)
-	_ = os.Rename(fakeGoFile+".tmp", fakeGoFile)
+	writeWhole(fakeGoFile, prompt)
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGTERM)
 	offset := 0

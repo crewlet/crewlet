@@ -287,6 +287,26 @@ func (o *Organization) AgentSeatByID(id uuid.UUID) *Role {
 	return nil
 }
 
+// AgentHandleByID names the agent seat whose derived id is id by its handle,
+// for a reader naming a seat a peer reported by its id (a heartbeat row names
+// the seat an instance was launched for that way, ADR-0013).
+//
+// THE ID ITSELF WHERE THIS ORG HOLDS NO SUCH SEAT, which is a seat retired since
+// the peer reported it, or a peer on another revision: the honest name for it,
+// as a lease's is in `fleet`, rather than none. "" for uuid.Nil, which names no
+// seat (a shared server's instance). A nil org names every seat by its id.
+func (o *Organization) AgentHandleByID(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	if o != nil {
+		if role := o.AgentSeatByID(id); role != nil {
+			return role.Handle()
+		}
+	}
+	return id.String()
+}
+
 // ---- normalisation --------------------------------------------------- //
 
 // Normalize applies the derivations the org chart implies but nobody writes
