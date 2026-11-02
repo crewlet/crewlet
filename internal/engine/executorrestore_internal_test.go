@@ -403,3 +403,76 @@ func TestAResumeReadsWhichSessionTheJobsBoxStarted(t *testing.T) {
 		}
 	}
 }
+
+// A RELAUNCH IS TARGETED AT THE MEMBER IT WOULD BE LAUNCHED ON, by the one pick
+// the relaunch's own probe and every reader of whether a relaunch continues a
+// session ask ([Engine.RelaunchTarget]): the seat's first member with an in-box
+// runner that is not sitting out its plan, the cell its run lands in and its
+// runner — never the runner of the harness that wrote the session, which a seat
+// whose plan member is spent is not relaunched on. A chain every member of
+// which sits out has no member yet, and says it waits rather than that none
+// restores the session; a handle the company holds no seat under has none.
+//
+// Mutation: answer the catalogue's runner for a harness, skip the sit-out,
+// resolve the cell otherwise than the launch does, or read a chain sitting out
+// as one with no runner, and a case goes red.
+func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		members []chainMember
+		harness string
+		cell    sandbox.Placement
+		waiting bool
+	}{
+		"the chain's head, in the catalogue's default cell": {harness: "claude-code", cell: sandbox.Direct,
+			members: []chainMember{{key: "api", agent: "claude-code", model: "claude-golden"}}},
+		"the next member past a spent plan, in its own cell": {harness: "opencode", cell: sandbox.Container,
+			members: []chainMember{
+				{key: "plan", agent: "claude-code", model: "opus", spent: true},
+				{key: "oc", agent: "opencode", model: "anthropic/claude-sonnet-5", runIn: config.Placement(sandbox.Container)},
+			}},
+		"every member sitting out": {waiting: true,
+			members: []chainMember{{key: "plan", agent: "claude-code", model: "opus", spent: true}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, seat := chainCompany(t, tc.members...)
+			e, runners := launchRigRestoring(t, c, bridgeFor(t, mcpbridge.Options{
+				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+			}), &keptLog{rows: map[string]executordomain.Session{}, archives: map[string][]byte{}})
+			got := e.RelaunchTarget(seat.Handle())
+			// AND THE PROBE ASKS THE SAME PICK: of a turn with no run record, it
+			// answers the member's runner's decision where there is a member,
+			// and the pick's own reason where there is none.
+			basis := launcherOn(e, c, seat, "t-none").ProbeSession(t.Context())
+			if tc.waiting {
+				if !got.Waiting || got.Restorer != nil || !strings.Contains(got.Why, "sitting out its plan") {
+					t.Fatalf("a chain sitting out is targeted %+v, want it waiting, saying so", got)
+				}
+				if basis.Continues() || basis.Why != got.Why {
+					t.Errorf("the probe answered %+v, want the pick's reason %q", basis, got.Why)
+				}
+				return
+			}
+			want, ok := sandbox.Runner(runners[tc.harness]).(sandbox.SessionRestorer)
+			if !ok {
+				t.Fatalf("the %s runner restores no carried session, so this case proves nothing", tc.harness)
+			}
+			if got.Waiting || got.Harness != tc.harness || got.Placement != tc.cell || got.Restorer != want ||
+				got.Why != "" {
+				t.Fatalf("a relaunch is targeted %+v, want the %s member's runner in the %s cell",
+					got, tc.harness, tc.cell)
+			}
+			if basis.Continues() || !strings.Contains(basis.Why, "no run record") {
+				t.Errorf("the probe answered %+v, want the member's runner asked of a turn with no record", basis)
+			}
+		})
+	}
+	c, _ := executorCompany(t)
+	e, _ := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	if got := e.RelaunchTarget("nobody"); got.Restorer != nil || got.Waiting || !strings.Contains(got.Why, "no seat") {
+		t.Errorf("a handle no seat holds is targeted %+v, want no member, said", got)
+	}
+}

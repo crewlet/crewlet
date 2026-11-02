@@ -227,13 +227,9 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		return runner.Launched{}, err
 	}
 
-	// THE CELL THE RUN GOES TO, resolved as the manager resolves it — the
-	// member's own run_in, else the catalogue's default — because it decides
-	// which address its box dials the bridge at ([mcpbridge.Session.OnHost]).
-	cell := sandbox.Placement(agentPlacement(company, member.Key))
-	if cell == "" {
-		cell = manager.DefaultPlacement()
-	}
+	// THE CELL THE RUN GOES TO ([memberCell]), because it decides which
+	// address its box dials the bridge at ([mcpbridge.Session.OnHost]).
+	cell := memberCell(company, manager, member.Key)
 	// A CELL THAT CANNOT DIAL THE BRIDGE IS REFUSED BY NAME, before the launch
 	// opens a job, for the reason the refusals above are. A direct box is a
 	// process of this host and dials this node's own listener on loopback,
@@ -791,6 +787,18 @@ func agentPlacement(c *Company, key string) config.Placement {
 		return ""
 	}
 	return entry.RunIn
+}
+
+// memberCell is the cell a run of the chain member key lands in, resolved as
+// the manager resolves it: the member's own run_in, else the catalogue's
+// default. The launch's cell ([agentLauncher.launch]) and the cell a relaunch
+// target names ([Company.relaunchTarget]) alike, so a reader's word on whether
+// a relaunch continues in the box a run parked in is the launch's.
+func memberCell(c *Company, manager *sandbox.Manager, key string) sandbox.Placement {
+	if cell := sandbox.Placement(agentPlacement(c, key)); cell != "" {
+		return cell
+	}
+	return manager.DefaultPlacement()
 }
 
 // maxTurnsFor is a seat's coding-round cap, nil-safe on a seat with no sandbox
