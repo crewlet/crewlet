@@ -12,9 +12,11 @@ import (
 //
 // The table is the policy, written out whole so that a new reason cannot join
 // [worklet.Reasons] without somebody deciding whether it is worth a turn. The
-// second column is the answer when the change asks something of the task's
-// owner (a new assignment, a person's comment, the task finishing or
-// reopening), and only the two owner reasons depend on it.
+// second column is the answer when the change asks something of the seat
+// holding the reason: of the task's owner, collaborators, fallback lead and
+// reporter, any change but another agent's comment or a change to who
+// watches it; of a watcher, a person's comment. Only those five reasons
+// depend on it.
 func TestEveryReasonDecidesWhetherItStartsATurn(t *testing.T) {
 	t.Parallel()
 	policy := map[worklet.Reason][2]bool{
@@ -30,18 +32,17 @@ func TestEveryReasonDecidesWhetherItStartsATurn(t *testing.T) {
 		worklet.ReasonRoutedTo:       {true, true},
 		worklet.ReasonParentAssignee: {true, true},
 		worklet.ReasonChecklist:      {true, true},
-		// The owner, and the lead who stands in for an absent one.
+		worklet.ReasonBlocking:       {true, true},
+		worklet.ReasonPurged:         {true, true},
+		// Woken when the change asks something of the seat holding it.
 		worklet.ReasonAssignee:     {false, true},
+		worklet.ReasonCollaborator: {false, true},
 		worklet.ReasonLeadFallback: {false, true},
-		// Following the work rather than being asked about it: a row in the
-		// inbox, read when the seat next opens the task.
-		worklet.ReasonReporter:     {false, false},
-		worklet.ReasonWatcher:      {false, false},
-		worklet.ReasonCollaborator: {false, false},
-		worklet.ReasonUnassigned:   {false, false},
-		worklet.ReasonBlocking:     {false, false},
-		worklet.ReasonUnwatched:    {false, false},
-		worklet.ReasonPurged:       {false, false},
+		worklet.ReasonReporter:     {false, true},
+		worklet.ReasonWatcher:      {false, true},
+		// A row in the inbox and never a turn: nothing is left to do.
+		worklet.ReasonUnassigned: {false, false},
+		worklet.ReasonUnwatched:  {false, false},
 	}
 	for _, r := range worklet.Reasons {
 		want, ok := policy[r]
@@ -49,9 +50,9 @@ func TestEveryReasonDecidesWhetherItStartsATurn(t *testing.T) {
 			t.Errorf("%q is a reason with no decision about whether it starts a turn", r)
 			continue
 		}
-		for i, ownerAsked := range []bool{false, true} {
-			if got := r.StartsTurn(ownerAsked); got != want[i] {
-				t.Errorf("%q.StartsTurn(ownerAsked=%v) = %v, want %v", r, ownerAsked, got, want[i])
+		for i, asked := range []bool{false, true} {
+			if got := r.StartsTurn(asked); got != want[i] {
+				t.Errorf("%q.StartsTurn(asked=%v) = %v, want %v", r, asked, got, want[i])
 			}
 		}
 	}
@@ -62,11 +63,13 @@ func TestEveryReasonDecidesWhetherItStartsATurn(t *testing.T) {
 
 // THE NOTICES A LIVE COMPANY SPENT ITS TURNS ON, AND WHAT EACH WAKES NOW.
 //
-// Every case below is a change that woke a seat into a turn which ended
+// The quiet cases are changes that woke a seat into a turn which ended
 // `turn_no_action` with a summary saying the change asked it nothing ("a
 // status note asks nothing of QA", "an acknowledgement to backend-engineer",
-// "a watcher change with no request"), beside the changes that must still
-// reach their seat at once.
+// "a watcher change with no request"); the rest are changes the same
+// company's seats acted on (a person's instruction, a status move by somebody
+// else, a new dependency, a reassignment, a finished task to verify), which
+// must still reach the seats that answer for the task.
 func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 	t.Parallel()
 	agentComment := worklet.Snapshot{
@@ -96,10 +99,10 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 		actor: "sre",
 		want:  []string{"pm"},
 	}, {
-		name:  "a person's comment on the task",
+		name:  "a person's comment on the task, which speaks to everyone following it",
 		n:     worklet.Notify{Kind: worklet.ChangeComment, Snapshot: humanComment},
 		actor: "miles",
-		want:  []string{"backend-engineer"},
+		want:  []string{"app-engineer", "backend-engineer", "designer", "pm", "qa"},
 	}, {
 		name: "a reply in a thread two seats wrote in",
 		n: worklet.Notify{Kind: worklet.ChangeComment, Snapshot: func() worklet.Snapshot {
@@ -110,15 +113,15 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 		actor: "sre",
 		want:  []string{"pm", "qa"},
 	}, {
-		name:  "a watchers change",
+		name:  "a change to who watches the task",
 		n:     worklet.Notify{Kind: worklet.ChangeWatchers, Snapshot: agentComment},
 		actor: "pm",
 		want:  nil,
 	}, {
-		name:  "a status move that neither finishes nor reopens the task",
+		name:  "a status move by somebody else that neither finishes nor reopens the task",
 		n:     worklet.Notify{Kind: worklet.ChangeStatus, Snapshot: agentComment},
-		actor: "app-engineer",
-		want:  nil,
+		actor: "qa",
+		want:  []string{"app-engineer", "backend-engineer"},
 	}, {
 		name: "somebody else finishing the seat's task",
 		n: worklet.Notify{Kind: worklet.ChangeStatus, Snapshot: func() worklet.Snapshot {
@@ -127,7 +130,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 			return s
 		}()},
 		actor: "pm",
-		want:  []string{"backend-engineer"},
+		want:  []string{"app-engineer", "backend-engineer"},
 	}, {
 		name: "a new dependent on the seat's task",
 		n: worklet.Notify{Kind: worklet.ChangeRelations, Snapshot: func() worklet.Snapshot {
@@ -136,12 +139,30 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 			return s
 		}()},
 		actor: "app-engineer",
-		want:  nil,
-	}, {
-		name:  "a new assignment",
-		n:     worklet.Notify{Kind: worklet.ChangeAssignee, Snapshot: agentComment},
-		actor: "pm",
 		want:  []string{"backend-engineer"},
+	}, {
+		name:  "a new assignment, which the reporter hears as the owner does",
+		n:     worklet.Notify{Kind: worklet.ChangeAssignee, Snapshot: agentComment},
+		actor: "miles",
+		want:  []string{"app-engineer", "backend-engineer", "pm"},
+	}, {
+		name: "the assignee finishing the task, which its reporter verifies",
+		n: worklet.Notify{Kind: worklet.ChangeStatus, Snapshot: func() worklet.Snapshot {
+			s := agentComment
+			s.PrevStatusGroup, s.StatusGroup = worklet.GroupActive, worklet.GroupDone
+			return s
+		}()},
+		actor: "backend-engineer",
+		want:  []string{"app-engineer", "pm"},
+	}, {
+		name: "a reopened task",
+		n: worklet.Notify{Kind: worklet.ChangeStatus, Snapshot: func() worklet.Snapshot {
+			s := agentComment
+			s.PrevStatusGroup, s.StatusGroup = worklet.GroupDone, worklet.GroupActive
+			return s
+		}()},
+		actor: "qa",
+		want:  []string{"app-engineer", "backend-engineer", "pm"},
 	}, {
 		name: "a question asked of one seat",
 		n: worklet.Notify{Kind: worklet.ChangeComment, Snapshot: func() worklet.Snapshot {
@@ -157,6 +178,11 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 		actor: "qa",
 		want:  nil,
 	}, {
+		name:  "a person's comment on an unowned, unwatched task",
+		n:     worklet.Notify{Kind: worklet.ChangeComment, Snapshot: worklet.Snapshot{ProjectLead: "pm", CommentAuthorKind: worklet.AuthorHuman}},
+		actor: "miles",
+		want:  []string{"pm"},
+	}, {
 		name:  "a new task nobody owns",
 		n:     worklet.Notify{Kind: worklet.ChangeCreated, Snapshot: worklet.Snapshot{ProjectLead: "pm"}},
 		actor: "qa",
@@ -169,7 +195,7 @@ func TestOnlyANoticeThatAsksSomethingStartsATurn(t *testing.T) {
 			return s
 		}()},
 		actor: "pm",
-		want:  []string{"qa-lead"},
+		want:  []string{"app-engineer", "backend-engineer", "qa-lead"},
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

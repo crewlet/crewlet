@@ -160,18 +160,19 @@ func TestAFallbackYieldsToAnyOrdinaryCandidate(t *testing.T) {
 	}
 
 	// AND A WATCHER WHO IS NOT WOKEN STILL COUNTS AS AN AUDIENCE. The
-	// fallback asks whether the change reached anybody, and a watched task's
-	// quiet status note did: it is in the watcher's inbox. Deciding the
-	// fallback after dropping the watcher would page the lead instead.
+	// fallback asks whether the change reached anybody, and another agent's
+	// comment on a watched task did: it is in the watcher's inbox. Deciding
+	// the fallback after dropping the watcher would page the lead instead.
 	quiet := worklet.Route(worklet.Candidates(&worklet.Notify{
-		Kind: worklet.ChangeStatus,
+		Kind: worklet.ChangeComment,
 		Snapshot: worklet.Snapshot{
-			Watchers:        []string{"cy"},
-			RoutingUnitLead: "backend-lead",
+			Watchers:          []string{"cy"},
+			RoutingUnitLead:   "backend-lead",
+			CommentAuthorKind: worklet.AuthorAgent,
 		},
 	}), everyone, "bo")
 	if len(quiet) != 0 {
-		t.Fatalf("a status note on a watched, unowned task woke %v; the "+
+		t.Fatalf("an agent's comment on a watched, unowned task woke %v; the "+
 			"watcher is its audience and it asks nobody anything", handles(quiet))
 	}
 }

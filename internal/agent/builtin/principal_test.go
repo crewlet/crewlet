@@ -42,12 +42,9 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 	t.Parallel()
 	ana := boundPerson("ana.silva", "ana")
 	task := worklet.Task{ID: "t-1", Key: "ENG-1", Project: "ENG", Assignee: "ana",
-		Status: worklet.StatusTodo, StatusGroup: worklet.GroupNotStarted}
-	// FINISHED, because that is a status change the assignee is woken for
-	// when somebody else makes it: one that neither finishes nor reopens
-	// the task wakes nobody, and the control below would assert nothing.
+		Status: worklet.StatusTodo}
 	moved := task
-	moved.Status, moved.StatusGroup = worklet.StatusDone, worklet.GroupDone
+	moved.Status = worklet.StatusInProgress
 	notify := worklet.Wake{Kind: worklet.ChangeStatus, Before: task,
 		After: moved}.Notify(nil)
 	candidates := worklet.Candidates(notify)
