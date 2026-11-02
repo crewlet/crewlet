@@ -479,9 +479,7 @@ func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) 
 // configured tokens at provisioning time. A failure of either tears the box
 // down before it is answered ([Manager.discard]), and the box is kept alive
 // from its creation until both are done ([keepProvisioning]), for a check's
-// box as for a coding run's. Mounts the cell cannot take
-// are refused before any box exists ([mountsFit]): the remote backend reads
-// none, so its cell is held here, where every box is made.
+// box as for a coding run's.
 func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, runner Runner) (Sandbox, error) {
 	placement := spec.Placement
 	if placement == "" {
@@ -489,9 +487,6 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	}
 	provider, err := m.configured(placement)
 	if err != nil {
-		return nil, err
-	}
-	if err = mountsFit(placement, spec.Mounts); err != nil {
 		return nil, err
 	}
 	box, err := provider.Create(ctx, spec)
@@ -526,7 +521,7 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	}
 	log.DebugContext(ctx, "sandbox_acquired",
 		"sandbox_id", box.ID(), "placement", string(placement),
-		"coding_agent", spec.CodingAgent, "setup_steps", names, "mounts", len(spec.Mounts))
+		"coding_agent", spec.CodingAgent, "setup_steps", names)
 	return box, nil
 }
 

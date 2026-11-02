@@ -143,11 +143,16 @@ func compactionCharge(inputs int64, limits code.Limits) int64 {
 // a walk: `pack-objects --revs` from every tip it keeps reads every commit,
 // tree and blob those reach — the repository's whole history, whichever packs
 // it sorts — as a clone without a bitmap walks it, at the transfer's figure an
-// object (gitproc.TransferBytesPerObject). And its refusal is "slower", as a
-// publication's is, never a compaction's "pushes refused": a purge waits, and
-// no push does. A node whose budget cannot hold the charge is refused it
-// (ErrNoMemory); the expunge is asked again at every pass, and a git node with
-// more memory serves it once it becomes the repository's maintainer.
+// object (gitproc.TransferBytesPerObject). A due scan is admitted here too, at
+// no input: the walk's room and the window alone. A node whose budget cannot
+// hold the charge is refused it (ErrNoMemory); the expunge is asked again at
+// every pass, and a git node with more memory serves it once it becomes the
+// repository's maintainer. Its refusal refuses no push at once, as a
+// compaction's does at the pack bound, but it is no publication's mere
+// "slower" either: until it is served, what no ref reaches keeps counting
+// against code.limits.repo_max_bytes, so a refusal that stands — a purge's
+// or the weekly schedule's — ends in the repository's pushes refused
+// repo_size.
 //
 // A refusal for memory is logged once an incarnation as
 // code_cache_expunge_refused and counted

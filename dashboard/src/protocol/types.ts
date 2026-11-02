@@ -7643,7 +7643,6 @@ export interface CodeCheckRow {
   runner?: string;
   placement?: string;
   box?: string;
-  borrowed?: boolean;
   reporter?: string;
   queued_at?: string;
   started_at?: string;

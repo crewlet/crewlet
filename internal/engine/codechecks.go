@@ -3,8 +3,10 @@ package engine
 import (
 	"context"
 	"runtime"
+	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/checkrun"
 	codehome "github.com/crewlet/crewlet/internal/code/home"
@@ -57,7 +59,7 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codeho
 	}
 	o := checkrun.Options{
 		NodeID: nodeID, Estate: seam, Order: e.router, Boxes: e.checkBoxes, Company: e.checkCompany,
-		Tokens: checkTokens{tokens: e.checkTokens}, GitBase: e.boxGitURL,
+		Tokens: checkTokens{tokens: e.checkTokens}, GitBase: e.boxGitURL, CodeBase: checkCodeBase(e.boxGitURL),
 		Slots: boot.Git.MaxChecksFor(runtime.GOMAXPROCS(0)), Timing: checkrun.Production(),
 		// THE COMPANY'S REMOTE CAPS are the coordination store's: a slot
 		// leased for each remote box, its minutes on the fleet's counter.
@@ -71,6 +73,25 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codeho
 		o.Logs = objects
 	}
 	return checkrun.New(o)
+}
+
+// checkCodeBase is where a check's box reads its commit without a clone
+// (checkrun.Options.CodeBase, its CREWLET_CHECK_API): gitBase — this node's
+// CREWLET_BOX_GIT_URL, the code host's public listener and the box git route
+// — with that route traded for the one the API serves a check's reads under.
+// "" for a gitBase that does not end in the box git route, which
+// checkrun.New refuses by its own name.
+//
+// BOTH ROUTES ARE auth's OWN SPELLINGS (BoxGitPrefix, BoxCodePrefix), never a
+// copy: the runner spelled its own "/box/code" before, which nothing held to
+// the route the API mounts, so renaming either would have answered every
+// check's read 404 with only a live run to show it.
+func checkCodeBase(gitBase string) string {
+	listener, ok := strings.CutSuffix(gitBase, strings.TrimSuffix(auth.BoxGitPrefix, "/"))
+	if !ok || listener == "" {
+		return ""
+	}
+	return listener + strings.TrimSuffix(auth.BoxCodePrefix, "/")
 }
 
 // checkBoxes is this node's CURRENT sandbox catalogue, read at every walk and

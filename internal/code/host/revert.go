@@ -46,9 +46,12 @@ func (b *building) revertChange(ctx context.Context) (string, code.EngineWriteRe
 	s, w := wr.s, wr.w
 	repo := wr.synced.Repo
 	// THE COPY'S OWN SNAPSHOT OR LATER: its caller read the change merged
-	// at a floor the copy was synced past, so the merge_oid is in it.
+	// at a floor the copy was synced past, so the merge_oid is in it. Its
+	// detail and its HEAD REVISION alone, a first page one revision long:
+	// a revert reads the head revision's facts (revertBase) and no other,
+	// and a whole page is up to 200 revisions' touched paths.
 	ans, err := s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChange, Asker: w.Principal, Repo: repo.Name,
-		Change: w.Change, Fresh: statelog.FloorAt(statelog.ReadSession, wr.synced.Position)})
+		Change: w.Change, Limit: 1, Fresh: statelog.FloorAt(statelog.ReadSession, wr.synced.Position)})
 	named := code.ChangeRef(repo.Name, w.Change)
 	switch {
 	case errors.Is(err, code.ErrChangeNotFound):
@@ -117,7 +120,8 @@ const (
 // it restores ([revertChange]'s doc) — and how it was merged: the merge
 // commit's first parent, a squash's one parent, or a fast-forward's recorded
 // base; or the sentence of a merge the rows cannot place yet. parents are the
-// merge_oid's, and revisions the change's first page of them, newest first.
+// merge_oid's, and revisions the change's first page of them, newest first —
+// its head revision, the one revertChange reads.
 func revertBase(named string, c *code.ChangeDetail, revisions []code.RevisionRow, parents []string) (string,
 	string, string) {
 

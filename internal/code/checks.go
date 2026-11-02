@@ -48,7 +48,6 @@ import (
 //     lower (StartedAt, Runner): two claims of one attempt converge on one
 //     runner wherever each landed. The box is that claim's, set once by its
 //     holder's later record, which repeats the claim's StartedAt and Runner;
-//     whether it borrowed a cache only ever turns on;
 //   - its ENDING is the measurement over infrastructure's — passed and failed
 //     over errored, cancelled and skipped, since a run that measured the
 //     commit says more of it than one that did not run — then the earlier
@@ -139,6 +138,20 @@ const CheckSweepGrace = 24 * time.Hour
 // the attempt's row the authority: a box whose attempt has ended is refused at
 // once, whatever its token's expiry.
 const CheckBoxGrace = sandbox.DefaultSetupTimeout
+
+// CheckUser is the HTTP Basic user name a check's box presents on the box
+// routes, its password its check's token: beside internal/code/host's
+// BoxUser, the second of the two a box route reads, and what tells a check's
+// box from a coding run's before either is verified.
+//
+// SPELLED HERE, ONCE, for its two sides: the check runner (internal/code/
+// checkrun), which hands it to the box's git, and the code host, which admits
+// a check's box only under it. Each kept its own copy before, and nothing
+// held the two together — the runner's suites run on fake boxes, the host's
+// never import the runner — so a rename on either side would have refused
+// every real check box's fetch with nothing short of a live run to show it.
+// Both import this package, and neither imports the other.
+const CheckUser = "check"
 
 // The record's bounds. Each is the payload's own, refused by its Validate
 // before a writer forms a record, so the largest record a check takes fits
@@ -660,6 +673,16 @@ func (q CheckQueued) Validate() error {
 // record repeating its claim's StartedAt and Runner, names the box it made —
 // on the repository's checks subject ([OpCheckStarted]). Every field is in
 // the base format, under the condition the subject states.
+//
+// NO `borrowed` FLAG: it named a box given its node's cache to read from, a
+// borrow no engine path launches (crewlet/crewlet#496 would measure one
+// against the fetch before any box takes it), so nothing ever set it and
+// every row held it false. Its removal takes no versionedFields row, under
+// the same condition: no build carrying the code domain has run, so no
+// record of this build meets one that wrote it. Were that otherwise, the
+// removal would still read both ways: a record carrying the key decodes here
+// with the key ignored, and a build that declared it reads a record without
+// it as the false every record carried.
 type CheckStarted struct {
 	CheckKey
 	// Runner is the claiming node's id; empty for an attempt a person's CI
@@ -669,8 +692,6 @@ type CheckStarted struct {
 	// Box is the box's handle: empty on the claim, named by the holder's
 	// later record once it made one.
 	Box string `json:"box,omitempty"`
-	// Borrowed reports a box given its node's cache to read from.
-	Borrowed bool `json:"borrowed,omitempty"`
 	// StartedAt is the claiming node's instant: the claim's key, with
 	// Runner, so two claims of one attempt converge on the lower.
 	StartedAt time.Time `json:"started_at"`
@@ -688,7 +709,7 @@ func (s CheckStarted) Validate() error {
 		return checkField("runner", "a runner of the engine names itself, and a person's CI is no runner")
 	case len(s.Runner) > MaxProvenanceBytes || len(s.Box) > MaxProvenanceBytes:
 		return checkField("box", "a runner's id and a box's handle are at most %d bytes", MaxProvenanceBytes)
-	case s.Placement == PlacementExternal && (s.Box != "" || s.Borrowed):
+	case s.Placement == PlacementExternal && s.Box != "":
 		return checkField("box", "a person's CI runs no box of the engine's")
 	case s.StartedAt.IsZero():
 		return checkField("started_at", "a claim names the instant it was made")

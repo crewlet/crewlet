@@ -19,12 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// CheckUser is the Basic user name a check's box presents its token under:
-// the code host's own (internal/code/host's CheckUser), spelled here because
-// this package imports nothing of the host. The box's git is told it by the
-// credential helper sandbox.BoxGit writes.
-const CheckUser = "check"
-
 // LostPolls is how many polls in a row a box may fail to answer before its
 // run is ended `errored box_failed`: FOUR, a minute at CheckPoll — a box's
 // control plane down for one poll is a blip a check should outlast, and one
@@ -227,7 +221,7 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *cod
 		return sandbox.Spec{}, nil, a.ended(code.CheckStateErrored, code.CheckReasonBoxFailed, nil,
 			"no credential could be minted for the check's box")
 	}
-	git, err := sandbox.BoxGit{Base: r.o.GitBase, User: CheckUser, Token: token}.Env(env)
+	git, err := sandbox.BoxGit{Base: r.o.GitBase, User: code.CheckUser, Token: token}.Env(env)
 	if err != nil {
 		return sandbox.Spec{}, nil, a.ended(code.CheckStateErrored, code.CheckReasonSetupFailed, nil, err.Error())
 	}
@@ -256,7 +250,7 @@ func (a *attempt) checkEnv() map[string]string {
 		"CREWLET_CHECK_SHA":     a.c.OID,
 		"CREWLET_CHECK_NAME":    a.c.Name,
 		"CREWLET_CHECK_ATTEMPT": strconv.Itoa(a.c.Attempt),
-		"CREWLET_CHECK_API":     a.r.apiBase + "/" + a.c.Repo,
+		"CREWLET_CHECK_API":     a.r.o.CodeBase + "/" + a.c.Repo,
 		"CREWLET_CHECK_SUMMARY": summaryFile,
 	}
 	if a.c.Base != "" {

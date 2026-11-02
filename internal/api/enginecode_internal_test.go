@@ -62,10 +62,10 @@ func TestTheEnginesCodeSurfaceTellsABoxWhyOnlyByTheFleetsKeyring(t *testing.T) {
 		signed            bool
 	}{
 		{"a run's token this fleet signed", host.BoxUser, boxes.Mint(run), true},
-		{"a check's token this fleet signed", host.CheckUser, checks.Mint(check, time.Minute), true},
+		{"a check's token this fleet signed", code.CheckUser, checks.Mint(check, time.Minute), true},
 		{"a run's token another fleet signed", host.BoxUser, otherBoxes.Mint(run), false},
-		{"a check's token another fleet signed", host.CheckUser, otherChecks.Mint(check, time.Minute), false},
-		{"this fleet's run token as a check's", host.CheckUser, boxes.Mint(run), false},
+		{"a check's token another fleet signed", code.CheckUser, otherChecks.Mint(check, time.Minute), false},
+		{"this fleet's run token as a check's", code.CheckUser, boxes.Mint(run), false},
 		{"this fleet's check token as a run's", host.BoxUser, checks.Mint(check, time.Minute), false},
 	}
 	routes := []struct {

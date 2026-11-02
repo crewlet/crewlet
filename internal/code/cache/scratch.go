@@ -146,12 +146,13 @@ func (c *Cache) NewScratch(ctx context.Context, s Synced, id string) (*Scratch, 
 // scratch ([Scratch.Gather]) — shaped as
 // NewScratch's, but leaning on a STORE OF EXACTLY THE PACKS IT MERGES rather
 // than on s's incarnation: packs names each by its git checksum, every one a
-// pack live in the incarnation s pins, and its .pack, .idx and .rev are
-// hard-linked from there into scratch/merge.<repository>.<id>.git, the
-// scratch's one alternate (A MERGE'S REPOSITORIES, above). So a
-// `pack-objects --stdin-packs` run in it reads every pack it merges through
-// its alternate, writes into the scratch alone, and walks for its name hashes
-// nothing its inputs do not hold. It pins s's incarnation until Remove, which
+// pack live in the incarnation serving s now (s's own, unless a swap has
+// replaced it: newScratch), and its .pack, .idx and .rev are hard-linked from
+// there into scratch/merge.<repository>.<id>.git, the scratch's one alternate
+// (A MERGE'S REPOSITORIES, above). So a `pack-objects --stdin-packs` run in it
+// reads every pack it merges through its alternate, writes into the scratch
+// alone, and walks for its name hashes nothing its inputs do not hold. It pins
+// that incarnation until Remove, which
 // takes the store with the scratch. id names it — the merge's: a canonical
 // lowercase UUID, since it is a path component — and an id names one scratch,
 // once.
@@ -367,6 +368,16 @@ func (c *Cache) mergeAt(dir string) (*entry, *incarnation) {
 // the entry for the observer (mergeAt). A directory already there under the
 // name is refused; one that could not be written whole is moved into trash/,
 // with its store, and its pin given back.
+//
+// A MERGE'S IS MADE OVER THE COPY SERVING s NOW (serving), as a rewrite's is
+// (newRewriteScratch): a swap leaves the incarnation it replaced no live set,
+// and a merge's scratch is made after its plan — a compaction's, a
+// publication's repack and its rebuild — while the repository's other records
+// on its maintainer, an expunge's begin and commit among them, swap the copy
+// beside it; its inputs, held from every other build of the repository there
+// (internal/code/compact's claims), are live in the copy serving now. A
+// push's scratch and a view stay over s's own incarnation: what a push is
+// checked against is the copy its sync handed it.
 func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool, merge []string) (*Scratch,
 	error) {
 
@@ -379,6 +390,9 @@ func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool
 	}
 	e, inc := s.entry, s.inc
 	e.mu.Lock()
+	if merge != nil {
+		inc = serving(inc)
+	}
 	if inc.discarded {
 		e.mu.Unlock()
 		return nil, fmt.Errorf("%w: a scratch names a Synced still held, and %s was released and removed",
@@ -400,7 +414,7 @@ func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool
 		}
 		return nil, fmt.Errorf("cache: making %s: %w", dir, err)
 	}
-	sc := &Scratch{Dir: dir, Alternate: s.Dir, c: c, e: e, inc: inc, view: view}
+	sc := &Scratch{Dir: dir, Alternate: inc.dir, c: c, e: e, inc: inc, view: view}
 	sc.remove = sync.OnceFunc(sc.discard)
 	if merge != nil {
 		sc.store = filepath.Join(c.dir, scratchDir, mergeStoreName(e.id, name))
@@ -412,7 +426,7 @@ func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool
 		e.merges[sc.store] = inc
 		e.mu.Unlock()
 	}
-	if err := sc.fill(s.Dir, merge); err != nil {
+	if err := sc.fill(inc.dir, merge); err != nil {
 		sc.Remove()
 		return nil, fmt.Errorf("cache: making %s for %s: %w", dir, e.id, err)
 	}
@@ -560,10 +574,25 @@ type rewritePick struct {
 	leanStore bool
 }
 
-// newRewriteScratch makes scratch/<name>.git as pick says, pinning s's
-// incarnation for it — and for the store it leans on, where pick names one —
-// until Remove. A name already there is refused; a scratch that could not be
-// written whole is moved into trash/ with its store, and its pin given back.
+// newRewriteScratch makes scratch/<name>.git as pick says over the copy
+// SERVING s now, pinning it for the scratch — and for the store it leans on,
+// where pick names one — until Remove. A name already there is refused; a
+// scratch that could not be written whole is moved into trash/ with its
+// store, and its pin given back.
+//
+// THE COPY SERVING s, NEVER s's OWN WHERE A SWAP HAS REPLACED IT (serving): a
+// swap carries the live set into the next incarnation and leaves none in the
+// one it replaced (swapFields), so a pick over that one would find no pack
+// live and refuse the scratch. And the rewrites that make one run beside the
+// repository's merges on its maintainer — an expunge's build after the scan's
+// walk and again for the rebuild its bundle rule asks for, its rescue after
+// its own sync (internal/code/compact) — each merge's round swapping the
+// copy, so a scratch refused for the swap would fail every cycle of a busy
+// repository. The copy serving s holds every pack s's live set held but the
+// ones a merge retired, whose objects are in the merge's output, live there
+// too; its refs and its live set are one moment's (below); and a rewrite is
+// valid over any copy at or past its scan — an expunge's inputs are held from
+// every merge, and its rescue is valid at any position at or after its begin.
 func (c *Cache) newRewriteScratch(ctx context.Context, s Synced, name string,
 	pick func(*incarnation) (rewritePick, error)) (*Scratch, error) {
 
@@ -574,12 +603,13 @@ func (c *Cache) newRewriteScratch(ctx context.Context, s Synced, name string,
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("cache: making %s's scratch for %s: %w", name, s.entry.id, context.Cause(ctx))
 	}
-	e, inc := s.entry, s.inc
+	e := s.entry
 	if err := c.acquireWrite(ctx, e); err != nil {
 		return nil, fmt.Errorf("cache: making %s's scratch for %s: %w", name, e.id, err)
 	}
 	defer c.releaseWrite(e, writeExclusive)
 	e.mu.Lock()
+	inc := serving(s.inc)
 	if inc.discarded {
 		e.mu.Unlock()
 		return nil, fmt.Errorf("%w: a scratch names a Synced still held, and %s was released and removed",
@@ -602,7 +632,7 @@ func (c *Cache) newRewriteScratch(ctx context.Context, s Synced, name string,
 		}
 		return nil, fmt.Errorf("cache: making %s: %w", dir, err)
 	}
-	sc := &Scratch{Dir: dir, Alternate: s.Dir, c: c, e: e, inc: inc}
+	sc := &Scratch{Dir: dir, Alternate: inc.dir, c: c, e: e, inc: inc}
 	sc.remove = sync.OnceFunc(sc.discard)
 	if p.leanStore {
 		sc.store = filepath.Join(c.dir, scratchDir, mergeStoreName(e.id, name))
@@ -614,7 +644,7 @@ func (c *Cache) newRewriteScratch(ctx context.Context, s Synced, name string,
 		e.merges[sc.store] = inc
 		e.mu.Unlock()
 	}
-	if err := sc.fillRewrite(s.Dir, p); err != nil {
+	if err := sc.fillRewrite(inc.dir, p); err != nil {
 		sc.Remove()
 		return nil, fmt.Errorf("cache: making %s for %s: %w", dir, e.id, err)
 	}

@@ -138,15 +138,16 @@ type changeWritten struct {
 }
 
 // changeOf reads the change number names on repo, at the seat's level — ONE
-// read a call, held to the caller's grant on the repository where it is
+// read a call, of its detail alone (code.ReadQuery.DetailOnly: no write reads
+// a revision), held to the caller's grant on the repository where it is
 // answered — for the id a write names it by and the position the write is
 // decided at or past. A detail naming another repository than the one the turn
 // resolved the name to is refused as a name taken again between the two reads.
 func (d CodeDeps) changeOf(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo code.RepoRef, number int64) (changeWritten, *tools.Result) {
 
-	answer, err := d.read(ctx, c, code.ReadQuery{Kind: code.ReadChange, Repo: repo.Name, Change: number, Limit: 1,
-		Fresh: seatRead})
+	answer, err := d.read(ctx, c, code.ReadQuery{Kind: code.ReadChange, Repo: repo.Name, Change: number,
+		DetailOnly: true, Fresh: seatRead})
 	if err != nil {
 		r := d.failed(ctx, turn, tool, c.asker, repo, err)
 		return changeWritten{}, &r

@@ -91,14 +91,16 @@
 // and a second ask of one push id on this node joins the first.
 //
 // A CHANGE'S MERGE is the same pipeline's (merge.go, M5-D11): its change read
-// at the caller's floor, judged and built onto the target's tip under its
-// kind's budget (code.MergeBuildDeadline), its merge commit authored by who
+// at the caller's floor — its detail alone — judged and built onto the
+// target's tip under its kind's budget (code.MergeBuildDeadline, one for the
+// merge and every rebuild of it), its merge commit authored by who
 // merged and its squash by the change's owner with each other author a
 // `Co-authored-by:` trailer (U43 a) — but LANDED AS A MERGE RECORD, the one
 // landing proposing it (landing.Merge) where a push's proposal goes, and
 // built again onto a target that moved under it at most code.MergeRecomputes
-// times. A target whose merges land through its queue takes an enqueue
-// instead, built by nothing here.
+// times, each rebuild only where what is left of that budget and of the
+// write's attempt holds one. A target whose merges land through its queue
+// takes an enqueue instead, built by nothing here.
 //
 // A CHANGE'S REBASE (rebase.go) is an engine write landing as one forced push
 // of its source: its commits replayed onto the target's tip, each keeping its
@@ -367,7 +369,7 @@
 // # A check's box is admitted by its attempt's row
 //
 // A box running one ATTEMPT of one check of one commit reaches the same
-// routes with its CHECK'S credential: the Basic user name CheckUser and a
+// routes with its CHECK'S credential: the Basic user name code.CheckUser and a
 // token (CheckTokens, in BoxKeyDomain beside a run's and told from one by its
 // subject) naming the attempt's key and the repository's name its box was
 // given, valid for the check's timeout and code.CheckBoxGrace — a backstop,

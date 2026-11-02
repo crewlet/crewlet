@@ -30,8 +30,7 @@
 # nobody ran `git config`.
 #
 # The whole emitted tree, not just assets/: index.html is generated too and
-# took the third marker injection, and protocol.js is the second build target.
-# Not `static/**` — static/static.go (the embed directive) and
+# took the third marker injection. Not `static/**` — static/static.go (the embed directive) and
 # static/merge_test.go sit beside the generated tree, are hand-written, and
 # must merge as ordinary source; the merge test's "other side" case holds that.
 #
@@ -47,5 +46,12 @@ static/dashboard/** -merge
 # artifact kit, under directories named by their versions. The same rule and
 # the same resolution: rebuild, never merge.
 #
-#     make dashboard && git add -A -- static/dashboard static/artifacts
+#     make dashboard && git add -A -- static/dashboard static/artifacts static/protocol
 static/artifacts/** -merge
+#
+# AND THE PROTOCOL MODULE, the second build target
+# (dashboard/vite.protocol.config.ts): the wire protocol alone, which
+# internal/e2e replays a real company's frames through. Beside the embedded
+# trees rather than in them, since no page loads it, and generated all the
+# same.
+static/protocol/** -merge

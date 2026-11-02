@@ -488,7 +488,9 @@ gate. It answers one of three things:
 `method` is `merge` (a merge commit, the default), `squash` or
 `fast_forward`. `delete_branch` deletes the change's branch as it merges;
 unsaid, a seat's branch (`seats/<handle>/…`) is deleted unless a rule over the
-target keeps it (`delete_source: none`), and any other branch is kept.
+target keeps it (`delete_source: none`), and any other branch is kept —
+decided by the code host as it judges the merge, on the rules the merge is
+judged by, and said in the answer (`deleted_branch`).
 `close_task` closes the change's work item once it merges — a second write of
 the same operation, so the same call made again is the same close, and the
 tracker's write, so it is decided as `update_work_item` is: a person who does

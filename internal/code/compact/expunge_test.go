@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -237,20 +240,247 @@ func TestAnExpungeKeepsEveryObjectAReferenceReaches(t *testing.T) {
 	}
 }
 
-// AN EXPUNGE HOLDS ITS REPOSITORY FROM EVERY OTHER BUILD ON ITS NODE, from its
-// scan to its commit, and waits for one running: its begin retires inputs
-// chosen among every live pack and drops the published layers over them, so
-// a merge or a layer planned beside it would have one of the two refused
-// stale — the begin after its whole build. Unlike a compaction beside a
-// publication, which merges around the publication's reservation, nothing
-// builds beside an expunge, and each answers busy having synced nothing.
+// THE MAINTAINER DOWNLOADS NOTHING ITS EXPUNGE BUILT: once the begin has
+// applied, the node that built it adopts every output from the build's
+// scratch — the kept packs live, the dropping packs into its copy's dropping
+// view — and the rescue too once the commit has: so across a whole cycle,
+// the rescue's sync and every round to the commit among it, that node GETs
+// none of the objects the cycle stored. The dropping packs are the cruft, up
+// to compact.ExpungeInputByteCap a cycle, which the commit retires minutes
+// later.
 //
-// Mutations: drop the expunge from claimCompaction's refusal, and the merge
-// asked while the expunge is held syncs the repository; drop the publication
-// from claimExpunge's, and the expunge asked while a publication is held does.
-func TestAnExpungeHoldsItsRepositoryFromEveryOtherBuild(t *testing.T) {
+// Mutation: skip the dropping packs' adoption in the cycle, and the rescue's
+// sync downloads every dropping pack.
+func TestTheMaintainerDownloadsNothingItsExpungeBuilt(t *testing.T) {
 	t.Parallel()
-	t.Run("a compaction and a publication while the expunge runs", func(t *testing.T) {
+	gets := &gotten{}
+	x := newFixtureWith(t, func(o *codetest.SoloOptions) {
+		o.WrapObjects = func(_ string, b objstore.Backend) objstore.Backend {
+			return gettingFrom{Backend: b, gets: gets}
+		}
+	})
+	x.pushN(code.CompactMinMerge, 4<<10)
+	x.leak("feature")
+	x.purge()
+	rs := &recordingStore{Store: x.store}
+	c, _, _ := x.compactorOf(func(o *compact.Options) { o.Objects = rs })
+	if out, err := expungeWhileBusy(t, c, x.mustOwe()); out != compact.OutcomeApplied {
+		t.Fatalf("the purge's expunge answered %s, %v; want applied", out, err)
+	}
+	stored, _ := rs.stored()
+	if len(stored) < 2 {
+		t.Fatalf("the premise: the cycle stored %d objects, want its kept and its dropping packs at least",
+			len(stored))
+	}
+	got := gets.names()
+	for _, obj := range stored {
+		if n := got[obj.Key.Name()]; n > 0 {
+			t.Errorf("the maintainer downloaded %s, which its own cycle built and stored, %d times", obj.Key, n)
+		}
+	}
+}
+
+// gotten is every object name a git node's backend was asked to GET, and how
+// many times.
+type gotten struct {
+	mu  sync.Mutex
+	got map[string]int
+}
+
+// names is a copy of what g counted.
+func (g *gotten) names() map[string]int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return maps.Clone(g.got)
+}
+
+// gettingFrom is a git node's backend with every GET it makes counted, by
+// name, in gets.
+type gettingFrom struct {
+	objstore.Backend
+	gets *gotten
+}
+
+func (g gettingFrom) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	g.gets.mu.Lock()
+	if g.gets.got == nil {
+		g.gets.got = map[string]int{}
+	}
+	g.gets.got[name]++
+	g.gets.mu.Unlock()
+	return g.Backend.Get(ctx, name, off, n)
+}
+
+// A COMPACTION MERGES BESIDE AN EXPUNGE, NEVER ITS INPUTS: an expunge's walk,
+// its build over up to compact.ExpungeInputByteCap of inputs, its upload and
+// its rescue run for minutes on a large repository, and a busy repository
+// gains packs at up to three hundred a minute, so a repository whose merges
+// waited for its own expunge would pass code.MaxPacksPerRepo and have its
+// pushes refused compaction_behind while it is purged. A compaction asked
+// while an expunge of its repository is in flight on the same node — held
+// here once its build is done, nothing stored — merges the roll pushed since
+// the expunge's plan, and never one of its inputs; and both records apply,
+// the begin's inputs all still live. Once an expunge's rescue has synced past
+// its begin — one resumed from the rows here, which has planned nothing — a
+// compaction merges beside it as though none ran, and the commit applies.
+// Only while an expunge syncs and plans does a compaction answer busy, having
+// synced nothing, since it could merge packs the plan is about to choose.
+//
+// Mutations: refuse a compaction while an expunge of its repository runs at
+// all, and the merge beside the build answers busy; plan it over the
+// expunge's inputs as well, and it merges them, so the begin is refused
+// stale; never mark the expunge begun, and the merge beside the resumed
+// rescue answers busy; let a compaction claim the repository while the
+// expunge has no reservation, and it syncs.
+func TestACompactionMergesBesideAnExpungeNeverItsInputs(t *testing.T) {
+	t.Parallel()
+	t.Run("beside its build", func(t *testing.T) {
+		t.Parallel()
+		x := newFixture(t)
+		x.pushN(code.CompactMinMerge, 4<<10)
+		x.leak("feature")
+		x.purge()
+		inputs := map[string]bool{}
+		for _, p := range x.rows().Packs {
+			inputs[p.PackID] = true
+		}
+		script := &codefault.Script{}
+		held, reached := make(chan struct{}), make(chan struct{})
+		script.Arm(codefault.ExpungeAfterBuild, codefault.Action{Once: true, Block: held, Reached: reached})
+		c, _, _ := x.compactorOf(func(o *compact.Options) { o.Faults = script })
+		cand := x.mustOwe()
+		done := make(chan compact.Outcome, 1)
+		go func() {
+			out, _ := expungeWhileBusy(t, c, cand)
+			done <- out
+		}()
+		select {
+		case <-reached:
+		case out := <-done:
+			t.Fatalf("the expunge ended %s before its build was stored", out)
+		case <-time.After(time.Minute):
+			t.Fatal("the expunge built nothing in a minute")
+		}
+
+		// A ROLL PUSHED SINCE THE EXPUNGE'S PLAN, merged while it is held.
+		x.pushN(code.CompactMinMerge, 4<<10)
+		before := x.rows()
+		if out, err := compactBesideSlots(t, c, x.candidate()); out != compact.OutcomeApplied {
+			close(held)
+			<-done
+			t.Fatalf("a compaction while its repository's expunge is in flight: %s, %v; want applied", out, err)
+		}
+		// WHAT IT RETIRED: every live row before it that the rows no longer hold.
+		retired := outputs(x.rows(), before)
+		for _, p := range retired {
+			if inputs[p.PackID] {
+				t.Errorf("the compaction merged pack %s, which the expunge in flight chose as an input", p.PackID)
+			}
+		}
+		if len(retired) != code.CompactMinMerge {
+			t.Errorf("the compaction merged %d packs, want the %d pushed since the expunge's plan", len(retired),
+				code.CompactMinMerge)
+		}
+		close(held)
+		if out := <-done; out != compact.OutcomeApplied {
+			t.Fatalf("the expunge once let go, the compaction beside it applied: %s, want applied", out)
+		}
+	})
+	t.Run("beside a resumed expunge's rescue", func(t *testing.T) {
+		t.Parallel()
+		x := newFixture(t)
+		x.pushN(code.CompactMinMerge, 4<<10)
+		x.leak("feature")
+		x.purge()
+		stop := &codefault.Script{}
+		stop.Arm(codefault.ExpungeAfterBegin, codefault.Action{Once: true, Err: errors.New("stop at the begin")})
+		stopped, _, _ := x.compactorOf(func(o *compact.Options) { o.Faults = stop })
+		if out, err := expungeWhileBusy(t, stopped, x.mustOwe()); out != compact.OutcomeFailed {
+			t.Fatalf("the first cycle answered %s, %v; want failed at its begin", out, err)
+		}
+		stopped.Stop(context.Background())
+		open := x.mustOwe()
+		if open.Open == "" {
+			t.Fatal("the premise: the stopped cycle left no expunge open")
+		}
+		script := &codefault.Script{}
+		held, reached := make(chan struct{}), make(chan struct{})
+		script.Arm(codefault.ExpungeAfterRescueUpload, codefault.Action{Once: true, Block: held, Reached: reached})
+		c, _, _ := x.compactorOf(func(o *compact.Options) { o.Faults = script })
+		done := make(chan compact.Outcome, 1)
+		go func() {
+			out, _ := expungeWhileBusy(t, c, open)
+			done <- out
+		}()
+		select {
+		case <-reached:
+		case out := <-done:
+			t.Fatalf("the resumed expunge ended %s before its rescue was stored", out)
+		case <-time.After(time.Minute):
+			t.Fatal("the resumed expunge stored no rescue in a minute")
+		}
+		x.pushN(code.CompactMinMerge, 4<<10)
+		if out, err := compactBesideSlots(t, c, x.candidate()); out != compact.OutcomeApplied {
+			close(held)
+			<-done
+			t.Fatalf("a compaction beside a resumed expunge's rescue: %s, %v; want applied", out, err)
+		}
+		close(held)
+		if out := <-done; out != compact.OutcomeApplied {
+			t.Fatalf("the resumed expunge once let go, the compaction beside it applied: %s, want applied", out)
+		}
+	})
+	t.Run("busy while the expunge plans", func(t *testing.T) {
+		t.Parallel()
+		x := newFixture(t)
+		x.pushN(code.CompactMinMerge, 4<<10)
+		x.leak("feature")
+		x.purge()
+		entered, release := make(chan struct{}), make(chan struct{})
+		h := &heldSync{counted: countedOver(x.node().Cache()), entered: entered, release: release}
+		c, _, _ := x.compactorOf(func(o *compact.Options) { o.Cache = h })
+		cand := x.mustOwe()
+		done := make(chan compact.Outcome, 1)
+		go func() {
+			out, _ := expungeWhileBusy(t, c, cand)
+			done <- out
+		}()
+		select {
+		case <-entered:
+		case <-time.After(time.Minute):
+			t.Fatal("the expunge did not sync in a minute")
+		}
+		syncs, _ := h.counts()
+		if out, err := c.Compact(t.Context(), x.candidate()); out != compact.OutcomeBusy {
+			t.Errorf("a compaction while an expunge of its repository plans: %s, %v; want busy", out, err)
+		}
+		if again, _ := h.counts(); again != syncs {
+			t.Errorf("the compaction refused busy synced the repository %d times, want none", again-syncs)
+		}
+		close(release)
+		if out := <-done; out != compact.OutcomeApplied {
+			t.Fatalf("the expunge once let go: %s, want applied", out)
+		}
+	})
+}
+
+// AN EXPUNGE IS NEVER PLANNED BESIDE ANOTHER BUILD OF ITS REPOSITORY, AND NO
+// PUBLICATION BUILDS BESIDE ONE, on its node: a publication asked while an
+// expunge of its repository runs answers busy having synced nothing — the
+// begin drops every layer published over its inputs and the decide refuses a
+// layer while an expunge is open, so either would be refused stale after its
+// whole build — and an expunge asked while a compaction or a publication of
+// its repository runs answers busy having synced nothing, since its plan
+// would choose among packs that build's record retires or covers. Each lands
+// once the other is done.
+//
+// Mutations: drop the expunge from claimPublication's refusal, and the
+// publication asked while the expunge is held syncs the repository; drop the
+// compaction or the publication from claimExpunge's, and the expunge asked
+// while one is held does.
+func TestAnExpungeIsNeverPlannedBesideAnotherBuild(t *testing.T) {
+	t.Parallel()
+	t.Run("a publication while the expunge runs", func(t *testing.T) {
 		t.Parallel()
 		x := newFixture(t)
 		x.pushN(code.CompactMinMerge, 4<<10)
@@ -275,30 +505,23 @@ func TestAnExpungeHoldsItsRepositoryFromEveryOtherBuild(t *testing.T) {
 			t.Fatal("the expunge built nothing in a minute")
 		}
 		syncs, _ := cc.counts()
-		if out, err := c.Compact(t.Context(), x.candidate()); out != compact.OutcomeBusy {
-			t.Errorf("a compaction while an expunge of its repository runs: %s, %v; want busy", out, err)
-		}
 		if out, err := c.Publish(t.Context(), x.publicationCandidate()); out != compact.OutcomeBusy {
 			t.Errorf("a publication while an expunge of its repository runs: %s, %v; want busy", out, err)
 		}
 		if again, _ := cc.counts(); again != syncs {
-			t.Errorf("the builds refused busy synced the repository %d times, want none", again-syncs)
+			t.Errorf("the publication refused busy synced the repository %d times, want none", again-syncs)
 		}
 		close(held)
 		if out := <-done; out != compact.OutcomeApplied {
 			t.Fatalf("the expunge once let go: %s, want applied", out)
 		}
-		if out, err := compactWhileBusy(t, c, x.candidate()); out == compact.OutcomeBusy {
-			t.Errorf("a compaction once the expunge committed: %s, %v; want it no longer busy", out, err)
-		}
 	})
 	// Each other build is asked of its listing on the test's goroutine, and
 	// run on its own until its point holds it; once it has landed, the copy
 	// is let settle where its node does more in the background — a
-	// publication's layer, which the installer places by swapping the copy
-	// — since an expunge planned over an incarnation a swap then replaced
-	// fails its build that cycle (its scratch reads the live set the swap
-	// carried on), and is asked again at the next pass.
+	// publication's layer, which the installer places by swapping the copy —
+	// so the expunge that follows plans over a copy no installer is still
+	// placing.
 	for _, other := range []struct {
 		name   string
 		point  codefault.Point

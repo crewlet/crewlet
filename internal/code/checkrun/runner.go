@@ -184,9 +184,17 @@ type Options struct {
 	Tokens Tokens
 	// GitBase is the code host's base as a box dials it — this node's
 	// CREWLET_BOX_GIT_URL, as sandbox.ParseBoxURL read it: a public
-	// listener and /box/git, its sibling /box/code where a check reads its
-	// commit without a clone.
+	// listener and /box/git.
 	GitBase string
+	// CodeBase is where a check's box reads its commit without a clone —
+	// the same listener and the route the API serves a check's reads under
+	// (internal/api/auth's BoxCodePrefix) — and CREWLET_CHECK_API is it and
+	// the repository's name. GIVEN, NEVER SPELLED HERE: the route is the
+	// API's, which this package does not import, and a copy of its spelling
+	// here was one nothing held to the route, a rename of which would have
+	// answered every check's read 404 with only a live run to show it. The
+	// engine builds it from the route itself.
+	CodeBase string
 	// Slots is how many checks this node runs at once in container cells:
 	// git.max_checks as config.Git.MaxChecksFor resolved it, 0 none.
 	Slots int
@@ -214,22 +222,18 @@ type Options struct {
 // ErrOptions is an Options value New refuses, wrapped naming every field.
 var ErrOptions = errors.New("checkrun: refused options")
 
-// boxGitSuffix is what a box's code host base ends in, and boxCodeSuffix its
-// sibling a check's box reads its commit at (internal/api/auth's
-// BoxCodePrefix).
-const (
-	boxGitSuffix  = "/box/git"
-	boxCodeSuffix = "/box/code"
-)
+// boxGitSuffix is what a box's code host base ends in: what New holds
+// CREWLET_BOX_GIT_URL to, since a value naming the listener alone, or another
+// route of it, would fail every box's clone.
+const boxGitSuffix = "/box/git"
 
 // Runner is one git node's check runner: its walk of the queue and the
 // checks it runs, each on a goroutine of its own, until Stop.
 type Runner struct {
-	o       Options
-	timing  Timing
-	apiBase string
-	log     *slog.Logger
-	now     func() time.Time
+	o      Options
+	timing Timing
+	log    *slog.Logger
+	now    func() time.Time
 
 	// life is every walk's and every run's context, ended by Stop; ending is
 	// the context a stopping run records its ending under, set by Stop
@@ -277,13 +281,16 @@ func New(o Options) (*Runner, error) {
 	if o.Slots < 0 {
 		return nil, fmt.Errorf("%w: Slots %d is no count of container cells", ErrOptions, o.Slots)
 	}
-	base, ok := strings.CutSuffix(o.GitBase, boxGitSuffix)
-	if !ok || base == "" {
+	if base, ok := strings.CutSuffix(o.GitBase, boxGitSuffix); !ok || base == "" {
 		return nil, fmt.Errorf("%w: GitBase: %s must name the code host's public listener ending in %s "+
-			"(docs/guides/deployment.md), which a check's box clones from — and its sibling %s, where a check "+
-			"reads its commit without a clone", ErrOptions, sandbox.BoxGitURLVar, boxGitSuffix, boxCodeSuffix)
+			"(docs/guides/deployment.md), which a check's box clones from", ErrOptions, sandbox.BoxGitURLVar,
+			boxGitSuffix)
 	}
-	r := &Runner{o: o, timing: o.Timing, apiBase: base + boxCodeSuffix, log: o.Logger, now: o.Now,
+	if o.CodeBase == "" {
+		return nil, fmt.Errorf("%w: CodeBase: a check's box reads its commit without a clone there "+
+			"(CREWLET_CHECK_API), and no base names it", ErrOptions)
+	}
+	r := &Runner{o: o, timing: o.Timing, log: o.Logger, now: o.Now,
 		wake: make(chan struct{}, 1), held: map[config.Placement]int{},
 		unknown: map[config.Placement]bool{}}
 	if r.timing == (Timing{}) {

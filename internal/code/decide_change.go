@@ -91,7 +91,10 @@ import (
 // home read it — else stale, decided against rows the home did not read, for
 // its next pass to read again. The decide runs no git: whether the tip holds
 // the head is the home's finding, which the tip it names makes true, since a
-// branch's tip holds what it held whatever moved it there.
+// branch's tip holds what it held whatever moved it there. Who made the merge
+// is the decide's own read: the push that set the target to that tip, in the
+// record the target's row says last moved it ([tipPusher]), whose pusher the
+// landing names as its actor.
 //
 // A write that asks for what the change already says — an edit to its own
 // values, a draft's state it is in, the target it has, a close of a closed
@@ -578,20 +581,35 @@ type changeDecision struct {
 	// a notice a handle and the change's count of them ([noticeWrites]) —
 	// beside the change's own ([withinChange]).
 	notices int
+	// actor and actorKind are who made the change a landing records — the
+	// home's own write, which names no asker — as its decide found them: the
+	// pusher of the target's tip the home found the head in ([tipPusher]).
+	actor     string
+	actorKind PartyKind
 }
 
 // routeChange stamps the routing of the record d forms ([routingFor]) for p, its
 // change row as the record leaves it: an open's and an edit's mentions, held
 // to the deciding chart; a draft's state's, a retarget's, a close's and a
-// reopen's watchers; a landing's authors, whom it merged the change for. A
-// decision that forms no record routes nothing.
+// reopen's watchers; a landing's authors, whom it merged the change for — but
+// whoever pushed the tip it landed at. A decision that forms no record routes
+// nothing.
 func routeChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRepo, row changeRow,
 	seats SeatRules, d changeDecision) (changeDecision, error) {
 
 	if d.payload == nil || d.refusal != "" {
 		return d, nil
 	}
+	// WHO MADE IT: the asker of a write somebody asked; for the home's
+	// landing, which names no asker, whoever pushed the tip it found the head
+	// in, as its decide read them — that push merged the change, so its
+	// pusher hears nothing of a merge they made, and a person who made it is
+	// named among the routing's persons, as a push's own merge names its
+	// pusher.
 	actor, actorKind := p.Asker.party()
+	if p.Landed != nil {
+		actor, actorKind = d.actor, d.actorKind
+	}
 	c := concerning{repoName: repo.name, change: row, actor: actor, actorKind: actorKind, roster: seats.Roster}
 	switch {
 	case p.Open != nil:
@@ -905,13 +923,31 @@ func decideLanded(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRe
 		return d.refuse(ChangeRefusalStale, fmt.Sprintf("%s merges into %s, and its home found its head in %s: "+
 			"the home reads the change again", named, row.target, l.TargetRef))
 	}
-	heads, err := refsNamed(ctx, tx, p.RepoID(), []string{l.TargetRef})
-	if err != nil {
+	// THE TARGET'S ROW, AND THE RECORD THAT LAST MOVED IT: the tip the
+	// landing is decided against, and where the push that set it there is.
+	var (
+		tip, seat string
+		moved, at int64
+	)
+	switch err := tx.QueryRowContext(ctx, liveRefSQL, p.RepoID(), l.TargetRef).Scan(&tip, &moved, &at,
+		&seat); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
 		return changeDecision{}, fmt.Errorf("code: read the target %s lands in: %w", named, err)
 	}
-	if tip := heads[l.TargetRef]; tip != l.TargetOID {
+	if tip != l.TargetOID {
 		return d.refuse(ChangeRefusalStale, fmt.Sprintf("%s of %s is at %s, and the home found %s's head in it "+
 			"at %s: the home reads the target again", l.TargetRef, repo.name, short(tip), named, short(l.TargetOID)))
+	}
+	// WHO MERGED IT: the home found the head inside the tip, so the push
+	// that set the target to that tip merged the change — an author's push
+	// of a merge commit onto it, most often — and its pusher is the
+	// landing's actor, as a push that sets the target to exactly the head
+	// names its own. Named as nobody, the pusher would be told `merged` of
+	// their own merge: a seat woken for a turn, a person sent a notice.
+	var err error
+	if d.actor, d.actorKind, err = tipPusher(ctx, tx, p.RepoID(), moved, l.TargetRef, tip); err != nil {
+		return changeDecision{}, err
 	}
 	_, d.payload = p.stamped("")
 	return d, nil

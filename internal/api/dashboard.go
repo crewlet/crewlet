@@ -88,7 +88,7 @@ const (
 
 	// cacheRevalidate is for everything else — the shell above all, whose
 	// name never changes and which names this build's hashed files, and the
-	// fonts, notices, icons and protocol.js, which are unhashed on purpose.
+	// fonts, notices and icons, which are unhashed on purpose.
 	// A browser keeps the copy and asks every time: unchanged costs a 304,
 	// and a redeploy is picked up on the very next load. A max-age on an
 	// unhashed name would open a stale window in which a page runs half the

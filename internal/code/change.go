@@ -358,7 +358,9 @@ type ChangeReopen struct {
 // what the home read: the change's revision and head, its target branch, and
 // the tip that branch was at. A head that moved since, a retarget, or a target
 // moved on is the landing decided against rows the home did not read — stale,
-// and its next pass reads the rows again.
+// and its next pass reads the rows again. Its routing names whoever pushed
+// that tip as its actor, as the committer's decide reads them, since that
+// push is what merged the change.
 type ChangeLanded struct {
 	RepoID   string `json:"repo_id"`
 	ChangeID string `json:"change_id"`

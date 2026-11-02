@@ -1405,6 +1405,11 @@ func (u *unreached) Adopt(context.Context, string, *cache.Scratch, ...code.PackR
 	return errUnreached
 }
 
+func (u *unreached) AdoptDropping(context.Context, string, *cache.Scratch, ...code.PackRef) error {
+	u.calls.Add(1)
+	return errUnreached
+}
+
 func (u *unreached) AdoptLayer(context.Context, string, *cache.Scratch, code.LayerRef) error {
 	u.calls.Add(1)
 	return errUnreached

@@ -53,8 +53,10 @@ var (
 
 // gateCase is dev's change web!42, from its own branch into main on platform,
 // a repository Engineering owns, at revision 2: its facts against main
-// recorded, touching touched, merging cleanly — and nobody's approval yet,
-// under the chart gateChart draws.
+// recorded, touching touched — matched against the owners and the human
+// paths the snapshot's repository row digests — merging cleanly, and
+// nobody's approval yet, under the chart gateChart draws. Which human paths
+// hold it is its home's match, which a case makes with matchedBy.
 func gateCase(touched ...string) code.GateFacts {
 	return code.GateFacts{
 		Rows: code.ReadinessRows{
@@ -70,9 +72,19 @@ func gateCase(touched ...string) code.GateFacts {
 			},
 			Merge: &code.RecordedMerge{Revision: 2, TargetRef: mainRef, TargetOID: oidOf("A"), State: code.MergeClean},
 		},
-		Head:   code.HeadFacts{Recorded: true, Touched: touched, OwnersDigest: oidOf("owners")},
-		Roster: gateChart(),
+		Head: code.HeadFacts{Recorded: true, TouchedCount: len(touched), OwnersDigest: oidOf("owners"),
+			HumanPathsDigest: oidOf("human paths")},
+		HumanPathsDigest: oidOf("human paths"),
+		Roster:           gateChart(),
 	}
+}
+
+// matchedBy is f with its head revision's human paths matched as its home
+// matches them (code.MatchHumanPaths): touched, the paths it touches, against
+// the human paths rules hold its target to, classed by f's classes.
+func matchedBy(f code.GateFacts, rules code.GateRules, touched ...string) code.GateFacts {
+	f.Head.HumanPaths = code.MatchHumanPaths(rules.HumanPaths, touched, f.Head.TouchesAll, f.Head.Classes)
+	return f
 }
 
 // approving is f with reviewer's standing verdict approving revision.
@@ -194,7 +206,7 @@ func TestAStaleApprovalDoesNotCount(t *testing.T) {
 	gate.Approvals, gate.OwnersApprove = code.ApprovalsOne, true
 	gate.HumanPaths = []code.HumanPath{{Glob: "deploy/**"}}
 	rules := gated(t, gate)
-	f := approving(gateCase("deploy/app.yaml"), gateFounder, 1)
+	f := matchedBy(approving(gateCase("deploy/app.yaml"), gateFounder, 1), rules, "deploy/app.yaml")
 	f.Head.RequestedOwners = []code.Owner{{Kind: code.OwnerUnit, Ref: "Web"}}
 	f.OwnerRowsDigest = f.Head.OwnersDigest
 	stale := code.JudgeGate(f, rules)
@@ -230,6 +242,7 @@ func TestAnUnlessClassWaivesOnlyItsEntry(t *testing.T) {
 
 	f := gateCase("deploy/app.yaml", "docs/guide.go", "docs/notes.go")
 	f.Head.Classes = code.RevisionClasses{WhitespaceOnly: []int{2}, CommentOnly: []int{1}, Complete: true}
+	f = matchedBy(f, rules, "deploy/app.yaml", "docs/guide.go", "docs/notes.go")
 	p := judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionUnmet,
 		"touches deploy/**")
 	if strings.Contains(p.Detail, "docs/**") {
@@ -238,13 +251,94 @@ func TestAnUnlessClassWaivesOnlyItsEntry(t *testing.T) {
 
 	f = gateCase("docs/guide.go", "docs/notes.go")
 	f.Head.Classes = code.RevisionClasses{WhitespaceOnly: []int{1}, CommentOnly: []int{0}, Complete: true}
+	f = matchedBy(f, rules, "docs/guide.go", "docs/notes.go")
 	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionMet,
 		"touches docs/** only with changes of a class its unless waives")
 
 	f = gateCase("docs/guide.go", "docs/server.go")
 	f.Head.Classes = code.RevisionClasses{CommentOnly: []int{0}, Complete: true}
+	f = matchedBy(f, rules, "docs/guide.go", "docs/server.go")
 	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionUnmet,
 		"touches docs/**")
+
+	// A REVISION THAT TOUCHES ALL is held by every entry, which no class
+	// waives.
+	f = gateCase()
+	f.Head.TouchesAll = true
+	f = matchedBy(f, rules)
+	p = judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionUnmet,
+		"touches deploy/**")
+	if !strings.Contains(p.Detail, "docs/**") {
+		t.Errorf("a revision touching all is not held by docs/**: %q", p.Detail)
+	}
+}
+
+// A HUMAN PATH CHANGE LEAVES HUMAN_APPROVAL COMPUTING: the head revision's
+// facts recorded which human paths hold it as its home matched them, under
+// one digest of the repository's rules' human paths, and the snapshot's
+// repository row digests them to another — a human path added or removed
+// since, which the home has not matched yet. Judged on the stale match, a
+// removed path would still hold the change and an added one never, and its
+// places name entries of a list that is not the gate's; so the term waits,
+// computing, for the home's next revise — and the same facts under their own
+// digest are judged. A match naming a place past the gate's human paths is
+// read as no match of this gate's either.
+//
+// Mutation: judge the recorded match whatever the snapshot's digest — the
+// first readiness reads unmet, red.
+func TestAHumanPathChangeLeavesHumanApprovalComputing(t *testing.T) {
+	t.Parallel()
+	gate := bareGate()
+	gate.HumanPaths = []code.HumanPath{{Glob: "deploy/**"}}
+	rules := gated(t, gate)
+	f := matchedBy(gateCase("deploy/app.yaml"), rules, "deploy/app.yaml")
+	f.HumanPathsDigest = oidOf("human paths since")
+	r := code.JudgeGate(f, rules)
+	judgedAs(t, r, code.PreconditionHumanApproval, code.PreconditionComputing,
+		"human paths changed since revision 2's facts matched")
+	if r.Ready() {
+		t.Error("a change whose person's approval is computing reads ready")
+	}
+	f.HumanPathsDigest = f.Head.HumanPathsDigest
+	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionUnmet,
+		"touches deploy/**")
+	f.Head.HumanPaths = code.HumanPathMatch{Held: []int{len(rules.HumanPaths)}}
+	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionComputing,
+		"human paths changed since")
+}
+
+// AN APPROVALS_UNLESS CLASS EXEMPTS ONLY A WHOLLY CLASSED REVISION: the gate
+// asks an approval unless every path is comment_only, and a revision is
+// exempt only where its classification is complete and every path it touches
+// is listed under a class it names — a whitespace_only change counting as a
+// comment_only one — which the gate counts, reading how many paths it
+// touches, never the paths. One path of no class, an incomplete
+// classification, or a comment_only path under a gate exempting
+// whitespace_only alone each leave the approval asked.
+//
+// Mutation: exempt a revision whose classed paths are fewer than its touched
+// paths — the second revision reads met, red.
+func TestAnApprovalsUnlessClassExemptsOnlyAWhollyClassedRevision(t *testing.T) {
+	t.Parallel()
+	gate := bareGate()
+	gate.Approvals, gate.ApprovalsUnless = code.ApprovalsOne, []code.ChangeClass{code.ChangeClassCommentOnly}
+	rules := gated(t, gate)
+
+	f := gateCase("a.go", "b.go")
+	f.Head.Classes = code.RevisionClasses{CommentOnly: []int{0}, WhitespaceOnly: []int{1}, Complete: true}
+	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionApproval, code.PreconditionMet,
+		"needs no approval: every path it touches is comment_only and whitespace_only")
+
+	f.Head.Classes = code.RevisionClasses{CommentOnly: []int{0}, Complete: true}
+	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionApproval, code.PreconditionUnmet, "no approval")
+
+	f.Head.Classes = code.RevisionClasses{CommentOnly: []int{0}, WhitespaceOnly: []int{1}}
+	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionApproval, code.PreconditionUnmet, "no approval")
+
+	gate.ApprovalsUnless = []code.ChangeClass{code.ChangeClassWhitespaceOnly}
+	f.Head.Classes = code.RevisionClasses{CommentOnly: []int{0}, WhitespaceOnly: []int{1}, Complete: true}
+	judgedAs(t, code.JudgeGate(f, gated(t, gate)), code.PreconditionApproval, code.PreconditionUnmet,
+		"no approval")
 }
 
 // AN EXTERNAL CHECK WAITS ON ITS REPORT: a required check with no attempt on
@@ -303,7 +397,7 @@ func TestTheGateNamesEveryUnmetTerm(t *testing.T) {
 	gate.HumanPaths = []code.HumanPath{{Glob: "deploy/**"}}
 	gate.Checks = []string{"lint", "unit"}
 	rules := gated(t, gate)
-	f := gateCase("deploy/app.yaml", "data/schema.sql")
+	f := matchedBy(gateCase("deploy/app.yaml", "data/schema.sql"), rules, "deploy/app.yaml", "data/schema.sql")
 	f.OwnerRowsDigest = f.Head.OwnersDigest
 	f.Head.RequestedOwners = []code.Owner{{Kind: code.OwnerUnit, Ref: "Data"}, {Kind: code.OwnerUnit, Ref: "Web"}}
 	f.Checks = []code.GateCheck{
@@ -473,7 +567,7 @@ func TestAChecksFileChangeNeedsAPerson(t *testing.T) {
 			code.ChecksDirGlob)
 	}
 
-	f := gateCase(code.ChecksFilePath, "app.go")
+	f := matchedBy(gateCase(code.ChecksFilePath, "app.go"), rules, code.ChecksFilePath, "app.go")
 	f.Checks = []code.GateCheck{{Name: "unit", Attempt: 1, State: code.CheckStatePassed, Reason: code.CheckReasonExit}}
 	bySeat := code.JudgeGate(approving(f, gateWebLead, 2), rules)
 	p := judgedAs(t, bySeat, code.PreconditionHumanApproval, code.PreconditionUnmet, code.ChecksDirGlob)
@@ -485,7 +579,7 @@ func TestAChecksFileChangeNeedsAPerson(t *testing.T) {
 	}
 	judgedAs(t, code.JudgeGate(approving(f, gateFounder, 2), rules), code.PreconditionHumanApproval,
 		code.PreconditionMet, `person "founder"'s approval counts`)
-	judgedAs(t, code.JudgeGate(gateCase("app.go"), rules), code.PreconditionHumanApproval,
+	judgedAs(t, code.JudgeGate(matchedBy(gateCase("app.go"), rules, "app.go"), rules), code.PreconditionHumanApproval,
 		code.PreconditionMet, "touches none of")
 
 	// AGENTS_EDIT_CHECKS OPTS THE RULE OUT, and a rule requiring no check
@@ -514,6 +608,6 @@ func TestAChecksFileChangeNeedsAPerson(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GateRulesOf: %v", err)
 	}
-	judgedAs(t, code.JudgeGate(approving(f, gateWebLead, 2), both), code.PreconditionHumanApproval,
-		code.PreconditionUnmet, code.ChecksDirGlob)
+	judgedAs(t, code.JudgeGate(matchedBy(approving(f, gateWebLead, 2), both, code.ChecksFilePath, "app.go"), both),
+		code.PreconditionHumanApproval, code.PreconditionUnmet, code.ChecksDirGlob)
 }

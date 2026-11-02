@@ -134,9 +134,10 @@ dashboard/            # The dashboard's SOURCE: React 19 + TypeScript, built by 
                       #   COMMITTED, so `go build ./...` needs no Node; CI rebuilds and
                       #   diffs it (`make dashboard-check`)
 static/               # Embedded assets; static/dashboard/ is that build output,
-                      #   compiled in via embed. NEVER hand-edited. Its protocol.js is
-                      #   the wire protocol alone, which internal/e2e/replay.mjs runs
-                      #   under `node`
+                      #   compiled in via embed. NEVER hand-edited. Beside it,
+                      #   static/protocol/protocol.js is the wire protocol alone,
+                      #   which internal/e2e/replay.mjs runs under `node`: built and
+                      #   committed with the dashboard, and never embedded
 examples/             # The Nimbus example company — a working two-tier config
 docs/                 # Product documentation, published to docs.crewlet.ai
 schema/               # GENERATED JSON Schema for both config tiers (`crewlet schema

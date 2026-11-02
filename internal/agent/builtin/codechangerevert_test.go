@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,8 +17,13 @@ import (
 // step 2; a merge refused is said beside the opened change as a residue,
 // never as a refusal of the revert that landed.
 //
+// Its branch's deletion is left to the git node that judges the merge, as an
+// unsaid delete_branch is: the merge says no word of it and nothing reads
+// the target's gates for it.
+//
 // Mutations: merge under the revert's own operation → red; answer a refused
-// merge as the call's refusal → red.
+// merge as the call's refusal → red; decide the branch's deletion in the tool
+// → red.
 func TestARevertsMergeIsStepTwo(t *testing.T) {
 	t.Parallel()
 	for name, refuse := range map[string]bool{"merged": false, "refused": true} {
@@ -36,8 +42,9 @@ func TestARevertsMergeIsStepTwo(t *testing.T) {
 				return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: mainOID,
 					Merge: &code.MergeAnswer{}}, nil
 			}
-			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
-				writerTurn(t), builtin.CodeRevertChangeTool, map[string]any{"change": "site!7", "merge": true})
+			host := newChangeHost(siteChange())
+			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
+				builtin.CodeRevertChangeTool, map[string]any{"change": "site!7", "merge": true})
 			if got.Failed {
 				t.Fatalf("the revert answered %q", got.Output)
 			}
@@ -54,6 +61,12 @@ func TestARevertsMergeIsStepTwo(t *testing.T) {
 				merge.Change != 8 || merge.ExpectedHead != writtenOID || merge.Ref != "refs/heads/main" {
 				t.Errorf("the revert's merge is %+v, want site!8 at %s into main as step 2 of %s", merge,
 					writtenOID, revert.OpID)
+			}
+			reads, _, _ := host.asked()
+			gated := slices.ContainsFunc(reads, func(q code.ReadQuery) bool { return q.Gates })
+			if merge.DeleteSource != nil || gated {
+				t.Errorf("the revert's merge sent delete_source %v, the gates read %v: its branch's deletion is "+
+					"the git node's to decide", merge.DeleteSource, gated)
 			}
 			out := decoded(t, got)
 			residue, _ := out["residue"].(string)

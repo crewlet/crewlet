@@ -134,12 +134,17 @@ func (c *mergeCase) recordFacts(n int64) code.ChangeDue {
 		c.T.Fatalf("read revision %d's facts: %+v %v", d.Revision, read, err)
 	}
 	f := read.RevisionFacts
-	_, digest := code.MatchOwners(nil, f.Touched, f.TouchesAll)
+	_, digest := code.MatchOwners(due.PathOwners, f.Touched, f.TouchesAll)
+	held, humanDigest, err := code.MatchTargetHumanPaths(due.Gates, d.TargetRef, f.Touched, f.TouchesAll, f.Classes)
+	if err != nil {
+		c.T.Fatalf("match revision %d's human paths: %v", d.Revision, err)
+	}
 	res, err := seam.Converse(c.Ctx, code.ConversationWrite{OpID: opNow(), Revise: &code.Revise{RepoID: c.repo,
 		ChangeID: d.ID, N: d.Revision, HeadOID: d.Head, TargetRef: d.TargetRef, TargetOID: d.Tip,
 		TargetPosition: d.TipPosition, BaseOID: f.MergeBase, BaseTree: f.BaseTree, HeadTree: f.HeadTree,
 		PatchID: f.PatchID, PatchIDOmitted: f.PatchIDOmission == code.OmittedPastBound, Touched: f.Touched,
-		TouchesAll: f.TouchesAll, Classes: f.Classes, Node: "solo-a", OwnersDigest: digest}})
+		TouchesAll: f.TouchesAll, Classes: f.Classes, Node: "solo-a", OwnersDigest: digest, HumanPaths: held,
+		HumanPathsDigest: humanDigest}})
 	if err != nil || res.Refusal != "" {
 		c.T.Fatalf("record revision %d's facts: %+v %v", d.Revision, res, err)
 	}
@@ -336,6 +341,200 @@ func TestASeatsMergeIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 	c.requireMerged(n, res, err)
 }
 
+// AN UNSAID SOURCE DELETION IS THE TARGET'S GATE'S, decided on the git node
+// that judges the merge: a change from a seat's branch merged with nothing
+// said of its branch deletes it where no gate over the target keeps it, and
+// keeps it where one does (delete_source: none) — each answered as decided
+// and done by the merge's own record — while a branch outside every seat's
+// namespace is kept, and a caller's own word wins over the gate's.
+//
+// Mutations: the git node ignoring the gate's KeepsSource → the kept seat
+// branch is deleted, red; defaulting to keep → the seat branch outlives its
+// merge, red; ignoring the caller's word → red.
+func TestAnUnsaidSourceDeletionIsTheTargetGates(t *testing.T) {
+	t.Parallel()
+	yes := true
+	for _, tc := range []struct {
+		name    string
+		keeps   bool
+		source  string
+		said    *bool
+		deleted bool
+	}{
+		{"a seat's branch, no gate keeping it", false, "refs/heads/seats/alice/fix", nil, true},
+		{"a seat's branch a gate keeps", true, "refs/heads/seats/alice/fix", nil, false},
+		{"a branch of nobody's namespace", false, featureRef, nil, false},
+		{"a branch a gate keeps, deleted as said", true, "refs/heads/seats/alice/fix", &yes, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			settings := codetest.Settings()
+			if tc.keeps {
+				settings.Protections[0].Gate = &code.MergeGate{MergeBy: code.MergeByWriters,
+					Approvals: code.ApprovalsNone, Landing: code.Landing{Depth: 4, Batch: 4},
+					DeleteSource: code.DeleteNone}
+			}
+			c := newMergeCase(t, codetest.SoloOptions{}, settings, map[string]string{"README.md": "one\n"})
+			n := c.open(tc.source, map[string]string{"x.md": "x\n"}, "Merge my branch")
+			c.meetGate(n, lead())
+			w := merge(c.repo, pat(), n, c.change(n).Head, code.MergeMethodMerge)
+			w.DeleteSource = tc.said
+			res, err := c.write(w)
+			c.requireMerged(n, res, err)
+			if res.Merge.DeleteSource != tc.deleted {
+				t.Errorf("the merge answered delete_source %v, want %v", res.Merge.DeleteSource, tc.deleted)
+			}
+			if _, kept := c.Rows().Refs[tc.source]; kept == tc.deleted {
+				t.Errorf("%s is kept %v after the merge, want deleted %v", tc.source, kept, tc.deleted)
+			}
+		})
+	}
+}
+
+// changeReads records every change read the host asks of its estate.
+type changeReads struct {
+	host.Estate
+	mu    sync.Mutex
+	asked []code.ReadQuery
+}
+
+func (r *changeReads) wrap(inner host.Estate) host.Estate {
+	r.Estate = inner
+	return r
+}
+
+func (r *changeReads) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	if q.Kind == code.ReadChange {
+		r.mu.Lock()
+		r.asked = append(r.asked, q)
+		r.mu.Unlock()
+	}
+	return r.Estate.Read(ctx, q)
+}
+
+// of is how many times change n was read.
+func (r *changeReads) of(n int64) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	read := 0
+	for _, q := range r.asked {
+		if q.Change == n {
+			read++
+		}
+	}
+	return read
+}
+
+// since is every change read r recorded from the from-th on, and the count to
+// read the next from.
+func (r *changeReads) since(from int) ([]code.ReadQuery, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.asked[from:]), len(r.asked)
+}
+
+// A COLLEAGUE-STEERED MERGE READS ITS CHANGE ONCE: a seat's merge made for
+// the colleague whose ask woke its turn is held to the colleague's merge
+// authority by the one rule of that term (code.MergeAuthority), judged on the
+// git node from its own chart, the synced row and the target's gate — so the
+// node reads the change once, as the merger, and never again as the
+// colleague; and the merge the colleague may make lands.
+//
+// Mutation: mergeCeiling reading the change again as the colleague → two
+// reads, red.
+func TestAColleagueSteeredMergeReadsItsChangeOnce(t *testing.T) {
+	t.Parallel()
+	reads := &changeReads{}
+	c := newMergeCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: reads.wrap}},
+		codetest.Settings(), map[string]string{"README.md": "one\n"})
+	n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Merged for the lead")
+	c.meetGate(n, lead())
+	head := c.change(n).Head
+	before := reads.of(n)
+	w := merge(c.repo, alice(), n, head, code.MergeMethodMerge)
+	w.Ceiling = &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: codetest.FixtureLead}
+	res, err := c.write(w)
+	read := reads.of(n) - before
+	c.requireMerged(n, res, err)
+	if read != 1 {
+		t.Errorf("the git node read change %d %d times to merge it for the lead, want once: the lead's merge "+
+			"authority is judged from what the node holds", n, read)
+	}
+}
+
+// A CHANGE'S WRITES READ NO REVISION THEY DROP: a change rebased by pat onto
+// a main that moved, merged by the seat alice for the unit's lead — its change
+// read as alice alone, the lead's merge authority judged from what the git
+// node holds (TestAColleagueSteeredMergeReadsItsChangeOnce) — and reverted
+// by pat. The
+// rebase and the merge read the change as its detail alone
+// (code.ReadQuery.DetailOnly), never with a page of its revisions beside it:
+// neither reads a revision, a merge reads its change again at the log's head
+// before a refusal and on every rebuild, and a first page of revisions is up
+// to 200 of them, each carrying its facts' touched paths, shipped from a data
+// node to the git node to be dropped. The revert reads its detail and its
+// HEAD REVISION alone — a first page one revision long — whose facts place a
+// fast-forward's range.
+//
+// Mutations: read the merge's change or the rebase's with its
+// revisions → that read asks for them, red; read the revert's with a whole
+// page → red.
+func TestAChangesWritesReadNoRevisionTheyDrop(t *testing.T) {
+	t.Parallel()
+	r := &changeReads{}
+	c := newMergeCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: r.wrap}}, codetest.Settings(),
+		map[string]string{"README.md": "one\n"})
+	c.branchOff("feature")
+	c.pat.Commit(c.patWork, map[string]string{"x.md": "x\n"}, "Add x")
+	head := strings.TrimSpace(c.pat.Git().Run(c.T, c.patWork, "rev-parse", "HEAD"))
+	n := c.openPushed(featureRef, "Read alone")
+	c.moveMain("main.md", "moved\n")
+	_, from := r.since(0)
+	rebased, err := c.write(rebase(c.repo, pat(), n, featureRef, head))
+	if err != nil || rebased.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the rebase did not land: %+v %v", rebased, err)
+	}
+	rebaseReads, from := r.since(from)
+	c.meetGate(n, lead())
+	w := merge(c.repo, alice(), n, c.change(n).Head, code.MergeMethodMerge)
+	w.Ceiling = &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: codetest.FixtureLead}
+	res, err := c.write(w)
+	c.requireMerged(n, res, err)
+	mergeReads, from := r.since(from)
+	if got, err := c.write(revertChange(c.repo, pat(), n, "refs/heads/revert-read-alone")); err != nil ||
+		got.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the revert did not land: %+v %v", got, err)
+	}
+	revertReads, _ := r.since(from)
+
+	for _, tc := range []struct {
+		write  string
+		reads  []code.ReadQuery
+		askers []string
+		limit  int
+		alone  bool
+	}{
+		{"rebase", rebaseReads, []string{codetest.FixturePat}, 0, true},
+		{"merge", mergeReads, []string{codetest.FixtureAlice}, 0, true},
+		{"revert", revertReads, []string{codetest.FixturePat}, 1, false},
+	} {
+		askers := map[string]bool{}
+		for _, q := range tc.reads {
+			askers[q.Asker.Seat] = true
+			if q.DetailOnly != tc.alone || q.Limit != tc.limit || q.Cursor != "" || q.Part != "" {
+				t.Errorf("the %s read change %d as %s as %+v, want detail_only %v and limit %d", tc.write,
+					q.Change, q.Asker.Seat, q, tc.alone, tc.limit)
+			}
+		}
+		// EVERY READ IT MAKES was seen: each write's as its asker.
+		for _, seat := range tc.askers {
+			if !askers[seat] {
+				t.Errorf("the %s asked no change read as %s among its %d", tc.write, seat, len(tc.reads))
+			}
+		}
+	}
+}
+
 // movingMain moves main under every merge record it is asked to decide, the
 // first moves times — a person's push landing between the merge's build and
 // its decide — and counts the records asked.
@@ -418,6 +617,91 @@ func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 			if parents := c.show(c.clone(), "%P", commit); !strings.HasPrefix(parents, c.p.Git().Run(c.T, c.work,
 				"rev-parse", "HEAD")[:40]) {
 				t.Errorf("the merge sits on %s, not on the tip main's last push left", parents)
+			}
+		})
+	}
+}
+
+// A MERGE IS BUILT AGAIN ONLY WHERE ITS ONE BUDGET AND ITS ATTEMPT HOLD A
+// ROUND: its git is code.MergeBuildDeadline across every round together — the
+// one build the router's attempt holds — so a merge whose target moves under
+// every build is answered target_moving, nothing more asked of the committer,
+// once what is left of that budget is less than the git its last round ran:
+// its merge-tree charged four seconds of a ten-second budget, it is built
+// twice, and the six seconds left after the first hold a rebuild while the two
+// after the second do not. And where what its caller's deadline leaves cannot
+// hold another round's waits, its git and the upload and proposal its first
+// landing was held to, it is built once. Never a round started to end unready
+// during its build, which sends the walk's runner-up git node to merge it
+// from scratch, or busy at its landing. The change stays open.
+//
+// Mutations: give every round the whole budget again → four rebuilds, five
+// records asked, red; start a rebuild the budget cannot hold → its git runs
+// out the budget on a second rebuild, red; start one the attempt cannot hold
+// → five records asked, red.
+func TestAMergeIsBuiltAgainOnlyWithinItsOneBudgetAndAttempt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// budget scales the merge's budget of git and its merge-tree's
+		// charge, and deadline the caller's attempt; zero leaves each as it
+		// is.
+		budget, mergeTree time.Duration
+		deadline          bool
+		// rebuilds is how many times the merge is built again, and says
+		// what its answer names as having stopped it.
+		rebuilds int
+		says     string
+	}{
+		{name: "its budget of git", budget: 10 * time.Second, mergeTree: 4 * time.Second, rebuilds: 1,
+			says: "of the 10s of git a merge is given"},
+		{name: "its attempt", deadline: true, says: "its caller left"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := &movingMain{moves: code.MergeRecomputes + 1}
+			c := newMergeCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: m.wrap}},
+				codetest.Settings(), map[string]string{"README.md": "one\n"})
+			m.move = func(i int) {
+				c.p.Commit(c.work, map[string]string{fmt.Sprintf("main-%d.md", i): "moved\n"}, "move main")
+				c.MustPush(c.p, c.work, "main")
+			}
+			if tc.budget > 0 {
+				host.SetBuildBudget(c.server(), tc.budget)
+				host.SlowGit(c.server(), tc.mergeTree, "merge-tree")
+			}
+			n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Chase main")
+			head := c.change(n).Head
+			w := merge(c.repo, pat(), n, head, code.MergeMethodMerge)
+			w.Override = "chasing a moving main"
+			ctx := c.Ctx
+			if tc.deadline {
+				// ROOM FOR ONE LANDING AND NOT ONE MORE ROUND: what the deadline
+				// rule holds the first landing to — its proposal and its
+				// upload's allowance, which a bundle of a few hundred bytes
+				// reaches whole (code.UploadDeadline's first byte alone is
+				// past it) — and four seconds for the round to reach it, short
+				// of the eight seconds of the share's and three reads' waits a
+				// second round needs on top of them.
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(c.Ctx, code.MinProposeAttempt+code.WriteUploadAllowance+
+					4*time.Second)
+				defer cancel()
+			}
+			res, err := c.server().Write(ctx, w)
+			if err != nil || res.Merge == nil || res.Merge.Refusal != code.MergeRefusalTargetMoving ||
+				res.Merge.Recomputes != tc.rebuilds || !strings.Contains(res.Merge.Detail, tc.says) {
+				t.Fatalf("a merge with no room to build again answered %+v %v (%+v), want target_moving after %d "+
+					"rebuilds, saying %q", res, err, res.Merge, tc.rebuilds, tc.says)
+			}
+			m.mu.Lock()
+			asked := m.asked
+			m.mu.Unlock()
+			if asked != tc.rebuilds+1 {
+				t.Errorf("the merge asked %d records, want %d: one a build", asked, tc.rebuilds+1)
+			}
+			if ch := c.change(n); ch.State != code.ChangeStateOpen {
+				t.Errorf("change %d is %s, want open", n, ch.State)
 			}
 		})
 	}

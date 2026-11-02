@@ -246,9 +246,17 @@ type EngineWrite struct {
 	// commit, or a fast-forward.
 	Method MergeMethod `json:"method,omitempty"`
 	// DeleteSource is whether a merge_change deletes the change's source
-	// branch as it merges, as its caller resolved it (Q4: a seat's branch, by
-	// its rule's delete_source).
-	DeleteSource bool `json:"delete_source,omitempty"`
+	// branch as it merges, where its caller said; nil — the zero value —
+	// leaves it to THE DEFAULT, which the git node decides on the snapshot
+	// it judges the merge on (Q4: a source in a seat's namespace deleted
+	// unless a gate over the target keeps it, [GateRules.KeepsSource]; any
+	// other kept) and answers back ([MergeAnswer.DeleteSource]). A pointer
+	// because false is a word a caller says (keep it), never the default.
+	//
+	// A write is no record, so the field takes no versionedFields row; it
+	// crosses the estate's wire to the repository's git node under the code
+	// domain's stated condition, as Ceiling does.
+	DeleteSource *bool `json:"delete_source,omitempty"`
 	// Override is a PERSON'S reason for merging past the target's merge gate,
 	// at most [MaxOverrideReasonBytes] — merged directly, on a queue target
 	// too — and "" for a merge its gate holds.
@@ -368,6 +376,12 @@ type MergeAnswer struct {
 	// that moved under it before its record was decided, at most
 	// [MergeRecomputes].
 	Recomputes int `json:"recomputes,omitempty"`
+	// DeleteSource is whether the merge deletes the change's source branch,
+	// as the git node resolved it ([EngineWrite.DeleteSource]): a direct
+	// merge's in its record, applied or pending; a queued change's on its
+	// entry, for its landing; a merge found already landed, from its push
+	// row. False beside a refusal, which deletes nothing.
+	DeleteSource bool `json:"delete_source,omitempty"`
 }
 
 // Conflict is one path a three-way merge could not resolve.
@@ -530,16 +544,20 @@ const (
 	WriteBuildDeadline = 10 * time.Second
 
 	// MergeBuildDeadline is a merge_change's whole build — its ancestry, its
-	// one `merge-tree --write-tree`, its commit and its pack: THIRTY
-	// SECONDS, three of a write's own (code/home's MergeabilityDeadline is
+	// one `merge-tree --write-tree`, its commit and its pack, and every
+	// rebuild's onto a target that moved (MergeRecomputes) together, never
+	// this much a round, since the estate's attempt on a git node holds one
+	// build term: THIRTY SECONDS, three of a write's own (code/home's MergeabilityDeadline is
 	// this constant), since the one merge-tree a merge runs is the one a
 	// change's mergeability is recorded by, merging the same two commits —
 	// the merge base found, both sides diffed against it, their changes
 	// merged — and BenchmarkMergeability measures it (code/home's doc: 125 ms
 	// for 1 000 files changed both ways, some 240 times inside). PROVISIONAL
 	// as that deadline is: what moves it is a production merge whose p99
-	// nears it. A merge past it is too_large, a change to merge in a coding
-	// box.
+	// nears it. A merge whose first build runs past it is too_large, a
+	// change to merge in a coding box; a rebuild that runs out what the
+	// builds before it left is target_moving, its change no larger than its
+	// first build proved it.
 	MergeBuildDeadline = 3 * WriteBuildDeadline
 
 	// MergeRecomputes is how many times a merge_change is built again onto a
@@ -548,6 +566,10 @@ const (
 	// branch moving under five consecutive builds is a branch moving faster
 	// than its merges are built — a queue's work (M5-D9), or a person's —
 	// and a fifth rebuild would only spend the attempt the write is given.
+	// A bound, not a promise: every rebuild draws on the one
+	// MergeBuildDeadline and must fit what is left of the write's attempt,
+	// or the merge is answered target_moving with fewer (internal/code/host's
+	// merge.go).
 	MergeRecomputes = 4
 
 	// MaxRebaseCommits is the most commits one rebase_change replays: A
@@ -861,7 +883,7 @@ func (w EngineWrite) validKind() error {
 	files := field{"files", len(w.Files) > 0}
 	suggestions := field{"suggestions", len(w.Suggestions) > 0}
 	merging := []field{{"change", w.Change != 0}, {"method", w.Method != ""},
-		{"delete_source", w.DeleteSource}, {"override", w.Override != ""}, {"close_task", w.CloseTask}}
+		{"delete_source", w.DeleteSource != nil}, {"override", w.Override != ""}, {"close_task", w.CloseTask}}
 	switch w.Kind {
 	case WriteMergeChange:
 		return w.validMerge(want(head), none(commit, files, base, message, suggestions))

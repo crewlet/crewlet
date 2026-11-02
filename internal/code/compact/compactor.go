@@ -58,8 +58,8 @@ type Estate interface {
 // maintainer's steps may be admitted at, cache.Cache.MaintenanceCharge), so
 // a repository's compactions, its publications and its expunges — the three
 // writers of its packs — run on ONE node, where a compaction never merges a
-// pack a publication in flight planned over ([Compactor.claimCompaction]) and
-// an expunge rewrites the repository with neither building beside it
+// pack a publication or an expunge in flight planned over
+// ([Compactor.claimCompaction]) and no publication builds beside an expunge
 // ([Compactor.claimExpunge]).
 //
 // Listed is whether this node is among the git nodes the placement lists —
@@ -105,7 +105,8 @@ type Uploader interface {
 // its repack's outputs; an expunge's holding its inputs and leaning on a store
 // of every other live pack; a rescue's holding the dropping packs and leaning
 // on the incarnation — every one pinning it — and the adoption of what it
-// built once its rows have applied.
+// built once its rows have applied, an expunge's dropping packs into the
+// copy's dropping view.
 type Cache interface {
 	Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error)
 	Packs(s cache.Synced) []code.PackRow
@@ -122,6 +123,7 @@ type Cache interface {
 	StageExpunge(ctx context.Context, s cache.Synced, id string, inputs []string) (*cache.Scratch, error)
 	StageRescue(ctx context.Context, s cache.Synced, id string) (*cache.Scratch, error)
 	Adopt(ctx context.Context, repoID string, sc *cache.Scratch, packs ...code.PackRef) error
+	AdoptDropping(ctx context.Context, repoID string, sc *cache.Scratch, packs ...code.PackRef) error
 	AdoptLayer(ctx context.Context, repoID string, sc *cache.Scratch, row code.LayerRef) error
 }
 
@@ -153,12 +155,12 @@ type Options struct {
 // ErrOptions is an Options value New refuses, wrapped naming every field.
 var ErrOptions = errors.New("compact: refused options")
 
-// errClaimed is a compaction of a repository whose publication on this node
-// has not planned yet, a publication of one whose compaction is running on
-// this node, either of them while an expunge of the repository runs here, or
-// an expunge while any build of it does ([Compactor.claimCompaction],
-// [Compactor.claimPublication], [Compactor.claimExpunge]): busy, and planned
-// again at the next pass.
+// errClaimed is a compaction of a repository whose publication or expunge on
+// this node has not planned yet — or whose rescue has not synced past its
+// begin — a publication of one whose compaction or expunge is running on this
+// node, or an expunge of one whose compaction or publication is
+// ([Compactor.claimCompaction], [Compactor.claimPublication],
+// [Compactor.claimExpunge]): busy, and planned again at the next pass.
 var errClaimed = errors.New("compact: the repository's other build on this node leaves this one no plan yet")
 
 // Outcome is what became of one compaction, publication or expunge this node
@@ -269,9 +271,10 @@ type holds struct {
 // publication of a large repository, minutes of its build, never delays a
 // compaction that keeps a hot repository under the pack bound, that
 // repository's own included, and neither delays a purge. Each runs one build
-// at a time; a compaction never merges a pack a publication of its repository
-// in flight on this node planned over, and an expunge rewrites a repository
-// with no other build of it on this node.
+// at a time; a compaction never merges a pack a publication or an expunge of
+// its repository in flight on this node planned over, and merges the rest
+// beside either, and no publication builds beside an expunge of its
+// repository.
 type Compactor struct {
 	o   Options
 	log *slog.Logger
@@ -302,11 +305,12 @@ type Compactor struct {
 	// RESERVATION, which a compaction of the repository leaves out — nil
 	// until it has planned ([Compactor.claimCompaction]); expunges is every
 	// repository an expunge of this node is running, from its scan to its
-	// commit, beside which neither of the others builds
-	// ([Compactor.claimExpunge]).
+	// commit, beside which no publication builds, with the reservation of its
+	// inputs and whether its rescue has synced past its begin
+	// ([Compactor.claimExpunge], [expungeClaim]).
 	compactions  map[string]bool
 	publications map[string]map[string]bool
-	expunges     map[string]bool
+	expunges     map[string]*expungeClaim
 	// notDue is every repository a compaction's plan found not due, at the
 	// version and cap it was planned at ([memo]).
 	notDue map[string]memo
@@ -415,7 +419,7 @@ func New(o Options) (*Compactor, error) {
 		return nil, fmt.Errorf("%w: %s missing", ErrOptions, strings.Join(missing, ", "))
 	}
 	c := &Compactor{o: o, log: o.Logger, now: o.Now, bounds: production, runBuild: runInSlot,
-		compactions: map[string]bool{}, publications: map[string]map[string]bool{}, expunges: map[string]bool{},
+		compactions: map[string]bool{}, publications: map[string]map[string]bool{}, expunges: map[string]*expungeClaim{},
 		notDue: map[string]memo{}, nothing: map[string]statelog.Position{}, built: map[string]lastBuild{},
 		tails: map[string]time.Time{}, caps: map[string]int64{}, expungeCaps: map[string]int64{},
 		clean: map[string]time.Time{}, done: make(chan struct{})}
@@ -577,17 +581,41 @@ func (c *Compactor) Stop(ctx context.Context) {
 // only packs a layer of the chain names, which the compaction's plan leaves
 // out already, so the reservation handed here holds for its whole length.
 //
-// REFUSED WHILE AN EXPUNGE OF THE REPOSITORY RUNS HERE, from its scan to its
-// commit ([Compactor.claimExpunge]).
+// AND BESIDE AN EXPUNGE OF THE REPOSITORY, NEVER OVER ITS INPUTS, for the
+// same reason and by the same rule ([expungeClaim]): an expunge's scan walks
+// the whole history, its build packs up to [ExpungeInputByteCap] of inputs
+// and walks it again, its upload stores up to code.MaxExpungeOutputs packs and
+// its rescue walks once more — minutes on a large repository, every week on
+// every repository its schedule finds due — so a repository whose merges
+// waited for it would be refused compaction_behind at the very moment it is
+// purged. Nothing its committer decides needs more than its inputs held: a
+// begin is refused only for an input no longer live, a drop epoch or a chain
+// that moved (the decide's begin rules 2-4), a non-layer compaction is never
+// refused for an expunge open, a compaction never takes a dropping pack, a
+// commit's one precondition is its expunge open at its epoch, and a merge of
+// packs beside the build keeps every object it merges live in its output —
+// the build's store is hard links, which a retirement leaves standing. So a
+// compaction answers busy only while the expunge has not planned — its sync
+// and its plan, seconds — then leaves out every input it chose, and once its
+// rescue has synced past its begin, which retired them, builds beside it as
+// though none ran.
 func (c *Compactor) claimCompaction(repoID string) (reserved map[string]bool, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	held, publishing := c.publications[repoID]
-	if c.compactions[repoID] || (publishing && held == nil) || c.expunges[repoID] {
+	x := c.expunges[repoID]
+	if c.compactions[repoID] || (publishing && held == nil) || (x != nil && !x.begun && x.reserved == nil) {
 		return nil, false
 	}
 	c.compactions[repoID] = true
-	return maps.Clone(held), true
+	reserved = maps.Clone(held)
+	if x != nil && !x.begun {
+		if reserved == nil {
+			reserved = make(map[string]bool, len(x.reserved))
+		}
+		maps.Copy(reserved, x.reserved)
+	}
+	return reserved, true
 }
 
 // unclaimCompaction gives repoID's compaction back.
@@ -606,12 +634,13 @@ func (c *Compactor) unclaimCompaction(repoID string) {
 // merge's inputs, live as of it, so whichever record landed second would be
 // refused stale — the publication's after its whole build. A merge is bounded
 // by what it merges, seconds at a busy repository's rate, so the next pass
-// finds it done. And it waits for an expunge of the repository running here
-// ([Compactor.claimExpunge]).
+// finds it done. And it waits for an expunge of the repository running here,
+// for the whole of its cycle ([Compactor.claimExpunge]).
 func (c *Compactor) claimPublication(repoID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, publishing := c.publications[repoID]; publishing || c.compactions[repoID] || c.expunges[repoID] {
+	_, publishing := c.publications[repoID]
+	if publishing || c.compactions[repoID] || c.expunges[repoID] != nil {
 		return false
 	}
 	c.publications[repoID] = nil
@@ -643,30 +672,82 @@ func (c *Compactor) unclaimPublication(repoID string) {
 }
 
 // claimExpunge reports whether this node may expunge repoID now — no
-// compaction, publication or other expunge of it building here — and takes the
-// repository until [Compactor.unclaimExpunge], which neither of the other two
-// claims while it holds it ([Compactor.claimCompaction],
-// [Compactor.claimPublication]).
+// compaction, publication or other expunge of it building here — and takes
+// the repository's expunge, PLANNING, until [Compactor.unclaimExpunge]
+// ([expungeClaim]).
 //
-// THE WHOLE REPOSITORY, FROM ITS SCAN TO ITS COMMIT — one rewrite of a
-// repository at a time on its maintainer, never a reservation of packs as a
-// publication's is: a begin retires every input its scan chose among the live
-// packs, full and published ones included, and drops every published layer
-// over them, so a merge planned beside it could take one of its inputs, and a
-// layer planned beside it would name one or sit over a layer the begin drops
-// — either refusing the begin stale after its whole build, or itself. So a
-// repository's merges wait on this node for the length of one cycle, at the
-// rate a person asks a purge or the weekly schedule finds an expunge due: a
-// cycle or two each, and a repository found not due takes no claim past its
-// scan.
+// IT WAITS FOR A RUNNING COMPACTION: its plan would choose among the live
+// packs that merge's inputs, which the merge's record retires, refusing the
+// begin stale after its whole build. A merge is bounded by what it merges,
+// seconds at a busy repository's rate, so the next pass finds it done. And
+// for a running publication, which no expunge builds beside
+// ([Compactor.claimPublication]).
 func (c *Compactor) claimExpunge(repoID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, publishing := c.publications[repoID]; publishing || c.compactions[repoID] || c.expunges[repoID] {
+	_, publishing := c.publications[repoID]
+	if publishing || c.compactions[repoID] || c.expunges[repoID] != nil {
 		return false
 	}
-	c.expunges[repoID] = true
+	c.expunges[repoID] = &expungeClaim{}
 	return true
+}
+
+// expungeClaim is an expunge of a repository this node is running, from its
+// claim to its commit ([Compactor.claimExpunge]), by what else of the
+// repository may build beside it:
+//
+//   - PLANNING — no reservation — from its claim through its sync and its
+//     plan, seconds: a compaction answers busy, since it could merge packs
+//     the plan is about to choose;
+//   - RESERVED — from its plan ([Compactor.reserveExpunge]) until its rescue
+//     has synced past its begin: a compaction merges beside it, leaving out
+//     every pack the plan chose as an input, by git checksum, as it leaves
+//     out a publication's reservation ([Compactor.claimCompaction]);
+//   - BEGUN ([Compactor.beganExpunge]) — from then to its commit, the begin
+//     having retired every input in this node's copy: a compaction builds
+//     beside it as though none ran.
+//
+// A PUBLICATION NEVER BUILDS BESIDE ANY OF THE THREE: a begin drops every
+// layer published over its inputs, and the decide refuses a layer while an
+// expunge is open (its rule 6g), so a layer planned beside one would refuse
+// the begin stale or be refused itself, after its whole build.
+type expungeClaim struct {
+	// reserved is every input the expunge's plan chose, by git checksum: nil
+	// while it plans, and once it has begun.
+	reserved map[string]bool
+	// begun: the expunge's rescue has synced past its begin.
+	begun bool
+}
+
+// reserveExpunge records every input p chose as the reservation of repoID's
+// expunge this node is running ([expungeClaim]'s RESERVED): from then on a
+// compaction of the repository is admitted beside it and leaves those packs
+// out. A later, narrower plan of the same cycle — the bundle rule's rebuild —
+// keeps the first one's reservation, which holds every input it chose.
+func (c *Compactor) reserveExpunge(repoID string, p planned) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	x := c.expunges[repoID]
+	if x == nil || x.begun {
+		return
+	}
+	x.reserved = make(map[string]bool, len(p.inputs))
+	for _, in := range p.inputs {
+		x.reserved[in.checksum] = true
+	}
+}
+
+// beganExpunge marks repoID's expunge this node is running BEGUN
+// ([expungeClaim]): its rescue has synced this node's copy past its begin,
+// which retired every input, so a compaction of the repository no longer
+// leaves any out.
+func (c *Compactor) beganExpunge(repoID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if x := c.expunges[repoID]; x != nil {
+		x.begun, x.reserved = true, nil
+	}
 }
 
 // unclaimExpunge gives repoID's expunge back.

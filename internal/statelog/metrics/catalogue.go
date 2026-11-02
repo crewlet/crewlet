@@ -928,7 +928,7 @@ func Catalogue() []Instrument {
 				"`repo_deleted`, `busy`, `not_applied`, `unavailable`, and the " +
 				"home's `superseded` — facts or a merge of a revision, a head or " +
 				"a target the change has moved from; facts no later than the " +
-				"facts it holds, or matched against path owners changed since; " +
+				"facts it holds, or matched against path owners or human paths changed since; " +
 				"a merge into a tip before the one its mergeability is of, or " +
 				"into the same tip once decided; a settling of asks for a " +
 				"change that moved since its home read it, or holds no such " +
@@ -1211,10 +1211,12 @@ func Catalogue() []Instrument {
 				"`unknown`: a record was appended and is not yet known to have " +
 				"applied — the next pass reads the rows and finishes it. " +
 				"`not_due`: nothing was left to rewrite — a purge already served, " +
-				"every live pack arrived within the two weeks' grace the weekly " +
-				"expunge keeps whole, or what no ref reaches is a quarter of the " +
-				"live bytes or less, or under 64 MiB — each but a served purge leaving the " +
-				"repository unscanned on this node for a week. `stale`: a compaction, a " +
+				"every live pack arrived within the grace the weekly expunge " +
+				"keeps whole, or what no ref reaches is too little to be due — " +
+				"no more than its share of the live bytes, or under the least an " +
+				"expunge frees — each but a served purge leaving the repository " +
+				"unscanned on this node until the weekly schedule lists it " +
+				"again. `stale`: a compaction, a " +
 				"publication or a purge moved an input first, or the expunge was " +
 				"finished elsewhere. `busy`: no maintenance slot or memory room " +
 				"was free, another build of the repository was running on the " +
@@ -1602,9 +1604,13 @@ func Catalogue() []Instrument {
 				"outside every bitmap, and every one pushed after. `expunge` (550 " +
 				"bytes an object of the packs an expunge sorts, beside the room " +
 				"for a clone of the whole repository, whose history its build " +
-				"walks, and its delta search): a person's purge of the " +
-				"repository waits until a git node with the memory maintains it " +
-				"(`code_cache_expunge_refused` names it). Rising is " +
+				"walks, and its delta search; a due scan the room and the " +
+				"search alone): a person's purge of the repository, or the " +
+				"weekly expunge it is due, waits until a git node with the " +
+				"memory maintains it (`code_cache_expunge_refused` names it), " +
+				"and meanwhile what no ref reaches still counts against " +
+				"repo_max_bytes, past which its pushes are refused " +
+				"`repo_size`. Rising is " +
 				"repositories outgrowing the node; the code_maintenance_refused " +
 				"alarm stands while any bitmap or publication is refused, and " +
 				"never for a tip, whose copy is served through its chain's bitmap.",

@@ -243,136 +243,6 @@ type Spec struct {
 	// writes them on the run's row ([PendingRun.Repos]), which is what the
 	// box's credential is judged against for as long as the job runs.
 	Repos []RunRepo
-
-	// Mounts are directories of the engine host the box is given at paths
-	// of its own ([Mount]) — a git node's copy of a repository a check's box
-	// borrows its objects from ([CloneBorrowed]). Only a container box takes
-	// one ([Placement.TakesMounts]); a spec carrying one for any other cell
-	// is refused before a box exists, never created without it.
-	Mounts []Mount
-}
-
-// Mount is a directory of the ENGINE HOST a box is given at a path of its
-// own, beside its home: the one way a box reads what the host holds — a git
-// node's copy of a repository, whose objects a check's box checks its commit
-// out of rather than fetching them ([CloneBorrowed]).
-//
-// ONLY A CONTAINER BOX TAKES ONE ([Placement.TakesMounts]). A container is a
-// process tree on the engine host whose filesystem its runtime assembles, so a
-// directory of the host is one more bind mount beside its home. A DIRECT box
-// is the host itself — a mount would be a path it already reads, given under
-// a name it does not have — and a REMOTE box is another machine, which no
-// directory of this host reaches. Either is REFUSED, never ignored: a mount
-// dropped on the way is a checkout that fails later, in a step that names a
-// directory nobody can find.
-//
-// Made by the engine, never read from configuration: what a box may be given
-// of the host is decided where a box is made, for the one thing it is for.
-type Mount struct {
-	// Host is the directory on the engine host: an absolute, clean path to
-	// a directory that exists when the box is made — a container runtime
-	// given a host path that does not exist MAKES it, as root on a rootful
-	// runtime, and the box would read an empty directory the engine cannot
-	// remove.
-	Host string
-	// Box is where the box sees it: an absolute, clean path OUTSIDE the
-	// box's home ([DefaultHome]). The home is itself the box's directory on
-	// the host, mounted, so a mount inside it is made through that mount — a
-	// directory the runtime creates in the engine's own box directory, as
-	// root on a rootful runtime, which the box's teardown cannot remove.
-	Box string
-	// ReadOnly gives it to the box to read: the box never writes it. A
-	// borrowed copy of a repository is read-only, since the host's git
-	// serves every other box from it.
-	ReadOnly bool
-}
-
-// MaxMountPathBytes is the longest path either side of a [Mount] names, and a
-// borrowed checkout's [RunRepo.Objects]: 4 095 bytes, PATH_MAX less its NUL —
-// the longest path the kernel resolves, on the host and in a container alike.
-const MaxMountPathBytes = 4095
-
-// Validate holds a mount to its grammar: each side an absolute, clean path of
-// at most [MaxMountPathBytes], neither of them the root, the box's side
-// outside its home ([boxPathProblem]). Neither side holds a `:`, which a
-// container runtime's `-v host:box[:ro]` reads as its separator, so a path
-// holding one would mount another directory than the one named.
-func (m Mount) Validate() error {
-	if why := mountPathProblem(m.Host); why != "" {
-		return fmt.Errorf("sandbox: a mount's host directory %q %s", m.Host, why)
-	}
-	if why := boxPathProblem(m.Box); why != "" {
-		return fmt.Errorf("sandbox: a mount's path in the box %q %s", m.Box, why)
-	}
-	return nil
-}
-
-// boxPathProblem is why p cannot be where a box is given a directory of the
-// engine host — "" when it can be: a [Mount]'s box side, and the objects a
-// borrowed checkout reads ([RunRepo.Objects]). What either side of a mount is
-// held to ([mountPathProblem]), and outside the box's home ([DefaultHome]),
-// which is itself a mount of the box's own directory on the host (see
-// [Mount.Box]).
-func boxPathProblem(p string) string {
-	if why := mountPathProblem(p); why != "" {
-		return why
-	}
-	if p == DefaultHome || strings.HasPrefix(p, DefaultHome+"/") {
-		return "is inside the box's home " + DefaultHome + ", which is itself a mount of the box's own " +
-			"directory, so the runtime would make the mount point there, as root on a rootful runtime, " +
-			"where the box's teardown cannot remove it"
-	}
-	return ""
-}
-
-// mountPathProblem is what both sides of a mount are held to: an absolute,
-// clean path, not the root, valid UTF-8 with no control character and no `:`,
-// at most [MaxMountPathBytes].
-func mountPathProblem(p string) string {
-	switch {
-	case p == "":
-		return "is empty"
-	case len(p) > MaxMountPathBytes:
-		return fmt.Sprintf("is %d bytes, past the %d a path may have (PATH_MAX)", len(p), MaxMountPathBytes)
-	case !utf8.ValidString(p):
-		return "is not valid UTF-8"
-	case strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == 0x7f }):
-		return "holds a control character"
-	case strings.Contains(p, ":"):
-		return "holds a `:`, which a container runtime's -v reads as its separator"
-	case !path.IsAbs(p) || path.Clean(p) != p:
-		return "is not an absolute, clean path"
-	case p == "/":
-		return "is the root"
-	}
-	return ""
-}
-
-// mountsFit refuses mounts a box in placement cannot be given: any at all
-// outside a container ([Placement.TakesMounts]), one [Mount.Validate]
-// refuses, and two given one path in the box, of which the runtime would
-// keep one. Asked where a box is made — by the manager, for every cell, and
-// by the local backend for its own — before anything of the box exists.
-func mountsFit(placement Placement, mounts []Mount) error {
-	if len(mounts) == 0 {
-		return nil
-	}
-	if !placement.TakesMounts() {
-		return fmt.Errorf("sandbox: a box in the %s cell takes no mount (%d given): only a container on the "+
-			"engine host is given a directory of it beside its home — a direct box is the engine host itself, "+
-			"and a remote one is another machine", placement, len(mounts))
-	}
-	at := make(map[string]int, len(mounts))
-	for i, m := range mounts {
-		if err := m.Validate(); err != nil {
-			return fmt.Errorf("%w (mounts[%d])", err, i)
-		}
-		if j, twice := at[m.Box]; twice {
-			return fmt.Errorf("sandbox: mounts[%d] and mounts[%d] are both given at %s in the box", j, i, m.Box)
-		}
-		at[m.Box] = i
-	}
-	return nil
 }
 
 // MaxRunRepos is the most repositories one coding run is given: each costs a
@@ -452,13 +322,11 @@ func (a RepoAccess) Valid() bool { return slices.Contains(RepoAccesses(), a) }
 // RunRepo is one repository a box is given, RESOLVED WHEN THE BOX IS: the
 // repository's id beside the name it had then, so a rename meanwhile cannot
 // move the grant; the commit the box starts from; the branch a coding run
-// works on; the cone it checks out; and, for a check's box that borrows a git
-// node's copy of the repository, where that copy's objects are in the box.
+// works on; and the cone it checks out.
 //
 // The json tags are a WIRE FORMAT: a coding run's row carries these
 // ([PendingRun.Repos]), and a node of another build reads them. A check's
-// repository rides no row — its box is made, run and closed by one node — so
-// [RunRepo.Objects], which only a check sets, is on no row any build wrote.
+// repository rides no row: its box is made, run and closed by one node.
 type RunRepo struct {
 	// Repo is the repository's name at launch: the directory the box is
 	// given it in, and the name its URL carries.
@@ -478,12 +346,6 @@ type RunRepo struct {
 	// Paths are the directories checked out (a sparse cone), at most
 	// [MaxConePaths]; empty is the whole tree.
 	Paths []string `json:"paths,omitempty"`
-	// Objects is where a BORROWED checkout's objects are in the box
-	// ([CloneBorrowed]): the box's side of a [Mount] of a git node's copy of
-	// the repository's object store, which the checkout reads as git's
-	// alternates rather than fetching. Required for that purpose and empty
-	// for every other.
-	Objects string `json:"objects,omitempty"`
 	// Change is the change a coding run works on — the live change whose
 	// source is Branch, which it starts from the head of — and nil for a run
 	// on no change (runchange.go). A coding run's alone.
@@ -503,20 +365,18 @@ type RunRepo struct {
 // holds a path to). Then by purpose:
 //
 //   - [CloneCoding]: a branch name git and the code host both take
-//     (gitref.ValidBranch), since the run works on one, and no objects; a
-//     change it works on named by its id and its number; and a change it
-//     asks to open given write, never beside a change it works on — whose
-//     branch heads that change already — and proposing its branch into
-//     another ([OpenChange.problem]);
-//   - [CloneSingleSHA] and [CloneBorrowed], a CHECK's: a base — the commit it
-//     measures — no branch, since a check is given one commit and works on
-//     none, read access, since its box's credential fetches and never pushes,
-//     and, for the borrowed checkout alone, the objects it reads, a path in
-//     the box a mount may take ([boxPathProblem]).
+//     (gitref.ValidBranch), since the run works on one; a change it works on
+//     named by its id and its number; and a change it asks to open given
+//     write, never beside a change it works on — whose branch heads that
+//     change already — and proposing its branch into another
+//     ([OpenChange.problem]);
+//   - [CloneSingleSHA], a CHECK's: a base — the commit it measures — no
+//     branch, since a check is given one commit and works on none, and read
+//     access, since its box's credential fetches and never pushes.
 //
 // A value a purpose does not read is REFUSED rather than ignored: a branch on
-// a check's repository, or objects on a coding run's, is a caller that meant
-// another purpose, and a box made from it would be told one thing and do
+// a check's repository, or a change on one, is a caller that meant another
+// purpose, and a box made from it would be told one thing and do
 // another.
 //
 // ONE GRAMMAR for every reader: the launch that resolves a run's repositories
@@ -550,9 +410,6 @@ func (r RunRepo) ValidateFor(purpose ClonePurpose) error {
 		switch {
 		case !gitref.ValidBranch(r.Branch):
 			return fmt.Errorf("sandbox: repository %s: %q is not a branch name git accepts", r.Repo, r.Branch)
-		case r.Objects != "":
-			return fmt.Errorf("sandbox: repository %s: a coding run clones its repository and borrows no "+
-				"objects, and is given %q", r.Repo, r.Objects)
 		case r.Change != nil && r.Change.problem() != "":
 			return fmt.Errorf("sandbox: repository %s: the change it works on %s", r.Repo, r.Change.problem())
 		case r.Open != nil && r.Change != nil:
@@ -578,17 +435,6 @@ func (r RunRepo) ValidateFor(purpose ClonePurpose) error {
 	case r.Access != RepoRead:
 		return fmt.Errorf("sandbox: repository %s: a check's box reads its repository, its credential "+
 			"fetching and never pushing, and is given %q", r.Repo, r.Access)
-	case purpose == CloneSingleSHA && r.Objects != "":
-		return fmt.Errorf("sandbox: repository %s: a single-commit checkout fetches its objects, and is "+
-			"given %q to borrow", r.Repo, r.Objects)
-	case purpose == CloneBorrowed && r.Objects == "":
-		return fmt.Errorf("sandbox: repository %s: a borrowed checkout reads its objects from a mount, "+
-			"and names none", r.Repo)
-	}
-	if purpose == CloneBorrowed {
-		if why := boxPathProblem(r.Objects); why != "" {
-			return fmt.Errorf("sandbox: repository %s: its objects %q %s", r.Repo, r.Objects, why)
-		}
 	}
 	return nil
 }

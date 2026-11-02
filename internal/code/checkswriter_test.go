@@ -393,11 +393,11 @@ func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 		Attempt: code.MaxCheckAttempts}
 	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
 		revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
-		runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
+		runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
 		duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
 		url, summary, def, failures, tail)
 		VALUES (?, ?, ?, ?, ?, 'errored', 'tip', '', 0, '', '', '', '', 0, '', 600,
-			'runner_lost', 'git-a', 'container', '', 0, '', ?, ?, ?, 0, NULL, 0, 1, 2, 0, ?, '', '', '', '', '')`,
+			'runner_lost', 'git-a', 'container', '', '', ?, ?, ?, 0, NULL, 0, 1, 2, 0, ?, '', '', '', '', '')`,
 		repo, last.OID, last.Target, last.Name, last.Attempt, store.EncodeTime(harnessAt),
 		store.EncodeTime(harnessAt), store.EncodeTime(harnessAt), store.EncodeTime(harnessAt.Add(600*time.Second)))
 	past := last
@@ -1216,11 +1216,11 @@ func insertAttempt(n *node, repo, target, name string, attempt int, state code.C
 	at := harnessAt.Add(time.Duration(attempt) * time.Minute)
 	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
 		revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
-		runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
+		runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
 		duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
 		url, summary, def, failures, tail)
 		VALUES (?, ?, ?, ?, ?, ?, 'head', '', 1, '', '', '', '', 1, '', 600,
-			'exit', 'git-a', 'container', '', 0, '', ?, ?, ?, 1000, NULL, 0, 1, 2, 0, 0, '', '', '', '', '')`,
+			'exit', 'git-a', 'container', '', '', ?, ?, ?, 1000, NULL, 0, 1, 2, 0, 0, '', '', '', '', '')`,
 		repo, oidOf("B"), target, name, attempt, string(state), store.EncodeTime(at), store.EncodeTime(at),
 		store.EncodeTime(at.Add(time.Second)))
 }

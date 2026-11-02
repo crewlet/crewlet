@@ -73,7 +73,9 @@ func TestACheckEndsByItsCommandsExit(t *testing.T) {
 // files and no commit identity.
 //
 // Mutation: hand the box every code.checks.env entry, or the process's own
-// model keys — the unnamed secret or ANTHROPIC_API_KEY reaches it, red.
+// model keys — the unnamed secret or ANTHROPIC_API_KEY reaches it, red; run
+// the check's command with ANTHROPIC_API_KEY — the command was run with it,
+// red.
 func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-the-engine's-own")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "the-engine's-plan")
@@ -86,9 +88,9 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	key := f.queue(oidOf("c"), d)
 	box := f.container.box(t)
 	spec := f.container.spec(0)
-	if spec.CodingAgent != "" || len(spec.CredentialFiles) > 0 || len(spec.Repos) > 0 || len(spec.Mounts) > 0 {
-		t.Fatalf("a check's box was made with an agent %q, %d login files, %d run grants, %d mounts",
-			spec.CodingAgent, len(spec.CredentialFiles), len(spec.Repos), len(spec.Mounts))
+	if spec.CodingAgent != "" || len(spec.CredentialFiles) > 0 || len(spec.Repos) > 0 {
+		t.Fatalf("a check's box was made with an agent %q, %d login files, %d run grants",
+			spec.CodingAgent, len(spec.CredentialFiles), len(spec.Repos))
 	}
 	allowed := append([]string{"NPM_TOKEN", sandbox.GitURLVar, sandbox.GitTokenVar, "GIT_CONFIG_COUNT"},
 		config.ReservedCheckEnv()...)
@@ -108,13 +110,21 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	}
 	for name, want := range map[string]string{"CREWLET_CHECK_REPO": "web", "CREWLET_CHECK_SHA": key.OID,
 		"CREWLET_CHECK_NAME": "unit", "CREWLET_CHECK_ATTEMPT": "1",
-		"CREWLET_CHECK_API": "https://git.example.com/box/code/web", sandbox.GitURLVar: gitBase} {
+		"CREWLET_CHECK_API": codeBase + "/web", sandbox.GitURLVar: gitBase} {
 		if got := spec.Env[name]; got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
 	if tok := spec.Env[sandbox.GitTokenVar]; !strings.HasPrefix(tok, "chk-web-unit-1-") {
 		t.Errorf("the box's token is %q, want its check's", tok)
+	}
+	f.container.end(box, 0, "")
+	f.ended(key)
+	// Read once the attempt has ENDED, never once its box is made: the box
+	// is handed to the case before the runner sets it up and long before it
+	// starts the command, so a read between sees only what ran by then.
+	if bg := box.Background(); len(bg) != 1 {
+		t.Fatalf("the premise: the box ran the check's command once, it ran %q", bg)
 	}
 	for _, exec := range box.Execs() {
 		for name := range exec.Env {
@@ -123,8 +133,6 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 			}
 		}
 	}
-	f.container.end(box, 0, "")
-	f.ended(key)
 }
 
 // A CHECK SPENDS NO TOKENS: nothing it runs is a model's, so the runner holds
@@ -416,24 +424,26 @@ func TestTheHomeClaimsFirstAndItsRunnerUpAStaggerLater(t *testing.T) {
 	other.end(other.box(t), 0, "")
 }
 
-// A RUNNER NEEDS THE CODE HOST'S BASE as a box dials it: New refuses one that
-// does not end in /box/git, since its /box/code sibling is where a check reads
-// its commit without a clone.
-func TestARunnerNeedsTheBoxGitBase(t *testing.T) {
+// A RUNNER NEEDS BOTH OF A BOX'S BASES: the code host's a box clones from,
+// which New refuses unless it ends in /box/git, and the one a check reads its
+// commit at without a clone, which New refuses unset — a box told neither
+// would fail its checkout or its first read with nothing to say why.
+func TestARunnerNeedsBothBoxBases(t *testing.T) {
 	t.Parallel()
-	o := checkrun.Options{NodeID: "git-a", Estate: estate{}, Order: &order{},
-		Boxes:   func() (checkrun.Boxes, bool) { return nil, false },
-		Company: func() (checkrun.Company, bool) { return checkrun.Company{}, false }, Tokens: tokens{},
-		Leases: memory.New(), Minutes: memory.NewFleet()}
+	o := wholeOptions()
 	for _, base := range []string{"", "https://git.example.com", "https://git.example.com/git"} {
 		o.GitBase = base
 		if _, err := checkrun.New(o); !errors.Is(err, checkrun.ErrOptions) {
 			t.Errorf("New with GitBase %q = %v, want ErrOptions", base, err)
 		}
 	}
-	o.GitBase = gitBase
-	if _, err := checkrun.New(o); err != nil {
-		t.Errorf("New with GitBase %q: %v", gitBase, err)
+	o = wholeOptions()
+	o.CodeBase = ""
+	if _, err := checkrun.New(o); !errors.Is(err, checkrun.ErrOptions) || !strings.Contains(err.Error(), "CodeBase") {
+		t.Errorf("New with no CodeBase = %v, want ErrOptions naming CodeBase", err)
+	}
+	if _, err := checkrun.New(wholeOptions()); err != nil {
+		t.Errorf("New with GitBase %q and CodeBase %q: %v", gitBase, codeBase, err)
 	}
 }
 
@@ -442,7 +452,7 @@ func wholeOptions() checkrun.Options {
 	return checkrun.Options{NodeID: "git-a", Estate: estate{}, Order: &order{},
 		Boxes:   func() (checkrun.Boxes, bool) { return nil, false },
 		Company: func() (checkrun.Company, bool) { return checkrun.Company{}, false }, Tokens: tokens{},
-		Leases: memory.New(), Minutes: memory.NewFleet(), GitBase: gitBase}
+		Leases: memory.New(), Minutes: memory.NewFleet(), GitBase: gitBase, CodeBase: codeBase}
 }
 
 // A RUNNER'S TIMING IS WHOLE OR UNSET: a cadence of zero is no cadence — a

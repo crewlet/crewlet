@@ -60,11 +60,11 @@ func (n *node) passed(repoID, oid, target, name string) {
 	at := store.EncodeTime(harnessAt)
 	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
 		revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
-		runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
+		runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
 		duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
 		url, summary, def, failures, tail)
 		VALUES (?, ?, ?, ?, 1, 'passed', 'head', '', 0, '', '', '', '', 1, '', 600, 'exit',
-			'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', 'ok', '', '', '')`,
+			'node-a', 'container', '', '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', 'ok', '', '', '')`,
 		repoID, oid, target, name, at, at, at, store.EncodeTime(harnessAt.Add(600*time.Second)))
 }
 
@@ -124,6 +124,35 @@ func (n *node) entryState(repo, entry string) (code.QueueState, string) {
 		n.t.Fatalf("read entry %s: %v", entry, err)
 	}
 	return code.QueueState(state), reason
+}
+
+// A QUEUED CHANGE'S READ NAMES ITS ENTRY: the read that judges a queued
+// change's gate names its live entry on the queue precondition — the entry,
+// its target, where it stands and its place — so a dequeue takes the entry
+// from the one read of the change it already made, never by walking the
+// queue for it.
+//
+// Mutation: gateJudge.queued naming no entry → red.
+func TestAQueuedChangesReadNamesItsEntry(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, change)
+	if p := preconditionOf(t, readinessOf(t, n, 1), code.PreconditionMergeable); p.Queue != nil {
+		t.Errorf("the %s precondition names a queue entry %+v: only the queue's does", p.Kind, p.Queue)
+	}
+	enqueue := enqueueing(repo, change, ada, oidOf("B"))
+	res, err := c.ProposeQueue(t.Context(), enqueue)
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+	p := preconditionOf(t, readinessOf(t, n, 1), code.PreconditionQueue)
+	want := code.QueuedFacts{EntryID: enqueue.Enqueue.EntryID, TargetRef: mainRef, State: code.QueueWaiting,
+		Place: 1}
+	if p.Queue == nil || *p.Queue != want {
+		t.Fatalf("the queued change's read names the entry %+v, want %+v", p.Queue, want)
+	}
 }
 
 // AN ENQUEUE IS DECIDED BY THE GATE: a change that meets no term of main's

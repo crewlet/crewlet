@@ -229,13 +229,14 @@ func hostWithChange(state code.ChangeState) *codeHost {
 // change's own source branch, from the head that branch holds, and names the
 // change on the run's grant, so its pushes revise it and its collection names
 // it; the change is read once, LINEARIZABLE — a run must not start from a
-// change a node behind still shows open — and a closed or a merged one is
-// refused before a box costs anything, as is a change of another repository
-// and one the repository does not hold.
+// change a node behind still shows open — and as its DETAIL ALONE
+// (code.ReadQuery.DetailOnly), no revision of it read; and a closed or a
+// merged one is refused before a box costs anything, as is a change of
+// another repository and one the repository does not hold.
 //
 // Mutations: start from the default branch rather than the change's — the
-// base is main's, red; read the change stale — red; let a merged change
-// through — red.
+// base is main's, red; read the change stale — red; read it with a page of
+// its revisions — red; let a merged change through — red.
 func TestARunOnAChangeStartsFromItsHead(t *testing.T) {
 	t.Parallel()
 	for _, named := range []string{"3", "site!3"} {
@@ -258,6 +259,9 @@ func TestARunOnAChangeStartsFromItsHead(t *testing.T) {
 		for _, q := range reads {
 			if q.Kind == code.ReadChange && q.Fresh.Level != statelog.ReadLinearizable {
 				t.Errorf("change %q: the change was read %s, want linearizable", named, q.Fresh.Level)
+			}
+			if q.Kind == code.ReadChange && (!q.DetailOnly || q.Limit != 0) {
+				t.Errorf("change %q: the change was read as %+v, want its detail alone", named, q)
 			}
 		}
 		if len(resolves) != 1 || resolves[0].Refs[0] != "refs/heads/feature" {

@@ -48,9 +48,14 @@ import (
 // MaxTouchedPaths paths, which no decide pays on every round it may take. So
 // the home matches ([MatchOwners]) and sends the owners it matched beside the
 // DIGEST of the owner rows it matched them against ([OwnersDigest]), and the
-// decide recomputes the digest from its own snapshot's rows: another digest is
+// decide holds it to the digest its own snapshot's repository row carries
+// (code_repos.owners_digest, written beside the rows): another digest is
 // owners that changed since the home read them, and the facts are SUPERSEDED,
-// recorded nowhere, for the home's next pass to match again. What the decide
+// recorded nowhere, for the home's next pass to match again. Owners changed
+// AFTER a revision's facts were recorded make it due its facts again
+// ([ReadChangesDue]), and the same tip read again is then no repeat: the facts
+// it holds were matched against owners the repository no longer has, and the
+// new match replaces them, asking any owner it adds. What the decide
 // does with the matched owners is a judgment of the chart, which no home
 // makes: a unit owner is asked of its EFFECTIVE LEAD, a seat owner of itself;
 // one who may not review the repository — a seat below review — or who is an
@@ -63,6 +68,15 @@ import (
 // path owner GRANTS NOTHING: its ask is a review request, and whether its
 // review counts is the reviewer's grant's, as any reviewer's.
 //
+// The home matches the HUMAN PATHS the change's target's merge gate names the
+// same way and for the same reason ([MatchTargetHumanPaths], humanpaths.go):
+// the facts carry which entries hold the revision for a person and which their
+// unless waives, by place, beside the digest of the repository's rules' human
+// paths the home matched against, which the decide holds to its snapshot's
+// repository row (code_repos.human_paths_digest) as it holds the owners'. A
+// match naming a place is checked against the target's gate as the
+// snapshot's rules combine it, so no recorded place is past the list it names.
+//
 // # The guard
 //
 // Facts are of the change's HEAD revision against its CURRENT target, and a
@@ -70,9 +84,12 @@ import (
 // a head the change has moved from, against a branch the change no longer
 // merges into, or no later than the facts it holds of that revision against
 // that branch — the same tip read twice, by a home that ran its pass again or
-// two homes a split presence view each called home — is SUPERSEDED. A retarget
-// is new facts of the same revision against another branch, which replace the
-// row.
+// two homes a split presence view each called home — is SUPERSEDED, while the
+// facts it holds still hold: facts matched against path owners or human paths
+// the repository has changed since are replaced by the same tip's facts
+// matched again. A
+// retarget is new facts of the same revision against another branch, which
+// replace the row.
 //
 // # Whom the facts concern, for the wakes
 //
@@ -212,6 +229,23 @@ type Revise struct {
 	// snapshot's to.
 	RequestedOwners []Owner `json:"requested_owners,omitempty"`
 	OwnersDigest    string  `json:"owners_digest"`
+	// HumanPaths is which of the human paths the change's target's merge gate
+	// names hold the revision to a person and which their unless waives, each
+	// by its place in the target's human paths ([HumanPathMatch]), as
+	// [MatchTargetHumanPaths] answers them; HumanPathsDigest the digest of
+	// the repository's rules' human paths they were matched against
+	// ([HumanPathsDigest]), which the decide holds its own snapshot's to.
+	//
+	// BASE FORMAT, under the condition [OpRevise] states: fields the op
+	// gained after it landed, so once a build without them has run they take
+	// {Name: "Revise.HumanPaths", Since: 2, Op: "revise", Path:
+	// []string{"mutation", "human_paths"}} and {Name:
+	// "Revise.HumanPathsDigest", Since: 2, Op: "revise", Path:
+	// []string{"mutation", "human_paths_digest"}}, which an older build
+	// defers the record by rather than record facts no gate can judge a
+	// person's approval by.
+	HumanPaths       HumanPathMatch `json:"human_paths,omitzero"`
+	HumanPathsDigest string         `json:"human_paths_digest"`
 
 	// Asked is the reviewers the record asks for the matched owners, each by
 	// the seat it resolved to and its kind; SkippedOwners the matched owners
@@ -437,6 +471,12 @@ func (r *Revise) validFields() error {
 	if len(r.OwnersDigest) != sha256.Size*2 || strings.Trim(r.OwnersDigest, "0123456789abcdef") != "" {
 		return badField("revise.owners_digest", "%q is not a SHA-256 in lowercase hex", r.OwnersDigest)
 	}
+	if err := humanPathMatchProblem(r.HumanPaths); err != nil {
+		return err
+	}
+	if len(r.HumanPathsDigest) != sha256.Size*2 || strings.Trim(r.HumanPathsDigest, "0123456789abcdef") != "" {
+		return badField("revise.human_paths_digest", "%q is not a SHA-256 in lowercase hex", r.HumanPathsDigest)
+	}
 	if len(r.Asked) > 0 || len(r.SkippedOwners) > 0 {
 		return badField("revise", "the writer stamps whom the facts ask, skip and wake from its snapshot and its "+
 			"chart, and the home sends none of them")
@@ -504,18 +544,21 @@ func stampedReviseBytes(r Revise) int {
 }
 
 // factsRow is what a revise's decide and apply read of one revision's facts:
-// the branch and the tip's position they are against, and what their wide
-// columns weigh.
+// the branch and the tip's position they are against, the digest of the path
+// owners they were matched against, and what their wide columns weigh.
 type factsRow struct {
-	targetRef      string
-	targetPosition int64
-	bytes          int64
+	targetRef        string
+	targetPosition   int64
+	ownersDigest     string
+	humanPathsDigest string
+	bytes            int64
 }
 
 // factsIn reads revision n of changeID's facts, and false where it holds none.
 func factsIn(ctx context.Context, tx *sql.Tx, changeID string, n int64) (factsRow, bool, error) {
 	var f factsRow
-	err := tx.QueryRowContext(ctx, factsSQL, changeID, n).Scan(&f.targetRef, &f.targetPosition, &f.bytes)
+	err := tx.QueryRowContext(ctx, factsSQL, changeID, n).Scan(&f.targetRef, &f.targetPosition, &f.ownersDigest,
+		&f.humanPathsDigest, &f.bytes)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return factsRow{}, false, nil
@@ -528,8 +571,9 @@ func factsIn(ctx context.Context, tx *sql.Tx, changeID string, n int64) (factsRo
 // decideRevise is a revise's rules over row — see this file's head: a LIVE
 // change (change_closed, change_merged); its head revision and head and its
 // current target (superseded); no facts of that revision against that branch
-// at or past the tip read (superseded); the repository's path owners as the
-// home matched them (superseded), each matched owner one of them; and then
+// at or past the tip read and matched against the path owners the repository
+// holds (superseded); the repository's path owners as the home matched them
+// (superseded), each matched owner one of them; and then
 // the chart's judgment of whom the facts ask, skip and wake, stamped onto the
 // record. Pure over (the rows, w, roster): roster is the deciding epoch's
 // chart, which a revise always reads ([ConversationWrite.JudgesChart]).
@@ -558,18 +602,35 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 	if err != nil {
 		return conversationDecision{}, err
 	}
-	if held && prior.targetRef == r.TargetRef && prior.targetPosition >= r.TargetPosition.Packed() {
+	digests, err := matchDigestsIn(ctx, tx, repo.ID)
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	// FACTS HELD AT OR PAST THE TIP READ SUPERSEDE THESE — unless a match
+	// they hold is of owners or rules the repository no longer has: the
+	// home's due listing names such a revision due its facts again
+	// ([ReadChangesDue]), and the same tip read again is how it matches what
+	// the repository holds now.
+	if held && prior.targetRef == r.TargetRef && prior.ownersDigest == digests.owners &&
+		prior.humanPathsDigest == digests.humanPaths && prior.targetPosition >= r.TargetPosition.Packed() {
 		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("revision %d of %s holds facts against %s "+
-			"at %s already, and these were read at %s", r.N, named, r.TargetRef, unpacked(prior.targetPosition),
-			r.TargetPosition))
+			"at %s already, matched against the path owners and the human paths it holds, and these were read "+
+			"at %s", r.N, named, r.TargetRef, unpacked(prior.targetPosition), r.TargetPosition))
+	}
+	if r.OwnersDigest != digests.owners {
+		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s's path owners are not the ones the "+
+			"facts were matched against: the home matches the touched paths again", repo.Name))
+	}
+	if r.HumanPathsDigest != digests.humanPaths {
+		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s's human paths are not the ones the "+
+			"facts were matched against: the home matches the touched paths again", repo.Name))
+	}
+	if err := humanPlacesIn(ctx, tx, repo, r); err != nil {
+		return conversationDecision{}, err
 	}
 	owners, err := pathOwnersIn(ctx, tx, repo.ID)
 	if err != nil {
 		return conversationDecision{}, err
-	}
-	if digest := OwnersDigest(owners); digest != r.OwnersDigest {
-		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s's path owners are not the ones the "+
-			"facts were matched against: the home matches the touched paths again", repo.Name))
 	}
 	isOwner := make(map[Owner]bool, len(owners))
 	for _, po := range owners {
@@ -847,6 +908,53 @@ func standingAsks(ctx context.Context, tx *sql.Tx, changeID string) ([]Reviewer,
 	return out, rows.Err()
 }
 
+// matchDigests is what a repository's row says a revision's touched paths are
+// matched against now: the digest of its path owners
+// (code_repos.owners_digest) and of its rules' human paths
+// (code_repos.human_paths_digest), each written beside the rows it digests by
+// every record that writes them.
+type matchDigests struct {
+	owners     string
+	humanPaths string
+}
+
+// humanPlacesIn refuses r's human-path match where a place it names is past
+// the human paths its target's gate names, as the rules of r's repository in
+// tx combine them: under the digest the decide held the match to, a place
+// names one entry of that list, and a place past it is a home's error that a
+// judgment could only read as a match of other rules, for ever. Read only for
+// a match naming a place, so a revision touching no human path reads no rule.
+func humanPlacesIn(ctx context.Context, tx *sql.Tx, repo RepoRef, r Revise) error {
+	if r.HumanPaths.IsZero() {
+		return nil
+	}
+	rules, err := protectionsIn(ctx, tx, repo.ID)
+	if err != nil {
+		return err
+	}
+	gate, err := GateRulesOf(rules, r.TargetRef, "")
+	if err != nil {
+		return err
+	}
+	for _, list := range [][]int{r.HumanPaths.Held, r.HumanPaths.Waived} {
+		if len(list) > 0 && list[len(list)-1] >= len(gate.HumanPaths) {
+			return fmt.Errorf("%w: revise: human path %d is past the %d %s's gate names", ErrInvalidProposal,
+				list[len(list)-1], len(gate.HumanPaths), r.TargetRef)
+		}
+	}
+	return nil
+}
+
+// matchDigestsIn reads repoID's [matchDigests] — one seek of its key.
+func matchDigestsIn(ctx context.Context, tx *sql.Tx, repoID string) (matchDigests, error) {
+	var m matchDigests
+	if err := tx.QueryRowContext(ctx, matchDigestsSQL, repoID).Scan(&m.owners, &m.humanPaths); err != nil {
+		return matchDigests{}, fmt.Errorf("code: read what repository %s's facts are matched against: %w", repoID,
+			err)
+	}
+	return m, nil
+}
+
 // factsOf reports whether changeID holds facts of any revision.
 func factsOf(ctx context.Context, tx *sql.Tx, changeID string) (bool, error) {
 	var n int64
@@ -867,8 +975,11 @@ func factsOf(ctx context.Context, tx *sql.Tx, changeID string) (bool, error) {
 // reviewers' key in its order — the reviewers' key NAMED ([reviewersKey] says
 // why).
 const (
-	factsSQL = `SELECT target_ref, target_position, bytes FROM code_revision_facts
-		WHERE change_id = ? AND n = ?`
+	factsSQL = `SELECT target_ref, target_position, owners_digest, human_paths_digest, bytes
+		FROM code_revision_facts WHERE change_id = ? AND n = ?`
+	// matchDigestsSQL is a repository's digests of what a revision's touched
+	// paths are matched against, by its key ([matchDigestsIn]).
+	matchDigestsSQL           = `SELECT owners_digest, human_paths_digest FROM code_repos WHERE id = ?`
 	anyFactsSQL               = `SELECT n FROM code_revision_facts WHERE change_id = ? LIMIT 1`
 	changesRequestedBeforeSQL = `SELECT handle, kind FROM code_participants
 		WHERE change_id = ? AND verdict = 'request_changes' AND verdict_revision < ? ORDER BY handle LIMIT ?`

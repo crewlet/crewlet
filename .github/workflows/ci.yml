@@ -347,14 +347,14 @@ jobs:
       - name: the committed bundle is what this source builds
         run: |
           npm --prefix dashboard run build
-          untracked="$(git ls-files --others -- static/dashboard static/artifacts)"
-          if ! git diff --exit-code -- static/dashboard static/artifacts || [ -n "$untracked" ]; then
-            echo "::error::static/dashboard or static/artifacts is not what dashboard/ builds."
+          untracked="$(git ls-files --others -- static/dashboard static/artifacts static/protocol)"
+          if ! git diff --exit-code -- static/dashboard static/artifacts static/protocol || [ -n "$untracked" ]; then
+            echo "::error::static/dashboard, static/artifacts or static/protocol is not what dashboard/ builds."
             echo "What a rebuild changed or wrote that the commit does not carry:"
             git status --porcelain --untracked-files=all --ignored=matching \
-              -- static/dashboard static/artifacts | grep -v '^. ' || true
+              -- static/dashboard static/artifacts static/protocol | grep -v '^. ' || true
             echo "Run:"
-            echo "  make dashboard && git add -A -- static/dashboard static/artifacts"
+            echo "  make dashboard && git add -A -- static/dashboard static/artifacts static/protocol"
             exit 1
           fi
 
@@ -536,7 +536,7 @@ jobs:
       # internal/e2e is why this job installs node: it runs a real engine, a
       # real broker and the real API, then replays the frames its socket
       # produced through the dashboard's OWN protocol module — the built
-      # static/dashboard/protocol.js, which is committed, so nothing has to be
+      # static/protocol/protocol.js, which is committed, so nothing has to be
       # built here. Both halves of the wire protocol are checked against each
       # other here and nowhere else, so a missing node fails rather than skips.
       #

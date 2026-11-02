@@ -143,7 +143,7 @@ func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Positi
 			if err := ctx.Err(); err != nil {
 				return errors.Join(append(failed, err)...)
 			}
-			done, err := c.change(ctx, repoID, due, a.PathOwners, a.Position)
+			done, err := c.change(ctx, repoID, due, against{owners: a.PathOwners, gates: a.Gates}, a.Position)
 			if done {
 				landed[due.ID] = true
 			}
@@ -175,8 +175,10 @@ func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Positi
 // read against its target's tip as the listing read it, asked at the
 // listing's position, so the git node that answers holds both commits — the
 // change LANDED where its target holds its head, and the facts RECORDED
-// otherwise, the path owners matched against the touched paths here, on the
-// home (code.MatchOwners), beside the digest of the owners the listing read;
+// otherwise, the path owners and the human paths its target's gate names
+// matched against the touched paths here, on the home (code.MatchOwners,
+// code.MatchTargetHumanPaths), beside the digests of the owners and the rules
+// the listing read;
 // then its MERGE where it owes one ([changes.merge]), whatever became of its
 // facts, since the merge reads none of them; and where it owes no merge, a
 // REFRESH of its readiness ([changes.refresh]) where it owes one, or where
@@ -188,13 +190,13 @@ func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Positi
 // LANDING THAT DECIDED NOTHING among them ([undecidedLandings]): a committer
 // that keeps refusing a landing busy, or a Change call that keeps failing,
 // is a turn that failed, never one that worked.
-func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue, owners []code.PathOwner,
+func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue, rules against,
 	at statelog.Position) (bool, error) {
 
 	var failed []error
 	revised := false
 	if due.FactsDue {
-		landed, recorded, err := c.facts(ctx, repoID, due, owners, at)
+		landed, recorded, err := c.facts(ctx, repoID, due, rules, at)
 		if landed {
 			return true, err
 		}
@@ -224,7 +226,7 @@ func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue,
 // recorded ([changes.change]): whether it was landed, and whether its facts
 // were recorded. Facts the git node left short for time are no facts to keep
 // (code.RevisionFactsAnswer.Final): the turn's failure, the change still due.
-func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, owners []code.PathOwner,
+func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, rules against,
 	at statelog.Position) (bool, bool, error) {
 
 	began := c.now()
@@ -260,7 +262,7 @@ func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, 
 			"the git node's budget before their patch id (%q) or their classes (%q) were whole; the next pass "+
 			"asks again", due.Revision, due.Number, repoID, f.PatchIDOmission, f.ClassesOmission)
 	}
-	recorded, err := c.revise(ctx, repoID, due, f, owners, at)
+	recorded, err := c.revise(ctx, repoID, due, f, rules, at)
 	return false, recorded, err
 }
 
@@ -401,23 +403,38 @@ func (c *changes) land(ctx context.Context, repoID string, due code.ChangeDue, a
 	return nil
 }
 
+// against is what a due page says a revision's touched paths are matched
+// against: the repository's path owners and its rules' merge gates, read in
+// the page's snapshot beside the changes they are matched for.
+type against struct {
+	owners []code.PathOwner
+	gates  []code.RuleGate
+}
+
 // revise asks the repository's change writer to record due's revision's facts
 // f — its trees and its classes with the rest, as the git node read them —
-// its touched paths matched against owners, and answers whether they were
+// its touched paths matched against rules' path owners and against the human
+// paths rules' gates hold its target to, and answers whether they were
 // recorded: an answer that the rows moved since — superseded, the change
 // closed or merged — is the next pass's to read; one that decided nothing for
 // a reason of the log's is this turn's failure.
 func (c *changes) revise(ctx context.Context, repoID string, due code.ChangeDue, f *code.RevisionFactsAnswer,
-	owners []code.PathOwner, at statelog.Position) (bool, error) {
+	rules against, at statelog.Position) (bool, error) {
 
-	matched, digest := code.MatchOwners(owners, f.Touched, f.TouchesAll)
+	matched, digest := code.MatchOwners(rules.owners, f.Touched, f.TouchesAll)
+	held, humanDigest, err := code.MatchTargetHumanPaths(rules.gates, due.TargetRef, f.Touched, f.TouchesAll,
+		f.Classes)
+	if err != nil {
+		return false, fmt.Errorf("home: match the human paths of revision %d of change %d of repository %s: %w",
+			due.Revision, due.Number, repoID, err)
+	}
 	res, err := c.estate.Converse(ctx, code.ConversationWrite{OpID: statelog.NewOpID(c.now(), ""), Seen: at,
 		Revise: &code.Revise{RepoID: repoID, ChangeID: due.ID, N: due.Revision, HeadOID: due.Head,
 			TargetRef: due.TargetRef, TargetOID: due.Tip, TargetPosition: due.TipPosition, BaseOID: f.MergeBase,
 			BaseTree: f.BaseTree, HeadTree: f.HeadTree, PatchID: f.PatchID,
 			PatchIDOmitted: f.PatchIDOmission == code.OmittedPastBound, Touched: f.Touched,
 			TouchesAll: f.TouchesAll, Classes: f.Classes, Node: c.node,
-			RequestedOwners: matched, OwnersDigest: digest}})
+			RequestedOwners: matched, OwnersDigest: digest, HumanPaths: held, HumanPathsDigest: humanDigest}})
 	switch {
 	case err != nil:
 		return false, fmt.Errorf("home: record the facts of revision %d of change %d of repository %s: %w",
@@ -433,7 +450,7 @@ func (c *changes) revise(ctx context.Context, repoID string, due code.ChangeDue,
 	c.log.Debug("code_change_facts_recorded", "repo", repoID, "change", due.Number, "revision", due.Revision,
 		"target", due.TargetRef, "tip", due.Tip, "touched", len(f.Touched), "touches_all", f.TouchesAll,
 		"classed", len(f.Classes.WhitespaceOnly)+len(f.Classes.CommentOnly), "classes_complete", f.Classes.Complete,
-		"owners", len(matched), "position", res.Position.String())
+		"owners", len(matched), "human_paths_held", len(held.Held), "position", res.Position.String())
 	if c.factsRecorded != nil {
 		c.factsRecorded(repoID, res.Position)
 	}

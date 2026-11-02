@@ -4239,7 +4239,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 > to miss: nothing looks broken, the page is simply always a few seconds
 > stale. `internal/e2e` closes that gap by replaying the frames a real server
 > produced through the dashboard's own protocol module
-> (`static/dashboard/protocol.js`, the same source its bundle contains), so
+> (`static/protocol/protocol.js`, the same source its bundle contains), so
 > both halves of the protocol are checked against each other rather than each
 > against its own idea of the other.
 >
@@ -4738,7 +4738,7 @@ where the build put the file:
 | Files | `Cache-Control` | Why |
 |---|---|---|
 | Everything under `/static/dashboard/assets/` — the entry module, every chunk, the stylesheet | `public, max-age=31536000, immutable` | Each name carries a content hash, so different bytes are a different URL. A browser that has the file never asks again, reload included |
-| Everything else — the shell (`/dashboard`), `/favicon.ico`, `/static/dashboard/crewlet-icon.svg`, the fonts, the notices and `protocol.js` | `no-cache` | The name does not change with the bytes. The browser keeps its copy and revalidates it on every load, so a redeploy is picked up on the next one; the shell is what names the new hashed files |
+| Everything else — the shell (`/dashboard`), `/favicon.ico`, `/static/dashboard/crewlet-icon.svg`, the fonts and the notices | `no-cache` | The name does not change with the bytes. The browser keeps its copy and revalidates it on every load, so a redeploy is picked up on the next one; the shell is what names the new hashed files |
 
 Every file answers with a strong `ETag`, and `If-None-Match` is read as a
 list under weak comparison, so `"a", "b"`, `W/"a"` and `*` each earn a
@@ -4773,12 +4773,14 @@ The product's mark is `/static/dashboard/crewlet-icon.svg`, emitted by the
 build from `@crewlethq/icons` beside the raster `favicon.ico`; the tab icon, the
 dashboard's lockup and the GitHub App landing page all draw that one file.
 
-A second build target, `/static/dashboard/protocol.js`, is the wire
+A second build target, `static/protocol/protocol.js`, is the wire
 protocol alone as plain ESM — `src/protocol/`, the store (`protocol/store.ts`)
 included, with nothing of React: `internal/e2e` replays a real company's
 captured frames through it under `node`, so the client's understanding
 of this contract is checked against a real server rather than against a
-fixture.
+fixture. It is committed beside the dashboard's tree and never embedded or
+served: no page loads it, so in the served tree it was a test's module in
+every binary.
 
 Its visual system — the token layer, the measured palette, and the rules
 a change has to keep — is documented in

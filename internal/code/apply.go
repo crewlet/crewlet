@@ -480,20 +480,34 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 }
 
 // insertPathOwners writes a repository's path owners, one row an owner with its
-// globs packed one a line ([packPaths]). An owner the record names twice —
-// which no writer forms, the settings holding each owner once — keeps its first
-// row rather than aborting the transaction on every node, as a protection's
+// globs packed one a line ([packPaths]), and their digest on the repository's
+// row ([OwnersDigest]; code_repos.owners_digest) — beside the rows it digests,
+// so no reader holds the one without the other: the merge gate and a revise's
+// decide read the column rather than hash every owner row, and the home's due
+// listing compares it with the digest a revision's facts were matched against,
+// which no statement could hash. An owner the record names twice — which no
+// writer forms, the settings holding each owner once — keeps its first row
+// rather than aborting the transaction on every node, as a protection's
 // pattern does.
 func insertPathOwners(ctx context.Context, tx *sql.Tx, maxVariables int, repoID string,
 	owners []PathOwner) (int, error) {
 
-	return store.InsertRows(ctx, tx, maxVariables,
+	n, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_path_owners (repo_id, owner_kind, owner, paths) VALUES `,
 		`(?, ?, ?, ?)`, `ON CONFLICT (repo_id, owner_kind, owner) DO NOTHING`, len(owners),
 		func(i int) []any {
 			po := owners[i]
 			return []any{repoID, string(po.Owner.Kind), po.Owner.Ref, packPaths(po.Paths)}
 		})
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, ownersDigestSQL, OwnersDigest(owners), repoID)
+	if err != nil {
+		return 0, fmt.Errorf("digest the path owners: %w", err)
+	}
+	digested, _ := res.RowsAffected()
+	return n + int(digested), nil
 }
 
 // packPaths and unpackPaths are a path owner's globs as its row holds them:
@@ -505,10 +519,13 @@ func packPaths(paths []string) string { return strings.Join(paths, "\n") }
 func unpackPaths(packed string) []string { return strings.Split(packed, "\n") }
 
 // insertProtections writes a repository's rules in the record's order, each
-// with its merge gate as the record encodes it ([gateColumn]). A pattern the
-// record names twice — which no writer forms, the settings being sorted and
-// unique — keeps its first rule rather than aborting the transaction on every
-// node.
+// with its merge gate as the record encodes it ([gateColumn]), and the digest
+// of their human paths on the repository's row ([HumanPathsDigest];
+// code_repos.human_paths_digest) — beside the rules it digests, as
+// [insertPathOwners] writes the owners' (humanpaths.go says who reads it). A
+// pattern the record names twice — which no writer forms, the settings being
+// sorted and unique — keeps its first rule rather than aborting the
+// transaction on every node.
 func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID string,
 	rules []Protection) (int, error) {
 
@@ -519,13 +536,22 @@ func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID
 			return 0, err
 		}
 	}
-	return store.InsertRows(ctx, tx, maxVariables,
+	n, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_protections (repo_id, pattern, allow_force, allow_delete, direct_push, gate) VALUES `,
 		`(?, ?, ?, ?, ?, ?)`, `ON CONFLICT (repo_id, pattern) DO NOTHING`, len(rules),
 		func(i int) []any {
 			r := rules[i]
 			return []any{repoID, r.Pattern, r.AllowForce, r.AllowDelete, string(r.DirectPush), gates[i]}
 		})
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, humanPathsDigestSQL, HumanPathsDigest(ruleGatesOf(rules)), repoID)
+	if err != nil {
+		return 0, fmt.Errorf("digest the human paths: %w", err)
+	}
+	digested, _ := res.RowsAffected()
+	return n + int(digested), nil
 }
 
 // applyRepo is every record on a repository's own subject.
@@ -911,6 +937,8 @@ const (
 		WHERE id = ?`
 	clearProtectionsSQL = `DELETE FROM code_protections WHERE repo_id = ?`
 	clearPathOwnersSQL  = `DELETE FROM code_path_owners WHERE repo_id = ?`
+	ownersDigestSQL     = `UPDATE code_repos SET owners_digest = ? WHERE id = ?`
+	humanPathsDigestSQL = `UPDATE code_repos SET human_paths_digest = ? WHERE id = ?`
 	deleteRepoSQL       = `UPDATE code_repos SET
 			status = 'deleted', deleted_at = ?, config_epoch = ?, version = ?
 		WHERE id = ? AND status IN ('importing', 'active', 'archived')`

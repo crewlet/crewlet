@@ -66,10 +66,20 @@
 // repository answers busy, and a publication asked while a compaction of its
 // repository runs answers busy itself, since its plan would cover that
 // merge's inputs: either way round, one of the two would otherwise be refused
-// stale after its whole build. An EXPUNGE holds the whole repository from its
-// scan to its commit, and neither of the others builds beside it
-// ([Compactor.claimExpunge]): its begin retires inputs chosen among every live
-// pack and drops every layer published over them. No lease and no epoch:
+// stale after its whole build. An EXPUNGE reserves its inputs the same way
+// ([Compactor.claimExpunge], expungeClaim): a compaction of its repository
+// answers busy only while the expunge syncs and plans, seconds, then merges
+// beside its walk, its build, its upload and its begin every pack but the
+// inputs it chose, and once its rescue has synced past the begin, which
+// retired them, builds beside it as though none ran — the begin is refused
+// only for an input no longer live, a drop epoch or a chain that moved, and
+// the commit only for its expunge no longer open — so a repository being
+// purged is never the one refused compaction_behind for it. No publication
+// builds beside an expunge, for the whole of its cycle: the begin drops every
+// layer published over its inputs, and the decide refuses a layer while an
+// expunge is open; and an expunge waits for a running compaction or
+// publication, whose records would move what its plan reads. No lease and no
+// epoch:
 // two nodes whose presence views disagree for a moment may both build, and the
 // committer refuses the second `stale`, one wasted build. Each pass judges
 // every listed repository it must against ONE LISTING of who serves git and
@@ -82,7 +92,8 @@
 // repository gains packs at up to three hundred a minute: behind a publication
 // in one loop, it would reach code.MaxPacksPerRepo and refuse pushes — and the
 // same holds for the repository being published, whose merges therefore run
-// beside its publication rather than wait for it. An expunge's builds walk the
+// beside its publication rather than wait for it, and for the repository being
+// expunged, whose merges run beside its expunge. An expunge's builds walk the
 // whole history from every tip, so a purge in either other loop would hold
 // back that loop's work on every other repository as long. They share the
 // node's maintenance slots and memory through the cache's admissions, which
@@ -113,7 +124,7 @@
 // The build is ONE `pack-objects --stdin-packs --max-pack-size` over the
 // inputs with NO pack excluded, in a scratch repository whose one alternate is
 // a store holding EXACTLY THE INPUTS — hard links of the packs of the
-// incarnation the plan was made over (internal/code/cache's NewMergeScratch)
+// incarnation serving the plan's sync (internal/code/cache's NewMergeScratch)
 // — so the inputs are read through it, and the build writes nothing but the
 // scratch. Every object of the inputs is in the outputs, an object an input
 // shares with a pack that is no input included: two compactions decided from
@@ -255,8 +266,9 @@
 // code.PruneGrace: every active or archived repository — a scratch one as
 // much as a project, since a push is refused repo_size on live bytes whoever
 // owns them — last expunged code.ExpungeInterval ago or never is listed, least
-// recently expunged first, and its cycle first judges whether an expunge is
-// DUE: what no ref, no drop the grace keeps and no row in flight reaches —
+// recently expunged first, and its cycle — once its plan has found inputs —
+// judges whether an expunge is DUE: what no ref, no drop the grace keeps and
+// no row in flight reaches —
 // the live pack bytes less ONE `rev-list --objects --disk-usage
 // --use-bitmap-index` from them, each object once as git stores it — is MORE
 // than 1/code.ExpungeShare of the live pack bytes AND at least
@@ -289,7 +301,12 @@
 // (code.PackRow.Arrived), earliest first under the same caps, so EVERY PACK
 // ADDED WITHIN THE GRACE IS KEPT WHOLE (M6-D2) — a push in flight's objects
 // that no ref reaches yet among them — and a pack whose arrival is not known
-// is passed over, the side the grace keeps.
+// is passed over, the side the grace keeps; a repository whose plan finds
+// no input is remembered not due with no walk at all. Either way the plan
+// reads the live packs ONCE, at the scan, and the walk weighs that reading:
+// the repository's merges go on beside the cycle from its plan on, and a
+// merge's round swaps the copy the scan pinned for one that holds its live
+// set.
 //
 // THE BUILD SORTS, never judges a record: in a scratch whose OWN packs are the
 // inputs and whose one alternate is a store of every other live pack
@@ -304,9 +321,18 @@
 // what the scratch holds first, one `cat-file --batch-check`. An input set the
 // rest holds whole writes neither, and is packed again as dropping alone,
 // which a begin must name one output of. The builds are admitted at a
-// publication's repack's charge (cache.Cache.AdmitExpunge): the walk reads the
-// whole history whatever few packs it sorts, and a refused expunge is a purge
-// waiting, never a push refused.
+// publication's repack's charge (cache.Cache.AdmitExpunge): a merge's figure
+// an object of what they sort, beside a clone's room of the WHOLE repository
+// and the delta window, since the walk reads the whole history whatever few
+// packs it sorts; the due scan at the room and the window alone. A refused
+// expunge refuses no push at once, but what no ref reaches keeps counting
+// against code.limits.repo_max_bytes until a node with the room serves it.
+// Once the begin has applied, EVERY OUTPUT IS ADOPTED from the build's scratch
+// before it goes — the kept packs live (cache.Cache.Adopt), the dropping packs
+// into the copy's dropping view (cache.Cache.AdoptDropping) — so the
+// maintainer downloads none of what it built, the cruft above all, up to
+// [ExpungeInputByteCap] of GETs a cycle for packs its commit retires minutes
+// later; every other git node installs both from the store at its next round.
 //
 // THE RESCUE IS VALID AT ANY POSITION AT OR AFTER THE BEGIN, which is what
 // makes a crash resumable from the rows alone. A push checked after the begin

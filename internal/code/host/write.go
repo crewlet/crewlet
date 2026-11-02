@@ -307,6 +307,11 @@ type writing struct {
 	// its budget of git run time (build.go's budget and charge).
 	metered bool
 	left    time.Duration
+	// landNeed is what the last landing's deadline rule held the caller's
+	// deadline to — code.MinProposeAttempt and its bundle's upload — and 0
+	// before one, or for a caller with no deadline: a merge's measure of
+	// the landing a rebuild would make again (merge.go's roomToRebuild).
+	landNeed time.Duration
 	// opens is the change the write's push opens as its build formed it —
 	// a revert_change's "Revert <repo>!<n>" — and nil for every other kind.
 	opens *code.ChangeOption
@@ -500,7 +505,7 @@ func (wr *writing) judge(ctx context.Context) (judgement, code.EngineWriteResult
 			// write is answered from its row with nothing built. Asked again
 			// at the log's head only where the head moved between the two.
 			asked, askedAt = true, j.head
-			if res, found, err := wr.outcome(ctx); err != nil || found {
+			if res, _, found, err := wr.outcome(ctx); err != nil || found {
 				return judgement{}, res, true, err
 			}
 		}
@@ -631,10 +636,12 @@ func (wr *writing) refused(reason code.Refusal, detail string) code.EngineWriteR
 }
 
 // outcome is step 5: this write's own push looked up at the copy's position,
-// within statelog.ReadBudget. Found, it is the write's answer, from its row. An
-// outcome that cannot be learned is answered busy — never stale, which a write
-// that may have landed must not be told.
-func (wr *writing) outcome(ctx context.Context) (code.EngineWriteResult, bool, error) {
+// within statelog.ReadBudget. Found, it is the write's answer, from its row,
+// beside every ref update the row names (a merge's second, its source's
+// deletion, says what the answer's one Command cannot). An outcome that
+// cannot be learned is answered busy — never stale, which a write that may
+// have landed must not be told.
+func (wr *writing) outcome(ctx context.Context) (code.EngineWriteResult, []code.Command, bool, error) {
 	s := wr.s
 	octx, cancel := context.WithTimeout(ctx, s.syncWait)
 	defer cancel()
@@ -647,20 +654,20 @@ func (wr *writing) outcome(ctx context.Context) (code.EngineWriteResult, bool, e
 		if c.New != code.ZeroOID {
 			res.Commit = c.New
 		}
-		return res, true, nil
+		return res, out.Push.Commands, true, nil
 	case err == nil:
-		return code.EngineWriteResult{}, false, nil
+		return code.EngineWriteResult{}, nil, false, nil
 	case code.AnswerDue(ctx):
-		return code.EngineWriteResult{}, true, wr.unready(code.UnreadyShare, fmt.Sprintf("%s could not learn "+
-			"whether this write already landed before its answer fell due; another git node is asked",
+		return code.EngineWriteResult{}, nil, true, wr.unready(code.UnreadyShare, fmt.Sprintf("%s could not "+
+			"learn whether this write already landed before its answer fell due; another git node is asked",
 			s.o.NodeID))
 	case ctx.Err() != nil:
-		return code.EngineWriteResult{}, true, ctx.Err()
+		return code.EngineWriteResult{}, nil, true, ctx.Err()
 	}
 	s.log.Warn("code_write_outcome_unread", "repo", s.repoNameOf(wr.synced.Repo), "push_id", wr.pushID,
 		"error", err)
 	return wr.refused(code.RefusalBusy, "could not learn whether this write already landed; make the same "+
-		"call again"), true, nil
+		"call again"), nil, true, nil
 }
 
 // repoName is the synced repository's name, or its id before any sync.
@@ -759,6 +766,7 @@ func (wr *writing) deadlineRule(ctx context.Context, sc *cache.Scratch) (code.En
 		}
 		need += min(code.UploadDeadline(ref.Size), code.WriteUploadAllowance)
 	}
+	wr.landNeed = need
 	if left := time.Until(deadline); left < need {
 		return wr.refused(code.RefusalBusy, fmt.Sprintf("this write's caller left %s for its upload and "+
 			"proposal, under the %s they take; ask again", left.Round(time.Millisecond), need)), true, nil
