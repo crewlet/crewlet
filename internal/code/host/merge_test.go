@@ -341,6 +341,56 @@ func TestASeatsMergeIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 	c.requireMerged(n, res, err)
 }
 
+// AN UNSAID SOURCE DELETION IS THE TARGET'S GATE'S, decided on the git node
+// that judges the merge: a change from a seat's branch merged with nothing
+// said of its branch deletes it where no gate over the target keeps it, and
+// keeps it where one does (delete_source: none) — each answered as decided
+// and done by the merge's own record — while a branch outside every seat's
+// namespace is kept, and a caller's own word wins over the gate's.
+//
+// Mutations: the git node ignoring the gate's KeepsSource → the kept seat
+// branch is deleted, red; defaulting to keep → the seat branch outlives its
+// merge, red; ignoring the caller's word → red.
+func TestAnUnsaidSourceDeletionIsTheTargetGates(t *testing.T) {
+	t.Parallel()
+	yes := true
+	for _, tc := range []struct {
+		name    string
+		keeps   bool
+		source  string
+		said    *bool
+		deleted bool
+	}{
+		{"a seat's branch, no gate keeping it", false, "refs/heads/seats/alice/fix", nil, true},
+		{"a seat's branch a gate keeps", true, "refs/heads/seats/alice/fix", nil, false},
+		{"a branch of nobody's namespace", false, featureRef, nil, false},
+		{"a branch a gate keeps, deleted as said", true, "refs/heads/seats/alice/fix", &yes, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			settings := codetest.Settings()
+			if tc.keeps {
+				settings.Protections[0].Gate = &code.MergeGate{MergeBy: code.MergeByWriters,
+					Approvals: code.ApprovalsNone, Landing: code.Landing{Depth: 4, Batch: 4},
+					DeleteSource: code.DeleteNone}
+			}
+			c := newMergeCase(t, codetest.SoloOptions{}, settings, map[string]string{"README.md": "one\n"})
+			n := c.open(tc.source, map[string]string{"x.md": "x\n"}, "Merge my branch")
+			c.meetGate(n, lead())
+			w := merge(c.repo, pat(), n, c.change(n).Head, code.MergeMethodMerge)
+			w.DeleteSource = tc.said
+			res, err := c.write(w)
+			c.requireMerged(n, res, err)
+			if res.Merge.DeleteSource != tc.deleted {
+				t.Errorf("the merge answered delete_source %v, want %v", res.Merge.DeleteSource, tc.deleted)
+			}
+			if _, kept := c.Rows().Refs[tc.source]; kept == tc.deleted {
+				t.Errorf("%s is kept %v after the merge, want deleted %v", tc.source, kept, tc.deleted)
+			}
+		})
+	}
+}
+
 // changeReads counts the reads of each change a git node's estate is asked,
 // by the change's number.
 type changeReads struct {

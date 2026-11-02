@@ -87,11 +87,13 @@ func mergeCarrying(p code.MergeProposal, pack *code.PackRef, epoch int64) code.M
 }
 
 // mergeJudgement is what a merge's judgement read: the change, the target's
-// tip in the copy, and whether the target lands its merges through its queue.
+// tip in the copy, whether the target lands its merges through its queue, and
+// whether the merge deletes the change's source ([writing.deletesSource]).
 type mergeJudgement struct {
-	change *code.ChangeDetail
-	tip    string
-	queue  bool
+	change       *code.ChangeDetail
+	tip          string
+	queue        bool
+	deleteSource bool
 }
 
 // mergeVerdict is a refusal a merge's judgement reached, with its sentence and
@@ -174,9 +176,9 @@ func (wr *writing) judgeMerge(ctx context.Context, fresh statelog.Freshness) (me
 		}
 		if v.ours && !asked {
 			asked = true
-			if res, found, err := wr.outcome(ctx); err != nil || found {
+			if res, cmds, found, err := wr.outcome(ctx); err != nil || found {
 				if found && res.Outcome != "" {
-					res.Merge = &code.MergeAnswer{}
+					res.Merge = &code.MergeAnswer{DeleteSource: deletedSource(cmds)}
 				}
 				return mergeJudgement{}, res, true, err
 			}
@@ -264,6 +266,9 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 			return mergeJudgement{}, v, err
 		}
 	}
+	if j.deleteSource, err = wr.deletesSource(ctx, gate, c.SourceRef); err != nil {
+		return mergeJudgement{}, mergeVerdict{}, err
+	}
 	if w.Override != "" {
 		return j, mergeVerdict{}, nil
 	}
@@ -348,12 +353,43 @@ func (wr *writing) mergeCeiling(ctx context.Context, gate *mergeGate, named stri
 	return mergeVerdict{}, nil
 }
 
+// deletesSource is whether this merge deletes the change's source branch: its
+// caller's word where it said one (code.EngineWrite.DeleteSource), and
+// otherwise THE DEFAULT, decided here on the snapshot the merge is judged on
+// — a source in a seat's namespace is deleted unless a gate over the target
+// keeps it (code.GateRules.KeepsSource, from the gate this judgement reads
+// anyway wherever a rule protects the target), and every other source is
+// kept (Q4): a seat's branch is the engine's working copy, and a person's is
+// theirs. Decided here rather than by the caller, so a merge from a seat's
+// branch costs its caller no read of the gates, and the rule a merge deletes
+// by is the one its own judgement read.
+func (wr *writing) deletesSource(ctx context.Context, gate *mergeGate, source string) (bool, error) {
+	if said := wr.w.DeleteSource; said != nil {
+		return *said, nil
+	}
+	if !strings.HasPrefix(source, gitref.SeatsRoot) {
+		return false, nil
+	}
+	rules, err := gate.rules(ctx)
+	if err != nil {
+		return false, err
+	}
+	return !rules.KeepsSource, nil
+}
+
+// deletedSource reports a merge's push row deleting the change's source: the
+// second ref a merge's push names, there only where the merge deleted it
+// (code.Merge's push).
+func deletedSource(cmds []code.Command) bool {
+	return len(cmds) > 1 && cmds[1].New == code.ZeroOID
+}
+
 // mergeGate is the gate one judgement of a merge holds its target to — every
 // rule of the repository matching it, with its merge gate, combined with
 // code.merge_by_floor on this node's epoch (code.GateRulesOf) — read at most
 // once a judgement, and only where something asks it: whether the target is a
-// queue's, and the merge authority of the colleague a seat's merge is made
-// for. Read where the judgement's floor holds the synced copy, so each
+// queue's, the merge authority of the colleague a seat's merge is made for,
+// and whether a merge from a seat's branch deletes it by default. Read where the judgement's floor holds the synced copy, so each
 // question is asked of the snapshot the merge is judged on.
 type mergeGate struct {
 	wr    *writing
@@ -415,7 +451,7 @@ func (wr *writing) enqueue(ctx context.Context, j mergeJudgement) (code.EngineWr
 	wr.landed = true
 	res, err := wr.s.o.Estate.Queue(ctx, code.QueueProposal{OpID: w.OpID, Asker: asker, Seen: wr.synced.Position,
 		Enqueue: &code.Enqueue{RepoID: w.RepoID, EntryID: entry, ChangeID: j.change.ID, TargetRef: w.Ref,
-			HeadOID: w.ExpectedHead, Method: w.Method, DeleteSource: w.DeleteSource, CloseTask: w.CloseTask}})
+			HeadOID: w.ExpectedHead, Method: w.Method, DeleteSource: j.deleteSource, CloseTask: w.CloseTask}})
 	var quiet silence
 	switch {
 	case errors.Is(err, code.ErrInvalidProposal):
@@ -431,13 +467,13 @@ func (wr *writing) enqueue(ctx context.Context, j mergeJudgement) (code.EngineWr
 		// A NODE WENT SILENT, or the caller left: it may have enqueued it.
 		wr.s.log.Warn("code_merge_enqueue_unknown", "repo", wr.repoName(), "entry", entry, "error", err)
 		return code.EngineWriteResult{Outcome: statelog.OutcomeUnknown, Merge: &code.MergeAnswer{EntryID: entry,
-			Queued: true}}, nil
+			Queued: true, DeleteSource: j.deleteSource}}, nil
 	case res.Refusal != "":
 		return code.EngineWriteResult{Position: res.Position, Merge: &code.MergeAnswer{EntryID: entry,
 			Refusal: res.Refusal, Detail: res.Detail, Unmet: res.Unmet}}, nil
 	}
 	return code.EngineWriteResult{Outcome: res.Outcome, Position: res.Position, Merge: &code.MergeAnswer{
-		Queued: true, EntryID: res.EntryID, Place: res.Place}}, nil
+		Queued: true, EntryID: res.EntryID, Place: res.Place, DeleteSource: j.deleteSource}}, nil
 }
 
 // buildAndLandMerge is one round's build and landing: the merge built in its
@@ -479,7 +515,7 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 		Merge: &code.MergeProposal{OpID: w.OpID, Asker: w.Principal, Seen: wr.synced.Position,
 			Merge: code.Merge{RepoID: w.RepoID, MergeID: wr.pushID, ChangeID: j.change.ID, Method: w.Method,
 				TargetRef: w.Ref, BaseOID: j.tip, HeadOID: w.ExpectedHead, CommitOID: commit,
-				DeleteSource: w.DeleteSource, Override: w.Override, Node: s.o.NodeID, ReceivedAt: s.now()}}})
+				DeleteSource: j.deleteSource, Override: w.Override, Node: s.o.NodeID, ReceivedAt: s.now()}}})
 	wr.landTook += s.now().Sub(landStart)
 	if err != nil {
 		return code.EngineWriteResult{}, nil, err
@@ -500,6 +536,9 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 		res.Commit = m.MergeOID
 	case statelog.OutcomePending:
 		res.Commit = commit
+	}
+	if m.Refusal == "" {
+		res.Merge.DeleteSource = j.deleteSource
 	}
 	return res, nil, nil
 }

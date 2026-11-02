@@ -54,7 +54,9 @@ import (
 // (refs/heads/seats/…) is deleted with the merge unless a gate over the
 // target keeps it (delete_source: none, code.GateRules.KeepsSource), and every
 // other source is kept (Q4): a seat's branch is the engine's working copy,
-// and a person's is theirs.
+// and a person's is theirs. The default is the git node's to decide, on the
+// snapshot it judges the merge on ([deleteSource]), and its answer says what
+// it decided (`deleted_branch`).
 //
 // THE DEQUEUE: code_dequeue_change takes a change's live entry out of its
 // target's queue — the entry the call's one read of the change names
@@ -146,14 +148,10 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			fmt.Sprintf("%s: %s is %s, and only a live change merges.", tool, cv.g.ref(), cv.change.State)), nil
 	}
 	repo := cv.g.repo
-	deleteSource, refusal := t.deleteSource(ctx, cv, args)
-	if refusal != nil {
-		return *refusal, nil
-	}
 	op := opIDFor(cv.g.c.actor, tool, mergeVerb, repo.ID, args)
 	w := code.EngineWrite{Kind: code.WriteMergeChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
 		OpID: op, Fresh: t.deps.writeFresh(turn, cv.g.c, repo), Ref: cv.change.TargetRef, ExpectedHead: head,
-		Change: cv.change.Number, Method: method, DeleteSource: deleteSource,
+		Change: cv.change.Number, Method: method, DeleteSource: deleteSource(args),
 		Override: strings.TrimSpace(argString(args, "override_reason")), CloseTask: argBool(args, "close_task"),
 		Ceiling: cv.g.c.write}
 	if err := w.Validate(); err != nil {
@@ -191,7 +189,7 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	default:
 		out.State, out.Outcome, out.Commit, out.Position = mergeMerged, res.Outcome, res.Commit,
 			positionText(res.Position)
-		out.DeletedBranch = deleteSource
+		out.DeletedBranch = m != nil && m.DeleteSource
 		if w.CloseTask {
 			out.WorkItem, out.Residue = t.closeTask(ctx, cv, op)
 		}
@@ -231,52 +229,18 @@ type codeMergeAnswer struct {
 	OpID     string `json:"op_id,omitempty"`
 }
 
-// deleteSource is whether the merge deletes the change's source branch: the
-// caller's `delete_branch`, or — unsaid — a seat's branch unless a gate over
-// the target keeps it, and no other ([codeMergeChange]'s doc). The gates are
-// read as the git node reads them for the merge (code.ReadRepo with its
-// gates), at the caller's floor.
-func (t *codeMergeChange) deleteSource(ctx context.Context, cv conversing, args map[string]any) (bool,
-	*tools.Result) {
-
-	if _, said := args["delete_branch"]; said {
-		return argBool(args, "delete_branch"), nil
+// deleteSource is the caller's `delete_branch`, nil where it said none: the
+// default — a seat's branch deleted unless a gate over the target keeps it,
+// and no other ([codeMergeChange]'s doc) — is the git node's to decide, on
+// the snapshot it judges the merge on, reading the gate it reads for the
+// merge anyway (code.EngineWrite.DeleteSource), so the call reads nothing
+// for it.
+func deleteSource(args map[string]any) *bool {
+	if _, said := args["delete_branch"]; !said {
+		return nil
 	}
-	return seatSourceDeleted(ctx, cv.g, cv.change.SourceRef, cv.change.TargetRef)
-}
-
-// seatSourceDeleted is whether a merge of source into target deletes source
-// where its caller said nothing: a seat's branch unless a gate over the
-// target keeps it, and no other (Q4) — read as the git node reads the gates
-// for the merge (code.ReadRepo with its gates), at the caller's floor. A
-// merge's default and a revert's step two take it alike.
-func seatSourceDeleted(ctx context.Context, g changeRead, source, target string) (bool, *tools.Result) {
-	if !strings.HasPrefix(source, gitref.SeatsRoot) {
-		return false, nil
-	}
-	answer, err := g.deps.read(ctx, g.c, code.ReadQuery{Kind: code.ReadRepo, Repo: g.repo.Name, Gates: true,
-		Fresh: seatRead})
-	if err != nil {
-		r := g.deps.failed(ctx, g.turn, g.tool, g.c.asker, g.repo, err)
-		return false, &r
-	}
-	if answer.Repo == nil {
-		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered repository %s's gates with no "+
-			"repository", g.repo.Name), fmt.Sprintf("%s could not read %s's merge rules: %s.", g.tool,
-			g.repo.Name, faultSaid))
-		return false, &r
-	}
-	rules := make([]code.Protection, len(answer.Repo.Gates))
-	for i, rg := range answer.Repo.Gates {
-		rules[i] = code.Protection{PushRule: code.PushRule{Pattern: rg.Pattern}, Gate: &rg.Gate}
-	}
-	gate, err := code.GateRulesOf(rules, target, "")
-	if err != nil {
-		r := faulted(ctx, g.tool, err, fmt.Sprintf("%s could not read %s's merge rules: %s.", g.tool,
-			g.repo.Name, faultSaid))
-		return false, &r
-	}
-	return !gate.KeepsSource, nil
+	deletes := argBool(args, "delete_branch")
+	return &deletes
 }
 
 // closeTask is a merged change's step two: its work item closed — status

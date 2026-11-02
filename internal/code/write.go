@@ -246,9 +246,17 @@ type EngineWrite struct {
 	// commit, or a fast-forward.
 	Method MergeMethod `json:"method,omitempty"`
 	// DeleteSource is whether a merge_change deletes the change's source
-	// branch as it merges, as its caller resolved it (Q4: a seat's branch, by
-	// its rule's delete_source).
-	DeleteSource bool `json:"delete_source,omitempty"`
+	// branch as it merges, where its caller said; nil — the zero value —
+	// leaves it to THE DEFAULT, which the git node decides on the snapshot
+	// it judges the merge on (Q4: a source in a seat's namespace deleted
+	// unless a gate over the target keeps it, [GateRules.KeepsSource]; any
+	// other kept) and answers back ([MergeAnswer.DeleteSource]). A pointer
+	// because false is a word a caller says (keep it), never the default.
+	//
+	// A write is no record, so the field takes no versionedFields row; it
+	// crosses the estate's wire to the repository's git node under the code
+	// domain's stated condition, as Ceiling does.
+	DeleteSource *bool `json:"delete_source,omitempty"`
 	// Override is a PERSON'S reason for merging past the target's merge gate,
 	// at most [MaxOverrideReasonBytes] — merged directly, on a queue target
 	// too — and "" for a merge its gate holds.
@@ -368,6 +376,12 @@ type MergeAnswer struct {
 	// that moved under it before its record was decided, at most
 	// [MergeRecomputes].
 	Recomputes int `json:"recomputes,omitempty"`
+	// DeleteSource is whether the merge deletes the change's source branch,
+	// as the git node resolved it ([EngineWrite.DeleteSource]): a direct
+	// merge's in its record, applied or pending; a queued change's on its
+	// entry, for its landing; a merge found already landed, from its push
+	// row. False beside a refusal, which deletes nothing.
+	DeleteSource bool `json:"delete_source,omitempty"`
 }
 
 // Conflict is one path a three-way merge could not resolve.
@@ -861,7 +875,7 @@ func (w EngineWrite) validKind() error {
 	files := field{"files", len(w.Files) > 0}
 	suggestions := field{"suggestions", len(w.Suggestions) > 0}
 	merging := []field{{"change", w.Change != 0}, {"method", w.Method != ""},
-		{"delete_source", w.DeleteSource}, {"override", w.Override != ""}, {"close_task", w.CloseTask}}
+		{"delete_source", w.DeleteSource != nil}, {"override", w.Override != ""}, {"close_task", w.CloseTask}}
 	switch w.Kind {
 	case WriteMergeChange:
 		return w.validMerge(want(head), none(commit, files, base, message, suggestions))

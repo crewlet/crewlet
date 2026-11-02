@@ -65,8 +65,67 @@ func TestAMergeRefusalNamesEveryUnmetPrecondition(t *testing.T) {
 	}
 	w := writes[0]
 	if w.Kind != code.WriteMergeChange || w.Ref != "refs/heads/main" || w.ExpectedHead != revHead(3) ||
-		w.Change != 7 || w.Method != code.MergeMethodSquash || w.DeleteSource || w.CloseTask || w.Validate() != nil {
-		t.Errorf("the merge is %+v, want site!7 squashed into main at revision 3's head, its branch kept", w)
+		w.Change != 7 || w.Method != code.MergeMethodSquash || w.DeleteSource != nil || w.CloseTask ||
+		w.Validate() != nil {
+		t.Errorf("the merge is %+v, want site!7 squashed into main at revision 3's head, its branch's "+
+			"deletion left to the git node", w)
+	}
+}
+
+// AN UNSAID DELETE_BRANCH IS THE GIT NODE'S: a merge of a seat's branch whose
+// caller says nothing of the branch sends no word of it — the git node that
+// judges the merge decides the default on that snapshot, from the gate it
+// reads for the merge anyway — reads no merge gate for it, and answers the
+// deletion the git node decided; a caller that says keep sends keep, and is
+// answered what the git node did.
+//
+// Mutations: the tool deciding the default itself — sending false, or
+// reading the target's gates first — red; the answer ignoring the git node's
+// word, red.
+func TestAnUnsaidDeleteBranchIsTheGitNodes(t *testing.T) {
+	t.Parallel()
+	keep := false
+	for name, c := range map[string]struct {
+		said    map[string]any
+		sent    *bool
+		deleted bool
+	}{
+		"unsaid":    {deleted: true},
+		"said keep": {said: map[string]any{"delete_branch": false}, sent: &keep},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			seats := siteChange()
+			seats.detail.SourceRef = "refs/heads/seats/agent-ceo/retry"
+			host := newChangeHost(seats)
+			writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
+				return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: writtenOID,
+					Merge: &code.MergeAnswer{DeleteSource: c.deleted}}, nil
+			}}
+			args := mergeArgs()
+			for k, v := range c.said {
+				args[k] = v
+			}
+			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
+				builtin.CodeMergeChangeTool, args)
+			if got.Failed {
+				t.Fatalf("the merge answered %q", got.Output)
+			}
+			writes, _ := writer.asked()
+			if len(writes) != 1 {
+				t.Fatalf("%d writes were sent, want one merge", len(writes))
+			}
+			if sent := writes[0].DeleteSource; (sent == nil) != (c.sent == nil) || (sent != nil && *sent != *c.sent) {
+				t.Errorf("the merge sent delete_source %v, want %v", sent, c.sent)
+			}
+			reads, _, _ := host.asked()
+			if slices.ContainsFunc(reads, func(q code.ReadQuery) bool { return q.Gates }) {
+				t.Error("the merge read the target's gates: the default is the git node's to decide")
+			}
+			if out := decoded(t, got); (out["deleted_branch"] == true) != c.deleted {
+				t.Errorf("answered %q, want deleted_branch %v as the git node answered it", got.Output, c.deleted)
+			}
+		})
 	}
 }
 

@@ -139,11 +139,12 @@ type GateRules struct {
 	// OwnersApprove is whether any gate makes path owners gating.
 	OwnersApprove bool
 	// KeepsSource is whether any gate matching Target keeps a seat's source
-	// branch when a change merges (delete_source: none): a merge's caller
-	// deletes a source in a seat's namespace unless it is so, and keeps
-	// every other source (Q4) — a gate that keeps it wins over one that
-	// deletes it, since a deleted branch is the one of the two no later
-	// write undoes.
+	// branch when a change merges (delete_source: none): a merge whose caller
+	// said nothing deletes a source in a seat's namespace unless it is so,
+	// and keeps every other source (Q4), decided by the git node that judges
+	// the merge (internal/code/host's deletesSource) — a gate that keeps it
+	// wins over one that deletes it, since a deleted branch is the one of the
+	// two no later write undoes.
 	KeepsSource bool
 }
 
