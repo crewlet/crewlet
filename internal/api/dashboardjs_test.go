@@ -1542,7 +1542,13 @@ const (
 	// shared code Rollup moved between chunks and of the Add dialog's rules
 	// out of the one sheet. The page is all in the settings chunk, so the
 	// initial load did not grow. 5385 KiB.
-	treeBudget = 5<<20 + 265<<10
+	// A session's row saying whether, and where, a relaunch would continue it
+	// (the sentence under its account for a session continued in any box,
+	// only in the box its run parked in, not at all, or not decidable now)
+	// took it from 5384.9 KiB to 5385.6 KiB (+0.7 KiB), all of it the agents
+	// chunk the view loads in (+245 bytes gzipped). The initial load did not
+	// grow. 5386 KiB.
+	treeBudget = 5<<20 + 266<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
