@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/words"
@@ -171,7 +172,7 @@ func (p *objectPass) readWindow(ctx context.Context, nc *nats.Conn, api jsapi.AP
 type declaringLog struct {
 	stream, deferred, domain string
 	tables                   []objstore.ReferenceTable
-	verifier                 *statelog.Verifier
+	verifier                 *recordseal.Verifier
 }
 
 // verifiers is a verifier for the domain of every Required table among
@@ -180,8 +181,8 @@ type declaringLog struct {
 // PER DOMAIN, as the applier's are: a record's signature binds the name of the
 // domain whose log it was appended to, so one verifier for every log would
 // open none of them (statelog's deriveRecordKey).
-func verifiers(tables []objstore.ReferenceTable, ring statelog.Keyring) (map[string]*statelog.Verifier, error) {
-	out := map[string]*statelog.Verifier{}
+func verifiers(tables []objstore.ReferenceTable, ring recordseal.Keyring) (map[string]*recordseal.Verifier, error) {
+	out := map[string]*recordseal.Verifier{}
 	for _, t := range tables {
 		if t.Standing != objstore.Required {
 			continue
@@ -189,7 +190,7 @@ func verifiers(tables []objstore.ReferenceTable, ring statelog.Keyring) (map[str
 		if _, made := out[t.Domain]; made {
 			continue
 		}
-		v, err := statelog.NewVerifier(t.Domain, ring)
+		v, err := recordseal.NewVerifier(t.Domain, ring)
 		if err != nil {
 			return nil, err
 		}
@@ -205,7 +206,7 @@ func verifiers(tables []objstore.ReferenceTable, ring statelog.Keyring) (map[str
 // deferred-record tables, or two domains, are declarations that disagree about
 // one log, and are refused rather than read twice.
 func declaringLogs(required []objstore.ReferenceTable,
-	verified map[string]*statelog.Verifier) ([]declaringLog, error) {
+	verified map[string]*recordseal.Verifier) ([]declaringLog, error) {
 
 	byStream := map[string]*declaringLog{}
 	var out []*declaringLog
@@ -271,8 +272,8 @@ func declaringLogs(required []objstore.ReferenceTable,
 func (p *objectPass) noteRecord(l declaringLog, where string, framed []byte) error {
 	payload, verdict := l.verifier.Open(framed)
 	switch verdict {
-	case statelog.Verified:
-	case statelog.KeyUnknown:
+	case recordseal.Verified:
+	case recordseal.KeyUnknown:
 		return fmt.Errorf("backup: %s: %w (this node holds %s) — a restore replays it "+
 			"and it may name a file this backup would not carry; add the key it was "+
 			"signed under to secrets.keys and restart this node, or take the backup "+

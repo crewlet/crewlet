@@ -3,6 +3,8 @@ package statelog
 import (
 	"context"
 	"sync"
+
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // Refusal is one record this node would not authenticate, as the audit trail
@@ -19,11 +21,11 @@ type Refusal struct {
 	// Domain is whose log the record was on.
 	Domain string
 
-	// Verdict is [KeyUnknown] or [Tampered], and never [Verified].
-	Verdict Verdict
+	// Verdict is [recordseal.KeyUnknown] or [recordseal.Tampered], and never [recordseal.Verified].
+	Verdict recordseal.Verdict
 
 	// KeyID is the key the FRAME names. Empty when the bytes are not a
-	// signed frame at all, which is itself a [Tampered] verdict.
+	// signed frame at all, which is itself a [recordseal.Tampered] verdict.
 	//
 	// WHATEVER THE FRAME SAYS, which is the reason the witness is bounded:
 	// anything that can reach a cluster port can write a frame, and the id
@@ -77,14 +79,14 @@ type witnessed struct {
 }
 
 type witnessKey struct {
-	verdict Verdict
+	verdict recordseal.Verdict
 	keyID   string
 }
 
 // claim reports whether (verdict, id) is new and within the cap, remembering
 // it if so, and whether this claim is the one that found the cap full for the
 // first time.
-func (w *witnessed) claim(verdict Verdict, id string) (fresh, firstRefused bool) {
+func (w *witnessed) claim(verdict recordseal.Verdict, id string) (fresh, firstRefused bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	key := witnessKey{verdict: verdict, keyID: id}
@@ -105,11 +107,11 @@ func (w *witnessed) claim(verdict Verdict, id string) (fresh, firstRefused bool)
 
 // witness tells the runner's witness about one refused record, at most once
 // per verdict and key id.
-func (r *Runner) witness(ctx context.Context, verdict Verdict, framed []byte, at Position) {
+func (r *Runner) witness(ctx context.Context, verdict recordseal.Verdict, framed []byte, at Position) {
 	if r.witnessTo == nil {
 		return
 	}
-	id := frameKeyID(framed)
+	id := recordseal.ClaimedKeyID(framed)
 	fresh, firstRefused := r.witnessedKeys.claim(verdict, id)
 	if firstRefused {
 		r.logger.WarnContext(ctx, "statelog_refusals_unwitnessed",

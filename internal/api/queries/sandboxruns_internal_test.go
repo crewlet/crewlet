@@ -9,8 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // EVERY KEY A CODING RUN'S ROW CARRIES IS CLASSIFIED, in both directions, and
@@ -147,7 +147,7 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 // answerSealOf is a fleet keyring's answer seal, under key material of its own.
 func answerSealOf(t *testing.T, material string) *sandbox.AnswerSeal {
 	t.Helper()
-	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", material))
+	seal, err := sandbox.NewAnswerSeal(recordseal.OneKey("answers", material))
 	if err != nil {
 		t.Fatalf("NewAnswerSeal: %v", err)
 	}

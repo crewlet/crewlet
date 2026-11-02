@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -481,7 +482,7 @@ type domainNode struct {
 	reader  *artifactsdomain.Reader
 	applier *artifactsdomain.Applier
 	waiter  *waiter
-	verify  *statelog.Verifier
+	verify  *recordseal.Verifier
 
 	mu       sync.Mutex
 	consumed uint64
@@ -540,11 +541,11 @@ func newDomainNode(t *testing.T, clock *clock) *domainNode {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -602,7 +603,7 @@ func (n *domainNode) drain() {
 			continue
 		}
 		body, verdict := n.verify.Open(payload)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			n.t.Errorf("record %d did not verify: %s", seq, verdict)
 			return
 		}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -457,7 +458,7 @@ func TestTheTrimsOwnDepsSignTheTrimmedRecord(t *testing.T) {
 		t.Fatalf("read the record the sweep appended at %d: held %v, %v", last+1, held, err)
 	}
 	body, verdict := running.verifier.Open(payload)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		t.Fatalf("the trimmed record on %s opens as %v under the running log's own "+
 			"verifier, want verified — every applier refuses it, and the anchors it "+
 			"names stay on every node", wire, verdict)

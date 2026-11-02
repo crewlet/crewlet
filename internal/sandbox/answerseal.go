@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/provenance"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -49,8 +49,9 @@ import (
 //
 // # Two failures, and only one of them waits
 //
-// The frame is internal/statelog's, judged by its three verdicts with their
-// dispositions. A seal under a key this node does not hold is a fact about
+// The frame is internal/recordseal's, the one every state-log record carries,
+// judged by its three verdicts with their dispositions. A seal under a key
+// this node does not hold is a fact about
 // THIS NODE: the answer is kept, owed, and waits — logged with the keys this
 // node holds — until a node that holds the key takes the seat, or this one is
 // restarted with it ([ConditionAnswerKey]). A seal that does not open under a
@@ -85,19 +86,19 @@ var ErrAnswerUnopened = errors.New("sandbox: the answer's seal does not open as 
 // AnswerSeal seals a person's answer onto the run it answers and opens it again
 // for a reader. SAFE FOR CONCURRENT USE: both halves are immutable once built.
 type AnswerSeal struct {
-	signer   *statelog.Signer
-	verifier *statelog.Verifier
+	signer   *recordseal.Signer
+	verifier *recordseal.Verifier
 }
 
 // NewAnswerSeal builds both halves over the fleet keyring every state-log
 // record is signed under, refusing one that could not seal (no active key) or
 // open (no key at all), by the field to set.
-func NewAnswerSeal(ring statelog.Keyring) (*AnswerSeal, error) {
-	signer, err := statelog.NewSigner(AnswerSealDomain, ring)
+func NewAnswerSeal(ring recordseal.Keyring) (*AnswerSeal, error) {
+	signer, err := recordseal.NewSigner(AnswerSealDomain, ring)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: the seal on answers to a parked run: %w", err)
 	}
-	verifier, err := statelog.NewVerifier(AnswerSealDomain, ring)
+	verifier, err := recordseal.NewVerifier(AnswerSealDomain, ring)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: the seal on answers to a parked run: %w", err)
 	}
@@ -223,8 +224,8 @@ func (s *AnswerSeal) Open(run PendingRun) (AnswerWords, error) {
 	answer := *run.Answer
 	body, verdict := s.verifier.Open(answer.Sealed)
 	switch verdict {
-	case statelog.Verified:
-	case statelog.KeyUnknown:
+	case recordseal.Verified:
+	case recordseal.KeyUnknown:
 		return AnswerWords{}, fmt.Errorf("%w (it holds %s) — add the key the fleet sealed it "+
 			"under to secrets.keys", ErrAnswerKeyUnknown, words.And(s.verifier.KeyIDs()))
 	default:

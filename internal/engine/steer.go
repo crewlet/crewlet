@@ -12,8 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A person's note to a running turn, carried out on the node running it.
@@ -160,7 +160,7 @@ type endedTurn struct {
 // newSteerDesk builds node's desk over the fleet keyring every state-log
 // record is signed under. The keyring is required on every node, so this fails
 // only on a bootstrap [config.Bootstrap.Validate] would already have refused.
-func newSteerDesk(node string, ring statelog.Keyring) (*steerDesk, error) {
+func newSteerDesk(node string, ring recordseal.Keyring) (*steerDesk, error) {
 	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel, ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the steer channel's envelopes: %w", err)

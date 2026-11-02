@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
@@ -199,7 +200,7 @@ type relayWire = signedask.Channel[relayAsk, relayAnswer]
 // every state-log record is signed under. The keyring is required on every
 // node, so this fails only on a bootstrap [config.Bootstrap.Validate] would
 // already have refused.
-func newRelayWire(ring statelog.Keyring) (*relayWire, error) {
+func newRelayWire(ring recordseal.Keyring) (*relayWire, error) {
 	wire, err := signedask.New[relayAsk, relayAnswer](liveRelayChannel, ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the live relay's envelopes: %w", err)

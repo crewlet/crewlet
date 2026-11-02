@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -108,11 +109,11 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 	// running node applies is: the runner opens each frame before the
 	// candidate's applier reads a byte, so the case drives the path a
 	// trimmed record takes on a node.
-	signer, err := statelog.NewSigner(name, suiteRing())
+	signer, err := recordseal.NewSigner(name, suiteRing())
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, err := statelog.NewVerifier(name, suiteRing())
+	verifier, err := recordseal.NewVerifier(name, suiteRing())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +345,7 @@ type suiteApplied struct {
 // signed by signer as a publisher would have signed them, and answers the ones
 // on a subject the log arbitrates — the ones that write an anchor — in order.
 func appendRecords(t *testing.T, c Candidate, spec statelog.StreamSpec, log *suiteLog,
-	signer *statelog.Signer, records []suiteRecord) []suiteApplied {
+	signer *recordseal.Signer, records []suiteRecord) []suiteApplied {
 
 	t.Helper()
 	var out []suiteApplied

@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -545,7 +546,7 @@ func (r *rig) operator(c authz.Chart, halves func() (workapi.Halves, bool)) *ope
 	// a key no node holds and run records no turn has: no case here calls one.
 	fleet, queue := coordmemory.NewFleet(), queuememory.New()
 	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
-		statelog.OneKey("k1", "the work surface cases' seat-control key material"))
+		recordseal.OneKey("k1", "the work surface cases' seat-control key material"))
 	if err != nil {
 		r.t.Fatalf("the steer channel: %v", err)
 	}

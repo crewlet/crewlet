@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -130,7 +131,7 @@ func laggingReadOn(t *testing.T, log statelog.Appender, waits *atomic.Int64) fun
 	}
 	// SIGNED UNDER THE SUITE'S FLEET KEYRING, as every barrier is: the read
 	// index refuses to be built without a signer.
-	signer, err := statelog.NewSigner(domain.Name(), fleetRing)
+	signer, err := recordseal.NewSigner(domain.Name(), fleetRing)
 	if err != nil {
 		t.Fatal(err)
 	}

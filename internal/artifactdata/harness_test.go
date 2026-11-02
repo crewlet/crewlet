@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -41,7 +42,7 @@ type node struct {
 	reader    *artifactdata.Reader
 	applier   *artifactdata.Applier
 	waiter    *testWaiter
-	verifier  *statelog.Verifier
+	verifier  *recordseal.Verifier
 	judged    *judged
 
 	mu       sync.Mutex
@@ -176,11 +177,11 @@ func newNode(t *testing.T, log *js.DomainLog, db store.ReplicatedHandle, nodeID 
 	if err != nil {
 		t.Fatalf("build the gate reserve: %v", err)
 	}
-	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(d.Name(), recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -241,7 +242,7 @@ func (n *node) drain() {
 			continue
 		}
 		body, verdict := n.verifier.Open(payload)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			n.t.Fatalf("record %d did not verify: %s", seq, verdict)
 		}
 		if n.storedAt != nil {

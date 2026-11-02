@@ -19,6 +19,7 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -51,8 +52,8 @@ type writeRound struct {
 	// signer and verifier are the log's record signing pair: every record
 	// the publisher appends is sealed, and the drain opens each frame
 	// before the domain decodes its body, as the framework's own loop does.
-	signer   *statelog.Signer
-	verifier *statelog.Verifier
+	signer   *recordseal.Signer
+	verifier *recordseal.Verifier
 
 	consumed uint64
 
@@ -205,7 +206,7 @@ func (r *writeRound) drain() {
 		// record is signed on its way to the appender, and what a domain
 		// decodes is the BODY.
 		body, verdict := r.verifier.Open(payload)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			r.t.Fatalf("record %d did not verify: %s", seq, verdict)
 		}
 		env, err := chatlet.DecodeEnvelope(body)
@@ -358,7 +359,7 @@ func (r *writeRound) lastRecord() chatlet.MutationRecord {
 		r.t.Fatalf("read record %d: %v (present: %v)", last, err, ok)
 	}
 	body, verdict := r.verifier.Open(payload)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		r.t.Fatalf("record %d did not verify: %s", last, verdict)
 	}
 	record, err := chatlet.Decode(body)
@@ -469,10 +470,10 @@ func credential(login string) chatlet.Actor {
 // fleet would refuse one at a time. The key is a fixture: what these cases are
 // about is what the domain writes, and the signature's own rules are certified
 // in [statelog].
-func testSigner(t *testing.T) *statelog.Signer {
+func testSigner(t *testing.T) *recordseal.Signer {
 	t.Helper()
-	signer, err := statelog.NewSigner(chatlet.Domain{}.Name(),
-		statelog.OneKey("k1", "test-material"))
+	signer, err := recordseal.NewSigner(chatlet.Domain{}.Name(),
+		recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
@@ -480,10 +481,10 @@ func testSigner(t *testing.T) *statelog.Signer {
 }
 
 // testVerifier opens what [testSigner] sealed.
-func testVerifier(t *testing.T) *statelog.Verifier {
+func testVerifier(t *testing.T) *recordseal.Verifier {
 	t.Helper()
-	verifier, err := statelog.NewVerifier(chatlet.Domain{}.Name(),
-		statelog.OneKey("k1", "test-material"))
+	verifier, err := recordseal.NewVerifier(chatlet.Domain{}.Name(),
+		recordseal.OneKey("k1", "test-material"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

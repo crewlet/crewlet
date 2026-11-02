@@ -9,9 +9,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A box on an engine host is its launching node's (internal/sandbox,
@@ -58,7 +58,7 @@ type boxReads struct {
 
 // newBoxReads builds this node's half of the box-read channel over the fleet
 // keyring every state-log record is signed under.
-func newBoxReads(ring statelog.Keyring, node string, q queue.EventQueue,
+func newBoxReads(ring recordseal.Keyring, node string, q queue.EventQueue,
 	host func() *sandbox.Coordinator) (*boxReads, error) {
 	wire, err := signedask.New[sandbox.BoxReadRequest, sandbox.BoxReadReply](sandbox.BoxReadChannel, ring)
 	if err != nil {

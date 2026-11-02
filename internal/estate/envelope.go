@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // EVERY ENVELOPE ON THE ESTATE'S SUBJECTS IS SIGNED, the request and the reply
@@ -93,7 +93,7 @@ type Envelopes struct {
 // is signed under. It refuses a keyring that names no active key or holds no
 // key at all, for the state log's reason: a node that signed under nothing
 // would be refused by every peer, one request at a time, for ever.
-func NewEnvelopes(ring statelog.Keyring) (*Envelopes, error) {
+func NewEnvelopes(ring recordseal.Keyring) (*Envelopes, error) {
 	channel, err := signedask.New[request, reply](channelName, ring)
 	if err != nil {
 		return nil, fmt.Errorf("estate: %w", err)

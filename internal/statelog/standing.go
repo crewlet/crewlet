@@ -3,6 +3,8 @@ package statelog
 import (
 	"context"
 	"fmt"
+
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // A NODE'S STANDING ON A LOG, READ OFF THE LOG ITSELF.
@@ -70,7 +72,7 @@ type SubjectLog interface {
 // and every record read back opened under v — the one way to build a
 // [StandingLog] from a domain's log, so no caller writes the pairing for
 // itself.
-func StandingOf(log SubjectLog, v *Verifier) StandingLog {
+func StandingOf(log SubjectLog, v *recordseal.Verifier) StandingLog {
 	return standing{VerifiedReader: VerifiedLog{Log: log, Verifier: v}, last: log}
 }
 

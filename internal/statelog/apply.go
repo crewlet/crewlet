@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/words"
@@ -169,8 +170,8 @@ type RunnerDeps struct {
 	// Verifier authenticates every record before this domain decodes one.
 	// REQUIRED: a runner built without it would apply whatever reached the
 	// broker, and the broker's admission vouches for a connection, never a
-	// record. See [signature.go].
-	Verifier *Verifier
+	// record. See [recordseal].
+	Verifier *recordseal.Verifier
 
 	// Log is the same stream read by position, which is how the applier
 	// establishes that the log still holds, at its checkpoint's sequence,
@@ -370,7 +371,7 @@ type Runner struct {
 	domain   Domain
 	applier  Applier
 	fetch    Fetcher
-	verifier *Verifier
+	verifier *recordseal.Verifier
 	log      CheckpointLog
 	node     NodeEstate
 	db       Estate
@@ -684,7 +685,7 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		// configure, never a node that quietly authenticates nothing.
 		return nil, fmt.Errorf("%w: %s's applier has no verifier, so it would apply "+
 			"any record that reached the broker — Tier A secrets.keys is required "+
-			"wherever a state-log domain runs", ErrUnsigned, d.Domain.Name())
+			"wherever a state-log domain runs", recordseal.ErrUnsigned, d.Domain.Name())
 	}
 	spec := d.Spec
 	if err := spec.Instantiates(d.Domain); err != nil {
@@ -2822,14 +2823,14 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 				Seq:        uint64(row.position % GenerationStride),
 			}
 			switch verdict {
-			case KeyUnknown:
+			case recordseal.KeyUnknown:
 				// STILL UNREADABLE, and said once per key for this
 				// process: after a restart this is the only place
 				// the node meets the record again.
 				r.witness(ctx, verdict, row.payload, at)
 				kept++
 				continue
-			case Tampered:
+			case recordseal.Tampered:
 				r.witness(ctx, verdict, row.payload, at)
 				return fmt.Errorf("%w: %s's retained record at packed position %d is "+
 					"not signed by this fleet — it was filed under a key this node "+
@@ -3095,14 +3096,14 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 		// handing it to the one place that parses attacker-controlled
 		// bytes.
 		body, verdict := r.verifier.Open(m.Payload)
-		if verdict != Verified {
+		if verdict != recordseal.Verified {
 			// OUTSIDE THE TRANSACTION, where the refusal is decided:
 			// the retention that follows for an unknown key runs in a
 			// body the store may run twice.
 			r.witness(ctx, verdict, m.Payload,
 				Position{Stream: r.spec.Name, Generation: gen, Seq: m.Seq})
 		}
-		if verdict == Tampered {
+		if verdict == recordseal.Tampered {
 			// PERMANENT, and it stops the loop. A record whose MAC
 			// fails under a key this fleet holds was written by
 			// something that is not this fleet; applying past it
@@ -3289,7 +3290,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 			// scope, is a row of the deferral index.
 			wrote := true
 			switch {
-			case rec.verdict == KeyUnknown:
+			case rec.verdict == recordseal.KeyUnknown:
 				// THE SAME DISPOSITION AS A RECORD FROM A NEWER
 				// BUILD, and for the same reason: both mean
 				// "this build cannot read this yet", and both

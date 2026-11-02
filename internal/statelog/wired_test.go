@@ -11,6 +11,7 @@ import (
 	"time"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -140,11 +141,11 @@ func newWiredNodeWith(tb testing.TB, q *js.Queue, nodeID string, opts store.Opti
 	}
 	// SIGNED AND VERIFIED under the keyring every case in this package
 	// shares, as every data node's records are.
-	signer, err := statelog.NewSigner(probeDomain{}.Name(), testRing())
+	signer, err := recordseal.NewSigner(probeDomain{}.Name(), testRing())
 	if err != nil {
 		tb.Fatalf("NewSigner: %v", err)
 	}
-	verifier, err := statelog.NewVerifier(probeDomain{}.Name(), testRing())
+	verifier, err := recordseal.NewVerifier(probeDomain{}.Name(), testRing())
 	if err != nil {
 		tb.Fatalf("NewVerifier: %v", err)
 	}

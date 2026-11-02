@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -631,7 +632,7 @@ type Record struct {
 	// act on it. An applier that could read it might branch on it, and a
 	// state machine whose rows depend on which keys the node happened to
 	// hold is no longer a pure function of the record.
-	verdict Verdict
+	verdict recordseal.Verdict
 
 	// ack acknowledges this record's delivery, and is unexported because
 	// exactly one caller may use it: the apply loop, after the transaction

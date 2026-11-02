@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -400,7 +401,7 @@ func (r *writeRound) feedRecord(seq uint64) changefeed.Record {
 		r.t.Fatalf("read record %d: %v (present: %v)", seq, err, ok)
 	}
 	body, verdict := r.verifier.Open(payload)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		r.t.Fatalf("record %d did not verify: %s", seq, verdict)
 	}
 	env, err := chatlet.DecodeEnvelope(body)
@@ -456,7 +457,7 @@ func TestAVerdictTheHorizonLetGoIsUnknownNeverDropped(t *testing.T) {
 		t.Fatalf("read the post's record: %v (present: %v)", err, ok)
 	}
 	body, opened := r.verifier.Open(payload)
-	if opened != statelog.Verified {
+	if opened != recordseal.Verified {
 		t.Fatalf("the post's record did not verify: %s", opened)
 	}
 	dropped, err := chatlet.Decode(body)

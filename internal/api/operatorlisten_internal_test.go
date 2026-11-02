@@ -25,8 +25,8 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // AN ASSISTANT IS TOLD AFTER THE LAST NODE'S MOVE, wherever its listing lands.
@@ -125,7 +125,7 @@ func (m fleetMember) applyPages() {
 // signs under a key no node of any case holds.
 func listenerSeatControls(opts operator.Options) operator.Options {
 	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
-		statelog.OneKey("k1", "the listener cases' seat-control key material"))
+		recordseal.OneKey("k1", "the listener cases' seat-control key material"))
 	if err != nil {
 		panic(err)
 	}

@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -82,7 +83,7 @@ var clusterTiming = estate.Timing{
 // one fleet, so one keyring, under which each member signs what it asks and
 // what it answers.
 var clusterEnvelopes = func() *estate.Envelopes {
-	env, err := estate.NewEnvelopes(statelog.OneKey("k1", "the code cluster's fleet key material"))
+	env, err := estate.NewEnvelopes(recordseal.OneKey("k1", "the code cluster's fleet key material"))
 	if err != nil {
 		panic(err)
 	}

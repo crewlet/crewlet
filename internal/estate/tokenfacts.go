@@ -7,8 +7,8 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/iam/credential"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/runtoken"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A MACHINE TOKEN'S ROW, AS IT CROSSES TO A NODE WITHOUT THE DIRECTORY.
@@ -112,7 +112,7 @@ type verifierKeys struct {
 // newVerifierKeys derives every key of ring in [verifierDomain]. The ring is
 // one [NewEnvelopes] has already held to a usable shape — an id on every
 // entry and an active one among them.
-func newVerifierKeys(ring statelog.Keyring) verifierKeys {
+func newVerifierKeys(ring recordseal.Keyring) verifierKeys {
 	keys := make(map[string][]byte, len(ring.Keys))
 	for _, key := range ring.Keys {
 		keys[key.ID] = runtoken.DeriveKey(verifierDomain, key.ID, key.Material)

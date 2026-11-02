@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -191,7 +192,7 @@ var sentinels = []sentinel{
 	{"statelog.ErrStopped", statelog.ErrStopped},
 	{"statelog.ErrStreamRecreated", statelog.ErrStreamRecreated},
 	{"statelog.ErrUnavailable", statelog.ErrUnavailable},
-	{"statelog.ErrUnsigned", statelog.ErrUnsigned},
+	{"recordseal.ErrUnsigned", recordseal.ErrUnsigned},
 	{"statelog.ErrWaitAbandoned", statelog.ErrWaitAbandoned},
 	{"statelog.ErrWrongStream", statelog.ErrWrongStream},
 

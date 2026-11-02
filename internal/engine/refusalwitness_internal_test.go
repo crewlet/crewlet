@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -60,8 +61,8 @@ func TestARecordUnderAnUnknownKeyReachesTheAuditFeed(t *testing.T) {
 	// A FRAME UNDER A KEY NOBODY IN THIS FLEET HOLDS, appended the way
 	// anything the broker admitted could.
 	domain := worklet.Domain{}
-	stranger, err := statelog.NewSigner(domain.Name(),
-		statelog.OneKey("stranger", "material-no-node-holds"))
+	stranger, err := recordseal.NewSigner(domain.Name(),
+		recordseal.OneKey("stranger", "material-no-node-holds"))
 	if err != nil {
 		t.Fatalf("signer: %v", err)
 	}

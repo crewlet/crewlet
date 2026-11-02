@@ -1,12 +1,13 @@
-package statelog_test
+package recordseal_test
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // The broker's admission vouches for a connection, never a record — an
@@ -16,27 +17,27 @@ import (
 // it refuses, and which of the two failures an operator can still recover
 // from.
 
-func ring(active string, keys ...statelog.Key) statelog.Keyring {
-	return statelog.Keyring{ActiveID: active, Keys: keys}
+func ring(active string, keys ...recordseal.Key) recordseal.Keyring {
+	return recordseal.Keyring{ActiveID: active, Keys: keys}
 }
 
 var (
-	key1 = statelog.Key{ID: "k1", Material: "material-one"}
-	key2 = statelog.Key{ID: "k2", Material: "material-two"}
+	key1 = recordseal.Key{ID: "k1", Material: "material-one"}
+	key2 = recordseal.Key{ID: "k2", Material: "material-two"}
 )
 
-func mustSign(t *testing.T, domain string, r statelog.Keyring) *statelog.Signer {
+func mustSign(t *testing.T, domain string, r recordseal.Keyring) *recordseal.Signer {
 	t.Helper()
-	s, err := statelog.NewSigner(domain, r)
+	s, err := recordseal.NewSigner(domain, r)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
 	return s
 }
 
-func mustVerify(t *testing.T, domain string, r statelog.Keyring) *statelog.Verifier {
+func mustVerify(t *testing.T, domain string, r recordseal.Keyring) *recordseal.Verifier {
 	t.Helper()
-	v, err := statelog.NewVerifier(domain, r)
+	v, err := recordseal.NewVerifier(domain, r)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -53,8 +54,8 @@ func TestASignedRecordOpensToTheBodyItCarries(t *testing.T) {
 		t.Fatal("the frame added nothing, so nothing was signed")
 	}
 	got, verdict := mustVerify(t, "tracker", ring("k1", key1)).Open(framed)
-	if verdict != statelog.Verified {
-		t.Fatalf("verdict = %q, want %q", verdict, statelog.Verified)
+	if verdict != recordseal.Verified {
+		t.Fatalf("verdict = %q, want %q", verdict, recordseal.Verified)
 	}
 	if !bytes.Equal(got, body) {
 		t.Errorf("the body came back as %q, want %q", got, body)
@@ -87,8 +88,8 @@ func TestATamperedRecordIsRefusedPermanently(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			body, verdict := verifier.Open(mutate(framed))
-			if verdict != statelog.Tampered {
-				t.Errorf("verdict = %q, want %q", verdict, statelog.Tampered)
+			if verdict != recordseal.Tampered {
+				t.Errorf("verdict = %q, want %q", verdict, recordseal.Tampered)
 			}
 			if body != nil {
 				t.Errorf("a tampered record handed back %d bytes of body — no domain "+
@@ -109,8 +110,8 @@ func TestAnUnknownKeyIsRecoverableAndKeepsTheBody(t *testing.T) {
 
 	// A node that does not hold k2 yet.
 	got, verdict := mustVerify(t, "tracker", ring("k1", key1)).Open(framed)
-	if verdict != statelog.KeyUnknown {
-		t.Fatalf("verdict = %q, want %q", verdict, statelog.KeyUnknown)
+	if verdict != recordseal.KeyUnknown {
+		t.Fatalf("verdict = %q, want %q", verdict, recordseal.KeyUnknown)
 	}
 	if !bytes.Equal(got, body) {
 		t.Errorf("an unverifiable record gave back %q; the framework needs the body "+
@@ -120,8 +121,8 @@ func TestAnUnknownKeyIsRecoverableAndKeepsTheBody(t *testing.T) {
 	// The operator adds k2. The SAME bytes now verify — that is what
 	// makes this disposition recoverable.
 	got, verdict = mustVerify(t, "tracker", ring("k1", key1, key2)).Open(framed)
-	if verdict != statelog.Verified {
-		t.Errorf("verdict = %q after the key arrived, want %q", verdict, statelog.Verified)
+	if verdict != recordseal.Verified {
+		t.Errorf("verdict = %q after the key arrived, want %q", verdict, recordseal.Verified)
 	}
 	if !bytes.Equal(got, body) {
 		t.Errorf("body = %q, want %q", got, body)
@@ -138,7 +139,7 @@ func TestARotationVerifiesInBothDirections(t *testing.T) {
 	newNode := ring("k1", key1, key2) // added, not yet active
 	flipped := ring("k2", key1, key2) // active flipped
 
-	for name, tc := range map[string]struct{ signer, verifier statelog.Keyring }{
+	for name, tc := range map[string]struct{ signer, verifier recordseal.Keyring }{
 		"old writes, new reads":     {oldNode, newNode},
 		"new writes, old reads":     {newNode, oldNode},
 		"flipped writes, new reads": {flipped, newNode},
@@ -147,9 +148,9 @@ func TestARotationVerifiesInBothDirections(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			framed := mustSign(t, "tracker", tc.signer).Seal(body)
 			_, verdict := mustVerify(t, "tracker", tc.verifier).Open(framed)
-			if verdict != statelog.Verified {
+			if verdict != recordseal.Verified {
 				t.Errorf("verdict = %q, want %q — a rotation must not split the fleet",
-					verdict, statelog.Verified)
+					verdict, recordseal.Verified)
 			}
 		})
 	}
@@ -157,9 +158,9 @@ func TestARotationVerifiesInBothDirections(t *testing.T) {
 	// AND THE ONE DIRECTION THAT MUST NOT WORK: a node that dropped k1
 	// refuses a record signed under it, which is what the drop is for.
 	framed := mustSign(t, "tracker", oldNode).Seal(body)
-	_, verdict := mustVerify(t, "tracker", statelog.OneKey("k2", key2.Material)).Open(framed)
-	if verdict != statelog.KeyUnknown {
-		t.Errorf("verdict = %q after the key was dropped, want %q", verdict, statelog.KeyUnknown)
+	_, verdict := mustVerify(t, "tracker", recordseal.OneKey("k2", key2.Material)).Open(framed)
+	if verdict != recordseal.KeyUnknown {
+		t.Errorf("verdict = %q after the key was dropped, want %q", verdict, recordseal.KeyUnknown)
 	}
 }
 
@@ -172,8 +173,8 @@ func TestOneDomainsRecordNeverVerifiesOnAnothersLog(t *testing.T) {
 	r := ring("k1", key1)
 	framed := mustSign(t, "tracker", r).Seal([]byte(`{"kind":"task.create"}`))
 	_, verdict := mustVerify(t, "pages", r).Open(framed)
-	if verdict != statelog.Tampered {
-		t.Errorf("verdict = %q on another domain's log, want %q", verdict, statelog.Tampered)
+	if verdict != recordseal.Tampered {
+		t.Errorf("verdict = %q on another domain's log, want %q", verdict, recordseal.Tampered)
 	}
 }
 
@@ -189,8 +190,8 @@ func TestARewrittenKeyIdDoesNotVerify(t *testing.T) {
 		t.Fatal("the fixture did not rewrite the id")
 	}
 	_, verdict := mustVerify(t, "tracker", both).Open(rewritten)
-	if verdict != statelog.Tampered {
-		t.Errorf("verdict = %q for a rewritten key id, want %q", verdict, statelog.Tampered)
+	if verdict != recordseal.Tampered {
+		t.Errorf("verdict = %q for a rewritten key id, want %q", verdict, recordseal.Tampered)
 	}
 }
 
@@ -199,23 +200,23 @@ func TestARewrittenKeyIdDoesNotVerify(t *testing.T) {
 // on every node, for ever — so the refusal is at boot and it names the field.
 func TestAKeyringThatCannotSignIsRefusedAtConstruction(t *testing.T) {
 	t.Parallel()
-	for name, r := range map[string]statelog.Keyring{
+	for name, r := range map[string]recordseal.Keyring{
 		"no keys at all":       {},
-		"no active id":         {Keys: []statelog.Key{key1}},
+		"no active id":         {Keys: []recordseal.Key{key1}},
 		"active names no key":  ring("k9", key1),
-		"a key with no id":     ring("k1", key1, statelog.Key{Material: "x"}),
-		"an id that is a book": ring("k1", statelog.Key{ID: strings.Repeat("x", 65), Material: "m"}),
+		"a key with no id":     ring("k1", key1, recordseal.Key{Material: "x"}),
+		"an id that is a book": ring("k1", recordseal.Key{ID: strings.Repeat("x", 65), Material: "m"}),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := statelog.NewSigner("tracker", r); err == nil {
+			if _, err := recordseal.NewSigner("tracker", r); err == nil {
 				t.Error("a keyring that cannot sign built a signer")
-			} else if !errors.Is(err, statelog.ErrUnsigned) {
+			} else if !errors.Is(err, recordseal.ErrUnsigned) {
 				t.Errorf("error = %v, want one wrapping ErrUnsigned so a caller can "+
 					"tell a configuration fault from a broker one", err)
 			}
 		})
 	}
-	if _, err := statelog.NewVerifier("tracker", statelog.Keyring{}); err == nil {
+	if _, err := recordseal.NewVerifier("tracker", recordseal.Keyring{}); err == nil {
 		t.Error("a node with no keys built a verifier, so it could not tell a peer's " +
 			"record from one written by anything else that reaches the broker")
 	}
@@ -235,14 +236,51 @@ func TestAVerifierNamesWhatItHolds(t *testing.T) {
 // this value and an unknown one would be neither retained nor refused.
 func TestEveryVerdictIsValidAndNothingElseIs(t *testing.T) {
 	t.Parallel()
-	for _, v := range []statelog.Verdict{statelog.Verified, statelog.KeyUnknown, statelog.Tampered} {
+	for _, v := range []recordseal.Verdict{recordseal.Verified, recordseal.KeyUnknown, recordseal.Tampered} {
 		if !v.Valid() {
 			t.Errorf("%q is not Valid", v)
 		}
 	}
-	for _, v := range []statelog.Verdict{"", "ok", "VERIFIED", "unknown"} {
+	for _, v := range []recordseal.Verdict{"", "ok", "VERIFIED", "unknown"} {
 		if v.Valid() {
 			t.Errorf("%q reported itself Valid", v)
 		}
 	}
+}
+
+// TestAFrameIsTheBytesTheFleetAlreadyHolds pins a frame to the bytes every
+// log a fleet holds was written in: the magic, the version, the id it names,
+// the MAC under the key derived with the "statelog/record|" label and the
+// body. The seal moved out of the state log and its label did not, and must
+// not: any change to the derivation, the MAC's input or the layout re-keys or
+// re-frames the fleet, and every record already written would open as
+// [recordseal.Tampered]. The expected bytes were computed outside Go, from the
+// layout this test states.
+func TestAFrameIsTheBytesTheFleetAlreadyHolds(t *testing.T) {
+	t.Parallel()
+	const want = "63736c6701026b31" + // "cslg", version 1, a 2-byte id, "k1"
+		"139d5da19b8f903d4c59d34678ce1b93416200d89866b00c0390712b58c89630" + // the MAC
+		"7b226b696e64223a227461736b2e637265617465227d" // the body
+	framed := mustSign(t, "tracker", ring("k1", key1)).Seal([]byte(`{"kind":"task.create"}`))
+	if got := hex.EncodeToString(framed); got != want {
+		t.Errorf("the frame is\n%s\nand every record the fleet holds is\n%s", got, want)
+	}
+	if _, verdict := mustVerify(t, "tracker", ring("k1", key1)).Open(mustHex(t, want)); verdict != recordseal.Verified {
+		t.Errorf("a record already on the fleet's logs opens as %q, want %q", verdict, recordseal.Verified)
+	}
+	if id := recordseal.ClaimedKeyID(framed); id != "k1" {
+		t.Errorf("ClaimedKeyID = %q, want the id the frame names", id)
+	}
+	if id := recordseal.ClaimedKeyID([]byte(`{"kind":"task.create"}`)); id != "" {
+		t.Errorf("ClaimedKeyID of bytes that are no frame = %q, want empty", id)
+	}
+}
+
+func mustHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

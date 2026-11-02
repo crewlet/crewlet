@@ -10,8 +10,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var log = logging.Get("httprelay")
@@ -41,7 +41,7 @@ type Options struct {
 	Owner string
 
 	// Keyring is the fleet's, every message is signed under.
-	Keyring statelog.Keyring
+	Keyring recordseal.Keyring
 
 	// Admit is what this process can do for a request addressed to it,
 	// asked before its handler runs: [Serve] runs it, and the other two

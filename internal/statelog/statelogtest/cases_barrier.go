@@ -5,6 +5,7 @@ import (
 	"maps"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -77,11 +78,11 @@ func ABarrierWritesNoRow(t *testing.T, new Factory) error {
 
 	node, db := openNodeEstate(t, c)
 	log := newSuiteLog()
-	signer, err := statelog.NewSigner(name, suiteRing())
+	signer, err := recordseal.NewSigner(name, suiteRing())
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier, err := statelog.NewVerifier(name, suiteRing())
+	verifier, err := recordseal.NewVerifier(name, suiteRing())
 	if err != nil {
 		t.Fatal(err)
 	}

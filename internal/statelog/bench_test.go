@@ -19,6 +19,7 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -214,7 +215,7 @@ func appendBurst(b *testing.B, q *js.Queue, n int) statelog.Position {
 	if err != nil {
 		b.Fatalf("open the log: %v", err)
 	}
-	signer, err := statelog.NewSigner(probeDomain{}.Name(), testRing())
+	signer, err := recordseal.NewSigner(probeDomain{}.Name(), testRing())
 	if err != nil {
 		b.Fatalf("NewSigner: %v", err)
 	}

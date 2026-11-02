@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -84,11 +85,11 @@ func Stamped(t *testing.T, new Factory) error {
 	log := newSuiteLog()
 	// SIGNED, as every publisher's records are: the framework refuses a
 	// publisher with no signer, and what the broker holds is the frame.
-	signer, err := statelog.NewSigner(name, suiteRing())
+	signer, err := recordseal.NewSigner(name, suiteRing())
 	if err != nil {
 		t.Fatalf("build a signer for %s: %v", name, err)
 	}
-	verifier, err := statelog.NewVerifier(name, suiteRing())
+	verifier, err := recordseal.NewVerifier(name, suiteRing())
 	if err != nil {
 		t.Fatalf("build a verifier for %s: %v", name, err)
 	}
@@ -138,7 +139,7 @@ func Stamped(t *testing.T, new Factory) error {
 	}
 	for _, framed := range records {
 		payload, verdict := verifier.Open(framed)
-		if verdict != statelog.Verified {
+		if verdict != recordseal.Verified {
 			return fmt.Errorf("%s's record does not open under the key it was "+
 				"signed with (%s)", name, verdict)
 		}
@@ -274,4 +275,4 @@ func (suiteWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Posi
 }
 
 // suiteRing is the keyring every record the suite publishes is signed under.
-func suiteRing() statelog.Keyring { return statelog.OneKey("suite", "statelogtest-material") }
+func suiteRing() recordseal.Keyring { return recordseal.OneKey("suite", "statelogtest-material") }

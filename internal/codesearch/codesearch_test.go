@@ -17,15 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var (
-	fleetRing = statelog.OneKey("k1", "the code search suite's fleet key material")
+	fleetRing = recordseal.OneKey("k1", "the code search suite's fleet key material")
 	person    = code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"}
 )
 
-func wire(t *testing.T, ring statelog.Keyring) *codesearch.Wire {
+func wire(t *testing.T, ring recordseal.Keyring) *codesearch.Wire {
 	t.Helper()
 	w, err := codesearch.NewWire(ring)
 	if err != nil {
@@ -419,7 +420,7 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-1", Deadline: time.Now().Add(time.Minute),
 		Asker: person, Search: code.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
 		Assign: map[string][]codesearch.Assigned{"git-a": {{RepoID: r.ref.ID, Name: "alpha", Home: true}}}}
-	stranger := statelog.OneKey("k1", "somebody else's key material")
+	stranger := recordseal.OneKey("k1", "somebody else's key material")
 	forged, err := wire(t, stranger).SealRequest(req)
 	if err != nil {
 		t.Fatal(err)
@@ -427,7 +428,7 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	if reply, err := srv.Answer(context.Background(), forged); err == nil || reply != nil {
 		t.Errorf("a request the fleet did not sign answered %q, %v", reply, err)
 	}
-	other := statelog.OneKey("k2", "a key this node does not hold")
+	other := recordseal.OneKey("k2", "a key this node does not hold")
 	unknown, err := wire(t, other).SealRequest(codesearch.Request{Version: req.Version, ID: "req-2",
 		Deadline: req.Deadline, Asker: person, Search: req.Search, Assign: req.Assign})
 	if err != nil {

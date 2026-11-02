@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -42,12 +43,12 @@ var asker = code.Principal{Kind: code.PrincipalOperator, OperatorID: "founder-to
 // records are signed (ADR-0031). The key is a fixture — what the cases are
 // about is what the domain writes, and the signature's own rules are
 // certified in internal/statelog.
-var testRing = statelog.OneKey("k1", "the code cases' fleet key material")
+var testRing = recordseal.OneKey("k1", "the code cases' fleet key material")
 
 // testSigner is the code log's signer under [testRing].
-func testSigner(t testing.TB) *statelog.Signer {
+func testSigner(t testing.TB) *recordseal.Signer {
 	t.Helper()
-	signer, err := statelog.NewSigner(code.Domain{}.Name(), testRing)
+	signer, err := recordseal.NewSigner(code.Domain{}.Name(), testRing)
 	if err != nil {
 		t.Fatalf("build the record signer: %v", err)
 	}
@@ -55,9 +56,9 @@ func testSigner(t testing.TB) *statelog.Signer {
 }
 
 // testVerifier opens what [testSigner] sealed.
-func testVerifier(t testing.TB) *statelog.Verifier {
+func testVerifier(t testing.TB) *recordseal.Verifier {
 	t.Helper()
-	verifier, err := statelog.NewVerifier(code.Domain{}.Name(), testRing)
+	verifier, err := recordseal.NewVerifier(code.Domain{}.Name(), testRing)
 	if err != nil {
 		t.Fatalf("build the record verifier: %v", err)
 	}

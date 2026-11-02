@@ -153,6 +153,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/references"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -395,7 +396,7 @@ type Options struct {
 	// this node cannot verify refuses the backup rather than being guessed
 	// at (see [objectPass.noteRecord]). A node holding no replicated estate
 	// reads no log and needs none.
-	Keyring statelog.Keyring
+	Keyring recordseal.Keyring
 
 	// Metrics is where the copy's duration is recorded. Nil records
 	// nothing, which is a legal deployment and leaves the `backup_taken`
@@ -450,7 +451,7 @@ type Service struct {
 	tables []objstore.ReferenceTable
 	// ring is the keyring each declaring log's records are opened with
 	// ([Options.Keyring]).
-	ring    statelog.Keyring
+	ring    recordseal.Keyring
 	metrics *metrics.Recorder
 	now     func() time.Time
 	// pageRead is called after each read of the copy's references — nil but

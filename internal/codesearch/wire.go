@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -36,7 +37,7 @@ type Wire = signedask.Channel[Request, Reply]
 
 // NewWire builds a node's envelopes over the fleet keyring every state-log
 // record is signed under ([signedask.New]).
-func NewWire(ring statelog.Keyring) (*Wire, error) {
+func NewWire(ring recordseal.Keyring) (*Wire, error) {
 	return signedask.New[Request, Reply](Channel, ring)
 }
 

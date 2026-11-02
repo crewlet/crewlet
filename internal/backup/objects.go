@@ -21,7 +21,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -250,7 +250,7 @@ type objectPass struct {
 
 	// verifiers opens each declaring log's signed frames, by domain
 	// ([verifiers]), under the service's keyring.
-	verifiers map[string]*statelog.Verifier
+	verifiers map[string]*recordseal.Verifier
 
 	// win is what the records past the copy name, read once the streams
 	// are snapshotted ([objectPass.readWindow]) and only then.

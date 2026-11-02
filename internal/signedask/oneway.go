@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -44,24 +44,24 @@ type Message interface {
 // for concurrent use.
 type OneWay[M Message] struct {
 	domain string
-	seal   *statelog.Signer
-	open   *statelog.Verifier
+	seal   *recordseal.Signer
+	open   *recordseal.Verifier
 }
 
 // NewOneWay builds a node's half of the one-way channel name from the fleet
 // keyring, refusing a keyring that names no active key or holds none, for
 // [New]'s reason.
-func NewOneWay[M Message](name string, ring statelog.Keyring) (*OneWay[M], error) {
+func NewOneWay[M Message](name string, ring recordseal.Keyring) (*OneWay[M], error) {
 	if name == "" {
 		return nil, errors.New("signedask: a one-way channel needs a name: it is the key " +
 			"domain its frames are sealed under")
 	}
 	w := &OneWay[M]{domain: name}
 	var err error
-	if w.seal, err = statelog.NewSigner(name, ring); err != nil {
+	if w.seal, err = recordseal.NewSigner(name, ring); err != nil {
 		return nil, fmt.Errorf("signedask: %s: seal the frames this node sends: %w", name, err)
 	}
-	if w.open, err = statelog.NewVerifier(name, ring); err != nil {
+	if w.open, err = recordseal.NewVerifier(name, ring); err != nil {
 		return nil, fmt.Errorf("signedask: %s: open the frames this node hears: %w", name, err)
 	}
 	return w, nil
@@ -104,9 +104,9 @@ func (w *OneWay[M]) Open(sealed []byte, now time.Time) (M, Disposition, error) {
 	var zero M
 	body, verdict := w.open.Open(sealed)
 	switch verdict {
-	case statelog.Tampered:
+	case recordseal.Tampered:
 		return zero, Tampered, errors.New("signedask: the frame is not sealed by this fleet")
-	case statelog.KeyUnknown:
+	case recordseal.KeyUnknown:
 		return zero, KeyUnknown, fmt.Errorf("signedask: the frame is sealed under a key "+
 			"this node does not hold (it holds %s); add the key to secrets.keys", words.And(w.HeldKeys()))
 	}

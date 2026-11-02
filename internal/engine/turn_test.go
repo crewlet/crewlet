@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -2817,7 +2818,7 @@ func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, record sandbox.
 // ([sandbox.CoordinatorOptions.Answers]): one fleet keyring for every one of
 // them, as a fleet shares one, so a node opens what another recorded.
 var fleetAnswers = sync.OnceValue(func() *sandbox.AnswerSeal {
-	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", "the engine cases' fleet key material"))
+	seal, err := sandbox.NewAnswerSeal(recordseal.OneKey("answers", "the engine cases' fleet key material"))
 	if err != nil {
 		panic(err)
 	}

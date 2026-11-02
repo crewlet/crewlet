@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -27,7 +28,7 @@ import (
 // signed.
 func routerEnvelopes(t *testing.T) *estate.Envelopes {
 	t.Helper()
-	envelopes, err := estate.NewEnvelopes(statelog.OneKey("k1", "the router cases' fleet key"))
+	envelopes, err := estate.NewEnvelopes(recordseal.OneKey("k1", "the router cases' fleet key"))
 	if err != nil {
 		t.Fatal(err)
 	}
