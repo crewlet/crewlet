@@ -374,6 +374,7 @@ var contract = []Entry{
 	{"TranscriptEntryKind", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"TranscriptCut", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 	{"SessionOutcome", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"SessionContinuesIn", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 
 	// identity.ts
 	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
