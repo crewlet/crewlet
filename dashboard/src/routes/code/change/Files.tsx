@@ -20,7 +20,9 @@
  * whose file the revision no longer holds is GONE; a thread on a line of
  * another revision has no line here. Each is drawn above the file's diff
  * under a Disclosure that counts them, never dropped: a reviewer who cannot
- * find what they raised re-raises it.
+ * find what they raised re-raises it. For the same reason a change whose
+ * findings or comments run past one page says so above the diff: the pages
+ * are oldest first, so what is left off is the newest.
  *
  * # A finding is drafted on its lines, and sent with a review
  *
@@ -33,7 +35,17 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import { Button, Disclosure, Input, Select, Skeleton, Stack, Tag, Textarea } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  Disclosure,
+  Input,
+  Select,
+  Skeleton,
+  Stack,
+  Tag,
+  Textarea,
+} from "@crewlethq/ui";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useParam } from "~/app/router.tsx";
 import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
@@ -216,6 +228,12 @@ export function Files({
           </Tag>
         )}
       </div>
+      {(findings.data?.next || comments.data?.next) && (
+        <Callout variant="neutral">
+          More findings and comments were raised on this change than one page holds: the newest are
+          neither drawn on their lines here nor counted as outdated.
+        </Callout>
+      )}
       {files.loading && !files.data && (
         <Skeleton variant="text" rows={4} label="Loading the files" />
       )}

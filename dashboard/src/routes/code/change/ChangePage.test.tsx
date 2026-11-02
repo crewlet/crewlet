@@ -504,6 +504,28 @@ test("the Files tab asks for a diff again only when the change moves", async () 
   await waitFor(() => expect(askedFor("diff")).toBe(3));
 });
 
+// FINDINGS AND COMMENTS PAST ONE PAGE ARE SAID on the Files tab: the pages
+// run oldest first, so what is left off is the newest, and a reviewer who
+// cannot find what they raised re-raises it. Mutation: drop the notice, and
+// this fails.
+test("the Files tab says when the change's findings run past one page", async () => {
+  stubEngine(detail(), () => json({}), {
+    findings: () =>
+      json({
+        position: POSITION,
+        level: "session",
+        revision: 2,
+        findings: [MINE],
+        placed: { "f-mine": { start: 9, end: 9, outdated: true } },
+        next: "f-mine",
+      }),
+  });
+  mount("#/code/repos/web/changes/42?tab=files&file=app.go");
+  expect(
+    await screen.findByText(/More findings and comments were raised on this change than one page/),
+  ).toBeTruthy();
+});
+
 // A CHANGE NO LONGER LIVE takes no review: each control stays drawn, held with
 // the reason. Mutation: hide them, or let them press, and this fails.
 test("a merged change holds its review controls with the reason", async () => {

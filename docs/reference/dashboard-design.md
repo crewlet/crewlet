@@ -7819,7 +7819,9 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   those are the engine's `standing` part, read to its last page, and the press
   is held, with why, while that read is out or after it was refused, so no
   review supersedes a finding the dialog never showed; the drafts are
-  forgotten only once the engine has taken it. An open finding
+  forgotten only once the engine has taken it. Findings and comments are each
+  read a page of two hundred at a time, oldest first, and where either runs
+  past one the Files tab says so above the diff. An open finding
   with a suggestion offers **Apply suggestion** (`code_apply_suggestions`,
   against the head on screen), and every finding and thread a reply; a thread
   **Resolve**. **Request review** asks reviewers by handle with a note
