@@ -49,6 +49,7 @@ import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CODE_MAX_BLAME_LINES } from "~/contract/code.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import {
+  EARLIER_FILE_LINES,
   baseName,
   isWholeOID,
   lineToOpenAt,
@@ -289,9 +290,9 @@ interface EarlierState {
 const NO_ANSWERS: readonly CodeGitAnswer[] = [];
 
 /**
- * Read a file's lines (or its blame) BACKWARDS from `from`, a step of
- * CODE_MAX_BLAME_LINES at a time — the most one blame names, and a few screens
- * of source, within one page for ordinary lines — each step a range
+ * Read a file's lines (or its blame) BACKWARDS from `from`, `step` lines at a
+ * time — EARLIER_FILE_LINES for a file, a page's worth, and
+ * CODE_MAX_BLAME_LINES for a blame, the most one names — each step a range
  * (`start_line`, `end_line`) followed through its pages to its end, so it
  * meets the lines after it with no line between them. What it holds belongs
  * to `place`, the file, the lens and the line read forward from: another
@@ -300,6 +301,7 @@ const NO_ANSWERS: readonly CodeGitAnswer[] = [];
 function useEarlier(
   place: string,
   from: number,
+  step: number,
   ask: (start: number, end: number, cursor: string) => Promise<CodeGitAnswer>,
 ): Earlier {
   const [state, setState] = useState<EarlierState>({
@@ -313,13 +315,12 @@ function useEarlier(
     state.place === place
       ? state
       : { place, answers: NO_ANSWERS, from, reading: false, error: null };
-  const held = useRef({ now, ask });
-  held.current = { now, ask };
+  const held = useRef({ now, step, ask });
+  held.current = { now, step, ask };
   const read = useCallback(() => {
-    const at = held.current.now;
-    const ask = held.current.ask;
+    const { now: at, step, ask } = held.current;
     if (at.reading || at.from <= 1) return;
-    const start = Math.max(1, at.from - CODE_MAX_BLAME_LINES);
+    const start = Math.max(1, at.from - step);
     const end = at.from - 1;
     setState({ ...at, reading: true, error: null });
     void (async () => {
@@ -408,7 +409,7 @@ function FileLines({
     nextOf,
   );
   const first = from > 1 ? atLine : opening;
-  const earlier = useEarlier(`${place}\n${from}`, from, (start, end, cursor) =>
+  const earlier = useEarlier(`${place}\n${from}`, from, EARLIER_FILE_LINES, (start, end, cursor) =>
     codeRest.query("code_blob", {
       ...params,
       start_line: start,
@@ -906,13 +907,17 @@ function Blame({
     (l: CodeBlameLine) => String(l.line),
     (a: CodeGitAnswer) => rangeCursor(a, from, total),
   );
-  const earlier = useEarlier(`${place}\n${from}`, from, (start, end, cursor) =>
-    codeRest.query("code_blame", {
-      ...params,
-      start_line: start,
-      end_line: end,
-      ...(cursor ? { cursor } : {}),
-    }),
+  const earlier = useEarlier(
+    `${place}\n${from}`,
+    from,
+    CODE_MAX_BLAME_LINES,
+    (start, end, cursor) =>
+      codeRest.query("code_blame", {
+        ...params,
+        start_line: start,
+        end_line: end,
+        ...(cursor ? { cursor } : {}),
+      }),
   );
   const commits = useMemo(() => {
     const all: Record<string, CodeBlameCommit> = {};

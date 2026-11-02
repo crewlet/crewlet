@@ -489,6 +489,18 @@ export function linesValue(run: LineRun): string {
 export const PICK_CONTEXT = 50;
 
 /**
+ * How many lines of a FILE one press of "Load earlier lines" reads back: as
+ * many as one answer page of ordinary source holds — `code.MaxGitAnswerBytes`
+ * (56 KiB) at under forty bytes a line — so a press draws one page, as a press
+ * of "Load more lines" does forward. Any narrower is dearer, not cheaper: a
+ * step costs the engine one whole-file stream whatever its width (git cannot
+ * seek inside a blob, and the read counts the file's lines to its end), and
+ * the step's pages after its first are cut from that one stream's memo. A
+ * blame's step is its own, CODE_MAX_BLAME_LINES: the most one blame names.
+ */
+export const EARLIER_FILE_LINES = 1500;
+
+/**
  * Where a file's lines (or its blame) should begin for the line an address
  * picks to be drawn, or null where they need not move: no line is picked, it
  * is drawn already (`drawn` is the first and last line on screen), or the

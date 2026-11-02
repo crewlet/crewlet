@@ -7900,11 +7900,13 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   OPENS AT THE LINE: the file is read again from fifty lines before it
   (`code_blob`'s `start_line`), paged forward from there as before, the line
   drawn picked and scrolled to the middle of the screen, and **Load earlier
-  lines** reads back towards line 1 five hundred lines a press (`start_line`
-  and `end_line`, each step followed through its pages, so it meets the lines
-  after it). The blame does the same through its own `start_line`, and reads
-  a range of at most `code.MaxBlameLines` (500) lines at a time, range after
-  range, so **Load more lines** reaches a blame's last line. A press picks a
+  lines** reads back towards line 1 fifteen hundred lines a press, a page's
+  worth (`start_line` and `end_line`, each step followed through its pages, so
+  it meets the lines after it; every step costs the git node one stream of
+  the whole file, however wide). The blame does the same through its own
+  `start_line`, and reads a range of at most `code.MaxBlameLines` (500) lines
+  at a time, forward and back, range after range, so **Load more lines**
+  reaches a blame's last line. A press picks a
   line on screen and so reads nothing; a line the file does not have is said
   so beside its size.
   The revision picker lists the first page of the branches and of the tags

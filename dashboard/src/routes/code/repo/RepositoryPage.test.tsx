@@ -559,13 +559,15 @@ test("a file opens at a picked line past its first page, and reads back from the
   expect(screen.queryByRole("button", { name: "Line 1" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Line 2349" })).toBeNull();
 
+  // A STEP BACK IS A PAGE'S WORTH OF LINES, EARLIER_FILE_LINES: each step
+  // costs the engine one whole-file stream whatever its width.
   fireEvent.click(screen.getByRole("button", { name: "Load earlier lines" }));
-  expect(await screen.findByRole("button", { name: "Line 1850" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Line 850" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Line 2349" })).toBeTruthy();
   const back = reads(asked, "code_blob").filter((u) => u.searchParams.has("end_line"));
   expect(
     back.map((u) => [u.searchParams.get("start_line"), u.searchParams.get("end_line")]),
-  ).toEqual([["1850", "2349"]]);
+  ).toEqual([["850", "2349"]]);
   // A PRESS ON A LINE DRAWN MOVES NOTHING: no read, no scroll.
   const before = asked.length;
   fireEvent.click(screen.getByRole("button", { name: "Line 1900" }));
