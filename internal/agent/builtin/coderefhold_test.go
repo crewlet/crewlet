@@ -301,7 +301,7 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 					for _, drop := range refCallDrops[name] {
 						delete(args, drop)
 					}
-					got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn, name, args)
+					got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), turn, name, args)
 					if got.Failed {
 						t.Fatalf("%s with %s %s answered %q", name, arg, seatBranchShort, got.Output)
 					}
@@ -321,7 +321,7 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 	for _, rev := range []string{mainOID, "main", "v1"} {
 		host, writer := withSeatBranch(newCodeHost(), "qa", time.Hour), &codeWrites{}
 		turn := writerTurn(t)
-		callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn, builtin.CodeReadTool,
+		callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), turn, builtin.CodeReadTool,
 			map[string]any{"repo": "site", "rev": rev, "path": "README.md"})
 		if held := turn.Holds.IDs(); len(held) != 0 {
 			t.Errorf("a read at %s held %v", rev, held)
@@ -382,7 +382,7 @@ func TestAChangeWriteHoldsTheSeatBranchItDependsOn(t *testing.T) {
 					defer mu.Unlock()
 					held[what] = slices.Contains(turn.Holds.IDs(), seatBranchKey)
 				})
-				got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn, c.tool, c.args)
+				got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), turn, c.tool, c.args)
 				if got.Failed {
 					t.Fatalf("%s answered %q", c.tool, got.Output)
 				}
@@ -456,7 +456,7 @@ func TestACallsSeatBranchesAreHeldInOneRowWrite(t *testing.T) {
 				written = append(written, slices.Clone(keys))
 				return nil
 			})
-			got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn, c.tool, c.args)
+			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), turn, c.tool, c.args)
 			if got.Failed {
 				t.Fatalf("%s answered %q", c.tool, got.Output)
 			}
@@ -571,7 +571,7 @@ func TestARefHoldOfAnIdleSeatBranchIsRecordedFirst(t *testing.T) {
 			host, writer := withSeatBranch(newCodeHost(), c.seat, c.unset), &codeWrites{life: c.answer}
 			ev := watch(host, writer, nil)
 			turn := writerTurn(t)
-			got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn, builtin.CodeReadTool,
+			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), turn, builtin.CodeReadTool,
 				readArgs)
 			_, lifecycles := writer.asked()
 			if recorded := len(lifecycles) == 1; recorded != c.recorded {
@@ -615,7 +615,7 @@ func TestARefHoldOfAnIdleSeatBranchIsRecordedFirst(t *testing.T) {
 	}}
 	ev := watch(host, writer, nil)
 	reg := codeRegistry(t, writeDeps(host, writer))
-	callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRevertTool, map[string]any{"repo": "site",
+	callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRevertTool, map[string]any{"repo": "site",
 		"branch": seatBranchShort, "expected_head": seatBranchOID, "commit": featureOID})
 	seen := ev.list()
 	write := slices.Index(seen, "git_write")
@@ -624,7 +624,7 @@ func TestARefHoldOfAnIdleSeatBranchIsRecordedFirst(t *testing.T) {
 	}
 	ev = watch(host, writer, nil)
 	writer.write = nil
-	callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeCreateBranchTool, map[string]any{"repo": "site",
+	callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeCreateBranchTool, map[string]any{"repo": "site",
 		"branch": "seats/qa/new", "at": mainOID})
 	if seen := ev.list(); count(seen, "resolve_ref") != 0 || count(seen, "lifecycle:hold") != 0 {
 		t.Errorf("a create of a new branch sent %v, want neither a resolve nor a hold", seen)
@@ -670,10 +670,10 @@ func TestATurnResolvesABranchItWritesOnce(t *testing.T) {
 	// THE GUIDANCE'S WAY: code_resolve, then two writes at its head.
 	host, writer, ev, turn := newCase()
 	reg := codeRegistry(t, writeDeps(host, writer))
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeResolveTool, map[string]any{"repo": "site",
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeResolveTool, map[string]any{"repo": "site",
 		"ref": seatBranchShort})
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commit(seatBranchShort))
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commit(seatBranchShort))
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commit(seatBranchShort))
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commit(seatBranchShort))
 	if seen := ev.list(); count(seen, "resolve_ref") != 1 || !slices.Equal(before(seen, "git_write"), []int{1, 1}) {
 		t.Errorf("code_resolve and two writes sent %v, want the one resolve, before both writes", seen)
 	}
@@ -681,8 +681,8 @@ func TestATurnResolvesABranchItWritesOnce(t *testing.T) {
 	// A WRITE FIRST: resolved before it, and not before the next.
 	host, writer, ev, turn = newCase()
 	reg = codeRegistry(t, writeDeps(host, writer))
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commit(seatBranchShort))
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commit(seatBranchShort))
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commit(seatBranchShort))
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commit(seatBranchShort))
 	if seen := ev.list(); !slices.Equal(before(seen, "git_write"), []int{1, 1}) {
 		t.Errorf("two writes sent %v, want one resolve, before the first", seen)
 	}
@@ -690,9 +690,9 @@ func TestATurnResolvesABranchItWritesOnce(t *testing.T) {
 	// A CREATE, THEN A WRITE AT ITS HEAD: one resolve, before that write.
 	host, writer, ev, turn = newCase()
 	reg = codeRegistry(t, writeDeps(host, writer))
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCreateBranchTool, map[string]any{"repo": "site",
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCreateBranchTool, map[string]any{"repo": "site",
 		"branch": seatBranchShort, "at": mainOID})
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commit(seatBranchShort))
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commit(seatBranchShort))
 	if seen := ev.list(); !slices.Equal(before(seen, "git_write"), []int{0, 1}) {
 		t.Errorf("a create and a write sent %v, want no resolve before the create and one before the write", seen)
 	}
@@ -700,7 +700,7 @@ func TestATurnResolvesABranchItWritesOnce(t *testing.T) {
 	// MAIN, AND AN OPERATOR: no resolve.
 	host, writer, ev, turn = newCase()
 	reg = codeRegistry(t, writeDeps(host, writer))
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commit("main"))
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, commit("main"))
 	deps := writeDeps(host, writer)
 	deps.Actor = builtin.PrincipalActor
 	operator := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
@@ -746,7 +746,7 @@ func TestAFailedHoldRecordLeavesTheBranchUnconfirmed(t *testing.T) {
 			turn := writerTurn(t)
 			args := map[string]any{"repo": "site", "branch": seatBranchShort, "expected_head": seatBranchOID,
 				"message": "m", "files": []any{map[string]any{"op": "put", "path": "a.txt", "content": "a"}}}
-			if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, args); !got.Failed {
+			if got := callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, args); !got.Failed {
 				t.Fatalf("a write whose hold record failed answered %q", got.Output)
 			}
 			writer.mu.Lock()
@@ -754,7 +754,7 @@ func TestAFailedHoldRecordLeavesTheBranchUnconfirmed(t *testing.T) {
 			writer.mu.Unlock()
 			for i, want := range []int{1, 0} {
 				mark := len(ev.list())
-				if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, args); got.Failed {
+				if got := callWrite(everyGrant(), t, reg, turn, builtin.CodeCommitFilesTool, args); got.Failed {
 					t.Fatalf("write %d answered %q", i+2, got.Output)
 				}
 				seen := ev.list()[mark:]
@@ -781,8 +781,8 @@ func TestAnIdleScratchRepositoryIsRecordedOncePerTurn(t *testing.T) {
 	turn := writerTurn(t)
 	reg := codeRegistry(t, writeDeps(host, writer))
 	args := map[string]any{"repo": "agent-cto.lab", "rev": mainOID, "path": "README.md"}
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeReadTool, args)
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeReadTool, args)
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeReadTool, args)
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeReadTool, args)
 	seen := ev.list()
 	if count(seen, "lifecycle:hold") != 1 ||
 		slices.Index(seen, "lifecycle:hold") > slices.Index(seen, "git_read:blob") {

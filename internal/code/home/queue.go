@@ -237,8 +237,8 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 	}
 	applied := false
 	defer func() {
-		if err := built.Settle(context.WithoutCancel(ctx), applied); err != nil {
-			w.log.Warn("code_queue_chain_not_settled", "repo", repoID, "about", about, "err", err)
+		if settleErr := built.Settle(context.WithoutCancel(ctx), applied); settleErr != nil {
+			w.log.Warn("code_queue_chain_not_settled", "repo", repoID, "about", about, "err", settleErr)
 		}
 	}()
 	var (
@@ -271,7 +271,7 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 		}
 	}
 	if len(ejected) > 0 {
-		if err := w.eject(ctx, repoID, about, ejected, at); err != nil {
+		if err = w.eject(ctx, repoID, about, ejected, at); err != nil {
 			return err
 		}
 	}

@@ -916,7 +916,7 @@ func Catalogue() []Instrument {
 				"`repo_deleted`, `busy`, `not_applied`, `unavailable`, and the " +
 				"home's `superseded` — facts or a merge of a revision, a head or " +
 				"a target the change has moved from; facts no later than the " +
-				"facts it holds, or matched against path owners changed since; " +
+				"facts it holds, or matched against path owners or human paths changed since; " +
 				"a merge into a tip before the one its mergeability is of, or " +
 				"into the same tip once decided; a settling of asks for a " +
 				"change that moved since its home read it, or holds no such " +

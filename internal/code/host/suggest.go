@@ -186,7 +186,7 @@ func (b *building) place(ctx context.Context, paths map[string]object) (map[stri
 		if err == nil {
 			err = lines.close()
 		}
-		if err := b.wr.failed(ctx, "diff of the files the suggestions were read in", res, err); err != nil {
+		if err = b.wr.failed(ctx, "diff of the files the suggestions were read in", res, err); err != nil {
 			return nil, nil, err
 		}
 	}

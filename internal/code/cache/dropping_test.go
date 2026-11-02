@@ -430,6 +430,133 @@ func TestAnAdoptionOfADroppingPacksChecksumMovesItsFilesOut(t *testing.T) {
 	}
 }
 
+// AN ADOPTED DROPPING PACK IS NEVER DOWNLOADED, AND LIES IN THE VIEW: the
+// maintainer that built an expunge's dropping pack adopts it from its
+// build's scratch once the begin has applied (AdoptDropping), and the copy's
+// next round — the rescue's sync — finds it installed where its row places
+// it, in the dropping view, and opens nothing of it; the copy is then exactly
+// what a fresh cache builds at the same position, nothing of the pack in
+// objects/pack.
+//
+// Mutations: place the adopted pack in objects/pack (adoptedPlace answering
+// placeLive), and the round moves it into the view with a GET; skip the
+// adoption's links, and the round downloads it.
+func TestAnAdoptedDroppingPackIsNeverDownloaded(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	base, first := w.push(t, repo, "refs/heads/main", nil)
+	gone, second := w.push(t, repo, "refs/heads/gone", nil)
+	w.client.Run(t, w.repos[repo].work, "reset", "--hard", base)
+	_, third := w.push(t, repo, "refs/heads/main", nil)
+	w.log.write(repo, nil, map[string]string{"refs/heads/gone": ""})
+	c := w.open(t)
+	before := w.sync(t, c, repo)
+	_, dropping := w.expungeBegin(t, repo, []string{gone}, first, second, third)
+	sc, err := c.NewScratch(t.Context(), before, uuid.Must(uuid.NewV7()).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Remove()
+	b := w.bundle(dropping.GitChecksum)
+	at := int64(0)
+	for _, section := range []struct {
+		ext string
+		n   int64
+	}{{".pack", b.PackBytes}, {".idx", b.IndexBytes}, {".rev", b.ReverseBytes}} {
+		write(t, filepath.Join(sc.Dir, "objects", "pack", "pack-"+dropping.GitChecksum+section.ext),
+			string(b.Bytes[at:at+section.n]))
+		at += section.n
+	}
+	if err := c.AdoptDropping(t.Context(), repo, sc, dropping.Ref()); err != nil {
+		t.Fatalf("adopting the dropping pack: %v", err)
+	}
+	after := w.sync(t, c, repo)
+	if opens, _, _ := w.objects.counts(); opens[dropping.Object] != 0 {
+		t.Errorf("the round after the adoption opened the dropping pack's object %d times, want none",
+			opens[dropping.Object])
+	}
+	if got := droppingFiles(t, after.Dir); !slices.Equal(got, rowFiles(dropping)) {
+		t.Errorf("after the begin's round the view holds %v, want the adopted dropping pack's %v", got,
+			rowFiles(dropping))
+	}
+	if got, want := imageOf(t, after.Dir), w.rebuilt(t, repo); got != want {
+		t.Errorf("after the begin's round, the image:\n%s\nwant a fresh cache's:\n%s", got, want)
+	}
+}
+
+// A REWRITE'S SCRATCH IS MADE OVER THE COPY SERVING ITS SYNC NOW: an
+// expunge's build is made over the Synced its scan took, and a merge landed
+// beside it on its maintainer swaps that copy for the next — the live set
+// carried over, none left in the copy it replaced — before the build's
+// scratch is made (after the scan's walk) or before the rebuild its bundle
+// rule asks for. The scratch is made over the copy serving now: its inputs,
+// live there, are its own packs, and its store holds every other pack live
+// there, the merge's output among them — never refused for inputs the old
+// copy's emptied live set no longer names.
+//
+// Mutation: pick over the Synced's own incarnation in newRewriteScratch, and
+// the scratch is refused: its input is no pack live there.
+func TestARewritesScratchIsMadeOverTheCopyServingItsSync(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	_, first := w.push(t, repo, "refs/heads/main", nil)
+	_, second := w.push(t, repo, "refs/heads/main", nil)
+	_, third := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	scan := w.sync(t, c, repo)
+	merged := w.compacted(t, repo, second, third)
+	if after := w.sync(t, c, repo); after.Dir == scan.Dir {
+		t.Fatalf("the premise: the merge's round left the copy at %s, want it swapped", after.Dir)
+	}
+	sc, err := c.StageExpunge(t.Context(), scan, uuid.Must(uuid.NewV7()).String(), []string{first.GitChecksum})
+	if err != nil {
+		t.Fatalf("an expunge's scratch over a copy a merge's swap replaced: %v", err)
+	}
+	defer sc.Remove()
+	if got, want := packFiles(t, sc.Dir), rowFiles(first); !slices.Equal(got, want) {
+		t.Errorf("the scratch's own packs are %v, want the input's %v", got, want)
+	}
+	if got, want := packFiles(t, sc.Alternate), rowFiles(merged); !slices.Equal(got, want) {
+		t.Errorf("the scratch's store holds %v, want every other pack live in the copy serving now, the "+
+			"merge's output %v", got, want)
+	}
+}
+
+// A MERGE'S SCRATCH IS MADE OVER THE COPY SERVING ITS SYNC NOW: a compaction
+// or a publication's repack makes its scratch after its plan, while another
+// record of the repository — another merge, an expunge's begin or commit —
+// swaps the copy its sync took, which leaves that copy no live set. The
+// scratch is made over the copy serving now, its store linking the inputs
+// from there, never refused for inputs the old copy's emptied live set no
+// longer names.
+//
+// Mutation: resolve no serving copy for a merge in newScratch, and the
+// scratch is refused: its input is no pack live in the copy the sync took.
+func TestAMergesScratchIsMadeOverTheCopyServingItsSync(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	_, first := w.push(t, repo, "refs/heads/main", nil)
+	_, second := w.push(t, repo, "refs/heads/main", nil)
+	_, third := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	planned := w.sync(t, c, repo)
+	w.compacted(t, repo, second, third)
+	if after := w.sync(t, c, repo); after.Dir == planned.Dir {
+		t.Fatalf("the premise: the other merge's round left the copy at %s, want it swapped", after.Dir)
+	}
+	sc, err := c.NewMergeScratch(t.Context(), planned, uuid.Must(uuid.NewV7()).String(), []string{first.GitChecksum})
+	if err != nil {
+		t.Fatalf("a merge's scratch over a copy another merge's swap replaced: %v", err)
+	}
+	defer sc.Remove()
+	if got, want := packFiles(t, sc.Alternate), rowFiles(first); !slices.Equal(got, want) {
+		t.Errorf("the merge's store holds %v, want its input's %v", got, want)
+	}
+}
+
 // ONLY SERVING READS NAME THE DROPPING VIEW (M6-D3): every git process under
 // internal/code that names a copy's dropping view (gitproc.Cmd.Dropping) is
 // a read — a subcommand of gitReaders — that SERVES the copy, a row of
@@ -527,4 +654,69 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/code/query/search.go", "grep", queryServes},
 	{"internal/code/query/search.go", "cat-file", queryServes},
 	{"internal/code/query/tree.go", "ls-tree", queryServes},
+}
+
+// A CHECK IS CHARGED FOR THE DROPPING VIEW IT WALKS. Verify's connectivity
+// check runs through the copy's dropping view while an expunge is open, and
+// git marks every object of every object directory it is handed, so the
+// check holds FsckBytesPerObject an object of the dropping packs as much as of
+// the live ones; the room kept beside it is for a clone of the live objects
+// alone, which is all a clone sends. A budget that holds the check's charge
+// over the live objects and not that over both refuses it with ErrNoMemory —
+// re-charged before it reads anything, where it was admitted on the copy
+// from before the expunge and its sync brought the view, and at its
+// admission, where the copy it is admitted on holds the view — and a budget
+// that holds the charge over both runs it, clean.
+//
+// Mutations: charge Verification.charge by the live objects alone, and the
+// check admitted before the expunge runs on the smaller budget; charge
+// AdmitVerify so, and the copy's own check is admitted on it; let placeMoved
+// count no dropping pack's objects, and both are.
+func TestACheckIsChargedForTheDroppingViewItWalks(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	base, first := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	w.sync(t, c, repo).Release()
+	before := cache.FsckCharge(c, repo)
+
+	gone, second := w.push(t, repo, "refs/heads/gone", nil)
+	w.client.Run(t, w.repos[repo].work, "reset", "--hard", base)
+	_, third := w.push(t, repo, "refs/heads/main", nil)
+	w.log.write(repo, nil, map[string]string{"refs/heads/gone": ""})
+	kept, dropping := w.expungeBegin(t, repo, []string{gone}, first, second, third)
+	live := kept.Objects * (cache.FsckBytesPerObject + gitproc.TransferBytesPerObject)
+	both := live + dropping.Objects*cache.FsckBytesPerObject
+	if dropping.Objects == 0 || before > live {
+		t.Fatalf("the case is no test: the dropping pack holds %d objects, and the copy before the expunge is "+
+			"charged %d, over the %d its live objects are after it", dropping.Objects, before, live)
+	}
+
+	cache.SetMaintenanceBudget(c, live)
+	v, err := c.AdmitVerify(repo)
+	if err != nil {
+		t.Fatalf("a check of the copy before the expunge, on a budget of %d past its charge of %d: %v", live,
+			before, err)
+	}
+	if _, err := v.Run(t.Context(), cache.VerifyRun{}); !errors.Is(err, cache.ErrNoMemory) {
+		t.Errorf("the check admitted before the expunge, its sync having placed a dropping view of %d objects, "+
+			"on a budget of %d = %v, want ErrNoMemory: its fsck walks the view, %d bytes in all", dropping.Objects,
+			live, err, both)
+	}
+	v.Release()
+
+	if v, err := c.AdmitVerify(repo); !errors.Is(err, cache.ErrNoMemory) {
+		if err == nil {
+			v.Release()
+		}
+		t.Errorf("a check of the copy holding a dropping view of %d objects, on a budget of %d, admitted = %v; "+
+			"want ErrNoMemory: its fsck walks the view, %d bytes in all", dropping.Objects, live, err, both)
+	}
+
+	cache.SetMaintenanceBudget(c, both)
+	if r, err := verify(t.Context(), c, repo, false); err != nil || len(r.Problems) != 0 {
+		t.Errorf("Verify at its charge over the live and the dropping objects, %d = %+v, %v; want it run, and "+
+			"clean", both, r, err)
+	}
 }

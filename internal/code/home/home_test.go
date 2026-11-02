@@ -50,6 +50,7 @@ type estate struct {
 	unsettle map[string][]code.AskDue
 	settles  []code.AskSettle
 	owners   map[string][]code.PathOwner
+	gates    map[string][]code.RuleGate
 	facts    map[string]code.RevisionFactsAnswer
 	// factsRead is how many times the facts of each head were read.
 	factsRead map[string]int
@@ -77,7 +78,7 @@ type estate struct {
 func newEstate() *estate {
 	return &estate{due: map[string][]code.ChangeDue{}, rechecks: map[string][]code.ChangeDue{},
 		unsettle: map[string][]code.AskDue{}, owners: map[string][]code.PathOwner{},
-		facts: map[string]code.RevisionFactsAnswer{}, factsRead: map[string]int{},
+		gates: map[string][]code.RuleGate{}, facts: map[string]code.RevisionFactsAnswer{}, factsRead: map[string]int{},
 		changed: make(chan struct{}, 1), at: statelog.Position{Stream: topics.CodeLogStream, Seq: 40}}
 }
 
@@ -171,7 +172,7 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	again := e.rechecks[repo]
 	again = slices.Clone(again[:min(len(again), q.ChangesDue.Rechecks)])
 	return code.ReadAnswer{DueChanges: slices.Clone(e.due[repo]), Rechecks: again, PathOwners: e.owners[repo],
-		AskSettles: slices.Clone(e.unsettle[repo]), Position: e.at}, nil
+		Gates: e.gates[repo], AskSettles: slices.Clone(e.unsettle[repo]), Position: e.at}, nil
 }
 
 func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -581,7 +582,7 @@ func counted(rec *metrics.Recorder, name string, attrs metrics.Attrs) uint64 {
 			}
 		}
 		if match {
-			n += uint64(s.Total)
+			n += s.Total
 		}
 	}
 	return n
@@ -1043,6 +1044,40 @@ func TestTheHomeRecordsTheClassesItsGitRead(t *testing.T) {
 	if r := revises[0]; r.BaseTree != oid("3") || r.HeadTree != oid("4") || !reflect.DeepEqual(r.Classes, classed) {
 		t.Errorf("the facts recorded trees %s and %s and classes %+v, want the read's %s, %s and %+v", r.BaseTree,
 			r.HeadTree, r.Classes, oid("3"), oid("4"), classed)
+	}
+}
+
+// THE HOME MATCHES THE HUMAN PATHS ITS TARGET IS HELD TO: beside the path
+// owners, the home matches the touched paths against the human paths the
+// listing's gates hold the change's target to — classed as its git read
+// classed them — and its revise carries which of them hold the revision and
+// which their unless waived, by place, with the digest of the gates' human
+// paths it matched against: the match no judgment makes again.
+//
+// Mutation: leave the match out of the revise — it records no human path
+// holding the revision, red.
+func TestTheHomeMatchesTheHumanPathsItsTargetIsHeldTo(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), BaseTree: oid("3"),
+		HeadTree: oid("4"), PatchID: oid("e"), Touched: []string{"deploy/app.go", "docs/guide.go"},
+		Classes: code.RevisionClasses{CommentOnly: []int{1}, Complete: true}})
+	e.gates[repoA] = []code.RuleGate{{Pattern: "refs/heads/main", Gate: code.MergeGate{
+		MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone, Landing: code.Landing{Depth: 4, Batch: 4},
+		DeleteSource: code.DeleteSeats, HumanPaths: []code.HumanPath{{Glob: "deploy/**"},
+			{Glob: "docs/**", Unless: []code.ChangeClass{code.ChangeClassCommentOnly}}}}}}
+	p := &placement{homes: map[string]string{repoA: "node-a"}}
+	loopOn(t, "node-a", e, p, newNudges(), time.Hour)
+	e.waitDone(t, repoA, 10*time.Second)
+	revises, _ := e.wrote()
+	if len(revises) != 1 {
+		t.Fatalf("the home recorded %d revisions' facts, want its one change's: %+v", len(revises), revises)
+	}
+	want := code.HumanPathMatch{Held: []int{0}, Waived: []int{1}}
+	if r := revises[0]; !reflect.DeepEqual(r.HumanPaths, want) ||
+		r.HumanPathsDigest != code.HumanPathsDigest(e.gates[repoA]) {
+		t.Errorf("the facts recorded the human paths %+v under %s, want %+v under the gates' %s", r.HumanPaths,
+			r.HumanPathsDigest, want, code.HumanPathsDigest(e.gates[repoA]))
 	}
 }
 

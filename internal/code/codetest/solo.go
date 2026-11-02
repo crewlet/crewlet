@@ -347,7 +347,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	if o.WrapEstate != nil {
 		seam = o.WrapEstate(seam)
 	}
-	var reads Reads = func(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	reads := func(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 		return f.data.Served().Read(ctx, q)
 	}
 	if o.WrapReads != nil {
@@ -720,6 +720,32 @@ func ReposOf(ctx context.Context,
 		}
 		if a.Next == "" {
 			return names, nil
+		}
+		q.Cursor = a.Next
+	}
+}
+
+// RepoIDsOf is the id of EVERY repository the rows hold, whatever its status —
+// read through read, at linearizable, every page: what a case's confinement
+// of its maintenance leaves out (Cluster.ConfineMaintenance), which must name
+// a repository that is deleted or purging as well as one in use, since a
+// maintainer's listings name archived and importing ones and a purge's.
+func RepoIDsOf(ctx context.Context,
+	read func(context.Context, code.ReadQuery) (code.ReadAnswer, error)) (map[string]bool, error) {
+
+	ids := map[string]bool{}
+	q := code.ReadQuery{Asker: Reader, Kind: code.ReadRepos, Status: code.RepoStatuses(), Limit: 500,
+		Fresh: Linearizable}
+	for {
+		a, err := read(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range a.Repos {
+			ids[r.ID] = true
+		}
+		if a.Next == "" {
+			return ids, nil
 		}
 		q.Cursor = a.Next
 	}

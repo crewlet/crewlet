@@ -610,11 +610,11 @@ type Write struct {
 type SeedRule string
 
 const (
-	// SeedNone: the new incarnation writes them again — the multi-pack-index
+	// SeedNone means the new incarnation writes them again — the multi-pack-index
 	// and the commit-graph, functions of the packs, which may be what failed
 	// in the copy being replaced.
 	SeedNone SeedRule = "none"
-	// SeedLink: hard-linked into the new incarnation, its record carried
+	// SeedLink hard-links them into the new incarnation, their record carried
 	// with them — files that are a function of the ROWS rather than the
 	// packs, which a rebuild reads again unchanged, so writing them again
 	// would read the rows again for nothing. A link is the same inode, so a
@@ -622,7 +622,7 @@ const (
 	// for in the new one, and one it has not is held to its Check before
 	// anything reads it there, as it would have been in the old.
 	SeedLink SeedRule = "link"
-	// SeedMove: MOVED whole into the new incarnation as it is promoted — ONE
+	// SeedMove MOVES them whole into the new incarnation as it is promoted — ONE
 	// rename of the directory the declaration owns whole (Owned.Tree), its
 	// record and its in-memory half with it (memo.go's carryMemo) — for a
 	// tree of files that are a function of what the new incarnation holds as

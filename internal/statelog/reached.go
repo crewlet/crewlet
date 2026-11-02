@@ -231,7 +231,7 @@ func (c *checkpoints) settle() ([]Record, error) {
 // failure — with every record pending, which the loop takes back, since the
 // goroutine that failed has exited and starts no other — or whether one
 // committed.
-func (c *checkpoints) outcome() (failed error, taken []Record, committed bool) {
+func (c *checkpoints) outcome() (taken []Record, committed bool, failed error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.failed != nil {
@@ -239,7 +239,7 @@ func (c *checkpoints) outcome() (failed error, taken []Record, committed bool) {
 		c.failed, c.pending = nil, nil
 	}
 	committed, c.committed = c.committed, false
-	return failed, taken, committed
+	return taken, committed, failed
 }
 
 // holds reports whether anything is pending or in flight here — whether the

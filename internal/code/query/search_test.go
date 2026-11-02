@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"slices"
@@ -26,10 +27,12 @@ func searchQ(repo string, s code.SearchQuery) code.GitQuery {
 // a server over it answers is read with git grep, by a run of its own.
 type grepOnly struct{ query.Cache }
 
-func (grepOnly) IndexTip(cache.Synced) (cache.IndexedTip, bool)      { return cache.IndexedTip{}, false }
-func (grepOnly) CodeIndex(cache.Synced) (*cache.CodeIndexView, bool) { return nil, false }
-func (grepOnly) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool)  { return nil, false }
-func (grepOnly) Memo(cache.Synced) *cache.MemoBatch                  { return nil }
+func (grepOnly) IndexTip(cache.Synced) (cache.IndexedTip, bool) { return cache.IndexedTip{}, false }
+func (grepOnly) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
+	return nil, false
+}
+func (grepOnly) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) { return nil, false }
+func (grepOnly) Memo(cache.Synced) *cache.MemoBatch                 { return nil }
 
 // building is a node's cache on one of the repository's index holders whose
 // indexer has not yet indexed the tip: it keeps no index, and says it holds
@@ -42,7 +45,9 @@ type building struct {
 func (b building) IndexTip(cache.Synced) (cache.IndexedTip, bool) {
 	return cache.IndexedTip{Holder: true, PassesOn: b.first, Files: -1}, true
 }
-func (building) CodeIndex(cache.Synced) (*cache.CodeIndexView, bool) { return nil, false }
+func (building) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
+	return nil, false
+}
 
 // searchFixture is a fixture whose default branch holds what a search reads
 // and passes over: matches in two directories, a line only Unicode's case

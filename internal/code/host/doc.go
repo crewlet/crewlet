@@ -367,7 +367,7 @@
 // # A check's box is admitted by its attempt's row
 //
 // A box running one ATTEMPT of one check of one commit reaches the same
-// routes with its CHECK'S credential: the Basic user name CheckUser and a
+// routes with its CHECK'S credential: the Basic user name code.CheckUser and a
 // token (CheckTokens, in BoxKeyDomain beside a run's and told from one by its
 // subject) naming the attempt's key and the repository's name its box was
 // given, valid for the check's timeout and code.CheckBoxGrace — a backstop,

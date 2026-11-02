@@ -418,7 +418,7 @@ func aCompactionDuringAFetch(t *testing.T, newFleet NewFleet) {
 	// 64 KiB, then nothing until the swap is done: a client this slow holds
 	// its git — and the copy it reads — for as long as the case waits.
 	first := make([]byte, 64<<10)
-	if _, err := io.ReadFull(resp.Body, first); err != nil {
+	if _, err = io.ReadFull(resp.Body, first); err != nil {
 		t.Fatalf("the fetch's first 64 KiB: %v", err)
 	}
 
@@ -434,7 +434,7 @@ func aCompactionDuringAFetch(t *testing.T, newFleet NewFleet) {
 	if next == old {
 		t.Fatalf("the sync after the compaction serves %s still, want the next directory", old)
 	}
-	if _, err := os.Stat(old); err != nil {
+	if _, err = os.Stat(old); err != nil {
 		t.Errorf("the directory the fetch reads is gone while it reads: %v", err)
 	}
 
@@ -598,7 +598,7 @@ func bulkPacks(c *Case, p *Person, repoID, tip string, n int) {
 			if err != nil {
 				return err
 			}
-			if err := code.StoreBundle(ctx, objects, path, ref, nil); err != nil {
+			if err = code.StoreBundle(ctx, objects, path, ref, nil); err != nil {
 				return err
 			}
 			res, err := c.Fleet.Propose(ctx, code.Proposal{

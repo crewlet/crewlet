@@ -899,7 +899,7 @@ func (c *Cache) wantsRun(e *entry) bool {
 // under the cache's lock as a pass reads every entry, rather than a walk of
 // the packs (incarnation.tail). e.mu is held.
 func tipWanted(inc *incarnation) bool {
-	return inc.tail.packs > 0 && !(inc.tipWritten && inc.tipOver == inc.tail.digest)
+	return inc.tail.packs > 0 && (!inc.tipWritten || inc.tipOver != inc.tail.digest)
 }
 
 // indexDue reports whether inc wants the maintainer's BITMAPPED index

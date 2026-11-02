@@ -133,9 +133,9 @@ func TestARunTokenIsNoCheckToken(t *testing.T) {
 		valid       bool
 	}{
 		{host.BoxUser, checks.Mint(check, time.Minute), false},
-		{host.CheckUser, boxes.Mint(run), false},
+		{code.CheckUser, boxes.Mint(run), false},
 		{host.BoxUser, boxes.Mint(run), true},
-		{host.CheckUser, checks.Mint(check, time.Minute), true},
+		{code.CheckUser, checks.Mint(check, time.Minute), true},
 	} {
 		if got := host.VerifyBox(boxes, checks, crossed.user, crossed.token); got != crossed.valid {
 			t.Errorf("a token presented as %q verifies %v, want %v", crossed.user, got, crossed.valid)
@@ -156,7 +156,7 @@ func TestARunTokenIsNoCheckToken(t *testing.T) {
 		name, user, token, says string
 	}{
 		{"a check's token as a run's", host.BoxUser, checkToken, "this run token is not valid here"},
-		{"a run's token as a check's", host.CheckUser, runToken, "this check token is not valid here"},
+		{"a run's token as a check's", code.CheckUser, runToken, "this check token is not valid here"},
 	} {
 		resp, answer := boxDo(t, c, 0, codetest.RepoName, boxFetchAdvert, crossed.user, crossed.token, "version=2", "")
 		if resp.StatusCode != http.StatusUnauthorized || !strings.Contains(answer, crossed.says) {
@@ -217,7 +217,7 @@ func TestTheCheckAPIAdmitsACheckTokenAsItsGitDoes(t *testing.T) {
 		}
 		return got.status, got.body
 	}
-	if status, body := ask(codetest.RepoName, host.CheckUser, token); status != http.StatusOK ||
+	if status, body := ask(codetest.RepoName, code.CheckUser, token); status != http.StatusOK ||
 		body != fmt.Sprintf("admitted %s of %s at %s, running", head, codetest.RepoName, statelog.ReadSession) {
 		t.Errorf("a check's token answered %d %q, want its attempt admitted at its session", status, body)
 	}
@@ -229,8 +229,8 @@ func TestTheCheckAPIAdmitsACheckTokenAsItsGitDoes(t *testing.T) {
 		{"no credential", codetest.RepoName, "", "", http.StatusUnauthorized, "as `check` with its check's token"},
 		{"a coding run's token", codetest.RepoName, host.BoxUser, c.Fleet.Runs().Token(live), http.StatusForbidden,
 			"answers a check's box"},
-		{"another repository", "other", host.CheckUser, token, http.StatusForbidden, "was given"},
-		{"a name no repository takes", "Web", host.CheckUser, token, http.StatusNotFound, "not found"},
+		{"another repository", "other", code.CheckUser, token, http.StatusForbidden, "was given"},
+		{"a name no repository takes", "Web", code.CheckUser, token, http.StatusNotFound, "not found"},
 	} {
 		if status, body := ask(row.repo, row.user, row.pass); status != row.status || !strings.Contains(body, row.says) {
 			t.Errorf("%s answered %d %q, want %d saying %q", row.name, status, short(body), row.status, row.says)
@@ -345,7 +345,7 @@ func TestACheckTokenAdmitsOneRepositoryToRead(t *testing.T) {
 	refused := func(name, repo, tail, protocol, token string, status int, reason, says string) {
 		t.Helper()
 		before := len(rec.seen("read:" + string(code.ReadCheckBox)))
-		resp, answer := boxDo(t, c, 0, repo, tail, host.CheckUser, token, protocol, "")
+		resp, answer := boxDo(t, c, 0, repo, tail, code.CheckUser, token, protocol, "")
 		if resp.StatusCode != status || !strings.Contains(answer, says) {
 			t.Errorf("%s answered %d %q, want %d saying %q", name, resp.StatusCode, short(answer), status, says)
 		}

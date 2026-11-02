@@ -816,7 +816,7 @@ func (c *Cache) placePack(e *entry, inc *incarnation, place packPlace, s *staged
 		c.hookInstall(strings.TrimPrefix(ext, "."), packDir)
 	}
 	e.mu.Lock()
-	c.counted(inc, place, s.p, !over, s.p.Size-was)
+	c.counted(inc, place, s.p.Objects, !over, s.p.Size-was)
 	if over || repairs {
 		repaired(inc)
 	}
@@ -828,15 +828,15 @@ func (c *Cache) placePack(e *entry, inc *incarnation, place packPlace, s *staged
 	return nil
 }
 
-// counted counts a pack placed at place into inc — added, a pack it did not
-// hold there before, or placed over files it held, which moves its bytes by
-// grew alone: the bytes on its disk, of them the dropping view's, and the
-// packs and objects an index covers, which a pack in the view is none of.
-// e.mu is held.
-func (c *Cache) counted(inc *incarnation, place packPlace, p code.PackRow, added bool, grew int64) {
+// counted counts a pack of objects objects placed at place into inc — added,
+// a pack it did not hold there before, or placed over files it held, which
+// moves its bytes by grew alone: the bytes on its disk, of them the dropping
+// view's, and the packs and objects an index covers, which a pack in the view
+// is none of. e.mu is held.
+func (c *Cache) counted(inc *incarnation, place packPlace, objects int64, added bool, grew int64) {
 	if added && place != placeDropping {
 		inc.packs++
-		inc.objects += p.Objects
+		inc.objects += objects
 	}
 	c.setSize(inc, inc.diskBytes+grew)
 	if place == placeDropping {
@@ -863,7 +863,7 @@ func (c *Cache) installHanded(e *entry, inc *incarnation, place packPlace, p cod
 		return false
 	}
 	e.mu.Lock()
-	c.counted(inc, place, p, true, p.Size)
+	c.counted(inc, place, p.Objects, true, p.Size)
 	e.mu.Unlock()
 	c.vouchPack(e, inc, place, p.GitChecksum)
 	return true

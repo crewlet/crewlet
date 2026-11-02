@@ -147,7 +147,7 @@ type CodeSurface interface {
 
 	// VerifyBox is whether token is the credential user presents on a box
 	// route, signed by this fleet — a coding run's token under host.BoxUser,
-	// a check's under host.CheckUser (host.VerifyBox) — by the engine's own
+	// a check's under code.CheckUser (host.VerifyBox) — by the engine's own
 	// tokens over the keyring Tier A derives on EVERY node whatever the
 	// company runs: so it answers where GitRoutes finds no code host, which
 	// is the one place it is asked — a box route there tells a box why only

@@ -1,7 +1,6 @@
 package checkrun
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -20,12 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// CheckUser is the Basic user name a check's box presents its token under:
-// the code host's own (internal/code/host's CheckUser), spelled here because
-// this package imports nothing of the host. The box's git is told it by the
-// credential helper sandbox.BoxGit writes.
-const CheckUser = "check"
-
 // LostPolls is how many polls in a row a box may fail to answer before its
 // run is ended `errored box_failed`: FOUR, a minute at CheckPoll — a box's
 // control plane down for one poll is a blip a check should outlast, and one
@@ -38,6 +31,22 @@ const LostPolls = 4
 // the runner-up, both seconds long. Past it the attempt stays running and the
 // home's sweep ends it runner_lost; SweepPolls counts this patience in.
 const FinishPolls = 2
+
+// EndPolls is how many polls long a run's ending may be read from its box —
+// its exit status, its reports, its summary, its tail and its kept log —
+// before whatever is still unread is gone without and the ending recorded:
+// FOUR, a minute at CheckPoll. JUDGMENT: the most an ending reads is two
+// reports of sandbox.MaxFileBytes and a log of code.MaxCheckLogBytes, 128 MiB,
+// which a minute carries at about 2 MB/s from a remote box into the object
+// store, the log streamed from one into the other as it arrives; a run on a
+// box slower than that ends without what is still unread — its log, or a
+// report — its summary saying so, rather than holding its attempt past what
+// the home's sweep waits for. Unbounded, a stalled upload held a run's ending
+// until the sweep took its runner for lost and queued the attempt again while
+// its first box still ran. SweepPolls counts this in, and it sits well inside
+// code.CheckBoxGrace (ten minutes), which the box's TTL outlives its last
+// poll by, so the box is never reclaimed under its ending's reads.
+const EndPolls = 4
 
 // The files of a run, in a directory of the box's home — never inside the
 // checkout, which the check's own command may clean: its output, its exit
@@ -69,8 +78,8 @@ const logContentType = "text/plain; charset=utf-8"
 // cell: given back the moment the box is closed, before the ending is
 // recorded, since what it bounds is boxes.
 func (r *Runner) run(c code.RunnableCheck, cell config.Placement, claimed time.Time, slot *RemoteSlot) {
-	defer slot.Release()
 	ctx := r.life
+	defer slot.Release(ctx)
 	if r.o.Faults != nil {
 		if err := r.o.Faults.Hit(ctx, codefault.CheckAfterClaim, 0); err != nil {
 			return
@@ -78,7 +87,7 @@ func (r *Runner) run(c code.RunnableCheck, cell config.Placement, claimed time.T
 	}
 	a := &attempt{r: r, c: c, cell: cell, claimed: claimed}
 	f, opID := a.run(ctx)
-	slot.Release()
+	slot.Release(ctx)
 	if f == nil {
 		return
 	}
@@ -212,7 +221,7 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *cod
 		return sandbox.Spec{}, nil, a.ended(code.CheckStateErrored, code.CheckReasonBoxFailed, nil,
 			"no credential could be minted for the check's box")
 	}
-	git, err := sandbox.BoxGit{Base: r.o.GitBase, User: CheckUser, Token: token}.Env(env)
+	git, err := sandbox.BoxGit{Base: r.o.GitBase, User: code.CheckUser, Token: token}.Env(env)
 	if err != nil {
 		return sandbox.Spec{}, nil, a.ended(code.CheckStateErrored, code.CheckReasonSetupFailed, nil, err.Error())
 	}
@@ -241,7 +250,7 @@ func (a *attempt) checkEnv() map[string]string {
 		"CREWLET_CHECK_SHA":     a.c.OID,
 		"CREWLET_CHECK_NAME":    a.c.Name,
 		"CREWLET_CHECK_ATTEMPT": strconv.Itoa(a.c.Attempt),
-		"CREWLET_CHECK_API":     a.r.apiBase + "/" + a.c.Repo,
+		"CREWLET_CHECK_API":     a.r.o.CodeBase + "/" + a.c.Repo,
 		"CREWLET_CHECK_SUMMARY": summaryFile,
 	}
 	if a.c.Base != "" {
@@ -349,7 +358,10 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*code.Check
 			return a.ended(code.CheckStateErrored, code.CheckReasonBoxFailed, nil,
 				"its command's process went with the engine that watched it, so it left no exit status"), opID
 		case state != sandbox.JobRunning:
-			return a.exited(ctx, box, began), opID
+			read, cancel := a.reading(ctx)
+			f := a.exited(read, box, began)
+			cancel()
+			return f, opID
 		}
 		lost = 0
 		if !now.Before(deadline) {
@@ -357,7 +369,9 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*code.Check
 			// read, its log kept, before its box is closed.
 			f := a.ended(code.CheckStateFailed, code.CheckReasonTimedOut, nil,
 				fmt.Sprintf("ran past its %s timeout and was stopped", a.timeout))
-			a.failed(ctx, box, f, nil)
+			read, cancel := a.reading(ctx)
+			a.failed(read, box, f, nil)
+			cancel()
 			return f, opID
 		}
 		// THE KEEPALIVE: the box's TTL held at the check's own end and the
@@ -367,6 +381,14 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*code.Check
 			r.log.WarnContext(ctx, "code_check_keepalive_failed", "box", box.ID(), "error", err.Error())
 		}
 	}
+}
+
+// reading is the context a run's ending is read from its box under: ctx
+// bounded by the timing's End (EndPolls polls in production), so a stalled
+// read or upload costs the ending what it had not read yet, never its
+// attempt.
+func (a *attempt) reading(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, a.r.timing.End)
 }
 
 // exited is the ending of a command that has ended — passed for status 0,
@@ -417,6 +439,15 @@ func (a *attempt) failed(ctx context.Context, box sandbox.Sandbox, f *code.Check
 // sandbox.MaxFileBytes, into one list of failures — nil where the check names
 // neither, or neither was written — and says, for each one named and not
 // read, why.
+//
+// STREAMED from the box into its parser (Sandbox.OpenFile), never read whole:
+// what a report costs the runner is the failures an ending keeps and the one
+// element in hand (junit.go, sarif.go), whatever its size — read whole, each
+// failed run held up to two reports of sandbox.MaxFileBytes at once, every
+// ending on a node beside the others. The cap still holds: a report past it is
+// refused as a whole read refuses one, since a report cut short reads as a
+// finished one, and the failures named before the cap are kept as a report
+// that stops being XML or JSON keeps them.
 func (a *attempt) reports(ctx context.Context, box sandbox.Sandbox) (*failures, []string) {
 	def := a.c.Def
 	if def.Report.JUnit == "" && def.Report.SARIF == "" {
@@ -424,27 +455,75 @@ func (a *attempt) reports(ctx context.Context, box sandbox.Sandbox) (*failures, 
 	}
 	fs := newFailures()
 	var unread []string
-	read := func(named, file, kind string, parse func([]byte) error) {
+	read := func(named, file, kind string, parse func(io.Reader) error) {
 		if named == "" {
 			return
 		}
-		raw, err := box.ReadFile(ctx, file)
-		switch {
-		case err != nil:
+		rc, err := box.OpenFile(ctx, file)
+		if err != nil {
 			unread = append(unread, fmt.Sprintf("its %s report %s could not be read: %v", kind, named, err))
-		case len(raw) == 0:
+			return
+		}
+		defer func() { _ = rc.Close() }()
+		in := &capped{r: rc, left: sandbox.MaxFileBytes}
+		err = parse(in)
+		switch {
+		case errors.Is(in.err, errReportTooLarge):
+			unread = append(unread, fmt.Sprintf("its %s report %s is past %d MiB, the most a report is read "+
+				"to, and a report cut short would read as a finished one", kind, named, sandbox.MaxFileBytes>>20))
+		case in.err != nil:
+			unread = append(unread, fmt.Sprintf("its %s report %s could not be read: %v", kind, named, in.err))
+		case in.read == 0:
 			unread = append(unread, fmt.Sprintf("it wrote no %s report at %s", kind, named))
-		default:
-			if err := parse(raw); err != nil {
-				unread = append(unread, fmt.Sprintf("its %s report %s: %v", kind, named, err))
-			}
+		case err != nil:
+			unread = append(unread, fmt.Sprintf("its %s report %s: %v", kind, named, err))
 		}
 	}
-	read(def.Report.JUnit, junitFile, "JUnit", func(raw []byte) error { return readJUnit(bytes.NewReader(raw), fs) })
-	read(def.Report.SARIF, sarifFile, "SARIF", func(raw []byte) error {
-		return readSARIF(bytes.NewReader(raw), a.c.Repo, fs)
-	})
+	read(def.Report.JUnit, junitFile, "JUnit", func(r io.Reader) error { return readJUnit(r, fs) })
+	read(def.Report.SARIF, sarifFile, "SARIF", func(r io.Reader) error { return readSARIF(r, a.c.Repo, fs) })
 	return fs, unread
+}
+
+// errReportTooLarge is a report's stream past sandbox.MaxFileBytes.
+var errReportTooLarge = errors.New("checkrun: the report is past the most a report is read to")
+
+// capped is a report's stream held to the most a report is read to: past
+// left bytes it fails with errReportTooLarge, as a whole read refuses such a
+// file. It remembers how much it read and the error it failed with, so the
+// report's reader is told apart from its parser: a stream the box broke, or a
+// report too large, is no report the check wrote wrong.
+type capped struct {
+	r    io.Reader
+	left int64
+	read int64
+	err  error
+}
+
+func (c *capped) Read(p []byte) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
+	if c.left <= 0 {
+		// One byte past the cap is read to tell a file of exactly the cap
+		// from one past it, as sandbox's readCapped does.
+		var one [1]byte
+		switch n, err := io.ReadFull(c.r, one[:]); {
+		case n > 0:
+			c.err = errReportTooLarge
+		case errors.Is(err, io.EOF):
+			return 0, io.EOF
+		default:
+			c.err = err
+		}
+		return 0, c.err
+	}
+	n, err := c.r.Read(p[:min(int64(len(p)), c.left)])
+	c.left -= int64(n)
+	c.read += int64(n)
+	if err != nil && !errors.Is(err, io.EOF) {
+		c.err = err
+	}
+	return n, err
 }
 
 // summary is the ending's summary: the file the command wrote to
@@ -493,30 +572,23 @@ func (a *attempt) tail(ctx context.Context, box sandbox.Sandbox) string {
 // keepLog stores the last MaxCheckLogBytes of the run's output as one object
 // through the runner's Logs, answering what the ending names it by — nil and
 // "" for a run with no output or a runner with no store, nil and why for one
-// that could not be stored. STREAMED from the box, its earlier bytes read and
-// dropped, so a run's output of any size costs the runner a buffer's memory,
-// never the output's.
+// that could not be stored. STREAMED from the box's end (Sandbox.OpenTail)
+// into the store as it arrives, so a run's output of any size costs the
+// runner a buffer's memory and the kept bytes' transfer, never the output's:
+// opened from its start, its earlier bytes read and dropped, a check that
+// wrote gigabytes paid every one of them from a remote box to keep 64 MiB.
 func (a *attempt) keepLog(ctx context.Context, box sandbox.Sandbox) (*code.CheckLog, string) {
 	r := a.r
 	if r.o.Logs == nil {
 		return nil, ""
 	}
-	end, err := box.ReadTail(ctx, outputFile, 0)
-	if err != nil {
-		return nil, "its log could not be read: " + err.Error()
-	}
-	if end.Size == 0 {
-		return nil, ""
-	}
-	rc, err := box.OpenFile(ctx, outputFile)
+	rc, size, err := box.OpenTail(ctx, outputFile, code.MaxCheckLogBytes)
 	if err != nil {
 		return nil, "its log could not be read: " + err.Error()
 	}
 	defer func() { _ = rc.Close() }()
-	if skip := end.Size - code.MaxCheckLogBytes; skip > 0 {
-		if _, err := io.CopyN(io.Discard, rc, skip); err != nil {
-			return nil, "its log could not be read: " + err.Error()
-		}
+	if size == 0 {
+		return nil, ""
 	}
 	o, err := r.o.Logs.Put(ctx, io.LimitReader(rc, code.MaxCheckLogBytes), code.MaxCheckLogBytes,
 		objstore.PutMeta{ContentType: logContentType})
@@ -556,7 +628,7 @@ func (r *Runner) finish(ctx context.Context, f code.CheckFinished, opID string) 
 				"attempt", f.Attempt, "error", err.Error())
 			return
 		}
-		why := ""
+		var why string
 		if err != nil {
 			why = err.Error()
 		} else {

@@ -2,6 +2,7 @@ package codetest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -478,7 +479,7 @@ func pausedWrite(c *Case, w code.EngineWrite) (code.EngineWriteResult, func(), e
 	select {
 	case <-reached:
 	case a := <-done:
-		return a.res, func() {}, fmt.Errorf("the write ended before its upload did: %+v %v", a.res, a.err)
+		return a.res, func() {}, errors.Join(fmt.Errorf("the write ended before its upload did: %+v", a.res), a.err)
 	}
 	resume := c.Fleet.PauseApplier(c.T, c.Fleet.DataNodes()[0])
 	close(held)

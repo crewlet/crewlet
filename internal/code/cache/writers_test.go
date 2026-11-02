@@ -519,8 +519,9 @@ var cacheWriters = []writerRow{
 			"inputs less what it kept and less the rest, in the expunge's own SCRATCH, whose objects/pack holds " +
 			"links of the inputs beside a store of every other live pack (cache.StageExpunge); and its rescue's " +
 			"`--revs --local`, in a scratch holding links of the dropping packs and leaning on the incarnation " +
-			"(cache.StageRescue) — never an incarnation: the kept packs and the rescue enter the cache only by " +
-			"Adopt, the dropping packs only by a round's install, once their rows have applied", nil},
+			"serving its sync (cache.StageRescue) — never an incarnation: the kept packs and the rescue enter the " +
+			"cache only by Adopt, the dropping packs only by AdoptDropping on the node that built them or by a " +
+			"round's install, once their rows have applied", nil},
 	{"internal/code/compact/expunge.go", kindRuntime,
 		"packOut hands the expunge's pack-objects Cmds — this file's literals above — to the admission's " +
 			"reserved slot (cache.Admission.Run), unchanged, and reads back the packs they printed", nil},
@@ -602,6 +603,16 @@ var cacheWriters = []writerRow{
 		"an import's read of the branch its source's HEAD names — `ls-remote --symref <url> HEAD`, in no " +
 			"repository — whose one argument not spelled as a literal is the source's URL, which the one outbound " +
 			"dial (gitproc.Cmd.Remote) holds to https, where no --upload-pack runs anything", nil},
+	{"internal/code/mirror/push.go", kindGit + " ls-remote",
+		"a push mirror's read of the refs the other host holds — `ls-remote --refs <url>`, in no repository — " +
+			"whose one argument not spelled as a literal is the other host's URL, which the one outbound dial " +
+			"(gitproc.Cmd.Remote) holds to https, where no --upload-pack runs anything", nil},
+	{"internal/code/mirror/push.go", kindGit + " push",
+		"a push mirror's push of the copy's green tips to the other host — `push --force --porcelain " +
+			"--no-verify` of whole object ids onto refs, or a ref's deletion — from the attempt's own SCRATCH " +
+			"(cache.NewScratch) " +
+			"leaning on the copy, never from the copy itself, which only a sync writes: it writes the other host, " +
+			"whose URL the one outbound dial (gitproc.Cmd.Remote) holds to https, and nothing of the cache's", nil},
 	{"internal/code/query/diff.go", kindGit + " diff-tree",
 		"a seat's read of a diff or an interdiff — its stat's raw records, with their counts where the stat " +
 			"admits every file, and the raw record of the one file a patch names — whose only arguments not " +

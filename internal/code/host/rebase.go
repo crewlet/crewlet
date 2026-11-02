@@ -199,7 +199,7 @@ func (b *building) toReplay(ctx context.Context, named, target string) ([]replay
 	if err == nil {
 		err = lines.Close()
 	}
-	if err := wr.failed(ctx, "listing of the commits to rebase", res, err); err != nil {
+	if err = wr.failed(ctx, "listing of the commits to rebase", res, err); err != nil {
 		return nil, code.EngineWriteResult{}, true, err
 	}
 	switch n := len(out); {
@@ -242,6 +242,7 @@ func (r *rebasing) replay(ctx context.Context, named string, cm replayed, h *com
 		return code.EngineWriteResult{}, true, err
 	}
 	if !m.clean {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := b.conflicted(ctx, m, fmt.Sprintf("%s's commit %s (%d of %d) does not apply cleanly on %s: %d "+
 			"paths conflict, and the rebase stops there with nothing stored; resolve them in a checkout of the repository "+
 			"("+toolname.CodeCheckout+")", named, shortID(cm.id), i+1, n, shortID(r.tip), len(m.conflicts)+m.omitted))

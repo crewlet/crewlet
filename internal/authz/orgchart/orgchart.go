@@ -275,11 +275,7 @@ func carries(role *org.Role, grant authz.SeatGrant) bool {
 	if role == nil || role.IsHuman() {
 		return false
 	}
-	switch grant {
-	case authz.SeatGrantHealth:
-		return role.HealthTools
-	}
-	return false
+	return grant == authz.SeatGrantHealth && role.HealthTools
 }
 
 // MemberOf reports whether actor's seat sits in the unit key names or in any

@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/caveat/caveattest"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -104,11 +105,39 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 		map[string]any{"path": "reports/q3.md"})
 
 	// THE COMPANY'S CODE: each write landed on a scratch repository, with the
-	// arguments the hold walk lands it with ([holdingCall]).
+	// arguments the hold walk lands it with ([holdingCall]). A PERSON'S VERB
+	// (its authority row human-only: a report of a CI run, an import, a purge)
+	// is refused to every seat by the table before anything is read, so it is
+	// landed the way a person reaches it — the operator catalogue, called by a
+	// person bound to a seat with a fresh proof — on the repository the
+	// person-only cases land on.
+	personArgs := map[string]map[string]any{
+		builtin.CodeReportCheckTool: {"repo": "site", "sha": mainOID, "name": "lint", "status": "failed",
+			"summary": "2 lint errors", "url": "https://ci.example.com/runs/1"},
+		builtin.CodeImportRepoTool: {"name": "web", "url": "https://git.example.com/acme/web.git",
+			"credential": "GITHUB_TOKEN", "owner": map[string]any{"kind": "unit", "ref": "eng"}},
+		builtin.CodePurgeUnreachableTool: {"repo": "site"},
+	}
 	for _, name := range builtin.CodeWrites() {
+		if human, _ := authz.HumanOnlyOf(authz.Action(name)); human {
+			deps := writeDeps(newCodeHost(), &codeWrites{})
+			deps.Actor, deps.Placement = builtin.PrincipalActor, purgePlacement{}
+			tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
+				name)
+			args, ok := personArgs[name]
+			if !ok {
+				t.Fatalf("%s is a person's verb with no arguments here: add its call", name)
+			}
+			res, err := tool.CallForTurn(asProvenPerson(), nil, args)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			out[name] = res
+			continue
+		}
 		args, _ := holdingCall(name)
 		reg := codeRegistry(t, writeDeps(scratchHost(time.Hour), &codeWrites{}))
-		out[name] = callWrite(t, everyGrant(), reg, writerTurn(t), name, args)
+		out[name] = callWrite(everyGrant(), t, reg, writerTurn(t), name, args)
 	}
 	// AND THE PERSON'S OWN CODE MARK, which only the operator catalogue serves.
 	marks := codeDeps(newCodeHost())

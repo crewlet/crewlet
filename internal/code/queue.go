@@ -890,7 +890,7 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 	case p.Land != nil:
 		return decideLand(ctx, tx, *p.Land, repo, seats, limits, d)
 	case p.Green != nil:
-		return decideGreen(ctx, tx, *p.Green, repo, d)
+		return decideGreen(ctx, tx, *p.Green, d)
 	case p.Broken != nil:
 		return decideBroken(ctx, tx, *p.Broken, repo, seats, d)
 	}
@@ -993,6 +993,7 @@ func decideDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 	// record goes on to its routing below: a person's dequeue tells the
 	// change's authors and its enqueuer as a seat's does.
 	if kind != PartyPerson {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		why, err := whyNoDequeue(ctx, tx, p, entry, repo, seats)
 		if err != nil {
 			return queueDecision{}, err
@@ -1124,8 +1125,9 @@ func (c *Committer) queueWrite(repoID string, q *queued) {
 	out, answerErr := c.queueAnswer(ctx, p, last, decided, res, err)
 	q.answer <- answered{queue: out, err: answerErr}
 	// AN EJECTION IS ANNOUNCED once its own record applied here, never for a
-	// retry the ledger collapsed onto it — once its answer is handed back, so
-	// its asker waits on none of it.
+	// retry the ledger collapsed onto it — handed to the announcer once its
+	// answer is handed back, so neither its asker nor the repository's next
+	// write waits on any of it (announce.go).
 	if p.Eject != nil && answerErr == nil && out.Outcome == statelog.OutcomeApplied && !res.Collapsed {
 		c.announceEjected(*p.Eject, out.Position)
 	}
@@ -1369,6 +1371,65 @@ func placeIn(ctx context.Context, tx *sql.Tx, e queueEntry) (int, error) {
 	return before + 1, nil
 }
 
+// placesIn is the place of each of entries — live entries, on any targets — in
+// its target's queue, from 1, by entry id: ONE WALK of code_queue_live_idx a
+// (repository, target) they are queued on, up to the latest of them there,
+// each entry's place its rank among the live entries the walk reads. A walk
+// reads at most the target's live entries — MaxQueueEntries waiting, and the
+// candidates' entries testing — however many of entries are queued there,
+// where a count a place ([placeIn]) reads the entries before each one again.
+func placesIn(ctx context.Context, tx *sql.Tx, entries []queueEntry) (map[string]int, error) {
+	places := make(map[string]int, len(entries))
+	latest := map[[2]string]int64{}
+	var targets [][2]string
+	for _, e := range entries {
+		key := [2]string{e.RepoID, e.TargetRef}
+		held, seen := latest[key]
+		if !seen {
+			targets = append(targets, key)
+		}
+		latest[key] = max(held, e.Seq)
+	}
+	for _, key := range targets {
+		seqs, err := liveSeqsIn(ctx, tx, key[0], key[1], latest[key])
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			if e.RepoID != key[0] || e.TargetRef != key[1] {
+				continue
+			}
+			at, found := slices.BinarySearch(seqs, e.Seq)
+			if !found {
+				return nil, fmt.Errorf("code: entry %s is live in %s's queue and not among the live entries "+
+					"the same snapshot holds there", e.EntryID, e.TargetRef)
+			}
+			places[e.EntryID] = at + 1
+		}
+	}
+	return places, nil
+}
+
+// liveSeqsIn is the seq of every live entry of target's queue on repoID up to
+// through, in queue order: one walk of code_queue_live_idx's range, which
+// holds them in that order.
+func liveSeqsIn(ctx context.Context, tx *sql.Tx, repoID, target string, through int64) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx, liveSeqsSQL, repoID, target, through)
+	if err != nil {
+		return nil, fmt.Errorf("code: read %s's live queue entries on %s: %w", target, repoID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var seqs []int64
+	for rows.Next() {
+		var seq int64
+		if err := rows.Scan(&seq); err != nil {
+			return nil, fmt.Errorf("code: read %s's live queue entries on %s: %w", target, repoID, err)
+		}
+		seqs = append(seqs, seq)
+	}
+	return seqs, rows.Err()
+}
+
 // changeOwnerIn is changeID's owner, by handle and kind.
 func changeOwnerIn(ctx context.Context, tx *sql.Tx, changeID string) (string, PartyKind, error) {
 	row, found, err := changeRowIn(ctx, tx, changeID)
@@ -1380,10 +1441,11 @@ func changeOwnerIn(ctx context.Context, tx *sql.Tx, changeID string) (string, Pa
 
 // The queue's reads, each registered in plan_test.go: one entry by its key; the
 // live entries of a list of changes, driven from the list, one seek of
-// code_queue_change_idx a change; a target's waiting entries counted, and the
-// live ones before an entry counted, each over code_queue_live_idx with its
-// partial predicate repeated verbatim — the pinned planner takes a partial
-// index only for a statement that implies its predicate in its own words.
+// code_queue_change_idx a change; a target's waiting entries counted, the live
+// ones before an entry counted, and a target's live entries up to a seq read in
+// queue order, each over code_queue_live_idx with its partial predicate
+// repeated verbatim — the pinned planner takes a partial index only for a
+// statement that implies its predicate in its own words.
 const (
 	// entryColumns is every column of an entry [scanEntry] reads, in its
 	// order.
@@ -1403,4 +1465,6 @@ const (
 		WHERE repo_id = ? AND target_ref = ? AND state IN ('waiting', 'testing') AND state = 'waiting' LIMIT ?)`
 	placeSQL = `SELECT COUNT(*) FROM code_queue INDEXED BY code_queue_live_idx
 		WHERE repo_id = ? AND target_ref = ? AND state IN ('waiting', 'testing') AND seq < ?`
+	liveSeqsSQL = `SELECT seq FROM code_queue INDEXED BY code_queue_live_idx
+		WHERE repo_id = ? AND target_ref = ? AND state IN ('waiting', 'testing') AND seq <= ? ORDER BY seq`
 )

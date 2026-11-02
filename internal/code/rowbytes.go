@@ -441,10 +441,10 @@ func (c ImportCandidate) encodedBytes() int {
 }
 
 // encodedBytes is the length of the source's JSON encoding.
-func (s ImportSource) encodedBytes() int {
-	n := 2 + field("url", stringBytes(s.URL), true)
-	if s.Credential != "" {
-		n += field("credential", stringBytes(s.Credential), false)
+func (i ImportSource) encodedBytes() int {
+	n := 2 + field("url", stringBytes(i.URL), true)
+	if i.Credential != "" {
+		n += field("credential", stringBytes(i.Credential), false)
 	}
 	return n
 }
@@ -469,21 +469,21 @@ func (c MirrorCandidate) encodedBytes() int {
 }
 
 // encodedBytes is the length of the source's JSON encoding.
-func (s MirrorSource) encodedBytes() int {
-	n := 2 + field("url", stringBytes(s.URL), true)
-	if s.Credential != "" {
-		n += field("credential", stringBytes(s.Credential), false)
+func (m MirrorSource) encodedBytes() int {
+	n := 2 + field("url", stringBytes(m.URL), true)
+	if m.Credential != "" {
+		n += field("credential", stringBytes(m.Credential), false)
 	}
 	return n
 }
 
 // encodedBytes is the length of the target's JSON encoding.
-func (t MirrorTarget) encodedBytes() int {
-	n := 2 + field("url", stringBytes(t.URL), true) +
-		field("credential", stringBytes(t.Credential), false) +
-		field("as", stringBytes(t.As), false)
-	if len(t.Refs) > 0 {
-		n += field("refs", stringsBytes(t.Refs), false)
+func (m MirrorTarget) encodedBytes() int {
+	n := 2 + field("url", stringBytes(m.URL), true) +
+		field("credential", stringBytes(m.Credential), false) +
+		field("as", stringBytes(m.As), false)
+	if len(m.Refs) > 0 {
+		n += field("refs", stringsBytes(m.Refs), false)
 	}
 	return n
 }

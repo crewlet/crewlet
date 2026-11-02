@@ -637,7 +637,7 @@ func (c *Cache) mapRun(e *entry, inc *incarnation, r provenanceRun) (*mappedRun,
 		return nil, fmt.Errorf("%w: %s's run %d is %d bytes, and its record says %d", errRunMalformed, e.id, r.N,
 			info.Size(), r.Bytes)
 	}
-	if err := c.maps.reserve(); err != nil {
+	if err = c.maps.reserve(); err != nil {
 		return nil, fmt.Errorf("cache: mapping %s's run %d: %w", e.id, r.N, err)
 	}
 	data, err := unix.Mmap(int(f.Fd()), 0, int(info.Size()), unix.PROT_READ, unix.MAP_SHARED)
@@ -1131,7 +1131,7 @@ func (c *Cache) placeRun(inc *incarnation, s *stagedRun, n uint64) (provenanceRu
 	made := false
 	switch info, err := os.Lstat(dir); {
 	case errors.Is(err, fs.ErrNotExist):
-		if err := os.Mkdir(dir, hostbox.DirMode); err != nil {
+		if err = os.Mkdir(dir, hostbox.DirMode); err != nil {
 			return provenanceRun{}, removeStaged(s.path, fmt.Errorf("cache: making %s: %w", dir, err))
 		}
 		made = true

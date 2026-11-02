@@ -178,7 +178,7 @@ func node(t *testing.T, backend *coordmem.Backend, id string, meta map[string]an
 
 // callTool calls a registered or catalogued tool as ctx's principal, in turn
 // where it is a seat tool.
-func callTool(t *testing.T, ctx context.Context, tool tools.Callable, args map[string]any) tools.Result {
+func callTool(ctx context.Context, t *testing.T, tool tools.Callable, args map[string]any) tools.Result {
 	t.Helper()
 	var (
 		got tools.Result
@@ -262,7 +262,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 	_, chart := healthChart(t)
 	catalogue := healthTools(builtin.HealthDeps{Leases: backend, Self: "node-a"}, chart)
 
-	answer := healthAnswer(t, callTool(t, asAdmin(), catalogue[builtin.FleetHealthTool], nil))
+	answer := healthAnswer(t, callTool(asAdmin(), t, catalogue[builtin.FleetHealthTool], nil))
 	if got := keysOf(t, answer); !slices.Equal(got, []string{"nodes", "this_node"}) {
 		t.Errorf("fleet_health answered the keys %v, want only nodes and this_node", got)
 	}
@@ -330,7 +330,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 	}}
 	repos := &grantHost{repos: map[string]code.RepoRef{"site": {ID: siteID, Name: "site"}}}
 	catalogue = healthTools(builtin.HealthDeps{Status: asker, Code: healthCode(repos, chart)}, chart)
-	status2 := healthAnswer(t, callTool(t, asAdmin(), catalogue[builtin.CodeStatusTool], nil))
+	status2 := healthAnswer(t, callTool(asAdmin(), t, catalogue[builtin.CodeStatusTool], nil))
 	if got := keysOf(t, status2); !slices.Equal(got, []string{"coverage", "hot", "nodes"}) {
 		t.Errorf("code_status answered the keys %v, want only coverage, hot and nodes", got)
 	}
@@ -430,7 +430,7 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 			}
 		}
 		entry, _ := snapshot.Lookup(builtin.FleetHealthTool)
-		if got := callTool(t, c.ctx, entry.Tool, nil); got.Failed == c.admitted {
+		if got := callTool(c.ctx, t, entry.Tool, nil); got.Failed == c.admitted {
 			t.Errorf("%s: fleet_health answered failed=%v (%s), want admitted %v", c.who,
 				got.Failed, got.Output, c.admitted)
 		}
@@ -509,14 +509,14 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 		}
 		return out
 	}
-	seat := healthAnswer(t, callTool(t, asSeat("sre"), tool, nil))
+	seat := healthAnswer(t, callTool(asSeat("sre"), t, tool, nil))
 	if got, want := hotOf(seat), []string{"node-a/" + siteID, "node-b/" + siteID}; !slices.Equal(got, want) {
 		t.Errorf("the seat's hot list = %v, want only what its grant reads: %v", got, want)
 	}
 	if got := seat["withheld"]; got != float64(3) {
 		t.Errorf("the seat's answer withheld %v, want 3 (refused, gone, renamed)", got)
 	}
-	person := healthAnswer(t, callTool(t, asAdmin(), tool, nil))
+	person := healthAnswer(t, callTool(asAdmin(), t, tool, nil))
 	if got := hotOf(person); len(got) != 5 {
 		t.Errorf("a person's hot list = %v, want all five entries", got)
 	}
@@ -524,7 +524,7 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 		t.Errorf("a person's answer withheld %v, want nothing left out", person["withheld"])
 	}
 
-	refused := callTool(t, asSeat("sre"), tool, map[string]any{"repo": "vault"})
+	refused := callTool(asSeat("sre"), t, tool, map[string]any{"repo": "vault"})
 	if !refused.Failed || !strings.Contains(refused.Output, "vault") {
 		t.Errorf("a seat asking about a repository it may not read was answered %q, want refused",
 			refused.Output)
@@ -532,7 +532,7 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 	if slices.Contains(asker.asked, vaultID) {
 		t.Errorf("the git nodes were asked about a repository the seat was refused: %v", asker.asked)
 	}
-	one := healthAnswer(t, callTool(t, asSeat("sre"), tool, map[string]any{"repo": "site"}))
+	one := healthAnswer(t, callTool(asSeat("sre"), t, tool, map[string]any{"repo": "site"}))
 	if one["id"] != siteID || one["repo"] != "site" {
 		t.Errorf("the one-repository answer names %v (%v), want site (%s)", one["repo"], one["id"], siteID)
 	}

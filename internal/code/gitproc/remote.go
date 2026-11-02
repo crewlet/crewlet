@@ -633,10 +633,12 @@ func (l *lineRedactor) flush() error {
 }
 
 // redactDamage is damage with its message redacted as a remote run's lines
-// are: known's secrets taken out (nil: none), then internal/redact's pass.
+// are: known's secrets taken out (nil: none), then internal/redact's pass —
+// the *Damage itself wherever it sits in the chain, and answered alone, since
+// a wrap around it would carry its text unredacted.
 func redactDamage(damage error, known *strings.Replacer) error {
-	d, ok := damage.(*Damage)
-	if !ok {
+	var d *Damage
+	if !errors.As(damage, &d) {
 		return damage
 	}
 	redacted := *d

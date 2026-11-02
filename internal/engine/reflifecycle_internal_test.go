@@ -319,6 +319,7 @@ func TestABranchAParkedRunOnlyReadIsHeld(t *testing.T) {
 		held, err := lc.liveHolds(ctx, keys)
 		if !read {
 			read = true
+			//nolint:contextcheck // The read is the turn's, another party's, under the test's context: never the pass's ctx.
 			got, callErr := resolve.CallForTurn(t.Context(), turn, map[string]any{"repo": lc.web.Name,
 				"ref": "seats/qa/fixtures"})
 			if callErr != nil || got.Failed {

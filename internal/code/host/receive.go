@@ -391,7 +391,7 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 	}
 	// A BOX'S RUN HOLDS EVERY SEAT BRANCH IT PUSHES, on the run's row, before
 	// anything of the push is received, stored or proposed (holdRefs).
-	if err := adm.holdRefs(ctx, s.o.Boxes.Runs, sec.Commands, pre); err != nil {
+	if err = adm.holdRefs(ctx, s.o.Boxes.Runs, sec.Commands, pre); err != nil {
 		s.boxHoldFailed(w, r, adm, err)
 		return received{answered: true}
 	}

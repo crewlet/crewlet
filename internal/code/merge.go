@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -492,6 +491,7 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 	d := mergeDecision{version: repo.version}
 	switch {
 	case !found || repo.status == RepoStatusDeleted || repo.status == RepoStatusPurging:
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		detail, err := goneDetail(ctx, tx, m.RepoID, repo, found, retention)
 		if err != nil {
 			return mergeDecision{}, err
@@ -737,7 +737,8 @@ func (c *Committer) mergeWrite(repoID string, q *queued) {
 	out, landed, answerErr := c.mergeAnswer(ctx, p, last, decided, res, err)
 	q.answer <- answered{merge: out, err: answerErr}
 	if landed != nil {
-		c.announce(landed)
+		c.announceLater(announcement{kind: "change_merged", repoID: landed.RepoID, id: landed.ChangeID,
+			publish: func(ctx context.Context, when time.Time) { c.announceMerged(ctx, when, landed) }})
 	}
 }
 
@@ -748,6 +749,7 @@ func (c *Committer) mergeAnswer(ctx context.Context, p MergeProposal, last merge
 	res statelog.Result, err error) (MergeResult, *types.ChangeMerged, error) {
 
 	if err != nil {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		out, err := c.refusedMerge(ctx, p, err)
 		return out, nil, err
 	}
@@ -819,23 +821,13 @@ func (c *Committer) appliedMerge(ctx context.Context, p MergeProposal, res state
 		MergedBy: row.mergedBy, MergedByKind: string(row.mergedByKind), Override: row.overrideReason}, nil
 }
 
-// announce publishes a merge's event on this node's event stream, bounded by
-// [checkEventBudget] under the committer's own lifetime: a stream that does
-// not take it is logged, and the change's row still says it merged. Called
-// once the merge's answer is handed back, so its asker waits on none of it;
-// the repository's next batch waits on it at most that budget, as a checks
-// writer's next write of the repository waits on its own announcement — a
-// merge is one record a change, and a stream that cannot take an event in
-// five seconds is one the code log behind it is no faster on.
-func (c *Committer) announce(e *types.ChangeMerged) {
-	if c.events == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.life, checkEventBudget)
-	defer cancel()
-	ev := events.New(*e, events.TraceContext{})
-	ev.Source = c.nodeID
-	if err := c.events.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+// announceMerged publishes a merge's event on this node's event stream,
+// stamped when, under ctx — the announcer's one [checkEventBudget]: a stream
+// that does not take it is logged, and the change's row still says it merged.
+// The announcer runs it once the merge's answer is handed back, so neither its
+// asker nor the repository's next write waits on any of it (announce.go).
+func (c *Committer) announceMerged(ctx context.Context, when time.Time, e *types.ChangeMerged) {
+	if err := announceOn(ctx, c.events, c.nodeID, when, *e); err != nil {
 		c.log.WarnContext(ctx, "change_merged_unpublished", "repo", e.RepoID, "change", e.ChangeID,
 			"error", err.Error(), "detail", "the activity feed and the event log do not hold this merge; the "+
 				"change's row and its push row on the code log still do")

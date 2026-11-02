@@ -227,7 +227,7 @@ func (wr *writing) headOf(ctx context.Context, branch string) (string, error) {
 	if err == nil {
 		err = lines.Close()
 	}
-	if err := wr.failed(ctx, "read of the branch", res, err); err != nil {
+	if err = wr.failed(ctx, "read of the branch", res, err); err != nil {
 		return "", err
 	}
 	if head != "" && kind != "commit" {
@@ -267,7 +267,7 @@ func (wr *writing) lookup(ctx context.Context, q lookups, what string, deadline 
 	if err == nil {
 		err = recs.close()
 	}
-	if err := wr.failed(ctx, what, res, err); err != nil {
+	if err = wr.failed(ctx, what, res, err); err != nil {
 		return nil, err
 	}
 	if len(out) != n {
@@ -554,7 +554,7 @@ func (b *building) ancestor(ctx context.Context, a, of string) (bool, error) {
 		Dir: b.sc.Dir, Alternate: b.sc.Alternate, Args: []string{"merge-base", "--is-ancestor", a, of},
 		Class: gitproc.ClassRead, Answers: []int{1}, Deadline: left,
 	})
-	if err := b.wr.failed(ctx, "ancestry of the merge", res, err); err != nil {
+	if err = b.wr.failed(ctx, "ancestry of the merge", res, err); err != nil {
 		return false, err
 	}
 	return res.Exit == 0, nil
@@ -602,13 +602,13 @@ func (b *building) commitPlan(ctx context.Context, j judgement, files []code.Fil
 	case refusal != "":
 		return "", wr.changeRefused(refusal, detail), true, nil
 	}
-	if err := b.stagePuts(p); err != nil {
+	if err = b.stagePuts(p); err != nil {
 		return "", code.EngineWriteResult{}, true, err
 	}
-	if res, done, err := b.blobLimit(p); done || err != nil {
+	if res, done, err := b.blobLimit(p); done || err != nil { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		return "", res, true, err
 	}
-	if err := b.hash(ctx, p); err != nil {
+	if err = b.hash(ctx, p); err != nil {
 		return "", code.EngineWriteResult{}, true, err
 	}
 	root, err := b.trees(ctx, p)
@@ -754,7 +754,7 @@ func (b *building) contents(ctx context.Context, j judgement, p *plan) (*commitH
 	if err == nil {
 		err = reader.Close()
 	}
-	if err := b.wr.failed(ctx, "read of the files and directories the change touches", res, err); err != nil {
+	if err = b.wr.failed(ctx, "read of the files and directories the change touches", res, err); err != nil {
 		return nil, "", "", err
 	}
 	for _, e := range p.edits {
@@ -841,7 +841,7 @@ func (b *building) hash(ctx context.Context, p *plan) error {
 	if err == nil {
 		err = lines.Close()
 	}
-	if err := b.wr.failed(ctx, "hash of the change's new files", res, err); err != nil {
+	if err = b.wr.failed(ctx, "hash of the change's new files", res, err); err != nil {
 		return err
 	}
 	if len(ids) != len(blobs) {
@@ -887,6 +887,7 @@ func (b *building) level(ctx context.Context, p *plan, level []string, ids map[s
 	bw := bufio.NewWriterSize(f, gitproc.CopyBuffer)
 	var sent []string
 	for _, d := range level {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		n, err := writeDir(bw, p.dirs[d], ids)
 		if err != nil {
 			_ = f.Close()
@@ -936,7 +937,7 @@ func (b *building) level(ctx context.Context, p *plan, level []string, ids map[s
 	if err == nil {
 		err = lines.Close()
 	}
-	if err := b.wr.failed(ctx, "write of the change's directories", res, err); err != nil {
+	if err = b.wr.failed(ctx, "write of the change's directories", res, err); err != nil {
 		return err
 	}
 	if len(answered) != len(sent) {
@@ -1049,7 +1050,7 @@ func (b *building) commitOf(ctx context.Context, tree string, parents []string, 
 		return "", fmt.Errorf("host: a commit of %d parents, and an engine write makes one of two at most",
 			len(parents))
 	}
-	if err := wr.failed(ctx, "commit of the change", res, err); err != nil {
+	if err = wr.failed(ctx, "commit of the change", res, err); err != nil {
 		return "", err
 	}
 	commit := strings.TrimSpace(string(res.Stdout))
@@ -1133,6 +1134,7 @@ func (b *building) pick(ctx context.Context) (string, code.EngineWriteResult, bo
 		return "", code.EngineWriteResult{}, true, err
 	}
 	if !m.clean {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := b.conflicted(ctx, m, fmt.Sprintf("%s does not apply cleanly on %s: %d paths conflict; resolve "+
 			"them in a checkout of the repository ("+toolname.CodeCheckout+"), or write the result yourself", shortID(w.Commit),
 			shortID(w.ExpectedHead), len(m.conflicts)+m.omitted))
@@ -1455,7 +1457,7 @@ func (b *building) merge(ctx context.Context, base, ours, theirs string) (*merge
 	if err == nil {
 		err = recs.close()
 	}
-	if err := b.wr.failed(ctx, "merge of the change", res, err); err != nil {
+	if err = b.wr.failed(ctx, "merge of the change", res, err); err != nil {
 		return nil, err
 	}
 	if m.tree == "" {
@@ -1526,7 +1528,7 @@ func (b *building) conflicted(ctx context.Context, m *mergeOutput, detail string
 		if err == nil {
 			err = reader.Close()
 		}
-		if err := wr.failed(ctx, "read of the conflicted files", run, err); err != nil {
+		if err = wr.failed(ctx, "read of the conflicted files", run, err); err != nil {
 			return code.EngineWriteResult{}, err
 		}
 	}
@@ -1625,7 +1627,7 @@ func (b *building) packWithin(ctx context.Context, bound int64, tooLarge func(si
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
-	if err := wr.failed(ctx, "pack of the change's objects", res, err); err != nil {
+	if err = wr.failed(ctx, "pack of the change's objects", res, err); err != nil {
 		return code.EngineWriteResult{}, true, err
 	}
 	info, err := os.Stat(packPath)
@@ -1652,7 +1654,7 @@ func (b *building) packWithin(ctx context.Context, bound int64, tooLarge func(si
 		wr.charge(res)
 		return wr.changeRefused(code.WriteRejectedObject, fsckWords(res)), true, nil
 	}
-	if err := wr.failed(ctx, "check of the change's objects", res, err); err != nil {
+	if err = wr.failed(ctx, "check of the change's objects", res, err); err != nil {
 		return code.EngineWriteResult{}, true, err
 	}
 	return code.EngineWriteResult{}, false, nil

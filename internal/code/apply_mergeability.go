@@ -55,6 +55,7 @@ func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Merge
 		m.Ready, m.WaitsPerson = false, false
 	}
 	if m.Refresh {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, refreshMergeabilitySQL, m.ChangeVersion, m.ReadinessVersion,
 			m.ChecksPosition.Packed(), m.ChartEpoch, m.Ready, m.WaitsPerson, m.ChangeID, m.Revision, m.TargetRef,
 			m.TargetPosition.Packed())

@@ -126,10 +126,10 @@ func ReadersOf(ctx context.Context, rows RepoRowReader, readers RepoReaders, ask
 	}
 	// THE RANGE AND THE CURSOR ARE THE CALLER'S, refused by name before
 	// anything is read.
-	if err := usage.ValidRange(from, to); err != nil {
+	if err = usage.ValidRange(from, to); err != nil {
 		return ReadersAnswer{}, err
 	}
-	if _, err := usage.ParseCursor(q.Cursor); err != nil {
+	if _, err = usage.ParseCursor(q.Cursor); err != nil {
 		return ReadersAnswer{}, err
 	}
 	answer, err := rows.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Asker: asker, Repo: q.Repo, Fresh: seatRead})

@@ -81,6 +81,8 @@ func newBrokerAuth(cfg Config) (*brokerAuth, error) {
 // clustered member's loopback client listener.
 type Listener string
 
+// The listeners a refusal can name: a member's route port, its leaf listener,
+// and a client connection.
 const (
 	ListenerRoute  Listener = "route"
 	ListenerLeaf   Listener = "leaf"
@@ -98,6 +100,8 @@ func (l Listener) Valid() bool { return slices.Contains(listenerKinds, l) }
 // material does not produce.
 type Presented string
 
+// What a refusal can say was presented: nothing, a credential no key of the
+// ring derives, and a known key with a proof its material does not produce.
 const (
 	PresentedNone    Presented = "none"
 	PresentedUnknown Presented = "unknown"
@@ -329,8 +333,9 @@ func routeTagShaped(username string) string {
 		return ""
 	}
 	for _, r := range username {
-		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' ||
-			r == '-' || r == '_') {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
 			return ""
 		}
 	}

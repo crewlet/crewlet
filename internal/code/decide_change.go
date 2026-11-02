@@ -574,8 +574,9 @@ type changeDecision struct {
 	unchanged *changeRow
 	payload   any
 	version   int64
-	// notices is how many handles the record tells: the notice rows its
-	// apply writes beside the change's ([withinChange]).
+	// notices is the rows the record's apply writes for whom it tells —
+	// a notice a handle and the change's count of them ([noticeWrites]) —
+	// beside the change's own ([withinChange]).
 	notices int
 }
 
@@ -615,7 +616,7 @@ func routeChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRep
 	if err != nil {
 		return changeDecision{}, err
 	}
-	d.payload, d.notices = withRouting(d.payload, r), heardCount(r)
+	d.payload, d.notices = withRouting(d.payload, r), noticeWrites(r)
 	return d, nil
 }
 
@@ -662,6 +663,7 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	d := changeDecision{version: repo.version}
 	switch {
 	case !found || repo.status == RepoStatusDeleted || repo.status == RepoStatusPurging:
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		detail, err := goneDetail(ctx, tx, repoID, repo, found, retention)
 		if err != nil {
 			return changeDecision{}, err
@@ -1079,13 +1081,13 @@ func (c *Committer) change(repoID string, q *queued) {
 	})
 	out, answerErr := c.changeAnswer(ctx, p, last, decided, res, err)
 	q.answer <- answered{change: out, err: answerErr}
-	// AN OPEN THIS CALL LANDED is announced once its answer is handed back
-	// (announce.go): never one answered unchanged, from no record, nor a
-	// retry the ledger collapsed onto an earlier landing, whose call
-	// announced it.
+	// AN OPEN THIS CALL LANDED is handed to the announcer once its answer is
+	// handed back (announce.go): never one answered unchanged, from no
+	// record, nor a retry the ledger collapsed onto an earlier landing, whose
+	// call announced it.
 	if p.Open != nil && answerErr == nil && out.Outcome == statelog.OutcomeApplied && !out.Unchanged &&
 		!res.Collapsed {
-		c.announceOpened(repoID, []opening{{changeID: out.ChangeID}})
+		c.announceOpenings(repoID, []opening{{changeID: out.ChangeID}})
 	}
 }
 

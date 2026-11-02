@@ -39,6 +39,13 @@ func BeginStop(l *Loop) {
 	l.watches = make([]Watching, len(nudgeFilters))
 }
 
+// ChangeWork is l's change work's turn of repoID, its rows read at floor: what
+// a nudge or a pass schedules for the changes worker, run on the case's own
+// goroutine.
+func ChangeWork(ctx context.Context, l *Loop, repoID string, floor statelog.Position) error {
+	return l.changes.Work(ctx, repoID, floor)
+}
+
 // CheckWork is l's check work's turn of repoID, its rows read at floor: what
 // a nudge or a pass schedules for the checks worker, run on the case's own
 // goroutine.

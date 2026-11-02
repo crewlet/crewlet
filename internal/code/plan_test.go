@@ -356,6 +356,8 @@ func registeredStatements() map[string]statement {
 		"path owners":         {pathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"path owners of":      {pathOwnersOfSQL, []any{`["repo-1","repo-2"]`}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"clear path owners":   {clearPathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
+		"owners digest":       {ownersDigestSQL, []any{strings.Repeat("a", 64), "repo-1"}, []string{repoKey + " (id=?)"}},
+		"human paths digest":  {humanPathsDigestSQL, []any{strings.Repeat("a", 64), "repo-1"}, []string{repoKey + " (id=?)"}},
 		"delete repo":         {deleteRepoSQL, []any{1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
@@ -385,6 +387,7 @@ func registeredStatements() map[string]statement {
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		"repo row":            {repoRowSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo remotes":        {remotesSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"repo remote state":   {remotesShownSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"protections":         {protectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"push rules":          {pushRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"gates":               {gatesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
@@ -564,6 +567,8 @@ func registeredStatements() map[string]statement {
 			[]string{factsKey + " (change_id=?)"}},
 		"purge a cut change's facts": {purgeCutFactsSQL, []any{"repo-1-change-000001", 3},
 			[]string{factsKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"count a cut change's notices again": {uncountNoticesSQL, []any{PurgePartRows, "repo-1-change-000001"},
+			[]string{changeKey + " (id=?)"}},
 		"weigh a cut conversation again": {unweighConversationSQL, []any{1024, "repo-1-change-000001"},
 			[]string{conversationKey + " (change_id=?)"}},
 		"purge all reviewers": {purgeAllReviewersSQL, []any{"repo-1"},
@@ -719,7 +724,8 @@ func registeredStatements() map[string]statement {
 		"reopened asks": {reopenedAsksSQL, []any{"repo-1", MaxAskSettlesPerRead},
 			[]string{"code_changes_open_idx (repo_id=?)", conversationKey + " (change_id=?)"}},
 		"due repository": {dueRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems, int64(5000)},
+		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems, int64(5000),
+			strings.Repeat("a", 64), strings.Repeat("b", 64)},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
 				factsKey + " (change_id=? AND n=?)", mergeabilityKey + " (change_id=?)",
 				conversationKey + " (change_id=?)",
@@ -770,25 +776,31 @@ func registeredStatements() map[string]statement {
 		// THE MERGE GATE (gatejudge.go), beside the readiness rows and the
 		// repositories' rules ("protections of"): the head revisions' facts a
 		// gate reaches, driven from the list of (change, revision) pairs, one
-		// seek of their key a pair; and every attempt of a required check on
+		// seek of their key a pair; what a list of repositories' matches are
+		// held to, one seek of each one's key, its list's members a set; and
+		// every attempt of a required check on
 		// a head commit checked for the change's target, driven from the list
 		// of (repository, commit, target, check) keys, one seek of the checks'
 		// key a key.
 		"gate heads": {gateHeadsSQL, []any{`[["repo-1-change-000001",3],["repo-1-change-000002",1]]`},
 			[]string{"SCAN json_each AS j", factsKey + " (change_id=? AND n=?)"}},
+		"gate match digests": {matchDigestsOfSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		// THE MERGE QUEUE (queue.go, apply_queue.go, queueread.go): one entry
 		// by its key; the live entries of a list of changes, driven from the
 		// list, one seek of code_queue_change_idx a change, and which of a
 		// list are queued, the push apply's; a target's waiting entries and
-		// the live ones before an entry, counted over code_queue_live_idx; an
-		// entry ended by its key, a change's live one by
+		// the live ones before an entry, counted over code_queue_live_idx, and
+		// its live entries up to a seq, read there in its order — a page's
+		// places, a walk a target; an entry ended by its key, a change's live one by
 		// code_queue_change_idx, and a list's, driven from the list; a
 		// target's live entries after a seq, a repository's from the top and
 		// after a place, and every repository's the same way, each in its
 		// index's order; the active repositories holding one, grouped on the
 		// index's leading column; the merge rate's enqueues of a target,
 		// its live entries over code_queue_live_idx and the repository's
-		// entries ended since over code_queue_ended_idx; a target's trains by
+		// entries ended since over code_queue_ended_idx; a repository's
+		// ejections and a target's, each by the index partial on ejections
+		// that leads with what it names; a target's trains by
 		// code_candidates_train_idx; its landings above a place and its
 		// green row by their keys, and a repository's green rows; and a purge
 		// part's bounded deletes and the purge's whole ones, each by its
@@ -803,6 +815,8 @@ func registeredStatements() map[string]statement {
 			[]string{"code_queue_live_idx (repo_id=? AND target_ref=?)"}},
 		"an entry's place": {placeSQL, []any{"repo-1", "refs/heads/main", 1000},
 			[]string{"code_queue_live_idx (repo_id=? AND target_ref=? AND seq<?)"}},
+		"a target's live entries up to a seq": {liveSeqsSQL, []any{"repo-1", "refs/heads/main", 1000},
+			[]string{"code_queue_live_idx (repo_id=? AND target_ref=? AND seq<=?)"}},
 		"end an entry": {endEntrySQL, []any{"dequeued", 1, 1000, "asked", "repo-1", "entry-1"},
 			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
 		"end a change's entry": {endChangeEntrySQL, []any{"dequeued", 1, 1000, "closed", "repo-1-change-000001"},
@@ -825,8 +839,10 @@ func registeredStatements() map[string]statement {
 			MergeRateScan}, []string{"code_queue_live_idx (repo_id=? AND target_ref=?)"}},
 		"a repository's entries ended since": {enqueuedEndedSQL, []any{"repo-1", 1000, "refs/heads/main", 1000,
 			MergeRateScan}, []string{"code_queue_ended_idx (repo_id=? AND ended_at>=?)"}},
-		"a repository's ejections": {ejectedSQL, []any{"repo-1", 1000, "", "", MaxEjectionsShown},
-			[]string{"code_queue_ended_idx (repo_id=? AND ended_at>=?)"}},
+		"a repository's ejections": {ejectedOfRepoSQL, []any{"repo-1", 1000, MaxEjectionsShown},
+			[]string{"code_queue_ejected_idx (repo_id=? AND ended_at>=?)"}},
+		"a target's ejections": {ejectedOfTargetSQL, []any{"repo-1", "refs/heads/main", 1000, MaxEjectionsShown},
+			[]string{"code_queue_target_ejected_idx (repo_id=? AND target_ref=? AND ended_at>=?)"}},
 		"a target's trains": {trainsSQL, []any{"repo-1", "refs/heads/main"},
 			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=?)"}},
 		"a target's landings": {landingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, 200},
@@ -928,12 +944,15 @@ func registeredStatements() map[string]statement {
 			[]any{`[["repo-1-change-000001",3000],["repo-1-change-000002",9223372036854775807]]`},
 			[]string{"SCAN json_each AS j", blockersKey + " (change_id=? AND position<=?)"}},
 		// A REVISION'S FACTS: one revision's by their key, a decide's and an
-		// apply's; whether a change holds any, by the key's prefix; who
+		// apply's, and what its repository's row says they are matched
+		// against now, by its key; whether a change holds any, by the key's
+		// prefix; who
 		// stands on request_changes before a revision, a range of the
 		// participants' key; and the reviewers a change asks now, a range of
 		// the reviewers' key.
 		"facts of a revision": {factsSQL, []any{"repo-1-change-000001", 1},
 			[]string{factsKey + " (change_id=? AND n=?)"}},
+		"what facts are matched against": {matchDigestsSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"whether a change holds facts": {anyFactsSQL, []any{"repo-1-change-000001"},
 			[]string{factsKey + " (change_id=?)"}},
 		"changes requested before": {changesRequestedBeforeSQL, []any{"repo-1-change-000001", 3, MaxReReviewers},
@@ -950,15 +969,18 @@ func registeredStatements() map[string]statement {
 			[]string{participantKey + " (change_id=?)"}},
 		"thread participants": {threadParticipantsSQL, []any{"repo-1-change-000001", "comment-1",
 			threadParticipantRows}, []string{"code_comments_thread_idx (change_id=? AND thread_id=?)"}},
-		// WHOM A RECORD REACHED (apply_notices.go, noticesweep.go): the notices of a list
-		// of changes a purge removes, read and deleted by the change index
-		// one seek an element; a kind's sweep, a range of the swept index;
-		// and the changes a repository still holds, for its final purge.
-		"notices of changes": {noticesOfChangesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
-			[]string{"SCAN json_each AS j", "code_notifications_change_idx (change_id=?)"}},
+		// WHOM A RECORD REACHED (apply_notices.go, noticesweep.go): a
+		// change's count of its notices, by its key; the notices of a list
+		// of changes a purge removes, deleted by the change index one seek
+		// an element, and the oldest of the change a part cuts, a range of
+		// it; a kind's sweep, a range of the swept index; and the changes a
+		// repository still holds, for its final purge.
+		"count notices": {countNoticesSQL, []any{3, "repo-1-change-000001"}, []string{changeKey + " (id=?)"}},
 		"remove notices": {removeNoticesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", "code_notifications_change_idx (change_id=?)",
 				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"remove a cut change's notices": {removeCutNoticesSQL, []any{"repo-1-change-000001", PurgePartRows},
+			[]string{"code_notifications_change_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"sweep notices": {sweepNoticesSQL, []any{string(PartyAgent), 3000},
 			[]string{"code_notifications_swept_idx (recipient_kind=? AND created_at<?)"}},
 		"purged changes": {purgedChangesSQL, []any{"repo-1"}, []string{"code_changes_number_idx (repo_id=?)"}},
@@ -1077,8 +1099,8 @@ func registeredStatements() map[string]statement {
 			"agent"}, []string{"SCAN json_each AS j", "code_findings_raiser_idx (change_id=?)"}},
 		"a person's code marks": {personMarksSQL, []any{"founder"},
 			[]string{"sqlite_autoindex_code_person_marks_1 (handle=?)"}},
-		"where a person's notice sits": {noticePositionSQL, []any{"record-1", "founder"},
-			[]string{"sqlite_autoindex_code_notifications_1 (record_id=? AND recipient=?)"}},
+		"where a person's notice sits": {noticePositionSQL, []any{"record-1", "repo-1-change-000001", "founder"},
+			[]string{"sqlite_autoindex_code_notifications_1 (record_id=? AND change_id=? AND recipient=?)"}},
 		"whom a change reached": {changeNoticesSQL, []any{"repo-1-change-000001"},
 			[]string{"code_notifications_change_idx (change_id=?)"}},
 		"whom a change reached after": {changeNoticesAfterSQL, []any{"repo-1-change-000001", 3000},
@@ -1194,21 +1216,30 @@ func registeredStatements() map[string]statement {
 		// the latest attempt of one check of one commit for one target, the
 		// key's prefix read backwards; a commit's attempts for every target
 		// after a (target, name, attempt) on the key, and for one target —
-		// a change's — after a (name, attempt) on the key; a
+		// a change's — after a (name, attempt) on the key, and the same two
+		// keeping each check's latest attempt, each row tested by one seek of
+		// its check's later attempts on the key; a
 		// repository's newest ended first, from the top or after a place, on
-		// code_checks_finished_idx; the window's above its moment, on
-		// code_checks_recent_idx; and the home's due work — the due
+		// code_checks_finished_idx; the window's between its start and its
+		// end, or a cursor's place, on code_checks_recent_idx; and the home's
+		// due work — the due
 		// listing's statements, a head tested by its dispatch's key and its
 		// target's, and a target's reading by its key.
-		"check listed":          {checkRowSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
-		"check whole":           {checkWholeSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
-		"check log":             {checkLogSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
-		"latest check":          {latestCheckSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit"}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=?)"}},
-		"checks of a commit":    {checksOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref>=?)"}},
-		"checks of a target":    {checksOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name>=?)"}},
+		"check listed":       {checkRowSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"check whole":        {checkWholeSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"check log":          {checkLogSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"latest check":       {latestCheckSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit"}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=?)"}},
+		"checks of a commit": {checksOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref>=?)"}},
+		"checks of a target": {checksOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name>=?)"}},
+		"latest of a commit": {latestOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 64},
+			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref>=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt>?)"}},
+		"latest of a target": {latestOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 64},
+			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name>=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt>?)"}},
 		"checks of a repo":      {checksOfRepoSQL, []any{"repo-1", 50}, []string{checksEndedKey + " (repo_id=?)"}},
 		"checks of a repo next": {checksOfRepoAfterSQL, []any{"repo-1", 1000, oid("c"), "refs/heads/main", "unit", 1, 50}, []string{checksEndedKey + " (repo_id=? AND finished_at<=?)"}},
-		"checks window":         {checksWindowSQL, []any{1, 50}, []string{"code_checks_recent_idx (finished_at>=?)"}},
+		"checks window":         {checksWindowSQL, []any{1, 1000, 50}, []string{"code_checks_recent_idx (finished_at<? AND finished_at>=?)"}},
 		"checks window next":    {checksWindowAfterSQL, []any{1, 1000, "repo-1", oid("c"), "refs/heads/main", "unit", 1, 50}, []string{"code_checks_recent_idx (finished_at<=? AND finished_at>=?)"}},
 		// THE HOME'S CHECK WORK (checksread.go, checksdispatch.go): a head's
 		// dispatch by the two rows' keys, its requeue by the partial index
@@ -1228,11 +1259,12 @@ func registeredStatements() map[string]statement {
 				repoKey + " (id=?)"}},
 		"checks backlog": {checksBacklogSQL, []any{1000, BacklogScan + 1}, []string{"code_checks_overdue_idx (overdue_at>? AND overdue_at<?)", repoKey + " (id=?)"}},
 		// A RUNNER'S CLAIM WALK and A HOME'S SWEEP (checksread.go): the
-		// queued attempts oldest queued first after a place, each tested and
-		// named by its repository's key; the repositories holding a running
-		// attempt after an id; and one repository's running attempts.
-		"queued checks": {queuedChecksSQL, []any{0, "", "", "", "", 0, MaxSnapshotItems},
-			[]string{"code_checks_queued_idx (queued_at>=?)", repoKey + " (id=?)"}},
+		// queued attempts naming one cell oldest queued first after a place,
+		// each tested and named by its repository's key; the repositories
+		// holding a running attempt after an id; and one repository's running
+		// attempts.
+		"queued checks": {queuedChecksSQL, []any{"container", 0, "", "", "", "", 0, MaxSnapshotItems},
+			[]string{"code_checks_queued_idx (run_in=? AND queued_at>=?)", repoKey + " (id=?)"}},
 		"running check repositories": {runningReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"code_checks_running_idx (repo_id>?)"}},
 		"running checks": {runningChecksSQL, []any{"repo-1", MaxSnapshotItems},

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -43,6 +44,29 @@ import (
 // announcement, as the event log resolves a participant's handle. A person is
 // no seat and has no day: a party of kind person is named by no agent id, and
 // a handle the chart no longer holds by none either.
+//
+// # The committer's announcements wait on none of its writes
+//
+// A committer's goroutine for a repository is that repository's ONLY writer on
+// this node: every push batch, open, merge, queue write, compaction and
+// expunge record of it is decided there, one after another. An announcement
+// is a read of this node's rows and a publish the stream acknowledges — with
+// the event store's own write of it, on the node file every turn's events
+// contend for, inside that publish — and made there, each was a wait of up to
+// [checkEventBudget] in front of the repository's next push. So a committer
+// hands each landed record's announcement to ONE announcer of its own
+// ([Committer.announcer]) and goes straight on: the announcer reads and
+// publishes them in the order they landed, each under a budget of its own.
+// What it holds is bounded ([CommitterAnnouncements]); an announcement past
+// that is dropped and logged, never waited for, which costs what a publish the
+// stream refused costs — the day one count, the feed one line — and leaves the
+// rows on the code log whole. Its events carry the instant it was handed over,
+// as the inline publish's did, so a backlog that crosses midnight still counts
+// each on the day its record landed. One announcer, rather than one a
+// repository, keeps every event of a repository in its landing order; and an
+// announcement is a record's — an opening, a merge, a queue's ejections — not
+// a push's: a change opens and merges once, so they come at the rate changes
+// do, which one publish at a time keeps up with.
 
 // opening is one change a write opened, to announce: its id, and whether a
 // push's options opened it.
@@ -145,34 +169,84 @@ func reviewEvent(ctx context.Context, db store.ReplicatedReader, agentIDs func(s
 	return e, found, err
 }
 
-// announceOn publishes one event on a node's event stream, as nodeID, bounded
-// by [checkEventBudget] under ctx — the announcing writer's own lifetime.
+// announceOn publishes one event on a node's event stream, as nodeID, stamped
+// when — the instant its record's answer was handed back — bounded by
+// [checkEventBudget] under ctx.
 func announceOn[T any, P events.PayloadPtr[T]](ctx context.Context, pub EventPublisher, nodeID string,
-	data T) error {
+	when time.Time, data T) error {
 
 	ev := events.New[T, P](data, events.TraceContext{})
-	ev.Source = nodeID
+	ev.Source, ev.Timestamp = nodeID, when
 	return pub.Publish(ctx, topics.Event(ev.Type), ev)
 }
 
 // unannounced logs an announcement that did not reach the event stream: the
-// seat's day it counts on is one short, and the rows on the code log still
-// hold what it announced.
+// day of usage that counts it is one short, and the rows on the code log
+// still hold what it announced.
 func unannounced(ctx context.Context, log *slog.Logger, kind, repoID, id string, err error) {
 	log.WarnContext(ctx, kind+"_unpublished", "repo", repoID, "id", id, "error", err.Error(),
-		"detail", "this node's day of usage does not count it and the activity feed does not show it; its "+
-			"rows on the code log still hold it")
+		"detail", "this node's event log and activity feed do not hold it, nor does a day of usage that "+
+			"counts it; its rows on the code log still hold it")
+}
+
+// announcement is one landed record's events, handed to the committer's
+// announcer ([Committer.announceLater]): publish reads what the record names
+// from this node's rows and publishes its events, each stamped when, under
+// ctx — one [checkEventBudget] for the read and every publish; kind, repoID
+// and id name it in the log if it is dropped.
+type announcement struct {
+	kind, repoID, id string
+	when             time.Time
+	publish          func(ctx context.Context, when time.Time)
+}
+
+// errAnnouncerFull is why an announcement is dropped: the announcer holds as
+// many unpublished as it may.
+var errAnnouncerFull = errors.New("the announcer holds as many records' announcements not yet published as it " +
+	"may (CommitterAnnouncements): the event stream is not keeping up with this node's landings")
+
+// announceLater hands a to the announcer and returns at once: a full queue
+// drops it, logged, rather than hold the repository's next write behind the
+// stream. Called only from a repository's goroutine, which Stop waits for
+// before it closes the queue — so no send meets a closed one.
+func (c *Committer) announceLater(a announcement) {
+	if c.announcements == nil {
+		return
+	}
+	a.when = time.Now().UTC()
+	select {
+	case c.announcements <- a:
+	default:
+		unannounced(c.life, c.log, a.kind, a.repoID, a.id, errAnnouncerFull)
+	}
+}
+
+// announcer publishes every announcement handed to it, in the order they
+// landed, each under one [checkEventBudget] of life — the committer's own
+// lifetime — until Stop closes its queue and it has drained it: every
+// publish refused at once, logged, should Stop's own wait end first and the
+// lifetime with it.
+func (c *Committer) announcer(life context.Context) {
+	defer close(c.announcerDone)
+	for a := range c.announcements {
+		ctx, cancel := context.WithTimeout(life, checkEventBudget)
+		a.publish(ctx, a.when)
+		cancel()
+	}
+}
+
+// announceOpenings hands the announcer the changes a write of repoID opened.
+func (c *Committer) announceOpenings(repoID string, opened []opening) {
+	if len(opened) == 0 {
+		return
+	}
+	c.announceLater(announcement{kind: "change_opened", repoID: repoID, id: opened[0].changeID,
+		publish: func(ctx context.Context, when time.Time) { c.announceOpened(ctx, when, repoID, opened) }})
 }
 
 // announceOpened announces the changes a write of repoID opened, read from
-// this node's rows, under the committer's own lifetime and one
-// [checkEventBudget] for the read and every publish.
-func (c *Committer) announceOpened(repoID string, opened []opening) {
-	if c.events == nil || len(opened) == 0 {
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.life, checkEventBudget)
-	defer cancel()
+// this node's rows, under ctx.
+func (c *Committer) announceOpened(ctx context.Context, when time.Time, repoID string, opened []opening) {
 	evs, err := openedEvents(ctx, c.db, c.agentIDs, repoID, opened)
 	if err != nil {
 		unannounced(ctx, c.log, "change_opened", repoID, opened[0].changeID,
@@ -180,7 +254,7 @@ func (c *Committer) announceOpened(repoID string, opened []opening) {
 		return
 	}
 	for _, e := range evs {
-		if err := announceOn(ctx, c.events, c.nodeID, e); err != nil {
+		if err := announceOn(ctx, c.events, c.nodeID, when, e); err != nil {
 			unannounced(ctx, c.log, "change_opened", repoID, e.ChangeID, err)
 		}
 	}
@@ -200,7 +274,7 @@ func (w *ChangeWriter) announceReview(cw ConversationWrite) {
 	case err != nil:
 		unannounced(ctx, w.log, "review_submitted", cw.RepoID(), reviewID, fmt.Errorf("read the review: %w", err))
 	case found:
-		if err := announceOn(ctx, w.events, w.nodeID, e); err != nil {
+		if err := announceOn(ctx, w.events, w.nodeID, time.Now().UTC(), e); err != nil {
 			unannounced(ctx, w.log, "review_submitted", cw.RepoID(), reviewID, err)
 		}
 	}

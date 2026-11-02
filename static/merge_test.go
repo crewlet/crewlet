@@ -76,7 +76,7 @@ func TestGitWillNotTextMergeTheEmbeddedTrees(t *testing.T) {
 		"static/dashboard/assets/index-0000000000.js",
 		"static/dashboard/assets/index-0000000000.css",
 		"static/dashboard/assets/react-0000000000.js",
-		"static/dashboard/protocol.js",
+		"static/protocol/protocol.js",
 		"static/dashboard/fonts/geist-latin.woff2",
 		"static/artifacts/runtime/1.0.0/runtime.js",
 		"static/artifacts/runtime/1.0.0/THIRD_PARTY_NOTICES.txt",
@@ -87,8 +87,8 @@ func TestGitWillNotTextMergeTheEmbeddedTrees(t *testing.T) {
 		if got := mergeAttr(t, git, root, path); got != "unset" {
 			t.Errorf("git check-attr merge %s = %q, want \"unset\"\n"+
 				"a text merge of this path writes conflict markers into a "+
-				"generated file; `static/dashboard/** -merge` and "+
-				"`static/artifacts/** -merge` in .gitattributes are what stop it, "+
+				"generated file; `static/dashboard/** -merge`, `static/artifacts/** -merge` "+
+				"and `static/protocol/** -merge` in .gitattributes are what stop it, "+
 				"and the only correct resolution is `make dashboard`", path, got)
 		}
 	}

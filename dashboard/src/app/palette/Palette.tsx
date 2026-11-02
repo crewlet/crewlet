@@ -98,6 +98,10 @@ import { useAssistantControl } from "../assistant/control.ts";
 import { capsOf, keyRow, matchesRow } from "../keymap.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { DOCLET_SEARCH_BACKEND, useSearchQuery } from "~/lib/useSearchQuery.ts";
+import { useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { useQuiet } from "~/lib/useQuiet.ts";
+import { repoPath } from "~/lib/code.ts";
+import { groupHits, hitAt } from "~/lib/codeSearch.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
 import { previewPalette, useViewerPrefs } from "~/lib/prefs.ts";
@@ -142,6 +146,8 @@ import {
   SOURCE_CHIPS,
   ARTIFACT_HITS,
   artifactHits,
+  CODE_HITS,
+  CODE_SEARCH_MIN,
   SEARCH_MIN,
   TASK_HITS,
   colleagueSendable,
@@ -341,6 +347,22 @@ export function CommandPalette({
     { scope: "all", q: searchTerm, sort: "updated", "max-keys": ARTIFACT_HITS },
     { enabled: wantsArtifacts },
   );
+  // CODE IN ITS OWN SCOPE ONLY, and asked once the term has rested: a code
+  // search is a signed request to every git node holding a repository the
+  // reader reads, so a word being typed asks nothing (`useQuiet`).
+  const codeTerm = useQuiet(term);
+  const wantsCode =
+    served &&
+    ask.code &&
+    !picking &&
+    scope === "code" &&
+    codeTerm.length >= CODE_SEARCH_MIN &&
+    codeTerm === term;
+  const code = useCodeQuery(
+    "code_search",
+    { q: codeTerm, limit: CODE_HITS },
+    { enabled: wantsCode, refetchOnReconnect: false },
+  );
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
   const nameTerm = useDeferredValue(picking ? pickTerm : term);
   const wantsNames =
@@ -377,6 +399,7 @@ export function CommandPalette({
   const taskAnswer = useSettled(tasks, searchTerm, wantsTasks);
   const pageAnswer = useSettled(pages, searchTerm, wantsPages);
   const artifactAnswer = useSettled(artifacts, searchTerm, wantsArtifacts);
+  const codeAnswer = useSettled(code, term, wantsCode);
   const nameAnswer = useSettled(names, nameTerm, wantsNames);
 
   // ---- the answer --------------------------------------------------------
@@ -789,6 +812,38 @@ export function CommandPalette({
       onSelect: () => openPage(page.id, page.url),
     }));
 
+  // A CODE HIT OPENS ITS FILE AT THE COMMIT ITS REPOSITORY WAS SEARCHED AT,
+  // with the line picked (`lib/codeSearch.ts`); the last row carries the
+  // term to Code › Search, which draws every line with what was not searched.
+  const codeRows = (): CommandPaletteItem[] => {
+    const data = codeAnswer.data;
+    if (!data) return [];
+    const rows: CommandPaletteItem[] = [];
+    for (const group of groupHits(data)) {
+      for (const file of group.files) {
+        for (const hit of file.lines) {
+          const at = hitAt(group.tip, file, hit.line);
+          rows.push({
+            id: `code-${group.repo}-${file.pathB64 ?? file.path}-${hit.line}`,
+            icon: <SearchGlyph size="sm" />,
+            label: `${group.repo}:${file.path}:${hit.line}`,
+            meta: hit.text.trim().slice(0, 80) || undefined,
+            onSelect: () =>
+              at ? nav.to(repoPath(group.repo), at) : nav.to(["code", "search"], { q: term }),
+          });
+        }
+      }
+    }
+    rows.push({
+      id: "code-all",
+      icon: <SearchGlyph size="sm" />,
+      label: `See every match for “${term}” →`,
+      hint: "every line, by repository and file, and what was not searched",
+      onSelect: () => nav.to(["code", "search"], { q: term }),
+    });
+    return rows;
+  };
+
   const openPage = (id: string, url: string) => {
     // A PAGE THIS ENGINE HOLDS OPENS HERE; a vendor wiki's opens there.
     if (url && /^https?:/.test(url) && pageAnswer.data?.backend !== DOCLET_SEARCH_BACKEND) {
@@ -1087,6 +1142,8 @@ export function CommandPalette({
     push("sources", "Sources of the answer", sourceRows(drawn));
   } else if (scope === "artifacts") {
     push("artifacts", "Artifacts", asItems(artifactHits(artifactAnswer.data?.contents ?? [], nav)));
+  } else if (scope === "code") {
+    push("code", "Code", codeRows());
   } else if (scope === "agents") {
     for (const g of agentGroups(Infinity, true)) push(g.id, g.label, g.items);
   } else {
@@ -1165,6 +1222,12 @@ export function CommandPalette({
       if (artifactAnswer.error) return "Artifact search did not run.";
       if (!artifactAnswer.data) return "Searching…";
       return `No artifact you can open matches “${term}”.`;
+    }
+    if (scope === "code") {
+      if (term.length < CODE_SEARCH_MIN) return "Type three or more characters.";
+      if (codeAnswer.error) return "Code search did not run.";
+      if (!codeAnswer.data) return "Searching…";
+      return `No line matches “${term}” in what was searched.`;
     }
     if (scope === "agents") return `Nobody in the chart matches “${term}”.`;
     return `Nothing matches “${term}”.`;
@@ -1414,6 +1477,7 @@ const SCOPE_NOTES: Record<Exclude<ScopeId, "actions">, string> = {
   tasks: "The company’s tasks",
   pages: "The knowledge base",
   artifacts: "Every artifact you can open",
+  code: "The lines of the repositories you read",
   agents: "The org chart",
 };
 

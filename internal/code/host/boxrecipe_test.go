@@ -2,7 +2,6 @@ package host_test
 
 import (
 	"bytes"
-	"context"
 	"io/fs"
 	"maps"
 	"os"
@@ -96,7 +95,7 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 	seatWork := map[string]string{}
 	for _, ref := range []string{"refs/heads/seats/" + codetest.FixtureBob + "/ENG-1",
 		"refs/heads/seats/" + codetest.FixtureLead + "/ENG-2", ownRef} {
-		seatWork[ref] = pushOffMain(ctx, t, person, work, url, tip, ref)
+		seatWork[ref] = pushOffMain(t, person, work, url, tip, ref)
 	}
 	// A REPOSITORY OF SEATS' BRANCHES ALONE, its default branch never
 	// pushed: two seats' work, Alice's among it.
@@ -106,7 +105,7 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 	loneOther := "refs/heads/seats/" + codetest.FixtureBob + "/ENG-4"
 	loneWork := map[string]string{}
 	for _, ref := range []string{loneOwn, loneOther} {
-		loneWork[ref] = pushOffMain(ctx, t, person, work, base+"/"+lone, tip, ref)
+		loneWork[ref] = pushOffMain(t, person, work, base+"/"+lone, tip, ref)
 	}
 	loneRows, err := f.Rows(ctx, lone, codetest.Linearizable)
 	if err != nil {
@@ -242,7 +241,7 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 	// of another seat's push since the clone, and another branch is fetched
 	// by its name, as the brief tells the agent — into FETCH_HEAD, through
 	// the box's own credential, never tracked.
-	late := pushOffMain(ctx, t, person, work, url, tip, "refs/heads/seats/"+codetest.FixtureLead+"/ENG-3")
+	late := pushOffMain(t, person, work, url, tip, "refs/heads/seats/"+codetest.FixtureLead+"/ENG-3")
 	runGit(t, clone, box, "fetch", "-q")
 	if heldObjects(t, client, clone)[late] {
 		t.Errorf("the box's own `git fetch` brought %s, another seat's push since its clone", late)
@@ -498,13 +497,14 @@ func sameFiles(t *testing.T, what, dir string, want ...string) {
 
 // pushOffMain pushes ref from p's work tree work as one commit on top of base,
 // a file of its own in a directory of its own — a new tree as well as a new
-// commit — leaves work on main again, and answers the commit.
-func pushOffMain(ctx context.Context, t *testing.T, p *codetest.Person, work, url, base, ref string) string {
+// commit — leaves work on main again, and answers the commit. Every git it
+// runs is the person's, under the test's context, as the client's own are.
+func pushOffMain(t *testing.T, p *codetest.Person, work, url, base, ref string) string {
 	t.Helper()
 	p.Git().Run(t, work, "checkout", "-q", "-B", "seat-work", base)
 	commit := p.Commit(work, map[string]string{"work/" + strings.ReplaceAll(ref, "/", "-") + ".txt": ref + "\n"},
 		"work on "+ref)
-	if res := p.Push(ctx, work, url, "HEAD:"+ref); res.Err != nil {
+	if res := p.Push(t.Context(), work, url, "HEAD:"+ref); res.Err != nil {
 		t.Fatalf("git push %s: %s", ref, res)
 	}
 	p.Git().Run(t, work, "checkout", "-q", "main")

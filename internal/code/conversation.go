@@ -369,6 +369,9 @@ func (v Verdict) Valid() bool { return slices.Contains(Verdicts(), v) }
 // not carry it clears one; resolved, won't fix and disputed keep it standing.
 type Severity string
 
+// The severities, heaviest first ([Severities]): a blocker alone holds a
+// change back; the three below it are weight a reviewer gives, and gate
+// nothing.
 const (
 	SeverityBlocker Severity = "blocker"
 	SeverityMajor   Severity = "major"
@@ -387,6 +390,7 @@ func (s Severity) Valid() bool { return slices.Contains(Severities(), s) }
 // Category is what a finding is about.
 type Category string
 
+// The categories a finding can be about, in [Categories]' order.
 const (
 	CategoryCorrectness Category = "correctness"
 	CategorySecurity    Category = "security"

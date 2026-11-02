@@ -10,3 +10,4 @@ export { Pushes } from "./Pushes.tsx";
 export { Queue } from "./Queue.tsx";
 export { Repositories } from "./Repositories.tsx";
 export { RepositoryPage } from "./repo/RepositoryPage.tsx";
+export { Search } from "./Search.tsx";

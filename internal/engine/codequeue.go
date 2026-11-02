@@ -64,11 +64,11 @@ func (q queueCloser) CloseWorkItem(ctx context.Context, c codehome.TaskClose) er
 		return fmt.Errorf("engine: close work item %s: this node writes to no tracker of the engine's own",
 			item.ID)
 	}
-	principal, err := turnRequesters{engine: q.engine}.Requester(ctx, actor.Handle)
+	principal, err := turnRequesters(q).Requester(ctx, actor.Handle)
 	if err != nil {
 		return fmt.Errorf("engine: close work item %s as %s: %w", item.ID, actor.Handle, err)
 	}
-	if err := builtin.DecisionError(authz.ActionWorkUpdate, authz.Decide(ctx, principal,
+	if err = builtin.DecisionError(authz.ActionWorkUpdate, authz.Decide(ctx, principal,
 		authz.ActionWorkUpdate, authz.Object{Kind: authz.KindTask}, ChartAuthorityOf(q.engine),
 		time.Now())); err != nil {
 		return fmt.Errorf("engine: close work item %s as %s: %w", item.ID, actor.Handle, err)
@@ -89,7 +89,7 @@ func (q queueCloser) CloseWorkItem(ctx context.Context, c codehome.TaskClose) er
 		worklet.NoIfMatch, patch, worklet.ChangeStatus, worklet.Wake{
 			Kind: worklet.ChangeStatus, Before: before.Task, After: worklet.Patched(before.Task, patch),
 			Excerpt: fmt.Sprintf("Change %d landed through its merge queue.", c.Change.Number),
-		}.Notify(liveLeads{engine: q.engine}))
+		}.Notify(liveLeads(q)))
 	switch {
 	case err != nil:
 		return fmt.Errorf("engine: close work item %s as %s: %w", item.ID, actor.Handle, err)

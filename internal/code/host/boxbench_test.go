@@ -32,8 +32,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A CODING BOX'S GIT, MEASURED (ADR-0086): what the two clone recipes that
-// fetch cost a box and the git node it clones from (BenchmarkBoxClone), what
+// A CODING BOX'S GIT, MEASURED (ADR-0086): what the two clone recipes cost
+// a box and the git node it clones from (BenchmarkBoxClone), what
 // the box's own git costs once its checkout is made and which of git's
 // box-side settings earn a place in the engine's box git environment
 // (BenchmarkBoxWorktree), and what a box borrowing a node's copy would save
@@ -85,7 +85,7 @@ func boxCone(cone, dir string) []string {
 // one directory names.
 const historyDir = "d000"
 
-// BenchmarkBoxClone is WHAT THE TWO RECIPES THAT FETCH COST: a box given the
+// BenchmarkBoxClone is WHAT THE TWO RECIPES COST: a box given the
 // repository by sandbox.CloneRecipe, timed from the step's start to its
 // checked-out tree, on a warm node, a fresh box an operation.
 //
@@ -97,11 +97,7 @@ const historyDir = "d000"
 //     at 100MB;
 //   - recipe=coding|single-sha is sandbox.ClonePurpose, each recipe given the
 //     repository its purpose takes (boxRepoFor): a blobless clone at the tip
-//     on the run's branch, or a check's one commit at depth one. The third
-//     purpose, sandbox.CloneBorrowed, is no arm: it fetches nothing — the box
-//     reads a git node's own copy, mounted into it — so the node answers it
-//     none of what an arm reports, and what a borrow saves a box is
-//     BenchmarkBoxDissociate's question;
+//     on the run's branch, or a check's one commit at depth one;
 //   - cone=none|one-dir checks out the whole tree or the history's first
 //     directory;
 //   - seats=0|1000|10000 is how many OTHER SEATS' BRANCHES the repository
@@ -151,9 +147,6 @@ func BenchmarkBoxClone(b *testing.B) {
 					}
 					box := newBenchBox(b, f, rows, git)
 					for _, purpose := range sandbox.ClonePurposes() {
-						if purpose == sandbox.CloneBorrowed {
-							continue
-						}
 						for _, cone := range []string{"none", "one-dir"} {
 							b.Run(fmt.Sprintf("recipe=%s/cone=%s", purpose, cone), func(b *testing.B) {
 								repo := boxRepoFor(rows, tip, boxCone(cone, historyDir), purpose)
@@ -1064,10 +1057,10 @@ func packCount(b *testing.B, dir string) int {
 //
 // — at size=100MB and, under CREWLET_BENCH_LARGE, 1GB, reporting beside the
 // wall time sent-MB, the node's server-cpu-ms and box-cpu-ms, the box's own
-// git (the repack's included). Nothing here is adopted: a coding box holds no
-// copy of the node's to borrow (sandbox.CloneRecipe), and a check's box on a
-// git node, which can be lent one, reads it in place for its run and never
-// copies it (sandbox.CloneBorrowed).
+// git (the repack's included). Nothing here is adopted: no box holds a copy
+// of the node's to borrow (sandbox.CloneRecipe), a check's box included,
+// which fetches its one commit (sandbox.CloneSingleSHA); a borrow read in
+// place for a check's run is crewlet/crewlet#496's to measure first.
 func BenchmarkBoxDissociate(b *testing.B) {
 	codetest.Quiet(b)
 	for _, size := range boxSizes {

@@ -116,7 +116,7 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 	declared := declaredChangeWrites(t)
 	planned := map[changeWrite]bool{}
 	if err := e.db.Tx(ctx, func(tx *sql.Tx) error {
-		roots := changeIndexRoots(t, tx)
+		roots := changeIndexRoots(ctx, t, tx)
 		// THE READING, ON WRITES WHOSE VERDICT IS KNOWN: a write of every
 		// column a change's lifecycle may move keeps every index but the
 		// number's, whose key no write moves — so a reading that found
@@ -234,7 +234,7 @@ func (x *explainer) ExecContext(ctx context.Context, query string, args ...any) 
 	if x.deletes == nil {
 		x.deletes = map[string]bool{}
 	}
-	for _, index := range rewrites(x.t, program(x.t, x.tx, query, args), x.roots) {
+	for _, index := range rewrites(x.t, program(ctx, x.t, x.tx, query, args), x.roots) {
 		x.deletes[index] = true
 	}
 	return driver.RowsAffected(0), nil
@@ -269,9 +269,9 @@ type instruction struct {
 }
 
 // program is the program the driver compiles query to, bound to args.
-func program(t *testing.T, tx *sql.Tx, query string, args []any) []instruction {
+func program(ctx context.Context, t *testing.T, tx *sql.Tx, query string, args []any) []instruction {
 	t.Helper()
-	rows, err := tx.QueryContext(context.Background(), "EXPLAIN "+query, args...)
+	rows, err := tx.QueryContext(ctx, "EXPLAIN "+query, args...)
 	if err != nil {
 		t.Fatalf("EXPLAIN:\n%s\n%v", query, err)
 	}
@@ -331,9 +331,9 @@ func rewrites(t *testing.T, program []instruction, roots map[int64]string) []str
 }
 
 // changeIndexRoots is every index of code_changes by its root page.
-func changeIndexRoots(t *testing.T, tx *sql.Tx) map[int64]string {
+func changeIndexRoots(ctx context.Context, t *testing.T, tx *sql.Tx) map[int64]string {
 	t.Helper()
-	rows, err := tx.QueryContext(context.Background(), `SELECT name, rootpage FROM sqlite_master
+	rows, err := tx.QueryContext(ctx, `SELECT name, rootpage FROM sqlite_master
 		WHERE type = 'index' AND tbl_name = 'code_changes'`)
 	if err != nil {
 		t.Fatalf("read code_changes' indexes: %v", err)

@@ -44,7 +44,7 @@ func mark(t *testing.T, m *code.Marks, w code.MarkWrite) code.MarkResult {
 
 // founderNotices opens a change on n that mentions founder and has dev answer
 // founder's comment replies times — 1+replies notices of founder's, oldest
-// first, by their record ids and their positions.
+// first, by their notice ids (code.NoticeID) and their positions.
 func founderNotices(t *testing.T, n *node, replies int) ([]string, []statelog.Position, string, string) {
 	t.Helper()
 	n.chart = testChart()
@@ -57,13 +57,13 @@ func founderNotices(t *testing.T, n *node, replies int) ([]string, []statelog.Po
 	open.Open.Mentions = []string{"founder"}
 	opened, err := c.ProposeChange(t.Context(), open)
 	requireChanged(t, opened, err)
-	ids := []string{n.recordAt(opened.Position).OpID}
+	ids := []string{code.NoticeID(n.recordAt(opened.Position).OpID, opened.ChangeID)}
 	at := []statelog.Position{opened.Position}
 	w, _ := writerOn(t, n, n.pub)
 	said := converse(t, w, saying(repo, opened.ChangeID, ada, "", "Why retry twice?"))
 	for range replies {
 		reply := converse(t, w, saying(repo, opened.ChangeID, dev, said.ID, "It races."))
-		ids = append(ids, n.recordAt(reply.Position).OpID)
+		ids = append(ids, code.NoticeID(n.recordAt(reply.Position).OpID, opened.ChangeID))
 		at = append(at, reply.Position)
 	}
 	return ids, at, repo, opened.ChangeID
@@ -158,7 +158,7 @@ func TestACodeMarkNamesOnlyTheirNotices(t *testing.T) {
 	_, _, repo, change := founderNotices(t, n, 0)
 	w, _ := writerOn(t, n, n.pub)
 	ask := converse(t, w, asking(repo, change, dev, "plat-lead"))
-	theirs := n.recordAt(ask.Position).OpID
+	theirs := code.NoticeID(n.recordAt(ask.Position).OpID, change)
 	m := markerOn(t, n, n.pub)
 	for name, tc := range map[string]struct {
 		w    code.MarkWrite

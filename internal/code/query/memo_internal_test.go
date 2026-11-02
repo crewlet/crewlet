@@ -131,11 +131,11 @@ func tailOf(a code.GitAnswer) memoTail {
 
 // A MEMO ENTRY HOLDS EVERY FIELD OF ITS ANSWER. A page of every kind the memo
 // keeps — every field of its answer set, but those Read stamps — is written as
-// a run writes it (appendPage, then its tail) and read back whole: so a field
+// a run writes it (encodePage, then its tail) and read back whole: so a field
 // added to an answer and left out of the encoding reads back as nothing,
 // here, rather than vanishing from every page a node answers from its memo.
 //
-// Mutation: leave a field out of appendPage (a tree entry's PathB64) — its
+// Mutation: leave a field out of encodePage (a tree entry's PathB64) — its
 // page reads back without it.
 func TestAMemoEntryHoldsEveryFieldOfItsAnswer(t *testing.T) {
 	t.Parallel()
@@ -159,7 +159,7 @@ func TestAMemoEntryHoldsEveryFieldOfItsAnswer(t *testing.T) {
 				}
 			}
 			p := memoPage{answer: a, commits: []string{"one commit", "another"}, budget: 4242}
-			body := appendTail(appendPage(nil, p), kind, tailOf(a))
+			body := appendTail(encodePage(p), kind, tailOf(a))
 			got, err := decodePage(body)
 			if err != nil {
 				t.Fatalf("decodePage: %v", err)
@@ -171,7 +171,7 @@ func TestAMemoEntryHoldsEveryFieldOfItsAnswer(t *testing.T) {
 			// totals alone: the same bytes.
 			if partOf[kind] == "Diff" {
 				tail := tailOf(a)
-				counted := appendTail(appendCounts(appendPage(nil, p), tail.files), kind,
+				counted := appendTail(appendCounts(encodePage(p), tail.files), kind,
 					memoTail{total: tail.total, added: tail.added, deleted: tail.deleted, counted: true})
 				if string(counted) != string(body) {
 					t.Error("a page whose counts were written as they were counted is not the page its tail ends")
@@ -261,10 +261,12 @@ func (fakeCache) WantHistory(string)                                {}
 func (f fakeCache) MemoGet(cache.Synced, cache.MemoKey) ([]byte, bool) {
 	return f.body, f.body != nil
 }
-func (fakeCache) Memo(cache.Synced) *cache.MemoBatch                  { return nil }
-func (fakeCache) Spool() (*os.File, error)                            { return nil, os.ErrInvalid }
-func (fakeCache) IndexTip(cache.Synced) (cache.IndexedTip, bool)      { return cache.IndexedTip{}, false }
-func (fakeCache) CodeIndex(cache.Synced) (*cache.CodeIndexView, bool) { return nil, false }
+func (fakeCache) Memo(cache.Synced) *cache.MemoBatch             { return nil }
+func (fakeCache) Spool() (*os.File, error)                       { return nil, os.ErrInvalid }
+func (fakeCache) IndexTip(cache.Synced) (cache.IndexedTip, bool) { return cache.IndexedTip{}, false }
+func (fakeCache) CodeIndex(context.Context, cache.Synced) (*cache.CodeIndexView, bool) {
+	return nil, false
+}
 
 // A PAGE FROM THE MEMO FITS WHATEVER IT IS STAMPED WITH. A page carries its
 // budget — the most the fields Read stamps may encode to and the page still
@@ -286,7 +288,7 @@ func TestAPageFromTheMemoFitsWhateverItIsStamped(t *testing.T) {
 
 	cut := &read{s: &Server{pageBytes: code.MaxGitAnswerBytes}, q: q, synced: cache.Synced{Position: near}}
 	budget := cut.stampCost() + 10 // ten bytes of the room left
-	body := appendTail(appendPage(nil, memoPage{answer: page, budget: budget}), code.GitTree, memoTail{total: 3})
+	body := appendTail(encodePage(memoPage{answer: page, budget: budget}), code.GitTree, memoTail{total: 3})
 	for _, tc := range []struct {
 		at   statelog.Position
 		fits bool

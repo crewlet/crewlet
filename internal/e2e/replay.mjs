@@ -42,27 +42,31 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// THE DASHBOARD UNDER TEST. CREWLET_DASHBOARD_ROOT names the tree; unset, it is
-// `static/dashboard`, the tree the binary embeds — the one that matters, since
-// this replay is the compatibility reference for the client's half of the wire
-// protocol and has to run against the bytes a browser is actually served.
-// golden_test.go always names it, so the gate never rests on the default.
+// THE PROTOCOL MODULE UNDER TEST. CREWLET_PROTOCOL_ROOT names the directory
+// the second build wrote it into; unset, it is `static/protocol`, this
+// checkout's committed build — the one that matters, since this replay is the
+// compatibility reference for the client's half of the wire protocol and has
+// to run the source the bundle a browser is served was built from, which
+// `make dashboard-check` holds the two builds to together. Not inside
+// `static/dashboard`: no page loads the module, and there it rode the embed
+// into every engine binary. golden_test.go always names it, so the gate never
+// rests on the default.
 //
 // A relative value is read against the REPOSITORY. Read against the working
 // directory, `node internal/e2e/replay.mjs` at the root and `node replay.mjs`
 // here would test different trees; read against this file's own directory, as
-// it once was while its comment said the repository, `static/dashboard` named
-// a tree nobody has. The repository is the nearest directory above this file
+// it once was while its comment said the repository, `static/protocol` named
+// a directory nobody has. The repository is the nearest directory above this file
 // holding a go.mod — the rule internal/sourcetree finds the module root by for
 // the Go half — never a counted `../..`, which every move would have to get
 // right again.
 //
 // Resolution is CHECKED rather than assumed. A wrong root would otherwise
 // surface as ERR_MODULE_NOT_FOUND on the protocol's import, which reads as a
-// missing dashboard file rather than as a missing dashboard.
-function dashboardDir(named) {
+// failed import rather than as a module that was never built.
+function protocolDir(named) {
   if (named && isAbsolute(named)) return resolve(named);
-  return resolve(repositoryRoot(), named || "static/dashboard");
+  return resolve(repositoryRoot(), named || "static/protocol");
 }
 
 function repositoryRoot() {
@@ -72,7 +76,7 @@ function repositoryRoot() {
     if (dirname(dir) === dir) {
       console.error(
         `replay: no go.mod in any directory above ${here}, so there is no ` +
-          "repository to read CREWLET_DASHBOARD_ROOT against: name the tree " +
+          "repository to read CREWLET_PROTOCOL_ROOT against: name the directory " +
           "to test by an absolute path",
       );
       process.exit(2);
@@ -80,17 +84,7 @@ function repositoryRoot() {
   }
 }
 
-const DASHBOARD_DIR = dashboardDir(process.env.CREWLET_DASHBOARD_ROOT);
-
-if (!existsSync(join(DASHBOARD_DIR, "index.html"))) {
-  console.error(
-    `replay: no dashboard at ${DASHBOARD_DIR} (no index.html there).\n` +
-      `Set CREWLET_DASHBOARD_ROOT to the tree to test, or leave it unset to ` +
-      `use the one in this checkout. If it is missing entirely, the built ` +
-      `dashboard has not been committed — run \`make dashboard\`.`,
-  );
-  process.exit(2);
-}
+const PROTOCOL_DIR = protocolDir(process.env.CREWLET_PROTOCOL_ROOT);
 
 // The wire protocol, as plain ESM.
 //
@@ -100,12 +94,15 @@ if (!existsSync(join(DASHBOARD_DIR, "index.html"))) {
 // source, emitted once more unminified, so the replay runs the client's REAL
 // dispatch table rather than a re-implementation of it that could agree with a
 // server the dashboard does not.
-const PROTOCOL = join(DASHBOARD_DIR, "protocol.js");
+const PROTOCOL = join(PROTOCOL_DIR, "protocol.js");
 
 if (!existsSync(PROTOCOL)) {
   console.error(
-    `replay: no protocol.js in ${DASHBOARD_DIR}. It is a second Vite build ` +
-      "target and easy to lose: `make dashboard` emits it beside the app bundle.",
+    `replay: no protocol.js in ${PROTOCOL_DIR}.\n` +
+      `Set CREWLET_PROTOCOL_ROOT to the directory to test, or leave it unset ` +
+      `to use the one in this checkout. If it is missing entirely, the second ` +
+      `Vite build target has not been committed — run \`make dashboard\`, ` +
+      `which emits it into static/protocol beside the app bundle.`,
   );
   process.exit(2);
 }

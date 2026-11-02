@@ -107,15 +107,19 @@ type purgeHolds struct {
 	StoreUntil    string `json:"store_until"`
 }
 
-// The holds' two sentences, the same for every purge.
+// The holds' two sentences, the same for every purge. A PERSON READS THEM as
+// the model does (the act route, the assistant, `crewlet code purge`), so each
+// ends as a sentence and names no tool or field (ADR-0060): the instant the
+// purge committed is the repository's detail, which the model reads with
+// code_get_repo and a person on its page.
 var (
 	purgeBackupsBefore = "every backup taken before the purge commits keeps the purged objects for as long as " +
 		"the backup is kept, and on the nats object store every backup taken before the store deletes them, " +
-		"since its snapshot of the bucket carries every byte the bucket holds; " + CodeGetRepoTool + "'s " +
-		"expunge.expunged_at is the commit's instant"
+		"since its snapshot of the bucket carries every byte the bucket holds. The repository's detail names " +
+		"the instant the purge committed."
 	purgeStoreUntil = fmt.Sprintf("the object store keeps them for %d hours after the purge commits, until "+
 		"the retired packs' sweep and the store's next collection take them, and a versioned S3 bucket for as "+
-		"long as its own rules keep a deleted object's noncurrent version", int(code.RetireGrace.Hours()))
+		"long as its own rules keep a deleted object's noncurrent version.", int(code.RetireGrace.Hours()))
 )
 
 // codePurgeUnreachable is the purge.

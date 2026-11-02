@@ -419,7 +419,7 @@ func (r holdsReader) running(ctx context.Context, keys []string) ([]string, erro
 	var held []string
 	err = r.askEach(askCtx, topics.CodeHolds, question, func(raw []byte) bool {
 		var a codeHoldsAnswer
-		if err := json.Unmarshal(raw, &a); err != nil || a.Version != codeHoldsProtocol || a.Owner == "" {
+		if json.Unmarshal(raw, &a) != nil || a.Version != codeHoldsProtocol || a.Owner == "" {
 			// AN ANSWER THIS BUILD CANNOT READ names nobody it could count
 			// as answered; its holder, if the leases name it, stays unheard.
 			return true

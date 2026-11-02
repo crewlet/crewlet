@@ -149,7 +149,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	for _, e := range p.Pushes {
 		ids = append(ids, e.PushID)
 	}
-	applied, err := keySet(ctx, tx, pushesAppliedSQL, ids)
+	applied, err := pushesApplied(ctx, tx, ids)
 	if err != nil {
 		return 0, fmt.Errorf("code: read the applied pushes at %s: %w", at.position, err)
 	}
@@ -446,7 +446,7 @@ func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID s
 		return 0, fmt.Errorf("code: the push at %s: %w", at.position, err)
 	}
 	if slices.ContainsFunc(pushes, func(e PushEntry) bool { return e.Change != nil }) {
-		if err := tx.QueryRowContext(ctx, nextChangeSQL, repoID).Scan(&book.next); err != nil {
+		if err = tx.QueryRowContext(ctx, nextChangeSQL, repoID).Scan(&book.next); err != nil {
 			return 0, fmt.Errorf("code: read %s's next change at %s: %w", repoID, at.position, err)
 		}
 	}
@@ -1037,21 +1037,16 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		budget -= int(n)
 	}
 	if budget > 0 {
-		n, w, whole, err := purgeChanges(ctx, tx, p.RepoID, budget, weighed)
+		// AND THEIR NOTICES, charged by each change's count of them: the
+		// table is divergent, and what the part charges decides which
+		// replicated rows go after them (apply_purge_changes.go).
+		done, err := a.purgeChanges(ctx, tx, at, p.RepoID, budget, weighed)
 		if err != nil {
 			return 0, err
 		}
-		deleted += n
-		budget -= n
-		weighed = w
-		// AND THEIR NOTICES, which no part counts: the table is divergent,
-		// and the part's count decides which replicated rows go
-		// (apply_notices.go).
-		removed, err := a.removeNotices(ctx, tx, at, whole)
-		if err != nil {
-			return 0, err
-		}
-		deleted += removed
+		deleted += done.deleted
+		budget -= done.spent
+		weighed = done.weighed
 	}
 	if budget > 0 {
 		n, err := purgeChecks(ctx, tx, p.RepoID, budget, weighed)
@@ -1092,7 +1087,8 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // repository's pushes, refs, packs, retired packs, ref drops, changes'
 // revisions, authors, bodies and rows and their conversations' rows — its
 // reviewers, participants, comments, reviews, findings, revisions' facts and
-// mergeability among them — its checks and their logs, its heads' dispatches
+// mergeability among them — the changes' notices by their counts
+// (code_changes.notices, never fewer than the rows), its checks and their logs, its heads' dispatches
 // and its targets' readings, and its merge queues' entries, candidates,
 // landings and green rows remain AND the
 // pushes, the bodies, the conversations' text and the checks among them
@@ -1119,7 +1115,10 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // record, since a derived row keeps its object only while it stands.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p Purge) (int, error) {
 	// THE NOTICES OF THE CHANGES THE PURGE STILL FINDS, before their rows
-	// go: the only way to them from the repository is its changes.
+	// go: the only way to them from the repository is its changes. They
+	// are bounded with the rest, since the decide forms this record only
+	// once the rows left and the changes' counts of their notices fit one
+	// part (purge.go).
 	remaining, err := changesOf(ctx, tx, p.RepoID)
 	if err != nil {
 		return 0, fmt.Errorf("code: read %s's remaining changes at %s: %w", p.RepoID, at.position, err)
@@ -1137,6 +1136,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 		purgeAllQueueSQL, purgeAllCandidatesSQL, purgeAllLandingsSQL, purgeAllGreenSQL,
 		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
 	} {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
 		if err != nil {
 			return 0, fmt.Errorf("code: purge %s at %s: %w", p.RepoID, at.position, err)
@@ -1182,27 +1182,28 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	return deleted + int(n), nil
 }
 
-// keySet reads the keys among keys a statement over json_each finds.
-func keySet(ctx context.Context, tx *sql.Tx, query string, keys []string) (map[string]bool, error) {
+// pushesApplied is the push ids among ids that the history holds already: a
+// push landed ([pushesAppliedSQL]).
+func pushesApplied(ctx context.Context, tx *sql.Tx, ids []string) (map[string]bool, error) {
 	out := map[string]bool{}
-	if len(keys) == 0 {
+	if len(ids) == 0 {
 		return out, nil
 	}
-	list, err := jsonList(keys)
+	list, err := jsonList(ids)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, query, list)
+	rows, err := tx.QueryContext(ctx, pushesAppliedSQL, list)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err != nil {
+		var id string
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		out[k] = true
+		out[id] = true
 	}
 	return out, rows.Err()
 }

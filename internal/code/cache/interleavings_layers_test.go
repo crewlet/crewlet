@@ -35,12 +35,6 @@ import (
 // proposal is decided and applied on the world's log by fakeCommitter, to the
 // rules the code domain's decide holds a publication to.
 
-// interleavingLayerOutcomes is every outcome of crewlet.code.cache.layers,
-// each of which the seeds must reach between them.
-var interleavingLayerOutcomes = []string{
-	"installed", "adopted", "kept", "cut", "missing", "corrupt", "newer_git", "failed",
-}
-
 // newerGit is the git another node's publication names its layer as written
 // by when it runs a newer git than this node: a release no pin reaches.
 const newerGit = "9.0.0"
@@ -548,10 +542,11 @@ func (in *interleaving) tip(repo string) string {
 }
 
 // noteLayers records the outcomes the layers reached on this node — every
-// outcome of crewlet.code.cache.layers it counted — and the node's tip
-// commit-graph written over a chained copy's tail.
+// outcome of crewlet.code.cache.layers it counted, each of which the seeds
+// must reach between them — and the node's tip commit-graph written over a
+// chained copy's tail.
 func (in *interleaving) noteLayers() {
-	for _, o := range interleavingLayerOutcomes {
+	for _, o := range cache.LayerOutcomes() {
 		if counter(in.w.rec, metrics.CodeCacheLayers, "outcome", o) > 0 {
 			in.saw("layer " + o)
 		}

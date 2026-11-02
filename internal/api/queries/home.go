@@ -302,7 +302,7 @@ func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := fresh.OnlyOn(topics.TrackerLogStream, topics.PagesLogStream); err != nil {
+	if err = fresh.OnlyOn(topics.TrackerLogStream, topics.PagesLogStream); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	actor := strings.TrimSpace(p.String("actor"))

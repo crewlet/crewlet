@@ -251,9 +251,12 @@ type CommitterOptions struct {
 	// instant; nil takes the wall clock in UTC.
 	Now func() time.Time
 	// Events is this node's event stream, which a merge whose record this
-	// committer landed is announced on (`change_merged`), and a change it
-	// opened (`change_opened`, announce.go); nil announces none — a node with
-	// no queue records no event of any kind.
+	// committer landed is announced on (`change_merged`), a change it opened
+	// (`change_opened`), and a queue's ejections and broken landings
+	// (`code_queue_ejected`, `code_target_broken`) — by the committer's own
+	// announcer, which NewCommitter starts and Stop ends (announce.go); nil
+	// announces none and starts none — a node with no queue records no event
+	// of any kind.
 	Events EventPublisher
 	// AgentIDs resolves a seat's handle to the agent id its day is counted
 	// under (ADR-0013), off the node's live epoch — false for a human seat
@@ -348,6 +351,15 @@ type Committer struct {
 	stopped  bool
 	stopping chan struct{}
 	wg       sync.WaitGroup
+
+	// announcements is the announcer's queue of landed records' events
+	// (announce.go), nil for a committer with no event stream; sent to only
+	// by the repositories' goroutines, which wg counts, so Stop closes it
+	// once wg is done (endAnnouncements) and announcerDone is closed once
+	// the announcer has drained it.
+	announcements    chan announcement
+	announcerDone    chan struct{}
+	endAnnouncements func()
 }
 
 // repoCommitter is one repository's queue and the goroutine draining it.
@@ -590,8 +602,17 @@ type answered struct {
 	carried bool
 }
 
-// NewCommitter builds a committer, refusing what it cannot work without.
+// NewCommitter builds a committer, refusing what it cannot work without, and
+// starts its announcer when it announces on an event stream (announce.go),
+// which [Committer.Stop] ends.
 func NewCommitter(o CommitterOptions) (*Committer, error) {
+	return newCommitter(o, CommitterAnnouncements)
+}
+
+// newCommitter is [NewCommitter] with an announcer holding at most
+// announcements unpublished records, a test's smaller value
+// (export_test.go).
+func newCommitter(o CommitterOptions, announcements int) (*Committer, error) {
 	switch {
 	case o.Publisher == nil:
 		return nil, errors.New("code: a committer needs the code log's write authority — " +
@@ -632,6 +653,13 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 		c.log = logging.Get("code")
 	}
 	c.life, c.end = context.WithCancel(context.Background())
+	c.endAnnouncements = func() {}
+	if c.events != nil {
+		c.announcements = make(chan announcement, announcements)
+		c.announcerDone = make(chan struct{})
+		c.endAnnouncements = sync.OnceFunc(func() { close(c.announcements) })
+		go c.announcer(c.life)
+	}
 	return c, nil
 }
 
@@ -842,14 +870,23 @@ func (c *Committer) Close() {
 // Stop refuses every new proposal [ErrNotServing], answers every queued one
 // the same — a node that decided nothing, so the router asks the runner-up —
 // and waits for the batches in flight, which are FINISHED rather than
-// abandoned so their callers get their outcome. If ctx ends first, the
-// batches are cancelled and answered from what their publish returned. Safe
-// to call more than once.
+// abandoned so their callers get their outcome, and then for the announcer to
+// publish what they and the batches before them landed. If ctx ends first,
+// the batches are cancelled and answered from what their publish returned,
+// and every announcement still held fails its publish at once and is logged
+// unpublished. Safe to call more than once.
 func (c *Committer) Stop(ctx context.Context) {
 	c.Close()
 	done := make(chan struct{})
 	go func() {
 		c.wg.Wait()
+		// NO REPOSITORY'S GOROUTINE IS LEFT TO ANNOUNCE, and Close started
+		// none since: the announcer's queue has no sender, so it is closed
+		// and drained.
+		c.endAnnouncements()
+		if c.announcerDone != nil {
+			<-c.announcerDone
+		}
 		close(done)
 	}()
 	select {
@@ -1166,7 +1203,9 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 		}
 		q.answer <- answers[i]
 	}
-	c.announceOpened(repoID, pushOpenings(answers))
+	// WHAT THE BATCH LANDED IS HANDED TO THE ANNOUNCER, never published
+	// here, where the repository's next batch would wait on it (announce.go).
+	c.announceOpenings(repoID, pushOpenings(answers))
 	// A QUEUED CHANGE WHOSE HEAD THE RECORD MOVED left its queue in the
 	// record's own apply, which no queue record names: announced once, from
 	// this node, once the record applied here — never for a record the

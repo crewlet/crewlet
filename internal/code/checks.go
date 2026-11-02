@@ -141,6 +141,20 @@ const CheckSweepGrace = 24 * time.Hour
 // once, whatever its token's expiry.
 const CheckBoxGrace = sandbox.DefaultSetupTimeout
 
+// CheckUser is the HTTP Basic user name a check's box presents on the box
+// routes, its password its check's token: beside internal/code/host's
+// BoxUser, the second of the two a box route reads, and what tells a check's
+// box from a coding run's before either is verified.
+//
+// SPELLED HERE, ONCE, for its two sides: the check runner (internal/code/
+// checkrun), which hands it to the box's git, and the code host, which admits
+// a check's box only under it. Each kept its own copy before, and nothing
+// held the two together — the runner's suites run on fake boxes, the host's
+// never import the runner — so a rename on either side would have refused
+// every real check box's fetch with nothing short of a live run to show it.
+// Both import this package, and neither imports the other.
+const CheckUser = "check"
+
 // The record's bounds. Each is the payload's own, refused by its Validate
 // before a writer forms a record, so the largest record a check takes fits
 // the code log's record with room for whatever a later field carries

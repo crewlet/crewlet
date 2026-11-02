@@ -45,9 +45,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	// A PERSON'S inbox, named apart from the seat's own inbox handler
-	// (internal/agent/inbox) that this file runs every turn through.
-	personinbox "github.com/crewlet/crewlet/internal/inbox"
+	personinbox "github.com/crewlet/crewlet/internal/inbox" // a PERSON'S, apart from the seat's (internal/agent/inbox)
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"

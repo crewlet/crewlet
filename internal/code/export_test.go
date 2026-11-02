@@ -136,6 +136,13 @@ func SetCommitterClock(c *Committer, clock func() time.Time) { c.clock = clock }
 // pushes. Set before c's first proposal.
 func SetCommitterNodeBytes(c *Committer, n int) { c.nodeBytes = n }
 
+// NewCommitterAnnouncing is NewCommitter with an announcer that holds at most
+// announcements unpublished, rather than CommitterAnnouncements — the case
+// that fills it without a thousand landings behind a held stream.
+func NewCommitterAnnouncing(o CommitterOptions, announcements int) (*Committer, error) {
+	return newCommitter(o, announcements)
+}
+
 // SetQueueEntries holds c's merge queues to n waiting entries a target, in
 // place of MaxQueueEntries.
 func SetQueueEntries(c *Committer, n int) { c.queueEntries = n }

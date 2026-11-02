@@ -22,7 +22,7 @@ func TestARebaseIsOneEngineWriteOfTheSource(t *testing.T) {
 	t.Parallel()
 	args := map[string]any{"change": "site!7", "expected_head": revHead(3)}
 	writer := &codeWrites{}
-	got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
 		writerTurn(t), builtin.CodeRebaseChangeTool, args)
 	writes, _ := writer.asked()
 	if got.Failed || len(writes) != 1 {
@@ -51,7 +51,7 @@ func TestARebaseIsOneEngineWriteOfTheSource(t *testing.T) {
 	} {
 		res := c.res
 		writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) { return res, nil }}
-		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
 			writerTurn(t), builtin.CodeRebaseChangeTool, args)
 		if !got.Failed || tools.RefusalOf(got) != c.class || !strings.Contains(got.Output, c.says) {
 			t.Errorf("%s answered %q as %s, want %s naming %q", name, got.Output, tools.RefusalOf(got), c.class,
@@ -60,7 +60,7 @@ func TestARebaseIsOneEngineWriteOfTheSource(t *testing.T) {
 	}
 
 	none := &codeWrites{}
-	got = callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newChangeHost(siteChange()), none)), writerTurn(t),
+	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), none)), writerTurn(t),
 		builtin.CodeRebaseChangeTool, map[string]any{"change": "site!7", "expected_head": "abc"})
 	if writes, _ := none.asked(); !got.Failed || len(writes) != 0 {
 		t.Errorf("a rebase at no whole head answered %q, sending %d writes", got.Output, len(writes))

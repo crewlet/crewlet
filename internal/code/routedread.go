@@ -16,10 +16,12 @@ import (
 // page's Woke tab: the change by its number on its repository, as a `change`
 // read names it and held to the same grant, and the records about it that
 // reached anybody, newest first, each with every recipient its notices name
-// (code_notifications, written by the applier per record and recipient,
-// apply_notices.go). It is the OTHER axis of the rows a person's code inbox
-// reads: an inbox is one recipient's notices across changes, this is one
-// change's notices across recipients, sought by code_notifications_change_idx.
+// (code_notifications, written by the applier per record, change and
+// recipient, apply_notices.go — read here for this one change, so a record
+// lists each recipient once). It is the OTHER axis of the rows a person's
+// code inbox reads: an inbox is one recipient's notices across changes, this
+// is one change's notices across recipients, sought by
+// code_notifications_change_idx.
 //
 // # Whole records, a page at a time
 //

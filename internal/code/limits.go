@@ -206,7 +206,7 @@ const (
 	// bytes a push (internal/code/compact's steady arm at the floor),
 	// 0.5 MB, the publications of their layers, 0.18–3.51 MB, its git
 	// clients' barriers at BarrierRecordBytes, 2.4–5.0 MB, and its changes'
-	// records, 14.2–90.6 MB (each MEASURED as its writer forms it,
+	// records, 14.2–85.9 MB (each MEASURED as its writer forms it,
 	// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt), against
 	// the tracker's measured 9.9 MB of records and 2.2 MB of barriers, every
 	// record in its signed frame. Two thirds is below that day: a company
@@ -286,7 +286,11 @@ const (
 	// past PruneGrace, fill what the record's own rows leave of it, so a push
 	// record reaches it exactly whenever enough of either is due —
 	// tombstones past RefTombstoneHorizon or past MaxTombstonesPerRepo,
-	// drops past PruneGrace.
+	// drops past PruneGrace. A record's NOTICES are rows of it too, each a
+	// handle its routing tells and each change's count of them
+	// (noticeWrites): at their widest — a push whose routing fills what its
+	// own rows leave, 3 904 notices — they hold the lane 143 ms (doc.go's
+	// measured section).
 	MaxRecordRows = statelog.ApplyTxRowBudget
 
 	// MaxCommandsPerPush is the most ref updates one push carries. A push's
@@ -596,16 +600,17 @@ const (
 	// nothing of each other).
 	MaxFindingsPerReview = 64
 
-	// MaxFindingTitleBytes, MaxFindingBodyBytes and MaxSuggestionBytes bound a
-	// finding's text: a title one line a listing shows whole, a body a
-	// paragraph or two of why, and a suggestion the lines it would put in
-	// place of the ones it is anchored to — every one weighed into its
-	// conversation's text_bytes and kept on a row of its own
-	// (code_finding_texts), off the narrow row a finding's resolution and a
-	// later review's supersession rewrite.
+	// MaxFindingTitleBytes bounds a finding's title: one line a listing shows
+	// whole. It and the two bounds after it hold a finding's text, every one
+	// weighed into its conversation's text_bytes and kept on a row of its
+	// own (code_finding_texts), off the narrow row a finding's resolution and
+	// a later review's supersession rewrite.
 	MaxFindingTitleBytes = 200
-	MaxFindingBodyBytes  = 4 << 10
-	MaxSuggestionBytes   = 16 << 10
+	// MaxFindingBodyBytes bounds a finding's body: a paragraph or two of why.
+	MaxFindingBodyBytes = 4 << 10
+	// MaxSuggestionBytes bounds a finding's suggestion: the lines it would
+	// put in place of the ones it is anchored to.
+	MaxSuggestionBytes = 16 << 10
 
 	// MaxStandingFindings is the most findings one reviewer keeps STANDING —
 	// open, resolved, won't fix or disputed — on one change: sixteen
@@ -714,9 +719,13 @@ const (
 	// MaxRecordRows with room for the record's own bookkeeping — and for
 	// the final purge's, which also removes every protection rule
 	// (MaxProtectionsPerRepo), the name claim, the repository's row and
-	// writes the marker — which the limits test pins. PurgePartBytes bounds
-	// a part's wide rows — its push rows and its changes' bodies — by what
-	// they weigh as well.
+	// writes the marker — which the limits test pins. A change's notices
+	// count among a part's rows by the count the change keeps of them
+	// (code_changes.notices), which every node agrees on and no node holds
+	// fewer rows than (apply_notices.go), so a part's deletes of
+	// code_notifications are inside it too. PurgePartBytes bounds a part's
+	// wide rows — its push rows and its changes' bodies — by what they weigh
+	// as well.
 	PurgePartRows = 3_000
 
 	// PurgePartBytes is how many BYTES of wide rows one purge step deletes
@@ -1042,6 +1051,23 @@ const (
 	// one repository's past its queue — what the lane's own bound did before,
 	// with the refusal said rather than the wait left unseen.
 	CommitterNodeProposals = CommitterInbox + MaxPushesPerRecord
+
+	// CommitterAnnouncements is the most landed records' announcements one
+	// node's committer holds unpublished — handed to its announcer and not
+	// yet read and published (announce.go): CommitterNodeProposals, 1 088.
+	// Every record the committer lands answers at least one proposal it
+	// held, so the announcer drops one only once it has fallen a whole
+	// node's held work behind the stream — a push batch hands over at most
+	// two (its openings and the queue entries its moved heads ejected), any
+	// other record at most one. A stream acknowledging in milliseconds
+	// drains it in seconds; one that acknowledges nothing spends
+	// checkEventBudget on each, and past this many the rest are dropped and
+	// logged rather than held — the cost an announcement the stream refused
+	// already had: its day one count short, its rows on the code log whole,
+	// and never a wait in front of the repository's next push. Each
+	// holds what its record named — change and entry ids, a merge's event —
+	// never the rows it reads.
+	CommitterAnnouncements = CommitterNodeProposals
 
 	// MaxChangeWritesWaiting is the most writes of ONE change's conversation
 	// one node's change writer holds at once — the one publishing and those

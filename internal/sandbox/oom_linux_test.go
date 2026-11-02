@@ -127,7 +127,7 @@ func TestAContainerBoxGoesBeforeItsEngineUnlessItsOperatorSaysOtherwise(t *testi
 		},
 		cli: containerCLI{path: fakeRuntime(t, "docker", dockerRootlessFormat, `[name=seccomp]`, 0)},
 	}
-	argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b", nil)
+	argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b")
 
 	ours := slices.Index(argv, "--oom-score-adj")
 	if ours < 0 || argv[ours+1] != strconv.Itoa(score) {

@@ -153,6 +153,66 @@ func TestInsertRowsAppliesTheConflictClauseWithinOneChunk(t *testing.T) {
 	}
 }
 
+// countingQuery counts the statements a returning insert issues.
+type countingQuery struct {
+	inner store.Querier
+	n     int
+}
+
+func (c *countingQuery) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	c.n++
+	return c.inner.QueryContext(ctx, query, args...)
+}
+
+// A RETURNING INSERT HANDS OVER ONLY THE ROWS IT WROTE, one statement a chunk:
+// under ON CONFLICT DO NOTHING a row that collides with one already stored is
+// skipped and never handed to scan, the rows of every chunk are handed in
+// the order given, and the count is of the rows handed — which is what a
+// writer that announces each row it wrote (internal/code's notices) needs and
+// a chunk's RowsAffected cannot say.
+//
+// Mutation: execute each chunk rather than query it, or hand over every row
+// given rather than every row answered, and the rows handed are not these.
+func TestInsertRowsReturningHandsOverOnlyTheRowsItWrote(t *testing.T) {
+	t.Parallel()
+	_, w := insertRowsStore(t)
+	ctx := t.Context()
+	given := []string{"a", "b", "c", "d", "e"}
+	var handed []string
+	count := 0
+	statements := 0
+	if err := w.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO ins_rows (a, b, c) VALUES ('k', 'b', 0)`); err != nil {
+			return err
+		}
+		q := &countingQuery{inner: tx}
+		// SIX VARIABLES of three columns a row: two rows a chunk, three
+		// chunks for five rows, the stored one's collision in the first.
+		n, err := store.InsertRowsReturning(ctx, q, 6,
+			`INSERT INTO ins_rows (a, b, c) VALUES`, `(?,?,?)`, `ON CONFLICT (a, b) DO NOTHING RETURNING b`,
+			len(given), func(i int) []any { return []any{"k", given[i], i + 1} },
+			func(rows *sql.Rows) error {
+				var b string
+				if err := rows.Scan(&b); err != nil {
+					return err
+				}
+				handed = append(handed, b)
+				return nil
+			})
+		count, statements = n, q.n
+		return err
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if want := []string{"a", "c", "d", "e"}; strings.Join(handed, ",") != strings.Join(want, ",") || count != 4 {
+		t.Errorf("the insert handed %v and counted %d, want %v and 4: the stored row's collision is "+
+			"skipped, and every row written is handed once", handed, count, want)
+	}
+	if statements != 3 {
+		t.Errorf("five rows of three columns under six variables issued %d statements, want 3", statements)
+	}
+}
+
 // A RAGGED BIND WIDTH IS REFUSED NAMING THE ROW, because the alternative is
 // every later row's arguments silently shifted by one.
 func TestInsertRowsRefusesARaggedRow(t *testing.T) {

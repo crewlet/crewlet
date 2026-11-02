@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -84,6 +85,24 @@ import (
 //     queue and the target's reading and every head's dispatch already say
 //     it, at its tip or a later one and naming its file, and refused on an
 //     archived repository as an attempt queued there is.
+//
+// # Its scope names what its decide reads
+//
+// A check's record WRITES only its repository's checks, and its decide READS
+// more: the repository's row — archived, deleted, its owner and visibility,
+// which a seat's rerun is judged by — on every arm; the changes a dispatch
+// queues at; and the change a rerun's authors or a failed head's routing are
+// read from. A node holding a record it cannot decode that rewrote any of
+// those holds them stale, and a write decided from them there — a rerun
+// admitted on a revoked grant, a dispatch queuing a head a deferred retarget
+// moved — must be answered unavailable, so the router asks another node
+// (M5-D33, as the change writer's and the queue's records do). So every
+// record names [RepoPath] beside [ChecksPath], and a queue or a dispatch the
+// [ChangePath] of every change it queues at ([checksScope]); a change the
+// decide FINDS in its snapshot — a rerun's head change, a failed head's —
+// it probes itself and names on its record ([checksDecision.changeRead]),
+// since no request could name it in advance. THE ENVELOPE CARRIES IT: a
+// scope is readable at every version, so no versionedFields row follows.
 //
 // A rerun and a report — a principal's request, a seat's or a person's — are
 // decided by the asker's standing (checkasks.go): a seat's rerun from the
@@ -164,20 +183,24 @@ type ChecksWriterOptions struct {
 }
 
 // EventPublisher is a node's event stream as the checks writer announces an
-// applied ending on it, the committer an applied merge and an opened change,
-// and the change writer a review: queue.Queue satisfies it.
+// applied ending on it, the committer's announcer an applied merge, an opened
+// change and a queue's ejections and broken landings, and the change writer a
+// review: queue.Queue satisfies it.
 type EventPublisher interface {
 	Publish(ctx context.Context, subject string, ev *events.Event) error
 }
 
-// checkEventBudget bounds the announcement of one applied record's event — a
-// check's ending, a change's merge, a change's opening or a review (the last
-// two the read of the rows they name and their publishes together):
-// FIVE SECONDS, the JetStream client's own request timeout — what nats.go
-// gives a publish whose context carries no deadline. Published after the
-// write's answer is handed back, so no asker waits on it; a stream that has
-// not acknowledged in that long costs the node's day the one check's,
-// opening's or review's count, or the feed the one merge, which the rows on
+// checkEventBudget bounds the announcement of one applied record's events — a
+// check's ending, a change's merge, a record's openings, a queue's ejections
+// or broken landing, or a review (all but the first two the read of the rows
+// they name and their publishes together): FIVE SECONDS, the JetStream
+// client's own request timeout — what nats.go gives a publish whose context
+// carries no deadline. Published after the write's answer is handed back, so
+// no asker waits on it, and never in front of the writer's next write: the
+// checks and change writers release the turn first, and the committer hands
+// its records' to its announcer (announce.go). A stream that has not
+// acknowledged in that long costs the node's day the one check's, opening's,
+// ejection's or review's count, or the feed the one merge, which the rows on
 // the code log still hold.
 const checkEventBudget = 5 * time.Second
 
@@ -205,7 +228,7 @@ type ChecksWriter struct {
 var checkFlights = flightBounds{
 	key: MaxCheckWritesWaiting, node: ChecksWriterNodeWrites, bytes: ChecksWriterNodeBytes,
 	keyBound: "MaxCheckWritesWaiting", nodeBound: "ChecksWriterNodeWrites", bytesBound: "ChecksWriterNodeBytes",
-	noun: "repository", writes: "check writes", closed: stoppingChecks,
+	noun: "repository", writes: "check writes", closed: errChecksWriterStopping,
 }
 
 // NewChecksWriter builds a checks writer, refusing what it cannot work
@@ -444,9 +467,9 @@ func (r ChecksRequest) weight() (int, error) {
 	return len(encoded), nil
 }
 
-// stoppingChecks is the refusal of a write a stopping writer decides nothing
-// of.
-var stoppingChecks = fmt.Errorf("%w: the checks writer is stopping", ErrNotServing)
+// errChecksWriterStopping is the refusal of a write a stopping writer decides
+// nothing of.
+var errChecksWriterStopping = fmt.Errorf("%w: the checks writer is stopping", ErrNotServing)
 
 // checksAgain is what a write refused busy or unavailable is told to do.
 const checksAgain = "send the write again"
@@ -482,7 +505,7 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest, weight int)
 	}
 	if !w.flights.begin() {
 		hold.release()
-		return ChecksResult{}, stoppingChecks, false
+		return ChecksResult{}, errChecksWriterStopping, false
 	}
 	type answer struct {
 		res ChecksResult
@@ -492,7 +515,7 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest, weight int)
 	//nolint:contextcheck // The publish is the writer's, not this caller's: it runs under the writer's own lifetime, so an asker that hangs up mid-publish never leaves the repository's next check write deciding beside a record still in flight.
 	go func() {
 		defer w.flights.done()
-		res, err, own := w.write(r, seats)
+		res, own, err := w.write(r, seats)
 		// THE TURN IS RELEASED ONCE THE ANSWER IS KNOWN — the record applied
 		// here, or the wait for it gave up — and before the announcement,
 		// which no write of the repository waits on.
@@ -550,6 +573,91 @@ type checksDecision struct {
 	// dropped is, for a dispatch, why each attempt it carried that the rows
 	// refused was left out of its record (decideDispatched).
 	dropped []string
+	// reads are the paths of the changes the decide found in its snapshot
+	// and read ([checksDecision.changeRead]), which its record names beside
+	// the request's scope.
+	reads []string
+}
+
+// checksScope is the scope a write of r is published under: [RepoPath] and
+// [ChecksPath] of its repository — every arm's decide reads the repository's
+// row — and the [ChangePath] of each change it queues at, a dispatch's and an
+// attempt queued for a change's head, whose head, target and liveness the
+// home read to queue it; past [MaxScopePaths], the whole domain, which covers
+// them all (the queue's land rule, queue.go). See the file's doc.
+func checksScope(r ChecksRequest) []string {
+	repoID := r.RepoID()
+	scope := []string{RepoPath(repoID), ChecksPath(repoID)}
+	var changes []string
+	switch {
+	case r.Queued != nil:
+		changes = append(changes, r.Queued.ChangeID)
+	case r.Dispatched != nil:
+		for _, h := range r.Dispatched.Heads {
+			changes = append(changes, h.ChangeID)
+		}
+		for _, a := range r.Dispatched.Attempts {
+			changes = append(changes, a.ChangeID)
+		}
+	}
+	changes = slices.DeleteFunc(changes, func(id string) bool { return id == "" })
+	slices.Sort(changes)
+	changes = slices.Compact(changes)
+	if len(scope)+len(changes) > MaxScopePaths {
+		return []string{DomainPath()}
+	}
+	for _, id := range changes {
+		scope = append(scope, ChangePath(id))
+	}
+	return scope
+}
+
+// scope is the scope d's record names: the request's, and every change d's
+// decide found and read — the whole domain past [MaxScopePaths].
+func (d checksDecision) scope(requested []string) []string {
+	if len(d.reads) == 0 {
+		return requested
+	}
+	scope := slices.Clone(requested)
+	for _, p := range d.reads {
+		if !slices.Contains(scope, p) {
+			scope = append(scope, p)
+		}
+	}
+	if len(scope) > MaxScopePaths || slices.Contains(requested, DomainPath()) {
+		return []string{DomainPath()}
+	}
+	return scope
+}
+
+// changeRead is the guard a decide passes before it reads change's rows,
+// having FOUND the change in its own snapshot — a rerun's head change, a
+// failed head's — where no request could name it for the framework's probe
+// ([statelog.Snap]): a record this node holds and cannot decode whose scope
+// covers the change refuses the write unavailable, the framework's own
+// `deferred`, so the router asks a node whose rows are current; otherwise the
+// change's path joins d's record's scope. The iam domain's wholeDirectory
+// precedent, over one change.
+func (d *checksDecision) changeRead(ctx context.Context, tx *sql.Tx, change string) error {
+	path := ChangePath(change)
+	deferral, hit, err := statelog.DeferredIn(ctx, tx, Domain{}, statelog.ScopeSet{Paths: []string{path}})
+	if err != nil {
+		return fmt.Errorf("code: ask whether this node holds a record about change %s it cannot decode: %w",
+			change, err)
+	}
+	if hit {
+		return &statelog.Unavailable{
+			Reason:   statelog.ReasonDeferred,
+			Position: deferral.Position,
+			Detail: fmt.Sprintf("this node holds a record at version %d it cannot decode, at %s, whose scope "+
+				"covers change %s — a check's write reads that change's rows, which are stale here, and "+
+				"another node can serve it", deferral.Version, deferral.Position, change),
+		}
+	}
+	if !slices.Contains(d.reads, path) {
+		d.reads = append(d.reads, path)
+	}
+	return nil
 }
 
 // checksLanded is what a write's answer says of its OWN record, which the
@@ -567,14 +675,14 @@ type checksLanded struct {
 // write publishes one write of a repository's checks and answers it — under
 // the writer's own lifetime and one CommitBudget — with what landed of its
 // own record.
-func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, error, checksLanded) {
+func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, checksLanded, error) {
 	ctx, cancel := context.WithTimeout(w.flights.life, CommitBudget)
 	defer cancel()
 	op := r.op()
 	retention := w.retention()
 	repoID := r.RepoID()
 	subject := ChecksSubject(repoID)
-	scope := []string{ChecksPath(repoID)}
+	scope := checksScope(r)
 	var (
 		last    checksDecision
 		decided bool
@@ -593,13 +701,14 @@ func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, er
 			if d.payload == nil {
 				return statelog.Decision{}, nil
 			}
-			return recordFor(stamp, subject, op, scope, r.OpID, Actor{ID: w.nodeID, Kind: ActorSystem},
+			return recordFor(stamp, subject, op, d.scope(scope), r.OpID, Actor{ID: w.nodeID, Kind: ActorSystem},
 				d.payload, now)
 		},
 	})
 	if err != nil {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := w.refused(ctx, r, err)
-		return res, err, checksLanded{}
+		return res, checksLanded{}, err
 	}
 	if decided && len(last.dropped) > 0 {
 		w.log.DebugContext(ctx, "code_check_dispatch_attempts_dropped", "repo", repoID, "op_id", r.OpID,
@@ -639,21 +748,21 @@ func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, er
 			if last.refusal == CheckRefusalClaimed && last.row != nil {
 				out.Holder = last.row.Runner
 			}
-			return out, nil, checksLanded{}
+			return out, checksLanded{}, nil
 		case decided && last.unchanged:
 			out := ChecksResult{Outcome: statelog.OutcomeApplied, Unchanged: true, Row: last.row}
 			if last.row != nil {
 				out.Holder = last.row.Runner
 				out.Position = statelog.Later(last.row.Queued, last.row.Finished)
 			}
-			return out, nil, checksLanded{}
+			return out, checksLanded{}, nil
 		}
-		return ChecksResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no "+
-			"record, and its decide neither refused nor found it unchanged", r.OpID), checksLanded{}
+		return ChecksResult{}, checksLanded{}, fmt.Errorf("code: the publish of operation %s answered applied "+
+			"with no record, and its decide neither refused nor found it unchanged", r.OpID)
 	case statelog.OutcomePending:
-		return ChecksResult{Outcome: statelog.OutcomePending, Position: res.Position}, nil, checksLanded{}
+		return ChecksResult{Outcome: statelog.OutcomePending, Position: res.Position}, checksLanded{}, nil
 	}
-	return ChecksResult{Outcome: statelog.OutcomeUnknown}, nil, checksLanded{}
+	return ChecksResult{Outcome: statelog.OutcomeUnknown}, checksLanded{}, nil
 }
 
 // decideChecks is one round of a write's decide, in ONE snapshot — see the
@@ -669,6 +778,7 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 	var d checksDecision
 	switch {
 	case !found || repo.status == RepoStatusDeleted || repo.status == RepoStatusPurging:
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		detail, err := goneDetail(ctx, tx, repoID, repo, found, retention)
 		if err != nil {
 			return checksDecision{}, err
@@ -689,7 +799,7 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 	case r.Rerun != nil:
 		return decideRerun(ctx, tx, *r.Rerun, r.Asker, repo, seats, d, named, now)
 	case r.Report != nil:
-		d, err := decideReport(ctx, tx, *r.Report, r.Asker, d, named, now)
+		d, err = decideReport(ctx, tx, *r.Report, r.Asker, d, named, now)
 		if err != nil || d.payload == nil {
 			return d, err
 		}
@@ -745,24 +855,15 @@ func routeFailedHead(ctx context.Context, tx *sql.Tx, repoName string, d checksD
 	if !ok || !f.failsItsHead() {
 		return d, nil
 	}
-	change, found, err := headChangeIn(ctx, tx, f.CheckKey, d.row, reporter != nil)
+	change, found, err := headChangeIn(ctx, tx, &d, f.CheckKey, d.row, reporter != nil)
 	if err != nil || !found {
 		return d, err
 	}
 	c := concerning{repoName: repoName, change: change, authors: true, checksFailed: true}
 	if reporter != nil {
 		c.actor, c.actorKind = reporter.party()
-	} else {
-		var pusher, kind string
-		switch err := tx.QueryRowContext(ctx, headPusherSQL, change.id, change.revision).Scan(&pusher,
-			&kind); {
-		case errors.Is(err, sql.ErrNoRows):
-		case err != nil:
-			return checksDecision{}, fmt.Errorf("code: read who pushed revision %d of %s: %w", change.revision,
-				change.id, err)
-		default:
-			c.actor, c.actorKind = pusher, PartyKind(kind)
-		}
+	} else if c.actor, c.actorKind, err = revisionPusher(ctx, tx, change.id, change.revision); err != nil {
+		return checksDecision{}, err
 	}
 	if f.Routing, err = routingFor(ctx, tx, c); err != nil {
 		return checksDecision{}, err
@@ -782,8 +883,12 @@ func routeFailedHead(ctx context.Context, tx *sql.Tx, repoName string, d checksD
 // key.OID; a check of a tip, a candidate or a landing measures no change's
 // head — a fast-forward candidate's commit can BE a change's head, and its
 // failure ejects that change rather than telling its authors their head fails.
-func headChangeIn(ctx context.Context, tx *sql.Tx, key CheckKey, row *CheckRow, reported bool) (changeRow,
-	bool, error) {
+//
+// THE CHANGE IS FOUND IN THE SNAPSHOT, so d's guard probes it before its rows
+// are read ([checksDecision.changeRead]): a record this node cannot decode
+// that closed, retargeted or moved it leaves them stale.
+func headChangeIn(ctx context.Context, tx *sql.Tx, d *checksDecision, key CheckKey, row *CheckRow,
+	reported bool) (changeRow, bool, error) {
 
 	var (
 		change changeRow
@@ -801,8 +906,14 @@ func headChangeIn(ctx context.Context, tx *sql.Tx, key CheckKey, row *CheckRow, 
 			return changeRow{}, false, fmt.Errorf("code: read the live change into %s at %s: %w", key.Target,
 				key.OID, err)
 		}
+		if err = d.changeRead(ctx, tx, change.id); err != nil {
+			return changeRow{}, false, err
+		}
 		found = true
 	case row != nil && row.Purpose == PurposeHead && row.ChangeID != "":
+		if err = d.changeRead(ctx, tx, row.ChangeID); err != nil {
+			return changeRow{}, false, err
+		}
 		if change, found, err = changeRowIn(ctx, tx, row.ChangeID); err != nil {
 			return changeRow{}, false, err
 		}
@@ -987,7 +1098,7 @@ func decideFinished(f CheckFinished, d checksDecision, held bool, named func(Che
 // a second ending of the attempt. told is whom the record tells (its
 // routing, nil for none: routeFailedHead).
 func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelog.Result,
-	replacing CheckState, told *ChangeRouting) (ChecksResult, error, checksLanded) {
+	replacing CheckState, told *ChangeRouting) (ChecksResult, checksLanded, error) {
 
 	key, at := r.Key(), res.Position
 	var (
@@ -1025,7 +1136,7 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		readError = fmt.Errorf("code: the record of operation %s applied at %s and its attempt's row could not "+
 			"be read: %w", r.OpID, at, err)
 		w.log.WarnContext(ctx, "code_checks_failed", "repo", key.RepoID, "op_id", r.OpID, "error", readError)
-		return ChecksResult{}, readError, checksLanded{}
+		return ChecksResult{}, checksLanded{}, readError
 	}
 	wrote := held
 	switch {
@@ -1041,13 +1152,13 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		w.log.ErrorContext(ctx, "code_checks_unanswerable", "repo", key.RepoID, "op_id", r.OpID,
 			"position", at.String())
 		return ChecksResult{Outcome: statelog.OutcomeUnknown, Detail: fmt.Sprintf("the write's record applied "+
-			"at %s and the attempt's row this node holds does not carry it", at)}, nil, checksLanded{}
+			"at %s and the attempt's row this node holds does not carry it", at)}, checksLanded{}, nil
 	}
 	out := ChecksResult{Outcome: statelog.OutcomeApplied, Position: at, Row: &row, Holder: row.Runner}
 	// A RETRY COLLAPSED ONTO AN EARLIER LANDING is that landing's, whose call
 	// counted and announced it.
 	if res.Collapsed {
-		return out, nil, checksLanded{}
+		return out, checksLanded{}, nil
 	}
 	own := checksLanded{fresh: true}
 	// THE ENDING ANNOUNCED IS THE ONE THE ROW KEEPS: an ending the join set
@@ -1063,7 +1174,7 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		}
 		own.endings = append(own.endings, ending)
 	}
-	return out, nil, own
+	return out, own, nil
 }
 
 // endingOf is the announcement of row's ending — the attempt key, of the
@@ -1121,7 +1232,7 @@ func failedHeadOwnerIn(ctx context.Context, tx *sql.Tx, row CheckRow) (Party, er
 // one it recorded ended — skipped, or errored for a file that does not run —
 // is announced, as a single queue's would be, where the row keeps it.
 func (w *ChecksWriter) dispatchApplied(ctx context.Context, r ChecksRequest, res statelog.Result,
-	attempts []CheckQueued) (ChecksResult, error, checksLanded) {
+	attempts []CheckQueued) (ChecksResult, checksLanded, error) {
 
 	d := r.Dispatched
 	var held bool
@@ -1171,15 +1282,15 @@ func (w *ChecksWriter) dispatchApplied(ctx context.Context, r ChecksRequest, res
 		err = fmt.Errorf("code: the dispatch of operation %s applied at %s and its target's reading could not "+
 			"be read: %w", r.OpID, res.Position, err)
 		w.log.WarnContext(ctx, "code_checks_failed", "repo", d.RepoID, "op_id", r.OpID, "error", err)
-		return ChecksResult{}, err, checksLanded{}
+		return ChecksResult{}, checksLanded{}, err
 	}
 	if !held {
 		w.log.ErrorContext(ctx, "code_checks_unanswerable", "repo", d.RepoID, "op_id", r.OpID,
 			"position", res.Position.String())
 		return ChecksResult{Outcome: statelog.OutcomeUnknown, Detail: fmt.Sprintf("the dispatch's record applied "+
-			"at %s and this node holds no reading of target %s", res.Position, d.Target)}, nil, checksLanded{}
+			"at %s and this node holds no reading of target %s", res.Position, d.Target)}, checksLanded{}, nil
 	}
-	return ChecksResult{Outcome: statelog.OutcomeApplied, Position: res.Position}, nil, own
+	return ChecksResult{Outcome: statelog.OutcomeApplied, Position: res.Position}, own, nil
 }
 
 // announce publishes an applied ending's event on this node's event stream,

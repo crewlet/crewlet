@@ -43,7 +43,7 @@ func indexOf(t *testing.T, c *cache.Cache, s cache.Synced, want cache.IndexOutco
 // whether the index skips its blob.
 func tipPaths(t *testing.T, c *cache.Cache, s cache.Synced) map[string]bool {
 	t.Helper()
-	view, ok := c.CodeIndex(s)
+	view, ok := c.CodeIndex(t.Context(), s)
 	if !ok {
 		t.Fatal("the copy keeps no code index")
 	}
@@ -155,7 +155,7 @@ func TestAnIndexBuildMergesAsItWritesNotOnceAtTheEnd(t *testing.T) {
 	c := w.open(t, cache.IndexSegmentBytesWith(1))
 	s := w.sync(t, c, repo)
 	indexOf(t, c, s, cache.IndexBuilt)
-	view, ok := c.CodeIndex(s)
+	view, ok := c.CodeIndex(t.Context(), s)
 	if !ok {
 		t.Fatal("the built index cannot be read")
 	}

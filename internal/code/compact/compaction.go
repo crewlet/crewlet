@@ -38,7 +38,10 @@ var (
 // the packs pushed since, which the layer neither names nor needs, so both
 // records apply ([Compactor.claimCompaction]). Only while that publication has
 // not planned yet, its sync and its plan, does a compaction answer busy, to be
-// planned again at the next pass.
+// planned again at the next pass. And so BESIDE AN EXPUNGE of the repository
+// on this node: the plan leaves out every input the expunge's plan chose
+// until its rescue has synced past its begin, and nothing after; only while
+// the expunge syncs and plans does a compaction answer busy.
 //
 //  1. SYNC at session, floored at the repository's version the listing read:
 //     never linearizable, because a barrier a compaction would cost the code
@@ -50,14 +53,15 @@ var (
 //  2. PLAN ([plan]) over the incarnation's live packs less every pack a
 //     published layer of its chain names — a published pack is never a
 //     compaction's input (the decide's rule 2), since a node's chain loads
-//     only over every pack it names — and less every pack a publication in
-//     flight here reserved, capped at the repository's cap
+//     only over every pack it names — and less every pack a publication or
+//     an expunge in flight here reserved, capped at the repository's cap
 //     ([Compactor.capFor]) and then at [InputByteCap] of the cut the inputs
 //     take ([bounds.cutFor]). Not due is remembered at the listing's version
 //     and the cap, never an admission's refusal: a publication, the one thing
 //     that moves the chain, moves the version too. A plan made beside a
 //     reservation is never remembered: the reservation goes with its
-//     publication, which may land nothing and leave the version where it was.
+//     publication or its expunge, which may land nothing and leave the
+//     version where it was.
 //  3. ADMIT the build to the maintenance lane ([cache.Cache.AdmitCompaction]):
 //     busy is the next poll's; a charge the node's memory cannot hold is
 //     refused `memory` and never remembered, since the budget is read again
@@ -93,12 +97,13 @@ func (c *Compactor) Compact(ctx context.Context, cand code.CompactionCandidate) 
 	defer c.compacting.Unlock()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	//nolint:contextcheck // c.life only cancels ctx, which stays the caller's: Stop must end the compaction however long the caller's ctx lives.
 	defer context.AfterFunc(c.life, func() { cancel(context.Cause(c.life)) })()
 	began := c.now()
 	reserved, ok := c.claimCompaction(cand.ID)
 	if !ok {
 		c.log.Debug("code_compaction_busy", "repo", cand.Name,
-			"detail", "a publication of the repository on this node has not planned yet")
+			"detail", "a publication or an expunge of the repository on this node has not planned yet")
 		c.counted(OutcomeBusy, began)
 		return OutcomeBusy, errClaimed
 	}
@@ -108,8 +113,9 @@ func (c *Compactor) Compact(ctx context.Context, cand code.CompactionCandidate) 
 	return out, err
 }
 
-// compact is [Compactor.Compact]'s body, beside the publication of the
-// repository in flight here that reserved the packs in reserved, if one is.
+// compact is [Compactor.Compact]'s body, beside the publication or the
+// expunge of the repository in flight here that reserved the packs in
+// reserved, if one is.
 func (c *Compactor) compact(ctx context.Context, cand code.CompactionCandidate, reserved map[string]bool,
 	began time.Time) (Outcome, error) {
 

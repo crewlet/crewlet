@@ -74,7 +74,7 @@ func (s *Store) ChecksSweep(ctx context.Context, repoID string, now time.Time) (
 			case err != nil:
 				return statelog.Decision{}, fmt.Errorf("code: read repository %s: %w", repoID, err)
 			}
-			rows, _, more, err := checksEndedBefore(ctx, tx, repoID, 1, cutoff, CheckHorizonRows,
+			rows, more, err := checksEndedBefore(ctx, tx, repoID, 1, cutoff, CheckHorizonRows,
 				CheckHorizonBytes)
 			if err != nil {
 				return statelog.Decision{}, fmt.Errorf("code: read %s's checks past their history: %w", repoID, err)

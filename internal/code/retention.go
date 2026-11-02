@@ -1041,13 +1041,8 @@ func (r *Reader) idleScratch(ctx context.Context, q idleQuery) (idlePage, error)
 	var page idlePage
 	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
 		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
-	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
-		page = idlePage{}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
-		page.through, page.keyedTo = cp.At, cp.KeyedTo
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
+		page = idlePage{through: cp.At, keyedTo: cp.KeyedTo}
 		rows, err := tx.QueryContext(ctx, idleScratchSQL, store.EncodeTime(q.cutoff), after.activity,
 			after.activity, after.id, q.limit)
 		if err != nil {

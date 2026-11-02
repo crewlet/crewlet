@@ -122,7 +122,7 @@ func TestTheContainerIsStartedKnowingTheEngineHostsName(t *testing.T) {
 				opts: LocalOptions{Placement: Container, Image: "img", RunArgs: []string{"--add-host", "x:1.2.3.4"}},
 				cli:  containerCLI{path: fakeRuntime(t, tc.runtime, tc.format, tc.info, 0)},
 			}
-			argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b", nil)
+			argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b")
 			first := slices.Index(argv, "--add-host")
 			if tc.want == nil {
 				if argv[first+1] != "x:1.2.3.4" {

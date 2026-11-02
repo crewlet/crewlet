@@ -1931,8 +1931,8 @@ type Stream struct {
 	// compaction retired, the barriers its git clients' reads append, and
 	// its changes' records — opens, reviews, comments, merges, every
 	// revision's facts and mergeability, and its queue's and checks' where
-	// they run — take nearly twice to about eight and a half times what its
-	// tracker writes and its seats' reads take a day. Such a company sets
+	// they run — take nearly twice to about eight times what its tracker
+	// writes and its seats' reads take a day. Such a company sets
 	// this field to the ratio its two logs' crewlet.statelog.log.bytes_per_day
 	// show before the first boot, or raises the log with `crewlet retention
 	// set-capacity` once it exists.

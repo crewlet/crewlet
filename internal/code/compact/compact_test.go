@@ -63,8 +63,19 @@ const fixtureProcesses = 4
 // newFixture is a fleet holding an empty codetest.RepoName.
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureWith(t, nil)
+}
+
+// newFixtureWith is newFixture over a fleet whose options edit changes
+// first, where it is set.
+func newFixtureWith(t *testing.T, edit func(*codetest.SoloOptions)) *fixture {
+	t.Helper()
 	gittest.RequireNode(t)
-	f := codetest.SoloNode(t, codetest.SoloOptions{MaxProcesses: fixtureProcesses})
+	opts := codetest.SoloOptions{MaxProcesses: fixtureProcesses}
+	if edit != nil {
+		edit(&opts)
+	}
+	f := codetest.SoloNode(t, opts)
 	f.Declare(t, code.Declared{Name: codetest.RepoName, Settings: codetest.Settings()})
 	store, err := objstore.NewStore(f.Objects())
 	if err != nil {

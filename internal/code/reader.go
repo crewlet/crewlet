@@ -31,14 +31,21 @@ import (
 // probe over what the read is ABOUT, then the freshness target — and only then
 // the rows, in ONE transaction.
 //
-// AND THE POSITION IS READ IN THAT TRANSACTION. The framework's answer names
-// the checkpoint it waited for, read before the transaction opened; the
-// applier can commit in between, so rows can be NEWER than that position. A
-// snapshot's delta floor, its full-or-delta decision and its stream identity
-// are claims about the rows, so each read here reads the code log's checkpoint
-// row beside its rows and reports THAT ([statelog.CheckpointOf] over the read's
-// own transaction) — read separately, one of them ends up describing another
-// checkpoint.
+// AND THE POSITION IS THE ROWS' OWN. A snapshot's delta floor, its
+// full-or-delta decision and its stream identity, a later page's floor, a
+// resolved ref's position are claims about the rows, so every read here is
+// stamped with the checkpoint the framework hands its transaction
+// ([statelog.Reader.ReadThrough]): the code log's checkpoint row as that
+// transaction reads it, carried over the barriers this node had reached when
+// the read was released. Neither half alone describes the rows. The release
+// position is read before the transaction opens and the applier can commit in
+// between, so rows can be NEWER than it. And the checkpoint row LAGS every
+// barrier this node has decoded and not yet committed, so a node that has
+// committed them stamps the same rows higher: stamped with the row alone, a
+// linearizable read was answered below one another node had answered before
+// it — a cache took that for its log gone back, and a snapshot's next page,
+// read on another node at the floor its last page set, issued a cursor read
+// below where it began.
 type Reader struct {
 	log    *statelog.Reader
 	limits func() Limits
@@ -146,8 +153,12 @@ type inTx struct{ tx *sql.Tx }
 
 func (t inTx) Read(_ context.Context, fn func(*sql.Tx) error) error { return fn(t.tx) }
 
-// checkpointIn is the code log's checkpoint in tx: the position the rows read
-// in tx were applied through, and the stream they are keyed to.
+// checkpointIn is the code log's checkpoint row in tx: the position the rows
+// read in tx were committed through, and the stream they are keyed to — what
+// a WRITE's decision and a node's read-back of its own rows stamp, neither of
+// which the read authority serves. A read through the authority is handed its
+// stamp instead ([statelog.Reader.ReadThrough]), because this row lags the
+// barriers the read was released past ([Reader]).
 func checkpointIn(ctx context.Context, tx *sql.Tx) (statelog.Checkpoint, error) {
 	cp, _, err := statelog.CheckpointOf(ctx, inTx{tx}, topics.CodeLogStream)
 	return cp, err
@@ -333,11 +344,8 @@ func (r *Reader) Resolve(ctx context.Context, q ResolveQuery) (RepoRef, error) {
 		return RepoRef{}, fmt.Errorf("%w: name: %q is not a repository name", ErrInvalid, q.Name)
 	}
 	var out RepoRef
-	_, err := r.log.Read(ctx, q.Fresh.Resolved(resolver(q.Name), false), func(tx *sql.Tx) error {
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
+	query := q.Fresh.Resolved(resolver(q.Name), false)
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
 		v, found, err := namedIn(ctx, tx, q.Name, cp.At)
 		if err != nil {
 			return err
@@ -469,12 +477,8 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 		query = statelog.FloorAt(statelog.ReadSession, q.Cursor.Seen).Query(scope, false)
 	}
 	var out RepoSnapshot
-	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
 		out = RepoSnapshot{}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
 		v, found, err := repoViewIn(ctx, tx, q.RepoID, cp.At)
 		if err != nil {
 			return err
@@ -1170,13 +1174,8 @@ func (r *Reader) PushOutcome(ctx context.Context, q OutcomeQuery) (PushOutcome, 
 	query := statelog.FloorAt(statelog.ReadSession, q.At).Query(
 		statelog.ScopeSet{Paths: []string{RepoPath(q.RepoID)}}, false)
 	var out PushOutcome
-	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
-		out = PushOutcome{}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
-		out.Position = cp.At
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
+		out = PushOutcome{Position: cp.At}
 		row, found, err := pushIn(ctx, tx, q.PushID)
 		if err != nil || !found {
 			return err
@@ -1342,7 +1341,12 @@ func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
 //     CheckSummaryBytes, so 200 attempts summarised in a line are under
 //     200 KB, and a page of summaries at their 4 KiB ends near 950 KB, under
 //     the byte budget; the bound is on the rows a page READS, so a window a
-//     seat reads little of costs what a full page does and no more.
+//     seat reads little of costs what a full page does and no more. A
+//     listing of each check's LATEST attempt ([CheckQuery.Latest]) takes
+//     latestCheckLimit by default: MaxChecksPerFile, every check one checks
+//     file declares for a branch, so a change's head's or a queue tip's
+//     checks for its branch are one page and a reader asks once — at their
+//     4 KiB summaries and 2 KiB links about 440 KB, under the byte budget.
 //
 // The maxima are exported for a client that pages: the most a page may ask
 // for of each, which a page past them is refused naming.
@@ -1356,6 +1360,7 @@ const (
 	defaultChangeLimit   = 50
 	MaxChangesPerPage    = 200
 	defaultCheckLimit    = 50
+	latestCheckLimit     = MaxChecksPerFile
 	MaxChecksPerPage     = 200
 	defaultRevisionLimit = 200
 	MaxRevisionsPerPage  = 1_000
@@ -1605,13 +1610,8 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.BranchChanges.RepoID)}}, false)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.branchChanges(ctx, tx, q, &out) }
 	}
-	answer, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
-		out = ReadAnswer{}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
-		out.Position = cp.At
+	answer, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
+		out = ReadAnswer{Position: cp.At}
 		return serve(tx, cp.At)
 	})
 	if err != nil {
@@ -1701,6 +1701,9 @@ func (q ReadQuery) validate() error {
 	case q.MirrorPush != nil:
 		return fmt.Errorf("%w: mirror_push: only a mirror_push read names the repository whose push mirror "+
 			"it reads", ErrInvalid)
+	case q.ChecksQueued != nil:
+		return fmt.Errorf("%w: checks_queued: only a checks_queued read names the cell whose queued checks it "+
+			"reads", ErrInvalid)
 	case q.QueueDue != nil:
 		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
 			"in", ErrInvalid)
@@ -1882,6 +1885,8 @@ func (q ReadQuery) validateIntroduced() error {
 			"checks it reads")
 	case q.MirrorPush != nil:
 		return refused("mirror_push", "only a mirror_push read names the repository whose push mirror it reads")
+	case q.ChecksQueued != nil:
+		return refused("checks_queued", "only a checks_queued read names the cell whose queued checks it reads")
 	case q.ExpungeTips != nil:
 		return refused("expunge_tips", "only an expunge_tips read names a repository's ref drops")
 	case !q.ExpungedBefore.IsZero():
@@ -1973,6 +1978,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -2023,6 +2029,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -2064,6 +2071,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -2115,6 +2123,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, lists+", a page of MaxSnapshotItems at a time, and names nothing else")
@@ -2173,6 +2182,7 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_queued", q.ChecksQueued != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+
@@ -2214,7 +2224,8 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"branch_changes", q.BranchChanges != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil},
+		{"branch_changes", q.BranchChanges != nil},
 		{"expunged_before", !q.ExpungedBefore.IsZero()}, {"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {
@@ -2237,7 +2248,7 @@ func (r *Reader) mirrorPush(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		return err
 	}
 	c := MirrorCandidate{ID: id, To: remotes.mirrorTo()}
-	if err := tx.QueryRowContext(ctx, repoNameSQL, id).Scan(&c.Name); err != nil {
+	if err = tx.QueryRowContext(ctx, repoNameSQL, id).Scan(&c.Name); err != nil {
 		return fmt.Errorf("code: read repository %s's name: %w", id, err)
 	}
 	green, err := greenRowsIn(ctx, tx, id)
@@ -2295,7 +2306,7 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil},
 		{"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {
@@ -2591,6 +2602,12 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 		return err
 	}
 	out.Repo.Expunge = state.view()
+	// AND WHERE IT STANDS WITH OTHER HOSTS ([remotesShownIn]): a person who
+	// imported it, or set a mirror, reads the import's progress and the
+	// mirror's last sync here.
+	if out.Repo.Remotes, err = remotesShownIn(ctx, tx, id); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -2620,6 +2637,7 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		// history holds: another repository's push, or one past
 		// PushHistory, is no row of this history, which is an answer with
 		// none.
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		row, found, err := pushIn(ctx, tx, q.Push)
 		if err != nil {
 			return fmt.Errorf("code: read %s's push %s: %w", q.Repo, q.Push, err)
@@ -3416,7 +3434,7 @@ func (r *Reader) mirrorsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 			synced  int64
 			version int64
 		)
-		if err := rows.Scan(&c.ID, &c.Name, &from, &synced, &version); err != nil {
+		if err = rows.Scan(&c.ID, &c.Name, &from, &synced, &version); err != nil {
 			return fmt.Errorf("code: list the pull mirrors: %w", err)
 		}
 		if c.From, err = remoteOf[MirrorSource](from); err != nil {
@@ -3451,7 +3469,7 @@ func (r *Reader) pushMirrors(ctx context.Context, tx *sql.Tx, after string, pg *
 			c  MirrorCandidate
 			to string
 		)
-		if err := rows.Scan(&c.ID, &c.Name, &to); err != nil {
+		if err = rows.Scan(&c.ID, &c.Name, &to); err != nil {
 			return false, fmt.Errorf("code: list the push mirrors: %w", err)
 		}
 		if c.To, err = remoteOf[MirrorTarget](to); err != nil {
@@ -3893,12 +3911,9 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 		return RefAnswer{}, chartErr
 	}
 	var out RefAnswer
-	_, err := r.log.Read(ctx, q.Fresh.Resolved(resolver(q.Repo), false), func(tx *sql.Tx) error {
+	query := q.Fresh.Resolved(resolver(q.Repo), false)
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
 		out = RefAnswer{}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
 		id, found, err := claimIn(ctx, tx, q.Repo)
 		if err != nil {
 			return err

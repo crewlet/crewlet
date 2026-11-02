@@ -33,10 +33,16 @@ import (
 // gitBase is the code host's base every case's boxes are given.
 const gitBase = "https://git.example.com/box/git"
 
+// codeBase is where every case's boxes read their commit without a clone: on
+// another host than gitBase's, so a runner that spelled its own sibling of
+// gitBase rather than taking the base it is given reads as one.
+const codeBase = "https://read.example.com/box/code"
+
 // fast is the timing every case runs its runners at: a poll of twenty
-// milliseconds, a stagger long enough to order two runners' claims.
+// milliseconds, a stagger long enough to order two runners' claims, and an
+// ending read for as long as a loaded runner takes to read one from memory.
 var fast = checkrun.Timing{Poll: 20 * time.Millisecond, Stagger: 300 * time.Millisecond,
-	Walk: 5 * time.Millisecond, Backstop: 50 * time.Millisecond, Renew: 20 * time.Millisecond}
+	Walk: 5 * time.Millisecond, Backstop: 50 * time.Millisecond, Renew: 20 * time.Millisecond, End: 10 * time.Second}
 
 // estate is a data node's code domain as a runner reaches it: its reads and
 // its checks writer, in process.
@@ -50,23 +56,12 @@ func (e estate) Checks(ctx context.Context, r code.ChecksRequest) (code.ChecksRe
 	return e.d.Served().PublishChecks(ctx, r)
 }
 
-// order is a git order a case sets: every repository's the same.
-type order struct {
-	mu    sync.Mutex
-	nodes []string
-}
+// order is the git order a case fixes when it builds its runner: every
+// repository's the same, and never moved under the runner, so it needs no
+// lock.
+type order struct{ nodes []string }
 
-func (o *order) GitOrder(string) ([]string, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return slices.Clone(o.nodes), nil
-}
-
-func (o *order) set(nodes ...string) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	o.nodes = nodes
-}
+func (o *order) GitOrder(string) ([]string, error) { return slices.Clone(o.nodes), nil }
 
 // tokens mints a token naming the attempt it is for.
 type tokens struct{}
@@ -210,8 +205,8 @@ func newFleet(t *testing.T) *fleet {
 func (f *fleet) options(node string, slots int, o checkrun.Order) checkrun.Options {
 	return checkrun.Options{NodeID: node, Estate: estate{f.d}, Order: o,
 		Boxes:   func() (checkrun.Boxes, bool) { return f.manager, true },
-		Company: f.companyOf, Tokens: tokens{}, GitBase: gitBase, Slots: slots, Timing: fast, Faults: f.faults,
-		Leases: f.leases, Minutes: f.counter}
+		Company: f.companyOf, Tokens: tokens{}, GitBase: gitBase, CodeBase: codeBase, Slots: slots, Timing: fast,
+		Faults: f.faults, Leases: f.leases, Minutes: f.counter}
 }
 
 // companyOf is the case's company, its ${VAR} references resolved from env.

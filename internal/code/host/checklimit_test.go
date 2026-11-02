@@ -47,7 +47,7 @@ func TestACheckBoxPastItsResyncsIsAnsweredAtItsSession(t *testing.T) {
 	fetch := func(token string) (barriers int, answer string) {
 		t.Helper()
 		before := rec.linearizable()
-		resp, body := boxDo(t, c, 0, codetest.RepoName, boxUploadPack, host.CheckUser, token, v2,
+		resp, body := boxDo(t, c, 0, codetest.RepoName, boxUploadPack, code.CheckUser, token, v2,
 			fetchWants([]string{missing}))
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("a check's box's fetch of %s answered %d %q", missing, resp.StatusCode, short(body))
@@ -74,7 +74,7 @@ func TestACheckBoxPastItsResyncsIsAnsweredAtItsSession(t *testing.T) {
 	}
 
 	reads := len(rec.seen("read:" + string(code.ReadCheckBox)))
-	resp, answer := boxDo(t, c, 0, codetest.RepoName, boxFetchAdvert, host.CheckUser, unknown, v2, "")
+	resp, answer := boxDo(t, c, 0, codetest.RepoName, boxFetchAdvert, code.CheckUser, unknown, v2, "")
 	if resp.StatusCode != http.StatusForbidden || !strings.Contains(answer, "is unknown here") ||
 		!strings.Contains(answer, "not re-judged at linearizable") {
 		t.Errorf("an attempt the rows do not hold, past the checks' re-syncs, answered %d %q, want 403 "+
@@ -113,7 +113,7 @@ func TestACheckHasOneBurstOnANode(t *testing.T) {
 		10*time.Minute)
 	for i := range code.ResyncBurst {
 		before := rec.linearizable()
-		resp, body := boxDo(t, c, 0, codetest.RepoName, boxUploadPack, host.CheckUser, token, v2,
+		resp, body := boxDo(t, c, 0, codetest.RepoName, boxUploadPack, code.CheckUser, token, v2,
 			fetchWants([]string{missing}))
 		if resp.StatusCode != http.StatusOK || rec.linearizable() == before || !strings.Contains(body, "not our ref") {
 			t.Fatalf("re-sync %d of the check's %d answered %d %q with %d barriers, want one and git's own not "+

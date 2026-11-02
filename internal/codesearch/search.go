@@ -592,10 +592,10 @@ func (s *Searcher) round(ctx context.Context, q Query, sq code.SearchQuery,
 	}
 	replies := map[string]Reply{}
 	err = s.ask(rctx, sealed, func(raw []byte) bool {
-		rep, why, err := s.wire.OpenReply(raw, req.ID)
+		rep, why, openErr := s.wire.OpenReply(raw, req.ID)
 		switch {
-		case err != nil:
-			s.log.Warn("code_search_reply_unreadable", "error", err)
+		case openErr != nil:
+			s.log.Warn("code_search_reply_unreadable", "error", openErr)
 		case why != "":
 			s.log.Warn("code_search_reply_refused", "why", why)
 		case rep.Version != Protocol:

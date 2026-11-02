@@ -50,7 +50,11 @@
 // writes it on a record of that subject's own, which reaches them under its
 // own reason and answers for itself afterwards: the tracker's unblocked
 // repair tells a dependent's assignee in a commit on the dependent, not on
-// the task whose close freed it.
+// the task whose close freed it. A domain whose ONE record carries several
+// subjects' news by construction — the code host's, which folds pushes from
+// unrelated clients into one record and lands several queue entries in one —
+// keys both on the subject too, and offers each subject's news to a Builder
+// of its own (internal/code's Concerns and NoticeID).
 //
 // # The fallback is a chain
 //

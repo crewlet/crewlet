@@ -406,8 +406,10 @@ func (p pathPattern) match(comps []string) bool {
 func globMatch(pattern, name string) bool {
 	px, nx := 0, 0
 	// Where to resume after the last *: the pattern past it, and the name
-	// one character on from where it last stood.
-	starPx, starNx := -1, -1
+	// one character on from where it last stood — starPx below zero before
+	// the first *, and starNx read only once there is one.
+	starPx := -1
+	var starNx int
 	for px < len(pattern) || nx < len(name) {
 		if px < len(pattern) {
 			switch c := pattern[px]; c {
@@ -418,7 +420,7 @@ func globMatch(pattern, name string) bool {
 					continue
 				}
 			case '*':
-				starPx, starNx = px, nx
+				starPx = px
 				if nx < len(name) {
 					_, w := utf8.DecodeRuneInString(name[nx:])
 					starNx = nx + w

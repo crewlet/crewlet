@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// CompactConfig is the configuration a compaction's pack-objects runs under,
+// PackConfig is the configuration a compaction's pack-objects runs under,
 // beside the pool's base: every output a bundle in the stored format — its
 // index version 2 and its reverse index written beside it, which the bundle's
 // seal holds it to (code.CheckBundle) — and the delta window held to what the
@@ -26,7 +26,7 @@ import (
 // makes the build's whole window — and a bound on the window alone: the build
 // held 5.4 of the largest blobs around it where its search met them, which is
 // what its memory charge counts (cache.CompactWindowBytes, six of them).
-func CompactConfig(maxBlob int64) []gitproc.KV {
+func PackConfig(maxBlob int64) []gitproc.KV {
 	return []gitproc.KV{
 		{Key: "pack.indexVersion", Value: "2"},
 		{Key: "pack.writeReverseIndex", Value: "true"},
@@ -116,7 +116,7 @@ func (c *Compactor) pack(ctx context.Context, adm *cache.Admission, sc *cache.Sc
 		Args: []string{"pack-objects", "--stdin-packs", "--max-pack-size=" + strconv.FormatInt(cut, 10),
 			"--delta-base-offset", "--quiet", "objects/pack/pack"},
 		Stdin:    strings.NewReader(list.String()),
-		Config:   CompactConfig(limits.MaxBlobBytes),
+		Config:   PackConfig(limits.MaxBlobBytes),
 		Deadline: gitproc.PackWorkDeadline(p.packBytes()),
 	})
 	if err != nil {

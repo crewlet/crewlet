@@ -176,7 +176,12 @@ func (s *Store) NameOf(ctx context.Context, id string) string {
 // logs, the home's dispatches and its targets' readings, and the merge queues'
 // entries, candidates, landings and green rows — is counted at most
 // PurgePartRows + 1 deep (?2, against the repository
-// ?1), and beside them what the wide rows among them weigh, summed over the
+// ?1), and so are the changes' NOTICES, by the count each change keeps of
+// them over the same first ?2 changes (code_changes.notices, read off the
+// narrow rows the bodies' term reads anyway): code_notifications is
+// divergent, so a decide every node must agree on counts the count, which
+// no node holds fewer rows than (apply_notices.go). Beside them is what the
+// wide rows among them weigh, summed over the
 // same depth: the push rows' row_bytes from code_pushes_repo_idx, which
 // carries every row's width, the changes' body_bytes from their own narrow
 // rows, never from the bodies, whose overflow pages a read would walk, their
@@ -247,7 +252,10 @@ const (
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_queue WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_candidates WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_landings WHERE repo_id = ?1 LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_green WHERE repo_id = ?1 LIMIT ?2)),
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_green WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COALESCE(SUM(notices), 0) FROM
+			(SELECT notices FROM code_changes INDEXED BY ` + changesNumberKey + `
+				WHERE repo_id = ?1 LIMIT ?2)),
 		(SELECT COALESCE(SUM(row_bytes), 0) FROM
 			(SELECT row_bytes FROM code_pushes WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COALESCE(SUM(body_bytes), 0) FROM

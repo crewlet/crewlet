@@ -173,7 +173,7 @@ func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := fresh.OnlyOn(topics.TrackerLogStream, topics.CodeLogStream); err != nil {
+	if err = fresh.OnlyOn(topics.TrackerLogStream, topics.CodeLogStream); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	var sources []inbox.Source
@@ -194,6 +194,7 @@ func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 		}
 	}
 	if s.Code != nil {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		reads, err := s.Code.CodeReads()
 		var notFound *NotFound
 		switch {

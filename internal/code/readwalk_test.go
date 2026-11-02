@@ -183,7 +183,7 @@ func walkForReads(t *testing.T, root, module string) readWalk {
 		evals:  map[constKey]evalResult{},
 		uses:   map[constKey]map[string]bool{},
 		folds:  map[constKey]bool{},
-		locals: map[*ast.Object]*origin{},
+		locals: localOrigins{},
 		params: map[paramKey]*origin{},
 		refs:   map[*funcDecl][]funcRef{},
 		out: readWalk{spelled: map[string]*spelling{}, builders: map[string][]string{},
@@ -257,11 +257,17 @@ type readWalker struct {
 	// to — nil while the walk is following one, since a cycle hands on no
 	// text the rest of the cycle does not — and refs every reference to a
 	// function.
-	locals map[*ast.Object]*origin
+	locals localOrigins
 	params map[paramKey]*origin
 	refs   map[*funcDecl][]funcRef
 	out    readWalk
 }
+
+// localOrigins is what each local variable was followed to, keyed by the
+// parser's own resolution of it.
+//
+//nolint:staticcheck // SA1019: a syntax walk has only the parser's resolution, and the case go/ast deprecates it for — a composite literal's key, a field or a variable by T's type — is never a local this walk follows: it follows a variable's writes, never a literal's keys.
+type localOrigins map[*ast.Object]*origin
 
 // constKey is one constant: one name of a specification.
 type constKey struct {

@@ -70,7 +70,7 @@ func TestOnlyAPersonPurges(t *testing.T) {
 	host, writer := newCodeHost(), &codeWrites{}
 	deps := writeDeps(host, writer)
 	deps.Placement = purgePlacement{}
-	got := callWrite(t, everyGrant(), codeRegistry(t, deps), writerTurn(t), builtin.CodePurgeUnreachableTool,
+	got := callWrite(everyGrant(), t, codeRegistry(t, deps), writerTurn(t), builtin.CodePurgeUnreachableTool,
 		args())
 	var refused *builtin.DecisionRefused
 	if !got.Failed || !errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonSeatRefused {

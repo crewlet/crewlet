@@ -1355,6 +1355,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/code/repos/{name}/commits/{sha}` | **A commit**, by its whole id: its header (subject, short id, repository, author, when it was authored and committed, its parents), who pushed it — the seat or the credential, when and how, and the turn, coding run and work item behind a seat's push, as the engine recorded them — the changes it belongs to (those it merged, and those whose revision it heads), and what it changed against its first parent (a root commit's from git's empty tree) in the one `DiffView` *(hidden where the company hosts no code)*. An abbreviated id is Not Found | `file=` (a path) · `layout=unified\|split` |
 | `#/code/repos/{name}/compare` | **A comparison** of two revisions: how they relate (ahead, behind, their merge base), what merging the compared into the base would do (merges cleanly, or conflicts in which paths), what it changed since the two parted in the one `DiffView`, and the page bar's **Open change**, which proposes the compared branch into the base branch, prefilled with its head's subject and the work item its push was charged to *(hidden where the company hosts no code)* | `base=` (none is the default branch) · `head=` (none asks for it) · `file=` · `layout=unified\|split` |
 | `#/code/repos/{name}/changes/{n}` | **A change**, `web!42` in full: its header (reference, title, state, repository, branches, owner, revisions, work item) and the page bar's **Approve**, **Request changes**, **Comment**, **Request review** and **Close**/**Reopen**; on a live change, the merge controls above the tabs — where its gate stands, judged with the reader as the merger, **Merge** (or **Add to queue** where the target's gate requires a check) with its method, **Delete its branch** and **Close** its work item, sending the head on screen, held with the gate's sentence while it is unmet; **Override**, a person's alone with a reason; and **Re-run checks** — each refusal said by the code host's own word; tabs **Conversation** (its readiness, description, and its reviews, threads and revisions in the order their records landed, with a comment of the reader's own), **Files** (the revision's files and one file's patch in the one `DiffView`, every finding and thread under the line it is on, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head), **Commits** (its revisions and their facts), **Checks** (the attempts that judge it: its head's, checked for its target, each opening in the check pane), **Provenance** (who opened it, from which turn and coding run, for which work item, and how it ended) and **Woke** (whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|files\|commits\|checks\|provenance\|woke` · on Files, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path), `layout=unified\|split`, `thread=` (a thread on a line, opening its file and its revision) |
+| `#/code/search` | **Code › Search**: the lines of the repositories the reader reads that match a search, by repository and then file, each line opening its file at the commit it was searched at with the line picked, under a Callout of what was not searched — asked when the reader presses Search | `q=` (the search, in the code host's grammar), `mode=literal\|regex\|word`, `repo=`, `path=`, `ref=` |
 | `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/code/queue` | **Code › Queue**: the merge queues of gated branches, a band per repository and branch, its entries in queue order — the place, the change, who enqueued it and its state — and, once a repository is named, each entry's train base, a `SegmentedMeter` of the required checks of what it is tested in, its time queued against the slowest of their declared timeouts, and what the queue put out in the last day, in the danger tone with the reason and the checks or paths the engine found | `repo=` (a repository's name; without one, every repository's live entries) |
 | `#/code/checks` | **Code › Checks**: every repository's attempts that ended in the window, newest ended first — under a `TimeRangePicker`, the state and check-name `FacetRail`s and a `Histogram` of when they ended (the failed ones its foot), each counted over the attempts loaded — each row opening the **check pane**: what it was checking, its commit and branch, how long it ran, its exit code and why it ended, its failures (each `path:line` a link into the comparison of its base and its commit on that file), its tail, and its log a page at a time on demand | `window=` (`1d` by default, `7d`, `30d`, or two instants) · `state=` · `name=` |
@@ -3248,8 +3249,10 @@ the inbox page in one snapshot (`code.NoticeChange`), the readiness judged for
 the reader at that read, so a page of fifty cards is one read and no card
 contradicts the row beside it. **Its gate** is read for the ONE card open,
 and only for a live change: `code_change` (its readiness, judged for the
-reader, and its revisions' facts) and `code_checks` of the change — the
-questions its own page asks, so the card needs nothing of the engine besides.
+reader, and its revisions' facts) and `code_checks` of the change at each
+check's latest attempt (`latest`, every page of it, drawn only once whole) —
+so the card needs nothing of the engine besides, and never rebuilds what a
+check stands at from a page of its history.
 It says what the head revision's REQUIRED checks measured, each one's state
 and duration — never tokens — and only where the readiness judges a `check`
 precondition; the head revision's change classes (how many touched paths
@@ -4432,9 +4435,9 @@ It is the design system's `CommandPalette` — the combobox, the scope tabs, the
 answer's live region and the key legend are the kit's — and `app/palette/` is
 what it searches and what a row does.
 
-### Six scopes, three sigils
+### Seven scopes, three sigils
 
-A launcher with one index answers "where do I go", and five questions do not
+A launcher with one index answers "where do I go", and six questions do not
 fit that shape, so each is a tab under the field:
 
 | Scope | Searches | Sigil |
@@ -4443,6 +4446,7 @@ fit that shape, so each is a tab under the field:
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
 | **Artifacts** | `artifacts` with the term over everything the reader can open, eight hits, each row its kind | |
+| **Code** | `code_search` (where the company hosts code), asked once the term has rested and is three characters or more — the shortest the code host's plan looks up — eight lines, each `repo:path:line` opening its file at the commit it was searched at with the line picked, and a row to Code › Search with the term | |
 | **Agents** | the org chart — the engine's own name tiers first (`colleague`), each seat's status glyph from the agents push, then people and teams | `@` |
 | **Actions** | the per-browser commands (Change theme…, a step listing the themes in their groups, which a query narrows by name, tag or group, whose highlight previews behind the palette, whose Enter applies and closes with an Undo toast, and from which Escape or an empty Backspace goes back to Actions; the mode; density; copy link, the one place a page's address is copied from, a refusal said in a toast; sign in as somebody else; clear recents; the key legend; Switch project…) and the three changes; the legend names who they are made as | `>` |
 
@@ -7832,9 +7836,18 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   read it, its default branch and the commit it stands at, its last push, its
   pushes, its size and how many protection rules it carries. `status=` is the
   engine's own filter (`REPO_STATUSES`, held to `code.RepoStatuses`). A row
-  opens the repository's page. Nothing here writes: a repository's settings
-  are the company document's `code.repos`, and an empty listing offers the
-  configuration to a reader who may open it.
+  opens the repository's page. A declared repository's settings are the
+  company document's `code.repos`, and an empty listing offers the
+  configuration to a reader who may open it. The listing's one write is
+  **Import a repository**, a person's alone (`code_import_repo`, which the
+  authority table refuses every seat): a new project, named in the engine's
+  grammar and owned by a unit picked from the chart, filled from an https URL
+  at another host — with the token a variable NAMES, typed as the name and
+  never as the token, which the tool refuses — or made a pull mirror of it
+  (**Keep following it**). It is drawn for every reader and held, with the
+  sentence, for one holding no human seat; the dialog's Import is held until
+  the form is one the engine takes. The new repository reads `importing`
+  until its home git node has landed the source.
 - **A repository's page**, `#/code/repos/{name}`, is its row (`code_repo`,
   read at the tab's floor and again every minute) and its CONTENT, which its
   home git node answers: a directory's listing (`code_tree`, and `code_blob`
@@ -7851,10 +7864,15 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   the revision and the lens replace it. A read by a ref answers the commit the
   ref resolved to, and the **Permalink** is the same place at that commit's
   whole id: an address that says the same thing tomorrow, which the engine
-  answers immutably. **Overview** is what the repository holds and the README
+  answers immutably. **Overview** is what the repository holds, a rail of how
+  code search reads it and where it stands with other hosts — its search mode,
+  its import's progress (the chunks landed so far, or how it ended), the pull
+  mirror it follows and its last sync, the push mirror it pushes to and as
+  which seat, each from the repository's own row (`remotes`) — and the README
   at its default branch's root, read at the commit that root was listed at
   and rendered by the dashboard's own Markdown renderer, which builds every
-  element itself. **Commits** is the history at a revision, of the path the
+  element itself. While an import runs, the header's state pill says
+  `importing`, its title how far it went. **Commits** is the history at a revision, of the path the
   address names or of every path, with who pushed each commit where the
   answering node's index holds the push — who pushed, which the commit's own
   author line is not. **Pushes** is the repository's push history, as Code ›
@@ -7862,11 +7880,29 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   protection rules with their merge gates — a gate that requires a check
   with how its queue lands a change (each change tested merged on the branch
   before it lands) —
-  and its path owners, and NEVER
-  edits them: a declared repository's are the company document's, settled by
-  every activation, and lead to Settings › Configuration; one a tool made is
-  changed by the code tools' lifecycle requests (`code_update_repo`,
-  `code_protect_branch`). Content is not polled: a reader reading a file reads
+  and its path owners, and makes three writes, each through `useAct` and a
+  WriteButton, never optimistic — the page is redrawn from the read the
+  write's position brings — and each drawn for every reader, held with the
+  sentence that says why: **Search mode** (`code_update_repo`'s `search`, a
+  button a mode of `REPO_SEARCH_MODES`, held to `code.SearchModes`: the mode
+  it has is no change, and a scratch repository is never indexed);
+  **Mirrors**, a person's alone (`code_update_repo`'s `mirror_from` and
+  `mirror_to`, each set whole from a dialog or removed — an https URL, the
+  credential as a variable's name, and a push mirror's seat and refs — and
+  refused every seat by the deciding data node); and **Unreachable
+  history**, where **Purge unreachable history** (`code_purge_unreachable`, a
+  person's alone, on a repository they maintain) opens a confirmation that
+  names, BEFORE the press, who keeps copies of what it drops — every git
+  node's copy until it syncs past the purge, every backup taken before it,
+  and the object store for a day (a versioned S3 bucket for as long as its
+  own rules keep a deleted object) — and only its Purge asks the repository's
+  maintainer; the section says where the last purge stands. A declared
+  repository's search mode and mirrors are the company document's, settled
+  by every activation: they are held with that sentence and the tab leads to
+  Settings › Configuration, while its purge, which changes none of its
+  settings, is offered. Its other settings are changed by the code tools'
+  lifecycle requests (`code_update_repo`, `code_protect_branch`), which a
+  seat or a person's assistant makes. Content is not polled: a reader reading a file reads
   the revision they opened. A commit of its history, and of a blame, opens
   the commit's page; a branch offers a comparison with the default branch.
 - **A commit's page**, `#/code/repos/{name}/commits/{sha}`, names its commit
@@ -7905,12 +7941,37 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   commit base lacks, a live change already proposes head's commit (which it
   then links), or that commit is still being read. Nothing moves until the
   engine answers, and an applied open leads to the change it opened.
+- **Search**, `#/code/search`, is the lines of the repositories the reader
+  reads that match a search (`code_search`): `q=` in the code host's one
+  grammar ([Finding code](../guides/code.md#finding-code)), its `repo:`,
+  `path:` and `ref:` filters first, and the bar's `mode=` (`CODE_SEARCH_MODES`,
+  held to `codeindex.Modes`), `repo=`, `path=` and `ref=` beside it — the same
+  filters said as controls, every one in the address, so a search is a link.
+  It is asked when the reader presses Search, never as they type: a search
+  across the company is a request to every git node. And it takes no floor:
+  it answers at the commit each repository was searched at (`tips`). The
+  lines are grouped by repository and then by file in the engine's order —
+  repository, path, line — never re-sorted; each line's number opens its file
+  on the repository's Files tab AT THAT COMMIT, by its whole id, with the line
+  picked (`ref=`, `path=`, `lines=`), so the link says tomorrow what the
+  search said today; a path that is not UTF-8 is drawn with no link, since no
+  address names it. **What was not searched is a Callout above the lines on
+  every answer, never hidden**: how many repositories were searched, then
+  each set the engine names — an index being built, a git node behind or not
+  answering, a grant a node refused, the lines cut — in the warning tone,
+  since lines may be missing, and in the quiet one what the search's own
+  terms left out: a repository read with git grep, the grep repositories a
+  search names no `repo:` for, a ref a repository does not hold, the files
+  passed over. ⌘K's **Code** scope asks the same question (see [⌘K: search,
+  answer, act](#k-search-answer-act)).
 - **Queue** is the merge queues, `code_queue`: a band per repository and
   branch, its live entries in queue order. Unnarrowed the engine answers every
   repository's live entries and no trains; what a train tests and what a
   queue put out are a NAMED repository's (`repo=`), so the train base, the
   meter of the required checks of the candidate an entry is tested in (one
-  `code_checks` of each candidate's tip, shared by every entry it tests) and
+  `code_checks` of each candidate's tip for its band's branch, at each
+  check's latest attempt and every page of it, shared by every entry it
+  tests) and
   the ejections appear once a repository is chosen. An ejection is the danger
   tone with the reason in words and the checks or paths the engine found,
   never a guess at blame. The engine answers fifty entries a page and one
@@ -7918,8 +7979,10 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   through the pager every code listing shares, the newest page held still
   from its press; each page answers the trains of the targets it reaches.
 - **Checks** is the window of `code_checks` naming no repository: the
-  attempts that ended at or after the window's start. The engine has no end,
-  so a window ending before now keeps the rows that ended inside it. A state
+  attempts that ended at or after the window's start and before its end
+  (`since=`, `until=`), which the engine seeks from the end down, so a custom
+  interval in the past reads its own newest attempts first rather than every
+  attempt that ended after it. A state
   or a check's name narrows on the ENGINE (`state=`, `name=`), and the chart
   and the chips count the pages loaded and say so. The listing, the pane and
   its log are one component every checks listing shares (`routes/code/checks`):
@@ -9897,8 +9960,9 @@ write control for every kind of reader. The gate these replaced checked a
 block of copyable tool calls; the block is gone, because the button is now
 the call.
 
-`static/dashboard/protocol.js` is a **second** build target: the protocol layer
-alone, unminified, importable by plain `node`. `internal/e2e/golden_test.go`
+`static/protocol/protocol.js` is a **second** build target: the protocol layer
+alone, unminified, importable by plain `node`, committed beside the served tree
+and never embedded in it, since no page loads it. `internal/e2e/golden_test.go`
 runs a real company, captures every frame its socket pushed, and replays those
 bytes through it — so the gate asks "does the client understand what the server
 sent", not "did the server send something". That is the gate that caught a full
@@ -10059,10 +10123,10 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 383 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. Ask Crewlet took it to 336.4 KiB: the kit's Ask Crewlet pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose coding run is out measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and a coding run's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link. The Chatlet redesign (uilet 0.82.0) took it to 373.8 KiB: the one sheet carries 9.2 KiB more (the kit's conversation parts and the compact rail), the entry script 3.9 KiB more (the compact rail, the sidebar's reading of the reader's rooms for the Chatlet badge, and the toast stack's top edge), and the kit's shared chunks and SeatAvatar about 4.6 KiB. It moved to 374 KiB, which is 2.04 seconds on that link, past the two seconds every earlier move kept. The Chatlet follow-ups on uilet 0.83.0 took it to 375.6 KiB: the kit's shared chunks carry 1.4 KiB more (the rail's fold motion, which every page loads with the shell), the one sheet 0.4 KiB more (the fold's keyframes, the compact rail's status row and face, and the dock column's rules), and the entry's own files 0.2 KiB less. It moved to 376 KiB, 2.05 seconds on that link. uilet 0.84.0 took it to 378.5 KiB: the one sheet carries 2.4 KiB more (the inbox row's leave and its arrival wash, the reading pane's entrance, the rail's chevron and its flyout, the calmer ActionCard, the catalogue tiles' status and the fill screens' scrollbars), and the entry script and the kit's shared chunks 0.2 KiB more each. It moved to 379 KiB, 2.07 seconds on that link; a follow-up ships the conversation parts' rules as a lazy Chatlet sheet to bring it back under. The code host, merged beside it, adds about 3 KiB: its own changes to the frame (a refusal's sentence among the act errors, a wait said in hours, Not Found's hint said as a sentence), the formatter cache's frozen shapes, whose key it reads once rather than on every date and number a list draws, and the Code workspace's row, routes, trail, service notice and words in the entry, with the bundler regrouping what the first paint already loaded — the code screens reach the peek rail through the grid and nothing of the lazy-screen table beside it, so the two are compressed apart. On the code host's own branch they took the load from 322.6 KiB to 325.6 KiB; merged, it measured 381.7 KiB (390,899 bytes), so it moved to 382 KiB. The code host's next round, merged in (My work's sections read from the services that run them, a code host's own word on an act's refusal and its `not_ready` class among the act errors, and the service notice for My work's queue), took it to 382.2 KiB with no screen's module in the entry, so it moved to 383 KiB, still 2.08 seconds on that link |
+| The initial load: the entry, its static imports and the linked stylesheet | 383 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. Ask Crewlet took it to 336.4 KiB: the kit's Ask Crewlet pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose coding run is out measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and a coding run's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link. The Chatlet redesign (uilet 0.82.0) took it to 373.8 KiB: the one sheet carries 9.2 KiB more (the kit's conversation parts and the compact rail), the entry script 3.9 KiB more (the compact rail, the sidebar's reading of the reader's rooms for the Chatlet badge, and the toast stack's top edge), and the kit's shared chunks and SeatAvatar about 4.6 KiB. It moved to 374 KiB, which is 2.04 seconds on that link, past the two seconds every earlier move kept. The Chatlet follow-ups on uilet 0.83.0 took it to 375.6 KiB: the kit's shared chunks carry 1.4 KiB more (the rail's fold motion, which every page loads with the shell), the one sheet 0.4 KiB more (the fold's keyframes, the compact rail's status row and face, and the dock column's rules), and the entry's own files 0.2 KiB less. It moved to 376 KiB, 2.05 seconds on that link. uilet 0.84.0 took it to 378.5 KiB: the one sheet carries 2.4 KiB more (the inbox row's leave and its arrival wash, the reading pane's entrance, the rail's chevron and its flyout, the calmer ActionCard, the catalogue tiles' status and the fill screens' scrollbars), and the entry script and the kit's shared chunks 0.2 KiB more each. It moved to 379 KiB, 2.07 seconds on that link; a follow-up ships the conversation parts' rules as a lazy Chatlet sheet to bring it back under. The code host, merged beside it, adds about 3 KiB: its own changes to the frame (a refusal's sentence among the act errors, a wait said in hours, Not Found's hint said as a sentence), the formatter cache's frozen shapes, whose key it reads once rather than on every date and number a list draws, and the Code workspace's row, routes, trail, service notice and words in the entry, with the bundler regrouping what the first paint already loaded — the code screens reach the peek rail through the grid and nothing of the lazy-screen table beside it, so the two are compressed apart. On the code host's own branch they took the load from 322.6 KiB to 325.6 KiB; merged, it measured 381.7 KiB (390,899 bytes), so it moved to 382 KiB. The code host's next round, merged in (My work's sections read from the services that run them, a code host's own word on an act's refusal and its `not_ready` class among the act errors, and the service notice for My work's queue), took it to 382.2 KiB with no screen's module in the entry, so it moved to 383 KiB, still 2.08 seconds on that link. Code search, a repository's import, mirrors, index and purge, and the checks' latest attempts and window end took it to 382.5 KiB with no screen newly in the first paint: a seat's Code tab in the seats workspace the first paint loads, the frame's code routes, keys, palette hits and sheet rules, and two helpers split into chunks of their own beside a merge of two shared ones |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load when it was 300 KiB, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
-| The whole of `static/dashboard`, which every binary and image carries | 5429 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. Ask Crewlet (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling Ask Crewlet what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's coding run and steering a turn whose coding run is out took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and a coding run's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB, and from there the budget holds the tree to what each change says it costs. Per-seat integration access and its polish took it to 4951.1 KiB, under 4952 KiB. The Chatlet redesign on uilet 0.82.0 took it to 5214.2 KiB (+263.5 KiB): the Chatlet workspace and its lazy sheets +136.6 KiB, the one sheet +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script +13.0 KiB, less 3.8 KiB elsewhere, so it moved to 5215 KiB. The Chatlet follow-ups on uilet 0.83.0 (the rail's fold motion, its compact status row and face, the kit's dock column, stable trigger refs) took it to 5221.4 KiB (+7.2 KiB): the one sheet +3.8 KiB, the kit's shared chunks +3.7 KiB and the Chatlet chunk +0.2 KiB, less 0.5 KiB elsewhere, so it moved to 5222 KiB. uilet 0.84.0 and the round of Inbox and Chatlet fixes beside it took it to 5250.9 KiB (+29.5 KiB): the one sheet +24.2 KiB, the kit's shared chunks +3.5 KiB, the writes chunk +0.9 KiB and the entry script +0.8 KiB, all the kit's, and +0.2 KiB net elsewhere (the Inbox's answer motion +1.3 KiB, against the Overview tab Settings no longer draws, 1.0 KiB less, and My work's seat row, 0.4 KiB less), so it moved to 5251 KiB. The Inbox review fixes (a row answered here opened as answered, read-only until the engine lists it, the move guarded as it is written, the last answer opening Answered, an arrival washed once) took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk), so it moved to 5252 KiB. The Home polish on uilet 0.84.1 (one row a decision under a band per asker, the integration issue tile with its agents' chips, and the smaller status badge) took it to 5253.0 KiB (+1.9 KiB): the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB and Home +0.2 KiB, less 0.2 KiB in the one sheet, so it moved to 5254 KiB. The code host's screens (the Code workspace: its repositories, a repository's files and history, its changes with their reviews, checks and merge queue, and their words) took it to 5377.4 KiB (+124.4 KiB), nearly all in chunks fetched on opening Code, so it moved to 5378 KiB. The code host's next round (the merge queue's and the checks' screens, the merge controls on a change, Settings › Code and the changes on Home) took it to 5428.4 KiB (+50.9 KiB): the Code workspace +15.5 KiB, a change's page +7.7 KiB, Settings +6.1 KiB, the shared chunks +5.9 KiB, the change list +2.8 KiB, Home +2.6 KiB and the checks' screens +2.5 KiB, less 4.2 KiB in the entry, so it moved to 5429 KiB |
+| The whole of `static/dashboard`, which every binary and image carries | 5429 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. Ask Crewlet (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling Ask Crewlet what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's coding run and steering a turn whose coding run is out took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and a coding run's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB, and from there the budget holds the tree to what each change says it costs. Per-seat integration access and its polish took it to 4951.1 KiB, under 4952 KiB. The Chatlet redesign on uilet 0.82.0 took it to 5214.2 KiB (+263.5 KiB): the Chatlet workspace and its lazy sheets +136.6 KiB, the one sheet +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script +13.0 KiB, less 3.8 KiB elsewhere, so it moved to 5215 KiB. The Chatlet follow-ups on uilet 0.83.0 (the rail's fold motion, its compact status row and face, the kit's dock column, stable trigger refs) took it to 5221.4 KiB (+7.2 KiB): the one sheet +3.8 KiB, the kit's shared chunks +3.7 KiB and the Chatlet chunk +0.2 KiB, less 0.5 KiB elsewhere, so it moved to 5222 KiB. uilet 0.84.0 and the round of Inbox and Chatlet fixes beside it took it to 5250.9 KiB (+29.5 KiB): the one sheet +24.2 KiB, the kit's shared chunks +3.5 KiB, the writes chunk +0.9 KiB and the entry script +0.8 KiB, all the kit's, and +0.2 KiB net elsewhere (the Inbox's answer motion +1.3 KiB, against the Overview tab Settings no longer draws, 1.0 KiB less, and My work's seat row, 0.4 KiB less), so it moved to 5251 KiB. The Inbox review fixes (a row answered here opened as answered, read-only until the engine lists it, the move guarded as it is written, the last answer opening Answered, an arrival washed once) took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk), so it moved to 5252 KiB. The Home polish on uilet 0.84.1 (one row a decision under a band per asker, the integration issue tile with its agents' chips, and the smaller status badge) took it to 5253.0 KiB (+1.9 KiB): the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB and Home +0.2 KiB, less 0.2 KiB in the one sheet, so it moved to 5254 KiB. The code host's screens (the Code workspace: its repositories, a repository's files and history, its changes with their reviews, checks and merge queue, and their words) took it to 5377.4 KiB (+124.4 KiB), nearly all in chunks fetched on opening Code, so it moved to 5378 KiB. The code host's next round (the merge queue's and the checks' screens, the merge controls on a change, Settings › Code and the changes on Home) took it to 5428.4 KiB (+50.9 KiB): the Code workspace +15.5 KiB, a change's page +7.7 KiB, Settings +6.1 KiB, the shared chunks +5.9 KiB, the change list +2.8 KiB, Home +2.6 KiB and the checks' screens +2.5 KiB, less 4.2 KiB in the entry, so it moved to 5429 KiB. Code search and a repository's import, mirrors, index and purge left it at 5271.9 KiB, because the bundle got smaller beside them: `protocol.js`, the wire protocol alone that `internal/e2e` replays frames through and no page loads, is built into `static/protocol` beside the tree rather than into it (about 124 KiB every binary had carried) |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from
@@ -11147,8 +11211,8 @@ to.
     `public, max-age=31536000, immutable`, so a browser holding a file there
     never asks for it again; that is correct only because the build names
     each one `<name>-<hash>.<ext>`, so different bytes are a different URL.
-    Emit a file with a fixed name anywhere but `assets/` — the fonts,
-    `protocol.js`, the notices and the brand marks do — and it is served
+    Emit a file with a fixed name anywhere but `assets/` — the fonts, the
+    notices and the brand marks do — and it is served
     `no-cache` and revalidated on every load, like the shell that names the
     hashed files. `TestEveryFileUnderAssetsIsContentHashed` fails on an
     unhashed name under `assets/`. Text is gzipped by the engine for a client
@@ -11184,5 +11248,5 @@ to.
     seat's Overview and Turns tabs and a turn over wire fixtures that carry a price everywhere
     the engine puts one, and reads text and attributes back for any trace of
     it; and the BUNDLE, where `TestTheDashboardRendersNoPrice` scans every
-    module the engine serves, lazy chunks and `protocol.js` included, because
-    the committed bundle is what a browser runs.
+    module the engine serves, lazy chunks included, because the committed
+    bundle is what a browser runs.

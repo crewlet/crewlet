@@ -127,7 +127,8 @@ func (s bookState) differs(o bookState) string {
 // Mutation: forget to restore a moved change's row, an author, a source a
 // change was opened on, a target's changes or the record's writes, and the
 // book differs; save every change of the book in try, and the journal holds
-// more than the entry reached.
+// more than the entry reached; count no row for the readiness of a change an
+// entry merged or closed, and the entry weighed alone comes two rows short.
 func TestAnEntryTakenBackLeavesTheBookAsItFoundIt(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -210,13 +211,19 @@ func TestAnEntryTakenBackLeavesTheBookAsItFoundIt(t *testing.T) {
 			}
 		}
 		// ALONE: the record's moves landed first, so the head it already
-		// moved is a change's row of this record again — eight rows where
-		// the record counts the same entry seven — and none of the record's
-		// own writes are its.
+		// moved is a change's row of this record again — ten rows where the
+		// record counts the same entry nine — and none of the record's own
+		// writes are its, the readiness of the change the record's "closing"
+		// closed among them. The ten are the four changes' rows, the two
+		// revisions and the two authors its head moves add, and the stored
+		// readiness of the change it merged and of the one it closed, which
+		// the apply clears ([clearReadiness]) and the book counts a row each
+		// whether or not it holds an answer, since the book reads no
+		// mergeability ([changeBook.rowCount]).
 		rows, moved := book.alone(tried[0])
-		if rows != 8 || moved != 4 {
-			t.Errorf("entry %s alone writes %d rows of %d changes, want 8 of 4: four changes, two revisions "+
-				"and two authors", tried[0].PushID, rows, moved)
+		if rows != 10 || moved != 4 {
+			t.Errorf("entry %s alone writes %d rows of %d changes, want 10 of 4: four changes, two revisions, "+
+				"two authors and the readiness of the two it merged and closed", tried[0].PushID, rows, moved)
 		}
 		if diff := stateOf(book).differs(before); diff != "" {
 			t.Errorf("weighing entry %s alone left the book's %s other than it found them", tried[0].PushID, diff)

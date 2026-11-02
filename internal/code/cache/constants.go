@@ -615,7 +615,11 @@ const PublishTailBytesPerObject = 350
 const GraphLayerBytesPerObject = 350
 
 // FsckBytesPerObject is the memory Verify's connectivity check (fsck
-// --connectivity-only) holds for every object of its repository.
+// --connectivity-only) holds for every object of its repository — every
+// object of every object directory it is handed, so while an expunge is open
+// the objects of the packs the copy's dropping view holds as much as the live
+// ones (Cache.AdmitVerify), though a clone, whose room is kept beside it,
+// sends none of them.
 //
 // 192 BYTES, a fifth past the larger repository's figure: 452 MiB over the
 // gigabyte (160 bytes an object) and 110 MiB over 100 MB (390, a fixed part of
@@ -671,7 +675,7 @@ const CompactBytesPerObject = 550
 // max_blob_bytes, 50 MiB, every revision a delta of the one before, held
 // 269.7 MiB — 5.4 blobs, where the two this charged before had admitted it
 // at 170 MiB less than it held. The window
-// itself is held to pack.windowMemory (internal/code/compact's CompactConfig:
+// itself is held to pack.windowMemory (internal/code/compact's PackConfig:
 // twice the largest blob, the serve configuration's figure, a per-thread
 // bound the pool's pack.threads=1 makes the build's whole window), so the
 // other 3.4 blobs are what the build holds beside its window — the object it

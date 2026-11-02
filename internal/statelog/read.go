@@ -665,6 +665,85 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 //     again — a deferred record landing between the two is the same hole
 //     through another door — and then the answer.
 func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Answer, error) {
+	return r.serveRead(ctx, q, func(tx *sql.Tx, _ Position) error { return fn(tx) })
+}
+
+// ReadThrough is [Reader.Read] for a domain that STAMPS ITS ANSWER WITH A
+// POSITION ITSELF — a snapshot a cache records and asks its next delta from, a
+// floor a later page is read at — read in the answer's own transaction: fn is
+// handed this domain's checkpoint row as that transaction reads it, its
+// position CARRIED to the reached position the read was released at
+// ([Runner.Reached], sampled before the transaction opened) wherever that is
+// past it on the checkpoint's generation ([currentThrough]). The answer is
+// [Reader.Read]'s, its Position the reached position the read was released
+// at: what its rows are current through, and the floor of what they hold.
+//
+// # Why neither of the two positions it is made of
+//
+// The checkpoint row alone LAGS: a barrier is reached the moment the loop
+// decodes it and committed later, beside the loop ([checkpoints]), so a read
+// released on the record before its own barrier opens its transaction under a
+// checkpoint that may still sit below every barrier the node has decoded since
+// its last row — while another node, whose commit of those barriers has
+// landed, stamps the same rows higher. So two linearizable reads of one object
+// on two nodes, the second asked after the first had answered, could be
+// stamped in the WRONG ORDER, and whatever compares two stamps took the second
+// node for one behind the first on rows it held whole: a cache took the lower
+// linearizable answer for its log gone back, and a snapshot's later page,
+// stamped below the highest checkpoint an earlier page was read at, issued a
+// cursor read below where it began.
+//
+// The released position alone is EARLY: the applier can commit between the
+// release and the transaction, so the rows can be newer than it, and a
+// position a cache asks its next delta from must not name less than the rows
+// it was handed. The later of the two names exactly the rows: every record in
+// (checkpoint, released] is a barrier, which writes no row on any node
+// ([writesNoRow]) — a record that writes one is reached only by its commit,
+// and the commit moves the checkpoint in the same transaction as the row.
+//
+// THE BROKER'S INSTANT IS ZERO WHERE THE POSITION WAS CARRIED: the checkpoint
+// row names the record it committed, and a barrier reached and not committed
+// is in no row — [Checkpoint.StoredAt] is zero where unknown.
+func (r *Reader) ReadThrough(ctx context.Context, q Query,
+	fn func(*sql.Tx, Checkpoint) error) (Answer, error) {
+
+	return r.serveRead(ctx, q, func(tx *sql.Tx, released Position) error {
+		row, _, err := r.tables.readCursor(ctx, tx)
+		if err != nil {
+			return err
+		}
+		cp := Checkpoint{At: currentThrough(row.at, released), KeyedTo: row.created, StoredAt: row.storedAt}
+		if cp.At != row.at {
+			cp.StoredAt = time.Time{}
+		}
+		return fn(tx, cp)
+	})
+}
+
+// currentThrough is the position a read transaction's rows are current
+// through: at, the checkpoint row that transaction reads, carried to released —
+// the reached position the read was released at, sampled before the
+// transaction opened — where released is past it on the same stream and
+// generation. Every record in (at, released] is then a barrier this node
+// decoded and has not committed ([Runner.Reached]), which writes no row, so
+// the rows are as current through released as through at.
+//
+// NEVER ACROSS A GENERATION: a reanchor moves the checkpoint to a generation of
+// its own, and a sequence of the one before names no record in it. And never
+// backwards: a checkpoint committed past the release — rows the applier wrote
+// between the release and the transaction — is what the rows hold.
+func currentThrough(at, released Position) Position {
+	if released.Stream != at.Stream || released.Generation != at.Generation || released.Seq <= at.Seq {
+		return at
+	}
+	return released
+}
+
+// serveRead is [Reader.Read]'s body, in its order. fn runs inside the answer's
+// transaction, handed the position the read was released at: the answer's
+// Position.
+func (r *Reader) serveRead(ctx context.Context, q Query, fn func(*sql.Tx, Position) error) (Answer, error) {
+
 	started := time.Now()
 	if !q.Level.Valid() {
 		return Answer{}, fmt.Errorf("statelog: %q is not a read level (want %s)",
@@ -836,7 +915,10 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		}
 	}
 
-	// 5. ONE transaction, coverage first.
+	// 5. ONE transaction, coverage first. released is the position the read
+	// was released at, sampled before the transaction opens — what makes it
+	// one the transaction's rows hold every row of ([Reader.ReadThrough]).
+	released := answer.Position
 	if err := r.db.Read(ctx, func(tx *sql.Tx) error {
 		// THE SAME HOLE THROUGH ANOTHER DOOR. A deferred record landing
 		// between the probe above and this transaction would otherwise be
@@ -883,7 +965,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 				Version:   d.Version,
 			}
 		}
-		return fn(tx)
+		return fn(tx, released)
 	}); err != nil {
 		var refusal *Refused
 		if errors.As(err, &refusal) {

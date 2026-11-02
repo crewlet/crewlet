@@ -143,7 +143,7 @@ func (r *Retention) expireIn(ctx context.Context, now time.Time, id string, page
 			return false, nil
 		}
 		p.Commands, cmds = cmds[:n], cmds[n:]
-		switch turn, err := pace.wait(ctx); {
+		switch turn, err := pace.wait(ctx); { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		case err != nil:
 			return false, err
 		case !turn:
@@ -313,13 +313,8 @@ func (r *Reader) idleSeatRefs(ctx context.Context, q idleRefsQuery) (idleRefsPag
 	var page idleRefsPage
 	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
 		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
-	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
-		page = idleRefsPage{repos: map[string]expiryRepo{}}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
-		page.through = cp.At
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
+		page = idleRefsPage{repos: map[string]expiryRepo{}, through: cp.At}
 		if err := page.readRefs(ctx, tx, q, after); err != nil {
 			return err
 		}

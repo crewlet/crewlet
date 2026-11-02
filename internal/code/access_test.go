@@ -385,7 +385,7 @@ func TestAReadForAnotherSeatIsHeldToBothGrants(t *testing.T) {
 			t.Errorf("%s: %s's read of %s = %v, want %v saying %q", tc.name, tc.asker, tc.repo.Name, err,
 				tc.want, tc.says)
 		}
-		if tc.want == code.ErrAboveCeiling && errors.Is(err, code.ErrNotPermitted) {
+		if errors.Is(tc.want, code.ErrAboveCeiling) && errors.Is(err, code.ErrNotPermitted) {
 			t.Errorf("%s: the refusal %v is also ErrNotPermitted, which is false of %s", tc.name, err, tc.asker)
 		}
 		if g.Principal != agent(tc.asker) || g.Access != tc.carriedAccess {

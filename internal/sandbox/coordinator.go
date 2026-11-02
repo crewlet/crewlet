@@ -2861,10 +2861,10 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// THE TURN TAKES THE ANSWER, on the row, or it does not run —
 			// under the CLAIMANT's lease, which the claim stamped on the
 			// row ([PendingStore.ClaimForResume]).
-			taken, err := c.pending.TakeAnswer(ctx, run.TurnID, run.LaunchID, fenceOf(run))
-			if err != nil {
+			taken, takeErr := c.pending.TakeAnswer(ctx, run.TurnID, run.LaunchID, fenceOf(run))
+			if takeErr != nil {
 				return fmt.Errorf("sandbox: recording that run %s's turn took its answer: %w",
-					run.TurnID, err)
+					run.TurnID, takeErr)
 			}
 			if !taken {
 				return fmt.Errorf("sandbox: run %s is no longer the claim that holds its answer: "+

@@ -198,6 +198,11 @@ Only a person or this document sets a mirror or an import: a seat asking to
 create a repository with one, or to set or remove either mirror of one, is
 refused `not_permitted` whatever its grant, since a pull mirror and an import
 reach another host for the company and a push mirror sends its code to one.
+A person sets a repository a tool made its mirrors through `code_update_repo`'s
+`mirror_from` and `mirror_to`, each set whole or removed by `{}` — from the
+repository's Settings tab in the dashboard, or their assistant — and imports
+one with `code_import_repo`; a repository this document declares has its
+mirrors from `code.repos`, which every activation settles.
 A scratch repository takes none of the three.
 
 **An import and a pull mirror run on the repository's home** — the first live
@@ -224,6 +229,13 @@ wants a user of its own beside a token (Bitbucket's `x-token-auth`) is given it
 in the variable. A push mirror pushes the refs it covers, each protected branch
 at its green commit, whenever its repository moves and every 15 minutes while
 it does not ([Mirrors and imports](#mirrors-and-imports)).
+
+**Watching it.** A repository's detail — the `code_repo` question its page in
+the dashboard reads — carries `remotes`: its mirrors as its settings name them, each
+credential the `${VAR}` reference it is and never a token; its import's
+source, how many chunks have landed, and once it ended, when and why it ended
+short; and a pull mirror's last sync. A repository with no mirror that was
+never imported carries none.
 
 At most 10 000 repositories one document — a typo guard two orders of
 magnitude past a large company's, not a limit anybody is expected to meet. It
@@ -1166,8 +1178,8 @@ after it starts, and its loops wait for that rather than run a pass before it;
 a node that is draining has left the listing, and every repository it
 maintained is placed among the rest.
 
-Both of a maintainer's loops ask by that one charge, so the two
-writers of a repository's packs run on one node, and there a merge never takes
+Every loop of a maintainer asks by that one charge, so the writers of a
+repository's packs run on one node, and there a merge never takes
 a pack a publication of the repository in flight has planned over. Once the
 publication has planned, it reserves every pack its layer will name, the packs
 it repacks among them, and the repository's merges go on beside it with the
@@ -1177,7 +1189,16 @@ climbs to its pack bound. Only while the publication syncs and plans, seconds,
 does a merge of its repository wait; and a publication asked while a merge of
 its repository is running waits for it, since it would cover that merge's
 packs: either way round, one of the two would otherwise be refused `stale`
-after its whole build. Nothing
+after its whole build. An [expunge](#expunge), the third writer of a
+repository's packs, holds back the repository's merges the same way, and no
+longer: they wait only while it syncs and plans,
+then go on beside its walk, its build and its upload with every pack but the
+ones it is rewriting, and once it has begun, beside it as though it were not
+running — so a repository being purged is never the one whose pushes are
+refused `compaction_behind`. No publication of the repository builds while
+an expunge of it runs, since the expunge drops the layers over what it
+rewrites, and an expunge waits for a merge or a publication already running.
+Nothing
 leases a repository to its maintainer: two nodes whose presence views disagree
 for a moment may both build, and the committer refuses the second `stale`.
 Each pass judges every repository it lists against one reading of the
@@ -1221,7 +1242,8 @@ publication, one rewrite of a repository at a time
   week. The 64 MiB is provisional, until the expunge's benchmark has priced a
   cycle against what it frees.
 - **At once, when a person purges** the repository's unreachable objects —
-  `code_purge_unreachable` from your own assistant, or
+  `code_purge_unreachable` from your own assistant, **Purge unreachable
+  history** on the repository's Settings tab in the dashboard, or
   [`crewlet code purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable).
   The purge is a request recorded on the repository's subject and answered
   as soon as it is, long before it is served; its maintainer serves it at its
@@ -1270,6 +1292,7 @@ sequenceDiagram
     M->>S: store every output, at once
     M->>C: propose the begin
     C-->>M: applied: inputs retired, kept packs live, the rest dropping, drop epoch moved
+    M->>M: link the kept and the dropping packs it built into its own copy
     G->>G: next sync: kept packs in, dropping packs beside the copy
     M->>M: rescue: what a push landed since the scan reaches again
     M->>S: store the rescue
@@ -1367,8 +1390,10 @@ admitted in the node's maintenance lane at a publication's charge — about
 waiting, never a push refused. The begin's record writes at most 2 625 rows
 and applied in 75 ms at its widest, measured on two cores, the commit's at
 most 97 rows in 13.5 ms. Every other git node holding the repository downloads
-the kept and rescue packs once — the maintainer links its own — which is why
-the schedule waits for a quarter of the repository to be unreachable.
+the kept, the dropping and the rescue packs once — the maintainer links its
+own, the dropping ones into its copy's dropping view, so it downloads none of
+what it built — which is why the schedule waits for a quarter of the
+repository to be unreachable.
 
 ---
 
@@ -1890,6 +1915,19 @@ agent ids, and a seat's day of usage counts the changes it opened, the reviews
 it gave, and the findings reviews raised on the changes it owns — see
 [Budgets and spend § A seat's changes and reviews](../guides/budgets-and-spend.md#a-seats-changes-and-reviews).
 
+No write of a repository waits on these announcements. A committer hands what
+its records announce — the changes they opened, a merge, a merge queue's
+ejections and broken landings — to one announcer of its own, which publishes
+them in the order they landed, each stamped when its record landed and given
+five seconds. The repository's next push goes on meanwhile. An announcement the
+stream does not take in time, or one that would put more than 1 088 waiting
+behind the announcer, is logged (`change_opened_unpublished`,
+`change_merged_unpublished`, `code_queue_ejected_unpublished`,
+`code_target_broken_unpublished`): the day it counts on is one short and the
+feed misses one line, while the rows on the code log keep all of it. A
+stopping node publishes what it landed before it exits, for as long as its
+drain allows.
+
 ### Findings
 
 A **finding** points at lines of one revision — a file, a side of the
@@ -2237,6 +2275,21 @@ Each write is asked under an **operation id** its asker mints once, so a write
 asked again — of the runner-up after the committing node went silent, or after
 an answer was lost — is the same write, collapsed onto the record that landed.
 
+A check's record **names what its decision read**, not only what it writes.
+It writes only the repository's check rows, and its decision reads more: the
+repository's own row on every write (whether it is archived or deleted, and
+the owner and visibility a seat's rerun is judged by), each change a head
+dispatch queues at, and the change a seat's rerun reads its authors from or a
+failed head's ending routes to. So the record's scope names the repository
+and its checks, and each of those changes — the whole code domain for a
+dispatch of more changes than a record's scope holds. A node holding a
+record it cannot decode — a newer build's, mid-upgrade — that covers any of
+them answers the write unavailable (`deferred`) and publishes nothing, and
+the asker asks the next node, whose rows are current: a rerun is never
+admitted there on a grant a newer record revoked, nor a head dispatched that
+a newer record retargeted or closed. A change the decision only finds in its
+rows — a rerun's, a failed head's — it asks about itself before reading it.
+
 An ending that applied and that its attempt's row keeps is announced **once**,
 by the node that wrote it, as a `code_check_finished` event in that node's
 [event log](event-system.md) — never by the applier every data node runs,
@@ -2397,9 +2450,9 @@ grant on the repository as every other read of it is:
   naming an attempt's key is refused, so no read that forgot whom it asks for
   is answered held to no grant;
 - **`checks_queued`**: the engine's own — a git node's [claim
-  walk](#who-runs-a-check): every repository's queued attempts, oldest queued
-  first, each with the definition it was queued under and its repository's
-  name, a page at a time;
+  walk](#who-runs-a-check): every repository's queued attempts whose checks
+  name one cell (or none), oldest queued first, each with the definition it
+  was queued under and its repository's name, a page at a time;
 - **`checks_running`**: the engine's own — a repository's home's sweep of a
   runner that is gone: the repositories holding a running attempt, or one
   repository's running attempts.
@@ -2545,6 +2598,16 @@ the same order from the same set of git nodes; there is no lease and no
 coordinator. A node walks the queue when a check record lands on the code log,
 at most once a second, and every fifteen seconds whatever happens.
 
+**A node reads only what it can claim.** The queue is read by the cell each
+check names, and a node reads the cells it can start a check in now: ones the
+company lets a check run in, that its own sandbox catalogue configures, and
+that have room — a container slot free, or an `e2b` cell the company's caps
+have not held back. A node whose container slots are full reads nothing of the
+container backlog, whatever else its catalogue holds, and one cell's backlog
+never costs a walk in another. Within a cell the attempts are taken oldest
+queued first, whether a check names the cell or falls to it as the company's
+default.
+
 **The claim comes before the box.** A runner claims an attempt — a
 `check_started` record naming itself, decided by the repository's checks
 writer ([Who records a check](#who-records-a-check)) — and makes a box only
@@ -2591,7 +2654,9 @@ how long each took on `crewlet.code.checks.duration`, by placement
 rows running. The repository's **home** sweeps them, at every pass of its
 loop: a running attempt whose runner has **left the repository's git order** —
 a node that left the fleet — or whose claim is older than its check's timeout,
-the ten minutes of setup and a minute more — a node that restarted mid-run and
+the ten minutes of setup and two minutes more (the minute a runner has to read
+a run's reports and keep its log, and the half minute it asks for the ending
+to be recorded) — a node that restarted mid-run and
 so is in the order again holding nothing — is ended `errored` `runner_lost`,
 and its box killed where it is an `e2b` one; a container box on a node that
 left is that node's own container runtime's to reclaim. The home queues such
@@ -3318,7 +3383,12 @@ size, 67 for the commit-graph and 100 MiB beside it whatever the
 repository's size, 192 for `crewlet code verify`'s
 connectivity check, and a clone about 240 more than the 224 MiB its git
 transfer slot keeps for it — the clone of a repository with no bitmap walks
-its whole history. The commit-graph's 100 MiB are its changed-path filters':
+its whole history. While an [expunge](#expunge) is open the connectivity
+check also walks the packs it keeps in the copy's dropping view, every object
+of which git marks as it marks a live one, so the check is charged its figure
+for each of their objects as well — a person's purge may leave far more there
+than the repository's live objects — and room beside it for a clone of the
+live objects alone, the only ones a clone sends. The commit-graph's 100 MiB are its changed-path filters':
 each filter is a diff of a commit against its parent, whose trees git keeps
 in its delta base cache up to that cache's 96 MiB cap — 112.8 MiB in all
 over a 100 MB history whose every commit rewrites a directory of a thousand
@@ -4582,7 +4652,7 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 
 | The turn was woken by | What the seat reads |
 |---|---|
-| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge, a revision's facts — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
+| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge, a change it found landed — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
 | a person of the company | what its own grant allows: a person maintains every repository, so they bound nothing |
 | a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
@@ -4593,7 +4663,11 @@ holds, never by how the name is spelled: a seat's change, or a person's made
 as the seat they hold, is that seat's, and the engine's own is nobody's. A
 record about a repository's change names who made it in the routing its
 writer stamped, a person by the human seat they hold, and its home's own
-records name nobody. A
+records name nobody — but a revision's facts, which its home records and
+which ask a path owner to review or a reviewer to look again: a revision is
+somebody's push, the opener's for the first and whoever moved the head for
+every later one, so the facts name that pusher, and a seat asked to review a
+colleague's revision reads for both grants. A
 credential acting as no seat holds no seat a ceiling could be decided for, so
 the turn its change wakes reads nothing, as a stranger's does. The seat's own
 voice is never its requester: when the outcome of its own act opens a thread,
@@ -5528,9 +5602,19 @@ was past its bound.
   and naming no asker. The HOME matches the globs, up to 64 owners' 32 globs
   each against up to 1 000 paths, which no decide pays on every round it may
   take, and sends the digest of the owners it matched against; the decide
-  computes the digest of the owners its own snapshot holds, and facts matched
-  against owners changed since are refused `superseded`, for the home to
-  match again.
+  holds it to the digest its own snapshot's repository row carries, written
+  beside the owners by every change of them, and facts matched against owners
+  changed since are refused `superseded`, for the home to match again. A
+  change whose facts were matched before its repository's owners changed is
+  due its facts again at its home's next pass: the same tip read again
+  replaces them, asking any owner the new match adds.
+- **So are the human paths that hold it.** The home matches the touched
+  paths against the [human paths](#the-merge-gate) the change's target's gate
+  names too, and the facts record which hold the revision for a person and
+  which their `unless` waives, beside the digest of the repository's rules'
+  human paths it matched against, which the decide holds to its own
+  snapshot's as it holds the owners'. A change whose facts were matched
+  before a rule's human paths changed is due its facts again in the same way.
 - **An owner who cannot review is skipped, and the facts say why**: a seat
   whose grant is below `review` (`below_review`), an author of the change
   (`author`), a unit nobody leads (`no_lead`), an owner the chart holds no seat
@@ -5937,11 +6021,24 @@ merged by somebody, and landed by its queue:
   ([Recorded on the change](#recorded-on-the-change)) against the owner rows
   whose digest it records: up to 64 owners of 32 globs each against a
   thousand paths, which no decision pays on every round it takes. Where the
-  owner rows a snapshot holds digest to another value — owners added or
-  removed since — `owners_approval` is `computing` until the home matches the
-  paths again.
-  The gate's human paths, at most 32 a rule, are matched against the paths
-  the facts list, and a glob this build cannot read holds the change.
+  repository's owners digest to another value than the match recorded —
+  owners added or removed since — `owners_approval` is `computing` until the
+  home matches the paths again, which the change is due at the home's next
+  pass.
+- **No human path's glob is matched in a judgment either.** A branch's human
+  paths are every matching rule's — up to 64 rules of 32 each, and the
+  checks' directory — and the home matches them against the touched paths
+  beside the owners, recording which entries hold the revision and which
+  their `unless` waives, with the digest of the repository's rules' human
+  paths it matched against; a glob this build cannot read holds the change.
+  Where the repository's rules' human paths digest to another value than the
+  match recorded — a human path added or removed, a pattern moved, a rule
+  that requires checks or stops — `human_approval` is `computing` until the
+  home matches the paths again, which every live change of the repository is
+  due at the home's next pass. A change to anything else of a rule makes
+  nothing due. Whether every path is of a class `approvals_unless` exempts is
+  counted from how many paths the facts list and the classes they record,
+  never read from the paths.
 - **A change to the checks waits for a person.** A gate that requires checks
   holds `.crewlet/**` — the directory the [checks file](#the-checks-file)
   lives in, and whatever script beside it a check runs — as one of its human
@@ -6411,10 +6508,14 @@ chart holds, in the snapshot, and not the asker's list beside them.
 | `lead_fallback` | The lead of the repository's owner, when nobody who may review the change is asked | A change's first facts |
 
 - **The order of the table is the precedence**: a handle a record names
-  under two reasons hears under the first — mentioned and watching is told
-  it was mentioned — and once a record, however many changes it names: a
-  push that merges one change and opens another tells somebody named in both
-  once, under the stronger reason. `mention`, `review_requested`,
+  under two reasons about one change hears under the first — mentioned and
+  watching is told it was mentioned — and once a change, however many of
+  the record's pushes route it. A record that names several changes tells
+  each handle about **each** of them: up to 64 pushes from unrelated clients
+  land in one record, so a push that merges one change and another that
+  opens a second tell somebody named in both twice — merged about the first,
+  mentioned about the second — and a landing of two of their changes tells
+  an author of both about each. `mention`, `review_requested`,
   `changes_requested`, `checks_failed`, `target_broken`, `conflicted`,
   `dequeued`, `finding_replied`, `ready_to_merge` and `re_review` **ask**
   something of whoever hears them; the rest are news to absorb.
@@ -6455,7 +6556,9 @@ chart holds, in the snapshot, and not the asker's list beside them.
   merger; where the gate lets none of them, the effective lead of the
   repository's owner, who may merge it or say who should.
 - **Every recipient is a row**: the record's applier writes one notice a
-  handle it tells, on every data node — a person's inbox reads them, a
+  handle it tells about a change, on every data node — a person's inbox reads
+  them, each named by its record and its change (the `record_id` a mark
+  names), a
   change's page says whom its records reached, and each committed batch tells
   the dashboards watching an inbox that it moved. A person's notice is kept
   the company's `inbox.retention_days`, a seat's 30 days
@@ -6499,11 +6602,13 @@ stops after its record committed loses no wake.
 - **A seat the company no longer employs is not woken**, and keeps its row:
   the chart is asked at the wake, so a reviewer who left after being asked
   hears nothing. The lead's copy (`lead_fallback`) wakes only where nobody
-  else the record tells is still employed — a person among them, whose
-  notice counts as somebody hearing.
-- **One wake per seat per record**, its id derived from the record and the
-  seat, so a record the feed handles twice — its claim fails open when the
-  coordination store cannot be reached — wakes nobody twice. Every wake
+  else the record tells about that change is still employed — a person among
+  them, whose notice counts as somebody hearing.
+- **One wake per seat per change a record names**, its id derived from the
+  record, the change and the seat, so a record the feed handles twice — its
+  claim fails open when the coordination store cannot be reached — wakes
+  nobody twice, and a batched push that tells a seat about two changes wakes
+  it about each. Every wake
   about one change is one conversation, keyed by the change's id: a rename of
   its repository splits nothing.
 - **The wake names the change's work item**, and the turn it starts is
@@ -6517,7 +6622,8 @@ stops after its record committed loses no wake.
 - **Who wrote it bounds what the seat reads**: a review a colleague seat
   asked for is that colleague's errand, and a code read in the turn is
   decided for both grants ([Reads made for somebody else](#reads-made-for-somebody-else));
-  the home's own records — a conflict, a change ready to merge — are nobody's.
+  the home's own records — a conflict, a change ready to merge — are nobody's,
+  and a revision's facts are whoever pushed the revision.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a

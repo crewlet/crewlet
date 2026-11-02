@@ -155,6 +155,7 @@ func (r *read) blameRead(ctx context.Context, objs found, at cursor, m *memoRun)
 		if at.letter != 0 {
 			return code.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, "a line of the file")
 		}
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		lines, err := r.countLines(ctx, objs.target.id)
 		if err != nil {
 			return code.GitAnswer{}, err
@@ -163,7 +164,7 @@ func (r *read) blameRead(ctx context.Context, objs found, at cursor, m *memoRun)
 	}
 	narrow := fmt.Errorf("%w: blaming lines %d to %d of %q did not finish in the read's %s of git: blame "+
 		"fewer of its lines", code.ErrSliceTooLarge, from, end, objs.path, r.s.gitBudget)
-	if err := r.failed(ctx, "blame", res, err, narrow); err != nil {
+	if err = r.failed(ctx, "blame", res, err, narrow); err != nil {
 		return code.GitAnswer{}, err
 	}
 	c.restore()
@@ -191,7 +192,7 @@ func (r *read) countLines(ctx context.Context, blob string) (int, error) {
 		Args: []string{"cat-file", "blob", blob}, Config: r.s.o.Cache.ServeConfig(),
 		Stdout: &n, Class: gitproc.ClassRead, Deadline: deadline,
 	})
-	if err := r.failed(ctx, "count of a file's lines", res, err, nil); err != nil {
+	if err = r.failed(ctx, "count of a file's lines", res, err, nil); err != nil {
 		return 0, err
 	}
 	return n.lines(), nil

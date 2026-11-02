@@ -117,6 +117,41 @@ type node struct {
 	// applied, when set, is told the rows each record's apply reported —
 	// what the framework holds a record's transaction to.
 	applied func(seq uint64, rows int)
+
+	// reserve is the code log's gate reserve every append this node makes
+	// is admitted through — its writes', and a barrier's ([node.barrier]).
+	reserve *statelog.Reserve
+
+	// barriersHeld has the drain REACH a barrier and commit none
+	// ([node.holdBarrierCommits]).
+	barriersHeld atomic.Bool
+}
+
+// holdBarrierCommits has this node reach every barrier the moment its drain
+// decodes it and commit none of them: a runner whose checkpoint transaction
+// beside its loop is held at its commit (statelog's [statelog.Runner.Reached]),
+// its checkpoint row left at the last record that wrote a row while its
+// reached position runs on over every barrier after it. A record that writes
+// a row commits the checkpoint past them, as the loop's next transaction with
+// rows carries them.
+func (n *node) holdBarrierCommits() { n.barriersHeld.Store(true) }
+
+// barrier appends one barrier to the code log through a read index — what any
+// node's linearizable read appends — and answers its position. The drain
+// applies it as it applies any record, or only reaches it where this node's
+// barrier commits are held.
+func (n *node) barrier() statelog.Position {
+	n.t.Helper()
+	index, err := statelog.NewReadIndex(code.Domain{}, code.Domain{}.Stream(), n.log, n.log.Members,
+		testSigner(n.t), n.reserve, code.EncodeBarrier, func() uint32 { return 0 }, nil)
+	if err != nil {
+		n.t.Fatalf("build the read index: %v", err)
+	}
+	at, err := index.Read(n.t.Context())
+	if err != nil {
+		n.t.Fatalf("append a barrier: %v", err)
+	}
+	return at
 }
 
 // harnessRoom is what a case may write to the code log with ordinary records:
@@ -237,7 +272,7 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 	}
 	n := &node{
 		t: t, id: id, db: db, log: log, records: records, applier: code.NewApplier(nil), pub: pub,
-		waiter: waiter, authority: authority, scratch: code.ScratchOf(config.Code{}),
+		waiter: waiter, authority: authority, scratch: code.ScratchOf(config.Code{}), reserve: reserve,
 	}
 	// THE LIFECYCLE STORE, deciding a tool's request by this node's chart,
 	// its scratch policy and whether it is behind — each read per request,
@@ -326,6 +361,13 @@ func (n *node) drain() {
 			Envelope: env,
 			Position: statelog.Position{Stream: spec.Name, Generation: env.Gen, Seq: seq},
 			Payload:  payload, StoredAt: storedAt,
+		}
+		if env.Kind == statelog.BarrierKind && n.barriersHeld.Load() {
+			// REACHED ON DECODE, its commit held: no transaction, the
+			// checkpoint row where the last row left it.
+			n.consumed = seq
+			n.waiter.reachUncommitted(record.Position)
+			continue
 		}
 		wire := spec.SubjectPrefix + "." + code.Subject{
 			Kind: code.ObjectKind(env.Subject.Kind), ID: env.Subject.ID,
@@ -501,9 +543,12 @@ func (n *node) exec(query string, args ...any) {
 // ran only when a case drained would let every write's budget expire. A HELD
 // node ([node.hold]) answers at once what an expired budget would.
 type testWaiter struct {
-	mu      sync.Mutex
-	at      statelog.Position
-	advance func()
+	mu sync.Mutex
+	// committed is the checkpoint this node's last transaction committed, and
+	// at the position its rows are current through: committed, or past it
+	// over the barriers it reached with their commit held.
+	committed, at statelog.Position
+	advance       func()
 }
 
 // running reports an applier in the wait — a node nobody holds.
@@ -513,7 +558,23 @@ func (w *testWaiter) running() bool {
 	return w.advance != nil
 }
 
+// reach is a record committed at p: the checkpoint and the reached position
+// both move to it.
 func (w *testWaiter) reach(p statelog.Position) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if p.Packed() > w.committed.Packed() {
+		w.committed = p
+	}
+	if p.Packed() > w.at.Packed() {
+		w.at = p
+	}
+}
+
+// reachUncommitted is a barrier at p decoded with its commit held
+// ([node.holdBarrierCommits]): the reached position moves to it, and the
+// checkpoint does not.
+func (w *testWaiter) reachUncommitted(p statelog.Position) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if p.Packed() > w.at.Packed() {
@@ -521,18 +582,30 @@ func (w *testWaiter) reach(p statelog.Position) {
 	}
 }
 
+// onCodeLog is p, or the zero position on the code log where nothing has
+// moved it.
+func onCodeLog(p statelog.Position) statelog.Position {
+	if p.Stream == "" {
+		return statelog.Position{Stream: code.Domain{}.Stream().Name}
+	}
+	return p
+}
+
 func (w *testWaiter) Committed() statelog.Position {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.at.Stream == "" {
-		return statelog.Position{Stream: code.Domain{}.Stream().Name}
-	}
-	return w.at
+	return onCodeLog(w.committed)
 }
 
-// Reached is Committed: this rig moves its position when it applies a record,
-// in one step, so it reaches nothing its commit has not.
-func (w *testWaiter) Reached() statelog.Position { return w.Committed() }
+// Reached is Committed, but past it over the barriers a node whose barrier
+// commits are held has decoded ([node.holdBarrierCommits]): this rig moves
+// both when it applies a record, in one step, so otherwise it reaches nothing
+// its commit has not.
+func (w *testWaiter) Reached() statelog.Position {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return onCodeLog(w.at)
+}
 
 // StreamIdentity and Truncated: this harness never rebuilds its log.
 func (w *testWaiter) StreamIdentity() error { return nil }
@@ -543,7 +616,7 @@ func (w *testWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "",
 
 func (w *testWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
-		if w.Committed().Packed() >= p.Packed() {
+		if w.Reached().Packed() >= p.Packed() {
 			return nil
 		}
 		w.mu.Lock()
@@ -556,7 +629,7 @@ func (w *testWaiter) WaitReached(ctx context.Context, p statelog.Position) error
 			return context.DeadlineExceeded
 		}
 		advance()
-		if w.Committed().Packed() >= p.Packed() {
+		if w.Reached().Packed() >= p.Packed() {
 			return nil
 		}
 		select {

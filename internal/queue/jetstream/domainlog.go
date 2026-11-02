@@ -746,14 +746,14 @@ func (l *DomainLog) Watch(ctx context.Context, filter string, h WatchHandler) (*
 	w := &DomainWatch{
 		l: l, filter: filter, h: h, timing: l.watching(), logger: l.q.log,
 		prefix: "watch_" + nuid.Next() + "_",
-		life:   life, cancel: cancel,
-		wake: make(chan struct{}, 1), done: make(chan struct{}),
+		cancel: cancel,
+		wake:   make(chan struct{}, 1), done: make(chan struct{}),
 	}
 	if err := w.begin(ctx, 1); err != nil {
 		cancel()
 		return nil, fmt.Errorf("jetstream: watch %q under %s: %w", l.name, filter, err)
 	}
-	go w.supervise()
+	go w.supervise(life)
 	return w, nil
 }
 
@@ -884,9 +884,9 @@ type DomainWatch struct {
 	// consumer beside it.
 	prefix string
 
-	// life is the watch's own context, cancelled by Stop: every create and
-	// read the supervisor asks runs under it.
-	life   context.Context
+	// cancel ends the watch's own context, which its supervisor is handed
+	// and asks every create and read under ([DomainWatch.supervise]); Stop
+	// calls it.
 	cancel context.CancelFunc
 	// wake tells the supervisor a loss was reported or a Gap waits for the
 	// log's end. Capacity one, so a report is never lost and its sender
@@ -989,8 +989,8 @@ func (w *DomainWatch) begin(ctx context.Context, gen uint64) error {
 
 	cc, err := cons.Consume(
 		func(msg jetstream.Msg) {
-			meta, err := msg.Metadata()
-			w.take(gen, msg.Subject(), meta, err)
+			meta, metaErr := msg.Metadata()
+			w.take(gen, msg.Subject(), meta, metaErr)
 		},
 		jetstream.PullHeartbeat(w.timing.heartbeat),
 		jetstream.ConsumeErrHandler(func(_ jetstream.ConsumeContext, err error) {
@@ -1136,25 +1136,25 @@ func connectionClosed(err error) bool {
 
 // supervise replaces a lost consumer, reads the connection's reconnect count
 // every recheck and reads the log's end for a Gap that waits for it, until the
-// watch is stopped or its connection closed for good. What it acts on is the
-// watch's state, so a wake that arrives while it is busy is answered by the
-// pass it is in or the next.
-func (w *DomainWatch) supervise() {
+// watch is stopped — life, the watch's own context, ended — or its connection
+// closed for good. What it acts on is the watch's state, so a wake that
+// arrives while it is busy is answered by the pass it is in or the next.
+func (w *DomainWatch) supervise(life context.Context) {
 	defer close(w.done)
 	recheck := time.NewTicker(w.timing.recheck)
 	defer recheck.Stop()
 	for {
 		select {
-		case <-w.life.Done():
+		case <-life.Done():
 			return
 		case <-recheck.C:
 			w.recheckConnection()
 		case <-w.wake:
 		}
-		if !w.replace() {
+		if !w.replace(life) {
 			return
 		}
-		w.placeGap()
+		w.placeGap(life)
 	}
 }
 
@@ -1202,14 +1202,14 @@ func (w *DomainWatch) recheckConnection() {
 // A read that fails leaves the Gap owed, asked again at the next recheck. A
 // loss meanwhile owes a Gap of its own, which answers for this one
 // ([DomainWatch.flushGap]).
-func (w *DomainWatch) placeGap() {
+func (w *DomainWatch) placeGap(life context.Context) {
 	w.mu.Lock()
 	owed := w.gapUnread && w.live && !w.stopped
 	w.mu.Unlock()
 	if !owed {
 		return
 	}
-	ctx, cancel := context.WithTimeout(w.life, w.timing.attempt)
+	ctx, cancel := context.WithTimeout(life, w.timing.attempt)
 	through, err := w.l.End(ctx)
 	cancel()
 	w.mu.Lock()
@@ -1231,9 +1231,9 @@ func (w *DomainWatch) placeGap() {
 }
 
 // replace begins a generation in place of one that stopped serving, asking at
-// once and then again, spaced, until a consumer begins or the watch ends,
-// and reports whether the watch goes on.
-func (w *DomainWatch) replace() bool {
+// once and then again, spaced, until a consumer begins or life — the watch's
+// own context — ends, and reports whether the watch goes on.
+func (w *DomainWatch) replace(life context.Context) bool {
 	w.mu.Lock()
 	if w.stopped || w.closed {
 		// CLOSED FOR GOOD: the queue's connection is gone and the node
@@ -1259,7 +1259,7 @@ func (w *DomainWatch) replace() bool {
 			"to read its rows for what it missed once its copy reaches where "+
 			"that consumer begins")
 	for attempt := 1; ; attempt++ {
-		ctx, cancel := context.WithTimeout(w.life, w.timing.attempt)
+		ctx, cancel := context.WithTimeout(life, w.timing.attempt)
 		err := w.begin(ctx, gen+1)
 		cancel()
 		if err == nil {
@@ -1277,7 +1277,7 @@ func (w *DomainWatch) replace() bool {
 				"through", began)
 			return true
 		}
-		if errors.Is(err, errWatchStopped) || w.life.Err() != nil {
+		if errors.Is(err, errWatchStopped) || life.Err() != nil {
 			return false
 		}
 		if connectionClosed(err) {
@@ -1293,7 +1293,7 @@ func (w *DomainWatch) replace() bool {
 				"of its rows carry its work meanwhile")
 		timer := time.NewTimer(wait)
 		select {
-		case <-w.life.Done():
+		case <-life.Done():
 			timer.Stop()
 			return false
 		case <-timer.C:

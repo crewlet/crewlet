@@ -13,6 +13,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -42,19 +44,39 @@ func (n *node) tip(repo, ref string) (string, statelog.Position) {
 // revising is the home's write of revision rev's facts on change — its head
 // head, against target at its tip — touching touched, the path owners matched
 // against owners: what a home that read them would send, its owners matched
-// by code.MatchOwners. Its base is A, and its head's tree its head's own, so
-// no two heads hold the same code unless a case says they do (codeOf).
+// by code.MatchOwners and the human paths its target's gate names by
+// code.MatchTargetHumanPaths, against the gates repo's rules hold now. Its
+// base is A, and its head's tree its head's own, so no two heads hold the same
+// code unless a case says they do (codeOf).
 func (n *node) revising(repo, change string, rev int64, head, target string, owners []code.PathOwner,
 	touched ...string) code.ConversationWrite {
 
 	n.t.Helper()
 	tip, at := n.tip(repo, target)
 	matched, digest := code.MatchOwners(owners, touched, false)
+	held, humanDigest, err := code.MatchTargetHumanPaths(n.gatesOfID(repo), target, touched, false,
+		code.RevisionClasses{})
+	if err != nil {
+		n.t.Fatalf("match %s's human paths: %v", target, err)
+	}
 	return code.ConversationWrite{OpID: statelog.NewOpID(time.Now(), ""), Revise: &code.Revise{
 		RepoID: repo, ChangeID: change, N: rev, HeadOID: head, TargetRef: target, TargetOID: tip,
 		TargetPosition: at, BaseOID: oidOf("A"), BaseTree: oidOf("the tree of A"),
 		HeadTree: oidOf("the tree of " + head), PatchID: oidOf("patch-" + head), Touched: touched, Node: n.id,
-		RequestedOwners: matched, OwnersDigest: digest}}
+		RequestedOwners: matched, OwnersDigest: digest, HumanPaths: held, HumanPathsDigest: humanDigest}}
+}
+
+// gatesOfID is the merge gates of the repository whose id is repo, as a
+// person's read of its detail that asks for them answers them (gatesOf).
+func (n *node) gatesOfID(repo string) []code.RuleGate {
+	n.t.Helper()
+	var name string
+	if err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(n.t.Context(), `SELECT name FROM code_repos WHERE id = ?`, repo).Scan(&name)
+	}); err != nil {
+		n.t.Fatalf("read repository %s's name: %v", repo, err)
+	}
+	return n.gatesOf(name)
 }
 
 // codeOf is w's revise as one holding the trees of the code named held — the
@@ -441,6 +463,135 @@ func TestAnOwnerRuleChangeSupersedesTheRevise(t *testing.T) {
 	}
 }
 
+// AN OWNER CHANGE MAKES THE FACTS DUE AGAIN: a revision's facts matched
+// against the path owners its repository held are its home's work no longer,
+// until the repository's owners change — and then the change is due its facts
+// again, since a statement cannot match a glob and the gate judging
+// owners_approve on the stale match would wait, computing, for a push that
+// may never come. The same tip read again is then no repeat: its facts,
+// matched against the owners the repository holds now, replace the stale
+// ones and ask the owner they add, and the change is no longer due them; the
+// same tip read a third time, the owners unchanged, is a repeat, superseded.
+//
+// Mutations: drop the owners' term of the due listing — the change is not
+// due its facts after the owners change, red; drop it from the revise's
+// guard — the same tip's facts matched again are refused superseded, red.
+func TestAnOwnerChangeMakesTheFactsDueAgain(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	was := []code.PathOwner{pathOwner(code.OwnerUnit, "Platform", "upload/**")}
+	repo, change := ownedChange(t, n, "web", was...)
+	w, _ := writerOn(t, n, n.pub)
+	res, err := w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, was, "upload/retry.go"))
+	requireConversed(t, res, err)
+	if n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched against the owners its repository holds is due them again")
+	}
+
+	now := []code.PathOwner{pathOwner(code.OwnerSeat, "cto", "upload/**")}
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.PathOwners = code.CanonicalPathOwners(now)
+	n.ensure("web", s, t1)
+	if !n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched against owners its repository has changed since is not " +
+			"due them again")
+	}
+	again := n.revising(repo, change, 1, oidOf("B"), mainRef, now, "upload/retry.go")
+	res, err = w.Converse(t.Context(), again)
+	requireConversed(t, res, err)
+	if got, ok := n.reviewer(change, "cto"); !ok || got.reason != string(code.ReviewerPathOwner) {
+		t.Fatalf("the facts matched again did not ask the owner they add, the cto: %+v (%v)", got, ok)
+	}
+	if n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched again is still due them")
+	}
+	before := n.end()
+	res, err = w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, now, "upload/retry.go"))
+	requireConversationRefused(t, n, before, res, err, code.ConversationRefusalSuperseded, "holds facts against")
+}
+
+// A HUMAN PATH CHANGE MAKES THE FACTS DUE AGAIN: which of a gate's human paths
+// hold a revision is its home's match, recorded on its facts beside the
+// digest of the repository's rules' human paths it was made against — so a
+// rule change that adds a human path makes the change due its facts again,
+// the revise matched against the old rules is refused superseded, and the one
+// matched against the rules the repository holds now lands, naming the entry
+// that holds it, after which the change is no longer due them. A rule change
+// that moves no human path — its merge_by — makes nothing due.
+//
+// Mutations: drop the human paths' term of the due listing — the change is
+// not due its facts after the rule change, red; skip the decide's digest
+// check — the stale revise lands, red.
+func TestAHumanPathChangeMakesTheFactsDueAgain(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := ownedChange(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+	first := n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "deploy/app.yaml")
+	res, err := w.Converse(t.Context(), first)
+	requireConversed(t, res, err)
+	if n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched against its repository's rules is due them again")
+	}
+	stale := n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "deploy/app.yaml")
+
+	gate := code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
+		HumanPaths: []code.HumanPath{{Glob: "deploy/**"}}, Landing: code.Landing{Depth: 4, Batch: 4},
+		DeleteSource: code.DeleteSeats}
+	s := gatedSettings(gate)
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	n.ensure("web", s, t1)
+	if !n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched against human paths its repository has changed since is " +
+			"not due them again")
+	}
+	before := n.end()
+	res, err = w.Converse(t.Context(), stale)
+	requireConversationRefused(t, n, before, res, err, code.ConversationRefusalSuperseded, "human paths")
+
+	res, err = w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "deploy/app.yaml"))
+	requireConversed(t, res, err)
+	var held string
+	if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT human_paths FROM code_revision_facts
+			WHERE change_id = ? AND n = 1`, change).Scan(&held)
+	}); err != nil {
+		t.Fatalf("read the facts' human paths: %v", err)
+	}
+	if held != `{"held":[0]}` {
+		t.Fatalf("the facts matched again record the human paths %q, want deploy/** holding them", held)
+	}
+	if n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched again is still due them")
+	}
+
+	gate.MergeBy = code.MergeByMaintainers
+	s = gatedSettings(gate)
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	n.ensure("web", s, t1)
+	if n.factsDue(repo, change) {
+		t.Fatal("a rule change that moves no human path makes the facts due again")
+	}
+}
+
+// factsDue reports whether repo's due listing names change as due its head
+// revision's facts, read as a home reads its first page.
+func (n *node) factsDue(repo, change string) bool {
+	n.t.Helper()
+	a, err := n.reader.Read(n.t.Context(), code.ReadQuery{Kind: code.ReadChangesDue, Fresh: stale,
+		ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: harnessAt}})
+	if err != nil {
+		n.t.Fatalf("read %s's due changes: %v", repo, err)
+	}
+	for _, d := range a.DueChanges {
+		if d.ID == change {
+			return d.FactsDue
+		}
+	}
+	return false
+}
+
 // A REVISION'S FIRST FACTS WAKE WHO MUST LOOK AGAIN, AND A CHANGE'S FIRST
 // FACTS ITS LEAD: the writer stamps on the record, from its snapshot and its
 // chart, the reviewers whose standing verdict asks for changes on an earlier
@@ -512,6 +663,62 @@ func TestARevisionsFirstFactsWakeWhoMustLookAgain(t *testing.T) {
 		t.Fatalf("a change its path owner is asked of asks %+v; want its path owner", r.Asked)
 	} else if _, lead := woken(r); lead != "" {
 		t.Fatalf("a change its path owner is asked of falls back to %q; want nobody to fall back to", lead)
+	}
+}
+
+// A REVISION'S FACTS ARE ITS PUSHER'S ERRAND: the home records them, but a
+// revision is somebody's push, so the review they ask for is that principal's
+// request. The facts of revision 1, which the seat dev opened, ask Platform's
+// lead to review as dev — the routing's actor, the wake's sender and its
+// writer the seat dev, which bounds the woken seat's reads by dev's grant
+// too — and the facts of revision 2, which the person holding the seat
+// harness pushed, ask plat-lead to look again as that person.
+//
+// Mutation: drop the pusher from the revise's concern, and both wakes say
+// nobody wrote them — a turn bounded by nothing beyond the reviewer's own
+// grant, red.
+func TestARevisionsFactsAreItsPushersErrand(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	owners := []code.PathOwner{pathOwner(code.OwnerUnit, "Platform", "upload/**")}
+	repo, change := ownedChange(t, n, "web", owners...)
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	wokenBy := func(p statelog.Position, want string) notify.Routed {
+		t.Helper()
+		_, relayed, routed := wakesOf(t, feedRecord(t, n, p))
+		if !relayed || !slices.Equal(woken(routed), []string{want}) {
+			t.Fatalf("the facts at %s wake %v (relayed %v), want %s", p, woken(routed), relayed, want)
+		}
+		return routed[0]
+	}
+
+	first, err := w.Converse(ctx, n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go"))
+	requireConversed(t, first, err)
+	if r := decodedRevise(t, n, first.Position).Routing; r == nil || r.Actor != "dev" || r.Person("dev") {
+		t.Fatalf("revision 1's facts route %+v, want the seat dev, who opened the change, as their actor", r)
+	}
+	asked := wokenBy(first.Position, "plat-lead:review_requested")
+	if asked.Sender != "dev" || asked.Writer == nil || asked.Writer.Kind != iam.ActorAgent ||
+		asked.Writer.Seat != "dev" {
+		t.Errorf("the path owner's wake is sent by %q, written by %+v; want the seat dev, whose revision it is",
+			asked.Sender, asked.Writer)
+	}
+
+	review, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil))
+	requireReviewed(t, review, err)
+	n.revise(repo, "B", "B2")
+	second, err := w.Converse(ctx, n.revising(repo, change, 2, oidOf("B2"), mainRef, owners, "upload/retry.go"))
+	requireConversed(t, second, err)
+	if r := decodedRevise(t, n, second.Position).Routing; r == nil || r.Actor != "harness" || !r.Person("harness") {
+		t.Fatalf("revision 2's facts route %+v, want the person on the seat harness, who pushed it, as their "+
+			"actor", r)
+	}
+	again := wokenBy(second.Position, "plat-lead:re_review")
+	if again.Sender != "harness" || again.Writer == nil || again.Writer.Kind != iam.ActorHuman ||
+		again.Writer.Seat != "harness" {
+		t.Errorf("the reviewer's wake to look again is sent by %q, written by %+v; want the person on the "+
+			"seat harness, whose push it is", again.Sender, again.Writer)
 	}
 }
 

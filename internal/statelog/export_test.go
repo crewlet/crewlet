@@ -41,6 +41,14 @@ func MeasureVolumesWith(s *Snapshotter, fn func(dir string) (int64, error)) { s.
 // derivation rather than a copy of it.
 func WaitsThrough(at Position) Position { return waitsThrough(at) }
 
+// CurrentThrough is the position a read transaction's rows are current
+// through, from the checkpoint row it read and the position the read was
+// released at ([currentThrough]).
+//
+// EXPORTED FOR A TEST so each rule of the carry is a case of its own, rather
+// than a branch reachable only through a loop a case holds a commit under.
+func CurrentThrough(at, released Position) Position { return currentThrough(at, released) }
+
 // StanceAt is a runner standing at at, with nothing reached past it, as a
 // reading of the log's end pairs it ([Runner.ObserveEnd]).
 //

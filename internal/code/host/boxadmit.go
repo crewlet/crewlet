@@ -23,7 +23,7 @@ import (
 // there, told apart by the Basic user name their credential presents: a seat's
 // CODING BOX (BoxUser), admitted by its run's row with its grant the run's on
 // top of the seat's — admitRun, the steps below — and a CHECK'S BOX
-// (CheckUser), admitted by its attempt's row to fetch one commit
+// (code.CheckUser), admitted by its attempt's row to fetch one commit
 // (checkadmit.go).
 //
 // # In order, each refusal its own answer
@@ -31,7 +31,7 @@ import (
 //  1. NAME — as admit's: the URL's segment, one `.git` stripped, held to the
 //     grammar.
 //  2. CREDENTIAL — git's Basic, user name [BoxUser] with the run's token as the
-//     password ([BoxTokens.Verify]), or [CheckUser] with the check's
+//     password ([BoxTokens.Verify]), or [code.CheckUser] with the check's
 //     ([CheckTokens.Verify]), each verified under [BoxKeyDomain] — and each
 //     user name's own token alone: a run's token presented as a check's, or a
 //     check's as a run's, verifies as neither ([boxCredential]). A box's token
@@ -142,10 +142,10 @@ import (
 // present, never an API token.
 const (
 	boxNoneSentence = "authentication required: a coding box authenticates as `" + BoxUser +
-		"` with its run token, and a check's box as `" + CheckUser + "` with its check's token, each " +
+		"` with its run token, and a check's box as `" + code.CheckUser + "` with its check's token, each " +
 		"answered by the engine's credential helper from $CREWLET_GIT_TOKEN"
 	boxUserSentence = "a coding box authenticates as `" + BoxUser + "` with its run token, and a check's " +
-		"box as `" + CheckUser + "` with its check's token"
+		"box as `" + code.CheckUser + "` with its check's token"
 	boxTokenSentence = "this run token is not valid here: forged, expired, or signed under a key this " +
 		"node's secrets.keys does not hold"
 	checkTokenSentence = "this check token is not valid here: forged, expired with its check, or signed " +
@@ -176,7 +176,7 @@ func (s *Server) admitBox(ctx context.Context, w http.ResponseWriter, r *http.Re
 	}, s.log) {
 		return admission{}, false
 	}
-	if user == CheckUser {
+	if user == code.CheckUser {
 		return s.admitCheck(ctx, w, r, op, name, check)
 	}
 	return s.admitRun(ctx, w, r, op, name, run)
@@ -340,7 +340,7 @@ func grantedNames(run BoxRun) string {
 
 // ChallengeBox is a box's admission's CREDENTIAL step (step 2) on its own: it
 // answers a request that presents no credential this fleet signed — no Basic
-// credential at all, a user name other than [BoxUser] and [CheckUser], or a
+// credential at all, a user name other than [BoxUser] and [code.CheckUser], or a
 // password signed refuses for the user name that presented it — with git's
 // 401 challenge in the box's own words, logs it on log at DEBUG
 // (code_box_challenged) with why (`none`, `user` or `token`) and never the
@@ -365,11 +365,11 @@ func ChallengeBox(w http.ResponseWriter, r *http.Request, signed func(user, toke
 	switch user, password, presented := r.BasicAuth(); {
 	case !presented:
 		why, words = "none", boxNoneSentence
-	case user != BoxUser && user != CheckUser:
+	case user != BoxUser && user != code.CheckUser:
 		why, words = "user", boxUserSentence
 	case !signed(user, password):
 		why, words = "token", boxTokenSentence
-		if user == CheckUser {
+		if user == code.CheckUser {
 			words = checkTokenSentence
 		}
 	default:

@@ -112,7 +112,7 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 	writer := &codeWrites{}
 	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
 	turn := writerTurn(t)
-	if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeOpenChangeTool, openArgs()); got.Failed {
+	if got := callWrite(everyGrant(), t, reg, turn, builtin.CodeOpenChangeTool, openArgs()); got.Failed {
 		t.Fatalf("the open answered %q", got.Output)
 	}
 	changes, converses := writer.changesAsked()
@@ -139,7 +139,7 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 	}
 
 	// THE SAME CALL AGAIN is the same two operations.
-	callWrite(t, everyGrant(), reg, turn, builtin.CodeOpenChangeTool, openArgs())
+	callWrite(everyGrant(), t, reg, turn, builtin.CodeOpenChangeTool, openArgs())
 	changes, converses = writer.changesAsked()
 	if len(changes) != 2 || len(converses) != 2 || changes[1].OpID != open.OpID || converses[1].OpID != ask.OpID {
 		t.Errorf("the open made again is %d opens and %d asks under %v and %v, want the first's two operations",
@@ -151,7 +151,7 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 		return code.ChangeResult{Refusal: code.ChangeRefusalChangeExists,
 			Detail: "refs/heads/feature heads site!3 already"}, nil
 	}}
-	got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), refusing)), writerTurn(t),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), refusing)), writerTurn(t),
 		builtin.CodeOpenChangeTool, openArgs())
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalExists || !strings.Contains(got.Output, "site!3") {
 		t.Errorf("a refused open answered %q as %s", got.Output, tools.RefusalOf(got))
@@ -165,7 +165,7 @@ func TestOpenChangeRequestsItsReviewersAsAStep(t *testing.T) {
 		return code.ConversationResult{Refusal: code.ConversationRefusalNotPermitted,
 			Detail: "agent-ceo reviews nothing of site"}, nil
 	}}
-	got = callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), unasked)), writerTurn(t),
+	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), unasked)), writerTurn(t),
 		builtin.CodeOpenChangeTool, openArgs())
 	answer := decoded(t, got)
 	said, _ := answer["reviewers_not_asked"].(string)
@@ -234,7 +234,7 @@ func TestAnOpenCarriesTheTurnsWorkItemUnlessItNamesOne(t *testing.T) {
 			if c.named != nil {
 				args["work_item"] = c.named
 			}
-			got := callWrite(t, everyGrant(), reg, turn, builtin.CodeOpenChangeTool, args)
+			got := callWrite(everyGrant(), t, reg, turn, builtin.CodeOpenChangeTool, args)
 			changes, _ := writer.changesAsked()
 			if c.class != "" {
 				if !got.Failed || tools.RefusalOf(got) != c.class || len(changes) != 0 {
@@ -297,7 +297,7 @@ func TestAChangeWriteIsHeldToTheVersionItsCallerRead(t *testing.T) {
 			t.Parallel()
 			writer := &codeWrites{}
 			host := newChangeHost(siteChange())
-			got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), writerTurn(t), c.tool, c.args)
+			got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t), c.tool, c.args)
 			changes, _ := writer.changesAsked()
 			if got.Failed || len(changes) != 1 {
 				t.Fatalf("answered %q with %d writes", got.Output, len(changes))
@@ -326,7 +326,7 @@ func TestAChangeWriteIsHeldToTheVersionItsCallerRead(t *testing.T) {
 			map[string]any{"change": "site!7", "expected_version": 4, "reopen": true, "reason": "x"}},
 	} {
 		host, writer := newChangeHost(siteChange()), &codeWrites{}
-		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), writerTurn(t), c.tool, c.args)
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t), c.tool, c.args)
 		reads, _, _ := host.asked()
 		changes, _ := writer.changesAsked()
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || len(reads)+len(changes) != 0 {
@@ -360,7 +360,7 @@ func TestEveryChangeRefusalIsInAnExistingClass(t *testing.T) {
 		writer := &codeWrites{change: func(code.ChangeProposal) (code.ChangeResult, error) {
 			return code.ChangeResult{Refusal: refusal, Detail: "the " + string(refusal) + " sentence"}, nil
 		}}
-		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
 			builtin.CodeOpenChangeTool, map[string]any{"repo": "site", "branch": "feature", "title": "t"})
 		class := tools.RefusalOf(got)
 		switch {

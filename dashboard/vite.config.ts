@@ -149,8 +149,8 @@ const SOURCE_NOTICES: readonly { heading: string; lead: string; file: string }[]
 // its license step among its own post-build plugins, which run after every user
 // plugin, so an ordinary generateBundle would look for the file before it
 // exists. Ordered handlers run after every unordered one, whatever the plugin
-// order. The second build (vite.protocol.config.ts) writes only protocol.js and
-// leaves this file as the first build wrote it.
+// order. The second build (vite.protocol.config.ts) writes only protocol.js,
+// into static/protocol, and leaves this file as the first build wrote it.
 function sourceNotices(): Plugin {
   return {
     name: "crewlet:source-notices",

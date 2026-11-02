@@ -680,9 +680,9 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 	// announces the change ready (concerns.go's head): it is the one whose
 	// decide holds the stored answer it replaces — a check that passed
 	// reaches it through the home's readiness refresh, never on its own.
-	d.concern = concerning{conflicted: m.State == MergeConflict && !(held && prior.state == MergeConflict)}
+	d.concern = concerning{conflicted: m.State == MergeConflict && (!held || prior.state != MergeConflict)}
 	d.concern.authors = d.concern.conflicted
-	if m.Ready && !(held && prior.ready) {
+	if m.Ready && (!held || !prior.ready) {
 		d.concern.readyFor = mergingAuthors(f, gate)
 		if len(d.concern.readyFor) == 0 {
 			if lead := ownersLead(f.Rows.Repo, roster); lead.Handle != "" {

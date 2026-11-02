@@ -1,11 +1,13 @@
 package checkrun
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -40,10 +42,13 @@ type Order interface {
 }
 
 // Boxes is this node's sandbox catalogue as a check's box is made from it —
-// internal/sandbox's Manager satisfies it: a box with no coding agent, and the
-// backend a remote box is killed through.
+// internal/sandbox's Manager satisfies it: a box with no coding agent, the
+// cells the CURRENT catalogue configures (Placements, the only ones a new box
+// is made in), and the backend a remote box is killed through (Provider, which
+// also answers a cell the catalogue dropped, for the boxes already on it).
 type Boxes interface {
 	AcquireBox(ctx context.Context, spec sandbox.Spec, setup []sandbox.SetupStep) (sandbox.Sandbox, error)
+	Placements() []sandbox.Placement
 	Provider(placement sandbox.Placement) (sandbox.Provider, error)
 }
 
@@ -100,6 +105,10 @@ type Timing struct {
 	// Renew is how often a remote check's slot is renewed and its box's
 	// minutes charged: [RemoteSlotRenew].
 	Renew time.Duration
+	// End is how long a run's ending may be read from its box — its exit
+	// status, reports, summary, tail and kept log: [EndPolls] polls, which
+	// the home's sweep counts into its patience ([SweepPolls]).
+	End time.Duration
 }
 
 // The production cadences.
@@ -138,20 +147,23 @@ const (
 	// JUDGMENT — a git node claims at most its free cells' worth of attempts
 	// a walk, a few dozen, and finds them among the attempts ranked to it,
 	// about one in each of its fleet's git nodes; 256 is a walk of one read
-	// on a fleet of up to a few nodes with a queue of a hundred, and a page
-	// of definitions (a few hundred bytes each) of under a hundred KiB.
+	// a cell on a fleet of up to a few nodes with a queue of a hundred, and a
+	// page of definitions (a few hundred bytes each) of under a hundred KiB.
+	// It holds because a walk reads only the cells it has room in and stops
+	// reading each the moment its room is spent (Runner.walk), so a walk
+	// pages on only while it has room for what it reads.
 	WalkPage = 256
 )
 
 // Production is the engine's timing.
 func Production() Timing {
 	return Timing{Poll: CheckPoll, Stagger: ClaimStagger, Walk: WalkGap, Backstop: WalkBackstop,
-		Renew: RemoteSlotRenew}
+		Renew: RemoteSlotRenew, End: EndPolls * CheckPoll}
 }
 
 // valid reports whether every cadence is one: a duration above zero.
 func (t Timing) valid() bool {
-	return t.Poll > 0 && t.Stagger > 0 && t.Walk > 0 && t.Backstop > 0 && t.Renew > 0
+	return t.Poll > 0 && t.Stagger > 0 && t.Walk > 0 && t.Backstop > 0 && t.Renew > 0 && t.End > 0
 }
 
 // Options build a [Runner]. Every field but Logs, Nudges, Faults, Metrics,
@@ -172,9 +184,17 @@ type Options struct {
 	Tokens Tokens
 	// GitBase is the code host's base as a box dials it — this node's
 	// CREWLET_BOX_GIT_URL, as sandbox.ParseBoxURL read it: a public
-	// listener and /box/git, its sibling /box/code where a check reads its
-	// commit without a clone.
+	// listener and /box/git.
 	GitBase string
+	// CodeBase is where a check's box reads its commit without a clone —
+	// the same listener and the route the API serves a check's reads under
+	// (internal/api/auth's BoxCodePrefix) — and CREWLET_CHECK_API is it and
+	// the repository's name. GIVEN, NEVER SPELLED HERE: the route is the
+	// API's, which this package does not import, and a copy of its spelling
+	// here was one nothing held to the route, a rename of which would have
+	// answered every check's read 404 with only a live run to show it. The
+	// engine builds it from the route itself.
+	CodeBase string
 	// Slots is how many checks this node runs at once in container cells:
 	// git.max_checks as config.Git.MaxChecksFor resolved it, 0 none.
 	Slots int
@@ -202,22 +222,18 @@ type Options struct {
 // ErrOptions is an Options value New refuses, wrapped naming every field.
 var ErrOptions = errors.New("checkrun: refused options")
 
-// boxGitSuffix is what a box's code host base ends in, and boxCodeSuffix its
-// sibling a check's box reads its commit at (internal/api/auth's
-// BoxCodePrefix).
-const (
-	boxGitSuffix  = "/box/git"
-	boxCodeSuffix = "/box/code"
-)
+// boxGitSuffix is what a box's code host base ends in: what New holds
+// CREWLET_BOX_GIT_URL to, since a value naming the listener alone, or another
+// route of it, would fail every box's clone.
+const boxGitSuffix = "/box/git"
 
 // Runner is one git node's check runner: its walk of the queue and the
 // checks it runs, each on a goroutine of its own, until Stop.
 type Runner struct {
-	o       Options
-	timing  Timing
-	apiBase string
-	log     *slog.Logger
-	now     func() time.Time
+	o      Options
+	timing Timing
+	log    *slog.Logger
+	now    func() time.Time
 
 	// life is every walk's and every run's context, ended by Stop; ending is
 	// the context a stopping run records its ending under, set by Stop
@@ -265,13 +281,16 @@ func New(o Options) (*Runner, error) {
 	if o.Slots < 0 {
 		return nil, fmt.Errorf("%w: Slots %d is no count of container cells", ErrOptions, o.Slots)
 	}
-	base, ok := strings.CutSuffix(o.GitBase, boxGitSuffix)
-	if !ok || base == "" {
+	if base, ok := strings.CutSuffix(o.GitBase, boxGitSuffix); !ok || base == "" {
 		return nil, fmt.Errorf("%w: GitBase: %s must name the code host's public listener ending in %s "+
-			"(docs/guides/deployment.md), which a check's box clones from — and its sibling %s, where a check "+
-			"reads its commit without a clone", ErrOptions, sandbox.BoxGitURLVar, boxGitSuffix, boxCodeSuffix)
+			"(docs/guides/deployment.md), which a check's box clones from", ErrOptions, sandbox.BoxGitURLVar,
+			boxGitSuffix)
 	}
-	r := &Runner{o: o, timing: o.Timing, apiBase: base + boxCodeSuffix, log: o.Logger, now: o.Now,
+	if o.CodeBase == "" {
+		return nil, fmt.Errorf("%w: CodeBase: a check's box reads its commit without a clone there "+
+			"(CREWLET_CHECK_API), and no base names it", ErrOptions)
+	}
+	r := &Runner{o: o, timing: o.Timing, log: o.Logger, now: o.Now,
 		wake: make(chan struct{}, 1), held: map[config.Placement]int{},
 		unknown: map[config.Placement]bool{}}
 	if r.timing == (Timing{}) {
@@ -406,10 +425,34 @@ func (r *Runner) watch(ctx context.Context) func() {
 // is decided again by the repository's checks writer.
 var stale = statelog.Freshness{Level: statelog.ReadStale}
 
-// walk reads the queue oldest first and claims, and starts, every attempt this
-// node may run now: one it ranks for that has waited its rank's staggers, in a
-// cell this node has room in. It answers the earliest instant an attempt it
-// read falls due at this node's rank, zero for none.
+// walk reads the queue and claims, and starts, every attempt this node may run
+// now: one it ranks for that has waited its rank's staggers, in a cell this
+// node has room in. It answers the earliest instant an attempt it read falls
+// due at this node's rank, zero for none.
+//
+// IT READS ONLY WHAT IT CAN ACT ON. The queue is read by the cell each
+// attempt's definition names ([code.ChecksQueuedQuery], one seek of
+// code_checks_queued_idx each), and only for the cells this node can claim in
+// NOW: ones the company lets a check run in (config.Company.CheckCell, against
+// the epoch the walk runs under), that this node's CURRENT catalogue
+// configures — never a backend kept only for the boxes already on a cell the
+// catalogue dropped — and that have room: a container slot free under
+// git.max_checks, or a remote cell no cap has held back this walk. A cell
+// whose room runs out mid-walk stops being read. So a node whose container
+// slots are full reads nothing of the container backlog, whatever else its
+// catalogue holds, and one cell's backlog never costs a walk in another: read
+// whole, the queue was paged to its end at every walk of every git node with
+// room in any cell, each claiming nothing it read, the fleet's reads growing
+// with its git nodes times its queue.
+//
+// The attempts naming a cell the company does not allow — or none, where it
+// resolves none — are ended unrun by the node whose turn it is, which needs no
+// room; they are read beside the cells this node has room in, or where it can
+// claim in no cell at all, so a node with every cell full reads nothing.
+//
+// OLDEST QUEUED FIRST across the lanes it reads — a cell's own name and the
+// default resolving to it compete for the same slots — merged a page at a
+// time by the queue's own order.
 func (r *Runner) walk(ctx context.Context) time.Time {
 	company, ok := r.o.Company()
 	if !ok || company.Config == nil || !company.Config.Code.Native {
@@ -419,41 +462,130 @@ func (r *Runner) walk(ctx context.Context) time.Time {
 	if !ok || boxes == nil {
 		return time.Time{}
 	}
-	var (
-		next   time.Time
-		cursor string
-		w      = &walking{ranks: map[string]int{}}
-	)
-	for !r.full(boxes, w) {
-		a, err := r.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChecksQueued, Cursor: cursor, Limit: WalkPage,
-			Fresh: stale})
-		if err != nil {
-			if ctx.Err() == nil {
-				r.log.WarnContext(ctx, "code_checks_walk_failed", "error", err.Error(), "detail",
-					"the queue is read again at the next walk")
-			}
+	w := &walking{ranks: map[string]int{}, configured: map[config.Placement]bool{}}
+	for _, p := range boxes.Placements() {
+		w.configured[config.Placement(p)] = true
+	}
+	lanes, cells := r.lanes(company.Config, w)
+	var next time.Time
+	for {
+		// A LANE OF A CELL WITH NO ROOM LEFT is read no further, and the
+		// lanes of attempts no cell runs only while this node could act on
+		// some cell's.
+		roomy := len(cells) == 0
+		for cell := range cells {
+			roomy = roomy || r.room(w, cell)
+		}
+		if !roomy {
 			return next
 		}
-		for _, c := range a.Runnable {
-			if due := r.consider(ctx, company, boxes, w, c); !due.IsZero() && (next.IsZero() || due.Before(next)) {
-				next = due
+		var head *lane
+		for _, l := range lanes {
+			if (l.cell != "" && !r.room(w, l.cell)) || l.drained() {
+				continue
 			}
-			if ctx.Err() != nil {
-				return next
+			if len(l.page) == 0 {
+				if err := r.fill(ctx, l); err != nil {
+					if ctx.Err() == nil {
+						r.log.WarnContext(ctx, "code_checks_walk_failed", "run_in", string(l.runIn), "error",
+							err.Error(), "detail", "the queue is read again at the next walk")
+					}
+					return next
+				}
+				if len(l.page) == 0 {
+					continue
+				}
+			}
+			if head == nil || queuedBefore(l.page[0].CheckRow, head.page[0].CheckRow) {
+				head = l
 			}
 		}
-		if a.Next == "" {
-			break
+		if head == nil {
+			return next
 		}
-		cursor = a.Next
+		c := head.page[0]
+		head.page = head.page[1:]
+		if due := r.consider(ctx, company, w, c); !due.IsZero() && (next.IsZero() || due.Before(next)) {
+			next = due
+		}
+		if ctx.Err() != nil {
+			return next
+		}
 	}
-	return next
 }
 
-// walking is what one walk has learned that the rest of it reads: each
-// repository's rank, the remote slots it listed, and whether a remote cap has
-// held a check back.
+// lane is one range of the queue a walk reads: the queued attempts whose
+// definitions name runIn ("" for none), oldest queued first, a page at a time
+// from where the last page ended.
+type lane struct {
+	runIn code.CheckCell
+	// cell is the cell the lane's attempts run in under the walk's epoch,
+	// "" for a lane of attempts no cell runs, which are ended unrun.
+	cell   config.Placement
+	cursor string
+	page   []code.RunnableCheck
+	// last is the lane read to its end: no page follows the one held.
+	last bool
+}
+
+// drained reports a lane with nothing left to read or consider.
+func (l *lane) drained() bool { return l.last && len(l.page) == 0 }
+
+// fill reads the lane's next page.
+func (r *Runner) fill(ctx context.Context, l *lane) error {
+	a, err := r.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChecksQueued,
+		ChecksQueued: &code.ChecksQueuedQuery{RunIn: l.runIn}, Cursor: l.cursor, Limit: WalkPage, Fresh: stale})
+	if err != nil {
+		return err
+	}
+	l.page, l.cursor, l.last = a.Runnable, a.Next, a.Next == ""
+	return nil
+}
+
+// lanes is what a walk under company may read: a lane for every cell an
+// attempt's definition may name, and one for naming none, each resolved to
+// the cell it runs in — where this node's catalogue configures that cell, and
+// said once and left unread where it does not — or to no cell, for the
+// attempts the company runs nowhere; and the cells those lanes run in.
+func (r *Runner) lanes(company *config.Company, w *walking) ([]*lane, map[config.Placement]bool) {
+	var (
+		lanes []*lane
+		cells = map[config.Placement]bool{}
+	)
+	for _, runIn := range append([]code.CheckCell{""}, code.CheckCells()...) {
+		cell, why := company.CheckCell(config.Placement(runIn))
+		switch {
+		case why != "":
+			lanes = append(lanes, &lane{runIn: runIn})
+		case r.configures(w, cell):
+			lanes = append(lanes, &lane{runIn: runIn, cell: cell})
+			cells[cell] = true
+		}
+	}
+	return lanes, cells
+}
+
+// queuedBefore reports a ahead of b in the queue's order — the order of
+// code_checks_queued_idx past its cell: the queuing instant, then the
+// attempt's key.
+func queuedBefore(a, b code.CheckRow) bool {
+	if !a.QueuedAt.Equal(b.QueuedAt) {
+		return a.QueuedAt.Before(b.QueuedAt)
+	}
+	return cmp.Or(strings.Compare(a.RepoID, b.RepoID), strings.Compare(a.OID, b.OID),
+		strings.Compare(a.Target, b.Target), strings.Compare(a.Name, b.Name),
+		cmp.Compare(a.Attempt, b.Attempt)) < 0
+}
+
+// walking is what one walk has learned that the rest of it reads: the cells
+// this node's catalogue configures, each repository's rank, the remote slots
+// it listed, and whether a remote cap has held a check back.
 type walking struct {
+	// configured is the cells this node's CURRENT catalogue configures
+	// (sandbox.Manager.Placements), read once a walk: the only cells a new
+	// box is made in, and never one the catalogue dropped, whose backend
+	// the manager keeps only for the boxes already on it.
+	configured map[config.Placement]bool
 	// ranks is this node's place in each repository's git order, read once
 	// a walk a repository, so a walk ranks every attempt of one against one
 	// reading.
@@ -484,11 +616,13 @@ func (r *Runner) rank(w *walking, repoID string) int {
 // consider is one queued attempt of the walk: claimed and started where this
 // node may run it now, answered the instant it falls due at this node's rank
 // where that is still to come, and zero otherwise.
-func (r *Runner) consider(ctx context.Context, company Company, boxes Boxes, w *walking,
-	c code.RunnableCheck) time.Time {
-
+func (r *Runner) consider(ctx context.Context, company Company, w *walking, c code.RunnableCheck) time.Time {
 	if c.Def == nil {
-		// A PERSON'S CI REPORTS IT: no runner of the engine's runs it.
+		// NO DEFINITION, NOTHING TO RUN: every queued attempt carries the
+		// one it was queued under — only one errored at its dispatch
+		// carries none, and it ends as it is queued (code.CheckQueued), and
+		// a person's CI queues nothing (code.QueueReasons) — so this is a
+		// row no runner could run, skipped rather than dereferenced.
 		return time.Time{}
 	}
 	at := r.rank(w, c.RepoID)
@@ -515,24 +649,24 @@ func (r *Runner) consider(ctx context.Context, company Company, boxes Boxes, w *
 		}
 		// A NODE WHOSE CATALOGUE LACKS THE CELL takes no slot and charges
 		// no minute: reserve says so below and leaves the check queued.
-		if _, err := boxes.Provider(sandbox.E2B); err == nil {
+		if w.configured[cell] {
 			if slot = r.takeRemote(ctx, company, w); slot == nil {
 				return time.Time{}
 			}
 		}
 	}
-	if !r.reserve(boxes, cell) {
-		slot.Release()
+	if !r.reserve(w, cell) {
+		slot.Release(ctx)
 		return time.Time{}
 	}
 	started := r.now()
 	if !r.claim(ctx, c, cell, started) {
-		slot.Release()
+		slot.Release(ctx)
 		r.release(cell)
 		return time.Time{}
 	}
 	r.wg.Add(1)
-	go func() {
+	go func() { //nolint:contextcheck // The run is the runner's, not this walk's: it runs under r.life, so a walk that ends never cuts the box it started, and records its ending under Stop's context.
 		defer r.wg.Done()
 		defer r.release(cell)
 		r.run(c, cell, started, slot)
@@ -562,42 +696,54 @@ func (r *Runner) takeRemote(ctx context.Context, company Company, w *walking) *R
 	return nil
 }
 
-// full reports a node with no room for any check: no container cell free —
-// or none configured — and no remote cell configured, or one this walk found
-// held by the company's caps.
-func (r *Runner) full(boxes Boxes, w *walking) bool {
-	if _, err := boxes.Provider(sandbox.E2B); err == nil && !w.remoteHeld {
+// room reports whether this node can start one more check in cell this walk:
+// one its catalogue configures, with a container slot free under
+// git.max_checks, or — a remote cell — no cap that has held a check back this
+// walk.
+func (r *Runner) room(w *walking, cell config.Placement) bool {
+	if !w.configured[cell] {
 		return false
 	}
-	if _, err := boxes.Provider(sandbox.Container); err != nil {
-		return true
+	if cell != config.PlacementContainer {
+		return !w.remoteHeld
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.held[config.PlacementContainer] >= r.o.Slots
+	return r.held[cell] < r.o.Slots
+}
+
+// configures reports whether this node's current catalogue configures cell —
+// and says once, until it does again, where a cell the company runs checks in
+// is missing from it.
+func (r *Runner) configures(w *walking, cell config.Placement) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if w.configured[cell] {
+		delete(r.unknown, cell)
+		return true
+	}
+	// THE CATALOGUE LACKS A CELL THE COMPANY RUNS CHECKS IN: the company's
+	// own validation builds every cell a check may run in, so this is a node
+	// behind its company's apply — said once, and the cell's checks left
+	// queued for a node that has it.
+	if !r.unknown[cell] {
+		r.unknown[cell] = true
+		r.log.Warn("code_checks_cell_unconfigured", "cell", string(cell), "configured",
+			slices.Sorted(maps.Keys(w.configured)), "detail",
+			"this node's sandbox catalogue has no backend for the cell, so it claims no check that runs there")
+	}
+	return false
 }
 
 // reserve takes room for one check in cell — a container slot under
 // git.max_checks, or nothing for a remote cell — where the catalogue
 // configures the cell, false where there is none.
-func (r *Runner) reserve(boxes Boxes, cell config.Placement) bool {
-	_, err := boxes.Provider(sandbox.Placement(cell))
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if err != nil {
-		// THE CATALOGUE LACKS A CELL A CHECK ASKS FOR: the company's own
-		// validation builds every cell a check may run in, so this is a
-		// node behind its company's apply — said once, and the check left
-		// queued for a node that has it.
-		if !r.unknown[cell] {
-			r.unknown[cell] = true
-			r.log.Warn("code_checks_cell_unconfigured", "cell", string(cell), "error", err.Error(), "detail",
-				"this node's sandbox catalogue has no backend for the cell, so it claims no check that runs "+
-					"there")
-		}
+func (r *Runner) reserve(w *walking, cell config.Placement) bool {
+	if !r.configures(w, cell) {
 		return false
 	}
-	delete(r.unknown, cell)
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if cell == config.PlacementContainer && r.held[cell] >= r.o.Slots {
 		return false
 	}

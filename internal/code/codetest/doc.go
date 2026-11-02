@@ -40,9 +40,15 @@
 // the log and drained, the routers past the half minute they remember a
 // refusal, every cache holding exactly the rows — and once a case leaves it
 // otherwise, the cases after it are not run on it, said by name rather than
-// failed for the first one's fault. It refuses a cluster of fewer than three
-// members: two have no quorum without each other, so the first case that
-// stops one would leave a code log nobody can write.
+// failed for the first one's fault. A case's MAINTENANCE is confined to the
+// repositories it made (Cluster.ConfineMaintenance): a pass maintains every
+// due repository its member maintains, and the repositories earlier cases made
+// stay on the cluster — one left due was compacted inside a later case's pass
+// and counted as that case's own — so beside every case stands a repository
+// due for every maintenance loop, every member its maintainer, on which a case
+// whose maintenance leaked fails, whatever ran before it. It refuses a cluster
+// of fewer than three members: two have no quorum without each other, so the
+// first case that stops one would leave a code log nobody can write.
 //
 // # The suite's own checks are held able to fail
 //

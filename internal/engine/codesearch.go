@@ -79,7 +79,11 @@ func (e *Engine) askCodeSearch(ctx context.Context, request []byte, each func([]
 	}
 	reply, err := srv.Answer(ctx, request)
 	if err != nil {
-		return nil
+		// AN ERROR ANSWERS NOTHING, the same fact to the asker as a server
+		// that was down ([queue.AnswerFunc]), and is said here, in the
+		// server's own log, as the queue's answerers say it.
+		log.Debug("scatter_answer_failed", "subject", topics.CodeSearch, "error", err.Error())
+		return nil //nolint:nilerr // an answer not given is no reply, never the ask's failure (queue.AnswerFunc)
 	}
 	each(reply)
 	return nil

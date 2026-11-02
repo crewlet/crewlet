@@ -222,7 +222,7 @@ func (r *read) logRead(ctx context.Context, objs found, at cursor, m *memoRun) (
 	narrow := fmt.Errorf("%w: the history of %s did not reach its first commit in the read's %s of git: "+
 		"narrow it with a path or a later since", code.ErrSliceTooLarge, rev.peeled, r.s.gitBudget)
 	if !cut {
-		if err := r.failed(ctx, "history walk", res, err, narrow); err != nil {
+		if err = r.failed(ctx, "history walk", res, err, narrow); err != nil {
 			return code.GitAnswer{}, err
 		}
 	}

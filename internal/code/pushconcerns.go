@@ -143,6 +143,7 @@ func (r *routingRoom) fit(i int, first bool, routings []ChangeRouting, rowsLeft 
 	whole := MaxRecordBytes - recordOverheadBytes
 	if !r.measured {
 		for _, j := range r.open {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			bound, err := entryBound(r.batch[j])
 			if err != nil {
 				return false, false, fmt.Errorf("code: measure push %s's entry: %w", r.batch[j].PushID, err)
@@ -179,14 +180,14 @@ func (r *routingRoom) fit(i int, first bool, routings []ChangeRouting, rowsLeft 
 	return true, true, nil
 }
 
-// noticeRows is the notice rows routings make an apply write: one a handle
-// they tell.
+// noticeRows is the rows routings make an apply write for whom they tell: one
+// a handle, and one a change told of for its count ([noticeWrites]).
 func noticeRows(routings []ChangeRouting) int {
 	pointers := make([]*ChangeRouting, len(routings))
 	for i := range routings {
 		pointers[i] = &routings[i]
 	}
-	return heardCount(pointers...)
+	return noticeWrites(pointers...)
 }
 
 // admit counts an admitted entry's routings, size bytes and notices rows, and

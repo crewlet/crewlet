@@ -97,7 +97,7 @@ func TestReviewChangeIsOneRecord(t *testing.T) {
 			FindingIDs: []string{"f-1", "f-2", "f-3"}, Position: codeAt(41)}, nil
 	}}
 	turn := writerTurn(t)
-	got := callWrite(t, toolloop.WithCallModel(everyGrant(), "claude-house"),
+	got := callWrite(toolloop.WithCallModel(everyGrant(), "claude-house"), t,
 		codeRegistry(t, writeDeps(host, writer)), turn, builtin.CodeReviewChangeTool, reviewArgsOf())
 	_, converses := writer.changesAsked()
 	if got.Failed || len(converses) != 1 || converses[0].Review == nil {
@@ -165,7 +165,7 @@ func TestAReviewNamesTheFindingsItCarries(t *testing.T) {
 	args["revision"] = 2
 	args["findings"] = []any{map[string]any{"path": "a.txt", "line_start": 3, "severity": "major",
 		"category": "tests", "title": "Untested"}}
-	if got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeReviewChangeTool, args); got.Failed {
+	if got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeReviewChangeTool, args); got.Failed {
 		t.Fatalf("the review of revision 2 answered %q", got.Output)
 	}
 	_, converses := writer.changesAsked()
@@ -185,7 +185,7 @@ func TestAReviewNamesTheFindingsItCarries(t *testing.T) {
 		for k, v := range change {
 			args[k] = v
 		}
-		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
 			builtin.CodeReviewChangeTool, args)
 		if _, sent := writer.changesAsked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
 			len(sent) != 0 {
@@ -221,7 +221,7 @@ func TestEveryConversationRefusalIsInAnExistingClass(t *testing.T) {
 		writer := &codeWrites{converse: func(code.ConversationWrite) (code.ConversationResult, error) {
 			return code.ConversationResult{Refusal: refusal, Detail: "the " + string(refusal) + " sentence"}, nil
 		}}
-		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
 			writerTurn(t), builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "body": "Hm."})
 		class := tools.RefusalOf(got)
 		switch {
@@ -253,7 +253,7 @@ func TestACommentSetsItsThreadAsASecondWrite(t *testing.T) {
 	const thread = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d30"
 	writer := &codeWrites{}
 	reg := codeRegistry(t, writeDeps(reviewHost(), writer))
-	got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeCommentOnChangeTool,
+	got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeCommentOnChangeTool,
 		map[string]any{"change": "site!7", "body": "Done, thanks.", "thread": thread, "resolve": true})
 	_, converses := writer.changesAsked()
 	if got.Failed || len(converses) != 2 || converses[0].Comment == nil || converses[1].ThreadResolve == nil {
@@ -270,13 +270,13 @@ func TestACommentSetsItsThreadAsASecondWrite(t *testing.T) {
 	}
 
 	alone := &codeWrites{}
-	callWrite(t, everyGrant(), codeRegistry(t, writeDeps(reviewHost(), alone)), writerTurn(t),
+	callWrite(everyGrant(), t, codeRegistry(t, writeDeps(reviewHost(), alone)), writerTurn(t),
 		builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "thread": thread, "resolve": false})
 	if _, sent := alone.changesAsked(); len(sent) != 1 || sent[0].ThreadResolve == nil || sent[0].ThreadResolve.Resolved {
 		t.Errorf("a thread opened again with nothing said sent %+v, want the one mark", sent)
 	}
 
-	refused := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(reviewHost(), &codeWrites{})), writerTurn(t),
+	refused := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(reviewHost(), &codeWrites{})), writerTurn(t),
 		builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "finding": standingFinding,
 			"resolve": true})
 	if !refused.Failed || tools.RefusalOf(refused) != tools.RefusalInvalid ||
@@ -286,7 +286,7 @@ func TestACommentSetsItsThreadAsASecondWrite(t *testing.T) {
 	}
 
 	anchoredWriter := &codeWrites{}
-	callWrite(t, everyGrant(), codeRegistry(t, writeDeps(reviewHost(), anchoredWriter)), writerTurn(t),
+	callWrite(everyGrant(), t, codeRegistry(t, writeDeps(reviewHost(), anchoredWriter)), writerTurn(t),
 		builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "body": "Why here?",
 			"anchor": map[string]any{"path": "a.txt", "line": 7}})
 	_, sent := anchoredWriter.changesAsked()
@@ -308,7 +308,7 @@ func TestAnAnswerToFindingsNamesEveryFindingOnce(t *testing.T) {
 	const other = "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d11"
 	writer := &codeWrites{}
 	reg := codeRegistry(t, writeDeps(reviewHost(), writer))
-	got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeResolveFindingTool,
+	got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeResolveFindingTool,
 		map[string]any{"change": "site!7", "findings": []any{standingFinding, other}, "resolution": "resolved",
 			"note": "Bounded now.", "commit": "main"})
 	_, converses := writer.changesAsked()
@@ -323,7 +323,7 @@ func TestAnAnswerToFindingsNamesEveryFindingOnce(t *testing.T) {
 	}
 
 	asking := &codeWrites{}
-	callWrite(t, everyGrant(), codeRegistry(t, writeDeps(reviewHost(), asking)), writerTurn(t),
+	callWrite(everyGrant(), t, codeRegistry(t, writeDeps(reviewHost(), asking)), writerTurn(t),
 		builtin.CodeRequestReviewTool, map[string]any{"change": "site!7", "reviewers": []any{"founder"},
 			"withdraw": []any{"agent-ceo"}, "note": "Please look at the retry."})
 	_, asks := asking.changesAsked()

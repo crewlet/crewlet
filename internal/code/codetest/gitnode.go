@@ -152,7 +152,8 @@ type GitOptions struct {
 	// Maintainers is which repositories the node maintains, as its compactor
 	// asks once a pass: the node's own router in every topology, as the
 	// engine hands its compactor the router — or a fixed answer a case hands
-	// it (SplitMaintainers).
+	// it (SplitMaintainers), and on a fleet none of the repositories an
+	// earlier case made (ConfineMaintenance).
 	Maintainers compact.Maintainers
 	// Objects is the object store's backend for each incarnation: asked
 	// again at every start, because a backend riding a broker connection
@@ -421,7 +422,7 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	}); err != nil {
 		t.Fatalf("codetest: build %s's host: %v", n.id, err)
 	}
-	if err := n.host.Start(ctx); err != nil {
+	if err = n.host.Start(ctx); err != nil {
 		t.Fatalf("codetest: start %s's host: %v", n.id, err)
 	}
 	// THE QUERY SERVER, as the engine builds it: over the node's cache and

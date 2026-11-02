@@ -176,6 +176,7 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, since time
 		}
 	}
 	for _, e := range scanned {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		w, err := workEntryOf(ctx, tx, e)
 		if err != nil {
 			return err

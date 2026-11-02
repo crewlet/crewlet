@@ -15,11 +15,6 @@ import (
 // key domain, naming ONE attempt of one check of one commit — the row whose
 // state admits the box — and the name of the repository its box was given.
 
-// CheckUser is the Basic user name a check's box presents, its password its
-// check's token: beside BoxUser, the second of the two a box route reads, and
-// what tells a check's box from a coding run's before either is verified.
-const CheckUser = "check"
-
 // CheckRunRef is what a check's token admits a box to: the attempt whose row
 // is the box's authority, read on every request, and the name of the
 // repository the box was given.
@@ -137,18 +132,18 @@ func validCheckRef(ref CheckRunRef) bool {
 
 // boxCredential is the credential a box's request presented under user, as
 // this fleet signed it: a coding run's token under BoxUser, a check's under
-// CheckUser — the ONE RULE of which credential a user name presents, which
+// code.CheckUser — the ONE RULE of which credential a user name presents, which
 // the box routes' admission (admitBox) and the API's box routes on a node
 // serving no code host (VerifyBox) both judge by. ok is false for any other
 // user name and for a token the user's own tokens do not verify: a run's
-// token under CheckUser, a check's under BoxUser.
+// token under code.CheckUser, a check's under BoxUser.
 func boxCredential(runs *BoxTokens, checks *CheckTokens, user, token string) (run BoxRunRef, check CheckRunRef,
 	ok bool) {
 
 	switch user {
 	case BoxUser:
 		run, ok = runs.Verify(token)
-	case CheckUser:
+	case code.CheckUser:
 		check, ok = checks.Verify(token)
 	}
 	return run, check, ok
@@ -156,7 +151,7 @@ func boxCredential(runs *BoxTokens, checks *CheckTokens, user, token string) (ru
 
 // VerifyBox reports whether token is the credential user presents on a box
 // route, signed by this fleet — a coding run's under BoxUser, a check's under
-// CheckUser ([boxCredential]). EXPORTED FOR the API's box routes on a node
+// code.CheckUser ([boxCredential]). EXPORTED FOR the API's box routes on a node
 // serving no code host, which tell a box why only once its request presents
 // one ([ChallengeBox]).
 func VerifyBox(runs *BoxTokens, checks *CheckTokens, user, token string) bool {

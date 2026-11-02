@@ -1044,11 +1044,11 @@ func TestAnUnservedBoxRouteAnswersACheckToken(t *testing.T) {
 	ref := aCheckRef()
 	run := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
 	basic := func(user, password string) string { return "Basic " + basicAuth(user, password) }
-	signed := basic(host.CheckUser, checks.Mint(ref, time.Minute))
+	signed := basic(code.CheckUser, checks.Mint(ref, time.Minute))
 	unsigned := []struct{ name, authorization string }{
 		{"a check's token as a run's", basic(host.BoxUser, checks.Mint(ref, time.Minute))},
-		{"a run's token as a check's", basic(host.CheckUser, boxes.Mint(run))},
-		{"another fleet's check token", basic(host.CheckUser, otherFleet.Mint(ref, time.Minute))},
+		{"a run's token as a check's", basic(code.CheckUser, boxes.Mint(run))},
+		{"another fleet's check token", basic(code.CheckUser, otherFleet.Mint(ref, time.Minute))},
 		{"no credential", ""},
 	}
 	var requests []struct{ method, path string }

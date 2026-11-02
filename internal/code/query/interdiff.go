@@ -221,7 +221,7 @@ func (r *read) lookup(ctx context.Context, base, head string, paths []string) ([
 	}
 	narrow := fmt.Errorf("%w: the lookup of the %d paths the revisions touch at %s and %s did not finish in "+
 		"the read's %s of git", code.ErrSliceTooLarge, len(paths), base, head, r.s.gitBudget)
-	if err := r.failed(ctx, "lookup of the paths a change touches", res, err, narrow); err != nil {
+	if err = r.failed(ctx, "lookup of the paths a change touches", res, err, narrow); err != nil {
 		return nil, err
 	}
 	if len(out) != len(in) {

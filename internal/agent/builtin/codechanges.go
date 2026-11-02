@@ -962,6 +962,7 @@ func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, er
 			return failed(fmt.Sprintf("%s: `since_revision` is a revision before %d, the one read.", g.tool,
 				rev.N)), nil
 		}
+		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		since, refusal := g.revision(ctx, call.since, d.Revision, first)
 		if refusal != nil {
 			return *refusal, nil
@@ -969,7 +970,7 @@ func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, er
 		revs = append(revs, since)
 	}
 	for _, r := range revs {
-		if refusal := g.recorded(d, r, call.since == 0); refusal != nil {
+		if refusal = g.recorded(d, r, call.since == 0); refusal != nil {
 			return *refusal, nil
 		}
 	}
@@ -1325,10 +1326,11 @@ func fitLabelled(n int, build func(k int) (*foreignRead, any)) (int, json.RawMes
 	if err != nil || len(whole) <= ToolAnswerBytes {
 		return n, whole, err
 	}
-	fits, kept := 0, json.RawMessage(nil)
-	if kept, err = render(0); err != nil {
+	kept, err := render(0)
+	if err != nil {
 		return 0, nil, err
 	}
+	fits := 0
 	for over := n; over-fits > 1; {
 		mid := fits + (over-fits)/2
 		rendered, err := render(mid)

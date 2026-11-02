@@ -552,6 +552,7 @@ func (t *codeReviewChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if len(review.Findings) > 0 {
+		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		lines, refusal := cv.anchor(ctx, rev, places)
 		if refusal != nil {
 			return *refusal, nil
@@ -729,6 +730,7 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 		return *refusal, nil
 	}
 	if !saying {
+		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		res, refusal := cv.send(ctx, code.ConversationWrite{ThreadResolve: &code.ThreadResolve{RepoID: cv.g.repo.ID,
 			ChangeID: cv.change.ID, ThreadID: thread, Resolved: resolve}})
 		if refusal != nil {
@@ -873,6 +875,7 @@ func (t *codeResolveFinding) CallForTurn(ctx context.Context, turn *turnctx.Turn
 	}
 	commit := ""
 	if rev != "" {
+		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		resolved, refusal := t.deps.resolveRevs(ctx, turn, tool, cv.g.c, cv.g.repo, rev)
 		if refusal != nil {
 			return *refusal, nil

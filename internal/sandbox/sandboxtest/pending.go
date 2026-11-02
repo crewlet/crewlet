@@ -4476,7 +4476,7 @@ func testListRunsListsEveryStatus(t *testing.T, s sandbox.PendingStore, runs coo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created, err := runs.CreateSandboxRun(t.Context(), "t2", body); err != nil || !created {
+	if created, err := runs.CreateSandboxRun(t.Context(), "t2", body); err != nil || !created { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		t.Fatalf("seed the newer build's row: created=%v err=%v", created, err)
 	}
 	listed, err := s.ListRuns(t.Context())
@@ -4558,6 +4558,7 @@ func testARunRowCarriesItsRepositoriesAndFloor(t *testing.T, s sandbox.PendingSt
 	}
 	kept := func(step string) {
 		t.Helper()
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		record, found, err := runs.SandboxRun(ctx, "t1")
 		if err != nil || !found {
 			t.Fatalf("%s: read the raw row: found=%v err=%v", step, found, err)
@@ -4577,7 +4578,7 @@ func testARunRowCarriesItsRepositoriesAndFloor(t *testing.T, s sandbox.PendingSt
 		t.Fatalf("raise: %v, %v", raised, err)
 	}
 	kept("the raise")
-	if got := mustGet(t, s, "t1"); got.CodeFloor != "code@1:41" || got.CodeLaunch != "code@1:40" {
+	if got = mustGet(t, s, "t1"); got.CodeFloor != "code@1:41" || got.CodeLaunch != "code@1:40" {
 		t.Fatalf("after a raise the floor is %q and the launch floor %q; want code@1:41 and code@1:40, "+
 			"the launch floor never raised", got.CodeFloor, got.CodeLaunch)
 	}

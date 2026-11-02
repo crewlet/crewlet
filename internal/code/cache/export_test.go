@@ -382,7 +382,12 @@ func GraphCharge(c *Cache, repoID string) int64 {
 }
 
 // FsckCharge is Verify's connectivity check's charge (BitmapCharge).
-func FsckCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, FsckBytesPerObject, 0) }
+func FsckCharge(c *Cache, repoID string) int64 {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return verifyCharge(e.current)
+}
 
 func chargeOf(c *Cache, repoID string, perObject, base int64) int64 {
 	e := lookup(c, repoID)
@@ -1821,4 +1826,15 @@ func Maintained(c *Cache, repoID string) (time.Time, time.Duration) {
 		return time.Time{}, 0
 	}
 	return e.current.maintained.LastRun, e.current.maintained.Took
+}
+
+// LayerOutcomes is every outcome of crewlet.code.cache.layers, from the
+// installer's own list, so a test asking for each one is asked for an
+// outcome the day the installer gains it.
+func LayerOutcomes() []string {
+	out := make([]string, len(layerOutcomes))
+	for i, o := range layerOutcomes {
+		out[i] = string(o)
+	}
+	return out
 }

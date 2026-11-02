@@ -243,7 +243,7 @@ func TestAReportIsAPersons(t *testing.T) {
 	}
 
 	host, writer := newCodeHost(), &codeWrites{}
-	got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
 		builtin.CodeReportCheckTool, report())
 	var refused *builtin.DecisionRefused
 	if !got.Failed || !errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonSeatRefused {
@@ -294,7 +294,7 @@ func TestARerunAsksForTheAttemptAfterTheOneRead(t *testing.T) {
 	host, writer := newCodeHost(), &codeWrites{}
 	reg := codeRegistry(t, writeDeps(host, writer))
 
-	got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
+	got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
 		"repo": "site", "sha": mainOID, "checks": []any{map[string]any{"name": "unit", "attempt": 1}}})
 	sent := writer.checksAsked()
 	if got.Failed || len(sent) != 1 || sent[0].Rerun == nil {
@@ -309,7 +309,7 @@ func TestARerunAsksForTheAttemptAfterTheOneRead(t *testing.T) {
 
 	host.checks = append(host.checks, failedCheck("", "", "boom", "lab.go", 0))
 	host.checks[1].Name, host.checks[1].Log = "lint", nil
-	got = callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
+	got = callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
 		"repo": "site", "sha": mainOID, "all_failed": true})
 	sent = writer.checksAsked()[1:]
 	if got.Failed || len(sent) != 1 || sent[0].Rerun.Name != "unit" {
@@ -319,7 +319,7 @@ func TestARerunAsksForTheAttemptAfterTheOneRead(t *testing.T) {
 	writer.check = func(code.ChecksRequest) (code.ChecksResult, error) {
 		return code.ChecksResult{Refusal: code.CheckRefusalRerunGenuine, Detail: "a measurement stands"}, nil
 	}
-	got = callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
+	got = callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
 		"repo": "site", "sha": mainOID, "checks": []any{map[string]any{"name": "lint", "attempt": 1}}})
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
 		!strings.Contains(got.Output, string(code.CheckRefusalRerunGenuine)) {
@@ -536,7 +536,7 @@ func TestANamedRerunReadsTheCommitsChecksOnce(t *testing.T) {
 		return slices.DeleteFunc(reads, func(q code.ReadQuery) bool { return q.Kind != code.ReadChecks })
 	}
 
-	got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
+	got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
 		"repo": "site", "sha": mainOID, "checks": []any{map[string]any{"name": "unit", "attempt": 1},
 			map[string]any{"name": "lint", "attempt": 1}, map[string]any{"name": "vet", "attempt": 1}}})
 	if got.Failed || len(writer.checksAsked()) != 3 {
@@ -546,7 +546,7 @@ func TestANamedRerunReadsTheCommitsChecksOnce(t *testing.T) {
 		t.Errorf("a rerun of three checks listed the commit's checks %d times (%+v), want once, whole", len(l), l)
 	}
 
-	got = callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
+	got = callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeRerunChecksTool, map[string]any{
 		"repo": "site", "sha": mainOID, "checks": []any{map[string]any{"name": "lint", "attempt": 1}}})
 	if got.Failed {
 		t.Fatalf("a rerun of one check answered %q", got.Output)

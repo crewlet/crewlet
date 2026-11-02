@@ -23,6 +23,14 @@
 // per check — some fifteen writes to the coordination store an attempt, where
 // the claim is one record on the log the attempt already lives on.
 //
+// A WALK READS ONLY WHAT IT CAN CLAIM: the queue by the cell each attempt's
+// definition names ([code.ChecksQueuedQuery], one seek a cell), and only the
+// cells this node can start a check in now — allowed by the company's epoch,
+// configured by its CURRENT catalogue, with room — each read no further once
+// its room is spent, the cells' ranges merged oldest queued first. A node with
+// every cell full reads nothing, however long the queue: read whole, every git
+// node paged the queue to its end at every walk while it claimed nothing.
+//
 // # The claim before the box
 //
 // A runner CLAIMS an attempt — a check_started record naming itself — BEFORE

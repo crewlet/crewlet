@@ -149,8 +149,7 @@ const (
 	codeCandidateBytes            = 1_290
 	codeCandidateCheckQueuedBytes = 1_010
 	codeLandBytes                 = 1_530
-	codeCheckQueuedBytes          = 970
-	codeCheckDispatchedBytes      = 970
+	codeCheckDispatchedBytes      = 2_290
 	codeCheckStartedBytes         = 780
 	codeCheckNamedBytes           = 840
 	codeCheckFinishedBytes        = 840
@@ -178,16 +177,21 @@ const (
 // pass while its target moves (internal/code/home's MergeabilityRefresh, ten
 // minutes, over a working day of eight hours) — each recheck merging clean
 // again, so recorded by its tip alone — and its target's checks file defines
-// three checks, each of every revision queued, claimed, its box named and
-// ended, beside the head's dispatch. A head's checks move its readiness's
-// inputs too (internal/code's changesdue.go, refreshDue: an attempt queued or
-// ended past the row's checks position), so its home refreshes once for the
-// three its dispatch queued together, in one pass, and once for each ending —
-// four a revision at the most, every one keeping the readiness (the one a
-// change that turns it ready is the approval's, above, at the most as at the
-// least: either the approval or the last ending turns it, never both). And a
-// moved target's checks file is read again where no head is dispatched, a
-// dispatch of no head (internal/code/home's ChecksFileRefresh, ten minutes) —
+// three checks, every revision's queued together by its head's dispatch, the
+// one record naming the head and carrying its three attempts (internal/code's
+// CheckDispatched.Attempts), and each claimed, its box named and ended. A
+// head's check is queued in a record of its own only when it is queued again,
+// requeued after its runner was lost or its box or its setup failed, or rerun
+// by hand, and the reference company's checks pass. A head's checks move its
+// readiness's inputs too (internal/code's changesdue.go, refreshDue: an
+// attempt queued or ended past the row's checks position), so its home
+// refreshes once for the three its dispatch queued together, in one pass, and
+// once for each ending — four a revision at the most, every one keeping the
+// readiness (the one a change that turns it ready is the approval's, above, at
+// the most as at the least: either the approval or the last ending turns it,
+// never both). And a moved target's checks file is read again where no head
+// is dispatched, a dispatch of no head (internal/code/home's
+// ChecksFileRefresh, ten minutes) —
 // at the most one for every change's target at every pass, as if no two
 // changes shared one. A queued change lands through its home's queue
 // worker: a train of it — one candidate of one entry, since a queue that
@@ -328,8 +332,8 @@ func codeLogDay() []codeLogTerm {
 			"box's keys", candidates, codeCheckNamedBytes, true},
 		{code.OpCheckFinished, "a candidate's check ended, three a change — a head's ending's keys",
 			candidates, codeCheckFinishedBytes, true},
-		{code.OpCheckQueued, "a check of a revision queued, three a push", checks, codeCheckQueuedBytes, true},
-		{code.OpCheckDispatched, "a head's dispatch, one a push", revisions, codeCheckDispatchedBytes, true},
+		{code.OpCheckDispatched, "a head's dispatch queuing its three checks in the record that names it, " +
+			"one a push", revisions, codeCheckDispatchedBytes, true},
 		{code.OpCheckDispatched, "a moved target's checks file read again dispatching no head, at the " +
 			"most one for every change's target at every pass of its home over a working day",
 			referenceRechecksAChange * changes, codeCheckDispatchedEmptyBytes, true},
@@ -697,6 +701,23 @@ func routingAbsent(prefix string, carried ...string) map[string]string {
 	return absent
 }
 
+// checkDefAbsent is every key of a check's definition under prefix that the
+// reference company's checks do not carry, with why: each is a command and its
+// timeout, and names no paths, reports, cell, checkout or environment.
+func checkDefAbsent(prefix string) map[string]string {
+	absent := map[string]string{}
+	for key, why := range map[string]string{
+		"paths":    "the paths a check runs for, where its definition names some: a few dozen bytes a pattern",
+		"report":   "the reports a check writes, where its definition names some",
+		"run_in":   "where a check runs, where its definition says",
+		"checkout": "how a check checks out its commit, where its definition says",
+		"env":      "a check's environment, where its definition sets one",
+	} {
+		absent[prefix+"."+key] = why
+	}
+	return absent
+}
+
 // principalAbsent is every key of a principal under prefix that a term's
 // records do not carry — carried named without the prefix — with why: a
 // seat's records name no person's credential, and a run is named whole,
@@ -1000,23 +1021,21 @@ var codeLogFields = map[code.OpKind]struct {
 	},
 	code.OpCheckQueued: {
 		payload: reflect.TypeFor[code.CheckQueued](),
-		carried: []string{"repo_id", "oid", "target", "name", "attempt", "purpose", "change_id", "revision",
-			"candidate_id", "base", "defs_oid", "def.name", "def.run", "def.timeout_seconds", "required",
-			"reason", "queued_at"},
-		absent: absent(
+		carried: []string{"repo_id", "oid", "target", "name", "attempt", "purpose", "candidate_id", "base",
+			"defs_oid", "def.name", "def.run", "def.timeout_seconds", "required", "reason", "queued_at"},
+		absent: absent(checkDefAbsent("def"),
 			map[string]string{
+				"change_id": "the change a head's check measures, and a head's checks are queued in the " +
+					"record that dispatches the head (check_dispatched's attempts): one is queued in a " +
+					"record of its own only when it is queued again, requeued after its runner was lost or " +
+					"its box or its setup failed, or rerun by hand, and the reference checks pass",
+				"revision": "the change's revision a head's check measures, likewise",
 				"by": "who queued an attempt again by hand, and the reference checks are queued by " +
 					"their home",
 				"entry_id": "the entry a queue's bisect probe names, which only the bisect of a red " +
 					"candidate queues, at the rate of the ejection it ends in (codeLogNegligible)",
-				"def.paths": "the paths a check runs for, where its definition names some: a few dozen " +
-					"bytes a pattern",
-				"def.report":   "the reports a check writes, where its definition names some",
-				"def.run_in":   "where a check runs, where its definition says",
-				"def.checkout": "how a check checks out its commit, where its definition says",
-				"def.env":      "a check's environment, where its definition sets one",
-				"skipped":      "a check its paths skip, a flag",
-				"invalid":      "a checks file that does not run, its sentence",
+				"skipped": "a check its paths skip, a flag",
+				"invalid": "a checks file that does not run, its sentence",
 			}),
 	},
 	code.OpGreen: {
@@ -1026,7 +1045,22 @@ var codeLogFields = map[code.OpKind]struct {
 	code.OpCheckDispatched: {
 		payload: reflect.TypeFor[code.CheckDispatched](),
 		carried: []string{"repo_id", "target", "tip", "tip_position", "defs_oid", "heads.oid",
-			"heads.change_id", "heads.revision", "dispatched_at"},
+			"heads.change_id", "heads.revision", "attempts.repo_id", "attempts.oid", "attempts.target",
+			"attempts.name", "attempts.attempt", "attempts.purpose", "attempts.change_id", "attempts.revision",
+			"attempts.defs_oid", "attempts.def.name", "attempts.def.run", "attempts.def.timeout_seconds",
+			"attempts.required", "attempts.reason", "attempts.queued_at", "dispatched_at"},
+		absent: absent(checkDefAbsent("attempts.def"),
+			map[string]string{
+				"attempts.candidate_id": "the queue's candidate a check measures, and a dispatch queues a " +
+					"change head's checks alone (code.CheckDispatched.Validate)",
+				"attempts.entry_id": "the entry a queue's bisect probe names, likewise",
+				"attempts.base": "the commit a candidate's or a tip's check is read against, and the home " +
+					"queues a head's checks naming none",
+				"attempts.by": "who asked for an attempt again, and a dispatch's attempts are its home's own, " +
+					"which name nobody",
+				"attempts.skipped": "a check its paths skip, a flag",
+				"attempts.invalid": "a checks file that does not run, its sentence",
+			}),
 	},
 	code.OpCheckStarted: {
 		payload: reflect.TypeFor[code.CheckStarted](),
@@ -1081,9 +1115,11 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindChange: "a change's conversation — its asks for review, its comments, its threads' " +
 		"resolutions, its reviews and the answers to their findings — and its revisions' facts and its " +
 		"mergeability, on the change (codeLogDay)",
-	code.KindChecks: "a repository's checks: an attempt queued, a head's dispatch, an attempt's claim and " +
-		"its box named, and its ending, of a head's checks, of a queue's candidate's checks and of a " +
-		"landing's tip checks (codeLogDay at the most), a bisect's probes (codeLogNegligible, with the " +
+	code.KindChecks: "a repository's checks: a head's dispatch, which queues the head's checks in the " +
+		"record naming it, a queue's candidate's checks and a landing's tip checks each queued, and an " +
+		"attempt's claim, its box named and its ending, of each of them (codeLogDay at the most); a head's " +
+		"check queued again, requeued after an ending its infrastructure made or rerun by hand, which the " +
+		"reference company's passing checks never are; a bisect's probes (codeLogNegligible, with the " +
 		"broken or the ejection they name), and the sweep of an idle repository's past the history " +
 		"(codeLogNegligible)",
 	code.KindPerson: "a person's marks over their own code notices (codeLogNegligible)",
@@ -1597,7 +1633,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		{"the keys a five-year-old project writes are under a tenth of one percent of the day",
 			keyBytes / records, 0, 0.001},
 		{"the code log takes nearly twice this log's day at its least", codeLeast, 1.75, 1.95},
-		{"and about eight and a half times it at its most", codeMost, 8.25, 8.75},
+		{"and about eight times it at its most", codeMost, 7.75, 8.25},
 		{"two thirds is below that range", share / codeLeast, 0, 1},
 		{"so a code log at two thirds of this log's ceiling fills in a little over a third of this log's " +
 			"time at its least", share / codeLeast, 0.34, 0.4},
@@ -1742,7 +1778,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		"internal/config/bootstrap.go": {
 			"two thirds is the least of what a company whose seats only push writes here, and BELOW " +
 				"what a company whose seats work through changes writes",
-			"take nearly twice to about eight and a half times what its tracker writes and its " +
+			"take nearly twice to about eight times what its tracker writes and its " +
 				"seats' reads take a day",
 		},
 		"internal/code/limits.go": {
@@ -1768,7 +1804,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 				"a push, measured) and publish their layers, the barriers its git clients' reads append "+
 				"(%d bytes a read)", spaced(codePushRecordBytes), codeCompactionBytes+codeSweepBytes,
 				code.BarrierRecordBytes),
-			"take nearly twice to about eight and a half times what its tracker writes and its " +
+			"take nearly twice to about eight times what its tracker writes and its " +
 				"seats' reads take a day",
 			fmt.Sprintf("priced as its coding box's, %s bytes alone in its record, and %s", spaced(
 				codePushRecordBytes), spaced(referenceChangesADay)),
@@ -1901,9 +1937,9 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 		"check_dispatched_empty": codeCheckDispatchedEmptyBytes, "review_findings": codeReviewFindingsBytes,
 		"review": codeReviewBytes, "answer": codeAnswerBytes,
 		"comment": codeCommentBytes, "thread_resolve": codeThreadResolveBytes, "merge": codeMergeBytes,
-		"enqueue": codeEnqueueBytes, "check_queued": codeCheckQueuedBytes,
-		"check_dispatched": codeCheckDispatchedBytes, "check_started": codeCheckStartedBytes,
-		"check_named": codeCheckNamedBytes, "check_finished": codeCheckFinishedBytes,
+		"enqueue": codeEnqueueBytes, "check_dispatched": codeCheckDispatchedBytes,
+		"check_started": codeCheckStartedBytes,
+		"check_named":   codeCheckNamedBytes, "check_finished": codeCheckFinishedBytes,
 		"publication_tail": codePublicationTailBytes, "publication_one": codePublicationOneBytes,
 		"tip_check_queued": codeTipCheckQueuedBytes, "green": codeGreenBytes, "broken": codeBrokenBytes,
 		"candidate": codeCandidateBytes, "candidate_check_queued": codeCandidateCheckQueuedBytes,
