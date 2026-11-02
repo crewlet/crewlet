@@ -9,10 +9,13 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE WIZARD READS WHAT THE ROUTES SEND. Settings › MCP & tools adds and edits
@@ -220,4 +223,53 @@ func TestTheReplaceValueReadsWhatTheRouteSends(t *testing.T) {
 		delete(refused, envelope)
 	}
 	holdDeclared(t, "McpValueRefusal", []map[string]any{refused}, false)
+}
+
+// THE HELD CALL'S ANSWER READS WHAT THE ROUTE SENDS. The Inbox, Home and a
+// server's page answer a held call through `POST /mcp-approvals/{id}` and read
+// its answer as `McpApprovalAnswer` (whether the answer reached the run, from
+// `outcome`). Held both ways over an answer to once and to always (whose
+// `revision` is the configuration's own answer), and the outcome union to the
+// two the route sends.
+//
+// Mutation: drop `answer_id` from McpApprovalAnswer, or `unknown` from
+// McpApprovalOutcome, and this is red.
+func TestTheApprovalReadsWhatTheRouteSends(t *testing.T) {
+	t.Parallel()
+	var rows []map[string]any
+	for _, c := range []struct {
+		answer string
+		as     iam.Principal
+	}{
+		{sandbox.HeldOnce, proved(time.Minute)},
+		{sandbox.HeldAlways, proved(time.Minute)},
+	} {
+		desk := &fakeApprovals{run: waitingRun()}
+		svc := approvalSurface(t, desk, &fakeToolDocuments{}, &recordedAudit{})
+		code, body := answer(t, svc, c.as, "/mcp-approvals/"+heldID, `{"answer": "`+c.answer+`"}`)
+		if code != http.StatusAccepted {
+			t.Fatalf("POST %s = %d %v", c.answer, code, body)
+		}
+		rows = append(rows, body)
+	}
+	holdDeclared(t, "McpApprovalAnswer", rows, false)
+	holdUnion(t, "McpApprovalOutcome", []statelog.Outcome{statelog.OutcomePending, statelog.OutcomeUnknown})
+}
+
+// THE REVIEW READS WHAT THE ROUTE SENDS. The Drift dialog decides a server's
+// changed tools through `POST /mcp-servers/{name}/changes` and reads its
+// answer as `McpChangesAnswer` (`moved`, the tools somebody else decided
+// meanwhile). Held both ways over the answer as the route writes it, a block
+// with its revision and an acceptance without one.
+//
+// Mutation: drop `moved` from McpChangesAnswer, and this is red.
+func TestTheReviewReadsWhatTheRouteSends(t *testing.T) {
+	t.Parallel()
+	rows := []map[string]any{
+		asJSON(t, mcpapi.ChangesAnswer{Server: "tracker", Accepted: []string{"close_issue"},
+			Blocked: []string{}, Moved: []string{}}),
+		asJSON(t, mcpapi.ChangesAnswer{Server: "tracker", Accepted: []string{}, Blocked: []string{"drop_issue"},
+			Moved: []string{"close_issue"}, Revision: map[string]any{"revision_id": "r2", "epoch": 3}}),
+	}
+	holdDeclared(t, "McpChangesAnswer", rows, false)
 }

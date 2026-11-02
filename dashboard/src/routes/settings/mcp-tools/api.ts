@@ -2,8 +2,11 @@
  * Settings › MCP & tools' calls: one server whole (`GET /mcp-servers/{name}`),
  * its restart (`POST /mcp-servers/{name}/retry`), its test
  * (`POST /mcp-servers/{name}/check`), a value stored for it
- * (`PUT /mcp-servers/{name}/values/{key}`), turning it off and on again (the
- * entity route, `enabled`), and its removal (`DELETE /config/mcp-servers/{name}`);
+ * (`PUT /mcp-servers/{name}/values/{key}`), turning it off and on again and
+ * who gets it (the entity route, `enabled` and `access`), its tools' levels
+ * (`PUT /mcp-servers/{name}/tools`), its changed tools reviewed
+ * (`POST /mcp-servers/{name}/changes`), and its removal
+ * (`DELETE /config/mcp-servers/{name}`);
  * and for the add and edit wizard, the catalogue (`GET /mcp-catalogue`), an
  * address checked before it is added (`POST /mcp-probe`) and a draft's test
  * (`POST /mcp-checks`). The list is the `mcp_servers_status` question, which
@@ -22,6 +25,7 @@
 
 import type {
   McpCatalogueAnswer,
+  McpChangesAnswer,
   McpCheckAnswer,
   McpMemberServerAnswer,
   McpProbeAnswer,
@@ -29,11 +33,13 @@ import type {
   McpRemovalWritten,
   McpRestartAnswer,
   McpServerAnswer,
+  McpToolLevel,
   McpValueAnswer,
 } from "~/contract/mcp.ts";
 import { answerOf, getEntity, outcomeOf, putEntity } from "~/protocol/configWrite.ts";
 import type { ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { isAbort, pathSegment, rest, RestError, type RestResponse } from "~/protocol/rest.ts";
+import { accessEntity, type Access } from "./GrantPicker.tsx";
 
 /** One server whole, in the reading the caller is answered. */
 export type ServerDetail = McpServerAnswer | McpMemberServerAnswer;
@@ -259,6 +265,81 @@ export async function storeValue(
         ...(options.seat ? { seat: options.seat } : {}),
         ...(options.test ? {} : { test: "false" }),
       },
+    }),
+  );
+}
+
+/** A change of a server's tool levels: its default, and each tool's own by the server's name for it (null clears). */
+export interface LevelsChange {
+  default?: McpToolLevel | null;
+  levels?: Readonly<Record<string, McpToolLevel | null>>;
+}
+
+/**
+ * `PUT /mcp-servers/{name}/tools`: the levels the change names, written as
+ * one revision under `summary`; every level it leaves out stays. A
+ * configuration write, so the transport asks for a fresh step-up first.
+ */
+export async function setLevels(
+  name: string,
+  change: LevelsChange,
+  summary: string,
+): Promise<McpAnswer<unknown>> {
+  return settle(
+    rest.request("PUT", `/mcp-servers/${pathSegment(name)}/tools`, {
+      body: { ...change, _summary: summary },
+    }),
+  );
+}
+
+/**
+ * Write who gets a server, through the entity route: the entry read with its
+ * own revision's tag and written back with only `access` changed (left out
+ * for every agent), so nothing else the entry carries moves.
+ */
+export async function saveAccess(
+  name: string,
+  access: Access,
+  summary: string,
+  signal?: AbortSignal,
+): Promise<ConfigWriteOutcome | { kind: "missing" }> {
+  const controller = signal ? null : new AbortController();
+  const used = signal ?? controller!.signal;
+  const read = await getEntity("mcp-servers", name, used);
+  if (read.kind !== "entity") return read;
+  const { access: _was, ...entry } = read.entity;
+  const written = accessEntity(access);
+  return putEntity(
+    "mcp-servers",
+    name,
+    written ? { ...entry, access: written } : entry,
+    read.etag,
+    summary,
+    used,
+  );
+}
+
+/** A review of a server's changed tools: each tool by the server's own name, and the digest reviewed (null for a removal). */
+export interface ChangesDecision {
+  accept?: Readonly<Record<string, string | null>>;
+  block?: Readonly<Record<string, string | null>>;
+}
+
+/**
+ * `POST /mcp-servers/{name}/changes`: each change accepted, or kept blocked,
+ * by the digest of the definition reviewed, written under `summary`. A
+ * configuration write, so the transport asks for a fresh step-up first. A
+ * definition the server swapped since the review is `409 stale_version`, and
+ * nothing is written.
+ */
+export async function reviewChanges(
+  name: string,
+  decision: ChangesDecision,
+  summary: string,
+): Promise<McpAnswer<McpChangesAnswer>> {
+  return settle(
+    rest.request("POST", `/mcp-servers/${pathSegment(name)}/changes`, {
+      body: { ...decision, _summary: summary },
     }),
   );
 }

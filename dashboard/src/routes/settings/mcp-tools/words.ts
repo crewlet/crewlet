@@ -12,19 +12,23 @@
 
 import type {
   McpAlarmKind,
+  McpApproval,
   McpAuth,
   McpAuthMethod,
   McpCallOutcome,
   McpFailureClass,
   McpFixKind,
   McpInstanceState,
+  McpReach,
+  McpReachReason,
   McpRisk,
   McpServerState,
   McpStepState,
   McpTestStage,
+  McpToolLevel,
 } from "~/contract/mcp.ts";
 import type { StepState } from "@crewlethq/ui";
-import type { BuiltinGate } from "~/contract/tools.ts";
+import type { BuiltinGate, ToolAnnotations } from "~/contract/tools.ts";
 import { managedSentence, unsettledSentence } from "~/protocol/configAnswer.ts";
 import type { ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
@@ -350,8 +354,8 @@ export const FIX: Record<McpFixKind, string> = {
   integration: "See its sign-in",
   edit: "Change its prefix",
   sign_in: "See its sign-in",
-  approve: "Open the Inbox",
-  review: "Review the changes",
+  approve: "Answer it",
+  review: "Review",
 };
 
 /**
@@ -392,4 +396,122 @@ export function writeRefusalWords(
     case "problems":
       return outcome.problems.map((p) => p.message).join(" ");
   }
+}
+
+/**
+ * A tool's level in words: the select's label, and the tone a level wears
+ * where it is a fact rather than a setting.
+ */
+export const LEVEL: Record<McpToolLevel, { label: string; tone: Tone }> = {
+  allow: { label: "Always allow", tone: "success" },
+  approve: { label: "Needs approval", tone: "warning" },
+  blocked: { label: "Blocked", tone: "danger" },
+};
+
+/** The levels in the order every picker lists them. */
+export const LEVELS: readonly McpToolLevel[] = ["allow", "approve", "blocked"];
+
+/**
+ * A server with no default of its own: each tool it does not name starts at
+ * the level the engine reads off its hints.
+ */
+export const BASELINE = {
+  hints: {
+    label: "By each tool's hints",
+    detail: "Read-only tools run, and every other tool asks first.",
+  },
+} as const;
+
+/** Why a server reaches an agent, in a few words. */
+export const REASON: Record<McpReachReason, string> = {
+  every_agent: "Every agent",
+  unit: "Through its team",
+  seat: "Granted to it",
+  integration: "On at its integration",
+};
+
+/**
+ * One agent's reason in words, naming the team a unit grant came through:
+ * the nearest unit the grant names, which may be above the agent's own.
+ */
+export function reasonWords(reach: McpReach, units: ReadonlyMap<string, string>): string {
+  if (reach.reason === "unit" && reach.via) return `Through ${units.get(reach.via) ?? reach.via}`;
+  return REASON[reach.reason];
+}
+
+/**
+ * What a team lead's limits hold a server to for one agent, in a line: off
+ * for it, or how many of its tools are held back, naming the team whose
+ * limit does it (the agent's own block where the engine names no team).
+ * "" where nothing narrows it.
+ */
+export function limitWords(
+  limited: McpReach["limited"],
+  units: ReadonlyMap<string, string>,
+): string {
+  if (!limited) return "";
+  const who = (key: string | null) => (key ? `${units.get(key) ?? key}'s lead` : "its lead");
+  if (limited.off) return `Turned off for it by ${who(limited.off_by)}`;
+  if (limited.tools.length === 0) return "";
+  const by = [...new Set(limited.tools.map((t) => t.by))];
+  return `${limited.tools.length === 1 ? "1 tool" : `${limited.tools.length} tools`} held back by ${by.map(who).join(" and ")}`;
+}
+
+/** A held call's answer in a word, and the tone its tag wears. */
+export function approvalWords(a: Pick<McpApproval, "status" | "answer">): {
+  label: string;
+  tone: Tone;
+} {
+  if (a.status === "waiting") return { label: "Waiting", tone: "warning" };
+  switch (a.answer) {
+    case "once":
+      return { label: "Allowed once", tone: "success" };
+    case "always":
+      return { label: "Always allowed", tone: "success" };
+    case "deny":
+      return { label: "Denied", tone: "danger" };
+    default:
+      return { label: "Answered", tone: "neutral" };
+  }
+}
+
+/**
+ * A route's refusal in the sentences a person acts on: each problem the
+ * engine placed (a level naming a tool a box lists, say), else its sentence.
+ */
+export function refusedWords(answer: { sentence: string; body: Record<string, unknown> }): string {
+  const problems = Array.isArray(answer.body.problems) ? answer.body.problems : [];
+  const said = problems
+    .map((p) =>
+      typeof p === "object" &&
+      p !== null &&
+      typeof (p as { message?: unknown }).message === "string"
+        ? (p as { message: string }).message
+        : "",
+    )
+    .filter(Boolean);
+  return said.length > 0 ? said.join(" ") : answer.sentence;
+}
+
+/** What a change to a tool moved, in a word each (`changes[].kinds`). */
+export const CHANGE_KIND: Readonly<Record<string, string>> = {
+  added: "New tool",
+  removed: "Removed",
+  title: "Title",
+  description: "Description",
+  schema: "Arguments",
+  annotations: "Hints",
+};
+
+/** A tool's hints, by the names a person reads them by. */
+export const HINT: Record<keyof ToolAnnotations, string> = {
+  read_only: "Read only",
+  destructive: "Destructive",
+  idempotent: "Idempotent",
+  open_world: "Open world",
+};
+
+/** One hint's value in a word. */
+export function hintWord(v: ToolAnnotations[keyof ToolAnnotations]): string {
+  return v === "yes" ? "Yes" : v === "no" ? "No" : "Not declared";
 }

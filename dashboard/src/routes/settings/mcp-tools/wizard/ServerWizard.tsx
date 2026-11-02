@@ -1,7 +1,8 @@
 /**
  * Add an MCP server, or edit one, step by step: where it comes from, its
- * name, how it connects, how it signs in, a test, and a review the engine
- * checks before anything is stored. The engine's problems land on the fields
+ * name, how it connects, how it signs in, who gets it, the level each of its
+ * tools runs at, a test, and a review the engine checks before anything is
+ * stored. The engine's problems land on the fields
  * they are about, each step that holds one marked on the stepper.
  *
  * A PAGE OF ITS OWN, in the list's place, so its steps have the room; adding
@@ -22,7 +23,10 @@
  * THE TEST IS THE ENGINE'S: the draft as a write would leave it, with the
  * values typed for it read through the variables they will be stored under
  * and sealed across the fleet (`POST /mcp-checks`); an edit that changes
- * nothing of the entry tests the saved server instead.
+ * nothing of the entry tests the saved server instead. It is sent without
+ * the draft's levels, which decide how a call runs and never what the server
+ * lists, so the approvals step is handed every tool, a blocked one included,
+ * each with the level the engine starts it at.
  *
  * ENTER MOVES ON from a single-line field, a choice or a step's heading; a
  * multi-line field, a button and an open list keep Enter for themselves (the
@@ -69,6 +73,8 @@ import {
 } from "./draft.ts";
 import { SourceStep, unavailableReason } from "./SourceStep.tsx";
 import {
+  AccessStep,
+  ApprovalsStep,
   ConnectionStep,
   isComplete,
   missingIn,
@@ -85,6 +91,8 @@ const LABELS: Record<Step, string> = {
   name: "Name",
   connection: "Connection",
   signin: "Sign-in",
+  access: "Who gets it",
+  approvals: "Tool approvals",
   test: "Test",
   review: "Review",
 };
@@ -95,6 +103,8 @@ const LEADS: Record<Step, string> = {
   name: "How the agents and this page name it.",
   connection: "Where the server is, or the command that starts it.",
   signin: "How the engine proves who it is to the server.",
+  access: "One connection for the company or one per agent, and which agents get it.",
+  approvals: "Whether each tool runs, asks a person first, or is blocked.",
   test: "Ask the server who it is and list its tools. No tool is called.",
   review: "Everything this saves. The engine checks it first.",
 };
@@ -192,10 +202,15 @@ export function ServerWizard({
   });
 
   const entity = useMemo(() => entityOf(draft, saved?.entity ?? null), [draft, saved]);
+  // WHAT THE TEST IS SENT: the entry without its levels (see above).
+  const tested = useMemo(() => {
+    const { tools: _levels, ...rest } = entity;
+    return rest;
+  }, [entity]);
   const values = useMemo(() => valuesOf(draft), [draft]);
   const unchanged = saved !== null && canonical(entity) === canonical(saved.entity);
   const testSeat = draft.shared ? "" : seat;
-  const signature = JSON.stringify({ entity, values, seat: testSeat });
+  const signature = JSON.stringify({ entity: tested, values, seat: testSeat });
 
   const set = useCallback((patch: Partial<Draft>) => {
     setDraft((d) => ({ ...d, ...patch }));
@@ -218,9 +233,14 @@ export function ServerWizard({
     const answer: McpAnswer<McpCheckAnswer> =
       unchanged && Object.keys(values).length === 0
         ? await testServer(draft.name, testSeat)
-        : await testDraft(entity, values, testSeat);
+        : await testDraft(tested, values, testSeat);
     if (answer.kind === "ok") {
       setTest({ kind: "done", for: sig, answer: answer.value });
+      // THE TOOLS IT LISTED, for the approvals step: a change of levels is
+      // the draft's own, so it clears no problem and no review. A tool not
+      // offered under its name takes no level (the test says why).
+      const listed = answer.value.tools.filter((t) => !t.refused);
+      if (listed.length > 0) setDraft((d) => ({ ...d, listed }));
       return;
     }
     const found = problemsIn(answer.body);
@@ -278,9 +298,10 @@ export function ServerWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, check.kind]);
 
-  // THE TEST RUNS AS ITS STEP OPENS, once for each version of the draft.
+  // THE TEST RUNS AS ITS STEP OPENS, once for each version of the draft, and
+  // as the approvals step opens with no tools listed yet, to list them.
   useEffect(() => {
-    if (step !== "test") return;
+    if (step !== "test" && !(step === "approvals" && draft.listed.length === 0)) return;
     if (test.kind !== "idle" && test.for === signature) return;
     if (!draft.shared && !seat) return;
     void runTest();
@@ -538,6 +559,15 @@ export function ServerWizard({
               problems={problems}
               missing={shownMissing}
               editing={editing}
+            />
+          ) : null}
+          {step === "access" ? <AccessStep draft={draft} set={set} /> : null}
+          {step === "approvals" ? (
+            <ApprovalsStep
+              draft={draft}
+              set={set}
+              listing={test.kind === "running"}
+              onList={() => void runTest()}
             />
           ) : null}
           {step === "test" ? (
