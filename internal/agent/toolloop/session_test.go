@@ -142,7 +142,7 @@ func (s *surface) execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		res = toolloop.ToolResult{Output: call.Name + " ok"}
 	}
 	if res.Origin == "" {
-		res.Origin, res.Server = origin, server
+		res.Origin, res.Server, res.Source = origin, server, origin
 	}
 	return res, nil
 }

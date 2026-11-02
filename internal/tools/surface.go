@@ -358,16 +358,21 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 		// not_found, and one that exists but was not offered to THIS
 		// surface is forbidden — the call is refused for where it was
 		// made rather than for what it named.
-		msg, class := fmt.Sprintf("Unknown tool: %s", name), RefusalNotFound
+		//
+		// WHOSE TOOL IT WAS rides a refusal of a name that exists
+		// ([toolloop.ToolResult.Source]): nothing answered it, but it was a
+		// call for that server's tool, refused here, which is what its
+		// count of refused calls is.
+		msg, class, source := fmt.Sprintf("Unknown tool: %s", name), RefusalNotFound, ""
 		if known {
 			msg = fmt.Sprintf("Tool %s is not active on this surface; activate it first.", name)
-			class = RefusalForbidden
+			class, source = RefusalForbidden, e.Origin
 		}
 		s.record(Call{Name: name, Args: args.Map(), Output: msg, Failed: true, Cause: class})
 		span.SetAttributes(
 			attribute.Bool("crewlet.tool_failed", true),
 			attribute.String("crewlet.tool_outcome", outcomeFor(known)))
-		return toolloop.ToolResult{Output: msg, Failed: true, Cause: class}, nil
+		return toolloop.ToolResult{Output: msg, Failed: true, Cause: class, Source: source}, nil
 	}
 
 	if s.guard != nil {
@@ -386,7 +391,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 				attribute.Bool("crewlet.tool_failed", true),
 				attribute.String("crewlet.tool_outcome", "refused_by_guard"))
 			return toolloop.ToolResult{Output: reason, Failed: true,
-				Cause: RefusalForbidden}, nil
+				Cause: RefusalForbidden, Source: e.Origin}, nil
 		}
 	}
 
@@ -427,7 +432,8 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 		span.SetAttributes(
 			attribute.Bool("crewlet.tool_failed", true),
 			attribute.String("crewlet.tool_outcome", "refused_by_contract"))
-		return toolloop.ToolResult{Output: recorded.Output, Failed: true, Cause: RefusalInvalid}, nil
+		return toolloop.ToolResult{Output: recorded.Output, Failed: true, Cause: RefusalInvalid,
+			Source: e.Origin}, nil
 	}
 	// THE MODEL READS TEXT, so the note is rendered after the output here
 	// ([Rendered]), and the ledger records what the model read.
@@ -461,7 +467,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	server, _ := e.FromMCP()
 	return toolloop.ToolResult{
 		Output: res.Output, Failed: res.Failed, Cause: res.Cause,
-		Origin: e.Origin, Server: server,
+		Origin: e.Origin, Server: server, Source: e.Origin,
 	}, nil
 }
 

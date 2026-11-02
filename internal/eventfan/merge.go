@@ -117,6 +117,26 @@ func MergeListing(parts []listPart, limit int) (rows []store.EventRecord, more b
 	return rows, more
 }
 
+// MergeToolCalls merges several nodes' newest calls to one MCP server into the
+// fleet's newest `limit`, in the listing's one order ([store.ToolCall.Before]).
+//
+// EXACT BECAUSE EACH NODE SENT ITS OWN NEWEST `limit` in that same order: a
+// call in the fleet's top `limit` has fewer than `limit` calls above it on its
+// own node too, so its node sent it. And each call is on ONE node's part,
+// since a node lists only the rows it keeps ([store.EventLog.ToolCalls]), so
+// the union needs no identity to fold a duplicate by.
+func MergeToolCalls(parts []toolCallsPart, limit int) []store.ToolCall {
+	var calls []store.ToolCall
+	for _, p := range parts {
+		calls = append(calls, p.Calls...)
+	}
+	store.SortToolCalls(calls)
+	if limit > 0 && len(calls) > limit {
+		calls = calls[:limit]
+	}
+	return calls
+}
+
 // MergeSpend merges several nodes' per-phase spend records into the fleet's
 // newest `limit` (every record when limit is not positive), newest first.
 //

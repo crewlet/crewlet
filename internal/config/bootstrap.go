@@ -1707,8 +1707,8 @@ type Stream struct {
 	// SIZED BY A CENSUS, NOT A RATE: the stream keeps one message per
 	// (node, day, seat, schedule or person) for 181 days, so its size is the
 	// number of those objects rather than how busy they were. A three-node
-	// fleet of forty seats and twenty schedules is about 217 MB; the 1 GiB
-	// default is four times that. Unset takes the default rather than a
+	// fleet of forty seats and twenty schedules is about 320 MB; the 1 GiB
+	// default is three times that. Unset takes the default rather than a
 	// share of the disk, because a census is a property of the fleet's
 	// seats and schedules and a larger volume buys no more of them.
 	//
@@ -1716,7 +1716,7 @@ type Stream struct {
 	// take, because the broker grants a stream its whole
 	// ceiling when it creates it: this number is free space a node must
 	// have before it can boot at all, and a ten-seat node's 181-day census
-	// is about 12 MB. See [UsageLogMaxBytesFloor].
+	// is about 18 MB. See [UsageLogMaxBytesFloor].
 	//
 	// It shares the state logs' one budget, and what the mutation log's
 	// field says about it holds here: the value is the one the stream is
