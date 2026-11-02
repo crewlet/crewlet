@@ -86,9 +86,9 @@ func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 			t.Errorf("relaunch: %v", err)
 		}
 		relaunched = res
-		if row := rig.getIn(ctx, "t1"); len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != "post_comment" {
+		if row := rig.callsIn(ctx, "t1"); len(row.Calls) != 1 || row.Calls[0].Name != "post_comment" {
 			t.Errorf("the carried-on round's log holds %+v, want the call made before the question",
-				row.BridgeCalls)
+				row.Calls)
 		}
 	})
 	if !relaunched.Reused || relaunched.SandboxID != run.SandboxID {

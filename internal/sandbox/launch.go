@@ -310,14 +310,14 @@ type OpenedJob struct {
 	// the run's row holds ([PendingRun.LaunchID]).
 	LaunchID string
 
-	// LastSeq is the place of the last bridged call the row keeps from
-	// before this job ([PendingRun.LastBridgeSeq]): zero for a job whose
-	// round starts its log afresh, and the asking job's last call for a job
-	// that continues one which asked a person ([PendingRun.Continues]).
+	// LastSeq is the place of the last bridged call the run's log keeps from
+	// before this job ([BridgeLog.LastSeq]): zero for a job whose round
+	// starts its log afresh, and the asking job's last call for a job that
+	// continues one which asked a person ([PendingRun.Continues]).
 	//
-	// READ OFF THE WRITE THAT OPENED THE JOB, which is the write that kept
-	// those calls, so the job's own are numbered after exactly what the row
-	// holds. Numbered from one instead, a continuation's calls were sorted
+	// READ OFF THE WRITE THAT OPENED THE JOB'S LOG ([PendingRun.OpenedAfter]),
+	// which is the write that kept those calls, so the job's own are
+	// numbered after exactly what the log holds. Numbered from one instead, a continuation's calls were sorted
 	// in among the asking job's by the collection that closes the round,
 	// which reads the round's calls in that order: its record, the log its
 	// reviewer reads, and its submissions, where the last one made wins.
@@ -533,7 +533,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// list the servers a box has.
 	var steer SteerWiring
 	if req.Opened != nil {
-		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.LastBridgeSeq()})
+		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.OpenedAfter})
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)

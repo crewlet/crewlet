@@ -704,8 +704,13 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 				continue
 			}
 			at := waitingSince(run)
+			r := reach(run)
+			calls, err := s.runCalls(ctx, run, r)
+			if err != nil {
+				return nil, err
+			}
 			items = append(items, DecisionItem{Kind: "run", At: at,
-				Run: serialiseRun(run, reach(run), s.answeredBy(run))})
+				Run: serialiseRun(run, calls, r, s.answeredBy(run))})
 			total++
 			older(at)
 		}

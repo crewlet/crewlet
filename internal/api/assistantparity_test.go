@@ -470,6 +470,10 @@ func (noCodingRuns) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return []sandbox.PendingRun{}, nil
 }
 
+func (noCodingRuns) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+	return sandbox.BridgeLog{}, nil
+}
+
 func (noCodingRuns) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	return sandbox.PendingRun{}, false, nil
 }

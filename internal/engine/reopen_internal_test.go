@@ -168,6 +168,16 @@ func launchRecoverable(t *testing.T) recoverableRun {
 	}
 }
 
+// calls is the run's bridged tool log as the seat's recovery reads it.
+func (r recoverableRun) calls(t *testing.T) sandbox.BridgeLog {
+	t.Helper()
+	log, err := r.e.sandbox.Load().pending.BridgeLog(t.Context(), r.row(t))
+	if err != nil {
+		t.Fatalf("the run's log: %v", err)
+	}
+	return log
+}
+
 // row is the run's row as the seat's recovery reads it.
 func (r recoverableRun) row(t *testing.T) sandbox.PendingRun {
 	t.Helper()
@@ -216,11 +226,11 @@ func TestARunIsServedAgainByTheNodeThatRecoversIt(t *testing.T) {
 	if got := run.tool.values(); len(got) != 2 || got[1] != "after" {
 		t.Errorf("the seat's tool saw %v, want the call before the restart and the one after", got)
 	}
-	row := run.row(t)
-	if len(row.BridgeCalls) != 2 {
-		t.Fatalf("the run's row holds %d calls, want both", len(row.BridgeCalls))
+	logged := run.calls(t)
+	if len(logged.Calls) != 2 {
+		t.Fatalf("the run's row holds %d calls, want both", len(logged.Calls))
 	}
-	last := row.BridgeCalls[1]
+	last := logged.Calls[1]
 	if last.Name != "probe" || last.Seq != 2 {
 		t.Errorf("the call after the recovery is recorded as %+v, want probe as the run's second", last)
 	}

@@ -29,6 +29,12 @@ func (f fixedRuns) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return f, nil
 }
 
+// BridgeLog is every run's log as one call, the shape a body reader is shown.
+func (f fixedRuns) BridgeLog(_ context.Context, run sandbox.PendingRun) (sandbox.BridgeLog, error) {
+	return sandbox.BridgeLog{Launch: run.LaunchID,
+		Calls: []sandbox.BridgeCall{{Name: "get_work_item", Args: `{"id":"ENG-1"}`}}}, nil
+}
+
 func (f fixedRuns) Get(_ context.Context, turnID string) (sandbox.PendingRun, bool, error) {
 	for _, run := range f {
 		if run.TurnID == turnID {

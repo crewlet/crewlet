@@ -147,6 +147,12 @@ type Resumer interface {
 type ResumeRequest struct {
 	Run PendingRun
 
+	// Bridged is the run's bridged tool log as its job left it
+	// ([PendingStore.BridgeLog]): the calls the resumed phase is judged on,
+	// and where a person's answer cut the round. Read by the coordinator
+	// once the job is collected, beside the row rather than off it.
+	Bridged BridgeLog
+
 	// Answer is what the resumed turn files as its executor's report: the
 	// collected run's own account of itself ([runReport]). Already redacted
 	// — it is published as a phase record. Empty on a person's answer, which
@@ -1381,20 +1387,10 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunComplete
 	}
 	if ended {
 		// A RUN ENDED AT ITS TURN'S CAP was working until the collection
-		// stopped it, and the claim read its row before then: a call it made
-		// over the bridge meanwhile is on the row and not on the claim, and
-		// the resumed turn judges the run on the claim's log. Read back
-		// once the box is stopped, so what the run did is all of it.
-		latest, found, readErr := c.pending.Get(ctx, run.TurnID)
-		switch {
-		case readErr != nil:
-			// The claim's log stands: the turn is judged on the calls it
-			// holds, and the line says the late ones may be missing from it.
-			log.WarnContext(ctx, "sandbox_run_calls_reread_failed",
-				"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", readErr.Error())
-		case found && latest.LaunchID == run.LaunchID:
-			run.BridgeCalls, run.BridgeCallsElided = latest.BridgeCalls, latest.BridgeCallsElided
-		}
+		// stopped it: a call it made over the bridge meanwhile is in its
+		// log, which the resume reads once the box is stopped
+		// ([Coordinator.resumeAndSettle]), so what the run did is all of it.
+		//
 		// AND NO QUESTION, whatever it asked on its way: a run that is being
 		// stopped is not one a person's answer could continue
 		// ([endedAtDeadline]), so it is collected and resumed like any
@@ -2889,15 +2885,24 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// without: "this node cannot resume this run" is the resumer's own
 	// answer, wrapping [ErrResumeUnavailable], and it takes the failure
 	// path below like every other failed resume.
-	if err := c.resume.Resume(ctx, ResumeRequest{
-		Run: run, Answer: answer, Success: success, Trigger: trigger,
-		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
-		Pushed: outcome.Pushed, PushedElided: outcome.PushedElided, PushedUnread: outcome.PushedUnread,
-		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
-		CacheReadTokens: outcome.CacheReadTokens, CacheWriteTokens: outcome.CacheWriteTokens,
-		Engine: outcome.Engine, Ended: outcome.Ended, Asked: outcome.Asked, Lost: outcome.Lost,
-		Begin: begin,
-	}); err != nil {
+	//
+	// AND THE RUN'S CALLS, read from its log here — after the collection
+	// stopped or read back its box, so a call the run made up to its end is
+	// in them — and never "no calls" for a log the store could not read:
+	// that read failing is a resume that failed, handed back like any other.
+	calls, err := c.pending.BridgeLog(ctx, run)
+	if err == nil {
+		err = c.resume.Resume(ctx, ResumeRequest{
+			Run: run, Bridged: calls, Answer: answer, Success: success, Trigger: trigger,
+			DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
+			Pushed: outcome.Pushed, PushedElided: outcome.PushedElided, PushedUnread: outcome.PushedUnread,
+			InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
+			CacheReadTokens: outcome.CacheReadTokens, CacheWriteTokens: outcome.CacheWriteTokens,
+			Engine: outcome.Engine, Ended: outcome.Ended, Asked: outcome.Asked, Lost: outcome.Lost,
+			Begin: begin,
+		})
+	}
+	if err != nil {
 		if errors.Is(err, ErrResumeAbandoned) && !began.Load() {
 			// BROKEN BEFORE ITS TURN BEGAN — a panic re-entering the
 			// conversation, say. It is not retried, for the reason every

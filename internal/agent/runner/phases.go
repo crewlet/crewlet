@@ -334,7 +334,7 @@ type Resume struct {
 
 	// Answered is the place ([BridgedCall.Seq]) of the last call the round
 	// made before a person's answer carried it on, and zero where no answer
-	// has: off the run's row (sandbox.PendingRun.AnsweredThrough). Only a
+	// has: off the run's row (sandbox.BridgeLog.AnsweredThrough). Only a
 	// submission made after it is the round's ([sinceAnswer]).
 	Answered int
 
@@ -386,7 +386,7 @@ type BridgedCall struct {
 	// they finished in when it made several at once. One order for the
 	// round: a job opened again after a recovery, and a job carrying on one
 	// that asked a person ([Asked]), number theirs after the calls before
-	// them (sandbox.PendingRun.LastBridgeSeq).
+	// them (sandbox.BridgeLog.LastSeq).
 	Seq int
 
 	// StartedAt is when the call was handed to the seat's surface, and
