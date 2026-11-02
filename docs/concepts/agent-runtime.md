@@ -421,7 +421,13 @@ stateDiagram-v2
   nothing. A too-short window is not stamped: it has room, and the counter
   stamps only a window with none. A resumed segment — a collected run whose
   relaunch the floor refuses, or a person's answer waiting to carry a run on —
-  has no delivery to park, and is held on the same window instead.
+  has no delivery to park, and is held on the same window instead: on the
+  floor its launch was refused below, which for a relaunch that [continues the
+  turn's session](code-sandbox.md#what-a-continued-launch-costs) is the
+  session's context with its brief where that is the larger, its reason
+  then reading `… below the 62000 an executor launch that continues its session
+  needs (its last request carried 60000 tokens and its brief about 2000;
+  turn_engine.executor_min_budget_tokens is 25000); resets …`.
 - **Released.** At the reset, or at once when a published company changes the
   ceilings of either scope or the company's clock (which moves every window's
   end) — the apply of the revision that changed them — the hold

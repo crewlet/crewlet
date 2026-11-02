@@ -97,7 +97,9 @@ turn_engine:                            # optional — executor/reviewer turn co
   executor_min_budget_tokens: 25000     # refuse an executor launch, and park the seat, below
                                         #   this remaining budget (0 = no floor). A seat's or
                                         #   the company's token_budget ceiling below it is
-                                        #   refused: no launch could ever fit
+                                        #   refused: no launch could ever fit. A relaunch that
+                                        #   continues its turn's session needs the larger of
+                                        #   this and the session's context with its brief
   delegation_depth_limit: 3             # max colleague-handoff chain depth before depth_cap guard breach
   extension_enabled: true               # round-cap extension judge for the onboarding pass
                                         #   (an executor run is its harness's loop, which no
@@ -301,7 +303,8 @@ as YAML. A ceiling below `turn_engine.executor_min_budget_tokens` (25000 by
 default) is refused too, on a seat that runs an executor and on the company,
 since no launch could ever fit under it; and a seat whose window leaves less
 than that floor waits [parked](../concepts/agent-runtime.md#the-budget-park)
-until it turns over.
+until it turns over — or, for a relaunch that continues its turn's session, less
+than [that session's own floor](../concepts/code-sandbox.md#what-a-continued-launch-costs).
 
 [`crewlet validate`](../reference/cli.md) **warns** — it never refuses — about a ceiling that
 can never refuse a turn, because another ceiling is always reached first:

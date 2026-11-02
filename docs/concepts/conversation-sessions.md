@@ -18,12 +18,14 @@ and it deliberately follows the same doctrine one scope wider.
 
 ## What it is not
 
-**Not a transcript replay.** A run parked on a person's question keeps its
-transcript in its harness's own session, in its box, and the answer continues that
-session where it stopped (Claude Code's `--resume`, OpenCode's `--session`)
-wherever the relaunch reuses that box; where it cannot, a fresh run is told the
-question and the answer instead. That is right for a run parked on one question waiting for one answer. It is
-wrong here: a conversation's next turn
+**Not a transcript replay.** Within a turn, a relaunch continues the turn's own
+harness session where it stopped (Claude Code's `--resume`, OpenCode's
+`--session`) — a person's answer to a run parked on a question, a reviewer's
+send-back, a lost job, a replaced sign-in — from the copy its box holds or from
+the capture the turn kept, restored into whichever box the launch gets
+([Code Sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)); where it
+cannot, a fresh run is told what it needs instead. That is right for one turn's
+work, carried on. It is wrong here: a conversation's next turn
 arrives against a thread that has **moved**, and replaying raw prior context
 invites acting on state that is no longer true.
 
@@ -302,8 +304,9 @@ harness's own transcript of a turn, sealed into the
 [object store](object-store.md) and named by the turn's row of the `executor`
 log
 ([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)),
-so a later turn of the same conversation, in any box on any node, can
-continue it. The trash reaper deletes a session untouched for
+so a later launch of the same turn, in any box on any node, continues it
+([Code Sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)); a
+conversation's next turn starts a session of its own. The trash reaper deletes a session untouched for
 `retention_days`, never one whose turn's run is still live, reading the value
 off the revision the fleet runs at every hourly pass rather than at start; a
 turn that never ended, a day past its last capture with no run of it live, it

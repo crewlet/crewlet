@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/agent/runner`
-- **Enforced-by:** `internal/agent/runner.TestTheExecutorLaunchesItsRunAndParks`, `internal/providers/llm/chain.TestEveryMemberSittingOutIsAnExhaustedChain`, `internal/engine.TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain`, `internal/providers/llm/harness.TestAnExecutorRunThatSpentThePlanSitsItsEntryOut`, `internal/providers/llm/harness.TestARunsResetIsReadAgainstWhenItsEndingWasFirstRead`, `internal/providers/llm/harness.TestAnEndingReadAgainIsTheSameReport`, `internal/engine.TestAResumeWaitsOnTheChainItsFirstCallTakes`, `internal/agent/runner.TestAnAgentRunThatNeverSubmittedIsRescued`, `internal/agent/runner.TestAnAnswerCarriesTheRunOnRatherThanReportingIt`, `internal/config.TestTheExecutorHarnessesAreTheInBoxRunners`, `internal/config.TestAnExecutorChainWithNoRunnerIsRefused`, `internal/config.TestAMixedExecutorChainIsAdvisedAbout`, `internal/config.TestAnAgentSeatNeedsTheCatalogue`, `internal/config.TestARunInOnAHarnessThatLaunchesNoRunIsRefused`, `internal/config.TestACeilingBelowTheExecutorFloorIsRefused`, `internal/engine.TestALaunchPlacesTheRunInItsMembersCell`, `internal/engine.TestALaunchFallsPastASpentHeadToTheNextMemberAndRunsOnIt`, `internal/engine.TestALaunchBelowTheExecutorFloorIsABudgetRefusal`, `internal/engine.TestALaunchRefusedBelowTheFloorParksTheSeat`, `internal/agent/prompts.TestEveryReviewIsToldTheRunsLocalWorkIsInNoLog`, `internal/sandbox/executor.TestTheClaudeInvocationIsHeadlessAndMachineReadable`, `internal/sandbox/executor.TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer`
+- **Enforced-by:** `internal/agent/runner.TestTheExecutorLaunchesItsRunAndParks`, `internal/providers/llm/chain.TestEveryMemberSittingOutIsAnExhaustedChain`, `internal/engine.TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain`, `internal/providers/llm/harness.TestAnExecutorRunThatSpentThePlanSitsItsEntryOut`, `internal/providers/llm/harness.TestARunsResetIsReadAgainstWhenItsEndingWasFirstRead`, `internal/providers/llm/harness.TestAnEndingReadAgainIsTheSameReport`, `internal/engine.TestAResumeWaitsOnTheChainItsFirstCallTakes`, `internal/agent/runner.TestAnAgentRunThatNeverSubmittedIsRescued`, `internal/agent/runner.TestAnAnswerCarriesTheRunOnRatherThanReportingIt`, `internal/config.TestTheExecutorHarnessesAreTheInBoxRunners`, `internal/config.TestAnExecutorChainWithNoRunnerIsRefused`, `internal/config.TestAMixedExecutorChainIsAdvisedAbout`, `internal/config.TestAnAgentSeatNeedsTheCatalogue`, `internal/config.TestARunInOnAHarnessThatLaunchesNoRunIsRefused`, `internal/config.TestACeilingBelowTheExecutorFloorIsRefused`, `internal/engine.TestALaunchPlacesTheRunInItsMembersCell`, `internal/engine.TestALaunchFallsPastASpentHeadToTheNextMemberAndRunsOnIt`, `internal/engine.TestALaunchBelowTheExecutorFloorIsABudgetRefusal`, `internal/engine.TestALaunchRefusedBelowTheFloorParksTheSeat`, `internal/engine.TestARefusedContinuedLaunchIsHeldOnItsOwnFloor`, `internal/engine.TestASessionNoWindowCanCarryIsNotContinued`, `internal/agent/prompts.TestEveryReviewIsToldTheRunsLocalWorkIsInNoLog`, `internal/sandbox/executor.TestTheClaudeInvocationIsHeadlessAndMachineReadable`, `internal/sandbox/executor.TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer`
 - **Measured:** a run's first request alone is the CLI's harness prompt and tool definitions, about 15k input tokens for Claude Code, before the bridged tool array and the seat's system prompt, which sets the launch floor at 25000 tokens
 - **Cost-when-tried:** the executor ran on the engine host as a text phase, its CLI's own shell and editor denied, and code work went through a `run_sandbox` tool that started a second coding agent in a box: two agents and two prompts for one task, a brief the first wrote for the second, the first's whole conversation serialized onto the run's row and re-entered with the second's findings spliced in as a tool reply, and three round caps between them (`max_tool_rounds`, `execute_max_tool_rounds_ceiling` and the box's `max_turns`)
 - **Tag-status:** unreleased
@@ -33,14 +33,30 @@ that entry's `run_in` cell (else `providers.sandbox.default_run_in`) and parks
 the turn with its bookkeeping and no conversation (`internal/agent/execstate`).
 The run's collection re-enters the same turn for the engine's delivery check
 and the reviewer, whose send-back launches the run again. A person's answer to
-a run that parked on a question launches it again too: in the box it parked
-in, continuing its own CLI session, where that box is kept, the member picked
-runs the same CLI in the same cell and the box is this node's to drive; and
-otherwise as a fresh run told the question, the answer and the branch it
-pushed. So a company with an agent seat and a model needs `providers.sandbox`,
-and a launch is held to a budget floor (`turn_engine.executor_min_budget_tokens`)
-and charged on collection, its rounds bounded by the CLI's own turn cap where
-the company or the seat sets one.
+a run that parked on a question launches it again too, and so do a job lost
+with its host and one refused on a sign-in replaced while it ran. Every such
+relaunch continues the turn's own harness session, within the turn: its newest
+kept capture, restored into whatever box the launch gets, where the harness's
+runner can take it up and the seat's budget can carry it (`internal/sandbox`'s
+restore.go); else, for an answer or a replaced sign-in, the session the box it
+parked in holds, where that box is kept, the member picked runs the same
+harness in the same cell and the box is this node's to drive; and otherwise as
+a fresh run told the question and the answer, or how the run before it was cut
+off, and the branch it pushed. So a company with an agent seat and a model
+needs `providers.sandbox`, and a launch is held to a budget floor
+(`turn_engine.executor_min_budget_tokens`) and charged on collection, its
+rounds bounded by the harness's own turn cap where the company or the seat
+sets one. **A relaunch that continues the turn's session is held to more**: the
+larger of that floor and the session's context — the whole input of its last
+request, cache included, recorded with its capture — with its brief, since it
+sends that context again before it reads a word of the brief. The floor is read
+in one place (`internal/engine`'s `launchFloor`), by the launch's refusal, by
+the hold that waits on it and by the reason the hold states, so a resume refused
+below a continued floor waits for a window with room for that floor and not
+the static one; a session whose floor is past every capped window's smallest
+ceiling, or whose context is past the window every executor run compacts at
+(`sandbox.ExecutorContextWindow`), is not continued, and its relaunch starts
+fresh on the static floor.
 
 **A model's limit reads the same on this road**
 ([ADR-0064](0064-a-model-at-its-limit-parks-the-seats-it-holds-and-a-seat-says-one-steady-thing.md)).

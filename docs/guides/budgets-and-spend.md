@@ -62,6 +62,37 @@ ceiling below that floor never has it left, so on a seat that runs an executor,
 or on a company that has one, it is refused when the document is validated,
 at the ceiling: raise it to the floor, or lower the floor (`0` turns it off).
 
+**A relaunch that continues its turn's session needs room for that session.**
+Within a turn, a send-back, a person's answer, a lost job or a replaced sign-in
+[continues the turn's harness session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)
+where it can, and a continued run sends the session's whole context again
+before it reads a word of its brief. So its launch needs the larger of the floor
+and that context with its brief: the whole input of the session's last request,
+cache included, recorded when the session was kept, and the brief's estimate —
+a 60 000-token session handed a 2 000-token brief needs 62 000 left in every
+capped window. It is held, parked or turned back on that figure exactly as
+above, and its reason names what the figure is made of. A session whose figure
+is past the smallest ceiling of the seat's or the company's capped windows,
+which no window turning over ever leaves room for, is not continued: the
+relaunch starts a session of its own on the floor.
+
+**And it pays for its context on every request.** Every request a harness makes
+sends its whole conversation, and every one is charged its whole input, the
+cache's share included ([Cache share](#cache-share)): a run that continues a
+60 000-token session and makes 20 requests is charged about 1.2 million input
+tokens for that context alone, most of them cache reads, where the same run
+started fresh begins at its
+harness's own prompt, its standing instructions and its brief and grows from
+there. The context a session is carried at is bounded for that reason. Every
+Claude Code run compacts its conversation at 100 000 tokens
+(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, which the engine pins), and a session of
+either harness whose last request carried more starts fresh, so a request of a
+continued run carries at most about 100 000 tokens — four times the default
+floor — and a continued run of *n* requests is charged at most about
+*n* × 100 000 input tokens before its output. A smaller window would compact
+sooner and charge less per request; a larger one would keep more of the session
+verbatim; the engine's is the least Claude Code accepts.
+
 A round's size is known only from its reply, so by the time it is judged the
 vendor has billed it, and **a refused round is counted like any other**. The
 window that refused it therefore reads **over its ceiling** by that round — a
