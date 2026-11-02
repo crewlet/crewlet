@@ -43,6 +43,13 @@ func TestEveryRecipientCarriesItsOwnReason(t *testing.T) {
 	reasons := map[string]string{}
 	for _, r := range routed {
 		reasons[r.To.Handle] = r.Metadata[worklet.MetaVia]
+		// THE TURN EACH WAKES IS FILED UNDER THE ITEM, under that seat's
+		// own reason.
+		if r.Origin != (types.TriggerOrigin{Kind: types.OriginWorkItem, ID: "ENG-1",
+			Reason: r.Metadata[worklet.MetaVia]}) {
+			t.Errorf("%s's wake names origin %+v, want ENG-1 under its reason",
+				r.To.Handle, r.Origin)
+		}
 	}
 	want := map[string]string{
 		"bo": string(worklet.ReasonMention),

@@ -196,6 +196,10 @@ func releaseCustody(ctx context.Context, tx *sql.Tx, batchID string) error {
 			WHERE event_time = ? AND event_id = ?`, id.Time, id.ID); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM crewlet_turn_origins
+			WHERE event_time = ? AND event_id = ?`, id.Time, id.ID); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM crewlet_events
 			WHERE event_time = ? AND event_id = ?`, id.Time, id.ID); err != nil {
 			return err

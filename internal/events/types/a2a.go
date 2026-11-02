@@ -99,6 +99,11 @@ type A2ARequest struct {
 // EventType is the "a2a_request" wire type.
 func (A2ARequest) EventType() string { return A2ARequestType }
 
+// TriggerOrigin is the colleague channel the ask was put in ([Originated]).
+func (e A2ARequest) TriggerOrigin() TriggerOrigin {
+	return TriggerOrigin{Kind: OriginColleagueAsk, ID: e.ChannelID}
+}
+
 // Brief is the colleague's question, which IS the woken seat's whole task.
 func (e A2ARequest) Brief() string {
 	if lead := e.lead(); lead != "" {

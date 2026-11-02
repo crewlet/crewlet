@@ -5896,10 +5896,24 @@ export interface TurnRow {
   models?: string;
   summary?: string;
   trigger?: string;
+  /** What started the turn: the object its earliest trigger named and why it
+   *  reached the seat. Absent where no record names one, and withheld from a
+   *  reader without the object's app. */
+  origin?: TurnOrigin;
   /** The one work item the turn is charged to, off its completion record.
    *  Absent for a turn on nothing — which includes one still running, since a
    *  sole write names its item only at the end. */
   work_item?: TurnWorkItem;
+}
+
+/** What started a turn. `kind` is `chat_message` (`id` the message's, `reason`
+ *  the routing reason it reached the seat), `work_item` (`id` the item's key,
+ *  `reason` the tracker's), `schedule` (`id` its name) or `colleague_ask`
+ *  (`id` the colleague channel's). OPEN, for a kind a newer engine adds. */
+export interface TurnOrigin {
+  kind: "chat_message" | "work_item" | "schedule" | "colleague_ask" | (string & {});
+  id: string;
+  reason?: string;
 }
 
 /** The work item a turn is charged to — `work_item` on the turn events. The
