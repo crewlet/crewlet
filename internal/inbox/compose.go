@@ -333,7 +333,7 @@ func ParseCursor(raw string) (map[string]string, error) {
 	}
 	values, err := url.ParseQuery(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBadCursor, err)
+		return nil, fmt.Errorf("%w: %w", ErrBadCursor, err)
 	}
 	for name, v := range values {
 		if name == "" || len(v) != 1 || v[0] == "" {
