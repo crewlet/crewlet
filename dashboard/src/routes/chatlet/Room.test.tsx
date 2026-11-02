@@ -188,6 +188,34 @@ describe("the room's intro", () => {
     expect(probe.stars).toEqual([{ room: "room-1", on: true }]);
   });
 
+  // THE BOX IS WHEREVER THE ENGINE TAKES THE POST. A team's room is readable
+  // by every seat and its write gate refuses nobody who may read it, so
+  // somebody outside the team says something there (its lead answers a person
+  // nobody else is following); only the join, which the chart decides, is
+  // not theirs. Mutation: hide the composer from a non-member again and the
+  // box is not found.
+  test("a team's room read from outside the team takes the reader's post", async () => {
+    answers.chat_channel = {
+      ...served,
+      channel: { ...channel, kind: "unit", name: "team", unit: "core" },
+      revision: 3,
+      message_seq: 2,
+      member: false,
+      members: [],
+    };
+    mount();
+    const box = (await screen.findByLabelText("Message team")) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: "Is the release on track?" } });
+    const send = screen.getByRole("button", { name: /^send$/i });
+    await waitFor(() => expect(send.getAttribute("aria-disabled")).not.toBe("true"));
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => expect(pressesOf("post_message")).toHaveLength(1));
+    expect(pressesOf("post_message")[0]!.args).toMatchObject({
+      channel: "room-1",
+      body: "Is the release on track?",
+    });
+  });
+
   // A CONVERSATION WITH NOBODY ELSE IN IT is one the engine allows, titled
   // "Just you"; its intro said "just between you and ." and named nobody.
   test("a conversation with only the reader in it says so", async () => {
@@ -1450,8 +1478,8 @@ test("a frame past the bound on what a tab holds still makes the room re-read", 
 // Standing in a room you are not in
 // ---------------------------------------------------------------------------
 
-test("a room the reader may read but is not in says so, and offers to join", async () => {
-  // A public room is readable by every seat, joined or not — so arriving here
+test("a room the reader may read but is not in says so, offers to join, and takes their post", async () => {
+  // A public room is readable by every seat, joined or not, so arriving here
   // from a search result and standing outside the room whose whole transcript
   // is on the screen is an ordinary state. Unsaid, a rail that does not list
   // the room looks like a rail that lost it.
@@ -1464,9 +1492,10 @@ test("a room the reader may read but is not in says so, and offers to join", asy
     members: [],
   };
   mount();
-  // THE BAR SAYS WHERE THE READER STANDS, in the box's place.
-  await waitFor(() => expect(callout(/join to post and react/i)).not.toBeNull());
-  expect(screen.queryByLabelText("Message #general")).toBeNull();
+  // THE BAR SAYS WHERE THE READER STANDS, above the box: the engine takes a
+  // post in a public room from anybody who may read it, so the box is there.
+  await waitFor(() => expect(callout(/You’re not in #general/)).not.toBeNull());
+  expect(await screen.findByLabelText("Message #general")).toBeTruthy();
 
   const join = screen.getByRole("button", { name: /^join room$/i });
   await waitFor(() => expect(join.getAttribute("aria-disabled")).not.toBe("true"));
