@@ -1424,6 +1424,18 @@ export function sectionOpen(
 }
 
 /**
+ * Whether a reader holding `held` may open the Settings section `key`, by
+ * [sectionOpen]: what asks a guarded answer outside its own screen (a figure in
+ * the Settings column, the engine panel's alarm names, the Inbox's MCP alarms)
+ * asks only a reader the section opens for, since every one of those answers is
+ * the section's and a refusal on a timer is a refusal nobody reads.
+ */
+export function settingsSectionOpen(key: string, held: readonly string[]): boolean {
+  const section = workspaceRow("settings")?.sections.find((s) => s.key === key);
+  return section !== undefined && sectionOpen(section, held);
+}
+
+/**
  * What a reader holding `held` lacks to open a section, as its lock says it:
  * nothing, or the section's own permissions.
  */

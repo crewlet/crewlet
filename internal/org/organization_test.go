@@ -927,6 +927,33 @@ func TestSeatLookupInvertsTheDerivation(t *testing.T) {
 	}
 }
 
+// A SEAT A PEER NAMES BY ITS ID IS READ BY ITS HANDLE where this org holds it,
+// and by the id itself where it does not (a seat retired since, or a peer on
+// another revision), which is the honest name for it; uuid.Nil names no seat.
+// A reader with no org yet names every seat by its id.
+func TestASeatNamedByItsIDIsReadByItsHandle(t *testing.T) {
+	t.Parallel()
+	o := identityOrg()
+	for r := range o.AllRoles() {
+		id, ok := o.AgentIDFor(r)
+		if !ok {
+			continue
+		}
+		if got := o.AgentHandleByID(id); got != r.Handle() {
+			t.Errorf("AgentHandleByID(%s) = %q, want %q", id, got, r.Handle())
+		}
+	}
+	elsewhere, _ := DeriveAgentID("Globex", "developer")
+	for _, named := range []*Organization{o, nil} {
+		if got := named.AgentHandleByID(elsewhere); got != elsewhere.String() {
+			t.Errorf("a seat this org does not hold is named %q, want its id", got)
+		}
+		if got := named.AgentHandleByID(uuid.Nil); got != "" {
+			t.Errorf("uuid.Nil is named %q, want no seat", got)
+		}
+	}
+}
+
 func TestExplicitHandleDrivesIdentityEverywhere(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{

@@ -23,7 +23,6 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Settings › Models over a running engine: the model routes
@@ -49,8 +48,9 @@ func NewModelSurface(e *engine.Engine, config *configapi.Service, cipher secrets
 }
 
 // ModelSources fills the model half of the question sources over e: what this
-// node resolved and its alarms, the fleet's secret rows, its device sign-ins,
-// and the model catalogue.
+// node resolved, the fleet's secret rows, its device sign-ins, and the model
+// catalogue. The alarms are the node's latest evaluation, which every answer
+// reads ([queries.Sources.Alarms]).
 func ModelSources(s *queries.Sources, e *engine.Engine, cipher secrets.Cipher) {
 	s.Models = modelSource{e: e}
 	s.Secrets = fleetsecrets.New(e.Backends().Fleet, cipher)
@@ -70,8 +70,6 @@ func (m modelSource) LocalModels() []queries.LocalModel {
 	}
 	return out
 }
-
-func (m modelSource) LatestAlarms() []statelog.Alarm { return m.e.LatestAlarms() }
 
 // modelEngine is the engine as the model routes call it, its refusals mapped
 // onto llmapi's.
