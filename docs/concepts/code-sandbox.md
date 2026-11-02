@@ -1317,23 +1317,40 @@ or [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessi
 which the transcript cannot know), what it was asked, and whether its session
 is still kept.
 
-**Each says whether a relaunch would continue it** (`continuable`, and where
-not, why: `not_continuable`), decided by the one decision a relaunch takes
-([above](#a-relaunch-continues-the-turns-session)) over what a relaunch reads:
-the turn's row of the executor log, the turn's run record in the coordination
-store and the job that record names as the one a relaunch would follow, and the
-runner this build registers for the row's harness. True where the turn is live
-and not ending, the newest capture of that job was kept and is the one the row
-names, and the runner restores its harness, format and release. As far as the
-engine can know before a box is chosen, and no further: whether the box a
-relaunch gets runs a harness that can take the session up, and whether the
-seat's budget can carry its context, are the launch's to find out, and no row
-says them. An ended turn's session is never continuable: no later turn
-continues a session yet. A page reads the coordination store once, one listing
-of the seat's live runs, and not at all where every turn on it has ended; where
-the store does not answer, a live turn's row says so (`continuable` null, its
-reason that the run record could not be read) rather than no, and the page is
-answered all the same.
+**Each says whether a relaunch would continue it** (`continuable`), where
+(`continues_in`), and where not, why (`not_continuable`), decided by the one
+decision a relaunch takes ([above](#a-relaunch-continues-the-turns-session))
+over what a relaunch reads: the turn's row of the executor log, read at the
+level a relaunch reads it (`linearizable`, read again where the page was read
+below it, since a copy of the log behind the run's record would read a capture
+a relaunch continues as one the log no longer names), the turn's run record in
+the coordination store and the job that record names as the one a relaunch
+would follow, and the member of the seat's executor chain a relaunch would be
+launched on — the first not sitting out its plan, by the same pick the
+relaunch's own probe makes — with the cell its run lands in and its runner.
+`any_box` where the turn is live and not ending, the newest capture of that job
+was kept and is the one the row names, and that runner restores its harness,
+format and release. `parked_box` where that is not so but a person's answer
+would still carry the turn's parked run on in the box it parked in — the run
+still holds the box and names its session, and the member is of the box's
+harness in its cell — which continues the session that box holds there and
+nowhere else, for as long as the box is held; `not_continuable` then says why
+no other box would. As far as the engine can know before a box is chosen, and
+no further: whether the box a relaunch gets runs a harness release that can
+take the session up, and whether the seat's budget can carry its context, are
+the launch's to find out, and no row says them. An ended turn's session is
+never continuable: no later turn continues a session yet; and a turn whose
+run's ending is decided is ending, from the decision on. **An unknown is never
+a no**: `continuable` is null, with its reason, where the run record or the
+row at the relaunch's level could not be read, and where a relaunch would not
+decide now either — the job it would follow still working or being collected,
+whose session the read that collects it takes; that job's capture still being
+kept; every member of the seat's chain sitting out its plan. A page reads the
+coordination store once, one listing of the seat's live runs — and one turn's
+record alone for a live row the listing does not hold, a record of a status
+this build does not know or one it could not decode — and not at all where
+every turn on it has ended; where the store does not answer, a live turn's row
+says so, and the page is answered all the same.
 
 **One session opens as its transcript**
 ([`GET /agents/{id}/sessions/{turn_id}`](../reference/api-endpoints.md#get-agentsidsessionsturn_id)):
