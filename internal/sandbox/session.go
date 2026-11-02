@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // EACH LAUNCH'S HARNESS SESSION, KEPT, and each turn's END, recorded
@@ -1294,7 +1295,7 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 		why := fmt.Sprintf("its outcome %q is not one this build knows", ending.Outcome)
 		if len(unknown) > 0 {
 			why = fmt.Sprintf("it holds %s, which this build does not know",
-				strings.Join(slices.Sorted(maps.Keys(unknown)), ", "))
+				words.And(slices.Sorted(maps.Keys(unknown))))
 		}
 		log.WarnContext(ctx, "executor_turn_end_deferred", "turn_id", run.TurnID, "agent", run.AgentHandle,
 			"detail", "the end the run's record owes was written by a newer build — "+why+" — so it is "+

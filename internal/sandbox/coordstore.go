@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // CoordStore is the pending-run store, on the FLEET's coordination store.
@@ -348,8 +349,8 @@ func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, 
 func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
 	if capture.LaunchSeq <= 0 || capture.CaptureSeq <= 0 || !capture.State.Valid() {
 		return false, fmt.Errorf("sandbox: a capture of run %s is placed at (%d, %d) in state %q, and "+
-			"every capture is placed from (1, 1) in one of %v", turnID, capture.LaunchSeq,
-			capture.CaptureSeq, capture.State, CaptureStates)
+			"every capture is placed from (1, 1) in one of %s", turnID, capture.LaunchSeq,
+			capture.CaptureSeq, capture.State, words.Or(CaptureStates))
 	}
 	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		took := false
