@@ -526,6 +526,7 @@ func (c *Compactor) Publish(ctx context.Context, cand code.PublicationCandidate)
 	defer c.publishing.Unlock()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	//nolint:contextcheck // c.life only cancels ctx, which stays the caller's: Stop must end the publication however long the caller's ctx lives.
 	defer context.AfterFunc(c.life, func() { cancel(context.Cause(c.life)) })()
 	began := c.now()
 	if !c.claimPublication(cand.ID) {

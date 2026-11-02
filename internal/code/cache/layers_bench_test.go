@@ -723,7 +723,7 @@ func (p *layerArms) published(b *testing.B, git string, inputs []string, fixture
 				"--max-pack-size=" + strconv.FormatInt(code.CompactPackBytes, 10), "--delta-base-offset",
 				"--quiet", "objects/pack/pack"},
 			Stdin:    strings.NewReader(packList(inputs, ".pack")),
-			Config:   compact.CompactConfig(code.DefaultLimits().MaxBlobBytes),
+			Config:   compact.PackConfig(code.DefaultLimits().MaxBlobBytes),
 			Deadline: time.Hour})
 		b.StopTimer()
 		outs := strings.Fields(string(res.Stdout))

@@ -675,7 +675,7 @@ const CompactBytesPerObject = 550
 // max_blob_bytes, 50 MiB, every revision a delta of the one before, held
 // 269.7 MiB — 5.4 blobs, where the two this charged before had admitted it
 // at 170 MiB less than it held. The window
-// itself is held to pack.windowMemory (internal/code/compact's CompactConfig:
+// itself is held to pack.windowMemory (internal/code/compact's PackConfig:
 // twice the largest blob, the serve configuration's figure, a per-thread
 // bound the pool's pack.threads=1 makes the build's whole window), so the
 // other 3.4 blobs are what the build holds beside its window — the object it

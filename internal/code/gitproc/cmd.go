@@ -521,7 +521,7 @@ var allowedConfig = map[string]string{
 	// against the node's background budget counts it and what the build holds
 	// beside it (internal/code/cache's CompactWindowBytes).
 	"pack.windowmemory": "the cache's serve configuration, and a compaction's pack-objects in its scratch " +
-		"(internal/code/compact's CompactConfig) and an import's or a pull mirror's cut in its own " +
+		"(internal/code/compact's PackConfig) and an import's or a pull mirror's cut in its own " +
 		"(internal/code/mirror)",
 	"pack.usebitmaps": "the cache's serve configuration",
 	// Read only by a bitmap write (the maintainer's multi-pack-index), so
@@ -574,12 +574,12 @@ var allowedConfig = map[string]string{
 	// like any other (code.StoreBundle). Pinned rather than left to git's
 	// default, which changed in 2.41.
 	"pack.writereverseindex": "the receive configuration, an engine write's index-pack in its scratch, and a " +
-		"compaction's pack-objects in its scratch (internal/code/compact's CompactConfig)",
+		"compaction's pack-objects in its scratch (internal/code/compact's PackConfig)",
 	// The index a stored bundle carries is version 2, which the bundle check
 	// requires; pinned so a future default cannot store one no cache accepts.
 	// Written by the same process as the .rev.
 	"pack.indexversion": "the receive configuration, an engine write's index-pack in its scratch, and a " +
-		"compaction's pack-objects in its scratch (internal/code/compact's CompactConfig)",
+		"compaction's pack-objects in its scratch (internal/code/compact's PackConfig)",
 	// How git writes a path in what it prints, and nothing else: off, a path
 	// is quoted only where a quote, a backslash or a control byte would break
 	// its line, rather than every byte past ASCII written as an octal escape.
