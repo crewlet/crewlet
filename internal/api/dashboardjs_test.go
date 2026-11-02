@@ -1474,13 +1474,19 @@ const (
 	// +8.2 KiB net (its dist chunk +6.8 KiB and shared chunks +4.0 KiB, less
 	// 2.6 KiB out of the entry script), the lazy sheets +0.3 KiB and +0.6 KiB
 	// elsewhere, Chatlet's chunk +0.1 KiB of it. 5281 KiB.
+	// The MCP alarms in an administrator's Inbox (each kind's words, and the
+	// MCP servers question asked of a reader the MCP section opens for, in the
+	// attention queue the entry loads) took it from 5280.7 KiB to 5282.3 KiB
+	// (+1.6 KiB): the entry script +1.4 KiB, the remedy chunk +0.1 KiB and the
+	// Inbox chunk under 0.1 KiB. The initial load went from 380.3 KiB to
+	// 380.8 KiB, inside its budget. 5283 KiB.
 	// Chatlet's delivery receipts on uilet 0.87.0 (DeliveryReceipt under a
 	// person's message, and the composer's line saying whom a draft will
 	// reach, read from chat_reach once the typing settles) took it from
-	// 5280.3 KiB to 5283.9 KiB (+3.6 KiB): Chatlet's chunk +2.7 KiB, the
-	// one sheet +0.7 KiB, Chatlet's sheet +0.1 KiB and the debounce moving
-	// into the shared links chunk. 5284 KiB.
-	treeBudget = 5<<20 + 164<<10
+	// 5282.3 KiB to 5285.7 KiB (+3.4 KiB): Chatlet's chunk +2.7 KiB, the
+	// one sheet +0.7 KiB and Chatlet's sheet +0.1 KiB, with the debounce
+	// moving out of its own chunk into the shared links chunk. 5286 KiB.
+	treeBudget = 5<<20 + 166<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

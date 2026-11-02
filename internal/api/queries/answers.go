@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/words"
@@ -522,9 +523,15 @@ type Sources struct {
 	Now func() time.Time
 
 	// Models is the engine's half of the model questions (`llm_entries`):
-	// what this node resolved for each entry and its latest alarms. Nil
-	// leaves `llm_entries` unregistered, with `llm_runners` beside it.
+	// what this node resolved for each entry. Nil leaves `llm_entries`
+	// unregistered, with `llm_runners` beside it.
 	Models ModelSource
+
+	// Alarms is this node's latest alarm evaluation, nil before one has run
+	// or on a node that runs no state log: the ONE evaluation the Models and
+	// the MCP servers answers carry their kinds from, the same one the health
+	// count, the gauge and the log lines were told. Nil answers no alarm.
+	Alarms func() []statelog.Alarm
 
 	// Secrets is the fleet's secret rows, metadata only, which a model's
 	// credential is dated by (`stored_at`). Nil answers no `stored_at`.
