@@ -249,6 +249,16 @@ func (s *stubCode) last() code.ReadQuery {
 	return s.asked[len(s.asked)-1]
 }
 
+// firstResolve is the first resolve of refs asked — a content question's one
+// read of the rows where a revision names a ref, `HEAD` among them
+// (code.HeadRef) — the zero query where none was.
+func (s *stubCode) firstResolve() code.RefQuery {
+	if len(s.resolved) == 0 {
+		return code.RefQuery{}
+	}
+	return s.resolved[0]
+}
+
 // codeQuestions are the code host's rows as questions — the kind of read each
 // asks, and the arguments each needs to answer at all.
 var codeQuestions = []struct {
