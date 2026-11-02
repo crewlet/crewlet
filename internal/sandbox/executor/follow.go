@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/redact"
@@ -36,6 +37,15 @@ import (
 // further on — the stream outran [liveBacklog] between two reads, or shrank —
 // names another, and so does the switch from the error stream to the
 // transcript the moment the transcript has something to say.
+//
+// The error stream's reading also reads [redactContext] BEFORE that place, and
+// never shows it: it is what the text's start is redacted with, so a private
+// key whose BEGIN came before the reading is read as the key it is rather than
+// from inside — which publishes its lines above three that part it — and the
+// reading shows only what that context settles ([pendingText.settle]). The
+// origin is still the place the text begins, and two owners read the same
+// context before it. The event stream needs none: an event is one line, and so
+// is a credential inside one, however its text wraps.
 
 // liveWindow is how much of the END of a stream a reading begins from.
 //
@@ -61,7 +71,7 @@ const liveBacklog = 8 << 20
 
 // Follow implements [sandbox.Runner].
 func (r *Runner) Follow(sandbox.RunHandle) sandbox.LiveReading {
-	return &follower{harness: r.harness, lineBound: r.lineBound}
+	return &follower{harness: r.harness, lineBound: r.lineBound, errs: rawStream{leads: true}}
 }
 
 // follower is one live reading of one job.
@@ -120,6 +130,7 @@ func (f *follower) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.LiveR
 	if restarted {
 		f.errText = pendingText{}
 	}
+	f.errText.lead(string(f.errs.takeLead()))
 	f.errText.add(string(lines))
 	read.Origin = f.errs.origin("stderr")
 	read.Front = f.errs.start > 0
@@ -155,20 +166,66 @@ func (f *follower) readEvents(ctx context.Context, box sandbox.Sandbox, path str
 }
 
 // pendingText is display text written but not shown yet, until its redaction
-// is settled.
-type pendingText struct{ text string }
+// is settled — and, before a reading's first text is shown, the CONTEXT the
+// stream holds before that text ([pendingText.lead]).
+type pendingText struct{ ctx, text string }
 
 func (p *pendingText) add(s string) { p.text += s }
 
-// settle takes what is settled — all of it, once the job is done — redacted.
-func (p *pendingText) settle(done bool) string {
-	n := len(p.text)
-	if !done {
-		n = redact.Settled(p.text)
+// lead adds context: what the stream holds before the text, which comes
+// before any text is added. Only its last [redactContext] bytes are kept,
+// which is as far back as a key reaching into the text can have begun.
+func (p *pendingText) lead(s string) {
+	if s == "" {
+		return
 	}
-	out := redact.Secrets(p.text[:n])
-	p.text = p.text[n:]
-	return out
+	p.ctx += s
+	if len(p.ctx) > redactContext {
+		p.ctx = p.ctx[len(p.ctx)-redactContext:]
+	}
+}
+
+// settle takes what is settled — all of it, once the job is done — redacted.
+//
+// THE CONTEXT SETTLES THE TEXT'S START, and nothing of it is shown. Until what
+// is settled reaches past it, the context is read with the text: what settles
+// is decided over both, and what is shown is what the text redacts to as the
+// two redact together — from the line after the last place the text redacted
+// alone reads otherwise, which is where whatever the context decided ends (a
+// key whose BEGIN it holds, read alone as one cut off from its BEGIN, whose
+// lines above three that part it are published). Past that point nothing
+// before it can change how what follows redacts, which is what settling it
+// means, so the context is let go and every later settle is the text's alone.
+func (p *pendingText) settle(done bool) string {
+	if p.ctx == "" {
+		n := len(p.text)
+		if !done {
+			n = redact.Settled(p.text)
+		}
+		out := redact.Secrets(p.text[:n])
+		p.text = p.text[n:]
+		return out
+	}
+	whole := p.ctx + p.text
+	n := len(whole)
+	if !done {
+		n = redact.Settled(whole)
+	}
+	if n <= len(p.ctx) {
+		return ""
+	}
+	n -= len(p.ctx)
+	part := redact.Secrets(p.text[:n])
+	start := len(part) - sharedSuffix(redact.Secrets(whole[:len(p.ctx)+n]), part)
+	if start > 0 && part[start-1] != '\n' {
+		if i := strings.IndexByte(part[start:], '\n'); i >= 0 {
+			start += i + 1
+		} else {
+			start = len(part)
+		}
+	}
+	p.ctx, p.text = "", p.text[n:]
+	return part[start:]
 }
 
 func (p *pendingText) held() int { return len(p.text) }
@@ -192,6 +249,34 @@ type rawStream struct {
 	// the tail of a credential that straddled the window's edge on screen,
 	// redacted in isolation with its rule's anchor cut off before it.
 	partialOpen bool
+	// leads is set on a stream whose text is shown as it was written (the
+	// error stream): a reading that begins inside it reads [redactContext]
+	// more before where it begins, and hands what it read there on as lead —
+	// the context the text's start is redacted with and never shows
+	// ([pendingText.settle]) — as it hands on, too, the rest of a line too
+	// long to have begun after, which it drops ([rawStream.take]).
+	leads bool
+	lead  []byte
+}
+
+// takeLead is the context read since it was last taken ([rawStream.leads]):
+// the stream's bytes, in order, straight before the first text taken.
+func (s *rawStream) takeLead() []byte {
+	lead := s.lead
+	s.lead = nil
+	return lead
+}
+
+// keepLead adds b to the context to hand on, keeping only its last
+// [redactContext] bytes, as [pendingText.lead] does.
+func (s *rawStream) keepLead(b []byte) {
+	if !s.leads || len(b) == 0 {
+		return
+	}
+	s.lead = append(s.lead, b...)
+	if over := len(s.lead) - redactContext; over > 0 {
+		s.lead = append(s.lead[:0], s.lead[over:]...)
+	}
 }
 
 // origin names the reading of this stream as one account.
@@ -242,13 +327,25 @@ func (s *rawStream) next(ctx context.Context, box sandbox.Sandbox, path string, 
 // begin starts the reading at the start of the stream's last [liveWindow], on
 // a line — or, when the window holds no line break at all, mid-line with
 // [rawStream.partialOpen] set, so the rest of that unreadable line is dropped
-// rather than shown as if it were whole ([rawStream.take]).
+// rather than shown as if it were whole ([rawStream.take]). A stream that
+// leads reads [redactContext] more before the window, and keeps all it read
+// before where the reading begins as lead.
 func (s *rawStream) begin(ctx context.Context, box sandbox.Sandbox, path string, done, again bool) ([]byte, bool, error) {
-	tail, err := box.ReadTail(ctx, path, liveWindow)
+	want := liveWindow
+	if s.leads {
+		want += redactContext
+	}
+	read, err := box.ReadTail(ctx, path, want)
 	if err != nil {
 		return nil, false, err
 	}
+	tail := read
+	if before := len(read.Data) - liveWindow; before > 0 {
+		tail = sandbox.FileTail{Data: read.Data[before:], Size: read.Size}
+	}
 	data, partial := tail.Lines()
+	s.lead = nil
+	s.keepLead(read.Data[:len(read.Data)-len(data)])
 	s.start = tail.Before() + int64(partial)
 	s.pos, s.size, s.growth, s.started = s.start, tail.Size, 0, true
 	// A mid-file window with no break is one long line whose start is off
@@ -274,9 +371,11 @@ func (s *rawStream) take(data []byte, done bool) []byte {
 	if s.partialOpen {
 		i := bytes.IndexByte(data, '\n')
 		if i < 0 {
+			s.keepLead(data)
 			s.pos += int64(len(data))
 			return nil
 		}
+		s.keepLead(data[:i+1])
 		s.partialOpen = false
 		s.pos += int64(i + 1)
 		data = data[i+1:]
