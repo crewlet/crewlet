@@ -736,6 +736,51 @@ func TestEjectingACulpritCancelsItsTrainsChecks(t *testing.T) {
 	}
 }
 
+// A GIVEN-UP RUN IS QUEUED AGAIN FOR THE TRAIN THAT TESTS ITS COMMIT: a
+// train built again from the same rows is the same commits, so the live train
+// may test a commit whose latest attempt a given-up train's cancellation
+// ended — `abandoned`, having measured nothing — and its test queues the next
+// attempt as a requeue, as it does one its runner's infrastructure ended;
+// one cancelled for any other reason is left, as stuck.
+//
+// Mutation: drop the given-up arm of the landing states → the cancelled
+// attempt reads stuck and nothing is queued, red; requeue any cancellation →
+// the superseded one is queued again, red.
+func TestAGivenUpRunIsQueuedAgainForTheTrainThatTestsIt(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		reason  code.CheckReason
+		requeue bool
+	}{{code.CheckReasonAbandoned, true}, {code.CheckReasonDequeued, true}, {code.CheckReasonSuperseded, false}} {
+		t.Run(string(c.reason), func(t *testing.T) {
+			t.Parallel()
+			rows := newQueueRows(oid("c"), 1, 1)
+			rows.enqueue(t, 1)
+			l := queueLoop(t, rows, &queueChains{}, &queueTasks{})
+			turn(t, l, rows)
+			turn(t, l, rows)
+			train, _ := rows.snapshot()
+			tip := train[0].Tip().Commit
+			rows.mu.Lock()
+			rows.checks[tip]["unit"] = code.TipCheck{Name: "unit", Attempt: 1, State: code.CheckStateCancelled,
+				Reason: c.reason}
+			rows.mu.Unlock()
+			_, before := rows.asked()
+			turn(t, l, rows)
+			_, after := rows.asked()
+			switch queued := after[len(before):]; {
+			case c.requeue && (len(queued) != 1 || queued[0].OID != tip || queued[0].Attempt != 2 ||
+				queued[0].Reason != code.QueueRequeue):
+				t.Fatalf("the train testing a commit whose run was cancelled %s queued %+v, want attempt 2 "+
+					"requeued", c.reason, queued)
+			case !c.requeue && len(queued) != 0:
+				t.Fatalf("the train testing a commit whose run was cancelled %s queued %+v, want nothing",
+					c.reason, queued)
+			}
+		})
+	}
+}
+
 // THE QUEUE STATES THE DROP EPOCH IT BUILT AND READ AT (M6-D4): on a
 // repository an expunge has begun on (epoch 1), a chain built from a copy
 // still at the epoch before is recorded at that epoch and refused expunging,
