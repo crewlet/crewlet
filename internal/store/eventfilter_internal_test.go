@@ -77,6 +77,10 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 			Before: &TurnCursor{Start: now().Add(-time.Hour), TurnID: "t-1"}}, "crewlet_events_work_key_idx"},
 		{"work_item from a cursor", TurnQuery{WorkItem: "native:t-1",
 			Before: &TurnCursor{Start: now().Add(-time.Hour), TurnID: "t-1"}}, "crewlet_events_work_item_idx"},
+		// AN MCP TOOL, on the turn's ending tally: the endings are sought
+		// by their type over the window, and only their tallies walked.
+		{"an MCP server's tool", TurnQuery{Server: "github", Tool: "github_get_issue"},
+			"crewlet_events_type_time_idx"},
 	} {
 		query, args := c.q.partialsSQL(now(), readPage, DefaultTurnPage+1)
 		plan := planOf(t, db, query, args)
@@ -405,4 +409,41 @@ func planOf(t *testing.T, db *DB, query string, args []any) string {
 		plan = append(plan, detail)
 	}
 	return strings.Join(plan, "\n")
+}
+
+// A SERVER'S RECENT CALLS SEEK THEIR WINDOW AND PROBE THE BATCHES IN FLIGHT:
+// the phase records are sought by their type over the window, newest first
+// on the index's own order (so the read can stop early), and each is held to
+// the in-flight custody key by its identity, as every count of the usage day
+// is (TestEveryUsageCountSeeksItsWindow).
+//
+// Mutation: spell the type as an `IN` list, or drop the window's upper edge,
+// and the seek loses the window; drop the kept-rows predicate, and no step
+// probes the batches in flight.
+func TestAServersRecentCallsSeekTheirWindow(t *testing.T) {
+	t.Parallel()
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	at := now()
+	query, args := toolCallsSQL("github", at.Add(-7*24*time.Hour), at)
+	plan := planOf(t, db, query, args)
+	sought, probed := false, false
+	for _, step := range strings.Split(plan, "\n") {
+		switch {
+		case scansLog(step), strings.Contains(step, "USE TEMP B-TREE"):
+			t.Errorf("the plan is %q: step %q walks or sorts what it should seek", plan, step)
+		case strings.HasPrefix(step, "SEARCH e "):
+			sought = strings.Contains(step, "crewlet_events_type_time_idx") &&
+				strings.Contains(step, "event_time>") && strings.Contains(step, "event_time<")
+		case strings.HasPrefix(step, "SEARCH u "):
+			probed = strings.Contains(step, "(row_time=? AND row_id=?)")
+		}
+	}
+	if !sought || !probed {
+		t.Errorf("the plan is %q: it must seek the window on the type's index (%v) and "+
+			"probe the in-flight key by each row's identity (%v)", plan, sought, probed)
+	}
 }

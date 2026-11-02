@@ -741,6 +741,53 @@ func TestARefusedCallHasNoOrigin(t *testing.T) {
 	}
 }
 
+// EACH CALL'S ORIGIN IS RECORDED: whose tool it named, on every call whose name
+// resolved, answered or refused, so a refusal is still counted against the
+// server whose tool was asked for (types.ToolTally), while Origin keeps naming
+// only who answered. A name nothing registered is no server's tool, and names
+// no source.
+//
+// Mutation: drop Source from any of the surface's refusals, or stamp one on the
+// unknown name, and its row goes red.
+func TestEachCallsSourceIsRecorded(t *testing.T) {
+	t.Parallel()
+	r := tools.NewRegistry()
+	mustRegister(t, r, tool("create_issue"), tools.Origin("github"))
+	mustRegister(t, r, tool("close_issue"), tools.Origin("github"))
+	mustRegister(t, r, tool("remember"), tools.OriginBuiltin)
+	offered := tools.NewSurface("execute", r.Snapshot(), []string{"create_issue", "remember"})
+	guarded := tools.NewSurface("execute", r.Snapshot(), []string{"close_issue"}).WithGuard(denyAll{})
+
+	for _, c := range []struct {
+		name            string
+		surface         *tools.Surface
+		call            string
+		source, origin  string
+		failed          bool
+		refusal         tools.Refusal
+		answeredByATool bool
+	}{
+		{"an MCP tool that answered", offered, "create_issue", "mcp:github", "mcp:github", false, "", true},
+		{"a builtin that answered", offered, "remember", tools.OriginBuiltin, tools.OriginBuiltin, false, "", true},
+		{"an MCP tool not offered here", offered, "close_issue", "mcp:github", "", true, tools.RefusalForbidden, false},
+		{"an MCP tool a guard refused", guarded, "close_issue", "mcp:github", "", true, tools.RefusalForbidden, false},
+		{"a name nothing registered", offered, "ghost", "", "", true, tools.RefusalNotFound, false},
+	} {
+		res, err := c.surface.Execute(context.Background(), llm.ToolCall{Name: c.call})
+		if err != nil {
+			t.Fatalf("%s: Execute: %v", c.name, err)
+		}
+		if res.Source != c.source || res.Origin != c.origin {
+			t.Errorf("%s: source %q origin %q, want source %q origin %q",
+				c.name, res.Source, res.Origin, c.source, c.origin)
+		}
+		if res.Failed != c.failed || res.Refusal() != c.refusal {
+			t.Errorf("%s: failed=%v class %q, want failed=%v class %q",
+				c.name, res.Failed, res.Refusal(), c.failed, c.refusal)
+		}
+	}
+}
+
 // recordingGuard admits every call and remembers the server each was checked
 // under.
 type recordingGuard struct{ servers []string }

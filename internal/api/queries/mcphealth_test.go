@@ -83,6 +83,7 @@ func TestInstanceDetailFansOutToEveryNodeHoldingAnInstance(t *testing.T) {
 	}}
 	s := mcpSources(t, backend)
 	s.Config, s.MCPListings, s.MCPInstances = surface, fakeListings{}, instances
+	s, _ = withHistory(t, s)
 
 	for server, want := range map[string][]string{
 		"github": {"node-a", "node-b", "node-c"},
@@ -192,8 +193,8 @@ mcp_servers:
 	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{
 		{Server: "search", Shared: true, Started: 1, Tools: 2},
 	}})
-	s := queries.Sources{Coord: backend, Company: companySource(t, cfg), Config: surface,
-		MCPListings: fakeListings{}}
+	s, _ := withHistory(t, queries.Sources{Coord: backend, Company: companySource(t, cfg),
+		Config: surface, MCPListings: fakeListings{}})
 	detail, err := s.MCPServer(t.Context(), "search")
 	if err != nil {
 		t.Fatal(err)
@@ -265,8 +266,8 @@ roles:
 	surface, _ := configSurface(t, doc)
 	backend := coordmemory.New()
 	presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{}})
-	s := queries.Sources{Coord: backend, Company: companySource(t, cfg), Config: surface,
-		MCPListings: fakeListings{}}
+	s, _ := withHistory(t, queries.Sources{Coord: backend, Company: companySource(t, cfg),
+		Config: surface, MCPListings: fakeListings{}})
 	read := func(name string) *queries.MCPResolved {
 		t.Helper()
 		got, err := s.MCPServer(t.Context(), name)

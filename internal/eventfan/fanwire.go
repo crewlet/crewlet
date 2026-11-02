@@ -71,7 +71,14 @@ import (
 //     the turn ran: the node holding a turn's rows is a custody keeper for a
 //     turn that ran on a node without `data`, so which nodes answered no
 //     longer says it.
-const Protocol = 7
+//   - A page of turns filters on `server` and `tool`, the MCP server and the
+//     tool whose calls the turn's ending tally names
+//     ([store.TurnQuery.Server]).
+//   - `tool_calls` asks for one MCP server's newest calls, out of the phase
+//     records that made them ([store.EventLog.ToolCalls]), each node's
+//     newest `limit` in the listing's one order, which the asker merges and
+//     cuts again.
+const Protocol = 8
 
 // Subject is where a history question is scattered: ONE subject for the whole
 // fleet, every data node serving it, because the answerers are every data node
@@ -107,6 +114,10 @@ const (
 	// batch, so one node's count of the rows it keeps is its share of the
 	// fleet's — beside the rows it holds unsettled, named.
 	QuestionNotificationOutcomes Question = "notification_outcomes"
+	// QuestionToolCalls is one MCP server's newest calls, the server page's
+	// recent calls: each is on the phase record of the phase that made it,
+	// in the event log of whichever data node ran or kept it.
+	QuestionToolCalls Question = "tool_calls"
 	// QuestionKept is every count's second question: which of the rows some
 	// node named rather than counted — a custody batch it has written and not
 	// settled — each node KEEPS, so the asker counts each such row once
@@ -119,7 +130,7 @@ const (
 var Questions = []Question{
 	QuestionEvents, QuestionEvent, QuestionSeries, QuestionTrace, QuestionTurn,
 	QuestionTurns, QuestionPhases, QuestionSeatPhases, QuestionTraceRows,
-	QuestionPhaseTokens, QuestionNotificationOutcomes, QuestionKept,
+	QuestionPhaseTokens, QuestionNotificationOutcomes, QuestionToolCalls, QuestionKept,
 }
 
 // Valid reports whether q is a question this build answers.
@@ -297,6 +308,8 @@ type turnsParams struct {
 	Model     string         `json:"model,omitempty"`
 	WorkKey   string         `json:"work_key,omitempty"`
 	WorkItem  string         `json:"work_item,omitempty"`
+	Server    string         `json:"server,omitempty"`
+	Tool      string         `json:"tool,omitempty"`
 	Failed    *bool          `json:"failed,omitempty"`
 	Before    time.Time      `json:"before,omitzero"`
 	Sort      store.TurnSort `json:"sort,omitempty"`
@@ -319,6 +332,7 @@ func turnsParamsOf(q store.TurnQuery) turnsParams {
 		Since: q.Since, Until: q.Until, At: q.At,
 		SinceDays: q.SinceDays, AgentID: q.AgentID,
 		Model: q.Model, WorkKey: q.WorkKey, WorkItem: q.WorkItem,
+		Server: q.Server, Tool: q.Tool,
 		Failed: q.Failed, Sort: q.Sort, Limit: q.Limit,
 	}
 	if q.Before != nil {
@@ -334,6 +348,7 @@ func (p turnsParams) query(ids []string) store.TurnQuery {
 		Since: p.Since, Until: p.Until, At: p.At,
 		SinceDays: p.SinceDays, AgentID: p.AgentID,
 		Model: p.Model, WorkKey: p.WorkKey, WorkItem: p.WorkItem,
+		Server: p.Server, Tool: p.Tool,
 		Failed: p.Failed, Sort: p.Sort, Limit: p.Limit,
 		IDs: ids,
 	}
@@ -402,6 +417,29 @@ func (p outcomeParams) query() store.OutcomeQuery {
 
 // keptParams names the rows [QuestionKept] asks about, by the event log's
 // identity alone: their instant and their id.
+// toolCallsParams is [QuestionToolCalls]' parameters: the server, the window's
+// oldest instant and how many calls, at the asker's instant.
+type toolCallsParams struct {
+	Server string    `json:"server"`
+	Since  time.Time `json:"since"`
+	Limit  int       `json:"limit"`
+	At     time.Time `json:"at"`
+}
+
+func toolCallsParamsOf(q store.ToolCallQuery) toolCallsParams {
+	return toolCallsParams{Server: q.Server, Since: q.Since, Limit: q.Limit, At: q.At}
+}
+
+func (p toolCallsParams) query() store.ToolCallQuery {
+	return store.ToolCallQuery{Server: p.Server, Since: p.Since, Limit: p.Limit, At: p.At}
+}
+
+// toolCallsPart is one node's answer to [QuestionToolCalls]: its newest calls,
+// in the listing's order.
+type toolCallsPart struct {
+	Calls []store.ToolCall `json:"calls"`
+}
+
 type keptParams struct {
 	Rows []store.UnsettledRow `json:"rows"`
 }
@@ -546,6 +584,16 @@ func answer(ctx context.Context, log *store.EventLog, q Question, params json.Ra
 			return nil, err
 		}
 		return log.NotificationOutcomes(ctx, p.query())
+	case QuestionToolCalls:
+		var p toolCallsParams
+		if err := decode(&p, func() time.Time { return p.At }); err != nil {
+			return nil, err
+		}
+		calls, err := log.ToolCalls(ctx, p.query())
+		if err != nil {
+			return nil, err
+		}
+		return toolCallsPart{Calls: calls}, nil
 	case QuestionKept:
 		// ABOUT ROWS BY THEIR IDENTITY, and at no instant: the rows were
 		// named by a first question that was floored at one.

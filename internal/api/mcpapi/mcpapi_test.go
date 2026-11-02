@@ -267,6 +267,7 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 	seen := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
 	failed := queries.MCPFailureView{Class: mcp.FailExited, Said: "its process exited (exit status 1)",
 		At: seen.Add(-time.Minute), Node: "node-a", Seat: "backend-dev"}
+	lastCall, callMS := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC), int64(120)
 	detail := func(_ context.Context, name string) (queries.MCPServerAnswer, error) {
 		switch name {
 		case "github":
@@ -295,6 +296,12 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 					BoxSeats: []queries.MCPBoxSeat{{Seat: "backend-dev", Cell: "container"}},
 					Warnings: []queries.MCPPlacementWarning{{Kind: queries.MCPWarnCommandInBox,
 						Seat: "backend-dev", Cell: "container", Message: "the image must provide npx"}}},
+				Usage: queries.MCPServerUsage{Since: "2026-10-26", Until: "2026-11-01", Days: 7,
+					Tools: []queries.MCPToolUsage{{Tool: "get_issue", Calls: 3, Failed: 1,
+						TotalMS: 300, LastAt: &lastCall, Seats: []string{"backend-dev"}}}},
+				Calls: queries.MCPServerCalls{Calls: []queries.MCPCallRow{{At: lastCall,
+					Seat: "backend-dev", TurnID: "t-1", Tool: "get_issue", Outcome: mcp.CallAnswered,
+					DurationMS: &callMS}}},
 			}, nil
 		case "catalogue":
 			return queries.MCPServerAnswer{Server: queries.MCPServerRow{Name: "catalogue"}}, nil
@@ -331,7 +338,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	}
 	holdKeys(t, "the detail", body, "reading", "server", "nodes", "listed", "tools", "tool_count",
 		"server_info", "instructions", "dependants", "instances", "instance_nodes", "last_success",
-		"last_failure", "resolved")
+		"last_failure", "resolved", "usage", "calls")
 	instance := body["instances"].([]any)[0].(map[string]any)
 	holdKeys(t, "an instance", instance, "seat", "node", "state", "since", "restarts", "tools", "failure",
 		"wait", "last_failure", "last_answer")
@@ -358,6 +365,17 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 		t.Errorf("the tool answered %v", tool)
 	}
 	holdKeys(t, "the dependants", body["dependants"].(map[string]any), "mcp_env", "sandbox", "secrets")
+	// THE SERVER'S ACTIVITY, key for key: counts per tool, and each recent
+	// call's who, when, which and how it ended, never its arguments or its
+	// result.
+	activity := body["usage"].(map[string]any)
+	holdKeys(t, "the usage", activity, "since", "until", "days", "tools", "elided")
+	holdKeys(t, "a tool's usage", activity["tools"].([]any)[0].(map[string]any), "tool", "calls",
+		"failed", "unavailable", "refused", "total_ms", "last_at", "seats")
+	calls := body["calls"].(map[string]any)
+	holdKeys(t, "the calls", calls, "calls", "coverage")
+	holdKeys(t, "a call", calls["calls"].([]any)[0].(map[string]any), "at", "seat", "turn_id",
+		"tool", "outcome", "refusal", "duration_ms")
 
 	req := httptest.NewRequestWithContext(iam.WithPrincipal(t.Context(), everyAppButAdmin()),
 		http.MethodGet, "/mcp-servers/github", nil)

@@ -154,7 +154,7 @@ less than 1 GiB, so setting them only moves the figure up.
   on a host this small sets `stream.executor_log_max_bytes` itself, which no
   scaling moves, or gives the broker the room for the default; the
   `log_ceiling_short` alarm names the log that is short), and the usage log
-  is a census of node-days — about 12 MB for a ten-seat node's 181 days — and a ceiling is
+  is a census of node-days (about 18 MB for a ten-seat node's 181 days), and a ceiling is
   granted in full at create time, so a log at a disk-sized floor costs free
   space a node needs before it can start, for a log that will not fill it.
 - **More room buys longer logs, up to a point.** Unset, the mutation log and

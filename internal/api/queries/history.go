@@ -31,6 +31,9 @@ type FleetEvents interface {
 	// name is shared by every seat a unit template stamps out.
 	SeatPhases(ctx context.Context, agentID string, before *store.Cursor) (eventfan.Listing, eventfan.Coverage, error)
 	NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) (store.NotificationOutcomes, eventfan.Coverage, error)
+	// ToolCalls is one MCP server's newest calls, out of the phase records
+	// that made them on every data node.
+	ToolCalls(ctx context.Context, q store.ToolCallQuery) ([]store.ToolCall, eventfan.Coverage, error)
 }
 
 var _ FleetEvents = (*eventfan.Fleet)(nil)

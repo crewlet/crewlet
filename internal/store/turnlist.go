@@ -349,6 +349,17 @@ type TurnQuery struct {
 	// unfiltered list shows. See schema/0033 for the column and its index.
 	WorkItem string
 
+	// Server narrows to the turns that called one MCP server's tools, and
+	// Tool, beside it, to the turns that called that one tool: ON THE TURN,
+	// like Model, off the tally its ending record states
+	// (types.TurnTally.Tools), which counts every call its segments, its
+	// workers and its executor run made, a refused one included. So a turn
+	// is listed under a tool once it has ended; a turn still running or
+	// parked has stated no calls yet. Tool without Server names no tool,
+	// since two servers can offer one name.
+	Server string
+	Tool   string
+
 	// Failed narrows to turns that carried a failure, or to those that did
 	// not. Nil is both, which is not the same as false.
 	Failed *bool
@@ -1154,6 +1165,23 @@ func (q TurnQuery) turnWhere(floor time.Time, read turnRead) ([]string, []any) {
 			"turn_id IN (SELECT turn_id FROM crewlet_events "+
 				"WHERE model = ? AND "+inTurnCost+" AND event_time >= ? AND turn_id != '')")
 		args = append(args, q.Model, EncodeTime(floor))
+	}
+	if q.Server != "" && !shares {
+		// ON THE TURN, off the record that ENDS it, for the reason its
+		// tally is that record's: the turn counted its own calls, wherever
+		// its phase records were kept. The ending's row is sought by the
+		// (type, time) index over the window, and only those rows' tallies
+		// are walked.
+		calls := "json_extract(t.value, '$.server') = ?"
+		args = append(args, turnCompleted, EncodeTime(floor), q.Server)
+		if q.Tool != "" {
+			calls += " AND json_extract(t.value, '$.tool') = ?"
+			args = append(args, q.Tool)
+		}
+		where = append(where,
+			"turn_id IN (SELECT e.turn_id FROM crewlet_events AS e, "+
+				"json_each(e.payload, '$.turn.tools') AS t "+
+				"WHERE e.event_type = ? AND e.event_time >= ? AND e.turn_id != '' AND "+calls+")")
 	}
 	if q.WorkItem != "" && !shares {
 		// ON THE TURN, not on the row, for Model's reason and one more:

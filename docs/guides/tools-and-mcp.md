@@ -560,6 +560,45 @@ it is added to theirs; the
 [API reference](../reference/api-endpoints.md#a-members-reading-of-mcp--tools)
 lists every field each reading carries.
 
+### How a server is used
+
+A server's page also answers how its tools were used over the last seven company
+days, today included (`usage` and `calls` on `GET /mcp-servers/{name}`, see the
+[API reference](../reference/api-endpoints.md#get-mcp-serversname)).
+
+- **Every call is filed under the server whose tool it named.** A call the
+  engine refused before any tool ran (the tool was not offered where it was
+  called, or a [required skill](../concepts/tool-skills.md#required-skills--load-before-use-enforcement)
+  was not loaded yet) is still that server's, so
+  a server's refused calls are counted. A call to a name nothing registered is
+  no server's.
+- **Four outcomes, each call in exactly one.** `answered`; `failed`, the server
+  answered with a failure of its own; `unavailable`, the server never saw the
+  call because it was not running or its session ended under it; and
+  `refused`, the engine refused it before it ran.
+- **Counts per tool, fleet-wide, for 181 days.** Each turn counts its own calls
+  as it runs (every phase's, every delegated worker's and its executor run's,
+  as the bridge recorded them) and states them on the record that ends it. Each
+  data node sums its turns' counts into the seat's day in the replicated
+  [`usage` domain](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day),
+  so the counts survive the node that made the calls. A call counts on the day
+  its turn ended; a turn still running or parked has counted nothing yet. Each
+  tool's row carries the calls, the four outcomes, the time the calls that ran
+  took between them (a mean is that over the calls less the refused ones), the
+  newest call that ran, and the seats that made them.
+- **Recent calls are the turns' own detail.** The newest 50 calls in the same
+  days are read out of the phase records that made them, on every data node at
+  query time, with which nodes answered. Each names the seat, the turn, the
+  tool, the instant, the outcome, the class of a refusal and how long it took.
+  **Never its arguments or its result:** those are a model's and a server's
+  words and can hold a credential or a customer's data, and they stay on the
+  turn for whoever may read that seat's trail.
+- **The turns that called a tool** are `GET /turns?server=<name>&tool=<tool>`
+  (or `server=` alone for every tool of the server), read off the same counts
+  each turn's ending states.
+- **No argument is ever counted.** The counts are numbers per tool; nothing a
+  call carried is stored for them.
+
 ### Adding a server from the dashboard
 
 **Add an MCP server** on Settings › MCP Tools (`admin`) writes
