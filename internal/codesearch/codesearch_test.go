@@ -742,6 +742,100 @@ func (r *sharedReads) begun() int {
 	return r.began
 }
 
+// grep is a `search: grep` repository of the fake company.
+func grep(name string, order ...string) repo {
+	r := indexed(name, order...)
+	r.ref.Search = code.SearchGrep
+	return r
+}
+
+// A FILTER PAST THE GREP BOUND IS REFUSED UNREAD: a repo: filter naming thirty
+// grep repositories is refused once more than MaxGrepRepos of their rows have
+// arrived, the reads in flight cancelled and the rest never begun — not after
+// a read of every name.
+//
+// Mutation: read every name and count the grep repositories after, and all
+// thirty are read, red.
+func TestAFilterPastTheGrepBoundIsRefusedUnread(t *testing.T) {
+	t.Parallel()
+	var repos []repo
+	var names []string
+	for i := range 30 {
+		r := grep(fmt.Sprintf("scratch-%02d", i), "git-a")
+		repos, names = append(repos, r), append(names, r.ref.Name)
+	}
+	e := &estate{repos: repos}
+	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": {}}))
+	q := query("needle")
+	q.Search.Repos = names
+	if _, err := s.Search(context.Background(), q); !errors.Is(err, code.ErrInvalid) ||
+		!strings.Contains(err.Error(), "searched with git grep") {
+		t.Fatalf("a filter naming %d grep repositories = %v, want refused past the bound", len(names), err)
+	}
+	if most := codesearch.MaxGrepRepos + 1 + codesearch.ResolveReads; e.reads > most {
+		t.Errorf("the refused filter read %d of its %d names, want at most %d", e.reads, len(names), most)
+	}
+}
+
+// wave is the fake company whose rows a repository's read answers only once
+// every one of a wave's reads has begun: a read made alone waits for company
+// that never comes, and is refused.
+type wave struct {
+	*estate
+	want int
+	mu   sync.Mutex
+	in   int
+	all  chan struct{}
+}
+
+func (w *wave) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	if q.Kind == code.ReadRepo {
+		w.mu.Lock()
+		if w.in++; w.in == w.want {
+			close(w.all)
+		}
+		w.mu.Unlock()
+		select {
+		case <-w.all:
+		case <-time.After(10 * time.Second):
+			return code.ReadAnswer{}, errors.New("the row's read began alone: no other name's began beside it")
+		}
+	}
+	return w.estate.Read(ctx, q)
+}
+
+// A FILTER'S NAMES ARE READ BESIDE EACH OTHER: a repo: filter naming six
+// repositories reads their six rows at once — one wave, whose linearizable
+// reads join one barrier — never one after another, a barrier each.
+//
+// Mutation: read the names one at a time, and the first waits alone and is
+// refused, red.
+func TestAFiltersNamesAreReadBesideEachOther(t *testing.T) {
+	t.Parallel()
+	var repos []repo
+	var names []string
+	for i := range 6 {
+		r := indexed(fmt.Sprintf("repo-%d", i), "git-a")
+		repos, names = append(repos, r), append(names, r.ref.Name)
+	}
+	e := &estate{repos: repos}
+	w := &wave{estate: e, want: len(names), all: make(chan struct{})}
+	s, err := codesearch.New(codesearch.Options{Estate: w, Placement: e,
+		Ask: newFleet(t, e, map[string]*node{"git-a": {}}).ask, Wire: wire(t, fleetRing)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := query("needle")
+	q.Search.Repos = names
+	got, err := s.Search(context.Background(), q)
+	if err != nil {
+		t.Fatalf("a filter of %d names = %v, want them read in one wave", len(names), err)
+	}
+	if got.Coverage.Searched != len(names) {
+		t.Errorf("searched %d repositories, want %d", got.Coverage.Searched, len(names))
+	}
+}
+
 // EVERY REPOSITORY LOOKS AT THE HEAD ITS LISTING READ: a search whose
 // listing of the asker's repositories was linearizable hands the position it
 // answered at to every repository's read — the scatter's on every node, and a

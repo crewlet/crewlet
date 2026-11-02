@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -315,37 +316,8 @@ func (q Query) validate() error {
 func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef, grepLeft []string,
 	head statelog.Position, err error) {
 	if len(q.Search.Repos) > 0 {
-		grep := 0
-		// ONE REPOSITORY NAMED TWICE IS SEARCHED ONCE: codeindex.ParseQuery
-		// names each once, and a Query built otherwise may not, where a
-		// repository listed twice would be read twice by its node, its lines
-		// taking two places in that node's first Limit, and counted twice in
-		// the coverage every repository is in exactly once.
-		seen := make(map[string]bool, len(q.Search.Repos))
-		for _, name := range q.Search.Repos {
-			if seen[name] {
-				continue
-			}
-			seen[name] = true
-			a, err := s.estate.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Repo: name, Asker: q.Asker,
-				CeilingSeat: q.CeilingSeat, Fresh: q.Rows})
-			if err != nil {
-				return nil, nil, statelog.Position{}, &RepoRefusal{Repo: name, Err: err}
-			}
-			if a.Repo == nil {
-				return nil, nil, statelog.Position{}, &RepoRefusal{Repo: name, Err: code.ErrRepoNotFound}
-			}
-			if a.Repo.Search != code.SearchIndexed {
-				grep++
-			}
-			searched, head = append(searched, a.Repo.RepoRef), headOf(head, a)
-		}
-		if grep > MaxGrepRepos {
-			return nil, nil, statelog.Position{}, fmt.Errorf("%w: repo: names %d repositories searched with git "+
-				"grep, and a search reads at most %d of them: name fewer, or search the indexed ones without a "+
-				"repo: filter", code.ErrInvalid, grep, MaxGrepRepos)
-		}
-		return searched, nil, head, nil
+		searched, head, err = s.named(ctx, q)
+		return searched, nil, head, err
 	}
 	rq := code.ReadQuery{Kind: code.ReadRepos, Asker: q.Asker, CeilingSeat: q.CeilingSeat, Fresh: q.Rows,
 		Limit: code.MaxReposPerPage}
@@ -368,6 +340,107 @@ func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef,
 		}
 		rq.Cursor = page.Next
 	}
+}
+
+// ResolveReads is how many of a repo: filter's names are read at once.
+//
+// A name is one estate read of the repository's row (code.ReadRepo) at the
+// asker's level, and a seat's and a person's is linearizable: read one after
+// another, a filter of dozens of names — a 400-byte query holds up to 57 —
+// was as many barriers back to back before anything was searched. Read
+// beside each other, the reads in flight at once join ONE barrier (a node's
+// barrier is single-flighted per log: statelog.ReadIndex), so a filter costs
+// a barrier a wave. MaxGrepRepos+1, nine, is the fewest answers that can
+// show a filter past the grep bound — so one wave decides a filter of grep
+// repositories that must be refused, and the rest are never read — and it
+// resolves the most names a query can hold in seven waves.
+const ResolveReads = MaxGrepRepos + 1
+
+// named is the repositories q's repo: filters name, read BESIDE EACH OTHER,
+// at most ResolveReads at once, and the head their reads found (headOf). A
+// filter naming more grep repositories than MaxGrepRepos is refused AS THEIR
+// ROWS ARRIVE: the reads in flight are cancelled and the rest never started.
+// Otherwise every name is read, and a refusal is the FIRST NAME's, in the
+// order the filter wrote them — whichever read answered first — so a search
+// is refused the same however its reads interleave.
+func (s *Searcher) named(ctx context.Context, q Query) ([]code.RepoRef, statelog.Position, error) {
+	// ONE REPOSITORY NAMED TWICE IS SEARCHED ONCE: codeindex.ParseQuery
+	// names each once, and a Query built otherwise may not, where a
+	// repository listed twice would be read twice by its node, its lines
+	// taking two places in that node's first Limit, and counted twice in the
+	// coverage every repository is in exactly once.
+	var names []string
+	seen := make(map[string]bool, len(q.Search.Repos))
+	for _, name := range q.Search.Repos {
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	rctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type read struct {
+		a   code.ReadAnswer
+		err error
+	}
+	reads := make([]read, len(names))
+	var (
+		mu   sync.Mutex
+		grep int
+		over bool
+		wg   sync.WaitGroup
+	)
+	slots := make(chan struct{}, ResolveReads)
+	for i, name := range names {
+		if rctx.Err() != nil {
+			break
+		}
+		select {
+		case slots <- struct{}{}:
+		case <-rctx.Done():
+		}
+		if rctx.Err() != nil {
+			break
+		}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			a, err := s.estate.Read(rctx, code.ReadQuery{Kind: code.ReadRepo, Repo: name, Asker: q.Asker,
+				CeilingSeat: q.CeilingSeat, Fresh: q.Rows})
+			mu.Lock()
+			defer mu.Unlock()
+			reads[i] = read{a: a, err: err}
+			if err == nil && a.Repo != nil && a.Repo.Search != code.SearchIndexed {
+				if grep++; grep > MaxGrepRepos && !over {
+					over = true
+					cancel()
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if over {
+		return nil, statelog.Position{}, fmt.Errorf("%w: repo: names more than %d repositories searched with "+
+			"git grep, and a search reads at most %d of them: name fewer, or search the indexed ones without a "+
+			"repo: filter", code.ErrInvalid, MaxGrepRepos, MaxGrepRepos)
+	}
+	var (
+		searched []code.RepoRef
+		head     statelog.Position
+	)
+	for i, r := range reads {
+		switch {
+		case r.err != nil:
+			return nil, statelog.Position{}, &RepoRefusal{Repo: names[i], Err: r.err}
+		case r.a.Repo == nil:
+			// A read never started (ctx ended first) answers ctx's error.
+			if err := ctx.Err(); err != nil {
+				return nil, statelog.Position{}, &RepoRefusal{Repo: names[i], Err: err}
+			}
+			return nil, statelog.Position{}, &RepoRefusal{Repo: names[i], Err: code.ErrRepoNotFound}
+		}
+		searched, head = append(searched, r.a.Repo.RepoRef), headOf(head, r.a)
+	}
+	return searched, head, nil
 }
 
 // headOf is the later of head and where a read of the rows answered, where

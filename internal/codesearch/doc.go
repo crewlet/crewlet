@@ -91,7 +91,10 @@
 //
 // The text is bounded as knowledge search's is (codeindex.MaxQueryBytes, 400
 // bytes, refused and never cut). `search: grep` repositories are read only
-// when a repo: filter names them, at most [MaxGrepRepos]. A round waits at
+// when a repo: filter names them, at most [MaxGrepRepos]; a filter's names
+// are read beside each other, [ResolveReads] at once, so their linearizable
+// reads join one barrier a wave, and a filter past the grep bound is refused
+// as their rows arrive, the rest unread. A round waits at
 // most [RoundBudget] and ends as soon as every node it asked has answered; a
 // node's searches together read at most [ScatterReads] of its repositories at
 // once — all but one unit of its seat git-work share, which each read's git
