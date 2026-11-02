@@ -663,12 +663,14 @@ func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
 // is its only completion signal and the poll reads nothing of the stream.
 //
 // THE BRIEF ON STDIN, for the reasons [ClaudeCode.Command] gives; the two
-// variables that switch hooks and the bridge off UNSET before the harness starts
-// ([claudeSwitchesOff]); and the session's layout PINNED
+// variables that switch hooks and the bridge off, and the two that switch its
+// compaction off, UNSET before the harness starts ([claudeSwitchesOff],
+// [claudeCompactionOff]); and the session's layout PINNED
 // ([claudeSessionLayout]).
 func (ClaudeCode) Output(paths Paths) Output {
 	return Output{Stdout: paths.Stream(), Events: true, Result: paths.Result(),
-		BriefOnStdin: true, Unset: claudeSwitchesOff, Pin: claudeSessionLayout(paths)}
+		BriefOnStdin: true, Unset: append(append([]string(nil), claudeSwitchesOff...), claudeCompactionOff...),
+		Pin: claudeSessionLayout(paths)}
 }
 
 // claudeProjectDir is the name every Claude Code run in a box files its
@@ -709,7 +711,9 @@ const claudeProjectDir = "crewlet"
 //     session's whole context again — carries at most. Unset, it is the
 //     model's own window, a million tokens on some, every one of them
 //     charged to the seat's budget on every request; the variable takes
-//     precedence over a setting an image or a repository makes.
+//     precedence over a window an image or a repository sets, and the two
+//     variables that would switch compaction off altogether are unset beside
+//     it ([claudeCompactionOff]).
 //
 // The transcript's trim (CLAUDE_CODE_TRANSCRIPT_LOCAL_GC) is the script's to
 // set, by release ([claudeLocalGCFloor]).
@@ -780,6 +784,17 @@ func (ClaudeCode) Continues(box, writer string) (bool, string) {
 // --mcp-config server. See [ClaudeCode] for why they are unset rather than
 // refused.
 var claudeSwitchesOff = []string{"CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_SAFE_MODE"}
+
+// claudeCompactionOff is every variable that, set in a run's environment,
+// switches its harness's compaction off: DISABLE_AUTO_COMPACT, automatic and
+// idle compaction, and DISABLE_COMPACT, every compaction (the vendor's
+// environment reference). Set by a seat's role.sandbox.env or by an image, either
+// would let the run's requests grow to its model's own window past the one it
+// is pinned to ([claudeSessionLayout]) — a million tokens on some, every one
+// charged to the seat's budget on every request, and every request of a run
+// that continues the session after it. Unset rather than refused, as
+// [claudeSwitchesOff] is: the run's compaction is the engine's to decide.
+var claudeCompactionOff = []string{"DISABLE_AUTO_COMPACT", "DISABLE_COMPACT"}
 
 // Events is a new decoder for one stream, read whole or followed ([Decoder]).
 func (ClaudeCode) Events() Decoder { return &claudeEvents{tools: map[string]string{}} }

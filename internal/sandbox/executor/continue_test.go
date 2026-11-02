@@ -199,19 +199,21 @@ func TestATranscriptCutOffMidLineIsCutBackBeforeItIsResumed(t *testing.T) {
 }
 
 // A CONTINUED CLAUDE CODE SESSION RUNS UNDER THE ENGINE'S WINDOW AND LEAVES ITS
-// INTERRUPTED TURN AS IT IS. Every run compacts at the window a session is
-// carried at (sandbox.ExecutorContextWindow), whatever the seat's environment
-// set it to, so no request of it, or of a run that continues it, carries more;
-// and a resumed run is started without CLAUDE_CODE_RESUME_INTERRUPTED_TURN,
-// which would have it run the turn its last process was cut off in again before
-// it reads its brief.
+// INTERRUPTED TURN AS IT IS. Every run compacts at the engine's window
+// (sandbox.ExecutorContextWindow), whatever the seat's environment set it to —
+// a window of its own, or compaction switched off altogether
+// (DISABLE_AUTO_COMPACT, DISABLE_COMPACT) — so no request of it, or of a run
+// that continues it, carries more; and a resumed run is started without
+// CLAUDE_CODE_RESUME_INTERRUPTED_TURN, which would have it run the turn its
+// last process was cut off in again before it reads its brief.
 //
-// Mutation: drop the window from the pins, or leave the variable set on a
-// resume, and the harness's environment shows it.
+// Mutation: drop the window from the pins or a switch from the unsets, or
+// leave the variable set on a resume, and the harness's environment shows it.
 func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 	t.Parallel()
 	runner, box := sessionBox(t, "2.1.310")
-	seat := map[string]string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000", "CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1"}
+	seat := map[string]string{"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000", "CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1",
+		"DISABLE_AUTO_COMPACT": "1", "DISABLE_COMPACT": "1"}
 	_, ran := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "begin", Env: seat})
 	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID, Env: seat})
 	if !res.Continued {
@@ -225,6 +227,11 @@ func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 		return strings.HasPrefix(kv, "CLAUDE_CODE_RESUME_INTERRUPTED_TURN=")
 	}) {
 		t.Error("a resumed run kept CLAUDE_CODE_RESUME_INTERRUPTED_TURN")
+	}
+	for _, off := range []string{"DISABLE_AUTO_COMPACT=", "DISABLE_COMPACT="} {
+		if slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, off) }) {
+			t.Errorf("the harness's environment keeps %s1, which switches its compaction off", off)
+		}
 	}
 }
 
