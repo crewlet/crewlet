@@ -29,8 +29,11 @@ import (
 // reachable just before it exactly when it is reachable from that move's old
 // value, which one more check asks — and if it was, the landing lies below,
 // in the segment before. MaxLandedProbes bounds the checks, and so does the
-// read's one budget of git, which they share with the check against the tip:
-// past either, the answer names how far the search reached rather than a push.
+// read's one budget of git, which they share with the check against the tip;
+// and since each check queues for a read-lane slot of its own, the read's
+// answer falling due and a lane busy past gitproc.SlotWait end one too. Past
+// any of the four, the answer names how far the search reached rather than a
+// push.
 //
 // NEVER A WRONG PUSH. A move is the landing only where the commit was NOT
 // reachable from its old value: inside a segment the move before it says so,
@@ -58,20 +61,41 @@ import (
 // THE BOUND IS WHERE THE SEARCH STOPS ASKING AND ANSWERS how far it reached,
 // before the budget would end it: every process of a read's own git shares
 // that one budget (server.go), so it is the budget, not this count, that
-// holds a search's time and its use of the read lane — no more than the ten
-// seconds any read's own git may run under its one unit of the seat share.
-// An unforced branch with a million moves in the window takes twenty checks
-// and each forced move since the landing two more, so a branch forced about
-// five hundred times since the commit landed on it — a seat's branch rewritten
-// at every review — is searched whole. A check that costs more than the
-// measure — an old commit's walk over a gigabyte (gittest.LargeEnv's arm,
-// which re-derives this by the same rule where it is run), a copy whose
+// holds the RUN TIME of a search's checks — no more than the ten seconds any
+// read's own git may run under its one unit of the seat share. An unforced
+// branch with a million moves in the window takes twenty checks and each
+// forced move since the landing two more, so a branch forced about five
+// hundred times since the commit landed on it — a seat's branch rewritten at
+// every review — is searched whole. A check that costs more than the measure
+// — an old commit's walk over a gigabyte (gittest.LargeEnv's arm, which
+// re-derives this by the same rule where it is run), a copy whose
 // commit-graph is not written yet (26 ms a check over the same history,
-// walking by date), a loaded node — runs the budget out first, and the search
-// answers how far it reached all the same (landing.stopped).
+// walking by date), a node whose CPU is contended — runs the budget out
+// first, and the search answers how far it reached all the same
+// (landing.stopped).
+//
+// FITTED TO RUN TIME, NOT TO THE READ'S WALL TIME. Each check is a git process
+// of its own, and each queues again, FIFO, for a slot of the read lane beside
+// persons' push scans and sync rounds' peels: a wait the budget charges
+// nothing (read.charge), since it is the node's contention and not the read's
+// size, and one the measure above, on an idle node, never met. So a search at
+// the bound queues 1 025 times, and its wall time is its run time and those
+// waits, held only by the read's answer falling due — its asker's attempt
+// (estate.GitReadAttempt, seventeen seconds) less code.ReplyMargin, the sync
+// and the wait for the share taken out of it first: at 9 ms a wait, the
+// search of 514 forced moves above spends about 9 s queueing beside its 4.8 s
+// of git, some 14 s of the 16 a quick sync leaves it. Neither a bound fitted
+// to those waits nor one slot held for the whole search is the fix: the first
+// would be fitted to a load nobody can name in advance, and the second would
+// keep every push scan queued behind a thousand checks for seconds. The search
+// answers instead: a check of it the due instant ends, or a lane busy past
+// gitproc.SlotWait refuses, ends it with how far it reached, as the bound and
+// the budget do (landing.stopped) — never the read refused unready, which
+// would throw away the moves already read and send the next git node to run
+// the same checks under the same kind of queue.
 //
 // It was 64, kept as a judgment while each check had a walk bound of its own,
-// so that this count was all that held a search's time.
+// so that this count was all that held a search's run time.
 const MaxLandedProbes = 1024
 
 // landedRead answers whether the query's commit is in its target's history at
@@ -207,33 +231,48 @@ func (l *landing) search() (int, string, error) {
 	}
 }
 
-// stopped is the answer of a search a check ended. TWO ENDS ARE THE SEARCH'S
+// stopped is the answer of a search a check ended. FOUR ENDS ARE THE SEARCH'S
 // OWN, and each is answered with how far it reached: past MaxLandedProbes
-// (errProbes), and past the read's one budget of git, which its checks share
-// with the check against the tip (code.ErrSliceTooLarge from a check of the
+// (errProbes); past the read's one budget of git, which its checks share with
+// the check against the tip (code.ErrSliceTooLarge from a check of the
 // search: one that ran all the budget had left, or one it had nothing left
-// for) — no push, the oldest move known to keep the commit (last, n where the
-// search knew none), and how many forced moves below it, the segment it
-// stopped in begun by bounds[k] among them, it did not search past. Any other
-// failure is the check's, and the read's answer.
+// for); past the instant the read's answer falls due (code.AnswerDue), while
+// a check waited for its slot or ran; and past a read lane that stayed busy
+// for gitproc.SlotWait (gitproc.ErrBusy). read.failed answers those last two
+// unready at the share (code.UnreadyShare), and nothing else a check of the
+// search meets is, since the read took its unit of the share before the
+// search began. Each end is answered with no push, the oldest move known to
+// keep the commit (last, n where the search knew none), and how many forced
+// moves below it, the segment it stopped in begun by bounds[k] among them, it
+// did not search past. Any other failure is the check's, and the read's
+// answer: damage the copy reported, its caller gone, the server's stop.
 //
 // THE BUDGET'S END IS NOT THE READ TOO LARGE, as it is for a comparison,
 // which has nothing to answer until its walks finish: the search has already
 // found a move that keeps the commit, and refusing the read would throw that
-// away and ask for a narrowing no landed-in read can make. Only the check
+// away and ask for a narrowing no landed-in read can make. NOR IS THE DUE
+// INSTANT OR A BUSY LANE THE READ UNREADY, for the same reason: the next git
+// node would begin the same search from its first check, under the same kind
+// of queue. Only the check
 // against the tip, which comes before the search and decides whether the
-// commit landed at all, runs the budget out as the read too large.
+// commit landed at all, answers those ends as any read's git does: too large,
+// or unready.
 func (l *landing) stopped(err error, bounds []int, k, last int) (int, string, error) {
 	// within is what the search ran out of; the answer's Probes says how
 	// many checks that was.
 	var within string
+	var unready *code.ErrGitUnready
 	switch {
 	case errors.Is(err, errProbes):
 		within = fmt.Sprintf("the %d ancestry checks a search runs", l.r.s.probes)
 	case errors.Is(err, code.ErrSliceTooLarge):
 		within = fmt.Sprintf("the read's %s of git", l.r.s.gitBudget)
-	default:
+	case !errors.As(err, &unready) || unready.Reason != code.UnreadyShare:
 		return -1, "", err
+	case code.AnswerDue(l.ctx):
+		within = "the read's attempt, whose answer fell due"
+	default:
+		within = fmt.Sprintf("this node's read lane, busy past %s", gitproc.SlotWait)
 	}
 	target := l.r.q.LandedIn.Target
 	if last >= l.view.Len() {
@@ -329,7 +368,10 @@ func (l *landing) ancestorBudgeted(tip string) (bool, error) {
 // ends — it ran all the budget had left, or the budget had nothing left for
 // it — is code.ErrSliceTooLarge, and only that: the read too large where it
 // is the check against the tip, how far the search reached where it is one of
-// the search's (landing.stopped).
+// the search's (landing.stopped). A check the read's answer falling due ends,
+// or a read lane busy past gitproc.SlotWait refuses, is unready at the share
+// (read.failed): the read's answer at the tip, how far the search reached in
+// the search.
 func (l *landing) ancestor(tip string) (bool, error) {
 	if tip == l.commit {
 		return true, nil

@@ -4486,8 +4486,9 @@ type LandedInAnswer struct {
 	// Detail says why LandedBy is nil: the landing predates what the index
 	// holds, falls in a range it has not read yet, or lies past what the
 	// search checked — its bound of checks (internal/code/query's
-	// MaxLandedProbes) or the read's budget of git — named with the oldest
-	// push the search knows kept the commit.
+	// MaxLandedProbes), the read's budget of git, its answer falling due or
+	// a read lane busy past gitproc.SlotWait — named with the oldest push the
+	// search knows kept the commit.
 	Detail string `json:"detail,omitempty"`
 }
 

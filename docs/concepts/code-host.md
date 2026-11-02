@@ -5622,11 +5622,19 @@ names a move the commit was reachable before: where the commit already stood
 on the branch before the oldest move the index holds of it, or before the
 first move past its gap, the answer names no push and says which range the
 landing lies in. A search runs at most 1 024 ancestry checks, and they share
-the read's ten seconds of git with its check against the tip; whichever ends it
-first, it names how far it reached and how many forced moves it did not search
-past, rather than refusing the read. The count is the most checks that fit
-those ten seconds at what one check measured, so a branch forced about five
-hundred times since the commit landed on it is searched whole.
+the read's ten seconds of git with its check against the tip. The count is the
+most checks whose **running** fits those ten seconds at what one check
+measured, so a branch forced about five hundred times since the commit landed
+on it is searched whole. It is not fitted to the read's wall time: each check
+is a git process of its own that waits its turn for the node's read lane,
+behind people's pushes and the node's syncs, and those waits count against no
+budget, so on a busy node a long search can run out of the time its asker
+waits for the answer before it runs out of checks or of git. Whichever ends
+it — the count, the ten seconds, the asker's wait, or a read lane busy for ten
+seconds — it names how far it reached and how many forced moves it did not
+search past, rather than refusing the read. Only the check against the tip,
+before the search, is refused as any read is: too large where it runs out the
+ten seconds, and on a busy node answered by another git node.
 
 **Kept like the rest of the copy.** The index is a set of immutable runs under
 `crewlet/` in the repository's directory, merged in the background eight
@@ -5680,7 +5688,10 @@ reached. Each check is a git process walking by generation once the node has
 written the copy's commit-graph, 6.7 ms at the 99th percentile, so the 1 025
 checks of a search at its bound fit the read's ten seconds of git where 2 049
 would not; walking by date, without the graph, one check over the same history
-took 26 ms.
+took 26 ms. These are an idle node's figures, with nothing else waiting for
+its read lane: on a busy one each check also waits its turn, so the same
+search takes longer than its 4.8 s of git, and answers how far it reached
+where the asker's wait ends first.
 
 ---
 
