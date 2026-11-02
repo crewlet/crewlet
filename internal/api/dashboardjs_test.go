@@ -1531,12 +1531,23 @@ const (
 	// page's words, and the page's alarm row) took it from 5341.0 KiB to
 	// 5341.7 KiB (+0.8 KiB): the settings chunk +0.5 KiB, the entry script
 	// +0.2 KiB and the Access chunk +0.1 KiB. 5342 KiB.
+	// Settings › MCP & tools' add and edit wizard (its source, name,
+	// connection, sign-in, test and review steps, the Test and Replace value
+	// dialogs), net of the Add dialog and its form helpers it replaces, took
+	// it from 5341.7 KiB to 5384.9 KiB (+43.2 KiB). Measured before the MCP
+	// sign-in, from 5338.8 KiB to 5381.5 KiB, that was the settings chunk
+	// +40.2 KiB and its sheet +2.2 KiB, the kit's chunks +5.9 KiB net (the
+	// setup wizard, key and value rows, source editor and file drop the
+	// wizard is the first settings screen to draw), and 5.6 KiB less of
+	// shared code Rollup moved between chunks and of the Add dialog's rules
+	// out of the one sheet. The page is all in the settings chunk, so the
+	// initial load did not grow. 5385 KiB.
 	// A team's MCP limits in the Remove dialog (each seat's and unit's
 	// mcp_limits block a removal clears, listed and counted with the other
-	// fields that name the server) took it from 5341.7 KiB to 5342.0 KiB
-	// (+0.2 KiB), all of it the settings chunk, which the initial load does
-	// not fetch. Still 5342 KiB.
-	treeBudget = 5<<20 + 222<<10
+	// fields that name the server) took it from 5384.9 KiB to 5385.2 KiB
+	// (+0.2 KiB, 238 bytes), all of it the settings chunk, which the initial
+	// load does not fetch. 5386 KiB.
+	treeBudget = 5<<20 + 266<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

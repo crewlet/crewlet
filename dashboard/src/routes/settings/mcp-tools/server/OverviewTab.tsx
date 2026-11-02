@@ -147,55 +147,91 @@ export function OverviewTab({
           </Card.Body>
         </Card>
         <Card padding="none">
-          <Card.Header icon={<ShieldCheckGlyph size="sm" />}>
+          <Card.Header
+            icon={<ShieldCheckGlyph size="sm" />}
+            actions={
+              admin && server.configured && server.enabled ? (
+                <Button
+                  size="small"
+                  variant="secondary"
+                  onClick={() => onFlow("test", server.name)}
+                >
+                  Test now
+                </Button>
+              ) : undefined
+            }
+          >
             <Card.Title>Answers</Card.Title>
           </Card.Header>
           <Card.Body>
-            <DescriptionList
-              dense
-              items={[
-                [
-                  "Last answered",
-                  detail.last_success ? <RelativeTime value={detail.last_success} /> : "Not yet",
-                ],
-                [
-                  "Last failure",
-                  detail.last_failure ? (
-                    <span>
-                      {
-                        failureWords(
-                          detail.last_failure.class,
-                          "said" in detail.last_failure ? detail.last_failure.said : "",
-                        ).short
-                      }
-                      , <RelativeTime value={detail.last_failure.at} />
-                    </span>
-                  ) : (
-                    "None"
-                  ),
-                ],
-                ...(detail.server_info
-                  ? ([
-                      [
-                        "Reported as",
-                        <span className="mono">
-                          {[detail.server_info.name, detail.server_info.version]
-                            .filter(Boolean)
-                            .join(" ")}
-                        </span>,
-                      ],
-                      ...(detail.server_info.protocol
-                        ? ([
-                            [
-                              "Protocol",
-                              <span className="mono">{detail.server_info.protocol}</span>,
-                            ],
-                          ] as const)
-                        : []),
-                    ] as const)
-                  : []),
-              ]}
-            />
+            <div className="mcp-stack">
+              <DescriptionList
+                dense
+                items={[
+                  [
+                    "Last answered",
+                    detail.last_success ? <RelativeTime value={detail.last_success} /> : "Not yet",
+                  ],
+                  ...(admin
+                    ? ([
+                        [
+                          "Last test",
+                          admin.last_check ? (
+                            <span>
+                              {admin.last_check.ok ? "Passed" : "Failed"}
+                              {admin.last_check.by ? ` by ${admin.last_check.by}` : ""},{" "}
+                              <RelativeTime value={admin.last_check.at} />
+                            </span>
+                          ) : (
+                            "Not tested yet"
+                          ),
+                        ],
+                      ] as const)
+                    : []),
+                  [
+                    "Last failure",
+                    detail.last_failure ? (
+                      <span>
+                        {
+                          failureWords(
+                            detail.last_failure.class,
+                            "said" in detail.last_failure ? detail.last_failure.said : "",
+                          ).short
+                        }
+                        , <RelativeTime value={detail.last_failure.at} />
+                      </span>
+                    ) : (
+                      "None"
+                    ),
+                  ],
+                  ...(detail.server_info
+                    ? ([
+                        [
+                          "Reported as",
+                          <span className="mono">
+                            {[detail.server_info.name, detail.server_info.version]
+                              .filter(Boolean)
+                              .join(" ")}
+                          </span>,
+                        ],
+                        ...(detail.server_info.protocol
+                          ? ([
+                              [
+                                "Protocol",
+                                <span className="mono">{detail.server_info.protocol}</span>,
+                              ],
+                            ] as const)
+                          : []),
+                      ] as const)
+                    : []),
+                ]}
+              />
+              {admin ? (
+                <Text as="p" variant="caption" tone="tertiary">
+                  A test asks the server who it is and lists its tools. It never calls a tool.
+                </Text>
+              ) : null}
+            </div>
           </Card.Body>
         </Card>
       </div>

@@ -211,7 +211,7 @@ func (noSignIns) RevokeMCPServerGrant(context.Context, *config.MCPServer) (strin
 type passingChecker struct{}
 
 func (passingChecker) CheckServer(_ context.Context, req mcpapi.CheckRequest) (mcpapi.Check, error) {
-	return mcpapi.Check{Server: req.Server, Seat: req.Seat, Draft: req.Draft != nil, At: time.Now(),
+	return mcpapi.Check{Server: req.Server, Seat: req.Seat, Draft: req.Draft, At: time.Now(),
 		By: req.By.Name, Node: "node-1", OK: true,
 		Nodes: []mcpapi.CheckedNode{{Node: "node-1", Answered: true}}}, nil
 }

@@ -75,9 +75,10 @@ func TestAClientsSecretIsStoredWriteOnlyAndTestedWhereATestSignsInWithIt(t *test
 		t.Fatalf("the answer carries the value: %s", raw)
 	}
 	asked := checker.requests()
-	if last := asked[len(asked)-1]; last.Value == nil || last.Value.Key != config.MCPValueClientSecret ||
-		last.Value.Variable != variable || last.Value.Value != theValue {
-		t.Fatalf("tested %+v, want the secret under test", last)
+	if last := asked[len(asked)-1]; len(last.Values) != 1 || last.Values[0].Key != config.MCPValueClientSecret ||
+		last.Values[0].Variable != variable || last.Values[0].Value != theValue ||
+		last.Entry == nil || last.Entry.OAuth == nil {
+		t.Fatalf("tested %+v, want the secret under test with its entry", last)
 	}
 	row, found, err := store.Describe(t.Context(), variable)
 	if err != nil || !found || !row.WriteOnly || row.Source != secrets.SourceMCP {

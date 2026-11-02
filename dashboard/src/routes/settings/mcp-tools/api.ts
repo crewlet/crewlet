@@ -1,9 +1,13 @@
 /**
  * Settings › MCP & tools' calls: one server whole (`GET /mcp-servers/{name}`),
- * its restart (`POST /mcp-servers/{name}/retry`), turning it off and on again
- * (the entity route, `enabled`), and its removal
- * (`DELETE /config/mcp-servers/{name}`). The list is the `mcp_servers_status`
- * question, which `data.ts` asks.
+ * its restart (`POST /mcp-servers/{name}/retry`), its test
+ * (`POST /mcp-servers/{name}/check`), a value stored for it
+ * (`PUT /mcp-servers/{name}/values/{key}`), turning it off and on again (the
+ * entity route, `enabled`), and its removal (`DELETE /config/mcp-servers/{name}`);
+ * and for the add and edit wizard, the catalogue (`GET /mcp-catalogue`), an
+ * address checked before it is added (`POST /mcp-probe`) and a draft's test
+ * (`POST /mcp-checks`). The list is the `mcp_servers_status` question, which
+ * `data.ts` asks.
  *
  * EVERY ANSWER IS A VALUE. A refusal comes back as one, with the engine's code
  * and sentence, so a flow branches on what came back rather than catching.
@@ -17,11 +21,15 @@
  */
 
 import type {
+  McpCatalogueAnswer,
+  McpCheckAnswer,
   McpMemberServerAnswer,
+  McpProbeAnswer,
   McpRemovalCheck,
   McpRemovalWritten,
   McpRestartAnswer,
   McpServerAnswer,
+  McpValueAnswer,
 } from "~/contract/mcp.ts";
 import { answerOf, getEntity, outcomeOf, putEntity } from "~/protocol/configWrite.ts";
 import type { ConfigWriteOutcome } from "~/protocol/configWrite.ts";
@@ -40,6 +48,8 @@ export type McpAnswer<T> =
       code: string;
       /** The engine's sentence for it, what a person is shown. */
       sentence: string;
+      /** The refusal's body whole, for a field a flow reads (a failed test, the problems). */
+      body: Record<string, unknown>;
     };
 
 async function settle<T>(request: Promise<RestResponse>): Promise<McpAnswer<T>> {
@@ -54,6 +64,7 @@ async function settle<T>(request: Promise<RestResponse>): Promise<McpAnswer<T>> 
         status: err.status,
         code: err.code,
         sentence: err.sentence || err.detail,
+        body: err.body,
       };
     }
     return {
@@ -61,6 +72,7 @@ async function settle<T>(request: Promise<RestResponse>): Promise<McpAnswer<T>> 
       status: 0,
       code: "unreachable",
       sentence: "The engine could not be reached.",
+      body: {},
     };
   }
 }
@@ -161,4 +173,92 @@ export async function removeServer(
     check: outcome.kind === "valid" ? (answer.body as McpRemovalCheck) : null,
     written: outcome.kind === "saved" ? (answer.body as McpRemovalWritten) : null,
   };
+}
+
+/**
+ * `GET /mcp-catalogue`: the curated catalogue whole, and with `q` the
+ * company's community registry searched for it. Rejects on a refusal, as a
+ * read does.
+ */
+export async function readCatalogue(q: string, signal: AbortSignal): Promise<McpCatalogueAnswer> {
+  const answer = await rest.request("GET", "/mcp-catalogue", {
+    ...(q ? { query: { q } } : {}),
+    signal,
+  });
+  return answer.body as McpCatalogueAnswer;
+}
+
+/**
+ * `POST /mcp-probe`: an address checked before a server is added at it, with
+ * no credential sent. The engine dials it as the server would be dialled once
+ * added, so it asks the rights a write does.
+ */
+export async function probeAddress(
+  url: string,
+  signal?: AbortSignal,
+): Promise<McpAnswer<McpProbeAnswer>> {
+  return settle(
+    rest.request("POST", "/mcp-probe", { body: { url }, ...(signal ? { signal } : {}) }),
+  );
+}
+
+/**
+ * `POST /mcp-servers/{name}/check`: the saved server tested on every node
+ * that runs it, or a per-agent one as `seat`. Recorded as its latest test.
+ */
+export async function testServer(name: string, seat: string): Promise<McpAnswer<McpCheckAnswer>> {
+  return settle(
+    rest.request("POST", `/mcp-servers/${pathSegment(name)}/check`, {
+      body: seat ? { seat } : {},
+    }),
+  );
+}
+
+/**
+ * `POST /mcp-checks`: a draft entry tested as a write would leave it, with
+ * the values typed for its keys and not stored yet, each read through the
+ * variable it will be stored under and never written. A draft the engine's
+ * dry run refuses comes back as its write would (`validation_error` with
+ * its problems).
+ */
+export async function testDraft(
+  entity: Record<string, unknown>,
+  values: Readonly<Record<string, string>>,
+  seat: string,
+  signal?: AbortSignal,
+): Promise<McpAnswer<McpCheckAnswer>> {
+  return settle(
+    rest.request("POST", "/mcp-checks", {
+      body: {
+        entity,
+        ...(seat ? { seat } : {}),
+        ...(Object.keys(values).length > 0 ? { values } : {}),
+      },
+      ...(signal ? { signal } : {}),
+    }),
+  );
+}
+
+/**
+ * `PUT /mcp-servers/{name}/values/{key}`: a value stored write-only, tested
+ * first unless `test` is false, and the key pointed at the variable it is
+ * sealed under (or that revision re-activated). Sent without a signal: once
+ * sent, it runs to its answer. A value the server refuses is
+ * `value_test_failed`, with the test in its body, and stores nothing.
+ */
+export async function storeValue(
+  name: string,
+  key: string,
+  value: string,
+  options: { seat?: string; test: boolean },
+): Promise<McpAnswer<McpValueAnswer>> {
+  return settle(
+    rest.request("PUT", `/mcp-servers/${pathSegment(name)}/values/${pathSegment(key)}`, {
+      body: { value },
+      query: {
+        ...(options.seat ? { seat: options.seat } : {}),
+        ...(options.test ? {} : { test: "false" }),
+      },
+    }),
+  );
 }

@@ -10299,11 +10299,27 @@ guard's refusals included.
 
 Tests a **draft** MCP server entry before it is saved, for the test step of the
 add and edit flows. The body is the entry as `PUT /config/mcp-servers/{name}`
-would take it, and the seat for a per-agent one:
+would take it, the seat for a per-agent one, and the values typed for its keys
+that are not stored yet:
 
 ```json
-{"entity": {"name": "wiki", "command": "wiki-mcp", "env": {"WIKI_TOKEN": "${WIKI_TOKEN}"}}, "seat": ""}
+{"entity": {"name": "wiki", "transport": "http", "url": "https://wiki.example.com/mcp"},
+ "seat": "", "values": {"Authorization": "Bearer <token>"}}
 ```
+
+**`values`** holds what the server would be sent under each key, whole, as
+[`PUT /mcp-servers/{name}/values/{key}`](#put-mcp-serversnamevalueskey) stores
+it once the entry is written. Each key reads, for the test, the variable that
+route would store its value under in the company the draft makes (the key's own
+`${VAR}` where only it reads one, else `MCP_<SERVER>_<KEY>`), ahead of anything
+the store holds under that name; a key it would refuse (one an integration
+fills for each agent, a name no header or variable can have, a derived name
+another field already reads) is refused here with the same answer. Each value
+is trimmed and must be one line; together they hold at most 64 KiB (one stored
+value's bound), past which the answer is `413`. **A value is never written,
+recorded, logged or answered**. The entry and every value cross the fleet's
+broker sealed under the fleet's keyring, each bound to the one test. A key whose
+value is already stored needs no entry here: the draft's `${VAR}` resolves it.
 
 A draft runs what a write would: a command on the engine host, or an address
 dialled with the values the entry names, each `${VAR}` resolved from the secret
@@ -10426,12 +10442,16 @@ conflict`: nobody stores it.
 
 1. The pointer the write would make is held to every rule a write of the
    document is (`422 validation_error` with `problems`).
-2. The test (unless `test=false`): the saved entry, turned on whatever its
-   `enabled` says, with the key reading the value, where the server runs (on
-   every node for a shared server, on the seat's holder for a seat's value),
-   as [`POST /mcp-servers/{name}/check`](#post-mcp-serversnamecheck) tests it
-   and calling no tool. The value travels to the other nodes sealed under the
-   fleet's keyring. It is never recorded as the server's latest test. A test
+2. The test (unless `test=false`): the entry as the fleet's active revision
+   states it, turned on whatever its `enabled` says, with the key reading the
+   value, where the server runs (on every node for a shared server, on the
+   seat's holder for a seat's value), as
+   [`POST /mcp-servers/{name}/check`](#post-mcp-serversnamecheck) tests it and
+   calling no tool. The entry is sent with the test, as a draft's is, so no
+   node needs to have applied it: a value stored straight after its entry's
+   write is tested, not refused. The entry and the value travel to the other
+   nodes sealed under the fleet's keyring. It is never recorded as the
+   server's latest test. A test
    that fails stores nothing and answers `422 value_test_failed` with the
    `stage` and the `class` it stopped at, the `node`, the whole `check` and a
    problem at `values.<key>`; one no node answered is `503`.

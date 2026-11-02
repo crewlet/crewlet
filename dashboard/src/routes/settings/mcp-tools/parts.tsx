@@ -23,23 +23,31 @@ import { listed, plural } from "~/lib/format.ts";
 import type { McpData } from "./data.ts";
 import { failureWords, RISK, STATE } from "./words.ts";
 
-/** The flows the page opens, by the `flow` parameter. */
-export type Flow = "add" | "disable" | "remove" | "restart";
+/**
+ * The flows the page opens, by the `flow` parameter. `add` and `edit` are the
+ * wizard (`step` names where an edit opens); `test` the Test dialog; `value`
+ * the dialog that stores one header or variable (`key`).
+ */
+export type Flow = "add" | "edit" | "test" | "value" | "disable" | "remove" | "restart";
 
-const FLOWS: readonly Flow[] = ["add", "disable", "remove", "restart"];
+const FLOWS: readonly Flow[] = ["add", "edit", "test", "value", "disable", "remove", "restart"];
 
 /** The open flow and its arguments, and the ways to open and close one. */
 export function useFlow() {
   const [raw] = useParam("flow", "", "section");
   const [server] = useParam("server", "");
   const [seat] = useParam("seat", "");
+  const [step] = useParam("step", "");
+  const [key] = useParam("key", "");
   const nav = useNavigator();
   return {
     flow: (FLOWS as readonly string[]).includes(raw) ? (raw as Flow) : null,
     server,
     seat,
+    step,
+    key,
     open: (next: Flow, args: Record<string, string> = {}) => nav.filter({ flow: next, ...args }),
-    close: () => nav.filter({ flow: null, server: null, seat: null }),
+    close: () => nav.filter({ flow: null, server: null, seat: null, step: null, key: null }),
   };
 }
 
@@ -313,6 +321,10 @@ export function ServerMenu({
       triggerVariant="ghost"
       align="end"
       items={[
+        ...(server.enabled
+          ? [{ key: "test", label: "Test", onSelect: () => onFlow("test", server.name) }]
+          : []),
+        { key: "edit", label: "Edit", onSelect: () => onFlow("edit", server.name) },
         ...(server.enabled
           ? [{ key: "restart", label: "Restart", onSelect: () => onFlow("restart", server.name) }]
           : []),

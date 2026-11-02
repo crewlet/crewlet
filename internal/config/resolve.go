@@ -96,9 +96,9 @@ type Resolver struct {
 	// [Resolver.Ahead] lays over this one: see [shadowsTold].
 	told *shadowsTold
 
-	// trying is the name [Resolver.Trying] answers first, whose shadow is
-	// not warned.
-	trying string
+	// trying is the values [Resolver.Trying] answers first, whose shadows
+	// are not warned.
+	trying MapSource
 
 	log *slog.Logger
 }
@@ -179,11 +179,16 @@ func (r *Resolver) Ahead(first Source) *Resolver {
 	return &Resolver{sources: sources, told: r.told, log: r.log}
 }
 
-// Trying is r with name answered by value first, for a value tested before it
-// is stored; hiding the stored one is intended, so that shadow is not warned.
-func (r *Resolver) Trying(name, value string) *Resolver {
-	out := r.Ahead(MapSource{name: value})
-	out.trying = name
+// Trying is r with each of values answered first, by its name, for values
+// tested before they are stored; hiding a stored one is intended, so those
+// shadows are not warned. values is read, never kept or changed.
+func (r *Resolver) Trying(values map[string]string) *Resolver {
+	tried := make(MapSource, len(values))
+	for name, value := range values {
+		tried[name] = value
+	}
+	out := r.Ahead(tried)
+	out.trying = tried
 	return out
 }
 
@@ -230,7 +235,7 @@ func (r *Resolver) warnShadowed(name, winner string, index int) {
 	if index >= len(r.sources)-1 {
 		return // the last source cannot be shadowing anything
 	}
-	if index == 0 && name != "" && name == r.trying {
+	if _, tried := r.trying[name]; index == 0 && tried {
 		return // a value under test hides what it replaces by design
 	}
 	var hidden Source

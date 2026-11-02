@@ -271,3 +271,184 @@
   align-items: center;
   gap: var(--spacing-2);
 }
+
+/* ---- a row's actions --------------------------------------------------------- */
+
+.mcp-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* A ROW'S PENCIL SHOWS ON HOVER OR FOCUS, and always where there is no hover;
+   the row's link still opens the page. */
+.mcp-row-edit {
+  opacity: 0;
+  transition: opacity var(--motion-duration-fast) var(--motion-easing-default);
+}
+
+:is(tr, [role="row"]):hover .mcp-row-edit,
+:is(tr, [role="row"]):focus-within .mcp-row-edit,
+.mcp-row-edit:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .mcp-row-edit {
+    opacity: 1;
+  }
+}
+
+/* ---- the add and edit wizard ---------------------------------------------------- */
+
+/* The wizard's keyboard listener, laid out as if absent. */
+.mcp-keys {
+  display: contents;
+}
+
+/* The address and its Check on one line: a control a reader presses sits
+   beside the field, never inside it, where the field's slots ignore the
+   pointer. */
+.mcp-address {
+  display: flex;
+  gap: var(--spacing-2);
+  align-items: center;
+}
+
+.mcp-address > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* A note of one line, quieter than a callout: the community warning, and
+   what the address check or the catalogue found about signing in. */
+.mcp-slim-note {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  color: var(--color-feedback-warning-ink);
+  font-size: var(--font-size-xs);
+}
+
+.mcp-slim-note.is-info {
+  color: var(--color-text-secondary);
+}
+
+.mcp-slim-note > svg {
+  flex: none;
+}
+
+.mcp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* The found server: its mark centred on its name and the line under it, as a
+   table row centres its mark, and the facts under the words. The card's
+   words are the body's 13px, its name in the semibold a Callout's title
+   takes. */
+.mcp-found {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  font-size: var(--font-size-compact);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-selected);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+}
+
+.mcp-found__mark {
+  display: inline-flex;
+  justify-content: center;
+}
+
+.mcp-found__title {
+  font-weight: var(--font-weight-semibold);
+}
+
+.mcp-found__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.mcp-found__facts {
+  display: flex;
+  grid-column: 2;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-5);
+  margin: 0;
+}
+
+.mcp-found__facts > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.mcp-found__facts dt {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.mcp-found__facts dd {
+  margin: 0;
+}
+
+/* The pasted configuration: the editor under a bar naming what it read. */
+.mcp-code {
+  display: grid;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.mcp-code__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-1) var(--spacing-1) var(--spacing-1) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+/* The file button at the bar's end. Named rather than reached as the bar's
+   last child, which is the button's hidden file input, not the button. */
+.mcp-code__pick {
+  margin-inline-start: auto;
+}
+
+.mcp-code__editor {
+  min-height: 11rem;
+}
+
+/* The step body's 13px under the disclosure's own title, each lead in the
+   semibold a title takes rather than the browser's bold. */
+.mcp-howto > li {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
+
+.mcp-lead {
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Review opens with the server, as the Models review opens with its entry. */
+.mcp-review-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+/* The test's result and, where it has not passed, the way to run it. */
+.mcp-test-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1) var(--spacing-3);
+}
