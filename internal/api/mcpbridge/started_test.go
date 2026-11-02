@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
 // told is what a session's [mcpbridge.Session.Started] was told, and what the
@@ -171,5 +174,75 @@ func TestAJobsIDCannotCarryTheMarkOfItsOtherToken(t *testing.T) {
 	f.session.Launch = "job_fresh"
 	if url := f.open(t); url != "" {
 		t.Errorf("a job named %q was opened at %q, want refused", f.session.Launch, url)
+	}
+}
+
+// A REQUEST THAT ARRIVES WHILE THE SESSION IS BEING TOLD WAITS FOR IT. The first
+// request on either token tells the session which session the box started
+// before it is served, and a request on the same opening that comes in
+// meanwhile — the harness's own MCP client racing a notes poll or a skill's
+// report — must not be served against the guard the telling is about to put
+// right: it waits until the session has been told, and only then reaches its
+// tool.
+//
+// Mutation: let the first request go before the session is told — record the
+// opening's word and unlock, then tell it — and the racing call reaches the
+// ledger while the session is still being told.
+func TestARequestArrivingWhileTheSessionIsToldWaitsForIt(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	let := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(let)
+	var first sync.Once
+	f.session.Started = func(context.Context, bool) {
+		first.Do(func() { close(entered) })
+		<-release
+	}
+	chosen := f.open(t)
+	client := f.server.Client()
+	pinged := make(chan struct{})
+	go func() {
+		defer close(pinged)
+		res, err := client.Post(chosen, "application/json",
+			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+		if err == nil {
+			_ = res.Body.Close()
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first request never told the session which session its box started")
+	}
+
+	// THE RACING CALL, on the same opening, while the session is being told.
+	pool := httpxtest.Pool(t)
+	called := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		box, err := mcp.NewClient(&mcp.Implementation{Name: "coding-agent", Version: "1"}, nil).
+			Connect(ctx, &mcp.StreamableClientTransport{Endpoint: chosen, HTTPClient: pool}, nil)
+		if err != nil {
+			called <- err
+			return
+		}
+		defer func() { _ = box.Close() }()
+		_, err = box.CallTool(ctx, &mcp.CallToolParams{Name: "read_page", Arguments: map[string]any{}})
+		called <- err
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if n := len(f.ledger.rows()); n != 0 {
+		t.Fatalf("%d calls reached the ledger while the session was still being told", n)
+	}
+
+	let()
+	if err := <-called; err != nil {
+		t.Fatalf("the racing call, once the session was told: %v", err)
+	}
+	<-pinged
+	if n := len(f.ledger.rows()); n != 1 {
+		t.Errorf("%d calls reached the ledger once the session was told, want the racing one", n)
 	}
 }
