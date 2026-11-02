@@ -191,7 +191,7 @@ export function MergePanel({ change }: { change: CodeChangeDetail }) {
       <p className={held ? "muted" : undefined}>
         {readiness
           ? `${readiness.met} of ${readiness.total} of its gate's conditions met${
-              held ? ` — ${held}` : ": it may merge."
+              held ? `. ${held}` : ": it may merge."
             }`
           : held}
       </p>
@@ -342,8 +342,8 @@ function OverrideDialog({
       }
     >
       <Callout variant="warning">
-        It merges now, directly, whatever its gate still waits on
-        {held ? ` — ${held}` : ""}. Your reason is kept with the merge, and the override is audited.
+        It merges now, directly, whatever its gate still waits on.{held ? ` ${held}` : ""} Your
+        reason is kept with the merge, and the override is audited.
       </Callout>
       <Textarea
         aria-label="Reason"

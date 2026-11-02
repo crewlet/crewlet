@@ -519,7 +519,7 @@ function PersonBand({ repo, showAll }: { repo: string; showAll: () => void }) {
               {c.ref}
             </a>{" "}
             {c.title}
-            {c.readiness && <span className="muted"> — {c.readiness.first}</span>}
+            {c.readiness && <span className="muted"> · {c.readiness.first}</span>}
           </li>
         ))}
       </ul>

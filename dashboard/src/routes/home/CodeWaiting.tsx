@@ -179,7 +179,7 @@ function WaitingRows({
             {c.ref}
           </a>{" "}
           {c.title}
-          {c.readiness && <span className="muted"> — {c.readiness.first}</span>}
+          {c.readiness && <span className="muted"> · {c.readiness.first}</span>}
           {c.state === "draft" && (
             <>
               {" "}

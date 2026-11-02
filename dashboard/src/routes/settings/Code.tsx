@@ -192,7 +192,7 @@ function RepoFold({ repo }: { repo: CodeRepoSummary }) {
     >
       <summary>
         <span className="mono">{repo.name}</span>{" "}
-        <span className="muted">— {plural(repo.protections?.length ?? 0, "rule")}</span>
+        <span className="muted">({plural(repo.protections?.length ?? 0, "rule")})</span>
       </summary>
       {opened && <RepoProtection repo={repo} />}
     </details>
