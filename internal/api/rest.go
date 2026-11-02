@@ -52,8 +52,8 @@ var namedRoutes = []struct {
 	// what its harness wrote on each turn, kept so a later turn can continue
 	// it — and one turn's transcript under the listing that names it.
 	{method: "GET", pattern: "/agents/{id}/sessions", what: "executor_sessions", path: map[string]string{"id": "handle"}},
-	{method: "GET", pattern: "/agents/{id}/sessions/{turn}", what: "executor_session",
-		path: map[string]string{"id": "handle", "turn": "turn"}},
+	{method: "GET", pattern: "/agents/{id}/sessions/{turn_id}", what: "executor_session",
+		path: map[string]string{"id": "handle", "turn_id": "turn_id"}},
 	{method: "GET", pattern: "/agents/{id}", what: "agent", path: map[string]string{"id": "id"}},
 	// The literal segment beats the wildcard, so /events/trace/{id} is not
 	// read as an event whose id is "trace" — net/http resolves the more

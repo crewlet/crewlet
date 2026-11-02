@@ -56,7 +56,7 @@ type ExecutorReader interface {
 	Head(ctx context.Context, handle, conversationKey string,
 		fresh statelog.Freshness) (executordomain.Head, error)
 	Session(ctx context.Context, handle, turn string,
-		fresh statelog.Freshness) (executordomain.Session, error)
+		fresh statelog.Freshness) (executordomain.SessionRead, error)
 	Sessions(ctx context.Context, handle, cursor string, limit int,
 		fresh statelog.Freshness) (executordomain.Page, error)
 	Expired(ctx context.Context, cutoff time.Time, limit int) ([]executordomain.Expiry, error)
@@ -139,11 +139,13 @@ type executorSessionArgs struct {
 	Fresh  statelog.Freshness
 }
 
+// ONE TURN'S ROW, and where the copy that answers read it: a surface states
+// the position beside the row, as it does a page's.
 var opExecutorSession = define("executor.session", opRead, executorDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a executorSessionArgs) (executordomain.Session, error) {
+	func(ctx context.Context, b Backend, _ *Actor, a executorSessionArgs) (executordomain.SessionRead, error) {
 		r, err := b.executorReader()
 		if err != nil {
-			return executordomain.Session{}, err
+			return executordomain.SessionRead{}, err
 		}
 		return r.Session(ctx, a.Handle, a.Turn, a.Fresh)
 	})
@@ -336,9 +338,10 @@ func (x ExecutorReads) Head(ctx context.Context, handle, conversationKey string,
 		executorHeadArgs{Handle: handle, ConversationKey: conversationKey, Fresh: fresh})
 }
 
-// Session answers one turn's row, at the level fresh asks for.
+// Session answers one turn's row, at the level fresh asks for, and where it
+// was read.
 func (x ExecutorReads) Session(ctx context.Context, handle, turn string,
-	fresh statelog.Freshness) (executordomain.Session, error) {
+	fresh statelog.Freshness) (executordomain.SessionRead, error) {
 	return call(ctx, x.r, opExecutorSession, nil, executorSessionArgs{Handle: handle, Turn: turn, Fresh: fresh})
 }
 

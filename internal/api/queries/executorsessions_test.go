@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -71,27 +72,30 @@ func (s *stubSessions) Sessions(_ context.Context, handle, cursor string, limit 
 	}
 	from = min(from, len(held))
 	end := min(len(held), from+limit)
-	page := executordomain.Page{Sessions: held[from:end], Complete: true,
-		Position: statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1, Seq: 9}}
+	page := executordomain.Page{Sessions: held[from:end], Complete: true, Position: stubAt}
 	if end < len(held) {
 		page.Next = strconv.Itoa(end)
 	}
 	return page, nil
 }
 
+// stubAt is where the stub's reads are served: the executor log's position the
+// rows were derived through.
+var stubAt = statelog.Position{Stream: executordomain.Domain{}.Stream().Name, Generation: 1, Seq: 9}
+
 func (s *stubSessions) Session(_ context.Context, handle, turn string,
-	fresh statelog.Freshness) (executordomain.Session, error) {
+	fresh statelog.Freshness) (executordomain.SessionRead, error) {
 
 	s.asked, s.handle, s.turn, s.fresh = true, handle, turn, fresh
 	if s.err != nil {
-		return executordomain.Session{}, s.err
+		return executordomain.SessionRead{}, s.err
 	}
 	for _, row := range s.rows {
 		if row.Handle == handle && row.Turn == turn {
-			return row, nil
+			return executordomain.SessionRead{Session: row, Position: stubAt, Complete: true}, nil
 		}
 	}
-	return executordomain.Session{}, fmt.Errorf("%w: %s's turn %s", executordomain.ErrNotFound,
+	return executordomain.SessionRead{}, fmt.Errorf("%w: %s's turn %s", executordomain.ErrNotFound,
 		handle, turn)
 }
 
@@ -290,7 +294,7 @@ func TestASeatsSessionsAreItsTrail(t *testing.T) {
 	store, _ := sessionObjectStore(t)
 	for _, what := range []string{"executor_sessions", "executor_session"} {
 		params := func(handle string) map[string]any {
-			return map[string]any{"handle": handle, "turn": turn}
+			return map[string]any{"handle": handle, "turn_id": turn}
 		}
 		own := &stubSessions{rows: rows}
 		if _, err := askHolding(t, sessionSources(t, own, store), "ana", what, params("")); err != nil {
@@ -339,12 +343,14 @@ func TestASeatsSessionsAreItsTrail(t *testing.T) {
 // through the runner's format knowledge: the entries in order, a token the
 // session quoted redacted at this read, the bounds every read is held to
 // stated, and the page cut at the bound with a cursor the next page is read
-// from — and that cursor names the object it was read from, so one handed out
-// for an object the row no longer names, or one no page handed out, is
-// refused rather than continued in another archive.
+// from — and that cursor names the object it was read from and the count of
+// entries it was read under, so one handed out for an object the row no longer
+// names, one a build counting entries otherwise handed out, and one no page
+// handed out are each refused, saying to read again from the start, rather
+// than continued in another archive or at an ordinal naming another entry.
 //
 // Mutation: hand an entry's text out unredacted, drop the cursor, or continue
-// a cursor of another object, and a check goes red.
+// a cursor of another object or of another count, and a check goes red.
 func TestASessionsTranscriptIsReadThroughItsSealedObject(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionObjectStore(t)
@@ -355,7 +361,7 @@ func TestASessionsTranscriptIsReadThroughItsSealedObject(t *testing.T) {
 	row := sealedSession(t, store, "ana", gzipText(t, openCodeExport(texts...)))
 	reads := &stubSessions{rows: []executordomain.Session{row}}
 	s := sessionSources(t, reads, store)
-	got, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn": row.Turn})
+	got, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": row.Turn})
 	if err != nil {
 		t.Fatalf("executor_session: %v", err)
 	}
@@ -378,7 +384,7 @@ func TestASessionsTranscriptIsReadThroughItsSealedObject(t *testing.T) {
 	}
 
 	got, err = askAsSeat(t, s, "ana", "executor_session",
-		map[string]any{"turn": row.Turn, "cursor": first.Next})
+		map[string]any{"turn_id": row.Turn, "cursor": first.Next})
 	if err != nil {
 		t.Fatalf("executor_session from %q: %v", first.Next, err)
 	}
@@ -389,14 +395,57 @@ func TestASessionsTranscriptIsReadThroughItsSealedObject(t *testing.T) {
 			len(rest.Entries), rest.From, rest.Cut, rest.Next)
 	}
 
-	for name, cursor := range map[string]string{
-		"a cursor of another object":  objstore.KeyAt(time.Now()).String() + ".200",
-		"a cursor no page handed out": "page two",
+	key := row.Object.Key.String()
+	for name, c := range map[string]struct{ cursor, says string }{
+		"a cursor of another object": {fmt.Sprintf("%s.%d.200", objstore.KeyAt(time.Now()),
+			executor.TranscriptVersion), "captured again"},
+		"a cursor of another count of entries": {fmt.Sprintf("%s.%d.200", key,
+			executor.TranscriptVersion+1), "counts a transcript's entries otherwise"},
+		"a cursor that names no count": {key + ".200", "handed out"},
+		"a cursor no page handed out":  {"page two", "handed out"},
 	} {
-		_, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn": row.Turn,
-			"cursor": cursor})
-		if !errors.Is(err, queries.ErrBadParams) {
-			t.Errorf("%s answered %v, want bad params", name, err)
+		_, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": row.Turn,
+			"cursor": c.cursor})
+		if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(queries.RefusalDetail(err), c.says) {
+			t.Errorf("%s answered %v, want bad params saying %q", name, err, c.says)
+		}
+	}
+}
+
+// AN ARCHIVE THAT IS NOT ITS FORMAT IS SAID IN THE ENGINE'S WORDS, never its
+// own. A box's agent can write what its run packs: an OpenCode session whose
+// document is a token followed by a mebibyte of its own words reads as
+// malformed, and the answer's sentence carries neither the token nor the words
+// — it is the engine's, a sentence long, whatever the archive held.
+//
+// Mutation: hand the decoder's message on as the reason, and the token — the
+// whole string the decoder met where the export's object belonged — reaches the
+// answer.
+func TestAnArchiveThatIsNotItsFormatIsSaidInTheEnginesWords(t *testing.T) {
+	t.Parallel()
+	store, _ := sessionObjectStore(t)
+	planted, err := json.Marshal(plantedKey + strings.Repeat(" what the box wrote", 56<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, document := range map[string]string{
+		"a document that is a string": string(planted),
+		"messages that are a string":  `{"info":{},"messages":` + string(planted) + `}`,
+	} {
+		row := sealedSession(t, store, "ana", gzipText(t, document))
+		got, err := askAsSeat(t, sessionSources(t, &stubSessions{rows: []executordomain.Session{row}}, store),
+			"ana", "executor_session", map[string]any{"turn_id": row.Turn})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		answer := got.(queries.SessionAnswer)
+		if answer.State != queries.TranscriptMalformed {
+			t.Errorf("%s reads %s (%q), want malformed", name, answer.State, answer.Why)
+		}
+		if strings.Contains(answer.Why, "ghp_") || strings.Contains(answer.Why, "what the box wrote") ||
+			len(answer.Why) > 1<<10 {
+			t.Errorf("%s is said in the archive's words, %d bytes of them: %.200q", name,
+				len(answer.Why), answer.Why)
 		}
 	}
 }
@@ -457,7 +506,7 @@ func TestASessionWhoseObjectCannotBeReadIsAnsweredAsSuch(t *testing.T) {
 		{"a turn that captured nothing", nothing, queries.TranscriptNone, "nothing of this turn's"},
 		{"a session the budget released", released, queries.TranscriptNone, "budget released"},
 	} {
-		got, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn": c.row.Turn})
+		got, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": c.row.Turn})
 		if err != nil {
 			t.Errorf("%s answered %v, want an answer saying so", c.name, err)
 			continue
@@ -471,11 +520,11 @@ func TestASessionWhoseObjectCannotBeReadIsAnsweredAsSuch(t *testing.T) {
 	}
 
 	_, err := askAsSeat(t, sessionSources(t, &stubSessions{rows: []executordomain.Session{tampered}},
-		failingObjects{}), "ana", "executor_session", map[string]any{"turn": tampered.Turn})
+		failingObjects{}), "ana", "executor_session", map[string]any{"turn_id": tampered.Turn})
 	if !errors.Is(err, queries.ErrUnavailable) {
 		t.Errorf("a store that did not answer: %v, want unavailable", err)
 	}
-	_, err = askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn": uuid.NewString()})
+	_, err = askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": uuid.NewString()})
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a turn the seat keeps no row of: %v, want not found", err)
 	}
@@ -499,12 +548,30 @@ func storedObject(t *testing.T, backend *memobj.Backend, name string) []byte {
 	return out
 }
 
-// THE CALLER'S FRESHNESS REACHES THE SESSIONS READER. Both questions read the
-// executor log at the level the caller asked — this surface's own when they
-// asked none — and a bare `session`, which waits for a position nobody named,
-// is refused rather than served.
+// servedAt is what a sessions answer says of how it was read: the level, the
+// position and whether the answering copy may be missing a row.
+func servedAt(t *testing.T, answer any) (statelog.ReadLevel, statelog.Position, bool) {
+	t.Helper()
+	switch a := answer.(type) {
+	case queries.SessionsAnswer:
+		return a.ReadLevel, a.Position, a.Complete
+	case queries.SessionAnswer:
+		return a.ReadLevel, a.Position, a.Complete
+	}
+	t.Fatalf("%T is not a sessions answer", answer)
+	return "", statelog.Position{}, false
+}
+
+// THE CALLER'S FRESHNESS REACHES THE SESSIONS READER, AND EACH ANSWER SAYS HOW
+// IT WAS READ. Both questions read the executor log at the level the caller
+// asked — this surface's own when they asked none — and say that level, the
+// position the rows were read at and whether the copy may be missing any,
+// beside them: the list and one session's transcript alike. A bare `session`,
+// which waits for a position nobody named, is refused rather than served.
 //
-// Mutation: read either at a fixed level, and the linearizable ask reads stale.
+// Mutation: read either at a fixed level, and the linearizable ask reads
+// stale; drop the level or the position from one session's answer, and it no
+// longer says how it was read.
 func TestTheCallersFreshnessReachesTheSessionsReader(t *testing.T) {
 	t.Parallel()
 	turn := uuid.NewString()
@@ -512,21 +579,31 @@ func TestTheCallersFreshnessReachesTheSessionsReader(t *testing.T) {
 		reads := &stubSessions{rows: []executordomain.Session{{Handle: "ana", Turn: turn}}}
 		store, _ := sessionObjectStore(t)
 		s := sessionSources(t, reads, store)
-		if _, err := askAsSeat(t, s, "ana", what, map[string]any{"turn": turn}); err != nil {
+		got, err := askAsSeat(t, s, "ana", what, map[string]any{"turn_id": turn})
+		if err != nil {
 			t.Fatalf("%s: %v", what, err)
 		}
-		if want := statelog.DefaultReadLevel(statelog.SurfaceDashboard); reads.fresh.Level != want {
+		want := statelog.DefaultReadLevel(statelog.SurfaceDashboard)
+		if reads.fresh.Level != want {
 			t.Errorf("%s read at %q with no ask, want this surface's %q", what, reads.fresh.Level, want)
 		}
-		if _, err := askAsSeat(t, s, "ana", what,
-			map[string]any{"turn": turn, "read_level": "linearizable"}); err != nil {
+		if level, at, complete := servedAt(t, got); level != want || at != stubAt || !complete {
+			t.Errorf("%s says it was read at %q, %s, complete %v; want %q, %s, complete", what,
+				level, at, complete, want, stubAt)
+		}
+		got, err = askAsSeat(t, s, "ana", what,
+			map[string]any{"turn_id": turn, "read_level": "linearizable"})
+		if err != nil {
 			t.Fatalf("%s at linearizable: %v", what, err)
 		}
 		if reads.fresh.Level != statelog.ReadLinearizable {
 			t.Errorf("%s asked for linearizable and read at %q", what, reads.fresh.Level)
 		}
+		if level, _, _ := servedAt(t, got); level != statelog.ReadLinearizable {
+			t.Errorf("%s was read linearizable and says %q", what, level)
+		}
 		if _, err := askAsSeat(t, s, "ana", what,
-			map[string]any{"turn": turn, "read_level": "session"}); !errors.Is(err, queries.ErrBadParams) {
+			map[string]any{"turn_id": turn, "read_level": "session"}); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%s accepted a bare read_level=session: %v", what, err)
 		}
 	}

@@ -732,7 +732,7 @@ func queryValues(v any) (url.Values, error) {
 // on a person, and the ones they answered: [decisionRows]) or names a
 // connected knowledge base as its backend.
 var outsideRoutes = []string{
-	"/agents/{id}/conversations", "/agents/{id}/sessions", "/agents/{id}/sessions/{turn}",
+	"/agents/{id}/conversations", "/agents/{id}/sessions", "/agents/{id}/sessions/{turn_id}",
 	"/events", "/turns", "/executors", "/query/{what}",
 }
 

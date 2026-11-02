@@ -19,12 +19,13 @@ import (
 // The Sessions view under a seat's Memory is typed by `contract/sessions.ts`,
 // and this holds it to both answers in both directions: every member it
 // declares is a key some row sends, a required one on every row, and every key
-// sent is declared — over a page of rows whose endings carry every field, a
-// transcript page that is cut and one that could not be read, entries of every
-// optional key (a subagent's, which only Claude Code's archive has, read as the
-// entry type itself encodes), and the bounds. And the four closed sets the
-// screen names words for are the engine's: the transcript's states, the
-// entries' kinds, a page's cuts and an ending's outcomes.
+// sent is declared — over the whole list and a page of it with a page after it,
+// rows whose endings carry every field, a transcript page that is cut and one
+// that could not be read, entries of every optional key (a subagent's, which
+// only Claude Code's archive has, read as the entry type itself encodes), and
+// the bounds. And the four closed sets the screen names words for are the
+// engine's: the transcript's states, the entries' kinds, a page's cuts and an
+// ending's outcomes.
 //
 // Mutation: rename a JSON key on either answer, add one, or add a state or a
 // kind on one side only, and this names it.
@@ -54,7 +55,12 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	list := asMap(t, listed)
-	holdShape(t, "ExecutorSessionsAnswer", []map[string]any{list}, false)
+	// A PAGE WITH ONE AFTER IT, which alone sends the cursor to it.
+	paged, err := r.Answer(asSeat(t, "ana"), "executor_sessions", map[string]any{"limit": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	holdShape(t, "ExecutorSessionsAnswer", []map[string]any{list, asMap(t, paged)}, false)
 	rows := rowsOf(t, list["sessions"])
 	holdShape(t, "ExecutorSessionRow", rows, false)
 	var endings []map[string]any
@@ -67,7 +73,7 @@ func TestTheSessionsScreenReadsWhatTheAnswersSend(t *testing.T) {
 
 	var answers, entries []map[string]any
 	for _, turn := range []string{read.Turn, missing.Turn} {
-		got, err := r.Answer(asSeat(t, "ana"), "executor_session", map[string]any{"turn": turn})
+		got, err := r.Answer(asSeat(t, "ana"), "executor_session", map[string]any{"turn_id": turn})
 		if err != nil {
 			t.Fatal(err)
 		}

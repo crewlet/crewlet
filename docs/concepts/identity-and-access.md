@@ -452,10 +452,16 @@ turn's harness transcript, kept so a later turn can continue it — are its
 answers for their agents, and could do none of it well without reading what
 those agents did. It is `audit.seat.read`, decided per seat, and it is limited
 to questions about **one seat** (a seat page's own turns and phases, its
-memory, the executor that seat launched, and that executor's sessions). A
-session holds what the executor's live output held, so reading it after the
-run widens nothing a lead could not watch while it ran. The company-wide trail
-stays admin's.
+memory, the executor that seat launched, and that executor's sessions). An
+executor session reaches nobody the executor's live output did not, but it
+holds **more** than that output showed: the live output names a tool call's
+subject on one line and a failed result's first line, and a session's
+transcript holds every call's whole input and each result's text to an entry's
+bound — the contents of the files the run read and what its commands printed —
+and every subagent's thread. A lead reads all of it, as they read the prompts
+and responses of their agents' phases; the redaction at the read matches the
+credential shapes the engine knows, not values. The company-wide trail stays
+admin's.
 
 **Admin is host access: running code on every engine host**, and that is what
 it confers rather than a side effect of it. It is one permission by decision,

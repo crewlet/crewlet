@@ -1188,28 +1188,40 @@ which the transcript cannot know), what it was asked, and whether a later
 launch could take the session up.
 
 **One session opens as its transcript**
-([`GET /agents/{id}/sessions/{turn}`](../reference/api-endpoints.md#get-agentsidsessionsturn)):
+([`GET /agents/{id}/sessions/{turn_id}`](../reference/api-endpoints.md#get-agentsidsessionsturn_id)):
 its object is streamed out of the store and opened under its own associated
 data, and the archive is read by the runner that packs it, which alone knows
 its layout — Claude Code's transcript, one record a line, then each subagent's
 own from its sidecar; OpenCode's export, a message at a time. The entries are
-what the run was briefed, what its model wrote, every tool call and what
-answered it, and the compaction summaries the harness wrote in place of what
-came before them; the model's thinking and the harness's bookkeeping are none.
-It is read a page at a time and bounded — 200 entries and 1 MiB of text a
-page, 16 KiB an entry, and 256 MiB of the archive decompressed a read, so an
-archive a box packed to inflate without end stops there — and every entry's
-text is **redacted whole at this read and only then cut**, whatever the capture
-did. An object the store no longer holds, one that does not open under the
-fleet's keyring, an archive that is not one its format describes and one this
-build does not read are each said as such, beside the turn's ending, which the
-row still holds.
+what the run was briefed, the notes a person sent it while it worked, what its
+model wrote, every tool call and what answered it, and the compaction summaries
+the harness wrote in place of what came before them; the model's thinking and
+the harness's bookkeeping are none. A note is known by the heading the engine
+opens every note with, wherever the harness filed it — OpenCode as a person's
+message, Claude Code as a hook's context in a record of its own. It is read a
+page at a time and bounded — 200 entries and 1 MiB of text a page, 16 KiB an
+entry, and 256 MiB a read of the archive as it inflates and, apart, of what a
+tar's members hand out, so an archive a box packed to inflate without end, or
+with a sparse member that declares more than it holds, stops there — and every
+entry's text is **redacted at this read before it is cut**, whatever the
+capture did: all of it that can reach the entry's bound and a private key's
+length past it, so a credential that begins inside the bound is redacted whole.
+An object the store no longer holds, one that does not open under the fleet's
+keyring, an archive that is not one its format describes and one this build
+does not read are each said as such, in the engine's own words, beside the
+turn's ending, which the row still holds.
 
-**It is the seat's trail.** A session is what the run's live output was,
-written down: so it is read by exactly who reads that — the seat, whoever leads
+**It is the seat's trail, and it holds more than the run's live output
+showed.** It is read by exactly who reads that output — the seat, whoever leads
 it, and an administrator, `audit.seat.read`
 ([Identity and Access](identity-and-access.md#the-authority-table-one-function-decides))
-— and by nobody the run's live output was withheld from.
+— and by nobody it was withheld from. But the live output names a call's
+subject on one line and a failed result's first line, and never a successful
+result's body; a session's transcript holds every call's whole input and each
+result's text to an entry's bound — the contents of the files the run read and
+what its commands printed — and every subagent's thread. The redaction matches
+the credential shapes the engine knows, not values, so a secret of no
+recognisable shape that a run read is in its transcript as the run read it.
 
 
 ---

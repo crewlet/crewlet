@@ -22,7 +22,7 @@ var readRoutes = []catalog.Route{
 	{Pattern: "GET /agents/{id}"},
 	{Pattern: "GET /agents/{id}/memory"},
 	{Pattern: "GET /agents/{id}/sessions"},
-	{Pattern: "GET /agents/{id}/sessions/{turn}"},
+	{Pattern: "GET /agents/{id}/sessions/{turn_id}"},
 	{Pattern: "GET /config"},
 	{Pattern: "GET /config/revisions"},
 	{Pattern: "GET /config/roles/{id}"},
@@ -76,11 +76,11 @@ func realAnswers(t *testing.T) map[string]any {
 	}
 	return map[string]any{
 		"GET /agents/{id}/sessions": map[string]any{
-			"handle": "eng-lead", "sessions": []any{session}, "next": "", "read_level": "stale",
+			"handle": "eng-lead", "sessions": []any{session}, "read_level": "stale",
 			"position": map[string]any{"stream": "CREWLET_EXECUTOR_LOG", "generation": 1, "seq": 42},
 			"complete": true,
 		},
-		"GET /agents/{id}/sessions/{turn}": map[string]any{
+		"GET /agents/{id}/sessions/{turn_id}": map[string]any{
 			"handle": "eng-lead", "session": session, "state": "read",
 			"entries": []any{
 				map[string]any{"kind": "brief", "at": "2026-10-24T09:00:00Z",
@@ -88,9 +88,12 @@ func realAnswers(t *testing.T) map[string]any {
 				map[string]any{"kind": "tool_call", "tool": "Bash",
 					"text": `{"command":"go test ./cache/..."}`, "bytes": 33},
 			},
-			"from": 0, "next": "",
+			"from": 0,
 			"bounds": map[string]any{"entries": 200, "bytes": 1 << 20, "entry_bytes": 16 << 10,
 				"line_bytes": 32 << 20, "read_bytes": 256 << 20},
+			"read_level": "stale",
+			"position":   map[string]any{"stream": "CREWLET_EXECUTOR_LOG", "generation": 1, "seq": 42},
+			"complete":   true,
 		},
 		"GET /config":            roundTrip(company.Redact()),
 		"GET /config/roles/{id}": roundTrip(company.Roles[0]),
@@ -276,7 +279,7 @@ func TestAGenericReadIsFencedAtTheTrustItsRouteEarns(t *testing.T) {
 		// every file it read and every command's output: the listing, whose
 		// asks and endings quote it, and the transcript alike.
 		{"GET /agents/{id}/sessions", true, provenance.TrustExternal},
-		{"GET /agents/{id}/sessions/{turn}", true, provenance.TrustExternal},
+		{"GET /agents/{id}/sessions/{turn_id}", true, provenance.TrustExternal},
 	} {
 		resp := exec.Response{Status: 200}
 		if c.body {
