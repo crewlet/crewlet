@@ -5958,11 +5958,15 @@ it names no asker.
   the checks position and the chart a refresh judged the readiness at (a
   chart alone included, since a configuration apply alone makes a change due
   a refresh, and only the row's chart moving ends that). Its apply moves
-  those columns, and a recheck's instant, under the guard the full record's
-  is decided by, and nothing else, so a conflicted change is not carried
-  again, paths and all, every ten minutes its target moves. Whatever turns
-  — a new revision or target, a state, a conflict list, a readiness — is the
-  whole `mergeability` record, since it is what somebody may be told of.
+  those columns, and a recheck's instant, while the row is of its revision
+  and holds no later tip or version, and nothing else, so a conflicted change
+  is not carried again, paths and all, every ten minutes its target moves.
+  The checks position and the chart are written as judged, below the row's
+  or not, as a full refresh writes them: a head whose checks ended more than
+  [30 days](#how-long-a-check-is-kept) ago holds none, and is judged at
+  zero. Whatever turns — a new revision or target, a state, a conflict
+  list, a readiness — is the whole `mergeability` record, since it is what
+  somebody may be told of.
 
 | Table | A row for | What it holds |
 |---|---|---|
