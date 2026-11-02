@@ -182,9 +182,10 @@
 // the BODY. [recordseal.Verifier.Open] is that one reading. The seal itself is
 // [internal/recordseal]'s, a leaf, because every other channel whose messages
 // are instructions seals under the same frame and none of them reads a log;
-// its package doc is where the whole argument lives, including why the answer
-// is three-valued. What stays here is that no record leaves unsealed and none
-// reaches a domain unopened (`signature.go`, [VerifiedLog]).
+// its package doc is the record's authority and where the whole argument
+// lives, including why the answer is three-valued. What stays here is that no
+// record leaves unsealed and none reaches a domain unopened (`signature.go`,
+// [VerifiedLog]).
 //
 // # A record this build cannot decode is RETAINED, with one exception
 //
