@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // WorkerQueue is the merge queue's worker's name, as crewlet.code.home.passes
@@ -116,9 +117,12 @@ type queue struct {
 	// rate is the queue's merge rate, measured from each target's queue
 	// work and the rounds this node timed (mergerate.go).
 	rate mergeRate
-	node string
-	log  *slog.Logger
-	now  func() time.Time
+	// metrics is where its rounds, landings and ejections are counted
+	// (crewlet.code.queue.*); nil records nothing.
+	metrics *metrics.Recorder
+	node    string
+	log     *slog.Logger
+	now     func() time.Time
 }
 
 // AlarmReading fills the reading's merge-rate half from the queues this node
@@ -204,7 +208,9 @@ func (w *queue) Work(ctx context.Context, repoID string, floor statelog.Position
 func (w *queue) target(ctx context.Context, repoID string, d code.QueueDue, memo *defsMemo,
 	at statelog.Position) (bool, error) {
 
-	w.rate.measure(repoID, d, w.now())
+	if w.rate.measure(repoID, d, w.now()) {
+		w.round(roundAbandoned)
+	}
 	switch {
 	case len(d.Entries) == 0:
 		return false, nil
@@ -238,7 +244,7 @@ func (w *queue) shed(ctx context.Context, repoID string, d code.QueueDue, at sta
 	for i, e := range d.Entries {
 		ejected[i] = code.Ejection{EntryID: e.EntryID, Reason: code.EjectRepoMirrored}
 	}
-	return w.eject(ctx, repoID, fmt.Sprintf("target %s of a pull mirror", d.TargetRef), ejected, at)
+	return w.eject(ctx, repoID, fmt.Sprintf("target %s of a pull mirror", d.TargetRef), nil, ejected, at)
 }
 
 // BatchOf is how many entries one candidate of a target's train takes, of
@@ -327,7 +333,7 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 		}
 	}
 	if len(ejected) > 0 {
-		if err = w.eject(ctx, repoID, about, ejected, at); err != nil {
+		if err = w.eject(ctx, repoID, about, nil, ejected, at); err != nil {
 			return false, err
 		}
 	}
@@ -358,7 +364,9 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 	}
 	applied = res.Outcome == statelog.OutcomeApplied
 	if applied && res.Refusal == "" {
-		w.rate.built(repoID, d.TargetRef, train, w.now())
+		if w.rate.built(repoID, d.TargetRef, train, w.now()) {
+			w.round(roundAbandoned)
+		}
 	}
 	if res.Refusal != "" {
 		w.log.Debug("code_queue_record_refused", "repo", repoID, "about", about, "write", "candidate",
@@ -448,7 +456,7 @@ func (w *queue) trainDefs(ctx context.Context, repoID string, d code.QueueDue, m
 				Checks: undefined})
 		}
 	}
-	return nil, w.eject(ctx, repoID, about, ejected, at)
+	return nil, w.eject(ctx, repoID, about, endOf(d, roundEjected), ejected, at)
 }
 
 // probe queues on commit of candidate c what s says it owes of the required
@@ -528,17 +536,34 @@ func (w *queue) land(ctx context.Context, repoID string, d code.QueueDue, green 
 		w.log.Debug("code_queue_record_refused", "repo", repoID, "about", about, "write", "land",
 			"refusal", res.Refusal, "detail", res.Detail, "ejecting", len(ejected))
 		if len(ejected) > 0 {
-			return w.eject(ctx, repoID, about, ejected, at)
+			return w.eject(ctx, repoID, about, endOf(d, roundEjected), ejected, at)
 		}
 		return nil
-	case res.Outcome != statelog.OutcomeApplied:
+	case res.Outcome == statelog.OutcomeUnknown:
+		// NOTHING ESTABLISHED HERE: the landing may be on no log at all, so
+		// it is neither counted nor timed nor closed on its word.
+		w.log.Warn("code_queue_close_not_run", "repo", repoID, "about", about, "outcome", res.Outcome,
+			"detail", "nothing is known here of the landing, so its work items are not closed")
+		return nil
+	}
+	// DURABLE, applied here or pending — every node applies a pending
+	// record — so the round ENDED at the landing's append, and is counted
+	// and timed there: a landing answered pending and left uncounted would
+	// read as its train abandoned on the next turn, its changes never
+	// counted landed.
+	took, timed := w.rate.landed(repoID, d.TargetRef, l.Train, w.now())
+	w.count(metrics.CodeQueueLanded, uint64(len(l.Entries)), nil)
+	w.round(roundLanded)
+	if timed && w.metrics != nil {
+		w.metrics.Observe(metrics.CodeQueueRoundDuration, took, nil)
+	}
+	if res.Outcome != statelog.OutcomeApplied {
 		// NOT YET APPLIED HERE: its changes are not merged on this node's
 		// rows, so no work item of theirs is closed on its word.
 		w.log.Warn("code_queue_close_not_run", "repo", repoID, "about", about, "outcome", res.Outcome,
 			"detail", "the landing is appended and not applied here, so its work items are not closed")
 		return nil
 	}
-	w.rate.landed(repoID, d.TargetRef, l.Train, w.now())
 	var failed []error
 	for _, e := range landed {
 		if !e.CloseTask || e.WorkItem == nil {
@@ -596,7 +621,7 @@ func (w *queue) bisect(ctx context.Context, repoID string, d code.QueueDue, fail
 			}
 		}
 		return w.eject(ctx, repoID, fmt.Sprintf("target %s candidate %d at %s", d.TargetRef, c.Ordinal,
-			short(culprit.Commit)), []code.Ejection{x}, at)
+			short(culprit.Commit)), endOf(d, roundBisected), []code.Ejection{x}, at)
 	}
 	mid := c.Commits[(good+red+1)/2]
 	s := commitStates(mid, failed)
@@ -613,8 +638,11 @@ func (w *queue) bisect(ctx context.Context, repoID string, d code.QueueDue, fail
 // eject asks the repository's committer to put entries out of their queue —
 // which abandons the train each was in — about what it is for: a refusal is
 // the rows answering, read again next turn, and only an error of the write
-// itself fails the turn.
-func (w *queue) eject(ctx context.Context, repoID, about string, entries []code.Ejection,
+// itself fails the turn. ends, where set, is the train the ejection ENDS and
+// how ([endOf]): counted once its first record is appended, and its round
+// left untimed ([mergeRate.ended]); nil for entries no train of the target's
+// was testing — a chain's skipped merges, a pull mirror's entries.
+func (w *queue) eject(ctx context.Context, repoID, about string, ends *trainEnd, entries []code.Ejection,
 	at statelog.Position) error {
 
 	for start := 0; start < len(entries); start += code.MaxLandEntries {
@@ -627,9 +655,57 @@ func (w *queue) eject(ctx context.Context, repoID, about string, entries []code.
 		case res.Refusal != "":
 			w.log.Debug("code_queue_record_refused", "repo", repoID, "about", about, "write", "eject",
 				"refusal", res.Refusal, "detail", res.Detail)
+			continue
+		}
+		// APPENDED, applied here or not yet: the log applies it in order,
+		// and the next turn reads its entries gone.
+		for _, x := range part {
+			w.count(metrics.CodeQueueEjected, 1, metrics.Attrs{"reason": string(x.Reason)})
+		}
+		if ends != nil {
+			w.rate.ended(repoID, ends.target, ends.train)
+			w.round(ends.outcome)
+			ends = nil
 		}
 	}
 	return nil
+}
+
+// How a train of a target's queue ended, as crewlet.code.queue.rounds
+// counts it.
+const (
+	roundLanded    = "landed"
+	roundBisected  = "bisected"
+	roundEjected   = "ejected"
+	roundAbandoned = "abandoned"
+)
+
+// trainEnd is the train an eject ends, and how.
+type trainEnd struct {
+	target, train, outcome string
+}
+
+// endOf is the end of d's train an eject of its entries makes, outcome being
+// how.
+func endOf(d code.QueueDue, outcome string) *trainEnd {
+	e := &trainEnd{target: d.TargetRef, outcome: outcome}
+	if len(d.Train) > 0 {
+		e.train = d.Train[0].Train
+	}
+	return e
+}
+
+// round counts a train of a target's queue ended, outcome being how.
+func (w *queue) round(outcome string) {
+	w.count(metrics.CodeQueueRounds, 1, metrics.Attrs{"outcome": outcome})
+}
+
+// count adds n to the counter name under attrs, where the node records
+// metrics at all.
+func (w *queue) count(name string, n uint64, attrs metrics.Attrs) {
+	if w.metrics != nil {
+		w.metrics.Add(name, n, attrs)
+	}
 }
 
 // cancelAbandoned ends each of attempts — an attempt its queue queued, of a

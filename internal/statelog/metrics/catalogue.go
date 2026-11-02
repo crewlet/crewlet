@@ -780,6 +780,62 @@ func Catalogue() []Instrument {
 				"`candidate` and `land`, a branch moving under its queue.",
 		},
 		{
+			Name: CodeQueueRounds, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Trains of a target's merge queue that ended on the git node " +
+				"that is its repository's home, by how, `outcome`: `landed`, " +
+				"its longest green prefix landed in one land record, applied " +
+				"or pending; " +
+				"`bisected`, its first candidate red and bisected down to the " +
+				"culprit, which was ejected `check_failed`; `ejected`, entries " +
+				"its landing would not land (a gate no longer met, a head " +
+				"moved) put out, which ends it; and `abandoned`, a train this " +
+				"node built that ended any other way — a person's merge or " +
+				"push moving its target, a dequeue, a newer train. `bisected` " +
+				"climbing against `landed` is changes queued red, each batch " +
+				"paying a bisect; `abandoned`, a target pushed to under its " +
+				"queue. A train counts once, where it ended; a home new to a " +
+				"queue counts the ones it saw end.",
+		},
+		{
+			Name: CodeQueueLanded, Kind: KindCounter, Unit: UnitCount,
+			Shows: "Changes a merge queue landed: the entries of each land " +
+				"record the repository's home appended, applied or pending " +
+				"(durable, which every node applies), every one merged onto " +
+				"its target as its enqueuer. Against " +
+				"`crewlet.code.queue.proposals{op=\"enqueue\"}` it is the " +
+				"queue's throughput: enqueues climbing past landings is a " +
+				"queue fed faster than it lands, which " +
+				"`code_merge_rate_over_capacity` raises once it outruns the " +
+				"queue's own capacity.",
+		},
+		{
+			Name: CodeQueueEjected, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Entries a merge queue's home put out of their queue, one " +
+				"for each ejection of an eject record it appended, by " +
+				"`reason`: `check_failed`, a bisect's culprit; `conflict` and " +
+				"`not_fast_forward`, a merge its chain could not build; " +
+				"`gate_unmet` and `head_moved`, an entry its landing would not " +
+				"land; `repo_mirrored`, the entries of a pull mirror's queue. " +
+				"`check_failed` climbing is changes enqueued before their " +
+				"checks pass on the target; `conflict`, changes queued " +
+				"together that touch the same lines.",
+		},
+		{
+			Name: CodeQueueRoundDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Shows: "One round of a merge queue that landed, on its home: from " +
+				"the candidate record that built its train applying to the " +
+				"land record that landed its green prefix appended, applied " +
+				"or pending — the same " +
+				"instants `code_merge_rate_over_capacity` prices a queue's " +
+				"capacity at. Only a train this node built is timed, so a " +
+				"home new to a queue records the rounds it builds. It is the " +
+				"queue's checks' wall clock plus its records': rising, a " +
+				"queue whose checks slowed or whose runners are busy, which " +
+				"lowers the rate it can land at.",
+		},
+		{
 			Name: CodeMergeOutcomes, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
 			Shows: "Merges of changes this node's committer was asked to decide " +

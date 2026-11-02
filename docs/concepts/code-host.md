@@ -6565,6 +6565,18 @@ The remedy for both is the same: a deeper queue or a larger batch lands more
 a round, faster or fewer required checks shorten it, and more branches or
 repositories each have a queue of their own.
 
+Before the alarm fires, the home's own instruments show how its queues are
+going ([Metrics](../reference/metrics.md)): `crewlet.code.queue.landed`
+counts the changes its land records landed, which against the enqueues
+`crewlet.code.queue.proposals` counts is the queue's throughput;
+`crewlet.code.queue.rounds` counts its trains by how each ended — `landed`,
+`bisected` down to a culprit, `ejected` by a landing that would not land
+them, or `abandoned` under a person's push, a dequeue or a newer train —
+so a rising share of `bisected` is changes queued red; and
+`crewlet.code.queue.ejected` counts what it put out, by reason.
+`crewlet.code.queue.round.duration` is each landed round, timed from the
+same two instants the alarm prices a round at.
+
 ### Tip checks and code_green
 
 **Every protected tip is checked.** A queue's landing proved its branch's
