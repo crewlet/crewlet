@@ -931,6 +931,56 @@ func TestAPushMirrorLandsBesideAForgesOtherRefs(t *testing.T) {
 	}
 }
 
+// A PUSH MIRROR DELETES WHAT THE REPOSITORY DROPPED, AND NEVER A BRANCH IT
+// HOLDS BACK: a push mirror covering main, release and every tag first gives
+// the other host all three; then the repository deletes its tag v1 and a
+// rule comes to protect release with a check none of its commits has passed,
+// so release has no green commit — and the next attempt deletes v1 at the
+// other host and leaves its release where it was, held back as waiting
+// rather than deleted as a ref the push does not set. The announcement
+// names both.
+//
+// Mutation: emit no deletion, and the other host keeps v1; delete a waiting
+// branch like any ref the push does not set, and the other host loses
+// release.
+func TestAPushMirrorDeletesWhatTheRepositoryDropped(t *testing.T) {
+	covers := []string{"refs/heads/main", "refs/heads/release", "refs/tags/*"}
+	var settings code.RepoSettings
+	h, p, wt, push := pushMirrored(t, func(url string) code.RepoSettings {
+		settings = mirroredTo(url, covers...)
+		return settings
+	})
+	m := h.mirrors()
+	a := p.Commit(wt, map[string]string{"a": "a\n"}, "first")
+	push("HEAD:refs/heads/main", "HEAD:refs/heads/release", "HEAD:refs/tags/v1")
+	h.pass(m)
+	if held := h.src.held(); held["refs/heads/release"] != a || held["refs/tags/v1"] != a {
+		t.Fatalf("the first push left the other host holding %v; want release and v1 at %s", held, a)
+	}
+
+	gated := settings
+	gated.Protections = append(slices.Clone(settings.Protections), code.Protection{
+		PushRule: code.PushRule{Pattern: "refs/heads/release", DirectPush: code.DirectPersons},
+		Gate: &code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
+			Checks: []string{"unit"}, Landing: code.Landing{Depth: 4, Batch: 4}, DeleteSource: code.DeleteNone}})
+	h.f.Declare(t, code.Declared{Name: "pushed", Settings: gated})
+	push(":refs/tags/v1")
+	h.advance(code.MirrorInterval + time.Minute)
+	h.pass(m)
+	held := h.src.held()
+	if got, ok := held["refs/tags/v1"]; ok {
+		t.Errorf("the other host still holds v1 at %s once the repository deleted it; want it deleted", got)
+	}
+	if got := held["refs/heads/release"]; got != a {
+		t.Errorf("the other host's release is %q while release waits for green; want it left at %s", got, a)
+	}
+	pushed := h.events.all()
+	if last := pushed[len(pushed)-1]; !slices.Equal(last.Deleted, []string{"refs/tags/v1"}) ||
+		!slices.Equal(last.Waiting, []string{"refs/heads/release"}) {
+		t.Errorf("the last push announced %+v; want v1 deleted and release waiting", last)
+	}
+}
+
 // A PUSH MIRROR DIALS ONLY WHEN WHAT IT COVERS MOVED: once its first push
 // has left the other host level, a nudge of its repository a minute later
 // that moved no ref it covers — a push of a branch beside main — reads the
