@@ -1394,10 +1394,15 @@ next pass.
 
 **What it costs.** On the schedule, the scan that judges an expunge due is
 one `git rev-list --disk-usage` over the repository's whole history, and every
-build is a walk of it from every tip kept,
-admitted in the node's maintenance lane at a publication's charge — about
-600 bytes an object of the repository — so a refused expunge is a purge
-waiting, never a push refused. The begin's record writes at most 2 625 rows
+build is a walk of it from every tip kept. Each is admitted in the node's
+maintenance lane at room for that walk, 240 bytes an object of the whole
+repository as a clone without a bitmap takes, and for the delta window beside
+it, six times `code.limits.max_blob_bytes` (300 MiB by default); a build adds
+550 bytes an object of the packs it sorts, as a merge does. A node whose
+budget cannot hold that refuses the expunge and asks again at every pass.
+Nothing is refused at once, but what no ref reaches keeps counting against
+`code.limits.repo_max_bytes`, the bytes a push is refused `repo_size` on,
+until a git node with the room maintains the repository. The begin's record writes at most 2 625 rows
 and applied in 75 ms at its widest, measured on two cores, the commit's at
 most 97 rows in 13.5 ms. Every other git node holding the repository downloads
 the kept, the dropping and the rescue packs once — the maintainer links its
