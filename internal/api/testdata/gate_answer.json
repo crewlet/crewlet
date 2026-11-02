@@ -29,6 +29,61 @@
           }
         },
         {
+          "domain": "iam",
+          "stream": "CREWLET_IAM_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.iam:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_IAM_LOG",
+            "generation": 1,
+            "seq": 8820
+          }
+        },
+        {
+          "domain": "artifacts",
+          "stream": "CREWLET_ARTIFACTS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifacts:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACTS_LOG",
+            "generation": 1,
+            "seq": 13230
+          }
+        },
+        {
+          "domain": "artifactdata",
+          "stream": "CREWLET_ARTIFACT_DATA_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifactdata:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACT_DATA_LOG",
+            "generation": 1,
+            "seq": 17640
+          }
+        },
+        {
+          "domain": "assistant",
+          "stream": "CREWLET_ASSISTANT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.assistant:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ASSISTANT_LOG",
+            "generation": 1,
+            "seq": 22050
+          }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
+          }
+        },
+        {
           "domain": "code",
           "stream": "CREWLET_CODE_LOG",
           "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.code:node-4",
@@ -36,7 +91,7 @@
           "position": {
             "stream": "CREWLET_CODE_LOG",
             "generation": 1,
-            "seq": 77
+            "seq": 30870
           }
         }
       ]
@@ -67,7 +122,62 @@
           "actions": [
             "set_capacity"
           ],
-          "hint": "CREWLET_PAGES_LOG is full to its broker ceiling, past even the reserve kept there for gate records: raise its ceiling, which is the only thing that makes room for it — then the same gesture under the same operation id finishes it, where a fresh one would write every log that already holds the record again"
+          "hint": "CREWLET_PAGES_LOG is full to its broker ceiling, past even the reserve kept there for gate records: raise its ceiling, which is the only thing that makes room for it. Then the same gesture under the same operation id finishes it, where a fresh one would write every log that already holds the record again"
+        },
+        {
+          "domain": "iam",
+          "stream": "CREWLET_IAM_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.iam:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_IAM_LOG",
+            "generation": 1,
+            "seq": 8820
+          }
+        },
+        {
+          "domain": "artifacts",
+          "stream": "CREWLET_ARTIFACTS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifacts:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACTS_LOG",
+            "generation": 1,
+            "seq": 13230
+          }
+        },
+        {
+          "domain": "artifactdata",
+          "stream": "CREWLET_ARTIFACT_DATA_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifactdata:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACT_DATA_LOG",
+            "generation": 1,
+            "seq": 17640
+          }
+        },
+        {
+          "domain": "assistant",
+          "stream": "CREWLET_ASSISTANT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.assistant:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ASSISTANT_LOG",
+            "generation": 1,
+            "seq": 22050
+          }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
+          }
         },
         {
           "domain": "code",
@@ -77,7 +187,7 @@
           "position": {
             "stream": "CREWLET_CODE_LOG",
             "generation": 1,
-            "seq": 77
+            "seq": 30870
           }
         }
       ]
@@ -111,6 +221,61 @@
           }
         },
         {
+          "domain": "iam",
+          "stream": "CREWLET_IAM_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.iam:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_IAM_LOG",
+            "generation": 1,
+            "seq": 8820
+          }
+        },
+        {
+          "domain": "artifacts",
+          "stream": "CREWLET_ARTIFACTS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifacts:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACTS_LOG",
+            "generation": 1,
+            "seq": 13230
+          }
+        },
+        {
+          "domain": "artifactdata",
+          "stream": "CREWLET_ARTIFACT_DATA_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifactdata:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACT_DATA_LOG",
+            "generation": 1,
+            "seq": 17640
+          }
+        },
+        {
+          "domain": "assistant",
+          "stream": "CREWLET_ASSISTANT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.assistant:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ASSISTANT_LOG",
+            "generation": 1,
+            "seq": 22050
+          }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
+          }
+        },
+        {
           "domain": "code",
           "stream": "CREWLET_CODE_LOG",
           "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.code:node-4",
@@ -118,7 +283,7 @@
           "position": {
             "stream": "CREWLET_CODE_LOG",
             "generation": 1,
-            "seq": 77
+            "seq": 30870
           }
         }
       ]
@@ -152,6 +317,61 @@
           "hint": "a later gate record has undone this operation's since: start a new gesture, under a fresh operation id, if the node should change again"
         },
         {
+          "domain": "iam",
+          "stream": "CREWLET_IAM_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.iam:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_IAM_LOG",
+            "generation": 1,
+            "seq": 8820
+          }
+        },
+        {
+          "domain": "artifacts",
+          "stream": "CREWLET_ARTIFACTS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifacts:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACTS_LOG",
+            "generation": 1,
+            "seq": 13230
+          }
+        },
+        {
+          "domain": "artifactdata",
+          "stream": "CREWLET_ARTIFACT_DATA_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifactdata:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACT_DATA_LOG",
+            "generation": 1,
+            "seq": 17640
+          }
+        },
+        {
+          "domain": "assistant",
+          "stream": "CREWLET_ASSISTANT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.assistant:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ASSISTANT_LOG",
+            "generation": 1,
+            "seq": 22050
+          }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
+          }
+        },
+        {
           "domain": "code",
           "stream": "CREWLET_CODE_LOG",
           "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.code:node-4",
@@ -159,7 +379,7 @@
           "position": {
             "stream": "CREWLET_CODE_LOG",
             "generation": 1,
-            "seq": 77
+            "seq": 30870
           }
         }
       ]
@@ -192,6 +412,61 @@
           "hint": "its outcome is unknown: the same gesture under the same operation id answers from this log's own ledger if the record landed, and writes it if it did not"
         },
         {
+          "domain": "iam",
+          "stream": "CREWLET_IAM_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.iam:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_IAM_LOG",
+            "generation": 1,
+            "seq": 8820
+          }
+        },
+        {
+          "domain": "artifacts",
+          "stream": "CREWLET_ARTIFACTS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifacts:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACTS_LOG",
+            "generation": 1,
+            "seq": 13230
+          }
+        },
+        {
+          "domain": "artifactdata",
+          "stream": "CREWLET_ARTIFACT_DATA_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifactdata:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACT_DATA_LOG",
+            "generation": 1,
+            "seq": 17640
+          }
+        },
+        {
+          "domain": "assistant",
+          "stream": "CREWLET_ASSISTANT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.assistant:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ASSISTANT_LOG",
+            "generation": 1,
+            "seq": 22050
+          }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
+          }
+        },
+        {
           "domain": "code",
           "stream": "CREWLET_CODE_LOG",
           "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.code:node-4",
@@ -199,7 +474,7 @@
           "position": {
             "stream": "CREWLET_CODE_LOG",
             "generation": 1,
-            "seq": 77
+            "seq": 30870
           }
         }
       ]
@@ -233,6 +508,61 @@
           "hint": "this node cannot tell whether the record landed: its operation ledger may have lost the record of this operation, which was minted before the cutoff of the ledger's thirty-day sweep, so the same gesture here answers the same way every time. Run it through a node whose ledger reaches back that far, under the same operation id"
         },
         {
+          "domain": "iam",
+          "stream": "CREWLET_IAM_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.iam:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_IAM_LOG",
+            "generation": 1,
+            "seq": 8820
+          }
+        },
+        {
+          "domain": "artifacts",
+          "stream": "CREWLET_ARTIFACTS_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifacts:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACTS_LOG",
+            "generation": 1,
+            "seq": 13230
+          }
+        },
+        {
+          "domain": "artifactdata",
+          "stream": "CREWLET_ARTIFACT_DATA_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.artifactdata:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ARTIFACT_DATA_LOG",
+            "generation": 1,
+            "seq": 17640
+          }
+        },
+        {
+          "domain": "assistant",
+          "stream": "CREWLET_ASSISTANT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.assistant:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_ASSISTANT_LOG",
+            "generation": 1,
+            "seq": 22050
+          }
+        },
+        {
+          "domain": "chat",
+          "stream": "CREWLET_CHAT_LOG",
+          "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.chat:node-4",
+          "outcome": "applied",
+          "position": {
+            "stream": "CREWLET_CHAT_LOG",
+            "generation": 1,
+            "seq": 26460
+          }
+        },
+        {
           "domain": "code",
           "stream": "CREWLET_CODE_LOG",
           "op_id": "01a0c450-6c00-7170-b8e5-7908c2cd9718.evict-node-4.evict.code:node-4",
@@ -240,7 +570,7 @@
           "position": {
             "stream": "CREWLET_CODE_LOG",
             "generation": 1,
-            "seq": 77
+            "seq": 30870
           }
         }
       ]
@@ -254,9 +584,9 @@
           "wait",
           "force"
         ],
-        "detail": "statelog: node-4 may not be evicted: it holds a live presence lease, so it is still reaching coordination and almost certainly running — an eviction drops every record it writes on every node and takes its copy of every log it is evicted from out of service, which is the gesture for a node that is not coming back.",
+        "detail": "node-4 may not be evicted: it holds a live presence lease, so it's still reaching coordination and almost certainly running. An eviction drops every record it writes on every node and takes its copy of every log it is evicted from out of service, which is the gesture for a node that isn't coming back.",
         "error": "eviction_refused",
-        "hint": "Stop node-4 and wait for its presence lease to lapse — the retention report stops showing it live — then run the eviction again; or, if it is wedged in a way that still renews its lease, force the eviction past the lease.",
+        "hint": "Stop node-4 and wait for its presence lease to lapse (the retention report stops showing it live), then run the eviction again; or, if it's wedged in a way that still renews its lease, force the eviction past the lease.",
         "message": "That node is still reaching the fleet, so it was not evicted and nothing was written. The hint says what to do.",
         "node": "node-4",
         "op_id": "01a0c450-6c00-749b-896e-5d411f840a8f.evict-node-4"
@@ -269,9 +599,9 @@
           "retry_same_op",
           "force"
         ],
-        "detail": "engine: the eviction of node-4 cannot be judged: list the live nodes: coordination is unreachable — a lease listing nobody could read is not one that came back clear.",
+        "detail": "Couldn't tell whether node-4 is still running, because this node couldn't read the presence leases, so nothing was written.",
         "error": "eviction_unjudged",
-        "hint": "This node could not read the presence leases, so it cannot tell whether node-4 is still running: ask again once coordination answers, or — if you know node-4 is gone — force the eviction, which does not need them.",
+        "hint": "Ask again once coordination answers, or, if you know node-4 is gone, force the eviction, which doesn't need the leases.",
         "message": "This node could not tell whether that node is still running, so nothing was written. The hint says how to go on.",
         "node": "node-4",
         "op_id": "01a0c450-6c00-7ba8-8d4a-0db8da6b0076.evict-node-4"
@@ -283,7 +613,7 @@
         "actions": [
           "wait"
         ],
-        "detail": "engine: this node publishes nothing in its mode: an eviction appends a record to the state log, and this node runs in seal mode.",
+        "detail": "An eviction adds a record to the logs, and this node runs in seal mode, which adds nothing while a capacity window measures them. Run it once the fleet is back in normal mode (`crewlet run` without -mode).",
         "error": "not_publishing",
         "hint": "This node is in a capacity window and writes nothing to the logs until the fleet is restarted into normal mode; run the gesture again then.",
         "message": "This node is in a capacity window and writes nothing to the logs, so nothing was judged or written. Run it again once the fleet is back in normal mode.",
@@ -297,14 +627,14 @@
         "actions": [
           "wait"
         ],
-        "detail": "statelog: node-4 may not be readmitted: its last position in tracker (reported 2026-09-21T12:00:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800) — it has to catch up before the fleet counts it again.",
+        "detail": "node-4 may not be readmitted: its last position in tracker (reported 2026-09-21T12:00:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800). It has to catch up before the fleet counts it again.",
         "domain": "tracker",
         "error": "readmission_refused",
         "first_seq": 8800,
         "floor": 9000,
         "floor_generation": 1,
         "generation": 1,
-        "hint": "Start node-4 if it is not running: it catches up on its own, replaying what the log still holds and adopting a peer's snapshot where it does not — the retention report's snapshots say whether any peer can donate one. Readmit it once it has applied every record up to the one just before the higher of the floor and the first surviving sequence this refusal names: its position on that log in the retention report at that bound minus one or above, at the log's current generation.",
+        "hint": "Start node-4 if it isn't running: it catches up on its own, replaying what the log still holds and adopting a peer's snapshot where it doesn't (the retention report's snapshots say whether any peer can donate one). Readmit it once it has applied every record up to the one just before the higher of the floor and the first surviving sequence this refusal names: its position on that log in the retention report at that bound minus one or above, at the log's current generation.",
         "message": "That node is too far behind to be counted again yet, so nothing was written. The detail gives the positions.",
         "node": "node-4",
         "op_id": "01a0c450-6c00-7f2e-8314-ccf84cf44c32.readmit-node-4",
@@ -319,13 +649,29 @@
           "retry_same_op",
           "other_node"
         ],
-        "detail": "engine: the readmission of node-4 cannot be judged on tracker: read its readmission bound: engine: read tracker's first surviving sequence: the stream has no leader.",
+        "detail": "Couldn't judge whether node-4 can be counted again on tracker, because this node couldn't read that log's bound, so nothing was written.",
         "error": "readmission_unjudged",
         "hint": "This node could not read what the readmission of node-4 is judged against, and wrote nothing: ask again once it answers, or through another node.",
         "log": "tracker",
         "message": "This node could not read what a readmission is decided on, so nothing was written. The hint says how to go on.",
         "node": "node-4",
         "op_id": "01a0c450-6c00-79ad-8c62-c1a2d6774ed0.readmit-node-4"
+      }
+    },
+    "readmission_unjudged_behind": {
+      "status": 503,
+      "body": {
+        "actions": [
+          "retry_same_op",
+          "other_node"
+        ],
+        "detail": "Couldn't judge whether node-4 can be counted again on tracker, because the fleet has re-anchored that log and this node hasn't applied it yet, so nothing was written.",
+        "error": "readmission_unjudged",
+        "hint": "This node hasn't applied the fleet's re-anchor of tracker yet, so it can't judge the readmission of node-4 there and wrote nothing: ask a node that has applied it, or ask here again once this node has.",
+        "log": "tracker",
+        "message": "This node could not read what a readmission is decided on, so nothing was written. The hint says how to go on.",
+        "node": "node-4",
+        "op_id": "01a0c450-6c00-7202-baff-88d7ba1e421e.readmit-node-4"
       }
     },
     "readmission_unjudged_register": {
@@ -335,7 +681,7 @@
           "retry_same_op",
           "other_node"
         ],
-        "detail": "engine: the readmission of node-4 cannot be judged: read the positions register: coordination is unreachable.",
+        "detail": "Couldn't judge whether node-4 can be counted again, because this node couldn't read the fleet's positions or floors, so nothing was written.",
         "error": "readmission_unjudged",
         "hint": "This node could not read what the readmission of node-4 is judged against, and wrote nothing: ask again once it answers, or through another node.",
         "message": "This node could not read what a readmission is decided on, so nothing was written. The hint says how to go on.",

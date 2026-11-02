@@ -7,15 +7,16 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iamdomain"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // seamClass is what a field a SERVING data node reads is, with respect to the
@@ -101,7 +102,7 @@ func (c seamClass) valid() bool {
 // builds a seat's engine write, from its own epoch's chart, which is the same
 // question a serving decide's grant is.
 var servingSeams = []reflect.Type{
-	reflect.TypeFor[tracker.WriterDeps](),
+	reflect.TypeFor[worklet.WriterDeps](),
 	reflect.TypeFor[estate.Backend](),
 	reflect.TypeFor[estate.ServerSeams](),
 	reflect.TypeFor[code.CommitterOptions](),
@@ -111,14 +112,17 @@ var servingSeams = []reflect.Type{
 	reflect.TypeFor[code.ReaderOptions](),
 	reflect.TypeFor[query.Options](),
 	reflect.TypeFor[host.Options](),
-	reflect.TypeFor[pages.SearcherOptions](),
-	reflect.TypeFor[pages.ReaderOptions](),
-	reflect.TypeFor[pages.Options](),
+	reflect.TypeFor[doclet.SearcherOptions](),
+	reflect.TypeFor[doclet.ReaderOptions](),
+	reflect.TypeFor[doclet.Options](),
 	reflect.TypeFor[iamdomain.ReaderOptions](),
 	reflect.TypeFor[artifactsdomain.ReaderOptions](),
 	reflect.TypeFor[artifactsdomain.WriterDeps](),
 	reflect.TypeFor[artifactdata.ReaderOptions](),
 	reflect.TypeFor[artifactdata.WriterDeps](),
+	reflect.TypeFor[chatlet.Options](),
+	reflect.TypeFor[chatlet.ReaderOptions](),
+	reflect.TypeFor[search.ChatIndexer](),
 	reflect.TypeFor[engine.ItemRanker](),
 	reflect.TypeFor[search.FanOut](),
 }
@@ -129,32 +133,35 @@ var classified = map[string]struct {
 	class seamClass
 	why   string
 }{
-	"tracker.WriterDeps.Publisher": {seamNone, "the tracker log's write authority"},
-	"tracker.WriterDeps.DB":        {seamNone, "the replicated rows a write decides from"},
-	"tracker.WriterDeps.Claims":    {seamNone, "the fleet's leases, for the key counters"},
-	"tracker.WriterDeps.NodeID":    {seamNone, "the deciding node"},
-	"tracker.WriterDeps.World": {seamValue, "a people field resolved to a handle, and a " +
+	"worklet.WriterDeps.Publisher": {seamNone, "the tracker log's write authority"},
+	"worklet.WriterDeps.DB":        {seamNone, "the replicated rows a write decides from"},
+	"worklet.WriterDeps.Claims":    {seamNone, "the fleet's leases, for the key counters"},
+	"worklet.WriterDeps.NodeID":    {seamNone, "the deciding node"},
+	"worklet.WriterDeps.World": {seamValue, "a people field resolved to a handle, and a " +
 		"project's default assignee checked, against the epoch's roster"},
-	"tracker.WriterDeps.Metrics":   {seamNone, "the node's instruments"},
-	"tracker.WriterDeps.Drain":     {seamNone, "the applier's measured rate"},
-	"tracker.WriterDeps.Actor":     {seamNone, "who writes, which the asker's credential states"},
-	"tracker.WriterDeps.ActorKind": {seamNone, "what kind of party writes"},
-	"tracker.WriterDeps.Leads": {seamValue, "the leads a create's, a purge's and a " +
+	"worklet.WriterDeps.Actor":     {seamNone, "who writes, which the asker's credential states"},
+	"worklet.WriterDeps.ActorKind": {seamNone, "what kind of party writes"},
+	"worklet.WriterDeps.Leads": {seamValue, "the leads a create's, a purge's and a " +
 		"dependency's wakes fall back to"},
-	"tracker.WriterDeps.Now":  {seamNone, "the clock"},
-	"tracker.WriterDeps.Zone": {seamValue, "the company's clock a date given as an instant is cut to a day by"},
+	"worklet.WriterDeps.Now":  {seamNone, "the clock"},
+	"worklet.WriterDeps.Zone": {seamValue, "the company's clock a date given as an instant is cut to a day by"},
 
 	"estate.Backend.Tracker": {seamNone, "the copy's reader, over its rows and its log's read " +
 		"authority alone; the units it renders are ServerSeams.Units"},
-	"estate.Backend.Writer": {seamNone, "a tracker writer per actor, built over tracker.WriterDeps"},
+	"estate.Backend.Writer": {seamNone, "a tracker writer per actor, built over worklet.WriterDeps"},
 	"estate.Backend.WorkSearch": {seamNone, "the item search over the copy's rows, ranked by " +
 		"engine.itemRanker through a search.FanOut, whose reads are classified there"},
-	"estate.Backend.Pages":      {seamNone, "the copy's page reader, built over pages.ReaderOptions"},
-	"estate.Backend.PageWriter": {seamNone, "the pages store, built over pages.Options"},
+	"estate.Backend.Pages":      {seamNone, "the copy's page reader, built over doclet.ReaderOptions"},
+	"estate.Backend.PageWriter": {seamNone, "the pages store, built over doclet.Options"},
 	"estate.Backend.Knowledge": {seamNone, "the knowledge searcher, built over " +
-		"pages.SearcherOptions, whose reads are classified there; its scope is ServerSeams.Seat"},
+		"doclet.SearcherOptions, whose reads are classified there; its scope is ServerSeams.Seat"},
 	"estate.Backend.Backlinks": {seamNone, "the node's link index"},
 	"estate.Backend.Usage":     {seamNone, "the usage rows"},
+	"estate.Backend.Chat":      {seamNone, "the rooms' reader, built over chatlet.ReaderOptions"},
+	"estate.Backend.ChatWriter": {seamNone, "the rooms' store, built over chatlet.Options, whose " +
+		"reads are classified there"},
+	"estate.Backend.ChatSearch": {seamNone, "the messages' keyword index, a search.ChatIndexer, " +
+		"classified there"},
 	"estate.Backend.Code": {seamNone, "the committer, the change writer, the checks writer, the reader " +
 		"and the lifecycle store, built over code.CommitterOptions, code.ChangeWriterOptions, " +
 		"code.ChecksWriterOptions, code.ReaderOptions and code.StoreOptions"},
@@ -306,31 +313,29 @@ var classified = map[string]struct {
 	"host.Options.Metrics": {seamNone, "the node's instruments"},
 	"host.Options.Now":     {seamNone, "the clock"},
 
-	"pages.SearcherOptions.Index":  {seamNone, "the node's lexical index"},
-	"pages.SearcherOptions.Node":   {seamNone, "this node's name in the fan-out's assignment table"},
-	"pages.SearcherOptions.Peers":  {seamNone, "the fleet half of the fan-out"},
-	"pages.SearcherOptions.Roster": {seamNone, "the live data nodes"},
-	"pages.SearcherOptions.Report": {seamNone, "the node's instruments"},
-	"pages.SearcherOptions.Enter":  {seamNone, "the count of scans in flight"},
-	"pages.SearcherOptions.Vectors": {seamValue, "a query's embedding, by the embeddings " +
+	"doclet.SearcherOptions.Index":  {seamNone, "the node's lexical index"},
+	"doclet.SearcherOptions.Node":   {seamNone, "this node's name in the fan-out's assignment table"},
+	"doclet.SearcherOptions.Peers":  {seamNone, "the fleet half of the fan-out"},
+	"doclet.SearcherOptions.Roster": {seamNone, "the live data nodes"},
+	"doclet.SearcherOptions.Report": {seamNone, "the node's instruments"},
+	"doclet.SearcherOptions.Enter":  {seamNone, "the count of scans in flight"},
+	"doclet.SearcherOptions.Vectors": {seamValue, "a query's embedding, by the embeddings " +
 		"provider and model of the serving node's epoch"},
-	"pages.SearcherOptions.SkillsContainer": {seamValue, "the tool-skills container every " +
+	"doclet.SearcherOptions.SkillsContainer": {seamValue, "the tool-skills container every " +
 		"result leaves out, read live from the epoch's knowledge.skills_container"},
-	"pages.SearcherOptions.Copies": {seamNone, "this node's verdict on the copies it scans"},
+	"doclet.SearcherOptions.Copies": {seamNone, "this node's verdict on the copies it scans"},
 
-	"pages.ReaderOptions.DB":  {seamNone, "the replicated rows a page read answers from"},
-	"pages.ReaderOptions.Log": {seamNone, "the pages log's read authority"},
+	"doclet.ReaderOptions.Log": {seamNone, "the pages log's read authority"},
 
-	"pages.Options.Publisher": {seamNone, "the pages log's write authority"},
-	"pages.Options.DB":        {seamNone, "the replicated rows a page write decides from"},
-	"pages.Options.Now":       {seamNone, "the clock an authored instant is stamped from"},
-	"pages.Options.Reserved": {seamValue, "the containers an agent's write is held back " +
+	"doclet.Options.Publisher": {seamNone, "the pages log's write authority"},
+	"doclet.Options.DB":        {seamNone, "the replicated rows a page write decides from"},
+	"doclet.Options.Now":       {seamNone, "the clock an authored instant is stamped from"},
+	"doclet.Options.Reserved": {seamValue, "the containers an agent's write is held back " +
 		"from and the spaces a page may be created in, read from the epoch's knowledge " +
 		"settings and chart: a write a stale reading admits is one that, sent a moment " +
 		"before the revision, would have landed anyway"},
 
 	"iamdomain.ReaderOptions.DB":      {seamNone, "the replicated rows an identity read answers from"},
-	"iamdomain.ReaderOptions.Log":     {seamNone, "the identity log's read authority"},
 	"iamdomain.ReaderOptions.Reached": {seamNone, "the applier's position"},
 	"iamdomain.ReaderOptions.Lag":     {seamNone, "the applier's distance from its log"},
 	"iamdomain.ReaderOptions.Await":   {seamNone, "the applier's wait for a position"},
@@ -356,6 +361,26 @@ var classified = map[string]struct {
 	"artifactdata.WriterDeps.Now":        {seamNone, "the clock"},
 	"artifactdata.WriterDeps.Metrics":    {seamNone, "the node's instruments"},
 	"artifactdata.WriterDeps.Objectives": {seamNone, "the node's objective meter"},
+
+	"chatlet.Options.Publisher": {seamNone, "the chat log's write authority"},
+	"chatlet.Options.DB":        {seamNone, "the replicated rows an answer no decision formed is read back from"},
+	"chatlet.Options.Roster": {seamValue, "the epoch's chart a write resolves handles against: " +
+		"whether a member added or a person mentioned is still a seat, the lead a unit's room " +
+		"wakes, the seats an auto-join room takes in — a seat the revision then removes or " +
+		"moves leaves the same rows a write sent a moment before it would have; who may write " +
+		"in a room is its membership rows', never the chart's"},
+	"chatlet.Options.Now": {seamNone, "the clock an authored instant is stamped from"},
+	"chatlet.Options.DefaultPrivate": {seamValue, "the visibility a create that states none " +
+		"resolves to, from the epoch's chat.chatlet.default_private: a room created under a " +
+		"default a revision then flipped is one its creator could have made by stating it"},
+
+	"chatlet.ReaderOptions.Log":       {seamNone, "the chat log's read authority"},
+	"chatlet.ReaderOptions.Committed": {seamNone, "the applier's position"},
+
+	"search.ChatIndexer.db":          {seamNone, "the node's own file the index is kept in"},
+	"search.ChatIndexer.estate":      {seamNone, "the replicated rows the index walks"},
+	"search.ChatIndexer.pruneCursor": {seamNone, "how far the index's prune has walked"},
+	"search.ChatIndexer.rebuild":     {seamNone, "whether the index must be built again"},
 
 	"engine.itemRanker.fan":   {seamNone, "the item search's fan-out, classified on search.FanOut"},
 	"engine.itemRanker.index": {seamNone, "the node's lexical index"},

@@ -18,8 +18,8 @@ import (
 // Every ref a collected run moved is named by the live change its branch
 // heads ([PushedRef.Change]), and what became of each ask to open one is the
 // run's result ([Result.Opened]): both read by the engine ([RunPushes.Changes])
-// and both told the resumed executor, so it reports the change rather than a
-// branch, and never opens one twice.
+// and both stated in the run's report ([runReport]), so its reviewer and the
+// record read the change rather than a branch, and nobody opens one twice.
 //
 // AT THE COLLECTION, NOT BY THE BOX: a box could open a change itself — `git
 // push -o change` — but a coding agent pushes as it goes, and a change opened
@@ -29,7 +29,7 @@ import (
 
 // RunChange is the change a coding run works on: its id, which the change is
 // named by on the code host, and its number on its repository, which a person
-// and the executor name it by (web!42).
+// and a seat name it by (web!42).
 type RunChange struct {
 	ID     string `json:"id"`
 	Number int64  `json:"number"`
@@ -99,7 +99,7 @@ type OpenedChange struct {
 	Unopened string
 }
 
-// line is how the resumed executor's text names what became of one ask.
+// line is how the run's report names what became of one ask.
 func (o OpenedChange) line() string {
 	switch {
 	case o.Opened:
@@ -127,23 +127,20 @@ func asked(run PendingRun, why string) []OpenedChange {
 // its collection opening it.
 const (
 	unopenedAsked = "the run stopped to ask a question before it finished, so its work was not " +
-		"proposed for review: the run that finishes it opens the change"
-	unopenedFailed = "the run did not succeed, so its work was not proposed for review: open it with " +
-		"code_open_change once the work is ready"
+		"proposed for review: the job that carries it on opens the change"
+	unopenedFailed = "the run did not succeed, so its work was not proposed for review"
 )
 
 // unopenedUnread is why no ask of a run whose push record could not be read
 // was opened.
 func unopenedUnread(why string) string {
-	return "what the run pushed could not be read (" + why + "), so no change was opened from it: read " +
-		"its branch with code_resolve and open it with code_open_change"
+	return "what the run pushed could not be read (" + why + "), so no change was opened from it"
 }
 
 // unopenedNoChanges is why no ask of a run was opened when the code host's
 // changes of its branches could not be read.
 func unopenedNoChanges(why string) string {
-	return "the changes its branches head could not be read (" + why + "), so none was opened: read them " +
-		"with code_list_changes and open it with code_open_change"
+	return "the changes its branches head could not be read (" + why + "), so none was opened"
 }
 
 // fitOpened holds what became of a run's asks to the record's bounds: each
@@ -158,8 +155,8 @@ func fitOpened(opened []OpenedChange) []OpenedChange {
 	return opened
 }
 
-// openedText is what the resumed executor is told of the changes its run
-// asked to open, "" for a run that asked for none.
+// openedText is what the run's report states of the changes the run asked to
+// open, "" for a run that asked for none.
 func openedText(result Result) string {
 	if len(result.Opened) == 0 {
 		return ""

@@ -534,8 +534,9 @@ func equalCounts(a, b map[string]int) bool {
 
 // NOTHING PERSONAL IS ON THE LOG IN THE CLEAR.
 //
-// The log is the write-ahead log every node's rows derive from, and a record
-// is on the broker, on the cluster port, in every node's deferred table and in
+// The log is the write-ahead log every data node's rows derive from, and a
+// record is on the broker, on the cluster port, in every data node's deferred
+// table and in
 // every backup of the streams until the trim passes it — none of which a
 // removal can reach. So what a record carries must already be ciphertext when
 // it is published: the name, the address and the seed are sealed at the
@@ -589,8 +590,8 @@ func TestNothingPersonalIsOnTheLogInTheClear(t *testing.T) {
 // opens every value — which is what makes the rotation zero-downtime. The
 // re-seal is RECORDS, because these rows are derived from the log and a node
 // that rewrote its own would disagree with its peers; so it is one record per
-// person, every node applies it, and after it a node holding ONLY the new key
-// opens every person's name, address and seed. A second pass finds nothing to
+// person, every data node applies it, and after it a node holding ONLY the new
+// key opens every person's name, address and seed. A second pass finds nothing to
 // move and publishes nothing.
 //
 // The CONTROL is the new key alone before the re-seal, which opens nothing —

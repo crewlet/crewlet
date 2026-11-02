@@ -65,7 +65,7 @@ func newMachineRig(t *testing.T) *machineRig {
 			Applied: 50, Found: true, IsToken: true,
 			Verifier:  credential.TokenVerifier(presented.ID, secret),
 			ExpiresAt: at.Add(24 * time.Hour),
-			Grants:    []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
+			Grants:    []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
 			Epoch:     2,
 			Owner: credential.TokenOwner{
 				Found: true, ID: tokenOwner, Kind: iam.KindPerson,
@@ -169,7 +169,7 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 		p.Kind != iam.KindPerson {
 		t.Errorf("acts as %s %s %q, want the owner", p.Kind, p.ID, p.Login)
 	}
-	if !slices.Equal(p.Grants, []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}) {
+	if !slices.Equal(p.Grants, []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}) {
 		t.Errorf("grants %v, want exactly what the mint conferred", p.Grants)
 	}
 	if token != m.presented.ID {
@@ -190,10 +190,10 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 
 	// THE OWNER LOST the knowledge base, and the token with them.
 	withdrawn := newMachineRig(t)
-	withdrawn.row.Owner.Grants = []iam.Grant{iam.GrantTracker}
+	withdrawn.row.Owner.Grants = []iam.Grant{iam.GrantWorklet}
 	got, _ = present(t, withdrawn.guard(nil), http.MethodGet, "/agents",
 		withdrawn.presented.Value())
-	if !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantTracker}) {
+	if !slices.Equal(got.principal.Grants, []iam.Grant{iam.GrantWorklet}) {
 		t.Errorf("grants %v: a permission the owner no longer holds survived "+
 			"on their token", got.principal.Grants)
 	}
@@ -203,8 +203,7 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 	minted.row.Grants = []iam.Grant{iam.GrantAdmin}
 	got, _ = present(t, minted.guard(nil), http.MethodGet, "/agents",
 		minted.presented.Value())
-	if !slices.Equal(got.principal.Grants, append([]iam.Grant{iam.GrantAdmin},
-		iam.Apps...)) {
+	if !slices.Equal(got.principal.Grants, iam.AllGrants) {
 		t.Errorf("grants %v, want admin and every app it includes",
 			got.principal.Grants)
 	}
@@ -456,7 +455,7 @@ func TestATokensWriteIsAttributedToTheToken(t *testing.T) {
 			m.row.Owner.Seat = sessionSeat
 			author = sessionSeat
 		}
-		got, _ := present(t, m.guard(nil), http.MethodPost, "/work/items",
+		got, _ := present(t, m.guard(nil), http.MethodPost, "/worklet/items",
 			m.presented.Value())
 		if got.how != iam.Resolved {
 			t.Fatalf("bound=%v: resolution %v (status %d)", bound, got.how,
@@ -481,7 +480,7 @@ func TestATokensWriteIsAttributedToTheToken(t *testing.T) {
 	// both the author and the credential a write records.
 	b := config.Bootstrap{}
 	b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "ops-token-value-long-enough-26",
-		Grants: []iam.Grant{iam.GrantTracker}}}
+		Grants: []iam.Grant{iam.GrantWorklet}}}
 	got, _ := present(t, auth.New(&b), http.MethodGet, "/agents",
 		"ops-token-value-long-enough-26")
 	by := auth.AttributionOf(iam.WithPrincipal(t.Context(), got.principal))

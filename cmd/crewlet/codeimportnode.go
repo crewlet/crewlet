@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -49,7 +50,7 @@ import (
 // first create rather than refused as a name already taken.
 
 // codeImportTool is the tool the command calls.
-const codeImportTool = "code_import_repo"
+const codeImportTool = string(authz.ActionCodeImportRepo)
 
 // codeImportOnNode is one import the node carries out: call is the command line
 // as [readImport] read it, not -local.
@@ -113,7 +114,7 @@ func codeImportOnNode(ctx context.Context, call importCall, stdout, stderr io.Wr
 		(refused.Unsettled || refused.OpID != "") {
 		if refused.Unvouched {
 			return fmt.Errorf("%w\n\nThis node cannot tell whether it was recorded and will answer the same "+
-				"way until it can: run it through another node with -url <that node> -op-id %s — never a "+
+				"way until it can: run it through another node with -api <that node> -op-id %s, never a "+
 				"fresh id", err, operation)
 		}
 		return fmt.Errorf("%w\n\nTo find out, %s", err, retry)
@@ -122,7 +123,7 @@ func codeImportOnNode(ctx context.Context, call importCall, stdout, stderr io.Wr
 		return err
 	}
 	if answer.Outcome == string(statelog.OutcomeUnknown) {
-		fmt.Fprintf(stdout, "import %s: unknown — the node could not confirm the create. To find out, %s\n",
+		fmt.Fprintf(stdout, "import %s: unknown: the node could not confirm the create. To find out, %s\n",
 			call.name, retry)
 		return nil
 	}
@@ -131,7 +132,7 @@ func codeImportOnNode(ctx context.Context, call importCall, stdout, stderr io.Wr
 	if call.mirror {
 		what = "mirroring"
 	}
-	fmt.Fprintf(stdout, "%s %s into %s — %s, owned by %s:%s (at %s)\n", what, call.source, call.name,
+	fmt.Fprintf(stdout, "%s %s into %s: %s, owned by %s:%s (at %s)\n", what, call.source, call.name,
 		r.Status, r.Owner.Kind, r.Owner.Ref, answer.Receipt.Position)
 	if call.mirror {
 		fmt.Fprintln(stdout, "  a pull mirror: once imported, its home keeps it in step with the source, "+
@@ -149,7 +150,7 @@ func ownerFlag(v string) (map[string]any, error) {
 	ref = strings.TrimSpace(ref)
 	switch {
 	case v == "":
-		return nil, errors.New("-owner: a project names its owner — unit:<key> or seat:<handle>")
+		return nil, errors.New("-owner: a project names its owner, unit:<key> or seat:<handle>")
 	case !ok || ref == "" || kind != "unit" && kind != "seat":
 		return nil, fmt.Errorf("-owner: %q is neither unit:<key> nor seat:<handle>", v)
 	}

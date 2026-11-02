@@ -823,6 +823,181 @@ func BenchmarkApplyARetireSweep(b *testing.B) {
 	}
 }
 
+// BenchmarkApplyALandRecord is a land record APPLIED AND COMMITTED — the
+// time it holds the replicated estate's one write lane, on every data node —
+// the queue's hot path: every change it lands merged by its enqueuer, every
+// entry landed, its train's landed candidates removed, a landing row an entry
+// and the green row moved, and a push an entry through the one apply every
+// push takes, the target moved onto the entry's commit and its source branch
+// deleted. Into a repository of its own each iteration, seeded outside the
+// timer as a train of the entries testing in candidates of MaxQueueBatch, its
+// changes live on their source branches:
+//
+//   - entries=1: a queue landing one change, what a quiet target lands;
+//   - entries=64: MaxLandEntries, the most one record lands — every entry
+//     deleting its source, so the most refs one landing moves.
+//
+// Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot split
+// a record; doc.go's measured section records the figures, and
+// MaxLandEntries reasons from them.
+func BenchmarkApplyALandRecord(b *testing.B) {
+	quiet(b)
+	for _, n := range []int{1, MaxLandEntries} {
+		b.Run(fmt.Sprint("entries=", n), func(b *testing.B) {
+			e := openApplyEstate(b)
+			a := NewApplier(nil)
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StopTimer()
+			for i := range b.N {
+				repo := fmt.Sprintf("repo-%06d", i)
+				e.apply(create(b, repo, fmt.Sprintf("r%06d", i)))
+				land := e.seedLanding(repo, n)
+				// EACH ENTRY: its change merged, its entry landed, its landing
+				// and its push row, at the least.
+				e.applyTimed(b, a, rec(b, RepoSubject(repo), OpLand, Scope{RepoPath(repo)}, land), 4*n)
+				if tip := e.str(`SELECT target FROM code_refs WHERE repo_id = ? AND ref = 'refs/heads/main'`,
+					repo); tip != land.TipOID {
+					b.Fatalf("main is at %s after the landing, want its tip %s", tip, land.TipOID)
+				}
+				if merged := e.num(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ? AND state = 'merged'`,
+					repo); merged != int64(n) {
+					b.Fatalf("the landing merged %d of its %d changes", merged, n)
+				}
+			}
+			b.ReportMetric(float64(b.Elapsed().Microseconds())/1000/float64(b.N), "ms/record")
+		})
+	}
+}
+
+// seedLanding writes what a land of n entries of repo lands over — n live
+// changes into main (seedLiveChanges), main at the landing's base, and the n
+// entries testing in one train, its candidates of MaxQueueBatch entries in
+// order — and answers that land: each entry onto the commit its candidate
+// built of it, deleting its source.
+func (e *estate) seedLanding(repo string, n int) Land {
+	e.t.Helper()
+	e.seedLiveChanges(repo, n)
+	base := oid("base")
+	e.exec(`INSERT INTO code_refs (repo_id, ref, target, position, at) VALUES (?, 'refs/heads/main', ?, 1, 0)`,
+		repo, base)
+	e.exec(`UPDATE code_repos SET refs = refs + 1, branches = branches + 1 WHERE id = ?`, repo)
+	train := uuid.Must(uuid.NewV7()).String()
+	land := Land{RepoID: repo, LandID: uuid.Must(uuid.NewV7()).String(), TargetRef: "refs/heads/main",
+		BaseOID: base, Train: train, Node: "node-a", ReceivedAt: applyClock}
+	from := base
+	for i := range n {
+		entry := LandEntry{EntryID: uuid.Must(uuid.NewV7()).String(),
+			ChangeID: fmt.Sprintf("%s-change-%06d", repo, i), Commit: oid(fmt.Sprint("landed", i)),
+			DeleteSource: true}
+		ordinal := i/MaxQueueBatch + 1
+		candidate := QueueCandidateID(train, ordinal)
+		e.exec(`INSERT INTO code_queue (repo_id, entry_id, target_ref, change_id, seq, head_oid, method,
+			delete_source, close_task, enqueued_by, enqueued_kind, enqueued_operator, state, train, candidate_id,
+			commit_oid, enqueued_at) VALUES (?, ?, 'refs/heads/main', ?, ?, ?, 'merge', 1, 0, 'dev', 'agent', '',
+			'testing', ?, ?, ?, 1)`, repo, entry.EntryID, entry.ChangeID, i+1, liveHead(i), train, candidate,
+			entry.Commit)
+		if i%MaxQueueBatch == MaxQueueBatch-1 || i == n-1 {
+			e.exec(`INSERT INTO code_candidates (repo_id, candidate_id, target_ref, train, ordinal, base_oid,
+				tip_oid, state, position, entries) VALUES (?, ?, 'refs/heads/main', ?, ?, ?, ?, 'testing', 1,
+				'[]')`, repo, candidate, train, ordinal, from, entry.Commit)
+			from = entry.Commit
+		}
+		land.Entries = append(land.Entries, entry)
+	}
+	land.TipOID = land.Entries[n-1].Commit
+	return land
+}
+
+// BenchmarkApplyAQueueSweep is a queue_sweep record APPLIED AND COMMITTED —
+// the time it holds the replicated estate's one write lane, on every data node
+// — over a repository of its own each iteration holding QueueSweepRows ended
+// entries past QueueHistory, seeded outside the timer:
+//
+//   - narrow: landed entries, which weigh nothing, so the step is the
+//     QueueSweepRows its row bound cuts — a retire sweep's shape;
+//   - widest: conflict ejections, each naming MaxEjectedPaths paths within
+//     MaxConflictBytes, the widest row a sweep removes, so the step is the
+//     some 2 000 of them QueueSweepBytes cuts. Bounded by its rows alone, the
+//     step removed all 3 999, about 64 MiB of overflow pages.
+//
+// Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot split
+// a record, and against the third of it PurgePartBytes is sized to; doc.go's
+// measured section records the figures, and QueueSweepBytes reasons from them.
+func BenchmarkApplyAQueueSweep(b *testing.B) {
+	quiet(b)
+	paths := make([]string, MaxEjectedPaths)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("%03d/", i) + strings.Repeat("p", 156)
+	}
+	if cost := ConflictsCost(paths); cost > MaxConflictBytes || cost < MaxConflictBytes-128 {
+		b.Fatalf("the widest ejection's paths are %d bytes of JSON, want just under %d", cost, MaxConflictBytes)
+	}
+	widest, err := ejectedDetail(Ejection{Reason: EjectConflict, Paths: paths})
+	if err != nil {
+		b.Fatal(err)
+	}
+	old := applyClock.Add(-QueueHistory - time.Hour)
+	for _, arm := range []struct {
+		name, ejected string
+		// swept is how many entries the step removes: every one, or as many
+		// as its bytes reach QueueSweepBytes with — the first whatever it
+		// weighs, and at most one past.
+		swept int
+	}{
+		{"narrow", "", QueueSweepRows},
+		{"widest", widest, int((QueueSweepBytes + int64(len(widest)) - 1) / int64(len(widest)))},
+	} {
+		b.Run(arm.name, func(b *testing.B) {
+			e := openApplyEstate(b)
+			a := NewApplier(nil)
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StopTimer()
+			for i := range b.N {
+				repo := fmt.Sprintf("repo-%06d", i)
+				e.apply(create(b, repo, fmt.Sprintf("r%06d", i)))
+				e.seedEndedRows(repo, QueueSweepRows, old, arm.ejected)
+				// THE REPOSITORY'S OWN ROW beside the rows it removes.
+				e.applyTimed(b, a, rec(b, RepoSubject(repo), OpQueueSweep, Scope{RepoPath(repo)},
+					QueueSweep{RepoID: repo, Through: applyClock.Add(-QueueHistory)}), arm.swept+1)
+				if left := e.num(`SELECT COUNT(*) FROM code_queue WHERE repo_id = ?`, repo); left !=
+					int64(QueueSweepRows-arm.swept) {
+					b.Fatalf("the sweep left %d of %s's %d ended entries, want %d", left, repo, QueueSweepRows,
+						QueueSweepRows-arm.swept)
+				}
+			}
+			b.ReportMetric(float64(b.Elapsed().Microseconds())/1000/float64(b.N), "ms/record")
+		})
+	}
+}
+
+// seedEndedRows writes n entries of repo that ended at at, each its
+// ejection's JSON ejected — landed where it is empty — and weighed by it.
+func (e *estate) seedEndedRows(repo string, n int, at time.Time, ejected string) {
+	e.t.Helper()
+	state, reason := "landed", ""
+	if ejected != "" {
+		state, reason = "ejected", string(EjectConflict)
+	}
+	ctx := context.Background()
+	if err := e.db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := store.InsertRows(ctx, tx, e.db.Caps().MaxVariables,
+			`INSERT INTO code_queue (repo_id, entry_id, target_ref, change_id, seq, head_oid, method,
+				delete_source, close_task, enqueued_by, enqueued_kind, enqueued_operator, state,
+				enqueued_at, ended_at, ended_position, end_reason, ejected, ejected_bytes) VALUES `,
+			`(?, ?, 'refs/heads/main', ?, ?, ?, 'merge', 0, 0, 'dev', 'agent', '', ?, ?, ?, 2, ?, ?, ?)`, ``, n,
+			func(i int) []any {
+				id := fmt.Sprintf("%s-e-%06d", repo, i)
+				return []any{repo, id, "change-" + id, i + 1, oid("B"), state, store.EncodeTime(at),
+					store.EncodeTime(at), reason, ejected, len(ejected)}
+			})
+		return err
+	}); err != nil {
+		e.t.Fatalf("seed %s's ended entries: %v", repo, err)
+	}
+}
+
 // widestCheck is the widest queued attempt and the widest ending of it a
 // writer forms, key's: every field at its bound, of text JSON escapes to six
 // bytes a character, as TestTheLargestCheckRecordsFitARecord builds them — so

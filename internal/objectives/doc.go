@@ -1,4 +1,4 @@
-// Package objectives holds the service objectives artifacts are held to, as
+// Package objectives holds the service objectives the engine is held to, as
 // named constants with their reasons: publish success and latency, the first
 // byte of a served document, the browser-reported time from a ticket to a ready
 // frame, the datastore round trip and its resolution, change visibility, wake
@@ -19,9 +19,13 @@
 // # Measured where the event happens, counted once
 //
 // A recording site (the publish pipeline, the artifact origin, the datastore
-// writer, the ready report) calls [Meter.Record] with what it measured, and
-// the meter classifies the observation against the objective and counts it
-// twice from that one call: into the engine's recorder, as
+// writer, the ready report, the socket's push of a committed change, the
+// change feed's wakes and the presence hub) calls [Meter.Record] with what it
+// measured — or [Meter.RecordSince] with the instant another clock stamped its
+// event's start, the broker's or a peer's, which the meter ends on its own
+// clock and clamps at zero against the two clocks' skew — and the meter
+// classifies the observation against the objective and counts it twice from
+// that one call: into the engine's recorder, as
 // `crewlet.objectives.events{objective, outcome}` for an exporter and the
 // operator's 24-hour window, and into its own minute ledger, which is what the
 // burn-rate alarm reads. The ledger exists because the recorder's window is

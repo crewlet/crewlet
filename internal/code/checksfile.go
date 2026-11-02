@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE CHECKS A REPOSITORY DEFINES: `.crewlet/checks.yaml` at the root of its
@@ -187,13 +188,13 @@ func (l checkList) over(n int) (string, bool) {
 
 // CheckCell is the kind of box a check runs in.
 //
-// TWO OF THE SANDBOX'S FOUR PLACEMENTS: a container on a git node, or a remote
+// TWO OF THE SANDBOX'S THREE PLACEMENTS: a container on a git node, or a remote
 // E2B box — config.CodeCheckCells, the one list the company's code.checks is
 // held to as well, so a file can name no cell the company could not allow and
 // the company allow none a file could not name. A check runs a change's own
 // code — its build, its tests, whatever its author put there — so it never
-// runs where that code reaches the engine: `direct` and `self` are refused by
-// name, each with config.CodeCheckCellRefusal's sentence (U1 a).
+// runs where that code reaches the engine: `direct` is refused by name, with
+// config.CodeCheckCellRefusal's sentence (U1 a).
 type CheckCell string
 
 const (
@@ -328,7 +329,7 @@ func (e *checksFileError) Is(target error) bool { return target == ErrInvalid }
 //	timeout_seconds  required; a whole number, 1 to CheckTimeoutCeiling
 //	paths            a list of at most MaxCheckPaths path globs (gitref)
 //	report           a mapping of junit and sarif, each a path in the checkout
-//	run_in           container or e2b (never direct or self)
+//	run_in           container or e2b (never direct)
 //	checkout         a list of a cone's directories, or the scalar none
 //	env              a list of at most MaxCheckEnv variable names
 //
@@ -530,7 +531,7 @@ func (p *checksParser) check(path config.Path, n *yaml.Node) (CheckDef, bool) {
 		case "env":
 			def.Env, ok = p.texts(field, value, envList)
 		default:
-			p.fault(field, keyNode, config.ErrUnknownField, "a check takes %s", strings.Join(checkKeys, ", "))
+			p.fault(field, keyNode, config.ErrUnknownField, "a check takes %s", words.And(checkKeys))
 			return
 		}
 		failed[key] = !ok
@@ -737,7 +738,7 @@ func (p *checksParser) report(path config.Path, n *yaml.Node) (CheckReport, bool
 			r.SARIF, read = p.text(field, value)
 		default:
 			p.fault(field, keyNode, config.ErrUnknownField, "a check's report is %s",
-				strings.Join(reportKeys, " or "))
+				words.Or(reportKeys))
 		}
 		ok = ok && read
 	})
@@ -860,7 +861,7 @@ func defFaults(d CheckDef) []defFault {
 		if why := config.CodeCheckCellRefusal(config.Placement(d.RunIn)); why != "" {
 			add(config.Path{"run_in"}, config.ErrUnknownValue, "a check never runs in %s: %s", d.RunIn, why)
 		} else {
-			add(config.Path{"run_in"}, config.ErrUnknownValue, "%q is not one of %v", d.RunIn, CheckCells())
+			add(config.Path{"run_in"}, config.ErrUnknownValue, "%q is not one of %s", d.RunIn, words.Or(CheckCells()))
 		}
 	}
 	if co := d.Checkout; co.None && len(co.Cone) > 0 {

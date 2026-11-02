@@ -42,7 +42,7 @@
               "type": "string"
             }
           ],
-          "description": "Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's agent-mode tool bridge, where api.public is unset). 0 binds nothing."
+          "description": "Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener); without it, /health and /ready, and on a node with the seats role the tool bridge and telemetry receiver its own direct boxes dial, to this host's loopback alone. 0 binds nothing."
         },
         "public": {
           "$ref": "#/$defs/APIPublic"
@@ -336,7 +336,7 @@
       "additionalProperties": false,
       "properties": {
         "grants": {
-          "description": "What this credential may do: admin, tracker, knowledge, artifacts. Required and non-empty.",
+          "description": "What this credential may do: admin, worklet, doclet, artifacts, chatlet. Required and non-empty.",
           "items": {
             "type": [
               "string",
@@ -363,7 +363,7 @@
               "pattern": "\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
             }
           ],
-          "description": "Short label; the token acts under the login token:\u003cid\u003e, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons, at most 58 characters so the login stays within 64.",
+          "description": "Short label; the token acts under the login token:<id>, which is recorded as the author of its writes. Lowercase letters, digits and hyphens, optionally joined by colons, at most 58 characters so the login stays within 64.",
           "type": [
             "string",
             "number",
@@ -514,7 +514,7 @@
               "type": "string"
             }
           ],
-          "description": "Seat and presence lease TTL; 0 takes the measured default. Every other lease — a fleet duty, a tracker walk's claim — sizes its own."
+          "description": "Seat and presence lease TTL; 0 takes the measured default, anything else is at least 15. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."
         },
         "type": {
           "anyOf": [
@@ -543,7 +543,7 @@
       "additionalProperties": false,
       "properties": {
         "cache_dir": {
-          "description": "Where this node keeps its disposable copies of the company's repositories; relative to the store's directory; unset is \u003cstore dir\u003e/git. A volume of its own is recommended: its own filesystem with its own space, not a subvolume or dataset drawing on the store's pool. Never backed up (it carries a CACHEDIR.TAG).",
+          "description": "Where this node keeps its disposable copies of the company's repositories; relative to the store's directory; unset is <store dir>/git. A volume of its own is recommended: its own filesystem with its own space, not a subvolume or dataset drawing on the store's pool. Never backed up (it carries a CACHEDIR.TAG).",
           "type": [
             "string",
             "number",
@@ -883,7 +883,7 @@
               "type": "string"
             }
           ],
-          "description": "Agent turns this process runs at once; 0 takes the engine default. Per node, so a fleet's ceiling is N times this."
+          "description": "Turn segments this process runs at once (a seat's executor run is not one of them: each seat runs at most one); 0 takes the engine default. Per node, so a fleet's ceiling is N times this."
         },
         "roles": {
           "description": "What this node does: data, git, ingress, seats, workers. Omit for all five. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers. git needs ingress.",
@@ -1148,7 +1148,7 @@
           ]
         },
         "snapshot_dir": {
-          "description": "Where this node keeps snapshots of the replicated estate; empty is \u003cdir of path\u003e/snapshots.",
+          "description": "Where this node keeps snapshots of the replicated estate; empty is <dir of path>/snapshots.",
           "type": [
             "string",
             "number",
@@ -1236,6 +1236,40 @@
             }
           ],
           "description": "Byte ceiling on the artifacts log; unset derives a quarter of the mutation log's ceiling, set or derived, 1 GiB..16 GiB from a volume alone."
+        },
+        "assistant_log_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 68719476736,
+              "minimum": 67108864,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on Ask Crewlet's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."
+        },
+        "chat_log_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 274877906944,
+              "minimum": 1073741824,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the chat log; unset asks for 8 GiB, capped at a sixteenth of the stream volume's free space (a quarter of what an unset tracker_log_max_bytes derives, so the whole 8 GiB is asked from 128 GiB free), 1 GiB..256 GiB, and does not follow tracker_log_max_bytes - size it for the same blocked-trim horizon, about 32 MB a day at the declared census."
         },
         "cluster": {
           "$ref": "#/$defs/StreamCluster"
@@ -1478,7 +1512,7 @@
               "type": "string"
             }
           ],
-          "description": "Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."
+          "description": "Byte ceiling on the usage log, the compacted stream each data node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."
         }
       },
       "type": [
@@ -1786,7 +1820,7 @@
       }
     },
     {
-      "$comment": "stream.replicas \u003e 1 on an embedded stream that joins no fleet needs peers to replicate to.",
+      "$comment": "stream.replicas > 1 on an embedded stream that joins no fleet needs peers to replicate to.",
       "if": {
         "properties": {
           "stream": {

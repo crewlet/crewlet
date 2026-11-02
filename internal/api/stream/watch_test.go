@@ -288,14 +288,14 @@ func newWatchSocketOver(t *testing.T, chart authz.Chart, holders iam.Holders,
 		id := strings.TrimPrefix(login, "token:")
 		b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
 			ID: id, Token: id + "-token-long-enough-to-pass",
-			Grants: []iam.Grant{iam.GrantTracker},
+			Grants: []iam.Grant{iam.GrantWorklet},
 		})
 	}
 	b.API.Auth.Tokens = append(b.API.Auth.Tokens, extra...)
 	guard := auth.New(&b).BindSeats(auth.SeatBindings{
 		Directory: watchBindings(bound), Chart: watchSeats(bound)})
 	svc := buildService(t, stream.Options{Chart: chart, Holders: holders})
-	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil))
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, nil, nil))
 	t.Cleanup(srv.Close)
 	return &watchFixture{svc: svc,
 		url: "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws/stream"}

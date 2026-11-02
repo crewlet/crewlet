@@ -4,7 +4,7 @@
  * what its days counted.
  *
  * THREE READS, EACH THE ENGINE'S OWN QUESTION, held to the reader's grant on
- * every repository it names (ADR-0058: no app gates code, so the tab is every
+ * every repository it names (ADR-0081: no app gates code, so the tab is every
  * reader's, and a repository the reader may not read is simply not in its
  * rows):
  *

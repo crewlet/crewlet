@@ -14,10 +14,10 @@
 // The LIVE window is a list of phase records the projection holds ([Record],
 // folded by [Aggregate]). Every NAMED window is company days read from the
 // replicated `usage` domain ([Cell] and [SeatDay], folded by [FoldDaily] and
-// bucketed by [BucketDaily]) — every node's day, so the answer is the same on
-// whichever node is asked and still includes a node that has left the fleet
-// (ADR-0020). The two are folded into the same [Rollup] and [Bucket], so a
-// reader moving from "the last 24 hours" to "the last 7 days" compares like
+// bucketed by [BucketDaily]) — every data node's day, so the answer is the
+// same on whichever node is asked and still includes a node that has left the
+// fleet (ADR-0020). The two are folded into the same [Rollup] and [Bucket], so
+// a reader moving from "the last 24 hours" to "the last 7 days" compares like
 // with like. What a daily row cannot answer it does not pretend to: a turn and
 // an hour are not in it, so a windowed answer has no `by_turn` and a series
 // has no hourly bucket — per-turn spend is the turn list's `sort=-tokens`.
@@ -135,12 +135,13 @@ type Record struct {
 	Stage string `json:"stage,omitempty"`
 
 	// Calls is how many provider calls the record covers: a phase's model
-	// rounds, an auxiliary record's coalesced calls. ONE UNIT under one
-	// label everywhere a bucket says "N calls" — it counted RECORDS once,
-	// so a forty-round executor was one call beside a coalesced record of
-	// seventy rewrites. Every producer states at least one — a phase's count
-	// is [PhaseCalls], and an auxiliary record coalesces at least the call
-	// that produced it — so a bucket sums what each record states.
+	// rounds, a coding run's own CLI turns, an auxiliary record's coalesced
+	// calls. ONE UNIT under one label everywhere a bucket says "N calls" —
+	// it counted RECORDS once, so a forty-turn coding run was one call
+	// beside a coalesced record of seventy rewrites. A phase's count is
+	// [PhaseCalls] — none for an executor's own record, whose run's calls
+	// are on the run's record — and an auxiliary record coalesces at least
+	// the call that produced it, so a bucket sums what each record states.
 	Calls int `json:"calls,omitempty"`
 
 	InputTokens  int `json:"input_tokens"`
@@ -178,22 +179,52 @@ const StageTurn = "turn"
 // seat's learning rather than what the work cost.
 func (r Record) InTurn() bool { return r.Stage == "" || r.Stage == StageTurn }
 
-// PhaseCalls is a phase record's provider calls, from the two counts the record
-// carries: its `rounds` list's length — one entry per provider call — where it
-// recorded one, its `rounds_used` where it lists no rounds (an agent-mode
-// executor, whose rounds are the CLI's), and one where neither says (a judge's
-// single call, a coding run collected whole, whose own calls happened inside a
-// CLI the engine does not see).
+// PhaseCounts is what a phase record says about the provider calls it covers,
+// as [PhaseCalls] reads it off the record's own fields.
+type PhaseCounts struct {
+	// Phase is the record's `phase`.
+	Phase string
+	// Rounds is the length of its `rounds` list — one entry per provider
+	// call it timed — and RoundsUsed its `rounds_used`.
+	Rounds     int
+	RoundsUsed int
+	// CLITurns is its `cli_turns`: a coding run's own model turns, as its
+	// CLI reported them.
+	CLITurns int
+}
+
+// PhaseCalls is a phase record's provider calls.
+//
+//   - An EXECUTOR's record (`execute`) covers none. Every executor is its
+//     coding CLI's own run: the engine's record of the phase states the run
+//     as one round — the launch and its answer — but the engine made no
+//     provider call for it, whether the run was collected or its launch was
+//     refused. The run's calls are its CLI's, counted on the run's own
+//     record; counting the round as well put two calls on every turn that
+//     nobody made.
+//   - A coding run's record (`sandbox`) covers its CLI's own turns, as the
+//     CLI reported them (`cli_turns`), and one where it reported none — the
+//     one run the engine asked for, which is the most it can say.
+//   - Every other phase covers its rounds: its `rounds` list's length where
+//     it recorded one, its `rounds_used` where it counted rounds without
+//     listing them, and one where neither says (a judge's single call).
 //
 // ONE RULE FOR BOTH PRODUCERS — the event store's writer and the live
 // projection — so a phase counts the same calls on either side of the live
-// edge.
-func PhaseCalls(rounds, roundsUsed int) int {
+// edge. The two phase names are the event catalogue's (events/types), spelled
+// here so this package stays a leaf; a test holds both spellings to the
+// catalogue's constants, so a renamed phase cannot fall silently to the
+// rounds rule.
+func PhaseCalls(c PhaseCounts) int {
 	switch {
-	case rounds > 0:
-		return rounds
-	case roundsUsed > 0:
-		return roundsUsed
+	case c.Phase == "execute":
+		return 0
+	case c.Phase == "sandbox":
+		return max(c.CLITurns, 1)
+	case c.Rounds > 0:
+		return c.Rounds
+	case c.RoundsUsed > 0:
+		return c.RoundsUsed
 	}
 	return 1
 }
@@ -265,6 +296,17 @@ func (b *Bucket) merge(o Bucket) {
 	b.Calls += o.Calls
 	b.CostUSD += o.CostUSD
 	b.PricedCalls += o.PricedCalls
+}
+
+// WithoutEntries is the rollup for a reader who may not read the company's
+// configuration: every figure but the per-entry breakdown, which names the
+// company's providers.llm entries and is an admin's, as Settings, Models is.
+// The totals and every other breakdown are the same, so nothing a reader is
+// told stops adding up. A copy: r is not changed.
+func (r Rollup) WithoutEntries() Rollup {
+	r.ByProvider = []ProviderRow{}
+	r.EntriesWithheld = true
+	return r
 }
 
 // PhaseRow is the per-phase breakdown of a rollup.
@@ -442,6 +484,12 @@ type Rollup struct {
 	ByProvider []ProviderRow `json:"by_provider"`
 	ByWorker   []WorkerRow   `json:"by_worker"`
 	ByAgent    []AgentRow    `json:"by_agent"`
+
+	// EntriesWithheld says ByProvider was left out for a reader who may not
+	// read which providers.llm entries the company configures, which is an
+	// admin's ([Rollup.WithoutEntries]): its empty list then says nothing
+	// about what was spent.
+	EntriesWithheld bool `json:"entries_withheld,omitempty"`
 
 	// ByTurn is the tail of recent turns — on the LIVE window only. A
 	// company day's row holds no turn, so a named window has none to list

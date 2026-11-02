@@ -26,7 +26,7 @@ vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
 /** answering counts the queries asked and answers each with `answer`, to a
  *  reader holding `grants` (both apps unless a case says otherwise). */
-function answering(answer: unknown, grants: string[] = ["tracker", "knowledge"]) {
+function answering(answer: unknown, grants: string[] = ["worklet", "doclet"]) {
   const query = vi.fn().mockResolvedValue(answer);
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
   vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
@@ -76,18 +76,18 @@ test("growing past the bound drops the answer the shorter phrase got", async () 
   expect(result.current.tooLong).not.toBeNull();
 });
 
-// EACH SEARCH IS ITS APP'S: a reader without Tracker is never sent the task
-// search, nor one without Knowledge the page search, and the hook says why in
+// EACH SEARCH IS ITS APP'S: a reader without Worklet is never sent the task
+// search, nor one without Doclet the page search, and the hook says why in
 // the words every lock uses rather than handing back "nothing matched". The
 // CONTROL is the other app's search, which the same reader is sent.
 test("a search in an app the reader lacks is never sent, and says which app", async () => {
-  const query = answering({ hits: [] }, ["knowledge"]);
+  const query = answering({ hits: [] }, ["doclet"]);
   const tasks = renderHook(() => useSearchQuery("work_search", { q: "auth" }));
   const pages = renderHook(() => useSearchQuery("knowledge", { q: "auth" }));
   await eventually(() => expect(query).toHaveBeenCalledTimes(1));
   expect(query.mock.calls[0]![0]).toBe("knowledge");
   expect(tasks.result.current.withheld).toBe(
-    "Search needs Tracker access. An admin can give it to you.",
+    "Search needs Worklet access. An admin can give it to you.",
   );
   expect(tasks.result.current.data).toBeNull();
   expect(pages.result.current.withheld).toBeNull();

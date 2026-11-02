@@ -233,10 +233,15 @@ const founderRecorded = "founder/human/pat:0192f00d-0000-7000-8000-00000000000a"
 type recorder struct {
 	events  []string
 	secrets map[string]string
-	failSet error
-	failApp error
-	active  string
-	seat    []byte
+	// failSet is what Set answers once failSetAfter values are sealed, so a
+	// case can fail the second credential of a submission rather than the
+	// first. failApp is what every document write answers: a patch, a
+	// seat and a reload.
+	failSet      error
+	failSetAfter int
+	failApp      error
+	active       string
+	seat         []byte
 	// writers, when set, are the only CREDENTIALS Authorize admits — a
 	// managed document, the way the config surface answers one: it judges
 	// the credential a write came through, never the author's name.
@@ -260,7 +265,7 @@ func (r *recorder) Authorize(by iam.Actor) error {
 func (r *recorder) Set(_ context.Context, name, value string, by secrets.Author,
 	source secrets.Source, _ time.Time) error {
 
-	if r.failSet != nil {
+	if r.failSet != nil && len(r.secrets) >= r.failSetAfter {
 		return r.failSet
 	}
 	if r.secrets == nil {
@@ -310,11 +315,13 @@ func (r *recorder) Current(context.Context) (string, error) {
 	return r.active, nil
 }
 
-func (r *recorder) Reload(_ context.Context, summary string, _ iam.Actor) (string, int64, error) {
+func (r *recorder) Reload(_ context.Context, summary string, _ iam.Actor,
+	expect string) (string, int64, error) {
+
 	if r.failApp != nil {
 		return "", 0, r.failApp
 	}
-	r.events = append(r.events, "reload:"+summary)
+	r.events = append(r.events, "reload:"+summary+" expect="+expect)
 	return "rev-2", 8, nil
 }
 
@@ -511,6 +518,135 @@ func TestAFailedPatchLeavesTheSealedValueAndNamesIt(t *testing.T) {
 	}
 	if rec.secrets["DATADOG_WEBHOOK_TOKEN"] != "tok" {
 		t.Error("the sealed value was rolled back")
+	}
+}
+
+// seatReqs is one seat's two credentials, the per-seat half's
+// requirement list.
+var seatReqs = []setup.Requirement{
+	{
+		Field: "bot_token", Kind: setup.KindSecret, Required: true,
+		ConfigPath: "integrations.slack.bot_token", Seat: "sre-lead",
+		SecretName: "SLACK_BOT_TOKEN_SRE_LEAD",
+	},
+	{
+		Field: "app_token", Kind: setup.KindSecret, Required: true,
+		ConfigPath: "integrations.slack.app_token", Seat: "sre-lead",
+		SecretName: "SLACK_APP_TOKEN_SRE_LEAD",
+	},
+}
+
+// A SEAL THAT FAILS NAMES ITSELF AND WHAT WAS SEALED BEFORE IT, on both
+// halves.
+//
+// The fleet's secret store is a coordination write, so the second of two
+// credentials can fail on the very error a pointer read fails with, after the
+// first is in the store. The first must still be named — it is a value nothing
+// points at yet — and the failure must say it was a seal, because a caller
+// that read it as an unreadable pointer told the operator the wrong thing
+// failed.
+//
+// Mutations: return an empty Result from either seal loop, and that half's
+// first name is lost; wrap the failure in a plain error, and SealError is not
+// found.
+func TestAFailedSealNamesItselfAndWhatWasSealedBeforeIt(t *testing.T) {
+	t.Parallel()
+	unanswered := errors.New("the secret store did not answer")
+	for _, tc := range []struct {
+		name string
+		reqs []setup.Requirement
+		in   setup.Submission
+	}{
+		{"company-wide", []setup.Requirement{datadogReqs[0], {
+			Field: "api_key", Kind: setup.KindSecret, Required: true,
+			ConfigPath: "integrations.datadog.provisioning.api_key",
+			SecretName: "DATADOG_API_KEY",
+		}}, setup.Submission{Kind: integration.KindDatadog,
+			Values: map[string]string{"webhook_token": "tok", "api_key": "key"}}},
+		{"per seat", seatReqs, setup.Submission{Kind: integration.KindSlack,
+			Seat:   "sre-lead",
+			Values: map[string]string{"bot_token": "xoxb", "app_token": "xapp"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := &recorder{failSet: unanswered, failSetAfter: 1}
+			result, err := writer(rec).Write(context.Background(), tc.reqs, tc.in)
+			var seal *setup.SealError
+			if !errors.As(err, &seal) || !errors.Is(err, unanswered) {
+				t.Fatalf("err = %v, want a SealError wrapping the store's failure", err)
+			}
+			if len(rec.secrets) != 1 {
+				t.Fatalf("sealed %v, want the first credential alone", rec.secrets)
+			}
+			for name := range rec.secrets {
+				if !slices.Equal(result.Secrets, []string{name}) {
+					t.Errorf("wrote_secrets = %v, want the %s sealed before the failure",
+						result.Secrets, name)
+				}
+				if seal.Name == name || seal.Name == "" {
+					t.Errorf("the failure names %q, want the credential after %s", seal.Name, name)
+				}
+			}
+			if len(rec.events) != 1 {
+				t.Errorf("events = %v, want the one seal and no write to the document", rec.events)
+			}
+		})
+	}
+}
+
+// A ROTATION RELOADS THE REVISION IT WAS READ FROM, and a reload that fails
+// still names what it sealed, on both halves.
+//
+// A rotation writes through the `${VAR}` the document it read holds, so its
+// reload is held to that revision, as a patch is: a reload of whatever the
+// pointer names by then could republish a document whose slot no longer reads
+// the value. And a reload that raced, went unanswered or could not read the
+// pointer has still overwritten the value in the store.
+//
+// Mutations: hand Reload anything but the submission's Expect, and the first
+// assertion fails; return an empty Result from either reload branch, and its
+// failure loses the name.
+func TestARotationReloadsTheRevisionItReadAndNamesWhatItSealed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		reqs   []setup.Requirement
+		in     setup.Submission
+		sealed string
+	}{
+		{"company-wide", withStored(datadogReqs, "webhook_token", "${DATADOG_WEBHOOK_TOKEN}"),
+			setup.Submission{Kind: integration.KindDatadog,
+				Values: map[string]string{"webhook_token": "fresh"}},
+			"DATADOG_WEBHOOK_TOKEN"},
+		{"per seat", withStored(seatReqs[:1], "bot_token", "${SLACK_BOT_TOKEN_SRE_LEAD}"),
+			setup.Submission{Kind: integration.KindSlack, Seat: "sre-lead",
+				Values: map[string]string{"bot_token": "xoxb-fresh"}},
+			"SLACK_BOT_TOKEN_SRE_LEAD"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := tc.in
+			in.Summary, in.Expect = "rotate", "rev-0"
+			rec := &recorder{}
+			result, err := writer(rec).Write(context.Background(), tc.reqs, in)
+			if err != nil || !result.Reloaded {
+				t.Fatalf("rotation = %+v, %v; want a reload", result, err)
+			}
+			if got := rec.events[len(rec.events)-1]; got != "reload:rotate expect=rev-0" {
+				t.Errorf("the reload was %q, want it held to rev-0, the revision the "+
+					"submission read", got)
+			}
+
+			failing := &recorder{failApp: errors.New("another write activated first")}
+			result, err = writer(failing).Write(context.Background(), tc.reqs, in)
+			if err == nil {
+				t.Fatal("a failed reload was reported as success")
+			}
+			if !slices.Equal(result.Secrets, []string{tc.sealed}) {
+				t.Errorf("wrote_secrets = %v, want %s: the value is in the store whatever "+
+					"became of the reload", result.Secrets, tc.sealed)
+			}
+		})
 	}
 }
 

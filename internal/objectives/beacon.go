@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ReadyOutcome is how a frame ended, as the viewer's browser reports it.
@@ -147,7 +148,7 @@ func (b *Beacon) Accept(r ReadyReport) error {
 	case strings.TrimSpace(r.Viewer) == "" || strings.TrimSpace(r.Frame) == "":
 		return fmt.Errorf("%w: it names no viewer or no frame", ErrImplausible)
 	case !r.Outcome.Valid():
-		return fmt.Errorf("%w: outcome %q is not one of %v", ErrImplausible, r.Outcome, ReadyOutcomes)
+		return fmt.Errorf("%w: outcome %q is not one of %s", ErrImplausible, r.Outcome, words.Or(ReadyOutcomes))
 	case r.Elapsed < 0:
 		return fmt.Errorf("%w: a negative time", ErrImplausible)
 	case !now.Before(r.Expires):

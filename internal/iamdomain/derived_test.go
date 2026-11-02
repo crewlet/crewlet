@@ -52,7 +52,7 @@ func TestARedemptionRefusedForItsLoginPublishesNothing(t *testing.T) {
 				PersonID: uuid.Must(uuid.NewV7()).String(),
 				Stage:    iam.StageActive, Name: "Dana Sre", Email: "dana@example.com",
 				Login: login, Password: aPassword(),
-				Grants: []iam.Grant{iam.GrantTracker}, Seat: seat,
+				Grants: []iam.Grant{iam.GrantWorklet}, Seat: seat,
 				Invitation: issued.ID, InvitationSecret: issued.Secret,
 				OpID: "invite:" + issued.ID, Reason: "redeemed an invitation",
 			})
@@ -382,12 +382,12 @@ func TestAnIssueRetriedUnderItsKeyAnswersTheInvitationItIssued(t *testing.T) {
 		})
 		return issued, err
 	}
-	first, err := issue(key, "priya@example.com", []iam.Grant{iam.GrantTracker})
+	first, err := issue(key, "priya@example.com", []iam.Grant{iam.GrantWorklet})
 	if err != nil {
 		t.Fatalf("the issue: %v", err)
 	}
 	rig.drain()
-	again, err := issue(key, "priya@example.com", []iam.Grant{iam.GrantTracker})
+	again, err := issue(key, "priya@example.com", []iam.Grant{iam.GrantWorklet})
 	if err != nil || again.ID != first.ID {
 		t.Fatalf("the retry answered %+v (%v), want the first attempt's "+
 			"invitation %s", again, err, first.ID)
@@ -413,7 +413,7 @@ func TestAnIssueRetriedUnderItsKeyAnswersTheInvitationItIssued(t *testing.T) {
 		"a seat the first did not bind": func() error {
 			return rig.draining(func() error {
 				_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
-					Email: "priya@example.com", Grants: []iam.Grant{iam.GrantTracker},
+					Email: "priya@example.com", Grants: []iam.Grant{iam.GrantWorklet},
 					Seat: "data-lead", ExpiresAt: brokerAt.Add(168 * time.Hour),
 					OpID: key, Reason: "onboarding",
 				})
@@ -422,12 +422,12 @@ func TestAnIssueRetriedUnderItsKeyAnswersTheInvitationItIssued(t *testing.T) {
 		},
 		"another address": func() error {
 			_, err := issue(key, "someone.else@example.com",
-				[]iam.Grant{iam.GrantTracker})
+				[]iam.Grant{iam.GrantWorklet})
 			return err
 		},
 		"other grants": func() error {
 			_, err := issue(key, "priya@example.com",
-				[]iam.Grant{iam.GrantTracker, iam.GrantKnowledge})
+				[]iam.Grant{iam.GrantWorklet, iam.GrantDoclet})
 			return err
 		},
 	} {

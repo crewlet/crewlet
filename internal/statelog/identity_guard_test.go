@@ -20,7 +20,7 @@ import (
 // non-test file under internal/ and cmd/ but internal/statelog/identity.go
 // reads the Created field of a stream's information — the BROKER'S creation
 // instant — rather than asking statelog.StreamCreatedAt for the stream's
-// identity (ADR-0053).
+// identity (ADR-0076).
 //
 // # Why a gate, and why the field
 //
@@ -110,7 +110,7 @@ func TestOnlyStreamCreatedAtReadsAStreamsCreationInstant(t *testing.T) {
 			"broker reports it, which a snapshot restore moves.\n\tRead the stream's "+
 			"identity with statelog.StreamCreatedAt, which reads the instant the stream's "+
 			"creator stamped and falls back to this one only for a stream carrying none "+
-			"(ADR-0053)", h.file, h.line, h.fn, h.owner)
+			"(ADR-0076)", h.file, h.line, h.fn, h.owner)
 	}
 	for _, u := range found.untyped {
 		t.Errorf("%s:%d in %s selects Created on %s, whose type this walk cannot "+

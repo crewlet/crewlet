@@ -34,6 +34,17 @@
 // and a session cookie (sessions.go). The first two arrive as a bearer and are
 // told apart by the value's shape; the third arrives as a cookie and yields to
 // any bearer presented beside it.
+//
+// # And one derived credential that never crosses a socket
+//
+// The Dashboard Assistant's grant (assist.go, ADR-0050) is a bearer too, told
+// apart by its shape, but it is no fourth way in: it is DERIVED from a person's
+// session, names that session rather than carrying any authority, and is
+// re-composed through [Lineages] from the identity rows on every request. It is
+// accepted only on a request [Dispatcher] built in process, so presented over
+// the wire it is refused on every path, and it never reaches the credential
+// surface, the sockets, the MCP surfaces, telemetry, webhooks or the
+// assistant's own routes.
 // The guard is mounted UNCONDITIONALLY: mounting it only when Tier A carries
 // tokens would be two independent conditions deciding one security property,
 // coinciding only because every real caller happens to supply both. Tier A
@@ -55,7 +66,7 @@
 // # A git client is answered in git's own terms, as a person
 //
 // git is the third person transport beside the dashboard's act route and the
-// operator's MCP (ADR-0055): a person's own token, presented by their git
+// operator's MCP (ADR-0078): a person's own token, presented by their git
 // client, pushes as that person where it is bound to their seat and fetches
 // only where it is bound to nobody, and neither /git/ nor /code/ is ever on the
 // public listener. Which requests under /git/ are fetches and which pushes is
@@ -82,6 +93,13 @@
 // [CORS] decides who may read an answer. They are separate because they answer
 // different questions: same-origin policy stops an attacker's page READING a
 // response, which on a write is the part they do not need.
+//
+// # And a request may say who it is for
+//
+// A browser's tabs share one cookie and each draws one person's screen, so a
+// request can name the principal it is made for ([ReaderHeader]), and the
+// guard then serves it only to that principal — `409 reader_changed` for
+// anybody else, before any handler runs. It refuses; it never admits.
 package auth
 
 import (
@@ -425,6 +443,11 @@ type Guard struct {
 
 	// audit is where a refused credential is counted. See audit.go.
 	audit Audit
+
+	// delegations is the assistant arm: the grants this guard accepts, or
+	// nil, which refuses every one. Installed by [Guard.BindDelegations];
+	// see assist.go.
+	delegations *Delegations
 }
 
 // BindSeats installs the seams that let a bound credential act as its seat, and
@@ -508,8 +531,9 @@ func (g *Guard) TokenIDs() []string {
 }
 
 // entry is the Tier A token a candidate matches, compared in constant time —
-// THE TOKEN COMPARISON, IN ONE PLACE: every bearer the guard resolves, on a
-// header or on the socket's query, is decided here.
+// THE TOKEN COMPARISON, IN ONE PLACE: every bearer the guard resolves — the
+// Authorization header's, on every route, the socket's included
+// ([Guard.Credential]) — is decided here.
 //
 // EVERY TOKEN IS COMPARED, and the loop does not stop at the first match: an
 // early exit makes the time taken depend on WHICH id matched, which is exactly
@@ -651,12 +675,15 @@ func markNoStore(w http.ResponseWriter, path string) {
 // Middleware wraps a handler with the guard.
 //
 // A WebSocket upgrade is an HTTP request and passes through here like any
-// other, which is why [Guard.Credential] reads the socket's query token: this
-// used to read the header alone and leave the query to the stream handler,
-// and under a closed posture the socket then never reached that handler at
-// all. The middleware answered 401 first, and the dashboard could not
-// connect with a valid token, on the one posture whose point is that the
-// token is required.
+// other, so whatever decides a handshake has to be something THIS frame reads:
+// the session cookie a browser attaches to a same-origin upgrade as to any
+// request, an Authorization bearer from any other client ([Guard.Credential],
+// which reads no credential off a URL), and — because a browser sets no header
+// on a WebSocket — the tab's reader in the handshake's [ReaderParam]. Anything
+// left to the stream handler alone is never seen: under a closed posture this
+// middleware answers 401 before the handler runs, which is how the dashboard
+// once could not connect with a valid token, on the one posture whose point is
+// that the token is required.
 //
 // EVERY ANSWER UNDER /auth LEAVES HERE `no-store` — see [markNoStore] — set
 // before anything is resolved, so the refusals this writes, the origin check's
@@ -665,6 +692,14 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		markNoStore(w, path)
+
+		// AN ASSISTANT GRANT IS JUDGED BEFORE THE EXEMPTION LIST: refused
+		// over the wire on every path, and refused on the surfaces it
+		// never reaches, some of which are exempt and would otherwise
+		// serve it as nobody (assist.go).
+		if IsAssistBearer(g.Credential(r)) && g.assistEdge(w, r) {
+			return
+		}
 
 		// EVERY REQUEST LEAVES HERE CARRYING AN ANSWER, which is what
 		// stops [iam.From] reading a handler nobody wired through this
@@ -684,6 +719,18 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 		// both uses below as new contexts.
 		//nolint:contextcheck // derived from r.Context(); see the paragraph above
 		principal, how := iam.From(r.Context())
+		if how == iam.Resolved && readerMoved(r, principal) {
+			// MADE FOR SOMEBODY ELSE — see [ReaderHeader] — and decided
+			// before the refusals below, because a tab that is somebody
+			// else's is the first thing to put right: whatever this
+			// credential's own refusal is, it is whoever the tab is handed
+			// to who meets it. Logged at info, as a resolved refusal is: a
+			// browser that changed hands is an ordinary afternoon.
+			log.Info("api_auth_reader_moved", "route", path,
+				"remote", g.Client(r))
+			refuseMovedReader(w)
+			return
+		}
 		if refusal != nil && refusal.Applies(r) {
 			// RESOLVED AND STILL REFUSED, on a route the refusal does
 			// not leave them — see [Refusal.Applies]. Logged at info
@@ -703,8 +750,7 @@ func (g *Guard) Middleware(next http.Handler) http.Handler {
 				GitText(w, refusal.Status, refusal.Detail)
 				return
 			}
-			httpjson.FailWith(w, refusal.Status, refusal.Code,
-				map[string]string{"detail": refusal.Detail})
+			refusal.write(w)
 			return
 		}
 		if how == iam.Unknown {

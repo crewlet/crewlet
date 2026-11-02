@@ -27,15 +27,15 @@ import (
 // BUCKETED, because A DIRECTORY RECORD'S SUBJECT NAMES NOBODY, and a
 // session's names a lineage — and the PERSON each of them is about is inside
 // a payload the deferring node, by construction, could not decode. A
-// per-person path would therefore be computable by every node except the one
-// that needs it. A bucket is on the ENVELOPE, in the clear, stated by the
+// per-person path would therefore be computable by every data node except the
+// one that needs it. A bucket is on the ENVELOPE, in the clear, stated by the
 // writer, so the node that cannot read the record still files it where a read
 // about that person will look.
 //
 // Per-person paths would also be a privacy leak into the one place this estate
 // most carefully keeps clear of personal data: a deferral row and every
 // operator surface that renders it would carry a person's id, for every
-// undecodable record, on every node.
+// undecodable record, on every data node.
 //
 // FLAT, because there is no hierarchy to reflect. A person is not inside
 // another person, and a bucket is a partition rather than a container — so

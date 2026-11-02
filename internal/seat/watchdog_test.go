@@ -115,8 +115,12 @@ func TestTheHostBeatFitsFiveTimesInTheThreshold(t *testing.T) {
 			t.Errorf("ttl %s: beat %s does not fit %d times inside the threshold",
 				tc.ttl, beat, WatchdogBeatsPerThreshold)
 		}
-		if beat > tc.heartbeat {
-			t.Errorf("ttl %s: beat %s is slower than the pass it proves (%s)",
+		// HALF THE HEARTBEAT at most, which is also never slower than
+		// the pass it proves: the pass runs a beat inside the heartbeat
+		// ([Host.renewPeriod]), and a beat over half of it would leave
+		// the pass less than a beat after the one before.
+		if 2*beat > tc.heartbeat {
+			t.Errorf("ttl %s: beat %s is more than half the heartbeat (%s)",
 				tc.ttl, beat, tc.heartbeat)
 		}
 		if beat <= 0 {
@@ -689,11 +693,20 @@ func TestADeclaredDeathEndsTheProcessWhateverTheWatchdogIsDoing(t *testing.T) {
 // declared itself dead must not share one. The notice has to carry the
 // broker's own reason, the one fact nothing else in the process outlives,
 // and name the code it ends with.
+//
+// And a stall's notice names its two durations as what they are: how long
+// the duty went without a beat, and the TTL that blew. The lag is the whole
+// time since the last beat, and the notice used to print it as the time PAST
+// the TTL — a duty 5.2 s dark against a 3 s TTL read "stalled 5.2s past the
+// seat lease TTL", 2.2 s past it being the truth.
 func TestTheExitNoticeTellsAStallFromADeclaredDeath(t *testing.T) {
 	t.Parallel()
-	stall := exitNotice(Stall{Duty: "seat-host", Lag: 50 * time.Second, Threshold: time.Minute})
-	if !strings.Contains(stall, "stalled 50.0s") {
-		t.Errorf("a stall's notice does not say how far it stalled: %q", stall)
+	stall := exitNotice(Stall{Duty: "seat-host", Lag: 5200 * time.Millisecond,
+		Threshold: 3 * time.Second})
+	if want := "crewlet: seat-host stalled for 5.2s, past the 3.0s seat lease TTL; " +
+		"exiting so peers can take over cleanly (code 75)"; stall != want {
+		t.Errorf("a stall's notice is\n  %q\nwant how long it went without a beat "+
+			"and the TTL it blew, each named for what it is:\n  %q", stall, want)
 	}
 	reason := "nats-server: Error listening on router port: 6222 - address already in use"
 	death := exitNotice(Stall{Duty: "embedded broker", Cause: errors.New(reason)})

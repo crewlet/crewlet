@@ -11,8 +11,8 @@
  * pushed it, which the commit's own author line is not — each opening the
  * commit's own page, and each branch but the default offering a comparison
  * with it. A page is what the
- * walk covered, so one can be short with more to come, and the first page is
- * held still from the press of Load older (`lib/usePaged.ts`).
+ * walk covered, so one can be short with more to come, and each page is joined
+ * to the one before it (`lib/usePaged.ts`).
  */
 
 import { useMemo } from "react";
@@ -25,7 +25,7 @@ import { refName, shortOID } from "~/lib/code.ts";
 import { plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import type {
   CodeGitAnswer,
   CodeLogCommit,
@@ -40,11 +40,10 @@ import { RefPicker, revisionWord } from "./refs.tsx";
 /** The repository's branches, the default first in name order as the engine lists them, each opening its files. */
 export function Branches({ repo }: { repo: CodeRepoDetail }) {
   const params = useMemo(() => ({ name: repo.name }), [repo.name]);
-  const hold = usePageHold<CodeRefsAnswer>(params);
-  const first = useCodeQuery("code_refs", params, { hold: hold.holding });
+  const first = useCodeQuery("code_refs", params);
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_refs", { ...params, cursor }),
     (a: CodeRefsAnswer) => a.refs ?? [],
     (r: CodeRefRow) => r.ref,
@@ -76,7 +75,7 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
           // THE ENGINE'S ORDER, by name.
           serverSorted
           rowHref={(r) => repoHref(repo.name, { tab: "files", ref: branchRev(repo, r) })}
-          onLoadMore={paged.more ? paged.older : undefined}
+          onLoadMore={paged.more ? paged.next : undefined}
           loadedNote={
             paged.more ? `${plural(rows.length, "branch", "branches")} loaded` : undefined
           }
@@ -183,14 +182,12 @@ export function Commits({ repo }: { repo: CodeRepoDetail }) {
     () => ({ name: repo.name, ...(rev ? { ref: rev } : {}), ...(path ? { path } : {}) }),
     [repo.name, rev, path],
   );
-  const hold = usePageHold<CodeGitAnswer>(params);
   const first = useCodeQuery("code_log", params, {
     enabled: Boolean(repo.head) || rev !== "",
-    hold: hold.holding,
   });
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_log", { ...params, cursor }),
     (a: CodeGitAnswer) => a.log?.commits ?? [],
     (c: CodeLogCommit) => c.oid,
@@ -250,7 +247,7 @@ export function Commits({ repo }: { repo: CodeRepoDetail }) {
           // GIT'S ORDER: every parent after every child.
           serverSorted
           rowHref={(c) => commitHref(repo.name, c.oid)}
-          onLoadMore={paged.more ? paged.older : undefined}
+          onLoadMore={paged.more ? paged.next : undefined}
           loadedNote={paged.more ? `${plural(rows.length, "commit")} loaded` : undefined}
           aria-label={`History of ${revisionWord(repo, rev)}`}
           columns={[

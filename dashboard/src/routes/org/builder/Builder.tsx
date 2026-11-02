@@ -58,6 +58,10 @@ import {
   type RefObject,
 } from "react";
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import type { PageActionSpec } from "~/app/assistant/context.ts";
+import { orgDraftSpec, orgOpsArgs, parseOrgOps, type OrgDraftChange } from "./assistantActions.ts";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useFillScreen } from "~/app/fill.tsx";
 import { useUndoKeys } from "~/lib/useUndoKeys.ts";
 import { useClickOnNothing } from "~/ui/clickOnNothing.ts";
@@ -71,7 +75,7 @@ import {
   configGuardedReason,
   useManagedConfig,
 } from "~/lib/useWriteAccess.ts";
-import { PRINCIPLES_PATH } from "~/app/routes.ts";
+import { MODELS_PATH, PRINCIPLES_PATH } from "~/app/routes.ts";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { principlesEditQuery } from "~/routes/settings/principles/edit/address.ts";
 import { useMayWriteCharter } from "~/routes/settings/principles/edit/access.ts";
@@ -107,6 +111,7 @@ import {
   STEP_UP_REQUIRED,
   type CheckOutcome,
   type CheckStatus,
+  type UncheckedWhy,
 } from "./model/scheduler.ts";
 import { readyToUpdate } from "./model/writes.ts";
 import { scopedTransport } from "./model/scope.ts";
@@ -122,15 +127,14 @@ import {
 import type { DraftStorage } from "./model/persistence.ts";
 import { clearDraft, keptScope } from "./model/persistence.ts";
 import { deriveChanges } from "./model/changes.ts";
-import { seatsWithoutContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
-import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
+import { AfterSaveStrip, shortRevision } from "./AfterSaveStrip.tsx";
 import { CreateCompany, managedModelSentence, NextSteps } from "./CreateCompany.tsx";
 import { clearSavedRevision, recordSavedRevision, useSavedRevision } from "./savedRevision.ts";
 import { configTransport } from "~/protocol/configWrite.ts";
 import { browserClock, randomKeys, sessionDraftStorage } from "./runtime.ts";
-import { useSave, type SaveEvents } from "./useSave.ts";
+import { useSave, type Landed, type SaveEvents } from "./useSave.ts";
 import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, nodeMenu } from "./nodeActions.tsx";
@@ -327,19 +331,27 @@ export function postureOf(answer: HttpAnswer, org: OrgKnowledge, signedIn: boole
   if (code === "unreadable_body") return { kind: "unserved" };
   if (answer.status === 404) {
     if (code !== "no_active_revision") return { kind: "unserved" };
-    // A NODE THAT HAS NOT CAUGHT UP IS NEVER OFFERED CREATE MODE. Its store
-    // holds no revision while the fleet runs a company, and a create from
-    // here would be refused at best. Until the snapshot has arrived, the
-    // answer is not known either way.
+    // A NODE THAT CANNOT SAY WHAT THE COMPANY IS IS NEVER OFFERED CREATE
+    // MODE. `GET /config` answers the fleet's pointer, or with none the
+    // company this node knows, so a 404 beside an org snapshot that names a
+    // company is a node whose two answers have not met yet — one still
+    // starting — and a create from here would be refused at best. Until the
+    // snapshot has arrived, the answer is not known either way.
     if (!org.known) return { kind: "loading" };
     return org.name ? { kind: "behind" } : { kind: "create" };
   }
   if (answer.status === 0) {
     return { kind: "unreachable", detail: text(body.detail) };
   }
+  // A 503 `unavailable` says why in `reason` (the fleet's pointer could not
+  // be read), not `detail`: without it the screen printed the bare code.
   return {
     kind: "failed",
-    detail: text(body.detail) || code || `The engine answered with status ${answer.status}.`,
+    detail:
+      text(body.detail) ||
+      text(body.reason) ||
+      code ||
+      `The engine answered with status ${answer.status}.`,
   };
 }
 
@@ -366,6 +378,7 @@ function statusLook(
   problems: number,
   signedIn: boolean,
   code: string,
+  unchecked: UncheckedWhy,
 ): StatusLook {
   switch (status) {
     case "checking":
@@ -374,8 +387,8 @@ function statusLook(
       return { label: "No problems", tone: "success", icon: CheckGlyph };
     case "problems":
       return { label: plural(problems, "problem"), tone: "danger", icon: CircleAlertGlyph };
-    case "unreachable":
-      return { label: "Could not reach the engine to check", tone: "warning", icon: PlugGlyph };
+    case "unchecked":
+      return { label: UNCHECKED_LABELS[unchecked], tone: "warning", icon: PlugGlyph };
     case "conflict":
       return { label: "The configuration changed", tone: "warning", icon: TriangleAlertGlyph };
     case "guarded":
@@ -392,6 +405,25 @@ function guardedLabel(code: string, signedIn: boolean): string {
   return configGuardedReason(code) === CONFIG_WRITE_REASONS.no_grant
     ? "Needs Admin access"
     : "Refused";
+}
+
+/**
+ * What the toolbar says of a check left unchecked, by why: "could not reach"
+ * only where the engine's answer never arrived. A drain, a start and an
+ * engine that failed each answered, and said so.
+ */
+const UNCHECKED_LABELS: Readonly<Record<UncheckedWhy, string>> = {
+  unanswered: "Could not reach the engine to check",
+  failed: "The engine failed to check",
+  draining: "Not checked: this node is draining",
+  starting: "Not checked: this node is starting",
+  unavailable: "Not checked: who holds the seats could not be read",
+};
+
+/** Why the check stands unchecked, read like [guardedCodeOf] from the last answer. */
+function uncheckedWhyOf(state: BuilderState): UncheckedWhy {
+  const outcome = state.check.outcome;
+  return outcome?.status === "unchecked" ? outcome.why : "unanswered";
 }
 
 /**
@@ -533,11 +565,33 @@ interface Arrival {
   readonly seat: string;
   readonly add: string;
   /**
-   * A tracker project key for the node, from Work's New project: its editor
+   * A tracker project key for the node, from Worklet's New project: its editor
    * opens on the Project field holding the key, not yet applied. Taken out of
    * the address once answered, as `add=` is, so a reload asks nothing twice.
    */
   readonly project: string;
+}
+
+/**
+ * What the toast says about a save that landed.
+ *
+ * A SAVE FOUND BENEATH A LATER REVISION IS NOT THE ONE BEING APPLIED. Settling
+ * a lost answer walks back from the active revision
+ * (`writes.settleUnknownWrite`), and finds the write as readily below a
+ * revision somebody built on it since as at the top; every node then applies
+ * that later revision, the save's changes with it. Told the save was being
+ * applied, the operator read that beside the strip mounted for the same save,
+ * which reads the fleet's activation and says the later revision has been
+ * activated since.
+ */
+function landedSentence(landed: Landed): string {
+  if (landed.activeRevisionId !== landed.revisionId) {
+    const later = `Revision ${shortRevision(landed.activeRevisionId)}, built on it, is active now.`;
+    return landed.resumed ? `Your last save was stored. ${later}` : `Saved. ${later}`;
+  }
+  return landed.resumed
+    ? "Your last save was stored and is being applied."
+    : "Saved. The engine is applying it.";
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,6 +1072,39 @@ function BuilderScreen({
     [readOnlyReason, announce],
   );
 
+  // --- assistant page actions (WP12) ---
+  // INTO THE DRAFT ONLY, through the one door every edit takes
+  // ([parseOrgOps]): the operation log, undo, the dry run and the review run
+  // as they do for a person's own edits, and saving stays the person's. The
+  // draft's generation is the page's data, so a change prepared against an
+  // older draft is stale.
+  useAssistantContext({
+    dataVersion: `org:${state.base.revision ?? "new"}:${state.generation}`,
+    actions: {
+      "org.draft.apply_ops": {
+        scope: "This org chart draft (not saved)",
+        args: orgOpsArgs(state.draft),
+        parse: (raw) => parseOrgOps(raw, state, keys),
+        preview: (change) =>
+          change.words.map((words, i) => ({
+            field: `Change ${i + 1}`,
+            next: words,
+            current: null,
+          })),
+        blocked: () =>
+          readOnlyReason !== null
+            ? `Editing is paused. ${readOnlyReason}`
+            : loaded
+              ? null
+              : "The company has not loaded yet.",
+        apply: (change) => {
+          for (const intent of change.intents) dispatch({ type: "record", intent });
+        },
+      } satisfies PageActionSpec<OrgDraftChange>,
+    },
+  });
+  // --- end assistant page actions (WP12) ---
+
   // Say what the last operation did, and put focus where it leads.
   const viewHandle = useRef<BuilderViewHandle | null>(null);
   const focusNode = useCallback((key: NodeKey) => viewHandle.current?.focusNode(key), []);
@@ -1372,11 +1459,7 @@ function BuilderScreen({
       // THE TOAST IS THE ANNOUNCEMENT: its host is a polite live region of
       // its own, so saying the same sentence through the Builder's region as
       // well had a screen reader read it twice.
-      toast.ok(
-        landed.resumed
-          ? "Your last save was stored and is being applied."
-          : "Saved. The engine is applying it.",
-      );
+      toast.ok(landedSentence(landed));
       load(!landed.resumed);
     },
     onConflict: ({ reason, currentRevisionId }) => {
@@ -1479,6 +1562,25 @@ function BuilderScreen({
   const structure = useStructure(state);
   const openScreen = useOpenScreen();
 
+  // WHAT IS OPEN, for the assistant: the draft being edited, read only
+  // ([orgDraftSpec]); a change to it is `org.draft.apply_ops` above. The
+  // create form declares its own while no template is recorded, and a
+  // builder still loading has nothing open.
+  useAssistantDraft(
+    loaded && !(creating && !templateApplied)
+      ? orgDraftSpec({
+          state,
+          view,
+          selected:
+            selection === null
+              ? null
+              : selection === COMPANY_KEY
+                ? "The company"
+                : nameIn(selection, [state.draft]),
+        })
+      : null,
+  );
+
   // ---- Rendering --------------------------------------------------------------
 
   if (!loaded) {
@@ -1486,7 +1588,7 @@ function BuilderScreen({
   }
 
   const problemCount = problemsCurrent ? state.check.problems.problemCount : 0;
-  const look = statusLook(status, problemCount, signedIn, guardedCode);
+  const look = statusLook(status, problemCount, signedIn, guardedCode, uncheckedWhyOf(state));
   const canUndo = !readOnly && state.log.ops.length > 0;
   const canRedo = !readOnly && state.log.undone.length > 0;
   // THE CREATE FORM HAS NO TOOLBAR: there is no draft to undo, check or save
@@ -1921,8 +2023,11 @@ function BuilderScreen({
           <Callout variant="warning" icon={<CpuGlyph />}>
             {documentManagedBy === null ? (
               <>
-                No model provider is set, so agents can’t work. One is added from a terminal on the
-                node’s host, starting from the company the store holds:
+                No model provider is set, so agents can’t work. Add one under{" "}
+                <a className="prose-link" href={href(MODELS_PATH, { flow: "add" })}>
+                  Settings, Models
+                </a>
+                , or from a terminal on the node’s host, starting from the company the store holds:
                 <Disclosure title="The steps" size="compact" headingLevel="none">
                   <CodeBlock plain wrap code={PROVIDER_STEPS} />
                 </Disclosure>
@@ -2187,11 +2292,6 @@ function ReviewPanel({
     [state, current],
   );
   const outcome = current ? state.check.outcome : null;
-  const withoutContact = useMemo(
-    () =>
-      seatsWithoutContact(state.draft).map((key) => locate(state.draft, key)?.node.data.name ?? ""),
-    [state.draft],
-  );
   return (
     <ReviewSaveDialog
       mode={state.mode}
@@ -2201,7 +2301,6 @@ function ReviewPanel({
       warnings={outcome?.status === "clean" ? outcome.warnings : []}
       problemCount={current ? state.check.problems.problemCount : 0}
       documentProblems={current ? state.check.problems.document : []}
-      withoutContact={withoutContact}
       writeId={writeId}
       phase={phase}
       onSave={onSave}

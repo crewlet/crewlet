@@ -94,8 +94,12 @@ const (
 	// its own or the company's, is refusing: the engine has parked the
 	// seat until the window resets or the ceiling is raised.
 	StoppedBudget StoppedReason = "budget"
-	// StoppedProvider — the seat's model provider was unreachable
-	// (`llm_unavailable`), and the seat has done no work since.
+	// StoppedProvider is a seat every model of whose chain is at its usage
+	// limit, and the engine has parked the seat until the first is tried
+	// again (`seat_provider_parked`). It lifts when a call through the
+	// chain answers. A chain that merely FAILED (`llm_unavailable`) is not
+	// a stop: nothing says the failure lasts, and the seat's failed turn is
+	// its `last_error`.
 	StoppedProvider StoppedReason = "provider"
 )
 
@@ -103,8 +107,8 @@ const (
 // holds, the first is the one stated. A PAUSE FIRST, because it is a person's
 // decision and nothing else moves until they reverse it; then PLACEMENT,
 // because a seat no node holds runs nothing whatever its budget; then the
-// BUDGET park, which lifts on its own at the window's end; then the PROVIDER,
-// which lifts the moment the seat works again.
+// BUDGET park, which lifts on its own at the window's end; then the PROVIDER
+// park, which lifts when a call through the seat's models answers.
 var StoppedReasons = []StoppedReason{StoppedPaused, StoppedUnplaced, StoppedBudget, StoppedProvider}
 
 // Valid reports whether r is a reason this build knows.
@@ -127,10 +131,6 @@ func (st seatState) stoppedReason() *StoppedReason {
 	return &r
 }
 
-// providerFailure is the engine-detected failure that stops a seat on its
-// provider, as the failure hold records it.
-const providerFailure = "llm_unavailable"
-
 // stateOf computes one seat's state from everything the projection holds about
 // it. `agent` may be nil: a seat the events never mentioned still has a
 // placement, runs, a company budget and therefore a state.
@@ -142,7 +142,13 @@ const providerFailure = "llm_unavailable"
 //
 // Called under s.mu.
 func (s *LiveState) stateOf(agentID string, agent *agentLive) seatState {
-	if agent != nil && agent.turn != nil && agent.turn.Stage != StageParked {
+	// A SEAT PARKED ON ITS MODELS' LIMIT IS NOT WORKING, even through the
+	// probe the engine runs when the park's alarm lifts it: until a call
+	// answers, the seat is waiting, and drawing each probe as work is the
+	// blink this state exists to stop. A person's pause still outranks it,
+	// below, as every stop's reason is ranked.
+	limitParked := agent != nil && agent.providerLimit != nil && agent.providerLimit.Parked
+	if agent != nil && agent.turn != nil && agent.turn.Stage != StageParked && !limitParked {
 		return seatState{activity: ActivityWorking}
 	}
 	running, waiting := s.runsOf(agentID)
@@ -169,7 +175,7 @@ func (s *LiveState) stateOf(agentID string, agent *agentLive) seatState {
 	case agent != nil && agent.budget != nil && refusing(agent.budget.Windows, s.clock()),
 		s.budget != nil && refusing(s.budget.Org.Windows, s.clock()):
 		return stopped(StoppedBudget)
-	case agent != nil && agent.failure == providerFailure:
+	case limitParked:
 		return stopped(StoppedProvider)
 	}
 	return seatState{activity: ActivityIdle}

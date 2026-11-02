@@ -74,6 +74,8 @@ import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useCreateArtifact, useSaveIn, useWorkItem } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import { createDraft } from "./assistantDraft.ts";
+import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import { AskAgentPanel, askTitleHold, askTool, chosenAgent, useAskPanel } from "./AskAgent.tsx";
 
 /** Briefs to start from, one press each. */
@@ -208,6 +210,53 @@ export function previewImages(
   return (path) => (slot && path === logo.path ? assets.logo(slot) : null);
 }
 
+/** What a new deck holds beyond what every create page does. */
+interface DeckDraft {
+  readonly theme: string;
+  readonly rows: readonly PlanRow[];
+}
+
+/**
+ * A new deck's own fields: its theme, chosen from the engine's, and each
+ * slide's title by its place in the deck, held to the slide title's own
+ * bound. A slide's layout is said in its hint and never set: adding, moving
+ * and removing slides are the person's, on the strip.
+ */
+export function deckFields(
+  themes: readonly DeckTheme[],
+  layouts: ReadonlyMap<string, DeckLayout>,
+  rows: readonly PlanRow[],
+): DraftFieldSpec<DeckDraft>[] {
+  const ids = themes.map((t) => t.id);
+  return [
+    {
+      path: "theme",
+      label: "Theme",
+      hint: `One of ${themes.map((t) => `${t.id} (${t.name})`).join(", ")}`,
+      read: (d) => d.theme,
+      write: (d, theme) =>
+        typeof theme === "string" && ids.includes(theme.trim())
+          ? { ...d, theme: theme.trim() }
+          : refuse(`Choose one of the themes: ${ids.join(", ")}.`),
+    },
+    ...rows.map((row, i): DraftFieldSpec<DeckDraft> => ({
+      path: `slides.${i + 1}.title`,
+      label: `Slide ${i + 1} title`,
+      hint: `${layouts.get(row.layout)?.name ?? row.layout} layout; empty for its own heading`,
+      read: (d) => d.rows[i]?.title ?? "",
+      write: (d, title) => {
+        if (typeof title !== "string") return refuse("A slide's title is a line of text.");
+        const wrong = slideTitleProblem(title);
+        if (wrong) return refuse(wrong);
+        return {
+          ...d,
+          rows: d.rows.map((r, at) => (at === i ? { ...r, title: title.trim() } : r)),
+        };
+      },
+    })),
+  ];
+}
+
 export function SlidesCreate() {
   const starters = useRest<SlidesStartersAnswer>("slides-starters", (signal) =>
     readSlidesStarters(signal),
@@ -318,6 +367,32 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
             ? "Choose the project to file the task in."
             : undefined)));
   const busy = create.busy || make.busy || files.busy;
+  // WHAT IS OPEN, for the assistant: the title, the theme and each slide's
+  // title, and the hand-off beside them, set through the composer's own
+  // setters; making the deck stays the reader's press.
+  useAssistantDraft(
+    createDraft<DeckDraft>({
+      what: "slide deck",
+      help:
+        "You can set the deck's theme and each slide's title. Adding, moving or removing " +
+        "slides and changing their layouts are the person's, on the page; you make no images.",
+      step: panel.open ? "ask" : "compose",
+      title,
+      setTitle,
+      brief,
+      setBrief,
+      who,
+      extra: {
+        value: { theme: themeId, rows },
+        fields: deckFields(themes, layouts, rows),
+        apply: (next) => {
+          setThemeId(next.theme);
+          setRows([...next.rows]);
+        },
+      },
+      blocked: () => (busy ? "The deck is being made." : null),
+    }),
+  );
   const handed = `${brief.trim()}\n\n${planBrief(theme, rows, title, layouts)}`;
 
   const start = async () => {
@@ -367,7 +442,7 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
       });
     }
     creating.current = true;
-    nav.to(filed.item ? ["work", filed.item] : artifactPath(id));
+    nav.to(filed.item ? ["worklet", filed.item] : artifactPath(id));
   };
 
   const add = (layout: string) => {

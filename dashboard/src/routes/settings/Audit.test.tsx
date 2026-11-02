@@ -25,6 +25,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { toCsv } from "@crewlethq/ui";
 import { Audit, artifactDetail, auditCsv, writerOf } from "./Audit.tsx";
 import { Router } from "~/app/router.tsx";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { QueryError, type QueryName } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -274,9 +275,9 @@ test("a source whose page stops inside the window says so", async () => {
   mount();
   await waitFor(() => expect(screen.getByText(/newest rows/)).toBeTruthy());
   // AND IT NAMES WHICH SOURCE. "Some of this may be missing" is a caption
-  // nobody can act on; "Knowledge shows only its newest rows" says where to
+  // nobody can act on; "Doclet shows only its newest rows" says where to
   // look.
-  expect(screen.getByText(/newest rows/).textContent).toBe("Knowledge shows only its newest rows.");
+  expect(screen.getByText(/newest rows/).textContent).toBe("Doclet shows only its newest rows.");
 });
 
 // THE EXPORT IS WHAT IS ON SCREEN.
@@ -602,6 +603,37 @@ test("a git push names its repository as what it was done to", async () => {
   expect(screen.getByText("pat:0192f0a1")).toBeTruthy();
 });
 
+// A MODEL GESTURE IS DRAWN AS WHAT WAS DONE TO WHICH MODEL, linked to the
+// models, and the secret names a credential call touched stay in its summary.
+test("a model gesture names its action and its entry", async () => {
+  serving({
+    work_activity: { records: [], complete: true },
+    events: {
+      events: [
+        runtimeEvent({
+          id: "ev-3",
+          type: "model_acted",
+          failed: false,
+          summary: "jane set the credential of model sonnet (ANTHROPIC_API_KEY_SONNET)",
+          tags: {
+            node: "node-a",
+            actor_kind: "human",
+            operator_id: "session:0192f00e",
+            action: "device_sign_in",
+            provider_key: "sonnet",
+          },
+        }),
+      ],
+      next: null,
+      exhausted: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("model device sign in")).toBeTruthy());
+  const entry = screen.getByRole("link", { name: "sonnet" });
+  expect(entry.getAttribute("href")).toBe("#/settings/models");
+});
+
 /** One row of the company trail of every artifact, as `artifact_trail` answers it. */
 function trailRow(over: Record<string, unknown> = {}) {
   return {
@@ -780,7 +812,7 @@ test("two sources whose pages filled are named together", async () => {
   mount();
   await waitFor(() => expect(screen.getByText(/newest rows/)).toBeTruthy());
   expect(screen.getByText(/newest rows/).textContent).toBe(
-    "Knowledge and Configuration show only their newest rows.",
+    "Doclet and Configuration show only their newest rows.",
   );
 });
 
@@ -909,12 +941,12 @@ test("a source refused on authority names its grant, and the other sources stand
   mount();
   await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
   expect(screen.getByText(/Reading the configuration's revisions needs Admin/)).toBeTruthy();
-  expect(screen.queryByText(/You may not read this/)).toBeNull();
+  expect(screen.queryByText(/no access would change that/)).toBeNull();
 });
 
 // TWO SOURCES REFUSED IN THE SAME WORDS ARE ONE SENTENCE: a refusal naming no
-// grant says "Sign in to see this." whichever source it refused, and the notice
-// said it once a source, keyed by the sentence.
+// grant says no access (`lib/refusal.ts`'s `authorityWords`) whichever source
+// it refused, and the notice said it once a source, keyed by the sentence.
 test("two sources refused in the same words are said once", async () => {
   serving({
     work_activity: { records: [commit()], complete: true },
@@ -923,7 +955,7 @@ test("two sources refused in the same words are said once", async () => {
   });
   mount();
   await waitFor(() => expect(screen.getByText("took it off the board")).toBeTruthy());
-  expect(screen.getAllByText("Sign in to see this.")).toHaveLength(1);
+  expect(screen.getAllByText(ACT_ERRORS.unauthorized)).toHaveLength(1);
 });
 
 // AND A REFUSAL REPLACES WHAT IT REFUSED: rows read before a grant was taken

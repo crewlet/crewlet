@@ -18,37 +18,45 @@
 // after a crash, a call repeated after an `unknown`, a person pressing retry —
 // and the state log collapses a repetition only when it arrives under the SAME
 // operation id. So every id a write derives — the operation's, and a created
-// task's, comment's, view's, checklist item's or page's own — comes from ONE
-// identity per call, chosen by one rule:
+// task's, comment's, view's, checklist item's, page's, room's or chat
+// message's own — comes from ONE identity per call, chosen by one rule:
 //
 //   - IN A TURN, the turn: its work key (or its run, for a turn with no
-//     ledgerable trigger), the instant that unit of work began, a digest of
-//     the call's own arguments and how many different calls to the same tool
-//     the run made first ([opIDFor], [Actor.OperationSince],
-//     turnctx.CallLog). A re-run makes the same calls and derives the same
-//     ids; a different call, or the same one after a different one, is a new
+//     ledgerable trigger), the instant that unit of work began, the tool, a
+//     digest of the call's own arguments and how many different calls the
+//     run made first to the same tool, or to a tool that undoes it — its
+//     FAMILY, which the domain owning the pair declares (chatlet.CallFamily:
+//     joining a room and leaving it) — derived ONCE, as the call's key
+//     ([callOpKey], [Actor.callKey], [Actor.OperationSince],
+//     turnctx.CallLog.OrdinalAmong), and every id the call's writes carry is
+//     derived from that key: by the knowledge base's and chat's stores, and by
+//     these tools for the tracker ([opIDFor], [commentID]). A re-run makes the
+//     same calls and derives the same ids; a different call, or the same one
+//     after a different one — a leave between two joins included — is a new
 //     operation.
 //   - OUTSIDE A TURN, the request's or the call's own operation. A transport
 //     that names its requests — the act transport and the HTTP write
 //     surface — carries the `Idempotency-Key` a retry repeats, held to the
 //     operation grammar and scoped to the principal by internal/api/opkey,
-//     as [Actor.WorkKey] with its instant as [Actor.WorkSince] (and as
-//     [pages.Actor.OpKey] for a page write), so a request is a unit of work
-//     exactly as a turn's trigger is and every id is derived from it as a
-//     turn's are. The operator's assistant over MCP names the call's
-//     OPERATION ([Actor.Operation]) instead: it brings back the `op_id` its
-//     call was answered with, or is minted one; that operation carries the
-//     instant it was minted and NAMES THE CALL — the tool and a digest of its
-//     arguments — so it is accepted only with that call: the same call made
-//     again is the same operation, and anything else under it is refused
-//     before a write. That is ONE rule for every family of write tools — the
-//     tracker's, the artifacts' and the datastore's ([operations]) — and
-//     only what a turn or a key derives stays each family's own.
+//     as [Actor.WorkKey], put there by [Actor.Keyed] and dated by the key's
+//     own instant, a key that carries none refused (and as
+//     [doclet.Actor.OpKey] for a page write, [chatlet.Actor.OpKey] for a chat
+//     one), so a request is a unit of work exactly as a turn's trigger is
+//     and every id is derived from it as a turn's are. The operator's
+//     assistant over MCP names the call's OPERATION ([Actor.Operation])
+//     instead: it brings back the `op_id` its call was answered with, or is
+//     minted one; that operation carries the instant it was minted and NAMES
+//     THE CALL — the tool and a digest of its arguments — so it is accepted
+//     only with that call: the same call made again is the same operation,
+//     and anything else under it is refused before a write. That is ONE rule
+//     for every family of write tools — Worklet's, the artifacts', the
+//     datastore's and the code host's ([operations]) — and only what a turn
+//     or a key derives stays each family's own.
 //   - WITH NEITHER — a tool that takes no `op_id`, called over MCP — each
-//     write is fresh, since nothing will repeat it. The page tools are such
-//     tools, and so are write_project and write_work_catalogue, whose writes
-//     restate what they declare, so a repeat under a new operation already
-//     changes nothing a first attempt landed.
+//     write is fresh, since nothing will repeat it. The page and chat tools
+//     are such tools, and so are write_project and write_work_catalogue,
+//     whose writes restate what they declare, so a repeat under a new
+//     operation already changes nothing a first attempt landed.
 //
 // There is deliberately no second key: a request key beside the operation, a
 // seed beside the turn, would be a second answer to "is this the same write",
@@ -73,13 +81,14 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 var log = logging.Get("agent.builtin")
 
 // LookupColleagueTool is the tool's wire name.
-const LookupColleagueTool = "lookup_colleague"
+const LookupColleagueTool = toolname.LookupColleague
 
 // lookupColleague resolves a free-text query to one colleague, or to the list
 // it might be.
@@ -103,11 +112,11 @@ func (t *lookupColleague) Description() string {
 		"handle, the seat kind (agent | human), and every known " +
 		"cross-platform identity; human results add what they own and how " +
 		"to reach them (a mention and an asynchronous reply — never " +
-		"a2a_ask, which addresses agents only). Matching is " +
+		A2AAskTool + ", which addresses agents only). Matching is " +
 		"case-insensitive and falls back to partial and fuzzy matching, so " +
 		"'ceo' finds the role 'Agent CEO'; when more than one colleague " +
 		"matches, the candidate list is returned instead of a guess. Use " +
-		"this before a2a_ask or before @mentioning anyone."
+		"this before " + A2AAskTool + " or before @mentioning anyone."
 }
 
 func (t *lookupColleague) Parameters() map[string]any {
@@ -134,10 +143,10 @@ func (t *lookupColleague) Call(ctx context.Context, args map[string]any) (tools.
 func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	query := strings.TrimSpace(argString(args, "query"))
 	if query == "" {
-		return failed("lookup_colleague needs a `query`: a handle, a role name, or an id on any connected platform."), nil
+		return failed(LookupColleagueTool + " needs a `query`: a handle, a role name, or an id on any connected platform."), nil
 	}
 	if turn == nil || turn.Org == nil {
-		return refused(tools.RefusalUnavailable,
+		return refusedBy(tools.RefusalUnavailable, waitless(),
 			"No organization is in scope, so there is nobody to look up."), nil
 	}
 
@@ -162,7 +171,7 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 	// AMBIGUOUS. The list, and the word "ambiguous", so the model asks
 	// again with a handle rather than picking the first row.
 	var b strings.Builder
-	fmt.Fprintf(&b, "%q is ambiguous — %d colleagues match. Call lookup_colleague "+
+	fmt.Fprintf(&b, "%q is ambiguous — %d colleagues match. Call "+LookupColleagueTool+" "+
 		"again with one of these handles:\n", safe, len(found))
 	// EVERY candidate. This message's whole job is to let the model retry
 	// with an exact handle, and a handle it cannot see is one it cannot
@@ -256,11 +265,11 @@ func describe(s colleague.Seat) string {
 		b.WriteString("  reach them: they cannot be reached on any chat or " +
 			"code-host account right now, so there is nobody to mention or " +
 			"message. Work for this seat goes in the PM tool, assigned to " +
-			"the seat. a2a_ask addresses AGENTS only and will not reach them.\n")
+			"the seat. " + A2AAskTool + " addresses AGENTS only and will not reach them.\n")
 	case s.Kind == string(org.KindHuman):
 		b.WriteString("  reach them: mention them on a shared surface and " +
 			"continue without waiting — a person answers asynchronously. " +
-			"a2a_ask addresses AGENTS only and will not reach them.\n")
+			A2AAskTool + " addresses AGENTS only and will not reach them.\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

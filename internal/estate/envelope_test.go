@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // fleetRing is the keyring every node of a test fleet holds.
@@ -190,7 +190,7 @@ func TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere(t *testing.T) {
 	r := routerAs(t, f, "agent-2", mustEnvelopes(rotated))
 
 	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-a"} })
-	_, err := r.WriterAs(swe).CreateTask(t.Context(), "op-k", tracker.Task{Project: "ENG"}, nil)
+	_, err := r.WriterAs(swe).CreateTask(t.Context(), "op-k", worklet.Task{Project: "ENG"}, nil)
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "does not hold the key") {
 		t.Fatalf("a write only a node without the key was asked = %v, want the estate "+
@@ -201,7 +201,7 @@ func TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere(t *testing.T) {
 	}
 
 	f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-a", "data-b"} })
-	if _, err := r.WriterAs(swe).CreateTask(t.Context(), "op-k", tracker.Task{Project: "ENG"},
+	if _, err := r.WriterAs(swe).CreateTask(t.Context(), "op-k", worklet.Task{Project: "ENG"},
 		nil); err != nil {
 		t.Fatalf("a write with a node holding the key = %v, want it written there", err)
 	}
@@ -219,7 +219,15 @@ func TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere(t *testing.T) {
 func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 	t.Parallel()
 	outsiders := mustEnvelopes(statelog.OneKey("k1", "not the fleet's material"))
+	_, replyDomain := fleetEnvelopes.channel.Domains()
+	fleetReplies, err := statelog.NewSigner(replyDomain, fleetRing)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, forge := range map[string]func(sealed []byte) []byte{
+		"the fleet's, in a shape this build cannot decode": func([]byte) []byte {
+			return fleetReplies.Seal([]byte(`{"node":"data-x","request":7}`))
+		},
 		"not signed by the fleet": func(sealed []byte) []byte {
 			return outsiders.sealReply(reply{Node: "data-x", Request: opened(sealed).ID,
 				Result: json.RawMessage(`{"TotalHint":99}`)})
@@ -246,7 +254,7 @@ func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 			t.Cleanup(func() { _ = stop(context.Background()) })
 			f.placement.set(func(p *fakePlacement) { p.nodes = []string{"data-x"} })
 
-			answer, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
+			answer, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
 			var unserved *ErrUnserved
 			if !errors.As(err, &unserved) || answer.TotalHint == 99 {
 				t.Fatalf("a read answered only by a reply nobody can believe = (%+v, %v), "+
@@ -256,11 +264,20 @@ func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 				t.Errorf("the refusal does not say why the reply was not believed: %s",
 					unserved.Detail)
 			}
-			_, _, err = f.client.Pages().Comment(t.Context(), pages.Actor{}, "p1",
-				pages.NewComment{Body: "hi"})
+			_, _, err = f.client.Pages().Comment(t.Context(), doclet.Actor{}, "p1",
+				doclet.NewComment{Body: "hi"})
 			if !errors.Is(err, ErrOutcomeUnknown) {
 				t.Fatalf("a once-write answered by a reply nobody can believe = %v, want "+
 					"ErrOutcomeUnknown", err)
+			}
+			// NOR IS A REPEATABLE WRITE'S "did not run": the node took the
+			// request and may have run it, so with no other node to ask
+			// the write is unknown rather than unserved.
+			_, err = f.client.WriterAs(swe).CreateTask(t.Context(), "op-x",
+				worklet.Task{Project: "ENG"}, nil)
+			if !errors.Is(err, ErrOutcomeUnknown) || errors.As(err, &unserved) {
+				t.Fatalf("a repeatable write answered by a reply nobody can believe = "+
+					"%v, want ErrOutcomeUnknown", err)
 			}
 			f.placement.mu.Lock()
 			defer f.placement.mu.Unlock()
@@ -284,7 +301,7 @@ func TestAReplayedRequestRunsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.WriterAs(swe).CreateTask(t.Context(), "op-once", tracker.Task{Project: "ENG"},
+	if _, err := r.WriterAs(swe).CreateTask(t.Context(), "op-once", worklet.Task{Project: "ENG"},
 		nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}

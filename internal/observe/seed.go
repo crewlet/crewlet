@@ -88,8 +88,9 @@ const seedTurnReads = 16
 //     AGENT ID, read off the composed org (nil asks nobody: a node with no
 //     company has no seats).
 //
-// FROM EVERY NODE. Each node's event store holds what that node published, so a
-// seed read from this node's alone showed a restarted node only its own share
+// FROM EVERY DATA NODE. Each data node's event store holds what it published
+// and the events it keeps in custody for a node without `data` ([Custody]), so
+// a seed read from this node's alone showed a restarted node only its own share
 // of the company, and a node that joined a fleet showed nothing its peers had
 // done. Which nodes answered is recorded on the projection
 // ([livestate.LiveState.SeededFrom]) rather than hidden.

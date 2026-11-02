@@ -26,7 +26,7 @@
 //     not merely idle — it raises everyone else's share.
 //
 // A caller may lease under a class of its own as well — the tracker's walk
-// claims are `move:`, `merge:` and `bulk:` — and every such class is held to
+// claims are `move:` and `merge:` — and every such class is held to
 // the same ceiling a duty is, never to the seat lease TTL: only a seat and a
 // presence lease run on the seat heartbeat ([HeldToSeatTTL]).
 //
@@ -86,7 +86,19 @@
 // store blip. Treating unknown as refusal makes a node stop refreshing its
 // own presence during exactly the outage it should ride out. Any non-nil
 // error means unknown — there is no error worth special-casing into a
-// definite answer.
+// definite answer about who holds what.
+//
+// ONE CLAIM'S ERROR IS A DEFINITE FACT ABOUT WHAT THE STORE HOLDS, and it is
+// still not a fourth answer: [Custody.ClaimCustody] wrapping
+// [ErrCustodyUndecidable], for a batch whose keeper record the store holds and
+// nothing can read as a keeper. It decides nothing about ownership — not
+// "mine", not "another node's" — so the caller keeps and deletes nothing,
+// exactly as on unknown. What it is NOT is an outage: the store answered,
+// about that one record, and will answer the same until the record is removed
+// or ages out, so a caller that waited on it as on a store it could not reach
+// would wait out the record's month — and one working through many batches
+// would stop at this one, holding every batch behind it on a record no wait
+// clears. So it is told apart, and the caller goes on to the next batch.
 //
 // # A definite answer is a CURRENT one
 //
@@ -154,6 +166,19 @@
 //     case. It is also why the positions register is an AGELESS bucket, which
 //     is the exact inversion of the presence bucket beside it, whose whole
 //     purpose is that a node that stops reporting vanishes.
+//
+// # A person's own record here is their SEAT's
+//
+// One record in this store is a PERSON'S rather than the company's or a
+// node's: their chat read state — the cursors, mutes and do-not-disturb of
+// [ChatReads]. It is keyed by the name iam.RecordOwner gives a principal's own
+// record, which for everybody chat admits is the human seat they act as, so
+// it follows the rule every personal record follows (ADR-0032): it belongs to
+// the SEAT, and the seat's next holder inherits it — the person themselves
+// once reinstated, or a successor once they are moved to another seat or
+// removed — exactly as the seat's tracker inbox, pins and personal views pass.
+// It ends when the seat leaves the company, never when its holder does; see
+// chatread.go for why neither a person id nor an agent id is the key.
 package coord
 
 import (
@@ -237,10 +262,57 @@ func ProtocolGateCounts(resource string) bool {
 }
 
 // ErrUnavailable is the canonical "store could not answer" error. Backends
-// wrap their transport failures in it. Callers should not switch on it —
-// ANY non-nil error means unknown — but it gives the common case one name
-// in logs and lets tests assert the tri-state deliberately.
+// wrap their transport failures in it. Callers should not switch on it — but
+// it gives the common case one name in logs and lets tests assert the
+// tri-state deliberately.
+//
+// NOT SWITCHED ON, because the rule runs the other way: an error is unknown
+// unless the contract the method belongs to names it as a definite answer — a
+// compare-and-set that lost its race ([ErrActivationRaced],
+// [ErrMaintenanceMoved], [ErrObjectBackendMoved]), a request the store will
+// not honour as asked ([ErrTTLTooLong]), and a custody record the store holds
+// and nothing can read ([ErrCustodyUndecidable], see the package doc). A
+// caller that read "not ErrUnavailable" as definite would take every
+// failure a backend did not wrap for a fact.
 var ErrUnavailable = errors.New("coordination store unavailable")
+
+// ErrWriteUnknown marks an [ErrUnavailable] that came AFTER a write was sent:
+// the store's answer to it was lost, so the write may have landed.
+//
+// A WRITE'S OWN THIRD ANSWER, and it exists for the methods that read before
+// they write. A caller of a plain compare-and-set knows its one call was the
+// write, so any error there is unknown and needs no marker; a caller of a
+// read-modify-write cannot tell a read that failed — after which nothing was
+// written — from a put whose reply never came, and the two ask opposite
+// things of it: one is "nothing changed, ask again", the other "it may have
+// changed, look before saying it did not". A method that marks this says so
+// in its contract ([ChatReads] does), and every error such a method returns
+// WITHOUT it changed nothing.
+var ErrWriteUnknown = errors.New("coord: the write was sent and its answer was lost")
+
+// ErrClaimInFlight is a claim answered while another claim of the same
+// resource BY THE SAME OWNER is still minting its fencing epoch: neither a
+// grant nor a refusal is true yet, and the sibling is one store round trip
+// from committing, or from giving the record back.
+//
+// AN [ErrUnavailable], which errors.Is reports it as: it is the unknown arm
+// of the tri-state, and every caller that branches on ErrUnavailable (a
+// scheduler failing closed for a tick, a duty passing the unknown through)
+// treats it exactly as before. Named so that a caller which knows the sibling
+// is its own, and that it ends, can tell it apart from a store that cannot
+// answer at all.
+var ErrClaimInFlight error = claimInFlight{}
+
+// claimInFlight is [ErrClaimInFlight]'s type: comparable, so errors.Is finds
+// the sentinel itself, and an ErrUnavailable by its Is.
+type claimInFlight struct{}
+
+func (claimInFlight) Error() string {
+	return ErrUnavailable.Error() + ": a claim by this owner is still minting its epoch"
+}
+
+// Is reports that the in-flight claim is the unknown arm, [ErrUnavailable].
+func (claimInFlight) Is(target error) bool { return target == ErrUnavailable }
 
 // ErrTTLTooLong reports a claim or renew asking for a TTL the store cannot
 // honour.
@@ -254,7 +326,7 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 
 // MaxDutyTTL is the longest TTL any lease outside seats and presence may be
 // claimed with — a fleet duty (a `worker:` resource), a tracker walk's claim,
-// a bulk admission, any class a caller leases under a name of its own — and
+// any class a caller leases under a name of its own — and
 // the TTL every backend must be able to honour for one, whatever TTL it runs
 // its seat leases on. Named for the duty that sizes it.
 //
@@ -266,9 +338,8 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // tick runs from ten seconds (the scheduler) to an hour (the learning passes),
 // so a duty TTL has to outlive several of its own ticks or it moves to a peer
 // on ordinary jitter. A caller's claim is the same kind of lease: the tracker
-// sizes a walk's claim from the walk's own heartbeat and a bulk admission from
-// the rows it projects, and neither has anything to do with how fast a dead
-// node's seats should move.
+// sizes a walk's claim from the walk's own heartbeat, which has nothing to do
+// with how fast a dead node's seats should move.
 //
 // The embedded KV backend fixes a lease's expiry as its BUCKET's age, so it
 // can only honour TTLs up to the bucket it writes into. For as long as duties
@@ -281,8 +352,8 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // the duties out fixed exactly the duties: every other class stayed in the
 // seat lease bucket, so the tracker's 60-second walk claim was refused on the
 // same fleets — every cross-project move and every merge failed before its
-// first append, and a large bulk edit's admission failed open — and the twin
-// hid that too, because the ceiling it enforced was the duties' alone.
+// first append — and the twin hid that too, because the ceiling it enforced
+// was the duties' alone.
 //
 // So the ceiling is stated HERE, for every class [HeldToSeatTTL] leaves out,
 // every backend enforces it through [CheckLeaseTTL], and a TTL the embedded KV
@@ -298,11 +369,11 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // "one missed tick must not move the duty" ratio every other duty follows. An
 // engine test asserts that this is exactly the longest duty TTL, so the number
 // cannot drift away from the duty that justifies it; every other lease it
-// bounds is far shorter (the tracker's longest, a bulk admission at its
-// largest, asks for about two minutes). Raising it is safe on a running fleet
-// (the KV backend only ever raises its duty bucket's age); lowering it leaves
-// an existing bucket older than it needs to be, which costs nothing, because
-// no record there is judged by the bucket's age.
+// bounds is far shorter (the tracker's longest, a walk's claim, asks for a
+// minute). Raising it is safe on a running fleet (the KV backend only ever
+// raises its duty bucket's age); lowering it leaves an existing bucket older
+// than it needs to be, which costs nothing, because no record there is judged
+// by the bucket's age.
 //
 // It is also the removal-marker horizon, [MarkerRetention], by definition
 // rather than by coincidence: no operation that read a record before it was

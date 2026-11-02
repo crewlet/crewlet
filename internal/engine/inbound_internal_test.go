@@ -17,6 +17,7 @@ func TestAFailedFirstInboundStartIsTakenDownForTheRetry(t *testing.T) {
 	c := companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -25,6 +26,7 @@ roles:
     handle: ceo
     integrations:
       mattermost:
+        enabled: false
         bot_token: tok-ceo
 integrations:
   mattermost:

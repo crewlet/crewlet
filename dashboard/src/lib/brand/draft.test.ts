@@ -58,8 +58,8 @@ describe("a picked logo", () => {
   test("is one of the three types, under its bound, saved under its slot's path", () => {
     expect(logoProblem(file("logo.svg", 10, "image/svg+xml"))).toBeNull();
     expect(logoProblem(file("logo.gif", 10, "image/gif"))).toMatch(/SVG, PNG or WebP/);
-    expect(logoProblem(file("logo.svg", 600 << 10, "image/svg+xml"))).toMatch(/512 KB/);
-    expect(logoProblem(file("logo.png", 3 << 20, "image/png"))).toMatch(/2 MB/);
+    expect(logoProblem(file("logo.svg", 600 << 10, "image/svg+xml"))).toMatch(/512 KiB/);
+    expect(logoProblem(file("logo.png", 3 << 20, "image/png"))).toMatch(/2 MiB/);
     expect(logoPath("on_dark", file("x.webp", 1, "image/webp"))).toBe("logos/on-dark.webp");
     // THE EXTENSION DECIDES where the browser named no type.
     expect(logoPath("mark", file("x.PNG", 1))).toBe("logos/mark.png");
@@ -67,10 +67,10 @@ describe("a picked logo", () => {
 });
 
 describe("a picked face", () => {
-  test("is WOFF2, at most four files of at most 2 MB, under a name the format admits", () => {
+  test("is WOFF2, at most four files of at most 2 MiB, under a name the format admits", () => {
     expect(fontProblem([file("a.woff2", 10)])).toBeNull();
     expect(fontProblem([file("a.ttf", 10)])).toMatch(/not a WOFF2/);
-    expect(fontProblem([file("a.woff2", 3 << 20)])).toMatch(/2 MB/);
+    expect(fontProblem([file("a.woff2", 3 << 20)])).toMatch(/2 MiB/);
     expect(fontProblem([1, 2, 3, 4, 5].map((i) => file(`${i}.woff2`, 1)))).toMatch(/at most 4/);
     expect(fontPath("body", 2)).toBe("fonts/body-2.woff2");
     expect(familyProblem("Inter Display")).toBeNull();

@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // mergeArgs is a merge of site!7 at the head its caller read.
@@ -178,7 +178,7 @@ func TestCloseTaskIsStepTwo(t *testing.T) {
 		residue string
 	}{
 		"closed":         {},
-		"a failed close": {fail: errors.New("the tracker refused it"), residue: "merged; ENG-42 not closed"},
+		"a failed close": {fail: errors.New("Worklet refused it"), residue: "merged; ENG-42 not closed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -202,7 +202,7 @@ func TestCloseTaskIsStepTwo(t *testing.T) {
 			if len(writes) != 1 || len(ops) != 1 || ops[0] != statelog.StepOpID(writes[0].OpID, "2") {
 				t.Fatalf("the merge %+v closed under %v, want its operation's step 2", writes, ops)
 			}
-			if got := closer.status(); got != tracker.StatusDone {
+			if got := closer.status(); got != worklet.StatusDone {
 				t.Errorf("the item was set %q, want done", got)
 			}
 			residue, _ := out["residue"].(string)
@@ -216,21 +216,21 @@ func TestCloseTaskIsStepTwo(t *testing.T) {
 	}
 }
 
-// CLOSE TASK IS DECIDED AS THE TRACKER'S WRITE: a merge's row admits
+// CLOSE TASK IS DECIDED AS WORKLET'S WRITE: a merge's row admits
 // everybody, but the close its step two makes is update_work_item's, the
-// tracker app's — so a person who does not use the tracker merges the change
+// Worklet app's — so a person who does not use Worklet merges the change
 // and is told the item was not closed and why, the item untouched, while one
 // who does closes it.
 //
 // Mutation: closeTask asking no decision before it closes → red.
-func TestCloseTaskIsDecidedAsTheTrackersWrite(t *testing.T) {
+func TestCloseTaskIsDecidedAsWorkletsWrite(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		grants []iam.Grant
 		closed bool
 	}{
-		"a person using the tracker":     {grants: iam.Apps, closed: true},
-		"a person not using the tracker": {grants: []iam.Grant{iam.GrantKnowledge, iam.GrantArtifacts}},
+		"a person using Worklet":     {grants: iam.Apps, closed: true},
+		"a person not using Worklet": {grants: []iam.Grant{iam.GrantDoclet, iam.GrantArtifacts, iam.GrantChatlet}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -327,39 +327,39 @@ func TestTheCodeMergingGuidanceNamesTheMergeTool(t *testing.T) {
 // workedChange is site!7 carrying the native work item ENG-42.
 func workedChange() *changeFixture {
 	f := siteChange()
-	f.detail.WorkItem = &types.WorkItem{Backend: types.WorkNative, ID: "task-42", Key: "ENG-42", Project: "ENG"}
+	f.detail.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: "task-42", Key: "ENG-42", Project: "ENG"}
 	return f
 }
 
-// closes is the native tracker as a merge's step two reads and closes one
+// closes is Worklet as a merge's step two reads and closes one
 // task: ENG-42 in progress at version 4, its close failing with fail.
 type closes struct {
 	fail  error
 	mu    sync.Mutex
 	asked []string
-	set   tracker.Status
+	set   worklet.Status
 }
 
-func (c *closes) Task(_ context.Context, idOrKey string, _ tracker.DetailWants,
-	_ statelog.Freshness) (tracker.TaskDetail, error) {
+func (c *closes) Task(_ context.Context, idOrKey string, _ worklet.DetailWants,
+	_ statelog.Freshness) (worklet.TaskDetail, error) {
 
-	return tracker.TaskDetail{Task: tracker.Task{ID: idOrKey, Key: "ENG-42", Project: "ENG", Version: 4,
-		Status: tracker.StatusInProgress}}, nil
+	return worklet.TaskDetail{Task: worklet.Task{ID: idOrKey, Key: "ENG-42", Project: "ENG", Version: 4,
+		Status: worklet.StatusInProgress}}, nil
 }
 
 func (c *closes) as(builtin.Actor) builtin.WorkWriter { return c }
 
-func (c *closes) CreateTask(context.Context, string, tracker.Task, *tracker.Notify) (tracker.WriteResult, error) {
-	return tracker.WriteResult{}, errors.New("a merge creates no task")
+func (c *closes) CreateTask(context.Context, string, worklet.Task, *worklet.Notify) (worklet.WriteResult, error) {
+	return worklet.WriteResult{}, errors.New("a merge creates no task")
 }
 
-func (c *closes) CreateTaskAsking(context.Context, string, tracker.Task, tracker.Comment,
-	*tracker.Notify) (tracker.WriteResult, error) {
-	return tracker.WriteResult{}, errors.New("a merge creates no task")
+func (c *closes) CreateTaskAsking(context.Context, string, worklet.Task, worklet.Comment,
+	*worklet.Notify) (worklet.WriteResult, error) {
+	return worklet.WriteResult{}, errors.New("a merge creates no task")
 }
 
-func (c *closes) UpdateTask(_ context.Context, opID, _, _ string, _ uint64, patch tracker.TaskPatch,
-	_ tracker.ChangeKind, _ *tracker.Notify) (tracker.WriteResult, error) {
+func (c *closes) UpdateTask(_ context.Context, opID, _, _ string, _ uint64, patch worklet.TaskPatch,
+	_ worklet.ChangeKind, _ *worklet.Notify) (worklet.WriteResult, error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -368,9 +368,9 @@ func (c *closes) UpdateTask(_ context.Context, opID, _, _ string, _ uint64, patc
 		c.set = *patch.Status
 	}
 	if c.fail != nil {
-		return tracker.WriteResult{}, c.fail
+		return worklet.WriteResult{}, c.fail
 	}
-	return tracker.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
+	return worklet.WriteResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
 func (c *closes) ops() []string {
@@ -381,7 +381,7 @@ func (c *closes) ops() []string {
 
 func (c *closes) count() int { return len(c.ops()) }
 
-func (c *closes) status() tracker.Status {
+func (c *closes) status() worklet.Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.set

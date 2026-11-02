@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -136,21 +137,22 @@ func New(opts Options) (*Service, error) {
 // precondition, as every artifact route does, and the handler decides the
 // read on the artifact through the artifacts' own gate before anything is
 // read. The catalogue is the engine's own vocabulary, any resolved caller's.
-// A source's preview is a builder's, so it asks what making a board asks
-// (`create_artifact`); the rows themselves are decided by the source's own
-// question, as the viewer, exactly as a board's dataset over it is.
+// A source's preview is a builder's read, so it asks the artifacts app as making
+// a board does, on a read verb of its own (`artifacts.source.read`); the rows
+// themselves are decided by the source's own question, as the viewer, exactly
+// as a board's dataset over it is.
 func (s *Service) Routes(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(s.chart))
 	pre := authz.Policy{Action: authz.ActionArtifactList, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: authz.KindArtifact}
 	}}
-	create := authz.Policy{Action: authz.ActionArtifactCreate, Object: func(*http.Request) authz.Object {
+	preview := authz.Policy{Action: authz.ActionDashboardSourceRead, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: authz.KindArtifact}
 	}}
 	return errors.Join(
 		router.Handle("GET /artifacts/{id}/versions/{n}/sources/{dataset}", pre, http.HandlerFunc(s.dataset)),
 		router.Handle("GET /artifacts/sources", pre, http.HandlerFunc(s.catalogue)),
-		router.Handle("GET /artifacts/sources/preview/{name}", create, http.HandlerFunc(s.preview)),
+		router.Handle("GET /artifacts/sources/preview/{name}", preview, http.HandlerFunc(s.preview)),
 	)
 }
 
@@ -306,7 +308,7 @@ func (s *Service) dataset(w http.ResponseWriter, r *http.Request) {
 func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 	p, how := iam.From(r.Context())
 	if how != iam.Resolved {
-		operator.RefuseDecision(w, r, authz.ActionArtifactCreate, authz.Decision{Err: iam.Reason(r.Context())})
+		operator.RefuseDecision(w, r, authz.ActionDashboardSourceRead, authz.Decision{Err: iam.Reason(r.Context())})
 		return
 	}
 	src, ok := dashspec.Source(r.PathValue("name"))
@@ -383,17 +385,41 @@ func settle(w http.ResponseWriter, r *http.Request, res result, out *Reading, wh
 		httpjson.ThrottledWith(w, httpjson.CodeReadBudget, budget.refusal.RetryAfter,
 			httpjson.Detail{"detail": spent})
 		return false
-	case errors.Is(res.err, queries.ErrUnavailable):
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(statelog.ElectionRetryHint),
-			httpjson.Detail{"detail": "this node could not read " + what + " right now"})
+	case errors.Is(res.err, queries.ErrUnavailable) || isCondition(res.err):
+		// A CONDITION OF THE NODE — a source's question it could not answer
+		// here, or a store dataset whose read the state log refused — in a
+		// person's words for it where there are any
+		// ([builtin.ConditionSentence]) and under its own hint, which is
+		// none where no wait clears it: every one of these was "could not
+		// read X right now" under an election's four seconds, so a log at
+		// its ceiling was polled for ever and a refusal's error, wrapped
+		// in nothing, fell to the arm below and was logged as a failure.
+		operator.LogCondition(r.Context(), log, "dashboard_dataset_unavailable", res.err,
+			logged...)
+		said, ok := builtin.ConditionSentence(res.err)
+		if !ok {
+			said = "this node could not read " + what + " right now"
+		}
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+			httpjson.RetrySeconds(builtin.RetryAfter(res.err, statelog.ElectionRetryHint)),
+			httpjson.Detail{"detail": said})
 		return false
 	default:
-		log.WarnContext(r.Context(), "dashboard_dataset_failed", append(logged, "error", res.err.Error())...)
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(statelog.ElectionRetryHint),
-			httpjson.Detail{"detail": "this node could not read " + what + " right now"})
+		// A FAILURE NO CONDITION CLAIMS is this node's own fault, which no
+		// wait clears: it was a 503 under an election's four seconds, so a
+		// board polled a fault for ever.
+		log.ErrorContext(r.Context(), "dashboard_dataset_failed", append(logged, "error", res.err.Error())...)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return false
 	}
 	return true
+}
+
+// isCondition reports a condition of the node waiting may clear, which is no
+// fault of the board or of the node ([builtin.Condition]).
+func isCondition(err error) bool {
+	_, ok := builtin.Condition(err)
+	return ok
 }
 
 // read answers dataset id of rd's board, memoised for the request.
@@ -562,14 +588,19 @@ func (s *Service) ask(ctx context.Context, src dashspec.EngineSource, args map[s
 }
 
 // sourceFailure is a source's failure in the answer's vocabulary.
+//
+// A DATASET IS CLOSED ONLY BY A REFUSAL THAT NAMES ITS DECISION — the
+// question's own [queries.Refusal], whose reason and grants are the rule's.
+// A bare [queries.ErrUnauthorized] names none (only a Refusal produces it),
+// and a question asked by nobody cannot reach here, since every dataset is
+// read on a request its artifact's gate admitted: closing the dataset as a
+// missing grant for either told the viewer a permission would open what no
+// permission decided, so both are the fault they would be.
 func sourceFailure(dataset string, src dashspec.EngineSource, err error) error {
 	var refusal *queries.Refusal
 	switch {
 	case errors.As(err, &refusal):
 		return &closed{refusal: Refusal{Dataset: dataset, Reason: refusal.Reason, Grants: refusal.Grants},
-			detail: "You cannot read " + string(src.Domain) + ": " + src.Access + "."}
-	case errors.Is(err, queries.ErrUnauthorized), errors.Is(err, queries.ErrUnauthenticated):
-		return &closed{refusal: Refusal{Dataset: dataset, Reason: authz.ReasonNoGrant},
 			detail: "You cannot read " + string(src.Domain) + ": " + src.Access + "."}
 	case errors.Is(err, queries.ErrUnknown):
 		return &unanswered{detail: "This node does not run " + string(src.Domain) + ", so " +

@@ -1,6 +1,6 @@
 /**
  * The sidebar's Pinned group lists what the reader pinned: their saved views
- * (with Tracker) and the artifacts they pinned (with no grant at all, since a
+ * (with Worklet) and the artifacts they pinned (with no grant at all, since a
  * share alone admits a reader to Artifacts). "Pin to your sidebar" is a
  * promise these cases hold the sidebar to.
  */

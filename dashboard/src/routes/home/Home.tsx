@@ -93,6 +93,8 @@ import { useServicesRun } from "~/lib/services.ts";
 import { WidgetSettings, configurable, widgetName } from "./board/settings.tsx";
 import { WidgetTray } from "./board/tray.tsx";
 import { openLinksInNewTab } from "./board/newTab.ts";
+import { homeBoardDraft } from "./board/assistantDraft.ts";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { EditBar } from "./board/EditBar.tsx";
 
 const store = boardStore(shippedBoard());
@@ -275,6 +277,18 @@ export function Home() {
   };
 
   const settingsWidget = settingsId && editing ? findWidget(board, settingsId) : undefined;
+
+  // WHAT IS OPEN, for the assistant, while the board is being arranged: what
+  // it holds, read only (`board/assistantDraft.ts`).
+  useAssistantDraft(
+    editing
+      ? homeBoardDraft({
+          board,
+          settings: settingsWidget ? widgetName(settingsWidget) : null,
+          changed,
+        })
+      : null,
+  );
 
   const openSettings = (id: string) => {
     opened.current = current.current ? { board: current.current, steps: past.length } : null;

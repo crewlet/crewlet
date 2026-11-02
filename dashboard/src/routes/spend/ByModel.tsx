@@ -45,6 +45,12 @@ export function ByModel({
       <Card.Body padding="md">
         {loading && !rollup ? (
           <Skeleton height="4.5rem" />
+        ) : rollup?.entries_withheld ? (
+          <EmptyState
+            size="compact"
+            title="Shown to admins"
+            description="Which of the company's model entries served the calls is its configuration, which an admin reads."
+          />
         ) : rows.length === 0 ? (
           // ONE EMPTY STATE FOR EVERY EMPTY CARD ON THE PAGE: a ranked list's
           // bare sentence beside the tables' and the chart's empty states read

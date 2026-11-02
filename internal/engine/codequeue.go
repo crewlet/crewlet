@@ -12,7 +12,7 @@ import (
 	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // queueTasks is the merge queue's step 2 (M5-D27): a landed change's work
@@ -23,7 +23,7 @@ func (e *Engine) queueTasks() codehome.Tasks { return queueCloser{engine: e} }
 
 // queueCloser closes a landed change's work item as its enqueuer.
 //
-// THE ENQUEUER'S OWN WRITE, DECIDED AS THEM. The close lands on the tracker
+// THE ENQUEUER'S OWN WRITE, DECIDED AS THEM. The close lands on Worklet
 // through the writer every seat's tool and every person's route writes
 // through, attributed to the enqueuer — a seat by its handle, a person by the
 // seat they hold with the credential they enqueued through beside it, the
@@ -35,7 +35,7 @@ func (e *Engine) queueTasks() codehome.Tasks { return queueCloser{engine: e} }
 // composed and nowhere else; the enqueue itself was that decision, made when
 // the person asked their merge to close the item.
 //
-// ONLY THE ENGINE'S OWN TRACKER is closed here. A change whose work item is a
+// ONLY WORKLET is closed here. A change whose work item is a
 // vendor's (a Jira issue, a GitHub issue) is closed by whoever closes it there
 // — the engine holds no credential of the enqueuer's on a vendor's tracker,
 // and its own on their behalf would put somebody else's name on the close — so
@@ -43,8 +43,8 @@ func (e *Engine) queueTasks() codehome.Tasks { return queueCloser{engine: e} }
 // change has landed whatever becomes of its item.
 type queueCloser struct{ engine *Engine }
 
-// errQueueCloseNotNative is a work item no tracker of this engine holds.
-var errQueueCloseNotNative = errors.New("engine: the work item is not on the engine's own tracker, " +
+// errQueueCloseNotWorklet is a work item Worklet does not hold.
+var errQueueCloseNotWorklet = errors.New("engine: the work item is not on Worklet, " +
 	"so it is closed where it lives")
 
 // CloseWorkItem closes c's work item as c.As, under c.OpID: asked twice, the
@@ -52,8 +52,8 @@ var errQueueCloseNotNative = errors.New("engine: the work item is not on the eng
 // already finished — done, cancelled or closed — is left as it is.
 func (q queueCloser) CloseWorkItem(ctx context.Context, c codehome.TaskClose) error {
 	item := c.WorkItem
-	if item.Backend != types.WorkNative {
-		return fmt.Errorf("%w: %s %s", errQueueCloseNotNative, item.Backend, item.ID)
+	if item.Backend != types.WorkWorklet {
+		return fmt.Errorf("%w: %s %s", errQueueCloseNotWorklet, item.Backend, item.ID)
 	}
 	actor, err := enqueuerActor(c.As)
 	if err != nil {
@@ -75,19 +75,19 @@ func (q queueCloser) CloseWorkItem(ctx context.Context, c codehome.TaskClose) er
 	}
 	// LINEARIZABLE, as every read a seat or an operator decides from: the
 	// status read is what says whether the close is still owed.
-	before, err := halves.reader.Task(ctx, item.ID, tracker.DetailWants{},
+	before, err := halves.reader.Task(ctx, item.ID, worklet.DetailWants{},
 		statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceSeat)})
 	if err != nil {
 		return fmt.Errorf("engine: read work item %s to close it: %w", item.ID, err)
 	}
-	if g := before.Task.Status.Group(); g == tracker.GroupDone || g == tracker.GroupClosed {
+	if g := before.Task.Status.Group(); g == worklet.GroupDone || g == worklet.GroupClosed {
 		return nil
 	}
-	done := tracker.StatusDone
-	patch := tracker.TaskPatch{Status: &done}
+	done := worklet.StatusDone
+	patch := worklet.TaskPatch{Status: &done}
 	got, err := halves.as(actor).UpdateTask(ctx, c.OpID, before.Task.ID, before.Task.Project,
-		tracker.NoIfMatch, patch, tracker.ChangeStatus, tracker.Wake{
-			Kind: tracker.ChangeStatus, Before: before.Task, After: tracker.Patched(before.Task, patch),
+		worklet.NoIfMatch, patch, worklet.ChangeStatus, worklet.Wake{
+			Kind: worklet.ChangeStatus, Before: before.Task, After: worklet.Patched(before.Task, patch),
 			Excerpt: fmt.Sprintf("Change %d landed through its merge queue.", c.Change.Number),
 		}.Notify(liveLeads(q)))
 	switch {
@@ -108,9 +108,9 @@ func (q queueCloser) CloseWorkItem(ctx context.Context, c codehome.TaskClose) er
 func enqueuerActor(p code.Principal) (builtin.Actor, error) {
 	switch {
 	case p.Kind == code.PrincipalAgent && p.Seat != "":
-		return builtin.Actor{Handle: p.Seat, Kind: tracker.AuthorAgent}, nil
+		return builtin.Actor{Handle: p.Seat, Kind: worklet.AuthorAgent}, nil
 	case p.Kind == code.PrincipalOperator && p.Seat != "":
-		return builtin.Actor{Handle: p.Seat, Kind: tracker.AuthorHuman, OperatorID: p.OperatorID}, nil
+		return builtin.Actor{Handle: p.Seat, Kind: worklet.AuthorHuman, OperatorID: p.OperatorID}, nil
 	}
 	return builtin.Actor{}, fmt.Errorf("engine: a %s principal bound to no seat (%q) closes no work item in "+
 		"its own name", p.Kind, p.OperatorID)

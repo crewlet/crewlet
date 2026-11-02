@@ -73,7 +73,7 @@ func TestAdoptingAHostLoginCopiesRatherThanMoves(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".fake", "creds.json")); err != nil {
 		t.Errorf("the operator's own login was moved, not copied: %v", err)
 	}
-	if !p.Workspace().HasLogin() {
+	if !hasLogin(t, p.Workspace()) {
 		t.Error("the adopted login is not where seats read it from")
 	}
 }
@@ -108,7 +108,7 @@ func TestACredentialBundleRoundTrips(t *testing.T) {
 		t.Fatalf("AdoptHostLogin: %v", err)
 	}
 
-	blob, err := source.ExportBundle()
+	blob, err := source.ExportBundle(t.Context())
 	if err != nil {
 		t.Fatalf("ExportBundle: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestARestoredBundleCannotEscapeTheCredentialDirectory(t *testing.T) {
 			t.Errorf("error for %q does not name it: %v", name, err)
 		}
 	}
-	if p.Workspace().HasLogin() {
+	if hasLogin(t, p.Workspace()) {
 		t.Error("a refused bundle still wrote a credential")
 	}
 }
@@ -171,7 +171,7 @@ func TestAnOversizedBundleIsRefusedRatherThanPartlyRestored(t *testing.T) {
 	if !strings.Contains(err.Error(), "`crewlet llm export sub`") {
 		t.Errorf("the refusal does not name the export that replaces it: %v", err)
 	}
-	if p.Workspace().HasLogin() {
+	if hasLogin(t, p.Workspace()) {
 		t.Error("a refused bundle still wrote a credential")
 	}
 }
@@ -247,7 +247,7 @@ func TestABundleRestoresOnlyIntoTheCLIItNames(t *testing.T) {
 				}
 				writeFile(t, filepath.Join(source.ws.CredentialsDir(), file), want[file])
 			}
-			blob, err := source.ExportBundle()
+			blob, err := source.ExportBundle(t.Context())
 			if err != nil {
 				t.Fatalf("ExportBundle: %v", err)
 			}
@@ -397,7 +397,7 @@ func TestARejectedBundleLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
 	// A good entry FIRST, then one the name check refuses.
-	blob, err := packBundle(p.agent, []bundleFile{
+	blob, err := packBundle(bundleManifest{Agent: p.agent}, []bundleFile{
 		{name: "creds.json", data: []byte(`{"token":"real"}`)},
 		{name: "../../.ssh/authorized_keys", data: []byte("pwned")},
 	})
@@ -444,7 +444,7 @@ func TestABundleDoesNotOverwriteALiveLogin(t *testing.T) {
 func TestExportingWithNoLoginRefuses(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
-	_, err := p.ExportBundle()
+	_, err := p.ExportBundle(t.Context())
 	if err == nil {
 		t.Fatal("an empty credential directory exported cleanly")
 	}
@@ -471,7 +471,7 @@ func TestLogoutRemovesTheCredentialEvenIfTheVendorCommandFails(t *testing.T) {
 	if err == nil {
 		t.Error("a failing vendor logout was reported as success")
 	}
-	if p.Workspace().HasLogin() {
+	if hasLogin(t, p.Workspace()) {
 		t.Error("the credential survived a logout the operator was told about")
 	}
 }
@@ -490,6 +490,240 @@ func TestACLIWithNoCredentialLoginExplainsItself(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the message does not mention %q: %v", want, err)
 		}
+	}
+}
+
+// AND IT NAMES ONLY ROUTES THAT RUN. It offered `crewlet llm login` to a CLI
+// that declares no login subcommand, which that command refuses, and
+// `-capture-token` "where the vendor mints a headless token" to every CLI,
+// which that command refuses for one that mints none — and a token minted
+// under an overrides.token_env no store can hold (MY-TOKEN) could be neither
+// stored nor referenced. Claude Code as shipped is the control: it has both
+// routes, and is told both.
+//
+// Mutation: offer -capture-token whatever the CLI mints, and the custom case
+// is told it; by the profile's token variable alone, and the MY-TOKEN case
+// is; offer `crewlet llm login KEY` whatever the CLI declares, and the custom
+// case is.
+func TestACredentialLoginRefusalNamesOnlyRoutesThatRun(t *testing.T) {
+	t.Parallel()
+	claude := func(t *testing.T, overrides map[string]any) *Provider {
+		t.Helper()
+		dir := t.TempDir()
+		t.Cleanup(func() { forgetWorkspace(dir) })
+		p, err := New(Config{
+			Key: "sub", Agent: "claude-code", StateDir: dir, Timeout: time.Second,
+			MaxConcurrent: 1, Overrides: overrides,
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return p
+	}
+	for _, tc := range []struct {
+		name          string
+		provider      func(t *testing.T) *Provider
+		want, notWant []string
+	}{
+		{
+			name:     "claude-code as shipped",
+			provider: func(t *testing.T) *Provider { return claude(t, nil) },
+			want: []string{"run `crewlet llm login sub`",
+				"CLAUDE_CODE_OAUTH_TOKEN with `crewlet llm login sub -capture-token`"},
+		},
+		{
+			name: "a token variable no store can hold",
+			provider: func(t *testing.T) *Provider {
+				return claude(t, map[string]any{"token_env": "MY-TOKEN"})
+			},
+			want:    []string{"run `crewlet llm login sub`"},
+			notWant: []string{"capture-token"},
+		},
+		{
+			name:     "a CLI with no login subcommand",
+			provider: loginProvider,
+			want:     []string{"declares no login subcommand", "`crewlet llm login sub -from-host`"},
+			notWant:  []string{"run `crewlet llm login sub`", "capture-token"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.provider(t).CredentialLogin(t.Context(), "ops@example.com", "hunter2",
+				&bytes.Buffer{}, &bytes.Buffer{})
+			if !errors.Is(err, ErrNoLoginCommand) {
+				t.Fatalf("err = %v, want ErrNoLoginCommand", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(err.Error(), bad) {
+					t.Errorf("the refusal names %q, a route that does not run here: %v", bad, err)
+				}
+			}
+		})
+	}
+}
+
+// A CLI THAT MINTS NO TOKEN IS SENT TO THE LOGIN IT HAS. `-capture-token` on
+// one told the operator to "run `crewlet llm login`" to broker its own login,
+// which a CLI declaring no login subcommand refuses in turn. Codex, which has
+// one, is the control.
+//
+// Mutation: name `crewlet llm login KEY` whatever the CLI declares, and the
+// custom case is told it.
+func TestATokenMintRefusalNamesTheLoginTheCLIHas(t *testing.T) {
+	t.Parallel()
+	codex := func(t *testing.T) *Provider {
+		t.Helper()
+		dir := t.TempDir()
+		t.Cleanup(func() { forgetWorkspace(dir) })
+		p, err := New(Config{
+			Key: "sub", Agent: "codex", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return p
+	}
+	for _, tc := range []struct {
+		name          string
+		provider      func(t *testing.T) *Provider
+		want, notWant []string
+	}{
+		{
+			name: "codex", provider: codex,
+			want: []string{`the "codex" CLI mints no headless token`, "run `crewlet llm login sub`"},
+		},
+		{
+			name: "a CLI with no login subcommand", provider: loginProvider,
+			want:    []string{"declares no login subcommand", "`crewlet llm login sub -from-host`"},
+			notWant: []string{"run `crewlet llm login"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := tc.provider(t).CaptureToken(t.Context(), nil, &bytes.Buffer{})
+			if !errors.Is(err, ErrNoLoginCommand) {
+				t.Fatalf("err = %v, want ErrNoLoginCommand", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(err.Error(), bad) {
+					t.Errorf("the refusal names %q, a route this CLI does not have: %v", bad, err)
+				}
+			}
+		})
+	}
+}
+
+// AND THE MODE CHOOSES ITS ROUTES BEFORE THE CLI DOES. Chosen by the CLI alone,
+// an api-key entry was told to run the CLI's login or, on Claude Code, to mint
+// a headless token with `-capture-token` — a login is not what an api-key entry
+// signs in with, and the token is one the mode removes from the CLI's
+// environment and `crewlet llm login` refuses before it mints; an inherit-env
+// Claude Code entry was told the same mint, whose token lands in the secret
+// store that mode never reads, so the command refuses to store it. api-key is
+// now told its key alone, and inherit-env what it forwards, a login and, where
+// the CLI mints, a token minted to stdout to export. Codex, which mints none,
+// is held to the same split. OpenCode under api-key, a pairing every write of
+// the configuration refuses and `crewlet llm` still loads, names no key
+// variable, so the mode hands its CLI nothing and the remedy is the mode's own,
+// a login under subscription: it was told that and, in the same sentence, that
+// a login is not its sign-in. Codex under api-key with its key variable
+// outside the reference grammar (MY=KEY), which leaves ModeSignIn's Variables
+// empty too, still keeps a key and is told to name the variable.
+//
+// Mutation: choose the routes by the CLI alone, and every case is red; word
+// the opencode case as an api-key entry that keeps its key, and it is red; ask
+// Variables alone for a CLI that names no key variable, and the MY=KEY case is
+// worded as one, losing that a login is not its sign-in.
+func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, agent   string
+		mode          AuthMode
+		overrides     map[string]any
+		want, notWant []string
+	}{
+		{
+			name: "claude-code under api-key", agent: "claude-code", mode: AuthAPIKey,
+			want: []string{"auth.mode is api-key",
+				"providers.llm.sub.auth.api_key, else ANTHROPIC_API_KEY", "`crewlet secrets set`"},
+			notWant: []string{"crewlet llm login sub", "capture-token", "stdin_login"},
+		},
+		{
+			name: "codex under api-key", agent: "codex", mode: AuthAPIKey,
+			want: []string{"auth.mode is api-key",
+				"providers.llm.sub.auth.api_key, else CODEX_API_KEY", "`crewlet secrets set`"},
+			notWant: []string{"crewlet llm login sub", "stdin_login"},
+		},
+		{
+			name: "claude-code under inherit-env", agent: "claude-code", mode: AuthInheritEnv,
+			want: []string{"run `crewlet llm login sub`", "auth.mode is inherit-env",
+				"CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY from the engine's own process environment",
+				"export one in the engine's environment",
+				"`crewlet llm login sub -capture-token -print-token`",
+				"export it as CLAUDE_CODE_OAUTH_TOKEN in the engine's environment"},
+			notWant: []string{"with `crewlet llm login sub -capture-token`"},
+		},
+		{
+			name: "codex under inherit-env", agent: "codex", mode: AuthInheritEnv,
+			want: []string{"run `crewlet llm login sub`", "auth.mode is inherit-env",
+				"CODEX_API_KEY from the engine's own process environment",
+				"export it in the engine's environment"},
+			notWant: []string{"capture-token"},
+		},
+		{
+			name: "opencode under api-key, its profile naming no key variable", agent: "opencode",
+			mode: AuthAPIKey,
+			want: []string{"its auth.mode is api-key, which puts its key in no variable",
+				"a pairing every write of the configuration refuses",
+				"set auth.mode: subscription, and sign the CLI in with a login"},
+			notWant: []string{"a login is not this entry's sign-in", "crewlet llm login sub",
+				"capture-token", "stdin_login"},
+		},
+		{
+			name: "codex under api-key, its key variable outside the grammar", agent: "codex",
+			mode: AuthAPIKey, overrides: map[string]any{"api_key_env": "MY=KEY"},
+			want: []string{"a login is not this entry's sign-in",
+				"name the variable your build of the CLI reads in providers.llm.sub.overrides.api_key_env"},
+			notWant: []string{"a pairing every write", "auth.mode: subscription", "crewlet llm login sub",
+				"`crewlet secrets set`"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			t.Cleanup(func() { forgetWorkspace(dir) })
+			p, err := New(Config{
+				Key: "sub", Agent: tc.agent, StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
+				Overrides: tc.overrides, Auth: Auth{Mode: tc.mode},
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			err = p.CredentialLogin(t.Context(), "ops@example.com", "hunter2", &bytes.Buffer{}, &bytes.Buffer{})
+			if !errors.Is(err, ErrNoLoginCommand) {
+				t.Fatalf("err = %v, want ErrNoLoginCommand", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(err.Error(), bad) {
+					t.Errorf("the refusal names %q, a route this mode does not read: %v", bad, err)
+				}
+			}
+		})
 	}
 }
 
@@ -538,7 +772,7 @@ func TestNoBuiltinProfileShipsACredentialLogin(t *testing.T) {
 // as the CLI it was exported from, through the export's own writer.
 func bundleOf(t *testing.T, agent, name, body string) string {
 	t.Helper()
-	blob, err := packBundle(agent, []bundleFile{{name: name, data: []byte(body)}})
+	blob, err := packBundle(bundleManifest{Agent: agent}, []bundleFile{{name: name, data: []byte(body)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,8 +807,9 @@ func rawBundle(t *testing.T, entries ...bundleFile) string {
 
 // credentialEntries names everything in the entry's credential directory,
 // whatever it is — nil where the directory holds nothing or does not exist.
-// Read from the directory rather than through LoginFiles, which sees only the
-// names the profile keeps: a manifest written there would be invisible to it.
+// Read from the directory rather than through [Workspace.Login], which reads
+// only the names the profile keeps: a manifest written there would be
+// invisible to it.
 func credentialEntries(t *testing.T, p *Provider) []string {
 	t.Helper()
 	entries, err := os.ReadDir(p.ws.CredentialsDir())
@@ -630,7 +865,9 @@ func TestNoProfileBrokersAnAuthCommandAsAPrompt(t *testing.T) {
 // `crewlet llm logout`, and the flagship profile has to answer both.
 //
 // It answered neither: with no status_args the command failed with "this CLI
-// has no status command" for a CLI that has one, and with no logout_args
+// has no status command" for a CLI that has one (now JSON for the engine's
+// reading, [Provider.LoginStatus], and --text for the person reading
+// `crewlet llm status`), and with no logout_args
 // `logout` deleted the local files while leaving the session live at the
 // vendor — an operator who believed they had revoked a login had not.
 func TestTheClaudeProfileCanBrokerInspectAndRevokeItsLogin(t *testing.T) {
@@ -640,12 +877,14 @@ func TestTheClaudeProfileCanBrokerInspectAndRevokeItsLogin(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	for label, want := range map[string][]string{
-		"login_args":  {"auth", "login", "--claudeai"},
-		"status_args": {"auth", "status", "--text"},
-		"logout_args": {"auth", "logout"},
+		"login_args":       {"auth", "login", "--claudeai"},
+		"status_args":      {"auth", "status"},
+		"status_text_args": {"auth", "status", "--text"},
+		"logout_args":      {"auth", "logout"},
 	} {
 		got := map[string][]string{
-			"login_args": p.LoginArgs, "status_args": p.StatusArgs, "logout_args": p.LogoutArgs,
+			"login_args": p.LoginArgs, "status_args": p.StatusArgs,
+			"status_text_args": p.StatusTextArgs, "logout_args": p.LogoutArgs,
 		}[label]
 		if strings.Join(got, " ") != strings.Join(want, " ") {
 			t.Errorf("claude-code %s = %q, want %q", label, got, want)
@@ -713,12 +952,11 @@ func TestTheClaudeProfilesMarkersAreStringsTheCLIStillEmits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	// Retired with the 1.x wording that carried them; the live lines put the
-	// reset in prose, and inventing a window is worse than the pool's own
-	// configured cooldown.
+	// The pipe-and-epoch reset retired with the 1.x wording that carried it:
+	// the live line names a time of day and its zone, read as `clock`.
 	for _, m := range p.LimitMarkers {
-		if m.ResetSeparator != "" || m.ResetUnit != "" {
-			t.Errorf("limit marker %q still claims a reset field: %+v", m.Sentinel, m)
+		if m.Reset.Unit == cliprofile.ResetEpoch {
+			t.Errorf("limit marker %q still reads a 1.x epoch reset: %+v", m.Sentinel, m)
 		}
 	}
 	for _, dead := range []string{"Claude AI usage limit reached", "OAuth token has expired"} {
@@ -774,7 +1012,7 @@ func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("an entry with no bundle: %v", err)
 	}
 	p := build(bundleOf(t, "custom", "creds.json", `{"token":"configured"}`))
-	if p.Workspace().HasLogin() {
+	if hasLogin(t, p.Workspace()) {
 		t.Fatal("building the entry restored its bundle — `crewlet validate` would write a login onto the host")
 	}
 	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
@@ -803,18 +1041,24 @@ func TestAConfiguredBundleIsRestoredOnlyWhenAsked(t *testing.T) {
 // one `crewlet llm status` makes before it asks, and the engine's at its next
 // boot or apply — put back the very login the operator had just removed, a
 // compromised one typically, and the logout lasted until the next command.
-// Now the restore declines, and says why in words an operator can act on.
+// Now the restore declines, and says why in words an operator can act on —
+// among them how to retire the bundle for good, `crewlet secrets unset`.
 //
 // Mutation: drop the record from Logout, or the check from restoreBundle, and
 // the login comes back here.
 func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
+	// A CLI that takes a headless token, as Claude Code does, so the decline
+	// and the notice have a token to say does not end the logout: they name
+	// one only for an entry it signs in ([Provider.headlessTokenRoute]). It
+	// declares no minting command, so `-token-stdin` is the one route.
+	p.profile.TokenEnv = "FAKE_CLI_TOKEN"
 	p.bundle = bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
 	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
 		t.Fatalf("the boot's restore: %v", err)
 	}
-	if !p.Workspace().HasLogin() {
+	if !hasLogin(t, p.Workspace()) {
 		t.Fatal("the premise: the bundle restored nothing")
 	}
 	if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
@@ -825,8 +1069,8 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	if !errors.Is(err, ErrLoggedOut) {
 		t.Errorf("the restore after a logout = %v, want ErrLoggedOut", err)
 	}
-	if p.Workspace().HasLogin() {
-		t.Fatalf("the restore after a logout brought the login back: %v", p.Workspace().LoginFiles())
+	if hasLogin(t, p.Workspace()) {
+		t.Fatalf("the restore after a logout brought the login back: %v", loginOnDisk(t, p.Workspace()))
 	}
 	for _, want := range []string{"`crewlet llm login sub -from-host`", "`crewlet llm import sub`",
 		"a headless token signs the entry in without ending the logout",
@@ -946,8 +1190,8 @@ func TestTheLogoutNoticeSpeaksForTheRecord(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "did not finish") {
 		t.Fatalf("the premise: Logout = %v, want the vendor's logout reported unfinished", err)
 	}
-	if p.Workspace().HasLogin() {
-		t.Fatalf("the premise: a failed vendor logout left the login: %v", p.Workspace().LoginFiles())
+	if hasLogin(t, p.Workspace()) {
+		t.Fatalf("the premise: a failed vendor logout left the login: %v", loginOnDisk(t, p.Workspace()))
 	}
 	if notice := logoutNotice(t, p); !strings.Contains(notice, cliprofile.BundleVarName("sub")) {
 		t.Errorf("after a logout whose vendor half failed, the notice says nothing of the bundle "+
@@ -985,8 +1229,8 @@ func TestAHeadlessTokenDoesNotEndALogout(t *testing.T) {
 	if err := p.RestoreConfiguredBundle(t.Context()); !errors.Is(err, ErrLoggedOut) {
 		t.Errorf("a token-only capture ended the logout: the restore = %v, want ErrLoggedOut", err)
 	}
-	if p.Workspace().HasLogin() {
-		t.Fatalf("a token-only capture brought the bundle back: %v", p.Workspace().LoginFiles())
+	if hasLogin(t, p.Workspace()) {
+		t.Fatalf("a token-only capture brought the bundle back: %v", loginOnDisk(t, p.Workspace()))
 	}
 
 	p.profile.CaptureTokenArgs = []string{"-c",
@@ -1017,6 +1261,105 @@ func logoutNotice(t *testing.T, p *Provider) string {
 		t.Fatalf("LogoutNotice: %v", err)
 	}
 	return notice
+}
+
+// A LOGGED-OUT ENTRY IS TOLD OF A HEADLESS TOKEN ONLY WHERE ONE SIGNS IT IN.
+// The logout's notice told every entry with a bundle that "a headless token
+// from `-capture-token` or `-token-stdin` signs it in without ending this",
+// and the restore's refusal that a headless token signs it in: codex, whose
+// profile names no token variable, takes none, and `crewlet llm login`
+// refuses both commands for it; under a token variable outside the reference
+// grammar (MY-TOKEN) a token could be neither stored nor referenced; api-key
+// removes the token variable from the CLI's environment; and inherit-env
+// never reads the secret store a token would be stored in, so the token that
+// signs it in is one exported in the engine's environment. A CLI with a token
+// variable and no minting command is told `-token-stdin` alone. Claude Code
+// as shipped is the control: it mints a token and reads a stored one, and is
+// told both commands.
+//
+// Mutation: name both commands whatever the entry takes, and every case but
+// the control is red; name both wherever a token is read at all, and the
+// inherit-env and no-minting cases are.
+func TestALoggedOutEntryIsToldOfAHeadlessTokenOnlyWhereOneSignsItIn(t *testing.T) {
+	t.Parallel()
+	none := []string{"headless", "-capture-token", "-token-stdin"}
+	for _, tc := range []struct {
+		name, agent string
+		mode        AuthMode
+		overrides   map[string]any
+		// want and notWant are judged on the notice; refusal is whether the
+		// restore's refusal says a headless token signs the entry in.
+		want, notWant []string
+		refusal       bool
+	}{
+		{
+			name: "claude-code as shipped", agent: "claude-code",
+			want:    []string{"a headless token from `-capture-token` or `-token-stdin` signs it in"},
+			refusal: true,
+		},
+		{name: "codex", agent: "codex", notWant: none},
+		{
+			name: "a token variable no store can hold", agent: "claude-code",
+			overrides: map[string]any{"token_env": "MY-TOKEN"}, notWant: none,
+		},
+		{name: "claude-code under api-key", agent: "claude-code", mode: AuthAPIKey, notWant: none},
+		{
+			name: "claude-code under inherit-env", agent: "claude-code", mode: AuthInheritEnv,
+			want: []string{"a headless CLAUDE_CODE_OAUTH_TOKEN exported in the engine's environment, " +
+				"which `-capture-token -print-token` mints, signs it in"},
+			notWant: []string{"-token-stdin", "from `-capture-token`"},
+			refusal: true,
+		},
+		{
+			name: "a CLI with no minting command", agent: "claude-code",
+			overrides: map[string]any{"capture_token_args": []any{}},
+			want:      []string{"a headless token from `-token-stdin` signs it in"},
+			notWant:   []string{"-capture-token"},
+			refusal:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			t.Cleanup(func() { forgetWorkspace(dir) })
+			p, err := New(Config{
+				Key: "sub", Agent: tc.agent, StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
+				Overrides: tc.overrides, Auth: Auth{Mode: tc.mode},
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			p.bundle = bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
+			// The vendor's own logout, if the profile has one, is a command
+			// that succeeds and does nothing.
+			p.profile.Binary = "true"
+			if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+				t.Fatalf("Logout: %v", err)
+			}
+			notice := logoutNotice(t, p)
+			if !strings.Contains(notice, cliprofile.BundleVarName("sub")) {
+				t.Fatalf("the premise: the notice names no bundle: %q", notice)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(notice, want) {
+					t.Errorf("the notice does not say %q: %s", want, notice)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(notice, bad) {
+					t.Errorf("the notice says %q, a token route this entry does not have: %s", bad, notice)
+				}
+			}
+			err = p.RestoreConfiguredBundle(t.Context())
+			if !errors.Is(err, ErrLoggedOut) {
+				t.Fatalf("the restore after a logout = %v, want ErrLoggedOut", err)
+			}
+			if said := strings.Contains(err.Error(), "a headless token signs the entry in"); said != tc.refusal {
+				t.Errorf("the refusal says a headless token signs the entry in: %v, want %v: %v",
+					said, tc.refusal, err)
+			}
+		})
+	}
 }
 
 // A LOGIN OF RECORD ENDS A LOGOUT. Whichever way the operator signs the entry
@@ -1057,7 +1400,7 @@ func TestALoginOfRecordEndsALogout(t *testing.T) {
 			}
 			// The directory empties some other way — an operator clearing it
 			// by hand — and the bundle restores into it as it always did.
-			for _, path := range p.ws.LoginFiles() {
+			for _, path := range loginOnDisk(t, p.ws) {
 				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}

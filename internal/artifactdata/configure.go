@@ -129,7 +129,6 @@ func planConfigure(ctx context.Context, tx *sql.Tx, s storeRow, present bool,
 		return configPlan{refusal: refuse(v, format, args...)}, nil
 	}
 	if r := checkAuthority(authority); r != nil {
-		//nolint:nilerr // A refusal is the plan's verdict, never the store's error.
 		return configPlan{refusal: r}, nil
 	}
 	if !authority.Role.Includes(artifacts.RoleEditor) {
@@ -200,7 +199,6 @@ func planConfigure(ctx context.Context, tx *sql.Tx, s storeRow, present bool,
 		}
 		affected, r := affectedFields(cur.spec, next)
 		if r != nil {
-			//nolint:nilerr // A refusal is the plan's verdict, never the store's error.
 			return configPlan{refusal: r}, nil
 		}
 		reindex := !slices.Equal(slices.Sorted(slices.Values(cur.spec.Indexed)),
@@ -230,7 +228,6 @@ func planConfigure(ctx context.Context, tx *sql.Tx, s storeRow, present bool,
 		for _, d := range docs {
 			d.reindex = reindex
 			if r := checkWhole(d); r != nil {
-				//nolint:nilerr // A refusal is the plan's verdict, never the store's error.
 				return configPlan{refusal: r}, nil
 			}
 		}

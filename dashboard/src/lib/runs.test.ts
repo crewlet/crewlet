@@ -15,7 +15,7 @@
 import { expect, test } from "vitest";
 
 import { lineOf, modules, parse, stringValue, walk, type Node } from "../test/source.ts";
-import { RUNS_POLL_MS } from "./runs.ts";
+import { RUNS_POLL_MS, runAskTexts } from "./runs.ts";
 
 test("every reader of sandbox_runs polls on RUNS_POLL_MS", () => {
   const off: string[] = [];
@@ -49,4 +49,33 @@ test("every reader of sandbox_runs polls on RUNS_POLL_MS", () => {
   // NOT VACUOUS: the board, a run's page and rail, and the attention queue.
   expect(sites).toBeGreaterThanOrEqual(4);
   expect(RUNS_POLL_MS).toBe(20_000);
+});
+
+// A RUN'S QUESTION IS ITS TITLE, WHOLE, AND ITS CONTEXT IS ITS OWN: one
+// message of the question, the context and the decision's texts, with nothing
+// split out of the question. It was split at its first sentence where a row
+// carried no context, and a question with a full stop of its own lost the
+// rest of itself to the context.
+//
+// Mutation: split the question at its first sentence again, or leave the
+// context out, and this fails.
+test("a run's question is one message of its title and its context, never split", () => {
+  expect(
+    runAskTexts({
+      question: "Should I drop the legacy flag (e.g. --old)? Nothing reads it.",
+      question_context: "",
+    }),
+  ).toEqual(["Should I drop the legacy flag (e.g. --old)? Nothing reads it."]);
+  expect(
+    runAskTexts({
+      question: "Keep the cache?",
+      question_context: "**Cold** start costs 4s.",
+      decision: {
+        question: "Keep the cache?",
+        options: [{ id: "keep", label: "Keep it" }],
+        role: "approver",
+      },
+    }),
+  ).toEqual(["Keep the cache?", "**Cold** start costs 4s.", "Keep it"]);
+  expect(runAskTexts({ question_context: "" })).toEqual([]);
 });

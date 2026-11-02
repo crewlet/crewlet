@@ -584,7 +584,7 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 	}
 	record, err := code.Encode(code.MutationRecord{
 		RecordEnvelope: code.RecordEnvelope{
-			OpID: statelog.NewOpID(at, "code.push"), Subject: code.RepoSubject(repo), Op: code.OpPush,
+			OpID: statelog.NewOpID(at, "code_push"), Subject: code.RepoSubject(repo), Op: code.OpPush,
 			CreatedAt: at, Gen: 1<<32 - 1, Writer: nodeID, Scope: code.Scope{code.RepoPath(repo)},
 		},
 		Expect: 1 << 63, Mutation: payload, Actor: nodeID, ActorKind: code.ActorSystem,

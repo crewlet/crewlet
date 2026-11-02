@@ -128,7 +128,7 @@ func TestAnAlarmsWakeIsNobodysErrand(t *testing.T) {
 	e.notify.registry = reg
 	evs := []*events.Event{noticeOf(t, reg, parser, alarmwake.Prompt{}, w.BodyRaw, "sre")}
 
-	interactions := e.interactionsOf(evs)
+	interactions := e.interactionsOf(evs, "sre")
 	if len(interactions) == 0 {
 		t.Fatalf("the wake carries no interaction, so this case proves nothing")
 	}

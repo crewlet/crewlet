@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A SEAT THAT NAMES NO PROJECT MEANS ITS OWN, on every one of these.
@@ -26,7 +26,7 @@ func TestTheProjectToolsFallBackToTheSeatsOwnProject(t *testing.T) {
 		DefaultProject: func(string) string { return "ENG" },
 	})
 
-	if got := callWork(t, reg, tracker.DescribeProjectTool, map[string]any{}); got.Failed {
+	if got := callWork(t, reg, worklet.DescribeProjectTool, map[string]any{}); got.Failed {
 		t.Fatalf("describe_project with no project failed: %q", got.Output)
 	}
 	if trk.detailQuery.Project != "ENG" {
@@ -38,7 +38,7 @@ func TestTheProjectToolsFallBackToTheSeatsOwnProject(t *testing.T) {
 	// answered about an empty key: an empty project is not a project, and
 	// a reader handed one would answer "no such project ''".
 	unowned := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
-	got := callWork(t, unowned, tracker.DescribeProjectTool, map[string]any{})
+	got := callWork(t, unowned, worklet.DescribeProjectTool, map[string]any{})
 	if !got.Failed || !strings.Contains(got.Output, "list_projects") {
 		t.Errorf("describe_project with no project and no default gave %q, "+
 			"want a refusal naming the lookup", got.Output)
@@ -61,13 +61,13 @@ func TestTheProjectToolsReadAtTheSeatDefault(t *testing.T) {
 		Reader: trk, Writer: trk.as,
 		DefaultProject: func(string) string { return "ENG" },
 	})
-	callWork(t, reg, tracker.ListProjectsTool, map[string]any{})
-	callWork(t, reg, tracker.DescribeProjectTool, map[string]any{})
+	callWork(t, reg, worklet.ListProjectsTool, map[string]any{})
+	callWork(t, reg, worklet.DescribeProjectTool, map[string]any{})
 
 	want := statelog.DefaultReadLevel(statelog.SurfaceSeat)
 	for name, level := range map[string]statelog.ReadLevel{
-		tracker.ListProjectsTool:    trk.projectQuery.Level,
-		tracker.DescribeProjectTool: trk.detailQuery.Level,
+		worklet.ListProjectsTool:    trk.projectQuery.Level,
+		worklet.DescribeProjectTool: trk.detailQuery.Level,
 	} {
 		if level != want {
 			t.Errorf("%s read at %q, want %q — a turn has to see its own "+
@@ -83,7 +83,7 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
-	callWork(t, reg, tracker.ListProjectsTool, map[string]any{
+	callWork(t, reg, worklet.ListProjectsTool, map[string]any{
 		"q": "platform", "unit": "Engineering", "archived": "only",
 		"sort": "-active", "limit": 12,
 	})
@@ -95,11 +95,11 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 	// retired ones, and a tool that read it as the two-valued flag it
 	// replaced would answer a model about both sets while the model's own
 	// question was about one.
-	if q.Archived != tracker.ArchivedOnly {
+	if q.Archived != worklet.ArchivedOnly {
 		t.Errorf("archived=only reached the query as %q, want %q",
-			q.Archived, tracker.ArchivedOnly)
+			q.Archived, worklet.ArchivedOnly)
 	}
-	if q.Sort != tracker.ProjectSortActive || !q.Descending {
+	if q.Sort != worklet.ProjectSortActive || !q.Descending {
 		t.Errorf("sort=-active reached the query as %q/%v, want active descending "+
 			"— a seat's page is fifty of the company's projects, so which "+
 			"fifty is what the ordering decides", q.Sort, q.Descending)
@@ -107,17 +107,17 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 
 	// AN ABSENT `archived` IS THE LIVE SET, resolved at the parse so the
 	// read never sees a query that named no set at all.
-	trk.projectQuery = tracker.ProjectQuery{}
-	callWork(t, reg, tracker.ListProjectsTool, map[string]any{})
-	if trk.projectQuery.Archived != tracker.ArchivedExclude {
+	trk.projectQuery = worklet.ProjectQuery{}
+	callWork(t, reg, worklet.ListProjectsTool, map[string]any{})
+	if trk.projectQuery.Archived != worklet.ArchivedExclude {
 		t.Errorf("an absent archived reached the query as %q, want %q",
-			trk.projectQuery.Archived, tracker.ArchivedExclude)
+			trk.projectQuery.Archived, worklet.ArchivedExclude)
 	}
 
 	// AND A VALUE THAT IS NOT ONE IS A TOOL FAILURE NAMING IT, never a
 	// silent fall back to the default: a model told nothing learns nothing
 	// and asks the same wrong question again.
-	res := callWork(t, reg, tracker.ListProjectsTool, map[string]any{
+	res := callWork(t, reg, worklet.ListProjectsTool, map[string]any{
 		"archived": "yes",
 	})
 	if !res.Failed || !strings.Contains(res.Output, "yes") {
@@ -125,7 +125,7 @@ func TestTheProjectToolsCarryTheirArguments(t *testing.T) {
 			res)
 	}
 
-	callWork(t, reg, tracker.DescribeProjectTool, map[string]any{
+	callWork(t, reg, worklet.DescribeProjectTool, map[string]any{
 		"project": "ops", "for_type": "bug",
 	})
 	if trk.detailQuery.Project != "ops" || trk.detailQuery.ForType != "bug" {
@@ -145,12 +145,12 @@ func TestTheProjectToolsPassTheChart(t *testing.T) {
 		Reader: trk, Writer: trk.as, Units: units,
 		DefaultProject: func(string) string { return "ENG" },
 	})
-	callWork(t, reg, tracker.ListProjectsTool, map[string]any{})
+	callWork(t, reg, worklet.ListProjectsTool, map[string]any{})
 	if trk.projectQuery.Units == nil {
 		t.Error("list_projects passed no chart, so every project's unit reads " +
 			"as one the org no longer has")
 	}
-	callWork(t, reg, tracker.DescribeProjectTool, map[string]any{})
+	callWork(t, reg, worklet.DescribeProjectTool, map[string]any{})
 	if trk.detailQuery.Units == nil {
 		t.Error("describe_project passed no chart")
 	}
@@ -167,7 +167,7 @@ func TestAProjectReadFailureIsReported(t *testing.T) {
 		DefaultProject: func(string) string { return "ENG" },
 	})
 	for _, name := range []string{
-		tracker.ListProjectsTool, tracker.DescribeProjectTool,
+		worklet.ListProjectsTool, worklet.DescribeProjectTool,
 	} {
 		if got := callWork(t, reg, name, map[string]any{}); !got.Failed {
 			t.Errorf("%s answered %q on a read failure, want a failure — an "+
@@ -178,24 +178,24 @@ func TestAProjectReadFailureIsReported(t *testing.T) {
 }
 
 // stubUnits is a test chart holding ONE unit, which answers to its id or its
-// name in any case — the contract [tracker.Units] states and the engine's own
+// name in any case, the contract [worklet.Units] states and the engine's own
 // resolver keeps.
 type stubUnits struct{}
 
-func (stubUnits) ResolveUnit(ref string) (tracker.ChartUnit, bool) {
+func (stubUnits) ResolveUnit(ref string) (worklet.ChartUnit, bool) {
 	ref = strings.TrimSpace(ref)
 	if !strings.EqualFold(ref, "plat") && !strings.EqualFold(ref, "Platform") {
-		return tracker.ChartUnit{}, false
+		return worklet.ChartUnit{}, false
 	}
-	return tracker.ChartUnit{
+	return worklet.ChartUnit{
 		Key: "plat", Name: "Platform",
-		Lead: tracker.LeadRef{Handle: "ada", Kind: tracker.AuthorAgent},
+		Lead: worklet.LeadRef{Handle: "ada", Kind: worklet.AuthorAgent},
 	}, true
 }
 
-func (s stubUnits) AllUnits() []tracker.ChartUnit {
+func (s stubUnits) AllUnits() []worklet.ChartUnit {
 	unit, _ := s.ResolveUnit("plat")
-	return []tracker.ChartUnit{unit}
+	return []worklet.ChartUnit{unit}
 }
 
 // MY_WORK TAKES NO HANDLE, ever.
@@ -212,7 +212,7 @@ func TestMyWorkIsAlwaysTheTurnsOwnSeat(t *testing.T) {
 	// A HANDLE SENT ANYWAY IS REFUSED BY NAME and reads nobody's day: a
 	// model that tried to read a colleague's is told it cannot name one,
 	// rather than being shown its own as if it had asked for that.
-	named := callWork(t, reg, tracker.MyWorkTool, map[string]any{"handle": "somebody-else"})
+	named := callWork(t, reg, worklet.MyWorkTool, map[string]any{"handle": "somebody-else"})
 	if !named.Failed || !errors.Is(named.Cause, builtin.ErrUndeclaredArgument) {
 		t.Errorf("my_work naming a handle answered %q (cause %v), want the "+
 			"argument refused by name", named.Output, named.Cause)
@@ -220,13 +220,13 @@ func TestMyWorkIsAlwaysTheTurnsOwnSeat(t *testing.T) {
 	if trk.myWorkQuery.Handle != "" {
 		t.Fatalf("my_work naming a handle read %q's day", trk.myWorkQuery.Handle)
 	}
-	callWork(t, reg, tracker.MyWorkTool, map[string]any{})
+	callWork(t, reg, worklet.MyWorkTool, map[string]any{})
 	if trk.myWorkQuery.Handle != "eng" {
 		t.Errorf("my_work read %q's day, want the turn's own seat — a tool "+
 			"that took a handle would hand one agent a colleague's queue",
 			trk.myWorkQuery.Handle)
 	}
-	entry, ok := reg.Lookup(tracker.MyWorkTool)
+	entry, ok := reg.Lookup(worklet.MyWorkTool)
 	if !ok {
 		t.Fatal("my_work is not registered")
 	}
@@ -255,14 +255,14 @@ func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
 		DefaultProject: func(string) string { return "ENG" },
 	})
 
-	callWork(t, reg, tracker.TaskActivityTool, map[string]any{})
+	callWork(t, reg, worklet.TaskActivityTool, map[string]any{})
 	if trk.activityQuery.Project != "ENG" || trk.activityQuery.Workspace {
 		t.Errorf("task_activity asked for %+v, want the seat's own project",
 			trk.activityQuery)
 	}
 
 	// AND A NAMED TASK WINS, because it is the narrower question.
-	callWork(t, reg, tracker.TaskActivityTool, map[string]any{
+	callWork(t, reg, worklet.TaskActivityTool, map[string]any{
 		"task": "ENG-1", "kinds": "status,assignee", "actor": "ada", "limit": 5,
 	})
 	q := trk.activityQuery
@@ -273,7 +273,7 @@ func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
 	// A `since` THAT IS NEITHER SHAPE IS REFUSED naming both, rather than
 	// silently dropped — a bound the caller believed in and that never
 	// reached the query answers a different question.
-	got := callWork(t, reg, tracker.TaskActivityTool, map[string]any{
+	got := callWork(t, reg, worklet.TaskActivityTool, map[string]any{
 		"task": "ENG-1", "since": "last tuesday",
 	})
 	if !got.Failed || !strings.Contains(got.Output, "RFC3339") {
@@ -288,7 +288,7 @@ func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
 // The tool built a change kind from any string it was handed and never checked
 // it, so a model asking for `status_changed` read an empty feed as a project
 // where nothing had happened. The tracker's read refuses such a kind naming
-// every kind it has ([tracker.ErrBadQuery]); what this holds is the tool's
+// every kind it has ([worklet.ErrBadQuery]); what this holds is the tool's
 // half — the kinds are in the schema a model picks from, and the refusal is
 // worded as an argument to change rather than a tracker that could not be
 // read "right now", which a model retries with the same argument.
@@ -297,22 +297,22 @@ func TestTaskActivityOffersItsKindsAndRefusesAnotherAsTheArgument(t *testing.T) 
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
-	entry, _ := reg.Lookup(tracker.TaskActivityTool)
+	entry, _ := reg.Lookup(worklet.TaskActivityTool)
 	props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
 	kinds, _ := props["kinds"].(map[string]any)
 	offered, _ := kinds["description"].(string)
-	for _, kind := range tracker.ChangeKinds {
+	for _, kind := range worklet.ChangeKinds {
 		if !strings.Contains(offered, "`"+string(kind)+"`") {
 			t.Errorf("task_activity's `kinds` does not offer %s: %q", kind, offered)
 		}
 	}
 
-	trk.readErr = fmt.Errorf("%w: %q is not a change kind", tracker.ErrBadQuery,
+	trk.readErr = fmt.Errorf("%w: %q is not a change kind", worklet.ErrBadQuery,
 		"status_changed")
-	got := callWork(t, reg, tracker.TaskActivityTool, map[string]any{
+	got := callWork(t, reg, worklet.TaskActivityTool, map[string]any{
 		"task": "ENG-1", "kinds": "status_changed",
 	})
-	if !got.Failed || !errors.Is(got.Cause, tracker.ErrBadQuery) ||
+	if !got.Failed || !errors.Is(got.Cause, worklet.ErrBadQuery) ||
 		!strings.Contains(got.Output, "change the arguments") ||
 		!strings.Contains(got.Output, "status_changed") {
 		t.Errorf("a kind nobody has answered %q, want a refusal of the argument", got.Output)
@@ -337,16 +337,16 @@ func TestDescribingAProjectThatIsNotThereSaysSo(t *testing.T) {
 		want tools.Refusal
 		says string
 	}{
-		{"no project", fmt.Errorf("tracker: no project \"ENGG\" — did you mean ENG: %w",
-			tracker.ErrNoProject), tools.RefusalNotFound, "did you mean ENG"},
-		{"no type", fmt.Errorf("tracker: no type \"epic\" — this company files bug, task: %w",
-			tracker.ErrNoType), tools.RefusalInvalid, "this company files bug, task"},
+		{"no project", fmt.Errorf("worklet: no project \"ENGG\"; did you mean ENG: %w",
+			worklet.ErrNoProject), tools.RefusalNotFound, "did you mean ENG"},
+		{"no type", fmt.Errorf("worklet: no type \"epic\"; this company files bug, task: %w",
+			worklet.ErrNoType), tools.RefusalInvalid, "this company files bug, task"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			trk := newFakeTracker()
 			trk.readErr = c.err
 			reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
-			got := callWork(t, reg, tracker.DescribeProjectTool, map[string]any{
+			got := callWork(t, reg, worklet.DescribeProjectTool, map[string]any{
 				"project": "ENGG",
 			})
 			if !got.Failed || tools.RefusalOf(got) != c.want {

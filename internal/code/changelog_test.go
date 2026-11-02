@@ -17,7 +17,7 @@ import (
 
 // changeRecordBytes is what each record of a change's life takes the code
 // log, as this build's writers form it at the reference company's text — the
-// figures internal/tracker's codeLogDay prices the reference company's
+// figures internal/worklet's codeLogDay prices the reference company's
 // changes at (its codeChange… constants, which state the same numbers), each
 // a record alone in the log, measured by the log's growth as
 // BenchmarkPushLogBytes measures a push:
@@ -173,7 +173,7 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decode the %s's record: %v", name, err)
 		}
-		// THE KEYS IT CARRIES, which internal/tracker's codeLogFields lists
+		// THE KEYS IT CARRIES, which internal/worklet's codeLogFields lists
 		// as the ones the term was measured with.
 		t.Logf("a change's %s carries %q", name, carriedKeys(rec.Mutation))
 	}
@@ -190,7 +190,7 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	open := opening(repo, seatRef, mainRef, dev)
 	open.Open.Title, open.Open.Body = "Retry the upload when the store answers busy", description
 	open.Open.TurnID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("the turn")).String()
-	open.Open.WorkItem = &types.WorkItem{Backend: types.WorkNative,
+	open.Open.WorkItem = &types.WorkItem{Backend: types.WorkWorklet,
 		ID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("ENG-1234")).String(), Key: "ENG-1234", Project: "ENG"}
 	var change string
 	var version int64
@@ -457,7 +457,7 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 			t.Errorf("the %s is measured and changeRecordBytes states no figure for it", name)
 		case want < got || float64(want) > float64(got)*(1+changeRecordTolerance):
 			t.Errorf("a change's %s takes the log %d bytes, and changeRecordBytes states %d: restate it, "+
-				"and the code log's day internal/tracker prices it in", name, got, want)
+				"and the code log's day internal/worklet prices it in", name, got, want)
 		}
 	}
 	for name := range changeRecordBytes {
@@ -467,7 +467,7 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 	}
 }
 
-// carriedKeys is every key a record's payload carries, as internal/tracker's
+// carriedKeys is every key a record's payload carries, as internal/worklet's
 // codeLogFields spells one: a nested key after its parent's and a dot, a
 // list's elements' keys under the list's own, and each once, in order.
 func carriedKeys(raw json.RawMessage) []string {

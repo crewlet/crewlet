@@ -43,7 +43,9 @@ package secrets
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -154,6 +156,28 @@ func (k Keyring) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Derive is a 32-byte key for one purpose, derived from the active key with
+// HKDF-SHA256 (no salt, info naming the purpose): a key every node holding this
+// keyring derives alike, which no other purpose's key and no ciphertext reveals.
+// Nil for a keyring with no usable active key ([Keyring.Validate]).
+//
+// FOR A SECRET THE FLEET MUST SHARE AND NOTHING SEALS: an HMAC that has to be
+// comparable across nodes and restarts, such as the sign-in identity a model's
+// sit-out is kept under. Keyed by the active key, so a rotation changes every
+// value derived from it; a caller that cannot afford that does not derive.
+func (k *Keyring) Derive(info string) []byte {
+	key, ok := k.Keys[k.ActiveID]
+	if !ok || len(key) != keyBytes {
+		return nil
+	}
+	derived, err := hkdf.Key(sha256.New, key, nil, info, keyBytes)
+	if err != nil {
+		// hkdf.Key fails only for an output longer than 255 hash blocks.
+		return nil
+	}
+	return derived
 }
 
 // keyringCipher is the AES-256-GCM implementation.

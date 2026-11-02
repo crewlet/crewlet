@@ -3,16 +3,16 @@
 Crewlet integrates with Confluence bidirectionally: agents read and write Confluence pages via MCP tools, and Confluence pushes content change events to agents via webhooks.
 
 > **Confluence is one of two knowledge backends, and it is not the default.**
-> The engine ships its own — `knowledge.backend: native`, which is what a
-> company that says nothing gets — with every page a record on the engine's
+> The engine ships its own, Doclet (`knowledge.backend: doclet`, which is what a
+> company that says nothing gets), with every page a record on the engine's
 > own pages log, applied on every data node, and searched by keyword over
-> each node's own BM25 index (and by meaning as well where
+> each data node's own BM25 index (and by meaning as well where
 > `knowledge.vectors` is on, the default for a company with an embeddings
 > provider). Set `knowledge.backend: confluence` (or declare this block,
-> which derives it) to run Confluence instead. It buys one thing the native
-> backend does not have: search runs **as the agent's own Atlassian user**,
+> which derives it) to run Confluence instead. It buys one thing Doclet
+> does not have: search runs **as the agent's own Atlassian user**,
 > so Confluence's page permissions are the boundary rather than the engine.
-> Exactly one backend per company — a config naming both is refused. See
+> Exactly one backend per company: a config naming both is refused. See
 > [Knowledge System](../concepts/knowledge-system.md).
 
 > **Prerequisites — the Atlassian side is set up by hand.** Atlassian offers no API for provisioning users, so the operator creates the Atlassian site (Cloud or Data Center) and each agent's Atlassian account and API token manually, then wires the tokens into `mcp_env` as shown below. `crewlet confluence provision` registers the inbound hooks on either deployment; on Cloud the [Crewlet Forge app](https://github.com/crewlet/forge) is the supported alternative (see [Webhooks](#webhooks-confluence-pushes-to-agents)).
@@ -60,7 +60,7 @@ mcp_servers:
 
 **Which deployment a `url` names is derived, by the rule the [Jira](jira.md#configuration) client uses.** A site under `atlassian.net`, `jira.com` or Atlassian Government Cloud's `atlassian-us-gov-mod.net` is Cloud, and serves Confluence under `/wiki`, which the engine appends when the address does not already end in it; a gateway a `cloud_id` is read through — `api.atlassian.com`, or Government Cloud's `api.atlassian-us-gov-mod.com`, chosen by the Cloud `site_url` names — is Cloud and already names the product, so nothing is appended. Any other host is what `integrations.atlassian.deployment` declares, and Data Center when nothing is declared, served at the address as written. An [Atlassian Isolated Cloud](https://support.atlassian.com/organization-administration/docs/ip-addresses-and-domains-for-atlassian-cloud-products/) site is at a base domain of its own, so it is Cloud by that declaration rather than by its host, and nothing is appended to it: write its `url` out whole, `/wiki` included. A `url` whose host is a `${VAR}` is judged when it resolves, so validation asks it for a Data Center's `webhook_secret` up front only when the company declares `data_center`.
 
-> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/confluence/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/wiki/spaces/…/pages/…` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) — `skill_variables.confluence_base_url: "https://mycompany.atlassian.net/wiki"` — for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` does not: it links to the engine's own tracker and pages through `${crewlet_base_url}`, so a company on Confluence gives its link rule a skill of its own.) Note this is *enforced-reading guidance* (the required-skill guard puts the rule + base in context before the agent can post), not a rewrite of tool results — `mcp-atlassian` builds result links from `CONFLUENCE_URL` and does not read a site-URL env. (This is independent of `site_url`, which the notification transport and knowledge search use for their own links.)
+> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/confluence/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/wiki/spaces/…/pages/…` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) (`skill_variables.confluence_base_url: "https://mycompany.atlassian.net/wiki"`) for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` does not: it links to Worklet and Doclet through `${crewlet_base_url}`, so a company on Confluence gives its link rule a skill of its own.) Note this is *enforced-reading guidance* (the required-skill guard puts the rule + base in context before the agent can post), not a rewrite of tool results: `mcp-atlassian` builds result links from `CONFLUENCE_URL` and does not read a site-URL env. (This is independent of `site_url`, which the notification transport and knowledge search use for their own links.)
 
 On **Cloud**, `crewlet confluence provision` registers token-bearing hooks on `/webhooks/confluence/{event}` through an endpoint Atlassian has never documented; the [Forge app](https://github.com/crewlet/forge) is the supported alternative and delivers to `POST /webhooks/forge`. `webhook_secret` signs Data Center deliveries; `webhook_token` authenticates Cloud ones. See [Webhooks](#webhooks-confluence-pushes-to-agents).
 
@@ -236,6 +236,54 @@ Inbound requests are verified using **HMAC-SHA256** against the `X-Hub-Signature
 Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identifier` the instance sends, which is stable across its own retries — so a redelivery is answered `200 {"status":"duplicate"}` and wakes nobody. The claim lasts five minutes. A route whose provider sends no such header — the Cloud token route and the Forge relay always, and a Data Center build that does not set one — is claimed on a **hash of the raw body** instead.
 
 **On the Cloud token route the body is the whole key**, so what the sender puts in it decides what counts as one event. Confluence's own registered hooks carry the content id, its version and a timestamp, and are therefore distinct per event without help. An Automation rule carries only what its body template names, which is why the recipe above includes the page version and the comment id: a template without them makes two saves of one page within the claim window indistinguishable, and the second wakes nobody. The payload is what stays identical across a provider's own retry, and byte identity is deliberately preferred to derived coordinates: every field left out of a coordinate set is a way for two *different* events to collapse into one, and a collapsed event is a message nobody ever answers. A hash cannot do that — any difference at all yields a different key.
+
+---
+
+## Per-agent access
+
+A seat's Confluence access rides on the same Atlassian service account as its
+Jira access, described in [Jira: Per-agent access](jira.md#per-agent-access):
+one account, one product grant per product, one API token whose scopes are
+the union of the products the seat is on. What differs is how a space is
+granted, and that is the site's choice:
+
+```yaml
+roles:
+  - name: SRE
+    integrations:
+      confluence:
+        enabled: true              # off until turned on
+        space_role: <space role id>  # where the site has role-based access
+        spaces: [ENG]              # empty: every space the company names
+```
+
+- **A site with role-based access** (Atlassian's space roles, a beta): the
+  seat holds one space role in each listed space, chosen from the site's own
+  roles read live: Viewer, Collaborator, Manager, Admin and any custom role.
+- **A site without it**: the seat holds space permissions by operation, under
+  Confluence's names (View, Add pages, Delete pages, Add comments, Export
+  space, Admin and the rest), stored as `operations: [read:space, create:page]`.
+  View is granted first and removed last, because Confluence requires it for
+  every other permission and removes them all with it. A set without View is
+  refused on save and reported by the sync, naming View; the Agents tab keeps
+  it checked while anything else is, from the lane's `required_level`.
+- **Space keys** are compared as Confluence matches them: a global space's key
+  in any case (`eng` is `ENG`), a personal space's `~` key exactly as written.
+
+- **Product access only**, offered first on either kind of site: the account
+  has Confluence and holds no space role or permission of its own, so the
+  site's and each space's permissions alone decide what it sees. Leave
+  `space_role`, `operations` and `spaces` out. Moving a seat to it removes its
+  space roles or permissions; a `spaces` list needs a role or permissions.
+
+Admin, and any custom role or permission set that administers a space, is an
+administration grant: a raise to it carries a warning and asks for a fresh
+step-up. Off removes the seat's space access and replaces its token with one
+without Confluence's scopes (`read:confluence-content.all`,
+`write:confluence-content`, `read:confluence-space.summary`,
+`read:confluence-user`), or revokes it when the seat is off on Jira too. Space
+access is managed with the site credential in `integrations.confluence`, whose
+account needs to administer the company's spaces.
 
 ---
 
@@ -443,9 +491,9 @@ Operators publish locally authored markdown — [Tool Skills](../concepts/tool-s
 crewlet confluence import <company.yaml> ./docs-to-publish
 ```
 
-(Neither bundled Nimbus example ships a `confluence:` block — both run the engine's own knowledge base — so neither works as the positional argument as-is: add the block at the top of this page to one of them first, and switch its `knowledge.backend` to `confluence` in the same edit. `examples/nimbus-docs/` is the set of pages either publishes.)
+(Neither bundled Nimbus example ships a `confluence:` block, because both run Doclet. So neither works as the positional argument as-is: add the block at the top of this page to one of them first, and switch its `knowledge.backend` to `confluence` in the same edit. `examples/nimbus-docs/` is the set of pages either publishes.)
 
-- The **first positional argument is the Tier B company YAML** and the second is the directory — the Confluence credentials come from its `confluence:` block, resolved through the node's secret store and then the environment (pass `-config` to name a different Tier A document).
+- The **first positional argument is the Tier B company YAML** and the second is the directory — the Confluence credentials come from its `confluence:` block, resolved through the company's secret store and then the environment: through the running engine, with one of its Tier A tokens in `CREWLET_API_TOKEN`, or, with the engine stopped, from the fleet's store itself (pass `-config` to name a different Tier A document, or `-api URL` to read through another node). On a member of a cluster whose engine is stopped a run that publishes is refused before it reads or writes anything; a `-dry-run`, which reads no stored value, runs anywhere — see [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
 - **Every target space is checked before a single page is written.** A typo in a directory name would otherwise be discovered half way through, leaving an operator to work out which pages landed. The importer never *creates* a space: that names a container the whole company then works in, and guessing it is not this command's job.
 - **A page that exists is updated in place**, matched by title within its space. Confluence has no external-id field, so a page somebody renamed in the UI is orphaned and a re-import creates a second one — a real limitation of the backend, reported rather than worked around with a marker pressed into service as a second identity.
 - **Frontmatter may declare `parent:` and `labels:`.** Frontmatter may also declare a `parent:` — the **title** of a page in the same space to nest this one under, which is the one thing a flat directory of files cannot say about a wiki that has trees in it — and `labels:`, the author's own page labels. The plan is ordered parents-first so a `parent:` naming a page **published by the same run** resolves; a cycle stops the walk naming the files, and a parent nobody publishes is a note and a page at the space root, because a doc nobody can read is worse than a doc in the wrong place. **An existing page is never re-parented** — where a page sits is something people move deliberately, and a run that dragged it back every time would be fighting them with no way to say so. Labels are lower-cased and de-duplicated at parse time, because that is what Confluence stores and answers with; a label that will not attach is a note, not a page failure.

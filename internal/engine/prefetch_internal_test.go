@@ -295,12 +295,13 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 		Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{
 			{Name: "Tech Lead", DeclaredHandle: "lead"}}},
 	}
-	e.prefetchFor(t.Context(), company, Request{
+	req := Request{
 		Handle:  "lead",
 		RunID:   "run-1",
 		WorkKey: "work-1",
 		Events:  []*events.Event{notification("gitlab", "dev", nil, true)},
-	}, "a pull request got a comment", auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1"}, provenance.NewBoundary())
+	}
+	e.prefetchFor(t.Context(), company, req, "a pull request got a comment", e.askOf(req), auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1"}, provenance.NewBoundary())
 
 	select {
 	case summary := <-got:
@@ -383,14 +384,15 @@ func TestTheThreadBlockReportsWhatItWasHanded(t *testing.T) {
 	// reports false, and the block renders the unreadable hint. That is the
 	// maintenance-mode and unreachable-instance case, and it has to be
 	// VISIBLE rather than looking like a thread nobody wrote in.
-	e.prefetchFor(t.Context(), company, Request{
+	req := Request{
 		Handle:  "lead",
 		WorkKey: "work-2",
 		Events: []*events.Event{notification("chat", "U1", map[string]string{
 			"transport": "slack", "channel": "C0ENG",
 			"ts": "1700000002.000100", "thread_ts": "1700000001.000100",
 		}, true)},
-	}, "+1", auxspend.Use{Stage: types.AuxStageTurn}, provenance.NewBoundary())
+	}
+	e.prefetchFor(t.Context(), company, req, "+1", e.askOf(req), auxspend.Use{Stage: types.AuxStageTurn}, provenance.NewBoundary())
 
 	select {
 	case summary := <-got:
@@ -510,10 +512,11 @@ func TestPrefetchSummaryIsTimed(t *testing.T) {
 			{Name: "Tech Lead", DeclaredHandle: "lead"}}},
 	}
 	before := time.Now().UTC()
-	e.prefetchFor(t.Context(), company, Request{
+	req := Request{
 		Handle: "lead", RunID: "run-4", WorkKey: "work-4",
 		Events: []*events.Event{notification("gitlab", "dev", nil, true)},
-	}, "a pull request got a comment", auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-4"}, provenance.NewBoundary())
+	}
+	e.prefetchFor(t.Context(), company, req, "a pull request got a comment", e.askOf(req), auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-4"}, provenance.NewBoundary())
 	after := time.Now().UTC()
 
 	select {

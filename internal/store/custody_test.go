@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func related(t *testing.T, log *store.EventLog) int {
 
 func unsettled(t *testing.T, log *store.EventLog, before time.Time) []string {
 	t.Helper()
-	got, err := log.UnsettledCustody(t.Context(), before, 10)
+	got, err := log.UnsettledCustody(t.Context(), before, store.UnsettledBatch{}, 10)
 	if err != nil {
 		t.Fatalf("unsettled: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestACustodyBatchWrittenAgainIsOneBatch(t *testing.T) {
 	if n := related(t, log); n != 2 {
 		t.Errorf("a batch written twice holds %d rows, want 2", n)
 	}
-	got, err := log.UnsettledCustody(t.Context(), time.Now(), 10)
+	got, err := log.UnsettledCustody(t.Context(), time.Now(), store.UnsettledBatch{}, 10)
 	if err != nil || len(got) != 1 || !got[0].WrittenAt.Equal(first.Truncate(time.Microsecond)) {
 		t.Fatalf("unsettled = (%+v, %v), want one batch first written at %v", got, err, first)
 	}
@@ -132,6 +133,54 @@ func TestUnsettledCustodyListsOnlyWhatIsOlderThanAsked(t *testing.T) {
 	}
 	if got := unsettled(t, log, now.Add(-time.Minute)); len(got) != 1 || got[0] != "old" {
 		t.Fatalf("unsettled before a minute ago = %v, want [old]", got)
+	}
+}
+
+// THE LISTING RESUMES AFTER THE LAST BATCH IT GAVE, ties on the instant
+// included: a keeper's pass leaves a batch unsettled when the fleet's record
+// of its keeper cannot be read, and listed from the oldest every time, a page
+// of such batches was every page there was. Three batches written at one
+// instant — the clock's resolution, or a redelivery burst — are told apart by
+// their ids, so a page that ends among them resumes at the next of them
+// rather than skipping the rest of the instant or repeating it.
+//
+// Mutation: compare the instant alone in the keyset, and the second page
+// skips the rest of the tie; compare it inclusively, and it repeats one.
+func TestUnsettledCustodyResumesAfterTheBatchItLastGave(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	tie := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	for _, c := range []struct {
+		id string
+		at time.Time
+	}{
+		{"late", tie.Add(time.Second)}, {"tie-b", tie}, {"early", tie.Add(-time.Second)},
+		{"tie-c", tie}, {"tie-a", tie},
+	} {
+		if err := log.WriteCustody(t.Context(), custodyBatch(c.id, c.at), c.at); err != nil {
+			t.Fatalf("write %s: %v", c.id, err)
+		}
+	}
+	var pages [][]string
+	after := store.UnsettledBatch{}
+	for range 5 {
+		got, err := log.UnsettledCustody(t.Context(), time.Now(), after, 2)
+		if err != nil {
+			t.Fatalf("list after %q: %v", after.ID, err)
+		}
+		var ids []string
+		for _, b := range got {
+			ids = append(ids, b.ID)
+		}
+		pages = append(pages, ids)
+		if len(got) == 0 {
+			break
+		}
+		after = got[len(got)-1]
+	}
+	want := [][]string{{"early", "tie-a"}, {"tie-b", "tie-c"}, {"late"}, nil}
+	if !slices.EqualFunc(pages, want, slices.Equal[[]string]) {
+		t.Errorf("pages = %q, want %q", pages, want)
 	}
 }
 

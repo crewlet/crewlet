@@ -1,6 +1,6 @@
 # Tool Skills
 
-Tool Skills are modular prompt fragments that teach an agent *how to use* a particular tool or MCP server. Each skill lives as one page in a dedicated container of the knowledge backend (a Confluence **space**, or a container of the engine's own pages), is loaded into every node's in-memory `skills.Registry`, and is kept current on every node by that node's skill sync: a walk of the container at boot and whenever the applied configuration moves it, a read of the one page that changed when a page changes, and a periodic walk behind both (see [Keeping every node current](#keeping-every-node-current)).
+Tool Skills are modular prompt fragments that teach an agent *how to use* a particular tool or MCP server. Each skill lives as one page in a dedicated container of the knowledge backend (a Confluence **space**, or a Doclet container), is loaded into every node's in-memory `skills.Registry`, and is kept current on every node by that node's skill sync: a walk of the container at boot and whenever the applied configuration moves it, a read of the one page that changed when a page changes, and a periodic walk behind both (see [Keeping every node current](#keeping-every-node-current)).
 
 **Two-tier consumption:**
 
@@ -48,19 +48,19 @@ flowchart TD
 empty registry → just the tool catalogue. Operators seed it by publishing
 markdown: with their own assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)
-on the native backend, or `crewlet confluence import` on Confluence (see below).
+on Doclet, or `crewlet confluence import` on Confluence (see below).
 
-**On the native backend the container is a person's to write, never an
+**On Doclet the container is a person's to write, never an
 agent's.** The skills container is one of the two [reserved
-containers](knowledge-system.md#who-may-write-where), and the knowledge base's
-store refuses a seat every write into it — creating a page, saving one,
-renaming one, and adding, editing or removing a comment — whichever tool asked.
+containers](knowledge-system.md#who-may-write-where), and Doclet's
+store refuses a seat every write into it (creating a page, saving one,
+renaming one, and adding, editing or removing a comment), whichever tool asked.
 A seat cannot see that a page there is machinery rather than knowledge, and one
 it wrote would be excluded from every search — and, declaring a `trigger:`,
 injected into every seat's phase as an instruction. A person publishing through
 their own assistant is not refused by that rule — putting skills there on
 purpose is what the container is for — but writing one is a configuration
-change, so it takes **`admin`** rather than the `knowledge` app: creating,
+change, so it takes **`admin`** rather than the `doclet` app: creating,
 saving, renaming, trashing, restoring or purging a skill page is decided as
 `pages.skill.write` ([who may write
 where](knowledge-system.md#who-may-write-where)). On Confluence the same
@@ -78,15 +78,15 @@ The registry is per node and its content is a wiki's, so each node runs one sync
 
 | What happened | What the node's sync does |
 |---|---|
-| The node boots | Walks the container. On the native backend it waits until this node's page projection has caught up first, because a walk over a projection that is behind is a partial set and the registry replaces wholesale. |
-| An apply moves the skills source: a different knowledge backend (connecting Confluence, or disconnecting it), a different skills container, or a different Confluence instance | **Retires the previous source's skills at once** (`tool_skills_retired`) and walks the new one. The registry never serves a source the applied company no longer names: the old container's pages are ordinary pages now, and a disconnected wiki's skills describe a stack the company stopped running. A company moved onto the native knowledge base by a revision serves its native skills after the node restarts, because the native backend starts with the node; until then the node logs `tool_skill_source_unreadable`, beside the activation's own [`native_backend_needs_restart`](control-plane.md#a-native-backend-changes-at-a-restart). |
+| The node boots | Walks the container. On Doclet it waits until this node's copy of the knowledge base has caught up with its log first, because a walk over a copy that is behind is a partial set and the registry replaces wholesale. |
+| An apply moves the skills source: a different knowledge backend (connecting Confluence, or disconnecting it), a different skills container, or a different Confluence instance | **Retires the previous source's skills at once** (`tool_skills_retired`) and walks the new one. The registry never serves a source the applied company no longer names: the old container's pages are ordinary pages now, and a disconnected wiki's skills describe a stack the company stopped running. A company moved onto Doclet by a revision serves its Doclet skills after the node restarts, because Doclet starts with the node; until then the node logs `tool_skill_source_unreadable`, beside the activation's own [`native_backend_needs_restart`](control-plane.md#a-native-backend-changes-at-a-restart). |
 | An apply turns tool skills off (`knowledge.backend: none`, or `skills_container: ""`) | Retires every skill and walks nothing (`tool_skills_off`). |
 | An apply that leaves the source as it was | Nothing, unless the last walk failed or this node could not read the source until now (a token put back, a Confluence integration that starts this time). An apply is the gesture that fixes a credential, so it walks again then; and a source that was unreadable is walked even after a walk that succeeded, because every page change that arrived while it could not be read was dropped. |
 | A Confluence page webhook, on the node that won the delivery | Reads **that page only** and updates it in the registry (`tool_skill_page_synced`), then publishes `tool_skill_page_changed` on the event stream. A page event in any other space costs nothing unless the page currently holds a skill (a page that just moved out of the skills space is announced from the space it moved to). |
 | `tool_skill_page_changed` from a peer | Reads that page itself and updates it. Webhook deliveries are a fleet-wide consumer group, so exactly one node parses each one, and this broadcast is how every other node hears about it. A node whose applied company names a different container ignores it. |
 | A Confluence page trashed or deleted | Reads it back like any other change, on the node that heard the webhook and on every peer, and drops it on the wiki's answer that the page is gone. A removal is never acted on without that read: a page restored from the trash announces nothing, and a trash delivery or a nudge that reached a node after the restore would otherwise drop a skill the wiki still serves until the next periodic walk. |
 | A single-page read fails | Walks the whole container instead (`tool_skill_page_read_failed`), which is the path that knows how to back off. |
-| On the native backend, a skill page commits in this node's page projection (created, edited into or out of a skill, trashed, restored or purged) | Walks the container, a read of the node's own store, and **announces** it: `tool_skill_page_changed` with `walk: true`, since the applier knows the container moved but not which page. Every node that holds data applies the page log itself and hears the change without it; the announcement is for a node that [holds no data](../guides/fleet.md#nodes-that-hold-no-data), which runs no applier and would otherwise hear of the edit only on its periodic walk. Several data nodes announce one edit, and a hearer coalesces them into one walk. A node whose company moved its skills to Confluence by an apply keeps its page projection running, and a native commit there walks nothing. |
+| On Doclet, this node's pages applier commits a change to a skill page (created, edited into or out of a skill, trashed, restored or purged) | Walks the container, a read of the node's own store, and **announces** it: `tool_skill_page_changed` with `walk: true`, since the applier knows the container moved but not which page. Every node that holds data applies the page log itself and hears the change without it; the announcement is for a node that [holds no data](../guides/fleet.md#nodes-that-hold-no-data), which runs no applier and would otherwise hear of the edit only on its periodic walk. Several data nodes announce one edit, and a hearer coalesces them into one walk. A node whose company moved its skills to Confluence by an apply keeps its pages applier running, and a Doclet commit there walks nothing. |
 | `tool_skill_page_changed` with `walk: true`, on a node that holds no data | Walks the container through a data node, which answers only once its own copy answers requests — level with its logs, or drained and close to their ends. |
 | Every 10 minutes, with a fifth of that as jitter either way | Walks the container. This bounds everything the event path misses (a broadcast a node did not hear, a webhook the wiki never delivered, and the changes no subscribed Confluence event names: a page moved into or out of the space, a page restored from the trash) at 12 minutes, the longest a jittered interval can be. |
 | A walk fails | Keeps what the registry held, logs `tool_skill_sync_failed` (with `attempt` and `retry_in`), and retries after 5 seconds, doubling per consecutive failure up to the 10-minute interval. A source that stays broken then costs one walk per interval, the same as a healthy one. |
@@ -99,24 +99,24 @@ A walk or a page read that finds the container as the registry was already built
 
 ## Skill file format
 
-Skills are authored as markdown files with YAML frontmatter, the same format the backend pages round-trip to via the per-backend codec ([below](#page-representation)). The repository ships eleven bundled examples under `examples/tool-skills/`.
+Skills are authored as markdown files with YAML frontmatter, the same format the backend pages round-trip to via the per-backend codec ([below](#page-representation)). The repository ships ten bundled examples under `examples/tool-skills/`.
 
 ```markdown
 ---
-key: skill:code_runtime
+key: mcp:github
 trigger:
-  tool: run_sandbox
+  mcp_server: github
 phases: [execute]
-required: false
-title: Running code work in the sandbox
+title: GitHub tools
 summary: |
-  For real code work, call the run_sandbox tool: a coding agent
-  implements in an isolated checkout and pushes a branch or opens a pull
-  or merge request.
+  Read / search code + issues + PRs; review, comment, and track work.
+  Author code in your own checkout with your shell and git, not via these tools.
 ---
 
-When a task needs you to implement or modify code, run tests, or
-reproduce a bug, call `run_sandbox` with a concrete brief …
+You have access to GitHub via MCP. Capabilities:
+
+- Read and search code, files, and repositories.
+- Create and manage issues and pull requests; comment on and review PRs. …
 ```
 
 ### Frontmatter fields
@@ -183,7 +183,7 @@ skill_variables:
   confluence_base_url: "https://nimbus.atlassian.net/wiki"
 ```
 
-A link rule for a company on Jira and Confluence uses them like this (the bundled `platform_mentions` skill links to the engine's own tracker and pages instead, through `${crewlet_base_url}`, described below):
+A link rule for a company on Jira and Confluence uses them like this (the bundled `platform_mentions` skill links to Worklet, Doclet and Chatlet's rooms instead, through `${crewlet_base_url}`, described below):
 
 ```markdown
 - **Work item:** `${jira_base_url}/browse/{ISSUE-KEY}`
@@ -207,7 +207,7 @@ The engine substitutes the variables at **render time**, everywhere a skill's `s
 
 `skill_variables` is **company-wide** and hot-reloadable: changing a value on `PUT /config` re-renders every skill on the next turn.
 
-**`${crewlet_base_url}` is the engine's own.** It carries where people reach this deployment's dashboard — Tier A's [`api.external_url`](configuration.md#what-tier-a-must-state-once-the-api-is-served), the address every link a person follows is built on — so a skill links to a work item as `${crewlet_base_url}/#/work/{KEY}` and to a page as `${crewlet_base_url}/#/knowledge/pages/{page-id}` with nothing for an operator to keep in step. The name is reserved — a company declaring it is refused, since two sources for one address is how a link comes to point at the deployment the company used to run on. It is never taken from `api.public.external_url`, which is where vendors reach the deployment and, behind a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), a socket that serves no dashboard. Where the node's Tier A states no `api.external_url` — a node that serves no API need not — it is left undefined, so a skill renders it literally and the registry warns `skill_variable_unresolved`.
+**`${crewlet_base_url}` is the engine's own.** It carries where people reach this deployment's dashboard (Tier A's [`api.external_url`](configuration.md#what-tier-a-must-state-once-the-api-is-served), the address every link a person follows is built on), so a skill links to a work item as `${crewlet_base_url}/#/worklet/{KEY}` and to a page as `${crewlet_base_url}/#/doclet/pages/{page-id}` with nothing for an operator to keep in step. The name is reserved: a company declaring it is refused, since two sources for one address is how a link comes to point at the deployment the company used to run on. It is never taken from `api.public.external_url`, which is where vendors reach the deployment and, behind a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), a socket that serves no dashboard. Where the node's Tier A states no `api.external_url` (a node that serves no API need not), it is left undefined, so a skill renders it literally and the registry warns `skill_variable_unresolved`.
 
 **`${crewlet_kit_version}` is the engine's own too.** It carries the newest [artifact kit](../guides/artifact-authoring.md#capabilities-and-the-runtime) release this build embeds, so the bundled artifacts skill tells a seat the exact `/_crewlet/kit/${crewlet_kit_version}/` to link. It moves with the engine binary and with nothing else: an upgrade that embeds a newer kit renders the new version into every skill on the next apply, and a page already published keeps the release it pinned. The newest kit matters because it is the one that reads the [adopted brand](artifacts.md#the-company-brand)'s slots; a page linked to an older kit is drawn in Crewlet's own look. The name is reserved, and a company declaring it is refused.
 
@@ -219,7 +219,7 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 
 | Phase | Tool surface seen | Notes |
 |---|---|---|
-| **Execute** | every tool the executor can reach, its first-party tools and every MCP server's tool alike, whether or not it is active yet, and the names of the MCP servers whose tools reach the seat | Matched once, when the phase opens, and the guard is armed over the same names, so a required skill for an MCP tool the executor activates later is enforced as the catalogue said. `run_sandbox` is on it only for a seat whose `role.sandbox` is enabled and whose executor is not itself a coding agent in agent mode, so a `tool: run_sandbox` trigger reaches exactly the seats that can launch a run. |
+| **Execute** | every tool the executor can reach, its first-party tools and every MCP server's tool alike, whether or not it is active yet, and the names of the MCP servers whose tools reach the seat | Matched once, when the phase opens, and the guard is armed over the same names, so a required skill for an MCP tool the executor activates later is enforced as the catalogue said. |
 | **Review** | empty (Review has no domain tools) | MCP-server-keyed skills still appear when an operator scopes a skill to the Review phase (lists it in the skill's `phases`), even though Review has no domain-tool surface. |
 | **Sub-agent** | the delegated task's allowlist | Same matching as Execute, against the worker's narrower surface. `subagent` is the wire name of the worker phase |
 
@@ -241,7 +241,7 @@ Catalogue entries carry only the summary. The full body reaches the LLM via `loa
 load_tool_skill(key="mcp:github") → returns the full body as a tool result
 ```
 
-Available in **Execute** (always-on: it is a builtin, so it needs no `activate_tool` promotion) and **Sub-agent** (same as Execute). Returns an error with the list of registered keys if the key doesn't exist, so the LLM can recover.
+Available in **Execute** (always-on: it is a builtin, so it needs no `activate_tool` promotion) and **Sub-agent** (same as Execute). A key that does not exist is refused `not_found` with the keys that hold it first ("did you mean `skill:artifacts`?" for `artifacts`) and then every registered key, at most 30, so the LLM recovers in one step rather than guessing again.
 
 Review intentionally doesn't have it — Review's contract is the decision enum, not domain action.
 
@@ -258,7 +258,7 @@ A skill is practices for the tools its trigger names — and in practice models 
 ```
 Tool 'create_pull_request' is gated behind a required tool skill you
 have not loaded in this session:
-- 'mcp:github': Read / search / review code + issues + PRs. Author code via the sandbox …
+- 'mcp:github': Read / search code + issues + PRs; review, comment, and track work. Author code in your own checkout …
 
 Call `load_tool_skill(key='mcp:github')` to read the required
 practice(s), then retry 'create_pull_request'. Loading is needed once
@@ -267,7 +267,7 @@ per session; after that the tool works normally.
 
 The blocked call never executes; the LLM loads the skill on the next round and retries.
 
-**Session scope, not turn scope.** "Loaded" means the body is in *this model's context*, and the executor, the reviewer and each worker are separate message histories — so a skill loaded by one is genuinely not in front of the others, and each session loads it itself. A round-cap extension continues the same session and keeps the load; a `self_iterate` starts a fresh session and therefore a fresh guard, because its context started over too. A **suspended** executor is the exception in the other direction: it is re-entered as the same message history, possibly on another node, so its loaded keys ride the saved conversation and the rebuilt guard starts from them.
+**Session scope, not turn scope.** "Loaded" means the body is in *this model's context*, and the executor, the reviewer and each worker are separate message histories — so a skill loaded by one is genuinely not in front of the others, and each session loads it itself. A round-cap extension continues the same session and keeps the load; a `self_iterate` starts a fresh session and therefore a fresh guard, because its context started over too. A **parked** executor run is the exception in the other direction: its guard outlives the segment that launched it. The parked turn's state carries the keys the guard held at the launch, and every rebuild of the run's guard starts from them. The skills the run loaded over the bridge are read off its bridged calls, which its row records, and replayed onto the guard by every rebuild: when a person's answer carries the run on, when a node reopens a working run's session after a restart or a seat move, and when the run is collected — possibly on another node. The collection makes no gated call, so its guard refuses nothing; it is rebuilt the same way all the same, because one rebuild for every segment is what keeps them from drifting apart. A person's answer that continues the run in the box it parked in continues its CLI's own session too, which still holds what it loaded.
 
 **The exempt set is about deadlock, not policy.** `load_tool_skill` itself, the discovery meta-tools, and the phase submitters are never blocked, whatever a trigger says: gating the unlock would make a session unrecoverable, gating discovery would add rounds without protecting anything, and gating a submitter would brick the phase. A misauthored trigger can cost a phase some tools; it can never cost the phase. Every block also publishes a `phase.tool_skill_blocked` event (agent, phase, tool, skill keys, turn id) so operators can see agents attempting to skip required practices.
 
@@ -283,7 +283,7 @@ required: false
 
 Because enforcement derives from the trigger, the per-session cost of an enforced skill is governed by two knobs the author controls:
 
-- **Trigger width** decides *which calls wait*. Prefer **exact tool names** — the tools the practices actually apply to. The bundled `skill:platform_mentions` triggers on the write tools only (posting broken mention markup is visible to humans; *reads* never wait on it) — its leaves name the engine's own tracker and knowledge-base writes (`comment_on_work_item`, `create_work_item`, `update_work_item`, `comment_on_page`, `write_page`, `save_page`) and the two posting tools of the version-pinned `mcp-server-mattermost==0.6.1` release (`mattermost_post_message`, `mattermost_update_message`), which is exactly why the example org pins that server while it runs every other at its newest release: an unpinned upgrade could rename a tool out from under the gate. `tool:refine_skill` triggers on the single `refine_skill` builtin (no other tool waits on skill-refinement conventions).
+- **Trigger width** decides *which calls wait*. Prefer **exact tool names**: the tools the practices actually apply to. The bundled `skill:platform_mentions` triggers on the write tools only (posting broken mention markup is visible to humans; *reads* never wait on it): its leaves name Chatlet's, Worklet's and Doclet's writes (`post_message`, `reply_in_thread`, `send_dm`, `comment_on_work_item`, `create_work_item`, `update_work_item`, `comment_on_page`, `write_page`, `save_page`, held to the domains' own lists by a test, so a new way to post fails the build until the skill names it) the two posting tools of the version-pinned `mcp-server-mattermost==0.6.1` release (`mattermost_post_message`, `mattermost_update_message`), and the one posting tool of the pinned `slack-mcp-server@1.3.0` (`slack_conversations_add_message`, under the `slack_` prefix [Slack's entry](../integrations/slack.md#configure-in-yaml) gives it), which is exactly why the example org pins the Mattermost server while it runs every other at its newest release, and why the Slack docs pin theirs: an unpinned upgrade could rename a tool out from under the gate. `tool:refine_skill` triggers on the single `refine_skill` builtin (no other tool waits on skill-refinement conventions).
 - **Body size** decides *what each wait costs*. An enforced `mcp_server` trigger gates every tool on that server, so its body must be a one-pager: the bundled `mcp:github` orientation is ~100 tokens, making the once-per-session load before any GitHub work near-free. If a server-wide skill's body grows past orientation size, split it — keep the tiny server-wide overview and move the detailed practices into a narrow tool-triggered skill.
 
 ### What a trigger covers
@@ -305,7 +305,7 @@ Enforcement gates exactly the tools the trigger names:
 - The guard only arms when the session can satisfy it: `load_tool_skill` is an Execute always-on and rides along on every worker surface that can reach it. A surface without it (e.g. a custom always-on override that removed the loader) disables enforcement for that session rather than soft-locking the LLM, with a `skill_guard_disabled_no_loader` warning.
 - A failed `load_tool_skill` call (wrong key, registry error) does **not** unlock anything.
 
-An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool: cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools (and `skill:artifacts`, the artifact design contract, gates only `create_artifact`, `publish_artifact` and `upload_artifact_asset`, never the reads), and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Three bundled skills are advisory (`required: false`): `skill:code_runtime` (advice on briefing `run_sandbox`, not markup correctness, triggered on that tool so it reaches exactly the seats offered it, whichever code host they push to or none), and `skill:getting_unstuck` and `skill:retrieval_research`, practice prose triggered on the commonest calls a seat makes (every chat post, work-item and page comment and `a2a_ask` for the first; every knowledge search, work-item read, episode query and memory refresh for the second), so *enforcing* either would make those calls wait on judgement rather than on markup a call can get wrong, inverting the trigger-width rule above.
+An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool: cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools (and `skill:artifacts`, the artifact design contract, gates only `create_artifact`, `publish_artifact` and `upload_artifact_asset`, never the reads), and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Two bundled skills are advisory (`required: false`): `skill:getting_unstuck` and `skill:retrieval_research`, practice prose triggered on the commonest calls a seat makes (every post on the company's own chat or Mattermost, work-item and page comment and `a2a_ask` for the first; every knowledge search, work-item read, episode query and memory refresh for the second), so *enforcing* either would make those calls wait on judgement rather than on markup a call can get wrong, inverting the trigger-width rule above.
 
 ---
 
@@ -407,7 +407,7 @@ The container is also **excluded from notification routing**. Webhooks for tool-
 | Knowledge backend unreachable | A walk that cannot enumerate the container completely replaces nothing (a partial walk must not silently delete skills): the registry keeps what it holds, which at boot is empty, and the node logs `tool_skill_sync_failed` with the attempt number and when it retries. Retries start at 5 seconds (sized for a wiki whose API comes up seconds after the engine, and a rate-limit refusal) and double to the 10-minute walk interval, so the ordinary boot race heals itself and an outage costs one walk per interval. Applying the configuration again retries at once. |
 | Webhook lost, or a page moved or restored (events the engine does not subscribe to) | Every node's periodic walk catches it up within 12 minutes (a 10-minute interval, jittered by a fifth). `crewlet confluence resync` is **a read-only diagnostic** that prints what the container holds, and does not reach into a running engine; see [Drift recovery](#drift-recovery) above. |
 | A node misses a peer's `tool_skill_page_changed` (a broker reconnect, or `tool_skill_nudge_unavailable` at boot) | That node converges on its periodic walk; the node that heard the webhook, and every node that heard the broadcast, already have the change. |
-| This node cannot read the skills source | Logged as `tool_skill_source_unreadable` with the reason: no `integrations.confluence.token` (the skills space is read with the organization's credential), a Confluence integration that did not start, or a revision that moved the company onto the native knowledge base on a node already running the native tracker without it — the runtime's halves are fixed by the first company that started it, so that change needs a restart, which the activation said with [`native_backend_needs_restart`](control-plane.md#a-native-backend-changes-at-a-restart). (On a node running no native backend at all, the apply that moves the company onto one starts it, knowledge base included.) The node keeps serving what it last read from that source (nothing, for a source it never read) and walks nothing until an apply or a restart fixes the reason; the apply that does walks the source at once. |
+| This node cannot read the skills source | Logged as `tool_skill_source_unreadable` with the reason: no `integrations.confluence.token` (the skills space is read with the organization's credential), a Confluence integration that did not start, or a revision that moved the company onto Doclet after this node's native runtime started without it: the runtime starts at the node's first company whatever backends that company runs, and its halves are the ones that company declared, so the change needs a restart, which the activation said with [`native_backend_needs_restart`](control-plane.md#a-native-backend-changes-at-a-restart). The node keeps serving what it last read from that source (nothing, for a source it never read) and walks nothing until an apply or a restart fixes the reason; the apply that does walks the source at once. |
 | Skill body over the 32 KB cap | The page fails validation and is skipped with `skill_page_undecodable`, which names the page and the cap; other skills load normally. |
 | Page is missing the leading YAML frontmatter block, or its frontmatter names no trigger | Not a skill: it is counted as an ordinary page and skipped without a warning, and a page that was previously a skill is dropped from the registry. A page that declares a trigger and does not parse is logged as `skill_page_undecodable` and dropped the same way. |
 | Two pages declare the same key | The page with the lower id (on Confluence, the older page) is served on every node, and `skill_key_duplicated` names both pages. Give the shadowed page a key of its own or remove it. |

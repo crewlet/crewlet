@@ -22,7 +22,7 @@ import (
 func TestEveryDeploymentWriteAsksForARecentProofAndNoReadDoes(t *testing.T) {
 	t.Parallel()
 	var patterns []string
-	(&App{}).deploymentRoutes(func(pattern string, _ http.HandlerFunc) {
+	(&App{}).deploymentRoutes(func(pattern string, _ authz.Effect, _ http.HandlerFunc) {
 		patterns = append(patterns, pattern)
 	})
 	if len(patterns) < 2 {

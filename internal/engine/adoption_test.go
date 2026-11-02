@@ -48,10 +48,10 @@ func TestAnAdoptedRevisionKeepsItsAuthor(t *testing.T) {
 			"written, not when this node met it", got.Source, got.CreatedAt, written)
 	}
 	// And it was ACTIVATED when the pointer says, which is not when it was
-	// written: the instant this node boots its chart with next time and the
-	// one its config history shows.
-	if !got.Active || !got.ActivatedAt.Equal(pinnedNow) {
-		t.Errorf("adopted active=%v at %s, want active at the pointer's %s",
-			got.Active, got.ActivatedAt, pinnedNow)
+	// written: applied here, it is what this node boots on, at the instant
+	// it boots its chart with next time and its config history shows.
+	if !got.Boots || !got.ActivatedAt.Equal(pinnedNow) {
+		t.Errorf("adopted boots=%v at %s, want the boot row at the pointer's %s",
+			got.Boots, got.ActivatedAt, pinnedNow)
 	}
 }

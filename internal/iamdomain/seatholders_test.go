@@ -205,7 +205,7 @@ func holdersBySeatAll(t *testing.T, reader *iamdomain.Reader) map[string][]iamdo
 // THE APPLIER RE-DERIVES A REMOVAL'S SEAT whenever the checkpoint's rule set
 // differs from this build's.
 //
-// A removal tombstone's `seat_id` (replicated migration 0094) is a DERIVED
+// A removal tombstone's `seat_id` (replicated migration 0117) is a DERIVED
 // column ([statelog.Deriver]): the removal's apply writes it from the
 // identifiers its record released, and [iamdomain.Applier.Rederive] recomputes
 // it from the same identifiers in the row's claims when a node holds rows
@@ -552,7 +552,7 @@ func issueOnto(t *testing.T, rig *writeRig, address, seat string,
 	if err := rig.during(func() error {
 		var err error
 		issued, err = rig.writer.Invite(t.Context(), iamdomain.InviteMint{
-			Email: address, Grants: []iam.Grant{iam.GrantTracker},
+			Email: address, Grants: []iam.Grant{iam.GrantWorklet},
 			Seat: rig.vacantSeat(seat), ExpiresAt: expires,
 			OpID: operationKey(), Reason: "onboarding",
 		})

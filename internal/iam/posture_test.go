@@ -16,7 +16,7 @@ import (
 // serve and every case here goes red.
 func TestAZeroPostureConfersNothing(t *testing.T) {
 	t.Parallel()
-	row := []Grant{GrantAdmin, GrantTracker}
+	row := []Grant{GrantAdmin, GrantWorklet}
 	for _, posture := range []AdminPosture{"", "Serve", "open"} {
 		got := posture.Effective(row)
 		if got == nil || len(got) != 0 {
@@ -52,10 +52,10 @@ func TestARefusingNodeKeepsEveryApp(t *testing.T) {
 		{"an administrator on a refusing node", AdminRefuse,
 			[]Grant{GrantAdmin}, Apps},
 		{"one app on a refusing node", AdminRefuse,
-			[]Grant{GrantKnowledge}, []Grant{GrantKnowledge}},
+			[]Grant{GrantDoclet}, []Grant{GrantDoclet}},
 		{"an unknown name is dropped and the rest ordered", AdminServe,
-			[]Grant{GrantKnowledge, "swarm", GrantTracker},
-			[]Grant{GrantTracker, GrantKnowledge}},
+			[]Grant{GrantDoclet, "swarm", GrantWorklet},
+			[]Grant{GrantWorklet, GrantDoclet}},
 		{"nothing held", AdminServe, nil, []Grant{}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

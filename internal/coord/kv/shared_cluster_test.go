@@ -58,14 +58,7 @@ func TestSharedContractOnACluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open: %v", err)
 		}
-		stream, err := first.js.Stream(t.Context(), first.leases.stream)
-		if err != nil {
-			t.Fatalf("the lease bucket's stream: %v", err)
-		}
-		info, err := stream.Info(t.Context())
-		if err != nil || info.Cluster == nil {
-			t.Fatalf("the lease bucket's placement: (%v, %v)", info, err)
-		}
+		info := streamOf(t.Context(), t, first.js, first.leases.stream)
 		holders := []string{info.Cluster.Leader}
 		for _, peer := range info.Cluster.Replicas {
 			holders = append(holders, peer.Name)
@@ -134,7 +127,7 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 	cfg := Config{TTL: coordtest.LongTTL, BucketPrefix: "cut", Clustered: true, Replicas: 3}
 	fleetCfg := FleetConfig{
 		BucketPrefix: "cutfleet", Clustered: true, Replicas: 3,
-		RateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
+		MaxRateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, BudgetRetention: time.Minute, RebaseRetention: 10 * time.Minute,
 		StatusFreshness:  10 * time.Minute,
@@ -154,13 +147,9 @@ func TestAReadIsNeverAnsweredByACopyThatIsBehind(t *testing.T) {
 	}
 	leaderOf := func(stream string) string {
 		t.Helper()
-		handle, err := first.js.Stream(ctx, stream)
-		if err != nil {
-			t.Fatalf("stream %s: %v", stream, err)
-		}
-		info, err := handle.Info(ctx)
-		if err != nil || info.Cluster == nil || info.Cluster.Leader == "" {
-			t.Fatalf("stream %s's placement: (%v, %v)", stream, info, err)
+		info := streamOf(ctx, t, first.js, stream)
+		if info.Cluster.Leader == "" {
+			t.Fatalf("stream %s's placement names no leader: %+v", stream, info.Cluster)
 		}
 		return info.Cluster.Leader
 	}

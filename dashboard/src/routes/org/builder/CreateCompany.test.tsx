@@ -11,6 +11,12 @@ import type { CompanyDocument } from "~/protocol/index.ts";
 import { clearSavedRevision } from "./savedRevision.ts";
 import { company, EDITOR, Engine, mountBuilder, type SentRequest } from "./testkit.tsx";
 import { withDerived } from "~/test/org.ts";
+import {
+  applyPageAction,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -19,6 +25,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.unstubAllGlobals();
   sessionStorage.clear();
   clearSavedRevision();
@@ -171,8 +178,8 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   expect(body._summary).toMatch(/^Created Nimbus in the organization builder \(write [0-9a-f]+\)$/);
 
   // What is left: the principles, on their own page in edit, and the two
-  // steps the builder cannot take, with the terminal steps for the one that has
-  // no screen at all: exactly the declaration the engine walks from a company
+  // steps the builder cannot take, with the terminal steps beside the model's
+  // own screen: exactly the declaration the engine walks from a company
   // only the store holds (`contract/providersteps.ts`), so a card drawn from
   // anything else is a card no gate has run.
   expect(await screen.findByText("The company is created")).toBeDefined();
@@ -182,6 +189,12 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   expect(screen.getByRole("link", { name: "Open Integrations" }).getAttribute("href")).toBe(
     "#/company/integrations",
   );
+  // The model is added on Settings › Models, signed in and tested there; the
+  // terminal steps stay folded beside it for a reader at the node's host.
+  expect(screen.getByRole("link", { name: "Add a model" }).getAttribute("href")).toBe(
+    "#/settings/models?flow=add",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Or from a terminal" }));
   expect(screen.getByText(/crewlet config export > company\.yaml/).textContent).toBe(
     PROVIDER_STEPS,
   );
@@ -310,4 +323,49 @@ test("a create draft kept after a company appeared still offers the company", as
   expect(await screen.findByText("CEO")).toBeDefined();
   await waitFor(() => expect(engine.checks().at(-1)!.method).toBe("PATCH"));
   expect(engine.requests.filter(isWrite)).toHaveLength(0);
+});
+
+test("the create form is the assistant's to read and fill in, and the draft it starts is the builder's", async () => {
+  setFramePage({
+    screen: "company-org-edit",
+    title: "Org chart › Edit org",
+    path: ["company", "org", "edit"],
+    params: {},
+    query: {},
+  });
+  const engine = new Engine(null);
+  mountBuilder({ engine });
+  await screen.findByLabelText("Company name");
+  const open = () => pageSnapshot()!.context;
+  const field = (path: string) => open().draft?.fields.find((f) => f.path === path);
+  await waitFor(() => expect(open().draft).toMatchObject({ kind: "client", step: "create" }));
+  expect(field("template")).toMatchObject({ value: "new_company", editable: true });
+  // A SHAPE THE FORM DOES NOT OFFER IS REFUSED in the form's own words.
+  expect(
+    applyPageAction({
+      correlation_id: "c0",
+      action: "draft.set",
+      payload: { values: { template: "startup" } },
+      source_revision: open().source_revision,
+    }),
+  ).toMatchObject({ outcome: "invalid", reason: expect.stringMatching(/^Choose the shape/) });
+  act(() => {
+    applyPageAction({
+      correlation_id: "c1",
+      action: "draft.set",
+      payload: { values: { name: "Nimbus", template: "empty", own_seat: "no" } },
+      source_revision: open().source_revision,
+    });
+  });
+  expect(((await screen.findByLabelText("Company name")) as HTMLInputElement).value).toBe("Nimbus");
+  expect(screen.getByRole("radio", { name: "Start empty" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  // NOTHING IS CREATED until the person starts it; then the draft open is
+  // the builder's, with the template as its one change.
+  expect(engine.requests.filter(isWrite)).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "Start the company" }));
+  await waitFor(() => expect(field("changes")?.value).not.toBe(""));
+  expect(open().draft).toMatchObject({ kind: "client", step: "visualization" });
+  expect(open().draft!.help).toMatch(/org\.draft\.apply_ops/);
 });

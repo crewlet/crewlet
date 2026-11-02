@@ -15,6 +15,7 @@ import (
 const orgDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -274,5 +275,51 @@ func TestAPatchOverAPeersDocumentStoresTheHandleOfASeatItAdds(t *testing.T) {
 	if storedMember(t, s)["a_setting_from_a_newer_build"] == nil {
 		t.Error("the control: the peer's key is gone, so the stored-form reader " +
 			"may not have been the one that read the patch")
+	}
+}
+
+// A PER-ENTITY REFUSAL IS TOLD IN WORDS: a rename names both ids without the
+// package's name and the sentinel's ("configapi: identity mismatch: …"), and a
+// miss says how that collection is added to — a seat by the whole document,
+// since its place in the chart is what the path cannot name, and a server by
+// a create. The seat's hint used to send it to If-None-Match: *, which this
+// route answers `not_creatable` for every seat. Mutations: answer the
+// mismatch's Error() as its detail, or drop the creatable check from the
+// hint, and a row fails.
+func TestAPerEntityRefusalIsToldInWords(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, orgDoc)
+	for _, c := range []struct {
+		name, path, body string
+		code             int
+		says, never      []string
+	}{
+		{"a seat renamed", "/config/roles/ceo",
+			`{"name":"Chief Executive","handle":"chief","llm":"zulu"}`, http.StatusBadRequest,
+			[]string{`this address is \"ceo\", but the body's handle is \"chief\"`},
+			[]string{"configapi", "identity mismatch"}},
+		{"a seat nobody declared", "/config/roles/nobody", `{"name":"x"}`, http.StatusNotFound,
+			[]string{`No seat is called \"nobody\". A seat is added by replacing the unit`, "PUT /config"},
+			[]string{"If-None-Match", "active revision", "roles is called"}},
+		{"a server nobody declared", "/config/mcp-servers/zzz", `{"name":"zzz"}`, http.StatusNotFound,
+			[]string{`No tool server is called \"zzz\"`, "If-None-Match: *"},
+			[]string{"active revision", "mcp-servers is called"}},
+	} {
+		res := s.do(t, http.MethodPut, c.path, c.body, map[string]string{"X-Summary": "probe"})
+		body := strings.ToLower(res.Body.String())
+		if res.Code != c.code {
+			t.Errorf("%s: answered %d, want %d: %s", c.name, res.Code, c.code, res.Body.String())
+		}
+		for _, want := range c.says {
+			if !strings.Contains(body, strings.ToLower(want)) {
+				t.Errorf("%s: %s does not say %q", c.name, res.Body.String(), want)
+			}
+		}
+		for _, not := range c.never {
+			if strings.Contains(body, strings.ToLower(not)) {
+				t.Errorf("%s: %s says %q", c.name, res.Body.String(), not)
+			}
+		}
 	}
 }

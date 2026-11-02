@@ -63,7 +63,7 @@ func TestCodePurgeRetriesUnderTheSameOperation(t *testing.T) {
 	if node.key != first {
 		t.Errorf("the retry sent %q, want the first attempt's %q", node.key, first)
 	}
-	if _, _, err := cli(t, "code", "purge-unreachable", "-url", node.server.URL); err == nil ||
+	if _, _, err := cli(t, "code", "purge-unreachable", "-api", node.server.URL); err == nil ||
 		!strings.Contains(err.Error(), "name the repository") {
 		t.Errorf("a purge naming no repository = %v, want it refused for want of one", err)
 	}

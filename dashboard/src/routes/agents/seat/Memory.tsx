@@ -16,7 +16,7 @@
  * Every header is the TOTAL the holder counted — never the length of the page
  * it sent, which is fifty at most — and every list cut short says "Latest 50
  * of 142" in its header, the same words on all four (`components/memory.tsx`,
- * whose diary and episode cards Knowledge › Agent diaries draws too), so the
+ * whose diary and episode cards Doclet › Agent diaries draws too), so the
  * two cannot silently disagree.
  */
 
@@ -34,7 +34,7 @@ import { reveal } from "~/lib/scroller.ts";
 import { QueryState } from "~/components/common.tsx";
 import { cutThen, DiaryCard, EpisodesCard, heldWords, pageWords } from "~/components/memory.tsx";
 import { conversationLabel, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
-import { plainText } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { CounterpartyProfile } from "~/contract/memory.ts";

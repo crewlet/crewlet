@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -78,6 +80,27 @@ type invocation struct {
 	// order, and run does not return until it has finished, so it never runs
 	// concurrently with the caller's own use of the result.
 	onLine func(string)
+
+	// everyLine forwards every line to onLine, past the stdout cap too —
+	// for a run whose record is read line by line as it goes, where each
+	// line is the record rather than part of an answer the cap would refuse.
+	everyLine bool
+
+	// clock bounds the child by stretches of model work — see [stretch].
+	// Nil: timeout bounds the whole run, as one stretch nothing pauses.
+	clock *stretch
+
+	// stop ends the run when it is closed: whoever asked for it is done with
+	// it. The child is stopped the way a timeout stops it — its group
+	// signalled, a grace, then killed — and the result says so
+	// ([rawResult.stopped]). Nil never closes.
+	stop <-chan struct{}
+
+	// failOn are sentinels which, written on stderr, mean the CLI is
+	// running without the confinement its profile gave it: the first line
+	// carrying one stops the run at once — see
+	// [cliprofile.Profile.FailureMarkers].
+	failOn []string
 }
 
 // lineTee forwards complete lines to a callback while passing every byte
@@ -94,33 +117,74 @@ type invocation struct {
 // line with no newline in it for as long as the child printed one — the very
 // memory the cap exists to protect. Past the cap it forwards nothing more,
 // because the answer it would be streaming is refused as clipped anyway.
+//
+// UNLESS every line is the point ([invocation.everyLine]): a run whose record
+// is read as it goes needs the lines past the cap as much as the ones before
+// it, and holds none of them. Then only ONE line is bounded — a line longer
+// than the cap is skipped to its end rather than held.
 type lineTee struct {
 	sink  io.Writer
 	on    func(string)
 	buf   []byte
 	limit int
 	seen  int
+	// every forwards past limit, which then bounds one line instead.
+	every bool
+	// skipping is a line past the bound, dropped up to its newline.
+	skipping bool
 }
 
 func (t *lineTee) Write(b []byte) (int, error) {
 	n, err := t.sink.Write(b)
-	if t.seen += n; t.seen > t.limit {
+	if t.seen += n; t.seen > t.limit && !t.every {
 		t.buf = nil
 		return n, err
 	}
-	if n > 0 {
-		t.buf = append(t.buf, b[:n]...)
-		for {
-			i := bytes.IndexByte(t.buf, '\n')
-			if i < 0 {
-				break
+	rest := b[:n]
+	for len(rest) > 0 {
+		i := bytes.IndexByte(rest, '\n')
+		if i < 0 {
+			if !t.skipping {
+				t.buf = append(t.buf, rest...)
 			}
-			line := string(t.buf[:i])
-			t.buf = t.buf[i+1:]
-			t.on(line)
+			if len(t.buf) > t.limit {
+				t.buf, t.skipping = nil, true
+			}
+			break
 		}
+		if !t.skipping {
+			t.on(string(append(t.buf, rest[:i]...)))
+		}
+		t.buf, t.skipping = t.buf[:0], false
+		rest = rest[i+1:]
 	}
 	return n, err
+}
+
+// errHostStopped is the cause a run's context is cancelled with when whoever
+// asked for the run closed [invocation.stop].
+var errHostStopped = errors.New("the run was stopped by the engine")
+
+// failureMarkerError is the cause a run's context is cancelled with when the
+// CLI wrote one of [invocation.failOn] on stderr.
+type failureMarkerError struct{ line string }
+
+func (e *failureMarkerError) Error() string {
+	return "the CLI reported its confinement failed to load: " + e.line
+}
+
+// stderrWatch forwards stderr to its sink and calls stop with the first line
+// carrying one of the markers, once.
+func stderrWatch(sink io.Writer, markers []string, stop func(line string)) io.Writer {
+	var once sync.Once
+	return &lineTee{sink: sink, limit: maxOutput, every: true, on: func(line string) {
+		for _, m := range markers {
+			if strings.Contains(line, m) {
+				once.Do(func() { stop(strings.TrimSpace(line)) })
+				return
+			}
+		}
+	}}
 }
 
 // rawResult is what a child produced.
@@ -131,6 +195,14 @@ type rawResult struct {
 	// timedOut reports that the wall-clock cap fired, which is a different
 	// fact from the context the caller passed being cancelled.
 	timedOut bool
+
+	// stopped reports a child stopped because [invocation.stop] closed
+	// before it exited — whoever asked for the run ended it.
+	stopped bool
+
+	// failureMarker is the stderr line that carried one of
+	// [invocation.failOn], which stopped the run; "" for none.
+	failureMarker string
 
 	// droppedStdout and droppedStderr are the bytes each stream lost past
 	// maxOutput. SEPARATE, because the two mean different things: a clipped
@@ -210,8 +282,15 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 			"a child that ignored SIGTERM would hold the call open for ever; "+
 			"an invocation takes its provider's termGrace", in.binary)
 	}
-	callCtx, cancel := context.WithTimeout(ctx, in.timeout)
-	defer cancel()
+	// ONE CLOCK FOR EVERY RUN: a text call's is never paused, so its one
+	// stretch is the whole call — see [stretch].
+	clock := in.clock
+	if clock == nil {
+		clock = newStretch(in.timeout)
+	}
+	defer clock.stop()
+	callCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 
 	cmd := exec.CommandContext(callCtx, in.binary, in.args...) //nolint:gosec // binary and args come from a validated profile
 	cmd.Dir = in.dir
@@ -224,7 +303,15 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	stderr.limit = maxOutput
 	sink := io.Writer(&stdout)
 	if in.onLine != nil {
-		sink = &lineTee{sink: &stdout, on: in.onLine, limit: maxOutput}
+		sink = &lineTee{sink: &stdout, on: in.onLine, limit: maxOutput, every: in.everyLine}
+	}
+	errSink := io.Writer(&stderr)
+	var marker atomic.Pointer[string]
+	if len(in.failOn) > 0 {
+		errSink = stderrWatch(&stderr, in.failOn, func(line string) {
+			marker.Store(&line)
+			cancel(&failureMarkerError{line: line})
+		})
 	}
 
 	// THE OUTPUT ON PIPES OF OUR OWN, handed to the child as files. Given
@@ -260,7 +347,21 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 	}
 	pgid := cmd.Process.Pid
 	outPipe.drainInto(sink)
-	errPipe.drainInto(&stderr)
+	errPipe.drainInto(errSink)
+	clock.start()
+	go func() {
+		// The clock running out and the caller ending the run end it the
+		// way the call's context ending does — Cancel signals the group,
+		// WaitDelay bounds the grace — each under a cause of its own, so the
+		// result can say which it was.
+		select {
+		case <-clock.expired():
+			cancel(errStretch)
+		case <-in.stop:
+			cancel(errHostStopped)
+		case <-callCtx.Done():
+		}
+	}()
 
 	// THE GRACE RUNS FROM WHICHEVER COMES FIRST, the CLI exiting or its call
 	// ending, which is os/exec's own rule for WaitDelay: a call stopped under
@@ -307,9 +408,18 @@ func run(ctx context.Context, in invocation) (*rawResult, error) {
 		reap(err)
 	}
 
+	cause := context.Cause(callCtx)
 	res := &rawResult{
-		timedOut: errors.Is(callCtx.Err(), context.DeadlineExceeded),
-		grace:    in.grace,
+		// The clock running out, or the caller's own deadline — both a
+		// call that ran out of time rather than one somebody stopped.
+		timedOut: errors.Is(cause, errStretch) || errors.Is(callCtx.Err(), context.DeadlineExceeded),
+		// Only a child still running when the stop came: one that exited
+		// on its own a moment before was not stopped, whatever followed.
+		stopped: !waited && errors.Is(cause, errHostStopped),
+		grace:   in.grace,
+	}
+	if line := marker.Load(); line != nil {
+		res.failureMarker = *line
 	}
 	// Decided AT THE DEADLINE, before its holder is killed or the read ends
 	// are closed: a stream that reached its end only because of either is
@@ -579,61 +689,90 @@ func extractObject(p cliprofile.Profile, stdout string) extracted {
 	return out
 }
 
+// outermostObject returns the span from the first '{' to the last '}'.
+func outermostObject(reply string) (string, bool) {
+	start := strings.IndexByte(reply, '{')
+	end := strings.LastIndexByte(reply, '}')
+	if start < 0 || end <= start {
+		return "", false
+	}
+	return reply[start : end+1], true
+}
+
 // extractStream reads a JSONL event stream.
 //
 // Text CONCATENATES in stream order — an event stream spells one answer
 // across several events — while usage figures take the LAST value found,
 // because a stream reports a running total and the final one is the total.
 func extractStream(p cliprofile.Profile, stdout string) extracted {
-	var out extracted
-	var text strings.Builder
+	e := streamExtractor{p: p}
 	for line := range strings.SplitSeq(stdout, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		doc, ok := decodeObject(line)
-		if !ok {
-			continue
-		}
-		if chunk, ok := textOf(p, doc); ok {
-			// LOCATED ON THE FIRST EVENT THAT CARRIES THE PATH, even
-			// when that event's text is empty: a stream spells one
-			// answer across many events and an empty fragment is an
-			// ordinary part of one. What matters is whether this
-			// profile recognises the stream's shape at all.
-			out.located = true
-			if chunk == "" {
-				continue
-			}
-			if text.Len() > 0 {
-				text.WriteString("\n")
-			}
-			text.WriteString(chunk)
-		}
-		if firstBool(doc, p.ErrorPaths) {
-			out.failed = true
-		}
-		if got, ok := firstInt(doc, p.Usage.Input); ok {
-			out.input, out.reported = got, true
-		}
-		if got, ok := firstInt(doc, p.Usage.Output); ok {
-			out.output, out.reported = got, true
-		}
-		if got, ok := firstInt(doc, p.Usage.CacheRead); ok {
-			out.cacheRead = got
-		}
-		if got, ok := firstInt(doc, p.Usage.CacheWrite); ok {
-			out.cacheWrite = got
-		}
-		if got, ok := firstInt(doc, p.Usage.Reasoning); ok {
-			out.reasoning = got
-		}
-		if got, ok := firstInt(doc, p.Usage.ToolPrompt); ok {
-			out.toolPrompt = got
+		if doc, ok := decodeObject(line); ok {
+			e.event(doc)
 		}
 	}
-	out.text = strings.TrimSpace(text.String())
+	return e.result()
+}
+
+// streamExtractor is [extractStream] one event at a time: what a JSONL stream
+// says about its answer, its failure flag and its usage, read as the lines
+// arrive — by the extraction of a finished stdout, and by a run whose record is
+// read while it goes ([recordReader]), so the two cannot read one stream two
+// ways.
+type streamExtractor struct {
+	p    cliprofile.Profile
+	out  extracted
+	text strings.Builder
+}
+
+// event reads one decoded line.
+func (e *streamExtractor) event(doc map[string]any) {
+	p, out := e.p, &e.out
+	if chunk, ok := textOf(p, doc); ok {
+		// LOCATED ON THE FIRST EVENT THAT CARRIES THE PATH, even when that
+		// event's text is empty: a stream spells one answer across many
+		// events and an empty fragment is an ordinary part of one. What
+		// matters is whether this profile recognises the stream's shape at
+		// all.
+		out.located = true
+		if chunk != "" {
+			if e.text.Len() > 0 {
+				e.text.WriteString("\n")
+			}
+			e.text.WriteString(chunk)
+		}
+	}
+	if firstBool(doc, p.ErrorPaths) {
+		out.failed = true
+	}
+	if got, ok := firstInt(doc, p.Usage.Input); ok {
+		out.input, out.reported = got, true
+	}
+	if got, ok := firstInt(doc, p.Usage.Output); ok {
+		out.output, out.reported = got, true
+	}
+	if got, ok := firstInt(doc, p.Usage.CacheRead); ok {
+		out.cacheRead = got
+	}
+	if got, ok := firstInt(doc, p.Usage.CacheWrite); ok {
+		out.cacheWrite = got
+	}
+	if got, ok := firstInt(doc, p.Usage.Reasoning); ok {
+		out.reasoning = got
+	}
+	if got, ok := firstInt(doc, p.Usage.ToolPrompt); ok {
+		out.toolPrompt = got
+	}
+}
+
+// result is what the stream said, so far.
+func (e *streamExtractor) result() extracted {
+	out := e.out
+	out.text = strings.TrimSpace(e.text.String())
 	return out
 }
 
@@ -796,6 +935,26 @@ func classifyFailureEvents(p cliprofile.Profile, stdout string) (markerHit, bool
 				return markerHit{Kind: llm.KindAuth, Said: f.line, Source: sourceEvent}, true
 			}
 		}
+	}
+	return markerHit{}, false
+}
+
+// limitEventHit is one decoded stdout event read as the CLI's own structured
+// limit report ([cliprofile.LimitEvent]), when it meets every condition of
+// one: the vendor's sentence is the string at the event's said path, or the
+// whole line where it names none, and the reset is read from that sentence as
+// of the run's end, in its zone. [classifyEvents] walks the stream.
+func limitEventHit(p cliprofile.Profile, doc map[string]any, line string, out cliOutput) (markerHit, bool) {
+	for _, event := range p.LimitEvents {
+		if !matches(doc, event.Match) {
+			continue
+		}
+		said := line
+		if text, found := textAt(doc, event.SaidPath); found {
+			said = text
+		}
+		return markerHit{Kind: llm.KindRateLimit, Reset: resetAt(said, event.Reset, out.at, out.zone),
+			Said: said, Source: sourceEvent}, true
 	}
 	return markerHit{}, false
 }

@@ -9,9 +9,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -58,6 +58,12 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 		return rows
 	}
 
+	// ITS ROW IS IN THE REGISTER, as a node that applied the first records
+	// and went away leaves it.
+	if err := back.Fleet.PutPositions(t.Context(), positions()[1]); err != nil {
+		t.Fatalf("publish %s's row: %v", away, err)
+	}
+
 	res, err := e.core.Load().gate.Evict(t.Context(), GateRequest{
 		Node: away, OpID: statelog.NewOpID(time.Now(), "evict"), By: gateOperator})
 	if err != nil || !res.Complete() {
@@ -66,6 +72,31 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 	if len(res.Domains) != len(identity) {
 		t.Fatalf("the gesture answered for %d log(s), want every identity-claiming "+
 			"one (%d)", len(res.Domains), len(identity))
+	}
+	// AND STAYS THERE: the eviction takes the node out of the trim through
+	// its tombstone, never by removing its row, which is what a readmission
+	// of that node is judged by. Mutation: purge the row in the eviction,
+	// and this is red.
+	rows, err := back.Fleet.Positions(t.Context())
+	if err != nil {
+		t.Fatalf("read the register: %v", err)
+	}
+	kept := false
+	for _, row := range rows {
+		if row.NodeID != away {
+			continue
+		}
+		kept = true
+		for _, running := range identity {
+			if at := row.Domains[running.domain.Name()]; at.Seq != 1 {
+				t.Errorf("the evicted node's row says %s at %d after the eviction, want the 1 "+
+					"it last published: a readmission is judged by it", running.domain.Name(), at.Seq)
+			}
+		}
+	}
+	if !kept {
+		t.Fatalf("the eviction removed %s's row from the register, so a readmission of it "+
+			"would be judged as a node that never reported anything", away)
 	}
 	targets := map[string]uint64{}
 	for _, running := range identity {
@@ -176,10 +207,10 @@ func TestAnEvictionStopsEveryIdentityLogCountingTheNode(t *testing.T) {
 
 	// AND THE PAGES APPLIER DROPS WHAT THE EVICTED NODE WRITES AFTER IT —
 	// beside a record from a node nobody evicted, which applies.
-	wiki := s.Domain(pages.Domain{}.Name())
-	appendRecord(t, wiki, pages.ContainerSubject("AWAY").String(),
+	wiki := s.Domain(doclet.Domain{}.Name())
+	appendRecord(t, wiki, doclet.ContainerSubject("AWAY").String(),
 		containerRecord(t, "AWAY", away))
-	appendRecord(t, wiki, pages.ContainerSubject("STILL").String(),
+	appendRecord(t, wiki, doclet.ContainerSubject("STILL").String(),
 		containerRecord(t, "STILL", "node-still-here"))
 	waitApplied(t, wiki)
 	requireRow(t, back, "pages_containers", "key", "AWAY", false)
@@ -316,18 +347,18 @@ func identityLogs(t *testing.T, s *stateLog) []*runningLog {
 // publish them.
 func containerRecord(t *testing.T, key, writer string) []byte {
 	t.Helper()
-	body, err := json.Marshal(pages.ContainerPayload{
-		V: pages.DocumentVersion, Key: key, Name: "The " + key + " space"})
+	body, err := json.Marshal(doclet.ContainerPayload{
+		V: doclet.DocumentVersion, Key: key, Name: "The " + key + " space"})
 	if err != nil {
 		t.Fatalf("encode the container: %v", err)
 	}
-	payload, err := pages.Encode(pages.MutationRecord{
-		RecordEnvelope: pages.RecordEnvelope{
-			V: pages.RecordVersion, OpID: statelog.NewOpID(time.Now(), "container-"+key),
-			Subject: pages.ContainerSubject(key), Op: pages.OpPatch,
-			Writer: writer, Scope: pages.ScopeSet{Subject: true},
+	payload, err := doclet.Encode(doclet.MutationRecord{
+		RecordEnvelope: doclet.RecordEnvelope{
+			V: doclet.RecordVersion, OpID: statelog.NewOpID(time.Now(), "container-"+key),
+			Subject: doclet.ContainerSubject(key), Op: doclet.OpPatch,
+			Writer: writer, Scope: doclet.ScopeSet{Subject: true},
 		},
-		Mutation: body, Actor: writer, ActorKind: pages.AuthorOperator,
+		Mutation: body, Actor: writer, ActorKind: doclet.AuthorOperator,
 	})
 	if err != nil {
 		t.Fatalf("encode the container record: %v", err)

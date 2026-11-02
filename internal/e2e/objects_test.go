@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A company's files, end to end.
@@ -31,7 +31,7 @@ import (
 func upload(t *testing.T, n *node, project, path string, content []byte) (int, map[string]any) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPut,
-		fmt.Sprintf("%s/work/files/%s/%s", n.server.URL, project, path), bytes.NewReader(content))
+		fmt.Sprintf("%s/worklet/files/%s/%s", n.server.URL, project, path), bytes.NewReader(content))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func upload(t *testing.T, n *node, project, path string, content []byte) (int, m
 func download(t *testing.T, n *node, project, path string) (int, []byte) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		fmt.Sprintf("%s/work/files/%s/%s", n.server.URL, project, path), nil)
+		fmt.Sprintf("%s/worklet/files/%s/%s", n.server.URL, project, path), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,12 +120,12 @@ func TestASeatOnAStatelessNodeWritesAFileTheDataNodeServes(t *testing.T) {
 	waitForSeat(t, p.agent, "ceo")
 	const body = "# Launch plan\n\nShip the migration on Thursday.\n"
 
-	p.agent.model.callOnExecute(tracker.WriteProjectFileTool, map[string]any{
+	p.agent.model.callOnExecute(worklet.WriteProjectFileTool, map[string]any{
 		"project": "ENG", "path": "plans/launch.md", "content": body,
 	})
 	wakeWithMessage(t, p.agent, "ceo")
 
-	var detail tracker.FileDetail
+	var detail worklet.FileDetail
 	t.Cleanup(func() {
 		if t.Failed() {
 			t.Logf("what the seat's tools answered: %q", p.agent.model.toolResults())
@@ -190,8 +190,9 @@ func TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone(t *testing.T) {
 		t.Fatalf("company config: %v", err)
 	}
 	ring := fleetRing(t)
-	data, dataBoot := bootDataMember(t, cfg, model, nil, ring)
-	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil, nil)
+	dataLn := bridgeListener(t, "")
+	data, dataBoot := bootDataMember(t, cfg, model, nil, dataLn, ring, nil)
+	data.app, data.server = serveAPI(t, data.engine, dataBoot, data.chat.Hub(), dataLn, nil)
 	waitFor(t, "the data node to serve its estate", hydrated(t, data.engine))
 
 	// A FILE THE FLEET HOLDS, uploaded through the data node's own byte

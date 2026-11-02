@@ -3,6 +3,8 @@ package statelog
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The transfer's subjects. Infrastructure names in an infrastructure estate:
@@ -52,6 +56,37 @@ const (
 // rather than something to wait out: the artefact is fetched to a temporary
 // path and a joiner that gives up simply asks again.
 const TransferChunkWait = 30 * time.Second
+
+// TransferReportEvery is how often a transfer still running says how far it
+// has got ([FetchArtefact]).
+//
+// A JOIN AT BOOT IS INSIDE THE NODE'S RECOVERY, which a deployment bounds with
+// a startup probe sized partly by how long a join takes — and a transfer that
+// said nothing between its start and `statelog_adopted` gave that sizing
+// nothing to measure, and an operator watching a node that would not come up
+// nothing to tell a slow transfer from a stuck one by. TEN SECONDS, the
+// cadence the broker's own recovery reports at, so the two waits of one boot
+// read alike: often enough that a person watching learns why before they reach
+// for an interrupt, and rare enough that the longest join a rejoin window
+// admits (a day) is under nine thousand lines.
+const TransferReportEvery = 10 * time.Second
+
+// Fetched is what a transfer wrote: how many bytes, and the SHA-256 of them
+// in the order they were written.
+type Fetched struct {
+	Bytes  int64
+	SHA256 string
+}
+
+// transferPace is how a fetch waits and how it reports: [TransferChunkWait]
+// for each chunk and [TransferReportEvery] between progress lines, in
+// production. A value rather than the constants alone so a case about either
+// can run at a scale it can wait out.
+type transferPace struct {
+	wait   time.Duration
+	report time.Duration
+	log    *slog.Logger
+}
 
 // OfferWindow is the longest a joining node collects offers before choosing.
 //
@@ -148,7 +183,7 @@ func (o Offer) Usable(req OfferRequest, build map[string]Registered, known []str
 	}
 	if ahead := aheadOf(o.Manifest.Migrations, known); len(ahead) > 0 {
 		return fmt.Errorf("the artefact carries migrations this binary does not: "+
-			"%v — its rows are shaped by code this node does not run", ahead)
+			"%s — its rows are shaped by code this node does not run", words.And(ahead))
 	}
 	for name, reg := range build {
 		pos, ok := o.Manifest.Domains[name]
@@ -859,16 +894,45 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 //
 // Every wait in it is bounded by [TransferChunkWait] as well as by ctx, and
 // the two ends are reported differently — see [boundedWaitErr].
-func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string) (int64, error) {
-	return fetchArtefact(ctx, nc, offer, dest, TransferChunkWait)
+//
+// IT SAYS HOW FAR IT HAS GOT: `statelog_join_fetching` once the donor has
+// been asked, naming the donor, the artefact's size and the projected join
+// ([ProjectJoinSeconds]), and `statelog_join_progress` every
+// [TransferReportEvery] after that, with the bytes received, the total, the
+// elapsed seconds and the rate — which is what a startup probe sized for a join
+// is measured from. logger nil is the package's own.
+//
+// THE CHECKSUM IS TAKEN AS THE BYTES ARE WRITTEN ([Fetched.SHA256]), in the
+// order they reach the file. It is what a joiner compares with the manifest,
+// and it was a second read of the whole file once the transfer ended: as long
+// as the transfer again on a large estate, inside a boot's recovery, and the
+// one step of a join nothing could cancel. A dropped or reordered chunk changes
+// the stream exactly as it changes the file, since every write lands after the
+// one before it.
+//
+// A FAILURE WRITING THE COPY IS THIS NODE'S, and is marked as one
+// ([nodeFault]): creating, writing, flushing or closing dest fails on this
+// node's own disk, which every other donor's artefact would be written to as
+// well, so a join files it as the end of the join rather than as this donor's
+// refusal. Everything else here — a donor that stopped sending, a verdict it
+// sent, a link that dropped — is about the offer.
+func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
+	logger *slog.Logger) (Fetched, error) {
+
+	return fetchArtefact(ctx, nc, offer, dest, transferPace{
+		wait: TransferChunkWait, report: TransferReportEvery, log: loggerOr(logger),
+	})
 }
 
-// fetchArtefact is [FetchArtefact] with the transfer's own bound as a
-// parameter. Nothing in the engine passes anything but [TransferChunkWait];
-// a test of what happens when that bound fires needs it shorter, or it spends
-// thirty seconds proving one comparison.
+// fetchArtefact is [FetchArtefact] with the transfer's own pace as a
+// parameter. Nothing in the engine passes anything but [TransferChunkWait] and
+// [TransferReportEvery]; a test of what happens when the bound fires, or of the
+// lines a long transfer writes, needs them shorter, or it spends thirty
+// seconds proving one comparison.
 func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
-	wait time.Duration) (int64, error) {
+	pace transferPace) (Fetched, error) {
+
+	wait := pace.wait
 
 	// A CALLER THAT HAS ALREADY GIVEN UP FETCHES NOTHING, for
 	// [CollectOffers]'s reason one step later. A request published now
@@ -879,12 +943,12 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 	// reads, and then holds all three for [TransferChunkWait] waiting for a
 	// credit that never comes, before it ends the transfer with a 408.
 	if err := ctx.Err(); err != nil {
-		return 0, fmt.Errorf("statelog: fetch the artefact: %w", err)
+		return Fetched{}, fmt.Errorf("statelog: fetch the artefact: %w", err)
 	}
 	deliver := nats.NewInbox()
 	sub, err := nc.SubscribeSync(deliver)
 	if err != nil {
-		return 0, fmt.Errorf("statelog: open the transfer inbox: %w", err)
+		return Fetched{}, fmt.Errorf("statelog: open the transfer inbox: %w", err)
 	}
 	defer func() { _ = sub.Unsubscribe() }()
 	// The subscription's own buffer, sized for the credit window: the
@@ -893,7 +957,7 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := sub.SetPendingLimits(SnapshotTransferWindow*4,
 		SnapshotChunkBytes*SnapshotTransferWindow*4); err != nil {
-		return 0, fmt.Errorf("statelog: size the transfer buffer: %w", err)
+		return Fetched{}, fmt.Errorf("statelog: size the transfer buffer: %w", err)
 	}
 
 	// THE BODY IS THE DELIVER SUBJECT, and the artefact chosen rides in a
@@ -904,7 +968,7 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 	fetch.Header.Set(HeaderFetchArtifact, offer.Manifest.Artifact)
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := nc.PublishMsg(fetch); err != nil {
-		return 0, fmt.Errorf("statelog: ask %s for the artefact: %w", offer.Fetch, err)
+		return Fetched{}, fmt.Errorf("statelog: ask %s for the artefact: %w", offer.Fetch, err)
 	}
 	// THE FLUSH TAKES THE CALLER'S CONTEXT, and the patience every other
 	// step of a transfer gets. A plain Flush is bounded by the client's
@@ -920,14 +984,14 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 	err = nc.FlushWithContext(flushCtx)
 	cancelFlush()
 	if err != nil {
-		return 0, boundedWaitErr(ctx, err, "flush the fetch",
+		return Fetched{}, boundedWaitErr(ctx, err, "flush the fetch",
 			fmt.Errorf("statelog: the broker did not confirm the fetch request "+
 				"to %s within %s", offer.Fetch, wait))
 	}
 
 	file, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return 0, fmt.Errorf("statelog: create %s: %w", dest, err)
+		return Fetched{}, ownFault(fmt.Errorf("statelog: create %s: %w", dest, err))
 	}
 	closed := false
 	defer func() {
@@ -936,48 +1000,67 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 		}
 	}()
 
+	donor, total := offer.Manifest.NodeID, offer.Manifest.Bytes
+	pace.log.InfoContext(ctx, "statelog_join_fetching",
+		"donor", donor, "artifact", offer.Manifest.Artifact, "total_bytes", total,
+		"projected_join_seconds", int(ProjectJoinSeconds(total)),
+		"detail", "fetching a peer's snapshot of the replicated estate; at boot "+
+			"this is inside the node's recovery, so its startup probe waits for it")
+	sum := sha256.New()
+	started := time.Now()
+	reported := started
 	var written int64
 	for {
 		chunk, err := nextTransferChunk(ctx, sub, wait)
 		if err != nil {
 			_ = os.Remove(dest)
-			return 0, err
+			return Fetched{}, err
 		}
 		if len(chunk.Data) == 0 {
 			// THE TERMINATOR CARRIES THE VERDICT. Every failure
 			// arrives looking exactly like a normal end of stream.
 			if verdict := transferVerdict(chunk); verdict != nil {
 				_ = os.Remove(dest)
-				return 0, verdict
+				return Fetched{}, verdict
 			}
 			break
 		}
 		n, err := file.Write(chunk.Data)
 		if err != nil {
 			_ = os.Remove(dest)
-			return 0, fmt.Errorf("statelog: write %s: %w", dest, err)
+			return Fetched{}, ownFault(fmt.Errorf("statelog: write %s: %w", dest, err))
 		}
+		// IN THE ORDER IT REACHED THE FILE — a hash.Hash never fails.
+		sum.Write(chunk.Data[:n])
 		written += int64(n)
+		if now := time.Now(); now.Sub(reported) >= pace.report {
+			reported = now
+			elapsed := now.Sub(started)
+			pace.log.InfoContext(ctx, "statelog_join_progress",
+				"donor", donor, "bytes", written, "total_bytes", total,
+				"elapsed_seconds", int(elapsed.Seconds()),
+				"bytes_per_second", int64(float64(written)/elapsed.Seconds()))
+		}
 		// THE CREDIT, returned before the next read rather than after
 		// it: the donor is waiting on this to send the chunk after
 		// next.
 		if chunk.Reply != "" {
 			if err := chunk.Respond(nil); err != nil {
 				_ = os.Remove(dest)
-				return 0, fmt.Errorf("statelog: keep the transfer flowing: %w", err)
+				return Fetched{}, fmt.Errorf("statelog: keep the transfer flowing: %w", err)
 			}
 		}
 	}
 	if err := file.Sync(); err != nil {
 		_ = os.Remove(dest)
-		return 0, fmt.Errorf("statelog: flush %s: %w", dest, err)
+		return Fetched{}, ownFault(fmt.Errorf("statelog: flush %s: %w", dest, err))
 	}
 	closed = true
 	if err := file.Close(); err != nil {
 		_ = os.Remove(dest)
-		return 0, fmt.Errorf("statelog: close %s: %w", dest, err)
+		return Fetched{}, ownFault(fmt.Errorf("statelog: close %s: %w", dest, err))
 	}
-	return written, nil
+	return Fetched{Bytes: written, SHA256: hex.EncodeToString(sum.Sum(nil))}, nil
 }
 
 // nextTransferChunk waits for the next message, bounded by wait as well as by

@@ -11,8 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // SHARING IS THE OWNER'S, BOUNDED TO THE COMPANY.
@@ -28,7 +30,10 @@ import (
 
 // ---- share_artifact ----------------------------------------------------- //
 
-type shareArtifact struct{ deps ArtifactDeps }
+type shareArtifact struct {
+	artifactTarget
+	deps ArtifactDeps
+}
 
 var _ tools.SeatCallable = (*shareArtifact)(nil)
 
@@ -82,12 +87,12 @@ func (t *shareArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	role := artifacts.Role(strings.TrimSpace(argString(args, "role")))
 	if !slices.Contains(artifacts.ShareableRoles, role) {
-		return failed(fmt.Sprintf("share_artifact takes `role` as one of %v: ownership "+
-			"moves only by a person's transfer.", artifacts.ShareableRoles)), nil
+		return failed(fmt.Sprintf(ShareArtifactTool+" takes `role` as one of %s: ownership "+
+			"moves only by a person's transfer.", words.Or(artifacts.ShareableRoles))), nil
 	}
 	if audience.Kind == artifacts.AudienceCompany && c.agent() {
 		return refusedBy(tools.RefusalForbidden, artifactsdomain.ErrAgentCompanyShare,
-			"share_artifact refused that: an agent never shares an artifact with the "+
+			ShareArtifactTool+" refused that: an agent never shares an artifact with the "+
 				"whole company. Share it with the seats or units that need it, or ask a "+
 				"person to widen it."), nil
 	}
@@ -101,7 +106,7 @@ func (t *shareArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if !dec.Standing.Role.Includes(role) {
 		return refusedBy(tools.RefusalForbidden, artifactsdomain.ErrAboveOwnRole, fmt.Sprintf(
-			"share_artifact refused that: a share never grants above your own role, and "+
+			ShareArtifactTool+" refused that: a share never grants above your own role, and "+
 				"you hold %s.", roleOrNone(dec.Standing.Role))), nil
 	}
 	written, err := t.deps.Writer.Share(ctx, t.deps.call(c, dec.Standing.Role, dec.Elevated),
@@ -112,7 +117,10 @@ func (t *shareArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 // ---- unshare_artifact --------------------------------------------------- //
 
-type unshareArtifact struct{ deps ArtifactDeps }
+type unshareArtifact struct {
+	artifactTarget
+	deps ArtifactDeps
+}
 
 var _ tools.SeatCallable = (*unshareArtifact)(nil)
 
@@ -194,7 +202,7 @@ func (d ArtifactDeps) audienceArg(o *org.Organization, tool, raw string) (artifa
 	case artifacts.AudienceSeat:
 		if o.SeatByHandle(a.ID) == nil {
 			r := failed(fmt.Sprintf("%s: the company has no seat %q. Find the colleague "+
-				"with lookup_colleague and share with their handle.", tool, a.ID))
+				"with "+LookupColleagueTool+" and share with their handle.", tool, a.ID))
 			return artifacts.Audience{}, &r
 		}
 	case artifacts.AudienceUnit:
@@ -216,7 +224,7 @@ func (d ArtifactDeps) shareAnswer(ctx context.Context, tool string, c artifactCa
 	}
 	if written.Result.Outcome == statelog.OutcomeUnknown {
 		return artifactUnknown(tool, c, written.Result, "Read the artifact with "+
-			"get_artifact: its shares say whether the change landed."), nil
+			GetArtifactTool+": its shares say whether the change landed."), nil
 	}
 	d.settle(ctx, written.Result.Position)
 	out := map[string]any{"artifact": h.ID.String(), "outcome": outcomeOf(written.Result),
@@ -232,7 +240,10 @@ func (d ArtifactDeps) shareAnswer(ctx context.Context, tool string, c artifactCa
 
 // ---- upload_artifact_asset ---------------------------------------------- //
 
-type uploadArtifactAsset struct{ deps ArtifactDeps }
+type uploadArtifactAsset struct {
+	artifactTarget
+	deps ArtifactDeps
+}
 
 var _ tools.SeatCallable = (*uploadArtifactAsset)(nil)
 
@@ -299,11 +310,11 @@ func (t *uploadArtifactAsset) CallForTurn(ctx context.Context, turn *turnctx.Tur
 	if refusal != nil {
 		return *refusal, nil
 	}
-	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{})
+	t.deps.present(c, h.ID, presence.Editing, presence.Focus{})
 	if !slices.Contains(h.Capabilities, artifacts.CapabilityAssets) {
-		return failed(fmt.Sprintf("upload_artifact_asset: artifact %s does not declare "+
+		return failed(fmt.Sprintf(UploadArtifactAssetTool+": artifact %q does not declare "+
 			"the `assets` capability, so its page cannot reference an asset. Publish a "+
-			"version declaring it first.", h.ID)), nil
+			"version declaring it first.", clip(ref))), nil
 	}
 	files := newFileSources(t.deps, c, t.Name())
 	name, refusal := files.cleanPath(argString(args, "name"))

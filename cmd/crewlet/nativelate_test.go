@@ -65,16 +65,16 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 		code         string
 	}{
 		// The tracker answered: there is no such project.
-		{http.MethodGet, "/work/files/NOSUCH/no-such.txt", http.StatusNotFound, "no_project"},
+		{http.MethodGet, "/worklet/files/NOSUCH/no-such.txt", http.StatusNotFound, "no_project"},
 		// And the upload, the write half on its own, through the same
 		// tracker read — before a byte of the body is stored.
-		{http.MethodPut, "/work/files/NOSUCH/no-such.txt", http.StatusNotFound, "no_project"},
+		{http.MethodPut, "/worklet/files/NOSUCH/no-such.txt", http.StatusNotFound, "no_project"},
 		// The purge's own refusal — a confirmation with no reason — before
 		// it reads a row.
-		{http.MethodPost, "/work/items/no-such/purge?confirm=X", http.StatusBadRequest,
+		{http.MethodPost, "/worklet/items/no-such/purge?confirm=X", http.StatusBadRequest,
 			"invalid_query"},
 		// The gate's own refusal, before anything is judged.
-		{http.MethodPost, "/work/retention/evict/no-such-node", http.StatusBadRequest,
+		{http.MethodPost, "/worklet/retention/evict/no-such-node", http.StatusBadRequest,
 			"confirm_required"},
 	} {
 		status, body := n.send(t, route.method, route.path)

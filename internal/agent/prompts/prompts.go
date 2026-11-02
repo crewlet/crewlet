@@ -30,10 +30,13 @@
 // what the engine prefetched for this turn, and the phase's contract — and
 // each rule once. A tool's semantics are its description and a field's are
 // its schema, both of which reach the model with the tool on every round, so
-// a rule about a tool or a field lives there and not here as well. The one
-// protocol fact no harness can teach — that in text mode an action is a call
-// in the engine's own envelope, and prose performs nothing — is stated here,
-// once. Generic agent behaviour, worked examples and restated emphasis are
+// a rule about a tool or a field lives there and not here as well. The
+// executor is the CLI's own agentic run in a box, its seat's tools reaching
+// it over the tool bridge; every other phase is the same CLI's own loop on
+// this host, its tools reaching it as one MCP server. The one protocol fact
+// no harness can teach — that the CLI's final text reaches nobody, so an
+// action is a tool call and prose performs nothing — is stated here, once.
+// Generic agent behaviour, worked examples and restated emphasis are
 // not: a second copy of a rule is two texts that drift, and a model reads
 // whichever it saw last.
 //
@@ -84,6 +87,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Phase names the pass a prompt is built for. The values are the ones an
@@ -138,6 +142,18 @@ type Seat struct {
 	// agent DMing somebody the company has off-boarded. Nil withholds
 	// nothing.
 	Withheld func(handle string) bool
+
+	// Chatlet says the company runs the engine's own chat
+	// (`chat.backend: chatlet`), where every seat — a person's included —
+	// answers to its HANDLE: `@jane` in a room reaches the person holding
+	// that seat, and `send_dm` opens a conversation with them, with no
+	// vendor account behind either. So on Chatlet a human report with
+	// no contact identity at all is still somebody to @-mention, and a
+	// roster deciding reachability from contact identities alone told a
+	// lead they had nobody to address. A bool rather than the company's
+	// backend, because reachability by handle is the one thing this
+	// package asks of it.
+	Chatlet bool
 }
 
 // withholds is [Seat.Withheld], nil-safe.
@@ -235,7 +251,7 @@ type SkillCatalogue interface {
 
 const skillCatalogueHeader = "\n## Tool skills" +
 	"\nHow this company uses specific tools and MCP servers, one line per " +
-	"skill. `load_tool_skill(key)` fetches a skill's full body when the " +
+	"skill. `" + toolname.LoadToolSkill + "(key)` fetches a skill's full body when the " +
 	"summary is not enough."
 
 // skillCatalogueReviewHeader is the catalogue's header in Review, which has no
@@ -248,7 +264,7 @@ const skillCatalogueReviewHeader = "\n## Tool skills" +
 
 const skillCatalogueRequiredNote = "\nThe engine rejects calls to the tools " +
 	"an entry marked `(required — load before use)` covers until you have " +
-	"loaded that skill with `load_tool_skill` in this session."
+	"loaded that skill with `" + toolname.LoadToolSkill + "` in this session."
 
 const requiredMarker = " (required — load before use)"
 

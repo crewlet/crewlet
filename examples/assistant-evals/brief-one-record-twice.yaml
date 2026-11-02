@@ -1,0 +1,49 @@
+# A brief whose model cites one agent twice, once by its handle and once by
+# its name. The draft's own check sees two spellings; the engine resolves both
+# to the QA Engineer, keeps the first row and drops the second, so the verdict
+# counts one thing, not two, and the card never draws one record twice.
+person:
+  apps: [worklet]
+page:
+  screen: home
+  title: Home
+  params: {}
+  query: {}
+  resources: [{kind: seat, id: qa}]
+  selection: null
+  source_revision: url:7b1d3e2a
+  accepts: []
+mode: brief
+question: Brief me on this page
+answers:
+  - route: GET /org
+    body:
+      timezone: UTC
+      roles:
+        - {handle: pm, name: Product Manager, kind: agent}
+        - {handle: qa, name: QA Engineer, kind: agent}
+  - route: GET /agents
+    body:
+      - {handle: qa, role: QA Engineer, activity: stopped, stopped_reason: budget}
+      - {handle: pm, role: Product Manager, activity: working}
+  - route: GET /agents/{id}
+    body:
+      handle: qa
+      role: QA Engineer
+      live: {activity: stopped, stopped_reason: budget}
+script:
+  - call: list_agents
+  - call: answer_brief
+    args:
+      about: The QA Engineer is stopped on its budget and the Product Manager is working.
+      needs:
+        - {ref_kind: seat, ref_id: qa, do: "Raise the QA Engineer's budget so it can run again", tone: danger, action: open}
+        - {ref_kind: seat, ref_id: QA Engineer, do: "Ask why the QA Engineer ran out of budget", tone: warning, action: ask, question: "Why did the QA Engineer run out of budget?"}
+expect:
+  calls: [list_agents, answer_brief]
+  proposals: 0
+  state: completed
+  brief:
+    needs: [qa]
+    tones: [danger]
+    verdict: 1 thing needs you

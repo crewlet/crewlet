@@ -16,10 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // listingsHeld is a coordination store whose every LISTING of the positions
@@ -138,11 +138,11 @@ func (f *listingsHeld) Admissions(ctx context.Context) ([]coord.Admission, error
 	return f.wrappedFleet.Admissions(ctx)
 }
 
-func (f *listingsHeld) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAck, error) {
+func (f *listingsHeld) MaintenanceAcks(ctx context.Context, stream string) ([]coord.MaintenanceAck, error) {
 	if err := f.hold(ctx); err != nil {
 		return nil, err
 	}
-	return f.wrappedFleet.MaintenanceAcks(ctx)
+	return f.wrappedFleet.MaintenanceAcks(ctx, stream)
 }
 
 func (f *listingsHeld) ListSeatPauses(ctx context.Context) ([]coord.SeatPause, error) {
@@ -157,6 +157,24 @@ func (f *listingsHeld) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPa
 		return nil, err
 	}
 	return f.wrappedFleet.WatchSeatPauses(ctx)
+}
+
+// ForgetBackupPoint lists the register because it walks the owner's backup
+// points under their key class to purge them, and SeatAccessRecords because it
+// reads an integration's whole ledger: both are listings the KV backend makes,
+// held like the rest.
+func (f *listingsHeld) ForgetBackupPoint(ctx context.Context, owner string) error {
+	if err := f.hold(ctx); err != nil {
+		return err
+	}
+	return f.wrappedFleet.ForgetBackupPoint(ctx, owner)
+}
+
+func (f *listingsHeld) SeatAccessRecords(ctx context.Context, kind string) (map[string][]byte, error) {
+	if err := f.hold(ctx); err != nil {
+		return nil, err
+	}
+	return f.wrappedFleet.SeatAccessRecords(ctx, kind)
 }
 
 // listingBound is how long a case waits on a read the write path makes: the
@@ -184,8 +202,8 @@ func TestAWriteFenceReadsItsFloorWithoutListingTheRegister(t *testing.T) {
 	t.Cleanup(fleet.letGo)
 	const generation = 2
 	for domain, floor := range map[string]uint64{
-		tracker.Domain{}.Name(): 700,
-		pages.Domain{}.Name():   300,
+		worklet.Domain{}.Name(): 700,
+		doclet.Domain{}.Name():  300,
 	} {
 		if err := fleet.PutFloor(t.Context(), coord.TrimFloor{
 			Domain: domain, Generation: generation, TrimTo: floor, Floor: floor,
@@ -199,7 +217,7 @@ func TestAWriteFenceReadsItsFloorWithoutListingTheRegister(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), listingBound)
 	defer cancel()
-	got, err := s.floorOf(tracker.Domain{}.Name())(ctx, generation)
+	got, err := s.floorOf(worklet.Domain{}.Name())(ctx, generation)
 	if err != nil {
 		t.Fatalf("the tracker's write fence could not read its floor with the "+
 			"register's listings held: %v — every write at an expectation of "+
@@ -212,7 +230,7 @@ func TestAWriteFenceReadsItsFloorWithoutListingTheRegister(t *testing.T) {
 		t.Fatalf("the fence's floor read made %d listing(s) of the register, want "+
 			"none: a listing is a consumer created through the metadata group", n)
 	}
-	if asked := fleet.floorsAsked(); !slices.Equal(asked, []string{tracker.Domain{}.Name()}) {
+	if asked := fleet.floorsAsked(); !slices.Equal(asked, []string{worklet.Domain{}.Name()}) {
 		t.Fatalf("the fence's floor read asked about %v, want the tracker alone — "+
 			"every other domain's row is a request this write did not need", asked)
 	}
@@ -273,8 +291,8 @@ func TestAWriteAtZeroLandsWhileTheRegistersListingsAreHeld(t *testing.T) {
 			"every listing of the register held, want applied", res, err)
 	}
 	for write, domain := range map[string]string{
-		"page create":   pages.Domain{}.Name(),
-		"tracker write": tracker.Domain{}.Name(),
+		"page create":   doclet.Domain{}.Name(),
+		"tracker write": worklet.Domain{}.Name(),
 	} {
 		asked := fleet.floorsOfWrite(write)
 		if len(asked) == 0 {
@@ -295,8 +313,8 @@ func TestAWriteAtZeroLandsWhileTheRegistersListingsAreHeld(t *testing.T) {
 // of the register it forgot — a key class read whole, or watched — is one a
 // write could wait on and still pass. The set is read off the KV backend's own
 // source: every kv.FleetStore method that walks a class of the positions
-// bucket (eachPositionKey, or eachUnder or watchUnder over f.positions), or
-// calls one that does, must be a method listingsHeld holds.
+// bucket (eachPositionKey, or eachUnder, watchUnder or watchRecords over
+// f.positions), or calls one that does, must be a method listingsHeld holds.
 func TestListingsHeldHoldsEveryListingOfTheRegister(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -359,7 +377,10 @@ func registerListings(t *testing.T, dir string) []string {
 					}
 					calls[name] = append(calls[name], fun.Sel.Name)
 				case *ast.Ident:
-					if fun.Name == "watchUnder" && namesPositions(call.Args) {
+					// watchRecords is the one watch of a record family,
+					// which calls watchUnder over the bucket it is handed.
+					if (fun.Name == "watchUnder" || fun.Name == "watchRecords") &&
+						namesPositions(call.Args) {
 						lists[name] = true
 					}
 				}

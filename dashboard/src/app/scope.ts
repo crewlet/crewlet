@@ -1,5 +1,5 @@
 /**
- * Work's SCOPE: All projects, or one project. The trail names it and switches
+ * Worklet's SCOPE: All projects, or one project. The trail names it and switches
  * it (`header/ProjectSwitcher.tsx`), and each scope carries its lenses beside
  * that name.
  *
@@ -10,15 +10,16 @@
  *
  * # Two kinds of lens, drawn alike
  *
- * All projects' lenses are Work's own SECTIONS (`nav.ts`), so each is a path:
- * `#/work`, `#/work/tasks`, `#/work/history`. A project's are keys on its
- * address (`#/work/{KEY}?lens=about`), its first lens taking no key at all.
+ * All projects' lenses are Worklet's own SECTIONS (`nav.ts`), so each is a
+ * path: `#/worklet`, `#/worklet/tasks`, `#/worklet/history`. A project's are
+ * keys on its address (`#/worklet/{KEY}?lens=about`), its first lens taking no
+ * key at all.
  * The header draws both as the same chips, so the reader meets one bar.
  */
 
 import { resolve } from "./routes.ts";
 
-/** All projects' lenses, in the order the bar draws them; the first is Work's landing. */
+/** All projects' lenses, in the order the bar draws them; the first is Worklet's landing. */
 export const ALL_PROJECTS_LENSES = ["projects", "tasks", "history"] as const;
 
 /** A project's lenses, in the order its bar draws them; the first is its landing. */
@@ -59,11 +60,11 @@ export function scopeAt(path: string[], query: URLSearchParams): ScopeAt | null 
   const where = resolve(path);
   if (!where.resolved) return null;
   switch (where.screen) {
-    case "work-projects":
+    case "worklet-projects":
       return { scope: { kind: "all" }, lens: "projects" };
-    case "work-tasks":
+    case "worklet-tasks":
       return { scope: { kind: "all" }, lens: "tasks" };
-    case "work-history":
+    case "worklet-history":
       return { scope: { kind: "all" }, lens: "history" };
     case "project": {
       const asked = query.get("lens") ?? "";
@@ -79,7 +80,7 @@ export function scopeAt(path: string[], query: URLSearchParams): ScopeAt | null 
 
 /** The path of one of All projects' lenses. */
 export function allProjectsPath(lens: AllProjectsLens): string[] {
-  return lens === "projects" ? ["work"] : ["work", lens];
+  return lens === "projects" ? ["worklet"] : ["worklet", lens];
 }
 
 /**
@@ -87,7 +88,7 @@ export function allProjectsPath(lens: AllProjectsLens): string[] {
  *
  * TASKS AND HISTORY CARRY OVER, because each is the same question about any
  * scope. ABOUT AND FILES CARRY BETWEEN TWO PROJECTS, and every other lens
- * opens the next scope's first lens. A switch from off Work's scope pages (the
+ * opens the next scope's first lens. A switch from off Worklet's scope pages (the
  * switcher opened centred) opens the scope's first lens too.
  *
  * ONLY THE LIST'S SHAPE TRAVELS, and only with Tasks: a saved view and the
@@ -106,7 +107,7 @@ export function switchTarget(
   if (to.kind === "all") {
     return { path: allProjectsPath(lens as AllProjectsLens), query: keep };
   }
-  return { path: ["work", to.key], query: lens === PROJECT_LENSES[0] ? keep : { lens } };
+  return { path: ["worklet", to.key], query: lens === PROJECT_LENSES[0] ? keep : { lens } };
 }
 
 function nextLens(from: ScopeAt | null, to: Scope): Lens {

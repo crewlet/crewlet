@@ -10,10 +10,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/trashreap"
 )
@@ -58,8 +59,8 @@ func TestADataNodeReapsAPageOnlyOnceItsTermHasRunOut(t *testing.T) {
 	if kb == nil {
 		t.Fatal("the premise: the node writes its knowledge base")
 	}
-	jane := pages.Actor{Handle: "jane", Kind: pages.AuthorHuman}
-	page := createEventually(t, kb, jane, pages.NewPage{
+	jane := doclet.Actor{Handle: "jane", Kind: doclet.AuthorHuman}
+	page := createEventually(t, kb, jane, doclet.NewPage{
 		Container: "DOCS", Title: "Superseded runbook", Body: "old steps",
 	})
 	if _, err := kb.Trash(t.Context(), jane, page); err != nil {
@@ -85,7 +86,7 @@ func TestADataNodeReapsAPageOnlyOnceItsTermHasRunOut(t *testing.T) {
 		t.Fatalf("a pass past the term reports %+v, want the page purged", got)
 	}
 	if _, err := e.Pages().Get(t.Context(), page,
-		statelog.Freshness{Level: statelog.ReadSession}); !errors.Is(err, pages.ErrNotFound) {
+		statelog.Freshness{Level: statelog.ReadSession}); !errors.Is(err, doclet.ErrNotFound) {
 		t.Errorf("the page past its term still reads: %v", err)
 	}
 	if last, found, err := trashreap.LastReport(t.Context(), fleet); err != nil || !found ||
@@ -97,7 +98,12 @@ func TestADataNodeReapsAPageOnlyOnceItsTermHasRunOut(t *testing.T) {
 
 // reapSource runs one pass of the reaper over every source this node arms, at
 // at, and answers the named source's part of the report, failing when the pass
-// did not visit every source the node offers.
+// did not visit every source the node offers or failed the named one.
+//
+// THE NAMED SOURCE'S FAILURE, NOT THE PASS'S. A pass's error joins every
+// source's, and on these nodes, whose company no activation has named, the
+// assistant's term is unknown and its source's part fails by design
+// ([Engine.assistantRetention]); the cases are about the source they name.
 func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	source string) trashreap.SourceReport {
 
@@ -110,24 +116,28 @@ func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	if err != nil {
 		t.Fatalf("build the reaper: %v", err)
 	}
-	report, err := r.Pass(t.Context())
-	if err != nil {
-		t.Fatalf("pass at %s: %v", at, err)
-	}
+	report, passErr := r.Pass(t.Context())
 	var names []string
 	for _, src := range sources {
 		names = append(names, src.Name())
 	}
-	if !slices.Equal(names, []string{"pages", artifactsdomain.Domain{}.Name()}) {
-		t.Fatalf("the node arms the sources %v, want the knowledge base's and the "+
-			"artifacts'", names)
+	// THE ASSISTANT'S TOO: a conversation untouched for its retention is
+	// purged through the same reaper, a Termed source of its own.
+	if !slices.Equal(names, []string{"pages", artifactsdomain.Domain{}.Name(),
+		assistantdomain.Domain{}.Name()}) {
+		t.Fatalf("the node arms the sources %v, want the knowledge base's, the "+
+			"artifacts' and the assistant's", names)
 	}
 	for _, got := range report.Sources {
 		if got.Source == source {
+			if got.Error != "" {
+				t.Fatalf("the pass at %s failed %s: %s (the whole pass: %v)", at,
+					source, got.Error, passErr)
+			}
 			return got
 		}
 	}
-	t.Fatalf("the pass reaped %+v and nothing of %s", report.Sources, source)
+	t.Fatalf("the pass reaped %+v and nothing of %s (%v)", report.Sources, source, passErr)
 	return trashreap.SourceReport{}
 }
 
@@ -191,8 +201,8 @@ func artifactsLimits() artifacts.Limits {
 
 // createEventually writes a page, waiting out the moments after boot before
 // the chart's space reaches this node's copy.
-func createEventually(t *testing.T, kb *pages.Store, actor pages.Actor,
-	in pages.NewPage) string {
+func createEventually(t *testing.T, kb *doclet.Store, actor doclet.Actor,
+	in doclet.NewPage) string {
 
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

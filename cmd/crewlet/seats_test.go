@@ -49,7 +49,7 @@ func newFakeActNode(t *testing.T) *fakeActNode {
 			"tool": n.tool, "outcome": n.answer["outcome"], "position": nil, "receipt": n.answer,
 		})
 	})
-	n.server = httptest.NewServer(mux)
+	n.server = httptest.NewServer(asEngine(mux))
 	t.Cleanup(n.server.Close)
 	return n
 }
@@ -89,8 +89,9 @@ func TestSeatsPauseActsThroughTheActTransport(t *testing.T) {
 		t.Errorf("args = %v, want the handle, the stop and the reason", node.body.Args)
 	}
 	if !strings.Contains(stdout, "paused swe (by jane.doe (through pat:0192)") ||
-		!strings.Contains(stdout, "next round") {
-		t.Errorf("stdout does not say who paused it, through what, and that the turn stops:\n%s", stdout)
+		!strings.Contains(stdout, "next round") || !strings.Contains(stdout, "is ended now") {
+		t.Errorf("stdout does not say who paused it, through what, and that the turn and its "+
+			"coding run stop:\n%s", stdout)
 	}
 }
 
@@ -101,17 +102,16 @@ func TestSeatsResumeRetriesUnderTheSameOperation(t *testing.T) {
 	t.Parallel()
 	node := newFakeActNode(t)
 	node.answer = map[string]any{"handle": "swe", "outcome": "unknown"}
-	stdout, _, err := cli(t, "seats", "resume", "swe", bootstrapForURL(t, node.server.URL))
-	if err != nil {
-		t.Fatalf("seats resume: %v", err)
-	}
+	_, _, err := cli(t, "seats", "resume", "swe", bootstrapForURL(t, node.server.URL))
 	if node.tool != "resume_seat" || len(node.body.Args) != 1 {
 		t.Errorf("posted %v to %q, want only the handle to resume_seat", node.body.Args, node.tool)
 	}
 	first := node.key
-	if !strings.Contains(stdout, "-op-id "+first) {
-		t.Fatalf("an unknown outcome did not print the id to retry with:\n%s", stdout)
+	if err == nil || !strings.Contains(err.Error(), "-op-id "+first) {
+		t.Fatalf("an unknown outcome answered %v, want it to fail naming the id to "+
+			"retry with", err)
 	}
+	node.answer = map[string]any{"handle": "swe", "outcome": "applied"}
 	if _, _, err := cli(t, "seats", "resume", "swe", "-op-id", first,
 		bootstrapForURL(t, node.server.URL)); err != nil {
 		t.Fatalf("retry: %v", err)
@@ -155,11 +155,11 @@ func TestSeatsARefusalOnAuthorityNamesTheGrant(t *testing.T) {
 func TestSeatsNeedsAHandleAndAWellFormedOperation(t *testing.T) {
 	t.Parallel()
 	node := newFakeActNode(t)
-	_, _, err := cli(t, "seats", "pause", "-url", node.server.URL)
+	_, _, err := cli(t, "seats", "pause", "-api", node.server.URL)
 	if err == nil || !strings.Contains(err.Error(), "name the seat") {
 		t.Fatalf("a pause naming no seat = %v, want it refused for want of a handle", err)
 	}
-	_, _, err = cli(t, "seats", "pause", "swe", "-url", node.server.URL, "-op-id", "has space")
+	_, _, err = cli(t, "seats", "pause", "swe", "-api", node.server.URL, "-op-id", "has space")
 	if err == nil || !strings.Contains(err.Error(), "-op-id") {
 		t.Fatalf("a malformed -op-id = %v, want it refused naming the flag", err)
 	}
@@ -172,7 +172,7 @@ func TestSeatsNeedsAHandleAndAWellFormedOperation(t *testing.T) {
 // node: a token typed as an argument is in shell history and `ps`.
 func TestSeatsTakesNoTokenFlag(t *testing.T) {
 	node := newFakeActNode(t)
-	if _, _, err := cli(t, "seats", "pause", "swe", "-url", node.server.URL,
+	if _, _, err := cli(t, "seats", "pause", "swe", "-api", node.server.URL,
 		"-token", "t"); err == nil {
 		t.Fatal("-token was accepted")
 	}

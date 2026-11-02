@@ -9,9 +9,13 @@
 // different one the root project never writes. Measured on 5.0.1 and 5.0.2:
 // every `vitest run` leaves 16-48 MB behind, and a working day of gate runs
 // had left 696 of them, 11.9 GB, on the machine that runs the engine's own
-// suites — whose embedded broker derives its byte ceiling from the free space
-// on the volume, so the Go suites then failed with "insufficient storage
-// resources available" for a reason nothing in their output pointed at.
+// suites. Those keep their stores and broker streams under the same temporary
+// directory, so a disk the leak has filled fails their writes for a reason
+// nothing in their output points at. It first showed as "insufficient storage
+// resources available" on every node boot, while the suites' brokers still
+// derived their byte ceiling from the volume's free space; they declare a
+// fixed one now (internal/queue/jetstream/brokertest), which ended that
+// failure and not the leak.
 //
 // The fix is to own the directory rather than to find Vitest's in it: POSIX
 // `os.tmpdir()` reads TMPDIR, so the child's every temporary file lands under

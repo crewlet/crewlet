@@ -1,0 +1,58 @@
+# A brief of the Inbox: one decision waits on the person and the QA Engineer
+# is stopped. The model ranks both, and a third task no read returned. The
+# engine keeps the two it read and the person may open, in the model's order,
+# so the stopped seat is the one to do first; it draws that seat danger from
+# the seat's own read, drops the row about ENG-99, and counts the verdict
+# from the rows it kept: two things, not the three the model wrote.
+person:
+  apps: [worklet]
+page:
+  screen: inbox
+  title: Inbox
+  params: {}
+  query: {}
+  resources: [{kind: task, id: ENG-42}, {kind: seat, id: qa}]
+  selection: null
+  source_revision: url:4c2a9e1b
+  accepts: []
+mode: brief
+question: Brief me on this page
+answers:
+  - route: GET /worklet/decisions
+    body:
+      items:
+        - kind: ask
+          at: "2026-10-26T09:00:00Z"
+          ask: {key: ENG-42, title: Pick the store build, body: "Which build should I test?", asked_by: qa}
+  - route: GET /agents
+    body:
+      - {handle: qa, role: QA Engineer, activity: stopped, stopped_reason: budget}
+      - {handle: pm, role: Product Manager, activity: working}
+  - route: GET /worklet/{id}
+    body:
+      task: {id: 5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f, key: ENG-42, title: Pick the store build, priority: normal}
+  - route: GET /agents/{id}
+    body:
+      handle: qa
+      role: QA Engineer
+      live: {activity: stopped, stopped_reason: budget}
+script:
+  - call: list_decisions
+  - call: list_agents
+  - call: answer_brief
+    args:
+      about: QA waits on your answer on ENG-42, and the QA Engineer is stopped on its budget.
+      needs:
+        - {ref_kind: seat, ref_id: qa, do: "Raise the QA Engineer's budget so it can run again", why: Stopped on its budget, tone: danger, action: open}
+        - {ref_kind: task, ref_id: ENG-42, do: "Answer ENG-42: which build QA tests", why: "Asked at 09:00", tone: warning, action: open}
+        - {ref_kind: task, ref_id: ENG-99, do: Chase ENG-99, why: Overdue, tone: warning, action: open}
+      follow_ups: ["Why is the QA Engineer out of budget?"]
+expect:
+  calls: [list_decisions, list_agents, answer_brief]
+  proposals: 0
+  state: completed
+  brief:
+    needs: [qa, ENG-42]
+    tones: [danger, warning]
+    verdict: 2 things need you
+  shows: ["#/worklet/ENG-42", "#/company/org/seats/qa"]

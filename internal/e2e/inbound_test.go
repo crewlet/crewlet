@@ -56,7 +56,9 @@ func stubPrompt() notify.ChatPrompt {
 }
 
 func routed(handle, body string, meta map[string]string) notify.Routed {
-	m := map[string]string{"channel": "C1", "ts": "p1", "transport": "stub"}
+	m := map[string]string{
+		notify.ChannelField: "C1", notify.MessageIDField: "p1", notify.TransportField: "stub",
+	}
 	for k, v := range meta {
 		m[k] = v
 	}

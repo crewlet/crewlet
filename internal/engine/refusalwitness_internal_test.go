@@ -11,9 +11,10 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A RECORD ON A STATE LOG SIGNED UNDER A KEY THIS NODE LACKS REACHES THE AUDIT
@@ -30,7 +31,7 @@ func TestARecordUnderAnUnknownKeyReachesTheAuditFeed(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
@@ -58,7 +59,7 @@ func TestARecordUnderAnUnknownKeyReachesTheAuditFeed(t *testing.T) {
 
 	// A FRAME UNDER A KEY NOBODY IN THIS FLEET HOLDS, appended the way
 	// anything the broker admitted could.
-	domain := tracker.Domain{}
+	domain := worklet.Domain{}
 	stranger, err := statelog.NewSigner(domain.Name(),
 		statelog.OneKey("stranger", "material-no-node-holds"))
 	if err != nil {

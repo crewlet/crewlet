@@ -278,7 +278,7 @@ func TestEveryM5WakeNamesItsWorkItem(t *testing.T) {
 	c, _ := committerOn(t, n, n.pub)
 	w, _ := writerOn(t, n, n.pub)
 	cw, _, _, _ := checksWriterOn(t, n)
-	item := &types.WorkItem{Backend: types.WorkNative, ID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("ENG-7")).String(),
+	item := &types.WorkItem{Backend: types.WorkWorklet, ID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("ENG-7")).String(),
 		Key: "ENG-7", Project: "ENG"}
 	s := suiteSettings()
 	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}

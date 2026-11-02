@@ -119,11 +119,15 @@ func threadedEngine(t *testing.T, thread []map[string]string) *Engine {
 		t.Fatalf("queue.Start: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	e := &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}}
+	// A SESSION HOST, as every engine `crewlet run` builds has one: the
+	// runner refuses to be built without the host its phases serve their
+	// tools on, and the turn would stop there rather than at the depth
+	// guard this case relies on.
+	e := withSessions(t, &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}})
 	e.epoch.current.Store(&Company{
 		Org: organization, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
-			MaxIterations: 1, DelegationDepthLimit: 1, MaxToolRounds: 3,
+			MaxIterations: 1, DelegationDepthLimit: 1,
 		}},
 	})
 	e.notify.registry = notify.NewRegistry(organization, nil)

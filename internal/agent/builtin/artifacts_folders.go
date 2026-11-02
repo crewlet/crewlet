@@ -11,10 +11,13 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/foldername"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // FOLDERS, AS AN AGENT FILES IN THEM (ADR-0047: an artifact lives in one
@@ -157,7 +160,7 @@ func (d ArtifactDeps) resolveFolder(ctx context.Context, c artifactCaller, tool,
 			r := folderNotFound(tool, ref, nearestFolders(visible, ref))
 			return artifactsdomain.Folder{}, "", nil, &r
 		}
-		r := refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %q names %d folders you "+
+		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: %q names %d folders you "+
 			"can see:\n%s\nPass the one you mean by its id.", tool, clip(ref), len(lines),
 			strings.Join(lines, "\n")))
 		return artifactsdomain.Folder{}, "", nil, &r
@@ -243,7 +246,8 @@ func folderNotFound(tool, ref string, nearest []string) tools.Result {
 func folderReadFailure(ctx context.Context, tool string, err error) tools.Result {
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not read the "+
-			"folders right now (%s). Nothing was changed. Try again shortly.", tool, why))
+			"folders%s (%s). Nothing was changed. %s", tool, rightNow(err), why,
+			conditionNext(err, "Try again shortly.", stuckRead)))
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s could not read the folders: %s. Nothing "+
 		"was changed: say you could not check.", tool, faultSaid))
@@ -341,18 +345,18 @@ func folderWriteFailure(ctx context.Context, tool string, c artifactCaller, err 
 	case errors.Is(err, artifactsdomain.ErrFolderNotFound):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: the folder was removed "+
 			"or moved out of your sight while this ran. Nothing was changed; list the folders "+
-			"again with list_artifacts and `delimiter`.", tool))
+			"again with "+ListArtifactsTool+" and `delimiter`.", tool))
 	case errors.Is(err, artifactsdomain.ErrFolderDepth):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: folders go "+
 			"at most %d deep, counting the top level. File in a shallower folder.", tool,
 			artifacts.MaxFolderDepth))
 	case errors.Is(err, artifactsdomain.ErrFolderLimit):
-		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: the "+
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: the "+
 			"company, or that folder, already holds as many folders as it may (%d in all, %d in "+
 			"one folder). File into a folder that exists.", tool, artifacts.MaxFolders,
 			artifacts.MaxFolderChildren))
 	case errors.Is(err, artifactsdomain.ErrFolderNameTaken):
-		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s", tool, domainSentence(err)))
+		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s", tool, artifactupload.Sentence(err)))
 	}
 	return publishFailure(ctx, tool, c, err)
 }
@@ -409,7 +413,7 @@ func (t *createArtifactFolder) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	}
 	ref := strings.TrimSpace(argString(args, "parent"))
 	if ref == "" {
-		return failed("create_artifact_folder needs a `parent`: the folder to create in, by id " +
+		return failed(CreateArtifactFolderTool + " needs a `parent`: the folder to create in, by id " +
 			"or path. Only a person creates a top-level folder."), nil
 	}
 	names, why := folderNames(argString(args, "name"))
@@ -444,7 +448,7 @@ func (t *createArtifactFolder) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	if c.agent() && c.turn != nil && !chainExists(visible, parentPath, names) {
 		give, used, ok := t.deps.FolderTurns.spend(c.turn.RunID, c.key)
 		if !ok {
-			return refused(tools.RefusalForbidden, fmt.Sprintf("create_artifact_folder refused "+
+			return refused(tools.RefusalForbidden, fmt.Sprintf(CreateArtifactFolderTool+" refused "+
 				"that (turn_quota): this turn has made %d of its %d folders. File into the folders "+
 				"there are, report what is left, and let the next turn continue.", used,
 				artifacts.TurnFolderCreates)), nil
@@ -459,7 +463,7 @@ func (t *createArtifactFolder) CallForTurn(ctx context.Context, turn *turnctx.Tu
 		return folderWriteFailure(ctx, t.Name(), c, err), nil
 	}
 	if created.Result.Outcome == statelog.OutcomeUnknown {
-		return artifactUnknown(t.Name(), c, created.Result, "List the folder with list_artifacts "+
+		return artifactUnknown(t.Name(), c, created.Result, "List the folder with "+ListArtifactsTool+" "+
 			"and `delimiter` before creating it another way: if it landed, it is there."), nil
 	}
 	chain := make([]map[string]any, 0, len(created.Folders))
@@ -471,7 +475,7 @@ func (t *createArtifactFolder) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	if len(created.Folders) == 0 {
 		refund()
 		return faulted(ctx, t.Name(), errors.New("builtin: a folder create answered no folder"),
-			"create_artifact_folder could not tell which folder it made: "+faultSaid+"."), nil
+			CreateArtifactFolderTool+" could not tell which folder it made: "+faultSaid+"."), nil
 	}
 	out := map[string]any{"folder": created.Folders[len(created.Folders)-1].ID, "path": path,
 		"folders": chain}
@@ -492,7 +496,7 @@ func (t *createArtifactFolder) CallForTurn(ctx context.Context, turn *turnctx.Tu
 func folderNames(raw string) ([]string, string) {
 	text := strings.Trim(strings.TrimSpace(raw), artifactsdomain.ListDelimiter)
 	if text == "" {
-		return nil, "create_artifact_folder needs a `name`: one to four words for what the " +
+		return nil, CreateArtifactFolderTool + " needs a `name`: one to four words for what the " +
 			"folder holds."
 	}
 	parts := strings.Split(text, artifactsdomain.ListDelimiter)
@@ -500,13 +504,13 @@ func folderNames(raw string) ([]string, string) {
 	for _, p := range parts {
 		name := strings.TrimSpace(p)
 		if name == "" {
-			return nil, fmt.Sprintf("create_artifact_folder: %q has an empty name between two "+
+			return nil, fmt.Sprintf(CreateArtifactFolderTool+": %q has an empty name between two "+
 				"slashes; name each folder of the path.", clip(raw))
 		}
 		names = append(names, name)
 	}
 	if len(names) >= artifacts.MaxFolderDepth {
-		return nil, fmt.Sprintf("create_artifact_folder: %q names %d folders, and beneath an "+
+		return nil, fmt.Sprintf(CreateArtifactFolderTool+": %q names %d folders, and beneath an "+
 			"existing folder a path holds at most %d (folders go at most %d deep).", clip(raw),
 			len(names), artifacts.MaxFolderDepth-1, artifacts.MaxFolderDepth)
 	}
@@ -565,7 +569,7 @@ func (t *moveArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(why), nil
 	}
 	if _, given := args["folder"]; !given {
-		return failed("move_artifact needs a `folder`: a folder's id or path, or an empty " +
+		return failed(MoveArtifactTool + " needs a `folder`: a folder's id or path, or an empty " +
 			"string for the top level."), nil
 	}
 	ref := strings.TrimSpace(argString(args, "folder"))
@@ -635,20 +639,20 @@ func (t *moveArtifact) moveOne(ctx context.Context, c artifactCaller, ref, dest 
 	}
 	if h.Status == artifactsdomain.StatusTrashed {
 		return refuse(refusedBy(tools.RefusalForbidden, artifactsdomain.ErrTrashed, fmt.Sprintf(
-			"move_artifact: artifact %s is in the trash, and only a person restores it. Nothing "+
+			MoveArtifactTool+": artifact %s is in the trash, and only a person restores it. Nothing "+
 				"was moved.", h.ID)))
 	}
 	if h.Folder == dest {
 		res["outcome"] = "unchanged"
 		return res, nil
 	}
-	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{})
+	t.deps.present(c, h.ID, presence.Editing, presence.Focus{})
 	written, err := t.deps.Writer.Move(ctx, t.deps.call(c, dec.Standing.Role, dec.Elevated), h.ID, dest)
 	switch {
 	case err != nil:
 		return refuse(folderWriteFailure(ctx, t.Name(), c, err))
 	case written.Result.Outcome == statelog.OutcomeUnknown:
-		r := artifactUnknown(t.Name(), c, written.Result, "Read the artifact with get_artifact "+
+		r := artifactUnknown(t.Name(), c, written.Result, "Read the artifact with "+GetArtifactTool+" "+
 			"or list the folder: if it is there, the move landed.")
 		res["outcome"], res["message"] = "unknown", r.Output
 		return res, r.Cause
@@ -664,20 +668,20 @@ func (t *moveArtifact) moveOne(ctx context.Context, c artifactCaller, ref, dest 
 // moveRefs reads `artifacts`: one to [artifacts.MaxMovesPerCall] references,
 // each once.
 func moveRefs(args map[string]any) ([]string, string) {
-	raw, ok := args["artifacts"].([]any)
+	raw, ok := argval.StringItems(args["artifacts"])
 	if !ok || len(raw) == 0 {
-		return nil, "move_artifact needs `artifacts`: a list of the artifact ids to move."
+		return nil, MoveArtifactTool + " needs `artifacts`: a list of the artifact ids to move."
 	}
 	if len(raw) > artifacts.MaxMovesPerCall {
-		return nil, fmt.Sprintf("move_artifact moves at most %d artifacts in one call; move "+
+		return nil, fmt.Sprintf(MoveArtifactTool+" moves at most %d artifacts in one call; move "+
 			"the rest in another.", artifacts.MaxMovesPerCall)
 	}
 	out := make([]string, 0, len(raw))
 	for i, v := range raw {
-		ref, ok := v.(string)
+		ref, ok := argval.String(v)
 		ref = strings.TrimSpace(ref)
 		if !ok || ref == "" {
-			return nil, fmt.Sprintf("move_artifact: artifact %d of the list is not an id.", i+1)
+			return nil, fmt.Sprintf(MoveArtifactTool+": artifact %d of the list is not an id.", i+1)
 		}
 		if !slices.Contains(out, ref) {
 			out = append(out, ref)

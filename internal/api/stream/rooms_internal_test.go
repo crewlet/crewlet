@@ -77,13 +77,16 @@ func (quietStores) Through(context.Context, artifacts.ID) (int64, int64, error) 
 
 type quietPresence struct{}
 
-func (quietPresence) Join(id artifacts.ID, _ presence.Local) (string, artifacts.PresenceRoster, error) {
-	return "s", artifacts.PresenceRoster{Artifact: id}, nil
+func (quietPresence) Join(_ presence.Room, _ presence.Local, hand presence.Hand) (string, error) {
+	if !hand("s", presence.Roster{}) {
+		return "", presence.ErrDeclined
+	}
+	return "s", nil
 }
-func (quietPresence) Update(artifacts.ID, string, artifacts.PresenceActivity, artifacts.Focus) error {
+func (quietPresence) Update(presence.Room, string, presence.Activity, presence.Focus) error {
 	return nil
 }
-func (quietPresence) Leave(artifacts.ID, string)                   {}
+func (quietPresence) Leave(presence.Room, string)                  {}
 func (quietPresence) OnChange(func(presence.Change)) (stop func()) { return func() {} }
 
 // A CREDENTIAL RECHECK THAT CANNOT DECIDE A ROOM HOLDS IT: the membership was

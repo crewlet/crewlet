@@ -92,7 +92,7 @@ func claimedPastRevival(t *testing.T, rig *coordRig, took bool) *events.Event {
 // with the person's answer, and handed nothing back and announced no loss.
 func resumedOnceWith(t *testing.T, rig, next *coordRig, answer string) {
 	t.Helper()
-	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, answer) {
+	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(askedOf(calls[0]).Answer, answer) {
 		t.Fatalf("the next holder resumed %+v, want the run resumed once with %q", calls, answer)
 	}
 	if got := rig.handedBack(); len(got) != 0 {
@@ -544,7 +544,7 @@ func TestAClaimGivenBackUnderTheReapIsResumedNotReaped(t *testing.T) {
 	}}
 	next := reaper(t.Context(), t, rig, store, 2, nil)
 	next.fireRetries()
-	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, "use main") {
+	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(askedOf(calls[0]).Answer, "use main") {
 		t.Fatalf("the next holder resumed %+v, want the run resumed once with its answer", calls)
 	}
 	if got := rig.handedBack(); len(got) != 0 {
@@ -624,12 +624,13 @@ func TestAResumeAbandonedBeforeItsTurnHandsTheAnswerOn(t *testing.T) {
 		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerConsumed {
 			t.Fatalf("disposition = %q, want the answer recorded on its run", d)
 		}
+		rig.fireRetries()
 		rig.finished("t1")
 		if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(ev.ID).String()}) {
 			t.Fatalf("handed back %v, want the answer's copy once: no turn ever took it", got)
 		}
-		// THE COPY, ON THE SEAT'S INBOX, finds the run gone, and says so.
-		copied := rig.lastInboxEvent(t)
+		// THE COPY, ON THE SEAT'S CONTROL TOPIC, finds the run gone, and says so.
+		copied := rig.lastHandedBack(t)
 		answer, _ := events.DataAs[*types.SandboxAnswerGiven](copied)
 		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), *answer, copied); d != AnswerNotMine {
 			t.Fatalf("the copy = %q, want it spent on a run that is gone", d)
@@ -857,7 +858,8 @@ func parkUnfenced(t *testing.T, rig *coordRig) {
 	rig.coordinator.lease = leased(Fence{})
 	rig.launchingUnder("t1", Fence{})
 	rig.suspend("t1")
-	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
@@ -1054,7 +1056,7 @@ func TestATurnThatTookTheAnswerInlineSpendsItsDeliveryBeforeItRuns(t *testing.T)
 	}
 }
 
-// AND ONE A RETRIED TURN TOOK BEFORE IT CALLED run_sandbox AGAIN. The relaunch
+// AND ONE A RETRIED TURN TOOK BEFORE IT RELAUNCHED ITS EXECUTOR. The relaunch
 // resets the row — the answer with it — so once the turn has relaunched,
 // nothing on the run could recognise the delivery that carried the reply; a
 // node that stops there must already have recorded it as worked.
@@ -1072,7 +1074,7 @@ func TestAReplyATurnTookIsSpentBeforeItsRelaunchClearsTheRow(t *testing.T) {
 	var spent []spentAt
 	var answer *RecordedAnswer
 	rig.resumer.during = func(ctx context.Context, run PendingRun) {
-		// THE TURN CALLS run_sandbox AGAIN, and its node stops right after.
+		// THE TURN RELAUNCHES ITS EXECUTOR, and its node stops right after.
 		if _, err := rig.pending.BeginLaunch(ctx, run, rigLease); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}
@@ -1154,6 +1156,7 @@ func TestAClaimCarriesTheClaimantsLease(t *testing.T) {
 				if d, _ := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerConsumed {
 					t.Fatalf("AnswerByTurn = %q, want it consumed", d)
 				}
+				rig.fireRetries()
 			},
 		},
 	} {

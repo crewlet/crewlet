@@ -1,0 +1,32 @@
+-- A push is found by its position.
+--
+-- code_pushes_repo_idx, REORDERED — a repository's pushes in LOG order. Its
+-- first shape (0074) ordered them by `at`, the instant the broker stamped on
+-- the record that applied them, and that instant is not monotone in the
+-- record's position: a stream leader's change can stamp a later record
+-- earlier. So the index could not answer "every push of this repository above
+-- this position", which is what a git node's index of which push introduced
+-- each commit is built from (the snapshot's pushes phase and the `introduced`
+-- read), and a push history paged by it put a push before the one its own
+-- record followed.
+--
+-- REORDERED RATHER THAN JOINED BY A SECOND INDEX, because every reader of the
+-- first shape is served by the second: the push listing newest first, the
+-- push-history horizon and a purge part oldest first, and the purge's bounded
+-- count. A second index would cost every push row its entry — about another
+-- hundred bytes beside the 395 a push row holds with its entries — on every
+-- data node for the 181 days the history keeps it.
+--
+-- The horizon reads pushes oldest POSITION first and stops at the first that
+-- is inside it, so a row stamped earlier than one before it (a leader change
+-- stepped the instant back) waits for that one — at most the members' clock
+-- skew past its own horizon — and every node deletes the same rows in the
+-- same order. `at` and `row_bytes` ride past the key so the horizon reads the
+-- instants it stops at and the widths it bounds itself by from the index
+-- alone, and a purge part the widths, as before: never a wide row's overflow
+-- pages.
+--
+-- Class: code_pushes is unchanged; an index carries no rows of its own.
+DROP INDEX code_pushes_repo_idx;
+
+CREATE INDEX code_pushes_repo_idx ON code_pushes (repo_id, position, push_id, at, row_bytes);    -- Reader.Read(pushes) newest first and Reader.Read(introduced) and the snapshot's pushes phase in log order, and the push apply's PushHistory horizon, a purge part and its remaining count oldest first

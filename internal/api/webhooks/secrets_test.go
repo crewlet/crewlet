@@ -35,6 +35,7 @@ const rotatedGitLabSecret = "whsec_YS1yb3RhdGVkLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM="
 var servedYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -65,8 +66,10 @@ roles:
     llm: primary
     integrations:
       mattermost:
+        enabled: false
         bot_token: mm-ceo
       slack:
+        enabled: false
         bot_token: xoxb-1
         signing_secret: ceo-signing
   - name: CTO
@@ -79,6 +82,7 @@ roles:
 var gitLabOnlyYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -98,6 +102,7 @@ roles:
 const referencedSecretsYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -426,6 +431,7 @@ func TestWithoutAResolverNothingVerifies(t *testing.T) {
 const seatAppsYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -436,6 +442,7 @@ roles:
     code: {access: full_access}
     integrations:
       github:
+        enabled: false
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 7
@@ -447,6 +454,7 @@ roles:
     code: {access: review}
     integrations:
       github:
+        enabled: false
         app_id: 42
         app_slug: acme-reviewer
   - name: Jane Founder

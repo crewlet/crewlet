@@ -51,6 +51,7 @@ import { useWaiting } from "~/lib/waiting.ts";
 import {
   introducedWarnings,
   managedSentence,
+  unsettledSentence,
   type ConfigRefusal,
 } from "~/protocol/configAnswer.ts";
 import { createEntity, dryRunCreate, dryRunPatch, getConfig } from "~/protocol/configWrite.ts";
@@ -70,8 +71,12 @@ type AddState =
       fields: Partial<Record<ServerField, string>>;
     };
 
-/** A refusal in one sentence a person can act on. */
-function addRefusalWords(refusal: ConfigRefusal, name: string): string {
+/**
+ * A refusal in one sentence a person can act on, at the `check` (a read and
+ * dry runs, which store nothing whoever answered) or the `add` itself, the
+ * one write that may have landed.
+ */
+function addRefusalWords(refusal: ConfigRefusal, name: string, stage: "check" | "add"): string {
   switch (refusal.kind) {
     case "guarded":
       return configGuardedReason(refusal.code);
@@ -94,8 +99,12 @@ function addRefusalWords(refusal: ConfigRefusal, name: string): string {
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "starting":
       return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
-    case "unreachable":
-      return "The engine did not answer, so the server may or may not have been added. Look for it in the list before trying again.";
+    case "unavailable":
+      return refusal.detail;
+    case "unsettled":
+      return stage === "check"
+        ? `${unsettledSentence(refusal)} Nothing was added. Try again.`
+        : `${unsettledSentence(refusal)} The server may or may not have been added. Look for it in the list before trying again.`;
     case "problems":
       return "The engine refused the server. Correct what is marked and try again.";
   }
@@ -177,7 +186,7 @@ export function AddMcpServerDialog({
       });
       return;
     }
-    setState(refused(outcome, name, form.transport));
+    setState(refused(outcome, name, form.transport, "add"));
   };
 
   const submit = () => {
@@ -202,7 +211,7 @@ export function AddMcpServerDialog({
           return;
         }
         if (after.kind !== "valid") {
-          setState(refused(after, name, form.transport));
+          setState(refused(after, name, form.transport, "check"));
           return;
         }
         const warnings = introducedWarnings(
@@ -533,16 +542,17 @@ function refused(
   refusal: ConfigRefusal,
   name: string,
   transport: ServerForm["transport"],
+  stage: "check" | "add",
 ): AddState {
   if (refusal.kind === "problems") {
     const { fields, rest } = problemsByField(refusal.problems, transport);
     return {
       kind: "refused",
-      message: rest.length > 0 ? rest.join(" ") : addRefusalWords(refusal, name),
+      message: rest.length > 0 ? rest.join(" ") : addRefusalWords(refusal, name, stage),
       fields,
     };
   }
-  return { kind: "refused", message: addRefusalWords(refusal, name), fields: {} };
+  return { kind: "refused", message: addRefusalWords(refusal, name, stage), fields: {} };
 }
 
 /**

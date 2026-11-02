@@ -175,7 +175,7 @@ func remoteInvalid(url, credential string, needCredential bool) string {
 
 // MirrorSeatRefusal is why the seat as may not be the one a push mirror of
 // repo pushes as, or "": a seat roster holds that reads the repository — a
-// PERSON'S seat reads every one (ADR-0058), and an agent's what its grant on it
+// PERSON'S seat reads every one (ADR-0081), and an agent's what its grant on it
 // reads ([GrantOf]), judged on repo as it stands, its owner and its visibility.
 //
 // THE ONE JUDGEMENT of a push mirror's seat: a person's settings change and a

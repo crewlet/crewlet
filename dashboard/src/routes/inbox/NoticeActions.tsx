@@ -7,7 +7,7 @@
  *
  * A GESTURE, NEVER THE DOCUMENT. Marking read marks this record and nothing
  * else: every other mark, every snooze and the read position stay where they
- * are (`tracker.Writer.MarkInbox`). The write this replaced sent the whole
+ * are (`worklet.Writer.MarkInbox`). The write this replaced sent the whole
  * inbox back, so a Done pressed in one tab erased a snooze set in another.
  *
  * UPDATES ONLY. A question, a parked run, a stopped seat and a condition leave

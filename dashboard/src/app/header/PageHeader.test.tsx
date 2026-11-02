@@ -30,7 +30,7 @@ import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { installWindow } from "~/testing.tsx";
 
 /** A company running every service built into Crewlet. */
-const EVERY = { tracker: true, knowledge: true, code: true } as const;
+const EVERY = { tracker: true, knowledge: true, chat: true, code: true } as const;
 
 afterEach(cleanup);
 
@@ -41,7 +41,7 @@ describe("the star", () => {
   afterEach(() => sessionStorage.clear());
 
   test("is offered on an object's page", () => {
-    render(<StarPage path={["work", "ENG-42"]} label="ENG-42" workspace="work" />);
+    render(<StarPage path={["worklet", "ENG-42"]} label="ENG-42" workspace="worklet" />);
     expect(screen.getByRole("button", { name: "Keep in Starred" })).toBeTruthy();
   });
 
@@ -50,14 +50,14 @@ describe("the star", () => {
   // whoever signs in next.
   test("is not offered to a tab nobody is reading yet", () => {
     sessionStorage.clear();
-    render(<StarPage path={["work", "ENG-42"]} label="ENG-42" workspace="work" />);
+    render(<StarPage path={["worklet", "ENG-42"]} label="ENG-42" workspace="worklet" />);
     expect(screen.queryByRole("button")).toBeNull();
   });
 
   // The store drops a kept path that does not resolve, so a star pressed on
   // Not Found filled and then vanished on the next read, with nothing said.
   test("is not offered on an address that is no page", () => {
-    render(<StarPage path={["work", "projects"]} label="Not found" workspace="work" />);
+    render(<StarPage path={["worklet", "projects"]} label="Not found" workspace="worklet" />);
     expect(screen.queryByRole("button")).toBeNull();
   });
 
@@ -119,7 +119,7 @@ describe("the star", () => {
   // none from the frame, inline or in the phone's More: one control per
   // action on screen.
   test("is drawn by the frame unless the screen's own menu carries it", () => {
-    location.hash = "#/work/ENG-42";
+    location.hash = "#/worklet/ENG-42";
     const header = (star?: boolean) => {
       const store = new Store();
       const socket = new LiveSocket(store);
@@ -135,7 +135,7 @@ describe("the star", () => {
                   row={undefined}
                   counts={{}}
                   title="ENG-42"
-                  workspace="work"
+                  workspace="worklet"
                   {...(star === undefined ? {} : { star })}
                 />
               }
@@ -210,8 +210,8 @@ describe("the trail", () => {
       <Router>
         <Trail
           crumbs={[
-            { label: "Work", path: ["work"], icon: "square-kanban" },
-            { label: "Core platform", path: ["work", "ENG"], tag: "ENG" },
+            { label: "Worklet", path: ["worklet"], icon: "square-kanban" },
+            { label: "Core platform", path: ["worklet", "ENG"], tag: "ENG" },
             { label: "ENG-42", mono: true },
           ]}
         />
@@ -225,12 +225,12 @@ describe("the trail", () => {
   // THE HEADING IS THE CONTROL: a reader landing on the page's name by
   // heading is on the button that changes it.
   test("Work's scope crumb is the switcher's button, as the page's heading", () => {
-    location.hash = "#/work/ENG";
+    location.hash = "#/worklet/ENG";
     render(
       frame(
         <Trail
           crumbs={[
-            { label: "Work", path: ["work"], icon: "square-kanban" },
+            { label: "Worklet", path: ["worklet"], icon: "square-kanban" },
             { label: "Core platform", tag: "ENG", switch: "project", archived: true },
           ]}
         />,
@@ -243,8 +243,8 @@ describe("the trail", () => {
   });
 
   test("All projects draws its lenses beside the trail, as links, with no star", () => {
-    location.hash = "#/work/tasks";
-    const work = WORKSPACES.find((w) => w.key === "work")!;
+    location.hash = "#/worklet/tasks";
+    const work = WORKSPACES.find((w) => w.key === "worklet")!;
     render(
       frame(
         <AppShell
@@ -253,13 +253,13 @@ describe("the trail", () => {
               runs={EVERY}
               grants={null}
               crumbs={[
-                { label: "Work", path: ["work"], icon: "square-kanban" },
+                { label: "Worklet", path: ["worklet"], icon: "square-kanban" },
                 { label: "All projects", switch: "project" },
               ]}
               row={work}
               counts={{}}
               title="All projects"
-              workspace="work"
+              workspace="worklet"
             />
           }
         />,
@@ -271,9 +271,9 @@ describe("the trail", () => {
         .getAllByRole("link")
         .map((a) => [a.textContent?.replace(/\d+/g, "").trim(), a.getAttribute("href")]),
     ).toEqual([
-      ["Projects", "#/work"],
-      ["Tasks", "#/work/tasks"],
-      ["History", "#/work/history"],
+      ["Projects", "#/worklet"],
+      ["Tasks", "#/worklet/tasks"],
+      ["History", "#/worklet/history"],
     ]);
     expect(within(lenses).getByRole("link", { name: /Tasks/ }).getAttribute("aria-current")).toBe(
       "page",
@@ -550,7 +550,7 @@ describe("Settings' section picker on a phone", () => {
     const view = render(column(["settings", "people"]));
     fireEvent.click(row("#/settings/models"));
     view.rerender(column(["settings", "models"]));
-    expect(toggle().getAttribute("aria-expanded"), "a pick of Models & keys").toBe("false");
+    expect(toggle().getAttribute("aria-expanded"), "a pick of Models").toBe("false");
     view.rerender(column(["settings", "nodes"]));
     expect(toggle().getAttribute("aria-expanded"), "a link to Nodes").toBe("false");
     // THE SIDEBAR'S SETTINGS ROW, or Back: no pick in this list made it.
@@ -559,7 +559,7 @@ describe("Settings' section picker on a phone", () => {
   });
 
   // A SECTION READING A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Expensive
-  // tasks names its tasks by Crewlet Works' keys, so where the company runs
+  // tasks names its tasks by Worklet's keys, so where the company runs
   // none the Spend group is the readings alone. Mutation: draw the column's
   // sections unfiltered and the row is there.
   test("a section reading a service the company does not run is not drawn", () => {
@@ -570,7 +570,7 @@ describe("Settings' section picker on a phone", () => {
         query={new URLSearchParams()}
         grants={null}
         figures={{}}
-        runs={{ tracker: false, knowledge: true, code: true }}
+        runs={{ tracker: false, knowledge: true, chat: true, code: true }}
       />,
     );
     expect(row("#/settings/spend")).not.toBeNull();
@@ -587,11 +587,11 @@ describe("Settings' section picker on a phone", () => {
 
 // A TAB THE READER CANNOT OPEN IS LOCKED, as the sidebar's rows and the
 // Settings column's are: Live's Turns, Agent-to-agent and Event log looked
-// open to a Tracker-only reader and then refused. Mutation: drop the grants
+// open to a Worklet-only reader and then refused. Mutation: drop the grants
 // from the tabs and no tab names what it needs.
 test("a section tab the reader cannot open names the access it needs", () => {
   const live = WORKSPACES.find((w) => w.key === "live")!;
-  const locked = live.sections.filter((s) => s.grants && !s.grants.includes("tracker"));
+  const locked = live.sections.filter((s) => s.grants && !s.grants.includes("worklet"));
   expect(locked.length).toBeGreaterThan(0);
   render(
     <Router>
@@ -601,7 +601,7 @@ test("a section tab the reader cannot open names the access it needs", () => {
         query={new URLSearchParams()}
         counts={{}}
         runs={EVERY}
-        grants={["tracker"]}
+        grants={["worklet"]}
       />
     </Router>,
   );

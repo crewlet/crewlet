@@ -277,7 +277,7 @@ func TestTheKimiProfilesAgentFilesDenyTheirToolsAndKeepTheWeb(t *testing.T) {
 }
 
 // holdsKimiAllowlist checks one agent file's frontmatter keeps the two web
-// tools and nothing else.
+// tools and the crewlet server's, and nothing else.
 func holdsKimiAllowlist(t *testing.T, field, front string) {
 	t.Helper()
 	var meta struct {
@@ -309,15 +309,17 @@ func holdsKimiAllowlist(t *testing.T, field, front string) {
 			"second list is one more thing to keep in step", field, meta.DisallowedTools)
 	}
 	// Web is the one local tool this backend never denies, and these are
-	// what this CLI calls its two.
+	// what this CLI calls its two. The seat's own tools are the crewlet
+	// server's, which this CLI offers its model as mcp__crewlet__<name> — and
+	// only where the allowlist names them; a call with no such server (a
+	// text function) matches the entry to nothing.
 	tools := slices.Clone(meta.Tools)
 	slices.Sort(tools)
-	if want := []string{"FetchURL", "WebSearch"}; !slices.Equal(tools, want) {
+	if want := []string{"FetchURL", "WebSearch", "mcp__crewlet__*"}; !slices.Equal(tools, want) {
 		t.Errorf("%s: tools = %v, want exactly %v: a subscription seat must not have "+
 			"less reach than the same CLI at a terminal, and anything else reaches the "+
-			"filesystem, the shell or another agent — Crewlet's tools ride the prompt "+
-			"envelope, and a CLI acting on its own is invisible to the tool registry, "+
-			"the permission model and redaction", field, meta.Tools, want)
+			"filesystem, the shell or another agent — a CLI acting on its own is invisible "+
+			"to the tool registry and the permission model", field, meta.Tools, want)
 	}
 }
 

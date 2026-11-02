@@ -72,8 +72,8 @@ func (p *auxProvider) request(t *testing.T, i int) llm.Request {
 // pass reads as "nothing to learn" with no error anywhere to say why.
 func wantNoTools(t *testing.T, req llm.Request) {
 	t.Helper()
-	if len(req.Tools) != 0 {
-		t.Errorf("%d tools offered; the contract is text in the content", len(req.Tools))
+	if req.Tools != nil {
+		t.Error("tools offered; the contract is text in the content")
 	}
 }
 
@@ -623,10 +623,10 @@ func TestEveryCoalescedRequesterReachesThePrompt(t *testing.T) {
 
 	prompt := p.prompt(t, 0)
 	for _, want := range []string{
-		"- Requester: Sam (slack:U0TESTUSER1)",
-		`- Inbound message: "please open replies with hey sam"`,
-		"- Requester: miles",
-		`- Inbound message: "and cc me"`,
+		"- Requester: Sam (slack:U0TESTUSER1)\n- Inbound message:\n[untrusted:",
+		"\nplease open replies with\nhey sam\n[/untrusted:",
+		"- Requester: miles\n- Inbound message:\n[untrusted:",
+		"\nand cc me\n[/untrusted:",
 		"- Woken by: Help with reporting",
 		"- What it did: Summarise",
 		"- Tools called: search",

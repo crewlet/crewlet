@@ -1,0 +1,274 @@
+package worklet
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// The one-sided dependency repair: the LAST step of a gesture that stopped.
+//
+// # What a one-sided edge is, and what it costs
+//
+// A dependency is two commits — the authored `waiting_on` edge on the
+// dependent, and the mirrored entry in the blocker's own `Dependents`. The
+// second is best effort, because the first is already durable and refusing the
+// whole gesture over it would lose an edge somebody asked for.
+//
+// So the residue is an edge whose mirror never landed, and it costs two
+// distinct things:
+//
+//  1. THE BLOCKER'S ASSIGNEE WAS NEVER TOLD. The mirror carries
+//     [Snapshot.Dependents], which is what routes `blocking` — and the
+//     dependent's own commit routes to the DEPENDENT's parties, so "the wake
+//     went out with the other commit" is false.
+//  2. A CLOSE CANNOT NAME WHO IT UNBLOCKS from the blocker's own row.
+//
+// # Why the repair is LOUD
+//
+// Every other repair in this file's neighbourhood re-derives something that is
+// already true and tells nobody. This one is the missing STEP of a sequence,
+// not a correction of a value, and the step it is missing is the one that
+// announces itself. It carries `Late: true` so a person receiving it hours
+// after the fact can see why.
+
+// OneSidedRepairAge is how old an edge must be before the duty repairs it.
+//
+// THIRTY SECONDS: how long a gesture that is still running may reasonably take
+// to reach its own last step. An age, because a dependency gesture takes no
+// claim — unlike a move or a merge, whose duty waits for the walk's own lease
+// to lapse ([ClaimTTL]) — so how long ago the edge was authored is the only
+// thing that can say the gesture behind it is over. Shorter and the duty races
+// live writers, publishing a mirror the gesture was about to publish itself —
+// two records on one subject where one would do, and a second wake for the
+// blocker's assignee. Longer and a dependency written during a node's restart
+// sits unannounced for no reason.
+//
+// It is measured against the AUTHORED instant carried on the EDGE rather than
+// against the task's `updated_at`, because any unrelated edit resets that
+// column — and a busy task would postpone its own repair indefinitely, while
+// the busiest tasks are exactly the ones that acquire dependencies.
+const OneSidedRepairAge = 30 * time.Second
+
+// OneSided is one edge whose mirror was never written.
+type OneSided struct {
+	// Dependent is the task that authored the `waiting_on` edge, and
+	// Blocker the task that does not list it.
+	Dependent, Blocker string
+
+	// DependentKey, DependentAssignee and BlockerProject are what the
+	// repair's own commit needs: the mirror is published on the BLOCKER's
+	// subject and its wake names the dependent.
+	DependentKey      string
+	DependentProject  string
+	DependentAssignee string
+	BlockerProject    string
+	BlockerKey        string
+	BlockerAssignee   string
+
+	// BlockerDependents is how many the blocker already has, and
+	// BlockerRemoved whether it has since been tombstoned. Both are
+	// reasons the repair is PERMANENT rather than pending.
+	BlockerDependents int
+	BlockerRemoved    bool
+	BlockerMissing    bool
+}
+
+// Final reports an edge whose mirror can never be written.
+//
+// THREE REASONS, and they are the three the design names: the blocker is gone,
+// it was tombstoned since, or its dependent list is full. Each is a fact a
+// person resolves rather than something a retry could change — so the duty
+// stamps the edge and never looks at it again, and the attention queue is
+// where it surfaces.
+func (o OneSided) Final() (string, bool) {
+	switch {
+	case o.BlockerMissing:
+		return "the blocker no longer exists", true
+	case o.BlockerRemoved:
+		return "the blocker was removed", true
+	case o.BlockerDependents >= MaxDependents:
+		return fmt.Sprintf("the blocker already has %d dependents, which is "+
+			"the maximum", o.BlockerDependents), true
+	}
+	return "", false
+}
+
+// pendingOneSidedStatement is [duty.pendingOneSided]'s probe — whether any
+// edge waits for the repair at all — named for the plan test.
+const pendingOneSidedStatement = `
+			SELECT EXISTS (SELECT 1 FROM tracker_relations
+			               WHERE one_sided = 1 AND one_sided_final = 0)`
+
+// oneSidedStatement is [ScanOneSided]'s read, named for the plan test.
+//
+// IT DOES NOT COUNT THE BLOCKER'S DEPENDENTS, which [blockerDependentsStatement]
+// reads for the batch: as a correlated `COUNT(*)` here it was a seek of the
+// mirror per edge only for as long as the planner chose not to unnest it, and
+// unnested it is one grouped read of every mirror row in the company per batch
+// — and whether it is unnested is the planner's cost guess over a database
+// nobody has ANALYZEd, which no line of this statement decides (the rule is
+// stated at Decorrelated in internal/store/storetest).
+const oneSidedStatement = `
+		SELECT r.task_id, r.other_id,
+		       COALESCE(t.key, ''), t.project_key, COALESCE(t.assignee, ''),
+		       COALESCE(b.project_key, ''), COALESCE(b.key, ''),
+		       COALESCE(b.assignee, ''),
+		       CASE WHEN b.removed_at IS NULL THEN 0 ELSE 1 END,
+		       CASE WHEN b.id IS NULL THEN 1 ELSE 0 END
+		FROM tracker_relations r
+		JOIN tracker_tasks t ON t.id = r.task_id
+		LEFT JOIN tracker_tasks b ON b.id = r.other_id
+		WHERE r.one_sided = 1 AND r.one_sided_final = 0
+		  AND r.kind = 'waiting_on'
+		  -- THE DEPENDENT'S OWN TOMBSTONE ENDS THE MATTER. A
+		  -- removed task's edges are frozen, and announcing a
+		  -- dependency on work nobody is doing wakes somebody
+		  -- about nothing.
+		  AND t.removed_at IS NULL
+		  -- THE EDGE'S OWN AGE, never the task's updated_at: any
+		  -- unrelated edit to the dependent resets that column, and a
+		  -- busy task would postpone its own repair indefinitely --
+		  -- while the busiest tasks are exactly the ones that acquire
+		  -- dependencies.
+		  AND r.created_at <= ?
+		ORDER BY r.task_id, r.other_id
+		LIMIT ?`
+
+// blockerDependentsStatement counts the mirror rows of n blockers — how many
+// dependents each already lists — by the blockers' keys, the leading column of
+// the mirror's primary key, for the batch [oneSidedStatement] scanned. A
+// blocker listing none has no row, and counts zero.
+func blockerDependentsStatement(n int) string {
+	return `
+		SELECT task_id, COUNT(*) FROM tracker_task_dependents
+		WHERE task_id IN (` + placeholders(n) + `)
+		GROUP BY task_id`
+}
+
+// ScanOneSided reads the edges whose mirror has not been written.
+//
+// SELECTED ON THE STORED FLAG, which the applier derives on both ends — so
+// this is an indexed read of exactly the broken edges rather than a join over
+// every relation in the company. On a healthy fleet it reads nothing.
+func ScanOneSided(ctx context.Context, db store.ReplicatedReader, before time.Time,
+	limit int) ([]OneSided, error) {
+
+	if db.IsZero() {
+		return nil, fmt.Errorf("worklet: the one-sided repair has no replicated estate")
+	}
+	var out []OneSided
+	err := db.Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, oneSidedStatement, store.EncodeTime(before), limit)
+		if err != nil {
+			return fmt.Errorf("worklet: read the one-sided dependency edges: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var edge OneSided
+			var removed, missing int
+			if err := rows.Scan(&edge.Dependent, &edge.Blocker,
+				&edge.DependentKey, &edge.DependentProject, &edge.DependentAssignee,
+				&edge.BlockerProject, &edge.BlockerKey, &edge.BlockerAssignee,
+				&removed, &missing); err != nil {
+				return fmt.Errorf("worklet: read a one-sided edge: %w", err)
+			}
+			edge.BlockerRemoved, edge.BlockerMissing = removed == 1, missing == 1
+			out = append(out, edge)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("worklet: read the one-sided dependency edges: %w", err)
+		}
+		_ = rows.Close()
+		return countBlockerDependents(ctx, tx, out)
+	})
+	return out, err
+}
+
+// countBlockerDependents fills each edge's [OneSided.BlockerDependents] from
+// one grouped read of the batch's distinct blockers, IN THE SCAN'S OWN
+// TRANSACTION, so the count is of the same snapshot the edges were read from.
+// A batch is at most the scan's limit, so its blockers are a bounded list of
+// bound keys.
+func countBlockerDependents(ctx context.Context, tx *sql.Tx, edges []OneSided) error {
+	var blockers []any
+	seen := map[string]bool{}
+	for _, edge := range edges {
+		if !seen[edge.Blocker] {
+			seen[edge.Blocker] = true
+			blockers = append(blockers, edge.Blocker)
+		}
+	}
+	if len(blockers) == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, blockerDependentsStatement(len(blockers)), blockers...)
+	if err != nil {
+		return fmt.Errorf("worklet: count the one-sided edges' blockers' dependents: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	counts := make(map[string]int, len(blockers))
+	for rows.Next() {
+		var blocker string
+		var n int
+		if err := rows.Scan(&blocker, &n); err != nil {
+			return fmt.Errorf("worklet: read a blocker's dependent count: %w", err)
+		}
+		counts[blocker] = n
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("worklet: count the one-sided edges' blockers' dependents: %w", err)
+	}
+	for i := range edges {
+		edges[i].BlockerDependents = counts[edges[i].Blocker]
+	}
+	return nil
+}
+
+// RepairOneSided writes the mirror commit a dependency gesture never reached,
+// or stamps the edge permanently one-sided.
+//
+// ON THE BLOCKER'S SUBJECT, which is what makes this the missing STEP rather
+// than a new gesture: the record is the one the writer would have published,
+// with the same patch and the same wake, published by whoever holds the duty.
+func (w *Writer) RepairOneSided(ctx context.Context, opID string, edge OneSided,
+	leads Leads) (WriteResult, error) {
+
+	if _, final := edge.Final(); final {
+		// THE STAMP GOES ON THE DEPENDENT'S OWN EDGE, because that is
+		// the row that carries the flag and the row a person opens to
+		// see it — and it is a GESTURE, resolved inside the decide,
+		// because this write lands minutes after the scan that chose
+		// it and a collection composed from that scan would discard
+		// every edge authored since.
+		//
+		// QUIET. Nothing happened that anybody acts on: the dependency
+		// the author asked for is not going to be mirrored, and the
+		// place that says so is the attention queue the flag feeds.
+		return w.UpdateTask(ctx, opID, edge.Dependent, edge.DependentProject,
+			NoIfMatch, TaskPatch{Relate: &RelationIntent{Final: []Relation{{
+				Kind: RelationWaitingOn, Other: edge.Blocker,
+			}}}}, ChangeRelations, nil)
+	}
+	return w.UpdateTask(ctx, opID, edge.Blocker, edge.BlockerProject,
+		NoIfMatch, TaskPatch{Depend: &DependentIntent{Add: []string{edge.Dependent}}},
+		ChangeRelations, &Notify{
+			Kind: ChangeRelations,
+			// LATE, and the flag is what tells a reader this wake is
+			// the step rather than the change: a blocker's assignee
+			// receiving it hours later should see why.
+			Late: true,
+			Snapshot: Snapshot{
+				Key: edge.BlockerKey, Project: edge.BlockerProject,
+				Assignee:    edge.BlockerAssignee,
+				ProjectLead: projectLead(leads, edge.BlockerProject),
+				Dependents: []TaskParty{{
+					Task: edge.Dependent, Key: edge.DependentKey,
+					Assignee: edge.DependentAssignee,
+				}},
+			},
+		})
+}

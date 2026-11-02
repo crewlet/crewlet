@@ -23,17 +23,17 @@
  */
 
 import { useMemo } from "react";
-import { Card } from "@crewlethq/ui";
+import { Card, TimeRangePicker } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { useParam } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { checkStateWord } from "~/lib/checks.ts";
 import { barsOver, useTimeRange, type Bucket, type Offer } from "~/lib/range.ts";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { CHECK_STATES } from "~/contract/checks.ts";
 import type { CodeCheckRow } from "~/protocol/index.ts";
 import { FacetRail, type Facet } from "~/ui/FacetRail.tsx";
 import { Histogram } from "~/ui/Histogram.tsx";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { CheckListing } from "./checks/CheckList.tsx";
 
 /**
@@ -69,7 +69,7 @@ export function Checks() {
   const header = (rows: readonly CodeCheckRow[], more: boolean) => (
     <>
       <div className="toolbar">
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
       </div>
       <FacetRail
         name="State"

@@ -23,9 +23,10 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/hostbox"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// AN ENGINE WRITE'S BUILD, AT A COST THAT FOLLOWS THE CHANGE (ADR-0062): git's
+// AN ENGINE WRITE'S BUILD, AT A COST THAT FOLLOWS THE CHANGE (ADR-0085): git's
 // own plumbing over exactly the trees the change touches — never read-tree,
 // write-tree, update-index or a checkout, never ls-tree -r or diff-tree -r of
 // the base: no index of the whole tree, ever (TestAnEngineCommitReadsNoWholeTree
@@ -1060,7 +1061,7 @@ func (b *building) commitOf(ctx context.Context, tree string, parents []string, 
 }
 
 // commitDates are an engine-built commit's two dates (M3-decisions U18, the
-// user's answer (c); ADR-0062): its AUTHOR date the instant the principal
+// user's answer (c); ADR-0085): its AUTHOR date the instant the principal
 // acted — the operation's own, to the second — and its COMMITTER date that
 // instant or its parent's committer date, whichever is later. A parent dated
 // after the operation — a person's clock ahead — would otherwise give a child
@@ -1104,7 +1105,7 @@ func (b *building) pick(ctx context.Context) (string, code.EngineWriteResult, bo
 	}
 	if len(subject.parents) > 1 {
 		return "", wr.changeRefused(code.WriteMergeCommit, fmt.Sprintf("%s merges %d commits: reverting or picking "+
-			"a merge needs a mainline; do it in a coding box (run_sandbox)", shortID(w.Commit),
+			"a merge needs a mainline; do it in a checkout of the repository ("+toolname.CodeCheckout+")", shortID(w.Commit),
 			len(subject.parents))), true, nil
 	}
 	message := w.Message
@@ -1135,7 +1136,7 @@ func (b *building) pick(ctx context.Context) (string, code.EngineWriteResult, bo
 	if !m.clean {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := b.conflicted(ctx, m, fmt.Sprintf("%s does not apply cleanly on %s: %d paths conflict; resolve "+
-			"them in a coding box (run_sandbox), or write the result yourself", shortID(w.Commit),
+			"them in a checkout of the repository ("+toolname.CodeCheckout+"), or write the result yourself", shortID(w.Commit),
 			shortID(w.ExpectedHead), len(m.conflicts)+m.omitted))
 		return "", res, true, err
 	}
@@ -1167,8 +1168,8 @@ func (wr *writing) defaultMessage(subject *commitHeader) (string, code.EngineWri
 	}
 	if cut && (w.Kind == code.WriteCherryPick || !subjectEnds(text)) {
 		return "", wr.changeRefused(code.WriteTooLarge, fmt.Sprintf("%s's message is past the %s one engine write "+
-			"carries (code.MaxCommitPayloadBytes): give the write its message, or %s it in a coding box "+
-			"(run_sandbox)", shortID(w.Commit), humanBytes(code.MaxCommitPayloadBytes),
+			"carries (code.MaxCommitPayloadBytes): give the write its message, or %s it in a checkout of the repository "+
+			"("+toolname.CodeCheckout+")", shortID(w.Commit), humanBytes(code.MaxCommitPayloadBytes),
 			strings.ReplaceAll(string(w.Kind), "_", "-"))), true, nil
 	}
 	msg := pickMessage(w.Commit, text)
@@ -1579,7 +1580,8 @@ func fitConflicts(res code.EngineWriteResult, conflicts []code.Conflict, omitted
 func (b *building) pack(ctx context.Context) (code.EngineWriteResult, bool, error) {
 	return b.packWithin(ctx, code.MaxWritePackBytes, func(size int64) string {
 		return fmt.Sprintf("this change's pack is %s, past the %s one engine write may store "+
-			"(code.MaxWritePackBytes); make it in a coding box (run_sandbox)", humanBytes(size),
+			"(code.MaxWritePackBytes); make it in a checkout of the repository ("+toolname.CodeCheckout+")",
+			humanBytes(size),
 			humanBytes(code.MaxWritePackBytes))
 	})
 }

@@ -103,6 +103,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sourcetree"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Tree is the dashboard's SOURCE directory. Not the built bundle: that is
@@ -916,9 +917,9 @@ func declaration(tree string, kind head, name string) (decl, error) {
 				strings.Count(h.src[:h.toks[h.at].start], "\n")+1))
 		}
 		return decl{}, fmt.Errorf("clientsource: %d declarations of %s %s under "+
-			"%s %v, want exactly one — none is a gate certifying nothing, and two "+
+			"%s %s, want exactly one — none is a gate certifying nothing, and two "+
 			"are two copies that can drift from each other as well as from the "+
-			"engine", len(hits), kind, name, tree, where)
+			"engine", len(hits), kind, name, tree, words.And(where))
 	}
 	return hits[0], nil
 }

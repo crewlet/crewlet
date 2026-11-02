@@ -1,11 +1,11 @@
 /**
  * The detail of a service built into Crewlet, laid out as a third-party
- * app's is (a header with its state and one line, the counts, and Overview,
- * Agents, Activity and Settings) and filled only with what the engine answers.
+ * app's is (a header with its state and one line, the counts, and Agents,
+ * Activity and Settings) and filled only with what the engine answers.
  *
  * WHAT EACH PART READS, and why it is honest:
  *
- *  - WHO WORKS IN IT. Every agent seat holds both of Crewlet's apps
+ *  - WHO WORKS IN IT. Every agent seat holds Worklet and Doclet
  *    (`iam.Apps`), so the Agents tab lists every agent rather than a roster
  *    of who connected. What it adds per agent is what the engine counts:
  *    open, blocked and overdue work (`work_workload`), and the space an agent
@@ -13,11 +13,18 @@
  *    the derived chart).
  *  - THE COUNTS. Projects and their open tasks (`work_projects`), spaces and
  *    their pages (`containers`), and the newest change on each log
- *    (`work_activity`, `page_activity`). No delivery count, because a
- *    built-in service has no inbound edge to count.
+ *    (`work_activity`, `page_activity`), in the header. The projects and the
+ *    spaces counted there link to the service's own list of them, which
+ *    names each with its counts: an Overview tab that listed them again here
+ *    was a second copy of that page. No delivery count, because a built-in
+ *    service has no inbound edge to count.
  *  - THE SETTINGS. The company document's `tracker` and `knowledge` blocks,
  *    and its top-level `inbox` horizon, with the engine's own defaults where a
  *    key is unset, read only by an Admin, as the `config` question is.
+ *  - CHATLET COUNTS NOTHING: the rooms it answers for are the reader's own
+ *    seat's, never the company's, so its page names no count and no roster,
+ *    only what it gives and the way in, which is offered to a holder of Chatlet
+ *    as Worklet and Doclet offer theirs to a holder of their apps.
  *
  * A service the company runs elsewhere says what replaces it and what
  * running it here would mean, with no control: switching is not offered yet.
@@ -44,24 +51,24 @@ import { documentUnits, handleLabel, indexOrg, type Seat } from "~/lib/seats.ts"
 import { useViewer } from "~/lib/viewer.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useNow } from "~/lib/clock.ts";
-import { KNOWLEDGE, TRACKER, needsWords } from "~/lib/access.ts";
+import { CHATLET, DOCLET, WORKLET, needsWords } from "~/lib/access.ts";
 import { fmtCount, plural, relTime } from "~/lib/format.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { CompanyDocument } from "~/protocol/types.ts";
 import { FeedRow, ServiceMark, ServiceState } from "./parts.tsx";
-import type { BuiltInService, Model } from "./model.ts";
+import type { BuiltInService, Model, ReplacingApp } from "./model.ts";
 
 /** What a settings row says for a key the company document leaves unset. */
 const DEFAULT = "The engine's default";
 
-/** What a service gives the company, for the off state and Chat. */
+/** What a service gives the company: what running it here would give, or what Chatlet gives. */
 const GIVES: Record<BuiltInService["key"], string[]> = {
-  works: [
+  worklet: [
     "Projects and tasks, on boards and lists",
     "An inbox and My work for every person",
     "Asks that wait on a person's decision",
   ],
-  knowledge: [
+  doclet: [
     "Spaces and pages, with every revision kept",
     "Search across pages and work, by words and meaning",
     "Skills and diaries the agents read before they act",
@@ -101,24 +108,64 @@ function block(
   doc: CompanyDocument | null | undefined,
   key: "tracker" | "knowledge" | "inbox",
 ): Record<string, unknown> {
-  const value = (doc as Record<string, unknown> | null | undefined)?.[key];
+  return asRecord((doc as Record<string, unknown> | null | undefined)?.[key]);
+}
+
+/** A value of the company document as an object, or an empty one where it is none. */
+function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+/** What each service holds, as the off state's sentences name it. */
+const HOLDS: Record<BuiltInService["key"], string> = {
+  worklet: "tasks",
+  doclet: "pages",
+  chat: "conversations",
+};
+
+/** A replacing app's name on its own line and button. */
+const APP_NAMES: Record<ReplacingApp, string> = {
+  jira: "Jira",
+  confluence: "Confluence",
+  slack: "Slack",
+  mattermost: "Mattermost",
+};
+
+/**
+ * The tool on the directory that connects a replacing app: Jira and
+ * Confluence are one Atlassian connection, and a chat vendor is its own.
+ */
+function connectionOf(app: ReplacingApp): "atlassian" | "slack" | "mattermost" {
+  return app === "jira" || app === "confluence" ? "atlassian" : app;
 }
 
 /** What replaces a service the company does not run here. */
 function Elsewhere({ service, model }: { service: BuiltInService; model: Model | null }) {
   const by = service.replacedBy;
-  const tool = model?.byKey.get("atlassian");
-  const what = service.key === "works" ? "tasks" : "pages";
+  const what = HOLDS[service.key];
+  const apps = by?.keys ?? [];
+  const only = apps.length === 1 ? apps[0] : undefined;
+  // THE SENTENCE NAMES THE CONNECTION THE APP RIDES: Jira and Confluence
+  // through the one Atlassian integration, a chat vendor as itself. A vendor
+  // nobody named (the `viewer` answer tells the names to a holder of Chatlet) is
+  // still a vendor's chat, said in words.
+  const how =
+    service.key === "chat"
+      ? `Your agents talk on ${by?.name}`
+      : `Your agents work in ${by?.name} through the Atlassian integration`;
   return (
     <div className="int-service-off">
       <Callout
         variant="neutral"
-        icon={by ? <VendorMark vendor="atlassian" size="md" /> : undefined}
-        title={by ? `${by.name} does this for your company` : "Nothing does this for your company"}
+        icon={only ? <VendorMark vendor={connectionOf(only)} size="md" /> : undefined}
+        title={
+          by
+            ? `${capitalised(by.name)} ${apps.length > 1 ? "do" : "does"} this for your company`
+            : "Nothing does this for your company"
+        }
       >
         {by
-          ? `Your agents work in ${by.name} through the Atlassian integration, so ${service.name} is not in use. Running both would leave two places for the same ${what}.`
+          ? `${how}, so ${service.name} is not in use. Running both would leave two places for the same ${what}.`
           : `The company document leaves ${service.name} out and names nothing in its place.`}
       </Callout>
       <section aria-label={`What ${service.name} would give you`}>
@@ -135,22 +182,35 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
         The company document decides which system holds the company&apos;s {what}, so this page
         offers no switch: moving them is a change to plan, not a toggle.
       </p>
-      {by && (
+      {apps.length > 0 && (
         <div className="int-row-start">
-          <ButtonLink
-            size="small"
-            variant="secondary"
-            href={href(["company", "integrations", by.key])}
-          >
-            Open {by.name}
-          </ButtonLink>
-          {tool && !tool.configured && (
-            <span className="t-caption">Atlassian is not connected.</span>
-          )}
+          {apps.map((app) => (
+            <ButtonLink
+              key={app}
+              size="small"
+              variant="secondary"
+              href={href(["company", "integrations", app])}
+            >
+              Open {APP_NAMES[app]}
+            </ButtonLink>
+          ))}
+          {[...new Set(apps.map(connectionOf))].map((key) => {
+            const tool = model?.byKey.get(key);
+            return tool && !tool.configured ? (
+              <span key={key} className="t-caption">
+                {tool.entry.name} is not connected.
+              </span>
+            ) : null;
+          })}
         </div>
       )}
     </div>
   );
+}
+
+/** A phrase as the start of a sentence: "a vendor's chat" is "A vendor's chat". */
+function capitalised(phrase: string): string {
+  return phrase.charAt(0).toUpperCase() + phrase.slice(1);
 }
 
 /** One agent's line on a service's Agents tab. */
@@ -190,10 +250,10 @@ function verb(kind: string): string {
   return VERBS[kind] ?? kind.replace(/_/g, " ");
 }
 
-type Tab = "overview" | "agents" | "activity" | "settings";
+type Tab = "agents" | "activity" | "settings";
 
 function useTab(): [Tab, (t: string) => void] {
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>("agents");
   return [tab, (t) => setTab(t as Tab)];
 }
 
@@ -215,7 +275,6 @@ function ServiceTabs({
       value={tab}
       onValueChange={onTab}
       items={[
-        { value: "overview", label: "Overview" },
         { value: "agents", label: "Agents", count: agents },
         { value: "activity", label: "Activity" },
         { value: "settings", label: "Settings" },
@@ -237,7 +296,6 @@ export function ServicePane({ service, model }: { service: BuiltInService; model
       actions={actions}
     />
   );
-  if (service.key === "chat") return <ChatPane service={service} head={head} />;
   if (!service.known) return <div className="int-detail">{head(service.sentence)}</div>;
   if (!service.on) {
     return (
@@ -247,19 +305,20 @@ export function ServicePane({ service, model }: { service: BuiltInService; model
       </div>
     );
   }
-  return service.key === "works" ? (
-    <WorksPane service={service} head={head} />
+  if (service.key === "chat") return <ChatPane service={service} head={head} />;
+  return service.key === "worklet" ? (
+    <WorkletPane service={service} head={head} />
   ) : (
-    <KnowledgePane service={service} head={head} />
+    <DocletPane service={service} head={head} />
   );
 }
 
 type Head = (line: ReactNode, actions?: ReactNode, facts?: Fact[]) => ReactNode;
 
-function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
+function WorkletPane({ service, head }: { service: BuiltInService; head: Head }) {
   const viewer = useViewer();
   const ask = useServicesAsk();
-  const enabled = ask.tracker && viewer.tracker;
+  const enabled = ask.tracker && viewer.worklet;
   const now = useNow();
   const org = useOrg();
   const agents = useMemo(() => indexOrg(org).seats.filter((s) => s.kind === "agent"), [org]);
@@ -286,7 +345,7 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
     agents.find((a) => a.handle === handle)?.name ?? handle ?? "Someone";
   // THE COMPANY'S HORIZON, at the top of its document (`inbox.retention_days`)
   // and not under `tracker`: a person's inbox is every native domain's
-  // notices, and this pane says how long the tracker's are kept. AN UNSET KEY
+  // notices, and this pane says how long Worklet's are kept. AN UNSET KEY
   // IS THE ENGINE'S DEFAULT, said as such: a copy of the engine's constant here
   // would be a second answer that drifts.
   const inbox = block(config.data, "inbox");
@@ -300,7 +359,7 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
       <div className="int-detail">
         {head(service.sentence)}
         <Callout variant="neutral">
-          {needsWords("Seeing its projects, tasks and who is working on what", [TRACKER])}
+          {needsWords("Seeing its projects, tasks and who is working on what", [WORKLET])}
         </Callout>
       </div>
     );
@@ -325,6 +384,8 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
             ) : (
               <EmptyValue label="Reading" />
             ),
+            // WORKLET'S OWN LIST OF THEM, each with its open and done counts.
+            ...(service.open ? { path: service.open.path } : {}),
           },
           {
             label: "Open tasks",
@@ -340,120 +401,105 @@ function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
           },
         ],
       )}
-      <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
-      {tab === "overview" && (
-        <div className="int-tab">
-          <section aria-label="Projects">
-            <h3 className="t-label">Projects</h3>
-            <ul className="int-feed">
-              {rows.map((p) => (
-                <li key={p.key} className="int-feed-row">
-                  <a className="int-feed-what" href={href(["work", p.key])}>
-                    <strong>{p.name}</strong> <span className="mono">{p.key}</span>
-                  </a>
-                  <span className="t-caption int-feed-at">
-                    {p.task_counts.todo + p.task_counts.active} open · {p.task_counts.done} done
-                  </span>
-                </li>
-              ))}
-              {projects.data && rows.length === 0 && <li className="t-caption">No project yet.</li>}
-            </ul>
-          </section>
-        </div>
-      )}
-      {tab === "agents" && (
-        <div className="int-tab">
-          <p className="t-caption">
-            Every agent works in Crewlet Works: it holds the Tracker app with its seat.
-          </p>
-          <div className="int-seats">
-            {agents.map((a) => {
-              const row = load.get(a.handle);
-              const home = homeOf(config.data, a.handle);
-              const detail = [
-                home.project ? `Files work in ${home.project}` : "",
-                row ? `${row.blocked} blocked · ${row.overdue} overdue` : "",
-              ]
-                .filter(Boolean)
-                .join(" · ");
-              return (
-                <AgentLine
-                  key={a.handle}
-                  seat={a}
-                  detail={detail || handleLabel(a.handle)}
-                  state={
-                    <Tag
-                      size="sm"
-                      variant={row && row.open > 0 ? "info" : "neutral"}
-                      appearance={row && row.open > 0 ? "soft" : "outline"}
-                    >
-                      {row && row.open > 0 ? `${row.open} open` : "Nothing open"}
-                    </Tag>
-                  }
-                />
-              );
-            })}
+      {/* THE TAB BAR AND ITS PANEL, one step apart (`.tab-detail`). */}
+      <div className="tab-detail">
+        <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
+        {tab === "agents" && (
+          <div className="int-tab">
+            <p className="t-caption">
+              Every agent works in Worklet: it holds the Worklet app with its seat.
+            </p>
+            <div className="int-seats">
+              {agents.map((a) => {
+                const row = load.get(a.handle);
+                const home = homeOf(config.data, a.handle);
+                const detail = [
+                  home.project ? `Files work in ${home.project}` : "",
+                  row ? `${row.blocked} blocked · ${row.overdue} overdue` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
+                return (
+                  <AgentLine
+                    key={a.handle}
+                    seat={a}
+                    detail={detail || handleLabel(a.handle)}
+                    state={
+                      <Tag
+                        size="sm"
+                        variant={row && row.open > 0 ? "info" : "neutral"}
+                        appearance={row && row.open > 0 ? "soft" : "outline"}
+                      >
+                        {row && row.open > 0 ? `${row.open} open` : "Nothing open"}
+                      </Tag>
+                    }
+                  />
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
-      {tab === "activity" && (
-        <div className="int-tab">
-          <ul className="int-feed">
-            {records.map((r) => (
-              <FeedRow
-                key={r.id}
-                who={nameOf(r.actor)}
-                what={
-                  <>
-                    {verb(r.kind)}{" "}
-                    <span className="mono">{r.subject_key ?? keys[r.subject_id] ?? "a task"}</span>
-                    {r.excerpt ? <span className="t-caption"> · {r.excerpt}</span> : null}
-                  </>
-                }
-                at={r.at}
-                now={now}
-              />
-            ))}
-            {feed.data && records.length === 0 && (
-              <li className="t-caption">Nothing has changed yet.</li>
-            )}
-          </ul>
-        </div>
-      )}
-      {tab === "settings" && (
-        <div className="int-tab">
-          <DescriptionList
-            dense
-            items={[
-              ["Work tracker", "Crewlet Works"],
-              [
-                "Inbox keeps a notice for",
-                viewer.admin ? retention : <EmptyValue label="Admins see this" />,
-              ],
-              [
-                "Projects the chart declares",
-                viewer.admin ? (
-                  documentUnits(config.data)
-                    .map((u) => u.project)
-                    .filter(Boolean)
-                    .join(", ") || <EmptyValue label="None" />
-                ) : (
-                  <EmptyValue label="Admins see this" />
-                ),
-              ],
-            ]}
-          />
-          <p className="t-caption">These live in the company document, under tracker.</p>
-        </div>
-      )}
+        )}
+        {tab === "activity" && (
+          <div className="int-tab">
+            <ul className="int-feed">
+              {records.map((r) => (
+                <FeedRow
+                  key={r.id}
+                  who={nameOf(r.actor)}
+                  what={
+                    <>
+                      {verb(r.kind)}{" "}
+                      <span className="mono">
+                        {r.subject_key ?? keys[r.subject_id] ?? "a task"}
+                      </span>
+                      {r.excerpt ? <span className="t-caption"> · {r.excerpt}</span> : null}
+                    </>
+                  }
+                  at={r.at}
+                  now={now}
+                />
+              ))}
+              {feed.data && records.length === 0 && (
+                <li className="t-caption">Nothing has changed yet.</li>
+              )}
+            </ul>
+          </div>
+        )}
+        {tab === "settings" && (
+          <div className="int-tab">
+            <DescriptionList
+              dense
+              items={[
+                ["Work tracker", "Worklet"],
+                [
+                  "Inbox keeps a notice for",
+                  viewer.admin ? retention : <EmptyValue label="Admins see this" />,
+                ],
+                [
+                  "Projects the chart declares",
+                  viewer.admin ? (
+                    documentUnits(config.data)
+                      .map((u) => u.project)
+                      .filter(Boolean)
+                      .join(", ") || <EmptyValue label="None" />
+                  ) : (
+                    <EmptyValue label="Admins see this" />
+                  ),
+                ],
+              ]}
+            />
+            <p className="t-caption">These live in the company document, under tracker.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-function KnowledgePane({ service, head }: { service: BuiltInService; head: Head }) {
+function DocletPane({ service, head }: { service: BuiltInService; head: Head }) {
   const viewer = useViewer();
   const ask = useServicesAsk();
-  const enabled = ask.knowledge && viewer.knowledge;
+  const enabled = ask.knowledge && viewer.doclet;
   const now = useNow();
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -483,7 +529,7 @@ function KnowledgePane({ service, head }: { service: BuiltInService; head: Head 
       <div className="int-detail">
         {head(service.sentence)}
         <Callout variant="neutral">
-          {needsWords("Seeing its spaces, pages and what changed", [KNOWLEDGE])}
+          {needsWords("Seeing its spaces, pages and what changed", [DOCLET])}
         </Callout>
       </div>
     );
@@ -502,6 +548,8 @@ function KnowledgePane({ service, head }: { service: BuiltInService; head: Head 
           {
             label: "Spaces",
             value: containers.data ? fmtCount(spaces.length) : <EmptyValue label="Reading" />,
+            // DOCLET'S OWN LIST OF THEM, each with its pages.
+            ...(service.open ? { path: service.open.path } : {}),
           },
           {
             label: "Pages",
@@ -513,168 +561,141 @@ function KnowledgePane({ service, head }: { service: BuiltInService; head: Head 
           },
         ],
       )}
-      <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
-      {tab === "overview" && (
-        <div className="int-tab">
-          <section aria-label="Spaces">
-            <h3 className="t-label">Spaces</h3>
-            <ul className="int-feed">
-              {spaces.map((c) => (
-                <li key={c.key} className="int-feed-row">
-                  <a className="int-feed-what" href={href(["knowledge", c.key])}>
-                    <strong>{c.name || c.key}</strong> <span className="mono">{c.key}</span>
-                  </a>
-                  <span className="t-caption int-feed-at">{plural(c.pages, "page")}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </div>
-      )}
-      {tab === "agents" && (
-        <div className="int-tab">
-          <p className="t-caption">
-            Every agent reads and writes the knowledge base: it holds the Knowledge app with its
-            seat.
-          </p>
-          <div className="int-seats">
-            {agents.map((a) => {
-              const home = homeOf(config.data, a.handle);
-              const space = home.space ? spaces.find((c) => c.key === home.space) : undefined;
-              const chain = chains.get(a.handle) ?? [];
-              return (
-                <AgentLine
-                  key={a.handle}
-                  seat={a}
-                  detail={
-                    [
-                      home.space
-                        ? `Writes in ${home.space}${space ? ` (${plural(space.pages, "page")})` : ""}`
-                        : "",
-                      chain.length > 0
-                        ? `Reads ${plural(chain.length, "onboarding page")} first`
-                        : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || handleLabel(a.handle)
-                  }
-                  state={
-                    <StatusDot tone={home.space || !viewer.admin ? "success" : "neutral"}>
-                      {home.space
-                        ? "Has a space"
-                        : viewer.admin
-                          ? "No space of its own"
-                          : "Reads and writes"}
-                    </StatusDot>
-                  }
-                />
-              );
-            })}
+      {/* THE TAB BAR AND ITS PANEL, one step apart (`.tab-detail`). */}
+      <div className="tab-detail">
+        <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
+        {tab === "agents" && (
+          <div className="int-tab">
+            <p className="t-caption">
+              Every agent reads and writes in Doclet: it holds the Doclet app with its seat.
+            </p>
+            <div className="int-seats">
+              {agents.map((a) => {
+                const home = homeOf(config.data, a.handle);
+                const space = home.space ? spaces.find((c) => c.key === home.space) : undefined;
+                const chain = chains.get(a.handle) ?? [];
+                return (
+                  <AgentLine
+                    key={a.handle}
+                    seat={a}
+                    detail={
+                      [
+                        home.space
+                          ? `Writes in ${home.space}${space ? ` (${plural(space.pages, "page")})` : ""}`
+                          : "",
+                        chain.length > 0
+                          ? `Reads ${plural(chain.length, "onboarding page")} first`
+                          : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || handleLabel(a.handle)
+                    }
+                    state={
+                      <StatusDot tone={home.space || !viewer.admin ? "success" : "neutral"}>
+                        {home.space
+                          ? "Has a space"
+                          : viewer.admin
+                            ? "No space of its own"
+                            : "Reads and writes"}
+                      </StatusDot>
+                    }
+                  />
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
-      {tab === "activity" && (
-        <div className="int-tab">
-          <ul className="int-feed">
-            {changes.map((c) => (
-              <FeedRow
-                key={c.id}
-                who={nameOf(c.actor)}
-                what={
-                  <>
-                    {verb(c.kind)}{" "}
-                    <a className="prose-link" href={href(["knowledge", "pages", c.page_id])}>
-                      {c.title || "a page"}
-                    </a>
-                    {c.container ? <span className="t-caption"> in {c.container}</span> : null}
-                  </>
-                }
-                at={c.at}
-                now={now}
-              />
-            ))}
-            {feed.data && changes.length === 0 && (
-              <li className="t-caption">No page has changed yet.</li>
-            )}
-          </ul>
-        </div>
-      )}
-      {tab === "settings" && (
-        <div className="int-tab">
-          <DescriptionList
-            dense
-            items={[
-              ["Knowledge base", "Crewlet Knowledge"],
-              ...(viewer.admin
-                ? ([
-                    [
-                      "Company pages",
-                      typeof knowledge.root_space === "string" ? knowledge.root_space : DEFAULT,
-                    ],
-                    ["Tool skills", skills === "" ? "Off" : (skills ?? DEFAULT)],
-                    ["Search reaches", scope.length > 0 ? scope.join(", ") : "Every space"],
-                    [
-                      "Search by meaning",
-                      knowledge.vectors === false
-                        ? "Off"
-                        : knowledge.vectors === true
-                          ? "On"
-                          : "When an embeddings provider is set",
-                    ],
-                  ] as [string, string][])
-                : ([["Everything else", "Admins see this"]] as [string, string][])),
-            ]}
-          />
-          <p className="t-caption">These live in the company document, under knowledge.</p>
-        </div>
-      )}
+        )}
+        {tab === "activity" && (
+          <div className="int-tab">
+            <ul className="int-feed">
+              {changes.map((c) => (
+                <FeedRow
+                  key={c.id}
+                  who={nameOf(c.actor)}
+                  what={
+                    <>
+                      {verb(c.kind)}{" "}
+                      <a className="prose-link" href={href(["doclet", "pages", c.page_id])}>
+                        {c.title || "a page"}
+                      </a>
+                      {c.container ? <span className="t-caption"> in {c.container}</span> : null}
+                    </>
+                  }
+                  at={c.at}
+                  now={now}
+                />
+              ))}
+              {feed.data && changes.length === 0 && (
+                <li className="t-caption">No page has changed yet.</li>
+              )}
+            </ul>
+          </div>
+        )}
+        {tab === "settings" && (
+          <div className="int-tab">
+            <DescriptionList
+              dense
+              items={[
+                ["Knowledge base", "Doclet"],
+                ...(viewer.admin
+                  ? ([
+                      [
+                        "Company pages",
+                        typeof knowledge.root_space === "string" ? knowledge.root_space : DEFAULT,
+                      ],
+                      ["Tool skills", skills === "" ? "Off" : (skills ?? DEFAULT)],
+                      ["Search reaches", scope.length > 0 ? scope.join(", ") : "Every space"],
+                      [
+                        "Search by meaning",
+                        knowledge.vectors === false
+                          ? "Off"
+                          : knowledge.vectors === true
+                            ? "On"
+                            : "When an embeddings provider is set",
+                      ],
+                    ] as [string, string][])
+                  : ([["Everything else", "Admins see this"]] as [string, string][])),
+              ]}
+            />
+            <p className="t-caption">These live in the company document, under knowledge.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-/** Crewlet Chat: what it will do, and nothing it cannot count yet. */
+/** Chatlet in use: what it gives and the way in, and no count (see the file's doc). */
 function ChatPane({ service, head }: { service: BuiltInService; head: Head }) {
+  // THE WAY IN IS CHATLET'S: every room is behind the Chatlet app, so a reader
+  // without it is told what would open it rather than offered a link to a
+  // screen that refuses them.
+  const viewer = useViewer();
   return (
     <div className="int-detail">
-      {head("Talk with your agents in Crewlet itself.")}
-      <div className="int-soon">
-        <div aria-hidden>
-          <ServiceMark service={{ ...service, soon: false }} size={64} />
-        </div>
-        <div className="int-soon-copy">
-          <h3 className="int-step-title">Coming soon</h3>
-          <p className="t-body">
-            Chat puts the conversation where the work already is, so asking an agent something does
-            not mean leaving Crewlet for another app.
-          </p>
-          <List variant="plain" className="int-checks">
-            {GIVES.chat.map((line) => (
-              <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
-                {line}
-              </List.Item>
-            ))}
-          </List>
-          <p className="t-caption">
-            Until it ships, your team talks with agents in Slack or Mattermost.
-          </p>
-          <div className="int-row-start">
-            <ButtonLink
-              size="small"
-              variant="secondary"
-              href={href(["company", "integrations", "slack"])}
-            >
-              Slack
-            </ButtonLink>
-            <ButtonLink
-              size="small"
-              variant="secondary"
-              href={href(["company", "integrations", "mattermost"])}
-            >
-              Mattermost
-            </ButtonLink>
-          </div>
-        </div>
-      </div>
+      {head(
+        service.sentence,
+        viewer.chatlet && service.open && (
+          <ButtonLink size="small" variant="primary" href={href(service.open.path)}>
+            {service.open.label}
+          </ButtonLink>
+        ),
+      )}
+      {!viewer.chatlet && (
+        <Callout variant="neutral">
+          {needsWords("Talking with your agents in it", [CHATLET])}
+        </Callout>
+      )}
+      <section aria-label={`What ${service.name} gives you`}>
+        <h3 className="t-label">What it gives you</h3>
+        <List variant="plain" className="int-checks">
+          {GIVES.chat.map((line) => (
+            <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
+              {line}
+            </List.Item>
+          ))}
+        </List>
+      </section>
     </div>
   );
 }

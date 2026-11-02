@@ -4,7 +4,7 @@
  *
  * A REAL LINK EITHER WAY: its `href` is the task's own page, so a middle click
  * or a modified one opens a tab, and a plain click opens the task in the side
- * panel instead (`rowPeekHandler`), because the inbox is where the reader is
+ * panel instead (`peekClickHandler`), because the inbox is where the reader is
  * and sending them away to read one task is the navigation every tracker
  * learned not to make.
  *
@@ -14,10 +14,15 @@
  * NAMED BY ITS KEY, OPENED AT ITS ADDRESS ([itemAddress]): a key another task
  * claimed first opens that task, so a row about the task that did not claim it
  * would open the claimant's page and thread from a duplicate's notice.
+ *
+ * A ROW'S TASK CARRIES THE TASK GLYPH (`glyph`), as a key in the row's words
+ * does (`components/InlineToken.tsx`), so the two read as the same thing; the
+ * reading pane's byline is the frame's navigation and stays plain.
  */
 
-import { Link } from "@crewlethq/ui";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { InlineRef, Link, peekClickHandler } from "@crewlethq/ui";
+import { SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { itemAddress, type ItemRef } from "~/lib/work.ts";
 
@@ -25,12 +30,15 @@ export function TaskLink({
   item,
   label,
   title,
+  glyph = false,
 }: {
   /** What it opens ([itemAddress]). */
   item: ItemRef;
   /** The key it is named by, or "": a turn's task is addressed by id alone. */
   label: string;
   title?: string | undefined;
+  /** Draw the task glyph before the key, as a row does. */
+  glyph?: boolean;
 }) {
   const peek = usePeekControls();
   const ref: ObjectRef = { kind: "item", id: itemAddress(item) };
@@ -39,9 +47,15 @@ export function TaskLink({
       href={peekHref(ref)}
       variant="quiet"
       size="inherit"
-      onClick={rowPeekHandler(() => peek.open(ref))}
+      onClick={peekClickHandler(() => peek.open(ref))}
     >
-      <span className="mono">{label || "Task"}</span>
+      {glyph ? (
+        <InlineRef mark={<SquareKanbanGlyph />} code={label !== ""}>
+          {label || "Task"}
+        </InlineRef>
+      ) : (
+        <span className="mono">{label || "Task"}</span>
+      )}
       {title ? ` ${title}` : ""}
     </Link>
   );

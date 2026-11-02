@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // VerifiedLog is a [LogReader] over a domain's own log that answers each
@@ -83,7 +85,7 @@ func (v VerifiedLog) At(ctx context.Context, seq uint64) (string, []byte, time.T
 		return subject, body, storedAt, true, nil
 	case KeyUnknown:
 		return subject, nil, storedAt, true, fmt.Errorf("%w (sequence %d; this node "+
-			"holds %v)", ErrRecordUnverified, seq, v.Verifier.KeyIDs())
+			"holds %s)", ErrRecordUnverified, seq, words.And(v.Verifier.KeyIDs()))
 	}
 	return subject, nil, storedAt, true, fmt.Errorf("%w (sequence %d)",
 		ErrRecordTampered, seq)

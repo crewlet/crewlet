@@ -2,6 +2,7 @@ package queries
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -17,7 +18,7 @@ import (
 // revision asked about; `code_change_routing`, whom its records reached
 // (…/routing); and `code_reviews`, the reviews one reviewer gave
 // (GET /code/reviews). Each is decided per repository by the grant the
-// serving node derives (code.GrantOf, ADR-0058), as every code question is,
+// serving node derives (code.GrantOf, ADR-0081), as every code question is,
 // and read at the caller's own freshness: a screen reads a change back at
 // `session` beside the position its write answered with.
 //
@@ -241,6 +242,15 @@ func (g changeAsk) revision(ctx context.Context, n, latest int64, after statelog
 	return answer.Revisions[0], nil
 }
 
+// revisionAt is [changeAsk.revision] as the code domain reads a change's
+// revisions beside each other ([code.ChangeRevisions]): each of a change whose
+// latest is latest, read at session floored at after.
+func (g changeAsk) revisionAt(ctx context.Context, latest int64, after statelog.Position) func(int64) (
+	code.RevisionRow, error) {
+
+	return func(n int64) (code.RevisionRow, error) { return g.revision(ctx, n, latest, after) }
+}
+
 // gap refuses a revision whose files cannot be read from its facts
 // (code.RevisionRow.FilesGap): one its home has not measured yet is
 // [ErrUnavailable], which a wait clears, and the rest are absences that name
@@ -265,31 +275,32 @@ func (g changeAsk) gap(d *code.ChangeDetail, r code.RevisionRow, based bool) err
 // files answers the `files` and `diff` parts: a revision's files or one file's
 // patch from the base its facts record, or since an earlier revision the
 // interdiff of the two (code.RevisionDiff), asked of the home git node at the
-// floor of the records that moved the revisions (code.ObjectFloor).
+// floor of the records that moved the revisions (code.ObjectFloor) — the two
+// revisions read at once once the head is (code.ChangeRevisions), as the code
+// tools read them.
 func (g changeAsk) files(ctx context.Context, call changeCall) (any, error) {
 	d, head, first, err := g.head(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rev := head
-	if call.revision != 0 && call.revision != head.N {
-		if rev, err = g.revision(ctx, call.revision, d.Revision, first); err != nil {
-			return nil, err
-		}
+	// THE REVISION READ, AS ITS NUMBER SAYS: the head where none is asked —
+	// so an earlier one is checked against it before either is read.
+	asked := head.N
+	if call.revision != 0 {
+		asked = call.revision
+	}
+	if call.since != 0 && call.since >= asked {
+		return nil, fmt.Errorf("%w: since_revision %d is not before revision %d, the one read", ErrBadParams,
+			call.since, asked)
+	}
+	rev, since, err := code.ChangeRevisions(head, call.revision, call.since,
+		g.revisionAt(ctx, d.Revision, first))
+	if err != nil {
+		return nil, err
 	}
 	revs := []code.RevisionRow{rev}
-	var since *code.RevisionRow
-	if call.since != 0 {
-		if call.since >= rev.N {
-			return nil, fmt.Errorf("%w: since_revision %d is not before revision %d, the one read", ErrBadParams,
-				call.since, rev.N)
-		}
-		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-		earlier, err := g.revision(ctx, call.since, d.Revision, first)
-		if err != nil {
-			return nil, err
-		}
-		revs, since = append(revs, earlier), &earlier
+	if since != nil {
+		revs = append(revs, *since)
 	}
 	for _, r := range revs {
 		if err = g.gap(d, r, since == nil); err != nil {
@@ -314,39 +325,49 @@ func (g changeAsk) files(ctx context.Context, call changeCall) (any, error) {
 // findings answers the `findings` part: a page of the change's findings as the
 // reader serves it, read at session floored at the head's read, each placed in
 // the revision asked about — the head by default — without a read where the
-// rows say where it is, and by ONE re-anchoring of the revision otherwise
-// (code.PlaceFindings), asked at the floor of the head revision and of the
-// revision placed in.
+// rows say where it is, and otherwise by re-anchorings of the revision asked
+// at once, one for every code.MaxReanchors findings (code.Place), so a page
+// of any size the reader serves is placed — each asked at the floor of the
+// head revision and of the revision placed in.
 func (g changeAsk) findings(ctx context.Context, call changeCall) (any, error) {
 	d, head, first, err := g.head(ctx)
 	if err != nil {
 		return nil, err
 	}
-	rev := head
-	if call.revision != 0 && call.revision != head.N {
-		if rev, err = g.revision(ctx, call.revision, d.Revision, first); err != nil {
-			return nil, err
-		}
-	}
+	// THE REVISION AND THE PAGE AT ONCE, each floored at the head's read and
+	// neither needing the other.
+	var rev code.RevisionRow
+	var page code.ReadAnswer
 	q := g.q
 	q.Part, q.Fresh = code.PartFindings, statelog.FloorAt(statelog.ReadSession, first)
-	page, err := g.reads.Read(ctx, q)
+	err = code.AtOnce(func() (err error) {
+		rev, _, err = code.ChangeRevisions(head, call.revision, 0, g.revisionAt(ctx, d.Revision, first))
+		return err
+	}, func() (err error) {
+		if page, err = g.reads.Read(ctx, q); err != nil {
+			return codeRefusal(q.Repo, err)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, codeRefusal(q.Repo, err)
+		return nil, err
 	}
-	placed, reanchor := code.PlaceFindings(rev, page.Findings)
-	if reanchor != nil {
+	fresh := code.ObjectFloor(g.reads.FloorOf(d.RepoID), head, rev)
+	placed, err := code.Place(rev, page.Findings, func(reanchor *code.ReanchorQuery) (*code.ReanchorAnswer,
+		error) {
+
 		answer, err := g.gitRead(ctx, code.GitQuery{Kind: code.GitReanchor, RepoID: d.RepoID, Asker: g.q.Asker,
-			Fresh: code.ObjectFloor(g.reads.FloorOf(d.RepoID), head, rev), Reanchor: reanchor})
-		if err != nil {
-			return nil, err
-		}
+			Fresh: fresh, Reanchor: reanchor})
+		return answer.Reanchor, err
+	})
+	switch {
+	case errors.Is(err, code.ErrMisplaced):
 		// AN ANSWER PLACING ANOTHER SET THAN THE ANCHORS ASKED is no git
-		// node's of this build: this node's fault, never a finding with
-		// no place.
-		if err := code.PlaceAnchors(placed, reanchor, answer.Reanchor); err != nil {
-			return nil, fmt.Errorf("queries: %s: %w", g.ref(), err)
-		}
+		// node's of this build: this node's fault, never a finding with no
+		// place.
+		return nil, fmt.Errorf("queries: %s: %w", g.ref(), err)
+	case err != nil:
+		return nil, err
 	}
 	return CodeChangeFindings{ReadAnswer: page, Revision: rev.N, Placed: placed}, nil
 }

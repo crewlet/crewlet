@@ -29,13 +29,10 @@ func claudeResult(said string) string {
 // anchored), and every case here is thrown away and sits the entry out.
 func TestAnAnswerThatMentionsALimitIsAnAnswer(t *testing.T) {
 	t.Parallel()
-	post := []llm.ToolDef{{Name: "post_comment", Description: "post a comment on the work item"}}
 	for name, tc := range map[string]struct {
 		agent  string
 		stdout string
-		tools  []llm.ToolDef
-		// want is what must come back: in the answer, or in the call's
-		// arguments where the request offered tools.
+		// want is what must come back in the answer.
 		want string
 	}{
 		"copilot, on backing off the GitHub API": {
@@ -48,13 +45,6 @@ func TestAnAnswerThatMentionsALimitIsAnAnswer(t *testing.T) {
 			stdout: claudeResult("Here is the banner copy for the quota feature.\n\n" +
 				"Usage limit reached. Upgrade your plan to keep going."),
 			want: "Usage limit reached",
-		},
-		"claude-code, in a tool call's arguments": {
-			agent: "claude-code",
-			stdout: claudeResult("```json\n" + `{"message":"posting the copy","tool_calls":[{"name":"post_comment",` +
-				`"arguments":{"body":"Usage limit reached. Upgrade your plan to keep going."}}]}` + "\n```"),
-			tools: post,
-			want:  "Usage limit reached",
 		},
 		"cursor-agent, on a Kubernetes ResourceQuota": {
 			agent:  "cursor-agent",
@@ -71,18 +61,14 @@ func TestAnAnswerThatMentionsALimitIsAnAnswer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			p := fakeProvider(t, map[string]string{"FAKE_STDOUT": tc.stdout}, shippedShape(t, tc.agent))
-			comp, err := ask(t, p, llm.Request{Tools: tc.tools})
+			comp, err := ask(t, p, llm.Request{})
 			if err != nil {
 				t.Fatalf("the model's answer was taken for the vendor's report: %v", err)
 			}
-			got := comp.Content
-			for _, call := range comp.ToolCalls {
-				got += " " + call.Arguments["body"].(string)
+			if !strings.Contains(comp.Content, tc.want) {
+				t.Errorf("came back %q, want the answer carrying %q", comp.Content, tc.want)
 			}
-			if !strings.Contains(got, tc.want) {
-				t.Errorf("came back %q (calls %+v), want the answer carrying %q", comp.Content, comp.ToolCalls, tc.want)
-			}
-			if err := p.benched(); err != nil {
+			if err := p.SittingOut(); err != nil {
 				t.Errorf("an answer sat the entry out: %v", err)
 			}
 		})
@@ -129,7 +115,7 @@ func TestTheVendorsOwnReportStillSitsTheEntryOut(t *testing.T) {
 			if _, err := ask(t, p, llm.Request{}); llm.KindOf(err) != llm.KindRateLimit {
 				t.Fatalf("the vendor's report answered %v, want a rate limit", err)
 			}
-			if err := p.benched(); err == nil {
+			if err := p.SittingOut(); err == nil {
 				t.Error("the vendor's report did not sit the entry out")
 			}
 		})

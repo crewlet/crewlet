@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Whether a turn actually delivered, judged from the engine's own record.
@@ -108,7 +109,7 @@ func ToolReply(surface string) Reply { return Reply{Kind: ReplyTool, Surface: su
 // Valid reports whether this is one of the three real answers.
 //
 // [ReplyUnset] is not one, deliberately — see its own doc. An unrecognised
-// value off the wire is not one either: a pending sandbox run carries its
+// value off the wire is not one either: a pending run carries its
 // Reply as a stored string, and a build that reads a value it does not know
 // must say so rather than fall through to whichever branch happens to be
 // last.
@@ -117,7 +118,7 @@ func (r Reply) Valid() bool {
 }
 
 // String encodes the obligation for the one place it is stored rather than
-// passed: a suspended sandbox run's row, which outlives the process that
+// passed: a parked run's row, which outlives the process that
 // parked it. `tool:mattermost`, or the bare kind when no surface is named.
 func (r Reply) String() string {
 	if r.Surface == "" {
@@ -187,7 +188,7 @@ const (
 // The rule this replaces was an ORIGIN test — server-backed and not a known
 // read — and it was right for as long as every shared surface belonged to
 // somebody else. It stopped being right when the tracker moved in-process:
-// commenting on a native work item reaches the person who asked, and a gate
+// commenting on a Worklet work item reaches the person who asked, and a gate
 // keyed on origin judged that turn to have answered nobody and looped it to
 // failure. What has NOT changed is that a diary write still does not deliver:
 // the engine declares which of its own tools reach anybody, one at a time.
@@ -315,7 +316,7 @@ func Record(earlier []ledger.Iteration, current []ledger.Call) []ledger.Call {
 // IT NAMES THE TOOLS, because the sentence it replaced named a MECHANISM —
 // "`list_mcp_server_tools` and `activate_tool` will find it" — and the
 // mechanism is right for only one kind of surface. A vendor's tools sit behind
-// discovery; the engine's own tracker and knowledge base are answered by
+// discovery; Worklet and Doclet are answered by
 // first-party tools the executor already holds, which no discovery call
 // lists. A seat woken by a work-item comment was sent to discovery, found the
 // one MCP server it held, and posted its answer in the team's chat channel: a
@@ -329,8 +330,8 @@ func Remedy(s Surface, reply Reply) string {
 	on := reply.Surface
 	if on == "" || !s.Reaches(on) {
 		return "Call the tool that delivers on the surface the request came from — " +
-			"`list_mcp_server_tools` and `activate_tool` will find one you do not " +
-			"have yet."
+			"`" + toolname.ListMCPServerTools + "` and `" + toolname.Activate +
+			"` will find one you do not have yet."
 	}
 	var held []string
 	discoverable := false
@@ -346,7 +347,8 @@ func Remedy(s Surface, reply Reply) string {
 	slices.Sort(held)
 	// THE SERVER IS THE SURFACE: an MCP tool reaches the surface named after
 	// its own server, so `on` is also the server to look in.
-	const discover = "`list_mcp_server_tools` lists and `activate_tool` promotes"
+	const discover = "`" + toolname.ListMCPServerTools + "` lists and `" +
+		toolname.Activate + "` promotes"
 	switch {
 	case len(held) > 0 && discoverable:
 		return "Deliver on `" + on + "` with one of the tools already on your tool " +

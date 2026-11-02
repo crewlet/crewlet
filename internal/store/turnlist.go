@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The list of turns, which is the one view of a working company that did not
@@ -65,13 +66,14 @@ import (
 // still decides — a run that failed while still launching is followed by its
 // turn's own completion, which is newer.
 
-// The two event types this fold is keyed on, taken from the payload types
+// The event types this fold is keyed on, taken from the payload types
 // themselves rather than spelled here: a literal would be the one place the
 // wire name silently stops matching.
 var (
 	phaseCompleted = types.AgentPhaseCompleted{}.EventType()
 	turnCompleted  = types.TurnCompleted{}.EventType()
 	runLost        = types.SandboxRunFailed{}.EventType()
+	agentTurnEnded = types.AgentTurnCompleted{}.EventType()
 )
 
 // failedRow is the per-row predicate "this event reports a failure", and it is
@@ -118,10 +120,54 @@ func failedRow(col func(string) string) (string, []any) {
 		" IN (" + holders + "))", args
 }
 
+// errorText and kindText are a failure record's message and class: the
+// record's own fields, a provider chain's `last_error` fields where it ran
+// out, and for the kind the failure's event type where the record names no
+// class, which is what the four types that ARE a failure carry.
+const (
+	errorText = "COALESCE(NULLIF(json_extract(payload, '$.error'), ''), " +
+		"NULLIF(json_extract(payload, '$.last_error'), ''))"
+	kindText = "COALESCE(NULLIF(json_extract(payload, '$.error_kind'), ''), " +
+		"NULLIF(json_extract(payload, '$.last_error_kind'), ''), event_type)"
+)
+
+// failureText is the aggregate a turn's failure message or kind is read with:
+// the maximum, over the turn's failure records that carry one, of the value
+// behind a rank byte, [failureRank] for the turn's own completion and
+// [otherRank] for every other record. So the turn's completion, which states
+// the failure that ended it, wins over a phase that failed on the way, and the
+// rest is decided as a maximum is, which a fleet combining logs takes again
+// ([CombineTurnPartials]). Its placeholders are failed's own, then the
+// completion's type.
+func failureText(failed, value string) string {
+	return "MAX(CASE WHEN " + failed + " AND " + value + " IS NOT NULL THEN " +
+		"(CASE WHEN event_type = ? THEN '" + failureRank + "' ELSE '" + otherRank + "' END) || " +
+		value + " END)"
+}
+
+// failureRank and otherRank lead a ranked failure text, so the greater sorts
+// first under a byte-wise maximum.
+const (
+	failureRank = "1"
+	otherRank   = "0"
+)
+
+// unranked is a ranked failure text without its rank.
+func unranked(ranked string) string {
+	if ranked == "" {
+		return ""
+	}
+	return ranked[1:]
+}
+
 // suspendedExpr is 1 for a completion record that PARKED its turn and 0 for
 // every other row — the flag is `omitempty` on the wire, so its absence is the
 // ordinary end.
 const suspendedExpr = "COALESCE(json_extract(payload, '$.suspended'), 0)"
+
+// stoppedExpr is a completion's `stopped` flag as an integer: absent (the flag
+// is omitempty) on every completion a person did not end.
+const stoppedExpr = "COALESCE(json_extract(payload, '$.stopped'), 0)"
 
 // segmentState is what a turn is now, from the time of its newest completion
 // that ENDED it and of its newest one that PARKED it (either absent).
@@ -205,6 +251,31 @@ type Turn struct {
 	// failed provider call and still end well, and an operator looking for
 	// what is going wrong wants both.
 	Failed bool `json:"failed"`
+
+	// Error and ErrorKind are WHY IT FAILED: the message and the class of a
+	// failure record of this turn, empty for a turn that carried none. The
+	// turn's own completion speaks first (its `error` is the failure that
+	// ended it), then any other failed record (a failed phase, a provider
+	// chain that ran out, a breached guard), so a turn that died before it
+	// completed still says why. The kind is the record's `error_kind`, or
+	// the failure's own event type for the four types that ARE a failure
+	// (llm_unavailable, budget_exhausted, turn.guard_breach,
+	// sandbox_run_failed).
+	//
+	// ON THE ROW, so whoever may read the row reads why it failed: the
+	// seat's trail, decided before the listing is read. Before this field
+	// the reason was only in the turn's raw events, an administrator's
+	// read, and a lead reading their agent's failed turn, or the
+	// assistant asked why one failed, could say only that it had.
+	Error     string `json:"error,omitempty"`
+	ErrorKind string `json:"error_kind,omitempty"`
+
+	// Stopped is whether a PERSON ended the turn — a pause with
+	// `stop_running` reached it at a round, or ended the coding run it was
+	// parked on — read off its completion's `stopped` flag. Not a failure,
+	// and never counted as one: a stopped turn's completion carries no
+	// `failed`, so Failed says only what else went wrong in it.
+	Stopped bool `json:"stopped,omitempty"`
 
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
@@ -505,6 +576,17 @@ type TurnPartial struct {
 	Phases     int  `json:"phases"`
 	Iterations int  `json:"iterations"`
 	Failed     bool `json:"failed"`
+	// Stopped is whether any completion of the turn says a person stopped
+	// it — a MAXIMUM, which a stop being final makes the turn's answer.
+	Stopped bool `json:"stopped,omitempty"`
+
+	// Error and ErrorKind are RANKED TEXT, the maximum the SQL takes over
+	// the turn's failure records: a leading rank byte (see [failureRank])
+	// and the value. A maximum combines across logs as it does within one,
+	// so the fleet's answer is the one a single log holding every row
+	// would give; [TurnPartial.Turn] strips the rank.
+	Error     string `json:"error,omitempty"`
+	ErrorKind string `json:"error_kind,omitempty"`
 
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
@@ -541,6 +623,8 @@ func (p TurnPartial) Turn() Turn {
 		StartedAt: p.StartedAt, EndedAt: p.EndedAt,
 		DurationMS: p.DurationMS,
 		Phases:     p.Phases, Iterations: p.Iterations, Failed: p.Failed,
+		Error: unranked(p.Error), ErrorKind: unranked(p.ErrorKind),
+		Stopped:     p.Stopped,
 		InputTokens: p.InputTokens, OutputTokens: p.OutputTokens,
 		TotalTokens: p.TotalTokens,
 		CacheRead:   p.CacheRead, CacheWrite: p.CacheWrite,
@@ -591,6 +675,9 @@ func CombineTurnPartials(parts ...TurnPartial) TurnPartial {
 		out.Phases += p.Phases
 		out.Iterations = max(out.Iterations, p.Iterations)
 		out.Failed = out.Failed || p.Failed
+		out.Error = max(out.Error, p.Error)
+		out.ErrorKind = max(out.ErrorKind, p.ErrorKind)
+		out.Stopped = out.Stopped || p.Stopped
 		out.InputTokens += p.InputTokens
 		out.OutputTokens += p.OutputTokens
 		out.TotalTokens += p.TotalTokens
@@ -656,7 +743,7 @@ func (l *EventLog) TurnShares(ctx context.Context, q TurnQuery) (TurnShares, err
 		return out, nil
 	}
 	if !q.Sort.Valid() {
-		return TurnShares{}, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
+		return TurnShares{}, fmt.Errorf("%w: sort %q is not one of %s", ErrTurnSort, q.Sort, words.Or(TurnSorts))
 	}
 	at := q.at()
 	err := l.db.Read(ctx, func(tx *sql.Tx) error {
@@ -748,7 +835,7 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 		limit = MaxTurnPage
 	}
 	if !q.Sort.Valid() {
-		return nil, false, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
+		return nil, false, fmt.Errorf("%w: sort %q is not one of %s", ErrTurnSort, q.Sort, words.Or(TurnSorts))
 	}
 	read := readPage
 	// ONE ROW PAST THE PAGE, so the page can say whether it is the last.
@@ -785,7 +872,7 @@ func (l *EventLog) ListedTurns(ctx context.Context, q TurnQuery) ([]string, erro
 		return out, nil
 	}
 	if !q.Sort.Valid() {
-		return nil, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
+		return nil, fmt.Errorf("%w: sort %q is not one of %s", ErrTurnSort, q.Sort, words.Or(TurnSorts))
 	}
 	listed, err := turnPartials(ctx, l.db.sql, q, readListed, len(q.IDs))
 	if err != nil {
@@ -817,15 +904,18 @@ func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, p
 			failed            int
 			models, summary   sql.NullString
 			item, trigger     sql.NullString
+			failure, kind     sql.NullString
 			in, outTok, total sql.NullInt64
 			cacheR, cacheW    sql.NullInt64
 			ended1, parked1   sql.NullInt64
 			duration          sql.NullInt64
+			stopped           int
 		)
 		if err := rows.Scan(&p.TurnID, &workKey, &agentID, &role, &started, &ended,
 			&p.Phases, &p.Iterations, &failed, &in, &outTok, &total,
 			&cacheR, &cacheW, &models,
-			&ended1, &parked1, &duration, &summary, &item, &trigger); err != nil {
+			&ended1, &parked1, &duration, &summary, &item, &trigger,
+			&failure, &kind, &stopped); err != nil {
 
 			return nil, fmt.Errorf("store: scan a turn: %w", err)
 		}
@@ -833,6 +923,7 @@ func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, p
 		p.AgentID, p.AgentRole = agentID.String, role.String
 		p.StartedAt, p.EndedAt = DecodeTime(started), DecodeTime(ended)
 		p.Failed = failed != 0
+		p.Stopped = stopped != 0
 		p.LastEnded, p.LastParked = instantOf(ended1), instantOf(parked1)
 		p.DurationMS = int(duration.Int64)
 		p.InputTokens = int(in.Int64)
@@ -844,6 +935,7 @@ func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, p
 		}
 		p.Summary, p.Trigger = summary.String, trigger.String
 		p.WorkItem = item.String
+		p.Error, p.ErrorKind = failure.String, kind.String
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -981,7 +1073,10 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, 
 		                THEN COALESCE(json_extract(payload, '$.plan_summary'), '') END),
 		       MAX(CASE WHEN event_type = ?
 		                THEN json_extract(payload, '$.work_item') END),
-		       MAX(COALESCE(json_extract(tags, '$.trigger'), ''))
+		       MAX(COALESCE(json_extract(tags, '$.trigger'), '')),
+		       ` + failureText(failedExpr, errorText) + `,
+		       ` + failureText(failedExpr, kindText) + `,
+		       MAX(CASE WHEN event_type = ? AND ` + stoppedExpr + ` = 1 THEN 1 ELSE 0 END)
 		  FROM (SELECT ` + turnColumns + `
 		          FROM crewlet_events
 		         WHERE ` + strings.Join(where, " AND ") + `) AS turn_rows
@@ -990,11 +1085,15 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, 
 		 LIMIT ?`
 	// The SELECT list's own placeholders, in the order they appear in it:
 	// the phase count, then the failure predicate, then the five reads off
-	// the completion rows — the first of them, the newest end, also reading
-	// a lost run as one.
+	// the completion rows (the first of them, the newest end, also reading
+	// a lost run as one), then the failure's message and its kind, each a
+	// failure predicate and the rank's completion type, and last the stop,
+	// off the agent's completion.
 	return query, slices.Concat([]any{phaseCompleted}, failedArgs,
 		[]any{turnCompleted, runLost, turnCompleted, turnCompleted, turnCompleted,
 			turnCompleted},
+		failedArgs, []any{agentTurnEnded}, failedArgs, []any{agentTurnEnded},
+		[]any{agentTurnEnded},
 		args)
 }
 

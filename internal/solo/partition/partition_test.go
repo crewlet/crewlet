@@ -156,7 +156,7 @@ func TestWithoutWeightsTheListedOrderIsPreserved(t *testing.T) {
 //
 // `go test` starts package runs in command-line order, so the first argument
 // is the first binary started, and the alphabetical order this replaced
-// started internal/search, internal/store and internal/tracker last of 147 —
+// started internal/search, internal/store and internal/worklet last of 147;
 // the run then ended on those three with the rest of the runner idle. Ties
 // keep the listed order, so the answer is a function of the list and the file
 // alone; it is asked a hundred times, from a map rebuilt each time, so an

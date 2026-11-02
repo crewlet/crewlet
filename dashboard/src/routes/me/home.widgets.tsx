@@ -18,7 +18,6 @@ import {
   ZapGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -28,15 +27,22 @@ import { useViewer } from "~/lib/viewer.ts";
 import { itemPath } from "~/lib/work.ts";
 import { askQuestion } from "~/routes/inbox/model.ts";
 import type { WorkClaimTotal, WorkMyWork, WorkSummary } from "~/protocol/index.ts";
-import { WidgetCard, WidgetNote, defineWidgets } from "~/routes/home/board/kit.tsx";
-import { MoreLink, ROWS, TaskList, countLabel } from "~/routes/work/taskRows.tsx";
+import {
+  PARTIAL_FIGURE,
+  WidgetCard,
+  WidgetNote,
+  WidgetQuery,
+  defineWidgets,
+  gapsOf,
+} from "~/routes/home/board/kit.tsx";
+import { MoreLink, ROWS, TaskList, countLabel } from "~/routes/worklet/taskRows.tsx";
 
 /** The reader's own day, as My work asks it. */
 function useMyWork() {
   const viewer = useViewer();
   const whose = viewer.owner;
   const read = useQuery("work_my_work", whose ? { handle: whose } : undefined, {
-    enabled: whose !== "" && viewer.tracker,
+    enabled: whose !== "" && viewer.worklet,
     pollMs: 30_000,
     refetchOnInboxOf: whose,
   });
@@ -76,10 +82,11 @@ function Block({
       {!viewer.loading && viewer.owner === "" ? (
         <WidgetNote>{NO_RECORD}</WidgetNote>
       ) : (
-        <QueryState
+        <WidgetQuery
           error={read.error}
           refusal={read.refusal}
           loading={read.loading && !read.data}
+          gaps={gapsOf([read.data])}
           empty={read.data && rows.length === 0 ? empty : undefined}
         >
           {ordinals ? (
@@ -97,7 +104,7 @@ function Block({
             <TaskList rows={rows} />
           )}
           <MoreLink shown={rows.length} total={block?.total} to={to} noun="task" />
-        </QueryState>
+        </WidgetQuery>
       )}
     </WidgetCard>
   );
@@ -120,10 +127,11 @@ function AskedOfMe() {
       {!viewer.loading && viewer.owner === "" ? (
         <WidgetNote>{NO_RECORD}</WidgetNote>
       ) : (
-        <QueryState
+        <WidgetQuery
           error={read.error}
           refusal={read.refusal}
           loading={read.loading && !read.data}
+          gaps={gapsOf([read.data])}
           empty={
             read.data && rows.length === 0
               ? {
@@ -152,7 +160,7 @@ function AskedOfMe() {
             ))}
           </List>
           <MoreLink shown={rows.length} total={total} to={["me", "asked-of-me"]} noun="question" />
-        </QueryState>
+        </WidgetQuery>
       )}
     </WidgetCard>
   );
@@ -189,10 +197,13 @@ function Glance() {
   if (read.error) {
     return (
       <WidgetCard title="My work" from="me">
-        <QueryState error={read.error} refusal={read.refusal} loading={false} />
+        <WidgetQuery error={read.error} refusal={read.refusal} loading={false} gaps={[]} />
       </WidgetCard>
     );
   }
+  // A COUNT OVER RECORDS THIS BUILD COULD NOT READ MAY BE SHORT, so each
+  // tile says so on its second line rather than drawing it as the day.
+  const partial = gapsOf([read.data]).length > 0;
   return (
     <StatGroup columns={4} aria-label="My work">
       {tiles.map((t) => (
@@ -206,6 +217,8 @@ function Glance() {
             </a>
           }
           value={t.total ? countLabel(t.total.total, t.total.capped) : "0"}
+          sub={partial ? PARTIAL_FIGURE : undefined}
+          subTone={partial ? "warning" : undefined}
         />
       ))}
     </StatGroup>

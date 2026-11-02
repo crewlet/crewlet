@@ -4,7 +4,7 @@
  * Identity and Presence).
  */
 
-import type { ArtifactPresenceMember, ArtifactRole } from "~/protocol/index.ts";
+import type { RoomMember, ArtifactRole } from "~/protocol/index.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
 import type { Roster } from "~/lib/artifacts/room.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
@@ -51,7 +51,7 @@ export function pageRoster(
   self: BridgePerson,
   people: Pick<ArtifactPeople, "pagePerson" | "index">,
 ): BridgeRoster {
-  const told = (m: ArtifactPresenceMember): BridgePerson => {
+  const told = (m: RoomMember): BridgePerson => {
     const kind = m.kind === "agent" ? "agent" : "human";
     if (m.session === ownSession) return self;
     if (!people.index.byHandle.has(m.seat)) return { seat: "", kind, displayName: "Somebody" };

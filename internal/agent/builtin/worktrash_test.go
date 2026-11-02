@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A SUBTREE GESTURE THAT STOPPED PART OF THE WAY THROUGH IS REPORTED AS WHAT
@@ -48,21 +48,21 @@ func (s *trashSpy) next() error {
 }
 
 func (s *trashSpy) RemoveTask(_ context.Context, _, id, _ string, subtree bool,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	s.removed, s.subtree = append(s.removed, id), subtree
 	return trashReceipt(), s.next()
 }
 
 func (s *trashSpy) RestoreTask(_ context.Context, _, id, _ string, alone bool,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	s.restored, s.alone = append(s.restored, id), alone
 	return trashReceipt(), s.next()
 }
 
-func trashReceipt() tracker.WriteResult {
-	return tracker.WriteResult{Result: statelog.Result{
+func trashReceipt() worklet.WriteResult {
+	return worklet.WriteResult{Result: statelog.Result{
 		Outcome:  statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 61},
 		Version:  61,
@@ -100,7 +100,7 @@ func trashSurface(t *testing.T, spy *trashSpy) *tools.Registry {
 // their own board.
 //
 // Both halves, because the gate stepping aside is only safe if the tool then
-// asks: the lead is admitted, and a colleague holding the tracker but leading
+// asks: the lead is admitted, and a colleague holding Worklet but leading
 // nothing — and who did not file the item — is refused with the authority's
 // own answer. Delete the
 // ask from either tool and the second half goes red.
@@ -109,7 +109,7 @@ func TestARowDecidedToolAsksAfterItReads(t *testing.T) {
 	lead := iam.WithPrincipal(context.Background(), iam.Principal{
 		ID: uuid.New(), Kind: iam.KindPerson, Login: "cto.lead", Seat: "cto",
 		Stage:  iam.StageActive,
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 	})
 	for _, c := range []struct {
 		name    string
@@ -120,14 +120,14 @@ func TestARowDecidedToolAsksAfterItReads(t *testing.T) {
 		{"a colleague who leads nothing", chartRefuses, false},
 	} {
 		for _, verb := range []string{
-			tracker.RemoveWorkItemTool, tracker.RestoreWorkItemTool,
+			worklet.RemoveWorkItemTool, worklet.RestoreWorkItemTool,
 		} {
 			t.Run(c.name+"/"+verb, func(t *testing.T) {
 				t.Parallel()
 				trk := newFakeTracker()
-				if verb == tracker.RestoreWorkItemTool {
+				if verb == worklet.RestoreWorkItemTool {
 					detail := trk.tasks["ENG-1"]
-					detail.Task.Removed = &tracker.Tombstone{By: "cto"}
+					detail.Task.Removed = &worklet.Tombstone{By: "cto"}
 					trk.tasks["ENG-1"] = detail
 				}
 				spy := &trashSpy{}
@@ -170,20 +170,20 @@ func TestARowDecidedToolAsksAfterItReads(t *testing.T) {
 }
 
 func stoppedWalk(verb string, err error) error {
-	return &tracker.SubtreeStopped{Verb: verb, Root: "i1", Followed: 1, Of: 3,
+	return &worklet.SubtreeStopped{Verb: verb, Root: "i1", Followed: 1, Of: 3,
 		OpID: "op", Err: err}
 }
 
 func TestAStoppedRestoreIsReportedAndFinishedFromTheTool(t *testing.T) {
 	t.Parallel()
 	spy := &trashSpy{answers: []error{
-		stoppedWalk("restore", fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved)),
+		stoppedWalk("restore", fmt.Errorf("stopped: %w", worklet.ErrStepUnresolved)),
 	}}
 	reg := trashSurface(t, spy)
 
 	// ENG-1 IS LIVE in the fake — the state a stopped restore leaves its
 	// root in, and the one the tool used to refuse before asking.
-	got := callNoTurn(t, reg, tracker.RestoreWorkItemTool, map[string]any{"item": "ENG-1"})
+	got := callNoTurn(t, reg, worklet.RestoreWorkItemTool, map[string]any{"item": "ENG-1"})
 	if got.Failed {
 		t.Fatalf("a restore whose root landed was reported as a failure: %s", got.Output)
 	}
@@ -204,7 +204,7 @@ func TestAStoppedRestoreIsReportedAndFinishedFromTheTool(t *testing.T) {
 	}
 
 	// AND THE NEXT CALL REACHES THE TRACKER, on a root that is back.
-	if got := callNoTurn(t, reg, tracker.RestoreWorkItemTool,
+	if got := callNoTurn(t, reg, worklet.RestoreWorkItemTool,
 		map[string]any{"item": "ENG-1"}); got.Failed {
 		t.Fatalf("finishing the restore from the tool failed: %s", got.Output)
 	}
@@ -217,9 +217,9 @@ func TestAStoppedRestoreIsReportedAndFinishedFromTheTool(t *testing.T) {
 func TestARestoreWithNothingToBringBackIsRefusedAsSuch(t *testing.T) {
 	t.Parallel()
 	spy := &trashSpy{answers: []error{
-		fmt.Errorf("tracker: task i1 is not in the trash: %w", tracker.ErrNothingToRestore),
+		fmt.Errorf("worklet: task i1 is not in the trash: %w", worklet.ErrNothingToRestore),
 	}}
-	got := callNoTurn(t, trashSurface(t, spy), tracker.RestoreWorkItemTool,
+	got := callNoTurn(t, trashSurface(t, spy), worklet.RestoreWorkItemTool,
 		map[string]any{"item": "ENG-1"})
 	if !got.Failed || !strings.Contains(got.Output, "nothing to restore") ||
 		strings.Contains(got.Output, "NOT made") {
@@ -233,18 +233,18 @@ func TestAStoppedRemovalIsReportedWithWhatFinishesIt(t *testing.T) {
 		err  error
 		want string
 	}{
-		"unknown": {fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved),
+		"unknown": {fmt.Errorf("stopped: %w", worklet.ErrStepUnresolved),
 			"remove_work_item on ENG-1 again, with the same arguments"},
 		// A STEP THIS NODE CANNOT VOUCH FOR is not finished by the same
 		// operation, which stops at the same task here every time — only
 		// a new one decides it afresh.
-		"unvouched": {fmt.Errorf("stopped: %w", tracker.ErrStepUnvouched),
+		"unvouched": {fmt.Errorf("stopped: %w", worklet.ErrStepUnvouched),
 			"WITHOUT an op_id"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			spy := &trashSpy{answers: []error{stoppedWalk("removal", tc.err)}}
-			got := callNoTurn(t, trashSurface(t, spy), tracker.RemoveWorkItemTool,
+			got := callNoTurn(t, trashSurface(t, spy), worklet.RemoveWorkItemTool,
 				map[string]any{"item": "ENG-1", "subtree": true})
 			if got.Failed {
 				t.Fatalf("a removal whose root landed was reported as a failure: %s",

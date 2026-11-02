@@ -22,7 +22,7 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { PlugGlyph, ExternalLinkGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { marked } from "~/ui/Problems.tsx";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 
 /**
  * How long one surface is waited out while something else is writing at it.
@@ -64,7 +64,7 @@ async function disconnectOne(
   const until = Date.now() + BUSY_RETRY_MS;
   for (;;) {
     try {
-      const answer = await rest.del(`/setup/integrations/${kind}`, {
+      const answer = await rest.del(`/setup/integrations/${pathSegment(kind)}`, {
         remove_seats: removeSeats,
         force,
       });

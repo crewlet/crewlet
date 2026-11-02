@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// THE BRANCH A SEAT'S CODING RUN WORKS ON when its run_sandbox call names
+// THE BRANCH A SEAT'S CODING RUN WORKS ON when its code_checkout call names
 // none: seats/<handle>/<the work item's key, spelled for a ref>, inside the
 // seat's own namespace ([SeatNamespace]) — so every run on one work item works
 // on ONE branch, and a second run on the item continues the first's pushed
@@ -34,7 +34,7 @@ const seatBranchDigestHex = 12
 // millisecond clock, which two runs a minute apart share.
 const seatBranchRunHex = 12
 
-// SeatBranch is the branch a seat's coding run works on when its run_sandbox
+// SeatBranch is the branch a seat's coding run works on when its code_checkout
 // call names none: seats/<handle>/<workKey, spelled for a ref> where the turn
 // is charged to a work item with a key, else seats/<handle>/run-<the last 12
 // hex digits of runID>. Always a branch [gitref.ValidBranch] accepts, inside

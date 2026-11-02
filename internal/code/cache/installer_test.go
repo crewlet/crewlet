@@ -580,13 +580,12 @@ func TestTheInstallerWakesWhenItsEarliestWaitEnds(t *testing.T) {
 	clk := newClock()
 	var mu sync.Mutex
 	var asked []time.Time
-	fire := make(chan time.Time)
 	c := w.open(t, clk.on, func(o *cache.Options) {
 		cache.InstallWakesWith(o, func(at time.Time) <-chan time.Time {
 			mu.Lock()
-			defer mu.Unlock()
 			asked = append(asked, at)
-			return fire
+			mu.Unlock()
+			return clk.At(at)
 		})
 	})
 	c.Start(t.Context())
@@ -603,12 +602,11 @@ func TestTheInstallerWakesWhenItsEarliestWaitEnds(t *testing.T) {
 		return slices.ContainsFunc(asked, due.Equal)
 	})
 	answer()
+	// The clock reaching the wait's end is what wakes the loop, as its timer
+	// would — never a send the case makes, which a loop that passed again
+	// meanwhile (a task's kick) and found the wait ended at the clock's new
+	// time, retrying then and arming no wake, never takes.
 	clk.Set(due)
-	select {
-	case fire <- due:
-	case <-time.After(hangDetector):
-		t.Fatalf("the installer's loop took no wake within %v", hangDetector)
-	}
 	eventually(t, "the layer placed by the retry the wake made", func() bool {
 		return slices.Equal(layerIDs(cache.Installed(c, repo)), layerIDs(chain))
 	})

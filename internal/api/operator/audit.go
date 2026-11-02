@@ -3,6 +3,8 @@ package operator
 import (
 	"context"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -76,7 +78,28 @@ func Acted(ctx context.Context, transport, verb, requestID string,
 		ActorName: by.Name, ActorKind: string(by.Kind), OperatorID: by.OperatorID,
 		Transport: transport, Tool: verb, RequestID: requestID,
 		Outcome: outcome, Position: position, Refusal: refusal,
+		Assistant: assistantRef(ctx),
 	})
+}
+
+// assistantRef is the Dashboard Assistant's part in a call: what carried it
+// when it came through an assistant grant, and nil for every other call. Read
+// off the grant the request guard admitted, never off anything the call says,
+// so a record can name a conversation only when a grant derived for that
+// conversation carried the call.
+func assistantRef(ctx context.Context) *types.AssistantRef {
+	claims, ok := auth.AssistOf(ctx)
+	if !ok {
+		return nil
+	}
+	ref := &types.AssistantRef{
+		ConversationID: claims.Conversation.String(), TurnID: claims.Turn.String(),
+		GrantID: claims.Grant.String(), Session: claims.Credential,
+	}
+	if claims.Proposal != uuid.Nil {
+		ref.ProposalID = claims.Proposal.String()
+	}
+	return ref
 }
 
 // AuditGesture publishes the runtime audit record of one call a surface made
@@ -168,7 +191,7 @@ func auditOutcome(name string, result tools.Result, err error) (
 		}
 		return types.AuditFailed, "", ""
 	}
-	answer := receiptOf(name, result.Output)
+	answer := receiptOf(name, result)
 	position := ""
 	if answer.Position != nil {
 		position = *answer.Position

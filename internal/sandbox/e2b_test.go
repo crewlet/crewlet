@@ -3,12 +3,14 @@ package sandbox_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -84,7 +86,27 @@ type e2bStub struct {
 	ignoreRange bool
 	// ranges is every Range header a download carried, in order.
 	ranges []string
+
+	// uploads is every path an upload wrote, in order; moves every Move's
+	// source and destination; removes every path a Remove named.
+	uploads []string
+	moves   [][2]string
+	removes []string
+	// uploadStatus fails every upload with it once half its body is
+	// written, as envd's does when the disk fills mid-write; moveStatus
+	// fails every Move with it. Zero is success.
+	uploadStatus int
+	moveStatus   int
+	// halfWritten, when set, is told of every upload once half its body is
+	// written, and the upload then waits for its client to give up on it —
+	// a caller whose context ended while the body was crossing.
+	halfWritten chan string
 }
+
+// uploadGap is how long the stub's in-place upload holds the file empty, and
+// then half written, standing in for the network an upload's body crosses
+// while envd writes it ([e2bStub.serveFiles]).
+const uploadGap = time.Millisecond
 
 func newE2BStub() *e2bStub {
 	return &e2bStub{
@@ -246,6 +268,12 @@ func (s *e2bStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		s.serveFiles(w, r)
 
+	case r.URL.Path == "/filesystem.Filesystem/Move", r.URL.Path == "/filesystem.Filesystem/Remove":
+		if !s.envdAdmits(w, r) {
+			return
+		}
+		s.serveFilesystem(w, r)
+
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -298,22 +326,104 @@ func (s *e2bStub) serveFiles(w http.ResponseWriter, r *http.Request) {
 		// code the real box runs.
 		http.ServeContent(w, r, path, time.Time{}, bytes.NewReader(content))
 	case http.MethodPost:
-		if err := r.ParseMultipartForm(1 << 20); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		file, _, err := r.FormFile("file")
+		form, err := r.MultipartReader()
 		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		defer file.Close()
-		content, _ := io.ReadAll(file)
+		part, err := form.NextPart()
+		if err != nil || part.FormName() != "file" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		content, err := io.ReadAll(part)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.uploads = append(s.uploads, path)
+		failWith := s.uploadStatus
+		s.mu.Unlock()
+		// IN PLACE, AS ENVD WRITES AN UPLOAD: its handler opens the path
+		// with O_TRUNC and copies the body in as it arrives (processFile in
+		// packages/envd/internal/api/upload.go, e2b-dev/infra), so a read
+		// made meanwhile finds the file empty, then half written.
+		s.hold(path, nil)
+		s.hold(path, content[:len(content)/2])
+		s.mu.Lock()
+		halfWritten := s.halfWritten
+		s.mu.Unlock()
+		if halfWritten != nil {
+			halfWritten <- path
+			<-r.Context().Done()
+			return
+		}
+		if failWith != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(failWith)
+			_, _ = w.Write([]byte(`{"code":507,"message":"not enough disk space available"}`))
+			return
+		}
 		s.mu.Lock()
 		s.files[path] = content
 		s.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// hold puts content at path, where a read finds it, for [uploadGap]: one
+// state an upload envd writes in place passes through.
+func (s *e2bStub) hold(path string, content []byte) {
+	s.mu.Lock()
+	s.files[path] = slices.Clone(content)
+	s.mu.Unlock()
+	time.Sleep(uploadGap)
+}
+
+// serveFilesystem answers envd's filesystem Move and Remove as Connect unary
+// calls in JSON, as envd does: a rename of the source over the destination
+// (os.Rename in packages/envd/internal/services/filesystem/move.go) and a
+// removal that does not mind a path that is not there (os.RemoveAll in its
+// remove.go). An error is Connect's: its code and message in a JSON body.
+func (s *e2bStub) serveFilesystem(w http.ResponseWriter, r *http.Request) {
+	var call map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&call); err != nil {
+		connectRefusal(w, http.StatusBadRequest, "invalid_argument", err.Error())
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bodies[r.URL.Path] = map[string]any{}
+	for key, value := range call {
+		s.bodies[r.URL.Path][key] = value
+	}
+	if strings.HasSuffix(r.URL.Path, "/Remove") {
+		s.removes = append(s.removes, call["path"])
+		delete(s.files, call["path"])
+		_, _ = w.Write([]byte(`{}`))
+		return
+	}
+	s.moves = append(s.moves, [2]string{call["source"], call["destination"]})
+	content, held := s.files[call["source"]]
+	switch {
+	case s.moveStatus != 0:
+		connectRefusal(w, s.moveStatus, "internal", "error renaming: rename: is a directory")
+	case !held:
+		connectRefusal(w, http.StatusNotFound, "not_found", "source file not found")
+	default:
+		s.files[call["destination"]] = content
+		delete(s.files, call["source"])
+		_, _ = w.Write([]byte(`{"entry":{"name":"x","type":"FILE_TYPE_FILE"}}`))
+	}
+}
+
+// connectRefusal writes a Connect error the way a unary call's is written.
+func connectRefusal(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	blob, _ := json.Marshal(map[string]string{"code": code, "message": message})
+	_, _ = w.Write(blob)
 }
 
 // connectFrame builds one Connect envelope: a flag byte, a big-endian
@@ -987,6 +1097,244 @@ func TestE2BWritesAFileAtItsCleanedPath(t *testing.T) {
 		if !held || string(got) != written {
 			t.Errorf("WriteFile(%q) did not reach envd as %q", written, sent)
 		}
+	}
+}
+
+// A FILE IS REPLACED, NEVER UPLOADED OVER. envd writes an upload in place —
+// the path truncated, then filled as the body arrives — so a file a run is
+// reading (the token file the poll keeps current, under the git credential
+// helper) read empty or part written for as long as the body took to cross
+// the network. The content is uploaded under a fresh name beside the path and
+// moved over it by envd's own rename, as the account every file call names,
+// with the box's token; the path itself is never an upload's destination, and
+// nothing staged is left.
+//
+// Mutation: upload to the path itself, and the path is an upload's destination.
+func TestE2BReplacesAFileItNeverUploadsOver(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	provider, _ := newE2B(t, stub)
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const path = "/home/user/.config/crewlet/github-token"
+	for _, token := range []string{"ghs_first", "ghs_renewed"} {
+		if err := box.WriteFile(t.Context(), path, []byte(token)); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		if got, err := box.ReadFile(t.Context(), path); err != nil || string(got) != token {
+			t.Fatalf("the path holds %q, %v; want %q", got, err, token)
+		}
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.uploads) != 2 || len(stub.moves) != 2 {
+		t.Fatalf("two writes made %d uploads and %d moves; want one of each apiece", len(stub.uploads),
+			len(stub.moves))
+	}
+	for i, upload := range stub.uploads {
+		if upload == path {
+			t.Errorf("write %d uploaded over the path itself, which envd writes in place", i)
+		}
+		if !strings.HasPrefix(upload, "/home/user/.config/crewlet/.crewlet-tmp-") {
+			t.Errorf("write %d staged its content at %s, not under a fresh name beside the path", i, upload)
+		}
+		if move := stub.moves[i]; move != [2]string{upload, path} {
+			t.Errorf("write %d moved %v; want what it staged moved over the path", i, move)
+		}
+	}
+	if stub.uploads[0] == stub.uploads[1] {
+		t.Errorf("both writes staged at %s; want a fresh name each", stub.uploads[0])
+	}
+	// AS THE ACCOUNT THE UPLOAD WROTE AS: envd resolves a relative or `~/`
+	// path in the home of the user a Connect call authenticates as.
+	if got, want := stub.headers["/filesystem.Filesystem/Move"].Get("Authorization"),
+		"Basic "+base64.StdEncoding.EncodeToString([]byte("user:")); got != want {
+		t.Errorf("the move authenticated as %q; want %q, the account every file call names", got, want)
+	}
+	if got := stub.headers["/filesystem.Filesystem/Move"].Get("Content-Type"); got != "application/json" {
+		t.Errorf("the move was sent as %q; want a Connect unary call in JSON", got)
+	}
+	for held := range stub.files {
+		if strings.Contains(held, ".crewlet-tmp-") {
+			t.Errorf("the box still holds %s, a staged file nothing reads", held)
+		}
+	}
+}
+
+// THE CONTENT IS STAGED IN THE DIRECTORY ENVD WRITES THE PATH IN, whatever
+// form the path takes, so the move is a rename within one directory and never
+// crosses a filesystem. envd resolves a relative or `~/` path against the
+// account's home and only then cleans it ([envdResolve]), so a staged name
+// made by cleaning the path here first could land somewhere else: `a/../~/x`
+// is <home>/~/x to envd, while its clean, `~/x`, is <home>/x.
+//
+// Mutation: stage at path.Dir of the path joined with the fresh name, and the
+// tilde forms and a trailing slash are staged in another directory than the
+// path's.
+func TestE2BStagesAWriteInTheDirectoryEnvdWritesThePathIn(t *testing.T) {
+	t.Parallel()
+	stub := newE2BStub()
+	provider, _ := newE2B(t, stub)
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for written, lands := range map[string]string{
+		"/home/user/.npmrc":          "/home/user/.npmrc",
+		"/home/user/.npmrc/":         "/home/user/.npmrc",
+		".npmrc":                     "/home/user/.npmrc",
+		".local/bin/tool":            "/home/user/.local/bin/tool",
+		"dir/":                       "/home/user/dir",
+		"~/.config/tool.toml":        "/home/user/.config/tool.toml",
+		"~/../user/.npmrc":           "/home/user/.npmrc",
+		"~/a/../../x":                "/home/x",
+		"a/../~/x":                   "/home/user/~/x",
+		"/home/user/./tools/../.pip": "/home/user/.pip",
+	} {
+		stub.mu.Lock()
+		stub.uploads, stub.moves = nil, nil
+		stub.mu.Unlock()
+		_ = box.WriteFile(t.Context(), written, []byte("x"))
+		stub.mu.Lock()
+		uploads, moves := slices.Clone(stub.uploads), slices.Clone(stub.moves)
+		stub.mu.Unlock()
+		if len(uploads) != 1 || len(moves) != 1 {
+			t.Errorf("WriteFile(%q) made %d uploads and %d moves; want one each", written, len(uploads), len(moves))
+			continue
+		}
+		staged, dest := envdResolve(uploads[0]), envdResolve(moves[0][1])
+		if dest != lands {
+			t.Errorf("WriteFile(%q) moved its content to %s; want %s", written, dest, lands)
+		}
+		if path.Dir(staged) != path.Dir(dest) {
+			t.Errorf("WriteFile(%q) staged its content in %s and moved it to %s: another directory",
+				written, path.Dir(staged), dest)
+		}
+	}
+}
+
+// envdResolve is where envd puts a path a file call names, for the account
+// whose home is /home/user (ExpandAndResolve in
+// packages/envd/internal/permissions/path.go, e2b-dev/infra): an absolute path
+// as written, a `~` one expanded to the home, a relative one joined onto the
+// home — those two cleaned by the join.
+func envdResolve(p string) string {
+	const home = "/home/user"
+	switch {
+	case path.IsAbs(p):
+		return p
+	case p == "~":
+		return home
+	case strings.HasPrefix(p, "~/"):
+		return path.Join(home, p[1:])
+	}
+	return path.Join(home, p)
+}
+
+// A FAILED WRITE LEAVES NOTHING STAGED, AND THE FILE AS IT WAS. An upload envd
+// refuses part way — the disk filled — leaves the staged file half written,
+// and a move envd refuses leaves it whole; either way it is removed, as the
+// account that wrote it, and the path keeps the file it had. The error names
+// the path and what failed.
+//
+// Mutation: return the upload's or the move's error without removing what was
+// staged, and the box keeps a file nothing reads.
+func TestE2BAFailedWriteLeavesNothingStaged(t *testing.T) {
+	t.Parallel()
+	const path = "/home/user/.config/crewlet/github-token"
+	for name, fail := range map[string]func(*e2bStub){
+		"the upload": func(s *e2bStub) { s.uploadStatus = http.StatusInsufficientStorage },
+		"the move":   func(s *e2bStub) { s.moveStatus = http.StatusInternalServerError },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			stub := newE2BStub()
+			provider, _ := newE2B(t, stub)
+			box, err := provider.Create(t.Context(), sandbox.Spec{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := box.WriteFile(t.Context(), path, []byte("ghs_held")); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			stub.mu.Lock()
+			fail(stub)
+			stub.mu.Unlock()
+			err = box.WriteFile(t.Context(), path, []byte("ghs_renewed"))
+			if err == nil || !strings.Contains(err.Error(), path) {
+				t.Fatalf("a write whose %s failed = %v; want an error naming %s", name, err, path)
+			}
+			if got, err := box.ReadFile(t.Context(), path); err != nil || string(got) != "ghs_held" {
+				t.Errorf("the path holds %q, %v; want the file it had", got, err)
+			}
+			stub.mu.Lock()
+			defer stub.mu.Unlock()
+			staged := stub.uploads[len(stub.uploads)-1]
+			if !slices.Contains(stub.removes, staged) {
+				t.Errorf("the staged file %s was not removed (removes: %v)", staged, stub.removes)
+			}
+			if _, held := stub.files[staged]; held {
+				t.Errorf("the box still holds %s, a staged file nothing reads", staged)
+			}
+			if got, want := stub.headers["/filesystem.Filesystem/Remove"].Get("Authorization"),
+				"Basic "+base64.StdEncoding.EncodeToString([]byte("user:")); got != want {
+				t.Errorf("the removal authenticated as %q; want %q", got, want)
+			}
+		})
+	}
+}
+
+// A WRITE WHOSE CALLER GAVE UP LEAVES NOTHING STAGED EITHER. A caller's context
+// that ends while the upload's body is crossing — a poll past its bound, a
+// node shutting down — is the commonest way an upload fails, and a removal
+// made under that same context would be refused before it was sent. So the
+// staged file is removed whatever became of the caller's context, and the
+// path keeps the file it had.
+//
+// Mutation: remove the staged file under the write's own context, and the
+// removal is never sent.
+func TestE2BAWriteItsCallerGaveUpOnLeavesNothingStaged(t *testing.T) {
+	t.Parallel()
+	const path = "/home/user/.config/crewlet/github-token"
+	stub := newE2BStub()
+	provider, _ := newE2B(t, stub)
+	box, err := provider.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := box.WriteFile(t.Context(), path, []byte("ghs_held")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	halfWritten := make(chan string, 1)
+	stub.mu.Lock()
+	stub.halfWritten = halfWritten
+	stub.mu.Unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	written := make(chan error, 1)
+	go func() { written <- box.WriteFile(ctx, path, []byte("ghs_renewed")) }()
+	var staged string
+	select {
+	case staged = <-halfWritten:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the upload never reached envd")
+	}
+	cancel()
+	if err := <-written; err == nil {
+		t.Fatal("a write whose caller gave up mid-upload succeeded")
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if !slices.Contains(stub.removes, staged) {
+		t.Errorf("the staged file %s was not removed (removes: %v)", staged, stub.removes)
+	}
+	if _, held := stub.files[staged]; held {
+		t.Errorf("the box still holds %s, a staged file nothing reads", staged)
+	}
+	if got := string(stub.files[path]); got != "ghs_held" {
+		t.Errorf("the path holds %q; want the file it had", got)
 	}
 }
 

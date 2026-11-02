@@ -32,6 +32,7 @@ func TestAnApplyAsksForPlacementExactlyWhenTheSeatsMoved(t *testing.T) {
 	const head = `
 name: Moves
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

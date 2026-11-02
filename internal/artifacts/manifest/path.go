@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // ErrInvalid reports a path, an entry or a manifest an artifact version may not
@@ -34,7 +34,7 @@ const PreflightPath = "preflight.js"
 // CleanPath is a published path as it is stored, served and compared, or a
 // refusal naming why.
 //
-// THE ENGINE'S ONE FILE-PATH RULE ([tracker.NormalizeFilePath]): no empty, dot
+// THE ENGINE'S ONE FILE-PATH RULE ([worklet.NormalizeFilePath]): no empty, dot
 // or dot-dot segment, no backslash, no control character, no trailing slash, a
 // leading slash and surrounding space trimmed. A second grammar here would be
 // a path the tracker's files accept and a version refuses, or the reverse.
@@ -42,7 +42,7 @@ const PreflightPath = "preflight.js"
 // prefixes, refused case-insensitively so `_Assets/x` cannot be published
 // beside a route a proxy might fold to lower case.
 func CleanPath(raw string) (string, error) {
-	p, err := tracker.NormalizeFilePath(raw)
+	p, err := worklet.NormalizeFilePath(raw)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}

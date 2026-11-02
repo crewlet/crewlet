@@ -8,9 +8,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE TRIMMED RECORD — ADR-0050.
+// THE TRIMMED RECORD — ADR-0073.
 //
 // Every arbitrated record a node consumes raises its subject's anchor
 // ([tables.advanceAnchor]), and the anchor is what a write's expectation is
@@ -247,10 +249,10 @@ func checkTrimmed(d Domain, spec StreamSpec, floor Position, writer string, body
 			"an operation id becomes a message id and a ledger row nothing "+
 			"resolves", name, env.OpID)
 	case !slices.Equal(env.Scope.Paths, []string{FrameworkScope}):
-		return fmt.Errorf("statelog: %s's trimmed record declares scope %v, not "+
+		return fmt.Errorf("statelog: %s's trimmed record declares scope %s, not "+
 			"the framework's %q — anything else makes the reads and writes it "+
 			"intersects wait behind a record that changes none of their rows",
-			name, env.Scope.Paths, FrameworkScope)
+			name, words.And(env.Scope.Paths), FrameworkScope)
 	case d.InstallsGate(env) || d.NodeGate(env):
 		return fmt.Errorf("statelog: %s declares its trimmed record a gate — a "+
 			"gate an older build cannot read stops its applier, and a node gate "+

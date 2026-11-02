@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -111,16 +110,16 @@ func completeRun(t *testing.T, rig *coordRig, result Result) error {
 	return rig.coordinator.OnCompleted(t.Context(), payload, ev)
 }
 
-// A COLLECTED RUN IS TOLD WHAT IT PUSHED, by the push record rather than its
-// own report: the refs the engine read under its launch — created, moved and
-// deleted, each as it ended, with how many pushes moved it — follow the run's
-// own `Delivered:` line in the resumed executor's text, and ride the resume
-// and the run's own phase record whole. The record is read once a collection,
-// for the run as its row stands.
+// A COLLECTED RUN'S REPORT SAYS WHAT IT PUSHED, by the push record rather than
+// the run's own words: the refs the engine read under its launch — created,
+// moved and deleted, each as it ended, with how many pushes moved it — follow
+// the run's own `Delivered:` line in its report, and ride the resume and the
+// run's own phase record whole. The record is read once a collection, for the
+// run as its row stands.
 //
-// Mutations: leave the pushed lines out of resumeText — red; skip the read
-// in collect — red; leave the refs off the run's phase record — red.
-func TestACollectedRunIsToldWhatItPushed(t *testing.T) {
+// Mutations: leave the pushed lines out of runReport — red; skip the read in
+// collect — red; leave the refs off the run's phase record — red.
+func TestACollectedRunsReportSaysWhatItPushed(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	launched := rig.launchWith("t1", withNative)
@@ -144,7 +143,7 @@ func TestACollectedRunIsToldWhatItPushed(t *testing.T) {
 		"- web refs/heads/seats/swe/spike created at cccccccccccc\n" +
 		"- api refs/heads/seats/swe/old deleted (it was dddddddddddd)\n"
 	if !strings.Contains(calls[0].Answer, want) {
-		t.Errorf("the resumed executor reads:\n%s\nwant it to carry:\n%s", calls[0].Answer, want)
+		t.Errorf("the run's report reads:\n%s\nwant it to carry:\n%s", calls[0].Answer, want)
 	}
 	if len(calls[0].Pushed) != 3 || calls[0].PushedElided != 0 || calls[0].PushedUnread != "" {
 		t.Errorf("the resume carries %+v, %d more, unread %q; want the three refs", calls[0].Pushed,
@@ -172,20 +171,20 @@ func TestACollectedRunIsToldWhatItPushed(t *testing.T) {
 	}
 }
 
-// A COLLECTED RUN IS TOLD THE CHANGES IT DELIVERED TO (M4-decisions D33): the
-// engine names each ref the run pushed by the live change its branch heads,
-// and opens the change the run asked to open — asked to open only for a run
-// that finished its work, succeeded and asked nothing — and the resumed
-// executor reads both: each ref beside its change, and what became of each
-// ask, opened or why not; the run's record carries each ref's change. A run
-// that stopped on a question is told the run that finishes its work opens
-// it, and one that did not succeed that it opens none; a run that pushed
-// nothing and asked nothing reads nothing more.
+// A COLLECTED RUN'S REPORT SAYS THE CHANGES IT DELIVERED TO (M4-decisions
+// D33): the engine names each ref the run pushed by the live change its branch
+// heads, and opens the change the run asked to open — asked to open only for a
+// run that finished its work, succeeded and asked nothing — and the run's
+// report says both: each ref beside its change, and what became of each ask,
+// opened or why not; the run's record carries each ref's change. A run that
+// stopped on a question opens none, the job that carries it on opening the
+// change, and one that did not succeed says it opened none; a run that pushed
+// nothing and asked nothing says nothing more.
 //
 // Mutations: ask the engine to open for a run that did not succeed — the
-// open flag, red; leave the opened lines out of resumeText — red; leave the
+// open flag, red; leave the opened lines out of runReport — red; leave the
 // change off the phase record — red.
-func TestACollectedRunIsToldTheChangesItDeliveredTo(t *testing.T) {
+func TestACollectedRunsReportSaysTheChangesItDeliveredTo(t *testing.T) {
 	t.Parallel()
 	opening := func(r *PendingRun) {
 		withNative(r)
@@ -220,14 +219,14 @@ func TestACollectedRunIsToldTheChangesItDeliveredTo(t *testing.T) {
 		"Changes on this company's code host (opened at the run's collection):\n" +
 		"- web!7 opened from seats/swe/ENG-1 for review\n"
 	if !strings.Contains(calls[0].Answer, want) {
-		t.Errorf("the resumed executor reads:\n%s\nwant it to carry:\n%s", calls[0].Answer, want)
+		t.Errorf("the run's report reads:\n%s\nwant it to carry:\n%s", calls[0].Answer, want)
 	}
 	if recs := rig.phases(); len(recs) != 1 || len(recs[0].PushedRefs) != 1 || recs[0].PushedRefs[0].Change != "web!7" {
 		t.Errorf("the run's record = %+v, want its ref naming web!7", recs)
 	}
 
 	// A RUN THAT DID NOT SUCCEED has its refs named and opens nothing, and
-	// is told why.
+	// its report says why.
 	failed := newCoordRig(t)
 	failed.launchWith("t1", opening)
 	failed.pushes.answer(pushed, 0, nil)
@@ -244,14 +243,18 @@ func TestACollectedRunIsToldTheChangesItDeliveredTo(t *testing.T) {
 		t.Errorf("a run that failed resumed with %+v, want it to say %q and name web!7", calls, says)
 	}
 
-	// A RUN THAT STOPPED ON A QUESTION opens nothing either: the run that
-	// finishes its work asks again.
+	// A RUN THAT STOPPED ON A QUESTION opens nothing either: the job that
+	// carries its work on asks again. Asked as a job asks, through the store
+	// under the launch the row holds, before the job ends.
 	parked := newCoordRig(t)
 	parked.launchWith("t1", opening)
 	parked.pushes.answer(pushed, 0, nil)
 	parked.pushes.changes = opened
-	if err := completeRun(t, parked, Result{Success: true, NeedsInput: true, Question: "which flag?",
-		AskTo: "requester"}); err != nil {
+	if _, err := parked.pending.RecordAsk(t.Context(), "t1", parked.get("t1").LaunchID,
+		Ask{Question: "which flag?", To: AskToRequester}); err != nil {
+		t.Fatalf("RecordAsk: %v", err)
+	}
+	if err := completeRun(t, parked, Result{Success: true}); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	if got := parked.pushes.opens(); !slices.Equal(got, []bool{false}) {
@@ -259,29 +262,12 @@ func TestACollectedRunIsToldTheChangesItDeliveredTo(t *testing.T) {
 	}
 }
 
-// A RUN RECLONED AFTER ITS ANSWER ASKS TO OPEN ITS CHANGE AGAIN: the call the
-// executor is told to make for a reclaimed box names each repository's ask
-// as the run had it, its target as a branch, so the run that finishes the
-// work opens the change the parked one could not.
-//
-// Mutation: leave open_change out of recloneText — red.
-func TestARecloneAsksToOpenItsChangeAgain(t *testing.T) {
-	t.Parallel()
-	repos := []RunRepo{{Repo: "web", RepoID: webRepoID, Branch: "seats/swe/ENG-1", Access: RepoWrite,
-		Open: &OpenChange{Target: "refs/heads/main", Title: "Retry the upload", Draft: true}}}
-	want := `[{"repo":"web","branch":"seats/swe/ENG-1","open_change":{"target":"main","title":"Retry the upload",` +
-		`"draft":true}}]`
-	if got := recloneText(repos); got != want {
-		t.Errorf("recloneText = %s, want %s", got, want)
-	}
-}
-
 // A PUSH RECORD THAT CANNOT BE READ IS SAID, NOT HIDDEN: the run is still
 // collected and resumed — a collection held until the code host answers would
-// hold a finished run's seat for as long as the host is down — and the
-// executor is told its pushes are UNKNOWN, why, and what to read instead, never
-// a silence it would read as "nothing pushed". The run's record says so too,
-// and the log names the run.
+// hold a finished run's seat for as long as the host is down — and its report
+// says its pushes are UNKNOWN, why, and which branches it worked on, never a
+// silence its reviewer would read as "nothing pushed". The run's record says
+// so too, and the log names the run.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 //
@@ -301,10 +287,10 @@ func TestAnUnreadPushRecordIsSaidNotHidden(t *testing.T) {
 		t.Fatalf("resumed %d times, want the collection resumed whatever the record said", len(calls))
 	}
 	want := "Pushed to this company's code host: unknown — its push record could not be read (code: this " +
-		"node is not serving the code host); read the branches it worked on (web: seats/swe/ENG-1; api: " +
-		"seats/swe/ENG-1) with code_resolve before you report them."
+		"node is not serving the code host); the branches it worked on are web: seats/swe/ENG-1; api: " +
+		"seats/swe/ENG-1."
 	if !strings.Contains(calls[0].Answer, want) {
-		t.Errorf("the resumed executor reads:\n%s\nwant:\n%s", calls[0].Answer, want)
+		t.Errorf("the run's report reads:\n%s\nwant:\n%s", calls[0].Answer, want)
 	}
 	if calls[0].PushedUnread == "" || len(calls[0].Pushed) != 0 {
 		t.Errorf("the resume carries %+v, unread %q; want the reason and no refs", calls[0].Pushed,
@@ -362,10 +348,10 @@ func TestAPushReadThisNodeCancelledHandsTheCollectionBack(t *testing.T) {
 }
 
 // A RUN THAT PUSHED NOTHING SAYS SO — and only a run that could have: one given
-// a repository to push to and whose record names no push is told "nothing";
-// one given its repositories only to read is told it could push none, with no
-// read of a record that cannot hold any; one given no repository on the code
-// host is told nothing of it.
+// a repository to push to and whose record names no push says "nothing"; one
+// given its repositories only to read says it could push none, with no read of
+// a record that cannot hold any; one given no repository on the code host says
+// nothing of it.
 //
 // Mutations: drop the "nothing" sentence — red; read the record of a run given
 // only repositories to read — red.
@@ -378,14 +364,14 @@ func TestARunThatPushedNothingSaysSo(t *testing.T) {
 	}
 	if calls := rig.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer,
 		"Pushed to this company's code host: nothing — no push of this run was recorded.") {
-		t.Errorf("a run that pushed nothing is told %+v", calls)
+		t.Errorf("a run that pushed nothing reports %+v", calls)
 	}
 
 	read := PendingRun{Repos: []RunRepo{{Repo: "docs", Access: RepoRead}}}
-	if text := resumeText(read, Result{Success: true}); !strings.Contains(text,
+	if text := runReport(read, Result{Success: true}); !strings.Contains(text,
 		"Pushed to this company's code host: nothing — it was given its repositories there to read, not to "+
 			"push to.") {
-		t.Errorf("a run given repositories to read is told:\n%s", text)
+		t.Errorf("a run given repositories to read reports:\n%s", text)
 	}
 	reader := newCoordRig(t)
 	reader.launchWith("t1", func(r *PendingRun) {
@@ -399,8 +385,8 @@ func TestARunThatPushedNothingSaysSo(t *testing.T) {
 		t.Errorf("the record of a run given repositories only to read was read %d times", len(asked))
 	}
 
-	if text := resumeText(PendingRun{}, Result{Success: true}); strings.Contains(text, "Pushed to") {
-		t.Errorf("a run given no repository on the code host is told of its pushes:\n%s", text)
+	if text := runReport(PendingRun{}, Result{Success: true}); strings.Contains(text, "Pushed to") {
+		t.Errorf("a run given no repository on the code host reports its pushes:\n%s", text)
 	}
 }
 
@@ -408,7 +394,7 @@ func TestARunThatPushedNothingSaysSo(t *testing.T) {
 // of MaxDeliveredRefBytes is what the push record's are listed in, counted by
 // the lines they render to; the list stops at the first that does not fit,
 // and the rest are counted with what the read had no room to hold and said in
-// the executor's text. A ref's names are redacted before they are measured.
+// the run's report. A ref's names are redacted before they are measured.
 //
 // Mutations: give the pushed refs a budget of their own — red; skip a long
 // ref for a shorter one after it — red; drop the reader's count — red.
@@ -446,9 +432,9 @@ func TestPushedRefsShareTheRefsBound(t *testing.T) {
 		t.Errorf("counted %d more, want the reader's 7 and the %d not listed", got.PushedElided, len(pushed)-100)
 	}
 	run := PendingRun{Repos: []RunRepo{{Repo: "web", Access: RepoWrite}}}
-	if text := resumeText(run, got); !strings.Contains(text,
+	if text := runReport(run, got); !strings.Contains(text,
 		fmt.Sprintf("- and %d more ref(s) its push record names, not listed here", got.PushedElided)) {
-		t.Errorf("the resumed executor is not told the list is short:\n%.400s", text)
+		t.Errorf("the run's report does not say the list is short:\n%.400s", text)
 	}
 
 	// WITH NO OWN LINES, THE PUSH RECORD HAS THE WHOLE BOUND, and what it
@@ -483,50 +469,6 @@ func TestEveryPushedLineIsAtLeastItsFloor(t *testing.T) {
 			t.Errorf("%q is %d bytes, under the %d MaxPushedRefs is derived from", line, len(line),
 				minPushedLineBytes)
 		}
-	}
-}
-
-// A RECLAIMED RUN WITH REPOSITORIES IS TOLD TO CLONE ITS BRANCHES AGAIN: its
-// box is gone, so the answer's text gives the call that gives the fresh box
-// each repository on the branch the run worked on — the one its work was
-// pushed to — with a repository it was given to read kept to reading and its
-// cone kept; an ask's branch that is none of those keeps a clause of its own.
-// A run whose box is still up reuses its checkout, as before.
-//
-// Mutation: leave the repositories out of the call — red.
-func TestAReclaimedRunWithReposIsToldToCloneItsBranchAgain(t *testing.T) {
-	t.Parallel()
-	run := PendingRun{Question: "which suite?"}
-	withNative(&run)
-	text := answerText(run, "the unit suite", "")
-	call := `[{"repo":"web","branch":"seats/swe/ENG-1"},{"repo":"api","branch":"seats/swe/ENG-1",` +
-		`"paths":["src"]},{"repo":"docs","branch":"seats/swe/ENG-1","access":"read"}]`
-	if !strings.Contains(text, "call run_sandbox again with `repos` set to "+call) {
-		t.Errorf("a reclaimed run's answer reads:\n%s\nwant it to give the call %s", text, call)
-	}
-	var value []map[string]any
-	if err := json.Unmarshal([]byte(call), &value); err != nil || len(value) != 3 {
-		t.Fatalf("the call is not the tool's argument: %v", err)
-	}
-	if strings.Contains(text, "check out the existing branch") {
-		t.Errorf("a run whose ask named no branch elsewhere is told to check one out:\n%s", text)
-	}
-
-	run.Branch = "wip/suite"
-	text = answerText(run, "the unit suite", "")
-	if !strings.Contains(text, "also check out the existing branch `wip/suite` it pushed its work-in-progress to") {
-		t.Errorf("an ask's branch on another host is not named:\n%s", text)
-	}
-	run.Branch = "seats/swe/ENG-1"
-	text = answerText(run, "the unit suite", "")
-	if strings.Contains(text, "check out the existing branch") {
-		t.Errorf("an ask's branch the clone already holds is named again:\n%s", text)
-	}
-
-	run.SandboxID = "box-1"
-	text = answerText(run, "the unit suite", "")
-	if strings.Contains(text, "`repos`") || !strings.Contains(text, "it reuses the same checkout") {
-		t.Errorf("a run whose box is up is told to clone again:\n%s", text)
 	}
 }
 

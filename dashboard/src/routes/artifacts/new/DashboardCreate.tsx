@@ -86,6 +86,8 @@ import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
 import { titleHold, titleProblem, useSaveIn, useWorkItem } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
+import { createDraft } from "./assistantDraft.ts";
+import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import {
   AskAgentPanel,
   askTitleHold,
@@ -169,6 +171,39 @@ function boardDataset(d: DraftDataset): DashboardBoardDataset {
     freshness: d.source.signal ? { mode: "signal", signal: d.source.signal } : { mode: "manual" },
     engine: d.source,
   };
+}
+
+/** What a new dashboard holds beyond what every create page does, as the assistant reads it. */
+interface BoardState {
+  /** The ready-made board to start from; read empty, since a start is a gesture, not a state. */
+  readonly starter: string;
+  readonly figures: readonly string[];
+}
+
+/** The ready-made boards by key, as a value names one. */
+const STARTER_KEYS: readonly string[] = STARTERS.map((st) => st.key);
+
+/**
+ * A new dashboard's own fields: a ready-made board to start from, taken only
+ * while the board is empty (`empty`), as its card is offered only then, and
+ * the figures on the board, read only.
+ */
+export function boardFields(empty: boolean): DraftFieldSpec<BoardState>[] {
+  return [
+    {
+      path: "starter",
+      label: "Start from",
+      hint: `One of ${STARTER_KEYS.join(", ")}, while the board is empty`,
+      read: (d) => d.starter,
+      write: (d, key) => {
+        if (!empty) return refuse("The board has figures: a ready-made board starts an empty one.");
+        return typeof key === "string" && STARTER_KEYS.includes(key.trim())
+          ? { ...d, starter: key.trim() }
+          : refuse(`Choose one of the ready-made boards: ${STARTER_KEYS.join(", ")}.`);
+      },
+    },
+    { path: "figures", label: "Figures on the board", read: (d) => d.figures },
+  ];
 }
 
 export function DashboardCreate() {
@@ -329,10 +364,40 @@ export function DashboardCreate() {
         message: filed.linked,
       });
     }
-    nav.to(id ? artifactPath(id) : ["work", filed.item]);
+    nav.to(id ? artifactPath(id) : ["worklet", filed.item]);
   };
 
   const dirty = title.trim() !== "" || draft.placed.length > 0 || brief.trim() !== "";
+  // WHAT IS OPEN, for the assistant: the title, the figures on the board and
+  // the hand-off. A ready-made board is started as a press of it would, while
+  // the board is empty; figures are the person's to add, size and move.
+  useAssistantDraft(
+    createDraft<BoardState>({
+      what: "dashboard",
+      help:
+        "You can set the title and start an empty board from a ready-made one. Figures are " +
+        "added, sized and moved by the person from Data, where each reads the company's " +
+        "data as them.",
+      step: panel.open ? "ask" : narrow ? pane : open ? "data" : "board",
+      title,
+      setTitle,
+      brief,
+      setBrief,
+      who,
+      extra: {
+        value: {
+          starter: "",
+          figures: resolved.map((r) => `${r.recipe.title} (${r.source.name})`),
+        },
+        fields: boardFields(draft.placed.length === 0),
+        apply: (next) => {
+          const chosen = STARTERS.find((st) => st.key === next.starter);
+          if (chosen) start(chosen);
+        },
+      },
+      blocked: () => (busy ? "The dashboard is being made." : null),
+    }),
+  );
   const refusal =
     uploadFailure ??
     (gesture.answer && gesture.answer.kind !== "done" ? gesture.answer.text : null);

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -25,9 +26,29 @@ import (
 // nor wait on during a rollout: a node that has not yet joined the fleet reads
 // exactly like one that has, and the next one is replaced while the first is
 // still claiming nothing. So api.port on such a node carries /health and /ready
-// and nothing else — plus, on a node running seats with a bridge URL, the
-// agent-mode tool bridge, which was never ingress's to serve ([mountBridge]).
-// api.port 0 binds nothing, here as everywhere.
+// to the network, and nothing else. api.port 0 binds nothing, here as
+// everywhere.
+//
+// # And the two routes its own boxes dial, to this host alone
+//
+// A node that runs seats launches executor boxes, and a `direct` one is a
+// process of this host: it reaches the seat's tools over the tool bridge and
+// exports its telemetry to the receiver, and the address it is handed for both
+// is this listener on loopback (cmd/crewlet's boxHostURL). So this surface
+// serves those two routes too — the bridge under its prefix (internal/api/
+// mcpbridge, its notes route included) and the receiver under `/otlp/` — to a
+// caller on THIS HOST'S LOOPBACK ALONE ([mcpbridge.FromLoopback], read from the
+// connection, never a header), and answers anybody else as their absence
+// would: the probes are still all the network reaches here.
+//
+// The obvious alternative was the one in place: hand such a node's boxes the
+// fleet's address (CREWLET_MCP_BRIDGE_URL) and let an ingress node relay each
+// call back over the broker. That address is the one thing a seat pool may
+// not have — a satellite on a private host, a Kubernetes seat pool with no
+// route in — and without it every executor launch on the node was refused.
+// The loopback address needs none, and is served by the same bridge, so a
+// call for a seat this node has since handed on is relayed to its holder as
+// on any ingress node.
 //
 // # The same answers, sized to the node
 //
@@ -104,6 +125,9 @@ type ProbeHealth struct {
 	AppliedEpoch int64    `json:"applied_epoch"`
 	Seats        []string `json:"seats"`
 
+	// ConfigAttempt is [Health]'s, absent on the same terms.
+	ConfigAttempt *ConfigAttempt `json:"config_attempt,omitempty"`
+
 	// IdentityDutySeconds is [Health]'s, always an object on the same
 	// terms: a node without the ingress role may still hold the workers
 	// role that arms the identity estate's duties, and this is where an
@@ -135,8 +159,12 @@ type ProbeOptions struct {
 	// QueueBackend names the event queue's backend, for display.
 	QueueBackend string
 
-	// Bridge is the node's agent-mode tool bridge. Nil serves none.
-	Bridge *mcpbridge.Bridge
+	// Bridge and OtelReceiver are the two routes a box on this node's own
+	// host dials — the tool bridge and the telemetry receiver — served to
+	// this host's loopback alone. Nil serves that route to nobody, and is
+	// what a node that runs no seats, and so launches no box, is given.
+	Bridge       *mcpbridge.Bridge
+	OtelReceiver *sandbox.OtelReceiver
 }
 
 // probes serves the probe surface.
@@ -147,13 +175,15 @@ type probes struct {
 	queueBackend string
 }
 
-// Probes is the HTTP handler of a node without the ingress role: /health,
-// /ready and, where there is one, the tool bridge — and no other route.
+// Probes is the HTTP handler of a node without the ingress role: /health and
+// /ready, and, to this host's loopback alone, the routes its own boxes dial
+// ([ProbeOptions.Bridge], [ProbeOptions.OtelReceiver]).
 //
 // It is wrapped in the same guard and security headers as the full [App], so a
 // request for any other path is refused or answered 404 exactly as the full
 // surface would answer an unknown path, never served by a bare mux. Every
-// route it serves is exempt from that guard by path, as it is there.
+// route it serves is exempt from that guard by path, as it is there: the
+// boxes' routes authenticate by the signed token in their own path.
 func Probes(opts ProbeOptions) (http.Handler, error) {
 	switch {
 	case opts.Bootstrap == nil:
@@ -173,13 +203,43 @@ func Probes(opts ProbeOptions) (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", http.HandlerFunc(p.serveHealth))
 	mux.Handle("GET /ready", http.HandlerFunc(p.serveReady))
-	mountBridge(mux, opts.Bridge)
-	// NO CSRF GATE HERE, for [BridgeOnly]'s reason: the probes are reads, and
-	// the bridge's credential is a signed token in its own path rather than
-	// anything a browser attaches, so there is no cross-site request for a
-	// check to refuse.
+	if opts.Bridge != nil || opts.OtelReceiver != nil {
+		// THE BOXES' ROUTES ON A MUX OF THEIR OWN, behind the host check as
+		// a whole: a caller off this host meets the absence of everything
+		// under both prefixes, whatever its method or path — never the
+		// inner mux's 405 for a route that exists, which would tell the
+		// network what is mounted here.
+		own := http.NewServeMux()
+		mountBridge(own, opts.Bridge)
+		mountOTLP(own, opts.OtelReceiver)
+		boxes := thisHostAlone(httpjson.Mux(own))
+		mux.Handle(mcpbridge.PathPrefix, boxes)
+		mux.Handle(auth.OTLPPrefix, boxes)
+	}
+	// NO CSRF GATE HERE: the probes are reads, and the boxes' routes are a
+	// server's calls, which the full surface's check does not judge either
+	// ([auth.Public]), so there is no cross-site request for a check to
+	// refuse.
 	return pagepolicy.Apply(auth.New(opts.Bootstrap).Middleware(httpjson.Mux(mux)),
 		servedOverHTTPS(opts.Bootstrap, false)), nil
+}
+
+// thisHostAlone serves next to a caller on this host's loopback, and answers
+// any other as the route's absence ([httpjson.NoRoute]): the routes a node's
+// own boxes dial, on the listener of a node that publishes nothing but its
+// probes. See the notes at the top of this file.
+//
+// ABSENT RATHER THAN FORBIDDEN, because a 403 tells whoever scans the port
+// that something is mounted behind it, and to the network this listener
+// serves the probes and nothing else.
+func thisHostAlone(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !mcpbridge.FromLoopback(r) {
+			httpjson.NoRoute(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (p *probes) serveHealth(w http.ResponseWriter, r *http.Request) {
@@ -201,18 +261,19 @@ func (p *probes) health(ctx context.Context) ProbeHealth {
 	configured := p.runtime.Configured()
 	state, fleet := readNode(ctx, p.runtime)
 	body := ProbeHealth{
-		Status:       healthStatus(state, configured),
-		Node:         p.nodeID,
-		Roles:        p.roles,
-		Configured:   configured,
-		Version:      version.String(),
-		StartedAt:    state.StartedAt,
-		Queue:        p.queueBackend,
-		InFlight:     state.InFlight,
-		ShuttingDown: state.ShuttingDown,
-		Posture:      state.Posture,
-		AppliedEpoch: state.AppliedEpoch,
-		Seats:        heldSeats(state),
+		Status:        healthStatus(state, configured),
+		Node:          p.nodeID,
+		Roles:         p.roles,
+		Configured:    configured,
+		Version:       version.String(),
+		StartedAt:     state.StartedAt,
+		Queue:         p.queueBackend,
+		InFlight:      state.InFlight,
+		ShuttingDown:  state.ShuttingDown,
+		Posture:       state.Posture,
+		AppliedEpoch:  state.AppliedEpoch,
+		ConfigAttempt: state.ConfigAttempt,
+		Seats:         heldSeats(state),
 
 		IdentityDutySeconds: identityDutySeconds(state),
 	}

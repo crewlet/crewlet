@@ -21,7 +21,7 @@
  * before the description has been reached, so a peek whose body is a
  * properties rail passes NO facts. The caller decides: plenty of peeks have no
  * rail under them, and for those the fact line is the only place the object's
- * own values are stated. See `routes/work/WorkItem.tsx` for the worked case.
+ * own values are stated. See `routes/worklet/WorkItem.tsx` for the worked case.
  */
 
 import type { ReactElement, ReactNode } from "react";

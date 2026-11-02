@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY ANSWER SHAPE FITS THE CEILING AT ITS OWN MAXIMUM, and this is the
@@ -37,19 +37,19 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 		{"get_work_item(include=comments)", onlyComments(whole)},
 		{"get_work_item(include=history)", onlyHistory(whole)},
 		{"get_work_item(include=links)", onlyLinks(whole)},
-		// ONE COMMENT BY ID, at [tracker.MaxCommentBody]. A MaxCommentBody
+		// ONE COMMENT BY ID, at [worklet.MaxCommentBody]. A MaxCommentBody
 		// raised past this would leave a thread page — which always
 		// carries at least one whole comment — too heavy to send.
 		{"get_work_item(comment=…)", oneWholeComment(whole)},
 		// THE DESCRIPTION, WHOLE, which is now a part of its own: a body
-		// at [tracker.MaxBody] beside a page holding one comment at its
+		// at [worklet.MaxBody] beside a page holding one comment at its
 		// cap is a full answer before anything else is said, so the two
 		// can only both be whole if each can be asked for alone.
 		{"get_work_item(include=body)", onlyBody(whole)},
 		{"get_work_catalogue", maximalCatalogue()},
 		// THE PROJECT LISTING AS A SEAT PAGES IT. Its own cap is the
 		// SCREEN's — two hundred rows, ≈ 93 KiB here, refused for weight
-		// — so the tool asks for [tracker.MaxProjectsPerToolAnswer] and
+		// so the tool asks for [worklet.MaxProjectsPerToolAnswer] and
 		// says `total` beside `truncated`. Nothing measured this until
 		// the row grew a field, and what a cap that does not fit buys a
 		// model is not a large answer but advice to narrow and no
@@ -58,7 +58,7 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			encoded, err := json.MarshalIndent(c.answer, "", "  ")
+			encoded, err := builtin.EncodeAnswer(c.answer)
 			if err != nil {
 				t.Fatalf("encode: %v", err)
 			}
@@ -93,7 +93,7 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 // EITHER direction.
 func TestAMaximalItemIsRefusedRatherThanTruncated(t *testing.T) {
 	t.Parallel()
-	encoded, err := json.MarshalIndent(maximalDetail(), "", "  ")
+	encoded, err := builtin.EncodeAnswer(maximalDetail())
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -112,33 +112,33 @@ func TestAMaximalItemIsRefusedRatherThanTruncated(t *testing.T) {
 // onlyComments, onlyHistory, onlyLinks and onlyBody are one `include` part
 // each, on the same maximal item. A part that is not asked for is not sent —
 // the description included, which is what lets each of these fit.
-func onlyComments(d tracker.TaskDetail) tracker.TaskDetail {
+func onlyComments(d worklet.TaskDetail) worklet.TaskDetail {
 	d.History, d.Links, d.Task.Body = nil, nil, ""
 	return d
 }
 
-func onlyHistory(d tracker.TaskDetail) tracker.TaskDetail {
+func onlyHistory(d worklet.TaskDetail) worklet.TaskDetail {
 	d.Comments, d.Links, d.CommentsCursor, d.Task.Body = nil, nil, "", ""
 	return d
 }
 
-func onlyLinks(d tracker.TaskDetail) tracker.TaskDetail {
+func onlyLinks(d worklet.TaskDetail) worklet.TaskDetail {
 	d.Comments, d.History, d.CommentsCursor, d.Task.Body = nil, nil, "", ""
 	return d
 }
 
-func onlyBody(d tracker.TaskDetail) tracker.TaskDetail {
+func onlyBody(d worklet.TaskDetail) worklet.TaskDetail {
 	d.Comments, d.History, d.Links, d.CommentsCursor = nil, nil, nil, ""
 	return d
 }
 
 // oneWholeComment is what `comment:` answers: that comment ALONE, at
-// [tracker.MaxCommentBody], with no page, no cursor and no description.
-func oneWholeComment(d tracker.TaskDetail) tracker.TaskDetail {
+// [worklet.MaxCommentBody], with no page, no cursor and no description.
+func oneWholeComment(d worklet.TaskDetail) worklet.TaskDetail {
 	d.History, d.Links, d.CommentsCursor, d.Task.Body = nil, nil, "", ""
-	d.Comments = []tracker.Comment{{
+	d.Comments = []worklet.Comment{{
 		ID: "c", Task: "id", Author: "ana",
-		Body:      strings.Repeat("c", tracker.MaxCommentBody),
+		Body:      strings.Repeat("c", worklet.MaxCommentBody),
 		CreatedAt: time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC),
 	}}
 	return d
@@ -146,35 +146,35 @@ func oneWholeComment(d tracker.TaskDetail) tracker.TaskDetail {
 
 // maximalDetail is one task carrying every part at its cap, AS THE TOOL
 // SENDS IT — and nothing on it is cut: the description is at
-// [tracker.MaxBody], and the thread page is the heaviest the reader returns,
-// one whole comment at [tracker.MaxCommentBody] (a page always carries at
+// [worklet.MaxBody], and the thread page is the heaviest the reader returns,
+// one whole comment at [worklet.MaxCommentBody] (a page always carries at
 // least one comment, and fills with whole ones up to
-// [tracker.CommentPageBytes] otherwise).
-func maximalDetail() tracker.TaskDetail {
+// [worklet.CommentPageBytes] otherwise).
+func maximalDetail() worklet.TaskDetail {
 	at := time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC)
-	detail := tracker.TaskDetail{
-		Task: tracker.Task{
+	detail := worklet.TaskDetail{
+		Task: worklet.Task{
 			ID: "id", Key: "ENG-1", Project: "ENG",
-			Title: strings.Repeat("t", tracker.MaxTitle),
-			Body:  strings.Repeat("b", tracker.MaxBody),
+			Title: strings.Repeat("t", worklet.MaxTitle),
+			Body:  strings.Repeat("b", worklet.MaxBody),
 		},
 		CommentsCursor: "1772614800:id",
-		Comments: []tracker.Comment{{
+		Comments: []worklet.Comment{{
 			ID: "c", Task: "id", Author: "ana",
-			Body:      strings.Repeat("c", tracker.MaxCommentBody),
+			Body:      strings.Repeat("c", worklet.MaxCommentBody),
 			CreatedAt: at,
 		}},
 	}
-	for range tracker.DetailHistoryDefault {
-		detail.History = append(detail.History, tracker.HistoryEntry{
+	for range worklet.DetailHistoryDefault {
+		detail.History = append(detail.History, worklet.HistoryEntry{
 			ID: "h", Kind: "status", Actor: "ana",
-			Excerpt: strings.Repeat("e", tracker.MaxExcerpt), At: at,
+			Excerpt: strings.Repeat("e", worklet.MaxExcerpt), At: at,
 		})
 	}
-	for range tracker.MaxWaitingOn {
-		detail.Links = append(detail.Links, tracker.DetailLink{
-			Kind: tracker.RelationWaitingOn, Other: "other",
-			Key: "ENG-2", Title: strings.Repeat("l", tracker.MaxTitle),
+	for range worklet.MaxWaitingOn {
+		detail.Links = append(detail.Links, worklet.DetailLink{
+			Kind: worklet.RelationWaitingOn, Other: "other",
+			Key: "ENG-2", Title: strings.Repeat("l", worklet.MaxTitle),
 		})
 	}
 	return detail
@@ -187,30 +187,30 @@ func maximalDetail() tracker.TaskDetail {
 // chart's own text — so "maximal" here is a measured row with room in it: a
 // purpose of a hundred and twenty characters is three times what a company
 // writes, and the whole point of the page size is that it holds even so.
-func maximalProjects() tracker.ProjectListing {
+func maximalProjects() worklet.ProjectListing {
 	at := time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC)
-	out := tracker.ProjectListing{
-		Total: tracker.MaxProjectsPerAnswer, Truncated: true,
+	out := worklet.ProjectListing{
+		Total: worklet.MaxProjectsPerAnswer, Truncated: true,
 	}
-	for i := range tracker.MaxProjectsPerToolAnswer {
-		out.Projects = append(out.Projects, tracker.ProjectRow{
+	for i := range worklet.MaxProjectsPerToolAnswer {
+		out.Projects = append(out.Projects, worklet.ProjectRow{
 			Key: "PROJECT" + itoa(i), Name: strings.Repeat("n", 48),
 			Purpose: strings.Repeat("p", 120),
-			Unit: tracker.UnitRef{
+			Unit: worklet.UnitRef{
 				Key: strings.Repeat("u", 32), Name: strings.Repeat("U", 32),
 				Resolved: true,
 			},
-			Lead: tracker.LeadRef{
-				Handle: strings.Repeat("l", 24), Kind: tracker.AuthorHuman,
+			Lead: worklet.LeadRef{
+				Handle: strings.Repeat("l", 24), Kind: worklet.AuthorHuman,
 			},
 			DefaultAssignee: strings.Repeat("a", 24),
 			TargetDate:      "2026-12-18",
-			Counts: tracker.TaskCounts{
+			Counts: worklet.TaskCounts{
 				Todo: 312, Active: 100, Done: 1204, Closed: 98,
 			},
-			LastChange: &tracker.LastChange{
+			LastChange: &worklet.LastChange{
 				At: at, Actor: strings.Repeat("l", 24),
-				ActorKind: tracker.AuthorOperator,
+				ActorKind: worklet.AuthorOperator,
 			},
 			Version: 1099511628032,
 		})
@@ -220,10 +220,10 @@ func maximalProjects() tracker.ProjectListing {
 
 // maximalCatalogue is every field a document may declare, each with every
 // option it may carry.
-func maximalCatalogue() tracker.CatalogueAnswer {
-	out := tracker.CatalogueAnswer{}
-	for i := range tracker.MaxTypes {
-		out.Types = append(out.Types, tracker.TaskType{
+func maximalCatalogue() worklet.CatalogueAnswer {
+	out := worklet.CatalogueAnswer{}
+	for i := range worklet.MaxTypes {
+		out.Types = append(out.Types, worklet.TaskType{
 			Slug: "t" + itoa(i), Name: strings.Repeat("n", 32),
 			Description: strings.Repeat("d", 64),
 		})
@@ -231,25 +231,25 @@ func maximalCatalogue() tracker.CatalogueAnswer {
 	// THE OPTION LISTS AS THE READER PAGES THEM, which is what a caller
 	// actually receives: the declarations allow 64 fields of 128 options,
 	// and an answer carrying all 8 192 encodes at nearly a megabyte.
-	budget := tracker.MaxCatalogueOptions
-	for i := range tracker.MaxFieldsPerDocument {
-		field := tracker.FieldDef{
+	budget := worklet.MaxCatalogueOptions
+	for i := range worklet.MaxFieldsPerDocument {
+		field := worklet.FieldDef{
 			ID: "f" + itoa(i), Slug: "f" + itoa(i),
-			Name: strings.Repeat("n", 32), Type: tracker.FieldDropdown,
+			Name: strings.Repeat("n", 32), Type: worklet.FieldDropdown,
 		}
-		if budget >= tracker.MaxOptions {
-			for j := range tracker.MaxOptions {
-				field.Config.Options = append(field.Config.Options, tracker.Option{
+		if budget >= worklet.MaxOptions {
+			for j := range worklet.MaxOptions {
+				field.Config.Options = append(field.Config.Options, worklet.Option{
 					ID: "o" + itoa(j), Slug: "o" + itoa(j),
 					Name: strings.Repeat("o", 16),
 				})
 			}
-			budget -= tracker.MaxOptions
+			budget -= worklet.MaxOptions
 		}
 		out.Fields = append(out.Fields, field)
 	}
-	out.OptionsTotal = tracker.MaxFieldsPerDocument * tracker.MaxOptions
-	out.OptionsShown = tracker.MaxCatalogueOptions
+	out.OptionsTotal = worklet.MaxFieldsPerDocument * worklet.MaxOptions
+	out.OptionsShown = worklet.MaxCatalogueOptions
 	return out
 }
 
@@ -263,4 +263,36 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(digits)
+}
+
+// A TOOL ANSWER CARRIES WHAT A PERSON WROTE AS THEY WROTE IT.
+//
+// The standard encoder escapes `<`, `>` and `&` for JSON spliced into an HTML
+// page, and a tool answer is spliced into nothing: its reader is a model, shown
+// `if a < b && c > d` as six-byte escapes it has to decode back into the code
+// it is reasoning about, each one five more bytes of the turn's context and of
+// the answer's ceiling. And the answer ends where its value does, with no
+// newline the encoder appends.
+func TestAToolAnswerCarriesMarkupAsWritten(t *testing.T) {
+	t.Parallel()
+	const said = `if a < b && c > d { return "<ok>" }`
+	encoded, err := builtin.EncodeAnswer(map[string]any{"body": said, "n": 1})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, `if a < b && c > d { return \"<ok>\" }`) ||
+		strings.Contains(text, `\u003c`) || strings.Contains(text, `\u0026`) {
+		t.Errorf("the answer carries %s, want the body's own `<`, `>` and `&`", text)
+	}
+	if strings.HasSuffix(text, "\n") {
+		t.Errorf("the answer ends in a newline the encoder appended: %q", text)
+	}
+	if !strings.Contains(text, "\n  \"body\": ") {
+		t.Errorf("the answer is not indented as every tool answer is: %s", text)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(encoded, &back); err != nil || back["body"] != said {
+		t.Errorf("the answer does not decode to what was said: %v, %v", back, err)
+	}
 }

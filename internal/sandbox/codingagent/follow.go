@@ -102,6 +102,9 @@ func (f *follower) Read(ctx context.Context, box sandbox.Sandbox) (sandbox.LiveR
 			return sandbox.LiveRead{}, err
 		}
 	}
+	if spender, ok := f.dec.(interface{ Spent() int }); ok {
+		read.Spent = spender.Spent()
+	}
 	if f.spoke {
 		read.Origin = f.events.origin("transcript")
 		read.Source = sandbox.SourceTranscript

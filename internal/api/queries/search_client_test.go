@@ -10,13 +10,14 @@ import (
 
 // THE DASHBOARD SENDS NO SEARCH THE ENGINE WOULD REFUSE.
 //
-// The palette, the work search and the knowledge screen ask `work_search`,
-// `knowledge` and `answer_knowledge` with what a person typed, and the engine
-// refuses a phrase past [knowledge.MaxQueryBytes] as `bad_params`. So each
-// withholds a longer phrase and says why, which only works while the two
-// numbers agree: a dashboard bound above the engine's sends phrases that are
-// refused — a list that silently loses its results — and one below it tells a
-// person their phrase is too long when the engine would have searched it.
+// The palette, the work search, the knowledge screen and the chat screen's
+// search and room finder ask `work_search`, `knowledge`, `answer_knowledge`
+// and `chat_search` with what a person typed, and the engine refuses a phrase
+// past [knowledge.MaxQueryBytes] as `bad_params`. So each withholds a longer
+// phrase and says why, which only works while the two numbers agree: a
+// dashboard bound above the engine's sends phrases that are refused — a list
+// that silently loses its results — and one below it tells a person their
+// phrase is too long when the engine would have searched it.
 func TestTheDashboardSendsNoSearchTheEngineWouldRefuse(t *testing.T) {
 	t.Parallel()
 	raw, err := clientsource.Scalar(clientsource.Tree(t), "SEARCH_QUERY_MAX")

@@ -154,13 +154,59 @@ export function PeekBoundary({ resetKey, children }: { resetKey: string; childre
 }
 
 /**
+ * The assistant's panel, a chunk the frame loads the first time it opens.
+ *
+ * ITS FALLBACK KEEPS A WAY OUT: the panel's own head (and its Close) is the
+ * chunk's, so a panel that never loaded, or that threw, has no head. The
+ * fallback is a sentence in the panel's place with a Close beside Reload, and
+ * the Ask button closes it as it always does.
+ *
+ * Its region sits inside the boundary, as a layer's does ([LayerBoundary]):
+ * the panel is mounted only while open, so drawing the failure and closing
+ * it ends the attempt, and the panel opened again asks for its chunk again.
+ */
+export function AsideBoundary({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+  return (
+    <ErrorBoundary
+      fallback={(error) => (
+        <Callout
+          variant="neutral"
+          role="alert"
+          title={error instanceof ChunkLoadError ? error.title : "Ask Crewlet could not be drawn"}
+          action={
+            <span className="boundary-actions">
+              {error instanceof ChunkLoadError ? (
+                <Button variant="primary" size="small" onClick={reload}>
+                  Reload
+                </Button>
+              ) : null}
+              <Button variant="ghost" size="small" onClick={onClose}>
+                Close
+              </Button>
+            </span>
+          }
+        >
+          {error instanceof ChunkLoadError ? error.advice : error.message || error.name}
+        </Callout>
+      )}
+    >
+      <ChunkRegion>
+        <Suspense fallback={<Skeleton variant="text" rows={3} label="Loading Ask Crewlet" />}>
+          {children}
+        </Suspense>
+      </ChunkRegion>
+    </ErrorBoundary>
+  );
+}
+
+/**
  * A layer the frame raises over the screen: the command palette, the New task
  * sheet. Its fallback is a DIALOG, not a block: the layer is over the screen,
  * and a block drawn where it was mounted would land below the frame, out of
  * sight, with the layer's own focus trap gone. The dialog closes the way the
  * layer does, and the next press opens a fresh one.
  *
- * A LAYER'S CODE CAN ARRIVE IN A CHUNK (the sheet is the Work workspace's, the
+ * A LAYER'S CODE CAN ARRIVE IN A CHUNK (the sheet is the Worklet workspace's, the
  * palette a chunk of its own), so
  * a load in flight draws nothing — the layer is not on screen until it is —
  * and a chunk that never came is this dialog, carrying the chunk's own

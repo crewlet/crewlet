@@ -1,43 +1,51 @@
 /**
  * The parts a detail pane on Company › Integrations is composed from: the
- * issues with their fixes, an agent's line, the settings an app holds, what to
- * have ready before connecting, and the engine's address at the foot of the
- * directory.
+ * issues with their fixes, the notes on a working integration, the settings an
+ * app holds, what to have ready before connecting, and the engine's address at
+ * the foot of the directory.
  */
 
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useId, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
   Copyable,
   DescriptionList,
   EmptyValue,
+  EntityChip,
+  IconTile,
   List,
   StatusDot,
   Tag,
+  Text,
+  type CatalogTileStatus,
 } from "@crewlethq/ui";
-import { ProductMark, VendorMark } from "@crewlethq/icons";
-import { CheckGlyph, RotateCwGlyph } from "@crewlethq/icons/glyphs";
-import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { relTime } from "~/lib/format.ts";
+import { VendorMark } from "@crewlethq/icons";
+import { ProductMark } from "@crewlethq/icons/product-mark";
+import { CheckGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
+import type { ReconcileFinding } from "~/contract/integrations.ts";
+import { asSentence, relTime } from "~/lib/format.ts";
+import { marked } from "~/ui/Problems.tsx";
+import { href } from "~/app/router.tsx";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
-import { FindingSubjects, SeatStep, docHref } from "./catalogue.tsx";
+// THE SCREEN'S OWN SHEET, with every module of the integrations screen (its
+// directory, panes, setup form and disconnect dialog), which all reach it here.
+import "~/styles/integrations.css";
+import { FindingSubjects, docHref } from "./catalogue.tsx";
 import {
   BUCKET_WORDS,
   OWNER_WORDS,
-  SEAT_WORDS,
   type BuiltInService,
   type DropPlan,
   type Intent,
   type Issue,
   type Model,
-  type SeatRow,
   type Tool,
 } from "./model.ts";
 
 /**
  * What an app's action is called to a screen reader: its visible words, then
- * whose it is ("Open Crewlet Works", "Replace key GitLab").
+ * whose it is ("Open Worklet", "Replace key GitLab").
  *
  * A COLUMN OF CARDS EACH SAYING "Open" is a list of identical link names, and
  * a reader listing the page's links could not tell one card's from the next.
@@ -50,7 +58,7 @@ export function actionName(words: string, name: string): string {
 
 /** A built-in service's own mark. */
 export function ServiceMark({ service, size }: { service: BuiltInService; size: "md" | number }) {
-  return <ProductMark product={service.key} size={size} soon={service.soon} />;
+  return <ProductMark product={service.key} size={size} />;
 }
 
 /** A tool's state as one tag, only where it carries meaning. */
@@ -64,33 +72,129 @@ export function BucketTag({ tool }: { tool: Tool }) {
   );
 }
 
-/** The state pill a built-in service carries everywhere it is named. */
+/**
+ * A built-in service's state, in the words and tone every place that names
+ * it draws: the catalogue's tile and the directory's row as a dot and the
+ * word, the detail's header as its pill ([ServiceState]). An app's state is
+ * the same shape (`BUCKET_WORDS`), so "In use" and "Connected" are drawn one
+ * way side by side.
+ *
+ * NOTHING UNTIL THE ENGINE HAS SAID: "Not in use" on a node running no company
+ * would be a guess. A SERVICE IS IN USE, never connected: it is Crewlet's own,
+ * so there is nothing to connect.
+ */
+export function serviceStatus(service: BuiltInService): CatalogTileStatus | undefined {
+  if (!service.known) return undefined;
+  return service.on
+    ? { tone: "success", label: "In use" }
+    : { tone: "neutral", label: "Not in use" };
+}
+
+/** A service's state as the detail header's pill. */
 export function ServiceState({ service }: { service: BuiltInService }) {
-  // NOTHING UNTIL THE ENGINE HAS SAID: "Not in use" on a node running no
-  // company would be a guess. A SERVICE IS IN USE, never connected: it is
-  // Crewlet's own, so there is nothing to connect.
-  if (!service.known) return null;
-  // SOON IS A FACT, CARRIED BY ITS WORD: the accent means where the reader
-  // is, so it is not spent on a service that has not shipped.
-  if (service.soon) {
-    return (
-      <Tag size="sm" variant="neutral">
-        Soon
-      </Tag>
-    );
-  }
-  return service.on ? (
-    <Tag size="sm" variant="success">
-      In use
-    </Tag>
-  ) : (
-    <Tag size="sm" variant="neutral" appearance="outline">
-      Not in use
+  const status = serviceStatus(service);
+  if (!status) return null;
+  return (
+    <Tag size="sm" variant={status.tone} appearance={service.on ? undefined : "outline"}>
+      {status.label}
     </Tag>
   );
 }
 
-/** One issue, with who owes the next move and the control that makes it. */
+/** A service's state as a dot and the word, as an app's row draws its own. */
+export function ServiceDot({ service }: { service: BuiltInService }) {
+  const status = serviceStatus(service);
+  return status ? <StatusDot tone={status.tone}>{status.label}</StatusDot> : null;
+}
+
+/**
+ * The notes on a working integration: what the loop noticed that is worth
+ * reading once (an address the vendor cannot reach, what its events cover),
+ * each its own row, led by its title in bold, then what it means, then what
+ * would change it at a quieter step.
+ *
+ * THE ENGINE LAYS THEM OUT, not this screen: a note's lead, sentence and
+ * remedy arrive as three fields, so nothing here reads one sentence apart. A
+ * config key, a `${VAR}` or a backticked address in one is set as the literal
+ * it is ([marked]).
+ */
+export function Notes({ notes }: { notes: ReconcileFinding[] }) {
+  const heading = useId();
+  if (notes.length === 0) return null;
+  return (
+    <section aria-labelledby={heading} className="int-notes">
+      <h3 id={heading} className="t-label">
+        Notes
+      </h3>
+      <List variant="divided" density="compact">
+        {notes.map((n) => (
+          <List.Item
+            key={`${n.kind}:${n.subject ?? ""}`}
+            leading={<InfoGlyph size="sm" aria-hidden />}
+          >
+            <span className="int-note">
+              <Text>
+                {n.title && <strong>{asSentence(n.title)} </strong>}
+                {marked(asSentence(n.detail || n.kind.replace(/_/g, " ")))}
+              </Text>
+              {n.remedy && (
+                <Text variant="caption" tone="secondary">
+                  {marked(asSentence(n.remedy))}
+                </Text>
+              )}
+            </span>
+          </List.Item>
+        ))}
+      </List>
+    </section>
+  );
+}
+
+/**
+ * The things an issue is about: each agent the chart has as its own chip, its
+ * name linking to its page, and anything else the engine names (an address,
+ * a project) as the plain subject it is.
+ */
+function IssueSubjects({ issue }: { issue: Issue }) {
+  const agents = new Set(issue.agents.map((a) => a.handle));
+  return (
+    <>
+      {issue.agents.length > 0 && (
+        <span
+          className="int-issue-agents"
+          role="group"
+          aria-label={`agents, ${issue.agents.length}`}
+        >
+          {issue.agents.map((agent) => (
+            <EntityChip
+              key={agent.handle}
+              name={agent.name}
+              kind={agent.kind}
+              size="xs"
+              href={href(["company", "org", "seats", agent.handle])}
+            />
+          ))}
+        </span>
+      )}
+      <FindingSubjects subjects={issue.subjects.filter((s) => !agents.has(s))} />
+    </>
+  );
+}
+
+/**
+ * One issue, as a tile: what is wrong, who owes the next move, the agents it
+ * is about, and the one control that makes it.
+ *
+ * THE APP IS NAMED ONCE, by its mark and on the line under the sentence,
+ * never in the sentence: the engine's sentence is the finding alone, and a
+ * row that led it with the app's name read "GitHub: GitHub: ..." where the
+ * finding named its lane as well.
+ *
+ * THE BUTTON SAYS THE FIX. A control here that answers it is the fix (Replace
+ * key), and in a list across apps it opens on the app's page with that
+ * control; a fix only the vendor takes goes there ("Fix on GitHub"); anything
+ * else in a list across apps sends the reader to the app's page.
+ */
 export function IssueRow({
   tool,
   issue,
@@ -104,151 +208,68 @@ export function IssueRow({
   onFix?: (intent: Intent) => void;
   /** Name the app the issue is about, for a list across apps. */
   showTool?: boolean;
-  /** Send the reader to the app's page instead of fixing it here. */
+  /** The app's page, for a list across apps: where its fix opens. */
   go?: string;
 }) {
+  const variant = issue.owner === "you" ? "primary" : "secondary";
+  const action =
+    issue.fix && onFix ? (
+      <Button
+        size="small"
+        variant={variant}
+        disabledReason={tool.blocked}
+        onClick={() => {
+          if (!tool.blocked && issue.fix) onFix(issue.fix.intent);
+        }}
+      >
+        {issue.fix.label}
+      </Button>
+    ) : issue.fix && go ? (
+      <ButtonLink
+        size="small"
+        variant={variant}
+        href={go}
+        aria-label={actionName(issue.fix.label, tool.entry.name)}
+      >
+        {issue.fix.label}
+      </ButtonLink>
+    ) : issue.external ? (
+      <ButtonLink size="small" variant={variant} external href={issue.external.href}>
+        {issue.external.label}
+      </ButtonLink>
+    ) : go ? (
+      <ButtonLink size="small" variant="secondary" href={go}>
+        Open {tool.entry.name}
+      </ButtonLink>
+    ) : null;
   return (
-    <div className="int-issue">
+    <div className="int-issue" data-tone={issue.tone}>
       {showTool && (
-        <span className="int-issue-mark" aria-hidden>
+        <IconTile size="md" tone="neutral" className="int-issue-mark">
           <VendorMark vendor={tool.entry.vendor} size="md" />
-        </span>
+        </IconTile>
       )}
       <div className="int-issue-text">
-        <span className="int-issue-problem">
-          {showTool && <strong>{tool.entry.name}: </strong>}
-          {issue.problem}
-        </span>
-        <FindingSubjects subjects={issue.subjects} />
+        <span className="int-issue-problem">{issue.problem}</span>
         {issue.remedy && <span className="t-caption">{issue.remedy}</span>}
-        <span className="int-issue-owner">
+        <span className="int-issue-meta">
           <StatusDot
             tone={issue.tone === "danger" ? "danger" : issue.owner === "you" ? "warning" : "info"}
           >
             {issue.owner === "you" ? "Waiting on you" : `${OWNER_WORDS[issue.owner]} is on it`}
           </StatusDot>
-        </span>
-      </div>
-      <span className="int-issue-act">
-        {go ? (
-          <ButtonLink size="small" variant="secondary" href={go}>
-            Open {tool.entry.name}
-          </ButtonLink>
-        ) : issue.fix && onFix ? (
-          <Button
-            size="small"
-            variant={issue.owner === "you" ? "primary" : "secondary"}
-            disabledReason={tool.blocked}
-            onClick={() => {
-              if (!tool.blocked && issue.fix) onFix?.(issue.fix.intent);
-            }}
-          >
-            {issue.fix.label}
-          </Button>
-        ) : issue.external ? (
-          <ButtonLink size="small" variant="secondary" external href={issue.external.href}>
-            {issue.external.label}
-          </ButtonLink>
-        ) : null}
-      </span>
-    </div>
-  );
-}
-
-/** One agent on one tool: its mark, its standing, and its own step at the app. */
-export function SeatLine({ row, tool, model }: { row: SeatRow; tool: Tool; model: Model }) {
-  const words = SEAT_WORDS[row.status];
-  return (
-    <div className="int-seat">
-      <SeatAvatar name={row.name} kind="agent" avatar={row.avatar} size="sm" decorative />
-      <div className="int-seat-id">
-        <span className="int-seat-name">
-          {row.name}
-          {row.tier && (
-            // THE ENGINE'S OWN WORDS, weighted by trust only on a scale it
-            // names: a role an organization made carries no tier id, and
-            // drawing it in the accent would claim what it grants.
-            <span
-              className={
-                row.tier.id ? `int-seat-tier int-seat-tier--${row.tier.id}` : "int-seat-tier"
-              }
-              title={row.tier.hint}
-            >
-              {row.tier.label}
-            </span>
+          {showTool && (
+            <>
+              <span className="int-issue-sep" aria-hidden>
+                ·
+              </span>
+              <span>{tool.entry.name}</span>
+            </>
           )}
         </span>
-        <span className="t-caption">{row.detail}</span>
+        <IssueSubjects issue={issue} />
       </div>
-      <Tag
-        size="sm"
-        variant={words.tone}
-        appearance={row.status === "missing" ? "outline" : "soft"}
-      >
-        {words.label}
-      </Tag>
-      {row.seat && row.toolKey && !model.guarded ? (
-        <span className="int-seat-act">
-          <SeatStep
-            app={tool.entry.name}
-            toolKey={row.toolKey}
-            seat={row.seat}
-            managed={model.managed}
-          />
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-/** Every agent on one tool, and the control that asks the loop to look again. */
-export function AgentList({ tool, model }: { tool: Tool; model: Model }) {
-  const [checking, setChecking] = useState(false);
-  const [said, setSaid] = useState("");
-  const provisioned = tool.sections.some((s) => s.tool.can_provision);
-  const waiting = tool.seats.filter((s) => s.status === "pending").length;
-  return (
-    <div className="int-agents">
-      <p className="t-caption">
-        {tool.story.identity}
-        {provisioned ? " Crewlet makes each account on its next pass." : ""}
-      </p>
-      {tool.seats.length > 0 ? (
-        <div className="int-seats">
-          {tool.seats.map((row) => (
-            <SeatLine key={row.handle} row={row} tool={tool} model={model} />
-          ))}
-        </div>
-      ) : (
-        <p className="t-caption">No agent is on this app yet.</p>
-      )}
-      {/* ONLY WHERE A PASS RUNS: a tool whose accounts are made by hand has
-          no loop to ask, so the control would only ever be refused. */}
-      {!model.guarded && tool.configured && provisioned && (
-        <div className="int-row-start">
-          <Button
-            size="small"
-            variant="secondary"
-            leadingIcon={<RotateCwGlyph size="sm" />}
-            disabled={checking}
-            disabledReason={model.managed ?? undefined}
-            onClick={async () => {
-              if (model.managed) return;
-              setChecking(true);
-              setSaid((await model.check(tool)) || "Crewlet is looking now.");
-              setChecking(false);
-            }}
-          >
-            {checking ? "Checking" : "Check now"}
-          </Button>
-          <span className="t-caption">
-            {said ||
-              (waiting > 0
-                ? `${waiting === 1 ? "One account is" : `${waiting} accounts are`} being made.`
-                : "Made an app or account just now? Check picks it up.")}
-          </span>
-        </div>
-      )}
+      {action && <span className="int-issue-act">{action}</span>}
     </div>
   );
 }

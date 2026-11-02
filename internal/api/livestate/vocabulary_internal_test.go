@@ -39,7 +39,6 @@ func TestEveryTypeTheProjectionReadsIsRegistered(t *testing.T) {
 	}{
 		{"stateEvents", keysOf(stateEvents)},
 		{"failureEvents", keysOf(failureEvents)},
-		{"providerFailure", []string{providerFailure}},
 		{"sandboxEvents", keysOf(sandboxEvents)},
 		{"a branch on env.Type", branchedTypes(t)},
 	} {

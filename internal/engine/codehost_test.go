@@ -65,7 +65,7 @@ roles:
 const noCodeCompany = `
 name: Nimbus
 tracker:
-  backend: native
+  backend: worklet
 knowledge:
   backend: none
 roles:
@@ -109,14 +109,14 @@ func bindOps(t *testing.T, e *engine.Engine) {
 // token. The token states its grants, as every Tier A token must, and lists
 // the tracker, which decides nothing a case here reads: what a credential may
 // do to a repository is the standing of the seat the directory binds it to
-// (ADR-0058).
+// (ADR-0081).
 func gitNodeBootstrap(t *testing.T, roles []string) *config.Bootstrap {
 	t.Helper()
 	return bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(filepath.Dir(b.Store.Path), "stream")
 		b.Node.Roles = roles
 		b.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: opsToken,
-			Grants: []iam.Grant{iam.GrantTracker}}}
+			Grants: []iam.Grant{iam.GrantWorklet}}}
 	})
 }
 

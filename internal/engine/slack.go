@@ -2,9 +2,12 @@ package engine
 
 import (
 	"context"
+	"errors"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/slack"
 )
 
@@ -29,9 +32,9 @@ func (e *Engine) startSlack(ctx context.Context, c *Company, cfg *config.Slack) 
 	env := e.resolver()
 	seats := slack.SeatsFrom(c.Org, env.LookupOK)
 	if len(seats) == 0 {
-		// Configured with no provisioned apps is a company mid-setup, not
-		// a failure: `crewlet slack provision` has not run yet, or its
-		// tokens have not reached this node's environment.
+		// Configured with no installed apps is a company mid-setup, not a
+		// failure: no agent's install has been approved yet, or its token
+		// has not reached this node.
 		log.InfoContext(ctx, "slack_configured_with_no_apps",
 			"detail", "no seat's integrations.slack.bot_token resolved, so "+
 				"nothing sends or receives on this surface")
@@ -167,4 +170,28 @@ func statusPhrases(p config.StatusPhrases) map[string][]string {
 		"review":            p.Review,
 		notify.DefaultPhase: p.Default,
 	}
+}
+
+// SlackInstalls mints seats' Slack install links and finishes the installs
+// they return to, for the setup surface and the webhook landing alike: one
+// object, so a link minted on one is the link the other finishes.
+//
+// THE FLEET'S, every part of it: the state is signed under the keyring every
+// node holds, its nonce is recorded on the fleet's claim registry, and the bot
+// token is sealed into the company's secret store, because the node Slack
+// returns a browser to is rarely the node that minted the link.
+func (e *Engine) SlackInstalls(material runtoken.Material) (*slack.Installs, error) {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return nil, errors.New("engine: this engine holds no fleet store to record " +
+			"Slack install links in; it was not built by engine.New")
+	}
+	return slack.NewInstalls(slack.InstallOptions{
+		Material: material,
+		Claims:   e.backends.Fleet,
+		Base:     func() string { return e.webhookBase },
+		Resolve:  func(ref string) string { return e.resolver().Value(ref) },
+		Sink: func(context.Context) (provision.TokenSink, error) {
+			return e.SetupSink(loopActor())
+		},
+	})
 }

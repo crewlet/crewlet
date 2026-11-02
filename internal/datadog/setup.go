@@ -66,10 +66,13 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			SecretName: "DATADOG_API_KEY",
 			Required:   true,
 			Connect:    true,
-			Checkable:  true,
-			Help:       "Create one on your",
-			LinkText:   "API keys page",
-			VendorURL:  "https://app.datadoghq.com/organization-settings/api-keys",
+			// NOT CHECKED ON ITS OWN: Datadog accepts or refuses the
+			// two keys together, so the one test is the application
+			// key's, made with this one (see its CheckWith).
+			CheckNote: "It is tested together with the application key.",
+			Help:      "Create one on your",
+			LinkText:  "API keys page",
+			VendorURL: "https://app.datadoghq.com/organization-settings/api-keys",
 		},
 		{
 			Field:      "app_key",
@@ -80,6 +83,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			Required:   true,
 			Connect:    true,
 			Checkable:  true,
+			CheckWith:  []string{"site", "api_key"},
 			Help:       "Create one on your",
 			LinkText:   "application keys page",
 			VendorURL:  "https://app.datadoghq.com/organization-settings/application-keys",

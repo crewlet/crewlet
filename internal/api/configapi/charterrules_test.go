@@ -143,7 +143,7 @@ func TestAnImportWarnsAboutTheCharterWhereAnEditIsRefused(t *testing.T) {
 	if body := decode(t, res); !warnedAt(body, "mission") || !warnedAt(body, "policies[1]") {
 		t.Errorf("the import does not warn about the charter: %v", body["warnings"])
 	}
-	active, _, err := s.configs.Active(t.Context())
+	active, _, err := s.active(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestAnImportWarnsAboutTheCharterWhereAnEditIsRefused(t *testing.T) {
 
 // AN IMPORT RELAXES THE CHARTER AND NOTHING ELSE: a file breaking another
 // admission rule (two units on one key) is refused as any write is, and a
-// stale If-Match is a conflict as on any write.
+// stale If-Match is a failed precondition as on any write.
 func TestAnImportRelaxesOnlyTheCharter(t *testing.T) {
 	t.Parallel()
 	summary := map[string]string{"X-Summary": "an import"}
@@ -180,8 +180,8 @@ func TestAnImportRelaxesOnlyTheCharter(t *testing.T) {
 			res.Code, body)
 	}
 	if res := s.do(t, http.MethodPut, "/config?import=true", faultyCharterDoc()+"timezone: UTC\n",
-		map[string]string{"X-Summary": "x", "If-Match": `"not-` + first + `"`}); res.Code != http.StatusConflict {
-		t.Errorf("an import under a stale If-Match = %d %s, want 409", res.Code, res.Body)
+		map[string]string{"X-Summary": "x", "If-Match": `"not-` + first + `"`}); res.Code != http.StatusPreconditionFailed {
+		t.Errorf("an import under a stale If-Match = %d %s, want 412", res.Code, res.Body)
 	}
 	if n := s.revisionCount(t); n != 1 {
 		t.Errorf("refused imports stored %d revisions", n-1)
@@ -201,7 +201,7 @@ func TestAnImportIsAnAdministratorsAndItsFlagIsStrict(t *testing.T) {
 		t.Errorf("a lead's import = %d %s, want 403 unauthorized", res.Code, res.Body)
 	}
 	member := iam.Principal{ID: uuid.New(), Login: "sam.member", Kind: iam.KindPerson,
-		Stage: iam.StageActive, Seat: "designer", Grants: []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
+		Stage: iam.StageActive, Seat: "designer", Grants: []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
 		ReauthAt: time.Now().Add(time.Hour)}
 	res = doAs(t, s, member, http.MethodPut, "/config?import=true", "{not json",
 		map[string]string{"X-Summary": "an import"})

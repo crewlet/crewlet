@@ -5,8 +5,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE DURABLE CONSUMER NAMES ARE FROZEN, and this is the assertion that keeps
@@ -34,8 +34,8 @@ func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 		wantName       string
 		wantGroupExact string
 	}{
-		"the tracker": {tracker.NewTranslator().Source(), "work", "crewlet-tracker-feed"},
-		"the wiki":    {pages.NewTranslator(nil).Source(), "page", "crewlet-pages-feed"},
+		"the tracker": {worklet.NewTranslator().Source(), "work", "crewlet-tracker-feed"},
+		"the wiki":    {doclet.NewTranslator(nil).Source(), "page", "crewlet-pages-feed"},
 		"the code":    {code.NewTranslator().Source(), "code", "crewlet-code-feed"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -52,8 +52,8 @@ func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 		})
 	}
 	groups := map[string]bool{}
-	for _, src := range []changefeed.Source{tracker.NewTranslator().Source(),
-		pages.NewTranslator(nil).Source(), code.NewTranslator().Source()} {
+	for _, src := range []changefeed.Source{worklet.NewTranslator().Source(),
+		doclet.NewTranslator(nil).Source(), code.NewTranslator().Source()} {
 		if groups[src.Group] {
 			t.Errorf("two estates share the durable consumer %q, so each would handle "+
 				"records it cannot decode", src.Group)

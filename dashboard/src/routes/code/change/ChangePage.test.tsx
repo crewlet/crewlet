@@ -21,6 +21,7 @@ import { draftsKey } from "~/lib/reviewDrafts.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
+import { engineJson } from "~/test/engineAnswer.ts";
 import { withDerived } from "~/test/org.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
@@ -44,7 +45,7 @@ const ORG = withDerived({
     { name: "Engineer", handle: "dev" },
   ],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
-  services: { tracker: "native", knowledge: "native", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
 }) as unknown as OrgProjection;
 
 /** The reader: bound to `jane`, offered every change write. */
@@ -115,11 +116,9 @@ const MINE = {
   position: POSITION,
 };
 
-const json = (payload: unknown, status = 200) =>
-  new Response(JSON.stringify(payload), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
+// THE STUB PLAYS THE ENGINE, so its answers carry the engine's mark: a
+// refusal without it reads as a proxy's, an outcome nobody knows.
+const json = (payload: unknown, status = 200) => engineJson(payload, status);
 
 interface Acted {
   tool: string;

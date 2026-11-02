@@ -287,7 +287,7 @@ function CodeAlarms({ fleet }: { fleet: FleetAnswer }) {
                 <a className="t-link prose-link mono" href={href(["settings", "nodes", a.node])}>
                   {a.node}
                 </a>
-                {a.since && <span className="muted"> — since {relTime(a.since, now)}</span>}
+                {a.since && <span className="muted">, since {relTime(a.since, now)}</span>}
               </li>
             ))}
           </ul>

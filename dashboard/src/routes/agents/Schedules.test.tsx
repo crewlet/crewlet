@@ -416,6 +416,6 @@ test("no schedule draws no figures, and offers the configuration to a reader who
     "#/settings/config",
   );
   cleanup();
-  await mountScreen(undefined, { schedules: [], grants: ["tracker"] });
+  await mountScreen(undefined, { schedules: [], grants: ["worklet"] });
   expect(screen.queryByRole("link", { name: "Open the configuration" })).toBeNull();
 });

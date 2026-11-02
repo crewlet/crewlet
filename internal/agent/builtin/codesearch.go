@@ -187,7 +187,7 @@ func (t *codeSearch) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		for i, hit := range page.Hits {
 			// A LINE IS A FILE'S TEXT, which nobody this read can name
 			// vouches for: fenced, at the least trust.
-			read.fence(fieldPath{}.key("hits").index(i).key("text"), provenance.SourceRepoFile, nil, false,
+			read.fenceRepository(fieldPath{}.key("hits").index(i).key("text"), provenance.SourceRepoFile,
 				hit.Text)
 			if tip, ok := answer.Tips[hit.Repo]; ok {
 				if page.Tips == nil {

@@ -39,7 +39,7 @@ import (
 //
 // THE READS AND THE GIT ROUTES ADMIT EVERYBODY THE GUARD RESOLVED: what each
 // may read, fetch or push is the per-repository grant the serving node
-// decides (ADR-0058), as a work item's thread is admitted for the comment's
+// decides (ADR-0081), as a work item's thread is admitted for the comment's
 // own decision. The same caller reaches every one of them — the control that
 // shows the refusal above is the verb's and not the credential's.
 //

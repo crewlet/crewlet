@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -32,14 +33,13 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/observe"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // pinned is the clock these answers run on. Pinned because a lease countdown
@@ -52,6 +52,7 @@ var pinned = time.Date(2026, 8, 23, 16, 0, 0, 0, time.UTC)
 const companyDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -71,6 +72,7 @@ roles:
     llm: zulu
     integrations:
       mattermost:
+        enabled: false
         bot_token: "${TOK}"
     schedules:
       - name: standup
@@ -755,6 +757,31 @@ func TestAgentMemoryIsAskedOfTheHolderWithTheSeatWhole(t *testing.T) {
 	}
 }
 
+// THE SKILLS' ORDER IS ASKED OF THE HOLDER, which cuts the page: a screen that
+// sorted the page it was handed answered the most used of the newest. An order
+// the store does not read is refused as bad params, naming the ones it does,
+// rather than answered newest under another name.
+//
+// Mutation: drop the order from the query this handler sends, and the holder
+// is asked for the newest.
+func TestAgentMemoryAsksTheHolderForTheSkillsInTheirOrder(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	memory := &stubMemory{}
+	answer(t, queries.Sources{Company: companySource(t, cfg), Memory: memory},
+		"agent_memory", map[string]any{"id": "cto", "skills_order": "uses"})
+	if memory.skills != learning.SkillsMostUsed {
+		t.Errorf("the holder was asked for the skills in %q, want %q",
+			memory.skills, learning.SkillsMostUsed)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Company: companySource(t, cfg), Memory: &stubMemory{}})
+	if _, err := r.Answer(everyGrant(t), "agent_memory",
+		map[string]any{"id": "cto", "skills_order": "-uses"}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("an order the store does not read: %v, want bad params", err)
+	}
+}
+
 // --- the fleet's config columns --------------------------------------------
 
 func TestFleetCarriesEachNodesConfigState(t *testing.T) {
@@ -963,8 +990,9 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 			InFlight: 4, Posture: "shed",
 		}.Meta(),
 	})
-	// A peer whose beat carried no status: its status hook overran its
-	// budget, so the heartbeat published the placement half alone.
+	// A peer whose beat carried no status: its status hook did not answer
+	// within its share of the beat, so the heartbeat published the
+	// placement half alone.
 	claim(coord.NodeResource("node-b"), "node-b:1", map[string]any{
 		"roles": []any{"ingress"},
 	})
@@ -1231,15 +1259,18 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 					ActionURL: "https://gitlab.example.com/api-gateway/-/settings",
 				},
 				Findings: []integration.Finding{{
-					Kind: integration.FindingGrantShort, Subject: "ceo",
+					// An agent's own, so `seat` is sent.
+					Kind: integration.FindingGrantShort, Subject: "ceo", Seat: true,
 					Detail:    "2 seats need maintainer on api-gateway",
 					Remedy:    "grant maintainer on api-gateway",
 					ActionURL: "https://gitlab.example.com/api-gateway/-/project_members",
 					Subjects:  []string{"ceo", "cto"},
 				}, {
-					// The one kind with a date, so `expires_at` is sent.
+					// The one kind with a date, so `expires_at` is sent, and
+					// an advisory, so it carries the lead the notes list sets.
 					Kind:      integration.FindingCredentialExpiring,
 					Subject:   "integrations.gitlab.provisioning.admin_token",
+					Title:     "Admin token expires soon",
 					Detail:    "the group Owner token expires on 2026-10-01",
 					ExpiresAt: pinned.Add(5 * 24 * time.Hour),
 				}},
@@ -1589,7 +1620,7 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 func TestTheMemoryOverviewListsEveryAgentSeat(t *testing.T) {
 	t.Parallel()
 	var doc strings.Builder
-	doc.WriteString("name: Acme\nproviders:\n  llm:\n    z: {model: m}\nroles:\n")
+	doc.WriteString("name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    z: {model: m}\nroles:\n")
 	for i := range 14 {
 		fmt.Fprintf(&doc, "  - name: Agent %02d\n    handle: agent-%02d\n    llm: z\n", i, 13-i)
 	}
@@ -2362,6 +2393,7 @@ func TestSeatsInUnitsAreReported(t *testing.T) {
 	const doc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -2380,10 +2412,12 @@ units:
         llm: zulu
         integrations:
           mattermost:
+            enabled: false
             bot_token: "${MM}"
           slack:
-            bot_token: "${BOT}"
-            signing_secret: "${SIG}"
+            enabled: false
+            bot_token: "${SLACK_BOT_TOKEN_SWE}"
+            signing_secret: "${SLACK_SIGNING_SECRET_SWE}"
     children:
       - name: Platform
         roles:
@@ -2392,6 +2426,7 @@ units:
             llm: zulu
             integrations:
               mattermost:
+                enabled: false
                 bot_token: "${MM2}"
 `
 	cfg, err := config.ParseCompany([]byte(doc))
@@ -2974,6 +3009,115 @@ func TestTheFleetNamesTheRevisionAndNotJustTheEpoch(t *testing.T) {
 	}
 }
 
+// WHICH REVISION A NODE ATTEMPTED IS NOT WHICH ONE IT RUNS, and the fleet view
+// says both (#324).
+//
+// A node that refused the fleet's revision reports the failed attempt at the
+// target — that revision, status error — and goes on serving the one before
+// it. With only the attempt on the row, "the active revision failed on
+// node-b" was all a screen could say, never "node-b is still serving P", and
+// whether node-b was taking traffic on the old company or on nothing at all
+// was a question for its logs.
+//
+// NOR IS EITHER OF THEM WHAT IT WOULD COME BACK ON: the boot row moves only
+// after an apply succeeds, and a write to it that failed leaves a node running
+// a revision it would not restart on. node-b is that node here, and whoever
+// keeps what a node needs in order to start reads `config_boot_revision_id`.
+// It is ABSENT rather than empty from a node that boots on nothing — a node
+// whose database is discarded at every start, and a build older than the
+// field — which node-a is.
+//
+// AND THE EPOCH EACH LAST APPLIED, which the attempted one does not say for
+// the node that refused it: node-b attempted the fleet's epoch and still runs
+// what it applied at the epoch before, and a screen judging whether a save
+// reached it compares the saved epoch with `config_applied_epoch`, as a node's
+// own health push compares it with its live epoch. ABSENT from a node that has
+// applied nothing — node-c, which booted on what it holds and refused the
+// first epoch it met — rather than a 0 a client would compare.
+//
+// Mutations: answer config_boot_revision_id from the record's Serving and
+// node-b's row names the revision it runs, which is not the one it would boot;
+// answer config_applied_epoch from the record's Epoch and node-b reads as
+// running the epoch it refused.
+func TestTheFleetViewSaysWhichRevisionEachNodeServes(t *testing.T) {
+	t.Parallel()
+	pinned := time.Date(2026, 5, 4, 9, 30, 0, 0, time.UTC)
+	backend := coordmemory.New()
+	for _, node := range []string{"node-a", "node-b", "node-c"} {
+		if _, _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+			coord.AcquireOptions{Owner: node + ":1", TTL: time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plane := coordmemory.NewFleet()
+	// THE EPOCH node-b still runs: rev-1, activated before the fleet moved.
+	before, err := plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte("{}"), At: pinned.Add(-time.Hour),
+		Summary: "the company before", Origin: coord.RevisionOrigin{Author: "maya",
+			AuthorKind: "operator", Source: "api", CreatedAt: pinned.Add(-time.Hour)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published, err := plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-2", Payload: []byte("{}"), At: pinned, Summary: "add a provider",
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api",
+			CreatedAt: pinned},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range []coord.NodeApply{
+		{NodeID: "node-a", Epoch: published.Epoch, RevisionID: "rev-2",
+			Applied: published.Epoch, Serving: "rev-2",
+			Status: string(configplane.StatusOK), UpdatedAt: pinned},
+		{NodeID: "node-b", Epoch: published.Epoch, RevisionID: "rev-2",
+			Applied: before.Epoch, Serving: "rev-1",
+			Boots: "rev-0", Status: string(configplane.StatusError),
+			Error: "no profile for the provider", UpdatedAt: pinned},
+		{NodeID: "node-c", Epoch: published.Epoch, RevisionID: "rev-2", Serving: "rev-1",
+			Boots: "rev-1", Status: string(configplane.StatusError),
+			Error: "no profile for the provider", UpdatedAt: pinned},
+	} {
+		if err := plane.RecordApply(t.Context(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, Plane: plane, NodeID: "node-a",
+	}, "fleet", nil))
+	byID := map[string]map[string]any{}
+	for _, row := range rows(t, body["nodes"]) {
+		byID[fmt.Sprint(row["id"])] = row
+	}
+	for node, want := range map[string]string{"node-a": "rev-2", "node-b": "rev-1",
+		"node-c": "rev-1"} {
+		if got := byID[node]["config_serving_revision_id"]; got != want {
+			t.Errorf("%s serves %v, want %s", node, got, want)
+		}
+		if got := byID[node]["config_revision_id"]; got != "rev-2" {
+			t.Errorf("%s attempted %v, want the fleet's rev-2", node, got)
+		}
+	}
+	if got := byID["node-b"]["config_boot_revision_id"]; got != "rev-0" {
+		t.Errorf("node-b boots on %v, want rev-0 — the revision its boot row still "+
+			"names while it runs rev-1", got)
+	}
+	if got, named := byID["node-a"]["config_boot_revision_id"]; named {
+		t.Errorf("node-a, which reported no boot revision, boots on %v", got)
+	}
+	for node, want := range map[string]int64{"node-a": published.Epoch,
+		"node-b": before.Epoch} {
+		if got := byID[node]["config_applied_epoch"]; got != float64(want) {
+			t.Errorf("%s applied epoch %v, want %d", node, got, want)
+		}
+	}
+	if got, named := byID["node-c"]["config_applied_epoch"]; named {
+		t.Errorf("node-c, which has applied nothing, applied epoch %v", got)
+	}
+}
+
 // A FLEET WITH NO ACTIVATION CARRIES NO ACTIVATION RECORD, rather than an
 // object of empty strings: a screen given one would render a revision named ""
 // activated at the zero time, which is a worse answer than none.
@@ -3019,7 +3163,7 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	// UNDER THE STATUS KEY, which is where the presence heartbeat puts it
 	// and where [coord.StatusFromMeta] looks.
 	claim("node-a", map[string]any{coord.StatusKey: coord.NodeStatus{
-		ProjectionsReady: 2, ProjectionsTotal: 3,
+		AppliersReady: 2, AppliersTotal: 3,
 	}.Meta()})
 	claim("node-b", map[string]any{coord.StatusKey: coord.NodeStatus{}.Meta()})
 
@@ -3030,14 +3174,14 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	for _, row := range rows(t, body["nodes"]) {
 		byID[fmt.Sprint(row["id"])] = row
 	}
-	if got := byID["node-a"]["projections_ready"]; got != float64(2) {
-		t.Errorf("node-a reports %v of its projections ready, want 2", got)
+	if got := byID["node-a"]["appliers_ready"]; got != float64(2) {
+		t.Errorf("node-a reports %v of its appliers ready, want 2", got)
 	}
-	if got := byID["node-a"]["projections_total"]; got != float64(3) {
+	if got := byID["node-a"]["appliers_total"]; got != float64(3) {
 		t.Errorf("node-a reports a total of %v, want 3", got)
 	}
-	if _, present := byID["node-b"]["projections_total"]; present {
-		t.Error("a node that published no projection counts carries a total " +
+	if _, present := byID["node-b"]["appliers_total"]; present {
+		t.Error("a node that published no applier counts carries a total " +
 			"anyway, so a screen draws 0 of 0 — which reads as ready")
 	}
 }
@@ -3238,10 +3382,10 @@ func TestThePageScreenReadsWhatTheseAnswersSend(t *testing.T) {
 	// A PLACE ON A TASK WHOSE KEY ANOTHER TASK CLAIMED FIRST, so the row
 	// carries `key_collision` — the field a link needs to reach this task by
 	// its id rather than open the claimant by the key.
-	sources.Work = &stubWork{places: map[string]tracker.TurnPlace{
+	sources.Work = &stubWork{places: map[string]worklet.TurnPlace{
 		"run-a": {TaskID: "t-1", Key: "ENG-412", KeyCollision: true,
 			Title: "Retry PXE boot", Ordinal: 2}}}
-	sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage}, Skill: true}}
+	sources.Pages = &stubPages{detail: doclet.Detail{Page: doclet.Page{ID: readPage}, Skill: true}}
 	// A BACKLINK TO EACH HOLDER OF ONE KEY, so a row carries `key_collision`
 	// — the field the rail needs to open the duplicate by its id rather than
 	// the claimant by the key — and a row without it says the flag is

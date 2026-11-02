@@ -190,3 +190,84 @@ func TestAPageClosesBetweenTwoPositionsOfASource(t *testing.T) {
 		t.Fatalf("paging read %v, want %v", all, want)
 	}
 }
+
+// pagedSource is a source that answers fixed pages by the cursor it is asked
+// with — what a source that SCANS rows it then leaves out answers: a page
+// whose own cursor lies past its last notice, or a page of none with one.
+type pagedSource struct {
+	name  string
+	pages map[string]inbox.SourcePage
+	asked []string
+}
+
+func (p *pagedSource) Name() string { return p.name }
+
+func (p *pagedSource) Notices(_ context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
+	p.asked = append(p.asked, q.Cursor)
+	page, found := p.pages[q.Cursor]
+	if !found {
+		return inbox.SourcePage{}, fmt.Errorf("%s: no page at %q", p.name, q.Cursor)
+	}
+	page.Notices = slices.Clone(page.Notices)
+	return page, nil
+}
+
+// A SOURCE'S PAGE OF NONE STILL MOVES ITS CURSOR: the code host scanned
+// founder's newest code notices and left every one out — each on a repository
+// deleted and not yet purged — so its first page holds no notice and its own
+// cursor past what it scanned; the next page asks it below that cursor and
+// reaches a notice on a repository founder still reads, and the inbox then
+// ends. Likewise a page whose last rows the source left out resumes below
+// them, never at its last notice.
+//
+// Mutation: keep the cursor a source was asked with where the page took none
+// of its notices — every page asks the code host its first page again, the
+// composed cursor never moves and the notices below are never read, red;
+// resume a page taken whole at its last notice — the left-out rows are asked
+// for again, red.
+func TestASourcesPageOfNoneStillMovesItsCursor(t *testing.T) {
+	t.Parallel()
+	const (
+		scanned = "CREWLET_CODE_LOG@1:50"
+		cut     = "CREWLET_CODE_LOG@1:30"
+	)
+	notice := func(id string, seq uint64, minute int) inbox.Notice {
+		return inbox.Notice{RecordID: id, Position: inbox.Position{Stream: "CREWLET_CODE_LOG", Generation: 1,
+			Seq: seq}, At: composeBase.Add(time.Duration(minute) * time.Minute)}
+	}
+	code := &pagedSource{name: "code", pages: map[string]inbox.SourcePage{
+		"":      {Next: scanned, Complete: true},
+		scanned: {Notices: []inbox.Notice{notice("code-40", 40, 40)}, Next: cut, Complete: true},
+		cut:     {Notices: []inbox.Notice{notice("code-5", 5, 5)}, Complete: true},
+	}}
+	tracker := noticesAt("tracker", "CREWLET_TRACKER_LOG", composeBase, 55, 20)
+	var all []string
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatalf("the inbox did not end after %d pages: %v, the code host asked at %q", pages, all,
+				code.asked)
+		}
+		page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
+			Limit: 3, Cursor: cursor}, []inbox.Source{tracker, code})
+		if err != nil {
+			t.Fatalf("Compose at %q: %v", cursor, err)
+		}
+		all = append(all, ids(page)...)
+		if page.NextCursor == "" {
+			break
+		}
+		if page.NextCursor == cursor {
+			t.Fatalf("a page at %q answered the cursor it was asked with, so no page can move past it: read %v",
+				cursor, all)
+		}
+		cursor = page.NextCursor
+	}
+	if want := []string{"tracker-55", "tracker-20", "code-40", "code-5"}; !slices.Equal(all, want) {
+		t.Errorf("paging read %v, want %v", all, want)
+	}
+	if want := []string{"", scanned, cut}; !slices.Equal(code.asked, want) {
+		t.Errorf("the code host was asked at %q, want each page below the rows the one before scanned, %q",
+			code.asked, want)
+	}
+}

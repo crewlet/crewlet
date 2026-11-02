@@ -71,12 +71,17 @@ type SubjectLog interface {
 // [StandingLog] from a domain's log, so no caller writes the pairing for
 // itself.
 func StandingOf(log SubjectLog, v *Verifier) StandingLog {
-	return standing{VerifiedLog: VerifiedLog{Log: log, Verifier: v}, last: log}
+	return standing{VerifiedReader: VerifiedLog{Log: log, Verifier: v}, last: log}
 }
 
+// standing is a [StandingLog] made of a verified reader and whatever answers
+// the per-subject probe: a domain's raw log ([StandingOf]), or a publisher's
+// appender beside the verified reader it already holds.
 type standing struct {
-	VerifiedLog
-	last SubjectLog
+	VerifiedReader
+	last interface {
+		LastSeq(ctx context.Context, subject string) (seq uint64, found bool, err error)
+	}
 }
 
 func (s standing) LastSeq(ctx context.Context, subject string) (uint64, bool, error) {
@@ -93,35 +98,51 @@ func EvictedOnLog(ctx context.Context, d Domain, spec StreamSpec, log StandingLo
 	if !gated {
 		return false, false, nil
 	}
-	subject := wireSubject(spec.SubjectPrefix, probe.EvictionSubject(node))
+	_, evicted, found, err = lastStanding(ctx, probe, spec.SubjectPrefix, spec.Name, log, node)
+	return evicted, found, err
+}
+
+// lastStanding is the last record on node's eviction subject of the log named
+// stream, whose wire subjects carry prefix: its sequence, whether it evicts,
+// and found false when the subject holds nothing.
+//
+// THE SEQUENCE TOO, for the reader that has to place the standing against a
+// position: a publisher judging another node's copy of its operation
+// ([Publisher.unresolved]) needs to know whether the last word on that node
+// is below the copy, where it decides the copy, or above it, where it says
+// nothing about it.
+func lastStanding(ctx context.Context, probe EvictionProbe, prefix, stream string,
+	log StandingLog, node string) (seq uint64, evicts, found bool, err error) {
+
+	subject := wireSubject(prefix, probe.EvictionSubject(node))
 	seq, held, err := log.LastSeq(ctx, subject)
 	if err != nil {
-		return false, false, fmt.Errorf("statelog: read %s's eviction subject on %s: %w",
-			node, spec.Name, err)
+		return 0, false, false, fmt.Errorf("statelog: read %s's eviction subject on %s: %w",
+			node, stream, err)
 	}
 	if !held {
-		return false, false, nil
+		return 0, false, false, nil
 	}
 	got, payload, _, ok, err := log.At(ctx, seq)
 	switch {
 	case err != nil:
-		return false, false, fmt.Errorf("statelog: read %s's standing at sequence %d "+
-			"of %s: %w", node, seq, spec.Name, err)
+		return 0, false, false, fmt.Errorf("statelog: read %s's standing at sequence %d "+
+			"of %s: %w", node, seq, stream, err)
 	case !ok:
 		// TRIMMED BETWEEN THE TWO READS: what the trim removed, the rows
 		// hold, which is the caller's fallback for found=false.
-		return false, false, nil
+		return 0, false, false, nil
 	case got != subject:
-		return false, false, fmt.Errorf("statelog: the broker named sequence %d of %s "+
+		return 0, false, false, fmt.Errorf("statelog: the broker named sequence %d of %s "+
 			"as the last on %s and holds a record of %s there", seq,
-			spec.Name, subject, got)
+			stream, subject, got)
 	}
-	evicts, err := probe.Evicts(payload)
+	evicts, err = probe.Evicts(payload)
 	if err != nil {
-		return false, false, fmt.Errorf("statelog: decode %s's standing at sequence "+
-			"%d of %s: %w", node, seq, spec.Name, err)
+		return 0, false, false, fmt.Errorf("statelog: decode %s's standing at sequence "+
+			"%d of %s: %w", node, seq, stream, err)
 	}
-	return evicts, true, nil
+	return seq, evicts, true, nil
 }
 
 // GenerationOpeners reads, off the log, which node opened each generation of

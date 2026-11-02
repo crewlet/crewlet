@@ -15,8 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // answeredMap runs one question and insists it succeeded, so a case about a
@@ -65,7 +66,7 @@ func TestSearchIsUnregisteredWithoutAnIndexAndTheBoardIsNot(t *testing.T) {
 // has them file the duplicate. It is a third answer, with a reason.
 func TestAnIndexStillBuildingIsReportedRatherThanReturnedAsAFailure(t *testing.T) {
 	t.Parallel()
-	w := &stubWork{err: tracker.ErrIndexBuilding}
+	w := &stubWork{err: worklet.ErrIndexBuilding}
 	got := answeredMap(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
 		"work_search", map[string]any{"q": "billing"})
 	switch {
@@ -76,7 +77,7 @@ func TestAnIndexStillBuildingIsReportedRatherThanReturnedAsAFailure(t *testing.T
 	case got["note"] == "" || got["note"] == nil:
 		t.Error("the answer carries no note, so a screen has nothing to say")
 	}
-	hits, ok := got["hits"].([]tracker.Ranked)
+	hits, ok := got["hits"].([]worklet.Ranked)
 	if !ok || hits == nil {
 		// AN EMPTY SLICE, never null: a client rendering `hits.length`
 		// should not have to guard the field as well.
@@ -249,11 +250,12 @@ type stubMemory struct {
 	conversation string
 	episode      string
 	limit        int
+	skills       learning.SkillOrder
 	seats        []memread.Seat
 }
 
-func (s *stubMemory) Memory(_ context.Context, seat memread.Seat, limit int) (memread.Memory, error) {
-	s.seat, s.limit = seat, limit
+func (s *stubMemory) Memory(_ context.Context, seat memread.Seat, q memread.MemoryQuery) (memread.Memory, error) {
+	s.seat, s.limit, s.skills = seat, q.Limit, q.Skills
 	return s.memory, s.err
 }
 
@@ -280,6 +282,7 @@ func (s *stubMemory) Overview(_ context.Context, seats []memread.Seat) (memread.
 const trailCompany = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     p: {model: m}
 roles:

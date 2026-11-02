@@ -123,7 +123,7 @@ func openFleetVia(t testing.TB, client jetstream.JetStream, prefix string) *Flee
 	t.Helper()
 	store, err := OpenFleet(context.Background(), client, FleetConfig{
 		BucketPrefix:     prefix,
-		RateWindow:       time.Minute,
+		MaxRateWindow:    time.Minute,
 		MaxClaimTTL:      10 * time.Minute,
 		LedgerRetention:  10 * time.Minute,
 		FireRetention:    10 * time.Minute,
@@ -1101,8 +1101,8 @@ func TestAKeyThePassLostIsReadBackOnTheEmbeddedFleetsDomain(t *testing.T) {
 		t.Fatalf("client: %v", err)
 	}
 	store, err := OpenFleet(ctx, js, FleetConfig{
-		BucketPrefix: fmt.Sprintf("d%d", bucketSeq.Add(1)),
-		RateWindow:   time.Minute, MaxClaimTTL: 10 * time.Minute,
+		BucketPrefix:  fmt.Sprintf("d%d", bucketSeq.Add(1)),
+		MaxRateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, BudgetRetention: time.Minute, RebaseRetention: 10 * time.Minute,
 		StatusFreshness:  10 * time.Minute,

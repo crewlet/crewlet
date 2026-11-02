@@ -181,6 +181,30 @@ func TestASeatIsNotCreatedByAddress(t *testing.T) {
 	}
 }
 
+// A MISSING SEAT OR UNIT POINTS AT THE WRITE THAT ADDS ONE. A plain PUT to an
+// id nothing carries says how to add one, and for a seat and a unit that is
+// replacing the unit it sits in: never the create-only header, which they
+// refuse `not_creatable`. A caller (the Dashboard Assistant among them) that
+// followed the old hint met a second refusal before it learned where a seat is
+// added. Mutation: answer every kind's 404 with the create-only hint and this
+// fails.
+func TestAMissingSeatSaysWhereASeatIsAdded(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, serversDoc)
+
+	for _, kind := range []string{configapi.EntityRoles, configapi.EntityUnits} {
+		res := s.do(t, http.MethodPut, "/config/"+kind+"/newcomer", `{"name":"newcomer"}`,
+			map[string]string{"X-Summary": "add one"})
+		body := res.Body.String()
+		if res.Code != http.StatusNotFound || strings.Contains(body, "If-None-Match") ||
+			!strings.Contains(body, "PUT /config/units/{id}") {
+			t.Errorf("a PUT to a missing %s = %d %s, want 404 naming the unit write", kind,
+				res.Code, body)
+		}
+	}
+}
+
 // ONE PRECONDITION PER WRITE. `If-Match` names the DOCUMENT's revision an edit
 // was read from, and an address with nothing at it has no representation for
 // that tag to describe — so the two together are refused rather than one of

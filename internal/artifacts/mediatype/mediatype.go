@@ -7,6 +7,8 @@ import (
 	"path"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Class is the family a type belongs to, which decides the size limit a file
@@ -191,8 +193,8 @@ func For(p string) (Type, bool) {
 func Resolve(p, declared string) (Type, error) {
 	row, ok := rowFor(p)
 	if !ok {
-		return Type{}, fmt.Errorf("%w: %q has no extension the media table serves "+
-			"(want one of %s)", ErrRefused, p, strings.Join(extensions(), " "))
+		return Type{}, fmt.Errorf("%w: %q has no extension an artifact can publish. "+
+			"Use %s", ErrRefused, p, words.Or(extensions()))
 	}
 	if strings.TrimSpace(declared) == "" {
 		return row.Types[0], nil
@@ -208,7 +210,7 @@ func Resolve(p, declared string) (Type, error) {
 		served = append(served, t.Essence())
 	}
 	return Type{}, fmt.Errorf("%w: %q is declared %q, and a %s file is served as %s",
-		ErrRefused, p, declared, row.Extension, strings.Join(served, " or "))
+		ErrRefused, p, declared, row.Extension, words.Or(served))
 }
 
 // rowFor is the row for the extension of p's last segment.

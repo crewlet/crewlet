@@ -11,7 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A NODE WITH NO CHECKPOINT TAKES THE FLEET'S GENERATION, AND ADOPTS.
@@ -34,7 +35,7 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
@@ -73,8 +74,8 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	// writes the row.
 	s.haltAppliers()
 
-	name := tracker.Domain{}.Name()
-	stream := tracker.Domain{}.Stream().Name
+	name := worklet.Domain{}.Name()
+	stream := worklet.Domain{}.Stream().Name
 
 	// THE FLEET HAS RE-ANCHORED: an operator moved it to generation 3, and
 	// the trim has published a floor there.

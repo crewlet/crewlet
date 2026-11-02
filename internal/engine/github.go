@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // The hosted code host, wired.
@@ -204,15 +205,25 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	lookup := &github.SeatLookup{Opts: github.SeatAppOptions{
 		APIBase: api, WebBase: web, Org: githubOrg(cfg),
 		Seats: e.githubSeatApps(c, env),
-	}}
+	}, Issuer: &e.githubIssuer}
 
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
 	registered := e.intoLiveRegistry(func(reg *notify.Registry) int {
 		return e.notify.github.register(reg, c, env)
 	})
-	if registered == 0 {
-		// Enabled with no seat identity is a company mid-setup —
-		// `crewlet github provision` has not run — or a deployment that
+	switch pending := githubAppsPending(c); {
+	case registered == 0 && len(pending) > 0:
+		// A COMPANY WHOSE AGENTS ARE GETTING THEIR OWN APPS, which is a
+		// step a person is part way through rather than a fault: each of
+		// these seats' identity is its app's slug, written when the app is
+		// created, and the card names the click that is left. Said once
+		// per wiring, at info, so it reads as the wait it is.
+		log.InfoContext(ctx, "github_seat_identities_waiting", "api", api, "seats", pending,
+			"detail", "each of these agents acts on GitHub as its own app, which is not "+
+				"created yet; its identity is registered once the app exists")
+	case registered == 0:
+		// Enabled with no seat identity is a company mid-setup
+		// (`crewlet github provision` has not run) or a deployment that
 		// refused every lookup. Logged loudly either way, because the
 		// integration is completely inert in this state and nothing else
 		// will say so.
@@ -221,6 +232,7 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	}
 	log.InfoContext(ctx, "github_wired", "api", api,
 		"seat_identities", registered, "participants_lookup", len(lookup.Opts.Seats) > 0)
+	e.githubPulls.wire(lookup)
 	return github.NewParser(github.ParserOptions{Participants: lookup}), nil
 }
 
@@ -249,6 +261,7 @@ func (e *Engine) reconcileGitHub(ctx context.Context, c *Company) {
 	// deliveries under the credential being revoked, while RoutedSources
 	// went on listing it as reachable.
 	if cfg == nil || !cfg.Enabled {
+		e.githubPulls.wire(nil)
 		if svc.Unregister(github.Backend) {
 			log.InfoContext(ctx, "github_retired",
 				"detail", "the revision no longer enables github; its deliveries "+
@@ -295,30 +308,47 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 		return out
 	}
 	for seat := range company.Org.AllRoles() {
-		if !seat.IsAgent() {
+		if !seat.IsAgent() || seat.GitHub == nil {
 			continue
 		}
-		app := seat.GitHub
-		if app == nil {
-			continue
-		}
-		// The seat's role.code.access, the one tier every code host reads:
-		// the manifest asked GitHub for its permission set, and every token
-		// is minted with exactly that set, so the two are one reading.
-		// PARSED FROM THE RAW VALUE, not through an "or default" helper:
-		// [github.ParseTier] already answers the default for an empty
-		// string and for a typo, and it is the package that OWNS the
-		// closed set — so there is one place that decides what an
-		// unrecognised tier runs at.
-		tier, _ := github.ParseTier(seat.CodeAccess)
-		out = append(out, github.SeatApp{
-			Handle: seat.Handle(), Name: seat.Name, Tier: tier, Repos: app.Repos,
-			AppID: app.AppID, Slug: app.AppSlug,
-			InstallationID: app.InstallationID,
-			Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
-		})
+		out = append(out, githubSeatApp(seat, env))
 	}
 	return github.SeatsFrom(out)
+}
+
+// githubSeatApp is one agent's own app as the company document records it,
+// with its key resolved. The caller has checked the seat carries a block.
+//
+// ONE READING of a seat's app for every reader of it: the roster above, and
+// the token a seat's own values are resolved with ([Engine.seatResolver]).
+func githubSeatApp(seat *org.Role, env *config.Resolver) github.SeatApp {
+	app := seat.GitHub
+	return github.SeatApp{
+		Handle: seat.Handle(), Name: seat.Name, Off: !app.Enabled,
+		Permissions: github.PermissionsOf(app.Permissions), Repos: app.Repos,
+		AppID: app.AppID, Slug: app.AppSlug,
+		InstallationID: app.InstallationID,
+		Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
+	}
+}
+
+// githubAppsPending is every agent seat that is set up to act as its own
+// GitHub App and whose app does not exist yet, sorted: the seats whose
+// identity waits on a person creating the app ([githubIdentities.register]
+// registers each one's slug the moment there is one).
+func githubAppsPending(c *Company) []string {
+	var out []string
+	if c == nil || c.Org == nil {
+		return out
+	}
+	for seat := range c.Org.AllRoles() {
+		if seat.IsAgent() && seat.GitHub != nil && seat.GitHub.Enabled &&
+			github.NormalizeLogin(seat.GitHub.AppSlug) == "" {
+			out = append(out, seat.Handle())
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // githubPrompt is the hosted code host's trigger builder. A value, held by

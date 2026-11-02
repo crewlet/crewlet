@@ -374,16 +374,11 @@ func TestInheritOmitsAnUnsetNameRatherThanPassingItEmpty(t *testing.T) {
 	}
 }
 
-func TestCopyFileAtomicWritesTheContentAtFileMode(t *testing.T) {
+func TestReplaceFileWritesTheContentAtFileMode(t *testing.T) {
 	dir := t.TempDir()
-	src := filepath.Join(dir, "src")
-	dst := filepath.Join(dir, "nested", "dst")
-	if err := os.WriteFile(src, []byte("token"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	ran, err := CopyFileAtomic(src, dst)
-	if err != nil || !ran {
-		t.Fatalf("CopyFileAtomic = %v, %v", ran, err)
+	dst := filepath.Join(dir, "dst")
+	if err := ReplaceFile(dst, strings.NewReader("token")); err != nil {
+		t.Fatalf("ReplaceFile: %v", err)
 	}
 	got, err := os.ReadFile(dst)
 	if err != nil || string(got) != "token" {
@@ -405,14 +400,10 @@ func TestCopyFileAtomicWritesTheContentAtFileMode(t *testing.T) {
 	}
 }
 
-func TestCopyFileAtomicLeavesNoTempFileBehind(t *testing.T) {
+func TestReplaceFileLeavesNoTempFileBehind(t *testing.T) {
 	dir := t.TempDir()
-	src := filepath.Join(dir, "src")
-	if err := os.WriteFile(src, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if _, err := CopyFileAtomic(src, filepath.Join(dir, "dst")); err != nil {
-		t.Fatalf("CopyFileAtomic: %v", err)
+	if err := ReplaceFile(filepath.Join(dir, "dst"), strings.NewReader("x")); err != nil {
+		t.Fatalf("ReplaceFile: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -420,107 +411,43 @@ func TestCopyFileAtomicLeavesNoTempFileBehind(t *testing.T) {
 	}
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".crewlet-tmp-") {
-			t.Fatalf("temp file %q survived the copy", entry.Name())
+			t.Fatalf("temp file %q survived the replacement", entry.Name())
 		}
 	}
 }
 
-func TestCopyFileAtomicReportsAMissingSourceRatherThanFailing(t *testing.T) {
-	dir := t.TempDir()
-	ran, err := CopyFileAtomic(filepath.Join(dir, "absent"), filepath.Join(dir, "dst"))
-	if err != nil {
-		t.Fatalf("a profile naming a file this vendor does not use is not an error: %v", err)
-	}
-	if ran {
-		t.Fatal("CopyFileAtomic reported a copy that could not have happened")
-	}
-}
-
-func TestCopyFileAtomicRefusesADirectory(t *testing.T) {
-	dir := t.TempDir()
-	ran, err := CopyFileAtomic(dir, filepath.Join(dir, "dst"))
-	if ran || err != nil {
-		t.Fatalf("CopyFileAtomic(dir) = %v, %v; want false, nil", ran, err)
-	}
-}
-
-func TestFileDigestSeparatesChangedFromUnchanged(t *testing.T) {
-	dir := t.TempDir()
-	a := filepath.Join(dir, "a")
-	b := filepath.Join(dir, "b")
-	if err := os.WriteFile(a, []byte("same"), FileMode); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if err := os.WriteFile(b, []byte("same"), FileMode); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	digest := func(path string) string {
-		t.Helper()
-		got, present, err := FileDigest(path)
-		if err != nil || !present || got == "" {
-			t.Fatalf("FileDigest(%s) = %q, %v, %v", path, got, present, err)
-		}
-		return got
-	}
-	if digest(a) != digest(b) {
-		t.Fatalf("identical contents digested differently: %q vs %q", digest(a), digest(b))
-	}
-	if err := os.WriteFile(b, []byte("rotated"), FileMode); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if digest(a) == digest(b) {
-		t.Fatal("a rotated credential digested the same as the old one")
-	}
-}
-
-// THREE ANSWERS: a file that is not there is absent and no error — a login
-// that was removed — while one that is there and cannot be digested is an
-// error, never a digest of "" every other compares unequal to.
+// A REPLACEMENT THAT FAILS LEAVES NOTHING STAGED. The content is written to a
+// file beside the destination before the rename that puts it in place, and a
+// rename refused — a directory at the destination, say — must not leave that
+// file behind: a box's home would hold a credential under a name nothing reads,
+// and a shared login's directory a file no reader expects. The destination is
+// left as it was.
 //
-// Mutation: answer an unreadable file as absent, or as "" and present, and a
-// compare-and-swap writes over it or recreates what was removed.
-func TestFileDigestTellsAnAbsentFileFromAnUnreadableOne(t *testing.T) {
+// Mutation: drop the removal of the staged file, and it survives the refusal.
+func TestReplaceFileInLeavesNothingStagedWhenItsRenameFails(t *testing.T) {
 	dir := t.TempDir()
-	if got, present, err := FileDigest(filepath.Join(dir, "absent")); got != "" || present || err != nil {
-		t.Errorf("FileDigest(absent) = %q, %v, %v; want \"\", false, nil", got, present, err)
-	}
-	if _, present, err := FileDigest(dir); err == nil || present {
-		t.Errorf("FileDigest(a directory) = %v, %v; want an error", present, err)
-	}
-	unreadable := filepath.Join(dir, "unreadable")
-	if err := os.WriteFile(unreadable, []byte("x"), 0o000); err != nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if f, err := os.Open(unreadable); err == nil {
-		// Root reads a file whatever its mode, so the case has nothing to
-		// show there; the directory above has shown the rule.
-		_ = f.Close()
-		return
-	}
-	if _, present, err := FileDigest(unreadable); err == nil || present {
-		t.Errorf("FileDigest(unreadable) = %v, %v; want an error", present, err)
-	}
-}
-
-// THE DIGEST IS OF WHAT WAS COPIED, in FileDigest's form — and nothing where
-// nothing was.
-func TestCopyFileAtomicDigestReportsWhatItCopied(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "src")
-	dst := filepath.Join(dir, "nested", "dst")
-	if err := os.WriteFile(src, []byte("token"), 0o600); err != nil {
+	t.Cleanup(func() { _ = root.Close() })
+	if err := os.MkdirAll(filepath.Join(dir, "dst", "inside"), DirMode); err != nil {
 		t.Fatal(err)
 	}
-	digest, copied, err := CopyFileAtomicDigest(src, dst)
-	if err != nil || !copied {
-		t.Fatalf("CopyFileAtomicDigest = %q, %v, %v", digest, copied, err)
+	if err := ReplaceFileIn(root, "dst", strings.NewReader("token")); err == nil {
+		t.Fatal("a replacement over a directory succeeded")
 	}
-	if want, _, _ := FileDigest(dst); digest != want {
-		t.Errorf("the copy's digest is %q, want the copied file's %q", digest, want)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
 	}
-	digest, copied, err = CopyFileAtomicDigest(filepath.Join(dir, "absent"), filepath.Join(dir, "other"))
-	if digest != "" || copied || err != nil {
-		t.Errorf("CopyFileAtomicDigest(absent) = %q, %v, %v; want nothing copied and no error", digest, copied, err)
+	for _, entry := range entries {
+		if entry.Name() != "dst" {
+			t.Errorf("%q survived the failed replacement", entry.Name())
+		}
+	}
+	if info, err := os.Lstat(filepath.Join(dir, "dst", "inside")); err != nil || !info.IsDir() {
+		t.Errorf("the destination is now %v, %v; want it as it was", info, err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
@@ -152,7 +153,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		// here for the reason it is everywhere: a session minted now
 		// would act as the bare credential on this node and as its seat
 		// on the next.
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
+		auth.UnavailableIdentity(w, iam.Reason(r.Context()))
 		return
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -191,7 +192,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		// the counters a bearer carries are the decide's, and nothing can
 		// prove they are the landed record's — so no cookie, and the next
 		// exchange is a new session.
-		writeFailed(w, r, "api_token_exchange_failed", opID, err)
+		gestureFailed(w, r, "api_token_exchange_failed", opID, err)
 		return
 	}
 	if !landed(opened.Result) {
@@ -231,8 +232,7 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 }
 
 // machineToken refuses a STEP-UP through a request that presented a machine
-// token, and says whether it did. window is the proof a step-up gives, named
-// on the refusal as every `step_up_required` here names it.
+// token, and says whether it did.
 //
 // THE STEP-UP'S OWN, because confirming who you are is no verb in the
 // authority table — it is about no object and asks no grant, it is the
@@ -242,16 +242,38 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 // gesture that NEEDS a person present is the table's to refuse
 // ([authz.Presence]).
 //
+// AND IN THE TABLE'S OWN WORDS for that fact, `token_refused` — the refusal
+// [authz.Decide] gives a token on every verb that needs a person present. It
+// was `step_up_required`, whose sentence asks the caller to confirm who they
+// are and replay the request: a client doing so sent the token back to this
+// route to be refused again, and the envelope's message contradicted its own
+// detail, which is the contradiction `token_refused` exists to end.
+//
 // ASKED OF THE CREDENTIAL, NEVER OF THE PRINCIPAL'S KIND OR ITS CLOCK: the one
 // thing on a token's principal that says nobody is present is what it came
 // THROUGH, which the guard stamps and [auth.PresentedToken] reads.
-func machineToken(w http.ResponseWriter, r *http.Request, window iam.Recency) bool {
+func machineToken(w http.ResponseWriter, r *http.Request) bool {
 	if _, fromToken := auth.PresentedToken(r.Context()); !fromToken {
 		return false
 	}
-	refuseStepUp(w, window, "Access tokens can't confirm it's you or change "+
-		"how you sign in. Sign in as yourself.")
+	authz.EnvelopeRefusal(w, r, authz.Policy{},
+		authz.Decision{Reason: authz.ReasonTokenRefused})
 	return true
+}
+
+// notAPerson refuses a gesture only a person can make to a principal that is
+// none — a Tier A token's session, a service account — with the request's own
+// sentence.
+//
+// `403 forbidden`, AS `POST /auth/password` ANSWERS THE SAME FACT, and never
+// `step_up_required`: no proof the caller could give lifts it, so a refusal
+// that asked for one sent a client to a step-up that refuses the same caller
+// again. Nor is it the authority table's refusal — a verb's row decides who
+// may take a gesture, and this is the rule of the gesture itself, which no
+// permission changes.
+func notAPerson(w http.ResponseWriter, detail string) {
+	httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeForbidden,
+		map[string]string{"detail": detail})
 }
 
 // stepUpRequest is what confirming identity presents.
@@ -290,22 +312,19 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return
 	}
-	// EVERY `step_up_required` THIS SURFACE ANSWERS CARRIES ITS WINDOW,
-	// the one a password step-up proves inside.
 	if principal.Kind != iam.KindPerson {
 		// A MACHINE HAS NOTHING TO CONFIRM WITH, which is the point of
 		// the step-up rather than a gap in it: a credential in a config
 		// file cannot prove a person is at the keyboard.
-		refuseStepUp(w, iam.RecencyStepUp,
-			"Only a person can confirm it's them. Sign in as yourself.")
+		notAPerson(w, "Only a person can confirm it's them. Sign in as yourself.")
 		return
 	}
 	// NOR CAN A TOKEN ACTING AS A PERSON, which the kind above cannot see.
-	if machineToken(w, r, iam.RecencyStepUp) {
+	if machineToken(w, r) {
 		return
 	}
 
-	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	body, err := httpjson.ReadBody(w, r, MaxLoginBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return
@@ -328,7 +347,7 @@ func (s *Service) StepUp(w http.ResponseWriter, r *http.Request) {
 	held, err := s.directory.PersonByLogin(r.Context(), principal.Login)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_step_up_lookup_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return
 	}
 	attempt := authevents.Failure{Source: source, Method: types.FailPassword}
@@ -420,7 +439,7 @@ func (s *Service) replacedSession(w http.ResponseWriter, r *http.Request,
 	case v.Row == session.RowValid && v.Bearer.Person == held.ID:
 		return v, true
 	case v.Row == session.RowBehind || v.Row == session.RowStalled:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(nil))
+		auth.UnavailableIdentity(w, nil)
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 	}

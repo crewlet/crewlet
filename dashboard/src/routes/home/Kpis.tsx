@@ -23,13 +23,14 @@ import { ArrowRightGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { decisionsHref } from "~/components/DecisionRow.tsx";
 import { fmtCount } from "~/lib/format.ts";
-import { useOrgBudget, useOrg } from "~/lib/store-hooks.ts";
-import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
-import { TRACKER, accessNames } from "~/lib/access.ts";
+import { useConnection, useOrgBudget, useOrg } from "~/lib/store-hooks.ts";
+import { configWriteAccess, linkOf } from "~/lib/useWriteAccess.ts";
+import { WORKLET, accessNames } from "~/lib/access.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { TokenSeries, WorkFlowAnswer } from "~/protocol/index.ts";
+import { PARTIAL_FIGURE, gapsOf } from "./board/kit.tsx";
 import {
   budgetCaption,
   completedIn,
@@ -43,6 +44,8 @@ import {
   type HomeRange,
   type Waiting,
 } from "./model.ts";
+import { remedyOffer } from "~/lib/remedy.ts";
+import type { Remedy } from "~/protocol/remedy.ts";
 
 /**
  * The five figures, in the order the row draws them by default. A board's
@@ -53,7 +56,7 @@ export type KpiId = (typeof KPI_IDS)[number];
 
 /**
  * The figures a service built into Crewlet answers, and which: tasks in
- * progress and tasks completed are Crewlet Works' flow (`work_flow`). Where
+ * progress and tasks completed are Worklet's flow (`work_flow`). Where
  * the company does not run it they are not drawn, and the rest fill the row.
  * What waits on the reader's decision is not among them: the seats stopped on
  * a spent budget and the coding runs parked on a question arrive whatever
@@ -114,14 +117,11 @@ export function Kpis({
       case "waiting":
         return <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />;
       case "progress":
-        return <InProgressTile flow={flow} locked={trackerLocked(viewer)} />;
+        return <InProgressTile flow={flow} locked={workletLocked(viewer)} />;
       case "completed":
-        return <CompletedTile flow={flow} range={range} locked={trackerLocked(viewer)} />;
+        return <CompletedTile flow={flow} range={range} locked={workletLocked(viewer)} />;
       case "tokens":
-        // WHO MAY SET A BUDGET is whoever may write the company's configuration
-        // (Admin, the access a ceiling is written under, and on a managed
-        // document one of its writers), never a kind of credential.
-        return <TokensTile spend={spend} range={range} mayConfigure={mayChangeConfig(viewer)} />;
+        return <TokensTile spend={spend} range={range} viewer={viewer} />;
     }
   };
   // THE ROW'S COLUMNS ARE ITS FIGURES', so one figure on its own fills its
@@ -155,7 +155,7 @@ function AgentsTile({ crew }: { crew: Crew }) {
             segments={[
               { id: "working", value: crew.working, tone: "info", label: "working" },
               { id: "needs", value: crew.needs, tone: "warning", label: "waiting" },
-              { id: "stopped", value: crew.stopped, tone: "danger", label: "stopped" },
+              { id: "stopped", value: crew.stopped, tone: "danger", label: "paused or stopped" },
             ]}
           />
         ) : undefined
@@ -177,10 +177,10 @@ function WaitingTile({
   error: QueryErrorCode | null;
   now: number;
 }) {
-  // THE INBOX IS THE TRACKER'S, so the way there is offered only to a reader
-  // who can open it; an asked person without Tracker answers on Home and on
+  // THE INBOX IS WORKLET'S, so the way there is offered only to a reader
+  // who can open it; an asked person without Worklet answers on Home and on
   // the task itself.
-  const review = viewer.tracker ? (
+  const review = viewer.worklet ? (
     <ButtonLink
       size="small"
       variant="secondary"
@@ -223,23 +223,27 @@ function WaitingTile({
       value={`${waiting.count.toLocaleString()}${waiting.floor ? "+" : ""}`}
       trend={review}
       sub={
-        // NO SECOND "NOTHING": the figure says 0, and the greeting says it in
-        // words. The line is for what the figure cannot carry.
-        waiting.count > 0 && waiting.oldestAt
-          ? `Oldest waiting ${waitedFor(waiting.oldestAt, now)}`
-          : undefined
+        // OVER AN ANSWER THAT COULD NOT ACCOUNT FOR EVERYTHING the figure may
+        // be wrong, and the line says so. NO SECOND "NOTHING" otherwise: the
+        // figure says 0, and the greeting says it in words. The line is for
+        // what the figure cannot carry.
+        waiting.partial
+          ? PARTIAL_FIGURE
+          : waiting.count > 0 && waiting.oldestAt
+            ? `Oldest waiting ${waitedFor(waiting.oldestAt, now)}`
+            : undefined
       }
-      subTone={waiting.count > 0 ? "warning" : undefined}
+      subTone={waiting.partial || waiting.count > 0 ? "warning" : undefined}
     />
   );
 }
 
 /**
- * Whether the tracker's tiles are closed to this reader: once the viewer has
- * said they hold no Tracker, never on a guess while it has not.
+ * Whether Worklet's tiles are closed to this reader: once the viewer has
+ * said they hold no Worklet, never on a guess while it has not.
  */
-function trackerLocked(viewer: ViewerState): boolean {
-  return !viewer.loading && !viewer.tracker;
+function workletLocked(viewer: ViewerState): boolean {
+  return !viewer.loading && !viewer.worklet;
 }
 
 /** Open work somebody has started, its change over a week, and what is stuck. */
@@ -253,13 +257,15 @@ function InProgressTile({ flow, locked }: { flow: QueryResult<WorkFlowAnswer>; l
   const earlier = points.length > WEEK ? points[points.length - 1 - WEEK]!.active : null;
   const delta = deltaWords(current, earlier, false);
   const trouble = troubleParts(data.now);
+  const partial = gapsOf([data]).length > 0;
   return (
     <StatCard
       label="Tasks in progress"
       value={current.toLocaleString()}
       trend={<Sparkline values={points.slice(-14).map((p) => p.active)} current />}
       delta={delta ? { value: delta, polarity: "neutral" } : undefined}
-      sub={<Parts parts={inProgressParts(delta !== null, trouble)} />}
+      sub={partial ? PARTIAL_FIGURE : <Parts parts={inProgressParts(delta !== null, trouble)} />}
+      subTone={partial ? "warning" : undefined}
     />
   );
 }
@@ -282,6 +288,7 @@ function CompletedTile({
   const { current, previous } = completedIn(data.points, range.days);
   const delta = deltaWords(current, previous, true);
   const shown = Math.max(range.days, 14);
+  const partial = gapsOf([data]).length > 0;
   return (
     <StatCard
       label={label}
@@ -295,7 +302,8 @@ function CompletedTile({
             }
           : undefined
       }
-      sub={delta ? `vs ${range.previous}` : undefined}
+      sub={partial ? PARTIAL_FIGURE : delta ? `vs ${range.previous}` : undefined}
+      subTone={partial ? "warning" : undefined}
     />
   );
 }
@@ -308,12 +316,14 @@ function CompletedTile({
  * and a bare "−88%" in front of "No weekly budget" read as a claim about the
  * budget. The window-on-window change is Spend's, where it has its own axis.
  *
- * THE WAY TO SET A BUDGET IS OFFERED TO WHOEVER CAN SET ONE: a reader who may
- * change the company's configuration (`mayChangeConfig` — an admin, and on a
- * managed document one of its writers) gets "No
- * weekly budget" as the link into Company › Budgets; anybody else gets the fact,
- * since the screen behind the link would only refuse them. The weekly budget
- * is the COMPANY's ceiling, so no lead path reaches it.
+ * THE WAY TO THE CEILING IS OFFERED BY THE ONE GATE EVERY REMEDY IS
+ * (`lib/remedy.ts`, the editor's own): a reader who may raise the company's
+ * ceiling gets "No weekly budget", or the spent week, as the link into
+ * Company › Budgets at the company's section; anybody else gets the fact, and
+ * for a spent week who can raise it ("An admin can raise this ceiling.", or
+ * who manages the document), since the screen behind the link would only
+ * refuse them. The weekly budget is the COMPANY's ceiling, so no lead path
+ * reaches it.
  *
  * AND ONLY ONCE IT IS A FACT. Before the engine's first `budget` report the
  * slice is `null` — nobody has read the counter — and the line says that
@@ -323,20 +333,21 @@ function CompletedTile({
 function TokensTile({
   spend,
   range,
-  mayConfigure,
+  viewer,
 }: {
   spend: QueryResult<TokenSeries>;
   range: HomeRange;
-  /**
-   * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
-   * Admin and, on a managed document, are one of its writers.
-   */
-  mayConfigure: boolean;
+  viewer: ViewerState;
 }) {
   const label = `Tokens · ${range.words}`;
   const budget = useOrgBudget();
   const org = useOrg();
   const week = weekWindow(budget?.org?.windows);
+  // THE COMPANY'S CEILING, which no lead path reaches: the configuration
+  // gate is the whole of the editor's gate for it (`orgWriteAccess`).
+  const offer = remedyOffer(COMPANY_BUDGET, configWriteAccess(viewer, linkOf(useConnection())));
+  const toCeiling =
+    offer.kind === "open" ? href(offer.destination.path, { ...offer.destination.query }) : null;
   if (spend.error) return <RefusedTile label={label} />;
   if (!spend.data?.totals) return <StatCard label={label} value={EMPTY_VALUE} loading />;
   const total = spend.data.totals.total_tokens;
@@ -358,11 +369,25 @@ function TokensTile({
       }
       sub={
         week ? (
-          <Parts parts={budgetCaption(week, org?.timezone ?? budget?.timezone)} />
+          week.state === "refusing" && toCeiling ? (
+            // A SPENT WEEK IS RAISED WHERE ITS CEILING IS, by a reader who
+            // may; the same link table every budget refusal opens through.
+            <a className="t-link" href={toCeiling}>
+              <Parts parts={budgetCaption(week, org?.timezone ?? budget?.timezone)} />
+            </a>
+          ) : (
+            <Parts
+              parts={[
+                ...budgetCaption(week, org?.timezone ?? budget?.timezone),
+                // WHO CAN RAISE IT, for a reader who may not.
+                ...(week.state === "refusing" && offer.kind === "who" ? [offer.sentence] : []),
+              ]}
+            />
+          )
         ) : budget === null ? (
           "Weekly budget not reported yet"
-        ) : mayConfigure ? (
-          <a className="t-link" href={href(["company", "budgets"])}>
+        ) : toCeiling ? (
+          <a className="t-link" href={toCeiling}>
             No weekly budget
           </a>
         ) : (
@@ -375,6 +400,9 @@ function TokensTile({
     />
   );
 }
+
+/** The company's own ceilings, the one a spent week is raised in. */
+const COMPANY_BUDGET: Remedy = { setting: "company_token_budget" };
 
 /**
  * A second line of whole facts: each part unbroken, the separator leading the
@@ -402,12 +430,12 @@ function RefusedTile({ label }: { label: string }) {
 }
 
 /**
- * A tile whose figure is the tracker's, for a reader without Tracker: the
+ * A tile whose figure is Worklet's, for a reader without Worklet: the
  * question is never asked, and the tile says what would open it rather than
  * waiting for an answer that will never come.
  */
 function LockedTile({ label }: { label: string }) {
   return (
-    <StatCard label={label} value={EMPTY_VALUE} sub={`Needs ${accessNames([TRACKER])} access`} />
+    <StatCard label={label} value={EMPTY_VALUE} sub={`Needs ${accessNames([WORKLET])} access`} />
   );
 }

@@ -201,9 +201,16 @@ func TestTheObjectReservationIsHeldToTheBroker(t *testing.T) {
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("want a conflict, got %v", err)
 	}
-	err = rejectsBootstrap(t, Served("store:\n  objects:\n    nats_max_bytes: 6442450944\n"+
-		"stream:\n  store_max_bytes: 6442450944\n  tracker_log_max_bytes: 4294967296\n"),
+	// 48 GiB of bucket beside a 32 GiB mutation log is 80 GiB inside a
+	// 64 GiB limit, and nothing else in the document is wrong: a case with a
+	// second problem passes on whichever of the two fires.
+	err = rejectsBootstrap(t, Served("store:\n  objects:\n    nats_max_bytes: 51539607552\n"+
+		"stream:\n  store_dir: /var/js\n  store_max_bytes: 68719476736\n"+
+		"  tracker_log_max_bytes: 34359738368\n"),
 		"store.objects.nats_max_bytes")
+	if problems := Problems(err); len(problems) != 1 {
+		t.Fatalf("want the one refusal at the bucket, got %+v", problems)
+	}
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("want a conflict, got %v", err)
 	}

@@ -43,42 +43,44 @@ func TestEvictionFenceHoldsTheTrimUntilTheNodeCanNotice(t *testing.T) {
 	}
 }
 
-// A NODE BETWEEN BOOT AND ITS FIRST HEARTBEAT COUNTS AT ZERO AND BLOCKS.
+// A LIVE DATA NODE WHOSE ROW HAS NOT LANDED COUNTS AT ZERO AND BLOCKS.
 //
-// That is exactly a node adopting a snapshot. Treating it as absent would let
-// the trim advance past the tail it is about to replay — the state it is
-// joining to escape.
+// That is a running node whose heartbeat's write was refused: it holds a
+// presence lease and applies every log, and nothing says where it stands.
+// Treating it as absent would let the trim advance past what it has still to
+// apply. (A node adopting a snapshot at boot is not this: it holds no lease
+// yet, and is kept by its own pin — [statelog.AdoptDeps.Hold].)
 func TestANodeWithNoPositionYetIsCountedAtZero(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	counted := statelog.CountedSet(now,
 		[]statelog.NodePosition{{NodeID: "a", Generation: 1, Seq: 9_000}},
-		[]statelog.Presence{{NodeID: "joiner"}}, nil)
+		[]statelog.Presence{{NodeID: "unreported"}}, nil)
 
 	if len(counted) != 2 {
-		t.Fatalf("counted %v, want both — a node holding a lease and no position "+
-			"yet is a node adopting a snapshot", counted)
+		t.Fatalf("counted %v, want both — a live data node holding a lease and "+
+			"no row yet applies the log all the same", counted)
 	}
 	var found bool
 	for _, n := range counted {
-		if n.NodeID == "joiner" {
+		if n.NodeID == "unreported" {
 			found = true
 			if n.Seq != 0 {
-				t.Errorf("the joiner counts at %d, want 0 — a position it has "+
-					"not reported is not a position it has reached", n.Seq)
+				t.Errorf("the node with no row counts at %d, want 0 — a position "+
+					"it has not reported is not a position it has reached", n.Seq)
 			}
 		}
 	}
 	if !found {
-		t.Fatal("the joining node is not counted at all")
+		t.Fatal("the live data node with no row is not counted at all")
 	}
 
-	// AND IT BLOCKS THE TRIM, for at most one heartbeat.
+	// AND IT BLOCKS THE TRIM, until its row lands.
 	in := baseInputs()
 	in.Counted = counted
 	if d := statelog.Trim(in.Terms()); d.To != 0 || d.Blocked() != (d.To == 0) {
-		t.Fatalf("the trim would remove up to %d with a node at position 0 — the "+
-			"tail that node is about to replay must not be removed under it", d.To)
+		t.Fatalf("the trim would remove up to %d with a node at position 0 — "+
+			"what that node has still to apply must not be removed under it", d.To)
 	}
 }
 
@@ -218,6 +220,15 @@ func TestAReadmissionIsRefusedBelowTheFloor(t *testing.T) {
 						"node cannot compare is not a fault in the node", err,
 						statelog.ErrUnavailable)
 				}
+				// AND IT SAYS WHICH LOG, so the engine can tell the
+				// operator where this node is behind and send them to a
+				// node that isn't, rather than answer a fault.
+				var behind *statelog.ReanchorNotApplied
+				if !errors.As(err, &behind) || behind.Domain != "tracker" ||
+					behind.Reported != 3 || behind.Runs != 2 {
+					t.Fatalf("err = %#v, want the tracker named as re-anchored "+
+						"past this node, 3 against 2", err)
+				}
 				return
 			case tc.refused == "":
 				if err != nil {
@@ -259,10 +270,10 @@ func TestAReadmissionIsRefusedBelowTheFloor(t *testing.T) {
 //
 // A writer about to publish a kind an older build cannot even defer waits for
 // every node that applies the log — so the set it asks is exactly the one the
-// trim counts. A joiner holding a lease and no row yet is about to replay and
-// reads as zero, a node advertising a lower version reads as that version,
-// and an operator's eviction, once its fence window has passed, releases the
-// writer exactly as it releases the trim.
+// trim counts. A live node holding a lease and no row yet applies the log all
+// the same and reads as zero, a node advertising a lower version reads as
+// that version, and an operator's eviction, once its fence window has passed,
+// releases the writer exactly as it releases the trim.
 func TestTheReadersAreTheTrimsCountedSet(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
@@ -272,11 +283,11 @@ func TestTheReadersAreTheTrimsCountedSet(t *testing.T) {
 		{NodeID: "gone", Generation: 1, Seq: 10, RecordVersion: 1},
 	}
 	readers := statelog.Readers(statelog.CountedSet(now, reported,
-		[]statelog.Presence{{NodeID: "joiner"}, {NodeID: "new"}},
+		[]statelog.Presence{{NodeID: "unreported"}, {NodeID: "new"}},
 		[]statelog.Tombstone{{NodeID: "gone",
 			At: now.Add(-statelog.EvictionFenceWindow - time.Second)}}))
 
-	want := map[string]int{"new": 2, "lower": 1, "joiner": 0}
+	want := map[string]int{"new": 2, "lower": 1, "unreported": 0}
 	if len(readers) != len(want) {
 		t.Fatalf("readers %v, want %v", readers, want)
 	}

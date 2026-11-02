@@ -18,7 +18,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
-import { afterMicrotasks } from "~/test/settle.ts";
+import { afterMicrotasks, settled } from "~/test/settle.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { Repositories } from "./Repositories.tsx";
 
@@ -35,7 +35,7 @@ const ORG = withDerived({
   name: "Acme",
   roles: [{ name: "CTO", handle: "cto" }],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
-  services: { tracker: "native", knowledge: "native", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
 }) as unknown as OrgProjection;
 
 /** A repository as the listing answers it, with what a case overrides. */
@@ -267,33 +267,31 @@ test("a company with no repository is told where one is declared", async () => {
   await waitFor(() => expect(screen.queryByRole("table")).toBeNull());
 });
 
-// THE FIRST PAGE IS HELD from the press of Load more. Its cursor is the last
-// name it scanned, and read again under a repository that entered its range —
+// THE FIRST PAGE STAYS LIVE past Load more, and its cursor is the last name
+// it scanned: read again under a repository that entered its range —
 // declared by an activation, restored, or moved into the filtered state — it
-// pushes that name out of both pages. The case found in review: a1 and a2,
-// then a3; a0 is declared, and a minute on a2 was gone until a reload.
-// Mutation: ask the listing without the pager's hold, and a2 is not listed.
+// pushes that name off its foot. The case found in review: a1 and a2, then
+// a3; a0 is declared, and a minute on a2 was gone until a reload. The pager
+// reads the names between the moved first page and the page after it.
+// Mutation: drop the pager's join, and a2 is not listed.
 test("a repository declared after Load more pushes none out of the listing", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   let declared = ["a1", "a2", "a3"];
   const asked = stubFetch(byName(() => declared));
-  const { store } = mount(<Repositories />);
+  mount(<Repositories />);
   fireEvent.click(await screen.findByRole("button", { name: /load more/i }));
   expect(await screen.findByText("a3")).toBeTruthy();
   expect(listed()).toEqual(["a1", "a2", "a3"]);
 
   declared = ["a0", "a1", "a2", "a3"];
-  await act(async () => void vi.advanceTimersByTime(3 * 60_000));
-  act(() => store.setConnected(true));
-  act(() => store.setConnected(false));
-  act(() => store.setConnected(true));
-  await afterMicrotasks();
-  expect(firstPages(asked)).toHaveLength(1);
-  expect(listed()).toEqual(["a1", "a2", "a3"]);
+  await act(async () => void vi.advanceTimersByTime(60_000));
+  await settled(() => asked.length);
+  expect(firstPages(asked).length).toBeGreaterThan(1);
+  expect(listed()).toEqual(["a0", "a1", "a2", "a3"]);
 });
 
 // A FILTER LEFT AND COME BACK TO starts the listing again: what the first
-// reading held is discarded, never hidden under its question, where it came
+// reading loaded is discarded, never hidden under its question, where it came
 // back under a first page read since. Mutation: hide the held pages by
 // question instead, and the old a3 is drawn under a fresh first page.
 test("a filter left and come back to lists from its first page, nothing held", async () => {

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
@@ -55,7 +56,7 @@ func TestTheBrokerTakesTheRESOLVEDNodeID(t *testing.T) {
 
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	// Deliberately unset, which is the whole point: the id lives only in
 	// the environment.
 	b.Node.ID = ""
@@ -86,7 +87,7 @@ func TestAClusteredMemberStartsOnAnEnvironmentSuppliedID(t *testing.T) {
 
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	b.Node.ID = ""
 	b.Coordination.Type = config.CoordinationEmbeddedKV
 	// A cluster port with no peers: enough to make this a clustered member
@@ -110,12 +111,14 @@ func TestAClusteredMemberStartsOnAnEnvironmentSuppliedID(t *testing.T) {
 
 // TestWhatANodePublishesNamesThatNode pins the other half of a node's name:
 // every event it publishes leaves carrying it as the envelope's `node`, and the
-// row its own event store writes carries the same.
+// row an event store writes for it carries the same — in the payload, and in
+// the row's own `node` column (node/0054).
 //
-// The event store is written inline on the publishing node, so each node's
-// database holds only what that node published — and a reader holding one row
-// or one live frame has nothing but this field to find the node whose store
-// holds the rest of that turn. Asserted on the stored row rather than on a
+// The field is the only thing that says where an event HAPPENED. The store a
+// row is read from no longer does: a node without `data` keeps no event log,
+// and the one data node that keeps its events in custody holds rows it never
+// published — so the turn answer's `nodes`, and an operator reading one row or
+// one live frame, ask the row. Asserted on the stored row rather than on a
 // listener of this test's own, because the row is what a reader later holds,
 // and through the environment-supplied id, because that is the shape an
 // orchestrator uses and the one the raw config field reads empty for.
@@ -126,7 +129,7 @@ func TestWhatANodePublishesNamesThatNode(t *testing.T) {
 
 	b := config.DefaultBootstrap()
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	b.Node.ID = ""
 
 	engine.SeedStore(t, &b)
@@ -152,5 +155,10 @@ func TestWhatANodePublishesNamesThatNode(t *testing.T) {
 		t.Errorf("the row this node wrote names node %q, want the resolved node id %q: "+
 			"the queue was built without the node it publishes for",
 			stored.Node, "node-from-the-orchestrator")
+	}
+	if row.Node != "node-from-the-orchestrator" {
+		t.Errorf("the row's node column reads %q, want %q: the payload names its "+
+			"origin and the column every reader of where a turn ran asks does not",
+			row.Node, "node-from-the-orchestrator")
 	}
 }

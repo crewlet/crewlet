@@ -263,9 +263,9 @@ func TestTheFindingsInstructionSaysWhatIsReported(t *testing.T) {
 		native []string
 		names  string
 	}{
-		{[]string{"web"}, "Your pushes to web on this company's code host"},
-		{[]string{"web", "api"}, "Your pushes to web and api on this company's code host"},
-		{[]string{"web", "api", "docs"}, "Your pushes to web, api and docs on this company's code host"},
+		{[]string{"web"}, `Your pushes to "web" on this company's code host`},
+		{[]string{"web", "api"}, `Your pushes to "web" and "api" on this company's code host`},
+		{[]string{"web", "api", "docs"}, `Your pushes to "web", "api" and "docs" on this company's code host`},
 	} {
 		instruction := codingagent.FindingsInstruction("/tmp/findings.md", tc.native)
 		if !strings.Contains(instruction, tc.names+" are recorded and reported for you: write a "+
@@ -283,7 +283,7 @@ func TestTheFindingsInstructionSaysWhatIsReported(t *testing.T) {
 	_, system, _ := systemOfRun(t, codingagent.NewClaudeCode(), sandbox.RunRequest{
 		Brief: "fix the flake", ReportedRepos: []string{"web", "api"},
 	})
-	if !strings.Contains(system, "Your pushes to web and api on this company's code host are recorded") {
+	if !strings.Contains(system, `Your pushes to "web" and "api" on this company's code host are recorded`) {
 		t.Errorf("the run's standing instructions do not say its pushes are reported:\n%s", system)
 	}
 }

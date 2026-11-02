@@ -12,6 +12,8 @@ import type { ReactNode } from "react";
 import {
   Button,
   Callout,
+  CodeBlock,
+  Disclosure,
   EmptyState,
   Section as UiSection,
   Tag,
@@ -19,7 +21,14 @@ import {
   InlineCode,
 } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
+import {
+  PlugGlyph,
+  KeyGlyph,
+  ClockGlyph,
+  RefreshCwGlyph,
+  ShieldUserGlyph,
+  TriangleAlertGlyph,
+} from "@crewlethq/icons/glyphs";
 // STILL OURS: an attention row's mark is named by `lib/attention.ts` as a
 // value, and uilet's glyphs are components. The name -> drawing lookup stays
 // in `~/ui/Icon.tsx`, which is the one place a port of it moves every caller
@@ -28,11 +37,18 @@ import { PhaseTag } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { isLogRefusal } from "~/protocol/index.ts";
-import { goSignIn } from "~/lib/session.ts";
-import { needsWords } from "~/lib/access.ts";
+import {
+  confirmStepUp,
+  DETAILED_QUERY_ERRORS,
+  isLogRefusal,
+  queryErrorCode,
+} from "~/protocol/index.ts";
+import { goSignIn, page } from "~/lib/session.ts";
+import { authorityWords } from "~/lib/refusal.ts";
+import { remedyFor, type AuthorityAction } from "~/lib/authorityRemedy.ts";
 import {
   activityOf,
+  shownStateOf,
   stateWord,
   handleLabel,
   statusOf,
@@ -106,7 +122,8 @@ export function SeatChip({
  * seat is the neutral pill — a green one read as activity.
  */
 export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
-  const state = activityOf(agent);
+  // A PAUSED SEAT READS "Paused", as its own page, the chart and the Inbox say.
+  const state = shownStateOf(agent);
   return (
     // SENTENCE CASE, as the seat's own page and the chart write the state
     // (`stateWord`): the roster's "idle" beside the seat page's "Idle" was one
@@ -114,6 +131,25 @@ export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
     <Tag variant={toneOf(state)} dot>
       {stateWord(state)}
     </Tag>
+  );
+}
+
+/**
+ * The engine's own words for a failure, folded behind the kit's disclosure.
+ *
+ * NEVER THE HEADLINE. A banner or a reading pane leads with the plain sentence
+ * (`failureWords` in lib/seats.ts); the raw message ("llm chain exhausted
+ * after 1 providers ...") is what an operator fixing it reads, so it stays one
+ * press away, selectable, and is drawn nowhere else. The engine sends it to an
+ * admin alone, since it names the company's model entries, so for every other
+ * reader there is nothing to draw.
+ */
+export function TechnicalDetails({ text }: { text: string | null | undefined }) {
+  if (!text) return null;
+  return (
+    <Disclosure title="Technical details" size="compact" headingLevel="none" lazy>
+      <CodeBlock plain selectable label="The engine's message" code={text} />
+    </Disclosure>
   );
 }
 
@@ -341,7 +377,7 @@ export function Section({
  * What each refusal MEANS, in the reader's terms.
  *
  * A TABLE OVER THE TYPE, not a chain of string comparisons, and the type is
- * the point: `QueryErrorCode` names the nine codes the engine can send and was
+ * the point: `QueryErrorCode` names the codes the engine can send and was
  * declared, documented and never used to type anything — so a branch comparing
  * against `"unavaliable"` compiled cleanly and quietly rendered the generic
  * failure for a projection that was merely catching up. Two of the nine had no
@@ -386,6 +422,36 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
     </Callout>
   ),
   not_found: <Callout variant="neutral">Not found. It may have been removed.</Callout>,
+  artifact_trashed: (
+    <Callout variant="neutral">This artifact is in the trash. Its owner can restore it.</Callout>
+  ),
+  // A REVISION THIS NODE CANNOT OPEN. The engine's own sentence, which names
+  // the key or the document that brings it back, is drawn in its place
+  // whenever the answer carries one (see `QueryState`); these are what is
+  // left when it does not.
+  unreadable_revision: (
+    <Callout variant="warning">
+      This node’s keyring doesn’t hold the key that revision is sealed under.
+    </Callout>
+  ),
+  unsealed_revision: (
+    <Callout variant="warning">That revision is stored without a seal, so it isn’t shown.</Callout>
+  ),
+  unreadable_fleet_revision: (
+    <Callout variant="warning">
+      This node doesn’t hold the key the fleet sealed this revision under.
+    </Callout>
+  ),
+  unsealed_fleet_revision: (
+    <Callout variant="warning">
+      The fleet’s revision arrived without a seal, so this node won’t read it.
+    </Callout>
+  ),
+  unknown_seal_revision: (
+    <Callout variant="warning">
+      That revision is sealed in a form this build doesn’t read, most likely by a newer build.
+    </Callout>
+  ),
   timeout: (
     <Callout variant="warning" icon={<ClockGlyph size="md" />}>
       The engine didn’t answer in time.
@@ -409,37 +475,37 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
 
 /**
  * A refusal on authority that says WHY: the access any one of which would
- * have admitted the reader ("needs Tracker access"), or — an empty list — that
- * none would, because what is missing is a relation the org chart does not
- * hold.
+ * have admitted the reader ("needs Worklet access"), or (where none was named,
+ * or the rule is one no access changes) what the deciding rule asks, in its
+ * own sentence ([REFUSAL_SENTENCES], keyed by the rule's reason).
  *
  * FROM THE ANSWER, NEVER WRITTEN HERE. The engine's error frame carries the
  * deciding rule's own reason and grants under the keys its REST envelope uses;
  * a sentence naming a permission typed into this file is a second statement
- * of the rule, and it is the one that goes stale the day the rule moves.
+ * of the rule, and it is the one that goes stale the day the rule moves. One
+ * sentence for every empty list was exactly that: it told a credential bound
+ * to no seat, and a token on a gesture that needs the person, that what they
+ * lacked was leading somebody. A reason this build has no sentence for says
+ * only that no access would change it.
+ *
+ * AND IT OFFERS WHAT CLEARS THAT RULE ([remedyFor]), never one control for
+ * all of them: Sign in for a reader short of access, which somebody holding it
+ * clears; Confirm for a proof gone stale, which the reader clears in this tab;
+ * Sign in as yourself for a credential acting as no seat; Try again once an
+ * admin has activated an account; Reload for a request this engine's build has
+ * no rule for — and nothing at all for a rule no reader can clear from here.
+ * It offered Sign in to every one of them, so a reader whose account was not
+ * active signed in again to the same refusal.
  */
 function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
-  // NO ACCESS WOULD ADMIT THIS READER: the rule asks a relation the org chart
-  // does not hold (leading this person, or the record being their own), so
-  // signing in again changes nothing and no button offers it.
-  if (refusal.grants.length === 0) {
-    return (
-      <Callout variant="warning" icon={<KeyGlyph size="md" />}>
-        Only this person and their lead can see this.
-      </Callout>
-    );
-  }
+  const remedy = remedyFor(refusal.reason, refusal.grants);
   return (
     <Callout
       variant="warning"
       icon={<KeyGlyph size="md" />}
-      action={
-        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
-          Sign in
-        </Button>
-      }
+      action={remedy.action ? <AuthorityRemedy action={remedy.action} /> : undefined}
     >
-      {needsWords("This answer", refusal.grants)}{" "}
+      {authorityWords("This answer", refusal)}{" "}
       <span className="t-caption">
         Refused as <InlineCode>{refusal.reason}</InlineCode>.
       </span>
@@ -448,19 +514,54 @@ function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
 }
 
 /**
- * A refusal by this node's STATE LOG that waiting will not clear — its log at
- * the byte ceiling, a record it cannot decode, a barrier its broker refused —
- * said as what it is rather than as the node catching up.
- *
- * `unavailable` covers both, and the generic banner promises "this screen asks
- * again on its own", which for these would be a promise of a loop: the same
- * read is refused until an admin acts or another node is asked. So the
- * banner says the one thing the reader can do: ask another node.
+ * The one control a refusal on authority offers, each the move that clears its
+ * rule. Signing in comes back to this screen, so somebody who holds the access
+ * lands where the refusal was; a confirmed step-up replaces the session, which
+ * re-dials the socket, and every read on the screen asks again on the
+ * reconnect; asking again and reloading reload this screen.
  */
-function RefusedByTheLog() {
+function AuthorityRemedy({ action }: { action: AuthorityAction }) {
+  const controls: Record<AuthorityAction, [string, ReactNode, () => void]> = {
+    sign_in: ["Sign in", <KeyGlyph />, goSignIn],
+    sign_in_yourself: ["Sign in as yourself", <KeyGlyph />, goSignIn],
+    confirm: ["Confirm it’s you", <ShieldUserGlyph />, () => void confirmStepUp()],
+    try_again: ["Try again", <RefreshCwGlyph />, () => page.reloadInto(location.hash)],
+    reload: ["Reload", <RefreshCwGlyph />, () => page.reloadInto(location.hash)],
+  };
+  const [label, icon, act] = controls[action];
+  return (
+    <Button size="small" variant="secondary" leadingIcon={icon} onClick={act}>
+      {label}
+    </Button>
+  );
+}
+
+/**
+ * A condition of the node, told in the engine's own sentence for it: what
+ * happened and what to do, which agrees with whether the answer carries a
+ * `Retry-After`, so a screen draws it as it stands rather than a guess of its
+ * own.
+ *
+ * `unavailable` covers a node catching up and a refusal no wait clears — a log
+ * at its ceiling, a record a node cannot decode, a barrier the storage
+ * refused — and the generic banner promises "this screen retries on its own",
+ * which for the second would be a promise of a loop. It used to be one fixed
+ * sentence sending the reader to another node, which contradicted the engine's
+ * own words where every node is refused alike (a full log, maintenance). Drawn
+ * for every answer with a sentence, and for one no wait clears without one,
+ * which says only what it is.
+ */
+function RefusedByTheNode({ refusal }: { refusal: LogRefusal }) {
+  if (refusal.retryAfter > 0) {
+    return (
+      <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
+        {refusal.detail}
+      </Callout>
+    );
+  }
   return (
     <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-      Couldn’t load this on this node. Try another node.
+      {refusal.detail ?? "Couldn’t load this here, and waiting won’t change that."}
     </Callout>
   );
 }
@@ -485,9 +586,9 @@ export function QueryState({
   /**
    * Why the answer was refused — `useQuery`'s and `useRest`'s own `refusal`.
    * For an `unauthorized` answer the banner then says which grant would have
-   * admitted the reader, or that none would; for an `unavailable` one the
-   * state log refused and waiting will not change, it says so and what the
-   * refusal names, rather than that the node is catching up.
+   * admitted the reader, or that none would; for an `unavailable` one it
+   * says the engine's own sentence for the condition, which names what to do
+   * and agrees with whether waiting changes it.
    */
   refusal?: QueryRefusal | LogRefusal | null;
   /**
@@ -512,17 +613,31 @@ export function QueryState({
     hint: ReactNode;
     /** The one way on from an empty answer, where the reader has one. */
     action?: ReactNode;
+    /**
+     * `"none"` where the card the claim sits in already names it with a
+     * title of its own, as the kit's `EmptyState` asks of such a claim.
+     */
+    headingLevel?: "none";
   };
   children?: ReactNode;
 }) {
   if (error === "unauthorized" && refusal && !isLogRefusal(refusal)) {
     return <RefusedOnAuthority refusal={refusal} />;
   }
-  if (error === "unavailable" && refusal && isLogRefusal(refusal) && refusal.retryAfter === 0) {
-    return <RefusedByTheLog />;
+  if (
+    error === "unavailable" &&
+    refusal &&
+    isLogRefusal(refusal) &&
+    (refusal.detail || refusal.retryAfter === 0)
+  ) {
+    return <RefusedByTheNode refusal={refusal} />;
   }
   if (error === "bad_params" && detail) {
     return <Callout variant="warning">The engine refused this request: {detail}</Callout>;
+  }
+  const code = queryErrorCode(error);
+  if (code !== null && code !== "bad_params" && DETAILED_QUERY_ERRORS.has(code) && detail) {
+    return <Callout variant="warning">{detail}</Callout>;
   }
   const banner = error ? REFUSALS[error as QueryErrorCode] : undefined;
   if (banner) return <>{banner}</>;
@@ -543,6 +658,7 @@ export function QueryState({
       // component's own defaults now.
       <EmptyState
         size="compact"
+        headingLevel={empty.headingLevel}
         title={empty.title}
         description={empty.hint}
         action={empty.action}
@@ -556,8 +672,8 @@ export function QueryState({
  * A page a pager asked for and did not get, said BESIDE the control that asks
  * it again — never in its place. The pager keeps the cursor the page was
  * asked from (`lib/usePaged.ts`), so the same press reads it; a footer whose
- * banner took the button's place left a reader nothing to press, and under a
- * list held still from the press of "older", nothing to do but reload.
+ * banner took the button's place left a reader nothing to press, and nothing
+ * to do but reload.
  *
  * A CAPTION, NOT [QueryState]'s BANNER, whose sentences promise what a polled
  * question does — "this screen retries on its own", "the screen reloads when

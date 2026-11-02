@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -23,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // THE SURFACES A PERSON REACHES, built over the engine running beside them:
@@ -37,7 +39,7 @@ import (
 // cmd/crewlet, which is package main and reachable from no other package, so
 // the end-to-end suite's own wiring could not call them and mounted none of
 // them: every fixture there presented a Tier A bearer to a node serving no
-// /auth, no /iam and no /work. A fleet whose sessions did not cross between
+// /auth, no /iam and no /worklet. A fleet whose sessions did not cross between
 // its members — a cookie minted on one node refused on the next, a revocation
 // one node never heard — left the fleet suite green, because nothing in it had
 // ever signed in. One constructor that `crewlet run` and the suite both call is
@@ -71,7 +73,7 @@ type HumanSurfaces struct {
 	Tokens *auth.Tokens
 
 	// Directory serves /iam, and Work the human write surface over the
-	// native tracker and knowledge base — which reads the halves it serves
+	// Worklet and Doclet, which reads the halves it serves
 	// per request, since a node meets them at its first company and may
 	// meet that long after this surface was built.
 	Directory guardedMounter
@@ -398,9 +400,14 @@ func operatorSurface(e *engine.Engine, authority authz.Chart,
 		}
 		return c.Org
 	}
+	var counter tools.Counter
+	if rec := e.Recorder(); rec != nil {
+		counter = rec
+	}
 	server, err := operator.New(operator.Options{
-		Halves: NativeOperatorHalves(e),
-		Org:    chart,
+		Halves:  NativeOperatorHalves(e),
+		Counter: counter,
+		Org:     chart,
 		// THE AUTHORITY DECISION, which is the SAME one every seat's
 		// registry is built with — one table, one function, every surface.
 		// It reads the chart per call, because an apply replaces it.
@@ -408,6 +415,9 @@ func operatorSurface(e *engine.Engine, authority authz.Chart,
 		Runs: builtin.RunDeps{Desk: sandbox.AnswerDesk{
 			Pending: sandbox.NewCoordStore(e.Backends().Fleet),
 			Queue:   e.Backends().Queue,
+			// WHO ANSWERED FIRST is said only by the answer's seal, which
+			// the node's own fleet keyring opens.
+			Seal: e.AnswerSeal(),
 		}},
 		Pauses: builtin.SeatPauseDeps{
 			Pauses: e.Backends().Fleet, Announce: e.Backends().Queue, Org: chart,
@@ -415,7 +425,7 @@ func operatorSurface(e *engine.Engine, authority authz.Chart,
 		// SIGNED WITH THE NODE'S OWN STEER CHANNEL, the one its desk
 		// answers with: the running node offers a note as the person it
 		// names on this node's decision, so neither half may be unsigned.
-		Steer: builtin.SteerDeps{Asker: e.Backends().Queue, Wire: e.SteerWire()},
+		Steer: builtin.SteerDeps{Asker: e.Backends().Queue, Wire: e.SteerWire(), Runs: e.RunSteers()},
 		Answer: builtin.AnswerDeps{
 			Models: engine.AnswerModels(e), Budget: engine.AnswerBudget(e),
 			Corpus: e.KnowledgeCorpus,
@@ -470,8 +480,8 @@ func workSurface(e *engine.Engine, operators *operator.Server,
 	return surface, nil
 }
 
-// nativeHalves are the tracker and knowledge-base halves this engine serves
-// now, and false where it has not been handed a company yet.
+// nativeHalves are the tracker, knowledge-base and chat halves this engine
+// serves now, and false where it has not been handed a company yet.
 //
 // [engine.Engine.NativeStarted] FIRST, and the halves after: it is monotonic,
 // so a half read as absent after it said "started" is one this company does
@@ -493,6 +503,12 @@ func nativeHalves(e *engine.Engine) (workapi.Halves, bool) {
 	}
 	if store, ok := engine.OperatorPageWriter(e); ok {
 		halves.PageStore = store
+	}
+	// CHAT'S WRITER THROUGH THE ROUTER, never this node's own store, for the
+	// tracker's reason; a node in a maintenance mode hands out none, and its
+	// chat routes answer as absent.
+	if rooms, ok := engine.OperatorChatWriter(e); ok {
+		halves.ChatStore = rooms
 	}
 	// THE CONVERSION IS THE POINT: a typed nil *objstore.Store inside the
 	// interface would pass the surface's own check and panic on the first
@@ -548,8 +564,8 @@ func personWriter(as func(estate.Actor) estate.WorkWriter, actor builtin.Actor) 
 // of service.
 //
 // THE READS WHEREVER THIS NODE SERVES THEM, THE WRITES ONLY WHERE IT HANDS OUT
-// A WRITER: two facts, so two gates. A node in a maintenance mode serves the
-// tracker's and the knowledge base's reads and hands no writer to any surface
+// A WRITER: two facts, so two gates. A node in a maintenance mode serves
+// Worklet's and Doclet's reads and hands no writer to any surface
 // ([engine.OperatorWorkWriter], [engine.OperatorPageWriter], behind the
 // engine's one writer gate), so it is handed the read tools and no write tool
 // — never write tools whose every write is refused. Gated on both at once,
@@ -770,4 +786,111 @@ func readsOnly(d builtin.WorkDeps) builtin.WorkDeps {
 	d.Placer = nil
 	d.FileWriter = nil
 	return d
+}
+
+// ChatletDeps are chat's tool deps for the same surfaces [NativeToolDeps]
+// builds the tracker's and the knowledge base's for, on the same terms: Actor
+// and Authorize are the operator surface's to set per call, and every read and
+// every write goes through this node's estate router ([engine.OperatorChat],
+// [engine.OperatorChatWriter], [engine.OperatorChatSearch]).
+//
+// # A person's read state, whenever the rooms are the engine's
+//
+// The one half no seat's surface has: how far a person has read in each room,
+// what they muted and when their do-not-disturb ends, which `list_channels`
+// counts its badges against ([builtin.ChatDeps.ReadState]) and `mark_chat_read`
+// writes ([builtin.ChatDeps.Cursors]). It is the fleet's coordination record
+// rather than a record on the chat log, so it is wired WHEREVER THE ROOMS ARE
+// THE ENGINE'S, a maintenance mode included: the mode forbids a node to
+// publish a record, and has nothing to say about a compare-and-set in the
+// coordination store — and every gesture the dashboard makes is a tool here
+// (ADR-0024), so withholding it would leave a person on such a node no way to
+// clear a badge at all.
+//
+// # The rooms, both halves or neither
+//
+// Unlike Worklet's and Doclet's tools, whose reads such a node still serves
+// ([NativeToolDeps]): a node that hands out no chat writer — one in a
+// maintenance mode — serves none of the tools that read or write the rooms,
+// rather than reads answered beside writes refused on every press. The search
+// goes with them, since a node that searches the rooms but cannot post in them
+// is a surface no seat has.
+func ChatletDeps(e *engine.Engine) builtin.ChatDeps {
+	reader, readable := engine.OperatorChat(e)
+	if !readable {
+		return builtin.ChatDeps{}
+	}
+	reads := chatReads{store: e.Backends().Fleet}
+	writer, writable := engine.OperatorChatWriter(e)
+	searcher, searchable := engine.OperatorChatSearch(e)
+	if !writable || !searchable {
+		return builtin.ChatDeps{Cursors: reads, ReadState: reads.ReadState}
+	}
+	return builtin.ChatDeps{
+		Reader: reader, Writer: writer, Search: searcher,
+		// THE CHART CURRENT WHEN THE MESSAGE IS WRITTEN, for the reason a
+		// work comment's mentions are resolved against it: these deps are
+		// built per call, over an engine an apply moves underneath them.
+		Mentions: engine.LiveMentions(e),
+		// THE ROUTER'S SESSION FLOOR, which every write above raises — a
+		// person's own message is in the room their next read draws.
+		Await:   e.AwaitEstate,
+		Cursors: reads, ReadState: reads.ReadState,
+	}
+}
+
+// chatReadStore is the coordination store's half of a person's chat read state
+// these deps reach: one read and one merge, and nothing else of the fleet's
+// shared state, so a seam serving a person's cursors is given no reason to
+// reach the activation pointer or the sealed secrets.
+type chatReadStore interface {
+	ChatRead(ctx context.Context, handle string) (coord.ChatReadState, error)
+	AdvanceChatRead(ctx context.Context, handle string, delta coord.ChatReadDelta) (
+		coord.ChatReadState, error)
+}
+
+// chatReads is a person's read state as the chat tools read and write it — the
+// [builtin.ChatCursors] seam, and [builtin.ChatDeps.ReadState] through its
+// ReadState.
+//
+// THE PERSON'S STATE AND NOTHING OF THE RECONCILE'S, both ways: the absence
+// stamp the maintenance sweep keeps on a record
+// ([coord.ChatReadState.AbsentSince]) is its machinery, so it is neither
+// answered to a listing nor handed back from a flush.
+//
+// THE STORE'S ERROR IS RETURNED AS IT IS, never re-worded or wrapped: the tool
+// tells a flush the merge refused ([coord.ErrInvalidReadState], the caller's
+// to change) from one whose answer was lost ([coord.ErrWriteUnknown], which
+// may have landed) and from a store that could not take it by the sentinel
+// alone, and says the first in the merge's own words — re-worded, a refusal
+// that can never land would read "try again". And a read that failed is never
+// a zero state in its place: a zero state is somebody who has opened nothing,
+// to whom every room's tail is unread.
+type chatReads struct{ store chatReadStore }
+
+var (
+	_ builtin.ChatCursors                                        = chatReads{}
+	_ func(context.Context, string) (coord.ChatReadState, error) = chatReads{}.ReadState
+)
+
+// ReadState is one person's read state, as a listing counts its badges by.
+func (r chatReads) ReadState(ctx context.Context, handle string) (coord.ChatReadState, error) {
+	state, err := r.store.ChatRead(ctx, handle)
+	if err != nil {
+		return coord.ChatReadState{}, err
+	}
+	state.AbsentSince = time.Time{}
+	return state, nil
+}
+
+// AdvanceChatRead merges one flush into a person's read state.
+func (r chatReads) AdvanceChatRead(ctx context.Context, handle string,
+	delta coord.ChatReadDelta) (coord.ChatReadState, error) {
+
+	state, err := r.store.AdvanceChatRead(ctx, handle, delta)
+	if err != nil {
+		return coord.ChatReadState{}, err
+	}
+	state.AbsentSince = time.Time{}
+	return state, nil
 }

@@ -3,7 +3,7 @@ package stream
 import (
 	"time"
 
-	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/presence"
 )
 
 // MaxInFlightQueries bounds how many queries ONE SOCKET may have running at
@@ -61,7 +61,7 @@ const MaxInFlightQueries = 4
 const MaxRoomsPerSocket = 8
 
 // presenceFrames is one socket's allowance of `presence` frames: at most
-// [artifacts.PresenceClientRate] a second, sustained and in a burst, the rate
+// [presence.ClientRate] a second, sustained and in a burst, the rate
 // the dashboard throttles itself to. A frame past it is dropped, which loses
 // nothing a person sees for long: the next frame says where they are now, and
 // the room's fan-out is coalesced to fewer than this anyway. It protects the
@@ -73,7 +73,7 @@ type presenceFrames struct {
 
 // take spends one frame's allowance at now, reporting whether there was one.
 func (b *presenceFrames) take(now time.Time) bool {
-	const rate = float64(artifacts.PresenceClientRate)
+	const rate = float64(presence.ClientRate)
 	if b.last.IsZero() {
 		b.tokens = rate
 	} else {

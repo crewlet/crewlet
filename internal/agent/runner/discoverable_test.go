@@ -14,26 +14,26 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // THE EXECUTOR'S SYSTEM PROMPT LISTS NOTHING IT HOLDS.
 //
-// Every first-party tool is on the executor's surface from its first round,
-// and an offered tool's whole definition reaches the model with every request
-// — as a text-mode prompt's tool catalogue, or over an agent-mode CLI's tool
-// bridge. The system prompt used to list each of them again, description and
-// all: with every builtin wired that copy was ~17 KB, most of the prompt, paid
-// on every round of every turn. What it lists now is what the model can learn
+// Every first-party tool is on the executor's surface from its launch, and an
+// offered tool's whole definition reaches the run over the tool bridge. The
+// system prompt used to list each of them again, description and all: with
+// every builtin wired that copy was ~17 KB, most of the prompt, paid on every
+// turn of every run. What it lists now is what the model can learn
 // nowhere else — the MCP servers it can still discover.
 //
 // REAL BUILTINS, registered by the builtin package itself, so the
 // descriptions a regression would duplicate are the ones production sends.
 func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llm.Completion{submitWork(t)}}
 	pub := newCapture()
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
+	got := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{
 		pub: pub,
 		register: func(t *testing.T, reg *tools.Registry) {
 			t.Helper()
@@ -54,18 +54,15 @@ func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
 				}
 			}
 		},
-	})
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	req := prov.requestsFor("execute")[0]
-	system := req.Messages[0].Content
+	}, 1, "", nil, run{calls: []llm.ToolCall{submitWork(t)}}, runner.RunRecord{})
+	system := got.launch.System
+	defs := got.launch.Surface.ToolDefs()
 
-	offered := toolNames(req.Tools)
+	offered := toolNames(defs)
 	if !slices.Contains(offered, builtin.SearchKnowledgeTool) {
 		t.Fatalf("the real builtin was not offered (%v), so this case proves nothing", offered)
 	}
-	for _, def := range req.Tools {
+	for _, def := range defs {
 		if strings.Contains(system, "- "+def.Name+":") || strings.Contains(system, "- "+def.Name+"\n") {
 			t.Errorf("the system prompt lists %s, which the request already defines", def.Name)
 		}
@@ -78,7 +75,7 @@ func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
 			t.Errorf("the system prompt lacks %q", want)
 		}
 	}
-	// Not the heading a text-mode prompt gives the definitions themselves.
+	// Not a heading of its own for the definitions the CLI already lists.
 	if strings.Contains(system, "## Available tools") {
 		t.Error("the system prompt has a second `## Available tools` section")
 	}
@@ -105,18 +102,15 @@ func (anySearcher) Search(context.Context, knowledge.Query) knowledge.Result {
 	return knowledge.Result{}
 }
 
-// THE REVIEW'S RULES ABOUT A TOOL FOLLOW THE SEAT'S SURFACE.
-//
-// The sandbox rule is for a seat whose executor could have handed code work
-// to run_sandbox — the gate enabled and the tool registered, which is exactly
-// what puts it in the executor's universe — and `a2a_ask` is named where the
-// registry carries it. Unconditional, both were prose about tools on every
-// review of every seat in the company, nearly none of which can call them.
+// THE REVIEW'S RULE ABOUT A TOOL FOLLOWS THE SEAT'S SURFACE: `a2a_ask` is
+// named where the registry carries it. Unconditional, it was prose about a
+// tool on every review of every seat in the company, most of which cannot
+// call it.
 func TestTheReviewNamesOnlyTheToolsTheSeatHolds(t *testing.T) {
 	t.Parallel()
 	review := func(t *testing.T, opts buildOpts) string {
 		t.Helper()
-		prov := &scriptedProvider{review: []llm.Completion{
+		prov := &scriptedProvider{review: []llmtest.Response{
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)}}
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, opts)
 		if _, err := r.Review(context.Background(), 1, turn.Work{Summary: "s"}, nil); err != nil {
@@ -124,53 +118,17 @@ func TestTheReviewNamesOnlyTheToolsTheSeatHolds(t *testing.T) {
 		}
 		return prov.requestsFor("review")[0].Messages[0].Content
 	}
-	both := func(t *testing.T, reg *tools.Registry) {
+	asker := func(t *testing.T, reg *tools.Registry) {
 		t.Helper()
-		for _, name := range []string{runner.RunSandboxTool, runner.A2AAskTool} {
-			if err := reg.Register(stubTool{name: name}, tools.OriginBuiltin); err != nil {
-				t.Fatalf("Register: %v", err)
-			}
+		if err := reg.Register(stubTool{name: toolname.A2AAsk}, tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register: %v", err)
 		}
 	}
 
-	plain := review(t, buildOpts{})
-	for _, unwanted := range []string{"run_sandbox", "a2a_ask"} {
-		if strings.Contains(plain, unwanted) {
-			t.Errorf("a seat holding neither tool was told about %s", unwanted)
-		}
+	if plain := review(t, buildOpts{}); strings.Contains(plain, "a2a_ask") {
+		t.Error("a seat not holding a2a_ask was told about it")
 	}
-
-	// Registered, but the seat's gate is off: the executor's universe never
-	// held run_sandbox, so there is no sandbox report to judge.
-	ungated := review(t, buildOpts{register: both})
-	if strings.Contains(ungated, "run_sandbox") {
-		t.Error("a seat whose gate is off was told how to judge a sandbox run")
-	}
-	if !strings.Contains(ungated, "`a2a_ask`") {
+	if held := review(t, buildOpts{register: asker}); !strings.Contains(held, "`a2a_ask`") {
 		t.Error("a seat holding a2a_ask was not told the next round can use it")
-	}
-
-	gated := review(t, buildOpts{register: both, sandbox: &org.RoleSandbox{Enabled: true}})
-	if !strings.Contains(gated, "A successful `run_sandbox` call IS the code work") {
-		t.Error("a seat offered run_sandbox was not told how to judge its report")
-	}
-}
-
-// THE RUNNER'S NAMES FOR THE BUILTINS ARE THE BUILTINS' OWN. The runner names
-// the few it builds surfaces and gates prompt rules on rather than importing
-// the package that registers them; a rename there would silently empty the
-// onboarding surface or ungate a review rule here, so the names are held to
-// each other.
-func TestTheRunnerNamesTheBuiltinsItDependsOn(t *testing.T) {
-	t.Parallel()
-	for runnerName, builtinName := range map[string]string{
-		runner.ReflectAndPersistTool: builtin.ReflectAndPersistTool,
-		runner.MarkOnboardedTool:     builtin.MarkOnboardedTool,
-		runner.RunSandboxTool:        builtin.RunSandboxTool,
-		runner.A2AAskTool:            builtin.A2AAskTool,
-	} {
-		if runnerName != builtinName {
-			t.Errorf("the runner names %q, the builtin registers %q", runnerName, builtinName)
-		}
 	}
 }

@@ -44,7 +44,7 @@ const alarmGauge = metrics.AlarmActive
 // health grant are woken by. A transition rather than a level for the log
 // line's reason — a wake per evaluation would wake a seat six times a minute
 // about one alarm — and the record the wake derives from, so nothing commits
-// beside it (ADR-0065). The first evaluation's finds are
+// beside it (ADR-0088). The first evaluation's finds are
 // [TransitionFiringAtBoot], never fired: the tracker cannot tell an alarm
 // that started then from one that stood through the node's restart, and that
 // second case is also how a clear the node did not live to hand on is
@@ -75,27 +75,34 @@ type Tracker struct {
 	// has run at all. Both are for [Tracker.Standing].
 	order    []Kind
 	observed bool
+
+	// latest is the latest evaluation's alarms, for [Tracker.Latest].
+	latest []Alarm
 }
 
 // instance is what the tracker writes ONE PAIR OF LOG LINES for: a kind, and
-// the log it stands on when it is a per-log condition ([PerLogKinds]).
+// the log it stands on when it is a per-log condition ([PerLogKinds]), or the
+// model entry when it is a per-entry one ([PerEntryKinds]).
 //
-// THE KIND ALONE IS NOT THE LOG LINE'S IDENTITY. Six conditions are evaluated
-// once per log ([Report]), so one alarm can stand on the tracker's log and the
-// knowledge base's at once ([Alarm.Domains]). Keyed on the kind, the second log
-// joining it raised no line of its own, a log whose condition cleared while
-// another's stood said nothing, and the one `alarm_cleared` that finally came
-// carried the LAST log's detail against the FIRST one's start.
+// THE KIND ALONE IS NOT THE LOG LINE'S IDENTITY. Seven conditions are
+// evaluated once per log ([Report]), so one alarm can stand on the tracker's
+// log and the knowledge base's at once ([Alarm.Domains]). Keyed on the kind,
+// the second log joining it raised no line of its own, a log whose condition
+// cleared while another's stood said nothing, and the one `alarm_cleared` that
+// finally came carried the LAST log's detail against the FIRST one's start.
 //
 // AND THE KIND ALONE IS STILL THE ALARM'S IDENTITY everywhere else: the alarm
 // is one per kind, the gauge one series per kind and [Tracker.Standing] one
 // entry per kind, so an instance is a log line's key and nothing more. A
-// node-wide kind is one instance with no log, even where it lists logs of its
-// own: `backup_age` names the logs it holds past their replay window, and those
-// are one problem with one remedy rather than a line each.
+// node-wide kind lists no log, so it is one instance with none.
+//
+// A PER-ENTRY KIND ([PerEntryKinds]) is the same move over model entries: one
+// instance per entry it stands on, so the second model whose token comes due
+// raises a line of its own.
 type instance struct {
 	kind   Kind
 	domain string
+	entry  string
 }
 
 // firing is one instance currently up.
@@ -105,17 +112,39 @@ type firing struct {
 }
 
 // instancesOf is an alarm's instances, each with the detail its lines carry:
-// one per log a per-log kind stands on, carrying that log's own measurement,
-// and otherwise one with no log, carrying the alarm's.
+// one per log or model entry the alarm stands on, carrying that log's or that
+// entry's own measurement, and otherwise one with no log, carrying the
+// alarm's.
+//
+// THE LOGS AN ALARM LISTS ARE ITS INSTANCES, with no second check of the kind:
+// only a per-log kind lists any, which the report's own test holds in both
+// directions, so a check here would be a second opinion about one fact. An
+// entry that names several logs — one measurement taken identically on each
+// ([AlarmDomain.Domains]) — is an instance per log it names, so carrying a
+// measurement once changes nothing about which log lines are written. The
+// model entries an alarm lists are its instances by the same rule: only a
+// per-entry kind lists any, since [Evaluate] fills [Alarm.Entries] for the
+// table's per-entry rows and nothing else fills it.
 func instancesOf(a Alarm) ([]instance, []string) {
-	if !perLogKind(a.Kind) || len(a.Domains) == 0 {
+	if len(a.Entries) > 0 {
+		keys := make([]instance, 0, len(a.Entries))
+		details := make([]string, 0, len(a.Entries))
+		for _, e := range a.Entries {
+			keys = append(keys, instance{kind: a.Kind, entry: e.Key})
+			details = append(details, e.Detail)
+		}
+		return keys, details
+	}
+	if len(a.Domains) == 0 {
 		return []instance{{kind: a.Kind}}, []string{a.Detail}
 	}
-	keys := make([]instance, 0, len(a.Domains))
-	details := make([]string, 0, len(a.Domains))
+	var keys []instance
+	var details []string
 	for _, d := range a.Domains {
-		keys = append(keys, instance{kind: a.Kind, domain: d.Domain})
-		details = append(details, d.Detail)
+		for _, domain := range d.Domains {
+			keys = append(keys, instance{kind: a.Kind, domain: domain})
+			details = append(details, d.Detail)
+		}
 	}
 	return keys, details
 }
@@ -208,6 +237,7 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	}
 	var made []AlarmTransition
 	t.observed = true
+	t.latest = slices.Clone(alarms)
 	t.order = t.order[:0]
 	for _, a := range alarms {
 		if !slices.Contains(t.order, a.Kind) {
@@ -263,6 +293,9 @@ func (i instance) attrs(rest ...any) []any {
 	if i.domain != "" {
 		out = append(out, "domain", i.domain)
 	}
+	if i.entry != "" {
+		out = append(out, "entry", i.entry)
+	}
 	return append(out, rest...)
 }
 
@@ -272,7 +305,23 @@ func compareInstances(a, b instance) int {
 	if c := cmp.Compare(a.kind, b.kind); c != 0 {
 		return c
 	}
-	return cmp.Compare(a.domain, b.domain)
+	if c := cmp.Compare(a.domain, b.domain); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.entry, b.entry)
+}
+
+// Latest is the alarms the latest evaluation found, in the table's order, and
+// nil before any evaluation has run.
+//
+// THE SAME EVALUATION every other surface reads: the Models page shows this
+// node's latest instances of the model kinds from here rather than judging the
+// thresholds a second time, so the page, the health count, the gauge and the
+// log lines cannot disagree about whether a token is expiring.
+func (t *Tracker) Latest() []Alarm {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.latest)
 }
 
 // Standing reports the kinds the latest evaluation found firing, the
@@ -288,9 +337,9 @@ func compareInstances(a, b instance) int {
 // table's order breaks a tie only between alarms raised by one evaluation.
 //
 // ONE ENTRY PER KIND, however many logs it stands on: the count is how many
-// problems an operator has to look at, and one cause standing on four logs is
-// one of them, as the gauge beside it says. A per-log kind has stood since its
-// longest-standing log's instance was raised.
+// problems an operator has to look at, and one cause standing on several logs
+// is one of them, as the gauge beside it says. A per-log kind has stood since
+// its longest-standing log's instance was raised.
 //
 // FALSE IS NOT "NONE FIRING": a node whose alarm table has not been evaluated
 // yet (mid-boot, or running no state log at all) cannot say, and an empty

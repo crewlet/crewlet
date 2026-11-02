@@ -27,7 +27,7 @@ import type { Seat } from "./seats.ts";
  */
 export type LoadState = "idle" | "stuck" | "working";
 
-/** The load column's own tone, in the tracker's shared vocabulary. */
+/** The load column's own tone, in Worklet's shared vocabulary. */
 export type LoadTone = "neutral" | "positive" | "caution" | "critical";
 
 /** One row of the workload screen, as it is drawn. */

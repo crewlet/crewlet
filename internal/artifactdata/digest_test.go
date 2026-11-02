@@ -173,7 +173,7 @@ func TestEveryHistoryRowCarriesTheDigestAfterIt(t *testing.T) {
 	}
 }
 
-// A CONDITIONAL WRITE IS SKIPPED IDENTICALLY ON EVERY NODE: two nodes race the
+// A CONDITIONAL WRITE IS SKIPPED IDENTICALLY ON EVERY DATA NODE: two nodes race the
 // same guarded edit of one row; the log orders them, exactly one applies and
 // the other is a conflict, and both nodes, and a third replaying the log from
 // nothing, hold the same verdicts and byte-identical tables.

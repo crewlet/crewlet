@@ -232,7 +232,7 @@ func (d *Derived) holds() []FilePattern {
 // apart (packFileName): against the snapshot by the sweep, against the
 // listing by Verify, and there too only a regular file is one.
 //
-// EVERY FILE OF THE IMAGE IS A REGULAR FILE (ADR-0056). git reads through a
+// EVERY FILE OF THE IMAGE IS A REGULAR FILE (ADR-0079). git reads through a
 // link at a derived file's name, at config or at packed-refs: a symbolic link
 // named commit-graph had git read the graph it pointed at, outside the
 // incarnation, and one named config over a file holding gitproc.RepoConfig
@@ -902,6 +902,7 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 	e.mu.Lock()
 	held := inc.converged || inc.pins > 0
 	known := maps.Clone(inc.leaving)
+	purged := crossedACommit(inc.dropEpoch, snap.repo.DropEpoch, viewWanted)
 	e.mu.Unlock()
 	emptied := viewHeld && !viewWanted && !held
 	if len(strays) == 0 {
@@ -933,9 +934,18 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 				// pack out of the view: what it held may be gone from every
 				// copy, and a graph or an answer about it with it.
 				ev = EventPackExpunged
-			case places[key.name] != placeNone ||
-				!history && (retired[key.name] || known[key] == EventPackRetired):
+			case places[key.name] != placeNone:
 				ev = EventPackRetired
+			case !history && (retired[key.name] || known[key] == EventPackRetired):
+				// A RETIREMENT, unless the round crossed an expunge's commit
+				// this copy never placed the dropping pack of
+				// (crossedACommit): then what the begin added to hold this
+				// pack's objects is not all here, and it leaves as the
+				// commit's.
+				ev = EventPackRetired
+				if purged {
+					ev = EventPackExpunged
+				}
 			}
 		}
 		if had, ok := leaving[key]; !ok || had != EventPackRemoved {

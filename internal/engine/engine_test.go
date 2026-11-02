@@ -1,19 +1,24 @@
 package engine_test
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 const companyDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -88,15 +93,33 @@ func TestTheSeatListIsStable(t *testing.T) {
 	}
 }
 
+// noLaunch is an executor launcher no case here launches through: a runner is
+// built only with one, and these cases are about building it.
+type noLaunch struct{}
+
+func (noLaunch) LaunchExecutor(context.Context, runner.AgentRunRequest) (runner.Launched, error) {
+	return runner.Launched{}, nil
+}
+
 func TestARunnerIsBuiltPerSeat(t *testing.T) {
 	t.Parallel()
 	c := company(t, companyDoc)
-	if _, err := c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Task: "post it", Reply: turn.NoReply()}); err != nil {
+	if _, err := c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{
+		Task: "post it", Reply: turn.NoReply(), Launcher: noLaunch{}, Sessions: toolSessions(t),
+	}); err != nil {
 		t.Errorf("RunnerFor(ceo): %v", err)
+	}
+	// AND NEVER WITHOUT A LAUNCHER: every executor is a launched run, so a
+	// runner assembled with none is refused where it is assembled, naming
+	// what is missing, rather than failing the seat's first turn.
+	_, err := c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Task: "post it", Reply: turn.NoReply(),
+		Sessions: toolSessions(t)})
+	if err == nil || !strings.Contains(err.Error(), "Launcher") {
+		t.Errorf("a runner with no executor launcher = %v, want it refused naming the launcher", err)
 	}
 	// A human seat has no runner, and the refusal must name the seat —
 	// "not an agent seat" sent to the wrong place is a debugging session.
-	_, err := c.RunnerFor(t.Context(), "founder", nil, engine.RunnerInput{})
+	_, err = c.RunnerFor(t.Context(), "founder", nil, engine.RunnerInput{})
 	if err == nil {
 		t.Fatal("a human seat got a runner")
 	}
@@ -114,20 +137,21 @@ func TestTurnSettingsComeFromTheEpochNotALiveCell(t *testing.T) {
 	// which is what makes the mid-turn config swap unrepresentable rather
 	// than merely guarded against.
 	c := company(t, companyDoc+"\nturn_engine:\n  max_iterations: 7\n  delegation_depth_limit: 2\n")
-	got := c.TurnSettings(0)
+	got := c.TurnSettings(time.Time{})
 	if got.MaxIterations != 7 || got.DelegationDepthLimit != 2 {
 		t.Errorf("settings = %+v", got)
 	}
-	if !slices.Contains(got.SkipNames, "activate_tool") {
+	if !slices.Contains(got.SkipNames, toolname.Activate) {
 		t.Errorf("skip names = %v, want the meta-tools", got.SkipNames)
 	}
-	// The wall-clock cap comes off the TRIGGER, not the epoch: a scheduled
-	// fire carries one and every other trigger carries none.
-	if got.MaxWallClock != 0 {
-		t.Errorf("an uncapped trigger produced a %s cap", got.MaxWallClock)
+	// The wall-clock cap comes off the TURN, not the epoch: a scheduled fire
+	// carries one, fixed when the turn began, and every other trigger none.
+	if !got.Deadline.IsZero() {
+		t.Errorf("an uncapped turn produced a deadline of %s", got.Deadline)
 	}
-	if capped := c.TurnSettings(180); capped.MaxWallClock != 3*time.Minute {
-		t.Errorf("MaxWallClock = %s, want the fire's 180s", capped.MaxWallClock)
+	deadline := time.Date(2026, 9, 1, 9, 3, 0, 0, time.UTC)
+	if capped := c.TurnSettings(deadline); !capped.Deadline.Equal(deadline) {
+		t.Errorf("Deadline = %s, want the turn's %s", capped.Deadline, deadline)
 	}
 }
 
@@ -156,6 +180,7 @@ func TestAnUnvalidatedConfigIsValidatedHere(t *testing.T) {
 	handbuilt.Providers.LLM = map[string]config.LLMProvider{
 		"a": {Model: "m"},
 	}
+	handbuilt.Providers.Sandbox = &config.SandboxProvider{Fake: true}
 	handbuilt.Roles = []config.Role{{Name: "CEO", Handle: "ceo"}}
 	if _, err := engine.NewCompany(&handbuilt); err == nil {
 		t.Error("an invalid hand-built config produced an epoch")
@@ -177,13 +202,15 @@ func TestTheExtensionJudgeIsOnUnlessTurnedOff(t *testing.T) {
 	// would disable round-cap extensions for every company that never
 	// mentioned them.
 	c := company(t, companyDoc)
-	if got, err := c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Reply: turn.NoReply()}); err != nil {
+	if got, err := c.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Reply: turn.NoReply(),
+		Launcher: noLaunch{}, Sessions: toolSessions(t)}); err != nil {
 		t.Fatalf("RunnerFor: %v", err)
 	} else if !got.Caps().ExtensionOn {
 		t.Error("an unset extension_enabled disabled the round-cap judge")
 	}
 	off := company(t, companyDoc+"\nturn_engine:\n  extension_enabled: false\n")
-	got, err := off.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Reply: turn.NoReply()})
+	got, err := off.RunnerFor(t.Context(), "ceo", nil, engine.RunnerInput{Reply: turn.NoReply(),
+		Launcher: noLaunch{}, Sessions: toolSessions(t)})
 	if err != nil {
 		t.Fatalf("RunnerFor: %v", err)
 	}
@@ -201,6 +228,7 @@ func TestAProviderBuildsWithoutALogin(t *testing.T) {
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     local:
       model: sonnet
@@ -267,6 +295,7 @@ func TestAnEntryReadsItsConventionalTokenWhenItNamesNone(t *testing.T) {
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     subscription:
       model: sonnet
@@ -279,11 +308,24 @@ roles:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	built, err := engine.BuildCLIAgent("subscription", c.Providers.LLM["subscription"], config.EnvOnly())
+	built, err := engine.BuildCLIAgent("subscription", c.Providers.LLM["subscription"], config.EnvOnly(), nil)
 	if err != nil {
 		t.Fatalf("BuildCLIAgent: %v", err)
 	}
-	if got := built.SignInState(); got != "token" {
+	if got := built.SignInState(t.Context()); got != "token" {
 		t.Errorf("SignInState = %q, want token — the conventional variable was not read", got)
 	}
+}
+
+// toolSessions is the session directory a runner serves its phases' tools
+// from, for one case, removed when it ends: what the engine hands every
+// runner it builds ([engine.RunnerInput.Sessions]).
+func toolSessions(t *testing.T) *toolsession.Host {
+	t.Helper()
+	host, err := toolsession.NewHost()
+	if err != nil {
+		t.Fatalf("toolsession.NewHost: %v", err)
+	}
+	t.Cleanup(func() { _ = host.Close() })
+	return host
 }

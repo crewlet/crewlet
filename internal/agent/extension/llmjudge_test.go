@@ -39,7 +39,7 @@ func (a *answering) Complete(_ context.Context, req llm.Request) (*llm.Completio
 
 func judgeReq() extension.Request {
 	return extension.Request{
-		Phase:                 phase.Execute,
+		Phase:                 phase.Onboarding,
 		Task:                  "reply to the review comment",
 		RoundsUsed:            20,
 		MaxStep:               8,
@@ -172,8 +172,8 @@ func TestTheJudgeIsShownTheEvidence(t *testing.T) {
 	}
 	// No tools: a tool on the surface invites a model to call it and
 	// answer nothing, and there is none this pass could use.
-	if len(model.seen.Tools) != 0 {
-		t.Errorf("the judge was offered %d tools", len(model.seen.Tools))
+	if model.seen.Tools != nil {
+		t.Error("the judge was offered tools")
 	}
 }
 
@@ -202,7 +202,7 @@ func TestTheJudgeCountsOnlyARepeatedFailureAsALoop(t *testing.T) {
 func TestOneCallAlwaysRendersTheSameWay(t *testing.T) {
 	t.Parallel()
 	req := extension.Request{
-		Phase: phase.Execute,
+		Phase: phase.Onboarding,
 		Calls: []ledger.Call{{Name: "search", Args: map[string]any{
 			"zebra": 1, "alpha": 2, "mid": 3, "beta": 4, "yankee": 5,
 		}}},

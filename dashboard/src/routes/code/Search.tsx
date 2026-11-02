@@ -126,7 +126,7 @@ export function Search() {
             aria-label="Search the company’s code"
             ref={box}
             leading={<SearchGlyph size="sm" />}
-            placeholder="A name, a string or a pattern — repo:, path: and ref: filter it"
+            placeholder="A name, a string or a pattern (repo:, path: and ref: filter it)"
             value={typed.q}
             onChange={(e) => setTyped({ ...typed, q: e.target.value })}
           />

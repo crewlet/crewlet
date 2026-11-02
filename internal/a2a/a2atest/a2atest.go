@@ -3,9 +3,9 @@
 // ONE implementation now — the channel record lives in the fleet's
 // coordination store, and [a2a.CoordStore] is the whole of the translation —
 // so what this suite covers is the seam rather than a second backend: the
-// sentinel every unknown-channel path has to return, the idle sweep composed
-// out of a list and a close, and the participants a closed channel still has
-// to be carrying when it comes back. The record's own semantics are certified
+// sentinel every unknown-channel path has to return, the idle listing the sweep
+// decides over, and the participants a closed channel still has to be carrying
+// when it comes back. The record's own semantics are certified
 // against BOTH coordination backends by internal/coord/coordtest.
 package a2atest
 
@@ -41,8 +41,8 @@ func Run(t *testing.T, newStore Factory) {
 		{"CountMessage", testCountMessage},
 		{"Close", testClose},
 		{"CloseIsIdempotentAndKeepsTheFirstTime", testCloseTwice},
-		{"CloseIdle", testCloseIdle},
-		{"CloseIdleSpares", testCloseIdleSpares},
+		{"Idle", testIdle},
+		{"IdleLeavesOutAClosedChannel", testIdleLeavesOutClosed},
 		{"Purge", testPurge},
 		{"GetReturnsACopy", testGetReturnsACopy},
 		{"ReopenIsNotAReset", testReopenIsNotAReset},
@@ -172,49 +172,47 @@ func testCloseTwice(t *testing.T, newStore Factory) {
 	}
 }
 
-func testCloseIdle(t *testing.T, newStore Factory) {
+func testIdle(t *testing.T, newStore Factory) {
 	s := newStore(t)
 	ctx := t.Context()
 	open(t, s, "stale", "alice", "bob", base)
 	open(t, s, "fresh", "alice", "carol", base.Add(2*time.Hour))
 
-	at := base.Add(3 * time.Hour)
-	closed, err := s.CloseIdle(ctx, base.Add(time.Hour), at)
+	idle, err := s.Idle(ctx, base.Add(time.Hour))
 	if err != nil {
-		t.Fatalf("CloseIdle: %v", err)
+		t.Fatalf("Idle: %v", err)
 	}
-	// WHICH channels closed is the point: each one is an ask that was never
-	// answered, and that is how an operator finds a seat that stopped
-	// replying.
-	if len(closed) != 1 || closed[0].ID != "stale" {
-		t.Fatalf("closed %v, want just the stale one", ids(closed))
+	// WHICH channels are idle is the point: the sweep decides on each, and
+	// one active after the cutoff is no candidate at all.
+	if len(idle) != 1 || idle[0].ID != "stale" {
+		t.Fatalf("idle %v, want just the stale one", ids(idle))
 	}
-	if closed[0].Requester != "alice" || closed[0].Target != "bob" {
-		t.Errorf("the returned channel lost its participants: %+v", closed[0])
+	// AND WHO THEY ASKED: the sweep asks whether that seat still owes the
+	// answer, and announces both parties of what it closes.
+	if idle[0].Requester != "alice" || idle[0].Target != "bob" {
+		t.Errorf("the listed channel lost its participants: %+v", idle[0])
 	}
-	if get(t, s, "stale").Open() {
-		t.Error("the stale channel was reported closed but is still open")
-	}
-	if !get(t, s, "fresh").Open() {
-		t.Error("a channel active after the cutoff was closed")
+	// A listing, never a close.
+	if !get(t, s, "stale").Open() {
+		t.Error("listing the stale channel closed it")
 	}
 }
 
-func testCloseIdleSpares(t *testing.T, newStore Factory) {
+func testIdleLeavesOutClosed(t *testing.T, newStore Factory) {
 	s := newStore(t)
 	ctx := t.Context()
 	open(t, s, "c1", "alice", "bob", base)
 	if _, err := s.Close(ctx, "c1", base.Add(time.Minute)); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	// An already-closed channel must not be reported again: a second close
-	// event for one channel draws two closes on a dashboard.
-	closed, err := s.CloseIdle(ctx, base.Add(time.Hour), base.Add(2*time.Hour))
+	// An already-closed channel is no candidate: closed again, a second
+	// close event for one channel draws two closes on a dashboard.
+	idle, err := s.Idle(ctx, base.Add(time.Hour))
 	if err != nil {
-		t.Fatalf("CloseIdle: %v", err)
+		t.Fatalf("Idle: %v", err)
 	}
-	if len(closed) != 0 {
-		t.Errorf("CloseIdle re-closed %v", ids(closed))
+	if len(idle) != 0 {
+		t.Errorf("Idle listed the closed %v", ids(idle))
 	}
 }
 

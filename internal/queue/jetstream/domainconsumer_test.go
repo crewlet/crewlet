@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -1111,7 +1112,7 @@ func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
 	t.Parallel()
 	q := newQueueWith(t, Config{
 		ServerName: "member", LeafHost: "127.0.0.1", LeafPort: AnyPort,
-		StoreDir: t.TempDir(), FleetAuth: testFleetAuth(),
+		StoreDir: t.TempDir(), StoreMaxBytes: brokertest.StoreMaxBytes, FleetAuth: testFleetAuth(),
 	})
 	if err := q.EnsureDomainStream(t.Context(), DomainStream{
 		Name: "CREWLET_LATER_LOG", Subjects: []string{"crewlet.later.log.>"},
@@ -1227,16 +1228,16 @@ func waitUntil(t *testing.T, what string, cond func() bool) {
 // idlePullBudget is the most one pull of an EMPTY log may allocate, heap
 // bytes, whatever the bounds it carries.
 //
-// 64 KiB: an idle applier pulls twice a second per domain ([statelog.FetchWait])
-// and a node runs three domains, so this is ≤ 384 KiB/s of garbage from a node
-// doing nothing. The pull measures about 6.5 KiB — a subscription, a request, a
-// timer, and the server's side of it in this same process — so the budget is
-// ten times what it needs and still below BOTH of the client library's fetches:
-// the byte-bounded one's 32 MiB (181 MiB/s from three idle consumers, and an
-// OOM kill for a process running a few hundred of them) and the count-only
-// one's ≈ 172 KiB at the applier's four thousand. A figure that grows with the
-// BATCH a pull may receive, rather than with what it did receive, is the
-// defect, and the second is the fix that would have looked like one.
+// 64 KiB: an idle applier pulls twice a second ([statelog.FetchWait]), so this
+// is ≤ 128 KiB/s of garbage per domain from a node doing nothing. The pull
+// measures about 6.5 KiB — a subscription, a request, a timer, and the
+// server's side of it in this same process — so the budget is ten times what
+// it needs and still below BOTH of the client library's fetches: the
+// byte-bounded one's 32 MiB (181 MiB/s from three idle consumers, and an OOM
+// kill for a process running a few hundred of them) and the count-only one's
+// ≈ 172 KiB at the applier's four thousand. A figure that grows with the BATCH
+// a pull may receive, rather than with what it did receive, is the defect, and
+// the second is the fix that would have looked like one.
 const idlePullBudget = 64 << 10
 
 // AN IDLE PULL ALLOCATES FOR WHAT IT RECEIVED, never for the batch it was
@@ -1407,8 +1408,13 @@ func TestAPullEndedAsAFailureReportsIt(t *testing.T) {
 // the broker delivered it then. Here one is delivered to a request still
 // standing after the fetch that sent it returned, the consumer is deleted under
 // that request, and created again at the start as a restored broker's would
-// be: the first record the handle hands over after the failure is the new
-// consumer's first delivery, never the buffered one from before.
+// be: once the pull has been told of the failure, the fetch reports it, and the
+// first record the handle hands over after it is the new consumer's first
+// delivery, never the buffered one from before.
+//
+// Mutations: let the failed fetch leave what it held for the fetch after —
+// that fetch hands over the record from before, red; record no failure from a
+// refusing status — the pull is never told, red.
 func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
 	t.Parallel()
 	const stream = "CREWLET_HANDBACK_LOG"
@@ -1452,9 +1458,33 @@ func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	// THE FAILURE: the consumer goes under the standing request.
+	// THE FAILURE: the consumer goes under the standing request — and the
+	// case waits for the PULL to be told, not for the delete to return. The
+	// server answers the deletion twice, with a `409` on the pull's inbox and
+	// with the reply the delete waits on, and the client dispatches the two
+	// on two subscriptions' own goroutines, so nothing orders them: a fetch
+	// made as the delete returns could find the record and no failure yet,
+	// and hand the record over — rightly, since it was delivered before the
+	// failure and the applier gives it back when the next fetch reports one.
+	// In the pull's inbox the record comes before the status, so a pull told
+	// of its failure holds the record still.
 	if err := q.JetStream().DeleteConsumer(t.Context(), stream, cons.Name()); err != nil {
 		t.Fatalf("delete the consumer: %v", err)
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		failed, held := pullFailure(cons)
+		if failed {
+			if held != 1 {
+				t.Fatalf("the pull was told of its failure holding %d record(s), "+
+					"want the one delivered before it", held)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the pull was never told its consumer went")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if _, err := cons.Fetch(t.Context(), 10, 1<<20, 5*time.Second); !errors.Is(err, errPullRefused) {
 		t.Fatalf("the fetch after the consumer went returned %v, want the refusal", err)
@@ -1474,6 +1504,20 @@ func TestAFailedPullHandsBackWhatItHeld(t *testing.T) {
 			"consumer's first delivery, 1 — a record the pull held across its failure "+
 			"reached the reader as though delivered after it", seqOf(got))
 	}
+}
+
+// pullFailure is whether c's standing pull has been told of a failure no fetch
+// has reported yet, and how many records its buffer holds.
+func pullFailure(c *DomainConsumer) (failed bool, held int) {
+	c.mu.Lock()
+	p := c.pull
+	c.mu.Unlock()
+	if p == nil {
+		return false, 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failure != nil, len(p.buffered)
 }
 
 // BenchmarkAnIdlePull is what one pull of an empty log costs, B/op being the

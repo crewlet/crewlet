@@ -3,7 +3,6 @@ package engine
 import (
 	"encoding/json"
 	"errors"
-	"slices"
 	"strings"
 	"testing"
 
@@ -20,6 +19,7 @@ import (
 const slackCompany = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -32,6 +32,7 @@ roles:
     llm: zulu
     integrations:
       slack:
+        enabled: false
         bot_token: "${SLACK_BOT_TOKEN_CEO}"
         signing_secret: "${SLACK_SIGNING_SECRET_CEO}"
 units:
@@ -42,6 +43,7 @@ units:
         llm: zulu
         integrations:
           slack:
+            enabled: false
             bot_token: "${SLACK_BOT_TOKEN_SRE_LEAD}"
             signing_secret: "xoxb-written-by-hand"
       - name: SWE
@@ -124,37 +126,32 @@ func (w *seatWriter) block(handle, kind string) (map[string]any, bool) {
 	return got, ok
 }
 
-// A SLACK DISCONNECT REMOVES THE CREDENTIALS IT LEFT BEHIND FOR YEARS.
+// A SLACK DISCONNECT THAT REMOVES THE ACCOUNTS CLEARS EVERY SEAT'S BLOCK.
 //
-// Slack has no reconcile pass — its apps are made from the command line and
-// only a person can delete one — which was read as "there is nothing to tear
-// down". What there was is a sealed bot token and signing secret on every
-// seat, and dropping the company block alone left both: the surface reported
-// nothing enabled and a secret still present, which the dashboard draws as
-// PAUSED. Measured on a live company, twice in a row, both attempts logging
-// `accounts=[] secrets=[]`.
-func TestASlackDisconnectRemovesEachSeatsApp(t *testing.T) {
+// The access sync turns each seat off and deletes each app the engine made,
+// clearing its sealed values once Slack confirms the deletion. What the
+// teardown adds is the document: a block naming an app that no longer exists
+// would ask the next connect to create one nobody chose again. The
+// credentials these seats name were handed in from outside Crewlet, so they
+// are not the teardown's to delete.
+func TestASlackDisconnectClearsEachSeatsBlock(t *testing.T) {
 	t.Parallel()
 	e, writer := slackEngine(t)
-	if e.Resolve("${SLACK_BOT_TOKEN_CEO}") == "" {
-		t.Fatal("precondition: nothing was sealed")
-	}
 
-	// THROUGH THE MAP THE LOOP READS, not through a [vendorDisconnect] built
-	// here. The two halves — "the step removes the right things" and "the
-	// loop reaches the step" — are separate facts, and only the second one
-	// ends the defect: Slack's whole disconnect was a nil pass and a `return
-	// nil`, so a step nothing registers is the shape this had all along.
+	// THROUGH THE MAP THE LOOP READS, so the step is the one the loop
+	// reaches.
 	removed, err := e.disconnectors()[integration.KindSlack].Disconnect(t.Context(),
 		integration.TeardownRequest{RemoveSeats: true, By: testParty})
 	if err != nil {
 		t.Fatalf("Disconnect: %v", err)
 	}
+	if got := removed.Secrets(); len(got) != 0 {
+		t.Errorf("the teardown reported %v for deletion, and every credential an "+
+			"app the engine made held is the access sync's to clear", got)
+	}
 
-	// EVERY WRITE IS RECORDED AS WHOEVER ASKED, the seats' cleared
-	// credentials and the dropped block alike: the loop only carries the
-	// disconnect out. Mutation: record the seat writes as the loop and the
-	// first list goes red.
+	// EVERY WRITE IS RECORDED AS WHOEVER ASKED, the seats' blocks and the
+	// dropped company block alike.
 	seats, documents := writer.recorded()
 	if len(seats) != 2 || len(documents) != 1 {
 		t.Fatalf("recorded %d seat write(s) and %d document write(s), want 2 "+
@@ -166,42 +163,14 @@ func TestASlackDisconnectRemovesEachSeatsApp(t *testing.T) {
 				"who asked, %+v", by, testParty)
 		}
 	}
-
-	// EVERY SEAT THAT HELD AN APP, AND NO OTHER. The seat with no Slack
-	// block is not a seat whose account was removed.
-	if got := removed.Handles(); !slices.Equal(got, []string{"ceo", "sre-lead"}) {
-		t.Errorf("handles = %v, want the two seats that held an app: the loop "+
-			"logs this as the only record a destructive act leaves", got)
-	}
-
-	// NAMES ONLY, AND ONLY WHOLE REFERENCES. `sre-lead`'s signing secret is
-	// a literal somebody typed into the document: there is no variable to
-	// delete, and reading one would hand the sealed store a key made of a
-	// credential.
-	want := []string{
-		"SLACK_BOT_TOKEN_CEO", "SLACK_BOT_TOKEN_SRE_LEAD", "SLACK_SIGNING_SECRET_CEO",
-	}
-	if got := removed.Secrets(); !slices.Equal(got, want) {
-		t.Errorf("secrets = %v, want %v", got, want)
-	}
-
-	// AND THEY ARE ACTUALLY GONE, which is the half a report cannot claim.
-	e.refreshSecrets(t.Context())
-	for _, name := range want {
-		if got := e.Resolve("${" + name + "}"); got != "" {
-			t.Errorf("%s = %q after the disconnect: a credential nothing "+
-				"points at is still resolving", name, got)
-		}
-	}
-
-	// AND THE BLOCKS WITH THEM, which is what stops the row being emitted
-	// at all. The whole block, because a block carrying one of its two
-	// credentials is a document that will not load.
 	for _, handle := range []string{"ceo", "sre-lead"} {
 		if got, held := writer.block(handle, "slack"); held {
-			t.Errorf("%s still carries %v, so the surface is still reported "+
-				"and the card still renders as Paused", handle, got)
+			t.Errorf("%s still carries %v", handle, got)
 		}
+	}
+	e.refreshSecrets(t.Context())
+	if got := e.Resolve("${SLACK_BOT_TOKEN_CEO}"); got == "" {
+		t.Error("a credential handed in from outside Crewlet was deleted")
 	}
 }
 
@@ -220,8 +189,8 @@ func TestASlackDisconnectKeepsTheAppsTheOperatorKept(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Disconnect: %v", err)
 	}
-	if got := removed.Handles(); len(got) != 0 {
-		t.Errorf("handles = %v, want none: the operator did not ask for the accounts", got)
+	if got := removed.Secrets(); len(got) != 0 {
+		t.Errorf("secrets = %v, want none: the operator did not ask for the accounts", got)
 	}
 	if len(writer.wrote) != 0 {
 		t.Errorf("wrote %v, want no seat touched", writer.wrote)
@@ -232,24 +201,15 @@ func TestASlackDisconnectKeepsTheAppsTheOperatorKept(t *testing.T) {
 	}
 }
 
-// A FAILURE MID-WAY STILL REPORTS WHAT IT HAS ALREADY DONE.
-//
-// The loop holds the surface in PhaseDisconnecting and tries again, and every
-// step here is "remove this if it is there" — but the seats cleared before the
-// failure have credentials nothing points at any more, and [Engine.forgetRemoved]
-// is the only thing that deletes them. Reported as a delta, or not at all, they
-// would be sealed values behind a block that no longer exists.
-func TestAPartialSlackTeardownReportsWhatItCleared(t *testing.T) {
+// A WRITE THAT FAILS IS RETRIED: every step is "remove this if it is there",
+// so the error goes back to the loop, which holds the surface disconnecting
+// and tries again.
+func TestAFailedSlackSeatWriteIsRetried(t *testing.T) {
 	t.Parallel()
 	e, writer := slackEngine(t)
 	writer.fail = errors.New("the config surface is busy")
-
-	removed, err := e.tearDownSlack(t.Context(), true, testParty)
-	if err == nil {
+	if err := e.tearDownSlack(t.Context(), true, testParty); err == nil {
 		t.Fatal("tearDownSlack: want the write failure surfaced so the loop retries")
-	}
-	if got := removed.Handles(); !slices.Equal(got, []string{"ceo"}) {
-		t.Errorf("handles = %v, want the seat reached before the failure", got)
 	}
 }
 
@@ -265,12 +225,12 @@ func TestASlackTeardownWithNoConfigSurfaceDefers(t *testing.T) {
 	e, _ := slackEngine(t)
 	e.configWriter.Store(nil)
 
-	_, err := e.tearDownSlack(t.Context(), true, testParty)
+	err := e.tearDownSlack(t.Context(), true, testParty)
 	if !errors.Is(err, integration.ErrDisconnectUnavailable) {
 		t.Fatalf("error = %v, want %v", err, integration.ErrDisconnectUnavailable)
 	}
 	// AND IT NAMES THE SEAT, because an operator reading the row's last
-	// error needs to know which seat is still holding a credential.
+	// error needs to know which seat is still holding its block.
 	if !strings.Contains(err.Error(), "ceo") {
 		t.Errorf("error = %q, want the seat it could not clear named", err)
 	}

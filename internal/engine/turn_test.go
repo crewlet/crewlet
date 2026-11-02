@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/workkey"
@@ -1387,7 +1389,7 @@ func TestTheTriggersDelegationReachesTheTurn(t *testing.T) {
 	ask := ev("a2a_request")
 	ask.DelegationDepth = 2
 	ask.DelegationChain = []string{"ceo", "cto"}
-	if res := e.Dispatch(context.Background(), "ceo", []*events.Event{ask}); res.Outcome != queue.OutcomeAck {
+	if res := engine.MailboxTurn(context.Background(), e, "ceo", []*events.Event{ask}); res.Outcome != queue.OutcomeAck {
 		t.Fatalf("dispatch = %+v", res)
 	}
 
@@ -2166,7 +2168,7 @@ func TestACoalescedConversationReachesTheTurnAsOneDigest(t *testing.T) {
 	if n := len(r.reqs[0].Trigger); n != 1 {
 		t.Fatalf("the turn was handed %d asks, want one merged digest", n)
 	}
-	ask := engine.DescribeTrigger(r.reqs[0].Ask())
+	ask := engine.DescribeTrigger(r.reqs[0].Ask(), "")
 
 	// EVERY constituent survives the merge: a digest that kept only the
 	// latest hands the seat a follow-up with no idea what it follows.
@@ -2713,6 +2715,7 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
 		Pushes:   noPushes{},
+		Answers:  fleetAnswers(),
 		Audience: noAudience{},
 		Queue:    discardPublisher{}, Pending: blindLookupStore{PendingStore: store, blind: blind}, Manager: manager,
 		// A RESUMER THAT PANICS, because these cases never reach one:
@@ -2736,10 +2739,8 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	if _, err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
-	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{
-		Question: "which branch?", Audience: "requester",
-		AskedAt: time.Now().UTC(),
-	}); err != nil {
+	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	// The seat's counts come from the store ONCE, here, exactly as a node
@@ -2812,112 +2813,16 @@ func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, pushed []sandbo
 	return pushed, nil, nil
 }
 
-// answerGiven is an operator's answer by turn, as it arrives on a seat's inbox.
-func answerGiven(turnID string) *events.Event {
-	return events.New(types.SandboxAnswerGiven{
-		TurnID: turnID, AgentHandle: "ceo", Answer: "use main",
-		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
-		LaunchID: "launch-" + turnID,
-	}, events.TraceContext{})
-}
-
-// AN ANSWER BY TURN IS NEVER RUN AS A TURN, whatever it became. It is
-// addressed to a parked run and not to the seat: resumed, found not waiting or
-// found gone, it is spent where it was routed, and only an answer the run is
-// still owed comes back — as a NAK, the spaced return. A seat BUSY CODING takes
-// no other work until that run settles or parks, an answer to another of its
-// runs included, so an answer that raced the seat's hold is deferred under it
-// and resumes nothing beside the job; a node that does not hold the seat
-// routes nothing at all.
-func TestAnAnswerEventIsNeverRunAsATurn(t *testing.T) {
-	t.Parallel()
-	free := inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
-	held := free
-	held.SeatHeldBySandbox = true
-	for name, tc := range map[string]struct {
-		conds       inbox.Conditions
-		disposition sandbox.AnswerDisposition
-		unwired     bool
-		outcome     queue.Outcome
-		routed      bool
-	}{
-		"resumed":                          {free, sandbox.AnswerConsumed, false, queue.OutcomeAck, true},
-		"not waiting or gone":              {free, sandbox.AnswerNotMine, false, queue.OutcomeAck, true},
-		"an answer this build cannot read": {free, sandbox.AnswerDisposition(""), false, queue.OutcomeAck, true},
-		"still owed":                       {free, sandbox.AnswerDeferred, false, queue.OutcomeNak, true},
-		"a seat another job holds":         {held, sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
-		"a node with no coordinator":       {free, "", true, queue.OutcomeNak, false},
-		"a node that does not hold the seat": {
-			inbox.Conditions{}, sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
-		// AN ANSWER WAITS BEHIND A PAUSE, like the seat's other mail:
-		// resuming a run is work, and a paused seat does none. The park
-		// the screening makes holds it for the resume.
-		"a seat a person paused": {
-			inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true, Paused: true},
-			sandbox.AnswerConsumed, false, queue.OutcomeAck, false},
-		"a node that has not read the pauses": {
-			inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true, PauseUnknown: true},
-			sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			r := &recorder{}
-			d := dispatcher(t, r)
-			d.Conditions = func(string) inbox.Conditions { return tc.conds }
-			var routed []string
-			if !tc.unwired {
-				d.AnswerByTurn = func(_ context.Context, given types.SandboxAnswerGiven,
-					_ *events.Event) (sandbox.AnswerDisposition, error) {
-					routed = append(routed, given.TurnID)
-					return tc.disposition, nil
-				}
-			}
-			got := d.Dispatch(context.Background(), "ceo", []*events.Event{answerGiven("t1")})
-			if got.Outcome != tc.outcome {
-				t.Errorf("outcome = %v, want %v", got.Outcome, tc.outcome)
-			}
-			if len(r.reqs) != 0 {
-				t.Errorf("an answer by turn was run as a turn: %+v", r.reqs)
-			}
-			if (len(routed) == 1) != tc.routed {
-				t.Errorf("routed to the run %v, want routed=%v", routed, tc.routed)
-			}
-			if tc.routed && len(r.parked) != 0 {
-				t.Errorf("an answer routed to its run was also parked: %v", r.parked)
-			}
-			if tc.conds.Paused && (len(r.parked) != 1 ||
-				!slices.Equal(r.holds, []inbox.Hold{inbox.HoldSeatPaused})) {
-				t.Errorf("a paused seat's answer parked %v under holds %v, want one park "+
-					"under the pause's own hold", r.parked, r.holds)
-			}
-		})
+// fleetAnswers is the seal these coordinators seal and open answers under
+// ([sandbox.CoordinatorOptions.Answers]): one fleet keyring for every one of
+// them, as a fleet shares one, so a node opens what another recorded.
+var fleetAnswers = sync.OnceValue(func() *sandbox.AnswerSeal {
+	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", "the engine cases' fleet key material"))
+	if err != nil {
+		panic(err)
 	}
-}
-
-// AN ANSWER IS TAKEN OUT OF WHATEVER IT ARRIVED WITH, and the rest of the
-// delivery is the ordinary delivery it is: the other event runs as a turn, and
-// the answer is not in it.
-func TestAnAnswerIsTakenOutOfTheDeliveryBeforeTheTurn(t *testing.T) {
-	t.Parallel()
-	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "posted"}}
-	d := dispatcher(t, r)
-	d.AnswerByTurn = func(context.Context, types.SandboxAnswerGiven, *events.Event) (sandbox.AnswerDisposition, error) {
-		return sandbox.AnswerConsumed, nil
-	}
-	answer, other := answerGiven("t1"), ev("notification")
-	got := d.Dispatch(context.Background(), "ceo", []*events.Event{answer, other})
-	if got.Outcome != queue.OutcomeAck {
-		t.Fatalf("outcome = %v, want an ack", got.Outcome)
-	}
-	if len(r.reqs) != 1 {
-		t.Fatalf("the turn ran %d times, want once for the ordinary event", len(r.reqs))
-	}
-	for _, e := range r.reqs[0].Events {
-		if e.ID == answer.ID {
-			t.Fatal("the answer by turn reached the turn as part of its trigger")
-		}
-	}
-}
+	return seal
+})
 
 // unpackReply is a [sandbox.Reply] as the three values the answer seam used to
 // be handed: the conversation, the text, and the delivery's leading event.

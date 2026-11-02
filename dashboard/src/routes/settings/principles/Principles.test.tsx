@@ -232,7 +232,7 @@ test("a reader who may write the charter adds each unwritten part at its card", 
 // Mutation: offer the admin's controls to everybody and the test fails.
 test("a reader who may not write the charter reads it with no control on it", async () => {
   for (const org of [ACME, { name: "Acme", roles: [] }]) {
-    const store = mount(["tracker"]);
+    const store = mount(["worklet"]);
     act(() => store.applyOrg(withDerived(org)));
     await viewerAnswered();
     for (const name of ["Mission", "Vision", "Standing policies"]) {
@@ -251,7 +251,7 @@ test("the engine's caps are a related row for a reader who may open them, and no
   const related = await screen.findByRole("navigation", { name: "Related" });
   expect(within(related).getByRole("link").getAttribute("href")).toBe("#/settings/limits");
   cleanup();
-  store = mount(["tracker"]);
+  store = mount(["worklet"]);
   act(() => store.applyOrg(withDerived(ACME)));
   await viewerAnswered();
   expect(screen.queryByRole("navigation", { name: "Related" })).toBeNull();

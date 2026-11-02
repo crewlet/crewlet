@@ -20,7 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // gate holds every call that passes it until it is opened, counting how many
@@ -450,7 +450,7 @@ func TestTheFetchBoundRidesWarmConnections(t *testing.T) {
 // tracker's first page holds far more references than a fetch's width. The
 // bound is counted from objstore/references rather than written down, because
 // a table a domain declares is a page the walk reads at its start — it was the
-// literal 2 while the tracker's files and the code host's packs were the only
+// literal 2 while Worklet's files and the code host's packs were the only
 // Required tables, and every table declared since read as a gathering walk.
 func TestABackupWalksItsCopyAPageAtATime(t *testing.T) {
 	t.Parallel()
@@ -470,7 +470,7 @@ func TestABackupWalksItsCopyAPageAtATime(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "paged")
 	done := takeAsync(t, svc, dir)
 	g.waitHeld(t, backup.FetchConcurrency)
-	// One page of the tracker's files and one of every other table the walk
+	// One page of Worklet's files and one of every other table the walk
 	// merges — a gathering walk has read the tracker's five by now.
 	tables, _ := othersDeclared()
 	if read, merged := pages.Load(), int32(1+tables); read > merged {
@@ -503,7 +503,7 @@ func TestABackupWalksItsCopyAPageAtATime(t *testing.T) {
 func othersDeclared() (tables, logs int) {
 	seen := map[string]bool{}
 	for _, ref := range references.All {
-		if ref.Standing != objstore.Required || ref.Domain == (tracker.Domain{}).Name() {
+		if ref.Standing != objstore.Required || ref.Domain == (worklet.Domain{}).Name() {
 			continue
 		}
 		tables++

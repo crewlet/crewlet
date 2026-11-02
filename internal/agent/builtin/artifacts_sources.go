@@ -20,8 +20,11 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WHERE AN AGENT'S FILES COME FROM: five sources, one write path.
@@ -101,7 +104,7 @@ func (s *fileSources) cleanPath(raw string) (string, *tools.Result) {
 	p, err := manifest.CleanPath(raw)
 	if err != nil {
 		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: %q is not a path an "+
-			"artifact may publish: %s", s.tool, clip(raw), domainSentence(err)))
+			"artifact may publish: %s", s.tool, clip(raw), artifactupload.Sentence(err)))
 		return "", &r
 	}
 	return p, nil
@@ -214,22 +217,22 @@ func (s *fileSources) parseSpec(ctx context.Context, p string, spec map[string]a
 	}
 	switch {
 	case hasBrand:
-		raw, _ := brand.(string)
+		raw, _ := argval.String(brand)
 		slot, refusal := s.brandSlot(p, raw)
 		if refusal != nil {
 			return refusal
 		}
 		return s.add(artifactFile{path: p, brand: slot})
 	case hasContent:
-		text, ok := content.(string)
-		if !ok {
+		text, ok := argval.String(content)
+		if !ok || content == nil {
 			r := failed(fmt.Sprintf("%s: the content of %q must be a string.", s.tool, p))
 			return &r
 		}
-		encoding, _ := spec["encoding"].(string)
+		encoding, _ := argval.String(spec["encoding"])
 		return s.addInline(p, text, strings.TrimSpace(encoding))
 	case hasBox:
-		from, _ := box.(string)
+		from, _ := argval.String(box)
 		f, refusal := s.boxFile(ctx, p, from)
 		if refusal != nil {
 			return refusal
@@ -265,8 +268,8 @@ func (s *fileSources) brandSlot(p, raw string) (brandformat.Slot, *tools.Result)
 		names[i] = string(v)
 	}
 	r := failed(fmt.Sprintf("%s: %q copies `from_brand` %q, which is no slot of the brand; "+
-		"take one of %s (get_company_brand lists what your company's brand holds).", s.tool, p,
-		clip(raw), strings.Join(names, ", ")))
+		"take one of %s ("+CompanyBrandTool+" lists what your company's brand holds).", s.tool, p,
+		clip(raw), words.Or(names)))
 	return "", &r
 }
 
@@ -283,21 +286,20 @@ func (s *fileSources) openBox(ctx context.Context) (ArtifactBox, *tools.Result) 
 		return nil, &r
 	}
 	if s.deps.Boxes == nil {
-		r := refused(tools.RefusalUnavailable, s.tool+" cannot read a coding run's box: "+
+		r := refusedBy(tools.RefusalUnavailable, waitless(), s.tool+" cannot read a coding run's box: "+
 			"this node runs no sandbox. Publish the files inline instead.")
 		return nil, &r
 	}
 	box, err := s.deps.Boxes.Box(ctx, s.caller.turn)
 	switch {
 	case errors.Is(err, ErrNoBox):
-		r := refusedBy(tools.RefusalNotRunning, err, s.tool+" found no coding run's box "+
-			"to read in this turn: a box is readable after run_sandbox returns and until "+
-			"this Execute phase ends, and is torn down after it. Ask the coding run to "+
-			"build into a directory with run_sandbox, then publish from it in the same turn.")
+		r := refusedBy(tools.RefusalNotRunning, err, s.tool+" found no live run's box "+
+			"to read in this turn: a box is readable by the run working in it, while it "+
+			"runs, and is torn down after it. Build into a directory in your workspace, "+
+			"then publish from it before your run ends.")
 		return nil, &r
 	case err != nil:
-		r := nodeFailure(ctx, s.tool, err, "Could not reattach the coding run's box",
-			"Nothing was published.")
+		r := boxFailure(ctx, s.tool, err, "Could not reattach the coding run's box")
 		return nil, &r
 	}
 	s.box = box
@@ -349,9 +351,32 @@ func (s *fileSources) addBoxDir(ctx context.Context, raw string) *tools.Result {
 		return refusal
 	}
 	listed, err := box.Files(ctx, dir, artifacts.MaxFilesPerVersion+1)
-	if err != nil {
-		r := nodeFailure(ctx, s.tool, err, "Could not list "+dir+" in the coding run's box",
-			"Nothing was published.")
+	switch {
+	case errors.Is(err, ErrNotADirectory):
+		// THE CALLER'S PATH, as a file's is ([fileSources.digest]): it was
+		// told as a fault of this node, and the model gave up on a publish
+		// one corrected argument would have made.
+		r := failed(fmt.Sprintf("%s: %s isn't a directory in your coding run's workspace: "+
+			"it's missing, or it's a file or a link. Name the directory the build wrote its "+
+			"output to. Nothing was published.", s.tool, dir))
+		return &r
+	case errors.Is(err, ErrNoWorkspace):
+		// NO DIR WOULD LIST, so naming another is no advice: the box has to
+		// hold a build again before anything in it can be published.
+		r := refusedBy(tools.RefusalNotRunning, err, s.tool+": your coding run's workspace "+
+			"is gone from its box, so nothing in it can be published. Build it again, "+
+			"then publish from it before your run ends.")
+		return &r
+	case errors.Is(err, ErrListIncomplete):
+		// A WALK THAT STOPPED PARTWAY is not the build: published, it shipped
+		// whatever the box could read and dropped the rest without a word.
+		r := refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %s couldn't be listed "+
+			"whole in your coding run's box: part of it can't be read, most often a "+
+			"directory without read permission. Nothing was published. Make the build's "+
+			"output readable, then publish it again.", s.tool, dir))
+		return &r
+	case err != nil:
+		r := boxFailure(ctx, s.tool, err, "Could not list "+dir+" in the coding run's box")
 		return &r
 	}
 	switch {
@@ -405,14 +430,23 @@ func (s *fileSources) digest(ctx context.Context, from string,
 
 	rc, err := open(ctx)
 	if err != nil {
-		r := nodeFailure(ctx, s.tool, err, "Could not read "+from, "Nothing was published.")
+		// A PATH THAT NAMES NO FILE is the caller's to change: a box streams
+		// only a regular file, and one that is missing, a directory or a
+		// link is refused by name. It was told as a fault of this node.
+		if errors.Is(err, sandbox.ErrNotRegularFile) {
+			r := failed(fmt.Sprintf("%s: %s isn't a file in your coding run's workspace: "+
+				"it's missing, or it's a directory or a link. Name a file the run wrote. "+
+				"Nothing was published.", s.tool, from))
+			return nil, &r
+		}
+		r := boxFailure(ctx, s.tool, err, "Could not read "+from)
 		return nil, &r
 	}
 	defer func() { _ = rc.Close() }()
 	h := sha256.New()
 	n, err := io.Copy(h, io.LimitReader(rc, artifacts.MaxTextFileBytes+1))
 	if err != nil {
-		r := nodeFailure(ctx, s.tool, err, "Could not read "+from, "Nothing was published.")
+		r := boxFailure(ctx, s.tool, err, "Could not read "+from)
 		return nil, &r
 	}
 	if n > artifacts.MaxTextFileBytes {
@@ -433,7 +467,7 @@ func (s *fileSources) digest(ctx context.Context, from string,
 func (s *fileSources) projectFile(ctx context.Context, published string,
 	ref map[string]any) (artifactFile, *tools.Result) {
 
-	project := tracker.ProjectKey(strings.TrimSpace(argString(ref, "project")))
+	project := worklet.ProjectKey(strings.TrimSpace(argString(ref, "project")))
 	from := strings.TrimSpace(argString(ref, "path"))
 	if project == "" || from == "" {
 		r := failed(fmt.Sprintf("%s: `from_project_file` for %q takes `{project, path}`.",
@@ -442,20 +476,20 @@ func (s *fileSources) projectFile(ctx context.Context, published string,
 	}
 	work := s.deps.work
 	if work.Files == nil || work.Objects == nil {
-		r := refused(tools.RefusalUnavailable, s.tool+" cannot read project files: this "+
-			"company does not run the native tracker.")
+		r := refusedBy(tools.RefusalUnavailable, waitless(), s.tool+" cannot read project files: this "+
+			"company does not run Worklet.")
 		return artifactFile{}, &r
 	}
 	// READING THE FILE IS read_project_file's VERB, asked as that tool's own
 	// gate asks it: a caller who may not read a project's files may not copy
 	// one into an artifact either.
-	if refusal := askAuthority(ctx, s.deps.authorize, authz.Action(tracker.ReadProjectFileTool),
+	if refusal := askAuthority(ctx, s.deps.authorize, authz.Action(worklet.ReadProjectFileTool),
 		authz.Object{}); refusal != nil {
 		return artifactFile{}, refusal
 	}
 	detail, err := work.Files.File(ctx, project, from, seatRead)
 	switch {
-	case errors.Is(err, tracker.ErrNoFile):
+	case errors.Is(err, worklet.ErrNoFile):
 		r := refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: project %s has no "+
 			"file %q to copy into %q.", s.tool, project, clip(from), published))
 		return artifactFile{}, &r
@@ -559,7 +593,7 @@ func (s *fileSources) transfer(ctx context.Context, call artifactsdomain.Call, u
 
 	rc, err := f.stream.open(ctx)
 	if err != nil {
-		r := nodeFailure(ctx, s.tool, err, "Could not read "+f.stream.from, "Nothing was published.")
+		r := boxFailure(ctx, s.tool, err, "Could not read "+f.stream.from)
 		return &r
 	}
 	defer func() { _ = rc.Close() }()
@@ -587,17 +621,6 @@ func (s *fileSources) find(p string) (artifactFile, bool) {
 	return artifactFile{}, false
 }
 
-// domainSentence is a refusal the artifacts packages composed for a caller,
-// without the package names their errors carry.
-func domainSentence(err error) string {
-	msg := err.Error()
-	for _, prefix := range []string{"artifactupload: ", "artifactsdomain: ", "manifest: ",
-		"mediatype: ", "lint: ", "edits: ", "artifacts: "} {
-		msg = strings.ReplaceAll(msg, prefix, "")
-	}
-	return msg
-}
-
 // streamedInline is an inline file as a stream of its own bytes, for the one
 // write that takes no inline content (an asset is always its own upload).
 func streamedInline(f artifactFile) artifactFile {
@@ -611,4 +634,66 @@ func streamedInline(f artifactFile) artifactFile {
 		}, from: "the inline content of " + f.path}
 	f.inline = nil
 	return f
+}
+
+// boxFailure is a read of a publish's source that failed, nothing having been
+// published, as a model is told it: by the class the sandbox backend marked the failure with
+// ([sandbox.WhyOf]) — the box's provider not answering, at a limit, refusing
+// the company's key, or a setup that cannot reach the box — and otherwise as
+// the condition or fault of this node it is ([nodeFailure]), which is every
+// read that is not of a box: a project's file reads the object store.
+//
+// A PROVIDER'S OUTAGE IS NOT THIS NODE'S FAULT. Every such failure was told as
+// one, "not something trying again clears", so a publish whose box E2B was
+// slow to answer was abandoned by a model told that waiting would not help.
+// The error itself goes to the node's log here, as a fault's does in
+// [faulted].
+func boxFailure(ctx context.Context, tool string, err error, stopped string) tools.Result {
+	const fact = "Nothing was published."
+	why, classed := sandbox.WhyOf(err)
+	switch {
+	case ctx.Err() != nil:
+		// The call's own context ended: told as that, whatever the
+		// provider's request it ended said.
+		log.WarnContext(ctx, "builtin_box_read_failed", "tool", tool, "error", err.Error())
+		return nodeFailure(ctx, tool, ctx.Err(), stopped, fact)
+	case !classed:
+		// A CONDITION IS WRITTEN HERE: [nodeFailure] logs only a fault, so a
+		// box read a coordination store or a deadline stopped left nothing
+		// in the log that said what stopped it.
+		if _, condition := Condition(err); condition {
+			log.WarnContext(ctx, "builtin_box_read_failed", "tool", tool, "error", err.Error())
+		}
+		return nodeFailure(ctx, tool, err, stopped, fact)
+	}
+	log.WarnContext(ctx, "builtin_box_read_failed", "tool", tool, "why", string(why),
+		"error", err.Error())
+	switch why {
+	case sandbox.WhyProviderUnavailable:
+		return refusedBy(tools.RefusalUnavailable, waits(), sentence(stopped+" (the coding "+
+			"run's box didn't answer, or its provider failed on its side).", fact,
+			"Try again shortly."))
+	case sandbox.WhyProviderLimit:
+		return refusedBy(tools.RefusalUnavailable, waits(), sentence(stopped+" (the sandbox "+
+			"provider is at a limit of the company's account).", fact, "Try again later."))
+	case sandbox.WhyProviderBilling:
+		return refusedBy(tools.RefusalUnavailable, waitless(), sentence(stopped+" (the "+
+			"sandbox provider's account for the company needs paying for, and waiting "+
+			"won't change that).", fact, "Tell whoever asked that an administrator needs "+
+			"to check the sandbox provider's account."))
+	case sandbox.WhyProviderRefused:
+		return refusedBy(tools.RefusalUnavailable, waitless(), sentence(stopped+" (the "+
+			"sandbox provider refused the company's credentials, and waiting won't change "+
+			"that).", fact, "Tell whoever asked that an administrator needs to fix the "+
+			"sandbox provider's credentials."))
+	case sandbox.WhyConfiguration:
+		return refusedBy(tools.RefusalUnavailable, waitless(), sentence(stopped+" (the "+
+			"sandbox isn't set up so this node can reach the box, and waiting won't change "+
+			"that).", fact, "Tell whoever asked that an administrator needs to fix the "+
+			"sandbox setup; the node's log says what."))
+	}
+	// A class no box read meets (setup_unavailable, a launch's own: its setup
+	// step's download failing for now) is told by the classification every
+	// tool shares ([Condition]), which words every class there is.
+	return nodeFailure(ctx, tool, err, stopped, fact)
 }

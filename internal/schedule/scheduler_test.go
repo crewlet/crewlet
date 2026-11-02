@@ -316,12 +316,14 @@ func TestARoleScheduleFiresToItsOwnInbox(t *testing.T) {
 	for field, got := range map[string]any{
 		"Description": fired.Description,
 		"Schedule":    fired.Schedule,
-		// Three minutes. A scheduled turn is a ritual, not open-ended work,
-		// and the cap is what releases the seat long before the next fire.
+		// THE DEFAULT CAP, on a schedule that sets none: a fire always carries
+		// the cap its turn is held to, because the cap is what releases the
+		// seat long before the next fire, and zero on the wire is no cap.
 		"TimeoutSeconds": fired.TimeoutSeconds,
 	} {
 		want := map[string]any{
-			"Description": "run smoke tests", "Schedule": "smoke", "TimeoutSeconds": 180,
+			"Description": "run smoke tests", "Schedule": "smoke",
+			"TimeoutSeconds": int(org.DefaultScheduleTimeout / time.Second),
 		}[field]
 		if got != want {
 			t.Errorf("%s = %v, want %v", field, got, want)

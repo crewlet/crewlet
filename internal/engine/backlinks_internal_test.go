@@ -10,7 +10,7 @@ import (
 )
 
 // A PAGE'S BACKLINKS ARE ANSWERED ONLY WHERE BOTH COPIES THEY READ SERVE, on a
-// real node through the reader the engine hands the API (ADR-0049): the links
+// real node through the reader the engine hands the API (ADR-0072): the links
 // come from the pages' and the tasks' bodies and are named from both domains'
 // rows, so a node whose TRACKER copy is wrong answers none of them though its
 // knowledge base serves — and a single node, with no peer to ask, says so,
@@ -24,7 +24,7 @@ func TestAWrongTrackerCopyAnswersNoBacklinks(t *testing.T) {
 	indexed(t, e)
 	pagesReader, ok := OperatorPages(e)
 	if !ok {
-		t.Fatal("the premise: the node serves no native knowledge base")
+		t.Fatal("the premise: the node serves no Doclet")
 	}
 	if _, err := pagesReader.LinkedFrom(t.Context(), "p.none"); err != nil {
 		t.Fatalf("the premise: a sound node's backlinks failed: %v", err)

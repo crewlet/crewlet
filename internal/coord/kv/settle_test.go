@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -123,23 +124,40 @@ func TestAConditionalWriteIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 	// The leader's in-flight answer is a REPLICATED stream's, so nothing a
 	// single server runs ever meets it — which is what made a call site
 	// that forgot to settle invisible. Every bucket the stores open is
-	// wrapped where it is opened; this holds that.
+	// wrapped where it is opened; this holds that, over EVERY bucket field
+	// the fleet store has rather than a list of them, so a bucket added
+	// later is held without anybody remembering to name it here.
 	t.Run("every bucket a store opens is settled", func(t *testing.T) {
 		t.Parallel()
 		nc := embeddedNATS(t)
 		store := openFleetForTest(t, nc, fmt.Sprintf("s%d", bucketSeq.Add(1)))
-		for name, kv := range map[string]jetstream.KeyValue{
-			"claims": store.claims, "budgets": store.budgets, "config": store.config,
-			"secrets": store.secrets, "mailboxes": store.mailboxes, "positions": store.positions,
-			"runs": store.runs, "custody": store.custody, "objects": store.objects,
-		} {
-			if _, ok := kv.(settledBucket); !ok {
-				t.Errorf("the fleet store's %s bucket is a %T, not settled", name, kv)
+		fields := reflect.ValueOf(store).Elem()
+		bucketType := reflect.TypeFor[jetstream.KeyValue]()
+		buckets := 0
+		for i := range fields.NumField() {
+			field := fields.Type().Field(i)
+			if field.Type != bucketType {
+				continue
 			}
+			buckets++
+			kv := fields.Field(i)
+			if kv.IsNil() {
+				t.Errorf("the fleet store's %s bucket was never opened", field.Name)
+				continue
+			}
+			// The dynamic type, read without Interface: the fields are
+			// unexported, and reflection will not hand their values out.
+			if got := kv.Elem().Type(); got != reflect.TypeFor[settledBucket]() {
+				t.Errorf("the fleet store's %s bucket is a %v, not settled", field.Name, got)
+			}
+		}
+		if buckets == 0 {
+			t.Fatal("premise: the walk found no bucket field on the fleet store, " +
+				"so it held nothing")
 		}
 		leases := openStore(t, nc, time.Minute)
 		for name, kv := range map[string]jetstream.KeyValue{
-			"leases": leases.leases.kv, "duties": leases.duties.kv, "epochs": leases.epochs,
+			"leases": leases.leases.kv, "duties": leases.duties.kv, "epochs": leases.counter.kv,
 		} {
 			if _, ok := kv.(settledBucket); !ok {
 				t.Errorf("the lease store's %s bucket is a %T, not settled", name, kv)

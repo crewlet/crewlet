@@ -119,7 +119,7 @@ func TestAFullRoundSweepsADeadWritersFilesBeforeItsIndex(t *testing.T) {
 
 // THE SWEEP KEEPS EXACTLY THE DECLARED IMAGE, and Verify admits exactly what
 // the sweep keeps: one predicate (image.imaged) over the fixed entries and the
-// files the declarations own (derived.go, ADR-0056), so the two never disagree
+// files the declarations own (derived.go, ADR-0079), so the two never disagree
 // about what a cache is. Over a copy the maintainer has written — the
 // multi-pack-index with its bitmap, the commit-graph — an undeclared entry is
 // planted in every directory of the image, a loose ref among them, and a
@@ -130,7 +130,7 @@ func TestAFullRoundSweepsADeadWritersFilesBeforeItsIndex(t *testing.T) {
 // nothing else, keeping the real index and its bitmap; and git reads the copy
 // whole after.
 //
-// EVERY FILE OF THE IMAGE IS A REGULAR FILE (ADR-0056): a symbolic link at
+// EVERY FILE OF THE IMAGE IS A REGULAR FILE (ADR-0079): a symbolic link at
 // the commit-graph's name, at config's, at packed-refs', at HEAD's and at the
 // state's, each to a file holding exactly what the cache keeps there, is
 // outside the image whatever it points at. git reads the graph, the

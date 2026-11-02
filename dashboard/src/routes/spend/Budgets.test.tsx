@@ -15,12 +15,13 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Budgets } from "./Budgets.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
+import { arriveAgain } from "~/lib/arrival.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { CONFIG_WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -28,6 +29,13 @@ import type { BudgetWindow, BudgetsAnswer } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import {
+  applyPageAction,
+  pageSnapshot,
+  resetPageContextForTest,
+  setFramePage,
+} from "~/app/assistant/context.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -44,6 +52,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.unstubAllGlobals();
   location.hash = "";
 });
@@ -89,13 +98,21 @@ function answer(extra: Partial<BudgetsAnswer> = {}): BudgetsAnswer {
         ],
       },
     ],
+    assistant: {
+      counted: true,
+      windows: [
+        win("day", { used: 180_000, limit: 200_000 }),
+        win("week", { used: 400_000 }),
+        win("month", { used: 900_000 }),
+      ],
+    },
     ...extra,
   };
 }
 
 const OPERATOR = {
   login: "U0FOUNDER",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   handle: "jane",
   owner: "jane",
   name: "Jane",
@@ -105,8 +122,12 @@ const READER = { login: "", grants: [], handle: "", owner: "", name: "", kind: "
 
 let budgetAsks = 0;
 
-function mount(budgets: BudgetsAnswer, viewer: Record<string, unknown> = OPERATOR) {
-  location.hash = "#/company/budgets";
+function mount(
+  budgets: BudgetsAnswer,
+  viewer: Record<string, unknown> = OPERATOR,
+  hash = "#/company/budgets",
+) {
+  location.hash = hash;
   budgetAsks = 0;
   const store = new Store();
   store.applyHealth(healthFrame({ applied_epoch: 4 }));
@@ -144,7 +165,7 @@ async function settle() {
 const json = (payload: unknown, status: number, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", ...headers },
   });
 
 interface Call {
@@ -314,6 +335,112 @@ test("a seat's ceiling is checked before it is saved, as the seat itself", async
   expect(screen.getByText("applying…")).toBeTruthy();
 });
 
+describe("a saved ceiling, followed by this node", () => {
+  const PM_DAY = /Change PM's daily token ceiling/;
+  /** The PM's daily ceiling, its figure and its mark. */
+  const cell = () => screen.getByRole("button", { name: PM_DAY }).closest<HTMLElement>(".ceiling")!;
+
+  /** Saves 2.5M as PM's daily ceiling: revision r2, activated at epoch 5. */
+  async function saveDay() {
+    stubConfig((call) => {
+      if (call.method === "GET") return json(PM_SEAT, 200, { ETag: '"r1"' });
+      if (call.url.includes("dry_run=true")) return valid();
+      return saved();
+    });
+    const store = mount(answer());
+    await settle();
+    await edit(PM_DAY, "2.5M");
+    expect(within(cell()).getByText("of 2.5M")).toBeTruthy();
+    expect(within(cell()).getByText("applying…")).toBeTruthy();
+    return store;
+  }
+
+  // A REFUSAL LEAVES THE APPLIED EPOCH WHERE IT WAS, so read alone it said
+  // "applying…" beside the saved ceiling for the life of the page while the
+  // gate went on enforcing the one before. Mutation: follow the save by the
+  // applied epoch alone and the cell keeps "of 2.5M" and "applying…".
+  test("refused by this node, it draws the ceiling still enforced and says so", async () => {
+    const store = await saveDay();
+    const asks = budgetAsks;
+    act(() =>
+      store.applyHealth(
+        healthFrame({
+          applied_epoch: 4,
+          config_attempt: { epoch: 5, revision_id: "r2", status: "error" },
+        }),
+      ),
+    );
+    await settle();
+    expect(within(cell()).getByText("of 1,000")).toBeTruthy();
+    expect(within(cell()).getByText("refused by this node")).toBeTruthy();
+    expect(within(cell()).queryByText("applying…")).toBeNull();
+    // Nothing moved here, so nothing is read again.
+    expect(budgetAsks).toBe(asks);
+  });
+
+  // A DROPPED SOCKET CLEARS THE HEALTH SLICE, and says nothing about the
+  // save: read as this node's standing, the missing push was "applying", and
+  // the refused ceiling went back to the saved figure marked applying until
+  // the socket came back. Mutation: follow the save by the live slice
+  // (`useEngineHealth`) and read its absence as applying, as
+  // `nodeStanding(null)` did, and this reads "of 2.5M" and "applying…".
+  test("refused by this node, it stays so through a dropped socket", async () => {
+    const store = await saveDay();
+    act(() =>
+      store.applyHealth(
+        healthFrame({
+          applied_epoch: 4,
+          config_attempt: { epoch: 5, revision_id: "r2", status: "error" },
+        }),
+      ),
+    );
+    await settle();
+    expect(within(cell()).getByText("refused by this node")).toBeTruthy();
+    act(() => store.setConnected(false));
+    await settle();
+    expect(within(cell()).getByText("of 1,000")).toBeTruthy();
+    expect(within(cell()).getByText("refused by this node")).toBeTruthy();
+    expect(within(cell()).queryByText("applying…")).toBeNull();
+  });
+
+  test("applied by this node, it says so and reads the budgets again", async () => {
+    const store = await saveDay();
+    const asks = budgetAsks;
+    act(() =>
+      store.applyHealth(
+        healthFrame({
+          applied_epoch: 5,
+          config_attempt: { epoch: 5, revision_id: "r2", status: "ok" },
+        }),
+      ),
+    );
+    await settle();
+    expect(budgetAsks).toBeGreaterThan(asks);
+    expect(within(cell()).getByText("applied")).toBeTruthy();
+  });
+
+  // A LATER ACTIVATION THIS NODE TRIED FIRST, and refused: it will not come
+  // back to this save, so the cell settles on the answer read again rather
+  // than applying for ever. Mutation: drop `passed` from the settling
+  // standings and the cell says "applying…" for good.
+  test("passed by a later activation, it settles on the ceiling read again", async () => {
+    const store = await saveDay();
+    const asks = budgetAsks;
+    act(() =>
+      store.applyHealth(
+        healthFrame({
+          applied_epoch: 4,
+          config_attempt: { epoch: 6, revision_id: "r3", status: "error" },
+        }),
+      ),
+    );
+    await settle();
+    expect(budgetAsks).toBeGreaterThan(asks);
+    expect(within(cell()).getByText("of 1,000")).toBeTruthy();
+    expect(within(cell()).queryByRole("status")).toBeNull();
+  });
+});
+
 // THE COMPANY'S CEILINGS ARE A MERGE PATCH naming only the window changed —
 // and an emptied field removes the key, which is the only "no ceiling".
 test("the company's ceiling is a merge patch of the one window, and empty removes it", async () => {
@@ -413,8 +540,9 @@ test("a ceiling of 0 is refused before anything is sent", async () => {
 test("a reader who cannot change the configuration sees why, on every ceiling", async () => {
   mount(answer(), { login: "dee", owner: "dee", grants: [] });
   await settle();
+  // The company's three, each person's assistant's three, and the one seat's.
   const pencils = screen.getAllByRole("button", { name: /token ceiling/ });
-  expect(pencils.length).toBe(6);
+  expect(pencils.length).toBe(9);
   for (const pencil of pencils) expect(pencil.getAttribute("aria-disabled")).toBe("true");
   expect(screen.getAllByText(CONFIG_WRITE_REASONS.no_grant).length).toBeGreaterThan(0);
   cleanup();
@@ -445,4 +573,175 @@ test("no control resets a budget", async () => {
     const source = readFileSync(resolve(__dirname, file), "utf8");
     expect(source, file).not.toMatch(/budgets\/reset|resetBudget|Reset budget/i);
   }
+});
+
+// THE ASSISTANT FILLS THE FIELD AND NOTHING MORE: the editor of that scope's
+// window opens with the value in it, nothing is sent, and the save is the
+// person's own press.
+test("a ceiling the assistant prepared opens its editor filled in, and saves nothing", async () => {
+  const calls = stubConfig(() => valid());
+  mount(answer());
+  await settle();
+  const ask = (payload: unknown) =>
+    applyPageAction({
+      correlation_id: "c",
+      action: "budgets.ceiling.prefill",
+      payload,
+      source_revision: "",
+    });
+  expect(ask({ seat: "nobody", period: "day", ceiling: "1M" }).outcome).toBe("invalid");
+  expect(ask({ period: "day", ceiling: "0" }).outcome).toBe("invalid");
+  await act(async () => {
+    expect(ask({ seat: "pm", period: "week", ceiling: "2M" }).outcome).toBe("applied");
+  });
+  await settle();
+  const field = screen.getByRole("textbox") as HTMLInputElement;
+  expect(field.value).toBe("2M");
+  expect(calls).toEqual([]);
+  resetPageContextForTest();
+});
+
+test("a ceiling open in its editor is the assistant's to read and fill in, and saves nothing", async () => {
+  const calls = stubConfig(() => valid());
+  setFramePage({
+    screen: "spend-budgets",
+    title: "Spend › Budgets",
+    path: ["spend", "budgets"],
+    params: {},
+    query: {},
+  });
+  mount(answer());
+  await settle();
+  expect(pageSnapshot()!.context.draft).toBeUndefined();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /Change PM's daily token ceiling/ }));
+  });
+  await settle();
+  const open = () => pageSnapshot()!.context;
+  expect(open().draft).toMatchObject({ kind: "client", id: "pm", step: "day" });
+  expect(open().draft!.fields[0]).toMatchObject({ path: "ceiling", editable: true });
+  const set = (ceiling: string) =>
+    applyPageAction({
+      correlation_id: ceiling,
+      action: "draft.set",
+      payload: { values: { ceiling } },
+      source_revision: open().source_revision,
+    });
+  // A VALUE THE FIELD REFUSES is refused in its own words.
+  expect(set("lots")).toMatchObject({
+    outcome: "invalid",
+    reason: expect.stringMatching(/^Give a whole number of tokens/),
+  });
+  await act(async () => {
+    expect(set("3M").outcome).toBe("applied");
+  });
+  expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("3M");
+  expect(calls).toEqual([]);
+});
+
+// EACH PERSON'S ASSISTANT CEILING IS RAISED HERE, as the company's is: a merge
+// patch one level down, checked first and recorded under a summary naming
+// whose ceiling moved. It is the ceiling a person's question is refused by,
+// and the remedy of that refusal opens this card.
+test("each person's assistant ceiling is a merge patch of the one window, recorded as theirs", async () => {
+  const calls = stubConfig((call) => {
+    if (call.method === "GET")
+      return json(
+        { name: "Acme", assistant: { llm: ["p"], token_budget: { day: 200_000 } } },
+        200,
+        { ETag: '"r1"' },
+      );
+    if (call.url.includes("dry_run=true")) return valid();
+    return saved();
+  });
+  mount(answer());
+  await settle();
+  await edit(/Change Ask Crewlet's per-person daily token ceiling/, "500k");
+  const save = calls.at(-1)!;
+  expect(save.method).toBe("PATCH");
+  expect(save.url).not.toContain("dry_run");
+  expect(save.body).toEqual({
+    assistant: { token_budget: { day: 500_000 } },
+    _summary: "Raise Ask Crewlet's per-person daily token ceiling from 200k to 500k",
+  });
+});
+
+// A FIGURE ONLY WHERE ONE IS COUNTED. The viewer's own spend is drawn where
+// the engine counts it; a zero nobody measured is not drawn as "0 tokens".
+test("the assistant's row draws the viewer's own spend only where it is counted", async () => {
+  mount(answer());
+  await settle();
+  const card = screen.getByRole("region", { name: "Ask Crewlet, per person" });
+  expect(within(card).getByText("180k")).toBeDefined();
+  expect(within(card).getAllByRole("meter").length).toBe(1);
+  cleanup();
+
+  mount(answer({ assistant: { counted: false, windows: [win("day", { limit: 200_000 })] } }));
+  await settle();
+  const uncounted = screen.getByRole("region", { name: "Ask Crewlet, per person" });
+  expect(within(uncounted).queryByText(/^0$/)).toBeNull();
+  expect(within(uncounted).queryByRole("meter")).toBeNull();
+  expect(
+    within(uncounted).getByRole("button", { name: /Ask Crewlet's per-person daily token ceiling/ }),
+  ).toBeDefined();
+});
+
+// A REMEDY'S ADDRESS OPENS THE CEILING IT NAMES: the card, or the seat's row,
+// marked as the one the reader came for and given focus; and a press on that
+// same address once the reader has moved on brings them back to it.
+//
+// Mutation: drop the section's arrival, or ignore a press on the address
+// already open, and a case fails.
+describe("arriving at a ceiling", () => {
+  const card = (name: string) => screen.getByRole("region", { name });
+
+  test("the assistant's ceiling is marked and focused", async () => {
+    mount(answer(), OPERATOR, "#/company/budgets?section=assistant");
+    await settle();
+    const assistant = card("Ask Crewlet, per person");
+    expect(assistant.classList.contains("is-selected")).toBe(true);
+    expect(card("The company").classList.contains("is-selected")).toBe(false);
+    expect(document.activeElement).toBe(assistant.parentElement);
+  });
+
+  test("a seat's ceiling is its row, marked as current", async () => {
+    mount(answer(), OPERATOR, "#/company/budgets?section=seat:pm");
+    await settle();
+    const marked = document.querySelector('[aria-current="true"]');
+    expect(marked?.closest('[role="row"]')?.textContent).toContain("PM");
+  });
+
+  test("a press on the address already open arrives again", async () => {
+    mount(answer(), OPERATOR, "#/company/budgets?section=company");
+    await settle();
+    const company = card("The company");
+    expect(document.activeElement).toBe(company.parentElement);
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => {
+      arriveAgain();
+    });
+    expect(document.activeElement).toBe(company.parentElement);
+  });
+
+  test("an address arrived at while the screen is open is revealed", async () => {
+    mount(answer());
+    await settle();
+    expect(card("The company").classList.contains("is-selected")).toBe(false);
+    await act(async () => {
+      location.hash = "#/company/budgets?section=company";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    await settle();
+    expect(card("The company").classList.contains("is-selected")).toBe(true);
+    expect(document.activeElement).toBe(card("The company").parentElement);
+  });
+
+  test("a section this screen does not draw reveals nothing, and the screen is read as it is", async () => {
+    mount(answer(), OPERATOR, "#/company/budgets?section=seat:ghost");
+    await settle();
+    expect(document.querySelector('[aria-current="true"]')).toBeNull();
+    expect(document.querySelector(".is-selected")).toBeNull();
+    expect(card("The company")).toBeDefined();
+  });
 });

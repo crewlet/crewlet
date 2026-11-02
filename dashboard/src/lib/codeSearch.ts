@@ -157,7 +157,7 @@ export function coverageNotes(coverage: Coverage): CoverageNotes {
   }
   if (coverage.not_indexed.count > 0) {
     notes.push(
-      `Read with git grep, no index answering for the commit: ${counted(coverage.not_indexed)} — the same lines, read more slowly.`,
+      `Read with git grep, no index answering for the commit: ${counted(coverage.not_indexed)} (the same lines, read more slowly).`,
     );
   }
   if (coverage.grep_not_named.count > 0) {

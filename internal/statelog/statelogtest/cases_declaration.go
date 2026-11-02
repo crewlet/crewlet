@@ -93,7 +93,7 @@ func Declaration(c Candidate) []error {
 	// coverage number rather than a fault — withholding every seat claim on
 	// a node for one is the outage the number exists to avoid. Whether its
 	// copy is JUDGED is not this declaration's to say: every domain's is
-	// (ADR-0049).
+	// (ADR-0072).
 	if c.Domain.GatesSeatAdmission() && spec.Replay != statelog.ReplayStrict {
 		add("%s gates seat admission and replays %s — a compacted domain's gap is a "+
 			"coverage number, and gating every seat claim on it is the outage the "+

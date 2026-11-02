@@ -20,9 +20,9 @@ import (
 //
 // A node without the `data` role runs no state log, keeps no replicated
 // estate and has no lexical index. Its seats still read and write the
-// company's tracker and knowledge base through exactly the tools a data node's
-// seats have — the same [estate.Router] facades every node's tools are handed,
-// which on this node answer nothing in-process and ask a data node for
+// company's tracker, knowledge base and chat through exactly the tools a data
+// node's seats have — the same [estate.Router] facades every node's tools are
+// handed, which on this node answer nothing in-process and ask a data node for
 // everything. The tool layer cannot tell, and must not: a tool that behaved
 // differently on a stateless node would be two tools, and only one of them
 // tested.
@@ -39,13 +39,14 @@ import (
 // runs natively, reached through the router. Written once, like [native],
 // before it is published.
 type remoteNative struct {
-	// tracker and wiki are the halves this company runs natively. A half
-	// the company runs on a vendor is not served from here at all.
+	// tracker, wiki and chat are the halves this company runs natively. A
+	// half the company runs on a vendor is not served from here at all.
 	tracker bool
 	wiki    bool
+	chat    bool
 
-	// built is the choices both are derived from, which a later activation
-	// is compared against — see [native.built].
+	// built is the choices the three are derived from, which a later
+	// activation is compared against — see [native.built].
 	built builtWith
 }
 
@@ -59,12 +60,14 @@ func (e *Engine) startRemote(c *Company) error {
 	// THE HALVES DERIVED FROM THE CHOICES, so the two cannot disagree.
 	built := builtFrom(c.Config)
 	e.remote.Store(&remoteNative{
-		tracker: built.runsTracker(), wiki: built.runsWiki(), built: built,
+		tracker: built.runsTracker(), wiki: built.runsWiki(), chat: built.runsChat(),
+		built: built,
 	})
 	log.Info("native_backends_remote", "node", e.id,
-		"tracker", built.runsTracker(), "knowledge", built.runsWiki(), "code", built.runsCode(),
-		"detail", "this node holds no data: its seats read and write the "+
-			"company's tracker and knowledge base through a data node")
+		"tracker", built.runsTracker(), "knowledge", built.runsWiki(), "chat", built.runsChat(),
+		"code", built.runsCode(),
+		"detail", "this node holds no data: its seats read and write "+
+			"Worklet, Doclet, Chatlet and the code host through a data node")
 	return nil
 }
 
@@ -197,7 +200,7 @@ func dataNodesOf(held []coord.Lease) []string {
 }
 
 // gitNodesOf is the nodes with the git role among a listing of presence
-// leases: the git nodes a repository's git work is asked of (ADR-0059). Read
+// leases: the git nodes a repository's git work is asked of (ADR-0082). Read
 // as every role reads off a peer's row — one this build cannot read is every
 // role — so a peer whose row is unreadable is asked as a git node too, and
 // answers `no_backend` where it is none, which the walk asks last for half a

@@ -125,6 +125,134 @@ func TestAParkedTurnSaysParkedNotIdle(t *testing.T) {
 	}
 }
 
+// parked is a seat whose turn tn-1 launched its executor's run and parked.
+func parked(t *testing.T) *livestate.LiveState {
+	t.Helper()
+	s := livestate.New()
+	s.Apply(env("agent_turn_started", turnPayload("tn-1", nil), at("2026-06-14T12:00:00Z")))
+	s.Apply(env("agent_phase_started", turnPayload("tn-1", map[string]any{"phase": "execute", "iteration": 1}),
+		at("2026-06-14T12:00:01Z")))
+	s.Apply(env("agent_turn_completed", turnPayload("tn-1", map[string]any{"suspended": true}),
+		at("2026-06-14T12:00:05Z")))
+	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StageParked {
+		t.Fatalf("turn = %+v, want tn-1 parked before the case begins", turn)
+	}
+	return s
+}
+
+// A WORKER THE RUN DELEGATED TO LEAVES ITS TURN PARKED. `delegate` is the
+// executor's alone and every executor is its coding CLI's run in a box, so
+// every worker runs while its turn is parked, and its record — nested under
+// the execute phase — is the only event the turn publishes until the run is
+// collected. Read as one of the turn's own phases it un-parked the turn: the
+// seat stopped saying its coding run was working, and the seat's next spawn,
+// which spares a parked turn alone, took the turn off the seat while the run
+// worked on.
+//
+// Mutation: stage every phase record as `phase`, and the turn reads phase.
+func TestAWorkerItsRunDelegatedToLeavesItsTurnParked(t *testing.T) {
+	t.Parallel()
+	s := parked(t)
+	s.Apply(env("agent_phase_completed", turnPayload("tn-1", map[string]any{
+		"phase": "subagent", "iteration": 1, "host_phase": "execute", "host_iteration": 1,
+		"task_id": "survey", "node": "core-2", "failed": true,
+	}), at("2026-06-14T12:03:00Z")))
+
+	o := overlayOf(t, s, "Lead")
+	if o.Turn == nil || o.Turn.Stage != livestate.StageParked {
+		t.Fatalf("turn = %+v, want tn-1 still parked on its run", o.Turn)
+	}
+	if o.Turn.Node != "core-2" {
+		t.Errorf("node = %q, want core-2, the node that published the turn's newest event", o.Turn.Node)
+	}
+	// NOT WORK OF ITS OWN: a parked turn is working only through its run's
+	// record, and this case holds none. Un-parked by its worker's report, the
+	// turn kept the seat working for as long as the turn lasted, over a run
+	// whose loss no event may ever report.
+	if o.Activity != livestate.ActivityIdle {
+		t.Errorf("activity = %q, want idle: no run of the seat's is on the record", o.Activity)
+	}
+
+	// The seat's next instance finds the turn still parked on its run.
+	s.Apply(env("agent_spawned", map[string]any{"agent_id": "Lead"}, at("2026-06-14T12:04:00Z")))
+	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StageParked {
+		t.Fatalf("turn = %+v, want tn-1 to outlive the spawn, parked", turn)
+	}
+
+	// The failed worker is still the turn's failure when the turn ends.
+	s.Apply(env("agent_turn_started", turnPayload("tn-1", map[string]any{"resumed": true}),
+		at("2026-06-14T13:00:00Z")))
+	s.Apply(env("agent_turn_completed", turnPayload("tn-1", nil), at("2026-06-14T13:00:09Z")))
+	if last := overlayOf(t, s, "Lead").LastTurn; last == nil || last.Outcome != livestate.OutcomeFailed {
+		t.Errorf("last turn = %+v, want tn-1 failed for its failed worker", last)
+	}
+}
+
+// THE RUN'S OWN RECORD LEAVES ITS TURN PARKED, and the turn's own segment is
+// what moves it on. The collection publishes the run's `sandbox` record before
+// it resumes the turn, and a resume can wait — on another node, behind the
+// seat's budget, on a retry — so the turn is parked on its collected run until
+// the resumed segment says otherwise. Read as a phase, it showed a phase
+// running that nothing was running.
+//
+// Mutation: stage the run's record as `phase`, and the turn reads phase; let
+// no phase record move a parked turn, and the resumed execute record leaves
+// it parked.
+func TestTheRunsOwnRecordLeavesItsTurnParked(t *testing.T) {
+	t.Parallel()
+	s := parked(t)
+	s.Apply(env("agent_phase_completed", turnPayload("tn-1", map[string]any{
+		"phase": "sandbox", "iteration": 1, "launch_id": "job-1",
+	}), at("2026-06-14T12:30:00Z")))
+	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StageParked {
+		t.Fatalf("turn = %+v, want tn-1 parked on its collected run", turn)
+	}
+
+	// The resumed segment's own execute record — its start overtaken on its
+	// subject — is one of the turn's phases, and moves it.
+	s.Apply(env("agent_phase_completed", turnPayload("tn-1", map[string]any{
+		"phase": "execute", "iteration": 1,
+	}), at("2026-06-14T12:30:02Z")))
+	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StagePhase {
+		t.Fatalf("turn = %+v, want tn-1 in a phase once its own segment ran one", turn)
+	}
+}
+
+// A NESTED RECORD OPENS A TURN THE SEAT DOES NOT HOLD AT THE STAGE ITS HOST
+// IMPLIES: a projection that missed the park — it started after it, and its
+// seed read no parked turn — still learns of the turn from its worker, and
+// learns it parked, since a worker runs only while its turn is parked on the
+// executor's run; a judge consulted by a phase the engine drives is in that
+// phase.
+//
+// Mutation: open every nested record's turn in a phase, and the worker's
+// reads phase.
+func TestANestedRecordOpensItsTurnAtTheStageItsHostImplies(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		payload map[string]any
+		want    livestate.Stage
+	}{
+		"a worker under the executor's run": {
+			payload: map[string]any{"phase": "subagent", "iteration": 1, "host_phase": "execute"},
+			want:    livestate.StageParked,
+		},
+		"the judge under the onboarding pass": {
+			payload: map[string]any{"phase": "judge", "iteration": 0, "host_phase": "onboarding"},
+			want:    livestate.StagePhase,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := livestate.New()
+			s.Apply(env("agent_phase_completed", turnPayload("tn-1", tc.payload), at("2026-06-14T12:03:00Z")))
+			if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.TurnID != "tn-1" || turn.Stage != tc.want {
+				t.Errorf("turn = %+v, want tn-1 at %s", turn, tc.want)
+			}
+		})
+	}
+}
+
 func TestAFailureDuringATurnIsItsOutcome(t *testing.T) {
 	t.Parallel()
 	// The turn list calls a turn failed when ANY of its events was a
@@ -243,5 +371,33 @@ func TestTheStagesAndOutcomesAreClosedSets(t *testing.T) {
 	}
 	if livestate.Stage("thinking").Valid() || livestate.TurnOutcome("done").Valid() {
 		t.Error("a value this build does not know was accepted")
+	}
+}
+
+// A TURN A PERSON STOPPED ENDS AS STOPPED, never as failed, even after a
+// failure in it and even where it was parked on its coding run: a stop ends a
+// parked turn with a completion of its own, newer than the park, and the seat's
+// last turn says the person ended it.
+func TestAStoppedTurnEndsAsStoppedAndNotFailed(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("agent_turn_started", turnPayload("tn-1", nil), at("2026-06-14T12:00:00Z")))
+	// A provider call that failed and recovered, earlier in the turn.
+	s.Apply(env("llm_unavailable", turnPayload("tn-1", nil), at("2026-06-14T12:00:02Z")))
+	s.Apply(env("agent_turn_completed", turnPayload("tn-1", map[string]any{"suspended": true}),
+		at("2026-06-14T12:00:05Z")))
+	change := s.Apply(env("agent_turn_completed", turnPayload("tn-1", map[string]any{
+		"stopped": true, "error_kind": "stopped",
+	}), at("2026-06-14T12:30:00Z")))
+
+	if _, moved := change.Agents["Lead"]; !moved {
+		t.Error("ending the parked turn did not move its seat")
+	}
+	o := overlayOf(t, s, "Lead")
+	if o.Turn != nil {
+		t.Errorf("turn = %+v, want the stopped turn off the seat", o.Turn)
+	}
+	if o.LastTurn == nil || o.LastTurn.TurnID != "tn-1" || o.LastTurn.Outcome != livestate.OutcomeStopped {
+		t.Errorf("last turn = %+v, want tn-1 stopped", o.LastTurn)
 	}
 }

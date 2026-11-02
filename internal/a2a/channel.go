@@ -104,13 +104,15 @@ type Store interface {
 	// CountMessage increments the message counter and bumps LastAt.
 	CountMessage(ctx context.Context, id string, at time.Time) (int, error)
 
-	// CloseIdle closes every open channel whose last activity predates
-	// cutoff, returning what it closed.
+	// Idle lists every open channel whose last activity predates cutoff.
 	//
-	// This is the sweep for the ask nobody answered: the requester's turn
-	// ended when it asked, so without it an unanswered channel stays open
-	// for the life of the deployment.
-	CloseIdle(ctx context.Context, cutoff time.Time, at time.Time) ([]Channel, error)
+	// The sweep's candidates for the ask nobody answered ([Sweeper]): the
+	// requester's turn ended when it asked, so without the sweep an
+	// unanswered channel stays open for the life of the deployment. A
+	// LISTING and not a close, because idle is not the whole question — a
+	// channel whose answer its seat still owes stays open however long it
+	// has been quiet ([Owed]) — and the store cannot ask it.
+	Idle(ctx context.Context, cutoff time.Time) ([]Channel, error)
 
 	// Purge deletes channels closed before cutoff, returning the count.
 	Purge(ctx context.Context, cutoff time.Time) (int64, error)

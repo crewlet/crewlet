@@ -333,7 +333,7 @@ func (s *EnvFileSink) rewrite() error {
 		_ = tmp.Close()
 		return fmt.Errorf("provision: %s: %w", s.path, err)
 	}
-	// DURABILITY BEFORE VISIBILITY, the rule hostbox.CopyFileAtomic states
+	// DURABILITY BEFORE VISIBILITY, the rule hostbox.ReplaceFile states
 	// and these two did not: os.Rename is atomic against a PROCESS crash,
 	// not a machine one. A rename can be observed before the data behind it
 	// reaches disk, so a power loss between the two leaves a file that

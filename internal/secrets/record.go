@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Record is one stored secret's row, whichever way it was reached.
@@ -102,6 +103,11 @@ const (
 	// fleet's store directly, with the node's engine stopped.
 	SourceLLMLogin Source = "llm-login"
 
+	// SourceModels is a model's credential written by the engine for the
+	// Models page: the login a device sign-in made, exported as the entry's
+	// bundle once the person approved it.
+	SourceModels Source = "models"
+
 	// SourceIAM is the engine's own key material, minted by the engine
 	// ([Reserved] names, which no listing shows).
 	SourceIAM Source = "iam"
@@ -109,7 +115,7 @@ const (
 
 // Sources are every write path's word.
 var Sources = []Source{SourceAPI, SourceSetup, SourceProvision, SourceCLI,
-	SourceLLMLogin, SourceIAM}
+	SourceLLMLogin, SourceIAM, SourceModels}
 
 // Valid reports whether a source off the wire is one this build stamps.
 func (s Source) Valid() bool { return slices.Contains(Sources, s) }
@@ -124,7 +130,7 @@ func CheckSource(s Source) error {
 		return nil
 	}
 	return fmt.Errorf("secrets: %q is not a write path's source; a row "+
-		"records one of %q, stamped by the path that wrote it", string(s), Sources)
+		"records one of %s, stamped by the path that wrote it", string(s), words.Or(Sources))
 }
 
 // Author is who writes a secret: the three facts every other trail in the
@@ -188,6 +194,51 @@ var ErrNotFound = errors.New("secrets: no such secret")
 // other failure here is a 500 or a 404.
 var ErrInvalidName = errors.New(
 	"secrets: a secret's name is an environment-variable name")
+
+// MaxValueBytes bounds one secret's value, in bytes, in every store and on
+// every path that writes one.
+//
+// The largest real credential this engine handles is a service-account JSON
+// key or a PEM private key, which are a few kilobytes; 64 KiB is an order of
+// magnitude above that and still finite. Every path that writes a value is an
+// operator's or the engine's own, so this bounds a mistake rather than an
+// attacker — a `curl -d @big.tar` or a `crewlet secrets set X < big.tar` typo
+// is refused rather than sealed.
+//
+// ONE LIMIT, HERE, because a value reaches the store by more than one path
+// and every reader of a revealed value through a node is sized from this one
+// number. A revealed value is read back — by `crewlet secrets get -reveal`, a
+// provisioning sink and a run resolving a company document through a node —
+// to the length this allows once spelled in the characters JSON escapes
+// longest. It was the API route's alone, so a `crewlet secrets set` run with
+// the engine stopped, which writes the fleet's store directly, stored a value
+// of any size, and a value past this limit can be longer, in those
+// characters, than any answer those readers take: a credential stored and
+// possibly unreadable through the node.
+const MaxValueBytes = 64 << 10
+
+// ErrValueTooLarge reports a value longer than [MaxValueBytes].
+//
+// Its own sentinel because it is the caller's mistake rather than the store's,
+// as [ErrInvalidName] is: what fixes it is different input, never a retry or
+// a repair of the store.
+var ErrValueTooLarge = errors.New("secrets: a secret's value is longer than any store keeps")
+
+// CheckValue refuses a value longer than [MaxValueBytes], naming its length
+// and the limit and never the value.
+//
+// EVERY STORE CALLS IT AT THE WRITE, as it calls [CheckName] and
+// [CheckSource], because the limit is what every reader through a node is
+// sized from: a store that took more could hold a value a reveal cannot give
+// back.
+func CheckValue(value string) error {
+	if len(value) <= MaxValueBytes {
+		return nil
+	}
+	return fmt.Errorf("%w: it is %d bytes, and a value is at most %d (%d KiB); "+
+		"a credential is a few kilobytes, so this is most likely the wrong input",
+		ErrValueTooLarge, len(value), MaxValueBytes, MaxValueBytes>>10)
+}
 
 // CheckName refuses a name the reference grammar cannot name.
 //

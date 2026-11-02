@@ -10,7 +10,7 @@ Three things make this work, and you can use any of them on their own:
 | Piece | What it gives you |
 |---|---|
 | **`crewlet schema`** | JSON Schema generated from the models — the authoritative field list, for your editor, your CI, or an agent |
-| **`crewlet validate -json`** | Machine-readable problems with exact field paths and kinds, so a fix loop converges |
+| **`crewlet validate -json`** | Machine-readable problems with exact field paths and kinds, their text as written, so a fix loop converges |
 | **The `company-architect` skill** | An interview script, the invariants, and the write → validate → fix loop |
 
 ---
@@ -46,8 +46,9 @@ It won't dump YAML at you first. It asks what the company does, who's on
 it, where *you* sit in the chart, which surfaces the work lives on, and
 what model and budget to use — whose models, and whether you pay with a plan
 or a key, since every model runs through that vendor's own coding CLI (Claude
-Code, Codex, or OpenCode for open models; see
-[LLM Backends](../concepts/llm-backends.md#picking-a-cli)). Give rough answers — it proposes a
+Code, Codex, or OpenCode for open models; only Claude Code and OpenCode can run
+a seat's executor, in a box from `providers.sandbox`, which the company then
+needs; see [LLM Backends](../concepts/llm-backends.md#picking-a-cli)). Give rough answers — it proposes a
 concrete org chart and you correct it. It should also, without being
 asked:
 
@@ -81,6 +82,9 @@ empty string and fails later, deep in a turn.
 ```bash
 # nothing to bring up: the engine embeds its stream and creates its store
 
+crewlet secrets keygen -key-id 2026-01   # the id crewlet.yaml's secrets: names;
+                                         #   prints the export line below
+export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."             # a Claude Code entry on auth.mode api-key
 export OPENAI_API_KEY="sk-..."                    # embeddings
@@ -248,7 +252,7 @@ crewlet validate company.yaml -json
   "problems": [
     { "path": "roles[1].llm", "segments": ["roles", 1, "llm"],
       "kind": "unknown_value", "seat": "cto",
-      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider: providers.llm has primary. A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" },
+      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider. Use one of providers.llm's: \"primary\". A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" },
     { "path": "units[0].roles[0].name", "segments": ["units", 0, "roles", 0, "name"],
       "kind": "conflict", "seat": "software-engineer",
       "message": "duplicate handle \"software-engineer\": 2 seats derive it (seat \"Software Engineer\" in unit \"Engineering\"; seat \"Software Engineer\" in unit \"Engineering\"). The handle is the canonical seat identity, naming its inbox, its agent id and its external accounts, so give each of these seats a distinct name or an explicit handle" },
@@ -431,11 +435,9 @@ It writes config; it doesn't provision. Standing up the Mattermost server
 (or the Slack workspace), the Atlassian site, the GitLab group, the
 API keys, and the coding CLI your model runs through
 ([installed on the engine host](installation.md#a-coding-cli)) is still your job — [Choosing your stack](choosing-your-stack.md)
-lists what you must create by hand for each. Once those exist,
-[`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision)
-and [`crewlet gitlab provision`](../reference/cli.md#crewlet-gitlab-provision)
-mint the per-seat accounts and tokens into the `${VAR}` references the
-config already declares; Atlassian and GitHub issue no credential on a
+lists what you must create by hand for each. Once those exist, each
+integration's Agents tab turns each agent on there, and the engine creates
+the per-seat accounts and seals their tokens itself; Atlassian and GitHub issue no credential on a
 provisioner's behalf, so their commands report which account each
 hand-created credential turned out to be.
 

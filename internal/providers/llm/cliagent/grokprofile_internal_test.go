@@ -73,6 +73,29 @@ func TestGrokOffersTheWebToolsAndNothingElse(t *testing.T) {
 	}
 }
 
+// THE FETCH A CALL IS OFFERED IS ALLOWED, NOT MERELY OFFERED. web_fetch asks
+// first, a headless run cannot ask, and 1.0.70 then cancels the WHOLE run — exit
+// 0, nothing on stdout, "was not run, as a headless run cannot ask for approval"
+// on stderr — so a call that fetched a page failed (measured through the
+// engine). --permission-mode dontAsk did not change that; the allow rule did,
+// and the fetch ran.
+//
+// Mutation: drop the allow rule from complete_args, and this fails.
+func TestGrokAllowsTheFetchItOffers(t *testing.T) {
+	t.Parallel()
+	p := grok(t)
+	var allowed []string
+	for i, arg := range p.CompleteArgs {
+		if arg == "--allow" && i+1 < len(p.CompleteArgs) {
+			allowed = append(allowed, p.CompleteArgs[i+1])
+		}
+	}
+	if !slices.Contains(allowed, "WebFetch") {
+		t.Errorf("complete_args = %q allows %q — web_fetch is offered and not allowed, and a headless "+
+			"run cancels itself at the fetch's approval", p.CompleteArgs, allowed)
+	}
+}
+
 // grokProvider is the shipped profile driven against the fake CLI.
 func grokProvider(t *testing.T, env map[string]string) *Provider {
 	t.Helper()

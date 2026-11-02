@@ -110,8 +110,8 @@ its suggested figures.
 
 | Source | Reads | Who may read it | Parameters | Columns | Refreshes on |
 |---|---|---|---|---|---|
-| `tracker.items` | Work items, one row each | People and agents holding the tracker | `scope`: `all`, `mine` (the viewer's own), `queue`, `priorities`, `triage`, `blocked`, `overdue`; `project`; `status_group` (absent reads the open work); `limit` 1 to 500, default 100 | `key`, `title`, `status`, `status_group`, `priority`, `assignee`, `project`, `due`, `updated`, `points`, `blocked`, `overdue` | Its interval |
-| `tracker.workload` | Open work per assignee | People and agents holding the tracker | `unit`, a team's key or name | `handle`, `open`, `points`, `blocked`, `overdue`, `unscheduled` | Its interval |
+| `tracker.items` | Work items, one row each | People and agents holding `worklet` | `scope`: `all`, `mine` (the viewer's own), `queue`, `priorities`, `triage`, `blocked`, `overdue`; `project`; `status_group` (absent reads the open work); `limit` 1 to 500, default 100 | `key`, `title`, `status`, `status_group`, `priority`, `assignee`, `project`, `due`, `updated`, `points`, `blocked`, `overdue` | Its interval |
+| `tracker.workload` | Open work per assignee | People and agents holding `worklet` | `unit`, a team's key or name | `handle`, `open`, `points`, `blocked`, `overdue`, `unscheduled` | Its interval |
 | `spend.seats` | Token spend per seat | Everybody the company admits | `days` 1 to 90; absent reads the live window | `handle`, `name`, `person`, `total_tokens`, `input_tokens`, `output_tokens`, `calls` | Every spend push |
 | `spend.daily` | Token spend per company day and band | Everybody the company admits | `days` 1 to 90, default 14; `group`: `seat`, `phase`, `model`, `provider`, `unit`, `worker` | `day`, `band`, `total_tokens` | Every spend push |
 | `agents.status` | Every agent seat and what it is doing | Everybody the company admits | none | `handle`, `name`, `activity`, `phase`, `paused`, `last_turn_at`, `last_outcome` | Every agents push |

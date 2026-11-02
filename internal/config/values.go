@@ -40,8 +40,8 @@ type ProviderKeys = org.ProviderKeys
 //
 // The mapping form exists because the phases have genuinely different
 // shapes of work (reviewing wants a strong model, the extension judge wants
-// a cheap fast one), and splitting them by hand across six flat fields is
-// how a config ends up with five of them agreeing and one stale.
+// a cheap fast one), and splitting them by hand across five flat fields is
+// how a config ends up with four of them agreeing and one stale.
 //
 // It decodes to ONE type rather than an `any`, so no consumer type-switches
 // on what the operator happened to write. A phase left unset here falls
@@ -52,7 +52,6 @@ type PhaseLLM struct {
 	Subagent  ProviderKeys `yaml:"subagent,omitempty" json:"subagent,omitzero"`
 	Auxiliary ProviderKeys `yaml:"auxiliary,omitempty" json:"auxiliary,omitzero"`
 	Judge     ProviderKeys `yaml:"judge,omitempty" json:"judge,omitzero"`
-	Sandbox   ProviderKeys `yaml:"sandbox,omitempty" json:"sandbox,omitzero"`
 }
 
 // phaseLLMFields decodes the mapping form without re-entering PhaseLLM's
@@ -152,7 +151,7 @@ func (p PhaseLLM) MarshalJSON() ([]byte, error) {
 // phases lists every chain in the order a per-phase mapping declares them,
 // so IsZero, the fallback resolution and the schema all read one list.
 func (p *PhaseLLM) phases() []ProviderKeys {
-	return []ProviderKeys{p.Default, p.Review, p.Subagent, p.Auxiliary, p.Judge, p.Sandbox}
+	return []ProviderKeys{p.Default, p.Review, p.Subagent, p.Auxiliary, p.Judge}
 }
 
 // IsZero reports that nothing was configured, which is what lets both

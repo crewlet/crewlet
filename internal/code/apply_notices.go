@@ -16,7 +16,7 @@ import (
 // concerns nobody, which writes no row) down as
 // ONE ROW PER (record, change, recipient) it reached — every handle each
 // change's routing precedence keeps ([Concerns]) but that routing's own actor
-// — in code_notifications (replicated 0081, keyed so by 0105), as the tracker
+// — in code_notifications (replicated 0104, keyed so by 0128), as the tracker
 // writes tracker_notifications from its records. The change is in the key
 // because one record can tell one handle about several: a batched push that
 // opens two changes mentioning them, a landing that merges two of their
@@ -49,7 +49,7 @@ import (
 //
 // Beside its rows, every record that writes notices adds to each change it
 // tells anybody about how many handles hear of it ([noticesByChange]) —
-// code_changes.notices (replicated 0102), REPRODUCIBLE — whether or not the
+// code_changes.notices (replicated 0125), REPRODUCIBLE — whether or not the
 // recipient's horizon let this node write the row. The count is a pure
 // function of the records, so it is the same on every node, and it is never
 // below the rows any node holds of the change: a node writes at most one row
@@ -151,7 +151,7 @@ func (a *Applier) writeNotices(ctx context.Context, tx *sql.Tx, at applyContext,
 			}
 			c := byKey[key]
 			a.inboxed.Note(inbox.Note{Record: NoticeID(record, key.change), Handle: key.handle,
-				Subject: key.change, Reason: string(c.Reason), Position: at.packed})
+				Subject: key.change, Reason: string(c.Reason), Position: at.packed, At: at.brokerAt})
 			return nil
 		})
 	if err != nil {
@@ -221,8 +221,10 @@ func excerptOf(payload any) string {
 
 // removeNotices deletes every notice of changeIDs — changes a purge removes
 // whole, each charged its count ([Applier.purgeChanges], [Store.PurgeStep])
-// — noting each for the batch's movements, and answers how many it deleted.
-func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, changeIDs []string) (int, error) {
+// — noting each for the batch's movements, timed at the purge's own broker
+// instant ([inbox.Movement.At]: the record that deleted it), and answers how
+// many it deleted.
+func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, at applyContext, changeIDs []string) (int, error) {
 	if len(changeIDs) == 0 {
 		return 0, nil
 	}
@@ -230,7 +232,7 @@ func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, changeIDs []str
 	if err != nil {
 		return 0, err
 	}
-	n, err := a.removed(ctx, tx, removeNoticesSQL, list)
+	n, err := a.removed(ctx, tx, at, removeNoticesSQL, list)
 	if err != nil {
 		return 0, fmt.Errorf("code: remove the notices of the changes a purge removes: %w", err)
 	}
@@ -239,10 +241,12 @@ func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, changeIDs []str
 
 // removeCutNotices deletes at most limit notices of changeID — the change a
 // purge part cuts, charged limit of its count — oldest first, noting each for
-// the batch's movements, and answers how many it deleted: up to limit, and
-// fewer where the sweep left this node fewer than its count says.
-func (a *Applier) removeCutNotices(ctx context.Context, tx *sql.Tx, changeID string, limit int) (int, error) {
-	n, err := a.removed(ctx, tx, removeCutNoticesSQL, changeID, limit)
+// the batch's movements as [Applier.removeNotices] does, and answers how many
+// it deleted: up to limit, and fewer where the sweep left this node fewer than
+// its count says.
+func (a *Applier) removeCutNotices(ctx context.Context, tx *sql.Tx, at applyContext, changeID string,
+	limit int) (int, error) {
+	n, err := a.removed(ctx, tx, at, removeCutNoticesSQL, changeID, limit)
 	if err != nil {
 		return 0, fmt.Errorf("code: remove the notices of change %s a purge cuts: %w", changeID, err)
 	}
@@ -250,10 +254,11 @@ func (a *Applier) removeCutNotices(ctx context.Context, tx *sql.Tx, changeID str
 }
 
 // removed runs one of the purge's notice deletes, whose RETURNING is the rows
-// it deleted, and notes each as removed from its recipient's inbox, by its [NoticeID]: ONE PASS,
+// it deleted, and notes each as removed from its recipient's inbox, by its [NoticeID]
+// and at the purge's broker instant: ONE PASS,
 // the delete answering what it took, never a read of the rows and a second
 // seek of the same index to delete them.
-func (a *Applier) removed(ctx context.Context, tx *sql.Tx, stmt string, args ...any) (int, error) {
+func (a *Applier) removed(ctx context.Context, tx *sql.Tx, at applyContext, stmt string, args ...any) (int, error) {
 	rows, err := tx.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return 0, err
@@ -265,7 +270,7 @@ func (a *Applier) removed(ctx context.Context, tx *sql.Tx, stmt string, args ...
 			_ = rows.Close()
 			return 0, err
 		}
-		note.Record, note.Removed = NoticeID(note.Record, note.Subject), true
+		note.Record, note.Removed, note.At = NoticeID(note.Record, note.Subject), true, at.brokerAt
 		a.inboxed.Note(note)
 		n++
 	}

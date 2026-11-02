@@ -99,7 +99,7 @@ func TestTurnsFoldOneRowPerTurn(t *testing.T) {
 	case one.Summary != "did the thing":
 		t.Errorf("t-1's summary is %q", one.Summary)
 	case one.WorkItem == nil || *one.WorkItem != (types.WorkItem{
-		Backend: types.WorkNative, ID: "task-1", Key: "ENG-1", Project: "ENG"}):
+		Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1", Project: "ENG"}):
 		t.Errorf("t-1's work item is %+v, want the completion's", one.WorkItem)
 	case one.Trigger != "chat":
 		t.Errorf("t-1's trigger is %q, want the phase records' own", one.Trigger)
@@ -845,5 +845,177 @@ func TestALogSaysWhichNamedTurnsItsPageLists(t *testing.T) {
 	}
 	if none, err := log.ListedTurns(t.Context(), store.TurnQuery{Since: since}); err != nil || none == nil || len(none) != 0 {
 		t.Errorf("naming nothing answered %v (%v), want an empty list", none, err)
+	}
+}
+
+// A FAILED TURN SAYS WHY ON ITS ROW, in the words of the record that ended it.
+//
+// The row said only that a turn failed, so whoever read the list (a lead on
+// their agent's trail, the assistant asked why a turn failed) could not say
+// why without the turn's raw events, an administrator's read. The turn's own
+// completion speaks first, a failed phase on the way does not override it, a
+// turn that died on a failure TYPE names that type, and a turn a person
+// stopped or one that ended well carries no reason. Mutation: drop the rank
+// and the phase's message wins the maximum; drop the event type from the kind
+// and the provider chain's turn has none.
+func TestAFailedTurnSaysWhyOnItsRow(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	appendAll := func(recs ...store.EventRecord) {
+		t.Helper()
+		for _, rec := range recs {
+			if rec.Tags == nil {
+				rec.Tags = map[string]string{}
+			}
+			rec.Tags["agent_role"], rec.Tags["agent_id"] = "QA", "id-qa"
+			rec.Category, rec.Actor = "lifecycle", "QA"
+			if err := log.Append(t.Context(), rec); err != nil {
+				t.Fatalf("append %s: %v", rec.ID, err)
+			}
+		}
+	}
+	payload := func(v map[string]any) json.RawMessage {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	appendAll(
+		store.EventRecord{ID: "ended-p0", Type: "agent_phase_completed", Time: at,
+			Tags:    map[string]string{"turn_id": "ended", "failed": "true"},
+			Payload: payload(map[string]any{"error": "write timed out", "error_kind": "timeout"})},
+		store.EventRecord{ID: "ended-done", Type: "agent_turn_completed",
+			Time:    at.Add(time.Second),
+			Tags:    map[string]string{"turn_id": "ended", "failed": "true"},
+			Payload: payload(map[string]any{"failed": true, "error": "the CLI never reached the seat's tools", "error_kind": "server"})},
+		store.EventRecord{ID: "chain-x", Type: "llm_unavailable", Time: at.Add(time.Minute),
+			Tags:    map[string]string{"turn_id": "chain"},
+			Payload: payload(map[string]any{"last_error": "every model was down"})},
+		store.EventRecord{ID: "stopped-done", Type: "agent_turn_completed",
+			Time:    at.Add(2 * time.Minute),
+			Tags:    map[string]string{"turn_id": "stopped"},
+			Payload: payload(map[string]any{"stopped": true, "error": "stopped by Ada", "error_kind": "stopped"})},
+		store.EventRecord{ID: "clean-p0", Type: "agent_phase_completed", Time: at.Add(3 * time.Minute),
+			Tags: map[string]string{"turn_id": "clean"}},
+	)
+
+	rows, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-qa"})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	got := map[string][2]string{}
+	for _, row := range rows {
+		got[row.TurnID] = [2]string{row.Error, row.ErrorKind}
+	}
+	want := map[string][2]string{
+		"ended":   {"the CLI never reached the seat's tools", "server"},
+		"chain":   {"every model was down", "llm_unavailable"},
+		"stopped": {"", ""},
+		"clean":   {"", ""},
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("turn %s says why %q, want %q", id, got[id], w)
+		}
+	}
+}
+
+// A TURN RESUMED ON ANOTHER NODE SAYS WHY AS ONE LOG WOULD: each log folds its
+// own half into ranked text, and the fleet's combination takes the maximum
+// again, so the completion's reason on one node outranks a phase's on the
+// other whichever half is read first. Mutation: combine by taking the first
+// partial's value and the order decides.
+func TestTheFailureReasonCombinesAcrossLogs(t *testing.T) {
+	t.Parallel()
+	phase := store.TurnPartial{TurnID: "t", Failed: true, Error: "0write timed out",
+		ErrorKind: "0timeout"}
+	ended := store.TurnPartial{TurnID: "t", Failed: true, Error: "1the chain ran out",
+		ErrorKind: "1server"}
+	for _, parts := range [][]store.TurnPartial{{phase, ended}, {ended, phase}} {
+		turn := store.CombineTurnPartials(parts...).Turn()
+		if turn.Error != "the chain ran out" || turn.ErrorKind != "server" {
+			t.Errorf("combined %q (%q), want the completion's reason", turn.Error, turn.ErrorKind)
+		}
+	}
+	if turn := (store.TurnPartial{TurnID: "t"}).Turn(); turn.Error != "" || turn.ErrorKind != "" {
+		t.Errorf("a clean partial says %q (%q)", turn.Error, turn.ErrorKind)
+	}
+}
+
+// A TURN A PERSON STOPPED SAYS SO, AND IS NOT FAILED. A stop ends a turn
+// parked on its coding run as surely as one running a round: the parked
+// segment completed `suspended`, and the stop's completion — the newer — ends
+// the turn, carrying `stopped`. Read off the agent's completion, because that
+// is the record that says how the turn ended for a person, and never as a
+// failure: a stopped completion carries no `failed`.
+func TestATurnAPersonStoppedIsCompleteStoppedAndNotFailed(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	at := time.Now().UTC().Add(-time.Hour)
+	appendRow := func(id, typ string, when time.Time, payload map[string]any) {
+		t.Helper()
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id, Type: typ, Time: when, Category: "lifecycle", Actor: "SWE",
+			Tags:    map[string]string{"turn_id": payload["turn_id"].(string), "agent_role": "SWE", "agent_id": "id-SWE"},
+			Payload: raw,
+		}); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+	}
+	// THE STOPPED TURN: parked on its run, then closed by the stop.
+	appendRow("s-park-a", "agent_turn_completed", at, map[string]any{"turn_id": "stopped", "suspended": true})
+	appendRow("s-park-t", "turn_completed", at, map[string]any{"turn_id": "stopped", "suspended": true})
+	appendRow("s-stop-a", "agent_turn_completed", at.Add(time.Minute),
+		map[string]any{"turn_id": "stopped", "stopped": true, "error_kind": "stopped"})
+	appendRow("s-stop-t", "turn_completed", at.Add(time.Minute), map[string]any{"turn_id": "stopped"})
+	// AND ONE THAT FINISHED, for the contrast.
+	appendRow("f-a", "agent_turn_completed", at.Add(2*time.Minute), map[string]any{"turn_id": "finished"})
+	appendRow("f-t", "turn_completed", at.Add(2*time.Minute), map[string]any{"turn_id": "finished"})
+
+	rows, err := log.Turns(t.Context(), store.TurnQuery{AgentID: "id-SWE"})
+	if err != nil {
+		t.Fatalf("Turns: %v", err)
+	}
+	byID := map[string]store.Turn{}
+	for _, row := range rows {
+		byID[row.TurnID] = row
+	}
+	if got := byID["stopped"]; !got.Stopped || got.Failed || !got.Complete || got.Parked {
+		t.Fatalf("the stopped turn reads stopped=%v failed=%v complete=%v parked=%v; want it "+
+			"stopped, complete and not failed", got.Stopped, got.Failed, got.Complete, got.Parked)
+	}
+	// The stop's own error_kind is how the turn ended, not why it failed: a
+	// stopped turn says no failure reason.
+	if got := byID["stopped"]; got.Error != "" || got.ErrorKind != "" {
+		t.Fatalf("the stopped turn says it failed because %q (%q)", got.Error, got.ErrorKind)
+	}
+	if got := byID["finished"]; got.Stopped {
+		t.Fatal("a turn nobody stopped reads stopped")
+	}
+}
+
+// A TURN STOPPED ON ANOTHER NODE IS STOPPED FLEET-WIDE: a turn parked on one
+// node's log can be closed by a stop that the seat's next holder finished on
+// another, and the fleet's row folds the two halves with the same aggregate one
+// log would have used.
+func TestATurnStoppedOnAnotherNodeIsStoppedWhenTheHalvesFold(t *testing.T) {
+	t.Parallel()
+	parkedAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	stoppedAt := parkedAt.Add(time.Minute)
+	parked := store.TurnPartial{TurnID: "t1", LastParked: &parkedAt}
+	stopped := store.TurnPartial{TurnID: "t1", LastEnded: &stoppedAt, Stopped: true}
+
+	for _, order := range [][]store.TurnPartial{{parked, stopped}, {stopped, parked}} {
+		got := store.CombineTurnPartials(order...).Turn()
+		if !got.Stopped || !got.Complete || got.Parked {
+			t.Fatalf("folded %v: stopped=%v complete=%v parked=%v, want the turn stopped and over",
+				order, got.Stopped, got.Complete, got.Parked)
+		}
 	}
 }

@@ -139,6 +139,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/words"
 
 	// The driver registers itself under the name [driverName]. A blank
 	// import because nothing here touches its types — the whole point of
@@ -341,8 +342,8 @@ type Options struct {
 	// It is fixed for the life of the handle once it is non-zero: the
 	// vectors already in the file are this wide, and the engine refuses a
 	// revision that would change it. The one exception is a store opened
-	// at 0 — a node with no active revision, holding no rows — which
-	// learns its width from its first apply via [DB.LearnEmbeddingDim].
+	// at 0 — a node that boots on no revision — which learns its width
+	// from its first apply via [DB.LearnEmbeddingDim].
 	EmbeddingDim int
 
 	// pins is how many connections [DB.Writer] may hold for the life of
@@ -646,8 +647,8 @@ func OpenNode(ctx context.Context, path string, opts Options) (*DB, error) {
 // two estates happen to share.
 func OpenEstate(ctx context.Context, estate Estate, path string, opts Options) (*DB, error) {
 	if !estate.Valid() {
-		return nil, fmt.Errorf("store: open %s: %q is not an estate; the estates are %v",
-			path, estate, Estates)
+		return nil, fmt.Errorf("store: open %s: %q is not an estate; the estates are %s",
+			path, estate, words.And(Estates))
 	}
 	opts.pins = 0
 	return openEstate(ctx, estate, path, opts)
@@ -944,6 +945,25 @@ func (d *DB) Path() string {
 	return d.path
 }
 
+// Scratch reports whether this handle's file is DISCARDED at every open: a
+// node's own database opened with [Options.Scratch], which nothing written
+// here outlives. It is how the handle was opened, and stays so after
+// [DB.Close]; false on a nil handle and on every handle [OpenNode] did not
+// open — a replicated estate is never discarded.
+//
+// THE HANDLE'S OWN ANSWER, because it is the one reading that cannot disagree
+// with what the open did: a caller that needs to know whether what it writes
+// here survives a restart — the reconciler, which tells the fleet what this
+// node would boot on — reads it here rather than deciding it again from Tier A,
+// where a second reading is how one of them comes to believe a node keeps what
+// it writes.
+func (d *DB) Scratch() bool {
+	if d == nil {
+		return false
+	}
+	return d.opened.Scratch
+}
+
 // EmbeddingDim reports the configured vector width, or 0 when no embedding
 // model is configured. See Options.EmbeddingDim for why this is not in the
 // schema.
@@ -969,9 +989,14 @@ func (d *DB) EmbeddingDim() int {
 // holds rows of two widths and the reader can match neither reliably.
 //
 // So: zero to non-zero, once. That is the only safe transition, and it is the
-// one a node that booted with no active revision needs — it opened at 0
-// holding no rows at all, and its first apply is what tells it how wide its
-// vectors will be. Every other case is already correct at open, because
+// one a node that booted on no revision needs — its first apply is what tells
+// it how wide its vectors will be. Such a store usually holds no rows: its
+// node has no active revision. The one that may is a node started to import a
+// file over its stored revision, which reads no revision so that one this
+// build cannot run does not refuse the boot that replaces it; its first apply
+// is the imported file's, so it learns the width a boot on that file opened
+// at, over the rows the file replaces — where a restart onto a new width has
+// always left a store. Every other case is already correct at open, because
 // [OpenBackends] passes the active revision's width.
 //
 // A width of 0 is "no declared width", not a width of zero:
@@ -1097,6 +1122,51 @@ func openPool(path string, busy time.Duration,
 			// connection answered and no other. The figure, and what the
 			// cache is for, are [nodeCacheKiB]'s; negative is KiB.
 			fmt.Sprintf("PRAGMA cache_size = %d", -nodeCacheKiB),
+			// TEMPORARY STORAGE IS MEMORY, because on the driver's default
+			// it was a file per connection that outlived the process.
+			// Turso opens a per-connection temp database at the first
+			// BEGIN IMMEDIATE, which every write here takes (begin.go),
+			// since that statement opens a transaction on every schema,
+			// temp included. On the default the temp database is a FILE,
+			//
+			//	$TMPDIR/.tmpXXXXXX/tursodb-temp.db
+			//
+			// in a fresh directory removed only when its connection
+			// closes. So every exit that closes nothing (the watchdog's
+			// two exits, a crash, a kill) left one per connection for
+			// good, eight a node as measured, in a directory shared with
+			// the rest of the host that nothing can safely sweep. And
+			// every write needed TMPDIR to be writable: missing, it
+			// refused each one with "I/O error (tempdir)". Nothing here
+			// declares a TEMP table, view, index or trigger, so the file
+			// held nothing.
+			//
+			// What moves into memory with it: a sort past the sort
+			// buffer (the page cache above), a hash join and an
+			// ephemeral table (a DISTINCT, an IN over a subquery) no
+			// longer spill to TMPDIR, so one that large holds what it
+			// built in memory until its statement ends. The plan gates
+			// keep the walks a node runs constantly from sorting their
+			// result (storetest.Sorts); what can build one past the
+			// buffer is a migration indexing a table that already holds
+			// most of a node's data, which holds that index's keys in
+			// memory while it runs.
+			//
+			// NOT a directory of the store's own: the driver takes the
+			// location from the process environment alone (TURSO_TMPDIR,
+			// then SQLITE_TMPDIR, for the temp database, TMPDIR for every
+			// other temp file), so a process holding two files could not
+			// give each its own, and the file it would still leave is one
+			// the next open would have to sweep rather than one never
+			// made.
+			//
+			// VACUUM INTO is the one statement that still writes there,
+			// and two things run it: a backup, and the state-log snapshot
+			// every data node takes for its peers. The driver builds the
+			// copy on a connection of its own, which no session pragma
+			// here reaches; [tempDirRefused] names the variable when that
+			// directory refuses it.
+			"PRAGMA temp_store = MEMORY",
 			fmt.Sprintf("PRAGMA busy_timeout = %d", busy.Milliseconds()),
 		},
 	}
@@ -1313,17 +1383,17 @@ func lockRetryBeat(busy time.Duration) time.Duration {
 // connection the handle may hold, and one more for the fresh connection the
 // pool opens once every held one has been retired.
 //
-// It was the literal eight, justified as "[defaultReaderConns] plus the pins
-// a node declares — four plus three state-log domains today". Both terms had
+// It was the literal eight, justified as "[defaultReaderConns] plus the pins a
+// node declares — four plus three state-log domains today". Both terms had
 // moved under it: the reader budget is max(8, GOMAXPROCS) now, the identity
-// reserve sits beside it, and five domains each pin a writer, so a replicated
-// estate on an ordinary host holds fourteen connections and more on a large one
-// — and a constant justified by a count is wrong the day the count changes,
-// with nothing to say so. (An earlier anchor was a measurement of four
-// goroutines racing one row, which the begin mode made impossible: a write
-// transaction takes the lock at BEGIN and queues for it, so the four
-// serialise and each body runs once — TestWriterAndTxShareOneWritePath
-// asserts exactly that.)
+// reserve sits beside it, and every log pins a writer of its own, so a
+// replicated estate on an ordinary host holds well over eight connections and
+// more on a large one — and a constant justified by a count is wrong the day
+// the count changes, with nothing to say so. (An earlier anchor was a
+// measurement of four goroutines racing one row, which the begin mode made
+// impossible: a write transaction takes the lock at BEGIN and queues for it,
+// so the four serialise and each body runs once —
+// TestWriterAndTxShareOneWritePath asserts exactly that.)
 //
 // pool is the handle's whole bound — readers, [identityReserve] and pins
 // ([Options.poolSize]) — although a pinned writer's connection and the held

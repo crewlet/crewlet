@@ -1,0 +1,768 @@
+/*
+ * Company › Integrations: the directory's detail, an app's tabs, its setup
+ * form and its disconnect dialog.
+ *
+ * Loaded with the screens that draw it rather than with the frame, since no
+ * part of it is on the first screen.
+ */
+
+/* ---- Company › Integrations ------------------------------------------------
+   The directory and the column beside it are the kit's (`DirectoryList` in a
+   `ListDetail`), so this screen draws only what fills the detail: a tool's or
+   a service's tabs, its issues, its agents, a feed, and the engine's address
+   at the foot of the directory. No part draws a frame inside a frame: rows are
+   divided by hairlines. */
+
+/* Where the directory and the detail are one pane (under 640px of the
+   screen's width: a phone, or a desktop beside the assistant), the detail is
+   the whole screen and this is its way back. The kit's `ListDetail` folds at
+   the same width of its own. */
+.int-back {
+  display: none;
+  align-self: flex-start;
+}
+@container page (width < 640px) {
+  .int-back {
+    display: inline-flex;
+  }
+}
+
+.int-detail,
+.int-tab,
+.int-service-off {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+}
+.int-service-off {
+  max-width: 44rem;
+}
+/* THE COLUMN SPACES ITS PARTS, so prose and headings inside it carry no
+   margin of their own, and a lone control keeps its own width. */
+:where(.int-detail, .int-tab, .int-service-off, .int-before) > :where(p, h3) {
+  margin: 0;
+}
+:where(.int-detail, .int-tab) > :where(a, button) {
+  align-self: flex-start;
+}
+.int-detail h3.t-label,
+.int-before h3.t-label {
+  margin-bottom: var(--spacing-2);
+}
+.int-checks svg {
+  color: var(--color-feedback-success-ink);
+}
+
+.int-row-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+/* What connecting gives the agents, how each gets in, and what to have ready. */
+.int-before {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  gap: var(--spacing-5);
+}
+
+/* THE NOTES, under the agents: a heading, then one row a note, its sentence
+   over the quieter line saying what would change it. */
+.int-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.int-notes h3 {
+  margin: 0;
+}
+.int-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* ONE ISSUE A TILE: its mark, what is wrong over who owes the next move and
+   the agents it is about, and the control that makes it, centred on the
+   words. THE TILE'S EDGE IS THE SOFT HAIRLINE, a step off the ground in either
+   theme: the default border is near the ground's own black on a dark page, so
+   a stack of tiles read as dark boxes. A tile that blocks work takes the
+   danger line instead. */
+.int-issues {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.int-seats {
+  display: flex;
+  flex-direction: column;
+}
+.int-seats > * + * {
+  border-top: 1px solid var(--color-border-default);
+}
+.int-issue {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
+  border: 1px solid var(--color-edge-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-inset);
+}
+.int-issue[data-tone="danger"] {
+  border-color: var(--color-feedback-danger-line);
+}
+.int-issue:has(> .int-issue-mark) {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding-inline-start: var(--spacing-3);
+}
+.int-issue-text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.int-issue-problem {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+.int-issue-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.int-issue-sep {
+  margin-inline: 0.35em;
+  color: var(--color-text-tertiary);
+}
+.int-issue-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+
+/* AN AGENT'S LINE: its mark, its name and one line under it, its standing,
+   and its own step at the app where it has one. */
+.int-seat {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) 0;
+  min-width: 0;
+}
+.int-seat-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.int-seat-id .t-caption {
+  overflow-wrap: anywhere;
+}
+.int-seat-act:empty {
+  display: none;
+}
+@media (width < 640px) {
+  .int-issue {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .int-issue:has(> .int-issue-mark) {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .int-issue:has(> .int-issue-mark) > .int-issue-act {
+    grid-column: 2;
+  }
+  .int-seat {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .int-seat-act {
+    grid-column: 2 / -1;
+  }
+}
+
+/* A FEED: one change or one item a line, its time at the end. */
+.int-feed {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.int-feed > * + * {
+  border-top: 1px solid var(--color-border-default);
+}
+.int-feed-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) 0;
+  font-size: var(--font-size-sm);
+}
+/* A line that leads with its app's mark: the mark, the line, its time. */
+.int-feed-row--marked {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--spacing-3);
+}
+.int-feed-mark {
+  display: inline-flex;
+  align-self: center;
+}
+.int-feed-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+a.int-feed-what:hover {
+  text-decoration: underline;
+}
+.int-feed-what strong {
+  font-weight: var(--font-weight-semibold);
+}
+.int-feed-at {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* THE HOME, with nothing chosen: what is in use, in one close column. One
+   small step between its parts, so a section heading reads as the head of what
+   it names rather than a band between two runs of cards. */
+.int-landing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.int-landing-foot {
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+}
+/* AN ITEM'S NAME IS THE WAY TO ITS PAGE, drawn as the title it is: the
+   title's own ink, underlined only under the pointer. */
+.int-tile-link {
+  color: inherit;
+  text-decoration: none;
+}
+.int-tile-link:hover {
+  text-decoration: underline;
+}
+
+/* THE ADDRESS APPS DELIVER TO, at the foot of the home (.int-landing-foot):
+   a small label over the address, cut to fit, with the whole of it in its
+   title. */
+.int-engine-address {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* THE SETTINGS FORM, in the pane where the tabs were: its heading, the
+   fields, and the actions ruled off at its foot. */
+.int-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+  max-width: 44rem;
+}
+.int-setup-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+.int-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  padding-top: var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+/* A KEY'S CHECK, under its field: the control and the engine's verdict. */
+.int-key-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-sm);
+}
+
+/* ONE ROW PER THING A TOOL IS MADE OF, surfaces and seats alike, separated
+   by a rule rather than by whitespace: stacked as loose lines of prose, a tool
+   with three surfaces read as one paragraph with no edges, and nothing said
+   where Jira stopped and Confluence began. */
+.int-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.int-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) 0;
+  border-top: 1px solid var(--color-border-default);
+}
+.int-row:first-child {
+  border-top: none;
+}
+
+/* The identity column takes the slack, so every badge in the list lands on
+   the same right edge however long a name or a path is.
+
+   THE BASIS IS WHAT MAKES THE ROW WRAP. At `flex: 1` (a basis of 0) the
+   badges never wrapped: flex placement asks whether an item's HYPOTHETICAL
+   size fits, a zero basis always does, and `min-width: 0` then let this
+   column shrink to about ten pixels rather than push them onto a second line.
+   In the peek rail, where a surface's three badges take most of 420px, the
+   sentence beside them came out one word per line. With a real basis the
+   badges wrap instead and the identity gets the width back on its own line;
+   `min-width: 0` stays, for the long paths it has to truncate rather than
+   overflow. */
+.int-row-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 15rem;
+}
+.int-row-name {
+  font-size: var(--font-size-compact);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.int-row-detail {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* THE CONNECT FORM, laid out the way the console's is.
+   The field spacing is deliberately wider than the dialog's default stack:
+   these are labelled inputs each carrying a help line, and at the tighter
+   gap a help line sat as close to the NEXT field's label as to the control
+   it belongs to, which is the one ambiguity a form must not have. */
+.int-form-intro {
+  margin: 0;
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-secondary);
+}
+.int-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+/* SENTENCE CASE, scoped to this form.
+   The product's field label is an uppercase micro-label, which reads as a
+   column head: right above a table, wrong above a question. These fields ARE
+   questions, each with a sentence of help under it, and the console asks them
+   in sentence case. Scoped rather than changed globally, because every other
+   form in the dashboard is a settings table where the micro-label belongs.
+
+   THE LABEL IS uilet's `.crewlet-label` NOW. The setup form draws uilet's
+   `ValueField` and puts `.field` on it, so the selector reaches the same
+   element it always did. Specificity is what makes
+   this land: `(0,2,1)` here against the package's `(0,1,0)`. */
+.int-form .field > label {
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-normal);
+  text-transform: none;
+  color: var(--color-text-primary);
+}
+
+/* AN AGENT'S ROW IN A CARD'S ROSTER.
+ *
+ * The console's shape: the agent's own mark, then a name and one line under
+ * it, then what it holds on the right. The mark is what makes the roster read
+ * as a list of the company's agents rather than a list of settings, which is
+ * the whole reason the roster is there.
+ */
+.int-seat-row {
+  align-items: center;
+  gap: var(--spacing-3);
+}
+.int-seat-row .int-row-identity {
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+/* What configures the connection, folded away from what makes it.
+ *
+ * The console asks three things to connect an app. This engine also receives
+ * that app's deliveries and routes them, so it has fields the console has no
+ * equivalent for, and seven inputs in one column made connecting an app read
+ * as filling in a configuration file. */
+/* An alternative to what the form asked for, so it closes the form rather
+   than sitting among the fields. It carries no rule of its own: where the
+   fold is present that rule already ends the form, and a second one would
+   box the note in. */
+/* SMALL, because it is an aside. The sentence that says what to do is one
+   line, so it sits under the form without competing with the fields for the
+   same attention. */
+.int-form-note {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-2xs);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-tertiary);
+}
+/* A PERMANENT UNDERLINE, and it says so in both states. This sits in a
+   sentence, so the underline is its only non-colour cue (base.css, WCAG
+   1.4.1). Stating the hover is what makes that true independently of load
+   order: `.int-form-note a` alone is (0,1,1), the same specificity as the
+   `a:hover` reset base.css now carries, so in the hover state the tie would
+   fall to whichever sheet `main.tsx` imports second. `.int-form-note a:hover`
+   is (0,2,1) and wins outright, so the mark is a property of the rule. */
+.int-form-note a,
+.int-form-note a:hover {
+  text-decoration: underline;
+}
+.int-form-note a {
+  color: inherit;
+}
+.int-form-note a:hover {
+  color: var(--color-text-primary);
+}
+.int-form-more {
+  /* IT CLOSES THE FORM, so it takes the rule and the space above it rather
+     than sitting in the field flow with a hairline through the middle. The
+     parent's own gap already separates it from the last field; a margin on
+     top of that put the rule closer to the fold than to the form it ends. */
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-5);
+}
+/* The disclosure is a control, so it reads as one: the same weight as a
+   field's label, with a marker that says which way it opens. */
+.int-form-more > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+.int-form-more > summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform var(--motion-duration-fast) var(--motion-easing-default);
+}
+.int-form-more[open] > summary::before {
+  transform: rotate(90deg);
+}
+.int-form-more > summary:hover {
+  color: var(--color-text-primary);
+}
+/* The fields inside carry the form's own rhythm, so opening the fold does
+   not change the spacing of the questions below it. */
+.int-form-more-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  padding-top: var(--spacing-5);
+}
+
+/* ONE AGENT'S OWN BLOCK in the setup dialog, for an app whose credentials
+   live on the seat. Folded, because the same two questions are asked once per
+   agent: a ten-agent company opened twenty inputs in one scroll with no way
+   to see how many were left, and the dialog now opens as the roster it is. */
+.int-seat-form {
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  /* THE RUNG ABOVE ITS GROUND. This block lives inside a modal, and a modal
+   paints the panel rung. */
+  background: var(--color-surface-elevated);
+}
+.int-seat-form + .int-seat-form {
+  margin-top: calc(var(--spacing-3) - var(--spacing-5));
+}
+.int-seat-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--radius-md);
+}
+.int-seat-summary::-webkit-details-marker {
+  display: none;
+}
+/* The marker says which way it opens, and is the same one the More settings
+   fold draws, so two disclosures in one dialog are one idea. */
+.int-seat-summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  color: var(--color-text-tertiary);
+  transition: transform var(--motion-duration-fast) var(--motion-easing-default);
+}
+.int-seat-form[open] > .int-seat-summary::before {
+  transform: rotate(90deg);
+}
+/* A HOVER IS AN INTERACTION STATE, so it takes the interaction token rather
+   than a structural rung. It used to reach for the rung above the page, which
+   worked only while `.int-seat-form` stood on the page itself; the form is on
+   the raised rung now (it opens inside a modal, and a modal paints the panel
+   one), so naming that same rung here drew the summary in its own parent's
+   colour and the block lost its hover affordance entirely. `--color-surface-hover`
+   is a translucent overlay, so it lifts whatever it lands on, which is what
+   every other hover in the product already uses. */
+.int-seat-summary:hover {
+  background: var(--color-surface-hover);
+}
+/* The badge sits at the far end, so a column of blocks reads down its right
+   edge as a list of what is left to do. */
+.int-seat-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.int-seat-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  padding: 0 var(--spacing-4) var(--spacing-4);
+}
+
+/* THE APP DEFINITION AN OPERATOR PASTES, inside the agent's own block.
+   FOLDED, because it is forty lines of JSON and the two boxes under it are
+   what the form is for: it is opened once per agent, at the start. */
+/* A ROW OF THE AGENT'S BLOCK, ruled off from the fields above it, never a
+   second bordered box inside the block's own frame. */
+.int-manifest {
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-3);
+}
+/* The label, the aside, and the Copy button on one line: copying is what an
+   operator does with this, and a button below the fold is one they have to
+   open it to reach. */
+.int-manifest-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  width: auto;
+}
+/* THE SAME MARKER THE OTHER DISCLOSURES DRAW, because a fold that gives no
+   sign of being one is a line of text somebody has to discover by clicking. */
+.int-manifest-summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  color: var(--color-text-tertiary);
+  transition: transform var(--motion-duration-fast) var(--motion-easing-default);
+}
+.int-manifest[open] > .int-manifest-summary::before {
+  transform: rotate(90deg);
+}
+.int-manifest-summary > span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.int-manifest > .int-manifest-text {
+  margin-top: var(--spacing-3);
+}
+/* IT SCROLLS RATHER THAN WRAPS. A wrapped manifest is not one a person can
+   read against the app they already have, and a dialog that grew to forty
+   lines of JSON would push its own buttons off the screen. */
+.int-manifest-text {
+  width: 100%;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  padding: var(--spacing-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  line-height: 1.5;
+  white-space: pre;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+/* The link that finishes an agent off, at the far end of its row, so a
+   column of them reads down one edge. */
+.int-row-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.int-row-badges {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex-shrink: 0;
+}
+
+/* A FINDING TAKES THE FULL WIDTH BENEATH ITS ROW rather than squeezing into
+   the detail line: it is a sentence, often a third-party app's own error
+   text, and truncating the one line that says what to do is the opposite of
+   useful. */
+.int-row-note {
+  flex-basis: 100%;
+  display: flex;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-tertiary);
+}
+.int-row-note-text {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  /* THE GAP IS THE STRUCTURE. Its four slots (what is wrong, which things,
+     what to do, and the rest) used to sit at 2px, which is closer than the
+     line spacing inside any one of them, so a paragraph and the disclosure
+     summary beneath it read as one run-on line: `…nothing else can do it.`
+     followed immediately by `1 more finding`. */
+  gap: var(--spacing-2);
+}
+.int-row-note-when {
+  color: var(--color-text-tertiary);
+}
+
+/* WHAT IS WRONG: the line a reader is here for, so it takes the body colour
+   while everything around it is quieter. */
+.int-note-problem {
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
+/* WHAT TO DO: one step down, because it is read second and only once. It is
+   a separate line rather than another clause because an instruction buried
+   mid-paragraph is one a reader has to find. */
+.int-note-remedy {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  color: var(--color-text-tertiary);
+}
+
+/* THE DISCLOSURE INSIDE THE BODY IS THE ONLY CONTROL IN ITS ROW, so it is
+   drawn at the muted step rather than the faint one: tokens.css marks
+   --color-text-muted decoration only, never a fact, and it falls under the 4.5:1
+   contrast floor on both themes. */
+.int-summary {
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
+}
+details > summary.int-summary {
+  cursor: pointer;
+  list-style: none;
+  width: fit-content;
+}
+details > summary.int-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A section heading inside the setup dialog, for a tool the engine reaches
+   over more than one surface. */
+/* A SURFACE'S HEADING in a sheet that sets up several (Atlassian's Jira and
+   Confluence): a real subheading in the words as written, never the
+   uppercase eyebrow, which under "Connect Slack" repeated the vendor. */
+.int-section {
+  margin: 0;
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-normal);
+  color: var(--color-text-primary);
+}
+.int-findings {
+  margin: var(--spacing-1) 0 0;
+  padding-left: var(--spacing-4);
+}
+
+/* WHICH THINGS A FINDING IS ABOUT, as chips.
+
+   A handle or an address is a thing a reader SCANS FOR, not a sentence they
+   read: wrapped in prose inside the finding's own sentence, picking one out
+   meant reading the whole line. Laid out, the same six are one glance.
+
+   Scrolls past a point rather than growing, because thirty-six service
+   accounts is the measured case and a peek is not a page. */
+.int-subjects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 9rem;
+  overflow-y: auto;
+}
+.int-subject {
+  display: inline-block;
+  padding: 1px var(--spacing-2);
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-sm);
+  /* THE RUNG ABOVE ITS GROUND: a chip sits on a peek's panel, and at the
+     panel's own rung it drew nothing. */
+  background: var(--color-surface-elevated);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  /* The addresses and URLs this carries have no spaces to break at. */
+  overflow-wrap: anywhere;
+}
+
+/* THE OVERFLOW COUNT EXPANDS IN PLACE. The reason the rest are folded is
+   width rather than secrecy, and the long case is a list somebody is working
+   through, so it must not send them somewhere to read it. */
+.int-subject-more {
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-xs);
+}
+.int-subject-more:hover {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-muted);
+}

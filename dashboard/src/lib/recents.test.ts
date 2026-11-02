@@ -32,13 +32,13 @@ beforeEach(() => {
  */
 describe("whose list it is", () => {
   it("is the tab's reader's, and a second reader of the browser has their own", () => {
-    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
+    remember({ path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" }, true);
     const { result } = renderHook(() => useRecents());
     expect(result.current.map((r) => r.label)).toEqual(["ENG-1"]);
 
     act(() => noteReader("p-2"));
     expect(result.current).toEqual([]);
-    act(() => remember({ path: ["work", "ENG-2"], label: "ENG-2", workspace: "work" }, true));
+    act(() => remember({ path: ["worklet", "ENG-2"], label: "ENG-2", workspace: "worklet" }, true));
     expect(result.current.map((r) => r.label)).toEqual(["ENG-2"]);
     // AND THE FIRST PERSON'S IS STILL THERE for when they are back.
     expect(stored("p-1").map((r) => r.label)).toEqual(["ENG-1"]);
@@ -49,7 +49,7 @@ describe("whose list it is", () => {
     sessionStorage.clear();
     resetForTest();
     const { result } = renderHook(() => useRecents());
-    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
+    remember({ path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" }, true);
     expect(result.current).toEqual([]);
     for (let i = 0; i < localStorage.length; i++) {
       expect(localStorage.key(i) ?? "").not.toMatch(/^crewlet_recents/);
@@ -59,11 +59,8 @@ describe("whose list it is", () => {
 
 describe("what the reader opened", () => {
   it("puts a place the reader has not been at the top", () => {
-    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
-    remember(
-      { path: ["knowledge", "ENG", "Runbook"], label: "Runbook", workspace: "knowledge" },
-      true,
-    );
+    remember({ path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" }, true);
+    remember({ path: ["doclet", "ENG", "Runbook"], label: "Runbook", workspace: "doclet" }, true);
     expect(stored().map((r) => r.label)).toEqual(["Runbook", "ENG-1"]);
   });
 
@@ -71,10 +68,10 @@ describe("what the reader opened", () => {
     // Keyed on the PATH: without that, a reader who keeps returning to one
     // item fills the whole list with it. And the palette's first row is where
     // the reader just was, so a revisit is newest.
-    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
-    remember({ path: ["work", "ENG-2"], label: "ENG-2", workspace: "work" }, true);
-    remember({ path: ["work", "ENG-3"], label: "ENG-3", workspace: "work" }, true);
-    remember({ path: ["work", "ENG-2"], label: "ENG-2", workspace: "work" }, true);
+    remember({ path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" }, true);
+    remember({ path: ["worklet", "ENG-2"], label: "ENG-2", workspace: "worklet" }, true);
+    remember({ path: ["worklet", "ENG-3"], label: "ENG-3", workspace: "worklet" }, true);
+    remember({ path: ["worklet", "ENG-2"], label: "ENG-2", workspace: "worklet" }, true);
     expect(stored().map((r) => r.label)).toEqual(["ENG-2", "ENG-3", "ENG-1"]);
   });
 
@@ -82,9 +79,9 @@ describe("what the reader opened", () => {
     // A page's title lands a render after its route, so the first label for a
     // path is often the raw identifier and the second is the name the reader
     // recognises.
-    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, false);
+    remember({ path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" }, false);
     remember(
-      { path: ["work", "ENG-1"], label: "Drop the Pulsar backend", workspace: "work" },
+      { path: ["worklet", "ENG-1"], label: "Drop the Pulsar backend", workspace: "worklet" },
       true,
     );
     expect(stored().map((r) => r.label)).toEqual(["Drop the Pulsar backend"]);
@@ -116,10 +113,10 @@ describe("what the reader opened", () => {
     // first and is still wanted. A revisit moves it up, so the bottom row is
     // always the oldest VISIT.
     for (let i = 0; i < MaxRecents; i++) {
-      remember({ path: ["work", `ENG-${i}`], label: `ENG-${i}`, workspace: "work" }, true);
+      remember({ path: ["worklet", `ENG-${i}`], label: `ENG-${i}`, workspace: "worklet" }, true);
     }
-    remember({ path: ["work", "ENG-0"], label: "ENG-0", workspace: "work" }, true);
-    remember({ path: ["work", "NEW"], label: "NEW", workspace: "work" }, true);
+    remember({ path: ["worklet", "ENG-0"], label: "ENG-0", workspace: "worklet" }, true);
+    remember({ path: ["worklet", "NEW"], label: "NEW", workspace: "worklet" }, true);
     const labels = stored().map((r) => r.label);
     expect(labels).toHaveLength(MaxRecents);
     expect(labels[0]).toBe("NEW");
@@ -135,7 +132,7 @@ describe("what the reader opened", () => {
   });
 
   it("forgets everything on request", () => {
-    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
+    remember({ path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" }, true);
     forgetAll();
     expect(stored()).toEqual([]);
   });
@@ -152,15 +149,15 @@ describe("a store that will not cooperate", () => {
         { label: "no path" },
         // A ROW WITH NO WORKSPACE is not one this build writes, and one the
         // palette has no hint for.
-        { path: ["work", "ENG-0"], label: "ENG-0" },
+        { path: ["worklet", "ENG-0"], label: "ENG-0" },
         // A PATH THE ROUTE TABLE DOES NOT RESOLVE: drawn, it would lead to
         // Not Found for ever.
-        { path: ["nowhere"], label: "Nowhere", workspace: "work" },
-        { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" },
+        { path: ["nowhere"], label: "Nowhere", workspace: "worklet" },
+        { path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" },
       ]),
     );
     resetForTest();
-    remember({ path: ["work", "ENG-2"], label: "ENG-2", workspace: "work" }, true);
+    remember({ path: ["worklet", "ENG-2"], label: "ENG-2", workspace: "worklet" }, true);
     expect(stored().map((r) => r.label)).toEqual(["ENG-2", "ENG-1"]);
   });
 
@@ -175,7 +172,7 @@ describe("a store that will not cooperate", () => {
     });
     resetForTest();
     expect(() =>
-      remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true),
+      remember({ path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" }, true),
     ).not.toThrow();
     setItem.mockRestore();
     getItem.mockRestore();
@@ -184,7 +181,7 @@ describe("a store that will not cooperate", () => {
   it("reads a value that is not even a list as nothing", () => {
     localStorage.setItem(recentsKey("p-1"), '"not a list"');
     resetForTest();
-    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
+    remember({ path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" }, true);
     expect(stored().map((r) => r.label)).toEqual(["ENG-1"]);
   });
 });
@@ -201,18 +198,18 @@ describe("a store that will not cooperate", () => {
  */
 describe("two tabs on one origin", () => {
   it("keeps where another tab has been while this one was painting", () => {
-    remember({ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" }, true);
+    remember({ path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" }, true);
     // This tab paints, so the snapshot is taken.
     expect(stored().map((r) => r.label)).toEqual(["ENG-1"]);
     // The other tab goes somewhere. No event is delivered here.
     localStorage.setItem(
       recentsKey("p-1"),
       JSON.stringify([
-        { path: ["work", "ENG-2"], label: "ENG-2", workspace: "work" },
-        { path: ["work", "ENG-1"], label: "ENG-1", workspace: "work" },
+        { path: ["worklet", "ENG-2"], label: "ENG-2", workspace: "worklet" },
+        { path: ["worklet", "ENG-1"], label: "ENG-1", workspace: "worklet" },
       ]),
     );
-    remember({ path: ["work", "ENG-3"], label: "ENG-3", workspace: "work" }, true);
+    remember({ path: ["worklet", "ENG-3"], label: "ENG-3", workspace: "worklet" }, true);
     expect(stored().map((r) => r.label)).toEqual(["ENG-3", "ENG-2", "ENG-1"]);
   });
 });
@@ -222,13 +219,13 @@ describe("two tabs on one origin", () => {
  *
  * It was per workspace while a sidebar drew one workspace's share; with the
  * palette the only reader, that let an empty palette open on up to eight rows
- * for each of nine workspaces.
+ * for every workspace there is.
  */
 describe("the cap", () => {
   it("is one bound over every workspace", () => {
     remember({ path: ["live", "turns", "t1"], label: "A turn", workspace: "live" }, true);
     for (let i = 0; i < MaxRecents + 3; i++) {
-      remember({ path: ["work", `ENG-${i}`], label: `ENG-${i}`, workspace: "work" }, true);
+      remember({ path: ["worklet", `ENG-${i}`], label: `ENG-${i}`, workspace: "worklet" }, true);
     }
     const kept = stored();
     expect(kept).toHaveLength(MaxRecents);

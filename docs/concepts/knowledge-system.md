@@ -7,7 +7,7 @@ The knowledge system (`internal/knowledge`) is the read path agents use to find 
 
 **A diary is read where it is kept current.** An agent's diary is written to
 the store of the node running the agent and follows the agent when placement
-moves it, so the dashboard's **Knowledge › Agent diaries** reads every diary
+moves it, so the dashboard's **Doclet › Agent diaries** reads every diary
 from the node HOLDING its agent — the list (`memory_overview`) counts every
 agent in the chart at its holder in one round, and one agent's page
 (`agent_memory`) is its holder's answer, naming that node. An agent no node
@@ -20,20 +20,20 @@ holds shows nothing rather than a copy of unknown age. See
 
 ```yaml
 knowledge:
-  backend: native      # the default — the engine's own pages
+  backend: doclet      # the default: Doclet, the engine's own pages
 # backend: confluence  # a live search against Confluence at query time
 # backend: none        # no knowledge base; every turn gets an empty block
 ```
 
-| | `native` | `confluence` |
+| | `doclet` | `confluence` |
 |---|---|---|
-| Where pages live | the fleet's own ordered log, applied into every node's database | a Confluence site |
+| Where pages live | the fleet's own ordered log, applied into every data node's database | a Confluence site |
 | How search works | keyword (BM25 over the node's own lexical index), semantic (two-stage 1-bit retrieval — an index over the codes, then an exact rerank), or `hybrid` — both, fused | CQL against the site's search API, live at query time |
 | Who it searches as | the engine — every seat reads every page, so there is no per-seat credential to be missing | **the agent's own user**, so Confluence enforces its page permissions natively |
 | Staleness | the index is built behind the node's own applied rows; a node still indexing SAYS SO rather than answering empty | none — there is no local copy at all |
 | What it costs to set up | nothing | a site, a space, and a per-seat account |
 
-### Native: an index, and what that means
+### Doclet: an index, and what that means
 
 There is a local copy, and being honest about it is the whole design. Every
 page change is one record on an ordered log, every data node applies it into its own
@@ -68,8 +68,9 @@ The driver this engine ships has **no approximate-nearest-neighbour index** —
 `internal/store/caps.go` measures for one once per process and reports what it
 found on every open — and the alternatives to building one were a full exact
 scan of every vector on every query, or embedding a search library with its
-own index format, file and backup story on every node. Instead the search is
-**two stages**, which is the shape every production vector engine uses anyway:
+own index format, file and backup story on every data node. Instead the
+search is **two stages**, which is the shape every production vector engine
+uses anyway:
 
 1. **Stage one** ranks a narrow table of **1-bit sign codes** — one bit per
    dimension, 387 bytes at 3 072 dimensions against 12 KB for the vector — and
@@ -91,7 +92,7 @@ documents are looked at and never how they are ordered.
 
 Every ranked search takes a **mode**: `hybrid` (the default — both halves,
 fused), `keyword` (BM25 alone) or `semantic` (meaning alone; a screen labels it
-"Meaning"). One vocabulary covers the knowledge search and the tracker's own
+"Meaning"). One vocabulary covers the knowledge search and Worklet's
 item search, on the `knowledge` and `work_search` queries alike.
 
 A semantic ranking needs the **query** in the documents' embedding space, so
@@ -234,11 +235,11 @@ index        measured on 118432 sources: 0.9812 against a 0.9800 floor in its wo
 recall       0.9761  (floor 0.9312 for this corpus size)
 worst query  0.9467
 head misses  0  (documents dropped from the exact top ten)
-scan recall  0.9803 with 0 head miss(es) — the same search with the full scan as its first stage
-narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  — scan 0.9950, 0 head miss(es)
-narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  — scan 0.9810, 0 head miss(es)
-narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  — scan 0.9967, 0 head miss(es)
-narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  — scan 1.0000, 0 head miss(es)
+scan recall  0.9803 with 0 head miss(es), from the same search with the full scan as its first stage
+narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  (scan 0.9950, 0 head miss(es))
+narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  (scan 0.9810, 0 head miss(es))
+narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  (scan 0.9967, 0 head miss(es))
+narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  (scan 1.0000, 0 head miss(es))
 verdict      the two-stage search recovers the exact ranking at the shipped depth, in every shape
 window       8192 bytes a source (the corpus's opening): a semantic search sees each source's title and body up to it, a keyword search the whole body
 past window  task  2110 of 104208 sources (2.0%), 7.4 MiB of 196.0 MiB of text (3.8%)
@@ -306,9 +307,9 @@ Embedding a document costs a provider call, and it is the one thing in the
 search path a node cannot recompute on its own. So it is not done per node and
 not on the write path — a page save would otherwise carry a third-party HTTP
 round trip inside its own transaction. One **fleet-singleton duty** embeds each
-source once and publishes a record; every data node applies it. The company pays the
-bill once and holds the answer everywhere. A node whose copy of the vectors, the
-tracker or the knowledge base is out of service does not hold the duty, since
+source once and publishes a record; every data node applies it. The company
+pays the bill once and every data node holds the answer. A node whose copy of
+the vectors, Worklet or Doclet is out of service does not hold the duty, since
 what it publishes and withdraws would be decided from rows it has stopped
 serving. It gives the duty back if it holds it, and a node whose copies serve
 takes it at its next tick
@@ -515,7 +516,7 @@ names every space it finds, which is how you see a refill in progress.
 
 ### Every document carries a bucket
 
-Both halves of the native backend stamp each document with a **search shard** —
+Worklet and Doclet both stamp each document with a **search shard**:
 a stable hash of its own identity into 64 fixed buckets, written beside the row
 by the same function in both estates.
 
@@ -533,11 +534,11 @@ independence is the point:
   function of the id rather than of anything derived from it.
 
 **A single node reads every bucket**, exactly as it did before the column
-existed. A fleet above 10 000 documents divides them: each live node scans a
-contiguous range, returns its best candidates *with scores*, and the asking node
-merges. There is no routing plan to compute and nothing to configure — the
-division is a sorted roster and a remainder, and every node computes the same
-one. See [Search](../guides/search.md) for the merge order, why BM25 stays
+existed. A fleet above 10 000 documents divides them: each live data node scans
+a contiguous range, returns its best candidates *with scores*, and the asking
+data node merges. There is no routing plan to compute and nothing to configure —
+the division is a sorted roster of the data nodes and a remainder, and every
+node computes the same one. See [Search](../guides/search.md) for the merge order, why BM25 stays
 comparable across a divided scan, and what a partial answer names.
 
 The count is fixed for the life of a deployment and is deliberately not
@@ -563,14 +564,14 @@ flowchart TD
     SEL["hybrid candidate selection:<br/>vector top-50 ∪ recency top-50,<br/>deduped by row id,<br/>then aux-LLM relevance filter"]
     PROMPT["Turn-start prefetch blocks<br/>'## Personal memory'<br/>'## Relevant knowledge'"]
     KS["KnowledgeSearcher<br/>aux-LLM → one plain-text query,<br/>once per turn"]
-    NATIVE["native: this node's own rows<br/>BM25 index ∪ two-stage vectors,<br/>fused by reciprocal rank"]
+    DOCLET["doclet: this node's own rows<br/>BM25 index ∪ two-stage vectors,<br/>fused by reciprocal rank"]
     CQL["confluence: live CQL at the site,<br/>as the seat's own user"]
     RP --> DIARY --> SEL --> PROMPT
-    KS --> NATIVE --> PROMPT
+    KS --> DOCLET --> PROMPT
     KS --> CQL --> PROMPT
 ```
 
-The two reads are independent: the diary is read by hybrid candidate selection (vector top-K ∪ recency top-K → aux-LLM relevance filter), scoped to the calling agent; the knowledge base is read through whichever backend the company wired — this node's own applied rows natively, a live query at the site on Confluence — scoped to the role's accessible containers. Neither depends on the other, and each renders into its own block of the executor's prompt.
+The two reads are independent: the diary is read by hybrid candidate selection (vector top-K ∪ recency top-K → aux-LLM relevance filter), scoped to the calling agent; the knowledge base is read through whichever backend the company wired (this node's own applied rows on Doclet, a live query at the site on Confluence), scoped to the role's accessible containers. Neither depends on the other, and each renders into its own block of the executor's prompt.
 
 ---
 
@@ -612,9 +613,9 @@ type Searcher interface {
 }
 ```
 
-**A search that did not run says so.** The native knowledge base is searched on
-a data node — this one when it has the `data` role, another data node
-otherwise — and a search no data node could run is answered with no hits, **no
+**A search that did not run says so.** Doclet is searched on
+a data node (this one when it has the `data` role, another data node
+otherwise), and a search no data node could run is answered with no hits, **no
 mode served** and none of the corpus covered, never as a plain empty list:
 "nothing matched" and "the knowledge base could not be searched" send a seat to
 different places. The turn-start block and `search_knowledge` say the second in
@@ -629,15 +630,15 @@ Contract semantics every backend honors:
 - **`Query.Mode`** is `hybrid` (the zero value), `keyword` or `semantic` — see [modes](#three-modes-and-the-querys-own-vector). A backend that cannot rank that way says so in the outcome; Confluence answers `modes: [keyword]`.
 - **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. Left nil it takes the default, `"Auto-Drafted Skills"` (`knowledge.AutoDraftedParent`), so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them; an empty, non-nil list disables the exclusion. Every draft title also carries the `[Auto-draft] ` prefix (`knowledge.AutoDraftTitlePrefix`) as a fail-closed backstop for a backend whose parent lookup fails.
 
-**Selection is by `knowledge.backend`, and single-homed.** Engine start constructs exactly one searcher: the native one over this node's own page index, or the Confluence one, or none. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With `backend: none`, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change re-points the running turn engine at the new searcher (or at none).
+**Selection is by `knowledge.backend`, and single-homed.** Engine start constructs exactly one searcher: Doclet's over this node's own page index, or the Confluence one, or none. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin and skill promotion agree about what the company knows; two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With `backend: none`, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change re-points the running turn engine at the new searcher (or at none).
 
-An empty `backend` **derives** rather than defaulting blindly: a company that declares `integrations.confluence` gets `confluence`, and one that declares nothing gets `native`. That is the compatible half of the rename — an Atlassian company that has not read this page keeps the backend it had, and a quickstart company gets a wiki without asking for one.
+An empty `backend` **derives** rather than defaulting blindly: a company that declares `integrations.confluence` gets `confluence`, and one that declares nothing gets `doclet`. So an Atlassian company that has not read this page still searches Confluence, and a quickstart company gets a wiki without asking for one.
 
-**The seam has two implementations, and it was written for the second.** `knowledge.Searcher` is declared by its consumers — the prefetch, the `search_knowledge` builtin, the promotion pass — so the native backend arrived as a new implementation rather than a rewrite of everything that searches. A seam collapsed into its last backend is what makes the next one a rewrite.
+**The seam has two implementations, and it was written for the second.** `knowledge.Searcher` is declared by its consumers (the prefetch, the `search_knowledge` builtin, the promotion pass), so Doclet arrived as a new implementation rather than a rewrite of everything that searches. A seam collapsed into its last backend is what makes the next one a rewrite.
 
-### Native backend — the engine's own pages
+### Doclet backend: the engine's own pages
 
-`internal/pages` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside every other state log's inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
+`internal/doclet` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every data node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside every other state log's — the tracker's, the vector index's, the identity estate's, usage's, chat's and the code host's — inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
 
 A search here is **hybrid by default**: the query is embedded once through the company's embeddings provider, and the BM25 ranking and the [two-stage semantic scan](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) are fused by reciprocal rank fusion. With no provider, or with `knowledge.vectors: false`, it is BM25 alone — and the answer says `served_mode: keyword` with `degraded: no_embeddings` rather than presenting the words as the whole of it.
 
@@ -656,12 +657,14 @@ Two properties differ from the vendor path and both are visible:
   activated (`chart_epoch`, in Unix milliseconds), and a configuration
   activated earlier never overwrites one activated later — so a node
   restarting on a revision the fleet has since replaced leaves the newer names
-  alone, exactly as the tracker's projects do (see
-  [the work tracker](../guides/work-tracker.md#projects-and-keys)). A later
+  alone, exactly as Worklet's projects do (see
+  [Worklet](../guides/worklet.md#projects-and-keys)). A later
   activation over unchanged settings is still written — a **re-stamp** —
   because a row left at the older stamp is open to any activation between the
-  two. A node with no activation instant — one booting on a revision it has
-  never seen activated — stamps nothing.
+  two. A configuration no activation has named stamps nothing, and a node
+  never runs one: it starts on the revision its store activated, with that
+  activation's instant, or with no company, and a company file reaches it
+  through an activation and its apply.
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is
@@ -672,24 +675,35 @@ Two properties differ from the vendor path and both are visible:
   (`pages{parent}`), each read when its row opens, in windows of 500 with the
   listing's `total` and an `after` cursor, and each page saying how many
   `children` the same listing would show under it, so an expander never opens
-  onto a level whose pages are all in the trash. A search there reads THIS
+  onto a level whose pages are all in the trash. A later window resumes the
+  listing's order where the last one stopped — by space, title and id — so
+  the tenth window of a large space costs what its first does. A search there reads THIS
   NODE'S OWN COPY (the rows, the lexical index and the replicated vectors), and
   the screen says so: it is as current as this node's place on the pages log.
-  See [the dashboard's Knowledge](../reference/dashboard-design.md#knowledge-the-spaces-a-landing-and-search-with-real-modes).
+  See [the dashboard's Doclet](../reference/dashboard-design.md#doclet-the-spaces-a-landing-and-search-with-real-modes).
+- **THE NEWEST TOOL SKILLS ARE READ IN THEIR OWN ORDER.** `pages{skills:
+  true, order: "newest"}` lists the tool skills by when each last changed,
+  newest first, from an index of the skill rows' own (replicated migration
+  0067), and pages by a cursor in that order — so the first window is the
+  skills that really changed last, however many the company keeps; Agent
+  skills' **Newest** and Home's Agent skills widget read it. Whether a
+  page is a skill is derived from its body on every node rather than stored on
+  the page, so no other listing has an index in that order and `newest` is
+  refused anywhere but beside `skills=true`.
 - **A PAGE KNOWS WHO READ IT AND WHO LINKS TO IT.** Every read a seat makes
   is a recorded `knowledge_read`, and the replicated `usage` domain keeps it
   per company day, so `page_reads` names each seat, how the page reached it
   and in which turn — the same answer on every node, a departed node's reads
   included. Backlinks are the answering data node's — one whose copies of
-  both the knowledge base and the tracker serve, since the links are read
+  both Doclet and Worklet serve, since the links are read
   from both: the lexical indexer extracts every
-  page id a body links to (`pages.Links` — `/pages/<id>` or the dashboard's
-  `#/knowledge/pages/<id>`, outside code) into `page_links` in the node
+  page id a body links to (`doclet.Links`: `/doclet/pages/<id>` or the dashboard's
+  `#/doclet/pages/<id>`, outside code) into `page_links` in the node
   estate, beside the index it is derived with, and a task links a page either
   as a page relation or by an address in its description. A link is BY ID,
   never by title — a title is an address a rename moves — and `write_page` and
   `save_page` tell a seat so on their `body` parameter, with an example a test
-  holds against `pages.Links`: `[its title](#/knowledge/pages/<page id>)`. A
+  holds against `doclet.Links`: `[its title](#/doclet/pages/<page id>)`. A
   `[[CONTAINER/Title]]` wiki link is not a grammar the engine reads; it is
   drawn as the brackets it is and counts for nothing in "Linked from". A build
   that changes what the index derives re-derives every older row once, on its
@@ -717,12 +731,12 @@ Two properties differ from the vendor path and both are visible:
   lead; and a page that names no space lands in the space of the seat that
   wrote it (`engine.LiveSeatSpace`), as a seat's own write does, while a
   credential bound to no seat, whose login no seat matches, is told the page
-  needs a container rather than having one guessed for it. This is the
-  tracker's rule, applied to the knowledge base.
+  needs a container rather than having one guessed for it. This is
+  Worklet's rule, applied to Doclet.
 - **A BODY HAS A HISTORY**, and revision N is the body at version N. The
   dashboard reads any one of them back and shows what a save changed against
   the version before it, by line.
-- **A body is MARKDOWN**, and the only format — see `internal/pages`. The
+- **A body is MARKDOWN**, and the only format (see `internal/doclet`). The
   dashboard renders it (headings, lists, tables, code, links), with raw HTML
   shown as its own text and a link's scheme restricted to `http(s):`,
   `mailto:` and the app's own routes: a page is written by an agent acting on
@@ -751,8 +765,8 @@ Two properties differ from the vendor path and both are visible:
   that is not there, or two pages filed under each other, are pages no walk of
   the container ever reaches. An empty parent is the container's top.
   Two moves that are each sound can still race — A under B on one node, B
-  under A on another — and so can a move and its parent's purge. Every node
-  then files the page where it can, identically: a move whose parent it can no
+  under A on another — and so can a move and its parent's purge. Every data
+  node then files the page where it can, identically: a move whose parent it can no
   longer hold leaves the page where it was, a create lands at the top, and a
   `pages_parent_salvaged` warning names the page. **Purging a page re-files
   its children** under its own parent (or the top) rather than leaving them
@@ -778,24 +792,24 @@ The tool-skills container is excluded from every result. A tool skill is machine
 
 #### Who may write where
 
-Reading and authoring pages — `get_page`, `list_pages`, `search_knowledge`, `write_page`, `save_page`, `comment_on_page` — is the **`knowledge` app**, which every agent seat holds and a person holds when an administrator ticks it (`admin` includes it). Five rules sit beside it.
+Reading and authoring pages (`get_page`, `list_pages`, `search_knowledge`, `write_page`, `save_page`, `comment_on_page`) is the **`doclet` app**, which every agent seat holds and a person holds when an administrator ticks it (`admin` includes it). Five rules sit beside it.
 
-**A page lives in a space the company declares.** Creating a page under a container key the company does not declare is refused, for a person and an agent alike, with a sentence naming the key and how a space is declared — exactly as filing a task in a project the company does not declare is. The declared spaces are every unit's and seat's `space:`, `knowledge.root_space` and the tool-skills container (`knowledge.skills_container`), read off the configuration current at each create; a company that declares none can create no page until it does. Creating is the only way into a container — a save cannot move a page and a rename keeps its container — so the rule is asked of `write_page`, the human write surface's `POST /pages` and the operator's assistant alike, by the knowledge base's own store, and a page's existing container is never re-judged. A container the chart's apply creates for a declared space needs no create of its own.
+**A page lives in a space the company declares.** Creating a page under a container key the company does not declare is refused, for a person and an agent alike, with a sentence naming the key and how a space is declared, exactly as filing a task in a project the company does not declare is. The declared spaces are every unit's and seat's `space:`, `knowledge.root_space` and the tool-skills container (`knowledge.skills_container`), read off the configuration current at each create; a company that declares none can create no page until it does. Creating is the only way into a container (a save cannot move a page and a rename keeps its container), so the rule is asked of `write_page`, the human write surface's `POST /doclet/pages` and the operator's assistant alike, by Doclet's own store, and a page's existing container is never re-judged. A container the chart's apply creates for a declared space needs no create of its own.
 
-**Two containers are reserved from agents, for two different reasons, so they hold back different writes.** The knowledge base's own **store** enforces both, answering `ErrReserved`:
+**Two containers are reserved from agents, for two different reasons, so they hold back different writes.** Doclet's own **store** enforces both, answering `ErrReserved`:
 
 | Container | What it holds | What an agent may not do there |
 |---|---|---|
 | The tool-skills container (`knowledge.skills_container`) | The pages the engine injects into a phase of every seat's turn as instructions. Excluded from knowledge search and from routing | **Anything**: create a page, save one, rename one, or add, edit or remove a remark. A page a seat wrote there would either never be read, or be read by every seat as an order |
 | The org root (`knowledge.root_space`) | What is true of the whole company, starting with the Onboarding page every seat reads first. Searched and routed like any other container | **Add a page.** A new page at the top of the company is a person's decision, and a seat publishes into its own team's space. Keeping a root page current, renaming it and remarking on it is ordinary upkeep, and is not refused |
 
-The rule lives in the store rather than beside one tool because it was once one check on `write_page`, and a seat that could not create a page in the skills container could still save over one, rename it and comment on it. It is a rule about the **actor**, not about capability: an agent cannot see from anything it holds that a page is machinery, or that a container is the company's canon, while a person publishing into either on purpose — through their own assistant over [`/operator/mcp`](#on-the-native-backend-your-own-assistant) — is what the containers are for. The container keys are read off the configuration current at each write, so an apply that moves `skills_container` or `root_space` moves the rule with it.
+The rule lives in the store rather than beside one tool because it was once one check on `write_page`, and a seat that could not create a page in the skills container could still save over one, rename it and comment on it. It is a rule about the **actor**, not about capability: an agent cannot see from anything it holds that a page is machinery, or that a container is the company's canon, while a person publishing into either on purpose (through their own assistant over [`/operator/mcp`](#on-doclet-your-own-assistant)) is what the containers are for. The container keys are read off the configuration current at each write, so an apply that moves `skills_container` or `root_space` moves the rule with it.
 
-**A tool skill is configuration, and a person writing one needs `admin`.** The store's rule above is about agents and exempts every person, because whether a person may is a permission and the store holds none — so the tool layer asks it, once the container is known. Creating or saving a page in the skills container (`write_page`, `save_page`), and renaming, trashing, restoring or purging one over the [write surface](../reference/api-endpoints.md#the-human-write-surface), is decided as `pages.skill.write` on top of the verb's own rule: `admin`, the permission that edits the company document, because a skill page is injected into every seat's turn and rewrites the prompt the whole company runs under. The `knowledge` app alone is not a way to put words in every agent's mouth. A remark on a skill page is not the skill, and stays an ordinary comment. The org root needs nothing beyond the app: publishing the onboarding tree there is what a person holding `knowledge` does.
+**A tool skill is configuration, and a person writing one needs `admin`.** The store's rule above is about agents and exempts every person, because whether a person may is a permission and the store holds none, so the tool layer asks it, once the container is known. Creating or saving a page in the skills container (`write_page`, `save_page`), and renaming, trashing, restoring or purging one over the [write surface](../reference/api-endpoints.md#the-human-write-surface), is decided as `pages.skill.write` on top of the verb's own rule: `admin`, the permission that edits the company document, because a skill page is injected into every seat's turn and rewrites the prompt the whole company runs under. The `doclet` app alone is not a way to put words in every agent's mouth. A remark on a skill page is not the skill, and stays an ordinary comment. The org root needs nothing beyond the app: publishing the onboarding tree there is what a person holding `doclet` does.
 
-**A remark is its author's.** Editing a comment is the author's alone — nobody puts words in somebody else's mouth, on a record that outlives the page's body. Removing one is the author's, or an administrator's (`admin`): a lead is not automatically a moderator of what is said on their team's pages. Both need the `knowledge` app beside the authorship.
+**A remark is its author's.** Editing a comment is the author's alone: nobody puts words in somebody else's mouth, on a record that outlives the page's body. Removing one is the author's, or an administrator's (`admin`): a lead is not automatically a moderator of what is said on their team's pages. Both need the `doclet` app beside the authorship.
 
-**A page's creator tidies it.** Renaming a page, trashing it and restoring it are its **creator's** — whoever wrote it first, which a save never changes — as well as its container's lead's and an administrator's, each with the `knowledge` app: somebody who drafted a page in the wrong place should not need a lead to take it down again. A **purge**, which nothing undoes, stays an administrator's alone, asks for a recent proof, and is never an agent's.
+**A page's creator tidies it.** Renaming a page, trashing it and restoring it are its **creator's** (whoever wrote it first, which a save never changes) as well as its container's lead's and an administrator's, each with the `doclet` app: somebody who drafted a page in the wrong place should not need a lead to take it down again. A **purge**, which nothing undoes, stays an administrator's alone, asks for a recent proof, and is never an agent's.
 
 **A page container is led through a unit's `space:`.** The rules that are a container's lead's — renaming, trashing and restoring a page — ask who leads the unit whose `space:` names the container (or the seat whose own container it is). That is its own question of the org chart rather than the project one: a unit declares its tracker project and its page container in two separate fields, and asking one with the other's key would refuse the lead of every company that spells them differently. See [the authority table](identity-and-access.md#the-authority-table-one-function-decides).
 
@@ -808,7 +822,7 @@ A trashed page is out of every reader's way and can be restored by anybody who c
 - **Nobody is woken.** The page's watchers were told when it went into the trash, which was the change anybody could act on; the purge a month later carries no notification.
 - **What a pass did** is recorded in the coordination store (the `objects` bucket's trash reap record) by whichever node held the duty, and logged as `trash_reap_pass` at `info` when it purged, skipped or failed anything. A purge that failed logs `trash_reap_purge_failed` with the page and the error.
 
-The trash on Confluence is Confluence's own: this duty empties the engine's knowledge base only.
+The trash on Confluence is Confluence's own: this duty empties Doclet's trash only.
 
 ### Confluence backend — the Confluence searcher
 
@@ -837,7 +851,7 @@ It is **role- and unit-independent** — every agent has the same read scope.
 
 So set `knowledge.scope` only to *narrow* reads to a curated floor (e.g. a company handbook); a fully per-agent-credentialled org leaves it unset and lets the backend's ACLs do the scoping. The backend's own permissions remain the hard boundary regardless.
 
-> **Single-homed, and validation enforces it.** A company that sets `knowledge.backend: native` *and* declares `integrations.confluence` is refused, because "what do we already know about this" would depend on which searcher was asked. Also refused: a read scope with no backend behind it — `knowledge.scope` under `backend: none` reads as a working narrowing and narrows nothing.
+> **Single-homed, and validation enforces it.** A company that sets `knowledge.backend: doclet` *and* declares `integrations.confluence` is refused, because "what do we already know about this" would depend on which searcher was asked. Also refused: a read scope with no backend behind it, since `knowledge.scope` under `backend: none` reads as a working narrowing and narrows nothing.
 
 ---
 
@@ -850,6 +864,18 @@ Shared knowledge **is** the backend — there is no separate engine-managed stor
 | Humans + agents via the backend's MCP tools (`confluence_create_page` / `confluence_update_page` / `confluence_add_comment`) | `knowledge.Searcher` (live query) | Whoever the page's backend permissions allow |
 | `crewlet confluence import` ([below](#publishing-knowledge-docs)) | `knowledge.Searcher` (live query) | Same |
 | Agents via `reflect_and_persist` (in-flight) and `PersistDecider` (post-turn) | `agent_diary` (hybrid vector ∪ recency selection → aux-LLM filter) | The writing agent only |
+
+**The company's chat is not in this corpus, and it is not a gap.** Chat has an
+index of its own and a tool of its own (`search_messages`), and a knowledge
+query never reaches it. Two reasons, and the first is one this page already
+acts on: a work item's comment thread is not indexed either, because a thread
+is a conversation *about* something rather than a statement of it, and one busy
+conversation would outrank every page written on purpose for any word said in
+passing. The second is arithmetic — chat has no semantic half at all, because
+a year of it at the declared census needs several times the whole supported
+vector corpus, and what would pay for it is the embeddings on this page. See
+[Chatlet § Search](chatlet.md#search) and
+[ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md).
 
 Static org configuration (mission, vision, policies, role profile, team roster, unit context, integration hints) is a third source, but it is not "knowledge" in the read-path sense: it renders straight into the executor's system prompt via the section builders in `internal/agent/prompts`. There is no startup seed step and no reconcile pass, because the prompt **is** the configuration. Documents that change frequently (procedures, ADRs, runbooks) live in the knowledge base, where humans and agents already author them.
 
@@ -886,12 +912,22 @@ sequenceDiagram
 
 - **From the sources and nothing else.** The model is told to say only what the
   numbered sources say, to cite each claim as `[n]`, and to say so in one
-  sentence when they do not answer the question. Source `[n]` is the n-th entry
-  of the answer's `sources`, so a screen links every citation. A question
+  sentence when they do not answer the question. Each source reaches it inside a
+  [fence](agent-runtime.md#text-somebody-else-wrote) of a token minted for the
+  call — a page labelled as the search that found it labels it, a work item's
+  description as a colleague's with nobody named — with the standing sentence
+  on what a fence means, so a page that addresses the model is read as the
+  page's words; a long source is condensed reading it under the same label, and
+  the answer has the fence's two escapes applied before anybody reads it. Source `[n]` is the n-th entry
+  of the answer's `sources`, so a screen links every citation; each source's
+  title is its writers' words and has the same escapes applied, and the
+  answer's `provenance` envelope says what the sources were read as — the
+  least trust among them and every writer they name — since a person's
+  assistant reading the answer reads those titles too. A question
   nothing matches is answered without a model at all, and costs nothing.
 - **A person's, not a seat's, and only what the asker uses.** It takes either
   app and a caller who holds a seat: it searches the pages only for a
-  `knowledge` holder and the board only for a `tracker` holder, a caller with
+  `doclet` holder and the board only for a `worklet` holder, a caller with
   neither is refused naming both, and the answer cache is kept apart per set
   of apps, so an answer drawn from pages is never handed to somebody who
   cannot read them. The seat is required — a person's, from the dashboard or
@@ -911,6 +947,13 @@ sequenceDiagram
   whatever becomes of the answer — an empty reply the tool declines to show
   ("The model wrote no answer") included, since its tokens are spent the moment
   the CLI replies.
+- **A model at its usage limit is a wait.** Where the asker's auxiliary model
+  has reached a usage limit its CLI reported, nothing is launched and nothing is
+  spent: the person is told the model has reached its limit, with the
+  company's models as where an administrator gives it a fallback, and the
+  answer carries the time until the model is tried again as its
+  `Retry-After`, as every caller of a model at its limit reads it
+  ([ADR-0064](https://github.com/crewlet/crewlet/blob/main/adr/0064-a-model-at-its-limit-parks-the-seats-it-holds-and-a-seat-says-one-steady-thing.md)).
 - **Cached at a corpus position.** Each node keeps 256 answers, keyed on the
   question (case and spacing folded) and where its tracker, pages and vector
   rows last changed. Any write that could change an answer moves the position
@@ -924,12 +967,12 @@ sequenceDiagram
 
 ## Publishing knowledge docs
 
-Most shared knowledge is authored directly by humans and agents — a seat calls
-`write_page` (native) or the vendor's own MCP tools (Confluence). For docs an
+Most shared knowledge is authored directly by humans and agents: a seat calls
+`write_page` (Doclet) or the vendor's own MCP tools (Confluence). For docs an
 operator wants to keep in **version control** — onboarding pages, runbooks,
 playbooks — there are two paths, one per backend.
 
-### On the native backend: your own assistant
+### On Doclet: your own assistant
 
 There is no import CLI, and there does not need to be one. Point any MCP client
 at [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)
@@ -950,10 +993,10 @@ flag-driven CLI handles badly: the parent chain, a title that already exists
 The [reserved containers](#who-may-write-where) are **not** refused to it, which
 is the difference from a seat: they are refused to an agent, and publishing the
 tool skills and the onboarding tree on purpose is exactly what a person does
-there. The onboarding tree takes the token's ordinary `knowledge`; the
+there. The onboarding tree takes the token's ordinary `doclet`; the
 tool skills take **`admin`**, because each one is injected into
-every seat's turn. It is also why this is the native way to seed [tool
-skills](tool-skills.md) — a file with a `trigger:` in its frontmatter belongs in
+every seat's turn. It is also how [tool skills](tool-skills.md) are seeded
+on Doclet: a file with a `trigger:` in its frontmatter belongs in
 the skills container, where it is injected into a phase as an instruction
 rather than read as knowledge, and every other file belongs anywhere else.
 Which containers those are is read from the running company at each write, so
@@ -970,12 +1013,12 @@ The first positional argument is the **Tier B company YAML** (the importer reads
 
 Knowledge docs follow a **directory-based convention** — the files are pure prose, no frontmatter required:
 
-- **Container = the file's immediate parent directory name.** A file at `<root>/ENG/onboarding.md` publishes to the container `ENG` — a native container, or a Confluence space of that key.
+- **Container = the file's immediate parent directory name.** A file at `<root>/ENG/onboarding.md` publishes to the container `ENG`: a Doclet container, or a Confluence space of that key.
 - **Title = the file's first `# H1` heading.** That H1 line is stripped from the published body (the backend shows the page title separately, so leaving it would duplicate the title on the page).
 
 `examples/nimbus-docs/` is a worked set of these: the pages the Nimbus
-example company publishes. Both bundled examples run the **native**
-knowledge base, so neither is an argument to this CLI: they publish
+example company publishes. Both bundled examples run **Doclet**, so
+neither is an argument to this CLI: they publish
 through the assistant path above. A company that moves to Confluence adds
 the `confluence:` block per [Confluence](../integrations/confluence.md),
 and its company YAML is then the positional argument the importer reads
@@ -1031,7 +1074,7 @@ Key properties:
 
 There is no orchestrator object to construct. The two reads are wired independently by engine start:
 
-- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or the native one, which needs this node's own store and its lexical index. The native one fuses the [semantic half](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) whenever `knowledge.vectors` is on, embedding each query through `providers.embeddings` — a model that produces vectors, not an LLM. Neither takes an LLM — writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
+- **The `knowledge.Searcher`** is constructed from whichever backend `knowledge.backend` names (see [the seam](#the-knowledgesearcher-seam)): the Confluence searcher, which needs the site connection and nothing local; or Doclet's, which needs this node's own store and its lexical index. Doclet's fuses the [semantic half](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) whenever `knowledge.vectors` is on, embedding each query through `providers.embeddings` (a model that produces vectors, not an LLM). Neither takes an LLM: writing the query text is the [prefetch's](#relevant-knowledge-prefetch) job, on the seat's auxiliary model, and `search_knowledge` has the executor's own words to search with. With `backend: none`, or a `confluence` company whose integration is missing, no searcher is wired and the `## Relevant knowledge` block stays empty.
 - **`learning.Diary`** is built over the node's store (`learning.NewDiary`), so a node with no store has no diary and the `## Personal memory` block stays empty without error. Writes are embedded when `providers.embeddings` is configured, and the node holding a seat fills the notes written without a vector or under another model; without it the diary degrades to a pure recency list (vector candidate selection becomes a no-op) but writes and recency reads still work.
 
 The two are independent: an org can have knowledge search without reflection, or reflection without knowledge search.
@@ -1040,7 +1083,7 @@ The two are independent: an org can have knowledge search without reflection, or
 
 ## Relevant-knowledge prefetch
 
-Beyond agents calling the backend's search tools directly, the executor's prompt carries a `## Relevant knowledge` block that pre-runs a knowledge-base search for the seat. Once per turn, the auxiliary LLM generates a short plain-text search query from the trigger context, the searcher runs it live (scoped to the role's accessible containers), and the executor sees title + snippet bullets without having to think to call a tool. When the block is thin — a pointer trigger gates the search off — the executor searches the same seam itself with the `search_knowledge` builtin, once it knows what the task actually needs. The `CanSearch` pre-gate skips the aux-LLM call entirely when a search could not return anything. Because the search runs as the agent's own backend user, restricted pages the agent cannot see never appear — there is no draft-page or restriction filter to apply engine-side.
+Beyond agents calling the backend's search tools directly, the executor's prompt carries a `## Relevant knowledge` block that pre-runs a knowledge-base search for the seat. Once per turn, the auxiliary LLM generates a short plain-text search query from the trigger context, the searcher runs it live (scoped to the role's accessible containers), and the executor sees title + snippet bullets without having to think to call a tool — inside one [fence](agent-runtime.md#text-somebody-else-wrote) of the turn's token, under the label the backend stamped on each hit (`knowledge.Hit.Provenance`: a Doclet page is a colleague's with nobody named, a Confluence page `external` with nobody named), which `search_knowledge` renders through the same function. When the block is thin — a pointer trigger gates the search off — the executor searches the same seam itself with the `search_knowledge` builtin, once it knows what the task actually needs. The `CanSearch` pre-gate skips the aux-LLM call entirely when a search could not return anything. Because the search runs as the agent's own backend user, restricted pages the agent cannot see never appear — there is no draft-page or restriction filter to apply engine-side.
 
 Full page bodies open via the backend's page-read MCP tool; further searches via its search MCP tool (`confluence_get_page` / `confluence_search`).
 
@@ -1054,7 +1097,7 @@ A read names the pages it reached (`pages[{id, container, title, rank}]`), the b
 
 | `via` | What happened | Phase |
 |---|---|---|
-| `get_page` | The seat read one page in full with `get_page` (native backend). | the phase that called it |
+| `get_page` | The seat read one page in full with `get_page` (Doclet). | the phase that called it |
 | `search` | The seat ran `search_knowledge`; `pages` are the hits it was shown, ranked, and `query` is what it searched for. | the phase that called it |
 | `prefetch` | The turn-start `## Relevant knowledge` block put these pages in front of the seat; `query` is the auxiliary model's. | none — it runs before the first phase |
 | `skill_loaded` | The seat loaded a [tool skill](tool-skills.md)'s body with `load_tool_skill`; the page is the one the skill was read from. | the phase that loaded it |
@@ -1082,7 +1125,7 @@ A dedicated table, because `learning.Onboarding.Onboarded` answers with one inde
 
 The knowledge system has a block of its own — `knowledge.backend`, `knowledge.scope`, `knowledge.skills_container`, `knowledge.root_space` and `knowledge.vectors`, field by field in [Configuration](../getting-started/configuration.md#knowledge). Two upstream configs determine the rest:
 
-- **`integrations.confluence`** — required by `backend: confluence`, and refused beside `backend: native` because pages would then live in two places with nothing keeping them in step. The query-time search authenticates with each role's per-agent token (`mcp_env.atlassian`), falling back to the org-level token (`confluence.token`); a `confluence` company missing it has no searcher at all, so the `## Relevant knowledge` block stays empty and only the agent's diary contributes. The native backend needs none of it — it searches as the engine, over this node's own applied rows.
-- **`providers.embeddings`** — required for the diary's vector candidate path (the vector half of the `## Personal memory` prefetch's hybrid selection, plus the diary write-side embedding step), for `episodes` vector recall in the learning subsystem (`query_episodes` and the `## Similar prior work` prefetch), **and** for the [semantic half](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) of the native knowledge search. `knowledge.vectors` is the switch that fuses that half into the query, and it **derives** from whether this block is configured — so a company already paying for embeddings for its diary gets the better search, and an explicit `vectors: true` with no provider is refused at validation rather than degrading quietly. An explicit `vectors: false` turns off everything that embeds the corpus at once: the embedding duty stops (no provider bill for documents), the coverage gauge measures nothing, and every search is keyword and says so — the diary and episode recall keep using the provider regardless. Without an embeddings provider the native search is lexical only (BM25 over this node's own index), the diary degrades to its recency-only path (still functional, just without semantic candidate matching), and episodic recall is disabled. On `backend: confluence` the question does not arise: that search is a live CQL query against the site, which embeds nothing either way.
+- **`integrations.confluence`**: required by `backend: confluence`, and refused beside `backend: doclet` because pages would then live in two places with nothing keeping them in step. The query-time search authenticates with each role's per-agent token (`mcp_env.atlassian`), falling back to the org-level token (`confluence.token`); a `confluence` company missing it has no searcher at all, so the `## Relevant knowledge` block stays empty and only the agent's diary contributes. Doclet needs none of it: it searches as the engine, over this node's own applied rows.
+- **`providers.embeddings`**: required for the diary's vector candidate path (the vector half of the `## Personal memory` prefetch's hybrid selection, plus the diary write-side embedding step), for `episodes` vector recall in the learning subsystem (`query_episodes` and the `## Similar prior work` prefetch), **and** for the [semantic half](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) of Doclet's knowledge search. `knowledge.vectors` is the switch that fuses that half into the query, and it **derives** from whether this block is configured, so a company already paying for embeddings for its diary gets the better search, and an explicit `vectors: true` with no provider is refused at validation rather than degrading quietly. An explicit `vectors: false` turns off everything that embeds the corpus at once: the embedding duty stops (no provider bill for documents), the coverage gauge measures nothing, and every search is keyword and says so; the diary and episode recall keep using the provider regardless. Without an embeddings provider Doclet's search is lexical only (BM25 over this node's own index), the diary degrades to its recency-only path (still functional, just without semantic candidate matching), and episodic recall is disabled. On `backend: confluence` the question does not arise: that search is a live CQL query against the site, which embeds nothing either way.
 
 See [Configuration](../getting-started/configuration.md) for the full YAML shape, [Confluence integration](../integrations/confluence.md) for setup, and [Agent Learning](agent-learning.md) for diary mechanics.

@@ -87,15 +87,15 @@ var dutyCases = []testCase{
 
 	{"a_caller_class_lease_is_honoured_beyond_the_seat_ceiling_up_to_the_contract_ceiling", func(h *harness) {
 		// The same ceiling for a class this package does not own. A
-		// caller's claim — the tracker's walk claims, `move:`, `merge:`
-		// and `bulk:` — is sized from the work it guards, a walk's
-		// heartbeat or a bulk's projected apply time, and never from the
-		// seat heartbeat. The embedded KV held every such claim to its
-		// seat lease bucket's age, so at the shipped 45-second seat TTL
-		// every cross-project move and every merge was refused before
-		// its first append, on every fleet. The twin honoured any TTL
-		// and every claim this suite made of a caller class sat inside
-		// LongTTL, so neither half of the suite could see it.
+		// caller's claim — the tracker's walk claims, `move:` and
+		// `merge:` — is sized from the work it guards, a walk's
+		// heartbeat, and never from the seat heartbeat. The embedded KV
+		// held every such claim to its seat lease bucket's age, so at
+		// the shipped 45-second seat TTL every cross-project move and
+		// every merge was refused before its first append, on every
+		// fleet. The twin honoured any TTL and every claim this suite
+		// made of a caller class sat inside LongTTL, so neither half of
+		// the suite could see it.
 		//
 		// Claimed GATED, as a caller's claim is: a duty is ungated, and
 		// a case that only ever claimed the ungated way would certify

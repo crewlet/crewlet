@@ -2,8 +2,6 @@ package slack
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -264,9 +262,4 @@ func encodeManifest(manifest map[string]any) (string, error) {
 		return "", fmt.Errorf("slack: encode manifest: %w", err)
 	}
 	return string(encoded), nil
-}
-
-func digest(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
 }

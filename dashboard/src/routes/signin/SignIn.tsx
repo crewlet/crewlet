@@ -89,6 +89,7 @@ import { useEffect, useState } from "react";
 import { Button, Callout, Disclosure, FormField, Input, Text, InlineCode } from "@crewlethq/ui";
 import { useRoute } from "~/app/router.tsx";
 import { currentReader } from "~/lib/reader.ts";
+import { fmtWait } from "~/lib/format.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { useSignedIn, type SignedInAs } from "~/lib/session.ts";
 import { auth, currentSessionNeed, RestError, type SessionAnswer } from "~/protocol/index.ts";
@@ -340,7 +341,7 @@ function PasswordForm({
         </Callout>
       )}
       <Button type="submit" variant="primary" disabled={busy || waiting || !ready}>
-        {busy ? "Signing in" : waiting ? `Try again in ${left}s` : "Sign in"}
+        {busy ? "Signing in" : waiting ? `Try again ${fmtWait(left)}` : "Sign in"}
       </Button>
       <Text as="p" variant="caption" tone="secondary">
         Forgot your password? Ask an admin for a reset link.

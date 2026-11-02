@@ -39,7 +39,7 @@ func cli(t *testing.T, args ...string) (string, string, error) {
 func cliIn(t *testing.T, environ config.Source, args ...string) (string, string, error) {
 	t.Helper()
 	var out, errs bytes.Buffer
-	err := runIn(environ, args, &out, &errs)
+	err := runIn(invocation{environ: environ}, args, &out, &errs)
 	return out.String(), errs.String(), err
 }
 
@@ -408,7 +408,7 @@ func TestTheCredentialIsTheEnvironmentsAndNeverTheConfigs(t *testing.T) {
 	}
 }
 
-// AN EXPORTED TOKEN AND -url NEED NO CONFIG. The Tier A file is read for the
+// AN EXPORTED TOKEN AND -api NEED NO CONFIG. The Tier A file is read for the
 // node's ADDRESS alone, and the token is the invocation's environment and
 // nothing else, so an operator who named the node and exported a token has
 // supplied both and can act on a node whose config this machine does not hold
@@ -417,7 +417,7 @@ func TestTheCredentialIsTheEnvironmentsAndNeverTheConfigs(t *testing.T) {
 // names the variable, and a development principal on a loopback bind needs
 // none.
 //
-// Mutation: read Tier A whenever the token is absent, or before -url is
+// Mutation: read Tier A whenever the token is absent, or before -api is
 // consulted, and the command fails on a config file nothing needed.
 func TestAnExportedTokenAndAURLNeedNoConfig(t *testing.T) {
 	t.Parallel()
@@ -425,16 +425,16 @@ func TestAnExportedTokenAndAURLNeedNoConfig(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nowhere.yaml")
 
 	if _, _, err := cliIn(t, tokenEnviron("exported"),
-		"budgets", "show", "-config", missing, "-url", node.server.URL); err != nil {
-		t.Fatalf("budgets show with -url and an exported token = %v, want no config read", err)
+		"budgets", "show", "-config", missing, "-api", node.server.URL); err != nil {
+		t.Fatalf("budgets show with -api and an exported token = %v, want no config read", err)
 	}
 	if got := node.tokens[len(node.tokens)-1]; got != "Bearer exported" {
 		t.Errorf("Authorization = %q, want the exported token", got)
 	}
 
 	if _, _, err := cliIn(t, noEnviron,
-		"budgets", "show", "-config", missing, "-url", node.server.URL); err != nil {
-		t.Fatalf("budgets show with -url and no token = %v, want no config read", err)
+		"budgets", "show", "-config", missing, "-api", node.server.URL); err != nil {
+		t.Fatalf("budgets show with -api and no token = %v, want no config read", err)
 	}
 	if got := node.tokens[len(node.tokens)-1]; got != "" {
 		t.Errorf("Authorization = %q with nothing exported, want no credential sent", got)
@@ -452,7 +452,7 @@ func TestReachingANodeThatIsDownExplainsItself(t *testing.T) {
 		"  external_url: \"http://127.0.0.1:1\"\n"+
 		"  auth:\n    admin: serve\n"+
 		"    tokens:\n      - id: ops\n        token: %s\n"+
-		"        grants: [tracker]\n"+
+		"        grants: [worklet]\n"+
 		fixtureStream(dir)+fixtureKeyring,
 		filepath.Join(dir, "index.db"), cliFixtureToken)
 	cfg := filepath.Join(dir, "config.yaml")

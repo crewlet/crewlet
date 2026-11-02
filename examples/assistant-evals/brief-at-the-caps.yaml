@@ -1,0 +1,45 @@
+# A brief written exactly at its caps, in characters of more than one byte
+# (é, ë, €): an about line of 90 characters, a row's do of 80 and its why of
+# 60, a context line of 100 and a follow-up of 80. The engine counts
+# characters as the model does, so a model that respects the schema it is
+# handed is accepted first time; the script has no second answer to fall
+# back on.
+person:
+  apps: [worklet]
+page:
+  screen: inbox
+  title: Inbox
+  params: {}
+  query: {}
+  resources: [{kind: task, id: ENG-42}]
+  selection: null
+  source_revision: url:4c2a9e1b
+  accepts: []
+mode: brief
+question: Brief me on this page
+answers:
+  - route: GET /worklet/decisions
+    body:
+      items:
+        - kind: ask
+          at: "2026-10-26T09:00:00Z"
+          ask: {key: ENG-42, title: Pick the store build, body: "Which build should I test?", asked_by: qa}
+  - route: GET /worklet/{id}
+    body:
+      task: {id: 5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f, key: ENG-42, title: Pick the store build, priority: normal}
+script:
+  - call: list_decisions
+  - call: answer_brief
+    args:
+      about: "QA asks which build to test on ENG-42 before the café opening; the budget is at 80 %, Zoë."
+      needs:
+        - {ref_kind: task, ref_id: ENG-42, do: "Answer ENG-42: test the store build before the café release, as QA asked at 9:00", why: "Asked at 09:00 by the QA Engineer; budget at 80 % of €1,200.", tone: warning, action: open}
+      context: "The review window opens tomorrow, 09:00; the Android signing key is due back for the café, Zoë says."
+      follow_ups: ["Which store build did QA test last week, and did it pass all tests for the café?"]
+expect:
+  calls: [list_decisions, answer_brief]
+  proposals: 0
+  state: completed
+  brief:
+    needs: [ENG-42]
+    tones: [warning]

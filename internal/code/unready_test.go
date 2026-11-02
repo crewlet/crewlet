@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 )
 
-// A WALK LETS ANOTHER NODE FILL ONLY PAST ONE BRINGING NO COPY UP (ADR-0059).
+// A WALK LETS ANOTHER NODE FILL ONLY PAST ONE BRINGING NO COPY UP (ADR-0082).
 // Every reason a git node gives for not answering a read is held to whether it
 // passes the walk's one fill on: a node behind its configuration (which judges
 // no seat until its apply succeeds) and one that failed on its own pass it, so

@@ -142,7 +142,7 @@ const saveKey = (el: Element) => fireEvent.keyDown(el, { key: "Enter", ctrlKey: 
 // `mayChangeConfig` gate and the Edit appears for the tracker reader.
 test("a reader who may not write the charter is offered no control at all", async () => {
   location.hash = "#/company/principles?edit=mission";
-  mount(["tracker"], { ...ACME, vision: "" });
+  mount(["worklet"], { ...ACME, vision: "" });
   // The address naming a part is dropped once the reader is known.
   await waitFor(() => expect(location.hash).toBe("#/company/principles"));
   expect(screen.queryByRole("button", { name: /^Edit/ })).toBeNull();
@@ -197,6 +197,74 @@ test("Save writes this part onto the charter as it is now and says it landed", a
   await waitFor(() =>
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Edit the mission" })),
   );
+});
+
+// A SAVE THIS NODE REFUSED IS NOT SHOWN AS ONE ON ITS WAY. The applied epoch
+// a refusal leaves where it was said nothing, so the card drew the saved
+// words, "shown as soon as this node applies" them, for as long as the page
+// stayed open while every agent here read the old ones. Mutation: settle a
+// landed save by the applied epoch alone and the card keeps "Ship it well".
+test("a save this node refused shows the words it still runs, and says so", async () => {
+  const store = mount();
+  fireEvent.click(await editOf("mission"));
+  fireEvent.change(missionBox(), { target: { value: "Ship it well" } });
+  saveKey(missionBox());
+  await screen.findByText("Mission saved");
+  expect(within(card("mission")).getByText("Ship it well")).toBeDefined();
+
+  // The fake engine stores every write as revision "r", activated at 5.
+  act(() =>
+    store.applyHealth(
+      healthFrame({
+        applied_epoch: 4,
+        config_attempt: { epoch: 5, revision_id: "r", status: "error" },
+      }),
+    ),
+  );
+  expect(within(card("mission")).getByText("Ship it")).toBeDefined();
+  expect(within(card("mission")).queryByText("Ship it well")).toBeNull();
+  expect(within(card("mission")).getByText(/this node refused the new revision/)).toBeDefined();
+  expect(within(card("mission")).queryByText(/as soon as this node applies/)).toBeNull();
+
+  // A later revision this node applies is the answer, whatever it says.
+  act(() =>
+    store.applyHealth(
+      healthFrame({
+        applied_epoch: 6,
+        config_attempt: { epoch: 6, revision_id: "r6", status: "ok" },
+      }),
+    ),
+  );
+  expect(within(card("mission")).queryByText(/this node refused/)).toBeNull();
+  expect(within(card("mission")).getByText("Ship it")).toBeDefined();
+});
+
+// A DROPPED SOCKET CLEARS THE HEALTH SLICE, and says nothing about the save:
+// read as this node's standing, the missing push was "applying", and the card
+// drew the saved words again over the refusal it had said, until the socket
+// came back. Mutation: hand the cards the live slice (`useEngineHealth`) and
+// this reads "Ship it well", "as soon as this node applies".
+test("a save this node refused stays refused through a dropped socket", async () => {
+  const store = mount();
+  fireEvent.click(await editOf("mission"));
+  fireEvent.change(missionBox(), { target: { value: "Ship it well" } });
+  saveKey(missionBox());
+  await screen.findByText("Mission saved");
+  act(() =>
+    store.applyHealth(
+      healthFrame({
+        applied_epoch: 4,
+        config_attempt: { epoch: 5, revision_id: "r", status: "error" },
+      }),
+    ),
+  );
+  expect(within(card("mission")).getByText(/this node refused the new revision/)).toBeDefined();
+
+  act(() => store.setConnected(false));
+  expect(within(card("mission")).getByText("Ship it")).toBeDefined();
+  expect(within(card("mission")).queryByText("Ship it well")).toBeNull();
+  expect(within(card("mission")).getByText(/this node refused the new revision/)).toBeDefined();
+  expect(within(card("mission")).queryByText(/as soon as this node applies/)).toBeNull();
 });
 
 // SOMEBODY ELSE'S WORDS ARE NEVER OVERWRITTEN UNSEEN: the change is shown and
@@ -278,7 +346,7 @@ test("moving to another page with unsaved writing asks first", async () => {
   fireEvent.click(await editOf("mission"));
   fireEvent.change(missionBox(), { target: { value: "Half a thought" } });
   act(() => {
-    location.hash = "#/work";
+    location.hash = "#/worklet";
   });
   const dialog = await screen.findByRole("alertdialog", { name: "Leave without saving?" });
   expect(within(dialog).getByText("Your changes to the mission will be lost.")).toBeDefined();

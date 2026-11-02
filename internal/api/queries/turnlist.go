@@ -90,8 +90,8 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 	// tracker rather than dropped, because the unfiltered page answers a
 	// different question from the one that was asked.
 	if item != "" && !authz.Shows(principal, authz.KindTask) {
-		return nil, &Refusal{What: "turns on a work item", Reason: authz.ReasonNoGrant,
-			Grants: []iam.Grant{authz.AppFor(authz.KindTask)}}
+		return nil, NewRefusal("turns on a work item", authz.Decision{
+			Reason: authz.ReasonNoGrant, Grants: []iam.Grant{authz.AppFor(authz.KindTask)}})
 	}
 	q.WorkItem = item
 	// THE WINDOW AS TWO INSTANTS ON THE TURN'S START, or as whole days back
@@ -111,7 +111,7 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 			"not both", ErrBadParams)
 	}
 	if !since.IsZero() && !until.IsZero() && !since.Before(until) {
-		return nil, fmt.Errorf("%w: since=%s is not before until=%s — the window "+
+		return nil, fmt.Errorf("%w: since=%s is not before until=%s. The window "+
 			"starts at since and ends before until", ErrBadParams,
 			since.Format(time.RFC3339), until.Format(time.RFC3339))
 	}
@@ -182,7 +182,7 @@ func (s Sources) trailOf(ctx context.Context, what string, p Params) (string, ia
 			return "", principal, fmt.Errorf("%w: this node cannot decide %s yet: %w",
 				ErrUnavailable, authz.ActionAuditRead, d.Err)
 		case !d.Allowed:
-			return "", principal, refused(what, d)
+			return "", principal, NewRefusal(what, d)
 		}
 		return "", principal, nil
 	}
@@ -195,7 +195,7 @@ func (s Sources) trailOf(ctx context.Context, what string, p Params) (string, ia
 
 // turnsFor is a page of turns as p is shown it: each turn's work item — the
 // task it was charged to — only where [authz.Shows] shows p a task (ADR-0033).
-// A lead reads their agents' trail whether or not they use the tracker, and
+// A lead reads their agents' trail whether or not they use Worklet, and
 // their agents' turns are not a way into it. A COPY wherever it changes
 // anything.
 func turnsFor(turns []store.Turn, p iam.Principal) []store.Turn {

@@ -28,23 +28,39 @@ import (
 // Revisions are immutable and the activation pointer is append-only, which is
 // what makes the history a record rather than a claim. Re-sealing writes a new
 // revision carrying the same document, exactly as `import` and `revert` do.
+//
+// # The revision this node BOOTS on
+//
+// That is the row the next start must open, so it is the one that has to move
+// off a retired key — on a node that refused the fleet's revision, not the
+// fleet's. The re-sealed copy is offered over what the boot row was built on: a
+// rekeyed copy of a revision the fleet has moved past is this node's alone, and
+// is never published over the company that replaced it.
 
-// rekeyConfig re-seals the active revision under the keyring's active key.
+// rekeyConfig re-seals the revision this node boots on under the keyring's
+// active key.
 //
 // IDEMPOTENT, and the check is on the DENORMALISED key id rather than on a
 // decrypt: a document already under the active key is left alone, so this is
 // safe in a deploy script and a dry run costs no decryption at all.
 func rekeyConfig(ctx context.Context, cs *configStore, dryRun bool, stdout io.Writer) error {
 	active := activeKeyID(cs)
-	rev, err := revisionOrActive(ctx, cs, "")
+	rev, found, err := cs.configs.Boot(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("read the revision this node boots on: %w", err)
 	}
-	sealedUnder, sealed := secrets.EnvelopeKeyIDOf(rev.Payload)
-	switch {
-	case !sealed:
-		return refuseUnsealed(rev.ID)
-	case sealedUnder == active:
+	if !found {
+		return errors.New("this node boots on no revision, so there is nothing to " +
+			"re-seal; run `crewlet config import`")
+	}
+	// WHY IT IS NOT A SEAL THIS BUILD READS, before the key id: a plaintext
+	// revision and one sealed in a form this build does not read both have
+	// no key id, and they are refused for opposite reasons.
+	if err = secrets.CheckSealed(rev.Payload); err != nil {
+		return storedRefusal(rev.ID, err)
+	}
+	sealedUnder, _ := secrets.EnvelopeKeyIDOf(rev.Payload)
+	if sealedUnder == active {
 		fmt.Fprintf(stdout, "revision %s is already sealed under %s\n", rev.ID, active)
 		return nil
 	}
@@ -59,7 +75,7 @@ func rekeyConfig(ctx context.Context, cs *configStore, dryRun bool, stdout io.Wr
 		// key back in secrets.keys and the error is otherwise a decrypt
 		// failure with nothing to act on.
 		return fmt.Errorf("revision %s is sealed under %s, which this "+
-			"keyring cannot open — restore that key to secrets.keys and "+
+			"keyring cannot open. Restore that key to secrets.keys and "+
 			"re-run: %w", rev.ID, sealedUnder, err)
 	}
 	id, err := reseal(ctx, cs, rev, document, fmt.Sprintf(
@@ -69,11 +85,12 @@ func rekeyConfig(ctx context.Context, cs *configStore, dryRun bool, stdout io.Wr
 	}
 	fmt.Fprintf(stdout, "re-sealed revision %s as %s under %s (was %s)\n",
 		rev.ID, id, active, sealedUnder)
-	fmt.Fprintln(stdout, rekeyPublishNote)
+	fmt.Fprintln(stdout, rekeyPublishNote(offerOn(rev)))
 	return nil
 }
 
-// reseal writes the document back as a new active revision.
+// reseal writes the document back as a new revision this node boots on,
+// offered over what the revision it re-seals was built on.
 func reseal(ctx context.Context, cs *configStore, parent store.Revision,
 	document []byte, summary string,
 ) (string, error) {
@@ -87,7 +104,7 @@ func reseal(ctx context.Context, cs *configStore, parent store.Revision,
 		// one would report success over a document still in the clear.
 		return "", errors.New("config: the keyring produced no sealed payload")
 	}
-	id, err := cs.configs.InsertActive(ctx, store.Revision{
+	id, err := cs.configs.Offer(ctx, offerOn(parent), store.Revision{
 		ParentID: parent.ID, Source: "rekey", CreatedBy: hostActor().Name,
 		CreatedByKind: hostActor().Kind, Summary: summary, Payload: payload,
 	})

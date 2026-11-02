@@ -14,7 +14,7 @@
  */
 
 import { useLayoutEffect, useRef, useState, type HTMLAttributes } from "react";
-import { Callout, Card, Tag, cx } from "@crewlethq/ui";
+import { Callout, Card, Tag, cx, peekClickHandler } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
   CalendarGlyph,
@@ -27,7 +27,6 @@ import {
 // `~/ui/Icon.tsx`, which is where one change moves every caller at once.
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { uiletTone } from "~/ui/primitives.tsx";
-import { rowPeekHandler } from "~/app/frame/DetailRail.tsx";
 import {
   fmtCount,
   fmtDateCompact,
@@ -334,7 +333,7 @@ export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean
  * The mark for a notice that ASKS something of its recipient.
  *
  * ONE MARK, because there were two. The engine writes ONE fact —
- * `tracker.Reason.Addressed`, a wake that obliges its seat to answer rather than
+ * `worklet.Reason.Addressed`, a wake that obliges its seat to answer rather than
  * absorb — and two screens drew it: My work as a caution-toned "asks" beside a
  * neutral reason chip, the item's Woke tab as a TINT ON the reason chip. Two
  * marks for one fact is two facts to a reader, and folding it into the reason
@@ -640,7 +639,7 @@ export function WorkCard({
       data-pending={pending ? "true" : undefined}
       aria-busy={pending || undefined}
       href={href}
-      onClick={rowPeekHandler(onOpen)}
+      onClick={peekClickHandler(onOpen)}
       {...drag}
     >
       <div className="work-card-top">
@@ -742,7 +741,7 @@ export function WorkRow({
       data-drop={drop}
       aria-busy={pending || undefined}
       href={href}
-      onClick={rowPeekHandler(onOpen)}
+      onClick={peekClickHandler(onOpen)}
       {...drag}
     >
       {/* EVERY CELL EXISTS EVEN WHEN ITS VALUE DOES NOT. The marks below each

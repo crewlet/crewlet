@@ -97,6 +97,13 @@ type Transcript struct {
 	// seam drops is older context a seat can do without; this is the thing
 	// it is answering.
 	StoppedShort bool
+
+	// Hosted says the thread is on a surface the engine hosts, where every
+	// sender authenticated as a company principal, so a line whose sender
+	// nobody can name is a colleague's rather than an outside party's
+	// ([provenance.TrustForHosted]). Set by the engine's own chat reader;
+	// a vendor's leaves it false.
+	Hosted bool
 }
 
 // Thread is a chat thread that ALREADY EXISTS.
@@ -135,8 +142,8 @@ type Thread struct {
 // straddle two threads) and the detached-sandbox round trip.
 func ThreadOf(metadata map[string]string) (Thread, bool) {
 	backend := metadata[TransportField]
-	channel := metadata["channel"]
-	root := metadata["thread_ts"]
+	channel := metadata[ChannelField]
+	root := metadata[ThreadField]
 	if backend == "" || channel == "" || root == "" {
 		return Thread{}, false
 	}

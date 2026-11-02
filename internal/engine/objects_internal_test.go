@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -24,7 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY DECLARED TABLE IS READ BY THE COLLECTOR THIS ENGINE STARTS.
@@ -48,17 +49,18 @@ func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 // to choose. Its readers are zero values, because only the estates' names are
 // read here.
 func objectsRuntime() *native {
-	return &native{trackerObjects: &tracker.Reader{}, codeReader: &code.Reader{}}
+	return &native{trackerObjects: &worklet.Reader{}, codeReader: &code.Reader{}}
 }
 
 // collectorEstates is every estate the collector reads on a data node, as
 // [Engine.startCollectorOver] builds them: [objectsRuntime]'s, and the
-// artifacts log's, which every data node runs ([objectEstatesFor]).
+// artifacts and assistant logs', which every data node runs
+// ([objectEstatesFor]).
 func collectorEstates() []collect.Estate {
-	return objectEstatesFor(objectsRuntime(), &artifactsdomain.Reader{})
+	return objectEstatesFor(objectsRuntime(), &artifactsdomain.Reader{}, &assistantdomain.Reader{})
 }
 
-// EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG (ADR-0052). A backup reads
+// EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG (ADR-0075). A backup reads
 // the log a declaration names past its store copy, and the deferred records of
 // the table it names, to carry the objects a restore's replay names — so a
 // declaration naming another domain's stream or table would have the backup
@@ -134,7 +136,7 @@ name: Nimbus
 tracker:
   backend: none
 knowledge:
-  backend: native
+  backend: doclet
 roles:
   - name: SWE
     handle: swe
@@ -175,10 +177,10 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 		// TOOLS, which decides the branch its estate is built on.
 		toolReader bool
 	}{
-		"native tracker":                    {doc: companyWithoutSandboxDoc, toolReader: true},
-		"no tracker, native knowledge base": {doc: noTrackerDoc, toolReader: false},
-		// THE STATE LOG ON THE CODE HOST ALONE: no tracker and no
-		// knowledge base of the engine's own, so nothing but code.native
+		"Worklet":               {doc: companyWithoutSandboxDoc, toolReader: true},
+		"no tracker, on Doclet": {doc: noTrackerDoc, toolReader: false},
+		// THE STATE LOG ON THE CODE HOST ALONE: no Worklet and no
+		// Doclet, so nothing but code.native
 		// starts the register — and every declaring domain's estate is
 		// still offered, the tracker's built for the object store alone.
 		"the code host alone": {doc: codeHostAlone, toolReader: false},
@@ -198,7 +200,7 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 			// THE ESTATES THE COLLECTOR IS BUILT OVER, as [Engine.startCollectorOver]
 			// builds them: the native half's and the artifacts log's, which
 			// every data node runs ([objectEstatesFor]).
-			estates := objectEstatesFor(n, e.ArtifactsReader())
+			estates := objectEstatesFor(n, e.ArtifactsReader(), e.AssistantReader())
 			offered := map[string]bool{}
 			for _, estate := range estates {
 				if offered[estate.Name()] {
@@ -354,8 +356,52 @@ func TestTheObjectStoresBucketCountsIntoTheNodesRecorder(t *testing.T) {
 // by hand: an in-memory store and fleet, and a collector over source.
 func collectorNode(t *testing.T, source collect.Source) (*Engine, *collectorDuty, *coordmemory.Fleet) {
 	t.Helper()
+	return collectorNodeOn(t, source, memobj.New())
+}
+
+// collectorNodeHolding is [collectorNode] over a store that already holds one
+// object uploaded two days ago under a key minted then: past the grace by both
+// instants, so a collection judges it, and pins its estate to do so.
+func collectorNodeHolding(t *testing.T, source collect.Source) (*Engine, *collectorDuty, *coordmemory.Fleet) {
+	t.Helper()
+	backend, upload := agedUploads(t)
+	upload()
+	return collectorNodeOn(t, source, backend)
+}
+
+// agedUploads is a memory store, and a put of one object into it uploaded two
+// days ago under a key minted then — past the grace by both instants, so the
+// next collection judges it and pins its estate to do so. A pass that finds
+// nothing past the grace decides nothing and takes no barrier
+// (internal/objstore/collect), so a case about what a pass does while it runs
+// gives it something to judge.
+func agedUploads(t *testing.T) (objstore.Backend, func()) {
+	t.Helper()
+	then := time.Now().Add(-2 * collect.PendingGrace)
+	var aged atomic.Bool
+	backend := memobj.NewAt(func() time.Time {
+		if aged.Load() {
+			return then
+		}
+		return time.Now()
+	})
+	return backend, func() {
+		t.Helper()
+		aged.Store(true)
+		defer aged.Store(false)
+		if err := backend.Put(t.Context(), objstore.KeyAt(then).Name(),
+			strings.NewReader("an old upload"), objstore.PutMeta{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// collectorNodeOn is [collectorNode] over the backend given.
+func collectorNodeOn(t *testing.T, source collect.Source,
+	backend objstore.Backend) (*Engine, *collectorDuty, *coordmemory.Fleet) {
+	t.Helper()
 	fleet := coordmemory.NewFleet()
-	store, err := objstore.NewStore(memobj.New())
+	store, err := objstore.NewStore(backend)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +446,8 @@ func collectionRecorded(t *testing.T, fleet *coordmemory.Fleet) (CollectionRepor
 func TestTheCollectorRunsThePassThatIsDueAndRecordsIt(t *testing.T) {
 	t.Parallel()
 	source := &namedNothing{}
-	e, duty, fleet := collectorNode(t, source)
+	backend, upload := agedUploads(t)
+	e, duty, fleet := collectorNodeOn(t, source, backend)
 
 	if _, found := collectionRecorded(t, fleet); found {
 		t.Fatal("the premise: a report was recorded before any pass ran")
@@ -421,6 +468,10 @@ func TestTheCollectorRunsThePassThatIsDueAndRecordsIt(t *testing.T) {
 		t.Fatalf("the second turn recorded audit %+v, want a completed audit", r.Status.Audit)
 	}
 
+	// SOMETHING PAST THE GRACE, so a pass that ran where none is due would
+	// judge it and take a barrier: over a store holding nothing to judge, a
+	// pass takes none, and the count below could not move either way.
+	upload()
 	barriers := source.barriers
 	for range 3 {
 		e.collectorTurn(t.Context(), nil, duty)
@@ -437,7 +488,9 @@ func TestTheCollectorRunsThePassThatIsDueAndRecordsIt(t *testing.T) {
 func TestATakenDutyResumesTheScheduleItsLastHolderRecorded(t *testing.T) {
 	t.Parallel()
 	source := &namedNothing{}
-	e, duty, fleet := collectorNode(t, source)
+	// AN AGED UPLOAD, so a pass that wrongly ran would judge it and take the
+	// barrier this case counts.
+	e, duty, fleet := collectorNodeHolding(t, source)
 	now := time.Now()
 	raw, err := json.Marshal(collectionReport{Node: "data-b", Backend: "nats", Status: collect.Status{
 		Collect: collect.CollectionReport{Completed: true, At: now.Add(-10 * time.Minute)},
@@ -505,10 +558,12 @@ func (*failingSource) Barrier(context.Context) (statelog.Position, error) {
 }
 
 // A PASS THAT FAILED IS RECORDED AS FAILED, its error where an operator reads
-// it, rather than leaving the last success standing as the store's status.
+// it, rather than leaving the last success standing as the store's status. The
+// store holds an object past the grace, so the pass has one to judge and asks
+// the failing estate for its barrier.
 func TestAFailedPassIsRecordedWithItsError(t *testing.T) {
 	t.Parallel()
-	e, duty, fleet := collectorNode(t, &failingSource{})
+	e, duty, fleet := collectorNodeHolding(t, &failingSource{})
 	e.collectorTurn(t.Context(), nil, duty)
 	r, found := collectionRecorded(t, fleet)
 	if !found || r.Status.Collect.Completed || r.Status.Collect.Error == "" {
@@ -680,7 +735,7 @@ func TestATakenDutyKeepsTheFindingsItsLastHolderRecorded(t *testing.T) {
 func TestATakenDutyResumesNothingFromAnotherStoresReport(t *testing.T) {
 	t.Parallel()
 	source := &namedNothing{}
-	e, duty, fleet := collectorNode(t, source)
+	e, duty, fleet := collectorNodeHolding(t, source)
 	now := time.Now()
 	lost := collect.MissingFile{Object: objstore.KeyAt(now), NamedBy: "ENG/lost.md"}
 	raw, err := json.Marshal(collectionReport{Node: "data-b",
@@ -733,7 +788,10 @@ func TestATakenDutyResumesNothingFromAnotherStoresReport(t *testing.T) {
 func TestARecordThatCannotBeReadResumesNothing(t *testing.T) {
 	t.Parallel()
 	source := &namedNothing{}
-	e, duty, fleet := collectorNode(t, source)
+	// AN AGED UPLOAD, so a pass that runs judges something and takes the
+	// barrier this case reads: a pass over a store holding nothing past the
+	// grace decides nothing and takes none.
+	e, duty, fleet := collectorNodeHolding(t, source)
 	now := time.Now()
 	// A WELL-FORMED DOCUMENT with a recent collection beside an audit of the
 	// wrong type: the decoder fills the first and reports the second.
@@ -814,14 +872,20 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 		}
 	}
 	// unanswered is a node over source whose fleet withholds the record the
-	// next time it is asked.
+	// next time it is asked, over a store holding an aged upload, and the put
+	// of another: a pass judges an object past the grace and takes a barrier,
+	// so a turn that ran one where none may run moves the count [unchanged]
+	// reads. Over a store holding nothing to judge, no pass takes a barrier
+	// and the count could not move either way.
 	unanswered := func(t *testing.T, source collect.Source) (*Engine, *collectorDuty,
-		*coordmemory.Fleet, *unansweredRecord) {
+		*coordmemory.Fleet, *unansweredRecord, func()) {
 		t.Helper()
-		e, duty, fleet := collectorNode(t, source)
+		backend, upload := agedUploads(t)
+		upload()
+		e, duty, fleet := collectorNodeOn(t, source, backend)
 		record := &unansweredRecord{memFleet: fleet}
 		e.backends.Fleet = record
-		return e, duty, fleet, record
+		return e, duty, fleet, record, upload
 	}
 	mine := func(context.Context) (bool, error) { return true, nil }
 	missing := func(e *Engine) int {
@@ -861,7 +925,7 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 	t.Run("a node taking the duty", func(t *testing.T) {
 		t.Parallel()
 		source := &namedNothing{}
-		e, duty, fleet, record := unanswered(t, source)
+		e, duty, fleet, record, _ := unanswered(t, source)
 		recordLost(t, fleet, []collect.MissingFile{{Object: objstore.KeyAt(time.Now()),
 			NamedBy: "ENG/lost.md", Finding: collect.FindingMissing}})
 
@@ -881,7 +945,7 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 	t.Run("a node taking it back after an unknown claim", func(t *testing.T) {
 		t.Parallel()
 		source := &namedObject{k: objstore.KeyAt(time.Now())}
-		e, duty, fleet, record := unanswered(t, source)
+		e, duty, fleet, record, upload := unanswered(t, source)
 		e.collectorTurn(t.Context(), nil, duty) // collect
 		e.collectorTurn(t.Context(), nil, duty) // audit: the one object is lost
 		e.collectorTurn(t.Context(), func(context.Context) (bool, error) {
@@ -895,6 +959,7 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 		duty.mu.Lock()
 		duty.collected = time.Time{} // a collection is due: a pass would run if one could
 		duty.mu.Unlock()
+		upload() // and one past the grace for it to judge, whatever the collection did with the first
 		barriers := source.barriers
 
 		record.fails.Store(1)
@@ -1044,9 +1109,13 @@ func turnAside(t *testing.T, e *Engine, claim func(context.Context) (bool, error
 func heldDutyNode(t *testing.T) (*Engine, *collectorDuty, *coordmemory.Fleet, *fakeDutyClock) {
 	t.Helper()
 	source := newHeldPass()
-	e, duty, fleet := collectorNode(t, source)
+	backend, upload := agedUploads(t)
+	e, duty, fleet := collectorNodeOn(t, source, backend)
 	e.collectorTurn(t.Context(), nil, duty) // collect
 	e.collectorTurn(t.Context(), nil, duty) // audit
+	// SOMETHING FOR THE HELD PASS TO JUDGE, so it takes the barrier the
+	// source holds it at.
+	upload()
 	var r statelog.Reading
 	e.objectsReading(time.Now(), &r)
 	if r.ObjectsMissing != 1 {
@@ -1070,7 +1139,7 @@ func TestACollectorPassLongerThanItsLeaseKeepsTheDuty(t *testing.T) {
 	t.Parallel()
 	source := newHeldPass()
 	source.hold.Store(true)
-	e, duty, fleet := collectorNode(t, source)
+	e, duty, fleet := collectorNodeHolding(t, source)
 	clk := newFakeDutyClock()
 	duty.renewal.clock = clk
 	store := &coordmemory.Backend{Clock: clk.Now}
@@ -1204,7 +1273,9 @@ func TestACollectorPassSurvivesARenewalTheStoreDidNotAnswer(t *testing.T) {
 			t.Parallel()
 			source := newHeldPass()
 			source.hold.Store(true)
-			e, duty, fleet := collectorNode(t, source)
+			// AN AGED UPLOAD, so the pass judges something and takes the
+			// barrier the source holds it at.
+			e, duty, fleet := collectorNodeHolding(t, source)
 			clk := newFakeDutyClock()
 			duty.renewal.clock = clk
 			claim := newScriptedClaim(answer{held: true}, unanswered)

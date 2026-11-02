@@ -51,25 +51,36 @@ var ErrFull = errors.New("inbox: this inbox list is at its ceiling")
 // one verb.
 var ErrInvalid = errors.New("inbox: invalid gesture")
 
-// refused is a gesture these rules refuse: the sentence a person reads,
-// without the package prefix [refused.Error] adds, and the sentinel that
-// classes it.
-type refused struct {
-	mark     error
-	sentence string
+// Refusal is a gesture these rules refuse: the sentinel that classes it and
+// the sentence a person reads, without the package prefix [Refusal.Error]
+// adds.
+//
+// EXPORTED, FIELDS AND ALL, because a mark is decided on the data node whose
+// copy holds the person's inbox and its refusal crosses the estate router's
+// wire (internal/estate) to the node whose caller is told: the wire rebuilds an
+// error TYPE from its exported fields — Mark as a nested wire error, so it
+// still answers errors.Is — and an unexported one arrived as its message
+// alone, so [Sentence] on the asking node found no refusal and handed its
+// reader the whole "inbox: …". Only this package builds one.
+type Refusal struct {
+	// Mark is the sentinel that classes the refusal: [ErrInvalid] or
+	// [ErrFull].
+	Mark error
+	// Why is the sentence, without the package prefix.
+	Why string
 }
 
-func (e *refused) Error() string { return "inbox: " + e.sentence }
-func (e *refused) Unwrap() error { return e.mark }
+func (e *Refusal) Error() string { return "inbox: " + e.Why }
+func (e *Refusal) Unwrap() error { return e.Mark }
 
 // invalid is a refusal marked [ErrInvalid].
 func invalid(format string, args ...any) error {
-	return &refused{mark: ErrInvalid, sentence: fmt.Sprintf(format, args...)}
+	return &Refusal{Mark: ErrInvalid, Why: fmt.Sprintf(format, args...)}
 }
 
 // full is a refusal marked [ErrFull].
 func full(format string, args ...any) error {
-	return &refused{mark: ErrFull, sentence: fmt.Sprintf(format, args...)}
+	return &Refusal{Mark: ErrFull, Why: fmt.Sprintf(format, args...)}
 }
 
 // Sentence is a refusal of these rules as a person reads it: its sentence,
@@ -78,9 +89,9 @@ func full(format string, args ...any) error {
 // is its whole message, because context is never dropped to tidy a prefix
 // away.
 func Sentence(err error) string {
-	var r *refused
+	var r *Refusal
 	if errors.As(err, &r) && r.Error() == err.Error() {
-		return r.sentence
+		return r.Why
 	}
 	return err.Error()
 }

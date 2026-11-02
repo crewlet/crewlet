@@ -24,10 +24,11 @@ import "context"
 //
 // Each step is written to notice for itself that it has nothing to do — the
 // registry compares the company it was built from, the mailbox pass compares
-// its own set against the broker's, the tracker and the knowledge containers
-// compare the row against what the company says, the scheduler arms or
-// disarms rather than rebuilding — so re-applying an unchanged revision, which
-// is the credential-rotation gesture, costs a comparison per step.
+// its own set against the broker's, the tracker, the knowledge containers and
+// the unit rooms compare the row against what the company says, the scheduler
+// arms or disarms rather than rebuilding — so re-applying an unchanged
+// revision, which is the credential-rotation gesture, costs a comparison per
+// step.
 //
 // # The order is not arbitrary
 //
@@ -88,13 +89,18 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 	e.reconcileSeatServers(ctx)
 	steps = append(steps, "seat_tools")
 
-	// THE TRACKER'S PROJECTS, THE KNOWLEDGE CONTAINERS AND THE DECLARED
-	// REPOSITORIES, before any mail is released: the first thing the seats
-	// in a new unit do is file work into its project.
+	// THE TRACKER'S PROJECTS, THE KNOWLEDGE CONTAINERS, THE CHAT ROOMS THE
+	// CHART STAFFS (each unit's own, and every auto-join room's newcomers)
+	// AND THE DECLARED REPOSITORIES, before any mail is released: the first
+	// thing the seats in a new unit do is file work into its project and talk
+	// in its room.
 	e.applyChart(ctx, c)
 	steps = append(steps, "tracker_projects")
 	e.applyContainers(ctx, c)
 	steps = append(steps, "knowledge_containers")
+	e.applyUnitRooms(ctx, c)
+	e.applyAutoJoinRooms(ctx, c)
+	steps = append(steps, "chat_rooms")
 	// AND THE REPOSITORIES code.repos declares, for the containers' reason
 	// and on their terms: asked for here, stamped with the activation the
 	// company was applied from, and decided beside the apply rather than
@@ -128,18 +134,35 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// thing a released inbox does is judge a delivery against the
 		// counters, and it must do so under the ceilings now current.
 		e.reconcileBudgetParks(ctx, c)
-		// AND A RETRIED RESUME WAITING ON EITHER: a published company is
-		// the event that brings a model and the one that moves a ceiling,
-		// so the answers waiting on them are re-checked under the company
-		// now current. One still refused waits again, on whatever refuses
-		// it.
+		// AND A SEAT PARKED ON ITS MODELS' LIMIT, when this company's
+		// models are not the ones that refused it: a park decided under
+		// another registry is released, since whether the seat's chain is
+		// still the one that refused is this company's to say. An entry
+		// that still calls as the same account finds its sign-in's
+		// sit-out ([cliagent.Plans]), so a limit that still holds parks the
+		// seat again at the cost of one delivery and no process: the
+		// entry refuses before any CLI is started. A seat whose mail its
+		// run holds is parked again by its run's completion, which the
+		// readmit below re-fires: collected again, and refused on the
+		// carried limit before its turn runs ([Engine.collectedRefusal]).
+		e.reconcileProviderParks(ctx, c)
+		// AND A RESUME WAITING ON ANY OF THEM: a published company is the
+		// event that brings a model, the one that moves a ceiling and the
+		// one that builds every entry afresh (each unchanged one keeping
+		// its sit-out), so the answers and the completions waiting on them
+		// are re-checked under the company now current. One still refused
+		// waits again, on whatever refuses it.
 		if c.Models != nil {
-			e.readmitAnswers(waitTurnEngine)
+			e.readmitResumes(waitTurnEngine)
+			e.readmitResumes(waitProvider)
 		}
-		e.readmitAnswers(waitBudget)
+		e.readmitResumes(waitBudget)
 		// AND A PAUSE WHOSE SEAT THIS COMPANY REMOVED goes with the seat.
 		// See seatpause.go.
 		e.clearRemovedSeatPauses(ctx, c)
+		// AND A RETRY WHOSE MODEL IT REMOVED goes with the model. See
+		// modelretry.go.
+		e.clearRemovedModelRetries(ctx, c)
 		steps = append(steps, "mailboxes")
 	}
 

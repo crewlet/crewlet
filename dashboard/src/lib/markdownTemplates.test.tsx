@@ -12,7 +12,7 @@ import { render } from "@testing-library/react";
 import { expect, test } from "vitest";
 import { renderMarkdown } from "./markdown.ts";
 import { DOC_TEMPLATES } from "./artifacts/docTemplates.ts";
-import { TEMPLATES } from "~/routes/knowledge/Composer.tsx";
+import { TEMPLATES } from "~/routes/doclet/Composer.tsx";
 
 const corpus = [
   ...TEMPLATES.filter((t) => t.body !== "").map((t) => [`knowledge ${t.value}`, t.body] as const),

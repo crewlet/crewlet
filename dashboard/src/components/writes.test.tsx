@@ -35,10 +35,11 @@ vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const JANE: ViewerState = {
   login: "founder",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   admin: true,
-  tracker: true,
-  knowledge: true,
+  worklet: true,
+  doclet: true,
+  chatlet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -58,6 +59,9 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
+  chatVendors: [],
 };
 
 let sent: { tool: string; body: { request_id: string; args: Record<string, unknown> } }[];

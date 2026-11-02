@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- the value grammar ---------------------------------------------------- //
@@ -158,8 +160,8 @@ func split(s string, isSep func(rune) bool) ([]string, bool) {
 
 func isSpace(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\f' }
 
-// words is s split at top-level whitespace.
-func words(s string) []string {
+// terms is s split at top-level whitespace.
+func terms(s string) []string {
 	parts, ok := split(s, isSpace)
 	if !ok {
 		return nil
@@ -229,7 +231,7 @@ func color(s string) (string, error) {
 	} else {
 		var alpha string
 		main, a, slash := strings.Cut(args, "/")
-		parts = words(main)
+		parts = terms(main)
 		if slash {
 			alpha = strings.TrimSpace(a)
 			parts = append(parts, alpha)
@@ -273,7 +275,7 @@ func keyword(set ...string) valueFunc {
 		if slices.Contains(set, low) {
 			return low, nil
 		}
-		return "", want("one of %s", strings.Join(set, ", "))
+		return "", want("one of %s", words.Or(set))
 	}
 }
 
@@ -302,7 +304,7 @@ func lengthPctAuto(v string, _ *styleCtx) (string, error) {
 func offset(calcOK bool) valueFunc {
 	return func(v string, c *styleCtx) (string, error) {
 		if name, args, ok := call(v); ok && name == "calc" && calcOK {
-			w := words(args)
+			w := terms(args)
 			if len(w) == 3 && (w[1] == "+" || w[1] == "-") {
 				p, okP := percent(w[0])
 				l, okL := length(w[2])
@@ -328,7 +330,7 @@ func numberOnly(lo, hi float64) valueFunc {
 // boxSides reads one to four LEN (or PCT where pctOK) within [lo, hi].
 func boxSides(lo, hi float64, pctOK bool) valueFunc {
 	return func(v string, _ *styleCtx) (string, error) {
-		w := words(v)
+		w := terms(v)
 		if len(w) < 1 || len(w) > 4 {
 			return "", want("one to four lengths")
 		}
@@ -362,7 +364,7 @@ func flex(v string, _ *styleCtx) (string, error) {
 	if low == "none" || low == "auto" {
 		return low, nil
 	}
-	w := words(low)
+	w := terms(low)
 	if len(w) < 1 || len(w) > 3 {
 		return "", want("none, auto, or a grow factor with an optional shrink factor and basis")
 	}
@@ -405,7 +407,7 @@ func tracks(v string, _ *styleCtx) (string, error) {
 	var read func(string, bool) (string, error)
 	read = func(s string, nested bool) (string, error) {
 		var out []string
-		for _, t := range words(s) {
+		for _, t := range terms(s) {
 			low := strings.ToLower(t)
 			if name, args, ok := call(low); ok && name == "repeat" && !nested {
 				parts, ok := split(args, func(r rune) bool { return r == ',' })
@@ -459,7 +461,7 @@ func tracks(v string, _ *styleCtx) (string, error) {
 }
 
 func gridSpan(v string, _ *styleCtx) (string, error) {
-	w := words(strings.ToLower(v))
+	w := terms(strings.ToLower(v))
 	if len(w) == 2 && w[0] == "span" {
 		if n, err := strconv.Atoi(w[1]); err == nil && n >= 1 && n <= 24 {
 			return "span " + strconv.Itoa(n), nil
@@ -570,7 +572,7 @@ func letterSpacing(v string, _ *styleCtx) (string, error) {
 
 // font reads the shorthand `[italic] [weight] LEN[/N] FAMILY`.
 func font(v string, c *styleCtx) (string, error) {
-	w := words(v)
+	w := terms(v)
 	var out []string
 	i := 0
 	if i < len(w) && strings.EqualFold(w[i], "italic") {
@@ -613,7 +615,7 @@ func font(v string, c *styleCtx) (string, error) {
 var decorationStyles = []string{"solid", "double", "dotted", "dashed", "wavy"}
 
 func textDecoration(v string, c *styleCtx) (string, error) {
-	w := words(strings.ToLower(v))
+	w := terms(strings.ToLower(v))
 	if len(w) == 0 || !slices.Contains([]string{"none", "underline", "line-through"}, w[0]) {
 		return "", want("none, underline or line-through, then an optional style and colour")
 	}
@@ -641,7 +643,7 @@ func textDecoration(v string, c *styleCtx) (string, error) {
 }
 
 func textStroke(v string, _ *styleCtx) (string, error) {
-	w := words(v)
+	w := terms(v)
 	if len(w) != 2 {
 		return "", want("a width from 0 to 8px and a colour")
 	}
@@ -686,19 +688,19 @@ func gradient(v string) (string, error) {
 		if a, ok := angle(first); ok {
 			out, parts = append(out, a), parts[1:]
 		} else if to, ok := strings.CutPrefix(first, "to "); ok {
-			for _, s := range words(to) {
+			for _, s := range terms(to) {
 				if !slices.Contains(sides, s) {
 					return "", want("a direction of to top, right, bottom or left")
 				}
 			}
-			out, parts = append(out, "to "+strings.Join(words(to), " ")), parts[1:]
+			out, parts = append(out, "to "+strings.Join(terms(to), " ")), parts[1:]
 		}
 	}
 	if len(parts) < 2 || len(parts) > 8 {
 		return "", want("two to eight colour stops")
 	}
 	for _, p := range parts {
-		w := words(p)
+		w := terms(p)
 		if len(w) < 1 || len(w) > 3 {
 			return "", want("a stop of a colour and up to two positions")
 		}
@@ -724,7 +726,7 @@ func gradient(v string) (string, error) {
 }
 
 func radialHead(s string) (string, error) {
-	w := words(s)
+	w := terms(s)
 	var out []string
 	if len(w) > 0 && (w[0] == "circle" || w[0] == "ellipse") {
 		out, w = append(out, w[0]), w[1:]
@@ -783,7 +785,7 @@ const maxBorder = 16
 // border reads `[LEN] style [COLOR]`, the style word required; a side also
 // takes `none`.
 func border(v string, _ *styleCtx) (string, error) {
-	w := words(strings.ToLower(v))
+	w := terms(strings.ToLower(v))
 	if len(w) == 1 && w[0] == "none" {
 		return "none", nil
 	}
@@ -826,7 +828,7 @@ func shadows(text bool) valueFunc {
 		}
 		out := make([]string, len(parts))
 		for i, p := range parts {
-			w := words(p)
+			w := terms(p)
 			var s []string
 			if !text && len(w) > 0 && strings.EqualFold(w[0], "inset") {
 				s, w = append(s, "inset"), w[1:]
@@ -869,7 +871,7 @@ func transform(v string, c *styleCtx) (string, error) {
 	order := []string{"translate", "translatex", "translatey", "rotate", "scale", "skew", "skewx", "skewy"}
 	last := -1
 	var out []string
-	for _, fn := range words(v) {
+	for _, fn := range terms(v) {
 		name, args, ok := call(fn)
 		at := slices.Index(order, name)
 		if !ok || at < 0 {
@@ -957,7 +959,7 @@ func filter(v string, _ *styleCtx) (string, error) {
 	bounds := map[string][2]float64{"brightness": {0, 2}, "contrast": {0, 2}, "saturate": {0, 3},
 		"grayscale": {0, 1}, "sepia": {0, 1}, "invert": {0, 1}}
 	var out []string
-	for _, fn := range words(v) {
+	for _, fn := range terms(v) {
 		name, args, ok := call(fn)
 		if !ok {
 			return "", want("filter functions")
@@ -1001,6 +1003,6 @@ func noop(ok ...string) valueFunc {
 		if slices.Contains(ok, strings.ToLower(v)) {
 			return "", nil
 		}
-		return "", want("only %s, which changes nothing on the stage", strings.Join(ok, " or "))
+		return "", want("only %s, which changes nothing on the stage", words.Or(ok))
 	}
 }

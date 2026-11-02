@@ -37,8 +37,8 @@
  *
  * The engine answers fifty entries a page, and one branch's queue may hold
  * up to 1 024 waiting (`code.MaxQueueEntries`), so Load more follows `next`
- * through the pager every code listing shares (`lib/usePaged.ts`), the
- * newest page held still from its press. Each page answers the trains of the
+ * through the pager every code listing shares (`lib/usePaged.ts`), each page
+ * joined to the one before it. Each page answers the trains of the
  * targets it reaches, so the bands draw every page's.
  *
  * # Ejected, in the danger tone, with what the engine found
@@ -80,7 +80,7 @@ import { fmtElapsed, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useLatestChecks } from "~/lib/useLatestChecks.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import type {
   CodeCheckRow,
   CodeEjectedRow,
@@ -103,15 +103,13 @@ export function Queue() {
   const named = repo !== "" && isRepoName(repo);
   const choices = useCodeQuery("code_repos");
   const params = useMemo(() => (named ? { repo } : {}), [named, repo]);
-  const hold = usePageHold<CodeQueueAnswer>(params);
   const read = useCodeQuery("code_queue", params, {
     pollMs: QUEUE_POLL_MS,
     enabled: repo === "" || named,
-    hold: hold.holding,
   });
   const paged = usePaged(
-    hold,
     read,
+    params,
     (cursor) => codeRest.query("code_queue", { ...params, cursor }),
     (a: CodeQueueAnswer) => a.queue ?? [],
     (r) => r.entry_id,
@@ -179,7 +177,7 @@ export function Queue() {
                 <Button
                   size="small"
                   variant="secondary"
-                  onClick={paged.older}
+                  onClick={paged.next}
                   disabled={paged.paging}
                   loading={paged.paging}
                 >
@@ -187,7 +185,6 @@ export function Queue() {
                 </Button>
               )}
               {paged.pageError && <PageFailed error={paged.pageError} />}
-              {paged.held && <span className="t-caption">Paused while you page on.</span>}
             </div>
           )}
         </>
@@ -257,7 +254,8 @@ function Band({ band, detailed }: { band: QueueBand; detailed: boolean }) {
   }, [tips]);
   // A candidate's required checks as its entries read them — its tip's,
   // checked for this band's branch — undefined until its tip answers.
-  const checksFor = (p: QueuePlace) => (p.candidate ? checksOf.get(p.candidate.tip_oid) : undefined);
+  const checksFor = (p: QueuePlace) =>
+    p.candidate ? checksOf.get(p.candidate.tip_oid) : undefined;
   return (
     <section aria-label={`The queue of ${title}`}>
       {tips.map((tip) => (

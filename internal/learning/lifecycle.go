@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -1345,7 +1346,11 @@ func (m modelSummarizer) Summarize(ctx context.Context, c Cluster) (Summary, err
 	// over, in a company whose whole point is that seats differ. The role
 	// is prose, and it reaches the model inside the rendered cluster where
 	// prose belongs.
-	raw, err := m.complete(ctx, c.Handle, CompactorSystemPrompt, RenderCluster(c, m.condense(ctx, c)))
+	//
+	// A TOKEN FOR THE CALL, though it carries no fence: every field is a
+	// label or a seat's account, neutralised under it ([RenderCluster]).
+	raw, err := m.complete(ctx, c.Handle, CompactorSystemPrompt,
+		RenderCluster(provenance.NewBoundary(), c, m.condense(ctx, c)))
 	if err != nil {
 		return Summary{}, err
 	}
@@ -1461,10 +1466,16 @@ const condenseParallel = 4
 // condensed is the rewrite of each task or plan past [perTurnDetail], keyed by
 // its flattened text; a field past the budget that is not in it renders whole.
 // NOTHING IS CUT, the tool sequence included.
-func RenderCluster(c Cluster, condensed map[string]string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Cluster of %d similar agent turns from one agent.\n\n", len(c.Episodes))
-	b.WriteString("Turns (numbered):\n")
+//
+// EVERY FIELD IS NEUTRALISED under b (ADR-0040): what woke a turn names its
+// sender as they chose to be named, what it did is the seat's own account of
+// work that read other people's words, and a rewrite is a model's answer —
+// and what the compactor writes back is a pattern the seat reads as its own
+// history, so nothing here may open or close a fence.
+func RenderCluster(b provenance.Boundary, c Cluster, condensed map[string]string) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "Cluster of %d similar agent turns from one agent.\n\n", len(c.Episodes))
+	out.WriteString("Turns (numbered):\n")
 	for i, ep := range c.Episodes {
 		tools := "(none)"
 		if len(ep.ToolSequence) > 0 {
@@ -1477,14 +1488,15 @@ func RenderCluster(c Cluster, condensed map[string]string) string {
 		}
 		// UNDER THE NAMES OF WHAT THEY ARE (see [describeTurn]): the
 		// label of the event that woke the turn, and what the turn did.
-		fmt.Fprintf(&b, "%d. [%s] woken by: %s\n", i, ep.ReviewOutcome, oneLine(ep.TaskSummary, condensed))
-		fmt.Fprintf(&b, "   did: %s\n", oneLine(ep.PlanSummary, condensed))
-		fmt.Fprintf(&b, "   tools: %s\n", tools)
-		fmt.Fprintf(&b, "   when: %s\n", ep.EndedAt.UTC().Format(time.DateOnly))
+		fmt.Fprintf(&out, "%d. [%s] woken by: %s\n", i, provenance.Neutralise(b, ep.ReviewOutcome),
+			provenance.Neutralise(b, oneLine(ep.TaskSummary, condensed)))
+		fmt.Fprintf(&out, "   did: %s\n", provenance.Neutralise(b, oneLine(ep.PlanSummary, condensed)))
+		fmt.Fprintf(&out, "   tools: %s\n", tools)
+		fmt.Fprintf(&out, "   when: %s\n", ep.EndedAt.UTC().Format(time.DateOnly))
 	}
-	b.WriteString("\nEmit one JSON object summarising the recurring pattern across " +
+	out.WriteString("\nEmit one JSON object summarising the recurring pattern across " +
 		"these turns.  Strict JSON, no prose.\n")
-	return b.String()
+	return out.String()
 }
 
 // oneLine flattens one field of a turn and takes its rewrite where it has one.

@@ -19,9 +19,10 @@ import (
 // ZERO.
 //
 // The trim may not remove a record a node that applies the log has not
-// applied, and every data node applies every log from boot. So a data node
-// still joining — no position yet — counts at zero on every log and blocks it:
-// the tail it is about to replay is exactly what the trim must keep.
+// applied, and every data node applies every log from boot. So a live data
+// node whose row has not landed — no position yet — counts at zero on every
+// log and blocks it: what it has still to apply is exactly what the trim must
+// keep.
 func TestEveryLogCountsTheLiveDataNodes(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -29,7 +30,7 @@ func TestEveryLogCountsTheLiveDataNodes(t *testing.T) {
 	e.stopRetention()
 	s.publishPositions(t.Context())
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: e.id,
-		holders: fixedHolders{{NodeID: e.id}, {NodeID: "node-joining"}}}
+		holders: fixedHolders{{NodeID: e.id}, {NodeID: "node-unreported"}}}
 	shared, err := r.read(t.Context())
 	if err != nil {
 		t.Fatalf("read the tick's inputs: %v", err)
@@ -41,13 +42,14 @@ func TestEveryLogCountsTheLiveDataNodes(t *testing.T) {
 		var ids []string
 		for _, n := range shared.counted(running, nil) {
 			ids = append(ids, n.NodeID)
-			if n.NodeID == "node-joining" && (n.Seq != 0 || n.Generation != 0) {
-				t.Errorf("%s counts the joining data node at %d@%d, want zero — it "+
-					"has reported nothing, and the tail it is about to replay is what "+
-					"the trim must keep", running.domain.Name(), n.Seq, n.Generation)
+			if n.NodeID == "node-unreported" && (n.Seq != 0 || n.Generation != 0) {
+				t.Errorf("%s counts the live data node with no row at %d@%d, want "+
+					"zero — it has reported nothing, and everything it has still to "+
+					"apply is what the trim must keep", running.domain.Name(), n.Seq,
+					n.Generation)
 			}
 		}
-		if want := slices.Sorted(slices.Values([]string{e.id, "node-joining"})); !slices.Equal(ids, want) {
+		if want := slices.Sorted(slices.Values([]string{e.id, "node-unreported"})); !slices.Equal(ids, want) {
 			t.Errorf("%s counts %v, want every live data node %v", running.domain.Name(), ids, want)
 		}
 	}
@@ -119,7 +121,7 @@ func TestTheRoutedDataNodesAreTheRoutersPlacement(t *testing.T) {
 
 // THE GIT PLACEMENT IS THE LIVE GIT NODES: every node the router's WATCHED view
 // names whose profile has the git role, sorted — the set a repository's git
-// order is computed over (ADR-0059) — a node that declares no roles among
+// order is computed over (ADR-0082) — a node that declares no roles among
 // them, since such a node has every role, and never a data node that lists its
 // roles without git or a node with seats alone; off the same view as the data
 // placement, so the two cannot disagree about who is live, and UNKNOWN before

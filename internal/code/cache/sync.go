@@ -188,7 +188,7 @@ func (c *Cache) Sync(ctx context.Context, repoID string, fresh statelog.Freshnes
 // starts nothing.
 //
 // It is what a git node asks before a read it was not asked to FILL a copy
-// for (code.GitQuery.Home, ADR-0059): a node that answers false starts
+// for (code.GitQuery.Home, ADR-0082): a node that answers false starts
 // nothing for such a read (code.UnreadyNotHeld), so one read of a repository
 // no git node holds costs the fleet one download, by the walk's effective
 // home, rather than one by every git node the walk reaches — a round, once
@@ -335,7 +335,7 @@ func (c *Cache) entryFor(repoID string) *entry {
 // Only from an incarnation CONVERGED IN THIS PROCESS — never from a state a
 // previous one left: the state's position names a record of the log it was
 // read from, and a log restored from an older copy while the node was down
-// keeps its identity (ADR-0053) and reuses those positions for other
+// keeps its identity (ADR-0076) and reuses those positions for other
 // records, so a stale or session answer from the state would serve a
 // history the log no longer holds. A repository's first caller after a boot
 // pays the full round D3 reads anyway; every one after it is answered here.
@@ -1207,7 +1207,7 @@ func (c *Cache) converge(e *entry, fresh statelog.Freshness, rebuild RebuildReas
 			// it named may have left the log since: a purge removes a
 			// repository's pack rows part by part before the repository
 			// itself, and a retired pack's object outlives its live row only
-			// by its domain's grace (ADR-0051), which a long enough round
+			// by its domain's grace (ADR-0074), which a long enough round
 			// outlives. The collector deletes an object once nothing names
 			// it, so such a round failed every caller for a pack no row
 			// names, and logged code_pack_missing for it. Only a read made
@@ -1775,6 +1775,7 @@ func applyDelta(inc *incarnation, snap snapshot) {
 		inc.leaving[key] = ev
 	}
 	begun := snap.repo.DropEpoch > inc.dropEpoch
+	purged := crossedACommit(inc.dropEpoch, snap.repo.DropEpoch, inc.droppingPacks > 0)
 	for cs, from := range was {
 		now := placeOf(inc, cs)
 		if from == placeNone || from == now {
@@ -1787,17 +1788,24 @@ func applyDelta(inc *incarnation, snap snapshot) {
 		// begin's inputs, whose objects the packs they add hold, and a pack
 		// whose files only move, out of objects/pack into the view or back. A
 		// dropping pack no row names any more is AN EXPUNGE'S COMMIT taking
-		// what it held out of the repository (EventPackExpunged).
+		// what it held out of the repository (EventPackExpunged) — and so is
+		// every pack leaving a round that crossed a commit the copy never
+		// placed the dropping pack of (crossedACommit): the packs the begin
+		// added to hold its inputs' objects are not all here.
 		ev := EventPackRetired
-		if from == placeDropping && now == placeNone {
+		if now == placeNone && (from == placeDropping || purged) {
 			ev = EventPackExpunged
 		}
 		leave(leaveKey{from, cs}, ev)
 	}
 	if begun {
+		ev := EventPackRetired
+		if purged {
+			ev = EventPackExpunged
+		}
 		for cs := range inc.installedPacks {
 			if placeOf(inc, cs) != placeLive {
-				leave(leaveKey{placeLive, cs}, EventPackRetired)
+				leave(leaveKey{placeLive, cs}, ev)
 			}
 		}
 	}
@@ -1807,6 +1815,25 @@ func applyDelta(inc *incarnation, snap snapshot) {
 	if snap.layersServed {
 		setChain(inc, snap.layers)
 	}
+}
+
+// crossedACommit reports whether a round bringing a copy whose objects/ hold
+// the drop epoch held (Synced.DropEpoch) to rows at the epoch rows crossed an
+// expunge's COMMIT as well as its begin — open being whether the rows still
+// leave a pack dropping. An expunge is open one at a time per repository and
+// its dropping rows are live until its commit, so of the epochs crossed every
+// one but the open expunge's has committed: what it left dropping is out of
+// the repository, never placed in this copy, and the begin's inputs leaving
+// it took those objects with them. A retirement keeps every object it
+// takes out (X04); these did not, so they leave as the commit's
+// (EventPackExpunged), and the commit-graph and the memo naming what was
+// purged go with them, as they go from a copy that held the view.
+func crossedACommit(held, rows int64, open bool) bool {
+	crossed := rows - held
+	if open {
+		crossed--
+	}
+	return crossed > 0
 }
 
 // sameRepo reports whether two reads of a repository's row found it the same,

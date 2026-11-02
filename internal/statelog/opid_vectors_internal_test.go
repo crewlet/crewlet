@@ -63,3 +63,46 @@ func TestAMintedOperationIDMatchesTheSharedVectors(t *testing.T) {
 		}
 	}
 }
+
+// opNameVector is one value written into an operation id's name: the value in,
+// the part out ([OpNamePart]).
+type opNameVector struct {
+	Value string `json:"value"`
+	Part  string `json:"part"`
+}
+
+// A CLIENT THAT WRITES A VALUE INTO AN OPERATION'S NAME WRITES IT AS
+// [OpNamePart] DOES, BYTE FOR BYTE.
+//
+// The dashboard names a gate gesture's id by its node, which may hold the dot
+// that begins a step, and so escapes it as this package does — in TypeScript,
+// over a digest of its own, since the browser's is not available to it. The
+// vectors in testdata/opname_vectors.json are the contract between the two,
+// as the layout's are: this test holds [OpNamePart] to them and the
+// dashboard's own suite holds its escape to the same file, with every value
+// written as itself and every escape on both sides of the bound among them.
+func TestAValueIsWrittenIntoANameAsTheSharedVectorsSay(t *testing.T) {
+	raw, err := os.ReadFile("testdata/opname_vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors []opNameVector
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	var kept, escaped int
+	for _, v := range vectors {
+		if got := OpNamePart(v.Value); got != v.Part {
+			t.Errorf("OpNamePart(%q) = %q, want %q", v.Value, got, v.Part)
+		}
+		if v.Part == v.Value {
+			kept++
+		} else {
+			escaped++
+		}
+	}
+	if kept == 0 || escaped == 0 {
+		t.Fatalf("the vectors keep %d value(s) and escape %d — a file without "+
+			"both certifies only half the rule", kept, escaped)
+	}
+}

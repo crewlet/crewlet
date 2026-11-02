@@ -25,13 +25,20 @@ import (
 // LandingKind is what landed a commit on a protected branch, as its landing
 // row says (code_landings.kind): a queue's landing of its tested prefix, a
 // change's direct merge, or a push. A named string with a closed set, so a
-// kind a later build records is a value.
+// kind a later build records is a value. Each kind is spelled as the
+// [MergedVia] of the same route is, so a landing row and the change row it
+// merged name one route one way, in the rows and in the REST reads alike.
 type LandingKind string
 
 const (
-	// LandedPreLand is a queue's landing, each change tested merged on the
+	// LandedQueue is a queue's landing, each change tested merged on the
 	// branch before it landed (m5-q2's `land` record).
-	LandedPreLand LandingKind = "pre_land"
+	//
+	// BASE FORMAT, under the condition queuerecords.go's head states: only
+	// a land record's apply writes it, so it rides that op's versionedFields
+	// row ({Name: "MutationRecord.Op land", Since: 2, Path: []string{"op"},
+	// Equals: "land"}) once a build without the queue has run.
+	LandedQueue LandingKind = "queue"
 	// LandedDirect is a change merged by a merge record ([Merge]), its gate
 	// held — or overridden by a person — from one snapshot.
 	LandedDirect LandingKind = "direct"
@@ -42,7 +49,7 @@ const (
 
 // LandingKinds is the closed set: a branch's queue's, then a direct merge and
 // a push.
-func LandingKinds() []LandingKind { return []LandingKind{LandedPreLand, LandedDirect, LandedPush} }
+func LandingKinds() []LandingKind { return []LandingKind{LandedQueue, LandedDirect, LandedPush} }
 
 // Valid reports a kind this build knows.
 func (k LandingKind) Valid() bool { return slices.Contains(LandingKinds(), k) }

@@ -1,0 +1,24 @@
+-- A tag filter is read from the tag rows, at either scope.
+--
+-- # tracker_task_tags_slug_idx
+--
+-- 0002 declared it `(project_key, slug, task_id)` for "tag=any:|all:|none:, and
+-- group_by=tag", and no statement reached it: every tag filter probed each
+-- task's own tag rows by the primary key, so a project's tag filter walked the
+-- project's whole board, a workspace's walked every live task in the company,
+-- and `all:`, written as a correlated count, became a scan of every tag row in
+-- the company. It was maintained on every tag write for a reader nothing ran.
+--
+-- The filters now read the tagged tasks from this index, one seek per slug
+-- (`tagClause` in internal/worklet/read.go), and the SLUG leads, because a
+-- workspace's filter names no project to seek and the planner stops seeking at
+-- an IN list: led by the slug, a workspace arm seeks the slug and a project's
+-- seeks the slug and the project together. `none:` stays a probe of the
+-- task's own rows, since no index over the rows that exist drives a question
+-- about the ones that do not, and `group_by=tag` joins on the task's id, which
+-- the primary key serves.
+--
+-- 0002 IS NOT EDITED: `schema_migrations` keys on the filename, so a database
+-- that applied it would never see the change.
+DROP INDEX IF EXISTS tracker_task_tags_slug_idx;
+CREATE INDEX tracker_task_tags_slug_idx ON tracker_task_tags (slug, project_key, task_id);                    -- tag=any: and tag=all:, at either scope

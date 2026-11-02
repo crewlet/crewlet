@@ -43,7 +43,7 @@ func TestTheImportCommandRunsOnTheNode(t *testing.T) {
 		t.Errorf("sent Authorization %q and key %q, want the token from %s and an operation id",
 			node.authorization, node.key, apiTokenEnv)
 	}
-	for _, want := range []string{"mirroring " + source + " into web — importing, owned by unit:eng",
+	for _, want := range []string{"mirroring " + source + " into web: importing, owned by unit:eng",
 		"CREWLET_CODE_LOG@1:42", "crewlet code status -repo web"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout does not say %q:\n%s", want, stdout)
@@ -51,7 +51,7 @@ func TestTheImportCommandRunsOnTheNode(t *testing.T) {
 	}
 
 	node.answer, node.body.Args = map[string]any{"outcome": "unknown"}, nil
-	stdout, _, err = cli(t, "code", "import", source, "web", "-url", node.server.URL, "-owner", "unit:eng")
+	stdout, _, err = cli(t, "code", "import", source, "web", "-api", node.server.URL, "-owner", "unit:eng")
 	if err != nil {
 		t.Fatalf("code import: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestTheImportCommandRunsOnTheNode(t *testing.T) {
 	if _, given := node.body.Args["credential"]; given || !strings.Contains(stdout, "-op-id "+first) {
 		t.Fatalf("an anonymous import sent %v and its unknown outcome said:\n%s", node.body.Args, stdout)
 	}
-	if _, _, err := cli(t, "code", "import", source, "web", "-url", node.server.URL, "-owner", "unit:eng",
+	if _, _, err := cli(t, "code", "import", source, "web", "-api", node.server.URL, "-owner", "unit:eng",
 		"-op-id", first); err != nil || node.key != first {
 		t.Errorf("the retry = %v, sent %q, want the first attempt's %q", err, node.key, first)
 	}
@@ -75,7 +75,7 @@ func TestTheImportCommandRunsOnTheNode(t *testing.T) {
 		{[]string{"-local", "-mirror"}, []string{"-mirror", "or -local"}},
 		{[]string{"-owner", "eng"}, []string{"-owner", "unit:<key>"}},
 	} {
-		args := append([]string{"code", "import", source, "web", "-url", node.server.URL}, c.flags...)
+		args := append([]string{"code", "import", source, "web", "-api", node.server.URL}, c.flags...)
 		_, _, err := cli(t, args...)
 		for _, want := range c.says {
 			if err == nil || !strings.Contains(err.Error(), want) {

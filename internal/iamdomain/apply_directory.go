@@ -138,10 +138,7 @@ func (a *Applier) writeEnrolment(ctx context.Context, tx *sql.Tx,
 		// guard is the column rather than the version: redeeming twice is
 		// not a stale write to skip, and the second must find it spent
 		// whatever position it arrived at.
-		spent, err := tx.ExecContext(ctx, `
-			UPDATE iam_invites
-			SET redeemed_at = ?, person_id = ?, version = ?
-			WHERE id = ? AND redeemed_at = 0`,
+		spent, err := tx.ExecContext(ctx, spendInvitationStatement,
 			at.unix(), id, at.packed, enrolled.Invitation)
 		if err != nil {
 			return int(written), fmt.Errorf("iamdomain: spend invitation %s: %w",
@@ -166,6 +163,24 @@ func (a *Applier) writeEnrolment(ctx context.Context, tx *sql.Tx,
 	return int(written), nil
 }
 
+// spendInvitationStatement marks one invitation redeemed by the person its
+// redemption created, by the invitation's key, and only while it is unspent.
+const spendInvitationStatement = `
+	UPDATE iam_invites
+	SET redeemed_at = ?, person_id = ?, version = ?
+	WHERE id = ? AND redeemed_at = 0`
+
+// The two statements [Applier.writeIdentity] runs, each by the person's key
+// under the version guard: what the row held, and what the record states.
+const (
+	identityBeforeStatement = `
+		SELECT login, seat_id FROM iam_people WHERE id = ? AND version < ?`
+	writeIdentityStatement = `
+		UPDATE iam_people
+		SET login = ?, seat_id = ?, updated_at = ?, version = ?
+		WHERE id = ? AND version < ?`
+)
+
 // writeIdentity sets an enrolled person's login and seat to what the record
 // states.
 //
@@ -183,8 +198,7 @@ func (a *Applier) writeIdentity(ctx context.Context, tx *sql.Tx,
 			at.position, err)
 	}
 	var login, seat string
-	err = tx.QueryRowContext(ctx, `
-		SELECT login, seat_id FROM iam_people WHERE id = ? AND version < ?`,
+	err = tx.QueryRowContext(ctx, identityBeforeStatement,
 		id, at.packed).Scan(&login, &seat)
 	switch {
 	case errorsIsNoRows(err):
@@ -196,10 +210,7 @@ func (a *Applier) writeIdentity(ctx context.Context, tx *sql.Tx,
 		return 0, fmt.Errorf("iamdomain: read person %s to change their "+
 			"login or seat: %w", id, err)
 	}
-	result, err := tx.ExecContext(ctx, `
-		UPDATE iam_people
-		SET login = ?, seat_id = ?, updated_at = ?, version = ?
-		WHERE id = ? AND version < ?`,
+	result, err := tx.ExecContext(ctx, writeIdentityStatement,
 		change.Login, change.SeatID, at.unix(), at.packed, id, at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: change person %s's login or seat: %w",
@@ -233,8 +244,8 @@ func (a *Applier) writeIdentity(ctx context.Context, tx *sql.Tx,
 // however many holders come and go after it. See [Reader.SeatHolders].
 //
 // The FIRST bind's operation id, and the guard is what makes it the first: a
-// removal is a gate no node defers, so every node has its tombstone before any
-// later bind, and every node stamps the same id.
+// removal is a gate no node defers, so every data node has its tombstone
+// before any later bind, and every data node stamps the same id.
 func (a *Applier) reboundBy(ctx context.Context, tx *sql.Tx, at applyContext,
 	seat string) (int64, error) {
 
@@ -263,7 +274,7 @@ func (a *Applier) reboundBy(ctx context.Context, tx *sql.Tx, at applyContext,
 // decide. It is the document's own value, written whatever it holds — the
 // writer's decides are what refuse an invitation naming no seat
 // ([Writer.Invite]), and an applier that refused a record would stop the log
-// on every node. [Applier.Rederive] recomputes it from the same decode
+// on every data node. [Applier.Rederive] recomputes it from the same decode
 // whenever a checkpoint's rule set differs from this build's.
 func (a *Applier) writeInvitation(ctx context.Context, tx *sql.Tx,
 	at applyContext, invitation Invitation) (int, error) {
@@ -318,8 +329,7 @@ func (a *Applier) writeInvitation(ctx context.Context, tx *sql.Tx,
 func (a *Applier) writeCancellation(ctx context.Context, tx *sql.Tx,
 	cancelled Cancellation) (int, error) {
 
-	result, err := tx.ExecContext(ctx,
-		`DELETE FROM iam_invites WHERE id = ? AND redeemed_at = 0`,
+	result, err := tx.ExecContext(ctx, cancelInvitationStatement,
 		cancelled.Invitation)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: cancel invitation %s: %w",
@@ -328,6 +338,13 @@ func (a *Applier) writeCancellation(ctx context.Context, tx *sql.Tx,
 	written, _ := result.RowsAffected()
 	return int(written), nil
 }
+
+// cancelInvitationStatement deletes one unredeemed invitation by its key.
+const cancelInvitationStatement = `DELETE FROM iam_invites WHERE id = ? AND redeemed_at = 0`
+
+// removePersonStatement deletes one person's row by its key — the last of the
+// rows a removal deletes ([Applier.writeRemoval]).
+const removePersonStatement = `DELETE FROM iam_people WHERE id = ?`
 
 // writeRemoval is the one operation here with no inverse.
 //
@@ -338,7 +355,8 @@ func (a *Applier) writeCancellation(ctx context.Context, tx *sql.Tx,
 //
 // THE IDENTIFIERS ARE RELEASED IN THE SAME STATEMENT LIST rather than by a
 // cascade, because a cascade is a delete nobody committed: the deletion is
-// part of this record's own effect and is therefore identical on every node.
+// part of this record's own effect and is therefore identical on every data
+// node.
 //
 // AND EVERY SEALED VALUE OF THEIRS IS ERASED, in the same transaction: the
 // rows it deletes take their name, address and seeds with them, and the rows
@@ -374,7 +392,7 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 	// person and carries the record's OP ID rather than its position,
 	// because the apply that writes it is the one that must be able to run
 	// twice and a position changes under a republish. The seat it released
-	// is a column beside the claims as well (replicated migration 0094), the
+	// is a column beside the claims as well (replicated migration 0117), the
 	// claims' own value, because one seat's standing is a seek on it
 	// ([Reader.SeatHolder], [reboundRemovals]) where the claims are a decode
 	// of every tombstone; [Applier.Rederive] recomputes it from the same
@@ -400,7 +418,7 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 		{"sessions", `DELETE FROM iam_sessions WHERE person_id = ?`},
 		{"revocation epoch", `DELETE FROM iam_revocation_epochs WHERE person_id = ?`},
 		{"credentials", `DELETE FROM iam_credentials WHERE person_id = ?`},
-		{"person", `DELETE FROM iam_people WHERE id = ?`},
+		{"person", removePersonStatement},
 	} {
 		deleted, execErr := tx.ExecContext(ctx, statement.sql, id)
 		if execErr != nil {
@@ -429,6 +447,7 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 		// credential they held, with the rows it deleted.
 		a.moved.Seats = true
 		a.moved.person(id, login)
+		a.moved.removed(id)
 	}
 	return int(written), nil
 }
@@ -442,19 +461,22 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 // bind whose scope named only its own person wrote where no node holding back
 // an earlier record about the leaver would wait for it.
 //
-// ONE SEEK, whatever the company has removed: `iam_removed_seat_idx` (0094)
+// ONE SEEK, whatever the company has removed: `iam_removed_seat_idx` (0117)
 // is `(seat_id, seat_rebound_by, person_id)`, so the clause is its prefix and
 // [leaversOf]'s order its third column. It read the seat out of every
 // tombstone's claims before, a cost that grew with every removal ever made.
 const reboundRemovals = `seat_rebound_by = ''
 	AND seat_id = ?`
 
+// leaversStatement is [leaversOf]'s read: the people [reboundRemovals] names,
+// in the order of the index's third column.
+const leaversStatement = `SELECT person_id FROM iam_removed WHERE ` + reboundRemovals + `
+	ORDER BY person_id`
+
 // leaversOf is the people whose removal tombstones a bind of seatID would
 // stamp ([reboundRemovals]), sorted.
 func leaversOf(ctx context.Context, tx *sql.Tx, seatID string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT person_id FROM iam_removed WHERE `+reboundRemovals+`
-		 ORDER BY person_id`, seatID)
+	rows, err := tx.QueryContext(ctx, leaversStatement, seatID)
 	if err != nil {
 		return nil, fmt.Errorf("iamdomain: read the removals that released "+
 			"seat %s: %w", seatID, err)

@@ -38,7 +38,7 @@ func tipTurn(t *testing.T, e *checkEstate) ([]code.ChecksRequest, []code.QueuePr
 	return slices.Clone(e.writes), slices.Clone(e.records), slices.Clone(e.read)
 }
 
-// A TIP CHECK IS DEFINED AT ITS LANDINGS' BASE (ADR-0068, M5-D15): main's
+// A TIP CHECK IS DEFINED AT ITS LANDINGS' BASE (ADR-0091, M5-D15): main's
 // green is at G; two landings lie above it — X, which rewrites the checks file
 // so unit runs `true`, then T on top of it. The tip work reads the checks file
 // at G, the base of the first landing above the green, and never at a

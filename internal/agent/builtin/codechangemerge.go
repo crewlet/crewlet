@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE MERGE: code_merge_change merges a live change into its target by its
@@ -257,39 +257,39 @@ func (t *codeMergeChange) closeTask(ctx context.Context, cv conversing, op strin
 		return "", fmt.Sprintf("merged; %s not closed: %s", label, why)
 	}
 	switch {
-	case item.Backend != types.WorkNative:
+	case item.Backend != types.WorkWorklet:
 		return notClosed(fmt.Sprintf("it is a %s item, which this engine does not write — close it there",
 			item.Backend))
 	case t.deps.Tasks == nil || t.deps.Closer == nil:
-		return notClosed("this company runs no native tracker here")
+		return notClosed("this company runs no Worklet here")
 	}
-	// THE CLOSE IS THE TRACKER'S WRITE, DECIDED AS ITS OWN TOOL'S IS: the
-	// merge's row admits everybody, and update_work_item's is the tracker
-	// app's (authz.ActionWorkUpdate), so a person who does not use the
-	// tracker — whose own update_work_item is refused — must not change an
+	// THE CLOSE IS WORKLET'S WRITE, DECIDED AS ITS OWN TOOL'S IS: the
+	// merge's row admits everybody, and update_work_item's is the Worklet
+	// app's (authz.ActionWorkUpdate), so a person who does not use
+	// Worklet — whose own update_work_item is refused — must not change an
 	// item's status by asking a merge to. Decided for the call's principal
 	// as the gate decides that tool, before anything is read.
 	if err := Decide(t.deps.Chart)(ctx, authz.ActionWorkUpdate, authz.Object{}); err != nil {
 		return notClosed(Refusal(UpdateWorkItemTool, err))
 	}
-	before, err := t.deps.Tasks.Task(ctx, item.ID, tracker.DetailWants{}, seatRead)
+	before, err := t.deps.Tasks.Task(ctx, item.ID, worklet.DetailWants{}, seatRead)
 	if err != nil {
 		return notClosed(fmt.Sprintf("its read failed (%v)", err))
 	}
-	if before.Task.Status.Group() == tracker.GroupDone {
+	if before.Task.Status.Group() == worklet.GroupDone {
 		return label, ""
 	}
-	done := tracker.StatusDone
+	done := worklet.StatusDone
 	after := before.Task
 	after.Status = done
 	got, err := t.deps.Closer(cv.g.c.actor).UpdateTask(ctx, statelog.StepOpID(op, stepTwo), before.Task.ID,
-		before.Task.Project, before.Task.Version, tracker.TaskPatch{Status: &done}, tracker.ChangeStatus,
-		tracker.Wake{Kind: tracker.ChangeStatus, Before: before.Task, After: after}.Notify(nil))
+		before.Task.Project, before.Task.Version, worklet.TaskPatch{Status: &done}, worklet.ChangeStatus,
+		worklet.Wake{Kind: worklet.ChangeStatus, Before: before.Task, After: after}.Notify(nil))
 	switch {
 	case err != nil:
 		return notClosed(fmt.Sprintf("its close was refused (%v)", err))
 	case got.Outcome == statelog.OutcomeUnknown:
-		return notClosed(fmt.Sprintf("nobody can say whether its close landed; read it with %s", tracker.GetWorkItemTool))
+		return notClosed(fmt.Sprintf("nobody can say whether its close landed; read it with %s", worklet.GetWorkItemTool))
 	}
 	return label, ""
 }

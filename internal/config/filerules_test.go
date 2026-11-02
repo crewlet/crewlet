@@ -73,8 +73,8 @@ units:
 			// declared. So a block keyed on it reaches nothing.
 			"the seat's own tool bridge",
 			"name: Acme\nroles:\n  - {name: CEO, handle: ceo, mcp_env: {" +
-				BridgeServerName + ": {TOKEN: \"${T}\"}}}\n",
-			"roles[0].mcp_env." + BridgeServerName,
+				ToolServerName + ": {TOKEN: \"${T}\"}}}\n",
+			"roles[0].mcp_env." + ToolServerName,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -426,7 +426,7 @@ roles:
 	}
 }
 
-// A CODING RUN'S optional_keys ARE HELD TO THE SAME RULE: a seat's sandbox
+// AN EXECUTOR BOX'S optional_keys ARE HELD TO THE SAME RULE: a seat's sandbox
 // block's over its env, and a setup step's over its env and its files' paths,
 // wherever the step is declared.
 //
@@ -447,7 +447,6 @@ roles:
   - name: Dev
     handle: dev
     sandbox:
-      enabled: true
       env: {GITLAB_TOKEN: "${DEV_GITLAB_TOKEN}"}
       optional_keys: [DEV_GITLAB_TOKEN]
 `, "roles[0].sandbox.optional_keys[0]", "(GITLAB_TOKEN)"},
@@ -462,7 +461,6 @@ roles:
   - name: Dev
     handle: dev
     sandbox:
-      enabled: true
       setup:
         - name: tools
           files: {bin/setup.sh: "cp ${HOME}/.cache/x ."}
@@ -488,7 +486,6 @@ roles:
   - name: Dev
     handle: dev
     sandbox:
-      enabled: true
       env: {DATABASE_URL: "postgres://${DB_HOST}/test"}
       optional_keys: [DATABASE_URL]
 `)

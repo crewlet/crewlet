@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // ---- the fixtures ------------------------------------------------------------ //
@@ -38,17 +38,17 @@ func changeWriteDeps(host builtin.CodeReader, writer *codeWrites, tasks builtin.
 
 // taskBook is the engine's tracker as a key is resolved: the tasks it holds,
 // each by its key and its id.
-type taskBook []tracker.Task
+type taskBook []worklet.Task
 
-func (b taskBook) Task(_ context.Context, idOrKey string, _ tracker.DetailWants,
-	_ statelog.Freshness) (tracker.TaskDetail, error) {
+func (b taskBook) Task(_ context.Context, idOrKey string, _ worklet.DetailWants,
+	_ statelog.Freshness) (worklet.TaskDetail, error) {
 
 	for _, t := range b {
 		if t.Key == idOrKey || t.ID == idOrKey {
-			return tracker.TaskDetail{Task: t}, nil
+			return worklet.TaskDetail{Task: t}, nil
 		}
 	}
-	return tracker.TaskDetail{}, fmt.Errorf("%w: %s", tracker.ErrNoTask, idOrKey)
+	return worklet.TaskDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoTask, idOrKey)
 }
 
 // decoded is a tool's answer as a JSON object.
@@ -195,16 +195,16 @@ func opIDsOfConverse(ws []code.ConversationWrite) []string {
 
 // AN OPEN CARRIES THE TURN'S WORK ITEM UNLESS IT NAMES ONE: the item the turn
 // is charged to by default; another tracker's by its identity,
-// `<backend>:<id>`, as named; a native item's key resolved by the tracker's
-// own read to the item's identity; and `none` carrying nothing. A key nothing
-// resolves — no task by it, or no tracker on this surface — refuses the call
+// `<backend>:<id>`, as named; a Worklet item's key resolved by Worklet's own
+// read to the item's identity; and `none` carrying nothing. A key nothing
+// resolves — no task by it, or no Worklet on this surface — refuses the call
 // before anything is written.
 //
 // Mutations: an explicit item ignored for the turn's; a key carried
 // unresolved as the item's id → red.
 func TestAnOpenCarriesTheTurnsWorkItemUnlessItNamesOne(t *testing.T) {
 	t.Parallel()
-	turnItem := types.WorkItem{Backend: types.WorkNative, ID: "t-7", Key: "ENG-7", Project: "ENG"}
+	turnItem := types.WorkItem{Backend: types.WorkWorklet, ID: "t-7", Key: "ENG-7", Project: "ENG"}
 	tasks := taskBook{{ID: "t-9", Key: "ENG-9", Project: "ENG"}}
 	for _, c := range []struct {
 		name  string
@@ -216,10 +216,10 @@ func TestAnOpenCarriesTheTurnsWorkItemUnlessItNamesOne(t *testing.T) {
 		{name: "the turn's own", want: &turnItem},
 		{name: "another tracker's by its identity", named: "jira:10042",
 			want: &types.WorkItem{Backend: types.WorkJira, ID: "10042"}},
-		{name: "a native key", named: "ENG-9", tasks: tasks,
-			want: &types.WorkItem{Backend: types.WorkNative, ID: "t-9", Key: "ENG-9", Project: "ENG"}},
-		{name: "a native identity", named: "native:t-9", tasks: tasks,
-			want: &types.WorkItem{Backend: types.WorkNative, ID: "t-9", Key: "ENG-9", Project: "ENG"}},
+		{name: "a Worklet key", named: "ENG-9", tasks: tasks,
+			want: &types.WorkItem{Backend: types.WorkWorklet, ID: "t-9", Key: "ENG-9", Project: "ENG"}},
+		{name: "a Worklet identity", named: "native:t-9", tasks: tasks,
+			want: &types.WorkItem{Backend: types.WorkWorklet, ID: "t-9", Key: "ENG-9", Project: "ENG"}},
 		{name: "none", named: "none"},
 		{name: "a key no task has", named: "ENG-404", tasks: tasks, class: tools.RefusalInvalid},
 		{name: "a key with no tracker to resolve it", named: "ENG-9", class: tools.RefusalInvalid},
@@ -279,7 +279,7 @@ func TestAChangeWriteIsHeldToTheVersionItsCallerRead(t *testing.T) {
 				return p.Edit != nil && *p.Edit.Title == "Retry twice" && p.Edit.Body != nil && *p.Edit.Body == ""
 			}},
 		{name: "a draft's state", tool: builtin.CodeUpdateChangeTool,
-			args: map[string]any{"repo": "site", "change": 7, "expected_version": 4, "draft": false},
+			args: map[string]any{"repo": "site", "change": 7.0, "expected_version": 4, "draft": false},
 			is:   func(p code.ChangeProposal) bool { return p.Draft != nil && !p.Draft.Draft }},
 		{name: "a retarget", tool: builtin.CodeUpdateChangeTool,
 			args: map[string]any{"change": "site!7", "expected_version": 4, "target": "release"},

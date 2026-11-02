@@ -10,7 +10,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -20,37 +19,38 @@ import (
 // failure, and its activity transcript.
 //
 // BYTES, because what it bounds is an EVENT. Every one of these rides the
-// run's `agent_phase_completed{phase: sandbox}` record (and the report rides
-// the resumed executor's too, as the tool result it reads), and an event over
-// the queue's 8 MiB [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes]
-// is refused — so an unbounded report does not arrive long, it does not arrive
-// at all, and it takes the run's only spend record with it. It was 100 000
-// RUNES, which is anything from 100 KB to 400 KB on the wire depending on the
-// script the output was written in: a bound on the wrong unit for the only
-// limit that matters.
+// run's `agent_phase_completed{phase: sandbox}` record (and the report and the
+// failure detail ride the collected executor's record too, as the run's report
+// its reviewer judges, [runReport]), and an event over the queue's 8 MiB
+// [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] is refused — so
+// an unbounded report does not arrive long, it does not arrive at all, and it
+// takes the run's only spend record with it. It was 100 000 RUNES, which is
+// anything from 100 KB to 400 KB on the wire depending on the script the
+// output was written in: a bound on the wrong unit for the only limit that
+// matters.
 //
 // THE WHOLE RECORD FITS, and this is its arithmetic. The record's variable
 // text is the report, the failure detail and the transcript (each at most
-// this), the question in its notes ([MaxQuestionBytes]), the delivered refs
-// and the refs the run's push record names, together ([MaxDeliveredRefBytes],
-// a pushed ref counted by the line it renders to), and the reason that record
-// could not be read where it could not
-// ([github.com/crewlet/crewlet/internal/events.MaxDiagnosticBytes]);
-// everything else on it is identifiers and counts, a few KiB — and, beside
+// this), the question in its notes (one sentence, [decision.MaxQuestion]
+// bytes), the delivered refs and the refs the run's push record names,
+// together ([MaxDeliveredRefBytes], a pushed ref counted by the line it
+// renders to), and the reason that record could not be read where it could
+// not ([github.com/crewlet/crewlet/internal/events.MaxDiagnosticBytes]);
+// everything else on it is identifiers and counts, a few KiB, and, beside
 // each pushed ref's names, its two whole object ids and its keys, about 140
 // bytes for each of at most [MaxPushedRefs], which a record carries only where
 // the reason is absent and which come to less than the reason's own worst.
-// JSON can grow text six-fold — a control byte becomes \u00XX, `<`, `>` and
-// `&` become \u003c and its kin, an invalid byte becomes \ufffd — so the worst
-// case is (3 × 256 + 16 + 16 + 64) KiB × 6, about 5.1 MiB, with the ceiling's
-// other 2.9 MiB to spare. A field added to the record that carries text a box
+// JSON can grow text six-fold (a control byte becomes \u00XX, `<`, `>` and
+// `&` become \u003c and its kin, an invalid byte becomes \ufffd), so the worst
+// case is (3 × 256 + 16 + 1 + 64) KiB × 6, about 5 MiB, with the ceiling's
+// other 3 MiB to spare. A field added to the record that carries text a box
 // wrote needs its own bound and a line here, or this promise is no longer
 // one.
 //
 // WHAT HAPPENS PAST IT DEPENDS ON WHO READS THE PIECE. The report and the
-// failure detail are what the resumed executor acts on — what to tell the
-// requester, what blocked the run — so one past the bound is CONDENSED by the
-// seat's auxiliary model ([Condenser]) rather than cut. A cut used to keep the
+// failure detail are what the run's reviewer judges the round on — what it
+// did, what blocked it — so one past the bound is CONDENSED by the seat's
+// auxiliary model ([Condenser]) rather than cut. A cut used to keep the
 // report's head, which a reader takes for the whole report: a run that seems
 // to have said less than it did. The transcript is read by a PERSON — no model
 // and no prompt reads it — so it is not condensed: it keeps whole lines from
@@ -141,10 +141,13 @@ func readLimit(capped int) int {
 // other than a regular file where it lies — a named pipe, a device, a socket,
 // a directory or a symbolic link. A backend that reads a box's files from the
 // engine host refuses one, because opening it there could block the reader or
-// never end ([NotRegularFileError] says which it was). It refuses a WRITE to
-// one too ([NotRegularFileError.Write]), which could block or follow a link
-// out of the box; a write refused is the launch's failure, since what it was
-// writing is something the run needs.
+// never end ([NotRegularFileError] says which it was). It refuses a WRITE over
+// one too ([NotRegularFileError.Write]): a write replaces a regular file whole
+// ([Sandbox.WriteFile]), and anything else at the path is the box's own doing
+// — a link it points somewhere, a pipe or a socket something uses — which a
+// replacement would destroy, so it is left as the box made it. A write refused
+// is the launch's failure, since what it was writing is something the run
+// needs.
 //
 // A REFUSAL OF THAT PIECE, NOT A BOX THAT COULD NOT BE READ. What the path
 // names is fixed by what the box holds, so a collection that retried it would
@@ -164,6 +167,10 @@ type NotRegularFileError struct {
 	Kind string
 	// Write is whether it was refused as a write rather than a read.
 	Write bool
+	// OnTheWay is whether Path is a component on the way to the file — one
+	// the file would be beneath — refused for not being a directory, rather
+	// than the file itself.
+	OnTheWay bool
 }
 
 // Reason is why the path was not read — or not written, for a write — as the
@@ -173,6 +180,9 @@ func (e *NotRegularFileError) Reason() string {
 	if e.Write {
 		verb, done = "written", "written"
 	}
+	if e.OnTheWay {
+		return "is " + e.Kind + ", not a directory, so nothing beneath it was " + done
+	}
 	if e.Kind == kindSymlink {
 		return "is a symbolic link, and a box's files are " + verb + " only where they lie, so it was not " + done
 	}
@@ -181,8 +191,9 @@ func (e *NotRegularFileError) Reason() string {
 
 func (e *NotRegularFileError) Error() string {
 	if e.Write {
-		return e.Path + " " + e.Reason() + ": what the engine writes into a box is a file, and " +
-			"writing anything else from the engine host could block it or write past the box"
+		return e.Path + " " + e.Reason() + ": the engine writes a box's file by replacing it whole, " +
+			"and replaces nothing else the box put at a path — a link, a directory, a named pipe — " +
+			"which is left as the box made it"
 	}
 	return e.Path + " " + e.Reason() + ": a box's markers, reports and streams are files " +
 		"its runner writes, and reading anything else from the engine host could block it, " +
@@ -222,32 +233,15 @@ const (
 	// PartFailure is [Result.Error]: why the run did not finish — its exit
 	// status, its CLI's own error, and what it printed to stderr.
 	PartFailure RunPart = "failure"
-	// PartQuestion is [Result.Question]: what the run stopped to ask a
-	// person.
-	PartQuestion RunPart = "question"
 )
 
-// RunParts is every part a [Condenser] can be asked about.
-var RunParts = []RunPart{PartReport, PartFailure, PartQuestion}
+// RunParts is every part a [Condenser] can be asked about. A run's question
+// is none of them: it is asked through a tool that holds it to its bounds
+// before it is recorded ([Ask.Validate]), so there is nothing to condense.
+var RunParts = []RunPart{PartReport, PartFailure}
 
 // Valid reports whether the part is one this package names.
 func (p RunPart) Valid() bool { return slices.Contains(RunParts, p) }
-
-// MaxQuestionBytes bounds the question a run parks on.
-//
-// SIZED TO WHERE IT TRAVELS, and it travels further than anything else a run
-// writes: it is the note on the run's phase record, a field of the park's
-// announcement, a field of the run's coordination row — read and written whole
-// on every status flip and every listing of active runs for as long as it
-// waits — the banner a person answers it from, the operator's `answer_run`
-// reply, and the resumed executor's answer text, which re-sends it on every
-// later round of the turn. 16 KiB is about four thousand tokens: a page of
-// prose, room for a question, its context and its options with plenty to
-// spare. A question longer than a page is the report put in the wrong place —
-// the report has 256 KiB of its own — and the shim's own route already stops
-// near 128 KiB, the most one argument can carry. Past it the question is
-// condensed by the seat's auxiliary model, never cut.
-const MaxQuestionBytes = 16 << 10
 
 // MaxDeliveredRefBytes bounds the branches and pull requests a run's record
 // lists as delivered.
@@ -259,8 +253,8 @@ const MaxQuestionBytes = 16 << 10
 // entry per line. A pull-request URL is typically under a hundred bytes, so
 // 16 KiB lists more than a hundred and sixty of them, past what any one run
 // delivers; the refs are deduplicated first, and what does not fit is COUNTED
-// on the record and in the resumed executor's text rather than dropped
-// unsaid.
+// on the record and in the run's report its reviewer reads ([runReport])
+// rather than dropped unsaid.
 const MaxDeliveredRefBytes = 16 << 10
 
 // MaxCondenseBytes is the most text one [Condenser] call reads: what the
@@ -276,9 +270,9 @@ const MaxCondenseBytes = 2 << 20
 
 // failureReserve is what the coordinator may itself put in front of a
 // runner's failure detail before condensing it, held back from what a runner
-// may compose: the sentence saying a question nobody could be asked
-// ([questionRefusal]) and its separator. A KiB is several times that — a
-// test holds the refusal at its longest to half of it — and out of two MiB it
+// may compose: the sentence saying the run was ended at its turn's wall-clock
+// cap and its separator ([endedAtDeadline]). A KiB is several times that (a
+// test holds the sentence to half of it), and out of two MiB it
 // costs the error stream's share nothing a reader would miss, while leaving
 // the sentence room to be reworded.
 //
@@ -298,7 +292,7 @@ const failureReserve = 1 << 10
 // error — and gives the error stream only what is left, so a failure built
 // around a long stderr is one a model can still be shown whole. Composed past
 // it, every such failure was a few hundred bytes over the compactor's input,
-// refused before a model was asked, and the resumed executor read the
+// refused before a model was asked, and the run's record carried the
 // uncondensed fallback although a model was configured.
 const MaxFailureBytes = MaxCondenseBytes - failureReserve
 
@@ -330,36 +324,103 @@ type Condenser interface {
 //
 // Applied ONCE, where every collected result enters the coordinator, and
 // before anything is published or resumed — so the run's phase record, the
-// resumed executor's tool result and the record's retries all carry the same
-// text.
+// run's report its resumed turn files for the reviewer ([runReport]) and the
+// record's retries all carry the same text.
 //
 // THE TRANSCRIPT TOO, and here rather than in the runner: this is the one
 // home of the rule that the run's record fits its event, and the coordinator
 // already trusts no runner to have redacted what it hands back (see
 // [runPhase]). Bounded in a runner, a runner that forgot the bound would
 // publish an unbounded transcript, and the record carrying the run's only
-// spend would be refused whole. And THE BRANCH a question was asked with, for
-// the run's row rather than its record ([fitBranch]); and THE REFS, the run's
-// own and those its push record names, to one budget ([boundPushed]).
+// spend would be refused whole. And THE REFS, the run's own and those its
+// push record names, to one budget ([boundPushed]).
+//
+// TWO HALVES, because a run's box and the seat its result is fitted for need
+// not be on one node ([BoxReader]). [boundBox] is the half that reads no model
+// — the transcript and the refs, held by rule — and is made where the box is
+// read; [Coordinator.fitText] is the half a model may write — the question,
+// the report and the failure, condensed on the seat's own auxiliary model —
+// and is made where the result is used, under the turn that pays for it, which
+// is also where the push record is read and so where its refs take what the
+// run's own left of the budget.
 func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Result) Result {
+	return c.fitText(ctx, run, boundBox(result))
+}
+
+// boundBox is the half of [Coordinator.fitResult] that reads no model: the
+// transcript and the delivered refs, each held to its bound by rule, with
+// what was left out counted. Applied ONCE, where the box is read, since a
+// second application would find nothing to leave out and count nothing.
+func boundBox(result Result) Result {
+	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
+		boundTranscript(result.Transcript)
+	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
+	if len(result.Event) > MaxRunEventBytes {
+		// DROPPED WHOLE, never cut: a cut event is no JSON, and the one
+		// reader it has classifies a decoded document or nothing.
+		result.Event = ""
+	}
+	return result
+}
+
+// MaxRunEventBytes bounds a result's terminal event ([Result.Event]), which a
+// box's host sends back to the node that asked whole or not at all.
+//
+// SIXTEEN KIB, the bound a question a person reads is held to: a CLI's result
+// line carries its usage and cost beside its last text, and the line a spent
+// plan ends a run on carries one sentence there. A line past this is a run
+// that ended on a long text, which is no limit report, so dropping it costs
+// the field's one reader nothing.
+const MaxRunEventBytes = 16 << 10
+
+// BoxReadCarries are the bounds, tried in turn, a box's host holds each piece
+// of a result's own text to before sending it back to the node that asked
+// ([CarriedResult]): the first whose sealed reply fits the broker's ceiling.
+//
+// [MaxCondenseBytes] FIRST, the most one condensation reads, so the asker
+// condenses a report or a failure exactly as it would have condensed one it
+// read itself — past it the compactor refuses before any model is asked, and
+// the asker's fallback keeps whole lines of the same text. Three such pieces
+// and a transcript fit the broker's 8 MiB ([queue.MaxPayloadBytes]) unless
+// JSON grows them several-fold, which only text written to do that makes it
+// do; then [MaxRunTextBytes], what the run's record carries of each, whose
+// arithmetic is the record's own and fits whatever the text.
+var BoxReadCarries = []int{MaxCondenseBytes, MaxRunTextBytes}
+
+// CarriedResult is result with its report and failure each held to budget by
+// whole lines, the note saying so counted inside it (a report keeping its
+// start, a failure both its ends, [keepLines]), for a reply between nodes
+// ([BoxReadCarries]).
+func CarriedResult(result Result, budget int) Result {
+	why := fmt.Sprintf("past the %d KiB a box's host sends back of it", budget>>10)
+	result.Text = carriedPart(PartReport, result.Text, budget, why)
+	result.Error = carriedPart(PartFailure, result.Error, budget, why)
+	return result
+}
+
+// carriedPart is one piece held to budget, note included — the room
+// [condensable] leaves for its note, for the same reason.
+func carriedPart(part RunPart, text string, budget int, why string) string {
+	if len(text) <= budget {
+		return text
+	}
+	room := len(omittedNote(len(text)+1, "intervening", len(text), why)) + 1
+	return keepLines(part, text, budget-room, why)
+}
+
+// fitText is the half of [Coordinator.fitResult] a model may write: the
+// report and the failure, each held to its bound and condensed past it by the
+// seat's auxiliary model.
+func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result) Result {
 	// THIS COLLECTION'S OWN, counted from nothing: the field is the
 	// coordinator's, and a runner that set it would be charging the turn
 	// for a rewrite nobody made.
 	result.Condensed = AuxTokens{}
-	// THE QUESTION FIRST, because a question nobody can be asked becomes
-	// part of the failure — fitted after it, the refusal rode past the
-	// failure's bound.
-	if result.NeedsInput {
-		result = c.fitQuestion(ctx, run, result)
-	}
-	result.WIPBranch = fitBranch(ctx, run, result.WIPBranch)
 	result.Text = c.fitPart(ctx, run, PartReport, result.Text, MaxRunTextBytes, &result.Condensed)
 	result.Error = c.fitPart(ctx, run, PartFailure, result.Error, MaxRunTextBytes, &result.Condensed)
-	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
-		boundTranscript(result.Transcript)
-	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
 	// ONE BUDGET FOR THE RUN'S REFS: what the push record says it pushed
-	// has what its own lines leave of it ([boundPushed]).
+	// has what its own lines, bounded where the box was read ([boundBox]),
+	// leave of it ([boundPushed]).
 	left := MaxDeliveredRefBytes
 	for _, ref := range result.DeliveredRefs {
 		left -= len(ref)
@@ -375,52 +436,6 @@ func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Resu
 	return result
 }
 
-// fitQuestion holds a question to [MaxQuestionBytes]: condensed past it, and
-// where no model can condense it, whole lines from its start — a question is
-// read from the top, like a report — with the rest said.
-//
-// A QUESTION NO LINE OF WHICH FITS IS NOT ASKED. Its first line alone is past
-// the bound, so whole lines leave nobody anything to answer, and a fragment
-// of it read as the question is a question the agent never asked. The run is
-// not parked on it: it resumes as not succeeded, saying why, and the executor
-// can ask the coding agent again for a question a person can read.
-func (c *Coordinator) fitQuestion(ctx context.Context, run PendingRun, result Result) Result {
-	question := result.Question
-	if len(question) <= MaxQuestionBytes {
-		return result
-	}
-	if rewritten, ok := c.condensed(ctx, run, PartQuestion, question, MaxQuestionBytes,
-		&result.Condensed); ok {
-		result.Question = rewritten
-		return result
-	}
-	if first, _, _ := strings.Cut(question, "\n"); len(first)+1 <= MaxQuestionBytes {
-		result.Question = wholeLines(PartQuestion, question, MaxQuestionBytes)
-		return result
-	}
-	refusal := questionRefusal(len(question))
-	log.WarnContext(ctx, "sandbox_question_not_asked", "turn_id", run.TurnID,
-		"launch_id", run.LaunchID, "bytes", len(question))
-	// The branch goes with the ask it was recorded by: nothing parks.
-	result.NeedsInput, result.Question, result.AskTo, result.WIPBranch = false, "", "", ""
-	result.Success = false
-	if result.Error == "" {
-		result.Error = refusal
-	} else {
-		result.Error = refusal + ":\n" + result.Error
-	}
-	return result
-}
-
-// questionRefusal is the sentence a failure opens with when its question
-// could not be asked: the one thing the coordinator itself puts in front of a
-// runner's failure, which [failureReserve] holds room for.
-func questionRefusal(bytes int) string {
-	return fmt.Sprintf("the question the coding agent asked is %s with no line break in its "+
-		"first %d KiB, past what a question carries, and no model could condense it, so nobody "+
-		"was asked it", kib(bytes), MaxQuestionBytes>>10)
-}
-
 // boundRefs is a run's delivered refs as its record carries them — redacted,
 // deduplicated in the order they were found, each valid UTF-8, and held to
 // [MaxDeliveredRefBytes] — with how many more the run named than are listed.
@@ -430,22 +445,23 @@ func questionRefusal(bytes int) string {
 // REDACTED FIRST, here rather than trusted to the runner, for the reason the
 // transcript is ([Coordinator.fitResult]): a ref is whatever word a run's
 // report put on its `Delivered:` line, which a box can make a credential, and
-// every reader of the record — its event, the resumed executor's text — reads
-// these. First, so the bound measures what is carried.
+// every reader of the record — its event, the run's report — reads these.
+// First, so the bound measures what is carried.
 //
 // NEVER ONE THAT IS NOT UTF-8, because every one of those readers reads the
 // refs through JSON, which replaces each byte that is not UTF-8 with U+FFFD:
 // listed, such a ref arrived as another — a URL the run never delivered —
 // and refs that differ only there arrived as one, past the deduplication
-// above. A branch is held to UTF-8 by its grammar ([gitref.ValidBranch]), but
-// a URL holds whatever bytes a report puts in it, and so does the host a
-// scrape of one reads; so the rule is HERE, where every runner's refs pass,
-// rather than in each runner's reading of an account, which hands on the
-// bytes it read. Judged as carried, after the redaction, as [fitBranch]
-// judges a branch, and DROPPED RATHER THAN MENDED, as it drops one: a mended
-// ref names what nobody delivered. And COUNTED with the refs past the bound,
-// because the run named it and the record does not list it: the reader is
-// told the list is short rather than shown a ref nobody delivered.
+// above. A branch is held to UTF-8 by its grammar
+// ([github.com/crewlet/crewlet/internal/gitref.ValidBranch]), but a URL
+// holds whatever bytes a report puts in it, and so does the host a scrape of
+// one reads; so the rule is HERE, where every runner's refs pass, rather than
+// in each runner's reading of an account, which hands on the bytes it read.
+// Judged as carried, after the redaction, and DROPPED RATHER
+// THAN MENDED: a mended ref names what nobody delivered. And COUNTED with the
+// refs past the bound, because the run named it and the record does not list
+// it: the reader is told the list is short rather than shown a ref nobody
+// delivered.
 func boundRefs(refs []string) ([]string, int) {
 	seen := make(map[string]bool, len(refs))
 	var kept []string
@@ -464,44 +480,6 @@ func boundRefs(refs []string) ([]string, int) {
 		kept = append(kept, ref)
 	}
 	return kept, left
-}
-
-// fitBranch is the branch a run recorded with its question ([Result.WIPBranch],
-// [PendingRun.Branch]), redacted, or "" where it is not one to hand on: a name
-// the engine's one grammar of a branch refuses ([gitref.ValidBranch]) — one
-// git refuses, which a credential the redaction replaced always is, one that
-// is not UTF-8, or one past [gitref.MaxBranchBytes].
-//
-// HELD TO THAT GRAMMAR, NEVER ONE OF ITS OWN (ADR-0008), because the branch is
-// a ref — what a re-seeded run is told to check out. One that is not UTF-8
-// does not survive the run's row, which is JSON: its bytes are replaced and it
-// arrives as another branch's name. One past the bound is a ref no push to the
-// engine's code host can create. And a ref's bound is all the row needs: the
-// branch rides the run's coordination row beside its question
-// ([MaxQuestionBytes]) — read and written whole on every status flip and every
-// listing of active runs — and the answer's text, which the resumed executor
-// re-sends on every later round of the turn, and 244 bytes is under a sixtieth
-// of the question beside it, so a tighter bound would spare neither anything.
-//
-// DROPPED RATHER THAN CUT OR MENDED, and said in the log. Without a branch the
-// answer's text tells a re-seeded run in general terms to check out the branch
-// the work was pushed to, which is true; with a wrong one — a name cut to fit,
-// or mended into UTF-8 — it names a branch to check out that does not exist.
-// Here rather than in a runner, for the reason the transcript's bound is
-// ([Coordinator.fitResult]): this is where every collected result enters,
-// whichever runner read it.
-func fitBranch(ctx context.Context, run PendingRun, branch string) string {
-	branch = redact.Secrets(branch)
-	if branch == "" || gitref.ValidBranch(branch) {
-		return branch
-	}
-	log.WarnContext(ctx, "sandbox_branch_not_recorded", "turn_id", run.TurnID,
-		"launch_id", run.LaunchID, "bytes", len(branch),
-		"detail", "the branch the run recorded with its question is not one a ref can be — a name "+
-			"git refuses for a branch, one that is not UTF-8, or one past what a ref may hold — so "+
-			"the run is parked with no branch and its re-seed is told to check out the branch it "+
-			"pushed in general terms")
-	return ""
 }
 
 // The two halves of a long transcript a run's record keeps, in whole lines.

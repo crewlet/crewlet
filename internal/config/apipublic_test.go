@@ -154,8 +154,8 @@ func TestAnExternalBrokersPortsAreNotThisHosts(t *testing.T) {
 // reaches the deployment at api.external_url and a vendor or a sandbox box at
 // the public listener's own address once there is one, and with a public
 // listener those are two sockets, each answering the other's routes 404: every
-// webhook, manifest and sandbox endpoint is built on the second, and every
-// cookie, origin and link a person follows on the first. A public listener
+// webhook and manifest is built on the second, and every cookie, origin and
+// link a person follows on the first. A public listener
 // with no address of its own composes no vendor address rather than borrowing
 // the person's, which is the wrong one exactly where the two differ.
 //

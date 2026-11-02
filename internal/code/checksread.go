@@ -465,7 +465,7 @@ func (q ReadQuery) validateChecksRunning() error {
 //
 // BY CELL, because a runner reads only what it can claim now: the cells it
 // has room in (internal/code/checkrun's walk), each one seek, so one cell's
-// backlog never costs a node's walk in another (replicated 0103). OLDEST
+// backlog never costs a node's walk in another (replicated 0126). OLDEST
 // FIRST within it, because that is the order a fleet's runners take the queue
 // in: every git node walks it from its head, and the one a repository's git
 // order ranks first claims each attempt first, so the attempts waiting longest
@@ -859,7 +859,7 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 // home's clock less its refresh — so a target pushed to on every landing is
 // read at the home's pace, and only a file that changed makes its heads due.
 // And a repository owes its home the TIP WORK of each protected target holding
-// a landing its tip checks have not judged (tipwork.go, ADR-0068).
+// a landing its tip checks have not judged (tipwork.go, ADR-0091).
 //
 // TWO SHAPES, as `changes_due`'s, and over the same index: with no repository
 // it pages the repositories holding such a change or such a target, by id,

@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Routing a hosted code host.
@@ -485,6 +486,13 @@ func inbound(h hook, reason string) notify.Inbound {
 		meta[RepoIDField] = strconv.FormatInt(h.Repository.ID, 10)
 	}
 	subject, body := subjectAndBody(h)
+	if body != "" {
+		source, author := bodyProvenance(h)
+		meta[notify.BodySourceField] = string(source)
+		if author != "" {
+			meta[notify.BodyAuthorField] = author
+		}
+	}
 	if key, value := itemRef(h); key != "" {
 		meta[key] = value
 	}
@@ -536,6 +544,39 @@ func subjectAndBody(h hook) (string, string) {
 	default:
 		return h.Issue.Title, h.Issue.Body
 	}
+}
+
+// bodyProvenance is what [subjectAndBody]'s body is and, where the payload
+// says one person wrote every word of it, who.
+//
+// A COMMENT OR A REVIEW IS A REMARK ON THE ITEM, and the issue or pull request
+// itself is its DESCRIPTION — GitHub models a pull request as an issue with a
+// diff, and the engine charges both to one work item, so the two surfaces are
+// the tracker's own two. ITS AUTHOR ONLY WHERE THE TEXT IS FRESH: a comment
+// just created and a review just submitted are their writer's alone, and so is
+// an item's body on the event that opened it; an edit is whoever edited it,
+// which can be a maintainer rewriting somebody else's words, and a description
+// on any later event is the opener's first version and every edit since. A body
+// nobody is named for is fenced as nobody's.
+func bodyProvenance(h hook) (provenance.Source, string) {
+	switch h.Event {
+	case EventIssueComment, EventReviewNote:
+		if h.Action == "created" {
+			return provenance.SourceWorkComment, login(h.Comment.User)
+		}
+		return provenance.SourceWorkComment, ""
+	case EventReview:
+		return provenance.SourceWorkComment, login(h.Review.User)
+	case EventPullRequest:
+		if h.Action == "opened" {
+			return provenance.SourceWorkDescription, login(h.PullRequest.User)
+		}
+	default:
+		if h.Action == "opened" {
+			return provenance.SourceWorkDescription, login(h.Issue.User)
+		}
+	}
+	return provenance.SourceWorkDescription, ""
 }
 
 // eventURL is the link a recipient should follow, which is the most specific

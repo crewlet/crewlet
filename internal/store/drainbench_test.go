@@ -85,7 +85,7 @@ const (
 // # Why this benchmark exists
 //
 // The drain rate is not a curiosity: it is the number a fleet's read latency
-// is derived from. Every node applies the same records serially, so a bulk
+// is derived from. Every data node applies the same records serially, so a bulk
 // edit occupies every peer's applier for rows ÷ drain seconds — and during
 // that window a linearizable read is behind and a write is pending. Halve
 // this number and that window halves with it.

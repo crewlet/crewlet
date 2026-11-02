@@ -16,6 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // AN ENGINE WRITE is a change a seat or a person asks of a repository through
@@ -23,7 +25,7 @@ import (
 // deleted, a review's suggestions applied — that the engine BUILDS on the
 // repository's git node, in a scratch
 // beside its cache, and LANDS as a push through the one landing every push
-// takes (internal/code/host's Server.Write, ADR-0062). This package holds what
+// takes (internal/code/host's Server.Write, ADR-0085). This package holds what
 // both ends of it import, as it does for a read by object id: the WIRE — the
 // write ([EngineWrite]), its answer ([EngineWriteResult]) and the change's
 // own refusals ([WriteRefusal]) — the one rule a write is held to by the tool
@@ -40,8 +42,8 @@ import (
 // publishes a change's wakes under ([Translator], [Parser]) — one name for
 // both, so the delivery gate compares a write's surface and a wake's source in
 // one spelling, and an addressed code wake is answered by a code write, as
-// tracker.Source and
-// pages.Source are each one. FIXED: a wake published under another spelling
+// worklet.Source and
+// doclet.Source are each one. FIXED: a wake published under another spelling
 // would find no delivery to it, and the gate would read every obligation
 // about code as reaching nobody.
 const Source = "code"
@@ -73,7 +75,7 @@ const (
 	// target ([EngineWrite.Ref]) by its method ([EngineWrite.Method]), at the
 	// head its caller read ([EngineWrite.ExpectedHead]): built on the
 	// repository's git node onto the target's tip and landed as ONE MERGE
-	// RECORD its gate decides ([MergeProposal], ADR-0066) — or, on a target
+	// RECORD its gate decides ([MergeProposal], ADR-0089) — or, on a target
 	// whose merges land through its queue, enqueued there ([QueueProposal]).
 	// Never a push: a merge moves its target, merges its change and may
 	// delete its source in one record, and an engine-built push carries one
@@ -176,7 +178,7 @@ const (
 )
 
 // EngineWrite is one write the engine builds and lands as a push, asked of the
-// repository's home git node (ADR-0059). Every field is held to
+// repository's home git node (ADR-0082). Every field is held to
 // [EngineWrite.Validate] by every party to it.
 type EngineWrite struct {
 	Kind   EngineWriteKind `json:"kind"`
@@ -677,7 +679,7 @@ func (w EngineWrite) Instant() time.Time {
 // and the git node that builds it all hold it to.
 func (w EngineWrite) Validate() error {
 	if !w.Kind.Valid() {
-		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, w.Kind, EngineWriteKinds())
+		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, w.Kind, words.Or(EngineWriteKinds()))
 	}
 	if id, err := uuid.Parse(w.RepoID); err != nil || id.String() != w.RepoID {
 		return fmt.Errorf("%w: repo_id: %q is not a repository's id", ErrInvalid, w.RepoID)
@@ -685,7 +687,7 @@ func (w EngineWrite) Validate() error {
 	// WHO WRITES IS NAMED, and is somebody who may: a seat with the run that
 	// made the write, whose push names it; a person through a credential
 	// bound to their human seat, whose seat is the commit's author. A token
-	// bound to nobody fetches and writes nothing (ADR-0055).
+	// bound to nobody fetches and writes nothing (ADR-0078).
 	if why := w.Principal.invalid(); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
 	}
@@ -799,7 +801,7 @@ func (w EngineWrite) validPayload() error {
 	case len(w.Files) > 0:
 		return fmt.Errorf("%w: files: the change — its operations and its message, as JSON spells them — is %d "+
 			"bytes, past the %d one engine write may carry (code.MaxCommitPayloadBytes); make a change this large "+
-			"in a coding box (run_sandbox)", ErrInvalid, n, MaxCommitPayloadBytes)
+			"in a checkout of the repository ("+toolname.CodeCheckout+")", ErrInvalid, n, MaxCommitPayloadBytes)
 	case len(w.Suggestions) > 0:
 		return fmt.Errorf("%w: suggestions: the change — its suggestions and its message, as JSON spells them — "+
 			"is %d bytes, past the %d one engine write may carry (code.MaxCommitPayloadBytes): apply them in two "+
@@ -920,7 +922,7 @@ func (w EngineWrite) validKind() error {
 		switch {
 		case len(w.Files) > MaxFileOps:
 			return fmt.Errorf("%w: files: %d operations, past the %d one write may carry (code.MaxFileOps); "+
-				"make a change this wide in a coding box (run_sandbox)", ErrInvalid, len(w.Files), MaxFileOps)
+				"make a change this wide in a checkout of the repository ("+toolname.CodeCheckout+")", ErrInvalid, len(w.Files), MaxFileOps)
 		case w.Base != "" && w.ExpectedHead != "":
 			return fmt.Errorf("%w: base: a commit onto a branch sits on its head (expected_head); base starts a "+
 				"branch the write creates", ErrInvalid)
@@ -971,7 +973,7 @@ func (w EngineWrite) validMerge(fields ...error) error {
 	case w.Change < 1:
 		return fmt.Errorf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
 	case !w.Method.Valid():
-		return fmt.Errorf("%w: method: %q is not one of %v", ErrInvalid, w.Method, MergeMethods())
+		return fmt.Errorf("%w: method: %q is not one of %s", ErrInvalid, w.Method, words.Or(MergeMethods()))
 	}
 	if why := textProblem(w.Override, MaxOverrideReasonBytes, "merge's override reason"); why != "" {
 		return fmt.Errorf("%w: override: %s", ErrInvalid, why)
@@ -1017,7 +1019,7 @@ func (w EngineWrite) validFiles() error {
 func (f FileOp) valid(i int) error {
 	at := fmt.Sprintf("files[%d]", i)
 	if !f.Op.Valid() {
-		return fmt.Errorf("%w: %s.op: %q is not one of %v", ErrInvalid, at, f.Op, FileOpKinds())
+		return fmt.Errorf("%w: %s.op: %q is not one of %s", ErrInvalid, at, f.Op, words.Or(FileOpKinds()))
 	}
 	if err := validWritePath(f.Path); err != nil {
 		return fmt.Errorf("%w: %s.path: %w", ErrInvalid, at, err)
@@ -1116,7 +1118,7 @@ func validWritePath(p string) error {
 	}
 	if n := strings.Count(p, "/") + 1; n > MaxTreePathDepth {
 		return fmt.Errorf("%d components deep, past the %d a path one engine write names may be "+
-			"(code.MaxTreePathDepth); make a change this deep in a coding box (run_sandbox)", n, MaxTreePathDepth)
+			"(code.MaxTreePathDepth); make a change this deep in a checkout of the repository ("+toolname.CodeCheckout+")", n, MaxTreePathDepth)
 	}
 	return nil
 }

@@ -294,7 +294,7 @@ a.seat-chip:hover {
    Every list is a `DataGrid` now (see app/frame/DataGrid.tsx), which is a CSS
    grid rather than a `<table>` because its columns, its sort and its bands are
    all things the URL carries. What remains here is a project's Files listing
-   (routes/work/Files.tsx): a block inside a card that already titles it, with
+   (routes/worklet/Files.tsx): a block inside a card that already titles it, with
    nothing to sort, so a table in the sense the element means rather than a
    list of objects. So this is the quiet nested treatment and nothing else; the
    sortable-header chrome, the row hover and the selected and failed marks went
@@ -419,65 +419,10 @@ a.seat-chip:hover {
 
 /* ---- Controls ----------------------------------------------------------- */
 
-/* THE TEXT FIELD IS uilet's `Input`, the picker is its `Select` and the
-   labelled row around them is its `FormField`, so `.input`, `.input-affixed`,
-   `.input-affix`, `.input.is-reference`, `.field` and `.hint` are gone from
-   here: the scheme affix is `InputAffix` in the control's leading slot, and a
-   field holding a `${VAR}` asks for `appearance="reference"` rather than
-   carrying our own face for it. What is left below is the one part of that
-   field the package has no register for — the sealed-entry completion list. */
-
-/* THE SECRET COMPLETION LIST, over the field that opened it.
- *
- * ABSOLUTE, so a list of eight names does not push the rest of a form down
- * the moment somebody types `$` and pull it back up when they finish the
- * word: a field that moves under a caret is a field people stop typing in.
- */
-.input-suggests {
-  position: relative;
-}
-.input-suggest-list {
-  position: absolute;
-  z-index: 40;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  margin: 0;
-  padding: var(--spacing-1);
-  list-style: none;
-  /* BOUNDED AND SCROLLED. A company with forty sealed entries would
-     otherwise draw a list past the bottom of the dialog. */
-  max-height: 12rem;
-  overflow-y: auto;
-  /* OPAQUE, and a rung is: this floats over a dialog that is already a
-     surface, and a translucent one let the help line and the fields beneath
-     show through the names. */
-  /* THE RUNG ABOVE ITS GROUND, not the same one: this opens over a modal, and a
-     modal paints the panel rung. */
-  background: var(--color-surface-elevated);
-  border: 1px solid var(--color-border-hover);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-md);
-}
-.input-suggest {
-  padding: var(--spacing-1) var(--spacing-2);
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  /* THE SAME FACE A REFERENCE WEARS in the box above and on the Secrets
-     screen: these are the names that go in one, and a list drawn in the
-     page's prose font reads as prose rather than as values. */
-  font-family: var(--font-family-mono);
-  font-variant-ligatures: none;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.input-suggest.is-active {
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
+/* THE TEXT FIELD IS uilet's `Input`, the picker is its `Select`, the
+   labelled row around them is its `FormField`, and a configuration value is
+   its `ValueField`, which also draws the sealed-entry completion list. No
+   control rule is left here. */
 
 /* Tabs — the in-page navigation a section owns. The STRIP is uilet's
    SegmentedControl now; what is left here is the panel it switches.
@@ -500,6 +445,16 @@ a.seat-chip:hover {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-5);
+  min-width: 0;
+}
+
+/* A TAB BAR AND ITS PANEL, as siblings: one column spaced by the shared step
+   (`--tab-panel-gap`), so the bar stands one step above what it switches
+   whatever gap the column around it keeps between its own parts. */
+.tab-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tab-panel-gap);
   min-width: 0;
 }
 

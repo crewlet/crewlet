@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -121,7 +122,7 @@ type Backends struct {
 // [OpenBackends] never builds a partial set, so this is for the caller that
 // supplies its own to [New]. A partial set used to be RUN rather than refused:
 // the engine skipped whatever needed the missing piece, so an engine lent a
-// queue and no store served a company with no native tracker, no conversation
+// queue and no store served a company with no Worklet, no conversation
 // ledger and no record of its turns, and said nothing. Every node `crewlet run`
 // builds holds all four, and so must every engine.
 func (b *Backends) Complete() error {
@@ -307,10 +308,18 @@ type backgroundCloser interface {
 // because the model is, and the store wants it at open time — it is the only
 // thing that knows how wide the packed BLOBs in its vector columns are.
 //
-// A NIL COMPANY IS A REAL CASE, not a caller's mistake: a node with no active
-// revision has no company to be asked for. It opens at width 0 holding no
-// rows, and learns its width from the first epoch that arrives — see
-// [store.DB.LearnEmbeddingDim].
+// A NIL COMPANY IS A REAL CASE, not a caller's mistake, and it is two. A node
+// whose store activated no revision has no company to be asked for, and holds
+// no rows. A node started with `-import-company` reads none, so that a stored
+// revision this build cannot run does not refuse the boot that replaces it —
+// and it may hold that revision's rows. Both open at width 0 and learn their
+// width from the first epoch that arrives ([store.DB.LearnEmbeddingDim]); for
+// the import that epoch is the imported file's, so the store ends at the width
+// a boot on the file opened it at, over rows of the width it replaced — where
+// a restart onto a new width, which is how the width is changed, has always
+// left a store. Opened at the stored revision's width instead, a file that
+// changes it would be refused by its first apply ([Engine.buildEmbedder]) with
+// the fleet already pointed at it, and need a second restart to take.
 //
 // This does NOT make the width mutable, and it was refused here while it was
 // immutable for a reason that still holds: a store left at a wrong non-zero
@@ -319,8 +328,9 @@ type backgroundCloser interface {
 // non-zero, [Engine.buildEmbedder] refuses a revision that would change it,
 // and only the never-told case is learnable.
 //
-// A node that HAS a revision does not arrive here nil: the caller reads the
-// active revision first and passes it, so the store opens at the right width.
+// A node that boots ON a revision does not arrive here nil: the caller reads
+// the active revision first and passes it, so the store opens at its width.
+// The one node holding a revision that arrives nil is the import above.
 //
 // rec is the node's recorder, which a backend that counts what it does counts
 // into from its first request — the object store's bucket client, whose
@@ -408,6 +418,9 @@ func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 	// estate is ever opened on it — a path that reaches for one is told
 	// [store.ErrNoEstate] rather than handed an empty database that reads as
 	// a company with nothing in it.
+	//
+	// DECIDED HERE ALONE: whoever else needs to know whether this node keeps
+	// what it writes asks the handle this opens ([store.DB.Scratch]).
 	if !HoldsEstate(b) {
 		opts.Scratch = b.Store.Scratch
 	}
@@ -418,9 +431,10 @@ func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 	// distinct from a configured width the store was never told about.
 	//
 	// A NIL COMPANY reads as the same 0, and is a real case rather than a
-	// caller's mistake: a node with no active revision has no company to be
-	// asked for. Such a store holds no rows and learns its width from the
-	// first epoch that arrives — see [store.DB.LearnEmbeddingDim].
+	// caller's mistake: a node that boots on no revision has no company to be
+	// asked for. It learns its width from the first epoch that arrives — see
+	// [store.DB.LearnEmbeddingDim], and [OpenBackends] for the node started
+	// with -import-company, which may hold rows already.
 	if c != nil && c.Providers.Embeddings != nil {
 		opts.EmbeddingDim = c.Providers.Embeddings.Width()
 	}
@@ -494,7 +508,7 @@ func streamConfig(b *config.Bootstrap) (jetstream.Config, error) {
 		return jetstream.Config{}, fmt.Errorf("engine: stream: %w", err)
 	}
 	// THE BROKER'S CREDENTIALS ARE THE KEYRING'S, derived per key by the rule
-	// every consumer of secrets.keys follows (ADR-0064): every route, leaf link
+	// every consumer of secrets.keys follows (ADR-0087): every route, leaf link
 	// and operator connection of an embedded fleet presents one. Derived on
 	// every node, a solo member's too — it opens no fleet listener, so its are
 	// never presented — because which listeners a broker opens is the jetstream
@@ -737,6 +751,22 @@ func objectsReservation(ctx context.Context, b *config.Bootstrap, q any,
 	return reservation, false
 }
 
+// unstatedLimit is the limit this node sizes against where the broker states
+// none it can read, on a stream volume with free bytes free: the share of it
+// [embeddedShareNum]/[embeddedShareDen] names, which is the cap nats-server
+// holds every reservation to when no max_file_store is set — and the limit
+// this engine's own embedded broker derives on the same volume.
+//
+// THE SHARE AND NEVER THE WHOLE VOLUME. The whole free space stood in for it
+// once, which overstated the cap by a third: the bucket reserved a quarter of
+// the volume — a third of the cap — and the logs half of what that left, so on
+// a 16 GiB volume the bucket took 4 GiB of a 12 GiB cap, the logs' floors came
+// out of the remaining 8, and every log the register gained at its 1 GiB floor
+// came out of the coordination remainder every mailbox and bucket grows into.
+func unstatedLimit(free int64) int64 {
+	return free / embeddedShareDen * embeddedShareNum
+}
+
 // derivedObjectsReservation is the reservation an unset
 // store.objects.nats_max_bytes takes against a broker limit of limit bytes,
 // beside state-log ceilings an operator declared summing to declared: the
@@ -886,6 +916,19 @@ func countRefusals(rec *metrics.Recorder) func(jetstream.PeerRefusal, uint64) {
 // sandbox run — a BILLED box — was forgotten by the process that launched it.
 // What persistence the records get is the same choice as the event log's:
 // stream.store_dir.
+//
+// # AND THE FENCING COUNTER IS A RECORD, whatever the coordination slot says
+//
+// The in-process lease table is right about OWNERSHIP and was wrong about the
+// TOKEN. A seat's epoch is written into fleet records (a sandbox run's
+// owner_epoch) and compared with later, so it has to outlive the process as
+// those records do. Counted beside the in-process leases, it restarted at 1 on
+// every boot, and after a graceful restart the seat's new holder was refused
+// as older than its own previous self on every run that self had parked: an
+// answer to such a run was never recorded, and its resume and reap were
+// refused too. So a single node's leases mint from the same persistent counter
+// a fleet's lease store does (coord/kv.Epochs), in the same bucket, which also
+// carries the tokens across a move from local coordination to a fleet.
 func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
 	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
 	// sequence actually is: every replicated bucket of both coordination
@@ -905,19 +948,66 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 	}
 	out.Fleet = shared
 
+	var epochs *kv.Epochs
 	if b.Coordination.Type != config.CoordinationEmbeddedKV {
-		out.Coord = coordmem.New()
-		return nil
+		epochs, err = kv.OpenEpochs(ctx, js, kv.EpochsConfig{
+			Replicas:  b.Stream.Replicas,
+			Clustered: clusteredStream(b),
+		})
+		if err != nil {
+			return fmt.Errorf("engine: coordination: %w", err)
+		}
+		out.Coord = &coordmem.Backend{Epochs: epochs}
+	} else {
+		leases, err := kv.Open(ctx, js, kv.Config{
+			TTL:       leaseTTL(b),
+			Replicas:  b.Stream.Replicas,
+			Clustered: clusteredStream(b),
+		})
+		if err != nil {
+			return fmt.Errorf("engine: coordination: %w", err)
+		}
+		out.Coord, epochs = leases, leases.Epochs()
 	}
-	leases, err := kv.Open(ctx, js, kv.Config{
-		TTL:       leaseTTL(b),
-		Replicas:  b.Stream.Replicas,
-		Clustered: clusteredStream(b),
-	})
+	return floorSeatEpochs(ctx, epochs, shared, runsBucketHome(b))
+}
+
+// floorSeatEpochs raises each seat's fencing counter above every epoch its
+// sandbox run records carry, BEFORE this node claims a seat.
+//
+// The counter is the only source of tokens, so a row should never carry one
+// above it, and on a deployment that has only ever minted from this bucket none
+// does. One that did not (local coordination before its counter was
+// persistent), or one whose epochs bucket was deleted and re-created, has rows
+// stamped above an empty counter, and the seat's next holder would be refused
+// as older than its own previous self on every one of them: an answer to a
+// parked run never recorded, its resume and reap refused. Raising the counter
+// is the whole repair, because the seat's next claim then mints above the rows
+// and its recovery fences them to the new lease.
+//
+// EVERY BOOT, on every topology, rather than once: it costs one listing of the
+// runs, and a floor at or below the counter changes nothing, so a fleet's
+// nodes doing it concurrently agree.
+func floorSeatEpochs(ctx context.Context, epochs *kv.Epochs, fleet coord.Fleet, home string) error {
+	floors, err := sandbox.NewCoordStore(fleet).OwnerEpochs(ctx)
 	if err != nil {
-		return fmt.Errorf("engine: coordination: %w", err)
+		return fmt.Errorf("engine: coordination: list the sandbox runs to floor each "+
+			"seat's fencing epoch above them (the sandbox runs bucket, %s, must be "+
+			"readable for the node to start): %w", home, err)
 	}
-	out.Coord = leases
+	for seat, floor := range floors {
+		resource := coord.SeatResource(seat)
+		raised, err := epochs.Floor(ctx, resource, floor)
+		if err != nil {
+			return fmt.Errorf("engine: coordination: raise the fencing epoch of %s to %d: %w",
+				resource, floor, err)
+		}
+		if raised {
+			log.InfoContext(ctx, "seat_epoch_floored", "seat", seat, "epoch", floor,
+				"detail", "a sandbox run carries a fencing epoch the counter had not "+
+					"reached, so the seat's next claim mints above it")
+		}
+	}
 	return nil
 }
 
@@ -929,7 +1019,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 // the subsystem that reads it already uses, named at its own package.
 func openFleet(ctx context.Context, js natsjs.JetStream, replicas int, clustered bool) (coord.Fleet, error) {
 	return kv.OpenFleet(ctx, js, kv.FleetConfig{
-		RateWindow:       coord.RateWindow,
+		MaxRateWindow:    coord.MaxRateWindow,
 		MaxClaimTTL:      coord.MaxClaimTTL,
 		LedgerRetention:  coord.LedgerRetention,
 		FireRetention:    coord.FireRetention,
@@ -1023,6 +1113,21 @@ func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration
 		return got
 	}
 	return configured
+}
+
+// runsBucketHome says where the sandbox runs bucket this node reads lives,
+// for an error an operator acts on: the place to look differs by broker, and
+// naming stream.store_dir to a node whose bucket is on an external cluster
+// sends the operator to a directory that holds none of it.
+func runsBucketHome(b *config.Bootstrap) string {
+	switch b.BrokerKind() {
+	case placement.BrokerClient:
+		return "on the external NATS cluster stream.url dials"
+	case placement.BrokerLeaf:
+		return "on the data members this node joins through stream.leaf.urls"
+	default:
+		return "on this node's embedded broker, kept under stream.store_dir"
+	}
 }
 
 // clusteredStream is whether this node's broker has PEERS.

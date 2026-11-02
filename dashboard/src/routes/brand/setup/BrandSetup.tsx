@@ -12,7 +12,7 @@
  *
  * # How it ends
  *
- * An administrator, a person, finishes with **Adopt as the company brand**
+ * An administrator, a person, finishes with **Publish as the company brand**
  * (the engine asks for a recent sign-in when the proof is stale); a person the
  * kit is shared with to edit finishes with **Save for review**, a draft an
  * administrator adopts from the Brand page. Both ask first that every
@@ -58,6 +58,13 @@ import {
 } from "~/lib/brand/setup.ts";
 import { adoptionProblem, partProblem } from "~/lib/brand/validate.ts";
 import { useBrandAssets } from "~/lib/brand/useBrand.ts";
+import {
+  BRAND_ASSISTANT_HELP,
+  applyBrandDraft,
+  brandDraftFields,
+  type BrandDraft,
+} from "~/lib/brand/assistantDraft.ts";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useBrandDraftSave } from "~/lib/brand/useBrandSave.ts";
 import { BRAND_PAGE } from "~/components/brand.tsx";
 import { BrandPreview } from "../BrandPreview.tsx";
@@ -66,6 +73,9 @@ import { ReviewStep, setupWarnings, warningKey } from "./Review.tsx";
 import { useSetupTarget, type SetupTarget } from "./useSetupTarget.ts";
 
 const TITLE = "Set up your brand";
+
+/** Every part of the brand is the setup's to change, whichever step is open. */
+const SETUP_FIELDS = brandDraftFields(new Set(["identity", "logos", "colours", "type", "voice"]));
 
 /** A step's place in the setup. */
 const indexOf = (id: SetupStepId) => SETUP_STEPS.findIndex((s) => s.id === id);
@@ -277,7 +287,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     if (now === null) return;
     if (!admin) {
       setFinishing(true);
-      toast.ok("Saved for review. An administrator adopts it from the Brand page.");
+      toast.ok("Saved for review. An administrator publishes it from the Brand page.");
       nav.to(BRAND_PAGE);
       return;
     }
@@ -285,7 +295,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     const answer = await adopt.run(adoptBrand(now.kit, now.version));
     if (answer?.kind === "done") {
       setFinishing(true);
-      toast.ok(`The ${edit.document.name.trim()} brand is adopted`);
+      toast.ok(`The ${edit.document.name.trim()} brand is published`);
       nav.to(BRAND_PAGE);
     } else if (answer) {
       setSaid(answer.text);
@@ -328,7 +338,28 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
   });
 
   const busy = draftSave.busy || adopt.busy;
+  // WHAT IS OPEN, for the assistant: the draft as it stands, at its step, and
+  // its text and value fields set through the same `setEdit` typing uses;
+  // Continue, Save as draft and the finish stay the person's.
+  useAssistantDraft<BrandDraft>({
+    kind: "client",
+    id: saved.kit,
+    revision: saved.kit ? saved.version : null,
+    step,
+    help: BRAND_ASSISTANT_HELP,
+    scope: "The brand you are setting up (not saved)",
+    value: edit,
+    fields: SETUP_FIELDS,
+    apply: (next) =>
+      applyBrandDraft(edit, next, setEdit, (sentence) => {
+        setSaid(sentence);
+        announce(sentence);
+      }),
+    blocked: () => (busy ? "The brand is being saved." : null),
+  });
   const spec = stepSpec(step);
+  // THE STEP'S PRIMARY ACTION is the wizard's own slot: it keeps one width on
+  // every step, and on a phone it takes the footer's second row by name.
   const footer =
     step === "review" ? (
       <>
@@ -338,11 +369,8 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
         <Button variant="secondary" loading={draftSave.busy} onClick={() => void saveDraft()}>
           Save as draft
         </Button>
-        <Button variant="primary" loading={busy} onClick={() => void finish()}>
-          {admin ? "Adopt as the company brand" : "Save for review"}
-        </Button>
       </>
-    ) : (
+    ) : step !== "identity" || spec.optional ? (
       <>
         {step !== "identity" ? (
           <Button variant="ghost" onClick={() => void go(previousStep(step))}>
@@ -354,10 +382,17 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
             Skip for now
           </Button>
         ) : null}
-        <Button variant="primary" loading={draftSave.busy} onClick={() => void go(nextStep(step))}>
-          Continue
-        </Button>
       </>
+    ) : undefined;
+  const primary =
+    step === "review" ? (
+      <Button variant="primary" loading={busy} onClick={() => void finish()}>
+        {admin ? "Publish as the company brand" : "Save for review"}
+      </Button>
+    ) : (
+      <Button variant="primary" loading={draftSave.busy} onClick={() => void go(nextStep(step))}>
+        Continue
+      </Button>
     );
 
   const editorProps = { edit, onEdit: setEdit, assets };
@@ -395,13 +430,14 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
                 <BrandPreview
                   document={edit.document}
                   assets={assets}
-                  draft
+                  drawn="changes"
                   title="Preview of your draft"
                 />
               ),
               asideLabel: "Preview of your draft",
             })}
         footer={footer}
+        primaryAction={primary}
       >
         <div ref={body} onKeyDown={onKeyDown} className="brand-setup-body">
           {/* WHY THE STEP IS HELD, over its fields, where it is read first. */}

@@ -1,0 +1,37 @@
+# A space named by its name: "the Company space" is HOME. The page is
+# proposed in HOME, never in a key guessed from the name, and nothing is
+# said not to exist.
+person:
+  apps: [doclet]
+  acts: [write_page]
+page:
+  screen: company-brand
+  title: Company › Brand
+  params: {}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: url:5e6f7a8b
+  accepts: []
+question: Write a short announcement page in the Company space saying our new brand is live.
+answers:
+  - route: GET /containers
+    body:
+      containers:
+        - {key: FAIR, name: FairSplit}
+        - {key: HOME, name: Company}
+        - {key: TS, name: Tool skills}
+  - route: GET /viewer
+    body: {handle: miles, project: FAIR, space: FAIR}
+script:
+  - call: create_page
+    args:
+      container: the Company space
+      title: Our new brand is live
+      body: Our new brand is live across the product.
+expect:
+  calls: [create_page]
+  proposals: 1
+  state: waiting_for_approval
+  never_says: [does not exist, no such space]
+  shows: [HOME]

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { EventRecord } from "~/protocol/index.ts";
-import { phaseRecord, toolCall } from "~/test/phaseRecord.ts";
+import { invocation, phaseRecord, toolCall } from "~/test/phaseRecord.ts";
 import { fmtDuration } from "./format.ts";
 import { buildWaterfall, tickLabel, ticks, type Span } from "./waterfall.ts";
 
@@ -48,6 +48,7 @@ function settledTurn() {
         outputTokens: 0,
         cacheReadTokens: 0,
         toolCalls: 2,
+        stopReason: "",
       },
       {
         round: 2,
@@ -58,6 +59,7 @@ function settledTurn() {
         outputTokens: 0,
         cacheReadTokens: 0,
         toolCalls: 0,
+        stopReason: "",
       },
     ],
     tools: [
@@ -102,6 +104,198 @@ describe("buildWaterfall", () => {
     expect(w.open).toBe(false);
   });
 
+  // A PHASE'S CLI RUNS hold the rounds each names, by round number — never by
+  // instant: the second run's first round here STARTS before that run was
+  // launched (the engine dates a request from the last thing it saw end), and
+  // it is still the second run's. A run that failed is marked, and a run whose
+  // CLI showed no requests is one round drawn over the run itself.
+  //
+  // Mutation: file a round under the run whose span holds its start, or leave
+  // an unobserved run's round untimed, and this fails.
+  test("nests each CLI run's rounds under it, by the rounds the run names", () => {
+    const timed = (round: number, startMs: number, durationMs: number, toolCalls = 0) => ({
+      round,
+      startedAt: startMs ? iso(startMs) : "",
+      durationMs,
+      model: "m",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      toolCalls,
+      stopReason: "",
+    });
+    const execute = phaseRecord({
+      key: "turn-1|execute|1",
+      clockStart: iso(1_000),
+      durationMs: 20_000,
+      timedRounds: [
+        timed(1, 1_000, 1_000, 1),
+        timed(2, 3_000, 1_000),
+        timed(3, 4_500, 2_000),
+        // The third run's one round: no record timed it.
+        timed(4, 0, 0, 1),
+      ],
+      tools: [
+        toolCall({ name: "look", round: 1, startedAt: iso(2_000), durationMs: 500 }),
+        toolCall({ name: "post", round: 4, startedAt: iso(12_000), durationMs: 500 }),
+      ],
+      invocations: [
+        invocation({
+          run: 1,
+          startedAt: iso(1_000),
+          durationMs: 3_800,
+          firstRound: 1,
+          lastRound: 2,
+        }),
+        invocation({
+          run: 2,
+          startedAt: iso(5_000),
+          durationMs: 3_000,
+          firstRound: 3,
+          lastRound: 3,
+          outcome: "failed",
+        }),
+        invocation({
+          run: 3,
+          startedAt: iso(10_000),
+          durationMs: 5_000,
+          firstRound: 4,
+          lastRound: 4,
+          requestsObserved: false,
+          providerKey: "hermes",
+        }),
+      ],
+    });
+    const w = buildWaterfall({
+      events: [],
+      phases: [execute],
+      now: T0,
+      running: false,
+      parked: false,
+    });
+    expect(w.spans.map((s) => `${s.depth}:${s.kind}:${s.label}`)).toEqual([
+      "0:turn:Turn",
+      "1:phase:Execute",
+      "2:invocation:CLI run 1",
+      "3:model:Round 1",
+      "4:tool:look",
+      "3:model:Round 2",
+      "2:invocation:CLI run 2",
+      // Round 3 began at 4.5s, before run 2's launch at 5s — and is run 2's.
+      "3:model:Round 3",
+      "2:invocation:CLI run 3",
+      "3:model:Round 4",
+      "4:tool:post",
+    ]);
+    const run2 = byId(w.spans, "turn-1|execute|1.i2");
+    expect([run2.failed, run2.invocation]).toEqual([true, 2]);
+    const unobserved = byId(w.spans, "turn-1|execute|1.r4");
+    expect([unobserved.start - T0, unobserved.end - T0, unobserved.invocation]).toEqual([
+      10_000, 15_000, 3,
+    ]);
+    expect(unobserved.sub).toContain("the whole run");
+    expect(byId(w.spans, "turn-1|execute|1.i3").sub).toBe("hermes");
+    expect(w.untimed).toEqual([]);
+  });
+
+  // THE RUN IN FLIGHT is on no record until it ends, so it is drawn open from
+  // the first instant measured under it, over the rounds past every ended run.
+  test("draws the run in flight open over the rounds past every ended run", () => {
+    const now = T0 + 30_000;
+    const live = phaseRecord({
+      live: true,
+      clockStart: iso(0),
+      timedRounds: [
+        {
+          round: 1,
+          startedAt: iso(1_000),
+          durationMs: 1_000,
+          model: "m",
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          toolCalls: 0,
+          stopReason: "",
+        },
+        {
+          round: 2,
+          startedAt: iso(9_000),
+          durationMs: 1_000,
+          model: "m",
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          toolCalls: 1,
+          stopReason: "",
+        },
+      ],
+      runningCalls: [
+        { id: "c9", round: 2, name: "run_tests", arguments: "{}", startedAt: iso(10_000) },
+      ],
+      invocations: [
+        invocation({ run: 1, startedAt: iso(500), durationMs: 2_000, firstRound: 1, lastRound: 1 }),
+      ],
+    });
+    const w = buildWaterfall({ events: [], phases: [live], now, running: true, parked: false });
+    expect(w.spans.map((s) => `${s.depth}:${s.kind}:${s.label}`)).toEqual([
+      "0:turn:Turn",
+      "1:phase:Execute",
+      "2:invocation:CLI run 1",
+      "3:model:Round 1",
+      "2:invocation:CLI run 2",
+      "3:model:Round 2",
+      "4:tool:run_tests",
+    ]);
+    const inFlight = byId(w.spans, "turn-1|execute|1.i2");
+    expect([inFlight.start - T0, inFlight.end, inFlight.open]).toEqual([9_000, now, true]);
+  });
+
+  // THE LAUNCH THE FRAME STATES is where the run in flight begins: its first
+  // round starts once the CLI is up and its model has begun, which is later.
+  // And a run with nothing timed under it yet — the CLI starting, its model
+  // writing the first request — is still a run, drawn open from its launch.
+  test("draws the run in flight from the launch the frame states, with or without rounds", () => {
+    const now = T0 + 30_000;
+    const round2 = {
+      round: 2,
+      startedAt: iso(9_000),
+      durationMs: 1_000,
+      model: "m",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      toolCalls: 0,
+      stopReason: "",
+    };
+    const ended = invocation({
+      run: 1,
+      startedAt: iso(500),
+      durationMs: 2_000,
+      firstRound: 1,
+      lastRound: 1,
+    });
+    const withRound = phaseRecord({
+      live: true,
+      clockStart: iso(0),
+      runStartedAt: iso(7_000),
+      timedRounds: [round2],
+      invocations: [ended],
+    });
+    let w = buildWaterfall({ events: [], phases: [withRound], now, running: true, parked: false });
+    let inFlight = byId(w.spans, "turn-1|execute|1.i2");
+    expect([inFlight.start - T0, inFlight.end, inFlight.open]).toEqual([7_000, now, true]);
+
+    const starting = phaseRecord({
+      live: true,
+      clockStart: iso(0),
+      runStartedAt: iso(20_000),
+      invocations: [ended],
+    });
+    w = buildWaterfall({ events: [], phases: [starting], now, running: true, parked: false });
+    inFlight = byId(w.spans, "turn-1|execute|1.i2");
+    expect([inFlight.start - T0, inFlight.end, inFlight.open]).toEqual([20_000, now, true]);
+  });
+
   test("a tool the engine stamped sits at its stamp; one it only timed runs after the one before it", () => {
     const { events, phases } = settledTurn();
     const w = buildWaterfall({ events, phases, now: T0, running: false, parked: false });
@@ -125,6 +319,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 2,
+          stopReason: "",
         },
       ],
       tools: [toolCall({ name: "a", durationMs: 200 }), toolCall({ name: "b", durationMs: 300 })],
@@ -179,7 +374,10 @@ describe("buildWaterfall", () => {
     expect(order).toContain("2:writer");
   });
 
-  test("a running phase, its round in flight and the call running now end at now", () => {
+  // EVERY CALL IN FLIGHT IS A SPAN, each by its own id: a CLI runs a
+  // response's calls side by side, and a waterfall that drew one of them hid
+  // the call the turn was actually waiting on.
+  test("a running phase, its round in flight and every call running now end at now", () => {
     const now = T0 + 20_000;
     const live = phaseRecord({
       live: true,
@@ -193,11 +391,15 @@ describe("buildWaterfall", () => {
           inputTokens: 0,
           outputTokens: 0,
           cacheReadTokens: 0,
-          toolCalls: 1,
+          toolCalls: 2,
+          stopReason: "",
         },
       ],
       roundStartedAt: iso(15_000),
-      runningCall: { round: 1, name: "run_tests", arguments: "{}", startedAt: iso(2_500) },
+      runningCalls: [
+        { id: "c1", round: 1, name: "run_tests", arguments: "{}", startedAt: iso(2_500) },
+        { id: "c2", round: 1, name: "read_file", arguments: "{}", startedAt: iso(2_600) },
+      ],
     });
     const w = buildWaterfall({
       events: [event("agent_turn_started", 0, { started_at: iso(0) })],
@@ -208,10 +410,13 @@ describe("buildWaterfall", () => {
     });
     const phase = byId(w.spans, "turn-1|execute|1");
     const inFlight = byId(w.spans, "turn-1|execute|1.r2");
-    const call = byId(w.spans, "turn-1|execute|1.r1.running");
-    for (const s of [phase, inFlight, call, byId(w.spans, "turn")]) {
+    const tests = byId(w.spans, "turn-1|execute|1.r1.running.c1");
+    const read = byId(w.spans, "turn-1|execute|1.r1.running.c2");
+    for (const s of [phase, inFlight, tests, read, byId(w.spans, "turn")]) {
       expect([s.id, s.open, s.end]).toEqual([s.id, true, now]);
     }
+    // Each knows which of the phase's running calls it is.
+    expect([tests.runningIndex, read.runningIndex]).toEqual([0, 1]);
     expect(w.open).toBe(true);
     expect(w.to).toBe(now);
   });
@@ -229,6 +434,7 @@ describe("buildWaterfall", () => {
       outputTokens: 0,
       cacheReadTokens: 0,
       toolCalls: 1,
+      stopReason: "",
     });
     const now = T0 + 237_000;
     const tools = phaseRecord({
@@ -356,6 +562,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 1,
+          stopReason: "",
         },
         {
           round: 2,
@@ -366,6 +573,7 @@ describe("buildWaterfall", () => {
           outputTokens: 0,
           cacheReadTokens: 0,
           toolCalls: 0,
+          stopReason: "",
         },
       ],
     });
@@ -441,6 +649,22 @@ describe("buildWaterfall", () => {
     });
     const run = byId(w.spans, "run:L1");
     expect([run.failed, run.open, run.end - T0]).toEqual([true, false, 4_000]);
+  });
+
+  test("a run a person stopped ends at its stop, and is not drawn as a failure", () => {
+    const events = [
+      event("sandbox_run_started", 1_000, { launch_id: "L1", started_at: iso(1_000) }),
+      event("sandbox_run_stopped", 4_000, { stopped_by: "jane" }),
+    ];
+    const w = buildWaterfall({
+      events,
+      phases: [],
+      now: T0 + 9_000,
+      running: false,
+      parked: false,
+    });
+    const run = byId(w.spans, "run:L1");
+    expect([run.failed, run.open, run.end - T0]).toEqual([false, false, 4_000]);
   });
 
   test("review pending follows a finished executor while the turn runs, and not while it is parked", () => {

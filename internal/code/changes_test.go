@@ -456,7 +456,7 @@ func TestAnOpenWritesTheChangesRows(t *testing.T) {
 	repo := changeRepo(t, n, "web")
 	p := opening(repo, featureRef, mainRef, ada)
 	p.Open.Body, p.Open.Draft = "It fails one run in ten.", true
-	p.Open.WorkItem = &types.WorkItem{Backend: types.WorkNative, ID: "task-9", Key: "ENG-412", Project: "ENG"}
+	p.Open.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: "task-9", Key: "ENG-412", Project: "ENG"}
 	p.Open.TurnID, p.Open.RunID = "turn-1", "run-1"
 	res, err := c.ProposeChange(t.Context(), p)
 	requireChanged(t, res, err)
@@ -714,7 +714,7 @@ func TestAChangeProposalThatIsNoneIsRefusedBeforeItIsQueued(t *testing.T) {
 		"an edit that sets a work item and clears it": {func() code.ChangeProposal {
 			return writing(dev, 1, func(p *code.ChangeProposal) {
 				p.Edit = &code.ChangeEdit{RepoID: repo, ChangeID: uuid.Must(uuid.NewV7()).String(),
-					WorkItem: &types.WorkItem{Backend: types.WorkNative, ID: "t"}, ClearWorkItem: true}
+					WorkItem: &types.WorkItem{Backend: types.WorkWorklet, ID: "t"}, ClearWorkItem: true}
 			})
 		}, "edit.clear_work_item"},
 		"a close's writer sent by its asker": {func() code.ChangeProposal {

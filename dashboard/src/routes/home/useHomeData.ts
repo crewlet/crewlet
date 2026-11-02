@@ -5,8 +5,8 @@
  *
  * # Three questions, and the rest is pushes
  *
- * `work_flow` (the tracker's history replayed backward from today's census,
- * asked only with Tracker), `token_series` (the spend over the window, by
+ * `work_flow` (Worklet's history replayed backward from today's census,
+ * asked only with Worklet), `token_series` (the spend over the window, by
  * team) and `decisions` (what waits on this person). Who is working, the
  * budget meter and the fleet are the pushes every screen already holds, so
  * nothing here polls for them. The feed asks its own question (`Feed`).
@@ -17,7 +17,9 @@
 
 import { useServicesAsk } from "~/lib/services.ts";
 import { createContext, useContext, useMemo } from "react";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { choiceKey, urlAction } from "~/app/assistant/urlAction.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
 import { ownName, useViewer } from "~/lib/viewer.ts";
@@ -29,7 +31,16 @@ import { seatDecisionsFor } from "~/components/DecisionRow.tsx";
 import { seatConditionsOf } from "~/lib/decisions.ts";
 import { useLeadScope } from "~/lib/leadScope.ts";
 import { conditionKey, conditionsToDecide } from "~/lib/attention.ts";
-import { DEFAULT_RANGE, crewOf, flowPoints, rangeOf, statusSentence, waitingOf } from "./model.ts";
+import {
+  DEFAULT_RANGE,
+  HOME_RANGES,
+  crewOf,
+  flowPoints,
+  rangeOf,
+  statusSentence,
+  waitingOf,
+} from "./model.ts";
+import { gapsOf } from "./board/kit.tsx";
 
 /** How often the decisions are asked again: a person answers one and another
  *  lands, and the push carries neither. */
@@ -56,21 +67,32 @@ export function useHomeData() {
   const attention = useAttention();
   const [rangeValue, setRange] = useParam("range", DEFAULT_RANGE);
   const range = rangeOf(rangeValue);
+  // --- assistant page actions (WP12) ---
+  // THE PAGE'S ONE RANGE, which every widget with a time axis reads.
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: urlAction("home.range.set", {
+      scope: "Home's window (view only)",
+      keys: { range: choiceKey("Window", HOME_RANGES, "filter", DEFAULT_RANGE) },
+      nav,
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
 
   const decisions = useQuery("decisions", undefined, {
     enabled: viewer.owner !== "",
     pollMs: DECISIONS_POLL_MS,
   });
-  // THE TRACKER'S HISTORY, asked only of a reader holding Tracker: the
+  // WORKLET'S HISTORY, asked only of a reader holding Worklet: the
   // engine refuses it to anybody else, and the tiles and chart it feeds say
   // what would open them rather than drawing a refusal as a broken read.
-  // AND OF A COMPANY RUNNING CREWLET WORKS, where the history is: elsewhere
+  // AND OF A COMPANY RUNNING WORKLET, where the history is: elsewhere
   // the tiles and chart it feeds are not drawn (`Kpis.tsx`'s `KPI_SERVICES`).
   const ask = useServicesAsk();
   const flow = useQuery(
     "work_flow",
     { bucket: "day", points: flowPoints(range) },
-    { pollMs: SLOW_POLL_MS, enabled: viewer.tracker && ask.tracker },
+    { pollMs: SLOW_POLL_MS, enabled: viewer.worklet && ask.tracker },
   );
   const spend = useQuery(
     "token_series",
@@ -100,7 +122,9 @@ export function useHomeData() {
   // WHAT WAITS ON THE READER: the engine's count of their asks and parked
   // runs, and the stopped seats they can act on. Unknown (nobody signed in,
   // or not answered yet) is null, never zero.
-  const waiting = viewer.owner ? waitingOf(decisions.data, seats.mine) : null;
+  const waiting = viewer.owner
+    ? waitingOf(decisions.data, seats.mine, gapsOf([decisions.data]).length > 0)
+    : null;
   // THE OTHER CONDITIONS: what the engine raised that a person decides and
   // that is not one of this reader's own decisions: a seat stopped for
   // another reason, a budget near its ceiling. Exactly the Inbox's condition

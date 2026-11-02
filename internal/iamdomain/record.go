@@ -71,7 +71,7 @@ const BaseRecordVersion = 1
 // a raised version it would be deferred — the licence above.
 //
 // The rule is the framework's ([statelog.VersionedField.Gate]) and every
-// strict domain's — internal/tracker's GateRecordVersion states it at length —
+// strict domain's (internal/worklet's GateRecordVersion states it at length),
 // and this domain's three gates take the same pin.
 const GateRecordVersion = 1
 
@@ -171,7 +171,7 @@ const (
 	// FULL POST-STATE AND NOT A PATCH, unlike the tracker: a person is
 	// authored as a form and submitted whole, so the writer always holds the
 	// complete new value and a patch would be a diff it computed in order to
-	// be reassembled by every node.
+	// be reassembled by every data node.
 	OpUpdate OpKind = "update"
 
 	// OpStatus moves a person between the enrolment and suspension stages
@@ -282,7 +282,7 @@ const (
 	OpBarrier OpKind = "barrier"
 
 	// OpTrimmed is the trim's payload-free record that removes the
-	// arbitration anchors below a floor (ADR-0050). Its subject is
+	// arbitration anchors below a floor (ADR-0073). Its subject is
 	// [KindTrimmed].
 	OpTrimmed OpKind = "trimmed"
 
@@ -417,7 +417,7 @@ type MutationRecord struct {
 	// IT IS WHERE EVERY SEALED VALUE LIVES. A person's name and address are
 	// sealed under the fleet keyring BEFORE publication, with their id and
 	// the field as the additional authenticated data, so the bytes on the
-	// broker, in every node's deferred table and in every snapshot are
+	// broker, in every data node's deferred table and in every snapshot are
 	// ciphertext that only a holder of the keyring can open.
 	Mutation json.RawMessage `json:"mutation,omitempty"`
 
@@ -490,7 +490,7 @@ type MutationRecord struct {
 // AN IP ADDRESS, A USER AGENT OR A DEVICE FINGERPRINT. A session record says
 // that a session was opened and by whom; where from is a request-scoped
 // observation, and putting one on a replicated, permanently retained log would
-// make every node's database a location history nobody asked for.
+// make every data node's database a location history nobody asked for.
 
 // MaxReason bounds the reason a record carries.
 //
@@ -722,7 +722,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0050) as one of this domain's own records — the barrier's split: the
+// ADR-0073) as one of this domain's own records — the barrier's split: the
 // framework owns when one is appended, what it removes and the floor its
 // subject names, and the domain owns what a record on its log looks like.
 //

@@ -103,6 +103,15 @@ func (d vendorDisconnect) Disconnect(
 	by := req.By
 	var removed provision.Removed
 	err := d.engine.dropBlock(ctx, d.kind, by, func(ctx context.Context) error {
+		// THE SEATS FIRST, while the block still holds the credentials
+		// their vendor authenticates with: every agent's account turned off
+		// and its credential revoked, and removed where the person asked,
+		// from the ledger rather than the document, so an account whose seat
+		// left the document is reached too. A no-op for a surface with no
+		// per-seat access.
+		if err := d.engine.tearDownSeatAccess(ctx, d.kind, by, req.RemoveSeats); err != nil {
+			return err
+		}
 		if d.pass == nil {
 			// NOTHING TO REMOVE ANYWHERE, which no surface in this
 			// build is: every kind has a step, seven at a vendor and
@@ -274,12 +283,12 @@ func (e *Engine) disconnectors() map[integration.Kind]integration.Disconnector {
 			tearers[pass.Kind()] = tearer
 		}
 	}
-	// THE ONE STEP THAT IS NOT A PASS. A type assertion over the passes
-	// cannot find it, because there is no Slack pass to assert on: nothing
-	// at Slack can be read or reconciled with the credentials a company
-	// holds. Registered by name for that reason, and it is the only such
-	// entry — an assertion that finds nothing is how the defect it fixes
-	// went unnoticed.
+	// THE ONE STEP THAT IS NOT A PASS'S. Slack's pass converges only its
+	// agents' apps and removes nothing at Slack (an app is deleted by a
+	// person), so it is no Teardowner; what a disconnect removes is the
+	// seats' sealed app credentials on the company document. Registered by
+	// name for that reason, and it is the only such entry: an assertion
+	// that finds nothing is how the defect it fixes went unnoticed.
 	tearers[integration.KindSlack] = slackTeardown{engine: e}
 	out := map[integration.Kind]integration.Disconnector{}
 	for _, kind := range integration.Kinds {

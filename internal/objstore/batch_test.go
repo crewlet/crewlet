@@ -10,14 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 )
 
-// refusing is the twin deleting in batches, but refusing the names in refuse
+// refusingBatch is the twin deleting in batches, but refusing the names in refuse
 // name by name, as S3 answers a key it would not remove.
-type refusing struct {
+type refusingBatch struct {
 	*memobj.Backend
 	refuse map[string]bool
 }
 
-func (r *refusing) DeleteBatch(ctx context.Context, names []string) error {
+func (r *refusingBatch) DeleteBatch(ctx context.Context, names []string) error {
 	failed := map[string]error{}
 	var rest []string
 	for _, name := range names {
@@ -88,7 +88,7 @@ func TestABatchOfKeysIsCountedAsTheStoreAnswered(t *testing.T) {
 	t.Run("some refused", func(t *testing.T) {
 		t.Parallel()
 		mem := memobj.New()
-		r := &refusing{Backend: mem, refuse: map[string]bool{}}
+		r := &refusingBatch{Backend: mem, refuse: map[string]bool{}}
 		s := newStore(t, r)
 		keys := put(s, 4)
 		r.refuse[keys[1].Name()] = true

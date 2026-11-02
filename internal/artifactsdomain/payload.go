@@ -56,7 +56,7 @@ type VersionPayload struct {
 
 	// Prune is the exact list of unlabelled versions this record retires,
 	// decided in the writer's snapshot: retention RIDES THE RECORD rather
-	// than being a rule each node evaluates, so every node deletes the same
+	// than being a rule each data node evaluates, so every data node deletes the same
 	// rows at the same position.
 	Prune []int `json:"prune,omitempty"`
 
@@ -492,7 +492,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0050) as a record this domain's applier decodes: the barrier's split,
+// ADR-0073) as a record this domain's applier decodes: the barrier's split,
 // the framework owning when one is appended, what it removes and the floor its
 // subject names, and the domain owning what a record on its log looks like.
 //

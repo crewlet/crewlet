@@ -205,7 +205,7 @@
 }
 /* The setup's Review: the summary (`ReviewList`) and, beside it, the column a
    person decides in, the preview over "Before you adopt", at 22rem: the
-   wizard's 20rem aside wrapped "When you adopt" to ten lines. The decision
+   wizard's 20rem aside wrapped "When you publish" to ten lines. The decision
    column ends above the finish action;
    where the step is narrower than both need, it follows the summary in one
    column, still ending where the finish is. */
@@ -261,7 +261,7 @@
 .brand-review-faces {
   grid-template-columns: repeat(auto-fill, minmax(min(12rem, 100%), 1fr));
 }
-/* "When you adopt" heads its three items at the small step: it sits under a
+/* "When you publish" heads its three items at the small step: it sits under a
    dialog's title or a card's, which it must never outrank (the register is
    the container's to set, `Section`). */
 .brand-when-you-adopt {

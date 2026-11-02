@@ -162,13 +162,13 @@ type Fleet interface {
 	// routing, as a seat's tool asks one: the production estate router,
 	// asking the git nodes — each serving its git lane on the broker, as the
 	// engine serves one — in the repository's rendezvous order, its home
-	// first (ADR-0059), and stamping the walk's first attempt home itself.
+	// first (ADR-0082), and stamping the walk's first attempt home itself.
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
-	// Write is an engine write (ADR-0062) through the fleet's routing, as a
+	// Write is an engine write (ADR-0085) through the fleet's routing, as a
 	// seat's or a person's tool asks one: the production estate router
 	// asking the git nodes — each serving its git writes' lane on the
 	// broker, as the engine serves one — in the repository's rendezvous
-	// order, its home first (ADR-0059), the walk stamping its first attempt
+	// order, its home first (ADR-0082), the walk stamping its first attempt
 	// home itself (code.EngineWrite.Home) and asking the next git node the
 	// same write where one ran nothing or went silent (code.git_write).
 	Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)

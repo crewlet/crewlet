@@ -8,10 +8,11 @@ import (
 	"maps"
 	"runtime"
 	"slices"
-	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 //go:embed profiles.yaml
@@ -69,7 +70,7 @@ func decodeTable(raw []byte, goos string) (map[string]Profile, error) {
 		for platform := range entry.Platforms {
 			if !slices.Contains(Platforms, platform) {
 				return nil, fmt.Errorf("%s: platforms names %q, which no release is built "+
-					"for (want one of %s)", name, platform, strings.Join(Platforms, ", "))
+					"for: use %s", name, platform, words.Or(Platforms))
 			}
 		}
 		profile := entry.Profile
@@ -90,6 +91,35 @@ func BuiltinNames() []string {
 	table := builtins()
 	names := slices.Sorted(maps.Keys(table))
 	return names
+}
+
+// AssistantEligible lists the built-in profiles the Dashboard Assistant can
+// run on, sorted: those whose web-denied run is left with no tool of its own
+// by construction ([Profile.ToolsOffProblem]). Derived from the table, as
+// [WebDeniable] is, of which it is a subset.
+func AssistantEligible() []string {
+	var out []string
+	for _, name := range WebDeniable() {
+		p, err := Load(name, map[string]any{"web_tools": string(WebToolsDenied)})
+		if err == nil && p.ToolsOffProblem() == "" {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// WebDeniable lists the built-in profiles that can run with their web tools
+// off ([Profile.CanDenyWeb]), sorted: the CLIs an entry may point the
+// Dashboard Assistant at. Derived from the table, so a profile that gains a
+// measured web_denial is named everywhere this list is printed.
+func WebDeniable() []string {
+	var out []string
+	for _, name := range BuiltinNames() {
+		if p := builtins()[name]; p.CanDenyWeb() {
+			out = append(out, name)
+		}
+	}
+	return out
 }
 
 // Builtin returns a copy of one built-in profile.
@@ -140,11 +170,19 @@ func (p Profile) Clone() Profile {
 	}
 	out.EventTypePath = append(Path(nil), p.EventTypePath...)
 	out.TextEvents = append([]string(nil), p.TextEvents...)
+	if p.LimitEvents != nil {
+		out.LimitEvents = make([]LimitEvent, len(p.LimitEvents))
+		for i, e := range p.LimitEvents {
+			out.LimitEvents[i] = LimitEvent{Match: cloneMatches(e.Match),
+				SaidPath: slices.Clone(e.SaidPath), Reset: e.Reset}
+		}
+	}
 	out.LimitMarkers = append([]LimitMarker(nil), p.LimitMarkers...)
 	out.AuthMarkers = append([]AuthMarker(nil), p.AuthMarkers...)
 	out.MarkerEvents = append([]string(nil), p.MarkerEvents...)
 	out.MarkerPath = append(Path(nil), p.MarkerPath...)
 	out.SeedFiles = append([]SeedFile(nil), p.SeedFiles...)
+	out.KeySeedFiles = append([]SeedFile(nil), p.KeySeedFiles...)
 	out.ConfigEnv = cloneMap(p.ConfigEnv)
 	out.WorkConfigEnv = cloneMap(p.WorkConfigEnv)
 	out.IsolationEnv = cloneMap(p.IsolationEnv)
@@ -156,12 +194,37 @@ func (p Profile) Clone() Profile {
 		login.Args = append([]string(nil), p.StdinLogin.Args...)
 		out.StdinLogin = &login
 	}
+	if p.WebDenial != nil {
+		// slices.Clone keeps a nil list nil, and nil is meaningful here:
+		// an unset field leaves its profile field alone.
+		out.WebDenial = &WebDenial{
+			CompleteArgs: slices.Clone(p.WebDenial.CompleteArgs),
+			SeedFiles:    slices.Clone(p.WebDenial.SeedFiles),
+		}
+		if dm := p.WebDenial.MCP; dm != nil {
+			out.WebDenial.MCP = &WebDenialMCP{CompleteArgs: slices.Clone(dm.CompleteArgs),
+				Seed: slices.Clone(dm.Seed)}
+		}
+	}
+	if p.ToolsOff != nil {
+		args := make([][]string, len(p.ToolsOff.Args))
+		for i, run := range p.ToolsOff.Args {
+			args[i] = append([]string(nil), run...)
+		}
+		out.ToolsOff = &ToolsOff{Args: args, Refuses: append([]string(nil), p.ToolsOff.Refuses...),
+			Note: p.ToolsOff.Note}
+	}
 	if p.CredentialStore != nil {
 		out.CredentialStore = &CredentialStore{
 			ExportArgs: append([]string(nil), p.CredentialStore.ExportArgs...),
 			ImportArgs: append([]string(nil), p.CredentialStore.ImportArgs...),
 		}
 	}
+	out.MCP = p.MCP.clone()
+	out.Requests = p.Requests.clone()
+	out.Cap = p.Cap.clone()
+	out.FailureMarkers = append([]string(nil), p.FailureMarkers...)
+	p.cloneSignIn(&out)
 	return out
 }
 
@@ -206,11 +269,16 @@ var ErrOverrides = errors.New("overrides does not decode into a profile")
 // built-in it was merged into besides: an override that moves a relocation
 // directory must move what the built-in keeps under it ([Profile.strandedBy]),
 // which only the pair can show.
+//
+// The profile it returns is the one the CLI RUNS: an entry whose merged stance
+// is `web_tools: denied` comes back with its [WebDenial] already applied, so
+// every caller (the backend that launches it, config validating it, the
+// doctor probing it) reads the same argv and the same seeded files.
 func Load(name string, overrides map[string]any) (Profile, error) {
 	builtin, ok := Builtin(name)
 	if !ok {
 		return Profile{}, fmt.Errorf("cli-agent: unknown agent %q (want %s)",
-			name, strings.Join(BuiltinNames(), ", "))
+			name, words.Or(BuiltinNames()))
 	}
 	if len(overrides) == 0 {
 		if err := builtin.Validate(name); err != nil {
@@ -222,10 +290,48 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 	if err != nil {
 		return Profile{}, fmt.Errorf("cli-agent %q: %w: %w", name, ErrOverrides, err)
 	}
-	if err := profileError(name, append(merged.problems(), merged.strandedBy(&builtin)...)); err != nil {
+	bad := merged.webOverrideConflicts(overrides)
+	if merged.EffectiveWebTools() == WebToolsDenied && merged.WebDenial != nil {
+		// A RUN WITH TOOLS IS DENIED THE WEB TOO, or the entry is refused:
+		// see [WebDenial]. Asked of the entry that denies, never of a
+		// profile that only carries a denial, so an operator's own mcp
+		// route on a seat that keeps its web is not refused for a stance
+		// it does not take.
+		if uncovered := merged.WebDenial.mcpUncovered(merged.MCP); len(uncovered) > 0 {
+			bad = append(bad, "web_tools is denied, but web_denial leaves "+
+				words.And(uncovered)+" in place, which a run with tools uses "+
+				"instead of what the denial replaces, so the web would stay on where a seat "+
+				"works: set web_denial.mcp to what that run uses with web denied")
+		}
+		merged = merged.withWebDenied()
+	}
+	bad = append(bad, merged.problems()...)
+	if err := profileError(name, append(bad, merged.strandedBy(&builtin)...)); err != nil {
 		return Profile{}, err
 	}
 	return merged, nil
+}
+
+// webOverrideConflicts refuses an override the web denial would silently
+// discard: a complete_args or seed_files written beside `web_tools: denied`
+// when the profile's web_denial replaces that same field. Applied as written,
+// the denial wins and the operator's edit never runs; applied the other way,
+// the edit wins and the denial never runs. Neither is what was written, so
+// the operator is told which field to edit instead.
+func (p *Profile) webOverrideConflicts(overrides map[string]any) []string {
+	if p.EffectiveWebTools() != WebToolsDenied || p.WebDenial == nil {
+		return nil
+	}
+	var bad []string
+	if _, set := overrides["complete_args"]; set && p.WebDenial.CompleteArgs != nil {
+		bad = append(bad, "complete_args is overridden, but web_tools is denied and "+
+			"web_denial.complete_args replaces it; override web_denial.complete_args instead")
+	}
+	if _, set := overrides["seed_files"]; set && p.WebDenial.SeedFiles != nil {
+		bad = append(bad, "seed_files is overridden, but web_tools is denied and "+
+			"web_denial.seed_files replaces it; override web_denial.seed_files instead")
+	}
+	return bad
 }
 
 // applyOverrides merges an operator's override map into a profile.

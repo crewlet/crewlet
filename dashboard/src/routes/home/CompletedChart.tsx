@@ -16,11 +16,11 @@
 
 import { Card, DATA_COLOR_OTHER, StackedColumns } from "@crewlethq/ui";
 import { ChartColumnGlyph } from "@crewlethq/icons/glyphs";
-import { QueryState } from "~/components/common.tsx";
 import { companyDateLabel } from "~/lib/format.ts";
-import { TRACKER, needsWords } from "~/lib/access.ts";
+import { WORKLET, needsWords } from "~/lib/access.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { WorkFlowAnswer } from "~/protocol/index.ts";
+import { WidgetQuery, gapsOf } from "./board/kit.tsx";
 
 /** A fortnight: two weeks side by side, enough to see a week-on-week shape. */
 export const CHART_DAYS = 14;
@@ -32,7 +32,7 @@ export function CompletedChart({
   locked,
 }: {
   flow: QueryResult<WorkFlowAnswer>;
-  /** The reader holds no Tracker, so the series was never asked. */
+  /** The reader holds no Worklet, so the series was never asked. */
   locked: boolean;
 }) {
   const points = flow.data?.points?.slice(-CHART_DAYS) ?? [];
@@ -67,12 +67,13 @@ export function CompletedChart({
       </Card.Header>
       <Card.Body className="home-chart">
         {locked ? (
-          <p className="home-card-note">{needsWords("The tracker's history", [TRACKER])}</p>
+          <p className="home-card-note">{needsWords("Worklet's history", [WORKLET])}</p>
         ) : (
-          <QueryState
+          <WidgetQuery
             error={flow.error}
             refusal={flow.refusal}
             loading={flow.loading && !flow.data}
+            gaps={gapsOf([flow.data])}
           >
             <StackedColumns
               series={SERIES}
@@ -83,7 +84,7 @@ export function CompletedChart({
               format={(v) => Math.round(v).toLocaleString()}
               formatTime={(at) => labels.get(at) ?? ""}
             />
-          </QueryState>
+          </WidgetQuery>
         )}
       </Card.Body>
     </Card>

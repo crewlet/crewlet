@@ -3,6 +3,10 @@ package node
 import (
 	"context"
 	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // The per-node turn concurrency gate.
@@ -71,6 +75,22 @@ type gate struct {
 	// rather than reopening because a closed channel cannot be reopened.
 	mu     sync.Mutex
 	closed chan struct{}
+
+	// running counts the slots held, and is what a drain waits on to see
+	// every turn end ([gate.waitIdle]). The queue's own count of running
+	// handlers is NOT that number: a turn this node starts outside any
+	// delivery (a recorded answer's retried resume, on the sandbox
+	// coordinator's own timer) holds a slot and no handler, so a drain that
+	// waited on handlers alone handed the seat back under a running turn.
+	// The same counter the queue keeps its handlers in, for the reason
+	// [queue.Inflight] gives: a WaitGroup cannot be counted up while a
+	// drain is waiting on it.
+	running queue.Inflight
+
+	// waiting counts the turns parked for a slot while the node is at its
+	// ceiling ([Node.TurnsWaiting]): the one state a caller cannot see from
+	// the slots, since a turn that waits holds none.
+	waiting atomic.Int64
 }
 
 // DefaultMaxConcurrent is how many turns one process runs at once when
@@ -129,10 +149,18 @@ func (g *gate) acquire(ctx context.Context) (func(), bool) {
 		return nil, false
 	default:
 	}
+	g.waiting.Add(1)
+	defer g.waiting.Add(-1)
 	select {
 	case g.slots <- struct{}{}:
+		g.running.Begin()
 		var once sync.Once
-		return func() { once.Do(func() { <-g.slots }) }, true
+		return func() {
+			once.Do(func() {
+				g.running.End()
+				<-g.slots
+			})
+		}, true
 	case <-barrier:
 		return nil, false
 	case <-ctx.Done():
@@ -173,5 +201,12 @@ func (g *gate) open() {
 	}
 }
 
-// inFlight is how many slots are currently held. Diagnostics only.
-func (g *gate) inFlight() int { return len(g.slots) }
+// inFlight is how many slots are currently held.
+func (g *gate) inFlight() int { return g.running.Count() }
+
+// waitIdle waits until no slot is held, timeout passes or ctx ends, and
+// reports how many were still held when it stopped: [queue.Inflight.Wait]'s
+// contract, which the drain already reads the queue's handlers through.
+func (g *gate) waitIdle(ctx context.Context, timeout time.Duration) (int, error) {
+	return g.running.Wait(ctx, timeout)
+}

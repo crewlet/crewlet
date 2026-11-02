@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // PromptMode is how a CLI receives the prompt.
@@ -29,8 +31,8 @@ const (
 	// the same two reasons: argv is bounded by ARG_MAX, and
 	// /proc/<pid>/cmdline makes it readable by every account on the
 	// machine. A rendered prompt is the whole flattened transcript — the
-	// seat's identity, the tool catalogue, the conversation and its tool
-	// results — so it is the LARGEST and the most sensitive thing this
+	// seat's identity, the conversation and its tool results — so it is
+	// the LARGEST and the most sensitive thing this
 	// backend hands a CLI. Prefer this over argv wherever a vendor offers
 	// a prompt-file flag; `muse exec --prompt-file` is the first that does.
 	PromptFile PromptMode = "file"
@@ -255,14 +257,81 @@ type LimitMarker struct {
 	// [Profile.MarkerPath] in the CLI's own failure event.
 	Sentinel string `yaml:"sentinel,omitempty"`
 
-	// ResetSeparator splits the reset value off the sentinel line. Claude
-	// Code emits "Claude AI usage limit reached|1719849600" — a pipe, then
-	// a Unix epoch — so the retry-after is a datum rather than a guess.
-	ResetSeparator string `yaml:"reset_separator,omitempty"`
+	// Reset reads the reset instant out of the line the sentinel matched
+	// on, where the vendor names one.
+	Reset ResetReading `yaml:",inline"`
+}
 
-	// ResetUnit is how to read the value after the separator: "epoch" for
-	// Unix seconds, "seconds" for a delta.
-	ResetUnit string `yaml:"reset_unit,omitempty"`
+// ResetReading says where a vendor's limit report names the instant the limit
+// lifts, and how to read it: the text after Separator, as Unit.
+//
+// A READING THAT FINDS NOTHING IS NOT AN ERROR. The report still classifies as
+// a limit, and the entry sits out a bounded, growing window instead
+// (internal/providers/llm/cliagent), which is the honest answer when the vendor
+// did not say: inventing an instant would hold a seat off a plan that has
+// already reset, or send it back into one that has not.
+type ResetReading struct {
+	// Separator splits the reset value off the report: "|" before an epoch,
+	// "resets " before a time of day.
+	Separator string `yaml:"reset_separator,omitempty"`
+
+	// Unit is how to read the value after the separator; see [ResetUnit].
+	Unit ResetUnit `yaml:"reset_unit,omitempty"`
+}
+
+// ResetUnit is how a [ResetReading] reads the value after its separator.
+type ResetUnit string
+
+const (
+	// ResetEpoch is Unix seconds.
+	ResetEpoch ResetUnit = "epoch"
+	// ResetSeconds is a delay in seconds from the report.
+	ResetSeconds ResetUnit = "seconds"
+	// ResetClock is a time of day followed by the IANA zone it is in, the
+	// way Claude Code 2.1 writes it: "4:30pm (America/Vancouver)",
+	// "4pm (Europe/Berlin)" or "16:30 (Asia/Tokyo)". The instant is the
+	// occurrence of that time nearest the report, so a reset named past
+	// midnight is tomorrow's.
+	ResetClock ResetUnit = "clock"
+)
+
+// Valid reports whether u is a unit a reading can be taken in.
+func (u ResetUnit) Valid() bool {
+	switch u {
+	case ResetEpoch, ResetSeconds, ResetClock:
+		return true
+	}
+	return false
+}
+
+// LimitEvent recognises a spent plan or a rate limit by the CLI's own
+// STRUCTURED report: a stdout event whose fields the CLI writes, such as
+// Claude Code's result event with `is_error: true` and `api_error_status: 429`.
+//
+// IT IS READ BEFORE ANY SENTINEL, because a status code is the one signal a
+// vendor's rewording leaves alone. Claude Code 2.1 replaced "Usage limit
+// reached" with "You've hit your 5-hour limit · resets 4:30pm" while still
+// writing 429 beside it, and a profile that knew only the sentence classified
+// every refusal as a server failure: nothing sat the entry out, and every round
+// of every seat launched a CLI to hear the same refusal.
+//
+// SAFE TO BENCH ON for the reason [MarkerScopeEvents] is: a model chooses the
+// words inside an event's strings, never the keys or the types of the event the
+// CLI writes them in. That holds only where every stdout line is a JSON event,
+// which is why a profile may declare these only with jsonl output and a
+// discriminator, and why every match names the discriminator and at least one
+// other field.
+type LimitEvent struct {
+	// Match picks the report out; see [Match].
+	Match []Match `yaml:"match,omitempty"`
+
+	// SaidPath is where in the event the vendor's own sentence is: what the
+	// operator is shown, and what Reset reads the instant from. Empty shows
+	// the whole line and reads no instant.
+	SaidPath Path `yaml:"said_path,omitempty"`
+
+	// Reset reads the reset instant out of the sentence at SaidPath.
+	Reset ResetReading `yaml:",inline"`
 }
 
 // MarkerScope says WHERE a CLI's failure prose can appear, and therefore
@@ -355,18 +424,23 @@ func (s MarkerScope) Valid() bool {
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
 // its file editor, its browser.
 //
-// In text mode the engine uses none of them: Crewlet's tools ride the prompt
-// envelope, and a CLI editing files in its own sandbox is invisible to the
-// tool registry, the permission model, redaction and the event stream. The
+// On this host the engine uses none of them — every phase but the executor: a
+// seat's tools reach the CLI as the engine's own MCP server ([MCP]), and a CLI
+// editing files in its own sandbox is invisible to the tool registry, the
+// permission model and the event stream. A seat's executor is the other case:
+// the same CLI's own agentic run in a box, fully permissioned there by its
+// in-box runner (internal/sandbox/codingagent), which this stance does not
+// reach. The
 // shell is the one that matters: hostbox isolates a seat's HOME and
 // environment, not the filesystem, so a CLI with a shell on the engine host
 // reads whatever the engine user can read. A profile therefore DENIES local
 // tools wherever the vendor offers a way to, and says so here, so that
 // `crewlet llm doctor` can print the claim next to what its probe measured.
 //
-// Web is the deliberate exception and is never denied: a seat on a
+// Web is the deliberate exception and is not one of these: a seat on a
 // subscription must not have less reach than the same CLI at a terminal, and
-// a fetch is a read — it never gates delivery.
+// a fetch is a read: it never gates delivery. An entry turns web off on its
+// own stance, [WebTools], never through this one.
 type LocalTools string
 
 const (
@@ -384,6 +458,108 @@ const (
 // Valid reports whether t is a stance this package knows.
 func (t LocalTools) Valid() bool {
 	return t == LocalToolsDenied || t == LocalToolsVendorDefault
+}
+
+// WebTools says whether a profile's run keeps the CLI's OWN web tools (its
+// fetch and its search) or turns them off.
+//
+// A SECOND STANCE BESIDE [LocalTools] rather than a value of it, because the
+// two answer different questions for different readers. Local tools are
+// denied wherever a vendor allows it, for every entry, since a shell on the
+// engine host reads whatever the engine user can. Web stays on for a seat by
+// default (see [LocalTools]) and is turned off PER ENTRY, by
+// `overrides: {web_tools: denied}`, for a caller whose whole security model
+// is that every byte it reads arrives through the engine's own guard: the
+// Dashboard Assistant (ADR-0050) refuses any member of `assistant.llm` whose
+// merged profile is not denied here, because a page the model fetched for
+// itself is text no authority decision ever saw, and a fetch is also a way
+// OUT for whatever the person's data put in the prompt.
+//
+// The empty value reads as [WebToolsAllowed], so every profile and every
+// entry that says nothing runs exactly as it did before the field existed.
+type WebTools string
+
+const (
+	// WebToolsAllowed keeps the CLI's web tools on, the seats' default.
+	WebToolsAllowed WebTools = "allowed"
+	// WebToolsDenied runs the CLI with its web tools off, through the
+	// profile's [WebDenial]. A profile with no web_denial cannot be denied,
+	// and Load refuses the stance on it rather than run a CLI that still
+	// fetches under a configuration that says it does not.
+	WebToolsDenied WebTools = "denied"
+)
+
+// Valid reports whether w is a stance this package knows. The empty value is
+// not one: it is the absence of a stance, which [Profile.EffectiveWebTools]
+// reads as allowed.
+func (w WebTools) Valid() bool { return w == WebToolsAllowed || w == WebToolsDenied }
+
+// WebDenial is how one CLI turns its web tools off: what its run uses INSTEAD
+// when the entry is `web_tools: denied`.
+//
+// REPLACEMENTS, NOT EDITS. Each field, when set, replaces the profile field
+// of the same name whole, for the reason [applyOverrides] replaces lists
+// whole: position matters in an argv, and the denied command line is one a
+// person wrote and measured as a unit (an allow list removed and a deny list
+// extended are two edits that only mean something together). A field left
+// unset leaves its profile field as it is, which is how a CLI that takes its
+// tool policy from a file (OpenCode) denies web without restating its argv.
+// A denial that sets neither field changes nothing and is refused.
+//
+// A RUN WITH TOOLS IS COVERED TOO. A profile whose mcp block runs its own argv
+// or writes its own settings (mcp.complete_args, mcp.seed) hands a run with
+// tools those in place of the profile's, so a denial that replaced only the
+// profile's fields would leave the web on exactly where a seat or the
+// assistant works. Such a profile's denial says what that run uses instead
+// ([WebDenial.MCP]) for each field whose counterpart it replaces, and one that
+// does not is refused.
+//
+// Every built-in denial was measured against the installed CLI with the
+// doctor's own web probe; the profile's web_tools_note says on which release.
+type WebDenial struct {
+	// CompleteArgs replaces complete_args when web is denied.
+	CompleteArgs []string `yaml:"complete_args,omitempty"`
+	// SeedFiles replaces seed_files when web is denied.
+	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
+	// MCP replaces the mcp block's own argv and seeds when web is denied.
+	MCP *WebDenialMCP `yaml:"mcp,omitempty"`
+}
+
+// WebDenialMCP is what a run with tools uses instead when web is denied: each
+// field, when set, replaces the mcp block's field of the same name whole.
+type WebDenialMCP struct {
+	// CompleteArgs replaces mcp.complete_args.
+	CompleteArgs []string `yaml:"complete_args,omitempty"`
+	// Seed replaces mcp.seed.
+	Seed []SeedFile `yaml:"seed,omitempty"`
+}
+
+// changes reports whether the denial replaces anything at all.
+func (d *WebDenial) changes() bool {
+	return d != nil && (d.CompleteArgs != nil || d.SeedFiles != nil ||
+		(d.MCP != nil && (d.MCP.CompleteArgs != nil || d.MCP.Seed != nil)))
+}
+
+// mcpUncovered names the mcp block's own fields a denial leaves in place
+// although it replaces their counterpart for a text function, which a run with
+// tools would then use with its web on; empty when it covers them all.
+//
+// THE COUNTERPART DECIDES: a denial that turns the web off in the argv must
+// turn it off in a run's own argv too, and one that does it in a settings file
+// must do it in the run's own settings. A field the denial does not touch
+// carries no web stance it could leave behind.
+func (d *WebDenial) mcpUncovered(m *MCP) []string {
+	if m == nil {
+		return nil
+	}
+	var out []string
+	if d.CompleteArgs != nil && len(m.CompleteArgs) > 0 && (d.MCP == nil || d.MCP.CompleteArgs == nil) {
+		out = append(out, "mcp.complete_args")
+	}
+	if d.SeedFiles != nil && len(m.Seed) > 0 && (d.MCP == nil || d.MCP.Seed == nil) {
+		out = append(out, "mcp.seed")
+	}
+	return out
 }
 
 // SeedScope is where a seeded file lands.
@@ -685,6 +861,42 @@ const DefaultSystemPromptFile = "crewlet-system-prompt.txt"
 type AuthMarker struct {
 	// Sentinel is matched exactly as a [LimitMarker]'s is, in the same scope.
 	Sentinel string `yaml:"sentinel,omitempty"`
+
+	// Meaning is what the failure says about the credential the CLI was
+	// handed: [AuthRefused] (the default) when the vendor turned it down,
+	// [AuthUnread] when the CLI never used it at all. Only the words a person
+	// is shown depend on it; every auth marker fires the same failure.
+	Meaning AuthMeaning `yaml:"meaning,omitempty"`
+}
+
+// AuthMeaning is what an [AuthMarker] says about the credential a run was
+// handed.
+type AuthMeaning string
+
+const (
+	// AuthRefused is a credential the vendor saw and turned down: wrong,
+	// expired or revoked. The empty meaning reads as this one.
+	AuthRefused AuthMeaning = "refused"
+	// AuthUnread is a credential the CLI did not use, so the vendor never saw
+	// it: the CLI reports itself signed out although a value was set. Claude
+	// Code does this with a token that has a space inside it.
+	AuthUnread AuthMeaning = "unread"
+)
+
+// AuthMeaning is the meaning of the first auth marker, in the profile's
+// order, whose sentinel said contains: what a refused sign-in's own words
+// ([llm.Error] Said) say about the credential. [AuthRefused] when none
+// matches, since a sign-in failure is otherwise the vendor's refusal.
+func (p Profile) AuthMeaning(said string) AuthMeaning {
+	for _, m := range p.AuthMarkers {
+		if m.Sentinel != "" && strings.Contains(said, m.Sentinel) {
+			if m.Meaning == "" {
+				return AuthRefused
+			}
+			return m.Meaning
+		}
+	}
+	return AuthRefused
 }
 
 // Profile is everything the engine needs to drive one coding CLI.
@@ -1088,11 +1300,85 @@ type Profile struct {
 	// means the login is CredentialPaths, a token, a key, or nothing.
 	CredentialStore *CredentialStore `yaml:"credential_store,omitempty"`
 
-	// LimitMarkers recognise a spent subscription.
+	// LimitEvents recognise a spent plan or a rate limit by the CLI's own
+	// structured report, ahead of every sentinel; see [LimitEvent].
+	LimitEvents []LimitEvent `yaml:"limit_events,omitempty"`
+
+	// LimitMarkers recognise a spent subscription by the vendor's words.
 	LimitMarkers []LimitMarker `yaml:"limit_markers,omitempty"`
 
 	// AuthMarkers recognise an expired login.
 	AuthMarkers []AuthMarker `yaml:"auth_markers,omitempty"`
+
+	// AuthEvents recognise a refused sign-in by the CLI's own structured
+	// report, ahead of every limit report and sentinel; see [AuthEvent].
+	AuthEvents []AuthEvent `yaml:"auth_events,omitempty"`
+
+	// LimitResetEvents date and name the limit a run reported, from the
+	// CLI's own fields; see [LimitResetEvent].
+	LimitResetEvents []LimitResetEvent `yaml:"limit_reset_events,omitempty"`
+
+	// LimitWindows name the window of a limit from the vendor's sentence,
+	// where no [LimitResetEvent] named one; see [LimitWindowWording].
+	LimitWindows []LimitWindowWording `yaml:"limit_windows,omitempty"`
+
+	// SignInEnv lists the variables that sign this CLI in when an entry's
+	// env sets one: a cloud provider's switch (CLAUDE_CODE_USE_BEDROCK) or a
+	// gateway's token (ANTHROPIC_AUTH_TOKEN). What auth.mode env requires
+	// one of, and what `crewlet llm list` reports as the route.
+	//
+	// A LIST, unlike [Profile.EnvSignIn]'s declaration, because these CLIs
+	// sign in by a handful of fixed names, and a switch such as
+	// CLAUDE_CODE_USE_BEDROCK is no credential: no credential-name rule
+	// would count it.
+	SignInEnv []string `yaml:"sign_in_env,omitempty"`
+
+	// IdentityEnv lists the variables, none of them a credential, whose
+	// values say WHICH account or endpoint a call reaches: a cloud region and
+	// profile, a project and location, a gateway's address. Folded into the
+	// entry's sign-in identity beside its credentials, so two entries on one
+	// cloud switch but different regions, projects or gateways are two
+	// sign-ins, and a limit one meets does not sit the other out.
+	IdentityEnv []string `yaml:"identity_env,omitempty"`
+
+	// TokenPrefix and APIKeyPrefix are how the vendor's headless token and
+	// its API key begin (`sk-ant-oat01-`, `sk-ant-api03-`): what a hint of
+	// a stored credential shows, and what tells a key pasted where a token
+	// belongs from the token. Empty where the vendor's credentials share no
+	// prefix.
+	TokenPrefix  string `yaml:"token_prefix,omitempty"`
+	APIKeyPrefix string `yaml:"api_key_prefix,omitempty"`
+
+	// TokenLifetimeDays is how long the headless token the CLI mints
+	// ([Profile.CaptureTokenArgs]) lasts, as the vendor documents it. Zero
+	// is unknown. The token is opaque, so its expiry is computed from when
+	// it was stored, never read from it.
+	TokenLifetimeDays int `yaml:"token_lifetime_days,omitempty"`
+
+	// DeviceLoginArgs runs the vendor's device-code sign-in, which prints
+	// an address and a one-time code a person enters elsewhere and then
+	// waits for their approval; see [DeviceCodePatterns].
+	DeviceLoginArgs []string `yaml:"device_login_args,omitempty"`
+
+	// DeviceCodePatterns read the address and the code out of what
+	// DeviceLoginArgs prints.
+	DeviceCodePatterns *DeviceCodePatterns `yaml:"device_code_patterns,omitempty"`
+
+	// StatusTextArgs asks the CLI who it is logged in as, in words, where
+	// StatusArgs prints JSON: what `crewlet llm doctor` shows a person.
+	// Empty shows StatusArgs' own output.
+	StatusTextArgs []string `yaml:"status_text_args,omitempty"`
+
+	// StatusFields locates the sign-in method and the account in the JSON
+	// StatusArgs prints; see [StatusFields]. Nil reads only the exit code.
+	StatusFields *StatusFields `yaml:"status_fields,omitempty"`
+
+	// ModelAliases are model names the CLI resolves itself; see
+	// [ModelAlias].
+	ModelAliases []ModelAlias `yaml:"model_aliases,omitempty"`
+
+	// ModelsDocs is the vendor's own page listing the models the CLI takes.
+	ModelsDocs string `yaml:"models_docs,omitempty"`
 
 	// MarkerScope is where the two marker sets above may be matched —
 	// see [MarkerScope]. Empty searches the answer and stderr, which is
@@ -1126,10 +1412,231 @@ type Profile struct {
 	// doctor beside the probe result.
 	LocalToolsNote string `yaml:"local_tools_note,omitempty"`
 
+	// ToolsOff is how this CLI's run is left with NO tool of its own at
+	// all, by construction in the argv it runs, or nil where no measured
+	// way exists. See [ToolsOff].
+	ToolsOff *ToolsOff `yaml:"tools_off,omitempty"`
+
 	// SeedFiles are the settings files written for the CLI before a call
 	// — the vendors that take their tool policy from a file rather than a
 	// flag. See [SeedFile].
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
+
+	// WebTools is the profile's stance on the CLI's own web tools, see
+	// [WebTools]. Empty reads as allowed. Set per entry through overrides;
+	// no built-in profile sets it.
+	WebTools WebTools `yaml:"web_tools,omitempty"`
+
+	// WebToolsNote says how this CLI's web denial was measured, or why the
+	// profile has none. Printed by the doctor beside the web probe.
+	WebToolsNote string `yaml:"web_tools_note,omitempty"`
+
+	// WebDenial is how this CLI turns its web tools off, or nil where it
+	// has no measured way to. See [WebDenial].
+	WebDenial *WebDenial `yaml:"web_denial,omitempty"`
+
+	// KeySeedFiles are settings files written into a seat's KEY home alone —
+	// the home its calls run in when they sign in with a key (auth.mode
+	// api-key, or inherit-env handing it the engine's own) — after
+	// seed_files, each over a seed_files entry at the same path.
+	//
+	// The counterpart of [Profile.SubscriptionEnv], for a CLI that picks
+	// its sign-in from SETTINGS before its environment, so no variable can
+	// tell it to use the key. Gemini CLI takes a GOOGLE_GEMINI_BASE_URL — an
+	// operator's gateway in front of the API — as its gateway sign-in, which
+	// it then refuses ("Invalid auth method selected", exit 41), unless its
+	// settings name the key sign-in; and the same settings in a login home
+	// would send every subscription call to a key it does not have (read
+	// from the 0.65.0 bundle, and measured). A key home and a login home are
+	// two directories ([Workspace.AcquireForKey] in the backend), so each
+	// keeps its own.
+	//
+	// The seat's home only (`in` is home, its default): a call's working
+	// directory is written per call and knows nothing of how it signs in.
+	KeySeedFiles []SeedFile `yaml:"key_seed_files,omitempty"`
+
+	// MCP is how the CLI is handed a phase's tools as an MCP server — see
+	// [MCP]. Nil: the CLI cannot be handed any, and a seat's phase on it is
+	// refused.
+	MCP *MCP `yaml:"mcp,omitempty"`
+
+	// Requests is how the CLI's own record shows each model request of a run
+	// with tools — see [Requests]. Nil: the record shows none, and the whole
+	// run counts as one round.
+	Requests *Requests `yaml:"requests,omitempty"`
+
+	// Cap is how a run the CLI's own turn cap ended is told from a failure —
+	// see [Cap]. Nil: the CLI has no cap, or the profile cannot tell one.
+	Cap *Cap `yaml:"cap,omitempty"`
+
+	// FailureMarkers are sentinels the CLI writes on stderr when its own
+	// confinement failed to load — a policy file it could not read — after
+	// which it runs on its vendor's defaults. Matched as each stderr line
+	// arrives, on every call, and the run is stopped at once and fails: a CLI
+	// running with its tool policy unloaded must not be left to use the tools
+	// that policy denies (Gemini CLI reports "Policy file error" and carries
+	// on, measured on 0.58.0).
+	FailureMarkers []string `yaml:"failure_markers,omitempty"`
+}
+
+// ToolsOff is the proof, IN THE ARGV, that a CLI's run offers its model no
+// tool of its OWN: no shell, no file reader or writer, no web, and no tool
+// server but the engine's. [LocalToolsDenied] is a claim about a profile; this
+// is what a caller that must not be reached around (the Dashboard Assistant,
+// whose every read goes through the person's own requests) checks instead,
+// against the exact argv each of its calls runs.
+//
+// THE ENGINE'S SERVER IS THE ONE TOOL SOURCE LEFT. A run with tools is handed
+// the phase's tools as one MCP server (ADR-0049, the profile's mcp block), and
+// for the assistant those tools are the person's own requests. So the call's
+// own arguments must turn every built-in tool off and load no server of their
+// own, and the mcp block may allow nothing but the engine's tools.
+//
+// A DENY LIST IS NOT THIS. Measured on Claude Code 2.1.310 with no login (no
+// model reached): the profile's --disallowedTools list still left thirteen
+// tools on offer (Workflow, SendMessage, EnterWorktree and the cron tools
+// among them), where `--tools ""` left none. A vendor adds tools in every
+// release, and a list of the ones to refuse is always a release behind; an
+// empty allow list is not.
+type ToolsOff struct {
+	// Args are the argument runs that leave the CLI with no built-in tool
+	// and no server but the ones the mcp block names. Each must appear in
+	// the call's own argv, its elements adjacent and in order, and a run's
+	// flag exactly once, since a CLI takes the last value of a repeated flag
+	// and a second `--tools default` would undo the first.
+	Args [][]string `yaml:"args,omitempty"`
+	// Refuses are flags whose presence in the call's own arguments brings a
+	// tool back (a tool server's config, an allow list, a plugin), so an
+	// argv carrying one is not off whatever else it says. The mcp block's
+	// own arguments are judged apart: they may allow only the engine's tools.
+	Refuses []string `yaml:"refuses,omitempty"`
+	// Note says how the construction was measured.
+	Note string `yaml:"note,omitempty"`
+}
+
+// ToolsOffProblem says why the argv this profile runs with tools is NOT left
+// with no tool of its own, or "" when it is: every run of [ToolsOff.Args]
+// present exactly once and no flag of [ToolsOff.Refuses] in the call's own
+// arguments, and an mcp block whose allow list names the engine's tools alone.
+func (p *Profile) ToolsOffProblem() string {
+	if p.ToolsOff == nil {
+		return "the profile has no measured way to run the CLI with no tool of its own"
+	}
+	if p.MCP == nil {
+		return "the profile has no mcp block, so the engine's tools cannot reach its CLI"
+	}
+	complete := p.CompleteArgs
+	if len(p.MCP.CompleteArgs) > 0 {
+		complete = p.MCP.CompleteArgs
+	}
+	if problem := p.ToolsOff.problemIn(complete); problem != "" {
+		return problem
+	}
+	return p.mcpAllowProblem()
+}
+
+// mcpAllowProblem says why the mcp block's allow list admits a tool that is
+// not the engine's, or "" when every tool it names is one: spelled with the
+// prefix the CLI gives the engine's server ([Requests.HostPrefix]). A block
+// that allows nothing by name (a CLI whose server's tools need no allow list)
+// admits nothing of its own either.
+func (p *Profile) mcpAllowProblem() string {
+	prefix := ""
+	if p.Requests != nil {
+		prefix = p.Requests.HostPrefix
+	}
+	for _, arg := range p.MCP.AllowArgs {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		if prefix == "" {
+			return fmt.Sprintf("mcp.allow_args admits %q, and the profile names no "+
+				"requests.host_prefix to tell the engine's tools from another's", arg)
+		}
+		if !strings.HasPrefix(arg, prefix) {
+			return fmt.Sprintf("mcp.allow_args admits %q, which is not one of the engine's tools", arg)
+		}
+	}
+	return ""
+}
+
+// problemIn judges one argv.
+func (t *ToolsOff) problemIn(argv []string) string {
+	for _, run := range t.Args {
+		if len(run) == 0 {
+			return "tools_off.args holds an empty run"
+		}
+		if !containsRun(argv, run) {
+			return fmt.Sprintf("the argv does not carry %q", strings.Join(run, " "))
+		}
+		if n := countOf(argv, run[0]); n != 1 {
+			return fmt.Sprintf("the argv carries %s %d times, and the CLI takes the last", run[0], n)
+		}
+	}
+	for _, flag := range t.Refuses {
+		if slices.Contains(argv, flag) {
+			return fmt.Sprintf("the argv carries %s, which brings a tool back", flag)
+		}
+	}
+	return ""
+}
+
+// containsRun reports whether run appears in argv, adjacent and in order.
+func containsRun(argv, run []string) bool {
+	for i := 0; i+len(run) <= len(argv); i++ {
+		if slices.Equal(argv[i:i+len(run)], run) {
+			return true
+		}
+	}
+	return false
+}
+
+// countOf counts the arguments equal to arg.
+func countOf(argv []string, arg string) int {
+	n := 0
+	for _, a := range argv {
+		if a == arg {
+			n++
+		}
+	}
+	return n
+}
+
+// EffectiveWebTools is the web stance with its default applied: empty reads
+// as [WebToolsAllowed].
+func (p *Profile) EffectiveWebTools() WebTools {
+	if p.WebTools == "" {
+		return WebToolsAllowed
+	}
+	return p.WebTools
+}
+
+// CanDenyWeb reports whether the profile has a way to turn its web tools off.
+func (p *Profile) CanDenyWeb() bool { return p.WebDenial.changes() }
+
+// withWebDenied is the profile as it runs with its web tools off: the stance
+// set and every field the denial names replaced. The denial itself is kept,
+// so the doctor can still print it, and applying it twice is applying it once.
+func (p Profile) withWebDenied() Profile {
+	out := p.Clone()
+	out.WebTools = WebToolsDenied
+	if d := p.WebDenial; d != nil {
+		if d.CompleteArgs != nil {
+			out.CompleteArgs = append([]string(nil), d.CompleteArgs...)
+		}
+		if d.SeedFiles != nil {
+			out.SeedFiles = append([]SeedFile(nil), d.SeedFiles...)
+		}
+		if dm := d.MCP; dm != nil && out.MCP != nil {
+			if dm.CompleteArgs != nil {
+				out.MCP.CompleteArgs = append([]string(nil), dm.CompleteArgs...)
+			}
+			if dm.Seed != nil {
+				out.MCP.Seed = append([]SeedFile(nil), dm.Seed...)
+			}
+		}
+	}
+	return out
 }
 
 // credentialWords are the name components that mark a variable as carrying a
@@ -1191,7 +1698,7 @@ func (p *Profile) TakesModel() bool {
 // modelPlaceholder is what a model_args element carries the entry's model as.
 const modelPlaceholder = "{model}"
 
-// ModelArgument is the model as a text call hands it to the CLI: the VALUE of
+// ModelArgument is the model as a run hands it to the CLI: the VALUE of
 // the model_args element carrying {model}, rendered with model — so an
 // override such as ["--model", "openrouter/{model}"] is part of it. The model
 // itself when no element carries the placeholder, which config and the
@@ -1199,10 +1706,10 @@ const modelPlaceholder = "{model}"
 //
 // ONE RENDERING FOR EVERY PLACE THE MODEL GOES, because a cli-agent entry's
 // `model` is written in its CLI's own grammar and every reader of it has to
-// see the same string: a text call's argv, an agent-mode or code-sandbox run
-// of the same CLI in a box, and the config rule that judges the value as that
+// see the same string: the argv of a run on this host, the executor's run of
+// the same CLI in a box, and the config rule that judges the value as that
 // CLI reads it. A run that rebuilt the value its own way named one model to
-// the box and another to every text call on the same entry.
+// the box and another to every run on this host on the same entry.
 //
 // THE VALUE, NOT THE ELEMENT. A box's runner writes its own flag
 // (`--model <value>`), so an element that spells flag and value as one —
@@ -1384,6 +1891,11 @@ func (p *Profile) kept(scope SeedScope) []keptPath {
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope {
 			add("seed_files", fmt.Sprintf("seed_files[%d].path", i), f.Path)
+		}
+	}
+	if scope == SeedHome {
+		for i, f := range p.KeySeedFiles {
+			add("key_seed_files", fmt.Sprintf("key_seed_files[%d].path", i), f.Path)
 		}
 	}
 	if scope == SeedWork {
@@ -1571,16 +2083,22 @@ func (p *Profile) problems() []string {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {
 			add("limit_markers[%d].sentinel %s", i, problem)
 		}
-		if m.ResetSeparator != "" && m.ResetUnit != "epoch" && m.ResetUnit != "seconds" {
-			add("limit_markers[%d].reset_unit %q (want epoch or seconds)", i, m.ResetUnit)
-		}
+		m.Reset.validate(fmt.Sprintf("limit_markers[%d]", i), add)
 	}
+	p.validateLimitEvents(add)
+	p.validateEventReports(add)
+	p.validateSignIn(add)
 	// Checked at all, which it was not: an auth marker fires KindAuth, and
 	// KindAuth exhausts the credential exactly as a spent plan does — so an
 	// unusable sentinel costs the same here as it does above.
 	for i, m := range p.AuthMarkers {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {
 			add("auth_markers[%d].sentinel %s", i, problem)
+		}
+		switch m.Meaning {
+		case "", AuthRefused, AuthUnread:
+		default:
+			add("auth_markers[%d].meaning is %q (want %s or %s)", i, m.Meaning, AuthRefused, AuthUnread)
 		}
 	}
 	if p.StdinLogin != nil && len(p.StdinLogin.Args) == 0 {
@@ -1629,6 +2147,8 @@ func (p *Profile) problems() []string {
 		add("local_tools is vendor-default but local_tools_note is empty — say which " +
 			"denial the vendor lacks")
 	}
+	p.validateWebStance(add)
+	p.validateToolsOff(add)
 	for i, f := range p.SeedFiles {
 		if strings.TrimSpace(f.Path) == "" {
 			add("seed_files[%d].path is empty", i)
@@ -1666,6 +2186,30 @@ func (p *Profile) problems() []string {
 				"configures nothing", i)
 		}
 	}
+	for i, f := range p.KeySeedFiles {
+		label := fmt.Sprintf("key_seed_files[%d]", i)
+		switch {
+		case f.Scope() != SeedHome:
+			add("%s.in is %q — a key home's own settings are written into the seat's home "+
+				"(in: home, the default); a call's working directory is written per call "+
+				"and knows nothing of how the call signs in", label, f.In)
+		case strings.TrimSpace(f.Path) == "":
+			add("%s.path is empty", label)
+		case !staysInside(f.Path):
+			add("%s.path %q must be relative and stay inside the home directory", label, f.Path)
+		case !namesAFile(f.Path):
+			add("%s.path %q must name a FILE inside the home directory — not the directory "+
+				"itself, not a path ending in a separator, and not one whose last element is "+
+				". or .. — e.g. .vendor/settings.json", label, f.Path)
+		}
+		if f.Content == "" {
+			add("%s.content is empty — a settings file with nothing in it configures nothing", label)
+		}
+	}
+	p.validateMCP(add)
+	p.validateRequests(add)
+	p.validateCap(add)
+	p.validateFailureMarkers(add)
 	p.validateCollisions(add)
 	return bad
 }
@@ -1692,6 +2236,72 @@ func (p *Profile) validateEveryStep(add func(string, ...any)) {
 			}
 		}
 	}
+}
+
+// validateWebStance holds the web stance and its denial to their rules.
+//
+// A profile that keeps web on but CARRIES a denial has that denial validated
+// as the profile it would become, so a broken web_denial is refused where it
+// is written rather than on the first entry that turns web off.
+func (p *Profile) validateWebStance(add func(string, ...any)) {
+	if p.WebTools != "" && !p.WebTools.Valid() {
+		add("web_tools %q (want allowed or denied)", p.WebTools)
+		return
+	}
+	if p.WebDenial != nil && !p.WebDenial.changes() {
+		add("web_denial sets neither complete_args nor seed_files, so it turns " +
+			"nothing off; say what the CLI runs with instead, or remove it")
+		return
+	}
+	if p.WebDenial != nil && p.WebDenial.MCP != nil && p.MCP == nil {
+		add("web_denial.mcp is set but the profile has no mcp block to replace it in")
+	}
+	switch {
+	case p.EffectiveWebTools() == WebToolsDenied && p.WebDenial == nil:
+		// Refused rather than run: the stance would be a claim the CLI
+		// does not honour, and the assistant admits an entry on exactly
+		// this claim.
+		add("web_tools is denied but the profile has no web_denial, so this CLI "+
+			"has no measured way to turn its web tools off (%s); set "+
+			"overrides.web_denial, or keep web_tools allowed", orUnstated(p.WebToolsNote))
+	case p.EffectiveWebTools() == WebToolsAllowed && p.WebDenial != nil:
+		denied := p.withWebDenied()
+		for _, problem := range denied.problems() {
+			add("with web_tools denied, %s", problem)
+		}
+	}
+}
+
+// validateToolsOff holds a tools_off block to its shape. Whether the argv
+// carries it is [Profile.ToolsOffProblem]'s question, asked by the one caller
+// that requires it, since a seat's argv deliberately keeps the web.
+func (p *Profile) validateToolsOff(add func(string, ...any)) {
+	t := p.ToolsOff
+	if t == nil {
+		return
+	}
+	if len(t.Args) == 0 {
+		add("tools_off.args is empty: name the arguments that leave the CLI with no tool")
+	}
+	for i, run := range t.Args {
+		if len(run) == 0 {
+			add("tools_off.args[%d] is empty", i)
+		}
+	}
+	if p.LocalTools != LocalToolsDenied {
+		add("tools_off is set but local_tools is %q: a CLI run with no tool denies its local tools", p.LocalTools)
+	}
+	if strings.TrimSpace(t.Note) == "" {
+		add("tools_off.note is empty: say how the construction was measured")
+	}
+}
+
+// orUnstated renders an optional note inside a sentence.
+func orUnstated(note string) string {
+	if strings.TrimSpace(note) == "" {
+		return "the profile does not say why"
+	}
+	return note
 }
 
 // pathClaim is one path a profile has the engine WRITE a file at, or has the
@@ -1725,9 +2335,30 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 		// label that says the engine owns it.
 		file("the call's project-root marker", ProjectRootMarker)
 	}
+	seeded := map[string]bool{}
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope && staysInside(f.Path) && namesAFile(f.Path) {
 			file(fmt.Sprintf("seed_files[%d].path", i), f.Path)
+			seeded[filepath.Clean(f.Path)] = true
+		}
+	}
+	if scope == SeedHome {
+		// A key home's own: one at a seed_files path is that file's key-home
+		// content, written in its place, so it is the same claim rather than
+		// a second write — and one anywhere else is held to every rule a
+		// seed is.
+		for i, f := range p.KeySeedFiles {
+			if !staysInside(f.Path) || !namesAFile(f.Path) {
+				continue
+			}
+			clean := filepath.Clean(f.Path)
+			if seeded[clean] {
+				// Replacing it, once: a second key seed at the path is a
+				// second write, which the claim below is refused as.
+				seeded[clean] = false
+				continue
+			}
+			file(fmt.Sprintf("key_seed_files[%d].path", i), f.Path)
 		}
 	}
 	if scope == SeedWork {
@@ -1759,6 +2390,12 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 				file(ch.field+".file.name", name)
 			}
 		}
+	}
+	if scope == SeedWork {
+		// Written on a run with tools alone, after the seeds above, so one at
+		// a path a seed or the system prompt file also names replaces it on
+		// exactly those runs.
+		out = append(out, p.mcpClaims()...)
 	}
 	field, relocations := "config_env", p.ConfigEnv
 	if scope == SeedWork {
@@ -1882,6 +2519,12 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			add("credential_paths[%d] %q has the file name %s, which every bundle keeps its "+
 				"manifest under — the entry naming the CLI it was exported from — so a login "+
 				"file by that name could not travel in one", i, rel, BundleManifest)
+			continue
+		}
+		if name == LoginInstallFile {
+			add("credential_paths[%d] %q has the file name %s, which the engine keeps a login's "+
+				"install record under beside the login, so a login file by that name would be "+
+				"read as the record", i, rel, LoginInstallFile)
 			continue
 		}
 		if first, taken := byName[name]; taken {
@@ -2156,11 +2799,53 @@ func (p *Profile) validateEventMarkers(add func(string, ...any)) {
 		}
 	}
 	for i, m := range p.LimitMarkers {
-		if m.ResetSeparator != "" {
+		if m.Reset.Separator != "" {
 			add("limit_markers[%d].reset_separator is set but marker_scope is %s — the "+
 				"sentinel is compared with the whole failure class, so there is no text "+
 				"after it to read a reset from", i, MarkerScopeEvents)
 		}
+	}
+}
+
+// validate holds a reset reading to a unit it can be taken in. what names the
+// declaration, for the message.
+func (r ResetReading) validate(what string, add func(string, ...any)) {
+	switch {
+	case r.Separator == "" && r.Unit != "":
+		add("%s.reset_unit is set with no reset_separator: the unit says how to read "+
+			"the text after the separator, so there is nothing to read", what)
+	case r.Separator != "" && !r.Unit.Valid():
+		add("%s.reset_unit %q (want %s, %s or %s)", what, r.Unit,
+			ResetEpoch, ResetSeconds, ResetClock)
+	}
+}
+
+// validateLimitEvents holds each [LimitEvent] to the one shape in which a
+// model cannot write it: a JSON event stream with a discriminator, matched on
+// that discriminator and on at least one field beside it.
+func (p *Profile) validateLimitEvents(add func(string, ...any)) {
+	if len(p.LimitEvents) == 0 {
+		return
+	}
+	if p.EffectiveOutput() != OutputJSONL || len(p.EventTypePath) == 0 {
+		add("limit_events needs output: %s and an event_type_path: on any other "+
+			"output a line of the model's answer is a line of stdout, and it could spell "+
+			"the report out", OutputJSONL)
+	}
+	for i, e := range p.LimitEvents {
+		what := fmt.Sprintf("limit_events[%d]", i)
+		discriminated := slices.ContainsFunc(e.Match, func(m Match) bool {
+			return slices.Equal(m.Path, p.EventTypePath)
+		})
+		if !discriminated || len(e.Match) < 2 {
+			add("%s.match must name the event type at event_type_path and at least one "+
+				"field the CLI writes beside it, e.g. an error flag or a status code", what)
+		}
+		if e.Reset.Separator != "" && len(e.SaidPath) == 0 {
+			add("%s.reset_separator is set with no said_path: the reset is read from "+
+				"the sentence at said_path", what)
+		}
+		e.Reset.validate(what, add)
 	}
 }
 
@@ -2350,6 +3035,25 @@ func (p *Profile) ValidateCredentials(name string) error {
 				"a credential through the entry's auth", env)
 		}
 	}
+	if p.MCP != nil {
+		for _, env := range slices.Sorted(maps.Keys(p.MCP.Env)) {
+			if p.MCP.mintedByServer(p.MCP.Env[env]) {
+				// A VALUE THE CLI'S OWN SERVER MINTS — the password
+				// OpenCode's `serve` prints as it starts — rendered into
+				// each run and never written anywhere: the profile holds
+				// a placeholder, which is no secret, and the rule below
+				// exists for a secret the profile would hold.
+				continue
+			}
+			// Set on every run with tools whatever auth.mode says, and
+			// stored unredacted like the rest of overrides.
+			if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
+				add("mcp.env names %q, which is a credential variable — the tool route's "+
+					"environment is set whatever auth.mode says and is stored unredacted; give "+
+					"the credential through the entry's auth or its own env", env)
+			}
+		}
+	}
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
 		switch {
 		case env != "" && (env == p.TokenEnv || env == p.APIKeyEnv):
@@ -2511,9 +3215,13 @@ func (p *Profile) ReadsUsage() bool {
 // operator to put one there: its credential files, the database a
 // [CredentialStore] reads and writes, or both.
 func (p *Profile) LoginLocation() string {
-	var where []string
+	var where []words.Said
 	if len(p.CredentialPaths) > 0 {
-		where = append(where, "its credential files ("+strings.Join(p.CredentialPaths, ", ")+")")
+		paths := make([]words.Said, len(p.CredentialPaths))
+		for i, path := range p.CredentialPaths {
+			paths[i] = words.Said(path)
+		}
+		where = append(where, words.Said("its credential files ("+words.And(paths)+")"))
 	}
 	if p.CredentialStore != nil {
 		where = append(where, "the login it keeps in its own database")
@@ -2521,7 +3229,7 @@ func (p *Profile) LoginLocation() string {
 	if len(where) == 0 {
 		return "a login this profile names no place for"
 	}
-	return strings.Join(where, " and ")
+	return words.And(where)
 }
 
 // KeepsLogin reports whether the CLI keeps a login of its own that the engine

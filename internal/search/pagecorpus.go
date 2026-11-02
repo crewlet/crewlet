@@ -59,7 +59,9 @@ func (PageCorpus) Source() Source { return SourcePage }
 
 // pageLive is the population the page corpus embeds: published pages not in
 // the trash — one spelling for every statement that reads or counts it, for
-// [taskLive]'s reason.
+// [taskLive]'s reason. It is also, word for word, the predicate of
+// `pages_heads_live_updated_idx` (replicated 0065), which the planner reaches
+// only for a statement that states it.
 const pageLive = `p.status = 'published' AND p.trashed_at IS NULL`
 
 // pageBody is a page's body as a statement reads it, and pageOpening the part
@@ -73,8 +75,14 @@ const (
 // pageSelectionStatement: the published pages whose vector in the asked space
 // is missing or was computed from another body, title or container, oldest
 // first, each with its key, its title and the digest of the vector it has
-// there — and not its body, which pageOpeningRead reads for the pages the
+// there — and not its body, which PageOpeningRead reads for the pages the
 // selection keeps ([selectStale]). Bound: the space twice, the limit.
+//
+// WALKED IN ITS ORDER through `pages_heads_live_updated_idx`, the live pages
+// by when they last changed (replicated 0065), so the LIMIT stops the walk at
+// the first batch of stale pages. With no index in that order every tick read
+// every page row in the company, drafts and the trash included, and sorted
+// the live ones before it could return one.
 const pageSelectionStatement = `
 	SELECT p.id, p.container, p.edit_version, p.title,
 	       CASE WHEN v.model = ? AND v.dim = ? THEN v.text_sha ELSE '' END
@@ -122,23 +130,31 @@ const pageCoverageStatement = `
 	  ON v.source = 'page' AND v.source_id = p.id
 	WHERE ` + pageLive
 
-// pageSelection, pageOpeningRead, pageWithdrawals and pageCoverageCount are
-// the four statements this corpus runs, each with its arguments — one place,
-// so the plan gate explains what runs rather than a copy. Each is what runs:
-// pageOpeningRead is the [openingRead] [selectStale] prepares and binds.
-func pageSelection(model string, dim, limit int) (string, []any) {
+// PageSelection is the statement [PageCorpus.Stale] selects stale pages with,
+// and its arguments. It, [PageOpeningRead], [PageWithdrawals] and
+// [PageCoverageCount] are the four statements this corpus runs, each the one
+// that runs, so a plan gate explains what runs rather than a copy; see the
+// package doc's "a read of another domain's table".
+func PageSelection(model string, dim, limit int) (string, []any) {
 	return pageSelectionStatement, []any{model, dim, model, dim, limit}
 }
 
-func pageOpeningRead(id string) (string, []any) {
+// PageOpeningRead is the statement [PageCorpus.Stale] reads one selected
+// page's opening with, by its primary key, and its arguments: the
+// [openingRead] [selectStale] prepares once and binds per page.
+func PageOpeningRead(id string) (string, []any) {
 	return pageOpeningStatement, []any{embedReadChars, id}
 }
 
-func pageWithdrawals(limit int) (string, []any) {
+// PageWithdrawals is the statement [PageCorpus.Stale] finds the vectors of
+// trashed, unpublished or purged pages with, and its arguments.
+func PageWithdrawals(limit int) (string, []any) {
 	return pageWithdrawalsStatement, []any{limit}
 }
 
-func pageCoverageCount(model string, dim int) (string, []any) {
+// PageCoverageCount is the statement [PageCorpus.Coverage] counts with, and
+// its arguments.
+func PageCoverageCount(model string, dim int) (string, []any) {
 	return pageCoverageStatement, []any{model, dim}
 }
 
@@ -152,10 +168,10 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int, hel
 	var stale []Document
 	var gone []string
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
-		statement, args := pageSelection(model, dim, limit+held.Len())
+		statement, args := PageSelection(model, dim, limit+held.Len())
 		var err error
 		if stale, err = selectStale(ctx, tx, statement, args, limit, held,
-			pageOpeningRead); err != nil {
+			PageOpeningRead); err != nil {
 			return err
 		}
 
@@ -164,7 +180,7 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int, hel
 		// took down stays findable by meaning for ever — nothing else
 		// will ever select it, because the selection above is driven by
 		// the rows that remain.
-		statement, args = pageWithdrawals(limit)
+		statement, args = PageWithdrawals(limit)
 		gone, err = selectGone(ctx, tx, statement, args)
 		return err
 	})
@@ -185,7 +201,7 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int, hel
 func (c PageCorpus) Coverage(ctx context.Context, model string, dim int) (int, int, error) {
 	var current, total int
 	err := c.DB.Read(ctx, func(tx *sql.Tx) error {
-		statement, args := pageCoverageCount(model, dim)
+		statement, args := PageCoverageCount(model, dim)
 		return tx.QueryRowContext(ctx, statement, args...).Scan(&total, &current)
 	})
 	if err != nil {

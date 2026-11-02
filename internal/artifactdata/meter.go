@@ -18,7 +18,7 @@ package artifactdata
 // a byte count would read as half), or its overflow pages past the largest
 // payload a page holds in place; an index entry costs its key and the row id,
 // at the fill an index's random inserts leave (nine eighths). Each cost is a
-// pure function of what the applier writes, so every node meters every
+// pure function of what the applier writes, so every data node meters every
 // record identically, and the constants are the column overhead of the
 // pinned driver's record format, calibrated against the DS-2 snapshot
 // (TestTheFootprintMeterMatchesTheFile holds the meter within 10 percent of

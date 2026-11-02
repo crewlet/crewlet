@@ -1,0 +1,136 @@
+id: 3db96f52-a891-5953-9735-0ae522cf6347.1
+event: conversation
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":1,"at":"2026-10-24T09:41:00.1Z","kind":"conversation","conversation":{"title":"Flaky sign-in test","created_at":"2026-10-24T09:41:00Z","resumed":false}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.2
+event: page_context
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":2,"at":"2026-10-24T09:41:00.2Z","kind":"page_context","page_context":{"used":true,"trimmed":false,"page":{"title":"Worklet › Tasks","screen":"worklet-tasks"}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.3
+event: status
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":3,"at":"2026-10-24T09:41:00.3Z","kind":"status","status":{"state":"thinking","steps_done":0}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.4
+event: step
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":4,"at":"2026-10-24T09:41:00.4Z","kind":"step","step":{"step_id":"10117ebc-fa02-518a-9e9a-1ed9af94497c","index":1,"tool":"search_work","label":"Search tasks for “sign-in test”","request":{"method":"GET","route":"/worklet/search"},"state":"running","started_at":"2026-10-24T09:41:00Z"}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.5
+event: step
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":5,"at":"2026-10-24T09:41:00.5Z","kind":"step","step":{"step_id":"10117ebc-fa02-518a-9e9a-1ed9af94497c","index":1,"tool":"search_work","label":"Search tasks for “sign-in test”","request":{"method":"GET","route":"/worklet/search"},"state":"done","started_at":"2026-10-24T09:41:00Z","duration_ms":812,"summary":"2 tasks"}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.6
+event: status
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":6,"at":"2026-10-24T09:41:00.6Z","kind":"status","status":{"state":"working","steps_done":1}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.7
+event: delta
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":7,"at":"2026-10-24T09:41:00.7Z","kind":"delta","delta":{"message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","text":"No open task covers it yet."}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.8
+event: card
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":8,"at":"2026-10-24T09:41:00.8Z","kind":"card","card":{"card_id":"8abe3981-1f84-5f46-9972-570186ac953f","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"table","table":{"title":"Matching tasks","columns":[{"key":"key","label":"Task","type":"text"},{"key":"spend","label":"Tokens","type":"tokens","align":"end"}],"rows":[["ENG-133",412000],["ENG-90",null]],"total":["Total",412000],"row_count":2,"truncated":false,"as_of":"2026-10-24T09:41:00Z","exports":{"csv":"/assistant/cards/8abe3981-1f84-5f46-9972-570186ac953f/export.csv","xlsx":"/assistant/cards/8abe3981-1f84-5f46-9972-570186ac953f/export.xlsx"}}}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.9
+event: card
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":9,"at":"2026-10-24T09:41:00.9Z","kind":"card","card":{"card_id":"a7fe7cf2-e332-56a8-8695-352132985457","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"entity","entity":{"kind":"unit","id":"core","title":"Core","facts":[{"label":"Lead","value":"Agent CTO"}],"items":[{"kind":"seat","id":"swe","label":"Agent SWE","fact":"Working","depth":1}]}}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.10
+event: card
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":10,"at":"2026-10-24T09:41:01Z","kind":"card","card":{"card_id":"6826e75d-5d1b-5758-a7b6-c34a3f3e0911","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"open_in_app","open_in_app":{"link":{"label":"ENG-133","screen":"item","href":"#/worklet/ENG-133"},"permitted":true}}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.11
+event: card
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":11,"at":"2026-10-24T09:41:01.1Z","kind":"card","card":{"card_id":"90905896-5a27-560b-b8d7-e171432443c8","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"notice","notice":{"tone":"info","text":"Showing the first 50 of 210 rows."}}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.12
+event: card
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":12,"at":"2026-10-24T09:41:01.2Z","kind":"card","card":{"card_id":"03e5218b-b8c8-5af2-91c8-ad5c9dabe641","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"oversize","oversize":{"title":"Matching tasks, \"brand identity\"","open":{"label":"Search","screen":"worklet-search","href":"#/worklet/search"},"narrow":["the search words"]}}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.13
+event: card
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":13,"at":"2026-10-24T09:41:01.3Z","kind":"card","card":{"card_id":"c172b9d6-305a-531e-89c7-169222450f2f","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"error","error":{"refusal":{"code":"unauthorized","message":"You do not have access to this.","reason":"no_grant","grants":["admin"]},"phrase":"read the fleet"}}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.14
+event: step
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":14,"at":"2026-10-24T09:41:01.4Z","kind":"step","step":{"step_id":"80829cda-345e-5425-afb7-e8b02cfb1fc4","index":2,"tool":"start_deep_work","label":"Deep work: redesign the brand assets","state":"running","started_at":"2026-10-24T09:41:00Z","deep":{"state":"running","goal":"Redesign the brand assets","started_at":"2026-10-24T09:41:00Z","deadline_at":"2026-10-24T10:01:00Z","steps":1,"max_steps":150,"budget_percent":12,"activity":["Reading the brand draft","Ran a command"]}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.15
+event: step
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":15,"at":"2026-10-24T09:41:01.5Z","kind":"step","step":{"step_id":"6587f2db-b905-5dbe-9eb2-944b20e7ca16","index":3,"tool":"api_request","label":"Read GET /brand","request":{"method":"GET","route":"/brand"},"state":"done","started_at":"2026-10-24T09:41:00Z","duration_ms":140,"summary":"1 record","parent":2}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.16
+event: step
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":16,"at":"2026-10-24T09:41:01.6Z","kind":"step","step":{"step_id":"80829cda-345e-5425-afb7-e8b02cfb1fc4","index":2,"tool":"start_deep_work","label":"Deep work: redesign the brand assets","state":"done","started_at":"2026-10-24T09:41:00Z","duration_ms":412000,"summary":"2 files","deep":{"state":"finished","goal":"Redesign the brand assets","started_at":"2026-10-24T09:41:00Z","deadline_at":"2026-10-24T10:01:00Z","steps":1,"max_steps":150,"budget_percent":40}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.17
+event: card
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":17,"at":"2026-10-24T09:41:01.7Z","kind":"card","card":{"card_id":"1a527eb0-3da9-5dd3-869d-ea3ebb22e175","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"file","file":{"files":[{"file_id":"ccbfac69-30d8-5b32-8370-9e4bbe0f008a","name":"logo.svg","media_type":"image/svg+xml","size":4096,"download":"/assistant/conversations/403212ed-5a4a-586d-8af6-c62411a17c2f/files/ccbfac69-30d8-5b32-8370-9e4bbe0f008a"},{"file_id":"176e3eb1-8ffa-5c89-8687-65f95db6ab96","name":"palette.csv","media_type":"text/csv","size":210,"download":"/assistant/conversations/403212ed-5a4a-586d-8af6-c62411a17c2f/files/176e3eb1-8ffa-5c89-8687-65f95db6ab96"}]}}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.18
+event: step
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":18,"at":"2026-10-24T09:41:01.8Z","kind":"step","step":{"step_id":"ea2b82f1-e4a4-55a5-bb5a-1db4b29f4e6d","index":4,"tool":"create_task","label":"Prepare a new task","state":"waiting","started_at":"2026-10-24T09:41:00Z"}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.19
+event: card
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":19,"at":"2026-10-24T09:41:01.9Z","kind":"card","card":{"card_id":"675530ff-3c9a-5426-bd29-a13ef5a0ba4c","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"proposal","proposal":{"proposal_id":"9035513c-6cd1-5b25-bbe2-c39df0a5a786","scope":"server","tool":"create_task","title":"Create task","target":"Core","changes":[{"kind":"fact","field":"scope","label":"Scope","to":"Saved for the company"},{"kind":"added","field":"title","label":"Title","to":"Fix the flaky sign-in test"},{"kind":"changed","field":"priority","label":"Priority","from":"Normal","to":"High"},{"kind":"removed","field":"label","label":"Label","from":"triage"},{"kind":"text","field":"body","label":"Description","from":"Fails sometimes.","to":"Fails on every third run.","words":[{"op":"same","text":"Fails "},{"op":"removed","text":"sometimes."},{"op":"added","text":"on every third run."}]}],"audience":["Core"],"taint":"Read ENG-90, written by Agent PM","digest":"sha256:9f2c0d6e5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0","expires_at":"2026-10-24T09:56:00Z","state":"proposed","source_revision":"url:3f9c1a0e","approve_label":"Approve and save"}}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.20
+event: card
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":20,"at":"2026-10-24T09:41:02Z","kind":"card","card":{"card_id":"4bc40140-e262-52fb-9f72-a37998fecd1b","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"proposal","proposal":{"proposal_id":"1279d9e8-ea4d-5af9-b086-ee01b312653e","scope":"page","tool":"propose_page_change","title":"Filter the list","target":"Worklet › Tasks","changes":[{"kind":"changed","field":"blocked","label":"Blocked","from":"Any","to":"Blocked only"}],"digest":"sha256:0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9","expires_at":"2026-10-24T09:56:00Z","state":"proposed","source_revision":"url:3f9c1a0e","page_action":{"name":"work.filter.apply","payload":{"blocked":"true"}},"approve_label":"Apply to this list"}}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.21
+event: action
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":21,"at":"2026-10-24T09:41:02.1Z","kind":"action","action":{"action_id":"5950210a-8478-5ed3-b6ed-a28d04417faa","name":"work.filter.apply","proposal_id":"9035513c-6cd1-5b25-bbe2-c39df0a5a786","source_revision":"url:3f9c1a0e","payload":{"blocked":"true"},"confirm":"approve"}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.22
+event: action
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":22,"at":"2026-10-24T09:41:02.2Z","kind":"action","action":{"action_id":"7bee0329-e6f7-5a5f-b19e-b7038180e148","name":"context.invalidate","invalidate":{"domain":"tracker","position":"CREWLET_TRACKER_LOG:1:4812"}}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.23
+event: status
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":23,"at":"2026-10-24T09:41:02.3Z","kind":"status","status":{"state":"waiting_for_approval","steps_done":4}}
+
+id: 3db96f52-a891-5953-9735-0ae522cf6347.24
+event: done
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":24,"at":"2026-10-24T09:41:02.4Z","kind":"done","done":{"state":"waiting_for_approval","duration_ms":5120,"steps":4,"message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}}
+
+id: 75099765-5fa3-5aa4-b185-7d8dd69869bd.1
+event: conversation
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","seq":1,"at":"2026-10-24T09:41:00.1Z","kind":"conversation","conversation":{"title":"Flaky sign-in test","created_at":"2026-10-24T09:41:00Z","resumed":true}}
+
+id: 75099765-5fa3-5aa4-b185-7d8dd69869bd.2
+event: snapshot
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","seq":2,"at":"2026-10-24T09:41:00.2Z","kind":"snapshot","snapshot":{"messages":[{"id":"0bf89d0f-2f00-54e6-9075-c932911602dd","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","role":"user","text":"What is running right now?","created_at":"2026-10-24T09:41:00Z","page":{"title":"Worklet › Tasks","screen":"worklet-tasks"}}],"steps":[{"step_id":"c47c2347-7a71-54a6-ad8a-0411130beeaa","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","index":1,"tool":"list_agents","label":"Read what the agents are doing","request":{"method":"GET","route":"/agents"},"state":"done","started_at":"2026-10-24T09:41:00Z","duration_ms":240,"summary":"6 agents"}],"cards":[]}}
+
+id: 75099765-5fa3-5aa4-b185-7d8dd69869bd.3
+event: error
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","seq":3,"at":"2026-10-24T09:41:00.3Z","kind":"error","error":{"code":"turn_interrupted","message":"The node running this answer stopped.","hint":"Ask again.","retryable":true}}
+
+id: 75099765-5fa3-5aa4-b185-7d8dd69869bd.4
+event: done
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"75099765-5fa3-5aa4-b185-7d8dd69869bd","seq":4,"at":"2026-10-24T09:41:00.4Z","kind":"done","done":{"state":"interrupted","duration_ms":0,"steps":0}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.1
+event: conversation
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":1,"at":"2026-10-24T09:41:00.1Z","kind":"conversation","conversation":{"title":"Brief: Inbox","created_at":"2026-10-24T09:41:00Z","resumed":false}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.2
+event: page_context
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":2,"at":"2026-10-24T09:41:00.2Z","kind":"page_context","page_context":{"used":true,"trimmed":false,"page":{"title":"Inbox","screen":"inbox"}}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.3
+event: step
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":3,"at":"2026-10-24T09:41:00.3Z","kind":"step","step":{"step_id":"8c43d23b-4619-5a58-9dc7-669a69af9688","index":1,"tool":"answer_brief","label":"Writing the brief","state":"done","started_at":"2026-10-24T09:41:00Z","duration_ms":40,"summary":"Written"}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.4
+event: delta
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":4,"at":"2026-10-24T09:41:00.4Z","kind":"delta","delta":{"message_id":"620faf8a-818d-5dc6-af51-b99b894ca0f7","text":""}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.5
+event: card
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":5,"at":"2026-10-24T09:41:00.5Z","kind":"card","card":{"card_id":"e88690dd-cd7c-5bbc-843a-d391c1859730","message_id":"620faf8a-818d-5dc6-af51-b99b894ca0f7","card":{"type":"brief","brief":{"scope":{"screen":"inbox","title":"Inbox","record":{"kind":"task","id":"ENG-133","noun":"decision"}},"about":"QA asks whether to test the store build or the nightly on ENG-133.","needs":[{"ref":{"kind":"task","id":"ENG-133"},"text":"Answer ENG-133: test the store build","detail":"Asked 2 hours ago","tone":"warning","action":{"kind":"open","label":"Open ENG-133","link":{"label":"ENG-133","screen":"item","href":"#/worklet/ENG-133"}}}],"context":"The release is Thursday.","follow_ups":["What did QA test last?"],"as_of":"2026-10-24T09:41:00Z"}}}}
+
+id: b7d720ed-6183-5418-829b-8067fd903172.6
+event: done
+data: {"v":1,"conversation_id":"a51f5e8d-b74a-53fd-8dbc-db770396a8ad","turn_id":"b7d720ed-6183-5418-829b-8067fd903172","seq":6,"at":"2026-10-24T09:41:00.6Z","kind":"done","done":{"state":"completed","duration_ms":2100,"steps":1,"message_id":"620faf8a-818d-5dc6-af51-b99b894ca0f7"}}
+

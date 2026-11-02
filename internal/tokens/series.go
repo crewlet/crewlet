@@ -70,6 +70,14 @@ var Groups = []Group{GroupPhase, GroupModel, GroupProvider, GroupSeat, GroupUnit
 // Valid reports whether g is one this build knows.
 func (g Group) Valid() bool { return slices.Contains(Groups, g) }
 
+// AdminGroups are the groupings only an admin is answered: a provider band is
+// one of the company's providers.llm entries, which is its configuration, as
+// [Rollup.WithoutEntries] withholds the same entries from a rollup.
+var AdminGroups = []Group{GroupProvider}
+
+// AdminOnly reports whether g is one of [AdminGroups].
+func (g Group) AdminOnly() bool { return slices.Contains(AdminGroups, g) }
+
 // Band is one of the four bands a phase breakdown is drawn in.
 //
 // FOUR, folded ONCE, here: the engine has seven phase values, a chart has four
@@ -79,9 +87,12 @@ type Band string
 
 // The four bands, in the order a chart stacks them.
 const (
-	// BandExecute is the seat's own turn doing its work: the executor, and
-	// a detached coding run it launched, which is the same work done
-	// somewhere else.
+	// BandExecute is the seat's own turn doing its work: the executor, which
+	// is its coding CLI's own run in a box. Both records of that run are this
+	// band — the engine's `execute` record of the phase, which states the run
+	// as one round and carries no tokens, and the run's own `sandbox` record
+	// of what it did and spent (see [PhaseCalls]) — so a figure is drawn in
+	// the same band whichever of the two it came from.
 	BandExecute Band = "execute"
 	// BandReview is the reviewer's pass over it.
 	BandReview Band = "review"

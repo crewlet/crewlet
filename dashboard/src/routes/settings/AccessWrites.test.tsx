@@ -34,6 +34,7 @@ import { CHART_ORG } from "~/test/orgchart.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { pick } from "~/testing.tsx";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -45,20 +46,20 @@ class InertWebSocket {
 }
 
 /**
- * An administrator — and so every app, though the row names Tracker alone
+ * An administrator, and so every app, though the row names Worklet alone
  * beside Admin: a stored row is read through `expand`, as the engine reads it.
  */
 const ADMIN = {
   login: "ana.admin",
   owner: "ana.admin",
-  grants: ["admin", "tracker"],
+  grants: ["admin", "worklet"],
 };
 /**
  * Every app and no Admin. The section is closed to them (`nav.ts`), so the
  * frame draws its lock instead; mounted anyway — a viewer read that failed
  * holds no screen — the screen offers no control they could not use.
  */
-const MEMBER = { login: "ana.diaz", owner: "jane", grants: ["tracker", "knowledge"] };
+const MEMBER = { login: "ana.diaz", owner: "jane", grants: ["worklet", "doclet"] };
 
 const UUID7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -90,7 +91,7 @@ const PEOPLE = {
       login: "ci:release",
       // billing is a name this build does not know — a permission a newer
       // engine might add: kept, granting nothing.
-      grants: ["tracker", "admin", "billing"],
+      grants: ["worklet", "admin", "billing"],
     },
   ],
   next: "",
@@ -122,7 +123,7 @@ interface Sent {
 function json(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
   });
 }
 
@@ -368,8 +369,9 @@ test("a reader without Admin sees no write control, and an administrator sees th
   mount(ADMIN);
   await screen.findAllByText("Bo Lang");
   await screen.findAllByText("sam@example.com");
-  // EACH CONTROL WAITED FOR ON ITS OWN: the directory's rows and the opened
-  // person's credentials answer apart, so one drawn says nothing of another.
+  // EACH WAITED FOR: the list's controls and the opened person's (their
+  // credentials' Revoke) are drawn on separate commits, as the reader's
+  // half above waits for the credentials before it looks.
   for (const name of ["Invite person", "Cancel", "Revoke"]) {
     expect(
       (await screen.findAllByRole("button", { name: new RegExp(`^${name}`) })).length,
@@ -401,8 +403,8 @@ test("invite person picks an open seat, then invites onto it", async () => {
   mount(ADMIN);
   fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
   const picker = await screen.findByRole("dialog", { name: "Invite person" });
-  // The seat field is drawn once the open seats it offers have answered, a
-  // render after the dialog itself.
+  // THE SEAT FIELD IS DRAWN ONCE THE OPEN SEATS HAVE ANSWERED, which a fixed
+  // number of ticks only sometimes outwaits.
   pick(await within(picker).findByLabelText(/^Seat/), /Lee Ops/);
   fireEvent.click(within(picker).getByRole("button", { name: "Continue" }));
   const invite = await screen.findByRole("dialog", { name: "Invite someone as Lee Ops" });
@@ -489,7 +491,7 @@ test("a write recorded but not yet applied here leaves its dialog only Done", as
   location.hash = "#/settings/people?peek=person:p-bo";
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
-  fireEvent.click(within(edit).getByRole("checkbox", { name: "Tracker" }));
+  fireEvent.click(within(edit).getByRole("checkbox", { name: "Worklet" }));
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
   expect(within(edit).getByRole("status").textContent).toMatch(
@@ -637,7 +639,7 @@ test("an opened person's edit sends what changed, and suspending sends the stage
   mount();
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
-  fireEvent.click(within(edit).getByRole("checkbox", { name: "Tracker" }));
+  fireEvent.click(within(edit).getByRole("checkbox", { name: "Worklet" }));
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
   fireEvent.click(screen.getByRole("button", { name: "Suspend" }));
@@ -645,7 +647,7 @@ test("an opened person's edit sends what changed, and suspending sends the stage
   fireEvent.click(within(suspend).getByRole("button", { name: "Suspend" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
-    { add_grants: ["tracker"] },
+    { add_grants: ["worklet"] },
     { stage: "suspended" },
   ]);
   for (const w of eng.writes()) expect(w.key).toMatch(UUID7);
@@ -661,7 +663,7 @@ test("an edit refused part way reads the directory again", async () => {
       json(403, {
         error: "unauthorized",
         message:
-          "You don’t have the access this needs (Admin, Tracker or Knowledge). Ask an admin for it.",
+          "You don’t have the access this needs (Admin, Worklet, Doclet or Chatlet). Ask an admin for it.",
         id: "p-bo",
         landed: ["identity"],
       }),
@@ -672,7 +674,7 @@ test("an edit refused part way reads the directory again", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Bo Lang" });
   fireEvent.change(within(edit).getByLabelText("Login"), { target: { value: "bo.lange" } });
-  fireEvent.click(within(edit).getByRole("checkbox", { name: "Tracker" }));
+  fireEvent.click(within(edit).getByRole("checkbox", { name: "Worklet" }));
   const before = eng.reads("/iam/people");
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
@@ -683,7 +685,7 @@ test("an edit refused part way reads the directory again", async () => {
 });
 
 // AN EDIT SENDS WHAT ITS EDITOR CHANGED, measured against the row it opened
-// on: while the dialog is open another administrator gives Bo Tracker and
+// on: while the dialog is open another administrator gives Bo Worklet and
 // binds him to a seat, the directory is read again as the tab comes back,
 // and a login change saved after it sends the login alone — never the grant
 // and the seat the dialog opened with, which would undo both. Mutation:
@@ -701,7 +703,7 @@ test("an edit sends what its editor changed, whatever the directory read since",
   people = {
     ...PEOPLE,
     people: PEOPLE.people.map((p) =>
-      p.id === "p-bo" ? { ...p, grants: ["tracker"], seat: "sam" } : p,
+      p.id === "p-bo" ? { ...p, grants: ["worklet"], seat: "sam" } : p,
     ),
   };
   const before = eng.reads("/iam/people");
@@ -781,9 +783,9 @@ test("a service account's edit offers No seat, and choosing it unbinds the accou
 // A GRANT CHANGE IS WHAT ITS EDITOR TICKED AND UNTICKED, which the engine
 // applies to what the person holds when it decides: while the dialog is open
 // another administrator gives Bo Admin, the directory is read again as the
-// tab comes back, and ticking Tracker sends that tick alone — never the
+// tab comes back, and ticking Worklet sends that tick alone, never the
 // whole list, which would take Admin away again, and which the engine would
-// accept. Mutation: send `grants` whole and the save carries Tracker without
+// accept. Mutation: send `grants` whole and the save carries Worklet without
 // Admin.
 test("a grant change sends the ticks alone, whatever another administrator changed", async () => {
   let people: unknown = PEOPLE;
@@ -805,10 +807,10 @@ test("a grant change sends the ticks alone, whatever another administrator chang
   });
   await settle();
   expect(eng.reads("/iam/people")).toBeGreaterThan(before);
-  fireEvent.click(within(edit).getByRole("checkbox", { name: "Tracker" }));
+  fireEvent.click(within(edit).getByRole("checkbox", { name: "Worklet" }));
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
-  expect(eng.writes().map((w) => w.body)).toEqual([{ add_grants: ["tracker"] }]);
+  expect(eng.writes().map((w) => w.body)).toEqual([{ add_grants: ["worklet"] }]);
 });
 
 // A SUSPENSION RETRIED IS A SUSPENSION: it is answered unknown, the directory
@@ -857,7 +859,7 @@ test("a suspension retried after an unknown answer sends the suspension again", 
 });
 
 // UNTICKING ADMIN KEEPS THE APPS IT INCLUDED: Di's row stores Admin alone,
-// which is every app, so the edit opens with Tracker and Knowledge ticked and
+// which is every app, so the edit opens with Worklet and Doclet ticked and
 // locked ("Included with Admin"); unticking Admin unlocks them still ticked,
 // and the save adds them as it takes Admin away — leaving Di their apps rather
 // than the overview alone. Mutation: let Admin go without reading the row
@@ -871,19 +873,19 @@ test("unticking Admin keeps the apps it included", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   const edit = await screen.findByRole("dialog", { name: "Edit Di Moss" });
   const admin = within(edit).getByRole("checkbox", { name: "Admin" });
-  const tracker = within(edit).getByRole("checkbox", { name: "Tracker" });
+  const tracker = within(edit).getByRole("checkbox", { name: "Worklet" });
   expect(admin).toHaveProperty("checked", true);
   expect(admin).toHaveProperty("disabled", false);
   expect(tracker).toHaveProperty("checked", true);
   expect(tracker).toHaveProperty("disabled", true);
-  expect(within(edit).getAllByText("Included with Admin.")).toHaveLength(3);
+  expect(within(edit).getAllByText("Included with Admin.")).toHaveLength(4);
   fireEvent.click(admin);
-  expect(within(edit).getByRole("checkbox", { name: "Tracker" })).toHaveProperty("checked", true);
-  expect(within(edit).getByRole("checkbox", { name: "Tracker" })).toHaveProperty("disabled", false);
+  expect(within(edit).getByRole("checkbox", { name: "Worklet" })).toHaveProperty("checked", true);
+  expect(within(edit).getByRole("checkbox", { name: "Worklet" })).toHaveProperty("disabled", false);
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
-    { add_grants: ["tracker", "knowledge", "artifacts"], remove_grants: ["admin"] },
+    { add_grants: ["worklet", "doclet", "artifacts", "chatlet"], remove_grants: ["admin"] },
   ]);
 });
 
@@ -931,7 +933,7 @@ test("a service account's mint starts from its own access, and never a name this
   fireEvent.click(within(mint).getByRole("button", { name: "Create token" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
-    { grants: ["tracker", "admin", "knowledge", "artifacts"] },
+    { grants: ["worklet", "admin", "doclet", "artifacts", "chatlet"] },
   ]);
 });
 
@@ -1060,9 +1062,9 @@ test("taking your own Admin in an edit says it is you, and when nobody else admi
     expect(within(edit).getByText("This is you")).toBeTruthy();
     expect(within(edit).getByText(/You’ll lose admin access when you save/)).toBeTruthy();
     expect(within(edit).queryByText(/You’re the only admin/) !== null).toBe(nobodyElse);
-    // AND WHAT THEY KEEP IS SAID TO THEM: letting Tracker go too leaves them
+    // AND WHAT THEY KEEP IS SAID TO THEM: letting Worklet go too leaves them
     // no way to receive what agents send people.
-    fireEvent.click(within(edit).getByRole("checkbox", { name: "Tracker" }));
+    fireEvent.click(within(edit).getByRole("checkbox", { name: "Worklet" }));
     expect(within(edit).getByText(/agents can’t send you work/)).toBeTruthy();
     cleanup();
   }
@@ -1157,7 +1159,7 @@ test("suspending or removing yourself says it is you, and when nobody else admin
 // — what a script may do is decided on purpose, never defaulted — and its
 // token's mint is unkeyed, offers the account's access alone and shows the
 // value once. Mutation: pre-tick the apps as a person's invitation does and
-// the create carries Knowledge nobody chose.
+// the create carries Doclet nobody chose.
 test("a service account is created keyed and its token minted unkeyed from its grants", async () => {
   const eng = engine({
     "POST /iam/people": [json(201, { id: "p-new", outcome: "applied", op_id: "k" })],
@@ -1166,7 +1168,7 @@ test("a service account is created keyed and its token minted unkeyed from its g
         id: "c-tok",
         person: "p-new",
         token: "cwl_pat_c-tok_1_secret",
-        grants: ["tracker"],
+        grants: ["worklet"],
         expires_at: "2027-01-04T09:00:00Z",
       }),
     ],
@@ -1175,17 +1177,17 @@ test("a service account is created keyed and its token minted unkeyed from its g
   fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
   const create = await screen.findByRole("dialog", { name: "New service account" });
   fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "ci:deploy" } });
-  for (const name of ["Admin", "Tracker", "Knowledge"]) {
+  for (const name of ["Admin", "Worklet", "Doclet"]) {
     expect(within(create).getByRole("checkbox", { name })).toHaveProperty("checked", false);
   }
-  fireEvent.click(within(create).getByRole("checkbox", { name: "Tracker" }));
+  fireEvent.click(within(create).getByRole("checkbox", { name: "Worklet" }));
   fireEvent.click(within(create).getByRole("button", { name: "Create" }));
   await settle();
   fireEvent.click(screen.getByRole("button", { name: "Create token" }));
   const mint = await screen.findByRole("dialog", { name: "New token for ci:deploy" });
   // OUT OF THE ACCOUNT'S OWN ACCESS: what it does not hold is not offered.
-  expect(within(mint).queryByRole("checkbox", { name: "Knowledge" })).toBeNull();
-  expect(within(mint).getByRole("checkbox", { name: "Tracker" })).toHaveProperty("checked", true);
+  expect(within(mint).queryByRole("checkbox", { name: "Doclet" })).toBeNull();
+  expect(within(mint).getByRole("checkbox", { name: "Worklet" })).toHaveProperty("checked", true);
   fireEvent.click(within(mint).getByRole("button", { name: "Create token" }));
   await settle();
   const [created, minted] = eng.writes();
@@ -1193,13 +1195,13 @@ test("a service account is created keyed and its token minted unkeyed from its g
     kind: "machine",
     login: "ci:deploy",
     name: "",
-    grants: ["tracker"],
+    grants: ["worklet"],
   });
   expect(created?.key).toMatch(UUID7);
   expect(minted?.path).toBe("/iam/credentials");
   expect(minted?.query.get("person")).toBe("p-new");
   expect(minted?.key).toBeNull();
-  expect(minted?.body).toEqual({ grants: ["tracker"] });
+  expect(minted?.body).toEqual({ grants: ["worklet"] });
   expect(screen.getByText("cwl_pat_c-tok_1_secret")).toBeTruthy();
 });
 
@@ -1321,7 +1323,7 @@ test("an unclaimed node running no company says to create the company first", as
   invitations = { invitations: [], next: "" };
   seatsAnswer = json(409, {
     error: "no_active_revision",
-    message: "This node has not been handed a company yet.",
+    message: "This node isn't running a company yet.",
     hint: "this node runs no company yet",
   });
   engine();

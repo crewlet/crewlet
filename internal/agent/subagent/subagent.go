@@ -72,7 +72,9 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 var log = logging.Get("agent.subagent")
@@ -82,18 +84,7 @@ var log = logging.Get("agent.subagent")
 // A constant because it is also the first entry of the denylist below: the
 // tool that starts a worker is the tool a worker must never see, and two
 // spellings of that name is one recursion away from a fork bomb.
-const ToolName = "delegate"
-
-// skillLoaderTool is the read-only prompt-fragment loader.
-//
-// Granted to every child that can reach it even when the parent did not name
-// it, because the child's own prompt tells it to call this — the tool-skill
-// catalogue rendered into the system prompt is a list of `key — summary`
-// lines ending in "call load_tool_skill(key)". A child told to call a tool it
-// was not given spends a round discovering that, every time.
-//
-// It cannot widen anything: it returns prompt text and touches nothing.
-const skillLoaderTool = "load_tool_skill"
+const ToolName = toolname.Delegate
 
 // The reasons [stopReason] can give for a context that ended under a child,
 // which [classify] turns into the child's [Status].
@@ -133,28 +124,13 @@ var controlDenylist = map[string]struct{}{
 	// A sub-agent that can spawn sub-agents has no depth bound at all.
 	ToolName: {},
 
-	// Launching a detached coding run is engine control keyed to the
-	// PARENT: the pending row carries the parent's turn id, and the
-	// completion re-enters the parent's own suspended executor. A
-	// sub-agent's loop cannot suspend, so the parent turn would finish
-	// normally, never persist an execute state, and the run would come back
-	// to a seat with nothing to resume into.
-	//
-	// The annotation filter below happens to catch it too — a coding run is
-	// open-world, and internal/agent/builtin says so. Named here anyway,
-	// and the redundancy is the point: that reason is about pushing
-	// branches other people read, and this one is about a turn that can
-	// never be resumed. Either alone would deny it; only this one survives
-	// somebody deciding a sandbox is private.
-	"run_sandbox": {},
-
 	// The PARENT's discovery pair. Both close over the parent's surface, so
 	// a child that inherited them would activate tools onto the surface of
 	// the phase that spawned it — the one escalation the grant exists to
 	// stop. The child gets its own pair, bound to its own surface, from
 	// Config.Discovery.
-	"activate_tool":         {},
-	"list_mcp_server_tools": {},
+	toolname.Activate:           {},
+	toolname.ListMCPServerTools: {},
 
 	// Cross-agent communication. A short-lived worker's half-formed
 	// conclusions must not land on a teammate's desk under the parent's
@@ -162,7 +138,7 @@ var controlDenylist = map[string]struct{}{
 	// why it is named here as well as annotated open-world. The last three
 	// are not engine tools today; they are denied defensively in case an
 	// extension registers them.
-	"a2a_ask":             {},
+	toolname.A2AAsk:       {},
 	"request_a2a_channel": {},
 	"send_a2a_message":    {},
 	"close_a2a_channel":   {},
@@ -254,6 +230,14 @@ func (l Limits) validate() error {
 	return nil
 }
 
+// sessionTitle is how a worker's tool session names itself to its CLI.
+func sessionTitle(parent prompts.Seat, task string) string {
+	if parent.Role == nil {
+		return "worker " + task
+	}
+	return "worker " + task + " of " + parent.Role.Handle()
+}
+
 // Config is everything one parent turn's spawns need. Built once per Execute
 // phase and shared by every spawn in it, including every child of a batch.
 type Config struct {
@@ -325,6 +309,10 @@ type Config struct {
 	// charging entirely, which is the embedded single-node case.
 	Budget toolloop.BudgetMeter
 
+	// Sessions is where the worker's tools are served to its CLI: the
+	// parent's own host. Required.
+	Sessions *toolsession.Host
+
 	// Fence is the PARENT's seat fence, handed down unchanged. A worker
 	// runs on the parent's grant, calls a slice of the parent's tools and
 	// spends the parent's budget, so a node that has lost the seat must
@@ -352,6 +340,18 @@ type Config struct {
 	// under the turn that spawned it.
 	Trace events.TraceContext
 
+	// Round is the parent phase's round every call of this tool is made
+	// in, which the batch record names so a reader nests the batch under
+	// the call that made it.
+	//
+	// STATED BY THE CALLER rather than read off the call's context: the
+	// tool is offered only on an executor run's surface, whose calls arrive
+	// over the bridge from the run's coding CLI — no engine loop is
+	// iterating when they do, so there is no frame to ask, and the caller
+	// is the one that knows which round of its phase the run's calls are
+	// recorded on.
+	Round int
+
 	// Turn binds the child's surface to the parent turn.
 	//
 	// Without it every seat-bound tool in the grant fails at call time
@@ -377,6 +377,13 @@ type Config struct {
 	// Nil leaves the child ungated, which is correct for a company with no
 	// required skills.
 	Guard func(*tools.Surface) tools.Guard
+
+	// Counter is where the worker's surface counts what it decides, the
+	// parent turn's recorder: its refusal-loop decisions
+	// (`crewlet.tools.policy_refusal_loops`) and the calls answered outside
+	// their schema (`crewlet.tools.args_outside_schema`), which
+	// [tools.Invoke] counts from the surface's counter. Nil counts nothing.
+	Counter tools.Counter
 
 	// Telemetry receives every child's Result, once, on every path a child
 	// can end on.
@@ -404,6 +411,12 @@ func (c Config) validate() error {
 	}
 	if c.Seat.Role == nil {
 		errs = append(errs, errors.New("no parent role"))
+	}
+	if c.Sessions == nil {
+		// Refused before any task starts, rather than by every worker's loop
+		// once it has rendered its prompts: a worker reaches its tools
+		// through nothing else.
+		errs = append(errs, errors.New("no tool session host (Config.Sessions)"))
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("subagent: %w", err)
@@ -488,10 +501,14 @@ func Permit(universe tools.Snapshot, parent, requested []string) Grant {
 		rejected = append(rejected, name)
 	}
 
-	// The skill loader rides along unrequested when the child can reach it;
-	// see the constant.
-	if reachable[skillLoaderTool] && !seen[skillLoaderTool] {
-		active = append(active, skillLoaderTool)
+	// THE SKILL LOADER RIDES ALONG UNREQUESTED when the child can reach it,
+	// because the child's own prompt tells it to call it: the tool-skill
+	// catalogue rendered into the system prompt is a list of `key — summary`
+	// lines ending in a call to it, and a child told to call a tool it was
+	// not given spends a round discovering that, every time. It cannot widen
+	// anything: it returns prompt text and touches nothing.
+	if reachable[toolname.LoadToolSkill] && !seen[toolname.LoadToolSkill] {
+		active = append(active, toolname.LoadToolSkill)
 	}
 
 	return Grant{Universe: safe, Active: active, Rejected: rejected}
@@ -708,6 +725,9 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	if cfg.Turn != nil {
 		surface = surface.ForTurn(cfg.Turn.InPhase(types.PhaseSubagent).WithCalls(calls))
 	}
+	if cfg.Counter != nil {
+		surface = surface.WithCounter(cfg.Counter)
+	}
 	if cfg.Guard != nil {
 		// AFTER the surface exists and from that surface, so what the
 		// guard enforces and what the worker's catalogue showed cannot
@@ -743,6 +763,10 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 	progress := &toolloop.Progress{}
 	loop, err := toolloop.Run(ctx, toolloop.Config{
 		Provider: provider,
+		Host:     cfg.Sessions,
+		// The worker names itself after its task and its parent seat, in
+		// the CLI's own logs.
+		ServerTitle: sessionTitle(cfg.Seat, task.ID),
 		// The resolved head, until a completion names the entry that
 		// actually served — which, on a seat's chain, can be a later one.
 		ProviderKey: key,
@@ -760,9 +784,6 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		// what it just submitted — on the parent's budget, for output
 		// nobody reads.
 		TerminateAfter: terminators(submit),
-		// No AllowSuspend: a worker's conversation is never persisted, so
-		// a suspended one could never be resumed — the tool loop turns
-		// the attempt into an ordinary tool failure it can react to.
 	})
 	res.ToolsAvailable = surface.Active()
 
@@ -1086,10 +1107,6 @@ func publishCall(ctx context.Context, cfg Config, tasks []resolved, results []Re
 	if cfg.Turn != nil {
 		batchRun, batchWork = cfg.Turn.RunID, cfg.Turn.WorkKey
 	}
-	// The parent's round, off the context its tool loop handed this call:
-	// the one frame that knows which round is running is the loop, and the
-	// delegate tool is called from inside it.
-	round, _ := toolloop.CallRound(ctx)
 	ev := events.New(types.SubagentBatched{
 		ParentHandle: cfg.Seat.Role.Handle(),
 		TurnID:       batchRun,
@@ -1101,7 +1118,7 @@ func publishCall(ctx context.Context, cfg Config, tasks []resolved, results []Re
 		Graph:        graphOf(tasks),
 		Statuses:     statuses,
 		StartedAt:    began,
-		Round:        round,
+		Round:        cfg.Round,
 	}, cfg.Trace)
 	// The payload carries no role, so the envelope's source is the only
 	// attribution this event has — without it every fan-out in the company

@@ -67,6 +67,18 @@ function useSecondFactor(): { app: boolean; factor: boolean } | null {
   return read.data;
 }
 
+/**
+ * The login this browser is signed in as, or "" until it is known: the
+ * account a password manager files the confirmation under.
+ *
+ * READ HERE, not from the frame's viewer, because the host is mounted outside
+ * the frame (the enrolment screen asks for a step-up too).
+ */
+function useSignedInLogin(): string {
+  const read = useRest("/auth/session", async (signal) => (await auth.session(signal)).login);
+  return read.data ?? "";
+}
+
 export function StepUpHost() {
   const [asking, setAsking] = useState(false);
   // THE ANSWER THE TRANSPORT IS WAITING ON. A ref rather than state, because
@@ -107,6 +119,7 @@ function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const held = useSecondFactor();
+  const login = useSignedInLogin();
   const needsCode = held?.app === true;
   // UNKNOWN STAYS DRAWN, optional: the engine's refusal says what it wants.
   const showCode = held === null || held.factor;
@@ -168,6 +181,13 @@ function StepUpDialog({ onDone }: { onDone: (confirmed: boolean) => void }) {
         </>
       }
     >
+      {/* THE ACCOUNT THIS PASSWORD BELONGS TO, for a password manager. A
+          password form with no username field reads to one as a new login,
+          and it offers to save it. Bitwarden's offer is a bar over the top
+          right of the page that renders blank here, so it sat invisible over
+          the assistant's drawer and took every press there. Named, the
+          confirmation matches the login the manager already holds. */}
+      <input hidden readOnly type="text" name="username" autoComplete="username" value={login} />
       <Text as="p" variant="body">
         Enter your password{needsCode ? " and a code from your app" : ""} to continue.
       </Text>

@@ -125,8 +125,12 @@ func TestObjectsStatusKeepsTheFindingsAndTheCountsOfAPassThatStopped(t *testing.
 	}
 }
 
-// -json IS THE BLOCK AS THE NODE ANSWERED IT: re-encoded, a field this build
-// does not know would be lost.
+// -json IS THE BLOCK AS THE NODE ANSWERED IT, in the engine's own shape: what
+// it prints decodes back into the API's type with every value the node set. It
+// is printed again rather than copied out as it came, and a field this build
+// does not know survives that too ([TestEveryJSONOutputSpellsItsTextAsWritten]),
+// because the block is decoded into a generic value, never into this build's
+// idea of it.
 func TestObjectsStatusJSONIsTheBlockAsAnswered(t *testing.T) {
 	t.Parallel()
 	out, _, err := cli(t, "objects", "status", "-json",

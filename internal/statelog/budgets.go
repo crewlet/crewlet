@@ -11,10 +11,13 @@ const (
 	//
 	// FOUR THOUSAND. The store has one writer and three other subsystems
 	// competing for it — learning, the knowledge base, config revisions —
-	// each with a bounded retry budget to burn while it waits. A maximal
-	// bulk write is about 31 800 rows, roughly sixteen seconds at the
-	// measured drain rate, and one transaction that long starves every one
-	// of them.
+	// each with a bounded retry budget to burn while it waits. A backlog —
+	// a node catching up after a restart, a cross-project move re-keying a
+	// subtree of up to a thousand tasks one record each — is as many rows
+	// as were published while the applier was behind, and one transaction
+	// over all of it would hold the writer for as long as the backlog
+	// takes, starving every one of them. Four thousand rows is about two
+	// seconds at the measured drain floor of 2 000 rows a second.
 	//
 	// AT A RECORD BOUNDARY, never inside one: the rows, the operation id
 	// and the checkpoint of any single record still land together, which
@@ -59,7 +62,7 @@ const (
 	//
 	// BYTES ARE THE REAL BOUND and the message count is the secondary one:
 	// a log whose records vary from a barrier's hundred-odd bytes to a
-	// bulk write's megabytes cannot be sized by count, and a count-only
+	// page's half a mebibyte cannot be sized by count, and a count-only
 	// bound on a catch-up replay fetches whatever the largest records
 	// happen to be. The client library cannot send the two together — its
 	// byte-bounded fetch fixes the count at a million, and allocated 32 MiB

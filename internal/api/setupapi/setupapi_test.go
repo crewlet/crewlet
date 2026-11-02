@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,11 +20,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
@@ -30,7 +35,6 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -38,6 +42,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/whsec"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var pinned = time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
@@ -59,6 +64,10 @@ func testCipher(t *testing.T) secrets.Cipher {
 	return cipher
 }
 
+// thisNode is the id the fixture's config surface runs under: the node an
+// unknown outcome names as holding the revision it stored.
+const thisNode = "core-1"
+
 // testAuthor is who a row a case seeds directly records.
 var testAuthor = secrets.Author{Name: "test", Kind: string(iam.ActorOperator)}
 
@@ -66,7 +75,7 @@ var testAuthor = secrets.Author{Name: "test", Kind: string(iam.ActorOperator)}
 // Connect for the first time is in.
 const companyDoc = `{
   "name": "Acme",
-  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
     {"name": "CTO", "handle": "cto", "llm": "zulu"}
@@ -82,7 +91,13 @@ type vault struct {
 	// authors is who each row records, which is what a case about
 	// attribution asserts.
 	authors map[string]secrets.Author
-	fail    error
+	// fail is what Set answers once failAfter values are in the store, so a
+	// case can fail a submission's second credential rather than its first.
+	// failName, when set, keeps fail to the one name: a case where one seal
+	// lands and the next does not.
+	fail      error
+	failAfter int
+	failName  string
 }
 
 func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
@@ -90,7 +105,8 @@ func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.fail != nil {
+	if v.fail != nil && len(v.values) >= v.failAfter &&
+		(v.failName == "" || v.failName == name) {
 		return v.fail
 	}
 	if v.values == nil {
@@ -119,11 +135,15 @@ type surface struct {
 	mux     *http.ServeMux
 	config  *configapi.Service
 	vault   *vault
-	company func() (*config.Company, *org.Organization)
 	configs *store.Configs
 	// cipher is the keyring the config surface seals under, which a
 	// revision the case plants is sealed under too.
 	cipher secrets.Cipher
+	// plane is the fleet the config surface activates on: the revision its
+	// pointer names is the company. gate is the same fleet, which a case
+	// takes down to stand for a coordination store that cannot be read.
+	plane coord.Plane
+	gate  *gatedPlane
 	// status is the fleet row every write on this surface records to.
 	status *statusStore
 	// webhookBase and webhookBaseKey are this fixture's vendor address and
@@ -143,6 +163,10 @@ type surface struct {
 	// caller replaces the Tier A token [surface.as] attaches, for a case
 	// about who a write is recorded as.
 	caller *iam.Principal
+
+	// access is the engine's per-seat access the Agents tab's routes answer
+	// from, a fake a case scripts.
+	access *fakeAccess
 }
 
 func newSurface(t *testing.T) *surface {
@@ -157,31 +181,95 @@ func newSurfaceWithNoExternalURL(t *testing.T) *surface {
 	return newSurfaceWithApps(t, nil, "")
 }
 
-// newConfigSurface is the config write path over a store of the test's own,
-// sealing under a keyring of its own — which it returns, because a revision
-// the case plants has to be sealed under it to be read back.
+// configFixture is the config write path over a store and a fleet of the
+// test's own, sealing under a keyring of its own: a revision the case plants
+// has to be sealed under it to be read back, and activated on the fleet to be
+// the company.
+type configFixture struct {
+	svc    *configapi.Service
+	db     *store.DB
+	cipher secrets.Cipher
+	plane  coord.Plane
+	gate   *gatedPlane
+}
+
+// gatedPlane is a fleet a case can take down: while down, the pointer cannot
+// be read, as a coordination store between leaders cannot — after the reads
+// allow still lets through, so a case can take it down partway through a
+// request. While unanswered, an activation lands and its answer is lost;
+// while dropped, it is lost before it lands and answered the same, because
+// the store's client cannot tell the two apart.
+//
+// And meanwhile, armed, is another write landing between two reads of a
+// request: it runs once, at the read after the ones skip lets by. contested,
+// armed, is one landing after the request's last read: it runs once, as the
+// request's own activation reaches the fleet, so the write has stored its
+// revision and loses at the compare-and-set.
+type gatedPlane struct {
+	coord.Plane
+	down       atomic.Bool
+	allow      atomic.Int64
+	unanswered atomic.Bool
+	dropped    atomic.Bool
+	meanwhile  atomic.Pointer[func()]
+	skip       atomic.Int64
+	contested  atomic.Pointer[func()]
+}
+
+func (p *gatedPlane) Target(ctx context.Context) (coord.Activation, bool, error) {
+	if m := p.meanwhile.Load(); m != nil && p.skip.Add(-1) < 0 &&
+		p.meanwhile.CompareAndSwap(m, nil) {
+		(*m)()
+	}
+	if p.down.Load() && p.allow.Add(-1) < 0 {
+		return coord.Activation{}, false, fmt.Errorf("%w: no leader", coord.ErrUnavailable)
+	}
+	return p.Plane.Target(ctx)
+}
+
+func (p *gatedPlane) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
+	if m := p.contested.Load(); m != nil && p.contested.CompareAndSwap(m, nil) {
+		(*m)()
+	}
+	if p.dropped.Load() {
+		return coord.Activation{}, fmt.Errorf("%w: publish the activation: no answer",
+			coord.ErrUnavailable)
+	}
+	if !p.unanswered.Load() {
+		return p.Plane.Activate(ctx, req)
+	}
+	if _, err := p.Plane.Activate(ctx, req); err != nil {
+		return coord.Activation{}, err
+	}
+	return coord.Activation{}, fmt.Errorf("%w: publish the activation: no answer",
+		coord.ErrUnavailable)
+}
+
+// newConfigSurface is a [configFixture].
 //
 // writers, when given, are the token ids Tier A names as the company
 // document's only writers (`api.auth.company_writers`).
-func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *store.DB, secrets.Cipher) {
+func newConfigSurface(t *testing.T, writers ...string) configFixture {
 	t.Helper()
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
-	cipher := testCipher(t)
+	gate := &gatedPlane{Plane: coordmemory.NewFleet()}
+	f := configFixture{db: db, cipher: testCipher(t), plane: gate, gate: gate}
 	cfg, err := configapi.New(configapi.Options{
-		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
-		Holders: func(context.Context, []string, time.Time) (
+		Store: db, Plane: f.plane, Cipher: f.cipher,
+		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
 			return nil, nil
 		},
-		CompanyWriters: writers,
-		Now:            func() time.Time { return pinned },
+		CompanyWriters: writers, Node: thisNode,
+		Now: func() time.Time { return pinned },
 	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}
-	return cfg, db, cipher
+	f.svc = cfg
+	return f
 }
 
 // newService builds the service over whatever a case names, filling each
@@ -204,11 +292,8 @@ const oneListener = "api.external_url"
 func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	t.Helper()
 	v := &vault{}
-	if opts.Company == nil {
-		opts.Company = companySource(t, nil)
-	}
 	if opts.Config == nil {
-		opts.Config, _, _ = newConfigSurface(t)
+		opts.Config = newConfigSurface(t).svc
 	}
 	if opts.Secrets == nil {
 		opts.Secrets = v
@@ -242,6 +327,9 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	if opts.WebhookBaseKey == "" {
 		opts.WebhookBaseKey = oneListener
 	}
+	if opts.Access == nil {
+		opts.Access = &fakeAccess{}
+	}
 	svc, err := setupapi.New(opts)
 	if err != nil {
 		t.Fatalf("setupapi.New: %v", err)
@@ -258,11 +346,10 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 // GitHub App refused. The constructor is where it has to surface.
 func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	t.Parallel()
-	cfg, _, _ := newConfigSurface(t)
+	cfg := newConfigSurface(t).svc
 	v := &vault{}
 	complete := func() setupapi.Options {
 		return setupapi.Options{
-			Company:        companySource(t, nil),
 			Config:         cfg,
 			Secrets:        v,
 			Resolve:        v.get,
@@ -274,13 +361,13 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 			StateCipher:    testCipher(t),
 			StateClaims:    coordmemory.NewFleet(),
 			WebhookBaseKey: oneListener,
+			Access:         &fakeAccess{},
 		}
 	}
 	if _, err := setupapi.New(complete()); err != nil {
 		t.Fatalf("the premise is wrong: a complete set was refused: %v", err)
 	}
 	for field, strip := range map[string]func(*setupapi.Options){
-		"Company":        func(o *setupapi.Options) { o.Company = nil },
 		"Config":         func(o *setupapi.Options) { o.Config = nil },
 		"Secrets":        func(o *setupapi.Options) { o.Secrets = nil },
 		"Resolve":        func(o *setupapi.Options) { o.Resolve = nil },
@@ -292,6 +379,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"StateCipher":    func(o *setupapi.Options) { o.StateCipher = nil },
 		"StateClaims":    func(o *setupapi.Options) { o.StateClaims = nil },
 		"WebhookBaseKey": func(o *setupapi.Options) { o.WebhookBaseKey = "" },
+		"Access":         func(o *setupapi.Options) { o.Access = nil },
 	} {
 		opts := complete()
 		strip(&opts)
@@ -330,30 +418,17 @@ func buildSurface(t *testing.T, apps map[string]string, webhookBase, webhookBase
 	writers ...string) *surface {
 
 	t.Helper()
-	cfg, db, cipher := newConfigSurface(t, writers...)
+	fixture := newConfigSurface(t, writers...)
+	cfg := fixture.svc
 	v := &vault{}
 	s := &surface{
-		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(), cipher: cipher,
+		mux: http.NewServeMux(), config: cfg, vault: v, configs: fixture.db.Configs(),
+		cipher: fixture.cipher, plane: fixture.plane, gate: fixture.gate,
 		status: &statusStore{}, webhookBase: webhookBase, webhookBaseKey: webhookBaseKey,
-	}
-	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
-	// engine hands it over: a screen bound to the company this process
-	// booted on would describe one that is no longer running.
-	s.company = func() (*config.Company, *org.Organization) {
-		doc, err := cfg.Document(t.Context())
-		if err != nil {
-			return nil, nil
-		}
-		// THE ORG THE DOCUMENT DESCRIBES, which is what the engine builds
-		// from the revision it applies.
-		o, err := doc.Organization()
-		if err != nil {
-			return doc, nil
-		}
-		return doc, o
+		access: &fakeAccess{},
 	}
 	s.setup = newService(t, setupapi.Options{
-		Company: s.company, Config: cfg, Secrets: v,
+		Config: cfg, Secrets: v, Access: s.access,
 		// The resolution chain: what the vault holds is what resolved.
 		Resolve:        v.get,
 		Status:         s.status,
@@ -438,8 +513,8 @@ func (s *surface) seed(t *testing.T) {
 	s.seedDocument(t, companyDoc)
 }
 
-// seedDocument stores one document as the active revision, sealed as every
-// writer stores one.
+// seedDocument stores one document and activates it, sealed as every writer
+// stores one, over whatever the fleet's pointer named.
 func (s *surface) seedDocument(t *testing.T, document string) {
 	t.Helper()
 	cfg, err := config.ParseCompany([]byte(document))
@@ -454,12 +529,63 @@ func (s *surface) seedDocument(t *testing.T, document string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.configs.InsertActive(t.Context(), store.Revision{
+	revision := store.Revision{
 		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
 		Summary: "first import", Payload: payload, CreatedAt: time.Now().UTC(),
-	}); err != nil {
+	}
+	id, err := s.configs.Insert(t.Context(), revision)
+	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	target, pointed, err := s.plane.Target(t.Context())
+	if err != nil {
+		t.Fatalf("seed: read the pointer: %v", err)
+	}
+	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: id, Summary: revision.Summary, Payload: payload, At: revision.CreatedAt,
+		Origin: coord.RevisionOrigin{
+			Author: revision.CreatedBy, AuthorKind: revision.CreatedByKind,
+			Source: revision.Source, CreatedAt: revision.CreatedAt,
+		},
+		Expect: target.RevisionID, ExpectAbsent: !pointed,
+	}); err != nil {
+		t.Fatalf("seed: activate: %v", err)
+	}
+}
+
+// datadogConnect is a whole Datadog connect: every field it requires, and
+// the webhook token minted, so the slot ends up holding
+// `${DATADOG_WEBHOOK_TOKEN}` and a later `{"generate": ["webhook_token"]}` is
+// a rotation.
+const datadogConnect = `{
+	"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"},
+	"generate": ["webhook_token"]
+}`
+
+// connect submits body to kind's inputs and requires it to land: the state a
+// case about a later submission starts from.
+func (s *surface) connect(t *testing.T, kind, body string) {
+	t.Helper()
+	if res := s.do(t, http.MethodPost, "/setup/integrations/"+kind+"/inputs", body,
+		nil); res.Code != http.StatusCreated {
+		t.Fatalf("connect %s = %d: %s", kind, res.Code, res.Body)
+	}
+}
+
+// active is the fleet's revision — the one the pointer names — as this node's
+// history holds it: the company every write here is built on.
+func (s *surface) active(t *testing.T) store.Revision {
+	t.Helper()
+	target, pointed, err := s.plane.Target(t.Context())
+	if err != nil || !pointed {
+		t.Fatalf("the fleet's revision: %v (pointed=%v)", err, pointed)
+	}
+	revision, found, err := s.configs.Get(t.Context(), target.RevisionID)
+	if err != nil || !found {
+		t.Fatalf("the fleet's revision %s is not in this node's history (found=%v): %v",
+			target.RevisionID, found, err)
+	}
+	return revision
 }
 
 func decode(t *testing.T, res *httptest.ResponseRecorder) map[string]any {
@@ -601,6 +727,8 @@ func TestTheExternalURLIsAnsweredOnce(t *testing.T) {
 	}
 }
 
+// AN UNKNOWN KIND IS REFUSED BY NAME, its hint offering the kinds this build
+// serves as the alternatives they are.
 func TestAnUnknownKindIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -610,8 +738,12 @@ func TestAnUnknownKindIsRefusedByName(t *testing.T) {
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", res.Code, res.Body)
 	}
-	if got := decode(t, res)["error"]; got != "unknown_kind" {
+	body := decode(t, res)
+	if got := body["error"]; got != "unknown_kind" {
 		t.Errorf("error = %v", got)
+	}
+	if got, want := body["hint"], "One of "+words.Or(integration.Kinds)+"."; got != want {
+		t.Errorf("hint = %v, want %q", got, want)
 	}
 }
 
@@ -766,10 +898,19 @@ func TestASubmissionIsValidatedAsTheWholeCompany(t *testing.T) {
 	if _, ok := body["derived"].(map[string]any); !ok {
 		t.Errorf("the refusal carries no derived hierarchy: %s", res.Body)
 	}
+	// AND THE CREDENTIAL IT SEALED FIRST: the document is checked as the
+	// activation builds it, after the token is in the store, so the refusal
+	// names what it left there. Mutation: drop the sealed names from refuse's
+	// validation arm.
+	if named, _ := body["wrote_secrets"].([]any); !slices.Contains(named, any("DATADOG_WEBHOOK_TOKEN")) {
+		t.Errorf("wrote_secrets = %v, want the sealed DATADOG_WEBHOOK_TOKEN named", named)
+	}
 }
 
 // A STALE BASE IS REFUSED BEFORE ANYTHING IS WRITTEN, and the refusal names
-// both sides so the caller can re-read and re-derive.
+// both sides so the caller can re-read and re-derive. 409, because the base
+// is the body's `if_match` rather than an If-Match header: a race the request
+// stated no HTTP condition about (a disconnect's header is 412, below).
 func TestAStaleRevisionIsRefused(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -792,6 +933,426 @@ func TestAStaleRevisionIsRefused(t *testing.T) {
 	}
 	if _, sealed := s.vault.get("DATADOG_WEBHOOK_TOKEN"); sealed {
 		t.Error("a refused submission sealed a value")
+	}
+}
+
+// A WRITE WHILE THE FLEET'S POINTER CANNOT BE READ IS RETRYABLE: the config
+// surface's own 503, never the 500 a caller reads as a broken install. Every
+// write here is checked against the pointer, so a coordination store between
+// leaders reached this as a fault.
+//
+// AND IT NAMES WHAT IT SEALED. A store that goes down after the credentials are
+// sealed, before the document is patched, leaves them in the fleet's store: the
+// answer and the log name them, as a write that lands does, rather than saying
+// nothing was written — the names are an operator's only record of values
+// nothing points at yet. A rotation's reload is the same write: the value under
+// the name the document already reads is overwritten before the reload reads
+// the pointer.
+//
+// Mutations: drop the coord.ErrUnavailable case from refuse and every case is a
+// 500; drop the sealed names from it and the sealed cases lose them; return an
+// empty result from a failed reload and the rotation loses them.
+func TestASetupWriteWhileTheFleetCannotBeReadIsRetryable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// reads is how many reads of the pointer the request makes before
+		// the store goes down: none, or the setup read and the write's
+		// own check before it seals.
+		reads  int64
+		sealed bool
+		// rotation is a submission that writes through the `${VAR}` a
+		// connect left in the slot, so it ends in a reload, not a patch.
+		rotation bool
+	}{
+		{name: "before anything is read", reads: 0},
+		{name: "after the credentials are sealed", reads: 2, sealed: true},
+		{name: "a rotation after its credential is sealed", reads: 2, sealed: true,
+			rotation: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seed(t)
+			submission := datadogConnect
+			if tc.rotation {
+				s.connect(t, "datadog", datadogConnect)
+				submission = `{"generate": ["webhook_token"]}`
+			}
+			before, _ := s.vault.get("DATADOG_WEBHOOK_TOKEN")
+			s.gate.allow.Store(tc.reads)
+			s.gate.down.Store(true)
+
+			res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", submission, nil)
+			if res.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503: %s", res.Code, res.Body)
+			}
+			body := decode(t, res)
+			if got := body["error"]; got != string(httpjson.CodeUnavailable) {
+				t.Errorf("error = %v, want unavailable", got)
+			}
+			if got := res.Header().Get("Retry-After"); got != strconv.Itoa(authz.RetryUndecidedSeconds) {
+				t.Errorf("Retry-After = %q, want %d", got, authz.RetryUndecidedSeconds)
+			}
+			if after, _ := s.vault.get("DATADOG_WEBHOOK_TOKEN"); (after != before) != tc.sealed {
+				t.Fatalf("the webhook token was sealed: %v, want %v", after != before, tc.sealed)
+			}
+			named, _ := body["wrote_secrets"].([]any)
+			if !tc.sealed && named != nil {
+				t.Errorf("a write refused before anything was sealed names %v", named)
+			}
+			if tc.sealed && !slices.Contains(named, any("DATADOG_WEBHOOK_TOKEN")) {
+				t.Errorf("wrote_secrets = %v, want the sealed DATADOG_WEBHOOK_TOKEN named", named)
+			}
+		})
+	}
+}
+
+// A SETUP WRITE STORED AND THEN UNANSWERED IS AN UNKNOWN OUTCOME, as it is on
+// the config surface: the revision may already be the company, so the answer
+// names it, the node whose history alone holds it and the credentials sealed
+// for it, and never says nothing was written. A rotation's reload is that write
+// too, after a value it has already overwritten.
+//
+// Mutations: drop the ActivationUnknownError case from refuse and it is a 503
+// that names no revision; return an empty result from a failed reload and the
+// rotation loses its sealed name; leave the node out of the configapi answer
+// and both lose it.
+func TestASetupWriteStoredAndThenUnansweredIsAnUnknownOutcome(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		rotation bool
+	}{
+		{name: "a connect"},
+		{name: "a rotation", rotation: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seed(t)
+			submission := datadogConnect
+			if tc.rotation {
+				s.connect(t, "datadog", datadogConnect)
+				submission = `{"generate": ["webhook_token"]}`
+			}
+			before, _ := s.vault.get("DATADOG_WEBHOOK_TOKEN")
+			s.gate.unanswered.Store(true)
+
+			res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", submission, nil)
+			if res.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503: %s", res.Code, res.Body)
+			}
+			body := decode(t, res)
+			stored, _ := body["stored_revision_id"].(string)
+			if body["outcome"] != httpjson.OutcomeUnknown || stored == "" {
+				t.Fatalf("refusal = %v, want an unknown outcome naming the stored revision", body)
+			}
+			if target, _, err := s.plane.Target(t.Context()); err != nil || target.RevisionID != stored {
+				t.Errorf("the fleet is on %s (err %v), want the stored %s the lost answer was about",
+					target.RevisionID, err, stored)
+			}
+			if after, _ := s.vault.get("DATADOG_WEBHOOK_TOKEN"); after == before {
+				t.Fatal("the webhook token was not sealed before the activation")
+			}
+			if named, _ := body["wrote_secrets"].([]any); !slices.Contains(named, any("DATADOG_WEBHOOK_TOKEN")) {
+				t.Errorf("wrote_secrets = %v, want the sealed DATADOG_WEBHOOK_TOKEN named", named)
+			}
+			// THE NODE WHOSE HISTORY HOLDS IT, and the hint sends the diff and
+			// the revert there: no other node holds the stored revision unless
+			// its activation landed.
+			if body["node"] != thisNode {
+				t.Errorf("node = %v, want %s", body["node"], thisNode)
+			}
+			if hint, _ := body["hint"].(string); !strings.Contains(hint, "node "+thisNode+"'s history alone") {
+				t.Errorf("the hint does not say the revision is on node %s alone: %q", thisNode, hint)
+			}
+		})
+	}
+}
+
+// A SETUP WRITE LANDS ON THE REVISION ITS REQUIREMENTS WERE READ FROM, or is
+// refused as stale.
+//
+// What each field holds decides the write: an empty slot is given a fresh
+// ${VAR}, a literal is refused. A submission with no if_match was built on
+// whatever the pointer named when it landed, so a write landing in between had
+// it decide on one document and patch another — here, a fresh pointer written
+// over the literal an operator put in the revision activated meanwhile, the
+// very write `literal_in_config` exists to refuse. The read this answer was
+// built from is its precondition now, so it is refused as stale instead:
+// before anything is sealed where the write's own check sees the change, and
+// after where only the activation's compare-and-set does — and then the
+// refusal names the credentials it sealed, which nothing points at yet. A
+// write that loses at that compare-and-set has stored its revision too, kept
+// inert, and the refusal names it and the node whose history alone holds it,
+// as the config surface's does.
+//
+// Mutations: send the caller's if_match alone, and the literal is
+// overwritten; drop the sealed names from refuse's raced arm, and the sealed
+// cases lose them; drop configapi.KeptRevision from that arm, or the node from
+// it, and the last case loses the revision or the node.
+func TestASetupWriteLandsOnTheRevisionItWasReadFrom(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// skip is how many reads of the pointer the request makes before the
+		// write meanwhile lands: the setup read alone, or that and the
+		// write's own check before it seals.
+		skip   int64
+		sealed bool
+		// atActivation lands the write meanwhile as the request's own
+		// activation reaches the fleet instead, after the request stored
+		// its revision.
+		atActivation bool
+	}{
+		{name: "before the credentials are sealed", skip: 1},
+		{name: "after the credentials are sealed", skip: 2, sealed: true},
+		{name: "at the activation, after the revision is stored", sealed: true,
+			atActivation: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seed(t)
+			original, _, err := s.plane.Target(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			patch := s.do(t, http.MethodPatch, "/config",
+				`{"integrations":{"datadog":{"enabled":true,"webhook_token":"EXAMPLEPLAINTOKEN000000000",`+
+					`"route_to":"sre-lead","provisioning":{"site":"datadoghq.com",`+
+					`"api_key":"dd-api","app_key":"dd-app"}}}}`,
+				map[string]string{"Content-Type": "application/merge-patch+json", "X-Summary": "by hand"})
+			if patch.Code != http.StatusCreated {
+				t.Fatalf("the literal's patch = %d: %s", patch.Code, patch.Body)
+			}
+			literal, _, err := s.plane.Target(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			revert := s.do(t, http.MethodPost, "/config/revisions/"+original.RevisionID+"/revert", "",
+				map[string]string{"X-Summary": "back to the original"})
+			if revert.Code/100 != 2 {
+				t.Fatalf("revert = %d: %s", revert.Code, revert.Body)
+			}
+			read, _, err := s.plane.Target(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			held, _, err := s.configs.Get(t.Context(), literal.RevisionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// THE OPERATOR'S LITERAL IS ACTIVATED AGAIN between the setup
+			// read and the write.
+			meanwhile := func() {
+				if _, err := s.gate.Plane.Activate(t.Context(), coord.ActivationRequest{
+					RevisionID: held.ID, Summary: "the literal again", Payload: held.Payload,
+					At: time.Now().UTC(), Expect: read.RevisionID, Origin: coord.RevisionOrigin{
+						Author: held.CreatedBy, AuthorKind: held.CreatedByKind,
+						OperatorID: held.OperatorID, Source: held.Source, CreatedAt: held.CreatedAt,
+					},
+				}); err != nil {
+					t.Errorf("the write meanwhile: %v", err)
+				}
+			}
+			if tc.atActivation {
+				s.gate.contested.Store(&meanwhile)
+			} else {
+				s.gate.skip.Store(tc.skip)
+				s.gate.meanwhile.Store(&meanwhile)
+			}
+
+			res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
+				`{"generate": ["webhook_token"]}`, nil)
+			body := decode(t, res)
+			if res.Code != http.StatusConflict || body["error"] != "revision_advanced" {
+				t.Fatalf("status = %d, want 409 revision_advanced: %s", res.Code, res.Body)
+			}
+			if after, _, err := s.plane.Target(t.Context()); err != nil || after.RevisionID != held.ID {
+				t.Errorf("the fleet is on %s (err %v), want the operator's %s untouched",
+					after.RevisionID, err, held.ID)
+			}
+			if _, sealed := s.vault.get("DATADOG_WEBHOOK_TOKEN"); sealed != tc.sealed {
+				t.Fatalf("the webhook token is sealed: %v, want %v", sealed, tc.sealed)
+			}
+			named, _ := body["wrote_secrets"].([]any)
+			if !tc.sealed && named != nil {
+				t.Errorf("a write refused before anything was sealed names %v", named)
+			}
+			if tc.sealed && !slices.Contains(named, any("DATADOG_WEBHOOK_TOKEN")) {
+				t.Errorf("wrote_secrets = %v, want the sealed DATADOG_WEBHOOK_TOKEN named", named)
+			}
+			// THE REVISION KEPT, AND WHERE: named only by a write that stored
+			// one, beside the one node whose history holds it.
+			if !tc.atActivation {
+				if _, said := body["stored_revision_id"]; said || body["node"] != nil {
+					t.Errorf("a write refused before it stored anything names a kept "+
+						"revision: %v", body)
+				}
+				return
+			}
+			stored, _ := body["stored_revision_id"].(string)
+			if kept, found, err := s.configs.Get(t.Context(), stored); err != nil || !found ||
+				kept.Boots {
+				t.Fatalf("stored_revision_id = %q (found %v, boots %v, err %v), want the "+
+					"inert revision the write kept", stored, found, kept.Boots, err)
+			}
+			if body["node"] != thisNode {
+				t.Errorf("node = %v, want %s, whose history alone holds %s", body["node"],
+					thisNode, stored)
+			}
+		})
+	}
+}
+
+// A ROTATION RELOADS THE REVISION IT WAS READ FROM, or is refused as stale —
+// after its value is sealed, and naming it.
+//
+// A rotation writes through the `${VAR}` the slot it read holds and then
+// reloads, because the value reaches the seats only at an activation. A reload
+// of whatever the pointer named by then republished a document a write in
+// between had changed — here, the company before the integration was
+// connected, whose slot reads no credential at all — and answered 201
+// `reloaded`, a rotation that reached nothing. Held to the revision it read,
+// the reload loses at its own read of the pointer: 409 revision_advanced, the
+// fleet left on the write in between, and the credential it overwrote named.
+// A seat's rotation is the same write through the entity route.
+//
+// Mutations: hand the reload no expectation, and both cases republish the
+// write in between and answer 201; return an empty result from a failed
+// reload, and its case loses the name.
+func TestASetupRotationReloadsOnlyTheRevisionItWasReadFrom(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, kind, connect, rotate, secret string
+		// reads is how many reads of the pointer the rotation makes before
+		// its reload's: the setup read and the write's own check, and the
+		// seat's read on the per-seat path.
+		reads int64
+	}{
+		{name: "company-wide", kind: "datadog", connect: datadogConnect,
+			rotate: `{"generate": ["webhook_token"]}`, secret: "DATADOG_WEBHOOK_TOKEN",
+			reads: 2},
+		{name: "a seat's", kind: "slack",
+			connect: `{"seat": "sre-lead", "values": {"bot_token": "xoxb-one", "signing_secret": "sig-one"}}`,
+			rotate:  `{"seat": "sre-lead", "values": {"bot_token": "xoxb-two"}}`,
+			secret:  "SLACK_BOT_TOKEN_SRE_LEAD", reads: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seed(t)
+			unconnected := s.active(t)
+			s.connect(t, tc.kind, tc.connect)
+			read := s.active(t)
+			before, _ := s.vault.get(tc.secret)
+			// THE COMPANY BEFORE THE CONNECT IS ACTIVATED AGAIN between the
+			// rotation's seal and its reload.
+			meanwhile := func() {
+				if _, err := s.gate.Plane.Activate(t.Context(), coord.ActivationRequest{
+					RevisionID: unconnected.ID, Summary: "back before the connect",
+					Payload: unconnected.Payload, At: time.Now().UTC(), Expect: read.ID,
+					Origin: coord.RevisionOrigin{
+						Author: unconnected.CreatedBy, AuthorKind: unconnected.CreatedByKind,
+						Source: unconnected.Source, CreatedAt: unconnected.CreatedAt,
+					},
+				}); err != nil {
+					t.Errorf("the write meanwhile: %v", err)
+				}
+			}
+			s.gate.skip.Store(tc.reads)
+			s.gate.meanwhile.Store(&meanwhile)
+
+			res := s.do(t, http.MethodPost, "/setup/integrations/"+tc.kind+"/inputs", tc.rotate, nil)
+			body := decode(t, res)
+			if res.Code != http.StatusConflict || body["error"] != "revision_advanced" {
+				t.Fatalf("status = %d, want 409 revision_advanced: %s", res.Code, res.Body)
+			}
+			if body["your_base"] != read.ID || body["current_revision_id"] != unconnected.ID {
+				t.Errorf("refusal = %v, want built on %s and lost to %s", body, read.ID,
+					unconnected.ID)
+			}
+			if after, _, err := s.plane.Target(t.Context()); err != nil || after.RevisionID != unconnected.ID {
+				t.Errorf("the fleet is on %s (err %v), want the write in between, %s, untouched",
+					after.RevisionID, err, unconnected.ID)
+			}
+			if after, _ := s.vault.get(tc.secret); after == before {
+				t.Fatalf("%s was not rotated before the reload: the case did not reach it", tc.secret)
+			}
+			if named, _ := body["wrote_secrets"].([]any); !slices.Equal(named, []any{tc.secret}) {
+				t.Errorf("wrote_secrets = %v, want the rotated %s", named, tc.secret)
+			}
+		})
+	}
+}
+
+// A SEAL THE SECRET STORE DID NOT ANSWER IS SAID AS ONE, naming what was
+// sealed before it.
+//
+// The fleet's secret store is a coordination write, so a credential's write
+// fails with the very error a pointer read does, and the refusal said "the
+// fleet's activation could not be read" about a write that may have landed —
+// and named nothing, though the credential before it was in the store. The
+// document was not touched, so it is the retryable 503 with no `outcome`,
+// naming the credential whose write is unknown as a field a client branches on
+// (`unanswered_secret`), beside the names sealed before it: said only in the
+// reason, a 503 without `outcome` read as one that wrote nothing.
+//
+// Mutations: let refuse answer a seal through its pointer-read arm, and the
+// reason is the pointer's and the field is gone; return an empty result from
+// the seal loop, and the first credential is not named; leave
+// `unanswered_secret` out of the seal arm, and the credential is named in the
+// reason alone.
+func TestASealTheStoreDidNotAnswerIsSaidAsOne(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	seeded := s.active(t)
+	s.vault.fail = fmt.Errorf("%w: no leader", coord.ErrUnavailable)
+	s.vault.failAfter = 1
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", datadogConnect, nil)
+	if res.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503: %s", res.Code, res.Body)
+	}
+	if got := res.Header().Get("Retry-After"); got != strconv.Itoa(authz.RetryUndecidedSeconds) {
+		t.Errorf("Retry-After = %q, want %d", got, authz.RetryUndecidedSeconds)
+	}
+	body := decode(t, res)
+	if body["error"] != string(httpjson.CodeUnavailable) {
+		t.Errorf("error = %v, want unavailable", body["error"])
+	}
+	if _, said := body["outcome"]; said {
+		t.Errorf("refusal = %v says an outcome: the document was not touched, so the "+
+			"submission is sent again", body)
+	}
+	named, _ := body["wrote_secrets"].([]any)
+	if len(named) != 1 {
+		t.Fatalf("wrote_secrets = %v, want the one credential sealed before the failure", named)
+	}
+	first, _ := named[0].(string)
+	if _, sealed := s.vault.get(first); !sealed {
+		t.Errorf("wrote_secrets names %s, which is not in the store", first)
+	}
+	unanswered, _ := body["unanswered_secret"].(string)
+	if !strings.HasPrefix(unanswered, "DATADOG_") || unanswered == first {
+		t.Fatalf("unanswered_secret = %v, want the Datadog credential written after %s",
+			body["unanswered_secret"], first)
+	}
+	if _, sealed := s.vault.get(unanswered); sealed {
+		t.Errorf("unanswered_secret names %s, which the store took", unanswered)
+	}
+	reason, _ := body["reason"].(string)
+	if strings.Contains(reason, "activation") || !strings.Contains(reason, "secret store") ||
+		!strings.Contains(reason, unanswered) || strings.Contains(reason, first) {
+		t.Errorf("reason = %q, want the write of %s, the credential after %s, not the pointer",
+			reason, unanswered, first)
+	}
+	if after := s.active(t); after.ID != seeded.ID {
+		t.Errorf("the fleet moved to %s after a failed seal, want %s untouched", after.ID,
+			seeded.ID)
 	}
 }
 
@@ -868,6 +1429,51 @@ func TestRotatingASecretPublishesAnyway(t *testing.T) {
 }
 
 // --- disconnect ------------------------------------------------------------- //
+
+// A DISCONNECT UNDER A STALE If-Match IS A FAILED PRECONDITION: the base it
+// names is the request's own header, so it is answered as the configuration
+// surface answers the same header (`412 revision_advanced`,
+// [configapi.RevisionStatus]) — where a connect, whose base is the body's
+// `if_match`, is the 409 above. Nothing is removed.
+//
+// Mutation: answer the stale arms 409 whatever the request stated, or 412
+// wherever an If-Match header arrived, and this goes red.
+func TestADisconnectUnderAStaleIfMatchIsAFailedPrecondition(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	connect := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
+		`{"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, "generate": ["webhook_token"]}`, nil)
+	if connect.Code != http.StatusCreated {
+		t.Fatalf("connect = %d: %s", connect.Code, connect.Body)
+	}
+
+	res := s.do(t, http.MethodDelete, "/setup/integrations/datadog", `{"force": true}`,
+		map[string]string{"If-Match": `"a-revision-that-moved-on"`})
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("status = %d, want 412: %s", res.Code, res.Body)
+	}
+	if body := decode(t, res); body["error"] != "revision_advanced" ||
+		body["current_revision_id"] == nil {
+		t.Errorf("refusal = %v, want revision_advanced naming the current revision", body)
+	}
+	after := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
+	if after["configured"] != true {
+		t.Errorf("configured = %v after a refused disconnect", after["configured"])
+	}
+
+	// AND ONLY THE HEADER A WRITE READS: a connect reads no If-Match, so
+	// one that carries a header and loses on its body's base stated no
+	// condition the server evaluated.
+	ignored := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", `{
+		"if_match": "01JSOMETHINGELSE",
+		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}
+	}`, map[string]string{"If-Match": `"01JSOMETHINGELSE"`})
+	if ignored.Code != http.StatusConflict {
+		t.Errorf("a connect with a header it does not read = %d, want 409: %s",
+			ignored.Code, ignored.Body)
+	}
+}
 
 // A FORCED DISCONNECT REMOVES THE BLOCK AND NAMES WHAT IS ORPHANED, without
 // deleting it. A credential an operator may be sharing with another
@@ -1075,7 +1681,7 @@ func (s *surface) withPassSink(
 	s.mux = http.NewServeMux()
 	s.status = status
 	s.setup = newService(t, setupapi.Options{
-		Company: s.company, Config: s.config, Secrets: s.vault,
+		Config: s.config, Secrets: s.vault, Access: s.access,
 		Resolve:        s.vault.get,
 		Passes:         runner,
 		Sink:           sink,
@@ -1519,6 +2125,45 @@ func TestTheOperatorCredentialReachesThePassAndIsNotKept(t *testing.T) {
 	}
 }
 
+// THE RECREATE SWITCH REACHES THE PASS SPELLED AS THIS ROUTE SPELLS IT.
+//
+// A pass refuses the switch over a secret the company document holds as a
+// literal, naming the switch so the caller knows what to drop. A pass that
+// spelled the switch itself could spell only one surface's, and a caller of
+// this route — who sends a body field and has no flag — would be told to
+// re-run with the command line's `-recreate-webhooks`, which sends them
+// nowhere. The route hands the pass the field's own name, and hands it
+// nothing at all where the body did not ask.
+func TestARecreateReachesThePassSpelledAsTheRouteSpellsIt(t *testing.T) {
+	t.Parallel()
+	for body, want := range map[string]provision.FreshSwitch{
+		`{"recreate_webhooks":true}`:  "recreate_webhooks",
+		`{"recreate_webhooks":false}`: "",
+		`{}`:                          "",
+	} {
+		t.Run(body, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seed(t)
+			pass := &recordingPass{}
+			s.withPass(t, pass)
+			s.seedGitHub(t)
+
+			res := s.do(t, http.MethodPost, "/setup/integrations/github/provision", body, nil)
+			if res.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", res.Code, res.Body)
+			}
+			in, calls := pass.last()
+			if calls != 1 {
+				t.Fatalf("the pass ran %d times", calls)
+			}
+			if in.Recreate != want {
+				t.Errorf("the pass got the switch %q, want %q", in.Recreate, want)
+			}
+		})
+	}
+}
+
 // --- per-seat setup ---------------------------------------------------------- //
 
 // SLACK IS PER SEAT, and the list names every AGENT rather than only the ones
@@ -1651,10 +2296,7 @@ func TestASetupWriteThroughATokenIsItsOwners(t *testing.T) {
 // activeAuthor is who the active revision records as its author.
 func (s *surface) activeAuthor(t *testing.T) iam.Actor {
 	t.Helper()
-	active, found, err := s.configs.Active(t.Context())
-	if err != nil || !found {
-		t.Fatalf("Active: %v (found=%v)", err, found)
-	}
+	active := s.active(t)
 	return iam.Actor{Name: active.CreatedBy, Kind: active.CreatedByKind,
 		OperatorID: active.OperatorID}
 }
@@ -1917,12 +2559,12 @@ func firstRunes(s string, n int) string {
 	return s[:n]
 }
 
-// A SEAT OPTS IN BY NAMING A VARIABLE, and the roster says which side of that
+// A SEAT OPTS IN BY BEING TURNED ON, and the roster says which side of that
 // each seat is on.
 //
-// The plan a provisioning pass runs is built from the seats whose mcp_env
-// block holds a whole `${VAR}`: that is where the minted credential goes, and
-// a seat with nowhere to put one is left alone. So the two states are not
+// The plan a provisioning pass runs is built from the seats whose
+// `integrations.<lane>` block says `enabled: true` (D9), and the engine seals
+// each one's credential under the seat's own name. So the two states are not
 // "has an account" and "does not": they are "no sync will look at this seat"
 // and "the next one will".
 //
@@ -1938,13 +2580,14 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
+	  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {"gitlab": {"enabled": true, "url": "https://gitlab.com",
 	    "signing_secret": "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=",
 	    "provisioning": {"group": "acme", "admin_token": "glpat-x"}}},
+	  "mcp_servers": [{"name": "gitlab", "command": "glab", "args": ["mcp", "serve"], "shared": false}],
 	  "roles": [
 	    {"name": "Coder", "handle": "coder", "llm": "zulu",
-	     "mcp_env": {"gitlab": {"GITLAB_TOKEN": "${CODER_GITLAB_TOKEN}"}}},
+	     "integrations": {"gitlab": {"enabled": true, "access_level": 30}}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
 	  ]
 	}`)
@@ -1960,8 +2603,8 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 		seats[seat["handle"].(string)] = seat
 	}
 
-	// OPTED IN AND WAITING. The variable is named and nothing is behind it
-	// yet, which is exactly what puts this seat in the plan.
+	// OPTED IN AND WAITING. The seat is on, and nothing is sealed under its
+	// own name yet, which is exactly what puts it in the plan.
 	opted, _ := seats["coder"]["detail"].(string)
 	if !strings.Contains(opted, "waiting for the next sync") {
 		t.Errorf("a seat that opted in reads %q", opted)
@@ -1973,7 +2616,7 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	// NOT OPTED IN, and no sync will look at it. Promised an account, the
 	// card read Connected over an agent that was never going to get one.
 	out, _ := seats["writer"]["detail"].(string)
-	if !strings.Contains(out, "mcp_env.gitlab") {
+	if !strings.Contains(out, "Agents tab") {
 		t.Errorf("a seat nobody opted in reads %q, and it does not say how to", out)
 	}
 	if strings.Contains(out, "created on the next sync") {
@@ -2077,6 +2720,51 @@ func TestACredentialFindingIsClearedByACredentialField(t *testing.T) {
 			if !claimed {
 				t.Errorf("no %s field claims credential_missing, so a row "+
 					"reporting one offers nothing that clears it", tc.kind)
+			}
+		})
+	}
+}
+
+// ONE TEST FOR DATADOG'S TWO KEYS, AND NO OTHER FORM MOVES.
+//
+// Datadog's application key carries the check for both keys
+// (setup.Requirement.CheckWith), and its API key lost its own Test control.
+// That is the only change: every other integration's checkable credentials
+// are the ones they were, each tested on its own, so their forms render as
+// before. A field gaining or losing a Test control anywhere else shows here.
+func TestOnlyDatadogChecksItsKeysTogether(t *testing.T) {
+	t.Parallel()
+	resolve := func(string) (string, bool) { return "", false }
+	for _, tc := range []struct {
+		kind      string
+		reqs      []setup.Requirement
+		checkable string
+		with      map[string]string
+	}{
+		{"atlassian", atlassian.Requirements(nil, resolve), "api_key", nil},
+		{"confluence", confluence.Requirements(nil, true, resolve), "token", nil},
+		{"confluence data center", confluence.Requirements(nil, false, resolve), "token", nil},
+		{"datadog", datadog.Requirements(nil, resolve), "app_key",
+			map[string]string{"app_key": "site,api_key"}},
+		{"github", github.Requirements(nil, resolve), "token", nil},
+		{"gitlab", gitlab.Requirements(nil, resolve), "token,admin_token", nil},
+		{"jira", jira.Requirements(nil, true, resolve), "token", nil},
+		{"jira data center", jira.Requirements(nil, false, resolve), "token", nil},
+		{"mattermost", mattermost.Requirements(nil, resolve), "admin_token", nil},
+		{"slack", slack.Requirements("ceo", nil, resolve), "bot_token", nil},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			var checkable []string
+			for _, req := range tc.reqs {
+				if req.Checkable {
+					checkable = append(checkable, req.Field)
+				}
+				if got, want := strings.Join(req.CheckWith, ","), tc.with[req.Field]; got != want {
+					t.Errorf("%s.%s is checked with %q, want %q", tc.kind, req.Field, got, want)
+				}
+			}
+			if got := strings.Join(checkable, ","); got != tc.checkable {
+				t.Errorf("%s's checkable fields are %q, want %q", tc.kind, got, tc.checkable)
 			}
 		})
 	}
@@ -2289,5 +2977,46 @@ func TestEverySetupRouteIsAdmins(t *testing.T) {
 				t.Error("a refused submission sealed a value")
 			}
 		})
+	}
+}
+
+// A SUBMISSION THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]):
+// the detail was encoding/json's own sentence (`json: unknown field
+// "valuez"`, "json: cannot unmarshal string into Go struct field .values of
+// type map[string]string"). Mutation: answer err.Error() again and both rows
+// go red; answer the App's begin under `hint` again and its case does.
+func TestASubmissionThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	for _, tc := range []struct{ body, says string }{
+		{`{"valuez": {}}`, `In the body, "valuez" isn't a field this takes.`},
+		{`{"values": "route_to"}`, `In the body, "values" holds text where an object belongs.`},
+	} {
+		res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", tc.body, nil)
+		body := decode(t, res)
+		if res.Code != http.StatusBadRequest || body["detail"] != tc.says {
+			t.Errorf("%s answered %d %v, want 400 saying %q", tc.body, res.Code,
+				body, tc.says)
+		}
+	}
+	// THE GITHUB APP'S BEGIN TOO, under `detail` as every other setup route
+	// answers it: under `hint` a screen read the code's own sentence first
+	// and this one after it.
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/app", `{"seat": 5}`, nil)
+	body := decode(t, res)
+	if res.Code != http.StatusBadRequest ||
+		body["detail"] != `In the body, "seat" holds a number where text belongs.` ||
+		body["hint"] != nil {
+		t.Errorf("the App's begin answered %d %v, want 400 saying it in detail", res.Code, body)
+	}
+	// THE CHECK OF A TYPED VALUE TOO, which reads its body as a submission
+	// does.
+	res = s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
+		`{"field": "api_key", "value": "x", "store": true}`, nil)
+	body = decode(t, res)
+	if res.Code != http.StatusBadRequest ||
+		body["detail"] != `In the body, "store" isn't a field this takes.` {
+		t.Errorf("the check answered %d %v, want 400 saying it in words", res.Code, body)
 	}
 }

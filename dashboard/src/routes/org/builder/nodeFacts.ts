@@ -224,15 +224,15 @@ export function isConnected(company: CompanyDocument, tool: Tool): boolean {
  * whose block is connected, else the engine's own.
  *
  * NOT `isConnected`: a seat's or a unit's `project` and `space` are
- * vendor-neutral, so they mean something on the engine's own tracker and
- * knowledge base — the default, which needs no block at all — and only a
- * company that runs NONE has nothing for them to name.
+ * vendor-neutral, so they mean something on Worklet and Doclet (the
+ * defaults, which need no block at all), and only a company that runs NONE
+ * has nothing for them to name.
  */
 export function backendFor(company: CompanyDocument, axis: "tracker" | "knowledge"): string {
   const named = getPath(company, [axis, "backend"]);
   if (typeof named === "string" && named !== "") return named;
-  if (axis === "tracker") return isConnected(company, "jira") ? "jira" : "native";
-  return isConnected(company, "confluence") ? "confluence" : "native";
+  if (axis === "tracker") return isConnected(company, "jira") ? "jira" : "worklet";
+  return isConnected(company, "confluence") ? "confluence" : "doclet";
 }
 
 /**
@@ -332,7 +332,6 @@ export const PHASE_MODEL_FIELDS = [
   "llm_subagent",
   "llm_auxiliary",
   "llm_judge",
-  "llm_sandbox",
 ] as const;
 
 // ---------------------------------------------------------------------------

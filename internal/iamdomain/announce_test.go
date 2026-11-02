@@ -66,13 +66,13 @@ func TestOnlyALandedWriteIsAnnounced(t *testing.T) {
 func TestAGrantDeltaIsSortedAndDeduplicated(t *testing.T) {
 	t.Parallel()
 	added, removed := grantDelta(
-		[]iam.Grant{iam.GrantTracker, "swarm", iam.GrantTracker},
-		[]iam.Grant{iam.GrantKnowledge, "swarm", iam.GrantKnowledge},
+		[]iam.Grant{iam.GrantWorklet, "swarm", iam.GrantWorklet},
+		[]iam.Grant{iam.GrantDoclet, "swarm", iam.GrantDoclet},
 	)
-	if !slices.Equal(added, []string{"knowledge"}) {
+	if !slices.Equal(added, []string{"doclet"}) {
 		t.Errorf("added %v", added)
 	}
-	if !slices.Equal(removed, []string{"tracker"}) {
+	if !slices.Equal(removed, []string{"worklet"}) {
 		t.Errorf("removed %v", removed)
 	}
 	if a, r := grantDelta([]iam.Grant{iam.GrantAdmin},
@@ -83,13 +83,13 @@ func TestAGrantDeltaIsSortedAndDeduplicated(t *testing.T) {
 	// it is counted here with no second edit.
 	notKept := []string{string(iam.GrantAdmin)}
 	for _, app := range iam.Apps {
-		if app != iam.GrantKnowledge {
+		if app != iam.GrantDoclet {
 			notKept = append(notKept, string(app))
 		}
 	}
 	slices.Sort(notKept)
 	if a, r := grantDelta([]iam.Grant{iam.GrantAdmin},
-		[]iam.Grant{iam.GrantKnowledge}); a != nil || !slices.Equal(r, notKept) {
+		[]iam.Grant{iam.GrantDoclet}); a != nil || !slices.Equal(r, notKept) {
 		t.Errorf("taking admin away is %v / %v, want admin and every app not kept "+
 			"removed (%v)", a, r, notKept)
 	}

@@ -59,8 +59,9 @@ work isn't done.</sub>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/code-sandbox.svg" width="64" alt=""><br>
 <b>Agents that ship code</b><br>
-<sub>An engineer seat runs a coding agent in an isolated sandbox and opens the merge
-request under its own identity — not yours.</sub>
+<sub>Every agent seat works as its coding CLI's own run in a box — on your host, in a
+container or in a remote VM — and an engineer seat opens the merge request under
+its own identity, not yours.</sub>
 </td>
 <td width="33%" align="center" valign="top">
 <img src="docs/assets/knowledge.svg" width="64" alt=""><br>
@@ -103,7 +104,7 @@ prompt on its own model — a frontier model to work, a cheap one to check. See
 ## Quickstart
 
 There is no infrastructure to bring up. Crewlet is one binary: it embeds its
-event stream (a NATS JetStream server) and its database is a local file it
+event stream (a NATS JetStream server) and its database is two local files it
 creates. Its models run through the **coding CLI** each vendor ships — Claude
 Code, Codex or OpenCode, installed beside it — so the vendor's own harness
 drives every model, on your plan or your key. Describe a company and run it:
@@ -134,8 +135,9 @@ posture `api.auth.admin` (`serve` or `refuse`), and at least one
 `api.auth.tokens` entry — the token
 above, which is how the first person is invited onto their seat.
 
-The company file is a **bootstrap seed**: it fills an empty store and is
-ignored once a company exists, so a restart never reverts a change made live.
+The company file is a **bootstrap seed**: it starts a company that does not
+exist yet — in the node's store or anywhere in its fleet — and is ignored once
+one does, so a restart never reverts a change made live.
 The store is the source of truth at runtime. To change a running fleet, run
 `crewlet config import company.yaml` — it goes through the node's API and every
 node converges with no restart. To make the file win on a restart instead, pass
@@ -152,6 +154,11 @@ providers:
     default:             # Claude Code, the default CLI
       model: sonnet
       auth: { mode: api-key }   # reads ANTHROPIC_API_KEY; drop it to run on your plan
+  sandbox:               # where every agent seat's executor runs: Claude Code's
+    local: {}            #   own fully permissioned run, as you on this host —
+    default_run_in: direct   # a first run on your own machine while its seats
+                             #   take work from you alone; container or e2b
+                             #   before a seat takes work from anyone else
 
 roles:
   - name: Your Name
@@ -196,16 +203,19 @@ first turn with no integrations at all, then wiring in the real ones.
 > **Want a whole company to run?** Two complete seven-seat reference orgs ship
 > in `examples/`, the same company at both ends of the stack.
 > `nimbus.company.yaml` is the full one — GitLab, Mattermost, open models
-> through OpenCode on an OpenRouter key, and the engine's own work tracker and
-> knowledge base.
+> through OpenCode on an OpenRouter key, and Worklet and Doclet, the engine's
+> own work tracker and knowledge base.
 > `nimbus-claude-cli.company.yaml` is the short path: chat on Mattermost, its
-> model Claude Code on the Claude plan you already pay for, and its engineering seats running
-> that same CLI as their own agentic loop in a sandbox on the engine host, on
+> model Claude Code on the Claude plan you already pay for, and every seat running
+> that same CLI as its own agentic run in a box on the engine host, on
 > that same login — no API key, and no service beyond the chat server in this
-> repo's compose file. Neither needs a tracker or a wiki account: both run the
-> engine's own, and [Jira](docs/integrations/jira.md) /
+> repo's compose file. Neither needs a tracker or a wiki account: both run Worklet
+> and Doclet, and [Jira](docs/integrations/jira.md) /
 > [Confluence](docs/integrations/confluence.md) are the blocks that move those
-> halves to Atlassian. Every setting in both carries its reasoning in a comment.
+> halves to Atlassian. Both talk on Mattermost; a company that declares no chat
+> surface gets the engine's own [chat](docs/concepts/chatlet.md) instead, with its
+> rooms in the dashboard. Every setting in both carries its reasoning in a
+> comment.
 
 > **Rather not write it by hand?** An AI assistant can interview you and author
 > both files, checking its own work against the shipped JSON Schema — see
@@ -223,11 +233,11 @@ Crewlet is the engine; the surfaces your agents work on are yours to choose — 
 
 | | Options |
 |---|---|
-| **LLM** | Every model through the vendor's own [coding CLI](docs/concepts/llm-backends.md) — Claude Code for Anthropic's models (on a Claude plan or an API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server |
+| **LLM** | Every model through the vendor's own [coding CLI](docs/concepts/llm-backends.md) — Claude Code for Anthropic's models (on a Claude plan or an API key), Codex for OpenAI's, **OpenCode for open models** on OpenRouter, a hosted provider or your own server. Claude Code or OpenCode runs each seat's executor; Codex can serve a seat's reviewer, workers and side passes |
 | **Tracker** | [Jira](docs/integrations/jira.md) — Cloud or Data Center — or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
 | **Knowledge base** | [Confluence](docs/integrations/confluence.md) — searched at turn start and on demand, run as the asking seat |
 | **Code host** | [GitLab](docs/integrations/gitlab.md) — gitlab.com or self-hosted — or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |
-| **Chat** | [Mattermost](docs/integrations/mattermost.md) — self-hosted, one bot identity per agent — or [Slack](docs/integrations/slack.md), one app per agent |
+| **Chat** | [Chatlet, the engine's own](docs/concepts/chatlet.md) — rooms in the dashboard, and the default where no vendor is declared — or [Mattermost](docs/integrations/mattermost.md), self-hosted, one bot identity per agent, or [Slack](docs/integrations/slack.md), one app per agent |
 | **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the coding agent |
 
 The knowledge base is **single-homed** — one searcher per company, because two would
@@ -237,17 +247,37 @@ backend is a new implementation rather than a rewrite of everything that searche
 Everything else composes: a company can run GitHub beside GitLab, or Slack beside
 Mattermost, which is what a migration and an open-source presence both look like.
 
-One command provisions the whole fleet — a bot or
-service account per seat, memberships, per-agent tokens minted into your config's own
-`${VAR}` references, and the webhooks:
+Each agent's own account at an integration (a bot, a service account or an
+app), its access and its token are the engine's: turn the agent on, with its
+access, on the integration's Agents tab, and the reconcile loop creates the
+account and seals the token under a name it derives for the seat. What is left
+for the command line is company-wide, such as the webhooks, and checks:
 
 ```bash
-crewlet mattermost provision company.yaml
-crewlet gitlab     provision company.yaml -public-url <url>
+crewlet gitlab     provision company.yaml -public-url <url> -env-file .env
 crewlet jira       provision company.yaml -public-url <url> -env-file .env
-crewlet slack      provision company.yaml -public-url <url> -env-file .env
 crewlet github     provision company.yaml -public-url <url> -env-file .env
+crewlet mattermost doctor    company.yaml
 ```
+
+Each run records what it mints where you send it — an env file (`-env-file`),
+the fleet's encrypted secret store (`-secret-store`) or your terminal
+(`-print`) — and a run that would mint takes exactly one of the three. It reads
+the company's values the way the engine does, the secret store before the
+environment: through the running engine, with `CREWLET_API_TOKEN` set to one
+of its Tier A tokens carrying `admin`, or through the running node `-api URL`
+names — and with the engine stopped from the fleet's store itself, which the
+command reaches through the node's own broker or the external one. A member of
+a cluster whose engine is stopped cannot reach the store alone, so a run there
+that reads it is refused before it changes anything, naming `-api`: every
+`gitlab`, `github` and `jira` run, its `-dry-run` included, and a `mattermost`
+or `slack` run with something to provision. A `mattermost` or `slack` run with
+`-dry-run` or nothing to provision reads nothing of the store and runs on any
+node
+([where a command reads the company's values](docs/reference/cli.md#where-a-command-reads-the-companys-values)).
+Beside a running engine, `-secret-store` is the sink the engine reads with no
+restart, at its next configuration apply; an env file reaches it only when it
+restarts from a shell that sourced the file.
 
 What each command can actually do differs by what the vendor allows: Mattermost and
 GitLab create an account per seat and mint its token; Jira and GitHub issue no
@@ -272,7 +302,7 @@ flowchart LR
     API["<b>REST API + dashboard</b><br/><i>inside the engine's<br/>own process</i>"]
     Q["<b>Event stream</b><br/><i>embedded JetStream,<br/>clustered or external for a fleet</i>"]
     ENG["<b>Engine</b><br/><i>one turn engine<br/>per seat</i>"]
-    DB[("<b>Store</b><br/>one local file<br/>events · memory · config")]
+    DB[("<b>Store</b><br/>two local files<br/>events · memory · config ·<br/>the replicated estate")]
 
     EXT -->|webhooks| API
     API <--> Q
@@ -309,7 +339,9 @@ crewlet secrets keygen                        # a keyring key — REQUIRED on ev
 crewlet secrets set ANTHROPIC_API_KEY         # a secret the engine reads ${VAR} from
 
 crewlet confluence import company.yaml docs/  # publish knowledge docs + tool skills
-crewlet gitlab provision company.yaml         # reconcile the company's seats into GitLab
+crewlet gitlab provision company.yaml -env-file .env
+                                              # reconcile the company's seats into GitLab,
+                                              #   minting their tokens into .env
 ```
 
 Full reference: [CLI](docs/reference/cli.md) ·
@@ -334,11 +366,12 @@ Full reference: [CLI](docs/reference/cli.md) ·
 **Core concepts**
 - [Overview](docs/concepts/overview.md) · [Organization model](docs/concepts/organization-model.md) · [Humans in the org chart](docs/concepts/humans-in-the-org.md)
 - [Agent runtime](docs/concepts/agent-runtime.md) · [Turn engine](docs/concepts/turn-engine.md) · [LLM backends](docs/concepts/llm-backends.md) · [Code sandbox](docs/concepts/code-sandbox.md)
-- [Knowledge system](docs/concepts/knowledge-system.md) · [Agent learning](docs/concepts/agent-learning.md) · [Tool skills](docs/concepts/tool-skills.md)
+- [Knowledge system](docs/concepts/knowledge-system.md) · [Chatlet](docs/concepts/chatlet.md) · [Agent learning](docs/concepts/agent-learning.md) · [Tool skills](docs/concepts/tool-skills.md)
 - [Event system](docs/concepts/event-system.md) · [Scheduling](docs/concepts/scheduling.md) · [Configuration](docs/concepts/configuration.md)
+- [Ask Crewlet](docs/concepts/assistant.md): ask questions and approve changes, acting as you
 
 **Guides**
-- [Tools & MCP](docs/guides/tools-and-mcp.md) · [Deployment](docs/guides/deployment.md) · [Running a Fleet](docs/guides/fleet.md)
+- [Tools & MCP](docs/guides/tools-and-mcp.md) · [Deployment](docs/guides/deployment.md) · [Running a Fleet](docs/guides/fleet.md) · [Running Ask Crewlet](docs/guides/assistant.md)
 
 </td>
 <td valign="top" align="center" width="38%">

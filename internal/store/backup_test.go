@@ -1,8 +1,11 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +19,35 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
+
+// A CHECKSUM ENDS WHEN ITS CALLER GIVES UP.
+//
+// The files hashed are whole estates — a backup's copy, a donor's snapshot —
+// and reading one takes as long as the disk does. With no context, a snapshot
+// loop told to stop by a node's drain read to the end of the file first and
+// the stop waited for it, and a backup whose request had gone away finished a
+// checksum nobody would read. So the digest is the file's while its caller
+// waits, and the caller's own ending once it does not.
+func TestAChecksumEndsWhenItsCallerGivesUp(t *testing.T) {
+	t.Parallel()
+	content := bytes.Repeat([]byte("a donor's snapshot "), 1<<16)
+	path := filepath.Join(t.TempDir(), "snapshot.db")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write the file: %v", err)
+	}
+	want := sha256.Sum256(content)
+	got, err := store.FileDigest(t.Context(), path)
+	if err != nil || got != hex.EncodeToString(want[:]) {
+		t.Fatalf("FileDigest = (%s, %v), want the file's own %x", got, err, want)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got, err := store.FileDigest(ctx, path); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a checksum whose caller had given up answered (%s, %v), want "+
+			"the cancellation — it read the whole file for nobody", got, err)
+	}
+}
 
 // A path with a space in it is ordinary and must work: the destination
 // reaches the driver as an interpolated SQL literal (VACUUM INTO refuses a
@@ -526,4 +558,57 @@ func readCopyProbe(t *testing.T, path string) (a, b int64) {
 		t.Fatalf("read the copy at %s: %v", path, err)
 	}
 	return a, b
+}
+
+// A BACKUP THAT CANNOT MAKE ITS TEMPORARY FILES NAMES WHERE THEY GO: the
+// variable that places them and the directory it names. The driver builds the
+// copy on a connection of its own, which keeps a temporary database under the
+// first of TURSO_TMPDIR and SQLITE_TMPDIR that is set, else TMPDIR, for as
+// long as the copy runs, so a directory there that is missing or read-only
+// fails every backup, and the driver's words for it, "I/O error (tempdir):
+// entity not found", name no variable and no path.
+//
+// THE CHECK IS THE VARIABLE AND ITS DIRECTORY TOGETHER, because every
+// t.TempDir path carries the test's name, so the variable's name alone would
+// be found there whatever the refusal said.
+func TestABackupThatCannotMakeItsTemporaryFilesNamesWhereTheyGo(t *testing.T) {
+	// One case per variable the driver can take the directory from, each
+	// with the one it reads missing and every other one writable or unset:
+	// the error must name the variable that placed the temporary database
+	// and its directory, since the driver's own label is the same for all.
+	for _, refused := range []string{"TMPDIR", "TURSO_TMPDIR", "SQLITE_TMPDIR"} {
+		t.Run(refused, func(t *testing.T) {
+			db := open(t)
+			missing := filepath.Join(t.TempDir(), "missing")
+			writable := t.TempDir()
+			t.Setenv("TMPDIR", writable)
+			for _, name := range []string{"TURSO_TMPDIR", "SQLITE_TMPDIR"} {
+				unsetEnv(t, name)
+			}
+			t.Setenv(refused, missing)
+
+			_, err := db.Backup(t.Context(), filepath.Join(t.TempDir(), "copy.db"))
+			if err == nil {
+				t.Fatalf("a backup succeeded with %s naming a directory that "+
+					"does not exist, so this case no longer stages the failure "+
+					"it is about", refused)
+			}
+			if want := refused + " (" + missing + ")"; !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not name %q, so it does not say "+
+					"what to change: %v", want, err)
+			}
+		})
+	}
+}
+
+// unsetEnv unsets name for the rest of the test and puts it back after,
+// which is what t.Setenv does for a value: an unset variable and one set to
+// nothing are different things to the driver, which takes a set
+// TURSO_TMPDIR or SQLITE_TMPDIR as the directory whatever it holds.
+func unsetEnv(t *testing.T, name string) {
+	t.Helper()
+	t.Setenv(name, "")
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("unset %s: %v", name, err)
+	}
 }

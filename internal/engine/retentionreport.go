@@ -81,12 +81,10 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 	// a row prints and the floor its refusal was judged by.
 	read := readFloorsOf(ctx, r.fleet, registeredNames())
 	backups, _ := r.fleet.BackupPoints(ctx)
-	// THE POINT THE TRIM COUNTS, under the operator's own policy — not the
-	// newest of every owner. Under `backup_floor: operator` the nodes' own
-	// nightly copies are fresh while the trim waits on an acknowledgement,
-	// and an alarm aging the copies stayed green beside a log that could not
-	// be trimmed.
-	newest, haveBackup := r.newestCounted(backups)
+	// THE BACKUP POLICY IS AGED PER LOG, against the point each log's trim
+	// counts — see [retention.newestCounted] and the `BackupAt` filled per
+	// domain below.
+	in.BackupMaxAge = r.cfg.BackupMaxAge()
 
 	// perLog is each identity-claiming log's own tombstones, which the node
 	// block folds into one answer per node below.
@@ -203,12 +201,36 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 				d.LinearizableReads, d.LinearizableReadsExpected = c.reads, expected
 			}
 		}
+		// THE FIELD THIS LOG'S CEILING IS SET BY, from the register's own
+		// declaration ([capacityBounds]), which `census_drift` names on
+		// the log's line: each log is sized by its own field.
+		if _, ceiling, known := capacityBounds(running.spec.Name); known {
+			d.CeilingField = ceiling.Field
+		}
+		// THE POINT THIS LOG'S TRIM COUNTS, under the operator's own
+		// policy and for this log alone — not the newest of every owner,
+		// and not the newest point whatever it covers. Under
+		// `backup_floor: operator` the nodes' own nightly copies are fresh
+		// while the trim waits on an acknowledgement, and each log is
+		// acknowledged on its own: an alarm aging any one point stayed
+		// green beside the logs that point left out.
+		if newest, ok := r.newestCounted(backups, running.spec.Name); ok {
+			d.BackupAt = newest.At
+		}
 		in.Domains = append(in.Domains, d)
 	}
 	in.Tombstones = fleetTombstones(perLog)
 
-	in.Reading = r.reading(ctx, now, newest, haveBackup, healths)
-	in.Maintenance = r.openMaintenance(ctx)
+	// THE CAPACITY WINDOWS, READ ONCE and handed to both the banner and the
+	// alarm, for the healths' reason: two reads a round trip apart could
+	// disagree about whether a window is open, and the report would show one
+	// answer under an alarm evaluated on the other. A log whose window
+	// couldn't be read is named as such ([readWindows]), never read as one
+	// with no window.
+	windows := readWindows(ctx, r.fleet)
+	in.Reading = r.reading(ctx, now, healths, r.windows.observe(ctx, now, windows))
+	in.Maintenance = r.openMaintenance(ctx, windows)
+	in.MaintenanceUnread = windows.unread
 	return statelog.NewReport(in)
 }
 
@@ -229,7 +251,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 //
 // PER LOG, which is the one arrangement in which the consequence the alarm
 // states is true: a deferral past the grace takes that log's copy out of
-// service and no other's ([stateLog.judgeCopy], ADR-0049), so two logs holding
+// service and no other's ([stateLog.judgeCopy], ADR-0072), so two logs holding
 // records at once are two different answers. And EVERY log's, whatever it
 // declares about seat admission, so nothing here says whether a log's copy is
 // judged: when one declaration answered both questions, the vectors' and the
@@ -299,78 +321,120 @@ func fleetTombstones(perLog [][]statelog.Tombstone) []statelog.Tombstone {
 	return out
 }
 
-// openMaintenance is the capacity operation currently holding the fleet, or
-// nil.
+// openMaintenance is every capacity operation one read found holding the fleet,
+// the oldest first, as the report shows it.
 //
-// THE OLDEST OF THEM, for the reason the alarm takes the oldest: maintenance
-// stops every publisher on every node, and two open operations do not stop it
-// twice — what a reader needs is the one that has been holding longest.
+// EVERY ONE, and the oldest first because it has been holding longest: a window
+// is per log and two can be open at once, each waiting on its own nodes, so
+// one reported alone hid what the other was waiting on. The alarm still takes
+// the oldest ([oldestWindow]): two windows do not stop publishing
+// twice.
 //
 // Read from the register rather than from whatever this node's own coordinator
 // remembers, because an operation is opened by whichever node ran the verb and
 // every other node is merely a PARTICIPANT — which is what makes maintenance
 // an outage rather than an inconvenience, and what makes a per-node memory of
-// it useless.
-func (r *retention) openMaintenance(ctx context.Context) *statelog.MaintenanceReport {
-	if r.fleet == nil {
-		return nil
-	}
-	var oldest *statelog.MaintenanceReport
-	for _, running := range r.state.running() {
-		if running == nil {
-			continue
-		}
-		op, open, err := r.fleet.Maintenance(ctx, running.spec.Name)
-		if err != nil || !open {
-			continue
-		}
-		row := &statelog.MaintenanceReport{
+// it useless. A log whose window the read couldn't answer is not here: it is
+// the report's `maintenance_unread`, beside it.
+func (r *retention) openMaintenance(ctx context.Context, read windowsRead) []statelog.MaintenanceReport {
+	var open []statelog.MaintenanceReport
+	for _, op := range read.open {
+		row := statelog.MaintenanceReport{
 			Stream: op.Stream, OperationID: op.OperationID,
 			Phase: string(op.Phase), Attempt: op.Attempt,
 			TargetMaxBytes: op.TargetMaxBytes, OriginalMaxBytes: op.OriginalMaxBytes,
 			Since: op.EnteredAt.UTC(), By: op.By, OperatorID: op.OperatorID,
-			ParticipantsMissing: outstanding(ctx, r.fleet, op),
-			Blocked:             op.Blocked,
-			AbandonedBy:         op.AbandonedBy,
+			Blocked:     op.Blocked,
+			AbandonedBy: op.AbandonedBy,
 		}
-		if oldest == nil || row.Since.Before(oldest.Since) {
-			oldest = row
+		// WHAT COULDN'T BE READ IS SAID AS THAT, never as a list: a list
+		// formed from nothing named every participant as owing a restart,
+		// or no admission as holding the window, and both surfaces print
+		// either as a fact. ONE READ OF THE ACKNOWLEDGEMENTS serves the
+		// list and the block's sentence, which an abandoned window's seal
+		// decides ([statelog.BlockedDetail]).
+		acks, err := windowAcks(ctx, r.fleet, op)
+		r.windows.part(ctx, op.Stream, partAcks, err)
+		row.AcksUnread = err != nil
+		if err == nil {
+			row.ParticipantsMissing = outstanding(op, acks)
 		}
+		row.BlockedDetail = statelog.BlockedDetail(op, acks, err)
+		held, err := holdingAdmissions(ctx, r.fleet, op)
+		r.windows.part(ctx, op.Stream, partAdmissions, err)
+		row.AdmissionsBlocking, row.AdmissionsUnread = held, err != nil
+		open = append(open, row)
 	}
-	return oldest
+	return open
 }
 
-// outstanding names the participants whose acknowledgement the seal is still
-// waiting for.
+// outstanding names the participants the window's next step is still waiting
+// for: at `opened`, those with no restart into a maintenance mode recorded
+// ([statelog.BaselineMissing], what the baseline reads); from the baseline to
+// the seal, those whose acknowledgement the seal does not take yet
+// ([statelog.SealOutstanding], the seal's own rule); and once it has sealed,
+// nobody, since the verify and the release wait on no node. At `opened` the
+// seal's reading named every node as owing an acknowledgement bound to the
+// window, which no node writes before the verb runs, so a banner said the
+// window was waiting on the whole fleet while the next step was the
+// operator's. Past it, a reading of its own that counted any acknowledgement
+// of the attempt said nothing was outstanding while the seal still waited on a
+// node in maintenance mode. And read at `sealed` or `confirmed`, the seal's
+// rule judges acknowledgements the seal has already taken against whatever
+// each node has written since: a node restarted again after the seal (into
+// maintenance mode, which a boot refused in service is told to do) was named
+// as outstanding by a window waiting on nobody but its operator.
 //
-// AN UNREADABLE ACK REGISTER YIELDS THE WHOLE PARTICIPANT SET rather than an
-// empty one: "nobody is outstanding" is the state that says the operation is
-// waiting on its operator, and reporting it because a read failed would send
-// somebody to finish an operation that is still waiting on four nodes.
-func outstanding(ctx context.Context, fleet coord.Fleet,
-	op coord.MaintenanceOperation) []string {
+// IT IS FORMED ONLY FROM ACKNOWLEDGEMENTS THAT WERE READ: an unreadable
+// register answered the whole participant set, which every surface printed as
+// every node still owing a restart, and "nobody" would have sent somebody to
+// finish an operation still waiting on four nodes. Neither is known, so the
+// report says it couldn't read them ([windowAcks]).
+func outstanding(op coord.MaintenanceOperation, acks []coord.MaintenanceAck) []string {
+	switch op.Phase {
+	case coord.PhaseSealed, coord.PhaseConfirmed:
+		return nil
+	case coord.PhaseOpened:
+		return statelog.BaselineMissing(op, acks)
+	}
+	return statelog.SealOutstanding(op, acks)
+}
 
-	excluded := map[string]bool{}
-	for _, node := range op.Excluded {
-		excluded[node] = true
+// windowAcks reads a window's acknowledgements where anything about it reads
+// them: every phase before the seal holds, which is what [outstanding] and an
+// abandoned window's sentence judge. Once it has sealed nothing does, and none
+// is read.
+func windowAcks(ctx context.Context, fleet coord.Fleet,
+	op coord.MaintenanceOperation) ([]coord.MaintenanceAck, error) {
+
+	switch op.Phase {
+	case coord.PhaseSealed, coord.PhaseConfirmed:
+		return nil, nil
 	}
-	acked := map[string]bool{}
-	acks, err := fleet.MaintenanceAcks(ctx)
-	if err == nil {
-		for _, ack := range acks {
-			if ack.OperationID == op.OperationID && ack.Attempt == op.Attempt {
-				acked[ack.NodeID] = true
-			}
-		}
+	if fleet == nil {
+		return nil, errNoFleet
 	}
-	var missing []string
-	for _, node := range op.Participants {
-		if !excluded[node] && !acked[node] {
-			missing = append(missing, node)
-		}
+	return fleet.MaintenanceAcks(ctx, op.Stream)
+}
+
+// holdingAdmissions names the nodes whose admission keeps a window at `opened`
+// from sending anything ([statelog.AdmissionBlocks]), and none past it, where
+// no step reads one. An unreadable register is an error rather than nobody: an
+// empty list reads as nothing holding the window.
+func holdingAdmissions(ctx context.Context, fleet coord.Fleet,
+	op coord.MaintenanceOperation) ([]string, error) {
+
+	if op.Phase != coord.PhaseOpened {
+		return nil, nil
 	}
-	sort.Strings(missing)
-	return missing
+	if fleet == nil {
+		return nil, errNoFleet
+	}
+	admissions, err := fleet.Admissions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return statelog.AdmissionBlocks(admissions, op.Excluded), nil
 }
 
 // decisionOf turns a published floor back into the decision that wrote it.
@@ -430,9 +494,9 @@ func (r *retention) replica() statelog.ReplicaReport {
 
 // reading is this node's alarm inputs, MINUS the per-domain ones — the log's
 // headroom, its ceiling against its window, a blocked trim and what it keeps,
-// a record held past the deferral grace and an unreadable floor — which the
-// report evaluates from the domain rows and [retention.Report]'s own
-// per-domain inputs.
+// the age of the backup its trim counts, a record held past the deferral grace
+// and an unreadable floor — which the report evaluates from the domain rows and
+// [retention.Report]'s own per-domain inputs.
 //
 // A FIELD THIS NODE CANNOT MEASURE IS LEFT AT ITS ZERO VALUE, which every
 // condition reads as "nothing to report" rather than as "at the floor" — see
@@ -440,22 +504,9 @@ func (r *retention) replica() statelog.ReplicaReport {
 // backend and no maintenance in flight evaluate the same table as one with all
 // three.
 func (r *retention) reading(ctx context.Context, now time.Time,
-	newest coord.BackupPoint, haveBackup bool,
-	healths map[string]domainHealth) statelog.Reading {
+	healths map[string]domainHealth, windows []judgedWindow) statelog.Reading {
 
-	out := statelog.Reading{BackupMaxAge: r.cfg.BackupMaxAge()}
-	if haveBackup {
-		out.BackupAge = statelog.Age(now.Sub(newest.At))
-	}
-	// AND NO BACKUP AT ALL IS LEFT NIL, which is the state itself rather
-	// than an age standing in for it. The alarm fires on nil exactly as it
-	// fires on an age past the policy — "a company that never backs up
-	// never trims" is the term it is about to hit — but it says which of
-	// the two it is. What this replaces filled the field with
-	// `BackupMaxAge + time.Hour` to reach the same threshold, and the
-	// alarm then told a company four seconds old that its newest verified
-	// backup was twenty-five hours old, one line above the trim term
-	// reporting that no backup had been recorded at all.
+	var out statelog.Reading
 	// THE FLOORS ARE READ AT MOST ONCE, and only where a health was not
 	// handed in: one read of every domain's key answers every domain's floor.
 	var floors *publishedFloors
@@ -488,9 +539,12 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	if r.code != nil {
 		r.code(ctx, now, &out)
 	}
+	if r.models != nil {
+		r.models(ctx, now, &out)
+	}
 	r.refsReading(&out)
 	r.space(&out, now)
-	r.maintenance(ctx, now, &out)
+	oldestWindow(now, windows, &out)
 	r.observed(&out)
 	r.burning(&out)
 	// HOW FAR THIS NODE'S CLOCK, AND THE BROKER MEMBER'S, STAND FROM THE
@@ -518,29 +572,29 @@ type domainHealth struct {
 	err    error
 }
 
-// maintenance is the oldest open capacity operation on any of this node's
-// domains.
+// oldestWindow is the oldest capacity window the alarm judges open.
 //
 // THE OLDEST, because the alarm is about how long publishing has been stopped
-// and two open operations do not stop it twice. Read from the register rather
-// than from whatever this node's own coordinator remembers: an operation is
-// opened by whichever node ran the verb, and a node that is merely a
-// PARTICIPANT — which is every node, and is what makes maintenance an outage
-// rather than an inconvenience — holds nothing about it in memory at all.
-func (r *retention) maintenance(ctx context.Context, now time.Time, out *statelog.Reading) {
-	if r.fleet == nil {
-		return
-	}
-	for _, running := range r.state.running() {
-		if running == nil {
+// and two open operations do not stop it twice. JUDGED, not merely read
+// ([windowWatch.observe]): a window this node last read open and can't read
+// now is still the window it knows of, AS OLD AS IT WAS WHEN THAT READ
+// ANSWERED, never aged on this node's clock since. Aged, a window last read
+// open at 59 minutes crossed the hour during a two-minute blip and raised the
+// alarm about a window that might have closed meanwhile. So a blip neither
+// clears a firing alarm nor raises one, and the detail says when the figure
+// was read.
+func oldestWindow(now time.Time, windows []judgedWindow, out *statelog.Reading) {
+	for _, w := range windows {
+		if w.op.EnteredAt.IsZero() {
 			continue
 		}
-		op, open, err := r.fleet.Maintenance(ctx, running.spec.Name)
-		if err != nil || !open || op.EnteredAt.IsZero() {
-			continue
-		}
-		if since := now.Sub(op.EnteredAt); since > out.MaintenanceOpenFor {
-			out.MaintenanceOpenFor, out.MaintenancePhase = since, string(op.Phase)
+		if since := w.readAt.Sub(w.op.EnteredAt); since > out.MaintenanceOpenFor {
+			out.MaintenanceOpenFor, out.MaintenancePhase = since, string(w.op.Phase)
+			out.MaintenanceStream = w.op.Stream
+			out.MaintenanceUnreadable, out.MaintenanceReadAgo = w.unreadable, 0
+			if w.unreadable {
+				out.MaintenanceReadAgo = now.Sub(w.readAt)
+			}
 		}
 	}
 }
@@ -720,11 +774,12 @@ func (c logCensus) expectedAt(holds uint64, read bool, minAge time.Duration) (in
 //
 // Declared rather than configured — it is a term in the log's own sizing, so
 // an operator who could set it would be silencing the alarm rather than
-// resizing the deployment it is about — scaled by the company's own seats,
-// plus what the engine's own periodic reads put on the log whatever the seats
-// do, plus the readers the log's own sizing declares that are neither — the
-// code log's git clients ([statelog.Census], [clientBarriers]), counted
-// whatever this node's runtime hosts, since the rate above is the fleet's.
+// resizing the deployment it is about — by each domain for its own log in the
+// register ([registration.Reads]), scaled by the company's own seats, plus
+// what the engine's own periodic reads put on the log whatever the seats do,
+// plus the readers the log's own sizing declares that are neither — the code
+// log's git clients ([statelog.Census], [clientBarriers]), counted whatever
+// this node's runtime hosts, since the rate above is the fleet's.
 //
 // WINDOWED, like every alarm input [retention.observed] reads: a count since
 // the process started only grows, and a threshold against it latches.
@@ -762,7 +817,8 @@ func (r *retention) census(running []*runningLog) map[string]logCensus {
 	}
 	out := make(map[string]logCensus, len(running))
 	for _, l := range running {
-		if barrierEncoder(l.domain) == nil {
+		reads, declared := readModel(l.domain)
+		if !declared {
 			// A LOG NO READ APPENDS TO has no census to drift from: its
 			// domain has no read index, so nothing it receives is a
 			// linearizable read.
@@ -772,6 +828,7 @@ func (r *retention) census(running []*runningLog) map[string]logCensus {
 		out[name] = logCensus{
 			reads: received[l.spec.Name],
 			census: statelog.Census{
+				Reads:      reads,
 				Seats:      seats,
 				Background: background(name),
 			},

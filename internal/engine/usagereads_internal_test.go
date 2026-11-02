@@ -11,7 +11,7 @@ import (
 )
 
 // A NODE WHOSE USAGE COPY IS WRONG ANSWERS NO SPEND SCREEN FROM IT, on a real
-// node through the reads the engine hands the API (ADR-0049): its spend and
+// node through the reads the engine hands the API (ADR-0072): its spend and
 // activity reads go to a data node whose usage copy serves, and a node with
 // no such peer says it served nothing — naming its own copy — rather than
 // drawing a screen from rows its applier stopped writing. Read straight off

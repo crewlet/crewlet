@@ -55,6 +55,41 @@ func writeLogin(t *testing.T, ws *Workspace, file, document string) {
 	}
 }
 
+// hasLogin is [Workspace.HasLogin], a login that cannot be read failing the
+// case.
+func hasLogin(t *testing.T, ws *Workspace) bool {
+	t.Helper()
+	present, err := ws.HasLogin(t.Context())
+	if err != nil {
+		t.Fatalf("HasLogin: %v", err)
+	}
+	return present
+}
+
+// loginOnDisk lists what the shared directory holds of a login RIGHT NOW,
+// read without its lock, as absolute paths: every login file present, and a
+// write's journal standing beside them — what a case that holds the lock
+// itself sees, and what an operator clearing the directory by hand removes.
+func loginOnDisk(t *testing.T, ws *Workspace) []string {
+	t.Helper()
+	paths := make([]string, 0, len(ws.loginNames())+1)
+	for _, name := range ws.loginNames() {
+		paths = append(paths, ws.sharedPath(name))
+	}
+	paths = append(paths, hostbox.CredentialJournal(ws.CredentialsDir()))
+	var out []string
+	for _, path := range paths {
+		_, err := os.Lstat(path)
+		switch {
+		case err == nil:
+			out = append(out, path)
+		case !os.IsNotExist(err):
+			t.Fatal(err)
+		}
+	}
+	return out
+}
+
 // sharedLogin reads both kinds of shared login, "" for one that is absent.
 func sharedLogin(t *testing.T, ws *Workspace) (file, document string) {
 	t.Helper()
@@ -207,10 +242,9 @@ func TestAStatusNeverRevertsARefreshThatLandedWhileItRan(t *testing.T) {
 	p := storeProvider(t, nil, nil)
 	writeDocument(t, p, seeded)
 	p.env = fakeChildEnv(map[string]string{
-		"FAKE_STORE":       "1",
-		"FAKE_MIDRUN_VERB": "store-list",
-		"FAKE_MIDRUN_PATH": p.ws.documentPath(),
-		"FAKE_MIDRUN_BODY": refreshed,
+		"FAKE_STORE":         "1",
+		"FAKE_MIDRUN_VERB":   "store-list",
+		"FAKE_MIDRUN_WRITES": midrun(t, map[string]string{p.ws.documentPath(): refreshed}),
 	})
 	if err := p.Status(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("Status: %v", err)
@@ -241,10 +275,9 @@ func TestALoginThatChangedNothingNeverRevertsARefresh(t *testing.T) {
 		p := storeProvider(t, nil, map[string]any{"login_args": []any{run, "store-list"}})
 		writeDocument(t, p, seeded)
 		p.env = fakeChildEnv(map[string]string{
-			"FAKE_STORE":       "1",
-			"FAKE_MIDRUN_VERB": "store-list",
-			"FAKE_MIDRUN_PATH": p.ws.documentPath(),
-			"FAKE_MIDRUN_BODY": refreshed,
+			"FAKE_STORE":         "1",
+			"FAKE_MIDRUN_VERB":   "store-list",
+			"FAKE_MIDRUN_WRITES": midrun(t, map[string]string{p.ws.documentPath(): refreshed}),
 		})
 		if err := p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 			t.Fatalf("BrokerLogin: %v", err)
@@ -266,8 +299,9 @@ func TestALoginThatChangedNothingNeverRevertsARefresh(t *testing.T) {
 		p.env = fakeChildEnv(map[string]string{
 			"FAKE_STORE":       "1",
 			"FAKE_MIDRUN_VERB": "store-list",
-			"FAKE_MIDRUN_PATH": filepath.Join(p.ws.CredentialsDir(), "creds.json"),
-			"FAKE_MIDRUN_BODY": refreshed,
+			"FAKE_MIDRUN_WRITES": midrun(t, map[string]string{
+				filepath.Join(p.ws.CredentialsDir(), "creds.json"): refreshed,
+			}),
 		})
 		if err := p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 			t.Fatalf("BrokerLogin: %v", err)
@@ -322,8 +356,8 @@ func TestALoginThatStoredNothingFails(t *testing.T) {
 			if !strings.Contains(err.Error(), "without leaving a login") {
 				t.Errorf("the failure does not say what happened: %v", err)
 			}
-			if p.ws.HasLogin() {
-				t.Errorf("a login that stored nothing left %v", p.ws.LoginFiles())
+			if hasLogin(t, p.ws) {
+				t.Errorf("a login that stored nothing left %v", loginOnDisk(t, p.ws))
 			}
 		})
 	}
@@ -340,7 +374,7 @@ func TestLoginThenLogoutThenStatusLeavesNoLogin(t *testing.T) {
 	if err := p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("BrokerLogin: %v", err)
 	}
-	if !p.ws.HasLogin() {
+	if !hasLogin(t, p.ws) {
 		t.Fatal("the login wrote nothing")
 	}
 	if err := p.Logout(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
@@ -349,8 +383,8 @@ func TestLoginThenLogoutThenStatusLeavesNoLogin(t *testing.T) {
 	if err := p.Status(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if p.ws.HasLogin() {
-		t.Errorf("status brought back the login logout removed: %v", p.ws.LoginFiles())
+	if hasLogin(t, p.ws) {
+		t.Errorf("status brought back the login logout removed: %v", loginOnDisk(t, p.ws))
 	}
 }
 
@@ -382,8 +416,8 @@ func TestAStatusNeverCreatesALogin(t *testing.T) {
 	if err := p.Status(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	if p.ws.HasLogin() {
-		t.Errorf("a status created a login: %v", p.ws.LoginFiles())
+	if hasLogin(t, p.ws) {
+		t.Errorf("a status created a login: %v", loginOnDisk(t, p.ws))
 	}
 }
 

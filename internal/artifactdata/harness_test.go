@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -105,7 +106,12 @@ const harnessCeiling = config.ArtifactDataLogMaxBytesFloor / 4
 // openLog stands up a broker and the datastore log on it.
 func openLog(t *testing.T) *js.DomainLog {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
+	// its cap from the runner's free space it takes three quarters of it,
+	// and would refuse even this log's quarter gibibyte on a runner with
+	// less than a third of one free, whatever the case under it does.
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}

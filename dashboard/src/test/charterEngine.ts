@@ -18,6 +18,7 @@
 
 import { vi } from "vitest";
 import type { Charter } from "~/contract/config.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 /** The fake engine: its state, which a suite reads and changes between steps. */
 export interface CharterEngine {
@@ -37,7 +38,7 @@ export interface CharterEngine {
 const json = (payload: unknown, status: number, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", ...headers },
   });
 
 const same = (a: Charter, b: Charter) =>

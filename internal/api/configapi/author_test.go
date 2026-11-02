@@ -24,7 +24,7 @@ func TestTheEnginesWriteIsRecordedAsTheSystems(t *testing.T) {
 	s.seed(t, companyDoc)
 
 	by := iam.Actor{Name: "node-a", Kind: iam.ActorSystem}
-	applied, err := s.service().Reload(t.Context(), "reload after sealing", by)
+	applied, err := s.service().Reload(t.Context(), "reload after sealing", by, "")
 	if err != nil {
 		t.Fatalf("Reload: %v", err)
 	}

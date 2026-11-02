@@ -51,13 +51,13 @@ func gateLoosenings() []aLoosening {
 			"lowers merge_by from maintainers to writers"},
 		{"approvals", code.GateChange{Approvals: ptr(code.ApprovalsNone)}, "lowers approvals from one to none"},
 		{"approvals_unless", code.GateChange{ApprovalsUnless: &code.ListChange[code.ChangeClass]{
-			Add: []code.ChangeClass{code.ChangeClassWhitespaceOnly}}}, "adds whitespace_only to approvals_unless"},
+			Add: []code.ChangeClass{code.ChangeClassWhitespaceOnly}}}, `adds "whitespace_only" to approvals_unless`},
 		{"human_paths", code.GateChange{HumanPaths: &code.HumanPathsChange{Remove: []string{"deploy/**"}}},
-			"drops deploy/** from human_paths"},
+			`drops "deploy/**" from human_paths`},
 		{"human_paths' unless", code.GateChange{HumanPaths: &code.HumanPathsChange{Put: []code.HumanPath{
-			{Glob: "deploy/**", Unless: both}}}}, "adds whitespace_only to the unless of deploy/** in human_paths"},
+			{Glob: "deploy/**", Unless: both}}}}, `adds "whitespace_only" to the unless of deploy/** in human_paths`},
 		{"checks", code.GateChange{Checks: &code.ListChange[string]{Remove: []string{"unit"}}},
-			"drops unit from checks"},
+			`drops "unit" from checks`},
 		{"owners_approve", code.GateChange{OwnersApprove: ptr(false)}, "turns owners_approve off"},
 		{"agents_edit_checks", code.GateChange{AgentsEditChecks: ptr(true)}, "turns agents_edit_checks on"},
 		{"the gate", code.GateChange{Remove: true}, "removes its merge gate"},
@@ -162,7 +162,7 @@ func TestAGateChangeIsResolvedInsideTheDecide(t *testing.T) {
 	}
 }
 
-// AN AGENT CANNOT LOOSEN A GATE (ADR-0058, field by field): the unit's lead at
+// AN AGENT CANNOT LOOSEN A GATE (ADR-0081, field by field): the unit's lead at
 // full_access, which maintains the repository, asks a protect request that
 // loosens main's merge gate in one field — each in turn: merge_by or approvals
 // lowered, a class added to approvals_unless, a human path dropped or its
@@ -186,7 +186,7 @@ func TestAnAgentCannotLoosenAGate(t *testing.T) {
 	end := n.end()
 	rows := append(gateLoosenings(), aLoosening{"checks, beside merge_by raised",
 		code.GateChange{MergeBy: ptr(code.MergeByPersons), Checks: &code.ListChange[string]{
-			Remove: []string{"lint"}}}, "drops lint from checks"})
+			Remove: []string{"lint"}}}, `drops "lint" from checks`})
 	for _, tc := range rows {
 		res := n.life(lcGate(cto, id, main, persons, tc.change))
 		switch {

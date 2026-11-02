@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // viewStore is the saved-view write side over a table of stored views: it
@@ -19,29 +19,29 @@ import (
 // for, so a case can tell a refusal from a write that landed.
 type viewStore struct {
 	mu     sync.Mutex
-	stored map[string]tracker.View
-	saved  []tracker.View
-	priors []tracker.ViewPrior
+	stored map[string]worklet.View
+	saved  []worklet.View
+	priors []worklet.ViewPrior
 }
 
-func (s *viewStore) ViewPrior(_ context.Context, id string) (tracker.ViewPrior, error) {
+func (s *viewStore) ViewPrior(_ context.Context, id string) (worklet.ViewPrior, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	held, ok := s.stored[id]
 	if !ok {
-		return tracker.ViewPrior{}, nil
+		return worklet.ViewPrior{}, nil
 	}
-	return tracker.ViewPrior{Held: true, Owner: held.Owner, Container: held.Container}, nil
+	return worklet.ViewPrior{Held: true, Owner: held.Owner, Container: held.Container}, nil
 }
 
-func (s *viewStore) WriteView(_ context.Context, _ string, view tracker.View,
-	prior tracker.ViewPrior) (tracker.WriteResult, error) {
+func (s *viewStore) WriteView(_ context.Context, _ string, view worklet.View,
+	prior worklet.ViewPrior) (worklet.WriteResult, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.saved = append(s.saved, view)
 	s.priors = append(s.priors, prior)
-	return tracker.WriteResult{Result: statelog.Result{
+	return worklet.WriteResult{Result: statelog.Result{
 		Outcome: statelog.OutcomeApplied,
 	}}, nil
 }
@@ -57,12 +57,12 @@ func (s *viewStore) WriteView(_ context.Context, _ string, view tracker.View,
 // it decided on, so the write refuses a view that changed in between.
 //
 // Both refusals, and the controls: the project's lead replaces the shared tab,
-// and a fresh id is the caller's own view, or a tool that refused every
-// replacement would pass.
+// and a save naming no id is the caller's own new view, or a tool that refused
+// every replacement would pass.
 func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 	t.Parallel()
-	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
-	stored := map[string]tracker.View{
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+	stored := map[string]worklet.View{
 		"v-shared": {ID: "v-shared", Container: eng, Name: "Board"},
 		"v-bob":    {ID: "v-bob", Container: eng, Name: "Mine", Owner: "bob"},
 	}
@@ -82,7 +82,7 @@ func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 		{"the project's lead replacing its shared tab", "v-shared", chartLeads,
 			map[string]any{"container": "project:ENG", "name": "Board v2", "type": "board"},
 			true},
-		{"a fresh id is the caller's own view", "v-new", chartRefuses, mine, true},
+		{"no id is the caller's own new view", "", chartRefuses, mine, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -96,18 +96,21 @@ func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 				},
 				Authorize: builtin.Decide(c.chart),
 			}) {
-				if candidate.Name() == tracker.SaveWorkViewTool {
+				if candidate.Name() == worklet.SaveWorkViewTool {
 					tool = candidate
 				}
 			}
 			if tool == nil {
 				t.Fatal("save_work_view is not on the operator surface")
 			}
-			args := map[string]any{"id": c.id}
+			args := map[string]any{}
+			if c.id != "" {
+				args["id"] = c.id
+			}
 			for key, value := range c.args {
 				args[key] = value
 			}
-			got, err := tool.Call(personHolding(iam.GrantTracker), args)
+			got, err := tool.Call(personHolding(iam.GrantWorklet), args)
 			if err != nil {
 				t.Fatalf("save_work_view: %v", err)
 			}
@@ -132,5 +135,47 @@ func TestASaveCannotTakeOverAViewItMayNotWrite(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A SAVE NAMING AN ID NO VIEW HOLDS IS REFUSED, and writes nothing.
+//
+// The argument is "the view to replace", and a view's id is the one its
+// create minted. A save that took any string for a missing view CREATED one
+// under it — dots, spaces and a path were all a primary key and the subject
+// its writes arbitrate on — so the only ids that reach the write are ones this
+// engine minted. Refused as not found rather than as an authority refusal,
+// because there is nothing the caller may not do: there is nothing there.
+func TestASaveNamingNoViewIsRefused(t *testing.T) {
+	t.Parallel()
+	views := &viewStore{stored: map[string]worklet.View{}}
+	var tool tools.Callable
+	for _, candidate := range builtin.OperatorTools(builtin.OperatorDeps{
+		Work: builtin.WorkDeps{
+			Reader: newFakeTracker(), Writer: newFakeTracker().as,
+			ViewWriter: func(builtin.Actor) builtin.ViewWriter { return views },
+			Actor:      builtin.PrincipalActor,
+		},
+		Authorize: builtin.Decide(chartLeads),
+	}) {
+		if candidate.Name() == worklet.SaveWorkViewTool {
+			tool = candidate
+		}
+	}
+	for _, id := range []string{"v-made-up", "ENG/docs/My Notes.md", "a.b.c"} {
+		got, err := tool.Call(personHolding(iam.GrantWorklet), map[string]any{
+			"id": id, "container": "person:tester", "name": "Mine", "type": "list",
+			"personal": true,
+		})
+		if err != nil {
+			t.Fatalf("save_work_view %q: %v", id, err)
+		}
+		if !got.Failed || len(views.saved) != 0 {
+			t.Fatalf("a save naming the missing view %q landed: %s", id, got.Output)
+		}
+		if class := tools.RefusalOf(got); class != tools.RefusalNotFound {
+			t.Errorf("a save naming the missing view %q was refused as %v, want "+
+				"not found: %s", id, class, got.Output)
+		}
 	}
 }

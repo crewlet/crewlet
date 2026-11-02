@@ -205,13 +205,30 @@ func releaseCustody(ctx context.Context, tx *sql.Tx, batchID string) error {
 }
 
 // UnsettledCustody lists up to limit batches written before `before` and not
-// settled, oldest first.
-func (l *EventLog) UnsettledCustody(ctx context.Context, before time.Time, limit int) ([]UnsettledBatch, error) {
-	rows, err := l.db.sql.QueryContext(ctx, `
-		SELECT batch_id, origin, written_at FROM custody_unsettled
-		 WHERE written_at < ?
-		 ORDER BY written_at, batch_id
-		 LIMIT ?`, EncodeTime(before.UTC()), limit)
+// settled, oldest first — by (written_at, batch_id) — and AFTER `after` in
+// that order: the zero [UnsettledBatch] starts at the oldest, and the last
+// batch of one page starts the next. Only after's WrittenAt and ID are read.
+//
+// A KEYSET, never an offset and never "the oldest again": a caller settling
+// what it lists leaves some batches as they are — one whose keeper cannot be
+// decided (coord.ErrCustodyUndecidable) stays unsettled for as long as the
+// event log keeps its rows — and listed from the oldest every time, the first
+// page of those would be every page there is, so a pass never reached a batch
+// behind them. An offset would still count the batches a settle has removed
+// since, and skip as many of the ones still there.
+func (l *EventLog) UnsettledCustody(ctx context.Context, before time.Time, after UnsettledBatch,
+	limit int) ([]UnsettledBatch, error) {
+
+	query := `SELECT batch_id, origin, written_at FROM custody_unsettled WHERE written_at < ?`
+	args := []any{EncodeTime(before.UTC())}
+	if after.ID != "" {
+		at := EncodeTime(after.WrittenAt)
+		query += ` AND (written_at > ? OR (written_at = ? AND batch_id > ?))`
+		args = append(args, at, at, after.ID)
+	}
+	query += ` ORDER BY written_at, batch_id LIMIT ?`
+	args = append(args, limit)
+	rows, err := l.db.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list unsettled custody: %w", err)
 	}

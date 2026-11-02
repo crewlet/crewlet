@@ -200,7 +200,7 @@ type ClearedBy struct {
 	// tier lets it maintain — none where neither does.
 	Maintainers []string `json:"maintainers,omitempty"`
 	// Persons is whether any person may clear it: always, since a person
-	// maintains every repository (ADR-0055).
+	// maintains every repository (ADR-0078).
 	Persons bool `json:"persons,omitempty"`
 }
 
@@ -975,7 +975,7 @@ func readinessEach(ctx context.Context, tx queryer, what, query string, args []a
 }
 
 // blockersKey is code_findings_blockers_idx, (change_id, position, id) WHERE
-// [standingBlockers] (replicated 0078): a change's standing blockers alone,
+// [standingBlockers] (replicated 0101): a change's standing blockers alone,
 // the oldest raised first.
 const blockersKey = "code_findings_blockers_idx"
 

@@ -20,7 +20,7 @@ Seven kinds ship in this release:
 
 The motivating case is a review table an agent hands to a team: the agent
 publishes it, three reviewers and the agent tick boxes and pick statuses in it
-at the same time, every edit lands on every node in the same order, and
+at the same time, every edit lands on every data node in the same order, and
 everybody sees who is in which row.
 
 ```mermaid
@@ -209,7 +209,7 @@ until that room is made.
 
 **The quotas are Tier A**, because a tenant administrator must not raise their
 own, and each record that consumes quota carries the limits it was decided
-under, so every node applies it identically:
+under, so every data node applies it identically:
 
 | Key | Default | Bounds |
 |---|---|---|
@@ -229,7 +229,7 @@ and a refusal names the value it refused at.
 
 ## Sharing
 
-Artifacts are an **app**, beside the tracker and the knowledge base (see
+Artifacts are an **app**, beside Worklet and Doclet (see
 [Identity and Access](identity-and-access.md#an-artifact-is-opened-by-its-shares)).
 The `artifacts` permission **gates authoring only**: creating, publishing,
 changing a datastore's schema, trashing and restoring. Opening an artifact,
@@ -281,7 +281,11 @@ What an **agent** may do is narrower than its shares, on purpose:
 - every artifact tool passes the **requester ceiling**: an agent reads for
   somebody only what that somebody could read, and writes for them only what
   they could write, except on an artifact the agent owns, which anybody who
-  can message the agent may ask it to change. The ceiling holds the turn
+  can message the agent may ask it to change. The somebody is whoever woke the
+  turn: a colleague's ask, or the first speaker of the message, comment or
+  remark it answers, on a vendor's surface or on Worklet, Doclet and Chatlet
+  alike. A turn woken by somebody the company does not know does nothing on an
+  artifact beyond those changes to the agent's own. The ceiling holds the turn
   somebody woke and no turn after it: a colleague the agent asks reads for the
   agent, the turn the colleague's answer wakes is the agent's own, and what the
   agent already knows — its memory, what it read in a turn nobody woke — is no
@@ -371,7 +375,7 @@ of an artifact's key, and an agent's `list_artifacts` takes `prefix` and
 
 ## Work items
 
-A tracker work item's **Artifacts** panel lists every artifact made or linked
+A Worklet item's **Artifacts** panel lists every artifact made or linked
 for it, read from the artifacts' own history (`GET /artifacts?work_item=ENG-12`):
 
 - **A write made for an item names it.** A create, a publish or a rollback that
@@ -383,8 +387,8 @@ for it, read from the artifacts' own history (`GET /artifacts?work_item=ENG-12`)
   use it to make a design or a dashboard first and file the task for it after.
 - **A link needs both halves.** The caller must be able to read the artifact
   (any role, viewer and above; the admin path is recorded as every elevated
-  read is), and must be able to change the item (`update_work_item`, the
-  tracker's own decision). The item must be one the company's tracker holds and
+  read is), and must be able to change the item (`update_work_item`,
+  Worklet's own decision). The item must be one Worklet holds and
   not removed, and the link is made under its current key, so an id or a
   former key links where the panel looks.
 - **A link is made once.** A retry under the same `Idempotency-Key` is the same
@@ -539,9 +543,9 @@ flowchart LR
 **The write is decided where it is applied.** Each store is one sequenced log:
 the API decides what needs identity or the org chart (the caller's role on the
 artifact, whether the caller is an agent, the quotas in force) and stamps it
-into the record; every node's applier then decides the rest from the record
+into the record; every data node's applier then decides the rest from the record
 and its own rows (names, schema, field rules, version guards, caps), in log
-order, so every node reaches the same verdict: `applied`, `conflict`,
+order, so every data node reaches the same verdict: `applied`, `conflict`,
 `invalid`, `forbidden`, `quota` or `gone`. The writer reads its own verdict
 back; a `conflict` answer carries the current documents to merge with. A sheet
 in the dashboard shows an edit at once as pending and makes it solid when the
@@ -597,6 +601,10 @@ flowchart LR
 - Each node rebroadcasts its roster every 15 seconds; an entry expires 45
   seconds after the last frame naming it. A node gaining its first member of a
   room asks its peers once, so a newcomer sees the room at once.
+- A tab joining a room is handed the room as the node's other tabs are being
+  shown it, with itself beside them, and every change after that in the order
+  the node took it — never one ahead of the room it changes — so no tab goes on
+  showing somebody who has left, or somebody as they were before they moved.
 - Every frame between nodes is sealed under the fleet keyring with a
   60-second validity; a frame the fleet did not seal shows nobody.
 - Past 50 members a room shows the 50 most recently active plus counts of
@@ -754,7 +762,7 @@ contract.
   finding naming its rule, under the code `doc_format`.
 - **Drawn by the dashboard, never as markup.** The engine answers a version tab
   by tab (`GET /artifacts/{id}/versions/{n}/doc`), and the dashboard draws each
-  with the element-constructing Markdown renderer Knowledge pages use, which
+  with the element-constructing Markdown renderer Doclet pages use, which
   also decides what a heading is, so the outline and the page it points into
   cannot disagree.
 - **Searched by every tab**, each title and its text, not by the index.
@@ -765,7 +773,7 @@ contract.
   dropped, and each new tab's file uploaded through the engine (a doc of one
   file gains its `doc.json` with its second tab). A save that raced somebody
   else's publish is merged onto theirs tab by tab, text by line as a
-  Knowledge page's is, and where both changed the same lines, the same title
+  Doclet page's is, and where both changed the same lines, the same title
   or the order, or one removed a tab the other changed, the person settles it
   before saving again. Print prints every tab in order.
 - **Started from a template.** New › Doc begins a doc from the engine's
@@ -830,7 +838,7 @@ Home board uses, each widget citing its dataset and when its rows were true,
 with a Sources rail that shows every dataset's definition, freshness and rows.
 
 - **Read as the viewer.** An `engine` dataset is answered by the question the
-  dashboard's own screens ask (the tracker's, spend's, the agents' status), on
+  dashboard's own screens ask (Worklet's, spend's, the agents' status), on
   the viewer's own request, so two people opening one board each see what
   they may read and nothing more; a figure over a source somebody may not read
   says so and names the permission that would open it
@@ -920,15 +928,35 @@ publisher attests the company may embed), and a short voice: a summary, a few
 lines to write like and a few to avoid. Anybody with the artifacts app may draft
 one, agents included, and many may exist.
 
-- **Held to its format at publish.** `brand.json` is read strictly
-  (`internal/artifacts/brandformat`): an unknown key, a key written twice, a
-  value outside its grammar, a file the index does not name, and a logo or
-  face outside its asset rule are each refused, naming the file, the line and
-  the fix. A logo is stored in the form the engine writes, never as uploaded:
+- **Its format is one read away.** `get_artifact_format` with `kind: "brand"`
+  answers every key of `brand.json` with its type and rule, the
+  exactly-one-source rule for a face, the logo and SVG rules, and an example
+  that reads clean. The reference is generated by `brandformat` from the same
+  form its strict decode reads with and the same constants its rules check, so
+  it cannot promise a key or a bound the reader refuses (a test holds it to
+  every key both ways). Every other kind with a closed format (`slides`,
+  `doc`, `design`, `dashboard`) answers its own index the same way.
+- **Held to its format at publish, every fault in one refusal.** `brand.json`
+  is read strictly (`internal/artifacts/brandformat` over
+  `internal/jsonform`): an unknown key (named with the keys its
+  object takes), a value of the wrong type (named with the shape read there),
+  a key written twice, a value outside its grammar, a file the index does not
+  name, and a logo or face outside its asset rule are each refused, naming the
+  file, the line and the fix. The strict decode does not stop at its first
+  fault: it reports every structural fault, decodes every well-formed field,
+  and runs the field rules over those in the same pass, so a kit with six
+  faults is answered with six findings. A logo refused by its asset rule is
+  answered together with the index's own findings. The tool answer lists the
+  first 20 findings and counts the rest. A logo is stored in the form the engine writes, never as uploaded:
   an SVG re-serialised from an allowlist that admits no script, style, foreign
   content, animation or outside reference (`internal/artifacts/svgsafe`, the
   one allowlist a slide's drawings are held to too), a PNG or WebP without its
   metadata and never animated. A draft is never refused for its contrast.
+  Text holds no link or address, and a bare domain is refused too, except the
+  brand's own `name` written as a domain: for the brand `GoPhrase`,
+  `GoPhrase.me` may appear in its voice, while `promo.gophrase.me` or any
+  other host may not. The rule reads the kit's own `name`, never the company
+  record, so a rename cannot turn a published kit into one its reader refuses.
 - **Drafted step by step.** A draft needs only its `name`: a kit may be saved
   after each step of its setup, with no logo, no colour and no typeface yet.
   Every field a draft does hold keeps all its rules. A typeface left unset
@@ -980,7 +1008,7 @@ decisions inside a sheet; a design's live board layer of shapes, connectors
 and images; a dashboard dataset an agent refreshes on a schedule, and
 integration sources a viewer's own connector answers; slide builds, magic moves, live
 embeds and connectors on a slide, and PowerPoint or Google Slides export of a
-deck; live tracker and knowledge data inside
+deck; live Worklet and Doclet data inside
 a page; a page asking a model a question; viewer uploads and device features;
 public links outside the company; moving idle stores to object storage;
 point-in-time recovery from a log archive; concurrent co-editing of long text;

@@ -1,11 +1,13 @@
 /**
- * Reviewing one version of a brand kit and adopting it: the version's
- * `brand.json` read, compared card by card with the adopted brand (each logo by
- * its bytes), and adopted as it is (`POST /brand/adoptions`).
+ * Reviewing one version of a brand kit and publishing it as the company's
+ * brand: the version's `brand.json` read, compared card by card with the
+ * published brand (each logo by its bytes), and adopted as it is (`POST
+ * /brand/adoptions`). "Publish" is the person's word for the adoption; the
+ * route and the permission keep the engine's.
  *
- * Opened from the newer-version notice on Company › Brand and from a kit's own
- * page. Nothing is published: the version already exists, and adopting it is
- * the one write.
+ * Opened from the draft notice on Company › Brand ("Publish brand") and from
+ * a kit's own page. No version is written: the version already exists, and
+ * adopting it is the one write.
  */
 
 import { useMemo } from "react";
@@ -55,7 +57,7 @@ export function ReviewAdopt({
   const adopt = async () => {
     const answer = await gesture.run(adoptBrand(kit, version));
     if (answer?.kind === "done") {
-      toast.ok(`The ${doc.name} brand is adopted`);
+      toast.ok(`The ${doc.name} brand is published`);
       onAdopted();
     }
   };
@@ -64,11 +66,11 @@ export function ReviewAdopt({
     <AdoptDialog
       open
       onClose={onClose}
-      title={`Adopt version ${version} as the ${doc.name} brand?`}
+      title={`Publish version ${version} as the ${doc.name} brand?`}
       before={adoption?.document ?? null}
       after={doc}
       digests={{ before, after }}
-      confirmLabel={`Adopt version ${version}`}
+      confirmLabel={`Publish version ${version}`}
       busy={gesture.busy}
       answer={gesture.answer && gesture.answer.kind !== "done" ? gesture.answer.text : undefined}
       onConfirm={() => void adopt()}

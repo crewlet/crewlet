@@ -52,6 +52,7 @@ import { restErrorCode, useRest } from "./useRest.ts";
 import { withFloor, type QueryResult } from "./useQuery.ts";
 import {
   QueryError,
+  pathSegment,
   RestError,
   rest,
   type CodeQueryMap,
@@ -81,13 +82,6 @@ export interface CodeQueryOptions {
   refetchOnFocus?: boolean;
   /** Ask again when the socket reconnects. Default true. */
   refetchOnReconnect?: boolean;
-  /**
-   * Hold the answer still: nothing asks the question again on its own — no
-   * poll, no reconnect, no return of the tab — and turning it on or off asks
-   * nothing; a change of the question, a write from this tab and `refetch()`
-   * still ask. `useQuery`'s option of the same name, for the same pager.
-   */
-  hold?: boolean;
 }
 
 /**
@@ -95,9 +89,11 @@ export interface CodeQueryOptions {
  * tab's floor on every log the question reads where it has written one and the
  * caller named no freshness of its own — or "" for none.
  *
- * THE QUERY STRING ALONE, never the path: each request writes its own
- * `/query/` prefix where it is sent, so the dev server's forwarding gate
- * (`protocol/proxy.test.ts`) reads the prefix it has to forward at the call.
+ * THE QUERY STRING ALONE, with no `?` and never the path: each request writes
+ * its own `/query/<kind>?` where it is sent, so the dev server's forwarding
+ * gate (`protocol/proxy.test.ts`) reads the prefix it has to forward at the
+ * call, and the segment gate (`protocol/rest.test.ts`) reads the `?` that ends
+ * the path before this value.
  */
 export function codeSearch(what: CodeQueryName, params: CodeParams = {}): string {
   const asked = withFloor(what, JSON.stringify(params));
@@ -113,8 +109,7 @@ export function codeSearch(what: CodeQueryName, params: CodeParams = {}): string
       search.append(key, String(value));
     }
   }
-  const query = search.toString();
-  return query ? `?${query}` : "";
+  return search.toString();
 }
 
 /**
@@ -153,7 +148,7 @@ export const codeRest = {
     try {
       const answer = await rest.request(
         "GET",
-        `/query/${encodeURIComponent(what)}${codeSearch(what, params)}`,
+        `/query/${pathSegment(what)}?${codeSearch(what, params)}`,
         { signal },
       );
       return answer.body as CodeQueryMap[K];
@@ -181,7 +176,7 @@ export function useCodeQuery<K extends CodeQueryName>(
   params?: CodeParams,
   options: CodeQueryOptions = {},
 ): QueryResult<CodeQueryMap[K]> {
-  const { enabled = true, pollMs, refetchOnFocus, refetchOnReconnect, hold = false } = options;
+  const { enabled = true, pollMs, refetchOnFocus, refetchOnReconnect } = options;
   // THE QUESTION IS THE KEY — its kind and its parameters, never the floor
   // (see the file's doc). The parameters are a fresh literal on every render,
   // so their serialisation is what is compared.
@@ -197,7 +192,7 @@ export function useCodeQuery<K extends CodeQueryName>(
       const held = tagged.current?.key === asking ? tagged.current : null;
       const answer = await rest.request(
         "GET",
-        `/query/${encodeURIComponent(what)}${codeSearch(what, paramsRef.current)}`,
+        `/query/${pathSegment(what)}?${codeSearch(what, paramsRef.current)}`,
         { signal, ...(held ? { headers: { "If-None-Match": held.etag } } : {}) },
       );
       if (answer.status === 304) {
@@ -213,13 +208,7 @@ export function useCodeQuery<K extends CodeQueryName>(
       tagged.current = answer.etag ? { key: asking, etag: answer.etag, body } : null;
       return body;
     },
-    // A HOLD IS THE LOADER'S OWN RE-READS TURNED OFF: `useRest` keeps each in
-    // an effect of its own that reads nothing when its option changes, so
-    // turning them off and on again asks nothing, and the poll's first tick
-    // after the hold is a whole interval on.
-    hold
-      ? { pollMs: undefined, refetchOnFocus: false, refetchOnReconnect: false }
-      : { pollMs, refetchOnFocus, refetchOnReconnect },
+    { pollMs, refetchOnFocus, refetchOnReconnect },
   );
   const { reload } = result;
 

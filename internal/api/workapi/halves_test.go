@@ -18,7 +18,7 @@ import (
 // A node's tracker and knowledge base come up with its FIRST COMPANY, which a
 // node that booted with none meets at an apply — after its API is serving.
 // The surface used to take its halves once, at construction, so such a node
-// mounted none of these routes and served no /work and no /pages until it was
+// mounted none of these routes and served no /worklet and no /doclet/pages until it was
 // restarted. Read per request, one surface built before the company answers
 // three different things over its life:
 //
@@ -69,7 +69,7 @@ func TestARouteIsServedByTheHalvesItsRequestFinds(t *testing.T) {
 	}
 	create := map[string]any{"title": "rotate the key", "project": "ENG"}
 
-	got := r.do(as(admin("ana")), http.MethodPost, "/work/items", create)
+	got := r.do(as(admin("ana")), http.MethodPost, "/worklet/items", create)
 	if got.status != http.StatusServiceUnavailable ||
 		got.body["error"] != string(httpjson.CodeNoActiveRevision) {
 		t.Fatalf("before any company the route answered %d %v, want 503 %s",
@@ -85,7 +85,7 @@ func TestARouteIsServedByTheHalvesItsRequestFinds(t *testing.T) {
 	}
 
 	phase.Store(pagesOnly)
-	got = r.do(as(admin("ana")), http.MethodPost, "/work/items", create)
+	got = r.do(as(admin("ana")), http.MethodPost, "/worklet/items", create)
 	if got.status != http.StatusNotFound || got.body["error"] != string(httpjson.CodeNoRoute) {
 		t.Fatalf("a tracker route on a company whose tracker is a vendor's "+
 			"answered %d %v, want the route's absence: 404 %s", got.status, got.body,
@@ -93,7 +93,7 @@ func TestARouteIsServedByTheHalvesItsRequestFinds(t *testing.T) {
 	}
 
 	phase.Store(both)
-	got = r.do(as(admin("ana")), http.MethodPost, "/work/items", create)
+	got = r.do(as(admin("ana")), http.MethodPost, "/worklet/items", create)
 	if got.status != http.StatusOK {
 		t.Fatalf("with the halves up the route answered %d %v, want it served",
 			got.status, got.body)

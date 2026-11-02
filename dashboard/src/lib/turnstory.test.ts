@@ -446,21 +446,10 @@ describe("what each phase's prompt weighed", () => {
         approximate_tokens: tokens,
         system_bytes: 24_000,
         user_bytes: 2_800,
-        message_bytes: 0,
         tool_bytes: 3_800,
         tool_count: 11,
         ...over,
       },
-    });
-  }
-
-  /** The re-entry half of a suspended executor: no opening, a parked
-      conversation instead. The shape `Runner.Resume` publishes. */
-  function reentry(phase: string, iteration: number, tokens: number): EventRecord {
-    return size(phase, iteration, tokens, {
-      system_bytes: 0,
-      user_bytes: 0,
-      message_bytes: 3_329,
     });
   }
 
@@ -479,56 +468,45 @@ describe("what each phase's prompt weighed", () => {
       "review|1",
       "execute|2",
     ]);
-    expect(rows.every((r) => !r.resumed)).toBe(true);
   });
 
-  test("a suspended executor's two measurements are two rows, not one with a count", () => {
-    // THE CASE THE COLLAPSE GOT WRONG. A repeated `phase|iteration` inside
-    // ONE turn is never a re-run — a redelivered trigger runs under a new
-    // run id (`adr/0017`) and the turn query is `WHERE turn_id = ?`, so the
-    // attempts never meet here. It is a SUSPEND: the executor's opening
-    // frame, then the parked conversation the resume re-enters with. The
-    // figures below are the pair a real suspend and resume published.
-    const rows = promptWeights([size("execute", 1, 1_753), reentry("execute", 1, 1_814)]);
+  test("two measurements under one phase key are two rows, not one with a count", () => {
+    // A repeated `phase|iteration` inside ONE turn is never a re-run — a
+    // redelivered trigger runs under a new run id (`adr/0017`) and the turn
+    // query is `WHERE turn_id = ?`, so the attempts never meet here. Two
+    // measurements are two prompts the turn sent, and each keeps its own
+    // figures: collapsed, the first one's vanished under the second's.
+    const rows = promptWeights([
+      size("execute", 1, 1_753),
+      size("execute", 1, 1_814, { system_bytes: 900 }),
+    ]);
     expect(rows).toHaveLength(2);
-    // The opening frame SURVIVES. Collapsed, this row was the one that
-    // vanished, and with it the only evidence the phase opened at all: the
-    // panel showed System 0 B over a 24,000-byte system prompt.
-    expect(rows[0]!.systemBytes).toBe(24_000);
-    expect(rows[0]!.messageBytes).toBe(0);
-    expect(rows[0]!.resumed).toBe(false);
-    // And the re-entry says what it is, which is what makes its 0/0 read as
-    // a fact about a re-entered phase rather than as a failed render.
-    expect(rows[1]!.resumed).toBe(true);
-    expect(rows[1]!.systemBytes).toBe(0);
-    expect(rows[1]!.messageBytes).toBe(3_329);
+    expect(rows.map((r) => r.systemBytes)).toEqual([24_000, 900]);
+    expect(rows.map((r) => r.approximateTokens)).toEqual([1_753, 1_814]);
   });
 
   test("every row carries its own event id, because the phase key is not unique", () => {
     // The renderer keys on this. Keyed on `phase|iteration` instead, the two
-    // rows above are one duplicate React key and the re-entry's figures
-    // reconcile onto the opening's row — the collapse back, by accident.
-    const rows = promptWeights([size("execute", 1, 1_753), reentry("execute", 1, 1_814)]);
+    // rows above are one duplicate React key and the second's figures
+    // reconcile onto the first's row — the collapse back, by accident.
+    const rows = promptWeights([size("execute", 1, 1_753), size("execute", 1, 1_814)]);
     expect(new Set(rows.map((r) => r.id)).size).toBe(2);
     expect(rows.every((r) => r.id !== "")).toBe(true);
   });
 
   test("rows come back in publish order, so they read down the page as the turn ran", () => {
-    // A resumed turn re-enters its parked phase and then carries on, so the
-    // executor's two halves are not adjacent to the rounds around them by
-    // accident — the order they were published in is the order they ran.
     const rows = promptWeights([
+      size("onboarding", 0, 3_046),
       size("execute", 1, 6_807),
       size("review", 1, 2_071),
       size("execute", 2, 7_646),
-      reentry("execute", 2, 9_100),
       size("review", 2, 2_400),
     ]);
-    expect(rows.map((r) => `${r.phase}|${r.iteration}${r.resumed ? "+resumed" : ""}`)).toEqual([
+    expect(rows.map((r) => `${r.phase}|${r.iteration}`)).toEqual([
+      "onboarding|0",
       "execute|1",
       "review|1",
       "execute|2",
-      "execute|2+resumed",
       "review|2",
     ]);
   });
@@ -561,23 +539,6 @@ describe("what each phase's prompt weighed", () => {
     expect(w.toolCount).toBe(11);
   });
 
-  test("a resumed phase's conversation is carried, not folded into the user term", () => {
-    // A detached coding run re-enters its saved messages, so the engine sends
-    // no system or user text at all and reports the seed instead. Folding it
-    // into `userBytes` would make one column mean two different things
-    // depending on whether the phase was resumed.
-    const [w] = promptWeights([
-      size("execute", 1, 12_950, { system_bytes: 0, user_bytes: 0, message_bytes: 48_000 }),
-    ]) as [PromptWeight];
-    expect(w.messageBytes).toBe(48_000);
-    expect(w.systemBytes).toBe(0);
-    expect(w.userBytes).toBe(0);
-    // And that term is ALSO what marks the row a re-entry: the engine ships
-    // no flag for it, because a phase that opens its own conversation reports
-    // this at 0 by construction.
-    expect(w.resumed).toBe(true);
-  });
-
   test("a payload missing a term reads as zero rather than NaN", () => {
     // The parse defaults a missing key to zero — `NaN B` in a column is worse
     // than a zero, because it reads as a broken screen rather than a quiet
@@ -589,12 +550,7 @@ describe("what each phase's prompt weighed", () => {
     ]) as [PromptWeight];
     expect(w.toolBytes).toBe(0);
     expect(w.toolCount).toBe(0);
-    expect(w.messageBytes).toBe(0);
     expect(Number.isNaN(w.toolBytes)).toBe(false);
-    // And it reads as an OPENING, which is the safe direction: no message
-    // term, no re-entry claimed — claiming one would label a row "resumed" on
-    // the strength of a key the writer never wrote.
-    expect(w.resumed).toBe(false);
   });
 });
 

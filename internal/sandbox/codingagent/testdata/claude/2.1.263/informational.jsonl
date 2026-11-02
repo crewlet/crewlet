@@ -1,0 +1,2 @@
+{"type":"system","subtype":"informational","content":"PostToolBatch says: crewlet: a note from ada reached the run","level":"notice","uuid":"00000000-0000-4000-8000-000000000000","session_id":"5e55f1d0-0000-4000-8000-00000000c1a0"}
+{"type":"system","subtype":"informational","content":"Stop says: crewlet: a note from bob reached the run as it was finishing","level":"notice","uuid":"00000000-0000-4000-8000-000000000000","session_id":"5e55f1d0-0000-4000-8000-00000000c1a0"}

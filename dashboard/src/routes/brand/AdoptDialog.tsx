@@ -1,6 +1,6 @@
 /**
- * Adopting a brand: what changes, which contrast pairs fall short, and what
- * adopting makes public, confirmed once.
+ * Publishing a brand (adopting it, in the engine's word): what changes, which
+ * contrast pairs fall short, and what publishing makes public, confirmed once.
  *
  * AN ADMINISTRATOR'S, A PERSON'S, WITH A RECENT PROOF. The engine asks for the
  * proof when it is stale (`StepUp.tsx`) and the adoption goes through once the
@@ -26,13 +26,13 @@ import { WhenYouAdopt } from "./WhenYouAdopt.tsx";
 export interface AdoptDialogProps {
   open: boolean;
   onClose: () => void;
-  /** The dialog's question: "Adopt version 9 as the Acme brand?". */
+  /** The dialog's question: "Publish version 9 as the Acme brand?". */
   title: string;
   /** The adopted brand, or null when none is adopted yet. */
   before: BrandDocument | null;
   after: BrandDocument;
   digests: { before: LogoDigests; after: LogoDigests };
-  /** The confirm's words: "Adopt version 9", "Save and adopt". */
+  /** The confirm's words: "Publish version 9", "Save and publish". */
   confirmLabel: string;
   busy: boolean;
   /** What the last attempt answered, where it did not adopt. */
@@ -104,13 +104,13 @@ export function AdoptDialog({
           </dl>
         ) : (
           <Text as="p" variant="body">
-            Nothing changes from the adopted brand.
+            Nothing changes from the published brand.
           </Text>
         )}
         {hold ? (
           <Callout
             variant={missing ? "warning" : "danger"}
-            title={missing ? "Draft, not ready to adopt" : "This brand cannot be adopted yet"}
+            title={missing ? "Draft, not ready to publish" : "This brand cannot be published yet"}
           >
             {hold}
           </Callout>

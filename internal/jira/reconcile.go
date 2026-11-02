@@ -149,7 +149,12 @@ type Options struct {
 	// secret, for the case where the existing one's secret was lost.
 	// Destructive: it invalidates the secret every other deployment of
 	// this company holds.
-	RecreateWebhook bool
+	//
+	// Spelled as the caller spells its switch ([provision.FreshSwitch]):
+	// `-recreate-webhook` from `crewlet jira provision`,
+	// `recreate_webhooks` from the setup route. A refusal of it names
+	// that spelling, never this package's guess at one.
+	RecreateWebhook provision.FreshSwitch
 }
 
 // SeatIdentity is one seat's tracker account, or why there is none.
@@ -374,8 +379,9 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 
 // SeatCredentialReads is every variable the reconcile's identity scan reads
 // ([atlassian.CredentialOf] for Jira over [agentSeats]), each name once,
-// sorted: the Jira spellings of each seat's token in the blocks Jira reads,
-// and the addresses beside them.
+// sorted: each seat's engine-owned token and address, then, for a document
+// written before per-seat access, the Jira spellings of each seat's token in
+// the blocks Jira reads and the addresses beside them.
 //
 // For `crewlet jira provision`, which asks a running node for exactly these,
 // each a reveal logged by name: a seat's Confluence-only credential is not
@@ -383,6 +389,7 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 func SeatCredentialReads(o *org.Organization) []string {
 	var names []string
 	for _, seat := range agentSeats(o) {
+		names = append(names, atlassian.SealedReads(seat.Handle())...)
 		names = append(names, atlassian.CredentialReads(atlassian.ProductJira, seat.MCPEnv)...)
 	}
 	slices.Sort(names)
@@ -443,7 +450,7 @@ func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 	for i, seat := range seats {
 		out[i] = SeatIdentity{
 			Handle:  seat.Handle(),
-			Project: org.NormalizeScope(seat.Project),
+			Project: config.JiraProjectKey(seat.Project),
 		}
 		creds[i] = atlassian.CredentialOf(atlassian.ProductJira, seat, opts.Value)
 		if !creds[i].Held() {
@@ -666,7 +673,7 @@ func ensureWebhook(ctx context.Context, opts Options) (ingress, error) {
 	}
 	if len(mine) > 0 {
 		hook := mine[0]
-		if opts.RecreateWebhook {
+		if opts.RecreateWebhook.Asked() {
 			if err := opts.Client.DeleteWebhook(ctx, hook.ID); err != nil {
 				return ingress{Notes: notes}, fmt.Errorf("jira: replace webhook: %w", err)
 			}
@@ -733,10 +740,20 @@ func webhookSecret(
 	if opts.Value != nil {
 		resolved = strings.TrimSpace(opts.Value(opts.Config.WebhookSecret))
 	}
-	if resolved != "" && !opts.RecreateWebhook {
+	if resolved != "" && !opts.RecreateWebhook.Asked() {
 		return webhookKey{Secret: resolved}, nil
 	}
 	secretVar, ok := provision.SoleVar(opts.Config.WebhookSecret)
+	if !ok && opts.RecreateWebhook.Asked() {
+		// A VALUE THE DOCUMENT OWNS, which the switch asked to replace:
+		// refused naming the switch as its caller spells it and both
+		// ways on ([provision.RefuseFresh]), never as a slot that
+		// resolved to nothing, which is what the refusal below is about.
+		if err := provision.RefuseFresh("integrations.jira.webhook_secret",
+			opts.RecreateWebhook, opts.Config.WebhookSecret); err != nil {
+			return webhookKey{}, fmt.Errorf("jira: %w", err)
+		}
+	}
 	if !ok {
 		// THE SHAPE, NEVER THE VALUE, the rule every other provisioner
 		// here states at its own call site. This error reaches further
@@ -752,7 +769,7 @@ func webhookSecret(
 			setup.BaseKey(opts.WebhookBaseKey), target)
 	}
 	secret, err := provision.MintSecret(ctx, opts.Sink, secretVar,
-		opts.RecreateWebhook, func() (string, error) { return rand.Text(), nil })
+		opts.RecreateWebhook.Asked(), func() (string, error) { return rand.Text(), nil })
 	if err != nil {
 		return webhookKey{}, fmt.Errorf("jira: %w", err)
 	}
@@ -761,7 +778,7 @@ func webhookSecret(
 		note := fmt.Sprintf(
 			"a fresh webhook secret was minted into %s — %s", secretVar,
 			opts.Sink.NextStep())
-		if opts.RecreateWebhook {
+		if opts.RecreateWebhook.Asked() {
 			note += ". The previous secret is now invalid on every other " +
 				"deployment of this company"
 		}

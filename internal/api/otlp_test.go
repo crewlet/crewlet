@@ -40,7 +40,7 @@ func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 // which is the only way a caller ever gets one.
 func tokenFor(t *testing.T, receiver *sandbox.OtelReceiver, traceID string) string {
 	t.Helper()
-	endpoint := receiver.RunEnv(traceID, "span", "turn-1", "engineer", time.Hour)
+	endpoint := receiver.RunEnv(traceID, "span", "turn-1", "engineer", false, time.Hour)
 	token := strings.TrimPrefix(
 		endpoint["OTEL_EXPORTER_OTLP_ENDPOINT"], "https://engine.internal/otlp/")
 	if token == "" {

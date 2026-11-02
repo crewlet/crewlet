@@ -133,7 +133,7 @@ export function CreateShell({
   children,
 }: CreateShellProps) {
   // ASKING AN AGENT FILES A TASK to its seat, so where the company runs no
-  // Crewlet Works the page offers none: every way a person makes the
+  // Worklet the page offers none: every way a person makes the
   // artifact here stays (`lib/services.ts`).
   const runs = useServicesRun();
   const handoff = runs.tracker ? offered : undefined;

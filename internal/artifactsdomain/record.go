@@ -34,7 +34,7 @@ const RecordVersion = 2
 // baseRecordVersion is version 1, the base format. The barrier, the trim's
 // trimmed record, a reanchor's generation and every gate are pinned at it for
 // ever, for the reason
-// internal/pages states at its own copy: an older node retains what it cannot
+// internal/doclet states at its own copy: an older node retains what it cannot
 // read, and a retained gate licenses every record above it.
 const baseRecordVersion = 1
 
@@ -155,7 +155,7 @@ const (
 	OpBarrier OpKind = "barrier"
 
 	// OpTrimmed is the trim's payload-free record that removes the anchors
-	// below a floor (ADR-0050).
+	// below a floor (ADR-0073).
 	OpTrimmed OpKind = "trimmed"
 
 	// OpMove files an artifact in another folder (on the artifact's
@@ -219,7 +219,7 @@ func (o OpKind) Valid() bool { return slices.Contains(OpKinds, o) }
 //
 // Its EIGHT keys are reserved at the top level of the format for its life: a
 // later version may add fields beside them and may never repurpose one. They
-// are internal/pages' eight, so an operator reading two logs reads one shape.
+// are internal/doclet's eight, so an operator reading two logs reads one shape.
 type RecordEnvelope struct {
 	// V is the record version.
 	V int `json:"v"`

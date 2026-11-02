@@ -83,3 +83,15 @@ It does not decide which answers are served from these rows or what shapes they
 take — those are the API's, over the rows this domain writes. It does not carry
 turn-level detail: which turn spent what is answered from each node's own
 event log, which is a different mechanism with a different retention.
+
+## Amendment — a node without `data` publishes no day
+
+ADR-0025 left a node without `data` no event log and no state log, so every
+"every node" above reads "every data node", on both sides: each data node
+publishes its own days and applies every data node's, and a node without
+`data` publishes none. Its seats' spend is counted in the day of the data node
+that keeps its events in custody — which is what **A node's day is the rows it
+keeps** above already decides, so the node a subject names is the node that
+kept the events, not necessarily the node whose seat spent them. Nothing else
+here moves: one writer per object, nothing arbitrated, and a reader summing
+across the nodes that have days.

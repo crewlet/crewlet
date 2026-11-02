@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE REGISTER IS THE ONLY PLACE A FLEET CAN SEE ANOTHER NODE'S ARTEFACT.
@@ -676,7 +676,7 @@ func TestAnAppliersFirstDrainWakesTheSnapshotLoop(t *testing.T) {
 	t.Parallel()
 	s, q, appendTo := aProvisionedTrackerLog(t)
 	s.snapshotNudge = make(chan struct{}, 1)
-	running, err := s.start(t.Context(), t.Context(), q, tracker.Domain{}, appendTo)
+	running, err := s.start(t.Context(), t.Context(), q, worklet.Domain{}, appendTo)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -733,7 +733,7 @@ func TestEveryEventThatStrandsTheArtefactWakesTheSnapshotLoop(t *testing.T) {
 		{"a reanchor", func(t *testing.T) (*Engine, func()) {
 			e, js := aRunningNode(t)
 			return e, func() {
-				running := e.core.Load().log.Domain(tracker.Domain{}.Name())
+				running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 				spec := running.spec
 				if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 					res.Outcome != statelog.OutcomeApplied {
@@ -824,11 +824,11 @@ func parkSnapshotLoop(t *testing.T, e *Engine) *snapshotHeld {
 	counted := time.Now().UTC()
 	// AT THIS NODE'S OWN GENERATION: a peer's row a generation ahead reads as
 	// a peer that re-anchored the log, which strands this node's rows.
-	generation := s.Domain(tracker.Domain{}.Name()).runner.Committed().Generation
+	generation := s.Domain(worklet.Domain{}.Name()).runner.Committed().Generation
 	if err := e.backends.Fleet.PutPositions(t.Context(), coord.NodePositions{
 		NodeID: "a-counted-peer", At: counted,
 		Domains: map[string]coord.DomainPosition{
-			tracker.Domain{}.Name(): {Generation: generation}},
+			worklet.Domain{}.Name(): {Generation: generation}},
 	}); err != nil {
 		t.Fatalf("publish a counted peer: %v", err)
 	}

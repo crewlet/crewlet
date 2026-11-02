@@ -14,6 +14,26 @@
 // is on is decided in worksubject.go and what each of its segments charges that
 // item in turnspend.go, because only this package holds the trigger, the
 // runner's tally and the tracker's writer together. ADR-0022 is the decision.
+//
+// And it is where an agent's own GitHub App token is issued: when a value
+// naming it is read, for that seat's resolution alone, renewed before it runs
+// short in the seat's tool servers and in a running box's token files, and
+// never sealed (githubtoken.go), because only this package holds a seat's
+// configuration, its app's key and its boxes together. ADR-0058 is the
+// decision.
+//
+// And it is where a person's note to a running turn is carried: in the first
+// segment's box on the node running the turn until the turn launches its coding
+// run (steer.go), and from that launch to the turn's end sealed on the run's
+// record, which any node files on, the run's bridge serves and the review reads
+// (runsteer.go) — because only this package holds the turn, the run's record,
+// the bridge and the fleet keyring together. ADR-0067 is the decision.
+//
+// And it is where a seat whose models are all at their usage limit is parked
+// rather than retried into the limit (providerpark.go, on the machinery the
+// budget park shares, seatpark.go), because only this package holds the
+// dispatcher, the seat's inbox and the chain's verdict together. ADR-0064 is
+// the decision.
 package engine
 
 import (
@@ -47,7 +67,12 @@ import (
 // had just called valid. The epoch carries a nil registry instead, which is
 // what [Company.Models] documents and what the dispatcher reads to hold every
 // seat's work until a provider arrives.
-func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, error) {
+//
+// EVERY ENTRY ON THE NODE'S ONE [cliagent.Plans], which outlives the revision:
+// an entry rebuilt with the same sign-in finds the windows its predecessor was
+// sitting out there, and nil (a company built to validate it, not to run it)
+// gives each entry a registry of its own.
+func buildProviders(c *config.Company, r *config.Resolver, plans *cliagent.Plans) (*phase.Registry, error) {
 	order := c.Providers.ProviderOrder()
 	if len(order) == 0 {
 		return nil, nil
@@ -62,7 +87,7 @@ func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, err
 			// using it would fall back to another model with nothing said.
 			return nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
 		}
-		p, err := BuildCLIAgent(key, spec, r)
+		p, err := BuildCLIAgent(key, spec, r, plans)
 		if err != nil {
 			return nil, err
 		}
@@ -134,7 +159,12 @@ func (c *Company) restoreBundles(ctx context.Context) {
 // kept by the vendor's CLI in a directory on disk, and at most a single
 // long-lived token or API key beside it, so there is no pool here and nothing
 // to rotate: a second key is a second entry in the seat's fallback chain.
-func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cliagent.Provider, error) {
+//
+// plans is the node's registry of sign-ins ([cliagent.Config.Plans]); nil
+// gives the entry one of its own, which is what a command that reports on one
+// entry needs.
+func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver,
+	plans *cliagent.Plans) (*cliagent.Provider, error) {
 	stateDir, err := spec.ResolvedStateDir(key)
 	if err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
@@ -223,7 +253,6 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cl
 		Key:                        key,
 		Model:                      model,
 		Agent:                      spec.AgentName(),
-		AgentMode:                  spec.AgentMode(),
 		StateDir:                   stateDir,
 		Overrides:                  spec.Overrides,
 		Timeout:                    time.Duration(spec.Timeout() * float64(time.Second)),
@@ -232,6 +261,7 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cl
 		Auth:                       auth,
 		CredentialBundle:           bundle,
 		CredentialBundleConfigured: bundleConfigured,
+		Plans:                      plans,
 	})
 }
 

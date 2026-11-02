@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 
 	"github.com/google/uuid"
@@ -160,7 +161,9 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 	completion, err := member.Provider.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: ClusterSystemPrompt},
-			{Role: llm.RoleUser, Content: buildClusterPrompt(cluster)},
+			// A TOKEN FOR THE CALL, though it carries no fence: every
+			// line is neutralised under it ([buildClusterPrompt]).
+			{Role: llm.RoleUser, Content: buildClusterPrompt(provenance.NewBoundary(), cluster)},
 		},
 	})
 	if err != nil {
@@ -310,24 +313,32 @@ reader has to make, not as an example.
 Answer exactly {} if the turns share no procedure worth writing down — similar
 tools do not always mean the same work.`
 
-// buildClusterPrompt renders the cluster for the model.
-func buildClusterPrompt(c SkillCluster) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d turns ran this tool sequence, or one very close to it:\n%s\n",
+// buildClusterPrompt renders the cluster for the model: each member through
+// [RenderPastTurn], the one rendering of a past turn, so a member reads as what
+// woke it, how it ended and the tools it called, and what it did — under the
+// names of what they are. It was "Task:" and "Plan:", the two misnomers
+// [describeTurn] retired from the per-turn prompts: the first is the label of
+// the waking event and the second the turn's own account of what landed.
+//
+// No member's ask is shown, so nothing here is fenced: every line is a label
+// or the seat's own account, neutralised under b, because what the model
+// writes back is a skill the seat follows as its own procedure.
+func buildClusterPrompt(b provenance.Boundary, c SkillCluster) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "%d turns ran this tool sequence, or one very close to it:\n%s\n",
 		c.Size(), strings.Join(c.Sequence, " -> "))
-	b.WriteString("\nThe turns:\n")
+	out.WriteString("\nThe turns:\n")
 	for i, ep := range c.Episodes {
 		if i >= clusterPromptTurns {
-			fmt.Fprintf(&b, "\n(and %d more with the same shape)\n",
+			fmt.Fprintf(&out, "\n(and %d more with the same shape)\n",
 				c.Size()-clusterPromptTurns)
 			break
 		}
-		fmt.Fprintf(&b, "\n%d. Task: %s\n   Plan: %s\n   Tools: %s\n   Outcome: %s\n",
-			i+1, orElse(ep.TaskSummary, "(no description)"),
-			orElse(ep.PlanSummary, "(no plan)"),
-			strings.Join(ep.ToolSequence, " -> "), ep.ReviewOutcome)
+		if turn := RenderPastTurn(b, ep, PastTurn{Account: flatten(ep.PlanSummary)}); turn != "" {
+			out.WriteString("\n" + turn + "\n")
+		}
 	}
-	return b.String()
+	return out.String()
 }
 
 // seatName is the role a pass is running for, empty when it has none.

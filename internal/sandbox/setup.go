@@ -20,12 +20,11 @@ import (
 // failure at its own budget.
 //
 // ONE COMMAND'S BUDGET, NEVER THE PROVISIONING'S. A launch runs the coding
-// agent's install, the operator's steps, the box's git check and one clone
-// for each repository it is given ([MaxRunRepos]) one after another, each to
-// this budget unless its step sets its own — an hour and a half at worst for
-// the engine's own nine, the check and eight clones, before any of the
-// operator's — while the box's TTL ([DefaultBoxTimeout], 900s) is a sixth of
-// that. Nothing races the two: the launch keeps the box's timer refreshed for
+// agent's install and then every one of the operator's steps one after
+// another, and a check's box its git check and its clone, each to this budget
+// unless its step sets its own — so a launch whose operator declares a handful
+// of steps can provision for longer than the box's TTL ([DefaultBoxTimeout],
+// 900s, a step and a half of this budget). Nothing races the two: the launch keeps the box's timer refreshed for
 // as long as it provisions it ([keepProvisioning]), so the provider never
 // reaps a box out from under a step that is still within its budget, and
 // only that budget ends a slow step.
@@ -55,11 +54,12 @@ const DefaultSetupTimeout = 10 * time.Minute
 // facts into tool shape itself.
 //
 // The one exception is the engine's OWN code host, whose repositories a run
-// is granted rather than told about: the steps that give a box those are the
-// engine's ([GitVersionStep], [CloneRecipe]), carried apart from the
-// operator's ([LaunchRequest.Clone]) and applied after them, and so is the
-// git access they clone with — the run's credential and the box's git
-// configuration ([BoxGit], ADR-0063), in the launch's own environment.
+// is granted rather than told about: the commands that give a box one are the
+// engine's ([CodingSteps]: [GitVersionStep], a [CloneRecipe], the monitor's
+// [MonitorStep]), answered by the `code_checkout` that grants it for the run
+// to run itself, never applied at launch, and so is the git access they clone
+// with — the run's credential and the box's git configuration ([BoxGit],
+// ADR-0086), in the launch's own environment.
 type SetupStep struct {
 	// Name is a short identifier, used in logs and setup-failure errors.
 	Name string `yaml:"name" json:"name"`
@@ -81,8 +81,8 @@ type SetupStep struct {
 	// OptionalKeys names the keys of Env and the paths of Files whose value
 	// may resolve to nothing at launch: the engine leaves such a variable
 	// out and writes no such file, where any other reference that resolves
-	// to nothing refuses a `run_sandbox` coding run (an agent-mode
-	// executor's box starts without it, and the engine says so).
+	// to nothing is the run's gap: the executor's box starts without it,
+	// and the engine says so.
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
 
 	// Brief is the environment-context paragraph for the coding agent —
@@ -108,7 +108,9 @@ func (s SetupStep) timeout() time.Duration {
 //
 // Distinct from an install failure on purpose: a failed setup step is an
 // OPERATOR CONFIG problem (a broken role or provider setup command), not a
-// coding-agent install problem, and the two want different debugging.
+// coding-agent install problem, and the two want different debugging. One
+// status says the recipe is not what broke: a command that exits
+// [exitTempFail] says a download it makes failed for now ([SetupError.why]).
 //
 // THREE FAILURES, AND THE MESSAGE SAYS WHICH. A step fails writing one of its
 // files, or running a command that then exits non-zero, or running a command
@@ -133,6 +135,12 @@ type SetupError struct {
 	Exited bool
 	Exit   int
 	Detail string
+
+	// Err is what the box answered where it did not run the step to an
+	// exit status — a write or a command it could not take — and nil for
+	// a command that exited: what kept the step from running is the
+	// box's, and [WhyOf] reads it through [SetupError.Unwrap].
+	Err error
 }
 
 func (e *SetupError) Error() string {
@@ -151,9 +159,43 @@ func (e *SetupError) Error() string {
 	return msg
 }
 
+// Unwrap is what the box answered, where it answered something.
+func (e *SetupError) Unwrap() error { return e.Err }
+
+// why is a step a command of which EXITED non-zero: the recipe is the
+// company's, so a person changes it. A step the box never ran to an exit is
+// not classed here: the box's own answer says why ([SetupError.Err]).
+//
+// EXCEPT A COMMAND THAT EXITED [exitTempFail], which is the recipe saying
+// that a download it makes is failing on the far side, and still was once
+// the command's own retries ran out: a wait clears that, not a person
+// ([WhySetupUnavailable]). Only the recipe can tell the two apart: the
+// engine has a status, and an account of the failure it does not read. A
+// step that downloads on every new box, as the sandbox guide's stock-image
+// recipe installs its coding CLI from npm and GitHub, makes a registry's
+// outage an ordinary way for a setup to fail, and classed with every other
+// exit it would read as a setup an administrator has to fix, which no wait
+// clears. Every other status is
+// still the recipe's to change, the step's own timeout (124) among them: a
+// command that runs until timeout_seconds stops it is as likely a network
+// the box cannot reach as a slow one, and the budget is the operator's.
+func (e *SetupError) why() (Why, bool) {
+	if e.Exited && e.Exit == exitTempFail {
+		return WhySetupUnavailable, true
+	}
+	return WhyConfiguration, e.Exited
+}
+
+// exitTempFail is the status a setup command exits with to say its failure
+// is temporary: EX_TEMPFAIL, which sysexits.h defines as a temporary failure
+// worth retrying, so the convention is the shell's own rather than a number
+// only this engine reads that way. docs/concepts/code-sandbox.md tells a
+// recipe when to use it.
+const exitTempFail = 75
+
 // ApplySetup applies every step to a box: write files, run commands, in order —
-// a fresh box's whole provisioning, or the clone steps a reused one is given
-// ([LaunchRequest.Clone]), each of which skips a repository already there.
+// a fresh box's whole provisioning, or a check box's git floor and checkout
+// ([Manager.AcquireBox]).
 //
 // env is the run env the coding agent will get — commands run WITH it so a
 // recipe can reference the engine's identity facts and its own configured
@@ -169,7 +211,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 		paths := slices.Sorted(maps.Keys(step.Files))
 		for _, path := range paths {
 			if err := box.WriteFile(ctx, path, []byte(step.Files[path])); err != nil {
-				return &SetupError{Step: step.Name, File: path, Detail: err.Error()}
+				return &SetupError{Step: step.Name, File: path, Detail: err.Error(), Err: err}
 			}
 		}
 		for i, cmd := range step.Commands {
@@ -178,7 +220,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 				TimeoutSec: step.timeout().Seconds(),
 			})
 			if err != nil {
-				return &SetupError{Step: step.Name, Command: i + 1, Detail: err.Error()}
+				return &SetupError{Step: step.Name, Command: i + 1, Detail: err.Error(), Err: err}
 			}
 			if result.ExitCode != 0 {
 				// NOT the command text. The engine resolves nothing in a

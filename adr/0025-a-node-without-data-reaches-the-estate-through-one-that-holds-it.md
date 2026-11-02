@@ -23,9 +23,10 @@ the same service, floored on the identity log.
 
 Four rules make that sound, and each is stated once, at `internal/estate`:
 the client picks the node and the failover is per operation (a read and a
-tracker write carrying an operation id move on, a page write moves on only when
-its caller named the operation, and an unnamed one that went unanswered is
-reported unknown and never repeated); every request carries the
+tracker write carrying an operation id move on, a page or chat write moves on
+only when its caller named the operation, a chat erase or prune moves on under
+its own operation id, and an unnamed one that went unanswered is reported unknown and never
+repeated); every request carries the
 asking node's SESSION FLOOR, so whichever data node answers has applied the
 node's own writes; what a stateless node publishes is persisted on exactly one
 data node's event log (custody: published durably, taken by a fleet-wide group,
@@ -99,7 +100,7 @@ consequences of routing on every node rather than on the nodes that hold none:
   is this record's decision, applied to the node itself. An estate no data node
   serves refuses the operation saying so, never an empty answer.
 - The OPERATOR'S surfaces go through the same router as the seats' tools: the
-  API's tracker and knowledge-base routes, a project's file rows and the
+  API's tracker, knowledge-base and chat routes, a project's file rows and the
   operator's own MCP. Read straight off the node's own copy, a data node whose
   copy was out of service answered its seats from a peer and its operator from
   the copy it had stopped serving. What still keeps `ingress` on a data node is
@@ -112,12 +113,12 @@ whether a copy lags rather than whether it is level this instant — and choosin
 a lagging copy last rather than never.
 `internal/estate` states the rules; the authority and the gate are unchanged.
 
-A copy goes out of service one DOMAIN at a time — ADR-0049.
+A copy goes out of service one DOMAIN at a time — ADR-0072.
 
 ## Amendment — a repository's git work is asked of its home git node
 
 The router has a second placement beside the data nodes:
-[ADR-0059](0059-a-repositorys-git-work-is-asked-of-its-home-git-node.md). An
+[ADR-0082](0082-a-repositorys-git-work-is-asked-of-its-home-git-node.md). An
 operation on a repository's git OBJECTS — a read of its content by object id —
 is asked of the nodes with the `git` role rather than of the data nodes, in the
 repository's rendezvous order over them, its home first, and answered from the

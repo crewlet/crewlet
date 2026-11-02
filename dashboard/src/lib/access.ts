@@ -3,10 +3,10 @@
  *
  * The engine's whole vocabulary is admin and the apps (`contract/identity.ts`'s
  * GRANTS, held to `iam.AllGrants`): `admin`, which runs the company and the
- * engine and INCLUDES EVERY APP, and one permission per app: `tracker` for
- * the work tracker, `knowledge` for the knowledge base and `artifacts` for
- * authoring artifacts (APPS, held to `iam.Apps`, the one place an app is
- * declared). Everything a signed-in
+ * engine and INCLUDES EVERY APP, and one permission per app: `worklet` for
+ * Worklet, `doclet` for Doclet, `artifacts` for authoring artifacts and `chatlet`
+ * for the company's own chat (APPS, held to `iam.Apps`, the one place an app
+ * is declared). Everything a signed-in
  * principal may do beyond its own account and the read-only overview comes
  * from these, so this module is the one place a screen asks "does the reader
  * hold this?" and the one place the dashboard says a permission in words.
@@ -18,7 +18,7 @@
  * viewer needs nothing more. A STORED row is another matter: a person's
  * directory row, an invitation or a token may hold `[admin]` alone (a Tier A
  * file, a CLI create), and reading it raw would draw an administrator as
- * holding neither app. Every comparison here therefore goes through [expand],
+ * holding no app. Every comparison here therefore goes through [expand],
  * the engine's own `iam.Expand`, so a lock, a picker and a People row read
  * one answer however the set was stored.
  *
@@ -46,11 +46,14 @@ export type App = (typeof APPS)[number];
 /** The permission that runs the company and the engine, and includes every app. */
 export const ADMIN: Grant = "admin";
 
-/** The work tracker's permission. */
-export const TRACKER: App = "tracker";
+/** Worklet's permission: projects, tasks, the inbox and My work. */
+export const WORKLET: App = "worklet";
 
-/** The knowledge base's permission. */
-export const KNOWLEDGE: App = "knowledge";
+/** Doclet's permission: spaces and pages. */
+export const DOCLET: App = "doclet";
+
+/** The company's own chat's permission. */
+export const CHATLET: App = "chatlet";
 
 /** Whether `name` is an app this build knows. */
 export function isApp(name: string): name is App {
@@ -109,17 +112,22 @@ export const ACCESS_WORDS: Record<Grant, { label: string; description: string }>
     description:
       "Runs the company: settings, secrets and people. Includes every app, and host access to the engine.",
   },
-  tracker: {
-    label: "Tracker",
+  worklet: {
+    label: "Worklet",
     description: "Tasks, projects, the inbox and My work.",
   },
-  knowledge: {
-    label: "Knowledge",
+  doclet: {
+    label: "Doclet",
     description: "Read, search and write pages.",
   },
   artifacts: {
     label: "Artifacts",
     description: `Create and publish ${KIND_LIST}. Anything shared with them opens without it.`,
+  },
+  chatlet: {
+    label: "Chatlet",
+    description:
+      "Use the company's own chat: read, search and talk in rooms, open conversations, and keep your read state. Agents talk to people through it.",
   },
 };
 
@@ -134,7 +142,7 @@ export function accessLabel(name: string): string {
  *
  *   - "Admin" for anybody holding admin (every app is included, so naming
  *     them beside it would read as if they were separate);
- *   - otherwise the apps they hold, "Tracker · Knowledge";
+ *   - otherwise the apps they hold, "Worklet · Doclet";
  *   - "Overview only" for nobody's apps — the org chart, agents' status,
  *     spend and their own account, which every signed-in principal reads.
  *
@@ -175,18 +183,27 @@ export function questionWithheld(run: { question?: string; body_withheld?: boole
 }
 
 /**
- * A refused change's one sentence, to the reader: "You need Tracker access for
+ * A refused change's one sentence, to the reader: "You need Worklet access for
  * this." ONE SENTENCE where the refusal and its remedy were two that said the
- * same thing ("You do not hold what this change needs. This needs Tracker
+ * same thing ("You do not hold what this change needs. This needs Worklet
  * access.").
  */
 export function youNeedWords(needs: readonly string[]): string {
   return `You need ${accessNames(needs)} access for this.`;
 }
 
-/** The permissions a lock names, as words: "Tracker", or "Tracker or Knowledge". */
+/**
+ * The permissions a lock names, as words: "Worklet", "Worklet or Doclet",
+ * "Worklet, Doclet or Artifacts": commas, and "or" before the last, the
+ * way the engine names them in a refusal's own sentence (httpjson's
+ * grantWords), so a screen and the message beside it never list one set two
+ * ways. Joined by "or" alone, three permissions read as "Worklet or Doclet
+ * or Artifacts" on the screen while the engine wrote the comma form.
+ */
 export function accessNames(needs: readonly string[]): string {
-  return needs.map(accessLabel).join(" or ");
+  const words = needs.map(accessLabel);
+  if (words.length < 3) return words.join(" or ");
+  return `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
 }
 
 /**
@@ -212,15 +229,17 @@ export function groupLock(reasons: readonly (string | undefined)[]): string | un
 
 /**
  * The one sentence a lock or a refusal says about `what` (a capitalised
- * subject: "Work", "Taking a backup") and the permissions that would open it:
- * "Work needs Tracker access. An admin can give it to you."
+ * subject: "Search", "Taking a backup") and the permissions that would open it:
+ * "Search needs Doclet access. An admin can give it to you."
  *
  * FROM THE ANSWER WHERE THERE IS ONE: a refusal's `grants` are the engine's
- * own (`refusedGrants`), and a lock's are the navigation table's. With none,
- * nothing the engine accepted was presented — a 401 — and the repair is to
- * sign in rather than to ask an admin.
+ * own (`refusedGrants`), and a lock's are the navigation table's. A refusal
+ * that names none is `lib/refusal.ts`'s `authorityWords`, which tells a 401
+ * from a rule's refusal: this said "Sign in to see this." for any empty list,
+ * so a signed-in person a rule refused was told to sign in. With none, it says
+ * only that there is no access.
  */
 export function needsWords(what: string, needs: readonly string[]): string {
-  if (needs.length === 0) return "Sign in to see this.";
+  if (needs.length === 0) return "You don’t have access to this.";
   return `${what} needs ${accessNames(needs)} access. An admin can give it to you.`;
 }

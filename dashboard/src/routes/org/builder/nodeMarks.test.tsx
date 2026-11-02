@@ -94,7 +94,7 @@ describe("a seat's live state", () => {
       />,
     );
     expect(screen.queryByText("working")).toBeNull();
-    expect(screen.getByText("Offline")).toBeDefined();
+    expect(screen.getByText("No state yet")).toBeDefined();
   });
 
   /*
@@ -140,7 +140,7 @@ describe("a seat's live state", () => {
    */
   test("a saved agent seat the engine never mentions is offline", () => {
     render(<LiveState api={api([])} view={seat()} />);
-    expect(screen.getByText("Offline")).toBeDefined();
+    expect(screen.getByText("No state yet")).toBeDefined();
   });
 
   /*

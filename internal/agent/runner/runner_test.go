@@ -274,8 +274,20 @@ func TestARefusalOnTheTrackerNamesTheTrackersOwnTools(t *testing.T) {
 
 	chatted := decodeWork(turn.ToolReply("work"),
 		func() []ledger.Call { return []ledger.Call{{Name: "mattermost_post_message"}} }, surface)
-	if err := mustErr(t, chatted, claim); !strings.Contains(err.Error(), "somewhere else") {
-		t.Errorf("the refusal does not say the turn's write landed elsewhere: %v", err)
+	elsewhere := mustErr(t, chatted, claim)
+	if !strings.Contains(elsewhere.Error(), "somewhere else") {
+		t.Errorf("the refusal does not say the turn's write landed elsewhere: %v", elsewhere)
+	}
+
+	// BOTH OPEN WITH THE ONE EXPORTED CLAUSE, which is what a scripted model
+	// recognises the refusal by: a copy of the sentence that drifted from
+	// this one never sees it, and answers the same claim until the rounds
+	// run out.
+	for _, refused := range []error{err, elsewhere} {
+		if !strings.HasPrefix(refused.Error(), NotDeliveredOn("work")) {
+			t.Errorf("a refusal naming the surface does not open with %q: %v",
+				NotDeliveredOn("work"), refused)
+		}
 	}
 }
 
@@ -367,12 +379,14 @@ func TestASubmissionFieldTheSchemaDoesNotDeclareIsRefused(t *testing.T) {
 	decodeAWork := decodeWork(turn.NoReply(), func() []ledger.Call { return nil }, deliverySurface)
 	if _, err := decodeReview(args(t, `{"decision":"self_iterate",`+
 		`"notes":"link the runbook","complete_work":"posted the summary"}`)); err == nil ||
-		!strings.Contains(err.Error(), `"complete_work"`) {
+		!strings.Contains(err.Error(), "complete_work is not a key") ||
+		!strings.Contains(err.Error(), "completed_work") {
 		t.Errorf("a review's misspelt field answered %v, want it refused by name", err)
 	}
 	if _, err := decodeAWork(args(t,
 		`{"outcome":"no_action","summary":"nothing asked","evidnce":"x"}`)); err == nil ||
-		!strings.Contains(err.Error(), `"evidnce"`) {
+		!strings.Contains(err.Error(), "evidnce is not a key") ||
+		!strings.Contains(err.Error(), "evidence") {
 		t.Errorf("a work submission's misspelt field answered %v, want it refused by name", err)
 	}
 }

@@ -66,15 +66,15 @@ import (
 // json_each(?))` in refsNamedSQL and it seeks repo_id alone; drop `position >=
 // ?` from refsDeltaAfterSQL and the page seeks repo_id alone; drop row_bytes
 // from code_pushes_repo_idx and the purge's and the horizon's reads stop
-// covering; order the push listing by `at` again, which replicated 0056 moved
+// covering; order the push listing by `at` again, which replicated 0079 moved
 // out of code_pushes_repo_idx's key, and it sorts every push of the
 // repository; order the purge's walk of a repository's changes by `c.number,
 // r.n` and it sorts every revision the repository holds; write a claim's live
 // states in another order and it seeks code_changes_state_idx; lead
-// code_ref_drops' key with the position again (replicated 0061 moved the
+// code_ref_drops' key with the position again (replicated 0084 moved the
 // instant ahead of it) and the drops' expiry and a purge part sort what they
 // seek rather than read it in order; key code_changes_work_idx by the item
-// alone again (replicated 0069 ordered it) and a work item's listing sorts
+// alone again (replicated 0092 ordered it) and a work item's listing sorts
 // every change the item ever carried.
 func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
@@ -89,7 +89,7 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	// whether it reads a table by a scan is the read gate's to judge, of a
 	// claim as of a registered statement (TestEveryCodeReadSeeksANamedIndex).
 	held := func(t *testing.T, name string, st statement) []string {
-		plan := explain(t, db, st.sql, st.args)
+		plan := storetest.Plan(t, db, st.sql, st.args)
 		if len(st.seeks) == 0 {
 			t.Fatalf("%s names no seek — every registered statement is held to one", name)
 		}
@@ -101,7 +101,7 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 		// AND THE ORDER IS THE SEEK'S: a statement whose ORDER BY the index
 		// it seeks does not serve SORTS every row the seek finds before its
 		// LIMIT takes one — a push listing still ordered by the instant
-		// replicated 0056 moved out of code_pushes_repo_idx's key would read
+		// replicated 0079 moved out of code_pushes_repo_idx's key would read
 		// every push of the repository, its 181 days, on every page.
 		// Two-sided: a statement declared to sort that no longer does loses
 		// the declaration.
@@ -117,7 +117,7 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 			t.Errorf("%s is declared to sort (%s) and its plan reads in its index's order: "+
 				"drop the declaration:\n%s", name, why, strings.Join(plan, "\n"))
 		}
-		return indexesIn(plan)
+		return storetest.IndexesIn(plan)
 	}
 	used := map[string]bool{}
 	for name, st := range everyStatement(t) {
@@ -138,7 +138,7 @@ func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 			claimed[index] = true
 		})
 	}
-	for _, index := range indexesOn(t, db, covered) {
+	for _, index := range storetest.IndexesOn(t, db, covered) {
 		switch {
 		case used[index] && claimed[index]:
 			t.Errorf("%s is read by a registered statement and still carries a claimed read — "+
@@ -172,7 +172,7 @@ func TestTheRefConflictProbesStepOverNoTombstone(t *testing.T) {
 	db := seededPlanEstate(t)
 	gaps := `[["refs/heads/r/","refs/heads/r0"],["refs/heads/r000001/","refs/heads/r0000010"]]`
 	for name, probe := range map[string]string{"gaps holding": gapsHoldingSQL, "first live in": firstLiveInSQL} {
-		plan := explain(t, db, probe, []any{"repo-1", gaps})
+		plan := storetest.Plan(t, db, probe, []any{"repo-1", gaps})
 		reads := 0
 		for _, line := range plan {
 			if !strings.Contains(line, "code_refs") {
@@ -439,7 +439,7 @@ func registeredStatements() map[string]statement {
 		// place, each a COVERING seek, so weighing a wide row never reads it
 		// — and then the run's own in exactly that window, the same index's
 		// range with every row it reaches tested for the run, which no index
-		// carries (replicated 0070); never a sort.
+		// carries (replicated 0093); never a sort.
 		"run weigh": {runWeighSQL, []any{"repo-1", 11, "", 50},
 			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position>=?)"}},
 		"run weights": {runWeightsSQL, []any{"repo-1", 11, "", 50},
@@ -869,16 +869,19 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)"}},
 		// THE QUEUE'S OWN RECORDS (queuerecords.go, decide_queue.go,
 		// apply_queuerecords.go, queue_sweep.go): a list of entries by their
-		// key, driven from the list; an entry put in a candidate, ejected and
-		// landed by its key; a target's train abandoned — its testing entries
+		// key, and a list of their changes by theirs, each driven from the
+		// list — the entries a record puts in a candidate, ejects and lands
+		// are written back as upserts on their key, which have no plan; a
+		// target's train abandoned — its testing entries
 		// over code_queue_live_idx, its candidates over
 		// code_candidates_train_idx — a train's landed candidates and its
 		// candidates at a record's position over the same; a train's pack's
 		// counters by the repository's key; a landing record's tip, a landing
 		// by its key, broken by it, and the landings between a green row and
 		// a landing counted and marked over the key's range; and the queue's
-		// history — ended entries counted and removed over
-		// code_queue_ended_idx, a target's landings below its green read and
+		// history — ended entries walked in its key's order and weighed from
+		// code_queue_ended_idx alone, and removed over its key's range up to
+		// the last one walked, a target's landings below its green read and
 		// removed over the key's range — and the sweep's listing, a walk of
 		// the repositories by their key, two seeks each.
 		"entries named": {entriesNamedSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
@@ -888,12 +891,8 @@ func registeredStatements() map[string]statement {
 		"entries a push ejected": {pushEjectedSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`,
 			1000, "ejected", "head_moved"},
 			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
-		"test an entry": {testEntrySQL, []any{"train-1", "candidate-1", oid("m"), "repo-1", "entry-1"},
-			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
-		"eject an entry": {ejectEntrySQL, []any{1, 1000, "check_failed", "", "repo-1", "entry-1"},
-			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
-		"land an entry": {landEntrySQL, []any{1, 1000, oid("m"), "repo-1", "entry-1"},
-			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"changes named": {changesNamedSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", changeKey + " (id=?)"}},
 		"abandon a train's entries": {resetTrainSQL, []any{"repo-1", "refs/heads/main"},
 			[]string{"code_queue_live_idx (repo_id=? AND target_ref=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"abandon a train's candidates": {dropTrainSQL, []any{"repo-1", "refs/heads/main"},
@@ -924,10 +923,10 @@ func registeredStatements() map[string]statement {
 		"mark landings green": {greenLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 2000},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>? AND position<=?)",
 				"INTEGER PRIMARY KEY (rowid=?)"}},
-		"ended entries before": {endedBeforeSQL, []any{"repo-1", 1000, QueueSweepRows + 1},
-			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)"}},
-		"sweep ended entries": {sweepEndedSQL, []any{"repo-1", 1000, QueueSweepRows},
-			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"ended entries within": {endedWithinSQL, []any{"repo-1", 1000, QueueSweepRows + 1},
+			[]string{"COVERING INDEX code_queue_ended_idx (repo_id=? AND ended_at<?)"}},
+		"sweep ended entries": {sweepEndedSQL, []any{"repo-1", 1000, 1000, "entry-1"},
+			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"landings below green": {landingsBelowSQL, []any{"repo-1", "refs/heads/main", 1000, QueueSweepRows + 1},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position<?)"}},
 		"sweep landings": {sweepLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, 2},
@@ -1087,22 +1086,33 @@ func registeredStatements() map[string]statement {
 		"reviews given after": {reviewsGivenAfterSQL, []any{"seat-0", 3000, 50},
 			[]string{reviewsGivenKey + " (reviewer=? AND position<?)"}},
 		// ONE PERSON'S CODE INBOX (inboxread.go, marks.go): a range of their
-		// notices newest first, every filter bound; each change the page
-		// names is changesByIDSQL's row (its readiness the listing's
-		// statements), its description by the body's key; each one's open
-		// agent findings, a range of the raiser index; the person's marks by
-		// their key; and where one notice of theirs sits, by the notice's key.
+		// notices newest first, every filter bound — under `unread` its lower
+		// bound the seen-through position — and the notices an unread mark
+		// brings back below it, one seek of the notice's key a pair; each
+		// change the page names is changesByIDSQL's row (its readiness the
+		// listing's statements), its description by the body's key; each one's open
+		// agent findings, a covering seek of the index partial on them alone
+		// (replicated 0132); the person's marks by
+		// their key; and where the notices of theirs a mark names sit, one
+		// seek of the notice's key a pair of the gesture's list.
 		"an inbox page": {inboxScanSQL, []any{"founder", int64(1) << 62, 0, 0, "[]", 0, "[]", "[]", "", 0,
 			"exclude", "[]", "[]", 50},
 			[]string{"code_notifications_inbox_idx (recipient=? AND log_seq>? AND log_seq<?)"}},
+		"the notices an unread page brings back below the position": {inboxMarkedSQL,
+			[]any{`[["record-1","repo-1-change-000001"]]`, "founder", int64(1) << 62, 0, 0, "[]", "exclude", "[]",
+				"[]"},
+			[]string{"SCAN json_each AS j",
+				"sqlite_autoindex_code_notifications_1 (record_id=? AND change_id=? AND recipient=?)"}},
 		"the descriptions an inbox page names": {noticeBodiesSQL, []any{`["repo-1-change-000001"]`},
 			[]string{"SCAN json_each AS j", bodyKey + " (change_id=?)"}},
-		"the agent findings an inbox page names": {noticeFindingsSQL, []any{`["repo-1-change-000001"]`, "open",
-			"agent"}, []string{"SCAN json_each AS j", "code_findings_raiser_idx (change_id=?)"}},
+		"the agent findings an inbox page names": {noticeFindingsSQL, []any{`["repo-1-change-000001"]`},
+			[]string{"SCAN json_each AS j", "COVERING INDEX " + openAgentFindingsKey + " (change_id=?)"}},
 		"a person's code marks": {personMarksSQL, []any{"founder"},
 			[]string{"sqlite_autoindex_code_person_marks_1 (handle=?)"}},
-		"where a person's notice sits": {noticePositionSQL, []any{"record-1", "repo-1-change-000001", "founder"},
-			[]string{"sqlite_autoindex_code_notifications_1 (record_id=? AND change_id=? AND recipient=?)"}},
+		"where the notices a mark names sit": {noticePositionsSQL,
+			[]any{`[["record-1","repo-1-change-000001"],["record-2","repo-1-change-000002"]]`, "founder"},
+			[]string{"SCAN json_each AS j",
+				"sqlite_autoindex_code_notifications_1 (record_id=? AND change_id=? AND recipient=?)"}},
 		"whom a change reached": {changeNoticesSQL, []any{"repo-1-change-000001"},
 			[]string{"code_notifications_change_idx (change_id=?)"}},
 		"whom a change reached after": {changeNoticesAfterSQL, []any{"repo-1-change-000001", 3000},
@@ -1184,7 +1194,7 @@ func registeredStatements() map[string]statement {
 		// listing, by name over code_repos_search_idx.
 		"indexed": {indexedSQL, []any{string(SearchIndexed), "", MaxSnapshotItems},
 			[]string{"code_repos_search_idx (search=? AND name>?)"}},
-		// THE HOME'S LISTINGS OF WHAT IT OWES OTHER HOSTS (replicated 0095's
+		// THE HOME'S LISTINGS OF WHAT IT OWES OTHER HOSTS (replicated 0118's
 		// indexes): the repositories being imported by id, the push mirrors
 		// by id and the pull mirrors least recently synced first — each a
 		// keyset page, its partial predicate repeated verbatim.
@@ -1475,7 +1485,7 @@ func planShapes() map[string]shape {
 // package issues reads YET, by name, with the read its migration's `-- <reader>`
 // comment claims for it — planned here, so the claim is the planner's from the
 // migration that declares the index rather than from whichever change first
-// issues the read. A change's indexes land with its tables (replicated 0058),
+// issues the read. A change's indexes land with its tables (replicated 0081),
 // one migration for the rows rather than one an index, and their reads — the
 // lifecycle's, the listings', a commit's page — are each a change's of its own,
 // and are registered now (changeread.go, commitread.go): what stays a claim is
@@ -1493,18 +1503,18 @@ func planShapes() map[string]shape {
 // sees a claim, which no code issues yet.
 func claimedReads() map[string]statement {
 	return map[string]statement{
-		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0079):
+		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0102):
 		// the indexed repositories in name order, a keyset page at a time —
 		// the walk of a git node that keeps indexes, and of a search across
 		// the company's repositories — its partial predicate repeated
 		// verbatim. Nothing in this build reads a repository by its mode.
-		// THE MERGE QUEUE'S INDEX ITS LATER READERS SEEK (replicated 0082):
+		// THE MERGE QUEUE'S INDEX ITS LATER READERS SEEK (replicated 0105):
 		// a change's landings, a broken landing's authors' and the change
 		// page's. Nothing in this build reads a change's landings.
 		"code_landings_change_idx": {`SELECT repo_id, target_ref, position, ordinal FROM code_landings
 			INDEXED BY code_landings_change_idx WHERE change_id = ? AND change_id != ''`,
 			[]any{"repo-1-change-000001"}, []string{"code_landings_change_idx (change_id=?)"}},
-		// A PERSON'S CODE INBOX (replicated 0081), newest first: the
+		// A PERSON'S CODE INBOX (replicated 0104), newest first: the
 		// composed inbox's code half reads it.
 		"code_notifications_inbox_idx": {`SELECT record_id FROM code_notifications
 			WHERE recipient = ? ORDER BY log_seq DESC LIMIT ?`, []any{"founder", 50},
@@ -1727,78 +1737,4 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 		t.Fatalf("seed the plan estate: %v", err)
 	}
 	return db
-}
-
-// explain is a statement's query plan, one detail line a step.
-func explain(t *testing.T, db store.ReplicatedHandle, statement string, args []any) []string {
-	t.Helper()
-	var plan []string
-	// A WRITER'S TRANSACTION, because a read's refuses to plan a write — and
-	// EXPLAIN executes nothing it plans.
-	if err := db.Tx(context.Background(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(context.Background(), "EXPLAIN QUERY PLAN "+statement, args...)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var id, parent, notUsed int
-			var detail string
-			if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
-				return err
-			}
-			plan = append(plan, detail)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("EXPLAIN QUERY PLAN:\n%s\n%v", statement, err)
-	}
-	return plan
-}
-
-// indexesIn reads the index names out of a plan.
-func indexesIn(plan []string) []string {
-	var found []string
-	for _, line := range plan {
-		_, tail, ok := strings.Cut(line, "USING INDEX ")
-		if !ok {
-			_, tail, ok = strings.Cut(line, "USING COVERING INDEX ")
-		}
-		if !ok {
-			continue
-		}
-		name, _, _ := strings.Cut(tail, " ")
-		found = append(found, strings.TrimSpace(name))
-	}
-	return found
-}
-
-// indexesOn is every index the schema declares on these tables.
-func indexesOn(t *testing.T, db store.ReplicatedHandle, tables []string) []string {
-	t.Helper()
-	var found []string
-	if err := db.Read(context.Background(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(context.Background(), `SELECT name, tbl_name FROM sqlite_master
-			WHERE type = 'index' AND sql IS NOT NULL ORDER BY name`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var name, table string
-			if err := rows.Scan(&name, &table); err != nil {
-				return err
-			}
-			if slices.Contains(tables, table) {
-				found = append(found, name)
-			}
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("read the indexes: %v", err)
-	}
-	if len(found) == 0 {
-		t.Fatal("the schema declares no index on any covered table")
-	}
-	return found
 }

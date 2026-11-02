@@ -51,16 +51,22 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 
 	write := func(id, kind, turn string, at time.Time) {
 		t.Helper()
-		log := onA
-		if id == "c" || id == "d" {
-			log = onB
+		// EACH ROW NAMES THE NODE THAT PUBLISHED IT: node-a's and node-b's
+		// own, except t-2's, which ran on agent-1 — a node without `data`
+		// whose events node-b keeps in custody.
+		log, origin := onA, "node-a"
+		switch id {
+		case "c":
+			log, origin = onB, "node-b"
+		case "d":
+			log, origin = onB, "agent-1"
 		}
 		payload, err := json.Marshal(map[string]any{"turn_id": turn, "phase": "plan"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if err := log.Append(t.Context(), store.EventRecord{
-			ID: id, Type: kind, Time: at, Category: "lifecycle", Actor: "PM",
+			ID: id, Type: kind, Time: at, Category: "lifecycle", Actor: "PM", Node: origin,
 			Tags: map[string]string{"turn_id": turn, "agent_role": "PM"},
 			// The tag is what promotes the column; the payload is what a
 			// reader renders.
@@ -97,16 +103,17 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 	if got["turn_id"] != "t-1" {
 		t.Errorf("answer does not name its turn: %v", got)
 	}
-	// WHERE IT RAN: both nodes' stores hold part of it, and a stored row
-	// carries no node of its own, so the answer is the only thing that can
-	// say so.
+	// WHERE IT RAN: both nodes published part of it, and the answer says so
+	// off the rows.
 	if nodes, _ := got["nodes"].([]any); len(nodes) != 2 || nodes[0] != "node-a" || nodes[1] != "node-b" {
-		t.Errorf("nodes = %#v; want both nodes that hold part of the turn", got["nodes"])
+		t.Errorf("nodes = %#v; want both nodes that published part of the turn", got["nodes"])
 	}
-	// AND ONLY THOSE: t-2 lives on node-b alone.
+	// AND ONLY THOSE, and never the node that merely HOLDS a turn: t-2 is in
+	// node-b's store alone, and it ran on agent-1.
 	other := asMap(t, answer(t, queries.Sources{Events: fleet}, "turn", map[string]any{"turn_id": "t-2"}))
-	if nodes, _ := other["nodes"].([]any); len(nodes) != 1 || nodes[0] != "node-b" {
-		t.Errorf("nodes for t-2 = %#v; want node-b alone", other["nodes"])
+	if nodes, _ := other["nodes"].([]any); len(nodes) != 1 || nodes[0] != "agent-1" {
+		t.Errorf("nodes for t-2 = %#v; want agent-1, the node that ran it, not node-b, which keeps it",
+			other["nodes"])
 	}
 	// A SHORT TURN IS NOT A CUT ONE. The flag has to be present and false,
 	// or a client cannot tell "read to the end" from an answer that failed
@@ -1254,14 +1261,14 @@ func (s countingSearcher) Search(context.Context, knowledge.Query) knowledge.Res
 
 // THE KNOWLEDGE QUESTION SEARCHES PAGES, AND ONLY FOR SOMEBODY WHO HOLDS THE
 // KNOWLEDGE BASE (ADR-0033). Everybody may ask it; a hit is a page, so a caller
-// holding the tracker alone is answered `available: false` with the reason
+// holding Worklet alone is answered `available: false` with the reason
 // `no_access` and never searched for — a screen says their access leaves the
 // pages out, not that the company wrote nothing down — and a caller holding
 // neither app is refused naming both, since nothing it searches is theirs.
 //
 // Mutation: drop the knowledge check and the tracker-only caller is handed a
 // page; drop the refusal and the caller holding nothing is answered.
-func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
+func TestTheKnowledgeQuestionSearchesPagesOnlyWithDoclet(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name     string
@@ -1269,9 +1276,9 @@ func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
 		searched bool
 		refused  bool
 	}{
-		{"the knowledge base", []iam.Grant{iam.GrantKnowledge}, true, false},
+		{"the knowledge base", []iam.Grant{iam.GrantDoclet}, true, false},
 		{"an admin", []iam.Grant{iam.GrantAdmin}, true, false},
-		{"the tracker alone", []iam.Grant{iam.GrantTracker}, false, false},
+		{"the tracker alone", []iam.Grant{iam.GrantWorklet}, false, false},
 		{"neither app", nil, false, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -1287,8 +1294,10 @@ func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
 				map[string]any{"q": "deploy"})
 			if c.refused {
 				var refusal *queries.Refusal
-				if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, iam.Apps) {
-					t.Fatalf("answered %v, want a refusal naming every app %v", err, iam.Apps)
+				both := []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}
+				if !errors.As(err, &refusal) || !slices.Equal(refusal.Grants, both) {
+					t.Fatalf("answered %v, want a refusal naming the two apps it "+
+						"searches, %v", err, both)
 				}
 				if calls.Load() != 0 {
 					t.Error("a refused caller was searched for")
@@ -1305,17 +1314,17 @@ func TestTheKnowledgeQuestionSearchesPagesOnlyWithKnowledge(t *testing.T) {
 			}
 			if c.searched {
 				if len(hits) != 1 || answer["available"] != true {
-					t.Errorf("a knowledge holder was answered %v", answer)
+					t.Errorf("a Doclet holder was answered %v", answer)
 				}
 				return
 			}
 			reason := queries.KnowledgeReason(fmt.Sprint(answer["reason"]))
 			if len(hits) != 0 || answer["available"] != false ||
 				reason != queries.KnowledgeNoAccess || !reason.Valid() {
-				t.Errorf("a tracker-only caller was answered %v, want no hits, "+
+				t.Errorf("a Worklet-only caller was answered %v, want no hits, "+
 					"available false and the no_access reason", answer)
 			}
-			if !strings.Contains(fmt.Sprint(answer["note"]), "Knowledge") {
+			if !strings.Contains(fmt.Sprint(answer["note"]), "Doclet") {
 				t.Errorf("the note %q does not say which access is missing", answer["note"])
 			}
 		})

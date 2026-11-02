@@ -5,13 +5,13 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE SEAT-HOLDER CHECK: a write may not take a human seat out of the company
@@ -57,10 +57,23 @@ import (
 //
 // # An unreadable directory refuses, and only a write that needs it
 //
-// A write that takes no human seat away never asks. One that does and cannot
+// A write that takes no human seat away never asks, except a whole document
+// replacing an unsealed revision, which can't tell what it takes away (below).
+// One that does and cannot
 // read the directory is refused 503 rather than allowed: a removal may not
 // proceed on evidence this node does not have, and an outage read as "nobody
 // holds it" is exactly the answer the write would act on.
+//
+// # A document replacing what nobody can read asks about every seat
+//
+// The seats a write takes away are the human seats of the revision it
+// replaces that its own document does not keep. A whole document replacing a
+// revision stored without a seal reads nothing from it (apply.go), so it has
+// no such list: it asks instead about EVERY seat its document does not keep
+// as a human seat, and only the directory knows which of those anybody holds.
+// So it always asks, and a held seat it drops is refused exactly as a removal
+// is. Judged against nothing, the check would answer "nothing leaves" and the
+// replacement would take every seat it dropped from whoever holds it.
 
 // SeatHolder is the ONE thing holding a human seat, as a refusal names it: a
 // person or a service account bound to it, or an open invitation onto it.
@@ -103,17 +116,23 @@ func (h SeatHolder) held() string {
 	return cmp.Or(h.Login, h.Person)
 }
 
-// Holders answers what holds each of seats at now, keyed by the seat's handle
-// — one holder per seat ([SeatHolder]): whoever the identity directory binds
-// to it at any stage short of removal, or else an invitation open at now. A
-// seat nothing holds is absent. An error is UNKNOWN, never "nobody".
+// Holders answers what holds each seat the asked predicate admits at now,
+// keyed by the seat's handle — one holder per seat ([SeatHolder]): whoever the
+// identity directory binds to it at any stage short of removal, or else an
+// invitation open at now. A seat nothing holds, and a seat the predicate does
+// not admit, is absent. An error is UNKNOWN, never "nobody".
 //
 // A FUNCTION RATHER THAN THE DIRECTORY, because this surface needs one
 // question of it, and the directory's own types are the identity estate's.
+// THE SEATS ASKED ARE A PREDICATE rather than a list, because one write asks
+// about seats it cannot list: a whole document replacing a revision stored
+// without a seal asks about every seat its own document does not keep as a
+// human seat, and only the directory knows which of those anybody holds (see
+// this file's header).
 // NOW IS THE CALLER'S, because whether an invitation is still open is a
 // question about an instant and the directory keeps no clock: the surface
 // passes its own ([Service.now]), so a case pinning it pins the answer.
-type Holders func(ctx context.Context, seats []string, now time.Time) (
+type Holders func(ctx context.Context, asked func(seat string) bool, now time.Time) (
 	map[string]SeatHolder, error)
 
 // DirectoryHolders is [Holders] over this node's identity directory, or nil
@@ -137,18 +156,19 @@ func DirectoryHolders(directory *iamdomain.Reader) Holders {
 func claimHolders(read func(context.Context, time.Time) (iamdomain.SeatClaims,
 	error)) Holders {
 
-	return func(ctx context.Context, seats []string, now time.Time) (
+	return func(ctx context.Context, asked func(string) bool, now time.Time) (
 		map[string]SeatHolder, error) {
 
 		claims, err := read(ctx, now)
 		if err != nil {
 			return nil, err
 		}
-		return holdersOf(claims, seats)
+		return holdersOf(claims, asked)
 	}
 }
 
-// holdersOf folds one snapshot of the seat claims to what holds each of seats.
+// holdersOf folds one snapshot of the seat claims to what holds each seat
+// asked admits.
 //
 // IT ANSWERS ABOUT THE SEATS ASKED AND NO OTHERS: the claims are narrowed to
 // them BEFORE they are folded. The fold is the directory's
@@ -162,21 +182,17 @@ func claimHolders(read func(context.Context, time.Time) (iamdomain.SeatClaims,
 // invitations held their seats — because what the write takes from is the
 // person; the invitation's redemption is refused for the seat they hold either
 // way.
-func holdersOf(claims iamdomain.SeatClaims, seats []string) (
+func holdersOf(claims iamdomain.SeatClaims, asked func(string) bool) (
 	map[string]SeatHolder, error) {
 
-	asked := make(map[string]bool, len(seats))
-	for _, seat := range seats {
-		asked[seat] = true
-	}
 	narrowed := iamdomain.SeatClaims{}
 	for _, b := range claims.Bindings {
-		if asked[b.Seat] {
+		if asked(b.Seat) {
 			narrowed.Bindings = append(narrowed.Bindings, b)
 		}
 	}
 	for _, inv := range claims.Invitations {
-		if asked[inv.Seat] {
+		if asked(inv.Seat) {
 			narrowed.Invitations = append(narrowed.Invitations, inv)
 		}
 	}
@@ -184,11 +200,9 @@ func holdersOf(claims iamdomain.SeatClaims, seats []string) (
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]SeatHolder, len(seats))
-	for _, seat := range seats {
-		claim, ok := bySeat[seat]
+	out := make(map[string]SeatHolder, len(bySeat))
+	for seat, claim := range bySeat {
 		switch {
-		case !ok:
 		case claim.Holder != nil:
 			b := claim.Holder
 			out[seat] = SeatHolder{Person: b.Person, Kind: b.Kind,
@@ -206,77 +220,121 @@ func holdersOf(claims iamdomain.SeatClaims, seats []string) (
 // it.
 type SeatHeldError struct {
 	Held map[string]SeatHolder
+	// Replacing is a whole document replacing a revision nothing was read
+	// from ([base.unsealed]). It cannot say the seats were in the revision it
+	// replaces, only that its own document does not keep them, a seat no
+	// revision of this company names any more included; and keeping a seat
+	// in the document is the one remedy that needs no company running here,
+	// where moving a person to another human seat does.
+	Replacing bool
 }
 
 func (e *SeatHeldError) Error() string {
-	seats := make([]string, 0, len(e.Held))
+	seats := make([]words.Said, 0, len(e.Held))
 	for seat, h := range e.Held {
-		seats = append(seats, seat+" (held by "+h.held()+")")
+		seats = append(seats, words.Said(seat+" (held by "+h.held()+")"))
 	}
 	slices.Sort(seats)
-	return "this change removes human seats that people still hold: " +
-		strings.Join(seats, "; ")
+	if e.Replacing {
+		return "this document doesn't keep these human seats, which somebody " +
+			"holds: " + words.And(seats)
+	}
+	return "this change removes human seats that somebody still holds: " +
+		words.And(seats)
 }
 
-// HoldersUnavailableError reports a write that takes a human seat away on a
-// node that could not read who holds it.
+// HoldersUnavailableError reports a write that takes a human seat away, or a
+// whole document replacing an unsealed revision, on a node that could not
+// read who holds the seats it asked about.
 type HoldersUnavailableError struct {
+	// Seats are the human seats the write takes away, by handle, sorted;
+	// nil for a write Replacing a revision nothing was read from.
 	Seats []string
-	Err   error
+	// Replacing is a whole document replacing a revision nothing was read
+	// from ([base.unsealed]), which cannot list the seats it takes away and
+	// asked about every seat its document does not keep (see this file's
+	// header).
+	Replacing bool
+	Err       error
 }
 
 func (e *HoldersUnavailableError) Error() string {
-	return fmt.Sprintf("configapi: this change removes the human seat(s) %s, "+
+	if e.Replacing {
+		return fmt.Sprintf("configapi: this change replaces a revision this node "+
+			"can't read, so it asks who holds every seat its document doesn't keep "+
+			"as a human seat, and this node can't read that right now: %v", e.Err)
+	}
+	return fmt.Sprintf("configapi: this change removes the human seats %s, "+
 		"and this node can't check who holds them right now: %v",
-		strings.Join(e.Seats, ", "), e.Err)
+		words.And(e.Seats), e.Err)
 }
 
 func (e *HoldersUnavailableError) Unwrap() error { return e.Err }
 
-// checkHeldSeats refuses next when it takes a human seat of prior away while
-// anything holds it — see the file's header.
-func (s *Service) checkHeldSeats(ctx context.Context, prior, next *config.Company) error {
-	leaving := leavingHumanSeats(prior, next)
-	if len(leaving) == 0 {
-		return nil
+// checkHeldSeats refuses next when it takes a human seat of the revision it
+// replaces away while anything holds it — see the file's header. Over a base
+// nothing was read from ([base.unsealed]) every seat next does not keep as a
+// human seat is asked about, since which of them the replaced revision held is
+// what nobody can read.
+func (s *Service) checkHeldSeats(ctx context.Context, b base, next *config.Company) error {
+	keeps := humanSeats(next)
+	asked := func(seat string) bool { return !keeps[seat] }
+	var leaving []string
+	if !b.unsealed {
+		leaving = leavingHumanSeats(b.prior, keeps)
+		if len(leaving) == 0 {
+			return nil
+		}
+		asked = func(seat string) bool {
+			_, found := slices.BinarySearch(leaving, seat)
+			return found
+		}
 	}
-	held, err := s.holders(ctx, leaving, s.now())
+	held, err := s.holders(ctx, asked, s.now())
 	if err != nil {
-		return &HoldersUnavailableError{Seats: leaving, Err: err}
+		return &HoldersUnavailableError{Seats: leaving, Replacing: b.unsealed, Err: err}
 	}
 	refused := map[string]SeatHolder{}
-	for _, seat := range leaving {
-		if h, ok := held[seat]; ok {
+	for seat, h := range held {
+		// ONLY WHAT WAS ASKED, whatever the directory answered: a seat
+		// next keeps is no seat this write takes from anybody.
+		if asked(seat) {
 			refused[seat] = h
 		}
 	}
 	if len(refused) == 0 {
 		return nil
 	}
-	return &SeatHeldError{Held: refused}
+	return &SeatHeldError{Held: refused, Replacing: b.unsealed}
 }
 
-// leavingHumanSeats is every human seat of prior that next does not hold as a
-// human seat — removed, or turned into an agent seat — by handle, sorted.
+// humanSeats is every handle next holds as a human seat.
 //
 // BY HANDLE, because a seat's handle is its identity and a binding names it:
 // a seat renamed for display keeps its handle and is not leaving, and a
 // handle that disappears is a seat that did.
-func leavingHumanSeats(prior, next *config.Company) []string {
+func humanSeats(next *config.Company) map[string]bool {
+	keeps := map[string]bool{}
+	if next == nil {
+		return keeps
+	}
+	for role := range next.EachRole() {
+		if role.Kind == org.KindHuman {
+			keeps[role.IdentityKey()] = true
+		}
+	}
+	return keeps
+}
+
+// leavingHumanSeats is every human seat of prior that keeps does not hold —
+// removed, or turned into an agent seat — by handle, sorted.
+func leavingHumanSeats(prior *config.Company, keeps map[string]bool) []string {
 	if prior == nil {
 		return nil
 	}
-	stays := map[string]bool{}
-	if next != nil {
-		for role := range next.EachRole() {
-			if role.Kind == org.KindHuman {
-				stays[role.IdentityKey()] = true
-			}
-		}
-	}
 	var leaving []string
 	for role := range prior.EachRole() {
-		if handle := role.IdentityKey(); role.Kind == org.KindHuman && !stays[handle] {
+		if handle := role.IdentityKey(); role.Kind == org.KindHuman && !keeps[handle] {
 			leaving = append(leaving, handle)
 		}
 	}

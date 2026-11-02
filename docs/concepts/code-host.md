@@ -1,8 +1,8 @@
 # Code Host
 
 A company that sets [`code.native`](../getting-started/configuration.md#code)
-hosts its git repositories in the engine itself, beside its own tracker and
-knowledge base, and on the same footing: what a repository *is* — its
+hosts its git repositories in the engine itself, beside Worklet, Doclet and
+Chatlet, and on the same footing: what a repository *is* — its
 settings, its protection rules, its refs and the packs it holds — is
 replicated state every data node keeps whole, and the bytes of each push are
 one object in the [object store](object-store.md) the whole fleet shares.
@@ -16,7 +16,7 @@ company may host some repositories natively and keep others on a vendor.
 ## What it is
 
 A repository is **rows on the code log** (`CREWLET_CODE_LOG`), the state
-log's eighth domain (see [Replication](../guides/replication.md)): every change
+log's tenth domain (see [Replication](../guides/replication.md)): every change
 to a repository is one record on that ordered log, arbitrated at the broker,
 and every data node applies it into its own identical copy of the rows. There
 is no primary repository anywhere — no node's disk holds "the" repository and
@@ -75,7 +75,7 @@ This is the product's current shape, not a configuration choice:
 - **A seat has no git client of its own.** A person clones, fetches and
   pushes over HTTPS with their own API token ([Persons and their
   tokens](#persons-and-their-tokens)), and a seat's coding box with its run's
-  own credential, in the repositories its run was given at launch ([Coding
+  own credential, in the repositories its run checked out ([Coding
   boxes](#coding-boxes)). A seat itself reads and changes the company's
   repositories through its code tools
   ([The company's code](../guides/tools-and-mcp.md#the-companys-code)): its
@@ -659,7 +659,7 @@ seat archived it on purpose.
 
 **A scratch repository a live turn has named is never expired.** Every request
 a seat's turn makes about a repository — a read, a write, a lifecycle request,
-through its own tools, a delegated worker's or an agent-mode run's bridge —
+through its own tools, a delegated worker's or its executor run's bridge —
 takes the turn's **hold** on it first, and a turn holds what it named until it
 ends: while it runs, in the memory of the node running it; once it has a
 [coding run](code-sandbox.md)'s row, on the row as well, unioned at every
@@ -1000,7 +1000,7 @@ repository's **maintainer** merges them — the git node that also publishes its
 layers ([Who maintains a repository](#who-maintains-a-repository)), on a fleet
 of alike git nodes its [home git node](#the-home-git-node) — and its committer
 decides the merge as it decides a push
-([ADR-0060](https://github.com/crewlet/crewlet/blob/main/adr/0060-a-compaction-merges-packs-without-judging-reachability.md)).
+([ADR-0083](https://github.com/crewlet/crewlet/blob/main/adr/0083-a-compaction-merges-packs-without-judging-reachability.md)).
 
 **The roll.** Once a minute every git node lists the repositories holding
 sixteen live packs or more, most packs first, judges which of them it
@@ -1223,7 +1223,7 @@ fetchable by its id from every git node and counted against
 past a grace — run by the repository's
 [maintainer](#who-maintains-a-repository) beside its compaction and its
 publication, one rewrite of a repository at a time
-([ADR-0069](https://github.com/crewlet/crewlet/blob/main/adr/0069-an-expunge-drops-only-what-no-ref-or-in-flight-row-reached-within-its-grace-in-two-records.md)).
+([ADR-0092](https://github.com/crewlet/crewlet/blob/main/adr/0092-an-expunge-drops-only-what-no-ref-or-in-flight-row-reached-within-its-grace-in-two-records.md)).
 
 **When it runs.** Two ways, and nothing to configure:
 
@@ -2129,7 +2129,7 @@ defines none — and each check is a mapping of these keys and no other:
 | `timeout_seconds` | yes | How long it may run: a whole number, 1 to 21 600 — six hours, GitHub Actions' per-job ceiling, so no job moved from a pipeline has to be cut. A company holds its checks to its own ceiling at or under that (`code.checks.max_timeout_seconds`) |
 | `paths` | no | At most 32 path globs, in the grammar [path owners](#path-owners) use — `*` within a component, `**` for whole components, relative to the repository's root — of which a change must touch one for the check to run on it. None runs it on every change |
 | `report` | no | `junit` and `sarif`: the files the check writes its results to, each a path inside its checkout, read once the command ends. With neither, a check is judged by its exit code alone |
-| `run_in` | no | `container` — a container on a git node — or `e2b`, a remote box, among the cells the company allows (`code.checks.allow_run_in`); unset is the company's choice (`code.checks.run_in`, see [Check boxes](code-sandbox.md#check-boxes)). **`direct` and `self` are refused by name**: a check runs a change's own code, which `direct` would run as the engine's own user on the engine host, reading what the engine reads, and `self` is a seat's own executor box, which no check has |
+| `run_in` | no | `container` — a container on a git node — or `e2b`, a remote box, among the cells the company allows (`code.checks.allow_run_in`); unset is the company's choice (`code.checks.run_in`, see [Check boxes](code-sandbox.md#check-boxes)). **`direct` is refused by name**: a check runs a change's own code, which `direct` would run as the engine's own user on the engine host, reading what the engine reads |
 | `checkout` | no | What of the tree the check's box checks out: all of it (unset), a **cone** — at most 64 directories, git's sparse checkout, each a clean directory inside the repository — or `none`, for a check that reads what it needs by object id through the API instead of a clone |
 | `env` | no | At most 32 variable names, each the key of an entry in the company's check secrets (`code.checks.env`): the secrets this check is given. A check is given none it does not name |
 
@@ -3812,7 +3812,7 @@ and holds about 600 bytes of memory an object of it ([Memory](#the-cache-on-a-gi
 — and every git node that serves the repository wants them. So they can be
 written **once**, by one git node, the repository's
 [maintainer](#who-maintains-a-repository), and installed by every other
-([ADR-0061](https://github.com/crewlet/crewlet/blob/main/adr/0061-a-derived-object-is-published-kept-and-never-audited.md)).
+([ADR-0084](https://github.com/crewlet/crewlet/blob/main/adr/0084-a-derived-object-is-published-kept-and-never-audited.md)).
 The maintainer writes git's own incremental
 multi-pack-index **layer** over the packs the layers below it do not cover,
 with that layer's bitmap and a commit-graph layer over the same packs; stores
@@ -4141,7 +4141,7 @@ engine's own, reading the token from the environment; the user name is
 ignored). There is no second credential for git — no SSH key and
 no deploy token — because the token is already how the engine knows who a
 person is, and a second identity system would be one more thing to revoke and
-audit ([ADR-0055](https://github.com/crewlet/crewlet/blob/main/adr/0055-a-person-reaches-git-with-their-own-bound-token.md)).
+audit ([ADR-0078](https://github.com/crewlet/crewlet/blob/main/adr/0078-a-person-reaches-git-with-their-own-bound-token.md)).
 
 - **A credential acting as a human seat pushes as that person** — every
   person holds one ([humans in the org](humans-in-the-org.md)), so a person's
@@ -4192,26 +4192,27 @@ its own (`crewlet.git.v1`), naming the run's turn and its current launch. Any
 node can verify one another node minted, and a keyring rotation in flight
 keeps them working ([Secret store](secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost)).
 
-**A run names its repositories, and the engine gives the box the rest.** A
-seat calling `run_sandbox` names the repositories in its `repos`; the launching
-node resolves them into the run's grants at the seat's level — and its
-requester's, in a turn somebody woke — writes them on the run's row before any
-box exists, and hands that launch, in its environment alone, the token and the
-code host's address: the node's `CREWLET_BOX_GIT_URL`, a git node's public
-`/box/git` or a balancer over the git nodes, since any of them serves any box.
-The box's git is configured to present the token for that address only, and
-the engine's own setup steps clone each repository before the coding agent
-starts ([Code Sandbox → Repositories on this company's code
+**A run checks its repositories out, and the engine gives the box the rest.**
+Every launch on a node serving the code host hands the run, in its environment
+alone, the token and the code host's address: the node's `CREWLET_BOX_GIT_URL`,
+a git node's public `/box/git` or a balancer over the git nodes, since any of
+them serves any box. The box's git is configured to present the token for that
+address only, and the token reaches nothing yet: the run's row grants no
+repository. Each `code_checkout` the run's agent calls through its tool bridge
+resolves one repository into a grant at the seat's level — and its
+requester's, in a turn somebody woke — writes it on the run's row before the
+call answers, and answers the commands that clone it, which the agent runs in
+its box ([Code Sandbox → Repositories on this company's code
 host](code-sandbox.md#repositories-on-this-companys-code-host)). A node without
-`CREWLET_BOX_GIT_URL` refuses a launch naming repositories rather than give a
-box one it cannot reach.
+`CREWLET_BOX_GIT_URL` refuses every checkout rather than grant a box a
+repository it cannot reach.
 
 **The token is a backstop, the run's row the authority.** A token is valid
 seven days (`host.RunTokenTTL`), longer than any job a person would leave
 running, since a coding job has no wall-clock limit and an expiry would fail
 its only durable output, its last push. What admits a box is its run's row on
 the fleet's coordination store, read on every request: a run that ended, was
-reaped or launched again — a second `run_sandbox` call of the same turn — is
+reaped or launched again — a later launch of the same turn — is
 refused the moment its row says so, whatever its token's expiry.
 
 **What a box may do is what its run was given, held to what its seat may do.**
@@ -4251,7 +4252,7 @@ alone: a person maintains every repository.
 | | a push of a repository it was given to read | `403 read_only` |
 | The stop, for a push | a seat a person stopped (below) | `403`, naming who stopped it; `503` on a node that has not yet read the pauses |
 | The repository | not found, deleted or purging, or archived for a push, as a person's request is — decided through the code log's barrier, never on the box's own read, while the run's [re-syncs](#a-boxs-re-syncs-and-requests-in-flight) last; past them, on its run's floor, a not-found saying so. A name a rename left redirecting is not refused: the box is served the repository under its new name, a push included, since the box's remote is the name its launch gave it | as a person's |
-| | a name renamed away from the repository the run was given and since taken by another | `403 not_granted` — call `run_sandbox` again |
+| | a name renamed away from the repository the run was given and since taken by another | `403 not_granted` — a new launch resolves the name again |
 | The seat's grant | this node holds no chart yet, or is confirmed behind the company's configuration | `503` (`no_chart`, `behind_config`): the configuration it failed to apply may be the one that revoked the seat; the box retries, and `/ready` already drains this node |
 | | a fetch of a repository the seat reads nothing of — a `visibility: unit` one outside its unit — or, for a run working for a colleague, one that colleague reads nothing of | `403 not_permitted`, naming whose grant reads nothing |
 | The run's hold, for a push (below) | the run store could not be written | `503 holds_unwritten` with `Retry-After` — the push is never received unheld |
@@ -4264,9 +4265,9 @@ parked run depends on, so before anything of the push is received, stored or
 proposed, every such branch the push names that the run's row does not hold
 yet is added to the row's holds, in one write: the same holds the run's turn
 keeps for the branches it read or wrote through a code tool and every ref its
-launch resolved, kept until the run ends and its row is removed. A branch the
+checkout resolved, kept until the run ends and its row is removed. A branch the
 row holds already costs a later push nothing. A box's fetch holds nothing: its
-checkout is its launch's grant, held at the launch.
+checkout is its run's grant, held at the checkout.
 
 A refusal before a token this fleet signed is logged at debug
 (`code_box_challenged`): `/box/git/` is a public route, and a line anybody who
@@ -4313,20 +4314,19 @@ and paid from the run's re-syncs (below).
 **What a box's request costs its run's record.** Every request a box makes —
 each lazy fetch of a blob into a blobless clone among them — reads its run's
 record once, from the stream leader of the bucket the fleet keeps runs in,
-and each raise of its floor is one compare-and-set of that record. So the
-record holds the run's facts alone: the job's suspended conversation and its
-tool log are kept beside it, never on it
-([Code Sandbox](code-sandbox.md#the-runs-record-and-what-is-kept-beside-it)).
+and each raise of its floor is one compare-and-set of that record — which
+carries the job's bridged tool log with its facts
+([Code Sandbox](code-sandbox.md#the-runs-record-and-what-it-costs-to-read)).
 Measured on three members with every bucket at three replicas, from a member
-not leading the runs' bucket, for a job keeping half a mebibyte of
-conversation and a full bridge log of 200 calls: the record is 2 983 bytes,
-its 2 KiB brief among them, and a read takes 0.15 ms and a raise 0.42 ms at
-the median (0.21 and 0.88 at the 99th percentile). With the conversation and
-the log on the record, as they were, it was 1 046 412 bytes, a read took
-8.4 ms and a raise 16.4 (11.4 and 22.1) — and every listing of runs and every
-flip of one moved the same mebibyte (`BenchmarkABoxRequestOnItsRun`,
-`internal/coord/kv`, thirty operations each on two E-cores of an Intel Core
-Ultra 7 265U).
+not leading the runs' bucket, for a job parked with a 32 KiB frozen context
+and a full bridge log of 200 calls: the record is 516 173 bytes, nearly all
+of it the log, and a read takes 5.8 ms and a raise 11.1 ms at the median
+(7.9 and 26.0 at the 99th percentile) — and every listing of runs and every
+flip of one moves the same half mebibyte. With the log kept apart from the
+record, the record was 2 983 bytes, its 2 KiB brief among them, and a read
+took 0.15 ms and a raise 0.42 ms (0.21 and 0.88)
+(`BenchmarkABoxRequestOnItsRun`, `internal/coord/kv`, thirty operations each
+on two E-cores of an Intel Core Ultra 7 265U).
 
 **Its transfers are its run's.** Every box's git is charged to the `run` class
 of the [fair share](#fair-share), keyed by its launch, and boxes together hold
@@ -4360,15 +4360,17 @@ committers: an export imported again carries the engine's commits as git
 carries any.
 
 **A stopped seat pushes nothing.** A person's pause with `stop_running` is the
-emergency stop, and a detached coding run is not fenced by it — it outlives its
-turn by design — so its box's push is refused, at the advertisement and at the
-push itself, naming who stopped the seat, until the seat is resumed
-([Pausing a seat](agent-runtime.md#pausing-a-seat)). Its fetches are served: a
+emergency stop, and it ends the seat's runs ([Code
+Sandbox](code-sandbox.md#how-a-coding-task-runs)); a box's push is refused on
+the stop itself, at the advertisement and at the push, naming who stopped the
+seat, so a push that reaches the code host before its run's ending is written
+is refused too, until the seat is resumed ([Pausing a
+seat](agent-runtime.md#pausing-a-seat)). Its fetches are served: a
 read changes nothing, and a box winding down may need one. A pause without
 `stop_running` stops new work only, so a running job's pushes land. A push
 admitted before the pause landed and decided after it lands, as a push of a run
-that ended between its admission and its decide does. The same stop, read the
-same way, refuses the run's calls of the seat's tools that write through the
+that ended between its admission and its decide does. The same stop fences
+the run's calls of the seat's tools through the
 [tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box),
 so a stopped seat's run changes nothing by either edge until it is resumed.
 
@@ -4472,7 +4474,7 @@ no list of who may push to which repository, because such a list is a second
 org chart, and it drifts from the first the day a seat moves units. It is
 computed every time it is asked, from the repository's row and the chart the
 deciding node runs, by one rule
-([ADR-0058](https://github.com/crewlet/crewlet/blob/main/adr/0058-a-repository-grant-is-derived-from-the-chart.md)).
+([ADR-0081](https://github.com/crewlet/crewlet/blob/main/adr/0081-a-repository-grant-is-derived-from-the-chart.md)).
 
 | Who | What they may do |
 |---|---|
@@ -5233,7 +5235,7 @@ Every node asks a read of the same git node first: the repository's **home**,
 the first of the repository's rendezvous order over every live node with the
 `git` role, keyed by the repository's id — an order each node computes alike
 from the same set — and then its runner-up
-([ADR-0059](https://github.com/crewlet/crewlet/blob/main/adr/0059-a-repositorys-git-work-is-asked-of-its-home-git-node.md)).
+([ADR-0082](https://github.com/crewlet/crewlet/blob/main/adr/0082-a-repositorys-git-work-is-asked-of-its-home-git-node.md)).
 So one repository's reads meet on one git node's cache whichever node they are
 asked from, and a repository its readers keep warm costs the fleet one copy
 for them rather than one on every git node a read went through. A git node
@@ -6191,7 +6193,7 @@ change as whoever enqueued it.
 | `upload_expired`, `repo_size`, `compaction_behind` | The train's pack, held to a push's rules: a busy queue waits for compaction rather than outrunning it. |
 
 **Every record that moves a protected branch leaves its landing row**: a
-merge's (`kind: direct`), a queue's (`pre_land`) and a person's
+merge's (`kind: direct`), a queue's (`kind: queue`) and a person's
 own push under `direct_push: persons` (`kind: push`, naming their human seat)
 — green, and the branch's green row moved with it, where the branch's gate
 requires no check. The push's decide stamps its landings from the rules its
@@ -6201,10 +6203,14 @@ rule itself.
 **A queue's history keeps pace with its records.** Ended entries and the
 landings below each branch's green row are kept 30 days: every candidate,
 eject and land removes its repository's oldest past that, up to 128 rows a
-record — as many as a landing ends and lands. A repository whose queue
-stopped is the [code-retention duty](#retention-and-history)'s: a pass lists every
-repository holding such history past 30 days by a day's grace, and a
-`queue_sweep` record on its subject removes it, back to 30 days.
+record — as many as a landing ends and lands — and its ejections only up to
+a record's own size in bytes, since an ejection keeps the conflicted paths a
+person reads first. A repository whose queue stopped is the
+[code-retention duty](#retention-and-history)'s: a pass lists every
+repository holding such history past 30 days by a day's grace, and
+`queue_sweep` records on its subject remove it, back to 30 days, each at most
+3 999 rows and about 32 MiB of ejections, so one never holds the write lane past
+the third of a transaction's budget a purge part is held to.
 
 Three reads answer a queue to a person or a seat, each held to the asker's
 grant on the repository: `queue`, the live entries of one repository's queues
@@ -6279,8 +6285,8 @@ holds.
   behind with every red candidate. A larger batch spends fewer check runs a
   landed change (0.89 at two, 0.78 at four, 0.63 at eight) for that wait.
 - **Close the work item.** Once a landing has applied, every landed entry
-  that asked it has its change's work item closed — set `done` on the
-  engine's own tracker — **as its enqueuer**, decided by the authority table
+  that asked it has its change's work item closed — set `done` in
+  Worklet — **as its enqueuer**, decided by the authority table
   as theirs and attributed to them, under an operation id derived from the
   landing's, so a close asked again is the same write. An item already
   finished is left as it is; one on a vendor's tracker is closed there, by
@@ -6370,7 +6376,7 @@ is defined by `.crewlet/checks.yaml` at the **base of the first landing above
 the green** — the green itself, or before any tip passed, the commit the first
 landing moved the branch from — never at the tip, which holds every landing's
 edits: a landing that rewrote the file would otherwise define the check its own
-tip is judged by ([ADR-0068](https://github.com/crewlet/crewlet/blob/main/adr/0068-a-check-is-a-measurement-of-a-commit-defined-by-the-target-branch-and-run-where-no-author-can-reach-it.md)).
+tip is judged by ([ADR-0091](https://github.com/crewlet/crewlet/blob/main/adr/0091-a-check-is-a-measurement-of-a-commit-defined-by-the-target-branch-and-run-where-no-author-can-reach-it.md)).
 Each attempt records the file's blob (`defs_oid`) and its diff base. A base
 whose file does not run, or defines no check the gate requires, errors that
 check on the tip (`errored`, `defs_invalid`) and keeps the green where it is
@@ -6635,7 +6641,7 @@ stops after its record committed loses no wake.
   its repository splits nothing.
 - **The wake names the change's work item**, and the turn it starts is
   charged to that item from its first record
-  ([ADR-0067](../../adr/0067-a-change-implements-one-work-item-and-carries-no-spend.md)):
+  ([ADR-0090](../../adr/0090-a-change-implements-one-work-item-and-carries-no-spend.md)):
   the review a change was asked for, the fix its findings asked for, the
   answer to its conflict, a failed check, a removal from its queue and a
   branch its landing broke are all work on the item the change implements. A
@@ -6742,7 +6748,7 @@ holds. So a push is received in a throwaway **scratch** repository whose one
 alternate is the cache's packs — never the packs an expunge is dropping
 ([the cache on a git node](#the-cache-on-a-git-node)), so no push relies on
 one — and its pack enters the cache only once its row has
-applied ([ADR-0054](https://github.com/crewlet/crewlet/blob/main/adr/0054-a-repositorys-refs-move-only-by-records-and-a-cache-is-derived.md)).
+applied ([ADR-0077](https://github.com/crewlet/crewlet/blob/main/adr/0077-a-repositorys-refs-move-only-by-records-and-a-cache-is-derived.md)).
 The scratch is removed when the request ends, and a node that crashed with one
 open sweeps it at its next boot.
 
@@ -6988,7 +6994,7 @@ and their deadlines.
 ## A merge, end to end
 
 A change merges into its target by **one merge record**
-([ADR-0066](../../adr/0066-a-protected-branch-moves-only-by-a-merge-whose-preconditions-one-snapshot-proves.md)):
+([ADR-0089](../../adr/0089-a-protected-branch-moves-only-by-a-merge-whose-preconditions-one-snapshot-proves.md)):
 the record that marks the change merged is the record that moves its target,
 decided by the repository's [committer](#the-committer) from one snapshot. A
 merge is built elsewhere — its commit and its pack written by the repository's
@@ -7297,7 +7303,7 @@ A write is asked of the repository's [home git node](#the-home-git-node) first
 — the node its reads are asked of, whose copy they keep warm — then of its
 runner-up, in the order every node computes alike, whichever node the write was
 asked through
-([ADR-0059](https://github.com/crewlet/crewlet/blob/main/adr/0059-a-repositorys-git-work-is-asked-of-its-home-git-node.md)).
+([ADR-0082](https://github.com/crewlet/crewlet/blob/main/adr/0082-a-repositorys-git-work-is-asked-of-its-home-git-node.md)).
 
 - **A git node that runs none of it is passed over.** One whose code host is
   stopping, or that holds no configuration yet to sign the commit by, answers

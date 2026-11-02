@@ -86,7 +86,7 @@ func (r *queueRows) enqueue(t *testing.T, n int) []code.QueueWorkEntry {
 				Owner: "dev", Authors: []string{"dev"}}}
 		if r.seq%2 == 0 {
 			e.CloseTask = true
-			e.WorkItem = &types.WorkItem{Backend: types.WorkNative, ID: fmt.Sprintf("task-%d", r.seq),
+			e.WorkItem = &types.WorkItem{Backend: types.WorkWorklet, ID: fmt.Sprintf("task-%d", r.seq),
 				Key: fmt.Sprintf("ENG-%d", r.seq)}
 		}
 		r.entries = append(r.entries, e)

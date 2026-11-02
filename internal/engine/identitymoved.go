@@ -47,6 +47,9 @@ func (e *Engine) identityMoved(moved iamdomain.Moved) {
 	if moved.Seats {
 		e.nudgeDirectory()
 	}
+	if len(moved.Removed) > 0 {
+		e.nudgeAssistantErasure()
+	}
 	if !moved.Credentials() {
 		return
 	}
@@ -57,24 +60,27 @@ func (e *Engine) identityMoved(moved iamdomain.Moved) {
 	(*fn)(moved)
 }
 
-// estateReplaced tells the identity estate's listeners that every one of its
+// estateReplaced tells the replicated estate's listeners that every one of its
 // rows may have moved with no committed batch to say so — an adoption that
 // replaced the replicated file with a donor's, or an estate reopened on a file
 // a failed join installed.
 //
-// EVERYTHING, because nothing narrower is honest: the rows are a peer's now,
-// and every revocation that peer applied while this node was too far behind to
-// follow arrived without an apply. An open socket still serving a session one
-// of them ended would go on serving it until it closed on its own — so the
-// move names everyone ([iamdomain.Moved.Everyone]), which closes every socket
-// for its handshake to decide, and the party registry is rebuilt at once
-// rather than at its next periodic re-read.
+// THE IDENTITY ESTATE'S, EVERYTHING, because nothing narrower is honest: the
+// rows are a peer's now, and every revocation that peer applied while this
+// node was too far behind to follow arrived without an apply. An open socket
+// still serving a session one of them ended would go on serving it until it
+// closed on its own — so the move names everyone ([iamdomain.Moved.Everyone]),
+// which closes every socket for its handshake to decide, and the party
+// registry is rebuilt at once rather than at its next periodic re-read.
 //
 // AND THE ARTIFACTS ESTATE'S LISTENERS, for the same reason: every share,
 // trash and purge the donor applied arrived here without an apply, so an
 // authorization verdict or a room decided from the old rows is told that
 // everything moved ([artifactsdomain.MoveReset]), and the datastore's for the
 // same reason ([artifactdata.Moved.Reset]).
+//
+// AND WHAT A FORWARD WALK DERIVED FROM THE ROWS, which cannot see a row it has
+// already passed being replaced ([Engine.estateReplaced]).
 func (s *stateLog) estateReplaced() {
 	if s.identityMoved != nil {
 		s.identityMoved(iamdomain.Moved{Seats: true, Everyone: true})
@@ -84,5 +90,31 @@ func (s *stateLog) estateReplaced() {
 	}
 	if s.artifactDataMoved != nil {
 		s.artifactDataMoved([]artifactdata.Moved{artifactdata.ResetMove()})
+	}
+	if s.replaced != nil {
+		s.replaced()
+	}
+}
+
+// estateReplaced is what this node does once its replicated estate was replaced
+// under it: the chat index, whose walk only moves forward over the
+// transcript's own versions, drops what it holds and walks the rows it now has
+// ([search.ChatIndexer.RequestRebuild]) — a document indexed from the copy the
+// adoption replaced would otherwise answer searches for as long as the
+// deployment lived. The knowledge base's lexical index needs nothing: its walk
+// laps by id and repairs a drifted row where it finds one.
+//
+// THE NUDGE, NOT THE GUARANTEE: the request lives in this process, and the
+// adopter has already named the file it installed a new copy of the estate
+// ([statelog.EstateInstance]), which the index compares with the copy it was
+// built from on every sweep — so a process stopped before the index's next
+// sweep still has its index rebuilt. What this call adds is that a search
+// stops trusting the index from now rather than from that sweep.
+//
+// A NODE THAT HAS MET NO COMPANY, or one whose chat is not the engine's own,
+// holds no chat index and has nothing to rebuild.
+func (e *Engine) estateReplaced() {
+	if n := e.native.Load(); n != nil && n.chatIndex != nil {
+		n.chatIndex.RequestRebuild()
 	}
 }

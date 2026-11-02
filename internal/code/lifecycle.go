@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE REPOSITORY LIFECYCLE AS TOOLS: what a person, a unit's lead and a seat
@@ -38,7 +39,7 @@ import (
 // ONE FUNCTION, [lifecycleRefusal], over the chart of the DECIDING node's
 // epoch: a bound person maintains every tool-made repository and creates
 // projects for any owner the chart holds; a seat maintains what its grant on
-// the repository lets it ([GrantOf], ADR-0058) — a unit's projects if it is
+// the repository lets it ([GrantOf], ADR-0081) — a unit's projects if it is
 // the unit's effective lead at full_access, its own scratch repositories at
 // full_access — and never leaves a project owned by a seat: its own
 // repositories are its scratch repositories, which a cap and an idle expiry
@@ -351,7 +352,7 @@ func (c PathOwnersChange) invalid() string {
 			at := fmt.Sprintf("path_owners.%s[%d]", list, i)
 			switch {
 			case !po.Owner.Kind.Valid():
-				return fmt.Sprintf("%s.owner.kind: %q is not one of %v", at, po.Owner.Kind, OwnerKinds())
+				return fmt.Sprintf("%s.owner.kind: %q is not one of %s", at, po.Owner.Kind, words.Or(OwnerKinds()))
 			case strings.TrimSpace(po.Owner.Ref) == "":
 				return at + ".owner.ref: a path owner names a unit or a seat"
 			case seen[po.Owner]:
@@ -608,7 +609,7 @@ func (r LifecycleRequest) Validate() error {
 // invalid is why r is no request, or "".
 func (r LifecycleRequest) invalid() string {
 	if !r.Kind.Valid() {
-		return fmt.Sprintf("kind: %q is not one of %v", r.Kind, LifecycleKinds())
+		return fmt.Sprintf("kind: %q is not one of %s", r.Kind, words.Or(LifecycleKinds()))
 	}
 	if err := statelog.CheckCallerOpID(r.OpID); err != nil {
 		return "op_id: " + err.Error()
@@ -689,7 +690,7 @@ func (r LifecycleRequest) invalid() string {
 			return fmt.Sprintf("protect.pattern: %q is not a protection pattern", p.Pattern)
 		case p.Remove && len(named) > 0:
 			return fmt.Sprintf("protect.remove: a request removing the pattern's rule takes its gate with it and "+
-				"names nothing else, and this one names %s", listed(named))
+				"names nothing else, and this one names %s", words.And(named))
 		case p.Remove:
 			return ""
 		}
@@ -1064,14 +1065,14 @@ func askerLifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protectio
 		if opens := loosenings(rules, nextRules, req.Protect.Pattern); len(opens) > 0 {
 			return true, fmt.Sprintf("only a person may remove or loosen the protection on %s, and this "+
 				"change %s; a seat, its unit's lead included, may add a rule or tighten one",
-				req.Protect.Pattern, strings.Join(opens, " and "))
+				req.Protect.Pattern, words.And(saidAll(opens)))
 		}
 	case LifecycleSettings:
 		if gating, taken := gatingOwnersTaken(rules, owners, req.Change.PathOwners); len(taken) > 0 {
 			return true, fmt.Sprintf("only a person may take a glob from a path owner of %s, whose path "+
 				"owners gate its merges where %s owners_approve — a merge waits for an approval eligible "+
 				"for every owned glob it touches — and this change takes path_owners' %s; a seat, its unit's "+
-				"lead included, may give a path owner globs", repo.Name, gating, listed(taken))
+				"lead included, may give a path owner globs", repo.Name, gating, words.And(saidAll(taken)))
 		}
 	}
 	// AS THE CHANGE LEAVES IT TOO: a seat cannot hand a repository to an
@@ -1902,6 +1903,17 @@ func loosenings(rules, next []Protection, pattern string) []string {
 	return opens
 }
 
+// saidAll is phrases as [words.Said]: each of [loosenings]' is already words
+// ("turns allow_force on"), which a list says as written rather than quoted
+// as a value.
+func saidAll(phrases []string) []words.Said {
+	out := make([]words.Said, len(phrases))
+	for i, phrase := range phrases {
+		out[i] = words.Said(phrase)
+	}
+	return out
+}
+
 // gatingOwnersTaken is, where a rule of rules sets owners_approve on its merge
 // gate — which makes the repository's path owners whom a merge waits for —
 // those rules as a sentence names them and every glob change takes from a
@@ -1940,7 +1952,7 @@ func gatingOwnersTaken(rules []Protection, held []PathOwner, change *PathOwnersC
 	if len(gating) == 1 {
 		return "the merge gate of " + gating[0] + " sets", taken
 	}
-	return "the merge gates of " + listed(gating) + " set", taken
+	return "the merge gates of " + words.And(gating) + " set", taken
 }
 
 // lifecycleAnswer is a lifecycle request's answer from its publish: the
@@ -2148,7 +2160,7 @@ func (s *Store) ExpireScratch(ctx context.Context, repoID string, x ScratchExpir
 	}
 	subject := RepoSubject(repoID)
 	scope := []string{RepoPath(repoID)}
-	opID := statelog.NewOpID(time.Now(), "code.expire_scratch")
+	opID := statelog.NewOpID(time.Now(), "code_expire_scratch")
 	at := s.now()
 	var wrote bool
 	result, err := s.publisher.Publish(ctx, statelog.Request{
@@ -2201,7 +2213,7 @@ func (s *Store) ReleaseName(ctx context.Context, name, repoID string) (bool, err
 	token := NameToken(name)
 	subject := NameSubject(name)
 	scope := []string{NamePath(token)}
-	opID := statelog.NewOpID(time.Now(), "code.release_name")
+	opID := statelog.NewOpID(time.Now(), "code_release_name")
 	at := s.now()
 	var wrote bool
 	result, err := s.publisher.Publish(ctx, statelog.Request{

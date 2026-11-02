@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A CROSS-PROJECT MOVE CAN BE STARTED — by the lead of the item's project, or
@@ -84,7 +84,7 @@ func moverRegistry(t *testing.T, trk *fakeTracker,
 // made with it would be admitted by any chart.
 func callMove(t *testing.T, reg *tools.Registry, args map[string]any) tools.Result {
 	t.Helper()
-	return callWorkAs(colleagueCaller(), t, reg, tracker.MoveWorkItemTool, args)
+	return callWorkAs(colleagueCaller(), t, reg, worklet.MoveWorkItemTool, args)
 }
 
 func TestAMoveIsTheItemsProjectLeads(t *testing.T) {
@@ -122,8 +122,8 @@ func TestAMoveIsTheItemsProjectLeads(t *testing.T) {
 		// A MOVE IS A DELIVERY: a lead woken to triage an item filed in
 		// the wrong project answers by moving it, and without the flag the
 		// gate corrects that turn for having done nothing.
-		if got := reg.Deliveries()[tracker.MoveWorkItemTool]; got != tracker.Source {
-			t.Errorf("move_work_item delivers to %q, want %q", got, tracker.Source)
+		if got := reg.Deliveries()[worklet.MoveWorkItemTool]; got != worklet.Source {
+			t.Errorf("move_work_item delivers to %q, want %q", got, worklet.Source)
 		}
 		got := callMove(t, reg, map[string]any{"item": "ENG-1", "project": "ops"})
 		if got.Failed {
@@ -140,7 +140,7 @@ func TestAMoveIsTheItemsProjectLeads(t *testing.T) {
 		}
 		// AND IT WAKES THE PEOPLE ON THE ITEM, which the root's own
 		// move carries.
-		if n := trk.moved[0].notify; n == nil || n.Kind != tracker.ChangeMoved {
+		if n := trk.moved[0].notify; n == nil || n.Kind != worklet.ChangeMoved {
 			t.Errorf("the move carries notification %+v, want a `moved` one", n)
 		}
 	})
@@ -159,7 +159,7 @@ func TestAMoveIsTheItemsProjectLeads(t *testing.T) {
 			}
 		}
 		// ADMIN, leading nothing: callNoTurn carries every permission.
-		got := callNoTurn(t, reg, tracker.MoveWorkItemTool,
+		got := callNoTurn(t, reg, worklet.MoveWorkItemTool,
 			map[string]any{"item": "ENG-1", "project": "OPS"})
 		if got.Failed {
 			t.Fatalf("an operator's move failed: %s", got.Output)
@@ -175,7 +175,7 @@ func TestAMoveIsTheItemsProjectLeads(t *testing.T) {
 func TestAStoppedMoveIsNotReportedAsNotMade(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.writeErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved)
+	trk.writeErr = fmt.Errorf("stopped: %w", worklet.ErrStepUnresolved)
 	got := callMove(t, moveRegistry(t, trk, chartLeads),
 		map[string]any{"item": "ENG-1", "project": "OPS"})
 	if !got.Failed || strings.Contains(got.Output, "NOT made") ||
@@ -195,15 +195,15 @@ func TestAMoveRefusedOverATagNamesTheWayPastIt(t *testing.T) {
 		want []string
 	}{
 		"a label the target already uses": {
-			err: fmt.Errorf("tracker: declare the moving subtree's tags in OPS: %w",
-				&tracker.TagClash{Project: "OPS", Slug: "api", Label: "API",
-					Other: tracker.Tag{Slug: "backend-api", Label: "API"}}),
+			err: fmt.Errorf("worklet: declare the moving subtree's tags in OPS: %w",
+				&worklet.TagClash{Project: "OPS", Slug: "api", Label: "API",
+					Other: worklet.Tag{Slug: "backend-api", Label: "API"}}),
 			want: []string{"nothing was written", "backend-api", "write_project on OPS",
 				`"slug": "api"`, "update_work_item", "make this call again"},
 		},
 		"a target with no room for another tag": {
-			err: fmt.Errorf("tracker: declare the moving subtree's tags in OPS: %w",
-				&tracker.TagsFull{Project: "OPS", Slug: "api"}),
+			err: fmt.Errorf("worklet: declare the moving subtree's tags in OPS: %w",
+				&worklet.TagsFull{Project: "OPS", Slug: "api"}),
 			want: []string{"nothing was written", "tags_archive", "take api off",
 				"make this call again"},
 		},
@@ -232,12 +232,12 @@ func TestAMoveRefusedOverATagNamesTheWayPastIt(t *testing.T) {
 // any other operation's refused as somebody else's.
 type landingMover struct {
 	trk   *fakeTracker
-	first func(opID string) (tracker.WriteResult, error)
+	first func(opID string) (worklet.WriteResult, error)
 	ops   []string
 }
 
 func (m *landingMover) MoveTaskToProject(_ context.Context, opID, _, target string,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	m.ops = append(m.ops, opID)
 	if len(m.ops) == 1 {
@@ -253,11 +253,11 @@ func (m *landingMover) MoveTaskToProject(_ context.Context, opID, _, target stri
 	if opID != m.ops[0] {
 		// MARKED, as the tracker marks every refusal it writes about what
 		// was asked: an unmarked error is the node's failure instead.
-		return tracker.WriteResult{}, fmt.Errorf("%w: task i1 is already in "+
+		return worklet.WriteResult{}, fmt.Errorf("%w: task i1 is already in "+
 			"%s, and this node's operation ledger holds no record of this move "+
-			"putting it there", tracker.ErrInvalid, target)
+			"putting it there", worklet.ErrInvalid, target)
 	}
-	return tracker.WriteResult{Key: target + "-3", Result: statelog.Result{
+	return worklet.WriteResult{Key: target + "-3", Result: statelog.Result{
 		Outcome: statelog.OutcomeApplied, OpID: opID, Collapsed: true,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 71},
 		Version:  71,
@@ -274,19 +274,19 @@ func (m *landingMover) MoveTaskToProject(_ context.Context, opID, _, target stri
 // happened, which it never learned.
 func TestTheRetryOfAMoveThatLandedIsAnsweredByTheMove(t *testing.T) {
 	t.Parallel()
-	for name, first := range map[string]func(string) (tracker.WriteResult, error){
-		"an unknown": func(opID string) (tracker.WriteResult, error) {
-			return tracker.WriteResult{Result: statelog.Result{
+	for name, first := range map[string]func(string) (worklet.WriteResult, error){
+		"an unknown": func(opID string) (worklet.WriteResult, error) {
+			return worklet.WriteResult{Result: statelog.Result{
 				Outcome: statelog.OutcomeUnknown, OpID: opID,
 			}}, nil
 		},
-		"a walk stopped after the root moved": func(opID string) (tracker.WriteResult, error) {
-			return tracker.WriteResult{Result: statelog.Result{
+		"a walk stopped after the root moved": func(opID string) (worklet.WriteResult, error) {
+			return worklet.WriteResult{Result: statelog.Result{
 				Outcome: statelog.OutcomeApplied, OpID: opID,
-			}}, &tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
-				Followed: 1, Of: 2, OpID: opID, Err: fmt.Errorf("tracker: "+
+			}}, &worklet.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+				Followed: 1, Of: 2, OpID: opID, Err: fmt.Errorf("worklet: "+
 					"whether task id-9's move into OPS landed is unknown: %w",
-					tracker.ErrStepUnresolved)}
+					worklet.ErrStepUnresolved)}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -344,14 +344,14 @@ func TestAMoveIntoTheItemsOwnProjectIsTheTrackersToRefuse(t *testing.T) {
 
 // stoppedMover moves the root and answers the stop its walk met, as the
 // tracker does once the root's own move has landed.
-type stoppedMover struct{ stop *tracker.MoveStopped }
+type stoppedMover struct{ stop *worklet.MoveStopped }
 
 func (m stoppedMover) MoveTaskToProject(_ context.Context, opID, _, _ string,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 
 	stop := *m.stop
 	stop.OpID = opID
-	return tracker.WriteResult{Result: statelog.Result{
+	return worklet.WriteResult{Result: statelog.Result{
 		Outcome: statelog.OutcomeApplied, OpID: opID,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 71},
 	}}, &stop
@@ -365,7 +365,7 @@ func (m stoppedMover) MoveTaskToProject(_ context.Context, opID, _, _ string,
 // call, which the tracker refuses as somebody else's move. The answer is the
 // root's receipt, the walk's count, and the one thing that finishes it: the
 // same call, a restore first where a task in the trash holds it, and neither
-// where this node cannot vouch for the step it stopped at — the tracker duty
+// where this node cannot vouch for the step it stopped at: the Worklet duty
 // finishes it then.
 //
 // Mutation: drop the MoveStopped arm in move_work_item and every case answers
@@ -375,28 +375,28 @@ func TestAMoveStoppedAfterItsRootMovedSaysWhatFinishesIt(t *testing.T) {
 	refused := &statelog.Unavailable{Reason: statelog.ReasonLogFull,
 		Detail: "the broker refused to store the record"}
 	for name, tc := range map[string]struct {
-		stop      tracker.MoveStopped
+		stop      worklet.MoveStopped
 		want      []string
 		notWanted []string
 		waits     string
 		unvouched bool
 	}{
 		"a refused step": {
-			stop: tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+			stop: worklet.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
 				Followed: 2, Of: 5, Err: refused},
 			want: []string{"ENG-1 moved to OPS as OPS-3", "2 of the 5",
-				"exactly the same arguments", "tracker duty"},
+				"exactly the same arguments", "the Worklet duty"},
 		},
 		"a task in the trash": {
-			stop: tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+			stop: worklet.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
 				Followed: 4, Of: 5, Waiting: "ENG-9", Err: refused},
 			want:  []string{"ENG-9 is in the trash", "restored", "exactly the same arguments"},
 			waits: "ENG-9",
 		},
 		"a step this node cannot vouch for": {
-			stop: tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
-				Followed: 1, Of: 5, Err: fmt.Errorf("stopped: %w", tracker.ErrStepUnvouched)},
-			want:      []string{"cannot vouch", "tracker duty"},
+			stop: worklet.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+				Followed: 1, Of: 5, Err: fmt.Errorf("stopped: %w", worklet.ErrStepUnvouched)},
+			want:      []string{"cannot vouch", "the Worklet duty"},
 			notWanted: []string{"exactly the same arguments"},
 			unvouched: true,
 		},

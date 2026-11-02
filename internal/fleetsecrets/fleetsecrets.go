@@ -98,6 +98,7 @@ func operatorName(name string) error {
 // Set seals a value and writes it for the whole fleet, recording its author
 // and the credential beside them — see [secrets.Author] — and the write path
 // it arrived by, which [secrets.CheckSource] holds to the paths' own words.
+// The value is held to [secrets.MaxValueBytes], as every store holds it.
 func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) error {
 
@@ -116,7 +117,123 @@ func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 	if err := secrets.CheckSource(source); err != nil {
 		return err
 	}
+	// THE SIZE EVERY STORE KEEPS, which every reader of a revealed value
+	// through a node is sized from: see [secrets.MaxValueBytes].
+	if err := secrets.CheckValue(value); err != nil {
+		return err
+	}
 	return s.put(ctx, name, value, by, source, now)
+}
+
+// Create is [Store.Set] only where no value is stored under name, reporting
+// whether it wrote: false is another writer's row, and never a failure. opID
+// is the create-only request's operation key, stamped on the row so the same
+// request retried can [Store.Reclaim] it.
+//
+// ONE STEP OF THE STORE'S, as [Estate.Create] is: a create-only write that
+// read "none stored" and then put its value would seal over a value another
+// writer stored between the two.
+func (s *Store) Create(ctx context.Context, name, value string, by secrets.Author,
+	source secrets.Source, now time.Time, opID string) (bool, error) {
+
+	if err := s.writable(name, value, source); err != nil {
+		return false, err
+	}
+	rec := provenance(name, by, source, now)
+	rec.OpID = opID
+	rec, err := s.seal(rec, value)
+	if err != nil {
+		return false, err
+	}
+	created, err := s.fleet.CreateSecret(ctx, rec)
+	if err != nil {
+		return false, fmt.Errorf("fleetsecrets: create %s: %w", displayName(name), err)
+	}
+	return created, nil
+}
+
+// OpOf is the operation key of the create that sealed name, empty for a row
+// any other write left, when the row was sealed, and whether a row is stored
+// at all. It reads the row's provenance and never opens its value.
+//
+// THE SEAL'S TIME IS THE ENGINE'S, stamped as the row was written, never the
+// key's: a caller mints its own key, and the instant a UUIDv7 carries is
+// whatever the caller wrote into it.
+func (s *Store) OpOf(ctx context.Context, name string) (string, time.Time, bool, error) {
+	if err := operatorName(name); err != nil {
+		return "", time.Time{}, false, err
+	}
+	rec, found, err := s.fleet.Secret(ctx, name)
+	if err != nil {
+		return "", time.Time{}, false, fmt.Errorf("fleetsecrets: read %s: %w", displayName(name), err)
+	}
+	return rec.OpID, rec.UpdatedAt, found, nil
+}
+
+// Reclaim re-seals name with value only while its row is still the one the
+// create keyed opID sealed, at or after notBefore by the engine's own clock,
+// at the version it read, reporting whether it wrote: false is a row another
+// write has made since, or one sealed too long ago, which it leaves alone.
+//
+// THE RETRY OF A CREATE, and nothing else: it never reads the stored value,
+// so the end state is the retried request's whatever the first attempt sent,
+// and the answer says nothing about what was stored.
+func (s *Store) Reclaim(ctx context.Context, name, value string, by secrets.Author,
+	source secrets.Source, now time.Time, opID string, notBefore time.Time) (bool, error) {
+
+	if opID == "" {
+		return false, nil
+	}
+	if err := s.writable(name, value, source); err != nil {
+		return false, err
+	}
+	held, found, err := s.fleet.Secret(ctx, name)
+	if err != nil {
+		return false, fmt.Errorf("fleetsecrets: read %s: %w", displayName(name), err)
+	}
+	if !found || held.OpID != opID || held.UpdatedAt.Before(notBefore) {
+		return false, nil
+	}
+	rec := provenance(name, by, source, now)
+	rec.OpID = opID
+	if rec, err = s.seal(rec, value); err != nil {
+		return false, err
+	}
+	wrote, err := s.fleet.UpdateSecret(ctx, rec, held.Version)
+	if err != nil {
+		return false, fmt.Errorf("fleetsecrets: re-seal %s: %w", displayName(name), err)
+	}
+	return wrote, nil
+}
+
+// writable holds a write of an operator's secret to the store's rules.
+func (s *Store) writable(name, value string, source secrets.Source) error {
+	return s.checkWrite(operatorWriteName, name, value, source)
+}
+
+// checkWrite holds one write to the store's rules: a keyring to seal under,
+// a name by nameRule, which is the view's own (an operator's or the
+// engine's), a source a path stamps, and a value within the bound.
+func (s *Store) checkWrite(nameRule func(string) error, name, value string, source secrets.Source) error {
+	if s == nil || s.cipher == nil {
+		return secrets.ErrNoKeyring
+	}
+	if err := nameRule(name); err != nil {
+		return err
+	}
+	if err := secrets.CheckSource(source); err != nil {
+		return err
+	}
+	return secrets.CheckValue(value)
+}
+
+// operatorWriteName is the name rule of an operator's write: not one of the
+// engine's own names, and one the ${VAR} grammar can reference.
+func operatorWriteName(name string) error {
+	if err := operatorName(name); err != nil {
+		return err
+	}
+	return secrets.CheckName(name)
 }
 
 // put seals a value under its own name and writes it, once the caller's view
@@ -229,6 +346,60 @@ func (s *Store) All(ctx context.Context) (map[string]string, error) {
 			// The NAME, never the envelope: an error that echoed its
 			// input would put ciphertext into a log that a keyring
 			// might later open.
+			return nil, fmt.Errorf("fleetsecrets: open %s: %w", row.Name, err)
+		}
+		out[row.Name] = value
+	}
+	return out, nil
+}
+
+// Values unseals the operator values held under the names asked for, and no
+// other: a name nothing holds is simply absent from the answer.
+//
+// It is what a reader that needs SEVERAL values at once is given — a CLI run
+// resolving the `${VAR}` references of one company document, through a running
+// node's POST /secrets/reveal or, with that node's engine stopped, directly
+// (the CLI's fleetBackend) — and it exists so that reader is handed exactly
+// the credentials it asks for, the variables its command reads that the store
+// lists, rather than [Store.All]'s every value, and in one round trip rather
+// than one per name.
+//
+// A RESERVED NAME IS REFUSED before anything is read, as [Store.Get] refuses
+// one: no reference can name an engine row, so a caller asking for one has
+// built its list from something other than a document.
+//
+// It FAILS CLOSED on a row it was asked for and cannot open, for [Store.All]'s
+// reason — an answer missing that name would let it resolve from whatever the
+// environment holds — and opens nothing it was not asked for, so an
+// unreadable row nobody named cannot fail a read that never needed it.
+func (s *Store) Values(ctx context.Context, names []string) (map[string]string, error) {
+	if s == nil || s.cipher == nil {
+		return nil, secrets.ErrNoKeyring
+	}
+	wanted := make(map[string]bool, len(names))
+	for _, name := range names {
+		if err := operatorName(name); err != nil {
+			return nil, err
+		}
+		wanted[name] = true
+	}
+	out := make(map[string]string, len(wanted))
+	if len(wanted) == 0 {
+		return out, nil
+	}
+	// ONE LISTING rather than a read per name, which is [Store.All]'s round
+	// trip: the rows a company document names are a handful of a bucket that
+	// is itself small, and the values are opened only for the names asked.
+	rows, err := s.fleet.SecretValues(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("fleetsecrets: read the secrets: %w", err)
+	}
+	for _, row := range rows {
+		if !wanted[row.Name] {
+			continue
+		}
+		value, err := s.cipher.Decrypt(row.Value, secrets.AADForVar(row.Name))
+		if err != nil {
 			return nil, fmt.Errorf("fleetsecrets: open %s: %w", row.Name, err)
 		}
 		out[row.Name] = value
@@ -523,13 +694,10 @@ func (e *Estate) Get(ctx context.Context, name string) (string, error) {
 func (e *Estate) Create(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) (bool, error) {
 
-	if e == nil || e.store.cipher == nil {
+	if e == nil {
 		return false, secrets.ErrNoKeyring
 	}
-	if err := secrets.CheckEstateName(name); err != nil {
-		return false, err
-	}
-	if err := secrets.CheckSource(source); err != nil {
+	if err := e.store.checkWrite(secrets.CheckEstateName, name, value, source); err != nil {
 		return false, err
 	}
 	rec, err := e.store.seal(provenance(name, by, source, now), value)

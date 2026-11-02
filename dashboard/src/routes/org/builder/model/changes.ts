@@ -132,7 +132,7 @@ export interface ChangeSet {
    * declaration: a unit declaring it routes to the unit's effective lead, a
    * root seat declaring it to itself. `field` is which of the two keys
    * declares it — `project` or `space`, on the unit or seat itself and
-   * vendor-neutral, so the same on the engine's own backends and a vendor's.
+   * vendor-neutral, so the same on Worklet and Doclet and on a vendor's.
    * `shared` marks a scope declared with different owners, where the engine
    * routes to the first declaration it walks and reports the ambiguity in its
    * own log.

@@ -125,11 +125,11 @@ func liveToken() credential.TokenRow {
 		Applied: tokenApplied, Found: true, IsToken: true,
 		Verifier:  credential.TokenVerifier(machineID, machineSecret),
 		ExpiresAt: tokenNow.Add(24 * time.Hour),
-		Grants:    []iam.Grant{iam.GrantTracker},
+		Grants:    []iam.Grant{iam.GrantWorklet},
 		Epoch:     2,
 		Owner: credential.TokenOwner{
 			Found: true, ID: "018f3a9c-0000-7000-8000-00000000a11c", Kind: iam.KindPerson,
-			Stage: iam.StageActive, Login: "sarah.chen", Grants: []iam.Grant{iam.GrantTracker},
+			Stage: iam.StageActive, Login: "sarah.chen", Grants: []iam.Grant{iam.GrantWorklet},
 			Epoch: 2,
 		},
 	}

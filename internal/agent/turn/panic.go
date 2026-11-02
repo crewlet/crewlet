@@ -64,7 +64,7 @@ const (
 // trigger, or false when a redelivery may run it cleanly.
 //
 // ONE ANSWER FOR BOTH PATHS a turn arrives by. The dispatcher asks it about a
-// delivery and the sandbox resume asks it about a completion, and each used to
+// delivery and the run's collection asks it about a completion, and each used to
 // carry its own copy of the rule; a panic added to one and forgotten in the
 // other is exactly the drift one function makes impossible.
 //

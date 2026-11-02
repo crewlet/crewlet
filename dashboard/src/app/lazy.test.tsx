@@ -9,6 +9,8 @@
  * `boundaries.test.tsx`.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { startTransition, useState, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -32,7 +34,7 @@ import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { modules, parse, stringValue, walk, type Module } from "~/test/source.ts";
+import { modules, parse, stringValue, walk, type Module, type Node } from "~/test/source.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 
 let undo: (() => void)[] = [];
@@ -73,18 +75,20 @@ describe("which chunk draws a screen", () => {
         "account",
         "agents",
         "artifacts",
+        "assistant",
         "brand",
+        "chatlet",
         "code",
         "home",
         "inbox",
-        "knowledge",
+        "doclet",
         "live",
         "me",
         "org",
         "palette",
         "settings",
         "spend",
-        "work",
+        "worklet",
       ].sort(),
     );
     // EVERY SIDEBAR ROW'S LANDING is drawn by one of them.
@@ -92,6 +96,35 @@ describe("which chunk draws a screen", () => {
       const where = resolve(ws.path);
       expect(where.resolved && CHUNKS.includes(chunkOf(where)), ws.key).toBe(true);
     }
+  });
+
+  // THE DESIGN DOC NAMES EVERY SCREEN DIRECTORY, exactly as `ScreenDir`
+  // declares them. Its tree in "How it is built" named nine while the code had
+  // thirteen, so a reader never learned that Chatlet, Artifacts, Brand or the
+  // Account page is a directory and a chunk of its own. Both lists are read,
+  // never copied here: the type from lazyScreen.ts's syntax tree, and the
+  // doc's from the tree's `src/routes/<dir>/` entry.
+  test("the design doc's tree lists every screen directory, and only those", () => {
+    const source = modules().find((m) => m.path === "app/lazyScreen.ts")!;
+    const declared: string[] = [];
+    walk(parse(source.text, source.lang), (node) => {
+      if (node.type !== "TSTypeAliasDeclaration" || (node.id as Node).name !== "ScreenDir") return;
+      walk(node.typeAnnotation as Node, (member) => {
+        if (member.type !== "TSLiteralType") return;
+        const name = stringValue(member.literal as Node);
+        if (name !== null) declared.push(name);
+      });
+      return false;
+    });
+    expect(declared.length, "ScreenDir is not where this reads it").toBeGreaterThan(0);
+    const doc = readFileSync(
+      join(process.cwd(), "..", "docs", "reference", "dashboard-design.md"),
+      "utf8",
+    );
+    const entry = /^ {2}src\/routes\/<[a-z]+>\/[^(]*\(([^)]*)\)/m.exec(doc);
+    expect(entry, "the tree in How it is built has no src/routes/ entry").not.toBeNull();
+    const listed = entry![1]!.split(",").map((name) => name.trim());
+    expect([...listed].sort()).toEqual([...declared].sort());
   });
 
   // EVERY SCREEN OPENS THE PALETTE WITH A KEY, so it is the first chunk the
@@ -113,7 +146,7 @@ describe("which chunk draws a screen", () => {
     expect(at("company")).toBe("settings");
     expect(at("company", "budgets")).toBe("spend");
     expect(at("settings", "spend")).toBe("spend");
-    expect(at("work", "ENG-4")).toBe("work");
+    expect(at("worklet", "ENG-4")).toBe("worklet");
     expect(at("code")).toBe("code");
     expect(at("code", "repos")).toBe("code");
     expect(at("code", "pushes")).toBe("code");
@@ -777,7 +810,18 @@ describe("the split", () => {
   // while open and loads as a chunk of its own: the command palette, the
   // largest single piece of the frame, which one static import of it would
   // put back into the first paint.
-  const SCREEN_ONLY = ["lib/artifacts/api.ts", "app/palette/Palette.tsx"];
+  // AND THE ASSISTANT'S PANEL, a layer of the same kind: its store, its
+  // reducer, its cards and its stream client stay out of the first paint,
+  // where the entry keeps only the Ask button, the page context registry,
+  // the bus and the one-word status the button reads.
+  const SCREEN_ONLY = [
+    "lib/artifacts/api.ts",
+    "app/palette/Palette.tsx",
+    "app/assistant/chunk/index.ts",
+    "app/assistant/chunk/Drawer.tsx",
+    "app/assistant/chunk/session.ts",
+    "protocol/assistant.ts",
+  ];
 
   test("the entry's static graph reaches no module only a screen needs", () => {
     const byPath = new Map(modules().map((m) => [m.path, m]));

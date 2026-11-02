@@ -5,17 +5,17 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
 )
 
 // THE KNOWLEDGE BASE DECLARES EXACTLY THE SPACES THE CHART MAKES CONTAINERS OF.
 //
-// A page is created only in a declared space (pages.Reserved.Declared), and
+// A page is created only in a declared space (doclet.Reserved.Declared), and
 // the containers a company has are [chartContainers]'s. Declared from a second
 // walk of the chart, the two lists would drift — a seat's own `space:` left out
 // of one, a key in another spelling — and a page would be refused a space whose
-// container the Knowledge rail lists, or created in one nobody made. So the
+// container the Doclet rail lists, or created in one nobody made. So the
 // declared list IS that walk's keys, every unit's and seat's space and the
 // root and the skills container among them, the reserved two still come from
 // their own accessors, and a node running no company declares nothing — which
@@ -55,7 +55,7 @@ func TestReservedContainersDeclareEveryChartSpace(t *testing.T) {
 	for name, none := range map[string]*Company{
 		"no company": nil, "a company with no document": {Org: o},
 	} {
-		if held := reservedContainers(none); !reflect.DeepEqual(held, pages.Reserved{}) {
+		if held := reservedContainers(none); !reflect.DeepEqual(held, doclet.Reserved{}) {
 			t.Errorf("%s declares %+v, want nothing at all", name, held)
 		}
 	}

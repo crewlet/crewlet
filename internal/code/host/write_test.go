@@ -121,7 +121,7 @@ func (c *writeCase) objects() []string {
 	return names
 }
 
-// AN ENGINE COMMIT IS THE ACTING PRINCIPAL'S (ADR-0062): its author is the
+// AN ENGINE COMMIT IS THE ACTING PRINCIPAL'S (ADR-0085): its author is the
 // seat the signer names, at the address it names; its committer the engine,
 // `Crewlet <engine@seats.invalid>` with code.identity_domain unset; its author
 // date the operation's own second, and its committer date the same while the
@@ -189,7 +189,7 @@ func TestACommitIsNeverDatedBeforeItsParent(t *testing.T) {
 	}
 }
 
-// A RETRIED ENGINE WRITE IS ONE PUSH (ADR-0062's first Enforced-by): one write
+// A RETRIED ENGINE WRITE IS ONE PUSH (ADR-0085's first Enforced-by): one write
 // asked twice at once on one git node is built once — the second joins the
 // first, which holds the write's one scratch, and is answered its result — and
 // asked again once it landed is answered from its push's row with nothing

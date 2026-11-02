@@ -22,7 +22,7 @@ import {
   type PartValue,
 } from "./charter.ts";
 import { PartEditor } from "./PartEditor.tsx";
-import { hasSettled } from "./state.ts";
+import { landedView } from "./state.ts";
 import type { Editing } from "./useCharterEditing.tsx";
 
 /** The words that write an unwritten part, the same wherever the part is drawn. */
@@ -39,20 +39,26 @@ export function partEdit(editing: Editing, part: CharterPart): PrincipleCardEdit
   const session = editing.state.sessions[part];
   const projected = partOf(charterOf(editing.org), part);
   const landed = editing.state.landed[part];
-  // A SAVE IS SHOWN AS SAVED until the page's chart has it (`state.ts`).
-  const applying = landed !== undefined && !hasSettled(landed, projected, editing.appliedEpoch);
-  const shown = applying ? landed.value : projected;
+  // A SAVE IS SHOWN AS SAVED until the page's chart has it, and once this
+  // node has refused its revision the card draws what this node still runs
+  // and says so (`state.ts`, [landedView]).
+  const view = landed === undefined ? "settled" : landedView(landed, projected, editing.health);
+  const shown = landed !== undefined && view === "applying" ? landed.value : projected;
   const open = session !== undefined;
   const blocked = editing.access.can ? undefined : editing.access.reason;
   const empty = isEmptyPart(shown);
 
   return {
     shown,
-    // THE WORDS ALONE: the card draws its note as the caption under its body
-    // (`PrincipleCard`), so a paragraph here would be one inside another.
-    note: applying
-      ? "Saved. This page shows it as soon as this node applies the new revision."
-      : null,
+    // THE WORDS ALONE: the card sets its note as the caption under its body
+    // (`../PrincipleCard.tsx`), and a paragraph of its own here was a
+    // paragraph inside that one.
+    note:
+      view === "applying"
+        ? "Saved. This page shows it as soon as this node applies the new revision."
+        : view === "refused"
+          ? "Saved, but this node refused the new revision and goes on running the one before. Settings › Nodes says why."
+          : null,
     actions:
       editing.mayEdit && !open && !empty ? (
         <Button

@@ -1,0 +1,41 @@
+# A brief of a page where nothing waits on the person: no decision, every
+# agent working. "Nothing needs you" is the answer, and it is the engine's to
+# say: the model writes what the page is about and an empty list, never a row
+# invented to fill the card and never a verdict of its own.
+person:
+  apps: [worklet]
+page:
+  screen: home
+  title: Home
+  params: {}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: url:9d8e7f60
+  accepts: []
+mode: brief
+question: Brief me on this page
+answers:
+  - route: GET /worklet/decisions
+    body:
+      items: []
+  - route: GET /agents
+    body:
+      - {handle: engineer, role: Software Engineer, activity: working}
+      - {handle: pm, role: Product Manager, activity: idle}
+script:
+  - call: list_decisions
+  - call: list_agents
+  - call: answer_brief
+    args:
+      about: The Software Engineer is working and the Product Manager is idle; no decision is open.
+      needs: []
+      follow_ups: ["What shipped this week?"]
+expect:
+  calls: [list_decisions, list_agents, answer_brief]
+  never: [open_in_app]
+  proposals: 0
+  state: completed
+  brief:
+    needs: []
+    verdict: Nothing needs you

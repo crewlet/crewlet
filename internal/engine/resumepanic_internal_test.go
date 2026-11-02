@@ -80,15 +80,14 @@ func TestAResumeThatFailsWithoutPanickingKeepsItsError(t *testing.T) {
 // resume it.
 func TestAResumeOnANodeWithNoCompanyIsUnavailableHere(t *testing.T) {
 	t.Parallel()
-	state, err := execstate.Encode(execstate.State{AgentRun: true})
+	state, err := execstate.Encode(execstate.State{Version: execstate.Version})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 	r := &resumer{engine: &Engine{backends: &Backends{Queue: &pub{}}}}
-	err = r.Resume(context.Background(), sandbox.ResumeRequest{
-		Run:   sandbox.PendingRun{TurnID: "t-2", AgentHandle: "ceo"},
-		State: state,
-	})
+	err = r.Resume(context.Background(), sandbox.ResumeRequest{Run: sandbox.PendingRun{
+		TurnID: "t-2", AgentHandle: "ceo", ExecuteState: state,
+	}})
 	if !errors.Is(err, sandbox.ErrResumeUnavailable) {
 		t.Fatalf("err = %v, want ErrResumeUnavailable so the completion goes back", err)
 	}
@@ -109,7 +108,7 @@ func TestAResumeOnANodeWithNoCompanyIsUnavailableHere(t *testing.T) {
 // refused rather than quietly served from a second read.
 func TestAResumeIsNotRebuiltFromASecondReadOfTheEpoch(t *testing.T) {
 	t.Parallel()
-	company, seat := modeCompany(t, "claude-code", true, "")
+	company, seat := executorCompany(t)
 	e := &Engine{backends: &Backends{Queue: &pub{}}}
 	e.epoch.current.Store(company)
 

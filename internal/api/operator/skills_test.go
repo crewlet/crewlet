@@ -13,8 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -26,24 +26,24 @@ type skillPages struct {
 	wrote []string
 }
 
-func (k *skillPages) List(context.Context, pages.Filter, statelog.Freshness) (pages.Listing, error) {
-	return pages.Listing{}, nil
+func (k *skillPages) List(context.Context, doclet.Filter, statelog.Freshness) (doclet.Listing, error) {
+	return doclet.Listing{}, nil
 }
 
-func (k *skillPages) Get(_ context.Context, ref string, _ statelog.Freshness) (pages.Detail, error) {
+func (k *skillPages) Get(_ context.Context, ref string, _ statelog.Freshness) (doclet.Detail, error) {
 	if ref != "p-skill" {
-		return pages.Detail{}, pages.ErrNotFound
+		return doclet.Detail{}, doclet.ErrNotFound
 	}
-	return pages.Detail{Page: pages.Page{
+	return doclet.Detail{Page: doclet.Page{
 		ID: "p-skill", Container: "TS", Title: "Chat conventions", Version: 1,
 	}}, nil
 }
 
-func (k *skillPages) did(what string) (pages.Written, error) {
+func (k *skillPages) did(what string) (doclet.Written, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.wrote = append(k.wrote, what)
-	return pages.Written{Page: pages.Page{ID: "p-skill", Container: "TS"},
+	return doclet.Written{Page: doclet.Page{ID: "p-skill", Container: "TS"},
 		Outcome: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
@@ -53,35 +53,35 @@ func (k *skillPages) writes() []string {
 	return append([]string(nil), k.wrote...)
 }
 
-func (k *skillPages) Create(_ context.Context, _ pages.Actor, in pages.NewPage) (pages.Written, error) {
+func (k *skillPages) Create(_ context.Context, _ doclet.Actor, in doclet.NewPage) (doclet.Written, error) {
 	return k.did("create " + in.Container + "/" + in.Title)
 }
 
-func (k *skillPages) SavePage(_ context.Context, _ pages.Actor, id string, _ pages.Save) (pages.Written, error) {
+func (k *skillPages) SavePage(_ context.Context, _ doclet.Actor, id string, _ doclet.Save) (doclet.Written, error) {
 	return k.did("save " + id)
 }
 
-func (k *skillPages) Rename(_ context.Context, _ pages.Actor, id, title string, _ bool) (pages.Written, error) {
+func (k *skillPages) Rename(_ context.Context, _ doclet.Actor, id, title string, _ bool) (doclet.Written, error) {
 	return k.did("rename " + id + " " + title)
 }
 
-func (k *skillPages) Comment(_ context.Context, _ pages.Actor, id string,
-	_ pages.NewComment) (pages.Comment, pages.Written, error) {
+func (k *skillPages) Comment(_ context.Context, _ doclet.Actor, id string,
+	_ doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 
 	written, err := k.did("comment " + id)
-	return pages.Comment{ID: "c-1"}, written, err
+	return doclet.Comment{ID: "c-1"}, written, err
 }
 
-func (k *skillPages) EditComment(_ context.Context, _ pages.Actor, id, cid, _ string) (
-	pages.Comment, pages.Written, error) {
+func (k *skillPages) EditComment(_ context.Context, _ doclet.Actor, id, cid, _ string) (
+	doclet.Comment, doclet.Written, error) {
 
 	written, err := k.did("edit " + id + " " + cid)
-	return pages.Comment{ID: cid}, written, err
+	return doclet.Comment{ID: cid}, written, err
 }
 
 // A TOOL SKILL IS CONFIGURATION, AND THE OPERATOR'S ASSISTANT NEEDS ADMIN.
 //
-// internal/pages refuses an AGENT every write into the skills container and
+// internal/doclet refuses an AGENT every write into the skills container and
 // exempts every person, because whether a person may is a capability and the
 // store holds no grants. So over this surface — whose every caller is a person
 // or a credential — a token holding only the knowledge base rewrote the
@@ -91,7 +91,7 @@ func TestAToolSkillWriteOverTheOperatorSurfaceNeedsAdmin(t *testing.T) {
 	t.Parallel()
 	kb := &skillPages{}
 	dir := &directory{people: map[string]iam.Principal{
-		"writer": machine("token:writer", iam.GrantKnowledge),
+		"writer": machine("token:writer", iam.GrantDoclet),
 		"admin":  machine("token:admin", iam.GrantAdmin),
 	}}
 	s := newSurface(t, operator.Options{

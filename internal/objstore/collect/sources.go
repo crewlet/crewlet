@@ -35,7 +35,7 @@ type Source interface {
 
 	// Required is a walk of each of the domain's REQUIRED tables — never a
 	// retired or derived one's, whose objects the company is not owed
-	// (ADR-0051) — read no earlier than at, each in KEY ORDER
+	// (ADR-0074) — read no earlier than at, each in KEY ORDER
 	// ([objstore.Key.Compare]): the audit's ([objstore.PassAudit]).
 	//
 	// IN KEY ORDER because the audit merges every walk into one ordered

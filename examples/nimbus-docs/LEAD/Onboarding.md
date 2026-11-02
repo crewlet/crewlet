@@ -41,8 +41,8 @@ explicit lead and inherits the PM from the parent Product department.
 
 | Channel | What for |
 |---|---|
-| **The work tracker** | Work items, one project per department (see below): all backlog items — epics, stories, tasks. Every piece of work has a work item. It is the engine's own, so every seat already holds `list_work_items`, `get_work_item`, `create_work_item`, `update_work_item` and `comment_on_work_item` — there is nothing to connect and no account to be given. |
-| **The knowledge base** | Pages, one space per department, keyed the same as the tracker project: architecture decisions (ADRs), runbooks, meeting notes, competitive analysis, this onboarding content. Also the engine's own: `search_knowledge`, `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`. |
+| **Worklet**, the work tracker | Work items, one project per department (see below): all backlog items (epics, stories, tasks). Every piece of work has a work item. Worklet is built into the engine, so every seat already holds `list_work_items`, `get_work_item`, `create_work_item`, `update_work_item` and `comment_on_work_item`; there is nothing to connect and no account to be given. |
+| **Doclet**, the knowledge base | Pages, one space per department, keyed the same as the Worklet project: architecture decisions (ADRs), runbooks, meeting notes, competitive analysis, this onboarding content. Also built into the engine: `search_knowledge`, `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`. |
 | **Mattermost** | Real-time coordination, manager handoffs via `@`-mention. One bot identity per agent, self-hosted alongside GitLab. |
 | **GitLab** | All code. Each engineer's PAT is scoped to the repos their role owns (see the **Repo Ownership** page). |
 
@@ -70,8 +70,8 @@ The Leadership and Product backlogs are typically epic-heavy; the
 Engineering backlog is typically story- and task-heavy.
 
 **One Onboarding page per space.** Each space has exactly one page
-titled `Onboarding`. The knowledge base enforces title uniqueness within a
-space, so a second one cannot be created by accident — but a page moved
+titled `Onboarding`. Doclet enforces title uniqueness within a space, so
+a second one cannot be created by accident, but a page moved
 to another space can leave the space without one, so check before
 assuming. Each Onboarding page combines the org-level context (when
 relevant) with the unit-specific onboarding for the teams in that
@@ -82,7 +82,7 @@ space.
 The founder kicks off new product phases by messaging the **CEO** in Mattermost.
 The CEO drafts a strategy note, files a Phase-N kickoff epic, and
 briefs the PM and CTO in Mattermost or via a work-item mention. From there the
-cascade runs on its own through the tracker's own wakes (PM creates stories → CTO
+cascade runs on its own through Worklet's own wakes (PM creates stories → CTO
 assigns to engineers → engineers ship → DevRel writes docs).
 
 There is currently no autonomous "agents wake themselves up" behaviour —

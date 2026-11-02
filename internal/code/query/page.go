@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A PAGE IS MEASURED AS ITS JSON, because what bounds it is the bytes of the
@@ -94,7 +96,7 @@ func textCost(b []byte) int {
 // blame's every line and every commit's subject — a hundred, five hundred —
 // so each such field is costed here as internal/agent/builtin's code tools
 // send it: inside the fence they put a repository's text in, naming no writer
-// at trust external (provenance.Fence), its text NEUTRALISED there as every
+// at trust external (provenance.Repository), its text NEUTRALISED there as every
 // other string of a code tool's answer is (provenance.Neutralise: every
 // marker-shaped `[` lengthened into `[escaped `). The fence's label and closer
 // are read off provenance itself at init, so a fence grown longer is costed
@@ -119,7 +121,7 @@ var costModel string
 func init() {
 	for _, src := range []provenance.Source{provenance.SourceRepoFile, provenance.SourceRepoCommit} {
 		const text = "x"
-		fenced := provenance.Fence(provenance.NewBoundary(), src, provenance.TrustExternal, nil, text)
+		fenced := provenance.Repository(src).Fence(provenance.NewBoundary(), text)
 		fenceCost[src] = encodedLen(fenced) - encodedLen(text)
 	}
 	costModel = fmt.Sprintf("fence/%d/%d/%d", fenceCost[provenance.SourceRepoFile],
@@ -208,10 +210,11 @@ type cursor struct {
 	a, b   int
 }
 
-// errBadCursor is a cursor the kind does not issue.
-func errBadCursor(raw string, kind code.GitReadKind, want string) error {
+// errBadCursor is a cursor the kind does not issue; want is what it does
+// issue there, one item per cursor, joined as a set a person reads.
+func errBadCursor(raw string, kind code.GitReadKind, want ...string) error {
 	return fmt.Errorf("%w: cursor %q is not one a %s read issues (%s): hand back a page's next as it came",
-		code.ErrBadCursor, raw, kind, want)
+		code.ErrBadCursor, raw, kind, words.Or(want))
 }
 
 // parseCursor reads raw as one of letters' cursors, each at its arity; "" is
@@ -224,13 +227,16 @@ func parseCursor(raw string, kind code.GitReadKind, letters map[byte]int) (curso
 	for l, n := range letters {
 		want = append(want, widestCursor(l, n))
 	}
+	// IN ONE ORDER, because the letters are a map's and a refusal a person
+	// reads twice should read the same.
+	slices.Sort(want)
 	if len(raw) < 3 || raw[1] != ':' {
-		return cursor{}, errBadCursor(raw, kind, strings.Join(want, " or "))
+		return cursor{}, errBadCursor(raw, kind, want...)
 	}
 	arity, ok := letters[raw[0]]
 	parts := strings.Split(raw[2:], ":")
 	if !ok || len(parts) != arity {
-		return cursor{}, errBadCursor(raw, kind, strings.Join(want, " or "))
+		return cursor{}, errBadCursor(raw, kind, want...)
 	}
 	c := cursor{letter: raw[0]}
 	for i, p := range parts {
@@ -239,7 +245,7 @@ func parseCursor(raw string, kind code.GitReadKind, letters map[byte]int) (curso
 		// cursor no node issued, and two spellings of one position would
 		// be two pages of one memo.
 		if err != nil || n < 1 || strconv.Itoa(n) != p {
-			return cursor{}, errBadCursor(raw, kind, strings.Join(want, " or "))
+			return cursor{}, errBadCursor(raw, kind, want...)
 		}
 		if i == 0 {
 			c.a = n

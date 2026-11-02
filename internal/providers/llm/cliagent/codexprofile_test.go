@@ -140,7 +140,7 @@ func TestTheCodexProfileReadsARealStream(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	prov := &Provider{profile: p, model: "gpt-5.5", agent: "codex", key: "coding", now: time.Now}
-	comp, err := prov.completion(t.Context(), "prompt", false, &rawResult{stdout: codexStream}, "")
+	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: codexStream}, "")
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}

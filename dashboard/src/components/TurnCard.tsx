@@ -83,7 +83,7 @@ export function TurnCard({
               a column can be widened. Here nothing constrains the height — the
               card grows to its content and the metadata beside it is centred
               against whatever this is — so "Message from founder: " plus a task
-              title (up to tracker.MaxTitle, 256) lost its subject at about the
+              title (up to worklet.MaxTitle, 256) lost its subject at about the
               fortieth character with empty card underneath, and the only way to
               learn what the turn was about was to open it.
               TWO LINES, not free-flowing: this is one card in a feed of forty

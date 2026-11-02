@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // reportingWriter is a node's writer for one actor, reporting the task a
@@ -20,14 +20,14 @@ import (
 // names nothing.
 type reportingWriter struct {
 	*fakeNode
-	log tracker.WriteLog
+	log worklet.WriteLog
 }
 
-func (w reportingWriter) CreateTask(ctx context.Context, opID string, task tracker.Task,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+func (w reportingWriter) CreateTask(ctx context.Context, opID string, task worklet.Task,
+	notify *worklet.Notify) (worklet.WriteResult, error) {
 	out, err := w.fakeNode.CreateTask(ctx, opID, task, notify)
 	if err == nil && w.log != nil && out.Outcome == statelog.OutcomeApplied {
-		w.log.Add(types.WorkItem{Backend: types.WorkNative, ID: "task-" + out.Key, Key: out.Key})
+		w.log.Add(types.WorkItem{Backend: types.WorkWorklet, ID: "task-" + out.Key, Key: out.Key})
 	}
 	return out, err
 }
@@ -35,12 +35,12 @@ func (w reportingWriter) CreateTask(ctx context.Context, opID string, task track
 // EditComment is the TRACKER's remark edit — the node's own EditComment is the
 // knowledge base's, and a writer for one actor answers the tracker's.
 func (w reportingWriter) EditComment(_ context.Context, opID, _, _, _, _ string,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 	w.note("task_comment_edit")
 	w.mu.Lock()
 	w.opIDs = append(w.opIDs, opID)
 	w.mu.Unlock()
-	return tracker.WriteResult{}, nil
+	return worklet.WriteResult{}, nil
 }
 
 // turnSet is an asking turn's own set of the items it wrote, in its process.
@@ -80,68 +80,68 @@ func (f *fakeNode) seeds() []string {
 	return slices.Clone(f.keys)
 }
 
-func (f *fakeNode) Create(_ context.Context, actor pages.Actor, _ pages.NewPage) (pages.Written, error) {
+func (f *fakeNode) Create(_ context.Context, actor doclet.Actor, _ doclet.NewPage) (doclet.Written, error) {
 	f.note("page_create")
 	f.keyed(actor.OpKey)
-	return pages.Written{}, nil
+	return doclet.Written{}, nil
 }
 
-func (f *fakeNode) SavePage(_ context.Context, actor pages.Actor, _ string,
-	_ pages.Save) (pages.Written, error) {
+func (f *fakeNode) SavePage(_ context.Context, actor doclet.Actor, _ string,
+	_ doclet.Save) (doclet.Written, error) {
 	f.note("page_save")
 	f.keyed(actor.OpKey)
-	return pages.Written{}, nil
+	return doclet.Written{}, nil
 }
 
-func (f *fakeNode) Rename(_ context.Context, actor pages.Actor, _, _ string,
-	_ bool) (pages.Written, error) {
+func (f *fakeNode) Rename(_ context.Context, actor doclet.Actor, _, _ string,
+	_ bool) (doclet.Written, error) {
 	f.note("page_rename")
 	f.keyed(actor.OpKey)
-	return pages.Written{}, nil
+	return doclet.Written{}, nil
 }
 
-func (f *fakeNode) EditComment(_ context.Context, actor pages.Actor, _, _,
-	_ string) (pages.Comment, pages.Written, error) {
+func (f *fakeNode) EditComment(_ context.Context, actor doclet.Actor, _, _,
+	_ string) (doclet.Comment, doclet.Written, error) {
 	f.note("comment_edit")
 	f.keyed(actor.OpKey)
-	return pages.Comment{}, pages.Written{}, nil
+	return doclet.Comment{}, doclet.Written{}, nil
 }
 
-func (f *fakeNode) Trash(_ context.Context, actor pages.Actor, _ string) (pages.Written, error) {
+func (f *fakeNode) Trash(_ context.Context, actor doclet.Actor, _ string) (doclet.Written, error) {
 	f.note("page_trash")
 	f.keyed(actor.OpKey)
-	return pages.Written{}, nil
+	return doclet.Written{}, nil
 }
 
-func (f *fakeNode) Restore(_ context.Context, actor pages.Actor, _ string) (pages.Written, error) {
+func (f *fakeNode) Restore(_ context.Context, actor doclet.Actor, _ string) (doclet.Written, error) {
 	f.note("page_restore")
 	f.keyed(actor.OpKey)
-	return pages.Written{}, nil
+	return doclet.Written{}, nil
 }
 
-func (f *fakeNode) Purge(_ context.Context, actor pages.Actor, _, _ string) (pages.Written, error) {
+func (f *fakeNode) Purge(_ context.Context, actor doclet.Actor, _, _ string) (doclet.Written, error) {
 	f.note("page_purge")
 	f.keyed(actor.OpKey)
-	return pages.Written{}, nil
+	return doclet.Written{}, nil
 }
 
-func (f *fakeNode) RemoveComment(_ context.Context, actor pages.Actor, _, _ string,
-	_ pages.CommentAuthority) (pages.Written, error) {
+func (f *fakeNode) RemoveComment(_ context.Context, actor doclet.Actor, _, _ string,
+	_ doclet.CommentAuthority) (doclet.Written, error) {
 	f.note("comment_remove")
 	f.keyed(actor.OpKey)
-	return pages.Written{}, nil
+	return doclet.Written{}, nil
 }
 
 // PlaceTask is a drop whose lane step lands and whose order step this node's
 // ledger cannot vouch for where it says so.
-func (f *fakeNode) PlaceTask(_ context.Context, opID string, place tracker.Place,
-	_ *tracker.Notify) (tracker.PlaceResult, error) {
+func (f *fakeNode) PlaceTask(_ context.Context, opID string, place worklet.Place,
+	_ *worklet.Notify) (worklet.PlaceResult, error) {
 	f.note("place")
 	f.mu.Lock()
 	f.opIDs = append(f.opIDs, opID)
 	orderUnvouched := f.unvouched
 	f.mu.Unlock()
-	res := tracker.PlaceResult{Version: 4}
+	res := worklet.PlaceResult{Version: 4}
 	res.Lane.Result = statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID + "/lane",
 		Position: statelog.Position{Stream: trackerStream, Generation: 1, Seq: 3}}
 	res.Order.Result = statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID + "/order",
@@ -165,7 +165,7 @@ func TestAWriteAnotherNodeRanIsInTheAskingTurnsSet(t *testing.T) {
 	actor := swe
 	actor.Provenance.Written = set
 	if _, err := f.client.WriterAs(actor).CreateTask(t.Context(), "op-1",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if got := set.keys(); !slices.Equal(got, []string{"ENG-1"}) {
@@ -176,7 +176,7 @@ func TestAWriteAnotherNodeRanIsInTheAskingTurnsSet(t *testing.T) {
 	// for a writer that is not a turn's.
 	node := f.nodes["data-a"]
 	if _, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-2",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	node.mu.Lock()
@@ -201,7 +201,7 @@ func TestAWalkCollectsWhatEveryHolderCommittedTo(t *testing.T) {
 	actor := swe
 	actor.Provenance.Written = set
 	written, err := f.client.WriterAs(actor).CreateTask(t.Context(), "op-w",
-		tracker.Task{Project: "ENG"}, nil)
+		worklet.Task{Project: "ENG"}, nil)
 	if err != nil || written.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("create = (%+v, %v), want the second holder's applied answer", written.Result, err)
 	}
@@ -221,7 +221,7 @@ func TestALocalWriteReportsIntoTheTurnsSetOnce(t *testing.T) {
 	actor := swe
 	actor.Provenance.Written = set
 	if _, err := r.WriterAs(actor).CreateTask(t.Context(), "op-l",
-		tracker.Task{Project: "ENG"}, nil); err != nil {
+		worklet.Task{Project: "ENG"}, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if got := set.keys(); !slices.Equal(got, []string{"ENG-1"}) {
@@ -253,48 +253,43 @@ func TestAKeyedPageWriteNobodyAnsweredIsAskedAgainUnderItsKey(t *testing.T) {
 		write func(ctx context.Context, p Pages, key string) error
 	}{
 		{"create", "page_create", func(ctx context.Context, p Pages, key string) error {
-			_, err := p.Create(ctx, pages.Actor{OpKey: key},
-				pages.NewPage{Container: "ENG", Title: "Runbook"})
+			_, err := p.Create(ctx, doclet.Actor{OpKey: key},
+				doclet.NewPage{Container: "ENG", Title: "Runbook"})
 			return err
 		}},
 		{"save", "page_save", func(ctx context.Context, p Pages, key string) error {
 			body := "v2"
-			_, err := p.SavePage(ctx, pages.Actor{OpKey: key}, "p1",
-				pages.Save{BaseVersion: 1, Body: &body})
+			_, err := p.SavePage(ctx, doclet.Actor{OpKey: key}, "p1",
+				doclet.Save{BaseVersion: 1, Body: &body})
 			return err
 		}},
 		{"rename", "page_rename", func(ctx context.Context, p Pages, key string) error {
-			_, err := p.Rename(ctx, pages.Actor{OpKey: key}, "p1", "Runbook v2", false)
+			_, err := p.Rename(ctx, doclet.Actor{OpKey: key}, "p1", "Runbook v2", false)
 			return err
 		}},
 		{"comment", "comment", func(ctx context.Context, p Pages, key string) error {
-			_, _, err := p.Comment(ctx, pages.Actor{OpKey: key}, "p1", pages.NewComment{Body: "hi"})
-			return err
-		}},
-		{"comment from a turn", "comment", func(ctx context.Context, p Pages, key string) error {
-			_, _, err := p.Comment(ctx, pages.Actor{}, "p1",
-				pages.NewComment{Body: "hi", TurnKey: key, TurnSince: since})
+			_, _, err := p.Comment(ctx, doclet.Actor{OpKey: key}, "p1", doclet.NewComment{Body: "hi"})
 			return err
 		}},
 		{"edit comment", "comment_edit", func(ctx context.Context, p Pages, key string) error {
-			_, _, err := p.EditComment(ctx, pages.Actor{OpKey: key}, "p1", "c1", "hello")
+			_, _, err := p.EditComment(ctx, doclet.Actor{OpKey: key}, "p1", "c1", "hello")
 			return err
 		}},
 		{"trash", "page_trash", func(ctx context.Context, p Pages, key string) error {
-			_, err := p.Trash(ctx, pages.Actor{OpKey: key}, "p1")
+			_, err := p.Trash(ctx, doclet.Actor{OpKey: key}, "p1")
 			return err
 		}},
 		{"restore", "page_restore", func(ctx context.Context, p Pages, key string) error {
-			_, err := p.Restore(ctx, pages.Actor{OpKey: key}, "p1")
+			_, err := p.Restore(ctx, doclet.Actor{OpKey: key}, "p1")
 			return err
 		}},
 		{"purge", "page_purge", func(ctx context.Context, p Pages, key string) error {
-			_, err := p.Purge(ctx, pages.Actor{OpKey: key}, "p1", "spam")
+			_, err := p.Purge(ctx, doclet.Actor{OpKey: key}, "p1", "spam")
 			return err
 		}},
 		{"remove comment", "comment_remove", func(ctx context.Context, p Pages, key string) error {
-			_, err := p.RemoveComment(ctx, pages.Actor{OpKey: key}, "p1", "c1",
-				pages.CommentAuthority{Moderate: true})
+			_, err := p.RemoveComment(ctx, doclet.Actor{OpKey: key}, "p1", "c1",
+				doclet.CommentAuthority{Moderate: true})
 			return err
 		}},
 	} {
@@ -345,7 +340,7 @@ func TestADropWhoseOrderStepIsUnvouchedIsAskedOfTheNextHolder(t *testing.T) {
 	second := f.other(first)
 
 	placed, err := f.client.WriterAs(swe).PlaceTask(t.Context(), "op-drop",
-		tracker.Place{Task: "t-1", Project: "ENG"}, nil)
+		worklet.Place{Task: "t-1", Project: "ENG"}, nil)
 	if err != nil {
 		t.Fatalf("place: %v", err)
 	}

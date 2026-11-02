@@ -293,7 +293,7 @@ func TestTheRunEnvironmentCarriesNoCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env := receiver.RunEnv("trace-abc", "span-def", "turn-1", "engineer", time.Hour)
+	env := receiver.RunEnv("trace-abc", "span-def", "turn-1", "engineer", false, time.Hour)
 	endpoint := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
 	if !strings.HasPrefix(endpoint, "https://engine.internal/otlp/") {
 		t.Fatalf("the box exports to %q, which is not the engine", endpoint)
@@ -341,7 +341,7 @@ func TestARunWithNoTraceGetsNoEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if env := receiver.RunEnv("", "span", "turn-1", "engineer", time.Hour); len(env) != 0 {
+	if env := receiver.RunEnv("", "span", "turn-1", "engineer", false, time.Hour); len(env) != 0 {
 		t.Fatalf("a trace-less run got %v", env)
 	}
 }
@@ -407,7 +407,7 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	env := map[string]string{}
 	lookup := func(name string) string { return env[name] }
 
-	got, err := sandbox.BuildOtelReceiver(lookup, runtoken.Material{})
+	got, err := sandbox.BuildOtelReceiver(lookup, runtoken.Material{}, "")
 	if err != nil || got != nil {
 		t.Fatalf("an unset receiver URL built %v (%v)", got, err)
 	}
@@ -421,11 +421,11 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	// and nowhere else, so a box exporting to any other node would be
 	// refused with its configuration looking complete. Mutation: fall back
 	// to a per-process key and this builds a receiver.
-	if got, err = sandbox.BuildOtelReceiver(lookup, runtoken.Material{}); !errors.Is(err, runtoken.ErrNoKeyring) || got != nil {
+	if got, err = sandbox.BuildOtelReceiver(lookup, runtoken.Material{}, ""); !errors.Is(err, runtoken.ErrNoKeyring) || got != nil {
 		t.Fatalf("a receiver with no keyring = %v, %v, want the refusal", got, err)
 	}
 
-	got, err = sandbox.BuildOtelReceiver(lookup, runtoken.OneKey("k1", "material"))
+	got, err = sandbox.BuildOtelReceiver(lookup, runtoken.OneKey("k1", "material"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,12 +440,140 @@ func TestTheReceiverIsBuiltFromTheEnvironment(t *testing.T) {
 	// built, it minted every run an endpoint with no scheme, and the run's
 	// telemetry went nowhere.
 	env[sandbox.OtelReceiverURLVar] = "engine.internal:443"
-	got, err = sandbox.BuildOtelReceiver(lookup, runtoken.OneKey("k1", "material"))
+	got, err = sandbox.BuildOtelReceiver(lookup, runtoken.OneKey("k1", "material"), "")
 	if err == nil || got != nil {
 		t.Fatalf("a receiver URL with no scheme built %v (%v)", got, err)
 	}
 	if !strings.Contains(err.Error(), sandbox.OtelReceiverURLVar) {
 		t.Errorf("the refusal does not name %s: %v", sandbox.OtelReceiverURLVar, err)
+	}
+}
+
+// A BOX ON ITS NODE'S HOST EXPORTS TO THAT NODE, WHERE THE NODE FORWARDS. The
+// node that bound a listener knows where a `direct` box reaches it, as the
+// tool bridge does, so a deployment that sets OTEL_EXPORTER_OTLP_ENDPOINT for
+// the engine's own spans has its direct boxes' telemetry with no receiver
+// address to publish — a seat pool that has none above all. Where this node
+// has no upstream it would drop what it received, so it hands its boxes no
+// endpoint of its own: none at all, or the fleet's address where one is set,
+// whose node may forward. A box off the host dials the fleet's address alone.
+//
+// Mutation: take the host address whatever the upstream, and "no upstream"
+// builds a receiver that drops every export while "the fleet's address, no
+// upstream" sends a direct box away from a node that forwards; prefer the
+// fleet's address on the host, and "both" exports a direct box off the host.
+func TestABoxOnTheHostExportsToItsNodeWhereTheNodeForwards(t *testing.T) {
+	t.Parallel()
+	const host, fleet = "http://127.0.0.1:8080", "https://engine.example.com"
+	for name, tc := range map[string]struct {
+		env             map[string]string
+		onHost, offHost string // the endpoint's base, "" for none
+		builds          bool
+	}{
+		"an upstream, no fleet address": {
+			env:    map[string]string{sandbox.OtelUpstreamEndpointVar: "https://collector.example"},
+			builds: true, onHost: host,
+		},
+		"no upstream, no fleet address": {
+			env: map[string]string{},
+		},
+		"the fleet's address, no upstream": {
+			env:    map[string]string{sandbox.OtelReceiverURLVar: fleet},
+			builds: true, onHost: fleet, offHost: fleet,
+		},
+		"both": {
+			env: map[string]string{sandbox.OtelReceiverURLVar: fleet,
+				sandbox.OtelUpstreamEndpointVar: "https://collector.example"},
+			builds: true, onHost: host, offHost: fleet,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			receiver, err := sandbox.BuildOtelReceiver(func(name string) string { return tc.env[name] },
+				runtoken.OneKey("k1", "material"), host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (receiver != nil) != tc.builds {
+				t.Fatalf("built a receiver: %t, want %t", receiver != nil, tc.builds)
+			}
+			if receiver == nil {
+				return
+			}
+			for _, side := range []struct {
+				onHost bool
+				want   string
+			}{{true, tc.onHost}, {false, tc.offHost}} {
+				endpoint := receiver.RunEnv("trace-abc", "span-def", "turn-1", "engineer",
+					side.onHost, time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"]
+				switch {
+				case side.want == "" && endpoint != "":
+					t.Errorf("a box on the host: %t was handed %q, want no endpoint", side.onHost, endpoint)
+				case side.want != "" && !strings.HasPrefix(endpoint, side.want+"/otlp/"):
+					t.Errorf("a box on the host: %t exports to %q, want %s", side.onHost, endpoint, side.want)
+				}
+			}
+		})
+	}
+}
+
+// THE CELL PICKS THE ADDRESS, AS THE BRIDGE'S DOES. A `direct` box is a process
+// of the host and exports to its node's own listener; a `container` box is not
+// on the host's loopback, whatever its runtime delivers, and dials the fleet's
+// address, written as the box reaches it — and where there is none, it is
+// handed no endpoint at all rather than one it cannot dial.
+//
+// Mutation: choose by the box rather than the cell, or hand a container box the
+// host address, and the container rows read the node's loopback.
+func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
+	t.Parallel()
+	tokens := otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")})
+	both, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "http://127.0.0.1:9000", HostURL: "http://127.0.0.1:8080", Tokens: tokens,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostOnly, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		HostURL: "http://127.0.0.1:8080", Tokens: tokens,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	container := aliasedBox{FakeSandbox: sandbox.NewFakeSandbox("c"), alias: "host.docker.internal"}
+	for name, tc := range map[string]struct {
+		receiver *sandbox.OtelReceiver
+		cell     sandbox.Placement
+		box      sandbox.Sandbox
+		want     string // the endpoint's base, "" for none
+	}{
+		"a direct box":                      {both, sandbox.Direct, sandbox.NewFakeSandbox("d"), "http://127.0.0.1:8080"},
+		"a container box":                   {both, sandbox.Container, container, "http://host.docker.internal:9000"},
+		"a direct box, its node's alone":    {hostOnly, sandbox.Direct, sandbox.NewFakeSandbox("d"), "http://127.0.0.1:8080"},
+		"a container box, no fleet address": {hostOnly, sandbox.Container, container, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+				Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+				Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+				Telemetry: tc.receiver,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := sandbox.RunEnvFor(manager, sandbox.LaunchRequest{
+				Turn: sandbox.TurnRef{TraceID: "trace-abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
+				Spec: sandbox.Spec{Placement: tc.cell, CodingAgent: "claude-code", TimeoutSec: 900},
+			}, tc.box)
+			endpoint, set := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
+			switch {
+			case tc.want == "" && set:
+				t.Errorf("the run was handed %q, want no endpoint", endpoint)
+			case tc.want != "" && !strings.HasPrefix(endpoint, tc.want+"/otlp/"):
+				t.Errorf("the run exports to %q, want %s", endpoint, tc.want)
+			}
+		})
 	}
 }
 
@@ -489,7 +617,7 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 				"ANTHROPIC_API_KEY":           "sk-test",
 			},
 		},
-	})
+	}, sandbox.NewFakeSandbox("box"))
 	if got := env["OTEL_EXPORTER_OTLP_ENDPOINT"]; got != "https://our-own-collector.example" {
 		t.Errorf("the engine overrode the operator's collector: %q", got)
 	}
@@ -500,5 +628,57 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 	}
 	if env["ANTHROPIC_API_KEY"] != "sk-test" {
 		t.Errorf("the run environment lost a credential: %q", env["ANTHROPIC_API_KEY"])
+	}
+}
+
+// aliasedBox is a box whose network is not the engine host's, as a container
+// box's is: it names the host by alias.
+type aliasedBox struct {
+	*sandbox.FakeSandbox
+	alias string
+}
+
+func (b aliasedBox) EngineHost() string { return b.alias }
+
+// THE RECEIVER IS REACHED AS THE BOX DIALS IT. Its base is written in the
+// engine host's network, and on a single-host install that is loopback, which
+// inside a container is the container: every span a containerised run
+// exported went nowhere. An operator's own endpoint is in the box's network
+// already, and is left exactly as written.
+func TestTheRunsEndpointIsTheReceiverAsTheBoxDialsIt(t *testing.T) {
+	t.Parallel()
+	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
+		BaseURL: "http://127.0.0.1:8000",
+		Tokens:  otelTokens(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "k")}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+		Telemetry: receiver,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := sandbox.LaunchRequest{
+		Turn: sandbox.TurnRef{TraceID: "trace-abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
+		Spec: sandbox.Spec{CodingAgent: "claude-code", TimeoutSec: 900},
+	}
+	container := aliasedBox{FakeSandbox: sandbox.NewFakeSandbox("c"), alias: "host.docker.internal"}
+
+	got := sandbox.RunEnvFor(manager, req, container)["OTEL_EXPORTER_OTLP_ENDPOINT"]
+	if !strings.HasPrefix(got, "http://host.docker.internal:8000/otlp/") {
+		t.Errorf("a container box's endpoint = %q, want the receiver by the engine host's alias", got)
+	}
+	direct := sandbox.RunEnvFor(manager, req, sandbox.NewFakeSandbox("d"))["OTEL_EXPORTER_OTLP_ENDPOINT"]
+	if !strings.HasPrefix(direct, "http://127.0.0.1:8000/otlp/") {
+		t.Errorf("a box on the host's network was handed %q, want the receiver as written", direct)
+	}
+
+	req.Spec.Env = map[string]string{"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"}
+	if own := sandbox.RunEnvFor(manager, req, container)["OTEL_EXPORTER_OTLP_ENDPOINT"]; own != "http://127.0.0.1:4318" {
+		t.Errorf("the operator's own endpoint was rewritten to %q", own)
 	}
 }

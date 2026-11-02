@@ -187,19 +187,22 @@ A few things worth knowing when deploying Crewlet:
 - **Carrying a credential is not the same as being allowed to use it.** Every
   route and every socket question declares who may ask it (everybody, one of
   the [permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app),
-  `admin`, `tracker`, `knowledge` or `artifacts`, or a verb the answer decides
-  record by record), and both transports are decided by the same registry, so
-  a question cannot be reached by choosing a channel. A route registered without saying
-  so is a build failure rather than a route that answers to anyone.
+  `admin`, `worklet`, `doclet`, `artifacts` or `chatlet`, or a verb the answer
+  decides record by record), and both transports are decided by the same
+  registry, so a question cannot be reached by choosing a channel. A route
+  registered without saying so is a build failure rather than a route that
+  answers to anyone.
 - **`admin` is host access: it runs code on every engine host.** It is
   deliberately one permission over the whole company — its configuration, its
-  credentials, its people and its deployment — and the configuration
-  configuration runs code: a stdio `mcp_servers` entry is a `command` the
-  engine starts as its own user on every node that runs seats; a `cli-agent`
-  provider names a binary it runs, and a seat on one with `run_in: self` does
-  its code work inside it; a `run_in: direct` sandbox cell runs a coding agent,
-  and its setup steps, as that same user; and a seat's model chain,
-  credentials, sandbox cell and `mcp_env` are part of the same document.
+  credentials, its people and its deployment — and the configuration it
+  writes runs code: a stdio `mcp_servers` entry is a `command` the
+  engine starts as its own user on every node that runs seats; a
+  `providers.llm` entry names a coding CLI it runs, and every agent seat's
+  executor is that CLI's own fully permissioned run, which a `run_in: direct`
+  cell (on the entry, or as `providers.sandbox.default_run_in`) runs, with the
+  seat's setup steps, as that same user on the engine host; and a seat's model
+  chain (which places its run), credentials and `mcp_env` are part of the same
+  document.
   Whoever holds it can therefore run anything on every
   engine host and read whatever the engine's user can: the Tier A file, the
   keyring that signs every session, and every credential the store holds. Give
@@ -280,9 +283,9 @@ A few things worth knowing when deploying Crewlet:
   node publishes its posture so a mixed fleet mid-rollout is visible rather
   than silent.
 - **A Tier A token is a real credential and is checked as one.** Each entry
-  states its own `grants` — required and non-empty, naming only `admin`,
-  `tracker`, `knowledge` and `artifacts`, and refused for `admin` on a node that refuses it
-  — and its value must clear
+  states its own `grants` (required and non-empty, naming only `admin`,
+  `worklet`, `doclet`, `artifacts` and `chatlet`, and refused for `admin` on a node that refuses it),
+  and its value must clear
   a 26-character floor on what the `${VAR}` *resolves to*, so a reference
   cannot be the way around the rule. At least one is required on every node
   that serves the API: a fresh deployment's identity estate is empty, so it is
@@ -303,34 +306,54 @@ A few things worth knowing when deploying Crewlet:
   credential, a leaf link and the operator's nats tool an nkey signing the
   member's challenge, a node's own clients in process — and anything else is
   refused, counted and logged
-  ([ADR-0064](adr/0064-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)).
+  ([ADR-0087](adr/0087-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)).
   That admission is per connection, and a route's credential crosses the
   fleet network in clear once per connection, so it is only as private as that
   network; an external cluster (`stream.type: nats`) admits whom its own
   operator chooses, and a node dials one only where its servers authenticate
   their clients. So every state-log record is still signed under the
   keyring and verified before any node applies it, and so is every request one
-  node asks another to CARRY OUT, and every reply, on each of the three
-  channels that carry one: a node without `data` asking a data node's estate
-  service to write (the data node writes as the actor the request names), any
-  node asking a broker member to remove a voter from the metadata group (the
-  member does it through its own system account, changing the quorum every
-  election runs on), and a person's note to a running turn (the running node
-  offers it as the person it names). Unsigned, each would let anything the
-  broker admitted write as anybody, change the broker's quorum past every check
-  the operator's route makes, or put words in front of a running agent under
-  anybody's name. Each request is bound to an id and a deadline inside its
-  signature, so one captured off the wire is not carried out twice. A frame
-  under a key the receiver does not hold is not applied, or not run; one that
-  fails under a key it holds is refused and logged. Neither the admission nor
-  the signing encrypts: the records, the event stream and the coordination
-  store cross the fleet network in clear, the coordination store's writes are
-  guarded by compare-and-set rather than a signature, and the scatters that
-  only READ — history, search, a seat's memory, a sandbox's tail — are not
-  signed. Keep both ports on a private network, and coding boxes off a
-  member's host network. The decisions are
-  [ADR-0031](adr/0031-every-state-log-record-is-signed.md) and ADR-0064.
-- **Removing a person erases their values from every node's rows — and not
+  node asks another to CARRY OUT, and every reply, on every channel that
+  carries one: a node without `data` asking a data node's estate service to
+  write (the data node writes as the actor the request names), any node asking
+  a broker member to remove a voter from the metadata group (the member does it
+  through its own system account, changing the quorum every election runs on),
+  a person's note to a running turn (the running node offers it as the person
+  it names), a seat's holder asking the node a `direct` or `container` box is
+  on to read it back (that host reads the box and pauses it, as the collection
+  it is part of does), a box's tool call relayed to the node holding its
+  session (that node runs it as whoever the call's token names, and its answer
+  goes back to the box as that node's), and a request about a person's
+  Ask Crewlet turn running on another node (the running node hands the turn
+  over, or stops it, for the person the request names). Unsigned, each would
+  let anything the broker admitted write as anybody, change the broker's
+  quorum past every check the operator's route makes, put words in front of a
+  running agent under anybody's name, have a run's box read back and paused,
+  call a running seat's tools as that seat, or stop anybody's Ask Crewlet turn.
+  So is the live relay, which only reads but whose answers a data node whose
+  own copy is out of service pushes to its dashboards as a sound peer's
+  committed chat messages and datastore documents: unsigned, anything the
+  broker admitted could show words in a room, or values in a shared table,
+  under anybody's name. So are the frames a node broadcasts for its peers to
+  show: who is in a room, and an Ask Crewlet turn as it streams, which is also
+  encrypted under the keyring because it carries the person's conversation.
+  Each request is bound to an id and a deadline inside its signature, so one
+  captured off the wire is not carried out twice. A frame under a key the
+  receiver does not hold is not applied, or not run; one that fails under a key
+  it holds is refused and logged. Neither the admission nor the signing
+  encrypts: the records, the event stream and the coordination store cross the
+  fleet network in clear, the coordination store's writes are guarded by
+  compare-and-set rather than a signature — except a person's answer to a
+  parked coding run and a person's note to a running one, which the run's
+  record carries sealed under the keyring and which nothing hands to a model
+  until it opens — and the scatters that only answer the question their asker
+  put — history, search, a seat's memory, a sandbox's tail — are not signed.
+  Keep both ports on a private network, and coding boxes off a member's host
+  network. The decisions are
+  [ADR-0031](adr/0031-every-state-log-record-is-signed.md) and ADR-0087, and
+  the note's
+  [ADR-0067](adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md).
+- **Removing a person erases their values from every data node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,
   bound to them, before any record carrying them is published. Removing them
@@ -365,7 +388,7 @@ A few things worth knowing when deploying Crewlet:
   `jane.doe`), so after a removal the address's local part is usually still
   readable. If a person's login has to be erasable, do not derive it from a
   personal address: give them one that names nothing about them. See
-  [Removing somebody erases what is theirs from every node's rows](docs/concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows).
+  [Removing somebody erases what is theirs from every data node's rows](docs/concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows).
 - **Personal data in configuration revisions.** Every node keeps its own copy
   of every company-config revision it has ever met, in an append-only table
   that is in every backup of that node. A human seat's `email` and `contact`
@@ -392,16 +415,24 @@ A few things worth knowing when deploying Crewlet:
   page never does this by accident; share `editor` with seats and people you
   would trust with every viewer's readable rows. See
   `internal/api/pagepolicy` for why a nonce-based policy cannot close this.
-- **Sandbox isolation depends on the cell a seat runs in.** A coding agent
-  runs fully permissioned — the sandbox boundary, not the agent's own
-  permission prompts, is the isolation model — so where it runs is the
-  security decision. `run_in: e2b` is a remote VM per run and `run_in:
-  container` a Docker or Podman container on the engine host; `run_in: direct`
-  is a process tree running **as the engine's own user on the engine host**,
-  which isolates each box's state and not the host — it can read what that
-  user can. Use `direct` on a workstation or a dedicated VM, never where the
-  work is untrusted. Treat anything you inject into a sandbox (tokens in
-  `role.sandbox.env`) as visible to the code that runs there. See
+- **Where each executor runs is the isolation decision.** Every agent seat's
+  executor is its coding CLI's own fully permissioned run — Claude Code under
+  `bypassPermissions`, OpenCode with every action allowed but `question` —
+  because a headless run has nobody to answer a permission prompt, so the
+  cell it runs in, not the CLI's own prompts, is the isolation model. The cell
+  is the one the `providers.llm` entry it launches on names in `run_in`, else
+  `providers.sandbox.default_run_in`. `e2b` is a remote VM per run and
+  `container` a Docker or Podman container on the engine host; `direct` runs
+  a fully permissioned CLI **as the engine's own user on the engine host**,
+  which keeps each box's state apart and not the host — the run can read
+  what that user can. Use `direct` only on a dedicated host you are willing
+  to hand to an autonomous agent, for the entry that needs the host itself,
+  or for a first run on your own machine while its seats take work from you
+  alone — the quickstart's start; for any other local instance, a
+  workstation included, and before a seat takes work from anyone else,
+  place the runs in `container` (or `e2b`). Treat anything you put into a
+  box (tokens in `role.sandbox.env`) as visible to the code that runs there.
+  See
   [Code Sandbox § Local sandboxes](docs/concepts/code-sandbox.md#local-sandboxes).
   E2B boxes are created with secured access, so a box's in-box agent runs a
   command or serves a file only for a holder of that box's access token,

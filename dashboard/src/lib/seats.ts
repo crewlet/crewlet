@@ -54,10 +54,11 @@ import { useQuery } from "./useQuery.ts";
 import { useRest } from "./useRest.ts";
 import { useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
-import { loginKind } from "./login.ts";
-import { rest } from "~/protocol/rest.ts";
-import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
+import { loginKind, loginWords } from "./login.ts";
+import { pathSegment, rest } from "~/protocol/rest.ts";
+import type { SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
+import type { ProviderErrorKind } from "~/contract/failures.ts";
 import type {
   AgentRow,
   CompanyDocument,
@@ -490,6 +491,28 @@ export function indexOrg(org: OrgProjection | null | undefined): OrgIndex {
   return built;
 }
 
+/** Each org projection's index, built once however many readers ask. */
+const indexed = new WeakMap<OrgProjection, OrgIndex>();
+
+/**
+ * The org projection's index, SHARED: built once per projection for every
+ * reader of it, where a `useMemo` per component builds one per component. A
+ * page of prose draws a seat for every handle it mentions (`InlineToken`),
+ * and an index each was the whole chart walked once per mention.
+ */
+export function useOrgIndex(): OrgIndex {
+  const org = useOrg();
+  return useMemo(() => {
+    if (!org) return indexOrg(org);
+    let index = indexed.get(org);
+    if (index === undefined) {
+      index = indexOrg(org);
+      indexed.set(org, index);
+    }
+    return index;
+  }, [org]);
+}
+
 // ---------------------------------------------------------------------------
 // A unit's headcount, and a seat's
 // ---------------------------------------------------------------------------
@@ -847,7 +870,8 @@ export function useSeatSetup(handle: string): SeatSetup {
   const asked = !!seat && (granted || led !== null);
   const withheld = !!seat && !asked && !viewer.loading;
   const lead = useRest(
-    led ? `/config/roles/${led.handle}+${led.unit?.id ?? ""}` : null,
+    // A CACHE KEY, never requested: `leadDocument` builds the two requests.
+    led ? `lead ${led.handle} ${led.unit?.id ?? ""}` : null,
     (signal) => (led ? leadDocument(led, signal) : Promise.resolve(null)),
   );
   const read = led
@@ -893,8 +917,8 @@ export function useSeatSetup(handle: string): SeatSetup {
  */
 async function leadDocument(seat: Seat, signal: AbortSignal): Promise<CompanyDocument> {
   const [role, unit] = await Promise.all([
-    rest.get(`/config/roles/${encodeURIComponent(seat.handle)}`, signal),
-    seat.unit ? rest.get(`/config/units/${encodeURIComponent(seat.unit.id)}`, signal) : null,
+    rest.get(`/config/roles/${pathSegment(seat.handle)}`, signal),
+    seat.unit ? rest.get(`/config/units/${pathSegment(seat.unit.id)}`, signal) : null,
   ]);
   const own = isRecordValue(unit) ? { ...unit, roles: undefined, children: undefined } : null;
   return {
@@ -1016,7 +1040,7 @@ export function schedulesOf(settings: SeatSettings): ScheduleSpec[] {
  */
 export function llmChain(
   llm: PhaseLLM | undefined,
-  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge" | "sandbox",
+  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge",
 ): string[] {
   const keys = (value: ProviderKeys | undefined): string[] =>
     typeof value === "string"
@@ -1039,7 +1063,6 @@ export function llmChain(
     ...keys(mapping["subagent"]),
     ...keys(mapping["auxiliary"]),
     ...keys(mapping["judge"]),
-    ...keys(mapping["sandbox"]),
   ]);
 }
 
@@ -1316,7 +1339,10 @@ export function awaitingPerson(status: string | undefined): boolean {
  * has this blob lighting which feels like it is working", and the fix for
  * that is not a duller mark, it is none.
  */
-export function statusOf(state: SeatState | undefined): AvatarStatus | undefined {
+export function statusOf(state: ShownState | undefined): AvatarStatus | undefined {
+  // A PAUSED SEAT IS A STOPPED ONE to the engine, and its badge is the stop's
+  // square: the words beside it are what tell the two apart.
+  if (state === "paused") return "stopped";
   return state === "working" || state === "needs" || state === "stopped" ? state : undefined;
 }
 
@@ -1356,31 +1382,80 @@ export function heldBy(
  * stands on: WORKING IS INFO, NEEDS YOU IS WARNING, STOPPED IS DANGER, and idle
  * is neutral. Amber is reserved for the one state that asks for a person.
  */
-export function toneOf(state: SeatState | undefined): SeatTone | "neutral" {
+export function toneOf(state: ShownState | undefined): SeatTone | "neutral" {
   switch (state) {
     case "working":
       return "info";
     case "needs":
       return "warning";
     case "stopped":
+    case "paused":
       return "danger";
     default:
       return "neutral";
   }
 }
 
-/** The state in one lowercase word or two, for a pill. */
-export function activityWord(state: SeatState): string {
-  return state === "needs" ? "needs you" : state;
+/**
+ * A seat's state as a screen NAMES it: the engine's `activity`, with a paused
+ * seat told apart from a stopped one.
+ *
+ * ONE STATE, TWO WORDS FOR IT was the defect this closes. The engine calls a
+ * seat a person paused `stopped` with the reason `paused`, and the seat page's
+ * pill said "Paused" while the roster filed the same seat under "Stopped", the
+ * chart's caption said "Stopped" and the Inbox said it "is stopped". A pause
+ * is a person's decision and a stop is a fault, so every surface now says
+ * "Paused" for the one and "Stopped" for the other, off this one reading.
+ */
+export type ShownState = SeatState | "paused";
+
+/** Which [ShownState] a seat's row is in. */
+export function shownStateOf(row: AgentRow | null | undefined): ShownState {
+  const state = activityOf(row);
+  return state === "stopped" && row?.stopped_reason === "paused" ? "paused" : state;
 }
 
 /**
- * The same word capitalised, as a line of its own writes it: a chart node's
- * caption and the legend that counts those captions.
+ * The SHORT form of a seat's state: one or two words, sentence case, for a
+ * pill, a chart caption, a roster group and a legend.
+ *
+ * Every screen that names a state in a word takes it from here, so the badge,
+ * the roster, the chart and Home cannot drift apart again. The LONG form is
+ * [labelOf], which always opens with this word.
  */
-export function stateWord(state: SeatState): string {
-  const word = activityWord(state);
-  return word.charAt(0).toUpperCase() + word.slice(1);
+export function stateWord(state: ShownState): string {
+  switch (state) {
+    case "working":
+      return "Working";
+    case "needs":
+      return "Needs you";
+    case "paused":
+      return "Paused";
+    case "stopped":
+      return "Stopped";
+    case "idle":
+      return "Idle";
+    case "offline":
+      return "No state yet";
+  }
+}
+
+/**
+ * The heading over a GROUP of seats in one engine state: a roster group, a
+ * chart legend's entry, a Home tile.
+ *
+ * A group is keyed on the engine's `activity`, and `stopped` holds the seats a
+ * person paused as well as the ones a fault stopped, so its heading says both
+ * ("Paused or stopped") and its count stays true. Each seat inside it still
+ * names its own state in [stateWord]'s word.
+ */
+export function stateGroupWord(state: SeatState): string {
+  return state === "stopped" ? "Paused or stopped" : stateWord(state);
+}
+
+/** The short form of a seat row's state: [stateWord] over [shownStateOf]. */
+export function seatWord(row: AgentRow | null | undefined): string {
+  return stateWord(shownStateOf(row));
 }
 
 /**
@@ -1388,18 +1463,21 @@ export function stateWord(state: SeatState): string {
  *
  * `paused.by` is the name the engine records every author under
  * (`iam.ActorFor`): the SEAT HANDLE of a person bound to one, or the whole
- * login of anybody bound to none — an address either way, and "Paused by
+ * login of anybody bound to none, an address either way, and "Paused by
  * jane-founder" names an address where a person is meant. A screen passes the
- * chart's lookup; a key the chart does not hold (a login, a seat since
- * removed) is drawn as it came.
+ * chart's lookup; a key the chart does not hold is a login, said in
+ * [loginWords]'s plain words ("review (API token)", never `token:review`).
  */
 export type NameOf = (key: string) => string;
 
-const AS_WRITTEN: NameOf = (key) => key;
+const AS_WRITTEN: NameOf = loginWords;
 
-/** The chart's [NameOf]: a seat handle's name, and any other key as written. */
+/**
+ * The chart's [NameOf]: a seat handle's name, and any other key as a login is
+ * told ([loginWords]), so a credential's spelling never reaches a sentence.
+ */
 export function nameOfIn(index: OrgIndex): NameOf {
-  return (key) => index.byHandle.get(key)?.name ?? key;
+  return (key) => index.byHandle.get(key)?.name ?? loginWords(key);
 }
 
 /** Why a stopped seat cannot take work, in a sentence, keyed on the engine's reason. */
@@ -1410,52 +1488,111 @@ export function stoppedLine(row: AgentRow | null | undefined, nameOf: NameOf = A
     case "unplaced":
       return "not placed on any node";
     case "budget":
-      return "its token budget is spent until the window resets";
+      return "its token budget is spent until the window resets or the ceiling is raised";
     case "provider":
-      return "its model provider is unreachable";
+      return "its models are at their usage limit";
     default:
       return "stopped";
   }
 }
 
+/** What a failed model call is called: a word for a tag, and a sentence for a reader. */
+export interface FailureWords {
+  /** One or two words, for a phase's tag: "Rate limited", "Timed out". */
+  tag: string;
+  /** The plain sentence a banner or an Inbox row leads with. */
+  sentence: string;
+}
+
 /**
- * A seat's state as its LABEL: "Working", "Needs you · run parked", "Paused by
- * Jane · 12m", "Stopped · budget", "Not placed on any node", "Idle".
+ * The classifier's kinds in plain words, keyed on the engine's own spelling
+ * (`contract/failures.ts`, held to `llm.ErrorKind` by a Go gate), so a kind
+ * the engine adds fails the typecheck here until it has words.
  *
- * Every word is the engine's: the reason is `stopped_reason`, the pauser is
- * `paused.by`, the age is `paused.at` against the reader's clock. A reason
- * this build does not know draws "Stopped" rather than a guess.
+ * THE MACHINE CODE IS NEVER THE HEADLINE. The seat page drew "server: llm
+ * chain exhausted after 1 providers ..." and the Inbox titled the row with the
+ * bare kind. The raw engine message stays available, behind the kit's
+ * disclosure ([TechnicalDetails] in components/common.tsx), for whoever is
+ * fixing it.
+ */
+const FAILURE_WORDS: Record<ProviderErrorKind, FailureWords> = {
+  rate_limit: {
+    tag: "Rate limited",
+    sentence: "Its model provider refused the call because a rate or usage limit was reached.",
+  },
+  auth: {
+    tag: "Sign-in needed",
+    sentence: "Its model provider's sign-in has expired or is missing, so the call was refused.",
+  },
+  timeout: {
+    tag: "Timed out",
+    sentence: "The model call ran out of time before an answer came back.",
+  },
+  server: {
+    tag: "Provider error",
+    sentence: "Its model provider ran but gave no usable answer.",
+  },
+  canceled: {
+    tag: "Canceled",
+    sentence: "The turn was stopped before the model answered.",
+  },
+  fatal: {
+    tag: "Engine fault",
+    sentence: "The engine could not start the model call. An operator needs to check the setup.",
+  },
+};
+
+/** What a failure the classifier did not record reads as: never its raw code. */
+const FAILED: FailureWords = {
+  tag: "Failed",
+  sentence: "The turn ended before it finished its work.",
+};
+
+/**
+ * A failure's plain words, by the kind the engine recorded. A kind outside the
+ * classifier's set (a guard breach, a budget, an event type) reads as a failed
+ * turn rather than as its machine code.
+ */
+export function failureWords(kind: string | null | undefined): FailureWords {
+  return Object.hasOwn(FAILURE_WORDS, kind ?? "")
+    ? FAILURE_WORDS[kind as ProviderErrorKind]
+    : FAILED;
+}
+
+/**
+ * The LONG form of a seat's state, as its label: "Working", "Needs you · run
+ * parked", "Paused by Jane · 12m", "Stopped: its model provider is
+ * unreachable", "Idle".
+ *
+ * IT OPENS WITH THE SHORT FORM ([seatWord]) for every state the engine
+ * reports, so a pill and the line beside it can never name two states. Every other word is the engine's:
+ * the reason is `stopped_reason` (said by [stoppedLine]), the pauser is
+ * `paused.by`, the age is `paused.at` against the reader's clock. A reason this
+ * build does not know draws "Stopped" rather than a guess.
  */
 export function labelOf(
   row: AgentRow | null | undefined,
   now: number,
   nameOf: NameOf = AS_WRITTEN,
 ): string {
-  switch (activityOf(row)) {
-    case "working":
-      return "Working";
+  const state = shownStateOf(row);
+  const word = stateWord(state);
+  switch (state) {
     case "needs":
-      return row?.turn?.stage === "parked" ? "Needs you · run parked" : "Needs you";
-    case "idle":
-      return "Idle";
+      return row?.turn?.stage === "parked" ? `${word} · run parked` : word;
     case "offline":
       return "No state from the engine yet";
-    case "stopped":
-      switch (row?.stopped_reason) {
-        case "paused": {
-          const by = row.paused?.by ? `Paused by ${nameOf(row.paused.by)}` : "Paused";
-          const since = row.paused?.at ? shortAge(row.paused.at, now) : "";
-          return since ? `${by} · ${since}` : by;
-        }
-        case "unplaced":
-          return "Not placed on any node";
-        case "budget":
-          return "Stopped · budget";
-        case "provider":
-          return "Stopped · provider";
-        default:
-          return "Stopped";
-      }
+    case "paused": {
+      const by = row?.paused?.by ? `${word} by ${nameOf(row.paused.by)}` : word;
+      const since = row?.paused?.at ? shortAge(row.paused.at, now) : "";
+      return since ? `${by} · ${since}` : by;
+    }
+    case "stopped": {
+      const why = stoppedLine(row, nameOf);
+      return why === "stopped" ? word : `${word}: ${why}`;
+    }
+    default:
+      return word;
   }
 }
 
@@ -1471,40 +1608,18 @@ const PHASE_DOING: Record<string, { alone: string; on: string }> = {
 };
 
 /**
- * How many workers a seat's call in flight is running: the tasks of the
- * `delegate` call it is waiting on, or 0 when its running call is anything
- * else, or none.
- *
- * OFF THE CALL'S OWN ARGUMENTS, because that is the one record that exists
- * WHILE the workers run: each worker's phase record lands when it finishes and
- * the batch's summary when the last one does, so both describe a fan-out that
- * is over. Arguments that do not read as the tool's schema count nothing
- * rather than a guess.
- */
-export function delegatedWorkers(call: LiveCall | null | undefined): number {
-  const running = call?.running_call;
-  // A WITHHELD BODY carries no arguments, so the workers are not counted
-  // rather than guessed: the call is still `delegate`, and says so.
-  if (!running || running.name !== DELEGATE_TOOL || running.arguments === undefined) return 0;
-  try {
-    const args: unknown = JSON.parse(running.arguments);
-    const tasks = (args as Record<string, unknown> | null)?.[DELEGATE_TASKS];
-    return Array.isArray(tasks) ? tasks.length : 0;
-  } catch {
-    return 0;
-  }
-}
-
-/**
  * What a seat is doing, in one line under its name: "Executing ENG-412",
- * "3 workers on ENG-405", "Coding run on ENG-9", "Idle · last turn 24m ago".
+ * "Coding run on ENG-9", "Idle · last turn 24m ago".
  *
  * THE WORK ITEM IS THE TURN'S OWN, `live_call.work_item` — the one item the
  * engine charges the turn to — and never a `work_key` a prompt happened to
- * mention. The workers are the ones the call in flight is running
- * ([delegatedWorkers]), off the same row, so every surface that draws this
- * line says the same thing about a fan-out. A human seat is not run by the
- * engine and says so.
+ * mention. A human seat is not run by the engine and says so.
+ *
+ * NO WORKER COUNT, and none can be read off the row: `delegate` is the
+ * executor's alone, and the executor is its coding CLI's run, which calls it
+ * over the bridge while its turn is parked. The engine streams no call of that
+ * run's, so the line says its coding run, and each worker is on the turn's
+ * record once it finishes.
  */
 export function stateLine(
   row: AgentRow | null | undefined,
@@ -1522,11 +1637,6 @@ export function stateLine(
       // working and no model call is in flight, so the phase says nothing.
       if (row?.turn?.stage === "parked") {
         return item ? `Coding run on ${item}` : "Coding run in progress";
-      }
-      const workers = delegatedWorkers(row?.live_call);
-      if (workers > 0) {
-        const who = plural(workers, "worker");
-        return item ? `${who} on ${item}` : `${who} running`;
       }
       const doing = PHASE_DOING[row?.live_call?.phase ?? row?.current_phase ?? ""] ?? {
         alone: "Working",
@@ -1547,8 +1657,8 @@ export function stateLine(
 }
 
 /**
- * What a task's card says about the turn running on it: "SWE · executing ·
- * round 7 of 20", "AI Systems · 3 workers running", "SWE · coding run".
+ * What a task's card says about the turn running on it: "SWE · reviewing ·
+ * round 2 of 4", "SWE · coding run".
  *
  * JOINED ON THE ITEM THE ENGINE CHARGES THE TURN TO — `live_call.work_item`,
  * then the turn's own — and never on a `work_key`, which is the unit of work a
@@ -1591,17 +1701,14 @@ export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
 }
 
 /**
- * The words a working seat's strip carries after its name: "executing · round
- * 7 of 25", "3 workers running", "coding run". A task card's strip and the task
- * page's live row both read it here — the page kept a private copy that read
- * the zero-based `round_num` raw and called every phase but review
- * "executing", so the two named different rounds, and different phases, of
- * one turn.
+ * The words a working seat's strip carries after its name: "reviewing · round
+ * 2 of 4", "coding run". A task card's strip and the task page's live row both
+ * read it here — the page kept a private copy that read the zero-based
+ * `round_num` raw and called every phase but review "executing", so the two
+ * named different rounds, and different phases, of one turn.
  */
 export function doingWords(row: AgentRow): string {
   if (row.turn?.stage === "parked") return "coding run";
-  const workers = delegatedWorkers(row.live_call);
-  if (workers > 0) return `${plural(workers, "worker")} running`;
   const phase = row.live_call?.phase ?? row.current_phase ?? "";
   const verb = (PHASE_DOING[phase]?.alone ?? "working").toLowerCase();
   const round = roundOf(row.live_call);

@@ -1,9 +1,7 @@
 package host
 
 import (
-	"fmt"
 	"strings"
-	"testing"
 	"time"
 	"unicode"
 
@@ -42,8 +40,8 @@ const RunTokenTTL = 7 * 24 * time.Hour
 
 // BoxRunRef names a run's ONE job: the row's key (the turn's run id) and the
 // launch the token was minted for. A token naming the turn alone would keep
-// admitting the first job's box after a second run_sandbox call of the same
-// turn launched another on the row: the launch id, minted by the store at
+// admitting the first job's box after a second launch of the same
+// turn opened another on the row: the launch id, minted by the store at
 // every launch, is what a superseded job's token stops matching.
 type BoxRunRef struct {
 	TurnID   string
@@ -81,14 +79,14 @@ func NewBoxTokens(m runtoken.Material, now func() time.Time) (*BoxTokens, error)
 //
 // A ref no run has — a launch id that is not a UUID, a turn id empty, longer
 // than maxBoxTurnBytes or holding `.`, `~` or whitespace — is the caller's bug
-// (every launch id is a UUID the store mints, every turn id a UUIDv7): a test
-// binary panics naming it, and a production one answers "", which no git node
-// admits, rather than a token another run's parse could read.
+// (every launch id is a UUID the store mints, every turn id a UUIDv7), and is
+// answered "", which no git node admits and every caller refuses its launch
+// over, rather than a token another run's parse could read. Never a panic in a
+// test binary alone: telling one apart takes the `testing` package, which the
+// binary must not link (cmd/crewlet's TestTheBinaryLinksNoTestScaffolding), and
+// the answer a test reads is then the one production gives.
 func (t *BoxTokens) Mint(ref BoxRunRef) string {
-	if why := invalidRef(ref); why != "" {
-		if testing.Testing() {
-			panic("host: BoxTokens.Mint: " + why)
-		}
+	if !validRef(ref) {
 		return ""
 	}
 	return t.signer.Mint(ref.LaunchID+boxSubjectSep+ref.TurnID, RunTokenTTL)
@@ -104,24 +102,19 @@ func (t *BoxTokens) Verify(token string) (BoxRunRef, bool) {
 	}
 	launch, turn, ok := strings.Cut(subject, boxSubjectSep)
 	ref := BoxRunRef{TurnID: turn, LaunchID: launch}
-	if !ok || invalidRef(ref) != "" {
+	if !ok || !validRef(ref) {
 		return BoxRunRef{}, false
 	}
 	return ref, true
 }
 
-// invalidRef is why ref names no run's job, or "".
-func invalidRef(ref BoxRunRef) string {
+// validRef reports whether ref names a run's job: a launch id that is a UUID
+// in its canonical spelling, and a turn id that is present, at most
+// maxBoxTurnBytes, and free of `.`, the subject's separator and whitespace.
+func validRef(ref BoxRunRef) bool {
 	if id, err := uuid.Parse(ref.LaunchID); err != nil || id.String() != ref.LaunchID {
-		return fmt.Sprintf("launch id %q is not a UUID in its canonical spelling", ref.LaunchID)
+		return false
 	}
-	switch {
-	case ref.TurnID == "":
-		return "a run's token names its turn"
-	case len(ref.TurnID) > maxBoxTurnBytes:
-		return fmt.Sprintf("turn id of %d bytes, past %d", len(ref.TurnID), maxBoxTurnBytes)
-	case strings.ContainsAny(ref.TurnID, "."+boxSubjectSep) || strings.ContainsFunc(ref.TurnID, unicode.IsSpace):
-		return fmt.Sprintf("turn id %q holds a character a token's subject may not", ref.TurnID)
-	}
-	return ""
+	return ref.TurnID != "" && len(ref.TurnID) <= maxBoxTurnBytes &&
+		!strings.ContainsAny(ref.TurnID, "."+boxSubjectSep) && !strings.ContainsFunc(ref.TurnID, unicode.IsSpace)
 }

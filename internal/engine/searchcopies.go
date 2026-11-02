@@ -3,13 +3,13 @@ package engine
 import (
 	"context"
 
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/search"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // searchCopies is this node's per-domain verdict as a search participant asks
-// it (ADR-0049): the rows a source is indexed from are its own domain's — a
+// it (ADR-0072): the rows a source is indexed from are its own domain's — a
 // page's the knowledge base's, a task's the tracker's — and the vectors are
 // theirs.
 //
@@ -21,8 +21,8 @@ type searchCopies struct{ local *localEstate }
 
 // sourceDomains is the domain each search source's rows are applied by.
 var sourceDomains = map[search.Source]string{
-	search.SourcePage: pages.Domain{}.Name(),
-	search.SourceTask: tracker.Domain{}.Name(),
+	search.SourcePage: doclet.Domain{}.Name(),
+	search.SourceTask: worklet.Domain{}.Name(),
 }
 
 // Serves reports whether this node's copy of the domain src is indexed from is

@@ -45,7 +45,7 @@ const objectsDirName = "objects"
 // position names, since those records write rows too (the package doc's "The
 // objects follow the log").
 //
-// A RETIRED REFERENCE IS NOT CARRIED, NOR IS A DERIVED ONE (ADR-0051). A
+// A RETIRED REFERENCE IS NOT CARRIED, NOR IS A DERIVED ONE (ADR-0074). A
 // retired row keeps a replaced object from the collector for a grace, and a
 // derived row an object the engine can build again; neither names anything
 // the company is owed, so its object is never copied, never asked after and

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Reading a Jira payload.
@@ -303,8 +304,21 @@ func (p *Parser) base(body map[string]any, parties notify.Parties) (notify.Inbou
 		if id := str(comment, "id"); id != "" {
 			meta["comment_id"] = id
 		}
+		meta[notify.BodySourceField] = string(provenance.SourceWorkComment)
+		// THE COMMENT'S OWN AUTHOR, never the actor — a deleted comment's
+		// actor is whoever deleted it — and only while nobody else has
+		// edited it, since an edit by an administrator leaves the author
+		// field naming somebody who no longer wrote every word.
+		author, _ := comment["author"].(map[string]any)
+		updater, _ := comment["updateAuthor"].(map[string]any)
+		if id := personID(author); id != "" && (len(updater) == 0 || personID(updater) == id) {
+			meta[notify.BodyAuthorField] = id
+		}
 	default:
 		text = Flatten(fields["description"])
+		// A DESCRIPTION NAMES NO AUTHOR: whoever filed the issue wrote its
+		// first version, and the payload does not say who wrote this one.
+		meta[notify.BodySourceField] = string(provenance.SourceWorkDescription)
 	}
 
 	summary := str(fields, "summary")

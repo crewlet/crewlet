@@ -1,5 +1,5 @@
 // Package code is THE CODE DOMAIN: the company's git repositories as records on
-// one ordered log, CREWLET_CODE_LOG — the state log's eighth domain, strict and
+// one ordered log, CREWLET_CODE_LOG — the state log's tenth domain, strict and
 // identity-claiming.
 //
 // # A repository is rows
@@ -17,13 +17,13 @@
 // its pack BUNDLE, the pack and the two indexes the receiving node's
 // receive-pack wrote for it, back to back (bundle.go) — and a code_packs row
 // names it. That table is declared [objstore.Required] ([PackReferences],
-// ADR-0026 and ADR-0051), so the collector keeps every object a live row names,
+// ADR-0026 and ADR-0074), so the collector keeps every object a live row names,
 // the audit checks each one and a backup carries them. A git node's bare
 // repository is never the record: it is a cache derived from these rows,
 // disposable, rebuilt from them whenever it is lost or wrong — which holds
 // only because a repository's refs and packs move by records on its own
 // subject and by nothing else, receive-pack never runs in a cache, and git is
-// told `ok` only from a push's applied row (ADR-0054).
+// told `ok` only from a push's applied row (ADR-0077).
 //
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //
@@ -56,7 +56,7 @@
 // # A change is rows on its repository's subject
 //
 // A change (web!42) is code_changes, code_change_bodies, code_change_authors
-// and code_revisions (replicated migrations 0058 and 0066), written by records
+// and code_revisions (replicated migrations 0081 and 0089), written by records
 // on its REPOSITORY's subject and on no subject of its own, so its lifecycle
 // and the pushes that move its branches meet at one committer and one
 // arbitration, and its number — the repository's code_repos.next_change, read
@@ -159,7 +159,7 @@
 // names a repository, a work item, a state, a reviewer or what its changes
 // wait on, and walks the ONE index its filters lead — a reviewer's standing
 // asks, a work item's changes, an owner's in a state, a repository's in a
-// state (replicated 0069), a repository's, the company's in a state —
+// state (replicated 0092), a repository's, the company's in a state —
 // newest first, testing every filter that index does not seek on the rows the
 // page read, so a page is the rows it read and never scans past its limit
 // for the few it keeps. One change ([ReadChange]) is read by its number on
@@ -280,7 +280,7 @@
 // a draft, a retarget and a landing dequeue it, and a push that moves its head
 // ejects it.
 //
-// A CHANGE MERGES BY ONE RECORD ITS GATE DECIDES (merge.go, ADR-0066): a merge
+// A CHANGE MERGES BY ONE RECORD ITS GATE DECIDES (merge.go, ADR-0089): a merge
 // ([Merge]) built on the repository's home onto the tip it read of the target
 // is proposed to the repository's committer ([Committer.ProposeMerge]), whose
 // decide proves in ONE snapshot that the change is open at the head the merge
@@ -308,7 +308,7 @@
 // consumer, [FeedGroup], derives a WAKE for each seat among them (feed.go,
 // wake.go) — never the writer's goroutine (ADR-0012). The log's trim waits on
 // that consumer. A person is never queue-woken. A CHANGE IMPLEMENTS ONE WORK
-// ITEM AND CARRIES NO SPEND (ADR-0067): every wake about it names the item
+// ITEM AND CARRIES NO SPEND (ADR-0090): every wake about it names the item
 // ([Prompt.WorkItem]), so the turn it starts is charged to that item, and no
 // table of this domain has a column for what a turn spent.
 //
@@ -366,7 +366,7 @@
 // claim and ending they lead to decided again by the checks writer.
 //
 // A CHECK IS A MEASUREMENT OF A COMMIT, DEFINED BY THE TARGET BRANCH AND RUN
-// WHERE NO AUTHOR CAN REACH IT (ADR-0068): a head's checks are defined by the
+// WHERE NO AUTHOR CAN REACH IT (ADR-0091): a head's checks are defined by the
 // checks file at its target's tip, and a protected branch's TIP checks by the
 // file at the base of its first landing above its green row — never by the
 // commit measured, which may have rewritten the file. Every landing a record
@@ -494,7 +494,7 @@
 // restated from one count of one iteration once each row was weighed by its
 // own table, again once every id was the shape production writes, and the
 // pack row again once it named the position its content dates from,
-// replicated 0067, with that column's index, and once a seat's coding box's
+// replicated 0090, with that column's index, and once a seat's coding box's
 // push was measured beside a person's and a tool's),
 // measured as the replicated estate's growth after a truncating checkpoint
 // over records whose refs existed before, so a ref's own row is rewritten in
@@ -582,7 +582,7 @@
 // each an entry every push would keep on every data node for its 181 days
 // to answer a question the one index the rows have already answers: that
 // one; a second index of the rows in log order beside the repository's,
-// where the one was reordered instead (replicated 0056; a second would have
+// where the one was reordered instead (replicated 0079; a second would have
 // added about a quarter to the 395.3 bytes a push's row weighed then,
 // measured, # Measured); and an index
 // of each coding run's pushes, where a collected run's report scans its
@@ -618,11 +618,11 @@
 // 224.0 bytes more than a person's (push=box): its principal names, beside
 // the run the engine's write names, the coding run that pushed — the
 // launch's id, a UUID — the coding agent the box ran (`claude-code`) and
-// the identity of the work item its run was launched for (a native task's
+// the identity of the work item its run was launched for (a Worklet task's
 // UUID, [RunProvenance.WorkID], 49 of those bytes), and its way is `git`;
 // so 1 604 bytes alone in its record and about 1 016 in a burst (the
 // person's 792 and the same 224), the most a seat's push takes of the log, at which the code log's
-// day prices every one of the reference company's (internal/tracker's
+// day prices every one of the reference company's (internal/worklet's
 // codeLogDay). The compactions that merge the pushes' packs add
 // their own records, MEASURED a push (internal/code/compact's steady arms,
 // the code log's growth over every pass): 108 bytes where a merge takes the
@@ -692,7 +692,7 @@
 // # Who may read and push
 //
 // A principal's standing on a repository is DERIVED from the chart and never
-// stored (ADR-0058): there is no table of who may push where, because such a
+// stored (ADR-0081): there is no table of who may push where, because such a
 // table is a second chart, and it drifts from the first the day a seat moves
 // units. [GrantOf] computes it, every time it is asked, from the repository's
 // row and a [Roster] — the chart of the node that answers or decides, which
@@ -825,7 +825,7 @@
 //
 // A repository's REFS are listed by name under a prefix — its branches, its
 // tags, or a seat's own namespace — a page at a time ([MaxRefsPerPage]),
-// over the LIVE refs' partial index (replicated 0054) and never the key,
+// over the LIVE refs' partial index (replicated 0077) and never the key,
 // whose range holds every tombstone under the prefix too; the first page
 // carries the repository in detail, so what a seat asks first of a
 // repository is one read. [Reader.ResolveRef] names every ref a call needs —
@@ -835,7 +835,7 @@
 // read at one moment.
 //
 // A repository's PUSHES are read in LOG ORDER: code_pushes_repo_idx is keyed
-// (repo_id, position, push_id) (replicated 0056), because a record's
+// (repo_id, position, push_id) (replicated 0079), because a record's
 // instant is the broker's and steps back across a stream leader's change, so
 // "every push above this position" — what a git node's index of which push
 // introduced each commit is built from — could not be read by it. The
@@ -883,7 +883,7 @@
 // answer, with a reason that tells the walk whether it may let the next node
 // fill a copy instead ([UnreadyReason.PassesFill]). Which git node a read is
 // asked of first is the estate router's: the repository's HOME, the first of
-// its rendezvous order over the live git nodes (ADR-0059).
+// its rendezvous order over the live git nodes (ADR-0082).
 //
 // Two of those reads answer with text git leaves unbounded: a path's HISTORY
 // ([GitLog], its literal [LogQuery.Grep] matched by the git node, never by
@@ -898,7 +898,7 @@
 //
 // A seat's or a person's change made through a tool is BUILT on a git node
 // holding the repository (internal/code/host's Server.Write) and lands as a
-// push through the one landing every push takes (ADR-0062). This package
+// push through the one landing every push takes (ADR-0085). This package
 // holds what both ends of one import, as it does for a read by object id: the
 // write ([EngineWrite]), its answer ([EngineWriteResult]) and the change's own
 // refusals ([WriteRefusal], UNRECORDED — decided on the git node before
@@ -1169,10 +1169,10 @@
 //     empty repository; and an id no repository had is none;
 //   - RETIRED PACKS, [RetireGrace] (a day): a pack a record retires leaves
 //     code_packs for code_packs_retired, a RETIRED reference
-//     ([RetiredPackReferences], ADR-0051) that keeps its object from the
+//     ([RetiredPackReferences], ADR-0074) that keeps its object from the
 //     collector and does nothing else, for longer than the longest legal read
 //     of the largest bundle a row can name — so a reader that began on the
-//     pack before its retirement finishes it (ADR-0060). Like a purge it is no record's
+//     pack before its retirement finishes it (ADR-0083). Like a purge it is no record's
 //     own horizon, so the code-retention duty's pass sweeps it, before it
 //     purges anything ([Store.RetireSweep]): a retire_sweep record removes,
 //     oldest first, the rows whose broker instant the duty's clock puts past
@@ -1202,12 +1202,12 @@
 // Every push stores a pack, so a busy repository's pack count grows with its
 // pushes, and every cold sync pays a GET a pack and every request a lookup a
 // pack. A COMPACTION merges some of them into fewer: the repository's HOME git
-// node (internal/code/compact, ADR-0059) builds the outputs, stores each as one
+// node (internal/code/compact, ADR-0082) builds the outputs, stores each as one
 // bundle and proposes ONE record — OpCompact on the repository's subject
 // ([Compaction]), naming the packs it retires and the rows of the outputs it
 // adds — which the repository's committer decides
 // ([Committer.ProposeCompaction]). Merged without judging reachability and
-// retired for longer than the longest read: ADR-0060.
+// retired for longer than the longest read: ADR-0083.
 //
 // IN THE PUSHES' QUEUE, DECIDED ALONE: a compaction waits in the repository's
 // one committer queue in its arrival order, held to a push's bounds there —
@@ -1247,7 +1247,7 @@
 // object for [RetireGrace] (the RETIRED PACKS horizon above), so a reader
 // that began on it before the compaction finishes it.
 //
-// A MERGE MAKES NO REACHABILITY JUDGEMENT (ADR-0060): every object of the
+// A MERGE MAKES NO REACHABILITY JUDGEMENT (ADR-0083): every object of the
 // inputs is in the outputs, so a push decided against the inputs never lands a
 // ref whose closure a compaction removed, and two compactions planned from
 // different snapshots never each drop what the other relied on. Removing what
@@ -1277,7 +1277,7 @@
 // [ReadCompactionDue] listing: the active and archived repositories holding
 // at least MinPacks live packs, MOST FIRST, each with its row's version and
 // the objects its packs hold, one backward walk of code_repos_packs_idx
-// (replicated 0060) — the engine's own read, which names no asker.
+// (replicated 0083) — the engine's own read, which names no asker.
 //
 // # A publication puts a published layer on the chain, decided as a compaction
 //
@@ -1287,7 +1287,7 @@
 // them: a repository's PUBLISHED CHAIN, git's own incremental multi-pack-index
 // layers with their bitmaps and commit-graph layers, root first, its rows in
 // code_layers and its bytes the parts code_layer_parts names
-// ([LayerReferences], DERIVED under ADR-0051: kept while named, never audited,
+// ([LayerReferences], DERIVED under ADR-0074: kept while named, never audited,
 // never carried by a backup, since any git node can build a layer again). A
 // layer is put on the chain by a PUBLICATION: a compaction carrying a
 // [LayerRef] ([Compaction.Layer]), so the repository's committer — the one
@@ -1313,7 +1313,7 @@
 // rows, so live_packs − published_packs is the tail no layer covers — as of
 // that recount: a push moves only the live counts, so a pack pushed since that
 // is byte-identical to a published one is in the tail until the next
-// publication's (replicated 0062 says why no push recounts). A publication
+// publication's (replicated 0085 says why no push recounts). A publication
 // that does not fit the chain it meets applies as nothing, whole, on every
 // node; one applied already finds its layer and changes nothing. A snapshot
 // serves the chain WHOLE on page 1, first, whenever it moved above the
@@ -1322,7 +1322,7 @@
 // listing — every active and archived repository whose tail is not empty:
 // each holding a pack no layer covers, and any holding only such a
 // byte-identical pack, which has nothing to publish — LEAST RECENTLY
-// PUBLISHED FIRST, one walk of code_repos_unpublished_idx (replicated 0062),
+// PUBLISHED FIRST, one walk of code_repos_unpublished_idx (replicated 0085),
 // the engine's own read; it names none with an expunge open, whose
 // publication the expunge's rule refuses until its commit (below). A purge removes the chain with the rest of a
 // repository, in its final record: the chain is bounded apart from what a
@@ -1378,7 +1378,7 @@
 // EXPUNGE is the one rewrite that drops objects, in two records of their own
 // on the repository's subject, each decided alone by its committer in its one
 // queue ([Committer.ProposeExpunge], decide_expunge.go), as a compaction is
-// (ADR-0069):
+// (ADR-0092):
 //
 //   - its BEGIN ([ExpungeBegin]) rewrites some live packs — a full pack among
 //     them — into packs holding what a ref reached at its maintainer's scan,
@@ -1407,7 +1407,7 @@
 // ref dropped since left — and it is SERVED, cleared, once no pack of the
 // repository dates its CONTENT from before it, at a commit or, for a
 // repository holding no pack, at once. A pack row names the position its
-// content dates from as a purge reads it ([PackRow.Content], replicated 0067):
+// content dates from as a purge reads it ([PackRow.Content], replicated 0090):
 // a push's pack its own; a compaction's outputs, an expunge's that keeps a
 // ref drop's grace and every rescue the oldest of the packs they replace,
 // since moving content judges none of it; and a purge's kept and dropping
@@ -1418,7 +1418,7 @@
 // before the request it serves. While an expunge is open, a second begin is
 // stale and so is a publication (publication.go's rule 6g); a compaction of
 // live packs is decided as ever. A pack row also names WHEN its newest
-// content arrived ([PackRow.Arrived], replicated 0100): a push's and a queue
+// content arrived ([PackRow.Arrived], replicated 0123): a push's and a queue
 // merge's pack its record's broker instant, and every rewrite's output the
 // latest of the rows it retires — the record's own instant where it retires
 // none — so the maintainer's own expunge keeps every pack that arrived within
@@ -1426,14 +1426,14 @@
 // time. The repository's maintainer finds the expunges it owes by the
 // [ReadExpungeDue] listing, in two arms: first the active and archived
 // repositories with an expunge open or a request waiting, by id, one walk of
-// code_repos_expunging_idx (replicated 0064); then, asked with
+// code_repos_expunging_idx (replicated 0087); then, asked with
 // [ReadQuery.ExpungedBefore], every other active or archived repository of
 // any kind last expunged at or before that instant or never, least recently
 // expunged first, one seek of code_repos_expunge_due_idx (the same
 // migration) — the engine's own read, its maintainer's weekly schedule — and
 // reads what a cycle keeps beside the refs by the [ReadExpungeTips] read: the
 // objects the repository's ref drops left since an instant, one covering seek
-// of code_ref_drops' key, which replicated 0061 led with the instant for it;
+// of code_ref_drops' key, which replicated 0084 led with the instant for it;
 // the grace an expunge keeps is the instant's distance from its scan, none for
 // a purge (internal/code/compact builds and sorts the packs). Its
 // bounds: at most [MaxExpungeInputs] inputs and [MaxExpungeOutputs] outputs a
@@ -1465,7 +1465,7 @@
 // tombstones (3 995).
 //
 // THE DELETIONS, since each records the object it left (code_ref_drops,
-// keyed by its record's instant since replicated 0061) and the committer
+// keyed by its record's instant since replicated 0084) and the committer
 // counts it three times in its bound — its tombstone, the sweep's room for
 // one and its drop — measured in one bounded run (-benchtime 5x, one count:
 // five iterations an arm) on four E-cores of a Core Ultra 7 265U at a load
@@ -1505,7 +1505,7 @@
 // both writes and forgets.
 //
 // THE PUSH INDEX IN LOG ORDER (code_pushes_repo_idx reordered by replicated
-// 0056) moved none of it past the noise: interleaved with the build before
+// 0079) moved none of it past the noise: interleaved with the build before
 // it on four vCPUs of a 2.1 GHz Xeon under a load average of 20–40 — six runs
 // of thirty — a group of [MaxPushesPerRecord] pushes is 18.8–32.4 ms against
 // 18.1–29.4, 0.29–0.51 ms a push, and one push alone 6.7–14.2 ms against
@@ -1517,7 +1517,7 @@
 // moves the columns of the one entry a row has, where a second index would
 // have added about a quarter to the 395.3.
 //
-// THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0054, which the push
+// THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0077, which the push
 // decide's [RefusalRefConflict] probe reads — the decide below) is an entry
 // more for every live ref a record writes, and one moved for every ref it
 // deletes or creates again. Measured interleaved with the build before it,
@@ -1647,6 +1647,25 @@
 // prices the checks step from them: listed only past [CheckSweepGrace], a
 // repository is swept at most once a day.
 //
+// A QUEUE SWEEP (BenchmarkApplyAQueueSweep, the record applied and committed
+// over [QueueSweepRows] ended entries past [QueueHistory]; one bounded run,
+// -benchtime 3x and one count, on two E-cores of a Core Ultra 7 265U): 44 ms
+// for a step of QueueSweepRows landed entries, which weigh nothing, and 64 ms
+// for one of conflict ejections at [MaxConflictBytes], which [QueueSweepBytes]
+// cuts at 2 058 of them — where a step bounded by its rows alone removed all
+// 3 999, some 64 MiB of overflow pages, about 150 ms at a purge part's
+// measured 2.4 ms a megabyte. Both are under the third of
+// statelog.ApplyTxTimeBudget a purge part is sized to.
+//
+// A LAND RECORD (BenchmarkApplyALandRecord, the record applied and committed
+// over a train of its entries testing in candidates of [MaxQueueBatch], every
+// entry deleting its change's source; the same run): 5.7 ms for one entry and
+// 33 ms for [MaxLandEntries] — every change merged, every entry landed and
+// its landing written, and 64 pushes moving the target and deleting 64
+// sources — under the third of statelog.ApplyTxTimeBudget. Its entries are
+// written back in one upsert and its changes read in one statement, as a push
+// record's changes are ([writeEntries], [changeRowsIn]).
+//
 // A COMPACTION RECORD (BenchmarkApplyACompaction, the record applied and
 // committed against a repository of [MaxPacksPerRepo] live packs, each arm
 // writing the most outputs its inputs allow, so the most rows its input count
@@ -1742,7 +1761,7 @@
 // A batch that creates refs pays the round two reads more, for
 // [RefusalRefConflict] — a primary-key seek for every directory its creates
 // would make (and the upper bound of a create under another), and a seek of
-// the LIVE refs' index ([liveRefsKey], replicated 0054) for every gap: the
+// the LIVE refs' index ([liveRefsKey], replicated 0077) for every gap: the
 // creates' ranges cut at their bounds and at every name with a live row, each
 // gap asked once whichever creates hold it. Measured both ways on four vCPUs
 // of a 2.8 GHz Xeon under other builds' load (a load average of 15–18, which

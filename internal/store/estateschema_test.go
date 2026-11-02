@@ -67,31 +67,6 @@ func estateColumns(t *testing.T, estate store.ReplicatedHandle, table string) []
 	return out
 }
 
-// planOf is the driver's own EXPLAIN QUERY PLAN for query, one step per line.
-func planOf(t *testing.T, estate store.ReplicatedHandle, query string, args ...any) string {
-	t.Helper()
-	var steps []string
-	if err := estate.Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var id, parent, unused int
-			var detail string
-			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-				return err
-			}
-			steps = append(steps, detail)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("explain %q: %v", query, err)
-	}
-	return strings.Join(steps, "\n")
-}
-
 // replicatedDDL is every replicated migration's text, concatenated.
 func replicatedDDL(t *testing.T) string {
 	t.Helper()

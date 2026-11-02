@@ -97,6 +97,7 @@ func joinFleet(t *testing.T, q *js.Queue, id string, now time.Time) *fleetNode {
 	}
 	publisher, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: db, Log: authority, Estate: db.Replicated().Reader(), NodeID: id, Caught: caught,
+		Generations: unseen,
 		Zone:        func() *time.Location { return santiago },
 		Now:         func() time.Time { return now },
 		FireHistory: fireHistory,

@@ -255,9 +255,9 @@ func confluencePrompt() notify.Prompt { return confluence.Prompt{} }
 // EXACTLY ONE per company, which is the seam's own rule and not a limitation
 // of this function: "what do we already know about this" must not depend on
 // which searcher was asked, so `knowledge.backend` picks one and config
-// refuses a company that configures two. The NATIVE one is answered first
-// because it is the default; a company on `backend: confluence` builds no
-// native searcher at all, so the branch is a nil check rather than a
+// refuses a company that configures two. DOCLET is answered first because
+// it is the default; a company on `backend: confluence` builds no Doclet
+// searcher at all, so the branch is a nil check rather than a
 // preference.
 //
 // Nil means no backend is wired, and every consumer treats that as "search
@@ -269,7 +269,7 @@ func (e *Engine) Knowledge() knowledge.Searcher {
 	// and then answers as though a search had run and found nothing —
 	// indistinguishable from a real empty result, and it hides the fact
 	// that nothing is configured.
-	// THE ROUTER'S, ON EVERY NODE RUNNING THE NATIVE KNOWLEDGE BASE: a
+	// THE ROUTER'S, ON EVERY NODE RUNNING DOCLET: a
 	// node holding the index answers from it, and one holding none
 	// searches through one that does.
 	// A data node's runtime builds its searcher with the knowledge base's

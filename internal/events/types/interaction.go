@@ -1,5 +1,7 @@
 package types
 
+import "github.com/crewlet/crewlet/internal/provenance"
+
 // The canonical, platform-agnostic boundary type for inbound messages. It
 // rides on TurnCompleted, which is why it lives here rather than in the
 // learning package that reads it: an event's wire shape cannot be described
@@ -53,6 +55,14 @@ type CanonicalIdentity struct {
 type InboundInteraction struct {
 	Sender CanonicalIdentity `json:"sender"`
 	Body   string            `json:"body"`
+	// Provenance is who wrote Body and how far the woken seat may rely on
+	// it ([provenance.Label], ADR-0040) — the label the turn read it under,
+	// decided where the delivery was in hand by the source's own prompt
+	// (notify.SalientLabels), and carried here because a learning worker
+	// reads the body after the turn, on whichever node holds the seat, with
+	// no notification left to ask. Every worker that hands the body to a
+	// model fences it under this label.
+	Provenance provenance.Label `json:"provenance"`
 	// ChannelKind is descriptive context, never a behaviour switch.
 	ChannelKind ChannelKind `json:"channel_kind"`
 	// RawEventType is captured for audit and debugging only — it is the one

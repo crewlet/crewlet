@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -52,14 +53,6 @@ func (f *Fleet) Positions(_ context.Context) ([]coord.NodePositions, error) {
 		out = append(out, row)
 	}
 	return out, nil
-}
-
-// ForgetPositions removes a node's row.
-func (f *Fleet) ForgetPositions(_ context.Context, nodeID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.positions, nodeID)
-	return nil
 }
 
 // PutHold writes or renews a trim hold. See the KV backend for why it lives
@@ -142,16 +135,11 @@ func (f *Fleet) Floor(_ context.Context, domain string) (coord.TrimFloor, bool, 
 	return row, true, nil
 }
 
-// ForgetFloor removes one domain's row.
-func (f *Fleet) ForgetFloor(_ context.Context, domain string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.floors, domain)
-	return nil
-}
-
-// PutBackupPoint writes one owner's newest backup. See the KV backend for why
-// it lives in the same register as the positions, the holds and the floors.
+// PutBackupPoint writes one node's newest backup, or the operator's newest
+// acknowledgement of one log, at the point's own key. See the KV backend for
+// why it lives in the same register as the positions, the holds and the
+// floors, and [coord.BackupPointKey] for why an acknowledgement is keyed by its
+// log.
 func (f *Fleet) PutBackupPoint(_ context.Context, p coord.BackupPoint) error {
 	if err := p.Validate(); err != nil {
 		return err
@@ -164,29 +152,31 @@ func (f *Fleet) PutBackupPoint(_ context.Context, p coord.BackupPoint) error {
 	// CLONED ON THE WAY IN, for the reason every row here is.
 	row := p
 	row.Streams = maps.Clone(p.Streams)
-	f.backups[p.Owner] = row
+	f.backups[coord.BackupPointKey(p)] = row
 	return nil
 }
 
-// BackupPoints reads every owner's row, in owner order so two captures are
-// diffable.
+// BackupPoints reads every row, in key order so two captures are diffable.
 func (f *Fleet) BackupPoints(_ context.Context) ([]coord.BackupPoint, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]coord.BackupPoint, 0, len(f.backups))
-	for _, owner := range slices.Sorted(maps.Keys(f.backups)) {
-		row := f.backups[owner]
+	for _, key := range slices.Sorted(maps.Keys(f.backups)) {
+		row := f.backups[key]
 		row.Streams = maps.Clone(row.Streams)
 		out = append(out, row)
 	}
 	return out, nil
 }
 
-// ForgetBackupPoint removes one owner's row.
+// ForgetBackupPoint removes every row one owner holds — the operator's
+// acknowledgement of every log, under [coord.OperatorBackupOwner].
 func (f *Fleet) ForgetBackupPoint(_ context.Context, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.backups, owner)
+	maps.DeleteFunc(f.backups, func(_ string, row coord.BackupPoint) bool {
+		return row.Owner == owner
+	})
 	return nil
 }
 
@@ -302,7 +292,8 @@ func (f *Fleet) ForgetAdmission(_ context.Context, nodeID, incarnation string) e
 	return nil
 }
 
-// PutMaintenanceAck records one participant's restart.
+// PutMaintenanceAck records one participant's restart for one log's window,
+// at the key the KV backend writes it under ([coord.MaintenanceAckKey]).
 func (f *Fleet) PutMaintenanceAck(_ context.Context, ack coord.MaintenanceAck) error {
 	if err := ack.Validate(); err != nil {
 		return err
@@ -315,18 +306,26 @@ func (f *Fleet) PutMaintenanceAck(_ context.Context, ack coord.MaintenanceAck) e
 	if f.maintAcks == nil {
 		f.maintAcks = map[string]coord.MaintenanceAck{}
 	}
-	f.maintAcks[ack.NodeID] = ack
+	f.maintAcks[coord.MaintenanceAckKey(ack.Stream, ack.NodeID)] = ack
 	return nil
 }
 
-// MaintenanceAcks reads every participant's, in node order.
-func (f *Fleet) MaintenanceAcks(_ context.Context) ([]coord.MaintenanceAck, error) {
+// MaintenanceAcks reads every participant's for one log's window, in node
+// order.
+func (f *Fleet) MaintenanceAcks(_ context.Context, stream string) (
+	[]coord.MaintenanceAck, error) {
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([]coord.MaintenanceAck, 0, len(f.maintAcks))
-	for _, node := range slices.Sorted(maps.Keys(f.maintAcks)) {
-		out = append(out, f.maintAcks[node])
+	var out []coord.MaintenanceAck
+	for _, ack := range f.maintAcks {
+		if ack.Stream == stream {
+			out = append(out, ack)
+		}
 	}
+	slices.SortFunc(out, func(a, b coord.MaintenanceAck) int {
+		return strings.Compare(a.NodeID, b.NodeID)
+	})
 	return out, nil
 }
 

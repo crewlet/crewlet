@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A PERSON THE IDENTITY DIRECTORY BINDS TO A SEAT ACTS AS THAT SEAT on every
@@ -106,7 +106,7 @@ func boundSurface(t *testing.T, trk *fakeTracker, chart *seatChart) *tools.Regis
 }
 
 // asJane calls a tool as a person signed in as `jane.founder`, whom the
-// directory binds to the seat `jane-founder`, holding the tracker and NOT
+// directory binds to the seat `jane-founder`, holding Worklet and NOT
 // admin — so every relation below is the chart's to answer.
 func asJane(t *testing.T, reg *tools.Registry, name string,
 	args map[string]any) tools.Result {
@@ -115,7 +115,7 @@ func asJane(t *testing.T, reg *tools.Registry, name string,
 	jane := iam.Principal{
 		ID: uuid.New(), Login: "jane.founder", Kind: iam.KindPerson,
 		Seat: "jane-founder", Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 	}
 	entry, ok := reg.Lookup(name)
 	if !ok {
@@ -148,7 +148,7 @@ func TestABoundPersonRoutesTheWorkTheirSeatLeads(t *testing.T) {
 			"bound to", chart.asked)
 	}
 	if len(trk.actors) != 1 || trk.actors[0].Handle != "jane-founder" ||
-		trk.actors[0].Kind != tracker.AuthorHuman ||
+		trk.actors[0].Kind != worklet.AuthorHuman ||
 		trk.actors[0].OperatorID != "jane.founder" {
 
 		t.Errorf("the re-route is authored by %+v, want the seat as a human "+
@@ -259,7 +259,7 @@ func TestABoundPersonsProjectEditIsDecidedOnTheirSeat(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	chart := janesChart()
-	if got := asJane(t, boundSurface(t, trk, chart), tracker.WriteProjectTool,
+	if got := asJane(t, boundSurface(t, trk, chart), worklet.WriteProjectTool,
 		map[string]any{"project": "ENG", "default_assignee": "cto"}); got.Failed {
 
 		t.Fatalf("the project edit failed: %s", got.Output)

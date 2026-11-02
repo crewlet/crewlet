@@ -99,7 +99,7 @@ func guarded(t *testing.T, r *signInRig) http.Handler {
 	guard := auth.New(&b).WithSessions(arm)
 	mux := http.NewServeMux()
 	r.svc.Routes(mux)
-	for _, route := range []string{"GET /iam/people", "POST /work/items"} {
+	for _, route := range []string{"GET /iam/people", "POST /worklet/items"} {
 		mux.HandleFunc(route, func(w http.ResponseWriter, _ *http.Request) {
 			httpjson.Write(w, http.StatusOK, map[string]string{"reached": "yes"})
 		})
@@ -150,7 +150,7 @@ func statusOf(rec *httptest.ResponseRecorder) any {
 // alone, and nothing read it: a person holding only a password signed in and
 // reached every route. Now their sign-in succeeds into a session that says so
 // (`status: second_factor_enrolment_required`), which the guard refuses /iam
-// and /work to; `GET /auth/session` says the same; enrolling an authenticator
+// and /worklet to; `GET /auth/session` says the same; enrolling an authenticator
 // through that very session REPLACES it with a whole one — the restricted
 // session ended, the new cookie on the enrolment's answer — and the whole one
 // reaches both routes, while the restricted cookie reaches nothing again.
@@ -218,7 +218,7 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 				t.Errorf("GET /auth/session answered status %v, want %s", got, want)
 			}
 			for _, route := range [][2]string{
-				{http.MethodGet, "/iam/people"}, {http.MethodPost, "/work/items"},
+				{http.MethodGet, "/iam/people"}, {http.MethodPost, "/worklet/items"},
 			} {
 				rec, _ := send(t, h, route[0], route[1], "{}", first)
 				if tc.restricted && rec.Code != http.StatusForbidden {
@@ -277,7 +277,7 @@ func TestARequiredSecondFactorIsEnrolledBeforeAnythingElse(t *testing.T) {
 					starts[1].ProvedAt, starts[0].ProvedAt)
 			}
 			for _, route := range [][2]string{
-				{http.MethodGet, "/iam/people"}, {http.MethodPost, "/work/items"},
+				{http.MethodGet, "/iam/people"}, {http.MethodPost, "/worklet/items"},
 			} {
 				if rec, _ := send(t, h, route[0], route[1], "{}", second); rec.Code != http.StatusOK {
 					t.Errorf("the session the enrolment opened was refused %s %s "+

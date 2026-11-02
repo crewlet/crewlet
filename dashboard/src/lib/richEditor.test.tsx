@@ -1,7 +1,7 @@
 /**
  * The rich editor's round trip, held to the bodies this engine actually has.
  *
- * A Knowledge page and a doc's tab are stored as Markdown, and the bytes are
+ * A Doclet page and a doc's tab are stored as Markdown, and the bytes are
  * the record: a page's save is merged line by line, a doc's is a patch of the
  * lines that moved. So opening a body in the editor and saving it with no edit
  * must write the body back BYTE FOR BYTE, and a body the editor rewrites must
@@ -21,7 +21,7 @@ import { render } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 import { canonicalMarkdown, roundTripMarkdown } from "@crewlethq/ui/RichEditorMarkdown";
 import { headingLines, renderMarkdown } from "./markdown.ts";
-import { TEMPLATES } from "~/routes/knowledge/Composer.tsx";
+import { TEMPLATES } from "~/routes/doclet/Composer.tsx";
 import { DOC_TEMPLATES } from "~/lib/artifacts/docTemplates.ts";
 import { repoRoot } from "~/test/engineFiles.ts";
 

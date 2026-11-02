@@ -468,6 +468,67 @@ func TestTwoIdenticalRoundsAbortAsAStall(t *testing.T) {
 	}
 }
 
+// A STALL SPANS THE TURN'S SEGMENTS. Every executor launch parks the turn, so
+// the round after it is reviewed in a fresh segment — and a guard that counted
+// only its own segment's rounds would see one at a time and never fire: a
+// turn re-deriving the same artifact ran to its round budget, a whole run and
+// a review each time. The closed rounds carry their artifact's hash, and the
+// resumed segment is seeded from them.
+//
+// Mutation: drop the seeding in Run, and the resumed segment runs another
+// round instead of stopping.
+func TestAStallSpansTheTurnsSegments(t *testing.T) {
+	t.Parallel()
+	// Segment one: round 1 is reviewed and sent back, round 2 launches.
+	first := &fake{
+		works:    []turn.Work{delivered("same"), {Suspended: true}},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+	}
+	parked, err := turn.Run(context.Background(), first, settings(),
+		turn.Input{RunID: "t1", Reply: turn.ToolReply("")})
+	if err != nil || !parked.Suspended {
+		t.Fatalf("segment one = %+v, %v; want it parked on round 2's launch", parked, err)
+	}
+	if len(parked.Iterations) != 1 || parked.Iterations[0].ArtifactHash == "" {
+		t.Fatalf("the closed round carries no artifact hash: %+v", parked.Iterations)
+	}
+
+	// Segment two collects round 2 — the same artifact — and is sent back.
+	second := &fake{
+		works:    []turn.Work{delivered("same")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+	}
+	res, err := turn.Run(context.Background(), second, settings(), turn.Input{
+		RunID: "t1", Reply: turn.ToolReply(""),
+		Resume: true, Round: 2, History: parked.Iterations,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Breach == nil || res.Breach.Kind != types.GuardStall {
+		t.Fatalf("breach = %+v, want the stall the two segments make together", res.Breach)
+	}
+	if second.workRounds != 0 {
+		t.Errorf("the resumed segment launched %d more runs past the stall", second.workRounds)
+	}
+
+	// The counterfactual: a different artifact in segment two is progress.
+	moved := &fake{
+		works:    []turn.Work{delivered("different"), {Suspended: true}},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+	}
+	res, err = turn.Run(context.Background(), moved, settings(), turn.Input{
+		RunID: "t1", Reply: turn.ToolReply(""),
+		Resume: true, Round: 2, History: parked.Iterations,
+	})
+	if err != nil || res.Breach != nil || !res.Suspended {
+		t.Errorf("progress across segments = %+v, %v; want the next round launched", res, err)
+	}
+}
+
 func TestProgressIsNotAStall(t *testing.T) {
 	t.Parallel()
 	f := &fake{
@@ -569,8 +630,8 @@ func TestTheLedgerCarriesWhatTheNextRoundNeeds(t *testing.T) {
 }
 
 // ONLY THE READS ACTUALLY USED. Rendering is a membership test either way, so
-// the block reads the same — but the row is persisted across a sandbox
-// suspend, and carrying every read-only tool on a large MCP surface makes it
+// the block reads the same — but the row is persisted across a park, and
+// carrying every read-only tool on a large MCP surface makes it
 // grow with the catalogue rather than with what the round did.
 func TestOnlyTheReadsActuallyUsedAreRecorded(t *testing.T) {
 	t.Parallel()
@@ -599,13 +660,14 @@ func TestOnlyTheReadsActuallyUsedAreRecorded(t *testing.T) {
 	}
 }
 
-// A SUSPEND IS NOT AN ENDING. This round's review has not run, so appending it
-// would tell the resumed turn a delivery was judged when nothing judged it.
+// A PARK IS NOT AN ENDING. The executor's run was launched and this round's
+// review has not run, so appending the round would tell the resumed turn a
+// delivery was judged when nothing judged it.
 func TestASuspendHandsTheLedgerOutWithoutClosingTheRound(t *testing.T) {
 	t.Parallel()
 	prior := []ledger.Iteration{{Iteration: 1, Intent: "earlier"}}
 	f := &fake{
-		works:    []turn.Work{{Suspended: true, Text: "started a coding run"}},
+		works:    []turn.Work{{Suspended: true}},
 		surfaces: []turn.Surface{slackSurface()},
 	}
 	res, err := turn.Run(context.Background(), f, settings(),
@@ -682,11 +744,16 @@ func TestAResumedTurnInheritsTheLedgerItLeftBehind(t *testing.T) {
 	}
 }
 
-func TestAResumedTurnCanSuspendAgain(t *testing.T) {
+// A RESUMED TURN PARKS AGAIN ON ITS NEXT LAUNCH. The collected round is
+// reviewed like any other; when the reviewer sends it back, the next round's
+// executor is a new run, and the turn parks on that one with the collected
+// round closed into the ledger it carries.
+func TestAResumedTurnParksAgainOnItsNextLaunch(t *testing.T) {
 	t.Parallel()
 	f := &fake{
-		works:    []turn.Work{{Suspended: true, Text: "second run"}},
+		works:    []turn.Work{delivered("collected"), {Suspended: true}},
 		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
 	}
 	res, err := turn.Run(context.Background(), f, settings(),
 		turn.Input{RunID: "t1", Reply: turn.ToolReply(""), Resume: true})
@@ -694,7 +761,14 @@ func TestAResumedTurnCanSuspendAgain(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if !res.Suspended {
-		t.Error("a resumed turn that called the sandbox again did not suspend")
+		t.Fatal("the next round's launch did not park the turn")
+	}
+	if f.resumeRounds != 1 || f.workRounds != 1 {
+		t.Errorf("resume %d / execute %d, want the collection and one launch",
+			f.resumeRounds, f.workRounds)
+	}
+	if len(res.Iterations) != 1 || res.Iterations[0].Text != "collected" {
+		t.Errorf("iterations = %+v, want the collected round closed", res.Iterations)
 	}
 }
 
@@ -808,9 +882,9 @@ func TestAResumedTurnWithNoParkedRoundStartsAtOne(t *testing.T) {
 // THE RE-ENTERED ROUND RUNS EVEN PAST THE CAP. `max_iterations` is
 // founder-owned and edited live while a detached run can be parked for hours,
 // so a resume can arrive at a round the budget no longer reaches. It is not a
-// new round: its executor pass already ran and its `run_sandbox` call is still
-// unanswered, so refusing it would throw away a coding run the company has
-// paid for and leave that conversation answered by nobody.
+// new round: its executor run already ran and is waiting to be collected, so
+// refusing it would throw away a run the company has paid for and judge
+// nothing it did.
 func TestTheReEnteredRoundRunsEvenPastALoweredCap(t *testing.T) {
 	t.Parallel()
 	f := &fake{
@@ -849,7 +923,7 @@ func TestAResumedTurnsFirstRoundOutrunsTheWallClockCap(t *testing.T) {
 	}
 	res, err := turn.Run(context.Background(), f, turn.Settings{
 		MaxIterations: 5,
-		MaxWallClock:  30 * time.Second,
+		Deadline:      now.Add(30 * time.Second),
 		// One minute per read, so the cap is already past by the time the
 		// loop reaches its first round boundary.
 		Now: func() time.Time { now = now.Add(time.Minute); return now },
@@ -869,11 +943,10 @@ func TestAResumedTurnsFirstRoundOutrunsTheWallClockCap(t *testing.T) {
 	}
 }
 
-// AND WHAT THE BREACH SAYS IT SPENT IS THIS RUN'S SHARE, not the turn's. The
-// cap bounds the clock THIS process started, so the figure beside it has to be
-// counted from the same place: a resumed turn that reports the rounds since
-// round one names time it never spent, and sends whoever reads it looking for
-// a cap three times too small. The exemption above and this number are two
+// AND WHAT THE BREACH SAYS THIS SEGMENT SPENT IS ITS OWN SHARE, not the turn's:
+// the rounds and the time since this segment began, beside the deadline the
+// turn passed. A resumed turn that reported the rounds since round one named
+// time this segment never spent. The exemption above and this number are two
 // different reads of `first`, and only one of them fails when it is wrong.
 func TestAResumedTurnsWallClockBreachCountsOnlyItsOwnRounds(t *testing.T) {
 	t.Parallel()
@@ -888,7 +961,7 @@ func TestAResumedTurnsWallClockBreachCountsOnlyItsOwnRounds(t *testing.T) {
 	}
 	res, err := turn.Run(context.Background(), f, turn.Settings{
 		MaxIterations: 5,
-		MaxWallClock:  30 * time.Second,
+		Deadline:      now.Add(30 * time.Second),
 		// One minute per read, and Run reads once to start the clock and once
 		// per round boundary — so the cap is already past when the re-entered
 		// round is exempted, and fires at the next boundary.
@@ -910,6 +983,43 @@ func TestAResumedTurnsWallClockBreachCountsOnlyItsOwnRounds(t *testing.T) {
 	}
 	if res.Rounds != 3 {
 		t.Errorf("rounds = %d, want the round the turn reached", res.Rounds)
+	}
+}
+
+// THE CAP BOUNDS THE TURN, NOT THE SEGMENT. Every executor launch parks the
+// turn, so the segment that collects the run is a later call, with a clock of
+// its own that began a moment ago — and a cap measured from that start never
+// fired: the launching segment ends at its first round, before any boundary,
+// and every resumed one started afresh. Given the turn's own deadline, long
+// passed, a resumed segment still runs the round it re-entered and starts no
+// round after it, however little of its own clock it has spent.
+func TestAResumedSegmentIsHeldToTheTurnsDeadline(t *testing.T) {
+	t.Parallel()
+	began := time.Unix(10_000, 0)
+	now := began
+	f := &fake{
+		works:    []turn.Work{delivered("back from the box")},
+		surfaces: []turn.Surface{slackSurface()},
+		reviews:  []turn.Review{{Decision: phase.SelfIterate, Notes: "again"}},
+	}
+	res, err := turn.Run(context.Background(), f, turn.Settings{
+		MaxIterations: 5,
+		// The turn began two hours before this segment, under a one-hour cap.
+		Deadline: began.Add(-time.Hour),
+		// A second per read: the segment has spent next to nothing of its own.
+		Now: func() time.Time { now = now.Add(time.Second); return now },
+	}, turn.Input{RunID: "t1", Reply: turn.ToolReply(""), Resume: true, Round: 2})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if f.resumeRounds != 1 {
+		t.Errorf("resume ran %d times, want the re-entered round alone", f.resumeRounds)
+	}
+	if f.workRounds != 0 {
+		t.Errorf("launched %d more rounds past the turn's deadline", f.workRounds)
+	}
+	if res.Breach == nil || res.Breach.Kind != types.GuardScheduledTimeout {
+		t.Fatalf("breach = %+v, want a scheduled_timeout", res.Breach)
 	}
 }
 
@@ -1046,7 +1156,7 @@ func TestAnUnsetReplyIsRefused(t *testing.T) {
 }
 
 // A value this build does not know is refused for the same reason, and it is
-// reachable rather than theoretical: a suspended sandbox run carries its Reply
+// reachable rather than theoretical: a parked run carries its Reply
 // as a stored string and is resumed by whatever build is running then.
 func TestAnUnknownReplyValueIsRefused(t *testing.T) {
 	t.Parallel()
@@ -1098,7 +1208,7 @@ func TestAScheduledTurnStopsAtItsWallClockCap(t *testing.T) {
 	}
 	res, err := turn.Run(context.Background(), f, turn.Settings{
 		MaxIterations: 5,
-		MaxWallClock:  90 * time.Second,
+		Deadline:      now.Add(90 * time.Second),
 		// One minute passes per read; Run reads once per round boundary.
 		Now: func() time.Time { now = now.Add(time.Minute); return now },
 	}, turn.Input{RunID: "t-1", Reply: turn.NoReply()})

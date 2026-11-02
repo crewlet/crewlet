@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // The required-skill guard, with telemetry.
@@ -29,7 +30,9 @@ type reportingGuard struct {
 	guard *skills.Guard
 	emit  emitter
 	phase phase.Phase
-	round int
+	// iteration is the turn's iteration the guarded surface was built for,
+	// which every other event of the phase carries too.
+	iteration int
 }
 
 var _ tools.Guard = (*reportingGuard)(nil)
@@ -45,7 +48,7 @@ func (g *reportingGuard) Check(tool, server string) string {
 }
 
 // Observe implements [tools.Guard].
-func (g *reportingGuard) Observe(tool string, args map[string]any) {
+func (g *reportingGuard) Observe(tool string, args toolargs.Args) {
 	g.guard.Observe(tool, args)
 }
 
@@ -67,7 +70,7 @@ func (g *reportingGuard) report(tool string) {
 		SkillKeys: g.guard.Pending(),
 		TurnID:    g.emit.turn.RunID,
 		WorkKey:   g.emit.turn.WorkKey,
-		Iteration: g.round,
+		Iteration: g.iteration,
 	}, g.emit.turn.Trace)
 	// A BACKGROUND context, because tools.Guard has none to inherit — the
 	// interface is called from a tool dispatch that passes only names. A

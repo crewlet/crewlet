@@ -241,10 +241,9 @@ export function absorbedGroups(events: readonly EventRecord[]): AbsorbedGroup[] 
 export interface PromptWeight {
   /**
    * The measuring event's own id, because the phase key does NOT identify a
-   * row here — see [promptWeights]. A resumed executor publishes a second
-   * measurement under its own `phase|iteration`, so a list keyed on that pair
-   * has duplicate React keys and reconciles two different prompts onto one
-   * row.
+   * row here — see [promptWeights]. Nothing guarantees one measurement per
+   * `phase|iteration`, and a list keyed on that pair would reconcile two
+   * different prompts onto one row the day two arrive.
    */
   id: string;
   phase: string;
@@ -253,35 +252,15 @@ export interface PromptWeight {
   approximateTokens: number;
   /**
    * BYTES, which is what the engine measures — `len()` of a Go string — read
-   * off the wire keys `system_bytes` / `user_bytes` and the three beside them.
+   * off the wire keys `system_bytes` / `user_bytes` and the two beside them.
    * A byte and a character only agree on ASCII, so the labels say bytes too;
    * `PromptSize` in internal/events/types/turn.go carries the reason.
    */
   systemBytes: number;
   userBytes: number;
-  /**
-   * The conversation a RESUMED phase re-entered — zero for a phase that
-   * opened one of its own, which is nearly all of them.
-   */
-  messageBytes: number;
   /** The tool-definition array, as compact JSON: usually the largest term. */
   toolBytes: number;
   toolCount: number;
-  /**
-   * This measurement is a phase RE-ENTERED rather than opened — the second
-   * half of an executor that parked on a detached coding run.
-   *
-   * Read off [messageBytes] rather than off a flag of its own, because the
-   * engine ships no flag and needs none: `PromptSize.MessageBytes` in
-   * internal/events/types/turn.go is "the conversation a RESUMED phase
-   * re-enters … and zero for a phase that opens one of its own", and the
-   * producer is the one call that passes a seed
-   * (internal/agent/runner/resume.go's `seed: state.Answer(answer)`).
-   *
-   * A row with no message term reads false — the safe direction, since
-   * nothing then says the phase was re-entered.
-   */
-  resumed: boolean;
 }
 
 /**
@@ -300,46 +279,19 @@ export interface PromptWeight {
  * as a permanent zero instead of NaN, which is why the tests behind these
  * fields assert a value only the engine could have produced.
  *
- * ONE ROW PER MEASUREMENT, and the phase key is NOT the row's identity —
- * which is the opposite of what this function used to do, on a premise the Go
- * source contradicts twice over.
+ * ONE ROW PER MEASUREMENT, and the phase key is NOT the row's identity. A
+ * repeated `phase|iteration` inside one turn is never a re-run: the run id is
+ * minted per dispatch (`newRunID()` in internal/engine/turn.go, `adr/0017`),
+ * so a re-delivered trigger runs under a DIFFERENT turn id and lands on its
+ * own Turn screen — which is what `TurnView.attempt` is for. Every
+ * measurement on this page is therefore a prompt this turn actually sent and
+ * was billed for, and folding two of them into one row with a count would
+ * claim a structure nobody measured and present two prompts as a range of
+ * one. So each is drawn, in publish order, keyed by its event.
  *
- * The premise was that `turn_id|phase|iteration` is unique per measurement, so
- * a second row under one key had to be that phase RUNNING AGAIN after the
- * turn's dispatch was re-delivered — "the turn id IS the work key". It is not,
- * and has not been since `adr/0017`: `runnerTurn` in
- * internal/engine/telemetry.go opens with "TWO IDENTITIES, NEVER ONE", the run
- * id is minted per dispatch (`newRunID()` in internal/engine/turn.go) and the
- * work key is the trigger's digest. So a re-delivered trigger runs under a
- * DIFFERENT turn id, `EventLog.Turn` is `WHERE turn_id = ?`, and the two
- * attempts land on two Turn screens — which is exactly what `TurnView.attempt`
- * is for. A re-run cannot reach this function at all.
- *
- * What CAN put two measurements under one key is a SUSPEND, which is not a
- * re-run and is explicitly excluded from that ADR ("a detached coding run
- * re-enters the run that parked it, keeping the id from its own row"). The
- * executor parks mid-loop on `run_sandbox`, having already published its
- * opening measurement from `emit.started`; minutes or days later
- * `Runner.Resume` re-enters the SAME phase at the SAME iteration
- * (internal/agent/runner/resume.go: `phase: phase.Execute, iteration:
- * state.Round`) and publishes a second one. Measured on a real suspend and
- * resume, the pair is:
- *
- *     execute|1  system=3166 user=31 message=0     tool=3815  ~1753 tokens
- *     execute|1  system=0    user=0  message=3329  tool=3929  ~1814 tokens
- *
- * Collapsed, that drew ONE row reading `×2`, System 0 B, User 0 B and a
- * tooltip saying the phase "ran 2 times" and "ranged ~1,753–1,814 tokens".
- * Every clause of it is false. The phase ran once. Its opening frame was
- * 3,166 bytes of system prompt, not zero. And the two figures are not a range
- * of one quantity — they are two different prompts, both actually sent and
- * both actually billed, which is precisely what this panel exists to show.
- *
- * So both are drawn, in publish order, and the re-entry is marked rather than
- * merged — see [PromptWeight.resumed]. The old shape's own justification (a
- * turn that "ran five times" drawing ten byte-identical rows) was a
- * screenshot from before the identity split, and the split is what fixed it,
- * at the source. Collapsing here was the band-aid left behind.
+ * The executor's own launch measures the prompt its coding CLI was handed
+ * once, as the phase opens; a run's collection re-enters no conversation, so
+ * it publishes no measurement of its own.
  */
 export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
   const out: PromptWeight[] = [];
@@ -347,7 +299,6 @@ export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
     if (event.type !== "prompt.size") continue;
     const p = event.payload as Record<string, unknown> | undefined;
     if (!p) continue;
-    const messageBytes = Number(p.message_bytes ?? 0);
     out.push({
       id: event.id,
       phase: String(p.phase ?? ""),
@@ -355,10 +306,8 @@ export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
       approximateTokens: Number(p.approximate_tokens ?? 0),
       systemBytes: Number(p.system_bytes ?? 0),
       userBytes: Number(p.user_bytes ?? 0),
-      messageBytes,
       toolBytes: Number(p.tool_bytes ?? 0),
       toolCount: Number(p.tool_count ?? 0),
-      resumed: messageBytes > 0,
     });
   }
   return out;

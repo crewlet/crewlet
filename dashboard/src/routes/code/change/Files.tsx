@@ -44,6 +44,7 @@ import {
   Tag,
   Textarea,
 } from "@crewlethq/ui";
+import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useParam } from "~/app/router.tsx";
 import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -540,6 +541,40 @@ function FindingComposer({
   const [suggesting, setSuggesting] = useState(false);
   const [suggestion, setSuggestion] = useState("");
   const lines = pick.start === pick.end ? `line ${pick.start}` : `lines ${pick.start}–${pick.end}`;
+  // THE FINDING'S BOXES AS FIELDS of the change page's one draft
+  // (`ChangePage.tsx`), so the person's assistant reads and can fill what is
+  // being written on these lines; adding it to the review stays the person's.
+  useDraftBox({
+    path: "finding.title",
+    label: `Finding on ${lines}: title`,
+    hint: "One line",
+    rank: 10,
+    value: title,
+    set: setTitle,
+    refuses: (next) => (next.includes("\n") ? "A finding's title is one line." : null),
+  });
+  useDraftBox({
+    path: "finding.body",
+    label: `Finding on ${lines}: why, and what to do`,
+    hint: "Plain text",
+    rank: 11,
+    value: body,
+    set: setBody,
+    refuses: () => null,
+  });
+  useDraftBox(
+    suggesting
+      ? {
+          path: "finding.suggestion",
+          label: `Finding on ${lines}: the lines to put in their place`,
+          hint: "The replacement lines, exactly",
+          rank: 12,
+          value: suggestion,
+          set: setSuggestion,
+          refuses: () => null,
+        }
+      : null,
+  );
   return (
     <form
       className="code-finding"

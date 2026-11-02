@@ -2,7 +2,7 @@
  * The eighteen wake reasons, as English, written once.
  *
  * The applier records, per change and per recipient, the ONE reason of eighteen
- * under which that person heard about it — `internal/tracker/recipients.go`,
+ * under which that person heard about it (`internal/worklet/recipients.go`),
  * in the precedence order that decided it. Nothing has ever drawn it, and it
  * is the fact no commercial tracker records: Linear, Jira and ClickUp can all
  * tell you that you were notified, and none of them can tell you why.

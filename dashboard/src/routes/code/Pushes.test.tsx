@@ -52,7 +52,7 @@ const ORG = withDerived({
     { name: "CTO", handle: "cto" },
     { name: "Jane Founder", handle: "jane", kind: "human" },
   ],
-  services: { tracker: "native", knowledge: "native", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
 }) as unknown as OrgProjection;
 
 /** A push as the history answers it, with what a case overrides. */
@@ -122,13 +122,6 @@ function mount(hash: string) {
     </ClientContext.Provider>,
   );
   return { store };
-}
-
-/** The tab's socket comes back after a drop, as the loader hears it. */
-function reconnect(store: Store) {
-  act(() => store.setConnected(true));
-  act(() => store.setConnected(false));
-  act(() => store.setConnected(true));
 }
 
 /** A newest page of the history: no cursor named. */
@@ -375,21 +368,21 @@ test("a repository nobody declared is said with the engine's sentence", async ()
   expect(screen.getByText('no repository named "gone" is declared in code.repos')).toBeTruthy();
 });
 
-// A LOG REACHES ITS OLDER ROWS BY FETCHING THEM, and while it holds an older
-// page its first page is held still: re-read under newer pushes, the pushes
-// between the two pages would belong to neither — so neither a poll tick nor
-// a reconnect asks it. Mutation: ask the history without the pager's hold, and
-// the newest page is asked again below.
-test("Load older asks the next page by its cursor, and the first page is then held still", async () => {
+// A LOG REACHES ITS OLDER ROWS BY FETCHING THEM, by the cursor its newest
+// page carried, and the newest page stays polled while the reader pages back:
+// another person's push reaches the open history by that read or not at all.
+// Mutation: stop polling the newest page once an older one is loaded, and the
+// tick asks nothing.
+test("Load older asks the next page by its cursor, and the newest page stays polled", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const asked = stubFetch((url) =>
     url.searchParams.get("cursor") === "c1"
       ? json({ pushes: [push("p1")], position: POSITION, level: "stale" })
       : json({ pushes: [push("p2")], next: "c1", position: POSITION, level: "stale" }),
   );
-  const { store } = mount("#/code/pushes?repo=web");
+  mount("#/code/pushes?repo=web");
   await screen.findByRole("table", { name: "Pushes to web" });
-  // POLLED WHILE NOTHING OLDER IS HELD: a minute on, the newest page again.
+  // POLLED: a minute on, the newest page again.
   await act(async () => void vi.advanceTimersByTime(60_000));
   await afterMicrotasks();
   expect(histories(asked)).toHaveLength(2);
@@ -399,39 +392,17 @@ test("Load older asks the next page by its cursor, and the first page is then he
   expect(histories(asked).at(-1)!.searchParams.get("cursor")).toBe("c1");
   // AN OLDER PAGE IS ASKED IN BRIEF as the first is.
   expect(histories(asked).at(-1)!.searchParams.get("brief")).toBe("true");
-  expect(screen.getByText("Paused while you page back.")).toBeTruthy();
-  const before = histories(asked).length;
-  await act(async () => void vi.advanceTimersByTime(5 * 60_000));
-  reconnect(store);
+  const before = newest(asked).length;
+  await act(async () => void vi.advanceTimersByTime(60_000));
   await afterMicrotasks();
-  expect(histories(asked)).toHaveLength(before);
-});
-
-// HELD FROM THE PRESS, not from the answer: a tick landing while the older
-// page is on its way would read the first page again under the cursor that
-// page is asked from. Mutation: hold only once an older page is held, and the
-// tick asks the newest page.
-test("a poll tick while the older page is on its way asks nothing of the first", async () => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-  const asked = stubFetch((url) =>
-    url.searchParams.get("cursor") === "c1"
-      ? (new Promise<Response>(() => {}) as unknown as Response)
-      : json({ pushes: [push("p2")], next: "c1", position: POSITION, level: "stale" }),
-  );
-  mount("#/code/pushes?repo=web");
-  await screen.findByRole("table", { name: "Pushes to web" });
-  fireEvent.click(screen.getByRole("button", { name: "Load older" }));
-  await afterMicrotasks();
-  expect(histories(asked).at(-1)!.searchParams.get("cursor")).toBe("c1");
-  await act(async () => void vi.advanceTimersByTime(3 * 60_000));
-  await afterMicrotasks();
-  expect(newest(asked)).toHaveLength(1);
+  expect(newest(asked).length).toBeGreaterThan(before);
+  expect(screen.getByText("2 pushes listed")).toBeTruthy();
 });
 
 // AN OLDER PAGE THAT FAILS LEAVES THE CONTROL THAT ASKS IT AGAIN, its failure
 // said beside it: the pager keeps the cursor the page was asked from, and a
-// banner in the button's place left a reader nothing to press — under a list
-// held still from the press, nothing to do but reload. Mutation: draw the
+// banner in the button's place left a reader nothing to press, and nothing to
+// do but reload. Mutation: draw the
 // failure in the control's place again, and there is no Load older to press.
 test("an older page that fails keeps Load older, which asks it again", async () => {
   let failures = 1;
@@ -484,7 +455,6 @@ test("leaving a repository's history and coming back starts it from its newest p
   await screen.findByRole("table", { name: "Pushes to web" });
   await afterMicrotasks();
   expect(screen.getByText("2 pushes listed")).toBeTruthy();
-  expect(screen.queryByText("Paused while you page back.")).toBeNull();
   expect(screen.getByRole("button", { name: "Load older" })).toBeTruthy();
   expect(histories(asked).filter((u) => u.searchParams.get("cursor") === "c3")).toHaveLength(1);
 });

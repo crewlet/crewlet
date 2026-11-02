@@ -28,7 +28,7 @@ import (
 // # Read by object id, of the repository's home
 //
 // A tree, a file, a history, a blame and a diff are the repository's CONTENT,
-// answered by its home git node (estate.CodeSeam.GitRead, ADR-0059) and never
+// answered by its home git node (estate.CodeSeam.GitRead, ADR-0082) and never
 // by the rows — the code tools' own reads, one implementation. A revision a
 // request names by a ref — a branch, a tag, a whole ref, or `HEAD` for the
 // default branch — is resolved first, at the caller's freshness, in ONE read
@@ -160,7 +160,7 @@ func revParam(p Params, param string, dflt bool) (*gitRev, error) {
 	case rev == "" && dflt:
 		rev = headRev
 	case rev == "":
-		return nil, fmt.Errorf("%w: %s is required: a commit id — whole, or its first %d or more hex digits — "+
+		return nil, fmt.Errorf("%w: %s is required: a commit id (whole, or its first %d or more hex digits), "+
 			"or a branch, a tag, a whole ref, or %s for the default branch", ErrBadParams, param,
 			code.MinAbbrevDigits, headRev)
 	}
@@ -617,7 +617,7 @@ func (s Sources) codeCommit(ctx context.Context, p Params) (any, error) {
 	}
 	sha := strings.TrimSpace(p.String("sha"))
 	if !gitref.ValidOID(sha) || sha == code.ZeroOID {
-		return nil, fmt.Errorf("%w: sha %q is not a whole commit id: a commit's page names its commit whole — "+
+		return nil, fmt.Errorf("%w: sha %q is not a whole commit id: a commit's page names its commit whole, and "+
 			"code_log with it as ref and a limit of 1 expands an abbreviation", ErrBadParams, sha)
 	}
 	rows, err := g.reads.Read(ctx, code.ReadQuery{Kind: code.ReadCommit, Repo: g.name, Commit: sha, Asker: g.asker,

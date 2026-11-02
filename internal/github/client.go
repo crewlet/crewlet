@@ -134,6 +134,15 @@ type APIError struct {
 	Path   string
 	Status int
 	Detail string
+
+	// RateLimited is GitHub refusing for its rate limit rather than for the
+	// request: a 429, or a 403 carrying a sign GitHub documents for one,
+	// `x-ratelimit-remaining: 0` (its primary limit) or a `retry-after` (a
+	// secondary one). Read off the headers, never the message, for the
+	// reason above. A wait clears it, where a 403 that refuses the
+	// credential waits on a person, so a caller deciding which a refusal is
+	// reads this beside the status.
+	RateLimited bool
 }
 
 func (e *APIError) Error() string {
@@ -152,8 +161,21 @@ func (e *APIError) Error() string {
 // enumerate what exists. A caller acting on it has to say both.
 func (e *APIError) NotFound() bool { return e.Status == http.StatusNotFound }
 
-// Forbidden reports a credential that authenticated and may not do this.
-func (e *APIError) Forbidden() bool { return e.Status == http.StatusForbidden }
+// Forbidden reports a credential that authenticated and may not do this: a
+// 403 that is not GitHub's rate limit ([APIError.RateLimited]).
+func (e *APIError) Forbidden() bool { return e.Status == http.StatusForbidden && !e.RateLimited }
+
+// rateLimited reports whether res is GitHub refusing for its rate limit
+// ([APIError.RateLimited]).
+func rateLimited(res *http.Response) bool {
+	switch res.StatusCode {
+	case http.StatusTooManyRequests:
+		return true
+	case http.StatusForbidden:
+		return res.Header.Get("X-RateLimit-Remaining") == "0" || res.Header.Get("Retry-After") != ""
+	}
+	return false
+}
 
 func (c *Client) do(ctx context.Context, method, path string, params url.Values, in, out any) error {
 	target := c.base + path
@@ -191,7 +213,7 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 	if resp.StatusCode >= 400 {
 		return &APIError{
 			Method: method, Path: path, Status: resp.StatusCode,
-			Detail: httpx.ReadRefusal(resp),
+			Detail: httpx.ReadRefusal(resp), RateLimited: rateLimited(resp),
 		}
 	}
 	if out == nil {

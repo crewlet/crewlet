@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE COMPOSED INBOX (inbox.go's composedInbox): every native domain's notices
@@ -23,9 +23,9 @@ import (
 func inboxSources(t *testing.T) (queries.Sources, *stubWork, *stubCode) {
 	t.Helper()
 	at := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
-	work := &stubWork{inbox: tracker.InboxAnswer{Notices: []tracker.InboxNotice{{RecordID: "t-1",
+	work := &stubWork{inbox: worklet.InboxAnswer{Notices: []worklet.InboxNotice{{RecordID: "t-1",
 		LogStream: "CREWLET_TRACKER_LOG", LogGeneration: 1, LogSeq: 4, At: at.Add(10 * time.Minute),
-		Reason: tracker.ReasonMention, Kind: tracker.ChangeKind("comment"), SubjectID: "task-1",
+		Reason: worklet.ReasonMention, Kind: worklet.ChangeKind("comment"), SubjectID: "task-1",
 		SubjectKey: "ENG-1"}}}}
 	host := &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
 		return code.ReadAnswer{Level: q.Fresh.Level, Inbox: &code.InboxPage{Handle: q.Inbox.Handle,
@@ -66,8 +66,8 @@ func sourcesOf(p inbox.Page) []string {
 // asked about, interleaved with nothing they may not read — and asking for a
 // colleague's is the lead relation's, refused to a peer.
 //
-// Mutation: register `inbox` behind the tracker app, as `work_inbox` is — the
-// person without it is refused their own inbox, red.
+// Mutation: register `inbox` behind the worklet permission, as `work_inbox`
+// is — the person without it is refused their own inbox, red.
 func TestTheInboxOpensToEverySignedInPerson(t *testing.T) {
 	t.Parallel()
 	s, _, host := inboxSources(t)
@@ -88,14 +88,14 @@ func TestTheInboxOpensToEverySignedInPerson(t *testing.T) {
 	}
 }
 
-// TRACKER NOTICES NEED THE TRACKER APP: a person without it is asked nothing
-// of the tracker — not even a page it then drops — and one holding it reads
+// WORKLET'S NOTICES NEED WORKLET: a person without the permission is asked
+// nothing of Worklet — not even a page it then drops — and one holding it reads
 // both domains interleaved by when each happened, the code host's newer notice
 // first.
 //
-// Mutation: read the tracker's half for everybody the composed verb admits —
-// the person without the app reads the tracker's notice, red.
-func TestTrackerNoticesNeedTheTrackerApp(t *testing.T) {
+// Mutation: read Worklet's half for everybody the composed verb admits — the
+// person without the permission reads Worklet's notice, red.
+func TestWorkletNoticesNeedWorklet(t *testing.T) {
 	t.Parallel()
 	s, work, _ := inboxSources(t)
 	composed(t, s, "ana")
@@ -103,7 +103,7 @@ func TestTrackerNoticesNeedTheTrackerApp(t *testing.T) {
 		t.Errorf("the tracker was asked %+v for a person without its app", work.inboxQuery)
 	}
 	s, work, _ = inboxSources(t)
-	page := composed(t, s, "ana", iam.GrantTracker)
+	page := composed(t, s, "ana", iam.GrantWorklet)
 	if work.inboxQuery.Handle != "ana" {
 		t.Errorf("the tracker was asked for %q's inbox, want ana's", work.inboxQuery.Handle)
 	}

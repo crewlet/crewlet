@@ -48,9 +48,11 @@ func TestMain(m *testing.M) {
 	if status, ok := codetest.RunHookIfAsked(); ok {
 		os.Exit(status)
 	}
-	// THE THREE CASES THAT RE-EXECUTE THIS BINARY: as the node they stop, by
-	// a signal and by taking its broker connection away, and as the process
-	// a second interrupt kills. Before the sink below, which each node probe
+	// THE CASES THAT RE-EXECUTE THIS BINARY: as the node they stop, by a
+	// signal and by taking its broker connection away, as the process a
+	// second interrupt kills, as the engine holding a store's lock
+	// ([holdTheStore]), and as an operator's command run beside a node
+	// ([offlineCommand]). Before the sink below, which each node probe
 	// installs for itself: its log is what the parent reads the order of
 	// the shutdown from.
 	if os.Getenv(drainProbeEnv) != "" {
@@ -61,6 +63,12 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv(interruptProbeEnv) != "" {
 		runInterruptProbe()
+	}
+	if path := os.Getenv(holdStoreEnv); path != "" {
+		os.Exit(runHoldStore(path))
+	}
+	if args := os.Getenv(offlineCommandEnv); args != "" {
+		os.Exit(runOfflineCommand(args))
 	}
 	silenceProcessLog()
 	// THE PERSON'S GIT ENVIRONMENT, GONE before any case runs — and only now,

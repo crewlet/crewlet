@@ -46,7 +46,7 @@ const (
 	// has been removed, so its rows are missing state no replay can
 	// supply. Reads and writes both refuse, the node takes its copy of
 	// this domain out of service (its operations go to another data node,
-	// and its seats stay — ADR-0049), and it adopts a peer's snapshot.
+	// and its seats stay — ADR-0072), and it adopts a peer's snapshot.
 	FloorBelow
 
 	// FloorUnknown is the fourth value, and it takes the SAME branch as
@@ -470,7 +470,7 @@ func (h Health) AheadOfLog() bool {
 
 // Healthy reports whether this copy of the domain's log is SOUND — the copy its
 // node may keep serving that DOMAIN's operations from. One that is not goes out
-// of service for that domain alone (ADR-0049): its operations go to the other
+// of service for that domain alone (ADR-0072): its operations go to the other
 // data nodes, every other domain's copy keeps serving, and the node's seats
 // stay, since a copy being wrong is no fault of theirs.
 //

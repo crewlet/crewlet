@@ -71,6 +71,15 @@ func (r *Registry) Register(namespace, externalID, handle string) error {
 	if !org.ValidHandle(handle) {
 		return fmt.Errorf("notify: %q is not a valid handle", handle)
 	}
+	// A HANDLE NAMESPACE HOLDS NO MAPPINGS: its ids are the seats' own
+	// handles ([NewRegistry]), so a registration there is either the
+	// handle again or a second name for a seat that nothing on the
+	// surface ever writes — and a second name would answer before the
+	// handle it contradicts.
+	if r.handles[namespace] {
+		return fmt.Errorf("notify: %s ids are seat handles, so %q cannot be "+
+			"registered for seat %q there", namespace, externalID, handle)
+	}
 	// The seat must EXIST. A mapping onto an unknown handle is inert —
 	// resolution ends at a handle lookup that misses — so without this
 	// check a transport registering against a stale epoch's seat list
@@ -140,11 +149,20 @@ func (r *Registry) Unregister(namespace, externalID, expected string) bool {
 // companion — so a fellow agent's message annotates exactly the way a
 // human's does. See [botSuffix].
 //
+// AN ENGINE SURFACE'S ID IS THE HANDLE: on a namespace [NewRegistry] was
+// handed as one whose ids are seat handles, this is [Registry.ByHandle]. So a
+// person's comment on the engine's own tracker resolves to the seat they
+// write as, exactly as their message on a vendor's chat resolves to the seat
+// their member id is registered for.
+//
 // A miss is ORDINARY, not an error: most senders on a shared channel are
 // not colleagues, and the caller renders them as an outside party.
 func (r *Registry) ByExternalID(transport, externalID string) (Party, bool) {
 	if transport == "" || externalID == "" {
 		return Party{}, false
+	}
+	if r.handles[transport] {
+		return r.ByHandle(externalID)
 	}
 	r.mu.RLock()
 	handle, ok := r.external[transport][externalID]
@@ -162,8 +180,15 @@ func (r *Registry) ByExternalID(transport, externalID string) (Party, bool) {
 // [Registry.ByExternalID], which is what a writer reads to withdraw the id it
 // registered for a seat. Empty when the seat has none there. It is the id an
 // event names the sender by, never an address: a Mattermost person's is a
-// 26-character user id, which no message can mention.
+// 26-character user id, which no message can mention. On a namespace whose ids
+// are seat handles it is the handle, for a seat the registry holds.
 func (r *Registry) ExternalID(namespace, handle string) string {
+	if r.handles[namespace] {
+		if _, ok := r.ByHandle(handle); ok {
+			return handle
+		}
+		return ""
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.reverse[namespace][handle]
@@ -174,10 +199,15 @@ func (r *Registry) ExternalID(namespace, handle string) string {
 // The question a mention filter asks. A comment naming five people on a
 // shared tracker must fan out only to the ones who are seats here — without
 // the check, every outsider mentioned anywhere becomes a delivery attempt.
-// Both namespaces, for the same reason [ByExternalID] consults both.
+// Both namespaces, for the same reason [ByExternalID] consults both, and a
+// handle namespace by the handle, as [ByExternalID] answers it.
 func (r *Registry) Knows(namespace, externalID string) bool {
 	if namespace == "" || externalID == "" {
 		return false
+	}
+	if r.handles[namespace] {
+		_, ok := r.ByHandle(externalID)
+		return ok
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()

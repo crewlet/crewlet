@@ -1,0 +1,94 @@
+# ADR-0081: A repository grant is derived from the chart
+
+- **Status:** accepted
+- **Authority:** `internal/code`
+- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/code.TestAnAgentCannotLoosenAProtection`, `internal/code.TestEveryProtectionControlIsJudged`, `internal/code.TestAnAgentCannotLoosenAGate`, `internal/code.TestAnAgentMayTightenAGate`, `internal/code.TestEveryGateFieldIsJudged`, `internal/code.TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove`, `internal/code.TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn`, `internal/code.TestALifecycleRequestIsDecidedAgainForWhoeverWokeTheTurn`, `internal/code/host.TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/agent/builtin.TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn`, `internal/code.TestAChangeWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/code.TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn`, and the code host fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
+- **Measured:** nothing a figure decides: the grant is a pure function of the chart and the repository row
+- **Cost-when-tried:** not tried here. The alternative — access rows per repository — was rejected on paper: a list of who may push is a second chart that drifts from the first the day a seat moves units
+- **Tag-status:** unreleased
+
+## The decision
+
+What a principal may do on a repository is DERIVED, never stored: a person, who always holds a human seat
+(ADR-0032), holds maintain everywhere and a credential bound to no seat reads (ADR-0078, unchanged); a seat holds the minimum of its tier's cap
+(`role.code.access`: read_only → read, review → review, full_access → maintain; unset → read) and its relation to
+the repository on the chart — the owning unit's effective lead maintains, the owning unit's subtree writes, the
+lead chain above it reads, and every other seat reads only a `visibility: company` repository. A seat owns
+`refs/heads/seats/<handle>/` on every repository it may read when its tier is full_access — under a root of its
+own, never at `refs/heads/<handle>/`, because a handle is a role name's slug and people name branches under
+those (`docs/`, `release/`); `refs/heads/seats` and `refs/heads/seats/<handle>` themselves are nobody's —
+refused `reserved_ref` to every principal and as a repository's `default_branch` — because no ref is created
+beside a directory of its own name (`ref_conflict`: no clone can hold a file and a directory of one name), so a
+branch named `seats` would block every seat's namespace and one named `seats/<x>` the namespace of the seat `x`.
+Both shapes are `gitref`'s (`SeatsRoot`, `ReservedSeatBranch`), the one grammar the decide and the configuration
+read (ADR-0008). The grant is judged by the node that answers or decides, from ITS epoch's chart, through one
+function (`code.GrantOf`); M2's protection rules are judged after it and are never skipped for a grant. A seat's
+PUSH is held to it at the decide, by the repository's committer from its own chart, command by command before
+anything about the ref is read (`not_permitted`, recorded like every verdict on a command); and a seat outside a
+repository's owning unit — its relation below write, so it pushes only into its own namespace there — may fill
+at most half of the repository's refs and bytes (`code.OutsideSeatShare`), so its owners always keep half. A node
+CONFIRMED behind the company's configuration — shed or stuck, never lag alone — judges no seat's grant at all,
+even as the last node left to ask, since the revision it failed to apply may be the one that revoked it: a data
+node answers such a read `behind_config` (the estate's `judgesGrant` declaration, on every operation whose asker
+is a seat), a git node answers it unready and a committer hands a seat's push to the repository's next committer
+(`code.CommitterOptions.Current`), so a current node answers instead, or nobody does, while a person's read and
+push consult no chart and are answered there as before. The window in which a stale chart can still judge is the
+control plane's confirmation of the lag: about a minute after an activation at worst.
+
+A protection binds every seat, a unit's lead included: removing or loosening one is a person's. A seat whose grant
+maintains a repository a tool made may add a protection rule to it or tighten one; a seat's request that removes
+the rule a pattern holds, or opens any control of it — `direct_push` made to admit more (`none` → `persons`),
+`allow_force` or `allow_delete` turned on, its merge gate removed or loosened, and every control a later field of
+the rule adds — is refused `not_permitted` whatever its grant (`code.loosenings`, which weighs a gate field by
+field through `code.MergeGate.LoosenedBy`, so a seat adds a gate to a rule that has none and raises any field of
+one, and only a person lowers one), judged against the rule the repository's rows hold for the pattern inside the
+lifecycle decide's one snapshot, so two requests cannot loosen a rule between them. Where a rule's gate sets
+`owners_approve`, the repository's path owners are whom a merge waits for, so a seat's settings change that takes a
+glob from one, or an owner whole, is a loosening too (`code.gatingOwnersTaken`). A person's request is unaffected,
+and a repository `code.repos` declares takes no tool's request at all.
+
+A seat's read made inside a turn somebody woke is decided AGAIN for whoever woke it — the requester ceiling
+(`authz.DecideWithin`) on a repository's grant. The tool's own row is asked for the requester first, so a turn a
+stranger woke, or a person who may not act in the company now, reads nothing, and a person, who maintains
+everywhere, bounds nothing; a colleague SEAT rides on every read the turn makes (`code.ReadQuery.CeilingSeat`
+and its siblings on the resolve and the read by object id) and is judged by the node that answers, from the same
+chart and row, through one function (`code.JudgeRead`): served only what both seats may read, and refused
+`ErrAboveCeiling`, never `ErrNotPermitted`, where the colleague may not. Never judged where the turn runs: a
+ceiling judged once a turn would keep reading for a colleague an activation had shut out. A tool that reads
+repositories beside a view of its own — `code_status`, the health grant's — holds those reads to the same
+ceiling, its requester decided on the code host's read verb (`code.read`) rather than on its own row, which
+grants a view of the deployment that the ceiling does not bound.
+
+A seat's WRITE made inside a turn somebody woke is decided again for them too (`code.WriteCeiling`), on the
+repository's grant at the relation the write needs, by the node that decides the write and from the same chart
+and row: an engine write by its git node, the seat's grant held to the requester's (`code.Grant.Under`), and a
+lifecycle request by its data node, asked again as the colleague asking it itself. The tool's own row is decided
+for the requester first, and a requester it refuses — a stranger, a person who may not act now — is a ceiling of
+NOBODY rather than a refusal there, because the seat's OWN WORK stays steerable by whoever woke it, as
+`authz.DecideWithin` spares a steerable verb on what an agent owns: a command under its own namespace or in a
+repository it owns, its own scratch repository's create, and a repository it owns edited without being handed on.
+What discloses, hands on or retires a repository — its visibility, its owner, an archive, a delete, a restore, a
+rename — is never steered. A colleague seat bounds every read a write makes as well, and a person bounds nothing.
+A CHANGE's writes carry the same ceiling to the data node that commits the repository, judged once the seat
+itself may make the write: a colleague is held at the ACCESS the write needs (`review` for a review, `read` for
+every other) and never at the relation beyond it, which is the seat's own, so a change's author may ask a seat to
+review it; nobody steers only the seat's own change, an open of its own namespace, and the changes of a
+repository it owns.
+
+## Why the obvious alternative is wrong
+
+Access lists per repository duplicate the chart and drift from it; GitHub's tier as the only vocabulary made the
+native host's one per-seat setting a GitHub field. `visibility` narrows SEATS only: a person and a credential acting
+as no seat read every repository, because a CI token that could not read a unit repository breaks its builds
+and a Tier A token is the deployment's own credential. And maintain alone deciding who changes a protection would
+bind every seat but the one with the most reach: a lead seat steered by what it read could lift `main`'s
+protection and then force it.
+
+## What this does not decide
+
+A box's own grant on top of the seat's (M3 P6), read-side directory access lists (not planned: sensitive code
+goes in its own repository with `visibility: unit`), the review and merge levels' use (M4, M5). Nor a ceiling carried
+past its turn: a colleague a seat asks answers
+in a turn the asking seat woke, and the answer wakes the asking seat in a turn of its own work, so each turn is
+decided for whoever woke it and never for whoever woke the asker — as the artifacts tools' ceiling is — and
+nothing here bounds what a seat already knows, from its memory or a read made in a turn nobody woke.

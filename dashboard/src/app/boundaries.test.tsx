@@ -44,11 +44,11 @@ const expectCaught = (pattern: RegExp) => expectConsole("error", pattern);
 let undo: (() => void)[] = [];
 
 /** The real chunk with one export replaced — what a case breaks. */
-function breakExport(chunk: "spend" | "work", name: string, component: unknown) {
+function breakExport(chunk: "spend" | "worklet", name: string, component: unknown) {
   const real =
     chunk === "spend"
       ? () => import("~/routes/spend/index.ts")
-      : () => import("~/routes/work/index.ts");
+      : () => import("~/routes/worklet/index.ts");
   undo.push(overrideChunkForTest(chunk, async () => ({ ...(await real()), [name]: component })));
 }
 
@@ -205,7 +205,7 @@ describe("a chunk that never arrives", () => {
 describe("a peek that throws", () => {
   test("takes its body down and leaves the rail's close and the screen behind", async () => {
     expectCaught(THROWN);
-    breakExport("work", "ItemPeek", Throws);
+    breakExport("worklet", "ItemPeek", Throws);
     location.hash = `#/settings/spend?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
     await mount();
     expect(await screen.findByText("This preview could not be drawn")).toBeDefined();
@@ -230,7 +230,7 @@ describe("a sidebar section that throws", () => {
       // under the owner their record is kept by, and the tracker's question.
       viewer: {
         login: "ada",
-        grants: ["tracker"],
+        grants: ["worklet"],
         handle: "ada",
         owner: "ada",
         name: "Ada",
@@ -278,13 +278,13 @@ describe("a layer's boundary", () => {
     expect(closed).toBe(1);
   });
 
-  // THE NEW TASK SHEET'S CODE IS THE WORK CHUNK'S, so a sheet opened from a
+  // THE NEW TASK SHEET'S CODE IS THE WORKLET CHUNK'S, so a sheet opened from a
   // tab an upgrade outdated is a chunk that never arrives — and that is the
   // chunk's own sentence and a Reload, not the raw rejection.
   test("a layer whose chunk never came says to reload", () => {
-    expectCaught(/The Work screens could not be loaded/);
+    expectCaught(/The Worklet screens could not be loaded/);
     function ChunkGone(): never {
-      throw new ChunkLoadError("work", new Error("Failed to fetch"));
+      throw new ChunkLoadError("worklet", new Error("Failed to fetch"));
     }
     render(
       <LayerBoundary title="New task" onClose={() => {}}>

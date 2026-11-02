@@ -223,7 +223,9 @@ func TestAFailedLastTurnLeavesTheSeatIdle(t *testing.T) {
 func TestTheStoppedReasonsTakeTheirPrecedence(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
-	s.Apply(env("llm_unavailable", map[string]any{"agent_id": "Lead"}, id("u")))
+	s.Apply(env("seat_provider_parked", map[string]any{
+		"agent_id": "Lead", "provider_keys": []any{"default"}, "retry_at": "2026-06-14T13:00:00Z",
+	}, id("u")))
 	wantState(t, s, "Lead", livestate.ActivityStopped, livestate.StoppedProvider)
 
 	own := meterReport("m-1", 1, map[string]any{
@@ -239,9 +241,14 @@ func TestTheStoppedReasonsTakeTheirPrecedence(t *testing.T) {
 	s.Apply(env("seat_paused", map[string]any{"agent_id": "Lead", "paused_by": "jane"}, id("p")))
 	wantState(t, s, "Lead", livestate.ActivityStopped, livestate.StoppedPaused)
 
-	// And work outranks every stop.
+	// A turn on a seat parked on its models' limit is the park's probe, and
+	// the seat still waits (provider_test.go). Released, work outranks every
+	// other stop.
 	s.Apply(env("agent_turn_started", map[string]any{"agent_id": "Lead", "turn_id": "tn-9"},
 		at("2026-06-14T12:10:00Z"), id("ts")))
+	wantState(t, s, "Lead", livestate.ActivityStopped, livestate.StoppedPaused)
+	s.Apply(env("seat_provider_released", map[string]any{"agent_id": "Lead", "reason": "models changed"},
+		at("2026-06-14T12:10:01Z"), id("rel")))
 	wantState(t, s, "Lead", livestate.ActivityWorking, "")
 }
 

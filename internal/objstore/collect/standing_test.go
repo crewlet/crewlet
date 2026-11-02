@@ -17,7 +17,7 @@ import (
 
 // liveRefs, retiredRefs and derivedRefs are one domain's declared tables, one
 // of each standing — what a domain that retires the objects it replaces, and
-// keeps objects the engine can build again, declares (ADR-0051) — in a
+// keeps objects the engine can build again, declares (ADR-0074) — in a
 // database of the test's own, read through [Sources] exactly as the engine
 // builds the collector's: the fake source the other cases use stands in for
 // the declarations, and so cannot say what a declaration's standing does.
@@ -118,7 +118,7 @@ func (h *standingHarness) unname(ref objstore.ReferenceTable, k objstore.Key) {
 }
 
 // A RETIRED REFERENCE KEEPS ITS OBJECT FROM COLLECTION, for as long as its row
-// stands, and no longer (ADR-0051). The collector's grace dates an object's
+// stands, and no longer (ADR-0074). The collector's grace dates an object's
 // UPLOAD, so a replaced object older than a day would go at the first pass
 // after its live row stopped naming it; a retired row is what keeps it for a
 // reader that has not caught up — and once its domain sweeps the row, the
@@ -159,7 +159,7 @@ func TestARetiredReferenceKeepsItsObjectFromCollection(t *testing.T) {
 	}
 }
 
-// THE AUDIT ASKS ONLY AFTER REQUIRED REFERENCES (ADR-0051). An object a
+// THE AUDIT ASKS ONLY AFTER REQUIRED REFERENCES (ADR-0074). An object a
 // retired row keeps is one the company has let go of, and one a derived row
 // names is one the engine builds again: a store that lost either, or holds it
 // wrong, has lost nothing anybody can miss, so it is never asked after, never
@@ -199,7 +199,7 @@ func TestTheAuditAsksOnlyAfterRequiredReferences(t *testing.T) {
 }
 
 // A STORE MOVE WALKS THE REQUIRED AND THE DERIVED TABLES, AND NEVER A RETIRED
-// ONE (ADR-0051), while the audit walks the Required tables alone: a derived
+// ONE (ADR-0074), while the audit walks the Required tables alone: a derived
 // object left behind by a move is one every node of the moved fleet builds
 // again, and a retired one is one no reader of the moved fleet is left to
 // want. Every reference a move's walk hands on carries its table's standing,
@@ -248,7 +248,7 @@ func TestAStoreMoveWalksTheRequiredAndDerivedTablesAlone(t *testing.T) {
 	}
 }
 
-// A DERIVED REFERENCE IS KEPT, AND NEVER AUDITED (ADR-0051). A derived row
+// A DERIVED REFERENCE IS KEPT, AND NEVER AUDITED (ADR-0074). A derived row
 // names an object the engine can build again from what live rows name, so its
 // object is kept from collection for as long as the row stands, exactly as a
 // live row's is, and goes at the next pass once the row does, with no grace of

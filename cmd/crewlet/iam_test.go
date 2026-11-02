@@ -3,12 +3,18 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A BEARER WRITE PASSES THE NODE'S OWN CROSS-SITE CHECK.
@@ -32,12 +39,12 @@ func TestAnIamWritePassesTheNodesCrossSiteCheck(t *testing.T) {
 	var reached bool
 	var boot config.Bootstrap
 	boot.API.ExternalURL = "https://crewlet.example.com"
-	node := httptest.NewServer(auth.NewCSRF(&boot).Middleware(
+	node := httptest.NewServer(asEngine(auth.NewCSRF(&boot).Middleware(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			reached = true
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"position":"1:1"}`))
-		})))
+			_, _ = w.Write([]byte(`{"outcome":"applied","position":"1:1"}`))
+		}))))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -114,6 +121,57 @@ func TestEveryIamSubcommandIsDispatchedAndAdvertised(t *testing.T) {
 			t.Errorf("the usage names `crewlet iam %s` and runIAM dispatches no "+
 				"such subcommand, so it answers `unknown subcommand`", sub)
 		}
+	}
+}
+
+// THE HELP NAMES THE ONE COMMAND THAT READS NO TOKEN, beside the rule it is the
+// exception to.
+//
+// "Every iam command needs it, reads included" was false for `iam token
+// -login`, which signs in as its caller and never reads CREWLET_API_TOKEN — so
+// a person minting their first token was told to export a credential they did
+// not have yet, by the very help whose later paragraph said -login signs them
+// in. The paragraph stating the rule is read out of the help, and the
+// behaviour it describes is held beside it: an ordinary read with no variable
+// set is refused naming it, and `token -login` with no variable set mints.
+// Mutation: drop the exception from the paragraph and the first half fails;
+// make the -login path build its client from the environment first and the
+// last half fails.
+func TestTheIamHelpNamesTheOneCommandThatReadsNoToken(t *testing.T) {
+	var rule string
+	for _, para := range strings.Split(iamHelp(), "\n\n") {
+		if strings.HasPrefix(para, "Set "+apiTokenEnv+" to authenticate") {
+			rule = strings.Join(strings.Fields(para), " ")
+		}
+	}
+	if rule == "" {
+		t.Fatalf("no paragraph of the iam help says to set %s to "+
+			"authenticate:\n%s", apiTokenEnv, iamHelp())
+	}
+	if !strings.Contains(rule, `"iam token -login"`) {
+		t.Errorf("the paragraph stating the credential rule is %q, which "+
+			"never names `iam token -login`, the one command that reads no "+
+			"token", rule)
+	}
+
+	var out, errs bytes.Buffer
+	err := runIAM(noEnviron, []string{"people", "-config",
+		bootstrapWithKeyring(t, "k1"), "-api", "http://127.0.0.1:1"},
+		nil, &out, &errs)
+	if err == nil || !strings.Contains(err.Error(), apiTokenEnv) {
+		t.Errorf("`iam people` with no %s set answered %v, want a refusal "+
+			"naming the variable, as the help says", apiTokenEnv, err)
+	}
+
+	n := newSelfNode(t)
+	minted, stderr, err := runSelf(t, n, "a long pass phrase\n")
+	if err != nil {
+		t.Fatalf("`iam token -login` with no %s set: %v\n%s", apiTokenEnv,
+			err, stderr)
+	}
+	if !strings.Contains(minted, "cwl_pat_the-value") {
+		t.Errorf("`iam token -login` with no %s set printed no token:\n%s",
+			apiTokenEnv, minted)
 	}
 }
 
@@ -234,7 +292,7 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		method, path, person, auth string
 		body                       map[string]any
 	}
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen.method, seen.path = r.Method, r.URL.Path
 		seen.person = r.URL.Query().Get("person")
 		seen.auth = r.Header.Get("Authorization")
@@ -242,16 +300,17 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"c-1","person":"p-1","token":"cwl_pat_the-value",` +
-			`"grants":["tracker"],` +
+			`"grants":["worklet"],"outcome":"applied","position":"CREWLET_IAM_LOG@0:7",` +
+			`"op_id":"the-mint-key.k0123456789abcdef",` +
 			`"expires_at":"2026-07-01T00:00:00Z"}`))
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
 
 	var out, errs bytes.Buffer
 	if err := run([]string{"iam", "token", "-person", "p-1", "-label", "ci",
-		"-days", "30", "-grants", "tracker",
+		"-days", "30", "-grants", "worklet",
 		"-config", cfg, "-api", node.URL}, &out, &errs); err != nil {
 		t.Fatalf("iam token: %v\n%s", err, errs.String())
 	}
@@ -268,13 +327,13 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		t.Errorf("the body was %v", seen.body)
 	}
 	if grants, _ := seen.body["grants"].([]any); len(grants) != 1 ||
-		grants[0] != "tracker" {
+		grants[0] != "worklet" {
 		t.Errorf("the grants reached the node as %v", seen.body["grants"])
 	}
 	if seen.auth != "Bearer a-tier-a-token" {
 		t.Errorf("authenticated as %q", seen.auth)
 	}
-	for _, want := range []string{"cwl_pat_the-value", "tracker", apiTokenEnv} {
+	for _, want := range []string{"cwl_pat_the-value", "worklet", apiTokenEnv} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output does not carry %q:\n%s", want, out.String())
 		}
@@ -309,10 +368,10 @@ func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
 	}
 	// TRIMMED, AND IN THE ENGINE'S ORDER whatever order it was typed in,
 	// each name once.
-	listed := read(" knowledge , tracker,knowledge ").body()
+	listed := read(" doclet , worklet,doclet ").body()
 	if got := listed["grants"].([]string); !slices.Equal(got,
-		[]string{"tracker", "knowledge"}) {
-		t.Errorf("the list parsed to %v, want tracker, knowledge", got)
+		[]string{"worklet", "doclet"}) {
+		t.Errorf("the list parsed to %v, want worklet, doclet", got)
 	}
 }
 
@@ -320,8 +379,8 @@ func TestStrippingGrantsIsSpeltAndNotImplied(t *testing.T) {
 //
 // Admin includes every app whether or not a row says so, so what this buys is
 // what happens when admin is taken AWAY: a row that listed the apps beside it
-// keeps them, and an administrator stepping down — a `remove_grants: [admin]`
-// from the dashboard, say — goes on using the tracker. A command that sent
+// keeps them, and an administrator stepping down (a `remove_grants: [admin]`
+// from the dashboard, say) goes on using Worklet. A command that sent
 // admin alone would leave that row holding nothing past the overview. So the
 // expansion is the command's, on every subcommand that sends a set, and it
 // reaches the node as the stored list.
@@ -333,7 +392,7 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 	for _, app := range iam.Apps {
 		every = append(every, string(app))
 	}
-	for _, flagged := range []string{"admin", "knowledge,admin", " admin , tracker "} {
+	for _, flagged := range []string{"admin", "doclet,admin", " admin , worklet "} {
 		granted, err := iamGrants(flagged)
 		if err != nil {
 			t.Fatalf("-grants %q: %v", flagged, err)
@@ -346,14 +405,14 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 	// THROUGH THE COMMAND, onto the wire, on each subcommand that sends a
 	// set: an invitation, a create, a grant and a mint.
 	var bodies []map[string]any
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		bodies = append(bodies, body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"id":"x-1","outcome":"applied","position":"p"}`))
-	}))
+	})))
 	defer node.Close()
 	cfg := bootstrapWithKeyring(t, "k1")
 	for _, args := range [][]string{
@@ -374,7 +433,7 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 		t.Fatalf("the node was asked %d times, want 5", len(bodies))
 	}
 	for i, body := range bodies {
-		got := make([]string, 0, 3)
+		got := make([]string, 0, len(every))
 		raw, _ := body["grants"].([]any)
 		for _, g := range raw {
 			s, _ := g.(string)
@@ -394,21 +453,22 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 // every app, which is what a teammate needs to be sent work and to read what
 // the company wrote down. Admin is never a default. A token left without
 // -grants is the opposite case: it sends no field at all, which the node reads
-// as everything the owner holds — the default the help states for each.
+// as everything the owner holds that the minting session may confer — the
+// default the help states for each.
 //
 // Mutation: send no grants on a person's invitation or create and the first
 // two rows fail; send the apps on a mint and the third does.
 func TestAPersonsInviteDefaultsToEveryApp(t *testing.T) {
 	t.Parallel()
 	var bodies []map[string]any
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		bodies = append(bodies, body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"x-1","outcome":"applied","position":"p"}`))
-	}))
+	})))
 	defer node.Close()
 	cfg := bootstrapWithKeyring(t, "k1")
 	for _, args := range [][]string{
@@ -437,7 +497,8 @@ func TestAPersonsInviteDefaultsToEveryApp(t *testing.T) {
 	}
 	if grants, sent := bodies[2]["grants"]; sent {
 		t.Errorf("a mint naming no -grants sent %v, want no field — the node "+
-			"reads its absence as everything the owner holds", grants)
+			"reads its absence as everything the owner holds that the minting "+
+			"session may confer", grants)
 	}
 
 	// AND A GRANT NAMING NOTHING IS REFUSED rather than sent: it is the one
@@ -479,10 +540,10 @@ func TestAMachineCreateNamesItsGrants(t *testing.T) {
 			[]string{"-grants", "or none"}},
 		{[]string{"create", "-kind", "machine", "-login", "ci:release",
 			"-grants", "trackr"},
-			[]string{`"trackr"`, "admin, tracker, knowledge", "none"}},
+			[]string{`"trackr"`, "any of " + iamGrantWords() + ", separated by commas, or none"}},
 		{[]string{"invite", "lead@example.com", "-seat", "lead",
 			"-grants", "billing"},
-			[]string{`"billing"`, "admin, tracker, knowledge"}},
+			[]string{`"billing"`, "any of " + iamGrantWords() + ", separated by commas"}},
 		{[]string{"grant", "p-1", "-grants", "none,admin"},
 			[]string{"none", "on its own"}},
 		{[]string{"suspend", "p-1", "-grants", "admin"},
@@ -518,6 +579,132 @@ func TestAMachineCreateNamesItsGrants(t *testing.T) {
 		t.Errorf("a service account's create naming -grants none answered %v, "+
 			"want it to get as far as reading the config", err)
 	}
+}
+
+// THE COMMAND NEVER SPELLS THE PERMISSION LIST BY HAND.
+//
+// The help, the -grants flag's own line and the refusals that tell an
+// operator what to type all list the permissions, and four of them had the
+// list typed out while [iamGrantWords] — written so that list would follow
+// [iam.AllGrants] — was used by two. A typed copy is right on the day it is
+// written and goes on naming three permissions after a fourth exists, which
+// no behavioural case can see while the copy still matches. So this reads
+// every string this package's source builds, a constant concatenation folded
+// into one sentence, and refuses one that names every permission, or every
+// app, as a list.
+//
+// Mutation: type "admin, worklet and doclet" back into the grant refusal, or
+// "(worklet, doclet)" back into the help, and this fails naming the line.
+func TestTheCLINeverSpellsTheGrantListByHand(t *testing.T) {
+	t.Parallel()
+	// ANY LIST OF THE VOCABULARY'S WORDS, and not only the whole of it: a
+	// list typed when the vocabulary was smaller names fewer words than it
+	// holds now, and a pattern built from today's vocabulary alone passes
+	// exactly that copy -- the defaults, "worklet and doclet", went on
+	// standing in the help after the artifacts app arrived.
+	if len(iam.AllGrants) < 2 {
+		t.Fatal("the permissions are not two words long, so there is no list " +
+			"to spell and this guard asserts nothing")
+	}
+	words := make([]string, 0, len(iam.AllGrants))
+	for _, g := range iam.AllGrants {
+		words = append(words, regexp.QuoteMeta(string(g)))
+	}
+	word := `(?:` + strings.Join(words, "|") + `)`
+	list := regexp.MustCompile(`(?i)\b` + word + `(?:(?:,? (?:and|or) |, )` + word + `)+\b`)
+	vocabulary := regexp.MustCompile(`(?i)\b` + word + `\b`)
+
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := 0
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		read++
+		for _, built := range stringsBuilt(parsed) {
+			text := strings.Join(strings.Fields(built.text), " ")
+			for _, at := range list.FindAllStringIndex(text, -1) {
+				spelled := text[at[0]:at[1]]
+				distinct := map[string]bool{}
+				for _, w := range vocabulary.FindAllString(spelled, -1) {
+					distinct[strings.ToLower(w)] = true
+				}
+				if len(distinct) < 2 {
+					continue
+				}
+				t.Errorf("%s spells the list %q by hand: build it from "+
+					"iamGrantWords or iamAppWords, which follow the "+
+					"engine's own, so a permission a later build adds is "+
+					"named there too", fset.Position(built.pos), spelled)
+			}
+		}
+	}
+	if read == 0 {
+		t.Fatal("no source file was read, so this guard asserts nothing")
+	}
+}
+
+// builtString is one string a source file builds out of literals: a lone
+// literal, or a `+` chain of them folded into one, with a NUL where an operand
+// that is not a literal sits — so a sentence wrapped across lines is read as
+// the sentence it prints, and a word supplied by a call never joins the words
+// either side of it.
+type builtString struct {
+	pos  token.Pos
+	text string
+}
+
+func stringsBuilt(file *ast.File) []builtString {
+	var built []builtString
+	var visit func(ast.Node) bool
+	visit = func(n ast.Node) bool {
+		switch e := n.(type) {
+		case *ast.BasicLit:
+			if s, ok := stringLiteral(e); ok {
+				built = append(built, builtString{e.Pos(), s})
+			}
+			return false
+		case *ast.BinaryExpr:
+			if e.Op != token.ADD {
+				return true
+			}
+			var b strings.Builder
+			literal := false
+			var operand func(ast.Expr)
+			operand = func(x ast.Expr) {
+				x = ast.Unparen(x)
+				if chain, ok := x.(*ast.BinaryExpr); ok && chain.Op == token.ADD {
+					operand(chain.X)
+					operand(chain.Y)
+					return
+				}
+				if s, ok := stringLiteral(x); ok {
+					b.WriteString(s)
+					literal = true
+					return
+				}
+				b.WriteByte(0)
+				ast.Inspect(x, visit)
+			}
+			operand(e.X)
+			operand(e.Y)
+			if literal {
+				built = append(built, builtString{e.Pos(), b.String()})
+			}
+			return false
+		}
+		return true
+	}
+	ast.Inspect(file, visit)
+	return built
 }
 
 // A DIRECTORY NOBODY COULD CHECK IS NOT A CLEAN ONE.
@@ -608,13 +795,24 @@ func TestTheTrailPrintsATokensGestureAsOne(t *testing.T) {
 	}
 }
 
-// A WRITE SAYS WHETHER IT LANDED HERE, read off the answer's outcome.
+// EVERY KEYED WRITE SAYS WHETHER IT LANDED HERE, read off the answer's outcome
+// — an invitation's issue among them.
 //
 // The printer said "applied at" for every 2xx, so a write the node had made
 // durable and not yet applied — a 202, which a read there does not show yet —
-// was reported as applied. Mutation: print "applied" for every success again
-// and the pending case reads as applied.
+// was reported as applied. And `invite` printed its link and nothing else, so
+// an issue this node had not applied read exactly like one the next read here
+// shows, though the usage and cli.md say every write prints its outcome. A
+// link is printed on `pending` too: the record is durable, and it opens on
+// every node that has applied it. Every row of [iamKeyedArgs] is asked, so a
+// keyed write that stops saying where it stands is a row that fails.
+// Mutation: print "applied" for every success again and the pending rows read
+// as applied; drop the line from the invitation's printer and its rows fail;
+// print an invitation's link only on applied and its pending row fails.
 func TestAnIamWriteSaysWhetherItLandedHere(t *testing.T) {
+	t.Parallel()
+	const link = "https://crewlet.example.com/dashboard#/invite/x-1.s3cr3t"
+	cfg := bootstrapWithKeyring(t, "k1")
 	for _, tc := range []struct {
 		status  int
 		outcome string
@@ -622,29 +820,161 @@ func TestAnIamWriteSaysWhetherItLandedHere(t *testing.T) {
 		{http.StatusOK, "applied"},
 		{http.StatusAccepted, "pending"},
 	} {
-		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(tc.status)
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "p-1",
-				"outcome": tc.outcome, "position": "CREWLET_IAM_LOG@0:9",
-				"op_id": "people:update:p-1:k"})
-		}))
-		t.Setenv(apiTokenEnv, "a-tier-a-token")
-		cfg := bootstrapWithKeyring(t, "k1")
-		var out, errs bytes.Buffer
-		err := run([]string{"iam", "suspend", "p-1", "-config", cfg, "-api",
-			node.URL}, &out, &errs)
-		node.Close()
-		if err != nil {
-			t.Fatalf("a %s suspension failed: %v", tc.outcome, err)
+		t.Run(tc.outcome, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeKeyedNode(t)
+			node.status = tc.status
+			node.body = map[string]any{"id": "x-1", "outcome": tc.outcome,
+				"position": "CREWLET_IAM_LOG@0:9", "op_id": "people:update:p-1:k",
+				"url": link}
+			for sub, args := range iamKeyedArgs {
+				var out, errs bytes.Buffer
+				err := runIAM(tokenEnviron("a-tier-a-token"), append(slices.Clone(args),
+					"-config", cfg, "-api", node.server.URL), nil, &out, &errs)
+				if err != nil {
+					t.Errorf("iam %s: a %s write failed: %v", sub, tc.outcome, err)
+					continue
+				}
+				printed := out.String()
+				want := tc.outcome + " at CREWLET_IAM_LOG@0:9 (op people:update:p-1:k)"
+				if !strings.Contains(printed, want) {
+					t.Errorf("a %s iam %s printed %q, want it to say %q", tc.outcome,
+						sub, printed, want)
+				}
+				if tc.outcome == "pending" && strings.Contains(printed, "applied") {
+					t.Errorf("a pending iam %s was reported as applied: %q", sub, printed)
+				}
+				if (sub == "invite" || sub == "create") && !strings.Contains(printed, link) {
+					t.Errorf("a %s iam %s printed no link:\n%s", tc.outcome, sub, printed)
+				}
+			}
+		})
+	}
+}
+
+// iamKeyedArgs is every keyed `crewlet iam` write as an operator types it —
+// one row per subcommand [iamKeyed] names, which the case reading it holds it
+// to, so a keyed write added later is a row before it is a write nobody judged.
+var iamKeyedArgs = map[string][]string{
+	"invite":            {"invite", "sam@example.com", "-seat", "founder"},
+	"create":            {"create", "-email", "sam@example.com", "-seat", "founder"},
+	"bind":              {"bind", "p-1", "sre"},
+	"unbind":            {"unbind", "p-1"},
+	"grant":             {"grant", "p-1", "-grants", "worklet"},
+	"suspend":           {"suspend", "p-1"},
+	"activate":          {"activate", "p-1"},
+	"remove":            {"remove", "p-1"},
+	"revoke":            {"revoke", "p-1"},
+	"revoke-credential": {"revoke-credential", "c-1"},
+	"reset-mfa":         {"reset-mfa", "p-1"},
+	"invalidate-all":    {"invalidate-all"},
+	"cancel-invite":     {"cancel-invite", "inv-1"},
+}
+
+// A 2xx WHOSE OUTCOME THIS BUILD CANNOT READ FAILS, NAMING THE RETRY — on every
+// keyed iam write, as a table and as -json, and before anything of the answer
+// is printed.
+//
+// The node answers its own unknown 503; but a node newer than this command may
+// answer, 2xx, an outcome this build cannot read, and the printer printed it
+// as `outcome "x"` and exited zero — so a script read a write nobody here
+// could vouch for as one that landed, and an invitation's link was handed out
+// for an issue nobody could confirm. It fails as every other keyed write's
+// open outcome does, under the operation the command SENT, and prints nothing:
+// no link, and under -json no document a script reads before the exit status.
+// The failure begins with the write it is about — the subcommand and whom it
+// named — because it reaches a terminal or a log beside every other command's.
+// The control: applied and pending still exit zero on every row. Mutation:
+// drop the judgement from the printer of plain writes, of a create or of an
+// invitation, make it after the -json dump, or name nothing of the write in
+// the failure, and rows fail.
+func TestAnIamWriteWhoseOutcomeThisBuildCannotReadFails(t *testing.T) {
+	t.Parallel()
+	if len(iamKeyedArgs) != len(iamKeyed) {
+		t.Fatalf("the case types %d keyed writes, and iamKeyed names %d",
+			len(iamKeyedArgs), len(iamKeyed))
+	}
+	for sub := range iamKeyed {
+		if _, typed := iamKeyedArgs[sub]; !typed {
+			t.Fatalf("iam %s is keyed and the case types no row for it", sub)
 		}
-		want := tc.outcome + " at CREWLET_IAM_LOG@0:9 (op people:update:p-1:k)"
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("a %s write printed %q, want it to say %q", tc.outcome,
-				out.String(), want)
-		}
-		if tc.outcome == "pending" && strings.Contains(out.String(), "applied") {
-			t.Errorf("a pending write was reported as applied: %q", out.String())
+	}
+	cfg := bootstrapWithKeyring(t, "k1")
+	for _, tc := range []struct {
+		name    string
+		outcome any
+		says    string
+		lands   bool
+	}{
+		{name: "applied", outcome: "applied", lands: true},
+		{name: "pending", outcome: "pending", lands: true},
+		{name: "unknown", outcome: "unknown", says: "could not confirm the write"},
+		{name: "a newer build's", outcome: "deferred",
+			says: `the node answered "deferred", which this build cannot read`},
+		{name: "none at all", outcome: nil, says: "could not confirm the write"},
+	} {
+		for _, asJSON := range []bool{false, true} {
+			name := tc.name
+			if asJSON {
+				name += " as json"
+			}
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				node := newFakeKeyedNode(t)
+				node.status = http.StatusOK
+				node.body = map[string]any{"id": "x-1", "position": "CREWLET_IAM_LOG@0:9",
+					"op_id": "the-scoped-key.k0123456789abcdef",
+					"url":   "https://crewlet.example.com/dashboard#/invite/x-1.s3cr3t"}
+				if tc.outcome != nil {
+					node.body["outcome"] = tc.outcome
+				}
+				for sub, args := range iamKeyedArgs {
+					args = append(slices.Clone(args), "-config", cfg, "-api",
+						node.server.URL)
+					if asJSON {
+						args = append(args, "-json")
+					}
+					var out, errs bytes.Buffer
+					err := runIAM(tokenEnviron("a-tier-a-token"), args, nil, &out, &errs)
+					sent, _ := node.sent()
+					if tc.lands {
+						if err != nil {
+							t.Errorf("iam %s: a %s write failed: %v", sub, tc.name, err)
+						}
+						continue
+					}
+					if err == nil {
+						t.Errorf("iam %s: a 2xx carrying %s outcome exited zero:\n%s",
+							sub, tc.name, out.String())
+						continue
+					}
+					if sent == "" {
+						t.Errorf("iam %s sent no operation key, so no retry it names "+
+							"is this write's", sub)
+					}
+					named := sub
+					if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+						named += " " + args[1]
+					}
+					if !strings.HasPrefix(err.Error(), named+": ") {
+						t.Errorf("iam %s answered %q, want it to begin with the write "+
+							"it is about, %q", sub, err, named)
+					}
+					if !strings.Contains(err.Error(), tc.says) ||
+						!strings.Contains(err.Error(), "-op-id "+sent) {
+						t.Errorf("iam %s answered %q, want it to say %q and name the "+
+							"retry under %s", sub, err, tc.says, sent)
+					}
+					if strings.Contains(err.Error(), "-op-id the-scoped-key") {
+						t.Errorf("iam %s named the echoed id rather than the one it "+
+							"sent: %v", sub, err)
+					}
+					if out.Len() != 0 {
+						t.Errorf("iam %s printed what nobody can confirm:\n%s", sub,
+							out.String())
+					}
+				}
+			})
 		}
 	}
 }
@@ -665,12 +995,12 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	// holds the one sent back to that rule before anything is sent.
 	op := statelog.NewOpID(time.Now(), "")
 	var keys []string
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		keys = append(keys, r.Header.Get("Idempotency-Key"))
 		httpjson.UnknownOutcome(w, 2, op, false, httpjson.Detail{
 			"detail": "this node cannot establish what happened to this change",
 			"landed": []string{"seat"}})
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -681,7 +1011,7 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown write was reported as a success")
 	}
-	for _, want := range []string{"-idempotency-key " + op,
+	for _, want := range []string{"-op-id " + op,
 		"these changes were saved before it: seat",
 		"couldn't confirm whether this change was saved"} {
 		if !strings.Contains(err.Error(), want) {
@@ -692,11 +1022,15 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	if strings.Contains(err.Error(), "another node") {
 		t.Errorf("an unknown this node can settle was sent elsewhere: %v", err)
 	}
-	_ = run([]string{"iam", "bind", "p-1", "sre", "-idempotency-key",
+	_ = run([]string{"iam", "bind", "p-1", "sre", "-op-id",
 		op, "-config", cfg, "-api", node.URL}, &out, &errs)
-	if len(keys) != 2 || keys[0] != "" || keys[1] != op {
-		t.Errorf("the node saw keys %q, want none and then the retried op id",
-			keys)
+	if len(keys) != 2 || keys[1] != op {
+		t.Fatalf("the node saw keys %q, want the first attempt's and then the "+
+			"retried op id", keys)
+	}
+	if _, minted := statelog.OpMintedAt(keys[0]); !minted || keys[0] == op {
+		t.Errorf("the first attempt was sent under %q, want an operation this "+
+			"command minted before it asked", keys[0])
 	}
 
 	// A KEY ON A COMMAND THAT READS NONE is refused before anything is
@@ -706,9 +1040,9 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 		{"iam", "token", "-person", "svc-1"},
 		{"iam", "show", "p-1"},
 	} {
-		err := run(append(args, "-idempotency-key", "k", "-config", cfg,
+		err := run(append(args, "-op-id", "k", "-config", cfg,
 			"-api", node.URL), &out, &errs)
-		if err == nil || !strings.Contains(err.Error(), "idempotency-key") {
+		if err == nil || !strings.Contains(err.Error(), "-op-id") {
 			t.Errorf("%v with a key answered %v, want it refused naming the flag",
 				args, err)
 		}
@@ -719,10 +1053,10 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 
 	// THE CONTROL: a 503 that wrote nothing carries the op id too, and is
 	// not said to have maybe landed.
-	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	refused := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, 0, httpjson.Detail{
 			"detail": "the log is full", "op_id": op})
-	}))
+	})))
 	defer refused.Close()
 	err = run([]string{"iam", "bind", "p-1", "sre", "-config", cfg, "-api",
 		refused.URL}, &out, &errs)
@@ -731,19 +1065,241 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	}
 }
 
+// AN IAM WRITE THE NODE NEVER ANSWERED NAMES THE OPERATION IT WAS SENT UNDER.
+//
+// A write whose answer was lost — the connection dropped, or something in
+// front of the node answered in its place — may well have landed, and the key
+// it was sent under is the only handle on it. Left to the node to mint, that
+// key was lost with the answer, so the only retry an operator could run was a
+// fresh operation: a second invitation, or a create the first attempt's person
+// refuses. So every write whose route reads a key is sent under one minted
+// before it asks ([operationFor]) — a pasted one trimmed and sent as given —
+// and a lost answer names it. A read, and a mint whose route reads no key,
+// are offered no retry under one. Mutation: send no key until the operator
+// names one, drop the retry from a lost answer or from a proxy's, or offer it
+// on a read, and this fails.
+func TestAnIamWriteTheNodeNeverAnsweredNamesTheOperationItWasSentUnder(t *testing.T) {
+	var mu sync.Mutex
+	var keys []string
+	proxied := false
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		viaProxy := proxied
+		mu.Unlock()
+		if viaProxy {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusGatewayTimeout)
+			_, _ = w.Write([]byte("<html><title>504 Gateway Time-out</title></html>"))
+			return
+		}
+		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer node.Close()
+	t.Setenv(apiTokenEnv, "a-tier-a-token")
+	cfg := bootstrapWithKeyring(t, "k1")
+	last := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		if len(keys) == 0 {
+			return ""
+		}
+		return keys[len(keys)-1]
+	}
+	var out, errs bytes.Buffer
+
+	for _, args := range [][]string{
+		{"grant", "p-1", "-grants", "worklet"},
+		{"invite", "sam@example.com", "-seat", "founder"},
+	} {
+		err := run(append(append([]string{"iam"}, args...), "-config", cfg,
+			"-api", node.URL), &out, &errs)
+		key := last()
+		if _, minted := statelog.OpMintedAt(key); !minted {
+			t.Fatalf("iam %s was sent under %q, which no ledger could vouch for", args[0],
+				key)
+		}
+		if err == nil || !strings.Contains(err.Error(), "-op-id "+key) ||
+			!strings.Contains(err.Error(), "whether the "+args[0]+" landed is unknown") {
+			t.Errorf("an unanswered iam %s reads %v, want the retry under %s", args[0],
+				err, key)
+		}
+	}
+
+	mu.Lock()
+	proxied = true
+	mu.Unlock()
+	err := run([]string{"iam", "suspend", "p-1", "-config", cfg, "-api", node.URL},
+		&out, &errs)
+	if key := last(); err == nil || !strings.Contains(err.Error(), "-op-id "+key) {
+		t.Errorf("a proxy's 504 to iam suspend reads %v, want the retry under %s",
+			err, key)
+	}
+	pasted := statelog.NewOpID(time.Now(), "earlier")
+	_ = run([]string{"iam", "suspend", "p-1", "-op-id", pasted + "\n", "-config", cfg,
+		"-api", node.URL}, &out, &errs)
+	if key := last(); key != pasted {
+		t.Errorf("a pasted -op-id was sent as %q, want %q", key, pasted)
+	}
+	mu.Lock()
+	proxied = false
+	mu.Unlock()
+
+	for _, args := range [][]string{{"people"}, {"token", "-person", "svc-1"}} {
+		err := run(append(append([]string{"iam"}, args...), "-config", cfg,
+			"-api", node.URL), &out, &errs)
+		if err == nil || strings.Contains(err.Error(), "-op-id") || last() != "" {
+			t.Errorf("an unanswered iam %s reads %v under the key %q, want no "+
+				"key and no retry under one", args[0], err, last())
+		}
+	}
+}
+
+// A MINT AND A RESET LINK SAY WHERE THEY STAND, AND ONE NOBODY CAN CONFIRM IS
+// RUN AGAIN — never retried under a key, and never shown.
+//
+// `token` and `reset-password` printed their value and nothing of the outcome,
+// though every write here says where it stands; and a 2xx carrying an outcome
+// this build cannot read, or none, printed the value and exited zero. Their
+// routes read no key and the command refuses -op-id on both, so such an answer
+// is finished as the node's own unknown for either is — run again, as a new
+// one, with the op id said for the trail — and nothing of it is shown: a token
+// or a link nobody can confirm is one the node itself hands out to nobody.
+// Every path that mints is asked: a service account's under the bearer, and
+// your own under the session `-login` opens — each as a table and as -json,
+// where a document printed beside a failure is one a script reads before the
+// exit status. A token's value stays the table's first line, alone, with the
+// line saying where it stands after it, so what took the value from that line
+// still takes the value; and a failure begins with the write it is about.
+// Mutation: drop the judgement from either printer or make it after the -json
+// dump, prescribe the keyed retry for a write no key names, drop the op id
+// from the sentence, drop the line from either printer, print a token's line
+// before its value, or name nothing of the write in the failure, and rows
+// fail.
+func TestAMintAndAResetLinkSayWhereTheyStand(t *testing.T) {
+	t.Parallel()
+	const (
+		person = "0192f00d-0000-7000-8000-0000000000bb"
+		token  = "cwl_pat_the-value"
+		link   = "https://crewlet.example.com/dashboard#/reset/c-1.s3cr3t"
+		op     = "the-mint-key.k0123456789abcdef"
+	)
+	cfg := bootstrapWithKeyring(t, "k1")
+	for _, tc := range []struct {
+		name    string
+		outcome any
+		lands   bool
+		says    string
+	}{
+		{name: "applied", outcome: "applied", lands: true},
+		{name: "pending", outcome: "pending", lands: true},
+		{name: "unknown", outcome: "unknown", says: "could not confirm the write"},
+		{name: "a newer build's", outcome: "deferred",
+			says: `the node answered "deferred", which this build cannot read`},
+		{name: "none at all", outcome: nil, says: "could not confirm the write"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeKeyedNode(t)
+			node.status = http.StatusCreated
+			node.body = map[string]any{"id": person, "person": "svc-1", "token": token,
+				"url": link, "position": "CREWLET_IAM_LOG@0:7", "op_id": op}
+			if tc.outcome != nil {
+				node.body["outcome"] = tc.outcome
+			}
+			self := newSelfNode(t)
+			self.mintOutcome = tc.outcome
+			bearer := func(args ...string) func(...string) (string, error) {
+				return func(flags ...string) (string, error) {
+					var out, errs bytes.Buffer
+					err := runIAM(tokenEnviron("a-tier-a-token"),
+						append(append(slices.Clone(args), flags...), "-config", cfg,
+							"-api", node.server.URL), nil, &out, &errs)
+					return out.String(), err
+				}
+			}
+			for _, asJSON := range []bool{false, true} {
+				var flags []string
+				if asJSON {
+					flags = []string{"-json"}
+				}
+				for _, write := range []struct {
+					what, value, again, names string
+					run                       func(...string) (string, error)
+				}{
+					{"token -person", token, "Just run it again", "token: ",
+						bearer("token", "-person", "svc-1")},
+					{"token -login", token, "Just run it again", "token: ",
+						func(flags ...string) (string, error) {
+							out, _, err := runSelf(t, self, "a long pass phrase\n", flags...)
+							return out, err
+						}},
+					{"reset-password", link, "the new link replaces the old one",
+						"reset-password " + person + ": ",
+						bearer("reset-password", person)},
+				} {
+					what := strings.Join(append([]string{write.what}, flags...), " ")
+					printed, err := write.run(flags...)
+					if tc.lands {
+						// The line is the table's; a document carries the
+						// outcome as a field.
+						want := tc.name + " at CREWLET_IAM_LOG@0:7 (op " + op + ")"
+						if err != nil || !strings.Contains(printed, write.value) ||
+							(!asJSON && !strings.Contains(printed, want)) {
+							t.Errorf("a %s iam %s answered %v and printed\n%s\nwant %q "+
+								"and its value", tc.name, what, err, printed, want)
+						}
+						if first, _, _ := strings.Cut(printed, "\n"); !asJSON &&
+							write.value == token && first != token {
+							t.Errorf("a %s iam %s printed %q as its first line, want "+
+								"the value alone:\n%s", tc.name, what, first, printed)
+						}
+						continue
+					}
+					if err == nil {
+						t.Errorf("iam %s: a 2xx carrying %s outcome exited zero:\n%s",
+							what, tc.name, printed)
+						continue
+					}
+					if !strings.HasPrefix(err.Error(), write.names) {
+						t.Errorf("iam %s answered %q, want it to begin with the write "+
+							"it is about, %q", what, err, write.names)
+					}
+					for _, want := range []string{tc.says, write.again, "(op " + op + ")"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Errorf("iam %s answered %q, want it to say %q", what, err,
+								want)
+						}
+					}
+					if strings.Contains(err.Error(), "again with -op-id") {
+						t.Errorf("iam %s prescribes a retry under a key its route "+
+							"never reads: %v", what, err)
+					}
+					if printed != "" {
+						t.Errorf("iam %s printed what nobody can confirm:\n%s", what,
+							printed)
+					}
+				}
+			}
+		})
+	}
+}
+
 // AN UNKNOWN MINT IS RETRIED AS A NEW MINT, NEVER UNDER A KEY.
 //
 // A mint's route reads no Idempotency-Key and this command refuses the flag on
 // `token`, so the retry every other unknown prescribes here — the same command
-// with -idempotency-key — sent an operator to a flag they would be refused.
+// with -op-id — sent an operator to a flag they would be refused.
 // The node's own sentence says to mint again; the op id is named for the
 // trail. Mutation: prescribe the key for every 503 again and this goes red.
 func TestAnUnknownMintIsNotRetriedUnderAKey(t *testing.T) {
 	op := statelog.NewOpID(time.Now(), "")
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		httpjson.UnknownOutcome(w, 2, op, false, httpjson.Detail{
 			"detail": "no token was issued: mint again for one you hold"})
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -760,7 +1316,7 @@ func TestAnUnknownMintIsNotRetriedUnderAKey(t *testing.T) {
 			t.Errorf("the refusal %q does not say %q", err, want)
 		}
 	}
-	if strings.Contains(err.Error(), "-idempotency-key") {
+	if strings.Contains(err.Error(), "-op-id") {
 		t.Errorf("an unknown mint prescribes a flag `iam token` refuses: %v", err)
 	}
 }
@@ -774,14 +1330,14 @@ func TestAnUnknownMintIsNotRetriedUnderAKey(t *testing.T) {
 // and the advice names no other node.
 func TestAnUnvouchedIamWriteIsRetriedThroughAnotherNode(t *testing.T) {
 	op := statelog.NewOpID(time.Now(), "")
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "unavailable",
 			"detail":    "this node's operation ledger cannot vouch for this change",
 			"op_id":     op,
 			"unvouched": true})
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -793,7 +1349,7 @@ func TestAnUnvouchedIamWriteIsRetriedThroughAnotherNode(t *testing.T) {
 		t.Fatal("an unvouched write was reported as a success")
 	}
 	for _, want := range []string{"another node with -api",
-		"-idempotency-key " + op, "Don't use a new key"} {
+		"-op-id " + op, "Don't use a new id"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not say %q", err, want)
 		}
@@ -806,18 +1362,18 @@ func TestAnUnvouchedIamWriteIsRetriedThroughAnotherNode(t *testing.T) {
 // and the node is asked.
 func TestAnIamKeyTheEngineNeverMintedIsRefusedBeforeItIsSent(t *testing.T) {
 	var asked bool
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		asked = true
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
 
 	var out, errs bytes.Buffer
-	err := run([]string{"iam", "suspend", "p-1", "-idempotency-key",
+	err := run([]string{"iam", "suspend", "p-1", "-op-id",
 		"people:update:p-1:k7", "-config", cfg, "-api", node.URL}, &out, &errs)
-	if err == nil || !strings.Contains(err.Error(), "-idempotency-key") {
+	if err == nil || !strings.Contains(err.Error(), "-op-id") {
 		t.Fatalf("a hand-made key answered %v, want a refusal naming the flag", err)
 	}
 	if asked {
@@ -846,7 +1402,7 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 	// the retry the create prints is one this command accepts, which a
 	// hand-written `op-1` is not.
 	personOp, machineOp := statelog.NewOpID(time.Now(), ""), statelog.NewOpID(time.Now(), "")
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		asked = append(asked, r.Method+" "+r.URL.Path)
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -870,7 +1426,7 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 				`"expires_at":"2026-06-21T12:00:00Z",` +
 				`"detail":"a retry under the same Idempotency-Key hands back this same link"}`))
 		}
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -912,15 +1468,15 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 	for _, want := range []string{"p-1", "login lead, on seat platform-lead",
 		"applied at p (op " + personOp + ")", "password link for p-1",
 		"https://crewlet.example.com/dashboard#/reset/c-1.f1rst",
-		"shown once", "-idempotency-key " + personOp} {
+		"shown once", "-op-id " + personOp} {
 		if !strings.Contains(printed, want) {
 			t.Errorf("the person's create printed no %q:\n%s", want, printed)
 		}
 	}
-	// THE PRINTED RETRY RUNS: the key after -idempotency-key is one the
+	// THE PRINTED RETRY RUNS: the key after -op-id is one the
 	// command's own check admits, so the retry is not refused before it is
 	// sent.
-	_, after, _ := strings.Cut(printed, "-idempotency-key ")
+	_, after, _ := strings.Cut(printed, "-op-id ")
 	if key, _, _ := strings.Cut(strings.TrimSpace(after), " "); statelog.CheckCallerOpID(
 		strings.Trim(key, "`'\".,;")) != nil {
 		t.Errorf("the create printed a retry under %q, which the command refuses", key)
@@ -961,7 +1517,7 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 	}
 
 	// AND NOWHERE ELSE.
-	if _, err = cli("grant", "p-1", "-grants", "tracker", "-seat",
+	if _, err = cli("grant", "p-1", "-grants", "worklet", "-seat",
 		"platform-lead"); err == nil || !strings.Contains(err.Error(), "iam bind") {
 		t.Errorf("a grant given -seat answered %v, want a refusal naming `iam bind`",
 			err)
@@ -1024,17 +1580,17 @@ func TestACreateSaysWhatBecameOfItsLink(t *testing.T) {
 // HANDS BACK THE LINK.
 //
 // A person's first password link is derived from the operation, so the retry
-// an unknown answer prescribes — the same command with -idempotency-key — is
+// an unknown answer prescribes — the same command with -op-id — is
 // one that can hand the link back: the command has to name it, send it, and
 // print what the retry answers. Mutation: drop create from the keyed
 // subcommands and the retry is refused before it is sent.
 func TestAnUnknownCreateIsRetriedUnderItsKeyForTheSameLink(t *testing.T) {
 	op := statelog.NewOpID(time.Now(), "")
 	var keys []string
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("Idempotency-Key")
 		keys = append(keys, key)
-		if key == "" {
+		if key != op {
 			httpjson.UnknownOutcome(w, 2, op, false, httpjson.Detail{
 				"detail": "this node cannot establish what happened to this change",
 				"id":     "p-1"})
@@ -1047,7 +1603,7 @@ func TestAnUnknownCreateIsRetriedUnderItsKeyForTheSameLink(t *testing.T) {
 			"outcome": "applied", "position": "x", "op_id": op,
 			"url":        "https://crewlet.example.com/dashboard#/reset/c-1.same",
 			"expires_at": "2026-06-21T12:00:00Z"})
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -1056,15 +1612,16 @@ func TestAnUnknownCreateIsRetriedUnderItsKeyForTheSameLink(t *testing.T) {
 
 	var out, errs bytes.Buffer
 	err := run(args, &out, &errs)
-	if err == nil || !strings.Contains(err.Error(), "-idempotency-key "+op) {
+	if err == nil || !strings.Contains(err.Error(), "-op-id "+op) {
 		t.Fatalf("an unknown create answered %v, want the retry named", err)
 	}
 	out.Reset()
-	if err := run(append(args, "-idempotency-key", op), &out, &errs); err != nil {
+	if err := run(append(args, "-op-id", op), &out, &errs); err != nil {
 		t.Fatalf("the retry under the key: %v", err)
 	}
-	if len(keys) != 2 || keys[1] != op {
-		t.Errorf("the node saw keys %q, want none and then %s", keys, op)
+	if len(keys) != 2 || keys[0] == "" || keys[1] != op {
+		t.Errorf("the node saw keys %q, want the first attempt's own and then %s",
+			keys, op)
 	}
 	if !strings.Contains(out.String(), "#/reset/c-1.same") {
 		t.Errorf("the retry printed no link:\n%s", out.String())
@@ -1112,11 +1669,11 @@ func TestARefusalAboutASeatNamesTheCommandThatClearsIt(t *testing.T) {
 			[]string{"crewlet iam seats -unheld"}, []string{"iam bind"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(tc.status)
 				_ = json.NewEncoder(w).Encode(tc.answer)
-			}))
+			})))
 			defer node.Close()
 			t.Setenv(apiTokenEnv, "a-tier-a-token")
 			cfg := bootstrapWithKeyring(t, "k1")
@@ -1162,7 +1719,7 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 	// fullFails makes the unfiltered listing a 503, for the -unheld case
 	// whose count could not be read.
 	fullFails := false
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		queries = append(queries, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Query().Get("unheld") == "true" {
@@ -1175,7 +1732,7 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 			return
 		}
 		_, _ = w.Write([]byte(answer))
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -1264,7 +1821,9 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 	}
 	fullFails = false
 
-	// A COMPANY THAT DECLARES NO HUMAN SEAT says so, with -unheld or without.
+	// A COMPANY THAT DECLARES NO HUMAN SEAT says so, with -unheld or without,
+	// and sends the reader to the builder by the name the dashboard draws it
+	// under: it has no Agents item, so a line naming one leads nowhere.
 	answer = `{"seats":[]}`
 	for _, args := range [][]string{{"seats"}, {"seats", "-unheld"}} {
 		none, err := cli(args...)
@@ -1274,6 +1833,11 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 		if !strings.Contains(none, "the company has no human seats") ||
 			strings.Contains(none, "no vacant") {
 			t.Errorf("iam %v over no human seat printed %q", args, none)
+		}
+		if !strings.Contains(none, "Org chart › Edit org") ||
+			strings.Contains(none, "Agents ›") {
+			t.Errorf("iam %v over no human seat named the builder as %q, "+
+				"want Org chart › Edit org", args, none)
 		}
 	}
 
@@ -1305,10 +1869,10 @@ func TestIamSeatsNamesAMaskedHolderRatherThanReadingItVacant(t *testing.T) {
 		`{"handle":"c","name":"C","holder":{"kind":"person"}},` +
 		`{"handle":"d","name":"D","holder":{"name":"CI","kind":"machine"}},` +
 		`{"handle":"v","name":"V"}]}`
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(answer))
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -1373,11 +1937,11 @@ func TestAListingsMoreLineIsACommandThatRuns(t *testing.T) {
 			"0192f00d-0000-7000-8000-0000000000cc"},
 	} {
 		var asked []url.Values
-		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			asked = append(asked, r.URL.Query())
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(tc.answer))
-		}))
+		})))
 		t.Setenv(apiTokenEnv, "a-tier-a-token")
 		cfg := bootstrapWithKeyring(t, "k1")
 		var out, errs bytes.Buffer
@@ -1434,6 +1998,26 @@ func TestANextPageLineQuotesWhatAShellWouldSplit(t *testing.T) {
 	} {
 		if got := shellWord(value); got != want {
 			t.Errorf("shellWord(%q) = %s, want %s", value, got, want)
+		}
+	}
+}
+
+// THE FLAG'S NAMES ARE A LIST READ AS ONE, its last joined by the sentence's
+// own word and every name quoted as the value typed beside it is: "a, b, c,
+// comma-separated, or none" read "comma-separated" as a fourth member, and the
+// private join that fixed it left every name unquoted. Mutation: join the
+// names by hand again in iamGrantWords and this fails.
+func TestThePermissionListReadsAsAList(t *testing.T) {
+	t.Parallel()
+	if got, want := iamGrantWords(), words.Or(iam.AllGrants); got != want {
+		t.Errorf("the permissions read %q, want %q", got, want)
+	}
+	if got, want := iamAppWords(), words.And(iam.Apps); got != want {
+		t.Errorf("the apps read %q, want %q", got, want)
+	}
+	for _, g := range iam.AllGrants {
+		if !strings.Contains(iamGrantWords(), strconv.Quote(string(g))) {
+			t.Errorf("the permissions do not name %q", g)
 		}
 	}
 }

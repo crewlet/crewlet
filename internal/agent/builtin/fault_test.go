@@ -27,7 +27,8 @@ import (
 // screen showed the same path under "try again in a moment".
 //
 // The control beside it is a read the STATE LOG refused: a condition waiting
-// clears, which keeps `unavailable`, its own words and the hint it derived.
+// clears, which keeps `unavailable`, the hint it derived and the state log's
+// words for its code — never its detail, which is the log's too.
 //
 // NOT PARALLEL: it reads the process's log, which [logging.Configure] owns,
 // and Go resumes every parallel test only after the sequential ones end.
@@ -40,7 +41,7 @@ func TestAStoreFaultInAReadToolIsAFault(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
 
-	disk := errors.New("tracker: read ENG-1: open /var/lib/crewlet/replicated.db: " +
+	disk := errors.New("worklet: read ENG-1: open /var/lib/crewlet/replicated.db: " +
 		"disk I/O error")
 	trk := newFakeTracker()
 	trk.readErr = disk
@@ -78,9 +79,13 @@ func TestAStoreFaultInAReadToolIsAFault(t *testing.T) {
 	if hint := statelog.RetryAfter(got.Cause, 0); hint != 9*time.Second {
 		t.Errorf("the refusal's hint reads %s through the result, want its own 9s", hint)
 	}
-	if !strings.Contains(got.Output, "40 records behind") || !strings.Contains(got.Output, "Try again") {
+	if !strings.Contains(got.Output, "hasn't caught up") || !strings.Contains(got.Output, "Try again") {
 		t.Errorf("a condition's sentence %q does not say what it is and that a "+
 			"retry clears it", got.Output)
+	}
+	if strings.Contains(got.Output, "40 records behind") || strings.Contains(got.Output, "statelog") {
+		t.Errorf("a condition's sentence %q carries the refusal's own text, which "+
+			"is the node's log's", got.Output)
 	}
 }
 
@@ -110,12 +115,12 @@ func TestABrokerBlipAndABusyStoreAreConditions(t *testing.T) {
 	}
 
 	// THE STORE'S GIVE-UP, wrapped the way the store wraps it.
-	trk.writeErr = fmt.Errorf("tracker: update ENG-1: %w",
+	trk.writeErr = fmt.Errorf("worklet: update ENG-1: %w",
 		fmt.Errorf("%w: %w", store.ErrBusy, locked))
 	got := update()
 	assertCondition(t, "a write the store was too busy to take", got, store.ErrBusy, "turso")
 
-	trk.writeErr = fmt.Errorf("tracker: update ENG-1: %w", locked)
+	trk.writeErr = fmt.Errorf("worklet: update ENG-1: %w", locked)
 	if got := update(); tools.RefusalOf(got) != tools.RefusalInternalError {
 		t.Errorf("a lock error the store did not mark busy answered %s (%q); the "+
 			"store marks exactly the give-up a wait clears, and words are not a mark",

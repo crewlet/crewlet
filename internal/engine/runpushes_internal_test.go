@@ -106,8 +106,8 @@ func cmdNG(ref, from, to string) code.Command {
 }
 
 // A RUN GIVEN ITS MOST REPOSITORIES HAS ITS PUSHES READ WHOLE: the bound a
-// run's repositories are admitted to — run_sandbox's `repos` and the launch's
-// grants, sandbox.MaxRunRepos — never passes the bound a `run_pushes` read may
+// run's repositories are admitted to — the job's `code_checkout` grants
+// on its row, sandbox.MaxRunRepos — never passes the bound a `run_pushes` read may
 // name, code.MaxRunRepos, which the code host refuses a read past. The two are
 // spelled in two packages that do not import each other, and a raise of the
 // first alone would refuse the "what it pushed" read of every collected run

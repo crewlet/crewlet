@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A REANCHOR'S AUTHOR READS ALIKE ON EVERY LOG: the name bare, its kind in a
@@ -119,19 +119,19 @@ func TestAGenerationRecordNamesItsAuthorAsEveryLogDoes(t *testing.T) {
 			}
 
 			// AS THE OTHER LOGS NAME THE SAME PARTY.
-			pagesRecord, _, err := pages.GenerationRecord{}.GenerationRecord(facts)
+			pagesRecord, _, err := doclet.GenerationRecord{}.GenerationRecord(facts)
 			if err != nil {
 				t.Fatalf("the knowledge base's record: %v", err)
 			}
-			pagesDecoded, err := pages.Decode(pagesRecord.Payload)
+			pagesDecoded, err := doclet.Decode(pagesRecord.Payload)
 			if err != nil {
 				t.Fatalf("decode the knowledge base's record: %v", err)
 			}
-			trackerRecord, _, err := tracker.GenerationRecord{}.GenerationRecord(facts)
+			trackerRecord, _, err := worklet.GenerationRecord{}.GenerationRecord(facts)
 			if err != nil {
 				t.Fatalf("the tracker's record: %v", err)
 			}
-			trackerDecoded, err := tracker.Decode(trackerRecord.Payload)
+			trackerDecoded, err := worklet.Decode(trackerRecord.Payload)
 			if err != nil {
 				t.Fatalf("decode the tracker's record: %v", err)
 			}

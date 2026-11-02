@@ -2,13 +2,18 @@ package cliagent
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // The cases here hold the PENDING LOGIN: a `crewlet llm login` whose export
@@ -249,9 +254,8 @@ func TestAPendingLoginOutranksAWriteThatLandedWhileItRan(t *testing.T) {
 	// wrote does not matter here, only that it came before this login ended.
 	p.env = fakeChildEnv(map[string]string{
 		"FAKE_STORE": "1", "FAKE_LOGIN_KEY": "k-pending", "FAKE_STORE_EXPORT_FAIL_ONCE": marker,
-		"FAKE_MIDRUN_VERB": "store-login",
-		"FAKE_MIDRUN_PATH": filepath.Join(p.ws.Root(), loginEpochFile),
-		"FAKE_MIDRUN_BODY": "7\n",
+		"FAKE_MIDRUN_VERB":   "store-login",
+		"FAKE_MIDRUN_WRITES": midrun(t, map[string]string{filepath.Join(p.ws.Root(), loginEpochFile): "7\n"}),
 	})
 	if err := p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
 		t.Fatal("a login whose export failed was reported as written")
@@ -265,6 +269,211 @@ func TestAPendingLoginOutranksAWriteThatLandedWhileItRan(t *testing.T) {
 	}
 }
 
+// A PENDING LOGIN IS ORDERED UNDER THE SHARED LOGIN'S LOCK. An operator's
+// write — here `-from-host`'s steps, made by hand so the order can be stopped
+// part way — moves the epoch and then writes, in one hold of the lock. A login
+// whose carry failed inside that hold, between the two, read the moved epoch
+// without the lock: it was ordered after a write that landed after it
+// finished, and the next command carried it out over the human's login. Under
+// the lock the read cannot land there: it is refused (the record keeps the
+// epoch read with the seed, and the operator's login stands) or waits the hold
+// out (the login is ordered after it, as its own carry, waiting the same hold
+// out, would have been written over it). That a login command whose carry
+// failed orders itself through this read at all is
+// [TestASignInWhoseCarryFailsIsOrderedUnderTheSharedLock]'s.
+//
+// Mutation: read the epoch without the lock, and the first case carries the
+// sign-in out over the human's login; give up on a lock held at all rather
+// than wait for it, and the second keeps the human's login over a sign-in
+// that finished after it.
+func TestAPendingLoginIsOrderedUnderTheSharedLock(t *testing.T) {
+	t.Parallel()
+	token := `{"token":"signed-in"}`
+	signedIn := map[string]string{"auth.json": token, "config.toml": twoFileLogin("before")["config.toml"]}
+	for name, c := range map[string]struct {
+		// order records the sign-in's place while the operator's hold
+		// stands, the epoch moved and its write not yet made, and hands
+		// back what to wait on once the hold has ended.
+		order     func(t *testing.T, p *Provider, record string, gen generation) func()
+		wantAfter uint64
+		want      map[string]string
+	}{
+		"its read meets the operator's write part way": {
+			order: func(t *testing.T, p *Provider, record string, gen generation) func() {
+				// The lock is held, so the read is refused at the end of
+				// its wait — cut short here, as the bounded wait ends it.
+				ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+				defer cancel()
+				if err := p.ws.orderPendingLogin(ctx, record, gen); err != nil {
+					t.Fatalf("orderPendingLogin: %v", err)
+				}
+				return func() {}
+			},
+			wantAfter: 0,
+			want:      twoFileLogin("human"),
+		},
+		"its read waits the operator's write out": {
+			order: func(t *testing.T, p *Provider, record string, gen generation) func() {
+				done := make(chan error, 1)
+				go func() { done <- p.ws.orderPendingLogin(t.Context(), record, gen) }()
+				// Long enough that the read is waiting on the lock when
+				// the hold ends; the outcome is the same if it is not.
+				time.Sleep(100 * time.Millisecond)
+				return func() {
+					if err := <-done; err != nil {
+						t.Fatalf("orderPendingLogin: %v", err)
+					}
+				}
+			},
+			wantAfter: 1,
+			want:      signedIn,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p := twoFileProvider(t, nil)
+			writeShared(t, p.ws, twoFileLogin("before"))
+			home, cache := t.TempDir(), t.TempDir()
+			record := filepath.Join(p.ws.Root(), loginGenerationFile)
+			gen, err := p.ws.seed(t.Context(), home, cache, p, syncLogin)
+			if err != nil {
+				t.Fatalf("seeding the sign-in: %v", err)
+			}
+			if err := writeGeneration(record, gen); err != nil {
+				t.Fatal(err)
+			}
+			// The sign-in's CLI renews the token; its carry then fails.
+			writeFile(t, filepath.Join(home, ".fake", "auth.json"), token)
+
+			// `-from-host`'s hold: the epoch moved, its login not yet
+			// written.
+			unlock, err := p.ws.lockShared(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := p.ws.bumpLoginEpoch(); err != nil {
+				unlock()
+				t.Fatal(err)
+			}
+			wait := c.order(t, p, record, gen)
+			human := map[string][]byte{}
+			for name, body := range twoFileLogin("human") {
+				human[name] = []byte(body)
+			}
+			err = p.ws.writeLoginLocked(t.Context(), p.key, human)
+			unlock()
+			if err != nil {
+				t.Fatalf("the operator's write: %v", err)
+			}
+			wait()
+
+			kept, open, err := readGeneration(record)
+			if err != nil || !open || kept.After == nil {
+				t.Fatalf("the kept login's record = %+v (open %v, %v), want one ordered after an epoch",
+					kept, open, err)
+			}
+			if *kept.After != c.wantAfter {
+				t.Errorf("the kept login is ordered after epoch %d, want %d", *kept.After, c.wantAfter)
+			}
+			// The next command carries the kept sign-in out.
+			if _, err := p.ws.carryOut(t.Context(), home, cache, p, record, loginHomeRemedy(record)); err != nil {
+				t.Fatalf("carrying the kept sign-in out: %v", err)
+			}
+			if got := readLogin(t, p.ws); !maps.Equal(got, c.want) {
+				t.Errorf("the shared login is %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// A SIGN-IN WHOSE CARRY FAILS IS ORDERED UNDER THE SHARED LOGIN'S LOCK WHERE IT
+// FAILS: [TestAPendingLoginIsOrderedUnderTheSharedLock] holds the ordering's own
+// read, and this holds that a login command's failure path is what reaches it.
+// The sign-in's export fails while an operator's `-from-host` stands part way —
+// the epoch moved, the human's login not yet written — and the hold outlasts
+// the ordering's whole wait, as one stopped at a terminal would. The kept login
+// then keeps the epoch read with its seed, so the human's login, written once
+// the hold goes on, stands through the next command.
+//
+// Mutation: in runInCredentialHome, read the epoch the failed sign-in is
+// ordered after without the lock, and the kept login is ordered after the moved
+// epoch and carried out over the human's login.
+func TestASignInWhoseCarryFailsIsOrderedUnderTheSharedLock(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	started, held := filepath.Join(dir, "started"), filepath.Join(dir, "held")
+	p := storeProvider(t, map[string]string{
+		"FAKE_LOGIN_KEY": "k-pending", "FAKE_STORE_EXPORT_FAIL_ONCE": filepath.Join(dir, "once"),
+		"FAKE_MIDRUN_VERB": "store-login", "FAKE_MIDRUN_WRITES": midrun(t, map[string]string{started: ""}),
+		"FAKE_MIDRUN_AWAIT": held,
+	}, nil)
+	signedIn := make(chan error, 1)
+	go func() { signedIn <- p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}) }()
+	// The CLI is running, so its seed has let the shared lock go.
+	awaitFile(t, started)
+
+	// `-from-host`'s hold: the epoch moved, its login not yet written.
+	unlock, err := hostbox.LockCredentials(t.Context(), p.ws.CredentialsDir())
+	if err != nil {
+		t.Fatalf("taking the shared login's lock: %v", err)
+	}
+	if err := p.ws.bumpLoginEpoch(); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	writeFile(t, held, "")
+	// Held until the sign-in has ended: its carry, then its ordering, gave up
+	// on the lock or never needed it.
+	var signInErr error
+	select {
+	case signInErr = <-signedIn:
+	case <-time.After(hostbox.CredentialLockWait + 30*time.Second):
+		unlock()
+		t.Fatal("the sign-in never ended while the operator's hold stood")
+	}
+	human := `[{"id":"cred_h","key":"k-host"}]`
+	err = p.ws.writeLoginLocked(t.Context(), p.key,
+		map[string][]byte{cliprofile.CredentialStoreDocument: []byte(human)})
+	unlock()
+	if err != nil {
+		t.Fatalf("the operator's write: %v", err)
+	}
+	if signInErr == nil {
+		t.Fatal("a sign-in whose export failed was reported as written")
+	}
+
+	record := filepath.Join(p.ws.Root(), loginGenerationFile)
+	kept, open, err := readGeneration(record)
+	if err != nil || !open || kept.After == nil {
+		t.Fatalf("the kept login's record = %+v (open %v, %v), want one ordered after an epoch",
+			kept, open, err)
+	}
+	if *kept.After != 0 {
+		t.Errorf("the kept login is ordered after epoch %d, read inside the operator's hold; "+
+			"want 0, the epoch its seed read", *kept.After)
+	}
+	p.env = fakeChildEnv(map[string]string{"FAKE_STORE": "1"})
+	if err := p.Status(t.Context(), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if got := readDocument(t, p); !strings.Contains(got, "k-host") || strings.Contains(got, "k-pending") {
+		t.Errorf("the kept sign-in was carried out over the operator's -from-host: %q", got)
+	}
+}
+
+// awaitFile waits for path to exist, as a case's sign that a fake CLI has
+// reached a point it writes it at.
+func awaitFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(fakeAwaitBound)
+	for _, err := os.Stat(path); err != nil; _, err = os.Stat(path) {
+		if !os.IsNotExist(err) || !time.Now().Before(deadline) {
+			t.Fatalf("waiting for %s: %v", path, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // THE LATER OF TWO SIGN-INS WINS. An operator's write that landed while a
 // login's browser flow was open — a `-from-host` in another terminal — is
 // written over by the login when it finishes: the epoch orders only a login
@@ -275,9 +484,8 @@ func TestALoginOutranksAWriteThatLandedWhileItRan(t *testing.T) {
 	p := storeProvider(t, nil, nil)
 	p.env = fakeChildEnv(map[string]string{
 		"FAKE_STORE": "1", "FAKE_LOGIN_KEY": "k-login",
-		"FAKE_MIDRUN_VERB": "store-login",
-		"FAKE_MIDRUN_PATH": filepath.Join(p.ws.Root(), loginEpochFile),
-		"FAKE_MIDRUN_BODY": "7\n",
+		"FAKE_MIDRUN_VERB":   "store-login",
+		"FAKE_MIDRUN_WRITES": midrun(t, map[string]string{filepath.Join(p.ws.Root(), loginEpochFile): "7\n"}),
 	})
 	if err := p.BrokerLogin(t.Context(), nil, &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("BrokerLogin: %v", err)

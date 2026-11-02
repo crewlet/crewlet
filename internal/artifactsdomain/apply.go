@@ -33,7 +33,7 @@ import (
 //     the stamped limits, a label already taken), and those deterministically.
 //  3. A REFUSAL IS A ROW, NEVER AN ERROR. A record the broker accepted that the
 //     rows refuse is applied as a no-op that writes its history row with the
-//     outcome `refused` and the reason, on every node alike, and its writer
+//     outcome `refused` and the reason, on every data node alike, and its writer
 //     reads its own verdict back by operation id. An error would stall every
 //     node's log on a record that is merely too late.
 //  4. EVERY RECORD THAT WRITES A HISTORY ROW IS APPLIED ONCE. The row is keyed
@@ -262,8 +262,9 @@ func (a *Applier) Retained(context.Context, int) {
 	a.moved = append(a.moved, Reset())
 }
 
-// move notes one movement for the post-commit half.
-func (a *Applier) move(id string, what MoveKind, epoch int64, head int, at statelog.Position) {
+// move notes one movement for the post-commit half, at the record c is
+// applying: its position and the broker's instant for it.
+func (a *Applier) move(c applyContext, id string, what MoveKind, epoch int64, head int) {
 	parsed, err := artifacts.ParseID(id)
 	if err != nil {
 		// An id that does not parse names no artifact anybody can open,
@@ -271,7 +272,8 @@ func (a *Applier) move(id string, what MoveKind, epoch int64, head int, at state
 		return
 	}
 	a.moved = append(a.moved, Moved{
-		Artifact: parsed, What: what, AccessEpoch: epoch, Head: head, Position: at,
+		Artifact: parsed, What: what, AccessEpoch: epoch, Head: head, Position: c.position,
+		At: c.brokerAt,
 	})
 }
 
@@ -394,7 +396,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindTrimmed:
 		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
 		// below the floor its subject names, in this same transaction
-		// (ADR-0050); this domain writes nothing for it, history included.
+		// (ADR-0073); this domain writes nothing for it, history included.
 		return 0, nil
 	case KindEviction:
 		return a.applyEviction(ctx, tx, c)
@@ -572,7 +574,7 @@ func refuse(ctx context.Context, tx *sql.Tx, c applyContext, artifact string, op
 }
 
 // pruneHistory removes history rows past [artifacts.HistoryRetention] of broker
-// time, a bounded batch per record in one total order, so every node removes the
+// time, a bounded batch per record in one total order, so every data node removes the
 // same rows at the same position.
 func pruneHistory(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	if c.brokerAt.IsZero() {

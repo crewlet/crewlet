@@ -52,7 +52,7 @@ import {
   FeedRow,
   IssueRow,
   ServiceMark,
-  ServiceState,
+  serviceStatus,
 } from "./parts.tsx";
 import { DESCRIPTION, homeFacts, type InUse } from "./home.ts";
 
@@ -206,7 +206,7 @@ function Card({
             {s.name}
           </a>
         }
-        status={<ServiceState service={s} />}
+        status={serviceStatus(s)}
         description={s.sentence}
         action={
           <ButtonLink
@@ -237,7 +237,7 @@ function Card({
           {name}
         </a>
       }
-      status={<StatusDot tone={words.tone}>{words.label}</StatusDot>}
+      status={words}
       description={entry.description}
       {...(figure ? { meta: figure } : {})}
       action={

@@ -109,7 +109,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	body, err := httpjson.ReadBody(w, r, MaxLoginBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return
@@ -158,7 +158,7 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 	id := uuid.New().String()
 	// THE SEED IS SEALED BEFORE IT ENTERS ANY RECORD, under the fleet
 	// keyring and bound to this person and this credential: the record is
-	// replicated to every node, snapshotted, backed up and donated to
+	// replicated to every data node, snapshotted, backed up and donated to
 	// joining peers, and a seed in the clear there is a second factor
 	// everybody with a copy holds. Nothing past this line carries it in the
 	// clear.
@@ -311,7 +311,7 @@ func (s *Service) enrolmentSession(w http.ResponseWriter, r *http.Request,
 	case v.Row == session.RowValid && v.Bearer.Person == person:
 		return v, true, true
 	case v.Row == session.RowBehind || v.Row == session.RowStalled:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(nil))
+		auth.UnavailableIdentity(w, nil)
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 	}
@@ -459,8 +459,9 @@ func (s *Service) proofOfRemoved(w http.ResponseWriter, r *http.Request) {
 }
 
 // mayChangeProof resolves the caller and refuses one who may not change how
-// they prove who they are now — a machine, a machine token, or a person whose
-// proof of identity is older than the gesture's window.
+// they prove who they are now — a machine (`403 forbidden`, as
+// [notAPerson] says why), a machine token, or a person whose proof of identity
+// is older than the gesture's window.
 //
 // # The rule is the authority table's, the token's refusal included
 //
@@ -482,16 +483,14 @@ func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Pr
 	switch resolution {
 	case iam.Resolved:
 	case iam.Unknown:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
+		auth.UnavailableIdentity(w, iam.Reason(r.Context()))
 		return iam.Principal{}, false
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 		return iam.Principal{}, false
 	}
-	window, _ := authz.RecencyOf(authz.ActionCredentialProof)
 	if principal.Kind != iam.KindPerson {
-		refuseStepUp(w, window, "Only people can set up two-step "+
-			"verification.")
+		notAPerson(w, "Only people can set up two-step verification.")
 		return iam.Principal{}, false
 	}
 	d := authz.Decide(r.Context(), principal, authz.ActionCredentialProof,
@@ -502,23 +501,6 @@ func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Pr
 		return iam.Principal{}, false
 	}
 	return principal, true
-}
-
-// refuseStepUp answers `403 step_up_required` in the ONE envelope every such
-// refusal on this API carries — the authority table's own ([authz.StepUpDetail]):
-// the reason, the window the gesture asks a proof inside, the (empty) grants —
-// with a sentence saying why this caller cannot give that proof here.
-//
-// ONE SHAPE, because a client branches on it: the dashboard's confirmation
-// asks the person for the proof the window names and replays the request,
-// and a refusal that named no window left it guessing which of the two to
-// ask for.
-func refuseStepUp(w http.ResponseWriter, window iam.Recency, detail string) {
-	fields := authz.StepUpDetail(authz.Decision{
-		Reason: authz.ReasonStepUp, Recency: window,
-	})
-	fields["detail"] = detail
-	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired, fields)
 }
 
 // issuerLabel is what an authenticator app shows beside the account.

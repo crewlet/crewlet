@@ -130,7 +130,7 @@ type wideCut struct {
 // their own widths, read off the rows it then deletes, so it reads no wide row
 // it keeps. A part whose push rows reached the bound takes no change; it
 // advanced by those.
-func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
+func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, at applyContext, repoID string, budget int,
 	weighed int64) (changesPurged, error) {
 	if weighed >= PurgePartBytes {
 		return changesPurged{weighed: weighed}, nil
@@ -199,7 +199,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, b
 		}
 		// AND THEIR NOTICES, charged by their counts: as many as this node
 		// holds, which is never more.
-		removed, err := a.removeNotices(ctx, tx, whole)
+		removed, err := a.removeNotices(ctx, tx, at, whole)
 		if err != nil {
 			return changesPurged{}, err
 		}
@@ -234,7 +234,7 @@ func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, b
 		// the same on every node and never below the rows any node holds.
 		if take := min(left, cut.notices); take > 0 {
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			removed, err := a.removeCutNotices(ctx, tx, cut.id, take)
+			removed, err := a.removeCutNotices(ctx, tx, at, cut.id, take)
 			if err != nil {
 				return changesPurged{}, err
 			}

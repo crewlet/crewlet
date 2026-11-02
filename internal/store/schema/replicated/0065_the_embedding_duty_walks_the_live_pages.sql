@@ -1,0 +1,27 @@
+-- The embedding duty walks the live pages in the order it selects them.
+--
+-- # pages_heads_live_updated_idx
+--
+-- The page corpus's selection (`pageSelectionStatement` in
+-- internal/search/pagecorpus.go) asks for the published pages outside the
+-- trash whose vector is missing or stale, OLDEST CHANGE FIRST, a batch at a
+-- time: `WHERE status = 'published' AND trashed_at IS NULL … ORDER BY
+-- updated_at LIMIT ?`. No index held that order, so measured on the pages
+-- plan fixture every tick was `SCAN pages_heads` and a sorter: every page row
+-- in the company read, drafts and the trash included, and the live ones sorted
+-- before the first could be returned — on a corpus the duty keeps current,
+-- where a tick usually finds a handful of stale pages or none.
+--
+-- Partial on exactly the corpus's own predicate, which the statement spells
+-- verbatim (`pageLive`), so the planner can use it and every row in it is a
+-- page the corpus embeds. The selection walks it oldest change first, each
+-- page's vector a seek of the vector table's key, and its LIMIT stops the walk
+-- at the first batch of stale pages; with nothing stale it reads the live
+-- pages once, in order, and sorts nothing. The duty's coverage count and the
+-- window report state the same predicate and now read the live pages through
+-- it too, rather than every page row.
+--
+-- The task corpus answers the same question by walking
+-- `tracker_tasks_updated_idx` (0002).
+CREATE INDEX pages_heads_live_updated_idx ON pages_heads (updated_at)
+    WHERE status = 'published' AND trashed_at IS NULL;                          -- the embedding duty's page selection

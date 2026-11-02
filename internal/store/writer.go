@@ -68,6 +68,12 @@ var tagKeys = map[string]string{
 	// through disagreed about a dimension Append reads back out of the
 	// tags. One map is what makes that disagreement unrepresentable.
 	"turn_id": "turn_id",
+	// WHO ANSWERED a coding run's question: the one dimension a person's
+	// answered decisions select the answers' records by (ADR-0068), before
+	// reading the few that are theirs whole. A listing never selects the
+	// payload, so without it every answer in the window was read whole to
+	// find one person's.
+	"answered_by": "answered_by",
 	// The unit of work behind that run: turn_id names one EXECUTION, which
 	// is what a phase row, a live call and the turns list are keyed on, and
 	// a trigger that fails without acting is redelivered — so one unit of
@@ -128,8 +134,10 @@ var tagKeys = map[string]string{
 	// event names no app carries none.
 	"notification_source": "notification_source",
 	// WHICH NODE PUBLISHED THE EVENT — the envelope's own `node`, which the
-	// queue stamps on the way out and which is therefore the node whose
-	// store holds the row. The envelope owns the key (a payload field under
+	// queue stamps on the way out. Not always the node whose store holds the
+	// row: a data node also keeps the events of a node without `data` in
+	// custody, and their rows name the node that published them. The
+	// envelope owns the key (a payload field under
 	// it is dropped), so it means one thing on every type. A tag because a
 	// listing never selects the payload, and a row read back from history
 	// had no other way to say where it came from: a runtime backup's row is
@@ -160,6 +168,17 @@ var tagKeys = map[string]string{
 	"tool":        "tool",
 	"repo":        "repo",
 	"dir":         "dir",
+	// And a model gesture's (types.ModelActed): which gesture, and on which
+	// providers.llm entry. `provider_key` means that entry wherever a
+	// payload carries it (a phase's record, a fallback, a sandbox run), so
+	// "what ran on, and what was done to, this model" is one filter.
+	"action":       "action",
+	"provider_key": "provider_key",
+	// The Dashboard Assistant's CONVERSATION a runtime audit row belongs to
+	// (types.AssistantTurnCompleted, and an approved write the act route
+	// records under the assistant transport), so the Audit log lists every
+	// turn and write of one conversation from a listing.
+	"conversation_id": "conversation_id",
 }
 
 // The two events that carry an LLM call's cost: a phase's record, and an
@@ -175,7 +194,7 @@ var (
 )
 
 // repoReadType is the one event the repository-read columns are filled from
-// (node/0052), taken from its payload type for the reason [phaseCompleted] is.
+// (node/0059), taken from its payload type for the reason [phaseCompleted] is.
 var repoReadType = types.CodeFetched{}.EventType()
 
 // spendTypes are both, as a SQL `IN (…)` takes them — every read that folds
@@ -267,7 +286,12 @@ func phaseCalls(body map[string]json.RawMessage) int {
 	if raw, ok := body["rounds"]; ok {
 		_ = json.Unmarshal(raw, &rounds)
 	}
-	return tokens.PhaseCalls(len(rounds), jsonInt(body["rounds_used"]))
+	return tokens.PhaseCalls(tokens.PhaseCounts{
+		Phase:      jsonString(body["phase"]),
+		Rounds:     len(rounds),
+		RoundsUsed: jsonInt(body["rounds_used"]),
+		CLITurns:   jsonInt(body["cli_turns"]),
+	})
 }
 
 // ExtractTags pulls the filterable dimensions out of an event's serialized

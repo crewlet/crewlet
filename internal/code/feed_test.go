@@ -410,9 +410,10 @@ func TestACodeWakeIsAboutItsChange(t *testing.T) {
 	// — a failed check of a change's head — is news to who made it.
 	for _, op := range []code.OpKind{code.OpCheckFinished, code.OpMerge, code.OpLand, code.OpEject, code.OpBroken,
 		code.OpDequeue, code.OpPush, code.OpReview, code.OpMergeability} {
-		if p.WakesActor(string(op)) != (op == code.OpCheckFinished) {
+		n := notify.Inbound{Source: code.Source, EventType: string(op)}
+		if p.WakesActor(n) != (op == code.OpCheckFinished) {
 			t.Errorf("a wake of a %s record wakes its actor = %v, want only a check's ending to", op,
-				p.WakesActor(string(op)))
+				p.WakesActor(n))
 		}
 	}
 }

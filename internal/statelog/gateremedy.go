@@ -10,8 +10,8 @@ import "slices"
 //
 // The remedy used to be one sentence, and it was written in the command line's
 // vocabulary: "evict it with -force", "run it again without -op-id", "from
-// another node (-url)". The dashboard rendered that sentence word for word
-// beside a dialog that has no -force, no -op-id and no -url, so an operator in
+// another node (-api)". The dashboard rendered that sentence word for word
+// beside a dialog that has no -force, no -op-id and no -api, so an operator in
 // a browser was told to pass flags the screen in front of them could not send.
 // Two surfaces with two vocabularies need the WHAT separated from the HOW: the
 // engine says which of these to do, in a closed set a surface can switch on,

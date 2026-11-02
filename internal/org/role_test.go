@@ -135,8 +135,7 @@ func TestHumanSeatRejectsEveryRuntimeField(t *testing.T) {
 		{"llm_subagent", func(r *Role) { r.LLMSubagent = ProviderKeys{"gpt-4o"} }},
 		{"llm_auxiliary", func(r *Role) { r.LLMAuxiliary = ProviderKeys{"gpt-4o"} }},
 		{"llm_judge", func(r *Role) { r.LLMJudge = ProviderKeys{"gpt-4o"} }},
-		{"llm_sandbox", func(r *Role) { r.LLMSandbox = ProviderKeys{"sb"} }},
-		{"sandbox", func(r *Role) { r.Sandbox = &RoleSandbox{Enabled: true} }},
+		{"sandbox", func(r *Role) { r.Sandbox = &RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "${T}"}} }},
 		{"token_budget", func(r *Role) { r.TokenBudget = TokenCeilings{period.Day: 1000} }},
 		{"learning_enabled", func(r *Role) { r.LearningEnabled = On() }},
 		{"schedules", func(r *Role) {

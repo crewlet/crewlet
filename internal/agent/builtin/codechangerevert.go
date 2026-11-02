@@ -144,18 +144,26 @@ func (t *codeRevertChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 // opened says on out which change the revert's push opened, or why none was,
 // and answers its number — 0 where its record has not said it yet.
+//
+// WHY NONE WAS IS A SENTENCE A PERSON READS TOO (the act route answers a
+// person the same fields, ADR-0060), so it names no tool and no class: the
+// refusal's class rides beside it as a value (ChangeRefusal), and the
+// repository's changes, which list the change once its record says it, are
+// named as a person finds them.
 func (t *codeRevertChange) opened(out *codeRevertAnswer, repo string, ch *code.ChangeAnswer) int64 {
 	switch {
 	case ch == nil:
-		out.ChangeNotOpened = fmt.Sprintf("the push's record said nothing of its change yet; find it with %s",
-			CodeListChangesTool)
+		out.ChangeNotOpened = "The push's record has not named its change yet, and the repository's changes " +
+			"list it once it does."
 		return 0
 	case ch.Refusal != "":
-		out.ChangeNotOpened = fmt.Sprintf("%s (%s)", ch.Detail, ch.Refusal)
+		out.ChangeNotOpened = "The push opened no change. " + strings.TrimSuffix(strings.TrimSpace(ch.Detail),
+			".") + "."
+		out.ChangeRefusal = string(ch.Refusal)
 		return 0
 	case ch.Number < 1:
-		out.ChangeNotOpened = fmt.Sprintf("its number is told once the push's record applies; find it with %s",
-			CodeListChangesTool)
+		out.ChangeNotOpened = "The change's number is told once the push's record applies, and the " +
+			"repository's changes list it then."
 		return 0
 	}
 	out.Opened = code.ChangeRef(repo, ch.Number)
@@ -259,6 +267,7 @@ type codeRevertAnswer struct {
 	Position        string           `json:"position,omitempty"`
 	Opened          string           `json:"opened,omitempty"`
 	ChangeNotOpened string           `json:"change_not_opened,omitempty"`
+	ChangeRefusal   string           `json:"change_refusal,omitempty"`
 	Merge           string           `json:"merge,omitempty"`
 	MergeCommit     string           `json:"merge_commit,omitempty"`
 	Place           int              `json:"place,omitempty"`

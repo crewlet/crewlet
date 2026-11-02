@@ -6,13 +6,17 @@
  * PURE, so every rule a screen's Save turns on is pinned by a test without a
  * network or a clock: `lib/useCeilingWrite.ts` is the half that sends it.
  *
- * # Two scopes, two writes
+ * # Three scopes, two writes
  *
  * The COMPANY's ceilings are a top-level key of the company document, so they
  * change by a merge patch naming only the windows that change
  * (`{token_budget: {day: 50000000}}`, and `null` to remove one): a colleague's
  * change to anything else in the document survives it, and so does a ceiling
- * on a window this write did not touch.
+ * on a window this write did not touch. The ceiling every person's ASSISTANT
+ * is held to is the same kind of key one level down
+ * (`{assistant: {token_budget: {day: 200000}}}`), and a merge patch merges a
+ * nested object key by key, so it changes the same way and leaves the rest of
+ * the `assistant:` block as it was.
  *
  * A SEAT's live inside that seat, which may sit in a unit at any depth — and a
  * merge patch cannot address a list element (RFC 7396 replaces an array
@@ -24,7 +28,7 @@
  */
 
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
-import { managedSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
+import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { TokenBudget } from "~/protocol/types.ts";
 import { PERIOD_ADJECTIVE, readCeiling } from "./budget.ts";
 import { fmtCount } from "./format.ts";
@@ -35,6 +39,8 @@ export type Period = (typeof BUDGET_WINDOWS)[number]["period"];
 /** Whose ceilings a write changes. */
 export type CeilingScope =
   | { readonly kind: "company" }
+  /** The ceiling every person's Dashboard Assistant spend is held to (`assistant.token_budget`). */
+  | { readonly kind: "assistant" }
   | {
       readonly kind: "seat";
       /** The seat's handle — the id `PUT /config/roles/{handle}` addresses. */
@@ -51,19 +57,56 @@ const PERIODS: readonly Period[] = BUDGET_WINDOWS.map((w) => w.period);
 
 /** "the company's", "Agent PM's" — how a sentence names the scope's ceiling. */
 export function whoseCeiling(scope: CeilingScope): string {
-  return scope.kind === "company" ? "the company's" : `${scope.name}'s`;
+  switch (scope.kind) {
+    case "company":
+      return "the company's";
+    case "assistant":
+      return "Ask Crewlet's per-person";
+    case "seat":
+      return `${scope.name}'s`;
+  }
+}
+
+/** "The company", "Each person's assistant", "Agent PM": the scope as a heading names it. */
+export function scopeName(scope: CeilingScope): string {
+  switch (scope.kind) {
+    case "company":
+      return "The company";
+    case "assistant":
+      return "Ask Crewlet, per person";
+    case "seat":
+      return scope.name;
+  }
 }
 
 /**
- * The merge patch that changes the company's ceilings: only the windows named,
- * `null` removing one.
+ * The merge patch that changes a scope's ceilings in the company document, for
+ * the two scopes kept there as a key: only the windows named, `null` removing
+ * one.
  */
-export function companyPatch(changes: CeilingChanges): Record<string, unknown> {
+export function documentPatch(
+  scope: { readonly kind: "company" | "assistant" },
+  changes: CeilingChanges,
+): Record<string, unknown> {
   const budget: Record<string, number | null> = {};
   for (const period of PERIODS) {
     if (period in changes) budget[period] = changes[period] ?? null;
   }
-  return { token_budget: budget };
+  return scope.kind === "company"
+    ? { token_budget: budget }
+    : { assistant: { token_budget: budget } };
+}
+
+/** The ceilings a document-kept scope holds in the company document as read. */
+export function documentCeilings(
+  scope: { readonly kind: "company" | "assistant" },
+  document: Readonly<Record<string, unknown>>,
+): unknown {
+  if (scope.kind === "company") return document.token_budget;
+  const assistant = document.assistant;
+  return assistant && typeof assistant === "object" && !Array.isArray(assistant)
+    ? (assistant as Record<string, unknown>).token_budget
+    : undefined;
 }
 
 /**
@@ -203,10 +246,13 @@ export function refusalWords(
         message: `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
         reload: false,
       };
-    case "unreachable":
+    case "unavailable":
+      // The engine's own sentence: what stopped it, that nothing was
+      // stored, and that waiting clears it.
+      return { message: refusal.detail, reload: false };
+    case "unsettled":
       return {
-        message:
-          "The engine did not answer, so the change may or may not have landed. Reload before trying again.",
+        message: `${unsettledSentence(refusal)} The change may or may not have landed. Reload before trying again.`,
         reload: true,
       };
     case "missing":

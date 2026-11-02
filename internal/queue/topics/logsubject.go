@@ -16,8 +16,9 @@ import "strings"
 // runs — including a test's, under a prefix no constant here names. Written
 // once over any prefix, the publisher, the wake filter and the applier's
 // dispatch agree about every log's subjects because none of them spells the
-// grammar itself; [TrackerLogSubject] and [PagesLogSubject] are this grammar
-// bound to those two logs' prefixes.
+// grammar itself; [TrackerLogSubject], [PagesLogSubject], [IamLogSubject],
+// [ArtifactsLogSubject], [ArtifactDataLogSubject], [AssistantLogSubject] and
+// [ChatLogSubject] are this grammar bound to those seven logs' prefixes.
 //
 // # What the prefix is
 //

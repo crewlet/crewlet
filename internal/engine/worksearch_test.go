@@ -6,32 +6,32 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// A COMPANY THAT KEEPS NO NATIVE TRACKER HAS NO WORK SEARCH, NOT AN EMPTY ONE.
+// A COMPANY THAT DOES NOT RUN WORKLET HAS NO WORK SEARCH, NOT AN EMPTY ONE.
 //
-// The lexical index is built under either native backend, because it covers
+// The lexical index is built under Worklet or Doclet, because it covers
 // both corpora, and the tracker's ranked search was built over it whenever the
 // index was — so a company whose tracker is a vendor's, or none, still had a
 // work search, over a tracker corpus that is empty by construction. Every
 // other work question is one such a node does not have (`unknown_query`);
 // `work_search` answered with nothing, which reads to a screen as "no item
 // matches" rather than "there is no tracker here" — the confusion the
-// accessor's untyped nil exists to prevent. The control is a company on the
-// engine's own tracker, which searches.
+// accessor's untyped nil exists to prevent. The control is a company on
+// Worklet, which searches.
 //
 // Mutation: build the searcher whatever the tracker backend and the first
 // case holds one.
-func TestACompanyWithNoNativeTrackerHasNoWorkSearch(t *testing.T) {
+func TestACompanyWithoutWorkletHasNoWorkSearch(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		doc    string
 		search bool
 	}{
-		{"no tracker, the native knowledge base", companyDoc + `
+		{"no tracker, Doclet", companyDoc + `
 tracker:
   backend: none
 `, false},
-		{"the engine's own tracker, the control", companyDoc, true},
+		{"Worklet, the control", companyDoc, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
 // THE PHASE SEAM AND THE PHASE EVENT ARE ONE ANNOUNCEMENT.
@@ -24,23 +25,20 @@ func TestThePhaseSeamNamesThePhaseTheEventNames(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	var seen []phase.Phase
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: []llm.Completion{submitWork(t)},
-		review:  []llm.Completion{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+	// One seam across the launching segment and the collecting one, as a
+	// chat thread has one indicator for the whole turn.
+	round := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}}}, buildOpts{
 		pub:     pub,
 		onPhase: func(ph phase.Phase) { seen = append(seen, ph) },
-	})
-
-	w, _, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
+	}, 1, "", nil, run{calls: []llm.ToolCall{submitWork(t)}}, runner.RunRecord{})
+	if _, err := round.collector.Review(context.Background(), 1, round.work, nil); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
 
-	// The turn's own two passes, in the order they ran.
+	// The turn's own two passes, in the order they ran: the run's launch,
+	// then the review of what it did.
 	if !slices.Equal(seen, []phase.Phase{phase.Execute, phase.Review}) {
 		t.Fatalf("the seam reported %v, want the executor then the reviewer", seen)
 	}
@@ -67,13 +65,8 @@ func TestThePhaseSeamNamesThePhaseTheEventNames(t *testing.T) {
 func TestThePhaseSeamFiresWithNothingListening(t *testing.T) {
 	t.Parallel()
 	var seen []phase.Phase
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: []llm.Completion{submitWork(t)},
-	}}}, buildOpts{onPhase: func(ph phase.Phase) { seen = append(seen, ph) }})
-
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	launch(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{onPhase: func(ph phase.Phase) { seen = append(seen, ph) }}, 1, "", nil)
 	if !slices.Equal(seen, []phase.Phase{phase.Execute}) {
 		t.Fatalf("the seam reported %v on a runner with no publisher", seen)
 	}
@@ -83,15 +76,9 @@ func TestThePhaseSeamFiresWithNothingListening(t *testing.T) {
 // but a chat-triggered turn's runs with none.
 func TestAPhaseRunsWithNoSeamWired(t *testing.T) {
 	t.Parallel()
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: []llm.Completion{submitWork(t)},
-	}}}, buildOpts{})
-
-	w, _, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if w.Outcome != turn.OutcomeBlocked {
-		t.Fatalf("outcome = %q", w.Outcome)
+	round := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{}, 1, "", nil, run{calls: []llm.ToolCall{submitWork(t)}}, runner.RunRecord{})
+	if round.work.Outcome != turn.OutcomeBlocked {
+		t.Fatalf("outcome = %q", round.work.Outcome)
 	}
 }

@@ -17,7 +17,7 @@ import (
 // THE SUGGESTIONS' APPLY: code_apply_suggestions puts findings' suggestions
 // in place of the lines they are anchored to, on the change's source branch,
 // as ONE ENGINE WRITE the repository's git node builds and lands as one push
-// (code.WriteApplySuggestions, ADR-0062) — each suggestion placed in the
+// (code.WriteApplySuggestions, ADR-0085) — each suggestion placed in the
 // head's file by the one rule its finding is shown by (code.Reanchor), all of
 // them or none — and then answers each finding resolved with the commit it
 // made, as a SECOND write, a step of the same operation decided at or past

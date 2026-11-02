@@ -10,7 +10,7 @@ import "slices"
 
 // ReproducibleTables is every table a record's payload must be able to
 // rebuild: what a replay from zero into an empty database has to end up with,
-// byte for byte, on every node.
+// byte for byte, on every data node.
 var ReproducibleTables = []string{
 	// The object tables.
 	"artifacts", "artifact_source_claims", "artifact_versions",

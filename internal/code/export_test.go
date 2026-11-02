@@ -122,6 +122,24 @@ func ExpiryListing(ctx context.Context, r *Reader, cutoff time.Time) (pages, ref
 	}
 }
 
+// QueueSweepListing reads every page of the queue sweep's listing over r at
+// cutoff, as a pass reads them, and answers how many pages and repositories it
+// read.
+func QueueSweepListing(ctx context.Context, r *Reader, cutoff time.Time) (pages, repos int, err error) {
+	q := queueSweepQuery{cutoff: cutoff, limit: retentionPage}
+	for {
+		page, more, err := r.queueSweepDue(ctx, q)
+		if err != nil {
+			return pages, repos, err
+		}
+		pages, repos = pages+1, repos+len(page)
+		if !more {
+			return pages, repos, nil
+		}
+		q.after = page[len(page)-1]
+	}
+}
+
 // SetCommitterIdle has c's repository goroutines exit after d with nothing
 // queued, rather than CommitterIdle — set before c's first proposal.
 func SetCommitterIdle(c *Committer, d time.Duration) { c.idle = d }

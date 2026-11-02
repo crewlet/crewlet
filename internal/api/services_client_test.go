@@ -12,6 +12,7 @@ import (
 
 // THE DASHBOARD KNOWS EXACTLY THE SERVICES THE ENGINE SENDS: `OrgServices`
 // member for member against [api.OrgServices], and its three unions value for
+// member for member against [api.OrgServices], and its four unions value for
 // value against the backends' own closed sets and the code host's
 // ([api.CodeHosts]), in both directions.
 //
@@ -32,6 +33,7 @@ func TestTheDashboardKnowsExactlyTheServicesTheEngineSends(t *testing.T) {
 	}{
 		{"TrackerBackend", backendNames(config.TrackerBackends)},
 		{"KnowledgeBackend", backendNames(config.KnowledgeBackends)},
+		{"ChatBackend", backendNames(config.ChatBackends)},
 		{"CodeHost", backendNames(api.CodeHosts)},
 	} {
 		t.Run(tc.union, func(t *testing.T) {

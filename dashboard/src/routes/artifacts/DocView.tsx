@@ -9,7 +9,7 @@
  * which builds React elements and never parses markup, so nothing a doc
  * carries can become script on this origin (X8). A picture is a file of the
  * version, fetched with the reader's credential and shown by object URL; an
- * address the text names is never loaded. It reads like a Knowledge page
+ * address the text names is never loaded. It reads like a Doclet page
  * because it is drawn by the same renderer, the same document styles and the
  * same outline.
  *

@@ -1,8 +1,9 @@
 /**
  * The identity directory's closed sets that People offers back to the
  * engine — the permissions a person, an invitation or a token may carry, the
- * login grammars, the kinds of finding the directory reports — and the shapes
- * of the answers the seat surfaces and the reset screen read.
+ * login grammars, the kinds of finding the directory reports — the shapes of
+ * the answers the seat surfaces and the reset screen read, and the header a
+ * tab names who it is read by in.
  *
  * EXACTLY THE ENGINE'S — each held by the gate its doc names. A permission the
  * engine grew that this lacks is one no administrator can confer from the
@@ -16,7 +17,7 @@
  * runs the company and includes every app, then one per app. The wire field is
  * still `grants`; the dashboard calls the concept "Access".
  */
-export const GRANTS = ["admin", "tracker", "knowledge", "artifacts"] as const;
+export const GRANTS = ["admin", "worklet", "doclet", "artifacts", "chatlet"] as const;
 
 /**
  * The apps (`iam.Apps`), the one place the engine declares one. Admin
@@ -27,7 +28,7 @@ export const GRANTS = ["admin", "tracker", "knowledge", "artifacts"] as const;
  * artifact. Somebody without it still opens, comments on and fills in every
  * artifact shared with them, because a share is a relation, not a permission.
  */
-export const APPS = ["tracker", "knowledge", "artifacts"] as const;
+export const APPS = ["worklet", "doclet", "artifacts", "chatlet"] as const;
 
 /**
  * The two login grammars, as the engine holds them (`iam.ValidLoginFor`):
@@ -59,6 +60,17 @@ export const MAX_LOGIN = 64;
  * begin with.
  */
 export const CREDENTIAL_CLASSES = ["pat:", "session:"] as const;
+
+/**
+ * The class the Dashboard Assistant's grant is recorded under in the operator
+ * column (`iam.AssistPrefix`): a write the assistant made for a person carries
+ * the person as its author and `assist:<grant>` as the credential it came
+ * through. Held by
+ * `internal/api/iamapi.TestTheDashboardKnowsTheAssistantsCredentialClass`. A
+ * screen says such a write is the person's "with the assistant" and never
+ * prints the grant id (`lib/attribution.ts`).
+ */
+export const ASSIST_CREDENTIAL_PREFIX = "assist:";
 
 /**
  * How long a machine token lives when its mint names no lifetime, in days
@@ -190,3 +202,56 @@ export interface ResetView {
   /** The person holds no password yet: this link sets their first one. */
   first?: boolean;
 }
+
+/**
+ * The header an invitation's secret travels in to its view:
+ * `authapi.InviteSecretHeader`, held by
+ * `internal/api/authapi.TestTheDashboardSendsALinksSecretInTheHeaderItsViewReads`.
+ *
+ * A HEADER, because the view is a GET and a GET has no body — and never the
+ * query string, which every access log between the browser and the engine
+ * records. The link carries the secret in its FRAGMENT precisely so that no
+ * server sees it on the way to this page. Spelled differently here, the screen
+ * would present no secret and every invitation it opened would be the one
+ * `410` an id nobody issued answers.
+ */
+export const INVITE_SECRET_HEADER = "X-Crewlet-Invite-Secret";
+
+/**
+ * The header a password reset link's secret travels in to its view, for
+ * `INVITE_SECRET_HEADER`'s reason: `authapi.ResetSecretHeader`, held by the
+ * same gate.
+ */
+export const RESET_SECRET_HEADER = "X-Crewlet-Reset-Secret";
+
+/**
+ * The header every request a tab makes FOR ITS READER carries that reader in —
+ * the principal id the tab recorded (`lib/reader.ts`) — beside the session
+ * cookie: `auth.ReaderHeader`, held by
+ * `internal/api/auth.TestTheDashboardNamesItsReaderInTheGuardsHeader`.
+ *
+ * The engine serves such a request only to that principal and refuses anybody
+ * else `409 reader_changed` before it runs, so a window left open on the last
+ * person's screen after somebody signed in as somebody else in another tab
+ * makes no change as the new person, and is handed to them
+ * (`protocol/signin.ts`). Spelled differently here, every request would name
+ * nobody, be served to whoever the cookie is, and nothing would go red.
+ */
+export const READER_HEADER = "X-Crewlet-Reader";
+
+/**
+ * The query parameter the socket's HANDSHAKE names the tab's reader in:
+ * `auth.ReaderParam`, held by
+ * `internal/api/auth.TestTheDashboardsSocketNamesItsReaderInTheGuardsParameter`.
+ *
+ * A browser sets no header on a WebSocket, so the handshake is the one request
+ * that cannot carry `READER_HEADER`. The engine reads this parameter on an
+ * upgrade that carries no header, and refuses a dial made for anybody but the
+ * cookie's principal `409 reader_changed` before the stream is served — which
+ * the browser reports as 1006, and the socket's refusal probe reads and hands
+ * the tab over on (`protocol/socket.ts`). The id is not a secret, but it is in
+ * the socket's URL, so a proxy's access log of that path records it. Spelled
+ * differently here, every handshake would name nobody and be served to
+ * whoever the cookie is, until the tab's next request was refused.
+ */
+export const READER_PARAM = "reader";

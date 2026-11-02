@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -16,8 +17,8 @@ import (
 // A DATA NODE HOLDS ITS REPLICATED ESTATE WHATEVER ITS COMPANY RUNS, and its
 // backup copies it.
 //
-// Holding is a fact about the node: a company that moved its tracker off the
-// native backend leaves a data node's file on disk with every row its log ever
+// Holding is a fact about the node: a company that moved its tracker off
+// Worklet leaves a data node's file on disk with every row its log ever
 // derived. While the file was opened only by the native half's runtime, such a
 // node held nothing open, and its backup wrote a manifest for its own file
 // alone and reported success. So a data node that runs no native half at all —
@@ -27,7 +28,7 @@ func TestADataNodeHoldsItsEstateWhateverItsCompanyRuns(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	e, err := New(t.Context(), Options{Bootstrap: &b})
 	if err != nil {
 		t.Fatalf("New: %v", err)

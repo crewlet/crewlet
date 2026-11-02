@@ -28,7 +28,7 @@ import (
 // twice: a publish whose outcome was unknown, a lease that moved mid-training.
 // Both records would sit on the one centroids subject, the compaction would
 // keep the second, and a node replaying the log would hold the second's
-// centroids under the number every live node filed its rows against the
+// centroids under the number every live data node filed its rows against the
 // first's. A position is minted by the broker, once, identically on every
 // node: two trainings are simply two generations, the later superseding the
 // earlier, and a row filed under the earlier one is stale rather than wrong.

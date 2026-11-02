@@ -25,8 +25,9 @@ const READER: ViewerState = {
   login: "jane.doe",
   grants: [],
   admin: false,
-  tracker: false,
-  knowledge: false,
+  worklet: false,
+  doclet: false,
+  chatlet: false,
   handle: "",
   owner: "jane.doe",
   name: "",
@@ -39,6 +40,9 @@ const READER: ViewerState = {
   asking: false,
   configWriter: false,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
+  chatVendors: [],
 };
 
 class InertWebSocket {

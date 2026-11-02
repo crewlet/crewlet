@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,14 +17,15 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iam/session"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -88,8 +90,8 @@ func TestThePostureMatrix(t *testing.T) {
 	b.API.Auth.Tokens = []config.APIToken{
 		{ID: "ops", Token: admin, Grants: []iam.Grant{iam.GrantAdmin}},
 		{ID: "colleague", Token: apps, Grants: slices.Clone(iam.Apps)},
-		{ID: "tracker", Token: tracks, Grants: []iam.Grant{iam.GrantTracker}},
-		{ID: "writer", Token: knows, Grants: []iam.Grant{iam.GrantKnowledge}},
+		{ID: "tracker", Token: tracks, Grants: []iam.Grant{iam.GrantWorklet}},
+		{ID: "writer", Token: knows, Grants: []iam.Grant{iam.GrantDoclet}},
 	}
 	// THE SAME TIER A ON A NODE THAT REFUSES ADMIN — the node mid-rollout
 	// whose posture is not the one the document was validated against, so
@@ -178,8 +180,8 @@ func TestThePostureMatrix(t *testing.T) {
 		{"a credential this node refuses", plain, malformed, nil},
 		// EACH APP ALONE, so a row that names the wrong app is a
 		// column that disagrees.
-		{"a Tier A token carrying the tracker alone", plain, "Bearer " + tracks, nil},
-		{"a Tier A token carrying the knowledge base alone", plain, "Bearer " + knows, nil},
+		{"a Tier A token carrying Worklet alone", plain, "Bearer " + tracks, nil},
+		{"a Tier A token carrying Doclet alone", plain, "Bearer " + knows, nil},
 		// THE MOST AUTHORITY A CALLER CAN HAVE AND STILL BE REFUSED the
 		// deployment's controls, which is what makes each refusal about
 		// admin rather than about a caller who holds nothing.
@@ -201,7 +203,7 @@ func TestThePostureMatrix(t *testing.T) {
 		// A PERSONAL ACCESS TOKEN MINTED CARRYING THE TRACKER, whose
 		// owner holds admin: it reaches what the TOKEN carries, never
 		// what its owner could.
-		{"a personal access token carrying the tracker", plain, "Bearer " + machine.pat, nil},
+		{"a personal access token carrying Worklet", plain, "Bearer " + machine.pat, nil},
 		// A SERVICE ACCOUNT'S TOKEN HOLDING ADMIN: every admin route a
 		// pipeline runs, and none that needs a person present — the
 		// value of a credential is never revealed to a token.
@@ -226,7 +228,9 @@ func TestThePostureMatrix(t *testing.T) {
 		forbd  = http.StatusForbidden
 		bad    = http.StatusBadRequest
 		absent = http.StatusNotFound
-		broken = http.StatusInternalServerError
+		// unread is a 503 a wait clears: the route admitted the caller and
+		// the fixture's coordination read didn't answer.
+		unread = http.StatusServiceUnavailable
 		// stepUp is a 403 that says `step_up_required`: the caller may
 		// take the verb and has not proved who they are recently enough.
 		// Its own cell, because a 403 for a permission the caller lacks
@@ -276,13 +280,17 @@ func TestThePostureMatrix(t *testing.T) {
 			[len(shapes)]int{unath, unath, ok, ok, ok, ok, ok, ok, unath, ok, ok, ok, unath, ok, ok}},
 		{"the whole snapshot", "GET", "/stream/snapshot", "",
 			[len(shapes)]int{unath, unath, ok, ok, ok, ok, ok, ok, unath, ok, ok, ok, unath, ok, ok}},
+		// WHERE THE COMPANY'S APPS LIVE: every principal the guard resolves,
+		// as the overview is, and never somebody it cannot.
+		{"the hosts a link is drawn by", "GET", "/link-hosts", "",
+			[len(shapes)]int{unath, unath, ok, ok, ok, ok, ok, ok, unath, ok, ok, ok, unath, ok, ok}},
 
 		// --- each app's own questions -------------------------------- //
 		{"the tracker's projects", "GET", "/query/work_projects", "",
 			[len(shapes)]int{unath, unath, ok, forbd, ok, ok, ok, ok, unath, ok, ok, ok, unath, forbd, ok}},
 		// THE CALLER'S OWN RECORD, which is the tracker's too: a relation
 		// arm on a tracker verb takes the tracker.
-		{"a person's own inbox", "GET", "/work/inbox", "",
+		{"a person's own inbox", "GET", "/worklet/inbox", "",
 			[len(shapes)]int{unath, unath, ok, forbd, ok, ok, ok, ok, unath, ok, ok, ok, unath, forbd, ok}},
 		{"the knowledge base's spaces", "GET", "/query/containers", "",
 			[len(shapes)]int{unath, unath, forbd, ok, ok, ok, ok, ok, unath, ok, forbd, ok, unath, forbd, ok}},
@@ -302,30 +310,30 @@ func TestThePostureMatrix(t *testing.T) {
 		// stream is unknown — which is the handler speaking, after the
 		// authority layer let the request through.
 		{"moving the trim's backup floor", "POST",
-			"/work/retention/ack?stream=CREWLET_TRACKER_LOG&position=1", "",
+			"/worklet/retention/ack?stream=CREWLET_TRACKER_LOG&position=1", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, forbd, absent, unath, forbd, forbd, absent, unath, forbd, stepUp}},
 		// ADMITTED AS A 200: every API is handed a node gate — the
 		// engine's core, on every node from boot — and this fixture's
 		// lands every record it is asked for.
-		{"evicting a node", "POST", "/work/retention/evict/n1?confirm=n1", "",
+		{"evicting a node", "POST", "/worklet/retention/evict/n1?confirm=n1", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, stepUp}},
-		{"readmitting a node", "POST", "/work/retention/readmit/n1?confirm=n1", "",
+		{"readmitting a node", "POST", "/worklet/retention/readmit/n1?confirm=n1", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, stepUp}},
 		// ADMITTED AS A 400: no target named.
-		{"resizing a stream", "POST", "/work/retention/capacity", "",
+		{"resizing a stream", "POST", "/worklet/retention/capacity", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
-		// ADMITTED AS A 500: this fixture's capacity window cannot be read.
+		// ADMITTED AS A 503: this fixture's capacity window cannot be read.
 		{"the maintenance window's state", "GET",
-			"/work/retention/maintenance?stream=CREWLET_TRACKER_LOG", "",
-			[len(shapes)]int{unath, unath, forbd, forbd, forbd, broken, forbd, broken, unath, forbd, forbd, broken, unath, forbd, broken}},
-		{"abandoning a resize", "POST", "/work/retention/maintenance/abandon", "",
+			"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, unread, forbd, unread, unath, forbd, forbd, unread, unath, forbd, unread}},
+		{"abandoning a resize", "POST", "/worklet/retention/maintenance/abandon", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
-		{"excluding a participant", "POST", "/work/retention/maintenance/exclude", "",
+		{"excluding a participant", "POST", "/worklet/retention/maintenance/exclude", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 		{"the value a reanchor must echo", "GET",
-			"/work/retention/reanchor?stream=CREWLET_TRACKER_LOG", "",
+			"/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, absent, forbd, absent, unath, forbd, forbd, absent, unath, forbd, absent}},
-		{"re-anchoring a log", "POST", "/work/retention/reanchor", "",
+		{"re-anchoring a log", "POST", "/worklet/retention/reanchor", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, bad, forbd, bad, unath, forbd, forbd, bad, unath, forbd, stepUp}},
 
 		// --- the company's credentials: admin ------------------------ //
@@ -337,6 +345,11 @@ func TestThePostureMatrix(t *testing.T) {
 		// the route is mounted on and is refused the reveal asked on
 		// top of it as a token.
 		{"a credential's value", "GET", "/secrets/POSTURE_PROBE?reveal=true", "",
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, tokenNo, unath, forbd, stepUp}},
+		// THE SAME VERB MOUNTED ON ITS OWN ROUTE, so the same answer
+		// for every shape: what a document's run reads several of.
+		{"several credentials' values", "POST", "/secrets/reveal",
+			`{"names":["POSTURE_PROBE"]}`,
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, tokenNo, unath, forbd, stepUp}},
 		{"overwriting a credential", "PUT", "/secrets/POSTURE_PROBE", "probe",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, stepUp}},
@@ -399,7 +412,7 @@ type postureMachine struct {
 }
 
 // postureTokens is the guard's REAL machine-token arm over three rows: a
-// person's token minted carrying the tracker (their owner holds admin), a
+// person's token minted carrying Worklet (their owner holds admin), a
 // service account's token carrying admin, and a revoked token of the first
 // person's that carried admin.
 func postureTokens(t *testing.T) postureMachine {
@@ -435,7 +448,7 @@ func postureTokens(t *testing.T) postureMachine {
 		Stage: iam.StageActive, Login: "svc:deploy", Grants: admin,
 	}
 	out := postureMachine{
-		pat:     mint(person, []iam.Grant{iam.GrantTracker}, time.Time{}),
+		pat:     mint(person, []iam.Grant{iam.GrantWorklet}, time.Time{}),
 		service: mint(service, admin, time.Time{}),
 		revoked: mint(person, admin, now.Add(-time.Minute)),
 	}
@@ -473,28 +486,40 @@ func (postureNoSeats) Seat(context.Context, string) (session.Seat, bool, error) 
 // matrix asserts who is admitted, never what a page says.
 type posturePages struct{}
 
-func (posturePages) List(context.Context, pages.Filter, statelog.Freshness) (
-	pages.Listing, error) {
-	return pages.Listing{}, nil
+func (posturePages) List(context.Context, doclet.Filter, statelog.Freshness) (
+	doclet.Listing, error) {
+	return doclet.Listing{}, nil
 }
 
-func (posturePages) Get(context.Context, string, statelog.Freshness) (pages.Detail, error) {
-	return pages.Detail{}, pages.ErrNotFound
+func (posturePages) Get(context.Context, string, statelog.Freshness) (doclet.Detail, error) {
+	return doclet.Detail{}, doclet.ErrNotFound
 }
 
 func (posturePages) Containers(context.Context, statelog.Freshness) (
-	[]pages.ContainerListing, error) {
+	[]doclet.ContainerListing, error) {
 	return nil, nil
 }
 
-func (posturePages) Activity(context.Context, pages.PageActivityQuery) (
-	pages.PageActivity, error) {
-	return pages.PageActivity{}, nil
+func (posturePages) Activity(context.Context, doclet.PageActivityQuery) (
+	doclet.PageActivity, error) {
+	return doclet.PageActivity{}, nil
 }
 
 func (posturePages) Revision(context.Context, string, int, statelog.Freshness) (
-	pages.Revision, bool, error) {
-	return pages.Revision{}, false, nil
+	doclet.Revision, bool, error) {
+	return doclet.Revision{}, false, nil
+}
+
+// postureReads is a company that reads no secret, so a write in the matrix
+// is decided on its route alone and re-activates nothing.
+type postureReads struct{}
+
+func (postureReads) Reads(context.Context, []string) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
+
+func (postureReads) Reload(context.Context, string, iam.Actor, string) (configapi.Applied, error) {
+	return configapi.Applied{}, errors.New("posture matrix: nothing reads a secret here")
 }
 
 // postureSecrets is the real /secrets surface over a memory fleet, so the
@@ -509,6 +534,7 @@ func postureSecrets(t *testing.T) *secretsapi.Service {
 	}
 	svc, err := secretsapi.New(secretsapi.Options{
 		Fleet: coordmemory.NewFleet(), Cipher: cipher, ActiveKeyID: "k1",
+		Config: postureReads{},
 	})
 	if err != nil {
 		t.Fatalf("secretsapi.New: %v", err)

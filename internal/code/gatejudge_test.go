@@ -244,7 +244,7 @@ func TestAnUnlessClassWaivesOnlyItsEntry(t *testing.T) {
 	f.Head.Classes = code.RevisionClasses{WhitespaceOnly: []int{2}, CommentOnly: []int{1}, Complete: true}
 	f = matchedBy(f, rules, "deploy/app.yaml", "docs/guide.go", "docs/notes.go")
 	p := judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionUnmet,
-		"touches deploy/**")
+		`touches "deploy/**"`)
 	if strings.Contains(p.Detail, "docs/**") {
 		t.Errorf("a docs entry its unless waived still holds the change: %q", p.Detail)
 	}
@@ -253,13 +253,13 @@ func TestAnUnlessClassWaivesOnlyItsEntry(t *testing.T) {
 	f.Head.Classes = code.RevisionClasses{WhitespaceOnly: []int{1}, CommentOnly: []int{0}, Complete: true}
 	f = matchedBy(f, rules, "docs/guide.go", "docs/notes.go")
 	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionMet,
-		"touches docs/** only with changes of a class its unless waives")
+		`touches "docs/**" only with changes of a class its unless waives`)
 
 	f = gateCase("docs/guide.go", "docs/server.go")
 	f.Head.Classes = code.RevisionClasses{CommentOnly: []int{0}, Complete: true}
 	f = matchedBy(f, rules, "docs/guide.go", "docs/server.go")
 	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionUnmet,
-		"touches docs/**")
+		`touches "docs/**"`)
 
 	// A REVISION THAT TOUCHES ALL is held by every entry, which no class
 	// waives.
@@ -267,7 +267,7 @@ func TestAnUnlessClassWaivesOnlyItsEntry(t *testing.T) {
 	f.Head.TouchesAll = true
 	f = matchedBy(f, rules)
 	p = judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionUnmet,
-		"touches deploy/**")
+		`touches "deploy/**"`)
 	if !strings.Contains(p.Detail, "docs/**") {
 		t.Errorf("a revision touching all is not held by docs/**: %q", p.Detail)
 	}
@@ -301,7 +301,7 @@ func TestAHumanPathChangeLeavesHumanApprovalComputing(t *testing.T) {
 	}
 	f.HumanPathsDigest = f.Head.HumanPathsDigest
 	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionUnmet,
-		"touches deploy/**")
+		`touches "deploy/**"`)
 	f.Head.HumanPaths = code.HumanPathMatch{Held: []int{len(rules.HumanPaths)}}
 	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionHumanApproval, code.PreconditionComputing,
 		"human paths changed since")
@@ -327,7 +327,7 @@ func TestAnApprovalsUnlessClassExemptsOnlyAWhollyClassedRevision(t *testing.T) {
 	f := gateCase("a.go", "b.go")
 	f.Head.Classes = code.RevisionClasses{CommentOnly: []int{0}, WhitespaceOnly: []int{1}, Complete: true}
 	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionApproval, code.PreconditionMet,
-		"needs no approval: every path it touches is comment_only and whitespace_only")
+		`needs no approval: every path it touches is "comment_only" and "whitespace_only"`)
 
 	f.Head.Classes = code.RevisionClasses{CommentOnly: []int{0}, Complete: true}
 	judgedAs(t, code.JudgeGate(f, rules), code.PreconditionApproval, code.PreconditionUnmet, "no approval")

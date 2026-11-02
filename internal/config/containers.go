@@ -14,7 +14,7 @@ import (
 //
 // The keys became vendor-neutral so that switching backends does not rewrite
 // the org chart. A grammar wider than the narrowest backend would forfeit
-// exactly that: a company running natively could write `engineering-platform`
+// exactly that: a company on Worklet could write `engineering-platform`
 // and discover on the day it moves to Jira that its whole hierarchy has to be
 // renamed, with every item key it ever minted pointing at the old one.
 //

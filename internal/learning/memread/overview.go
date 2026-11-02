@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -87,7 +88,7 @@ type Overview struct {
 // no way to say who holds anything, every row would be a guess, and "held by
 // nobody" is precisely the guess the three-valued lease read exists to refuse.
 func (r *Reader) Overview(ctx context.Context, seats []Seat) (Overview, error) {
-	self := NodeOf(r.Owner)
+	self := config.IncarnationNode(r.Owner)
 	out := Overview{
 		Seats:    make([]OverviewSeat, len(seats)),
 		Coverage: eventfan.Coverage{Nodes: []eventfan.NodeCoverage{{ID: self, Answered: true}}, Complete: true},
@@ -220,14 +221,14 @@ func (r *Reader) Overview(ctx context.Context, seats []Seat) (Overview, error) {
 
 	if replies != nil {
 		for owner, seats := range asked {
-			node := NodeOf(owner)
+			node := config.IncarnationNode(owner)
 			missing(node, fmt.Sprintf("no answer within the %s read budget", r.budget()))
 			mark(seats, node, "the node holding it did not answer")
 		}
 		got := <-replies
 		if got.err != nil {
 			for owner := range asked {
-				missing(NodeOf(owner), "it could not be asked: "+got.err.Error())
+				missing(config.IncarnationNode(owner), "it could not be asked: "+got.err.Error())
 			}
 		}
 		for _, body := range got.replies {
@@ -239,7 +240,7 @@ func (r *Reader) Overview(ctx context.Context, seats []Seat) (Overview, error) {
 			if !ok {
 				continue
 			}
-			node := NodeOf(rep.Owner)
+			node := config.IncarnationNode(rep.Owner)
 			if rep.Error != "" {
 				missing(node, rep.Error)
 				mark(seats, node, rep.Error)

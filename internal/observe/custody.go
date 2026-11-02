@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -44,11 +45,14 @@ import (
 // member asks next — and a publisher that was not told its batch was stored
 // sends it again. Written by two data nodes, a batch is two copies of one
 // history, and every figure derived from a node's own log counts it twice: the
-// usage domain sums each node's day, so a stateless node's spend would be
+// usage domain sums each data node's day, so a stateless node's spend would be
 // billed once per data node that wrote it. So after writing a batch a keeper
 // CLAIMS it in coordination, create-only ([coord.Custody]): the claim's winner
 // keeps the batch, any other writer deletes its copy, and the delivery is
-// acknowledged only once that is settled.
+// acknowledged only once that is settled — or once the fleet's record of its
+// keeper is one nothing can read ([coord.ErrCustodyUndecidable]), which no
+// redelivery could settle and every one would only write again on another
+// data node.
 //
 // Write first and claim second, never the reverse: a node that claimed and died
 // before writing would hold a batch nobody wrote. In this order the worst a
@@ -397,7 +401,8 @@ func (c *Custody) send(ctx context.Context, batch *cutBatch) error {
 type CustodyLog interface {
 	WriteCustody(ctx context.Context, b store.CustodyBatch, at time.Time) error
 	SettleCustody(ctx context.Context, batchID string, kept bool) error
-	UnsettledCustody(ctx context.Context, before time.Time, limit int) ([]store.UnsettledBatch, error)
+	UnsettledCustody(ctx context.Context, before time.Time, after store.UnsettledBatch,
+		limit int) ([]store.UnsettledBatch, error)
 }
 
 // CustodyClaims is the coordination half: who keeps a batch ([coord.Custody]).
@@ -447,9 +452,11 @@ const keeperSettleGrace = time.Minute
 // to keep is gone about as soon as the store answers again.
 const keeperPass = time.Minute
 
-// keeperPassBatches bounds one pass, which then runs again at once: the table
-// holds only what was written in the last few moments, so this is reached
-// only after the coordination store was away for a while.
+// keeperPassBatches is how many unsettled batches one read of the store lists:
+// the pass reads the next page after the last batch of this one, so a pass
+// still reaches every batch, and a page bounds what one read holds. The table
+// holds only what was written in the last few moments, so a second page is
+// read only after the coordination store was away for a while.
 const keeperPassBatches = 256
 
 // keeperStopWait is how long [Keeper.Stop] waits for a batch in hand to settle
@@ -485,9 +492,13 @@ func NewKeeper(log CustodyLog, claims CustodyClaims, node string) (*Keeper, erro
 // Start settles what an earlier run of this node left unsettled, attaches the
 // keeper to the group, and runs the settling pass until [Keeper.Stop].
 //
-// SETTLED BEFORE IT ATTACHES, so the copies a crash left are resolved before
-// this node takes anything new — a node that came back after a long absence
-// has the most of them, and the most likely to be somebody else's.
+// SETTLED BEFORE IT ATTACHES, so the copies the last run left — a batch in
+// hand when it stopped, one whose claim a crash cut short or the coordination
+// store did not answer — are resolved before this node takes anything new.
+// Nothing writes this node's store while it is stopped, so how long it was
+// away does not change how many there are, only how many of them are somebody
+// else's: the group redelivered each batch this node had not acknowledged to
+// the data nodes still running, and whichever claimed it first keeps it.
 func (k *Keeper) Start(ctx context.Context, sub Attachment) error {
 	if _, err := k.Reconcile(ctx); err != nil {
 		// NOT FATAL: the store will answer later, and the pass retries.
@@ -601,8 +612,10 @@ func (k *Keeper) run(ctx context.Context) {
 		}
 		if _, err := k.Reconcile(ctx); err != nil && ctx.Err() == nil {
 			log.WarnContext(ctx, "event_custody_unsettled", "error", err.Error(),
-				"detail", "a custody batch this node wrote could not be settled; "+
-					"its rows stay until the next pass learns which node keeps it")
+				"detail", "the pass stopped where the coordination store or this "+
+					"node's own store could not answer; the custody batches it had "+
+					"not reached keep their rows until a later pass learns which "+
+					"node keeps each")
 		}
 	}
 }
@@ -638,6 +651,14 @@ func (k *Keeper) Handle(ctx context.Context, ev *events.Event) queue.Result {
 		return queue.Nak(fmt.Errorf("observe: write custody batch %s: %w", id, err))
 	}
 	if err := k.settle(ctx, id); err != nil {
+		if errors.Is(err, coord.ErrCustodyUndecidable) {
+			// ACKNOWLEDGED, never redelivered: whichever node took it
+			// next would be told the same — the record is the fleet's —
+			// and would only write one more copy nobody can settle. Its
+			// copy here stays, and every pass names it.
+			undecided(ctx, store.UnsettledBatch{ID: id, Origin: ev.Node}, err)
+			return queue.Ack()
+		}
 		// UNSETTLED, and said by the pass that settles it; the delivery
 		// goes back, and whichever node takes it next is told the same
 		// keeper this one will be.
@@ -662,34 +683,111 @@ func (k *Keeper) settle(ctx context.Context, id string) error {
 	return nil
 }
 
+// KeeperPass is what one [Keeper.Reconcile] did.
+type KeeperPass struct {
+	// Settled is how many batches it settled, kept, deleted or let go.
+	Settled int
+	// Undecidable are the batches it left unsettled because the fleet's
+	// record of their keeper cannot be read ([coord.ErrCustodyUndecidable]),
+	// oldest first: each keeps its rows, counted in no day, and is asked
+	// about again by the next pass.
+	Undecidable []store.UnsettledBatch
+}
+
 // Reconcile settles every batch this node wrote at least [keeperSettleGrace]
-// ago and has not settled, reporting how many it settled.
+// before it began and has not settled, reporting what it settled and what it
+// could not.
 //
 // A BATCH OLDER THAN THE EVENT LOG KEEPS ROWS is let go without asking: its
 // rows are past the log's retention and swept with every other row of their
 // age, and its keeper's record may have aged out with them
 // ([coord.CustodyRetention]), so there is nothing left to decide.
-func (k *Keeper) Reconcile(ctx context.Context) (int, error) {
-	settled := 0
+//
+// A BATCH WHOSE KEEPER CANNOT BE DECIDED IS STEPPED OVER, never stopped at:
+// the fleet holds a record of its keeper that nothing can read, which says
+// nothing about any other batch and will say the same on every pass. Stopped
+// at, it held every batch written after it — the listing is oldest first —
+// unsettled on every pass and every boot until it aged past the log's
+// retention: a batch this node keeps counted in none of its days for a month,
+// its days by then older than the floor its usage publisher derives again,
+// and a copy another node keeps left here beside the keeper's for as long. So
+// it is named ([undecided]), left as it is, and the pass reads on after it.
+//
+// It STOPS at an answer that is unknown — the coordination store unreachable,
+// a claim this build cannot classify, this node's own store failing, ctx
+// ending — because that is no fact about one batch: the next would meet the
+// same, each after its own wait. What it settled and stepped over by then is
+// reported beside the error.
+func (k *Keeper) Reconcile(ctx context.Context) (KeeperPass, error) {
+	var pass KeeperPass
+	// ONE INSTANT FOR THE PASS: the listing reads on after the last batch it
+	// gave, and a bound fixed at the start is one no batch written during
+	// the pass can fall under, so the pass ends.
+	now := k.now()
+	after := store.UnsettledBatch{}
 	for {
-		now := k.now()
-		batches, err := k.log.UnsettledCustody(ctx, now.Add(-keeperSettleGrace), keeperPassBatches)
+		batches, err := k.log.UnsettledCustody(ctx, now.Add(-keeperSettleGrace), after, keeperPassBatches)
 		if err != nil {
-			return settled, err
+			return pass, err
 		}
 		for _, b := range batches {
+			if ended := ctx.Err(); ended != nil {
+				return pass, ended
+			}
 			if now.Sub(b.WrittenAt) > store.EventRetention {
 				err = k.log.SettleCustody(ctx, b.ID, false)
 			} else {
 				err = k.settle(ctx, b.ID)
 			}
-			if err != nil {
-				return settled, err
+			switch {
+			case errors.Is(err, coord.ErrCustodyUndecidable):
+				undecided(ctx, b, err)
+				pass.Undecidable = append(pass.Undecidable, b)
+			case err != nil:
+				return pass, err
+			default:
+				pass.Settled++
 			}
-			settled++
 		}
 		if len(batches) < keeperPassBatches {
-			return settled, nil
+			return pass, nil
 		}
+		after = batches[len(batches)-1]
 	}
+}
+
+// undecided says that a batch this node wrote cannot be settled, because the
+// fleet's record of its keeper cannot be read: once when its delivery meets
+// it, and on every pass after for as long as the record stands — the pass
+// naming when the batch was first written, which is when the event log's
+// retention lets it go.
+//
+// LOUD, and on every pass: it is a value no claim of this engine writes, and
+// what clears it is somebody removing it — the next claim then creates the
+// record afresh, and the copies settle — or the month the event log keeps the
+// batch's rows, until which a batch this node may keep is counted in none of
+// its days.
+//
+// The detail says WHERE the removal is possible, because on the default
+// topology it is not: the record is in the coordination store's custody
+// bucket, which the error names with its key, and only an external NATS
+// cluster is one an operator's own client is meant to reach — an embedded
+// broker offers no way in from outside the engine. And it says what to know
+// first, since a removal over a batch some node already keeps as its own
+// hands it a second keeper.
+func undecided(ctx context.Context, b store.UnsettledBatch, err error) {
+	attrs := []any{"batch", b.ID, "origin", b.Origin}
+	if !b.WrittenAt.IsZero() {
+		attrs = append(attrs, "written_at", b.WrittenAt)
+	}
+	log.WarnContext(ctx, "event_custody_undecidable", append(attrs, "error", err.Error(),
+		"detail", "the fleet's record of which data node keeps this custody batch "+
+			"cannot be read, so this node's copy is neither kept nor deleted: its rows "+
+			"stay, counted in no day, until the batch is past the event log's "+
+			"retention and goes with them, or until the record — under the key and in "+
+			"the bucket the error names — is removed and the next claim creates it "+
+			"again. Only an external NATS cluster offers a way to remove it "+
+			"(nats kv del <bucket> <key>), and only once no data node kept the batch "+
+			"before its record became unreadable: such a node logs nothing, and the "+
+			"claim after the removal would keep a second copy")...)
 }

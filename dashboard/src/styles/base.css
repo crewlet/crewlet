@@ -357,7 +357,6 @@ img {
    `prefers-reduced-motion` above zeroes every duration in the document, this
    one included, so there is nothing to opt out of here. */
 .working-now,
-.peek-grip,
 .list-row.clickable,
 .work-row,
 .turn-row,
@@ -460,7 +459,7 @@ button.t-link {
    BOUNDED rather than free-flowing: one of these is a card in a feed of forty,
    and a single long value may not set the height of every row above the rest.
    Two lines by default — the shape these values have is a short head and a
-   subject up to `tracker.MaxTitle` (256), so two carry the head plus the
+   subject up to `worklet.MaxTitle` (256), so two carry the head plus the
    distinguishing opening of the subject — and `--clamp-lines` raises it where a
    card IS its title.
 

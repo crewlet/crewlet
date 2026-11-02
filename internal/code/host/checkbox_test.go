@@ -44,8 +44,8 @@ func aCheck(id, repo, oid, name string, attempt int) host.CheckRunRef {
 // whole — and to nothing past its check's timeout and the box's grace; a
 // token of another domain over the same keyring is refused, as is one minted
 // under another keyring; and a ref no attempt has, or a timeout no check runs
-// for, is a caller's bug, refused by name. The token is known by its shape to
-// redaction, as every per-run token is.
+// for, is a caller's bug, answered no token at all. The token is known by its
+// shape to redaction, as every per-run token is.
 //
 // Mutations: carry the names raw in the subject — a dotted name's token no
 // longer verifies, red; mint for the timeout alone — the token is refused
@@ -88,27 +88,22 @@ func TestACheckTokenNamesItsAttempt(t *testing.T) {
 	if got, ok := tokens.Verify(bridge.Mint("chk~x", time.Hour)); ok {
 		t.Errorf("a bridge token over the same keyring was admitted as a check's: %+v", got)
 	}
-	for name, bad := range map[string]func(){
-		"an attempt past the last": func() {
-			tokens.Mint(aCheck(ref.Attempt.RepoID, "web", ref.Attempt.OID, "unit", code.MaxCheckAttempts+1),
+	for name, bad := range map[string]func() string{
+		"an attempt past the last": func() string {
+			return tokens.Mint(aCheck(ref.Attempt.RepoID, "web", ref.Attempt.OID, "unit", code.MaxCheckAttempts+1),
 				time.Minute)
 		},
-		"a repository no name names": func() {
-			tokens.Mint(aCheck(ref.Attempt.RepoID, "Web", ref.Attempt.OID, "unit", 1), time.Minute)
+		"a repository no name names": func() string {
+			return tokens.Mint(aCheck(ref.Attempt.RepoID, "Web", ref.Attempt.OID, "unit", 1), time.Minute)
 		},
-		"no timeout": func() { tokens.Mint(ref, 0) },
-		"a timeout past the ceiling": func() {
-			tokens.Mint(ref, code.CheckTimeoutCeiling+time.Second)
+		"no timeout": func() string { return tokens.Mint(ref, 0) },
+		"a timeout past the ceiling": func() string {
+			return tokens.Mint(ref, code.CheckTimeoutCeiling+time.Second)
 		},
 	} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("%s was minted", name)
-				}
-			}()
-			bad()
-		}()
+		if got := bad(); got != "" {
+			t.Errorf("%s was minted %q, want no token", name, got)
+		}
 	}
 }
 

@@ -75,6 +75,7 @@ roles:
       notion: {NOTION_TOKEN: per-seat-literal}
     integrations:
       mattermost:
+        enabled: false
         bot_token: mm-literal-bot-token
 `
 
@@ -160,6 +161,7 @@ func TestRedactionKeepsEveryToggle(t *testing.T) {
 	original, err := ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu: {model: claude-sonnet-5, auth: {mode: api-key, api_key: sk-literal-key}}
 turn_engine:
@@ -530,11 +532,11 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	exempt := map[string]bool{
 		// Numeric caps that merely count tokens (a token budget is a
 		// mapping of them, one per calendar window).
-		"TokenBudget": true, "MinTokensPerTask": true, "SandboxMinBudgetTokens": true,
+		"TokenBudget": true, "MinTokensPerTask": true, "ExecutorMinBudgetTokens": true,
 		// An embedding model's limits, counted in tokens.
 		"MaxInputTokens": true, "MaxBatchTokens": true,
-		// Scope NAMES minted onto a token, not the token.
-		"TokenScopes": true,
+		// A deep-work run's cap on what it may spend, counted in tokens.
+		"MaxTokens": true,
 	}
 	usedNames := map[string]bool{}
 
@@ -550,6 +552,9 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 			"material at it",
 		"APIAuth.MinPasswordLength": "the floor a person's password is held " +
 			"to, a number of characters, never a password",
+		"MCPServer.SeatCredentials": "which seat credential a server reads and " +
+			"under which key: integration, field and key names, never a value; " +
+			"the engine binds the sealed value itself",
 	}
 	usedFields := map[string]bool{}
 
@@ -647,6 +652,7 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 const rosterDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -818,6 +824,7 @@ func TestDuplicateStepNamesAreMatchedToNothing(t *testing.T) {
 const movingDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu: {model: claude-sonnet-5, auth: {mode: api-key, api_key: sk-literal-key}}
 mcp_servers:

@@ -39,7 +39,7 @@ import (
 //     turn that works for nobody reruns only a check of a change the seat
 //     wrote, or of a repository it owns.
 //   - A PERSON reruns any ended attempt: a person maintains every
-//     repository (ADR-0055), and the person is who judges a flake.
+//     repository (ADR-0078), and the person is who judges a flake.
 //   - A credential bound to nobody writes nothing: it reads only (contract
 //     §1.8).
 //

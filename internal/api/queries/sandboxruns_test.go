@@ -14,9 +14,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 var runBase = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
@@ -195,8 +197,8 @@ func TestAParkedBoxWithNoPauseStampStillReadsAsHeld(t *testing.T) {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	// The park lands; the stamp that would have dated it does not.
+	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
 	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		Question: "which branch?", Audience: "requester",
 		AskedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
@@ -274,10 +276,6 @@ func (unreachableRuns) Get(context.Context, string) (sandbox.PendingRun, bool, e
 	return sandbox.PendingRun{}, false, fmt.Errorf("sandbox: read run: %w", coord.ErrUnavailable)
 }
 
-func (unreachableRuns) BridgeLog(context.Context, string, string) ([]sandbox.BridgeCall, error) {
-	return nil, fmt.Errorf("sandbox: read the bridge log: %w", coord.ErrUnavailable)
-}
-
 // The run board reads the fleet's coordination store, so a blip there is "ask
 // again in a moment" like any other, not a failure. It reached the client as
 // `query_failed` and a 500, where the reference promised a 503.
@@ -311,6 +309,27 @@ func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 	}
 }
 
+// THE BOARD NAMES THE MEMBER EACH RUN WAS LAUNCHED ON, and its model, to an
+// admin: a launch-time fallback runs a job on an entry other than the chain's
+// head, and which entry's plan a long run is spending is what the person who
+// configures the entries asks. Who else may read the entry is
+// [TestASandboxRunsBodyIsItsSeatsTrail]'s.
+//
+// Mutation: drop either key from the row and this goes red.
+func TestTheBoardNamesTheMemberEachRunWasLaunchedOn(t *testing.T) {
+	store := seedRuns(t, sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe", Role: "SWE",
+		Status: sandbox.StatusRunning, CreatedAt: runBase,
+		Launch: sandbox.LaunchRecord{ProviderKey: "spare", Model: "claude-haiku"}})
+	rows := askRuns(t, store)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want one", len(rows))
+	}
+	if rows[0]["provider_key"] != "spare" || rows[0]["model"] != "claude-haiku" {
+		t.Errorf("row names %v/%v, want the member the run was launched on",
+			rows[0]["provider_key"], rows[0]["model"])
+	}
+}
+
 // THE BOARD NAMES THE JOB EACH RUN HOLDS, which is what its live output is
 // asked by (`sandbox_tail{turn_id, launch_id}`). A turn can launch more than
 // one job, so the run's page could not poll a running run's output without it.
@@ -340,37 +359,20 @@ func TestTheBoardNamesTheJobEachRunHolds(t *testing.T) {
 // trigger; `bridge_calls` is the ONLY copy of a bridged run's tool log, since
 // those calls are made by a process outside the engine minutes apart and
 // possibly across a restart. Without them the run page's Calls tab had nothing
-// to render and "is anybody waiting on this" had no answer. The log is kept
-// beside the row, so the board reads it for the job the row holds, and how many
-// calls its middle lost is the row's own count.
-//
-// Mutation: answer the board's log as none ([Sources.bridgeLogFor] returning
-// nil) and the calls go missing; count the elided calls off the log rather than
-// the row and the count reads zero.
+// to render and "is anybody waiting on this" had no answer.
 func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 	t.Parallel()
+	called := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	store := seedRuns(t, sandbox.PendingRun{
 		TurnID: "t-1", Role: "Dev", Status: sandbox.StatusAwaiting,
 		Reply:     "chat:C1",
 		SessionID: "sess-9", CommandID: "cmd-3",
 		DelegationChain: []string{"agent-pm", "agent-swe"},
+		BridgeCalls: []sandbox.BridgeCall{
+			{Name: "get_work_item", Args: `{"id":"ENG-1"}`, At: called},
+		},
+		BridgeCallsElided: 4,
 	})
-	parked, _, err := store.Get(context.Background(), "t-1")
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	// FOUR PAST THE LOG'S BOUND, so its middle loses four.
-	for i := range sandbox.MaxBridgeCalls + 4 {
-		name := fmt.Sprintf("call-%03d", i)
-		if i == 0 {
-			name = "get_work_item"
-		}
-		if ok, err := store.AppendBridgeCall(context.Background(), "t-1", sandbox.BridgeAppend{
-			Launch: parked.LaunchID, Call: sandbox.BridgeCall{Name: name, Args: `{"id":"ENG-1"}`},
-		}); err != nil || !ok {
-			t.Fatalf("AppendBridgeCall %d = (%v, %v)", i, ok, err)
-		}
-	}
 	row := askRuns(t, store)[0]
 	switch {
 	case row["reply"] != "chat:C1":
@@ -384,9 +386,8 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 			"log that lies about what the run did", row["bridge_calls_elided"])
 	}
 	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
-	if !ok || len(calls) != sandbox.MaxBridgeCalls || calls[0].Name != "get_work_item" {
-		t.Fatalf("bridge_calls = %d calls %#v, want the run's own tool log, its start kept",
-			len(calls), row["bridge_calls"])
+	if !ok || len(calls) != 1 || calls[0].Name != "get_work_item" {
+		t.Fatalf("bridge_calls = %#v, want the run's own tool log", row["bridge_calls"])
 	}
 	chain, ok := row["delegation_chain"].([]string)
 	if !ok || !slices.Equal(chain, []string{"agent-pm", "agent-swe"}) {
@@ -410,9 +411,9 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 		"to-cy":     {Handles: []string{"cy"}, Fallback: true},
 		"to-nobody": {},
 	} {
+		sandboxtest.Ask(t, store, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToTeam})
 		if err := store.MarkAwaiting(t.Context(), turnID, sandbox.Clarification{
-			Question: "which branch?", Audience: "team", Answerers: answerers,
-			AskedAt: time.Now().UTC(),
+			Answerers: answerers, AskedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatalf("MarkAwaiting %s: %v", turnID, err)
 		}
@@ -476,8 +477,10 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
+	// THE SEAL IS OPAQUE HERE: the board reads a run's status and never its
+	// answer, so any sealed bytes stand for the one a coordinator records.
 	if _, won, err := store.RecordAnswer(t.Context(), "to-ana", run.LaunchID, sandbox.RecordedAnswer{
-		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"reply-1"},
+		Sealed: []byte("an answer ana gave, sealed"), Via: types.AnswerViaChat, EventIDs: []string{"reply-1"},
 	}, sandbox.Fence{Owner: run.Owner, Epoch: run.OwnerEpoch}); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
 	}
@@ -517,16 +520,20 @@ func TestARunNamesTheItemItIsOn(t *testing.T) {
 }
 
 // parkedRun is a coding run of the agent seat `swe` parked on a question put
-// to ana, carrying every body field and a work item.
+// to ana, carrying every body field, a work item, and the entry its job was
+// launched on.
 func parkedRun() sandbox.PendingRun {
 	return sandbox.PendingRun{
-		TurnID: "t-1", LaunchID: "launch-1", AgentHandle: "swe", Role: "SWE",
-		Status:          sandbox.StatusAwaiting,
+		TurnID: "t-1", AgentHandle: "swe", Role: "SWE", Status: sandbox.StatusAwaiting,
 		TaskDescription: "port the importer", Question: "which branch?",
+		QuestionContext: "Both `main` and `next` build.",
+		Decision: &decision.Decision{Question: "which branch?", Role: decision.RoleApprover,
+			Options: []decision.Option{{ID: "main", Label: "main"}, {ID: "next", Label: "next"}}},
 		Reply:           "chat:C1",
 		AudienceHandles: []string{"ana"},
-		Launch:          sandbox.LaunchRecord{BridgedCalls: 1},
+		BridgeCalls:     []sandbox.BridgeCall{{Name: "get_work_item", Args: `{"id":"ENG-1"}`}},
 		WorkItem:        &types.WorkItem{Backend: "native", ID: "task-1", Key: "ENG-1"},
+		Launch:          sandbox.LaunchRecord{ProviderKey: "plan-zulu", Model: "opus"},
 		CreatedAt:       runBase,
 	}
 }
@@ -550,38 +557,47 @@ func boardAs(ctx context.Context, t *testing.T, chart authz.Chart) map[string]an
 
 // A RUN'S STATUS IS EVERYBODY'S AND ITS BODY IS ITS SEAT'S TRAIL (ADR-0033).
 //
-// Every reader sees the run — its seat, its state, where it is — and only an
-// admin and the seat's lead see what it was asked, who is waiting on it and
-// what its agent called; the work item it is on goes to whoever holds the
-// tracker, whatever else they read. A withheld body is said (`body_withheld`)
-// rather than left to read as a run that was asked nothing.
+// Every reader sees the run — its seat, its state, where it is, the model it
+// runs under — and only an admin and the seat's lead see what it was asked,
+// who is waiting on it and what its agent called; the work item it is on goes
+// to whoever holds the tracker, whatever else they read; and the
+// `providers.llm` entry its job was launched on is the company's
+// configuration, an admin's alone, which the lead reads the trail without. A
+// withheld body is said (`body_withheld`) rather than left to read as a run
+// that was asked nothing.
 //
 // Mutation: show the body to every reader ([Sources.runReach] answering Body
 // true) and the stranger's row goes red; drop the tracker rule and the lead's
-// does.
+// does; classify the entry as status and every row but the admin's does.
 func TestASandboxRunsBodyIsItsSeatsTrail(t *testing.T) {
 	t.Parallel()
-	body := []string{"task_description", "question", "reply", "bridge_calls"}
+	body := []string{"task_description", "question", "question_context", "decision",
+		"reply", "bridge_calls"}
 	for _, c := range []struct {
 		name     string
 		ctx      context.Context
 		chart    authz.Chart
 		body     bool
 		workItem bool
+		entry    bool
 	}{
-		{"an admin", asGrants(t, "", iam.GrantAdmin), flatChart{}, true, true},
+		{"an admin", asGrants(t, "", iam.GrantAdmin), flatChart{}, true, true, true},
 		{"the seat's lead, holding no permission", asSeat(t, "lead"),
-			leadsChart{lead: "lead", report: "swe"}, true, false},
+			leadsChart{lead: "lead", report: "swe"}, true, false, false},
 		{"a stranger holding every app", asSeat(t, "pat", iam.Apps...), flatChart{},
-			false, true},
-		{"a stranger holding nothing", asSeat(t, "pat"), flatChart{}, false, false},
+			false, true, false},
+		{"a stranger holding nothing", asSeat(t, "pat"), flatChart{}, false, false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			row := boardAs(c.ctx, t, c.chart)
 			if row["turn_id"] != "t-1" || row["agent_handle"] != "swe" ||
-				row["status"] != sandbox.StatusAwaiting {
+				row["status"] != sandbox.StatusAwaiting || row["model"] != "opus" {
 				t.Errorf("the run's status is not everybody's: %v", row)
+			}
+			if entry, shown := row["provider_key"]; shown != c.entry ||
+				(shown && entry != "plan-zulu") {
+				t.Errorf("provider_key is %v (shown %v), want shown %v", entry, shown, c.entry)
 			}
 			for _, key := range body {
 				if _, shown := row[key]; shown != c.body {
@@ -609,8 +625,11 @@ func TestASandboxRunsBodyIsItsSeatsTrail(t *testing.T) {
 func TestAParkedQuestionReachesItsAudience(t *testing.T) {
 	t.Parallel()
 	asked := boardAs(asSeat(t, "ana"), t, flatChart{})
-	if asked["question"] != "which branch?" {
-		t.Errorf("the person the question is put to was shown %v, want it", asked["question"])
+	if asked["question"] != "which branch?" || asked["question_context"] == nil ||
+		asked["decision"] == nil {
+		t.Errorf("the person the question is put to was shown %v, %v, %v; want the "+
+			"question with its context and its options", asked["question"],
+			asked["question_context"], asked["decision"])
 	}
 	for _, key := range []string{"task_description", "reply", "bridge_calls"} {
 		if _, shown := asked[key]; shown {
@@ -620,7 +639,44 @@ func TestAParkedQuestionReachesItsAudience(t *testing.T) {
 	if asked["body_withheld"] != true {
 		t.Errorf("body_withheld = %v, want true: the task is still withheld", asked["body_withheld"])
 	}
-	if _, shown := boardAs(asSeat(t, "bo"), t, flatChart{})["question"]; shown {
-		t.Error("somebody the question is not put to was shown it")
+	stranger := boardAs(asSeat(t, "bo"), t, flatChart{})
+	for _, key := range []string{"question", "question_context", "decision"} {
+		if _, shown := stranger[key]; shown {
+			t.Errorf("somebody the question is not put to was shown its %s", key)
+		}
+	}
+}
+
+// A RUN'S ASK HAS ONE SHAPE ON EVERY READER. The question and its context are
+// always on the row, the context empty where the run gave none, and the choice
+// it offers is there only where it offers one, never as a null: a client read
+// the context's absence as a question of another kind and split a new open
+// question on its first sentence (ADR-0068).
+//
+// Mutation: send `decision: null` on an open question, or leave the context
+// out where it is empty, and this fails.
+func TestARunsAskHasOneShapeOnTheBoard(t *testing.T) {
+	t.Parallel()
+	open := parkedRun()
+	open.QuestionContext, open.Decision = "", nil
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Sandbox: fixedRuns{open}, Chart: flatChart{}})
+	got, err := r.Answer(asGrants(t, "", iam.GrantAdmin), "sandbox_runs", nil)
+	if err != nil {
+		t.Fatalf("sandbox_runs: %v", err)
+	}
+	raw, err := json.Marshal(got.(map[string]any)["runs"].([]any)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &row); err != nil {
+		t.Fatal(err)
+	}
+	if string(row["question_context"]) != `""` {
+		t.Errorf("question_context is %s on an open question, want an empty string", row["question_context"])
+	}
+	if d, present := row["decision"]; present {
+		t.Errorf("decision is %s on an open question, want it absent", d)
 	}
 }

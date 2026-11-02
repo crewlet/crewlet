@@ -112,7 +112,7 @@ func TestARecordRendersAsTheEntryItsRunWouldHaveAnnounced(t *testing.T) {
 }
 
 // A RUN IS NAMED FROM ITS RECORD AS IT WAS ANNOUNCED: by the label its launch
-// stored, which for an agent-mode executor is its turn's task rather than the
+// stored, which for an executor run is its turn's task rather than the
 // heading its brief opens with.
 func TestARecordIsNamedByTheLabelItsLaunchAnnounced(t *testing.T) {
 	t.Parallel()
@@ -126,6 +126,25 @@ func TestARecordIsNamedByTheLabelItsLaunchAnnounced(t *testing.T) {
 	}
 	if got := records[0].Entry.Task; got != run.Label {
 		t.Errorf("the run is named %q, want %q", got, run.Label)
+	}
+}
+
+// A RECORD NAMES THE MEMBER ITS RUN WAS LAUNCHED ON, as the announcement did,
+// so a run this process never saw announced is drawn with the entry and model
+// it runs on.
+func TestARecordNamesTheMemberItsRunWasLaunchedOn(t *testing.T) {
+	t.Parallel()
+	run := sandbox.PendingRun{
+		TurnID: "tn-1", Status: sandbox.StatusRunning,
+		Launch: sandbox.LaunchRecord{ProviderKey: "spare", Model: "claude-haiku"},
+	}
+	records := observe.SandboxRecords([]sandbox.PendingRun{run})
+	if len(records) != 1 {
+		t.Fatalf("records = %+v, want the run in flight", records)
+	}
+	if e := records[0].Entry; e.ProviderKey != "spare" || e.Model != "claude-haiku" {
+		t.Errorf("the record names %q/%q, want the member the run was launched on",
+			e.ProviderKey, e.Model)
 	}
 }
 

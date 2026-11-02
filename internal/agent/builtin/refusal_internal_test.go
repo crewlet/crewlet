@@ -8,15 +8,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/learning"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // EVERY WRITE SENTINEL HAS ITS OWN CLASS, because the class is what a person's
@@ -32,20 +36,20 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		err  error
 		want tools.Refusal
 	}{
-		{"no task", fmt.Errorf("x: %w", tracker.ErrNoTask), tools.RefusalNotFound},
+		{"no task", fmt.Errorf("x: %w", worklet.ErrNoTask), tools.RefusalNotFound},
 		{"lost race", fmt.Errorf("x: %w", statelog.ErrConflict), tools.RefusalConflict},
 		{"exists", fmt.Errorf("x: %w", statelog.ErrExists), tools.RefusalExists},
-		{"stale", fmt.Errorf("x: %w", tracker.ErrStaleVersion), tools.RefusalStaleVersion},
-		{"hand-offs", fmt.Errorf("x: %w", tracker.ErrReassignmentBudget),
+		{"stale", fmt.Errorf("x: %w", worklet.ErrStaleVersion), tools.RefusalStaleVersion},
+		{"hand-offs", fmt.Errorf("x: %w", worklet.ErrReassignmentBudget),
 			tools.RefusalReassignmentBudget},
-		{"authority", fmt.Errorf("x: %w", tracker.ErrForbidden), tools.RefusalForbidden},
+		{"authority", fmt.Errorf("x: %w", worklet.ErrForbidden), tools.RefusalForbidden},
 		// A FULL INBOX LIST asks for a different gesture, not a smaller
 		// one — read_through — so it is not a content refusal either.
 		{"inbox full", fmt.Errorf("x: %w", inbox.ErrFull), tools.RefusalInboxFull},
 		// A SECOND ANSWER THAT LOST THE RACE is refused by the write's own
 		// snapshot, after the thread read passed it — typed, naming who
 		// answered. It is not the node's failure and not a retry.
-		{"already answered", fmt.Errorf("x: %w", &tracker.AlreadyAnsweredError{
+		{"already answered", fmt.Errorf("x: %w", &worklet.AlreadyAnsweredError{
 			Task: "t-1", Comment: "c-1", By: "ana"}), tools.RefusalAlreadyAnswered},
 		// A maintenance or sealed fleet has no publisher and an evicted,
 		// deferred or full-log node refuses the append: all of them
@@ -80,26 +84,49 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		// THE WRITER'S OWN REFUSAL ON CONTENT, marked, which names what
 		// it refused: offering a retry for it would be a retry that
 		// never lands.
-		{"refused on content", fmt.Errorf("tracker: field estimate is exact "+
-			"to two places: %w", tracker.ErrInvalid), tools.RefusalInvalid},
-		{"text past its cap", fmt.Errorf("x: %w", &tracker.TextCapError{
-			Field: tracker.TextTitle, Size: 600, Limit: tracker.MaxTitle}),
+		{"refused on content", fmt.Errorf("worklet: field estimate is exact "+
+			"to two places: %w", worklet.ErrInvalid), tools.RefusalInvalid},
+		{"text past its cap", fmt.Errorf("x: %w", &worklet.TextCapError{
+			Field: worklet.TextTitle, Size: 600, Limit: worklet.MaxTitle}),
 			tools.RefusalInvalid},
-		// A TAG THAT CANNOT BE DECLARED is what the call asked for, and its
-		// sentence names the tag and the way past it.
-		{"a clashing tag", fmt.Errorf("x: %w", &tracker.TagClash{Project: "OPS",
-			Slug: "api", Label: "API", Other: tracker.Tag{Slug: "backend-api",
-				Label: "API"}}), tools.RefusalInvalid},
-		{"a full tag set", fmt.Errorf("x: %w", &tracker.TagsFull{Project: "OPS",
-			Slug: "api"}), tools.RefusalInvalid},
+		// A TAG WHOSE LABEL ANOTHER TAG CARRIES is a collision, and its
+		// sentence names the tag that holds it and the way past it.
+		{"a clashing tag", fmt.Errorf("x: %w", &worklet.TagClash{Project: "OPS",
+			Slug: "api", Label: "API", Other: worklet.Tag{Slug: "backend-api",
+				Label: "API"}}), tools.RefusalExists},
+		// THE PROJECT'S STATE, not the call's: it lands once a tag is
+		// archived to make room.
+		{"a full tag set", fmt.Errorf("x: %w", &worklet.TagsFull{Project: "OPS",
+			Slug: "api"}), tools.RefusalConflict},
+		{"a task frozen in the trash", &worklet.Refusal{Mark: worklet.ErrState,
+			Err: errors.New("task t1 was removed by jane; restore it first")},
+			tools.RefusalConflict},
+		// EVERY OTHER REFUSAL A DOMAIN DECIDED is its class too
+		// ([WriterClass]): with no arm of its own here each fell to the
+		// fault, and told a caller the node had broken over a comment
+		// that is not there or a remark that is not theirs.
+		{"a comment that is not there", fmt.Errorf("x: %w", worklet.ErrNoComment),
+			tools.RefusalNotFound},
+		{"a project that is not there", fmt.Errorf("x: %w", worklet.ErrNoProject),
+			tools.RefusalNotFound},
+		{"a remark that is not the caller's", fmt.Errorf("x: %w", worklet.ErrNotAuthor),
+			tools.RefusalForbidden},
+		// AND THE DOMAIN'S CLASS IS TAKEN BEFORE A CONDITION ITS ERROR
+		// ALSO CARRIES: a file filed under a project this node does not
+		// hold wraps the log's unavailable beside the domain's own
+		// sentinel, as the tracker writes it, and is the not-found its
+		// sentinel names — the project may be on its way, and the
+		// sentence says so.
+		{"a project not on this node yet", fmt.Errorf("%w: %s (or it is not on this node yet: %w)",
+			worklet.ErrNoProject, "ENG", statelog.ErrUnavailable), tools.RefusalNotFound},
 		// A GESTURE STOPPED AT A STEP WHOSE OUTCOME IS UNKNOWN may have
 		// written part of what it asked for, so it is never a refusal of
 		// what was asked: it is the class an interrupted call answers,
 		// the node's and not the request's — see [writeCause].
 		{"a step whose outcome is unknown", fmt.Errorf("x: %w",
-			tracker.ErrStepUnresolved), tools.RefusalUnavailable},
+			worklet.ErrStepUnresolved), tools.RefusalUnavailable},
 		{"a step this node cannot vouch for", fmt.Errorf("x: %w",
-			tracker.ErrStepUnvouched), tools.RefusalUnavailable},
+			worklet.ErrStepUnvouched), tools.RefusalUnavailable},
 		// AN UNMARKED FAILURE IS THE NODE'S, AND A FAULT. These arrive raw
 		// from the publisher and the writer's own reads — telling a person
 		// to fix their input over a disk error is one lie these rows pin,
@@ -112,7 +139,7 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 		// stay faults — the marks are what their own packages decided, and
 		// a classifier reading text would call any error naming a lock a
 		// wait.
-		{"re-spread unreadable", errors.New("tracker: read the re-spread " +
+		{"re-spread unreadable", errors.New("worklet: read the re-spread " +
 			"window in ENG: database is locked"), tools.RefusalInternalError},
 		{"broker words with no mark", errors.New("publish x: nats: no " +
 			"responders available for request"), tools.RefusalInternalError},
@@ -131,7 +158,7 @@ func TestWriteFailureClassesEachSentinel(t *testing.T) {
 			}
 			// AND ONLY A STOPPED STEP IS AN UNKNOWN: a refusal read as one
 			// tells a surface the write may have landed when nothing did.
-			wantUnknown := errors.Is(c.err, tracker.ErrStepUnresolved)
+			wantUnknown := errors.Is(c.err, worklet.ErrStepUnresolved)
 			if tools.UnknownOf(got) != wantUnknown {
 				t.Errorf("UnknownOf(writeFailure(%v)) = %v, want %v", c.err,
 					tools.UnknownOf(got), wantUnknown)
@@ -170,30 +197,30 @@ func TestAReusedOperationIsTheCallersToChange(t *testing.T) {
 	}
 }
 
-// A CONTENT REFUSAL READS FOR THE PERSON WHO IS SHOWN IT. The invalid class is
-// the one a person's surface prints as the tool wrote it (`contract/errors.ts`
-// — "the sentence names the argument"), so it must not carry the node-failure
-// wording written for a model, nor anything the person never typed. A title
+// A CONTENT REFUSAL IS THE WRITER'S SENTENCE. The invalid class is the one a
+// caller corrects its call by — "the sentence names the argument" — so it must
+// not carry the node-failure wording written for a failure the call did not
+// meet, nor anything the caller never sent. A title
 // filed from the dashboard at 600 bytes came back as "create_work_item did not
-// land (tracker: the title on task 68c5… is 600 bytes …). The change was NOT
+// land (worklet: the title on task 68c5… is 600 bytes …). The change was NOT
 // made — do not report it as done." — a tool name, a Go error prefix, the id
 // of a task that was never created, and an instruction meant for a model.
-func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
+func TestAContentRefusalIsTheWritersSentence(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		name  string
 		err   error
 		names []string
 	}{
-		{"a title", &tracker.TextCapError{Field: tracker.TextTitle, Size: 600,
-			Limit: tracker.MaxTitle}, []string{"`title`", "600", "256", "title"}},
-		{"a description", &tracker.TextCapError{Field: tracker.TextBody,
-			Size: tracker.MaxBody + 1, Limit: tracker.MaxBody},
-			[]string{"`body`", "description", fmt.Sprint(tracker.MaxBody)}},
-		{"a comment", &tracker.TextCapError{Field: tracker.TextComment,
-			Size: tracker.MaxCommentBody + 9, Limit: tracker.MaxCommentBody},
-			[]string{"`body`", "comment", fmt.Sprint(tracker.MaxCommentBody + 9)}},
-		{"any other content refusal", tracker.Decision{Question: "Which?"}.Validate(),
+		{"a title", &worklet.TextCapError{Field: worklet.TextTitle, Size: 600,
+			Limit: worklet.MaxTitle}, []string{"`title`", "600", "256", "title"}},
+		{"a description", &worklet.TextCapError{Field: worklet.TextBody,
+			Size: worklet.MaxBody + 1, Limit: worklet.MaxBody},
+			[]string{"`body`", "description", fmt.Sprint(worklet.MaxBody)}},
+		{"a comment", &worklet.TextCapError{Field: worklet.TextComment,
+			Size: worklet.MaxCommentBody + 9, Limit: worklet.MaxCommentBody},
+			[]string{"`body`", "comment", fmt.Sprint(worklet.MaxCommentBody + 9)}},
+		{"any other content refusal", invalidDecision(),
 			[]string{"a decision has 0 option(s)"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -207,21 +234,21 @@ func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
 				}
 			}
 			// NEITHER THE NODE-FAILURE WORDING NOR THE GO PREFIX: the
-			// class is printed to a person as it stands, and "tracker:" is
-			// a word for a log about where the error came from.
+			// class is told as it stands, and "worklet:" is a word for a
+			// log about where the error came from.
 			for _, never := range []string{"did not land", "do not report it as done",
-				"tracker:"} {
+				"worklet:"} {
 				if strings.Contains(got.Output, never) {
-					t.Errorf("a content refusal a person reads carries %q: %s",
+					t.Errorf("a content refusal carries %q: %s",
 						never, got.Output)
 				}
 			}
 		})
 	}
 	// THE TEXT CAP IS COMPOSED FROM ITS FIELDS, never the writer's Go error.
-	got := writeFailure(t.Context(), Actor{}, CreateWorkItemTool, &tracker.TextCapError{
-		Field: tracker.TextTitle, Size: 600, Limit: tracker.MaxTitle})
-	for _, never := range []string{"tracker:", CreateWorkItemTool} {
+	got := writeFailure(t.Context(), Actor{}, CreateWorkItemTool, &worklet.TextCapError{
+		Field: worklet.TextTitle, Size: 600, Limit: worklet.MaxTitle})
+	for _, never := range []string{"worklet:", CreateWorkItemTool} {
 		if strings.Contains(got.Output, never) {
 			t.Errorf("the text-cap sentence carries %q: %s", never, got.Output)
 		}
@@ -236,18 +263,151 @@ func TestPageWriteFailureClassesEachSentinel(t *testing.T) {
 		err  error
 		want tools.Refusal
 	}{
-		{fmt.Errorf("x: %w", pages.ErrInvalid), tools.RefusalInvalid},
-		{fmt.Errorf("x: %w", pages.ErrTitleTaken), tools.RefusalExists},
-		{fmt.Errorf("x: %w", pages.ErrStaleVersion), tools.RefusalStaleVersion},
-		{fmt.Errorf("x: %w", pages.ErrConflict), tools.RefusalConflict},
-		{fmt.Errorf("x: %w", pages.ErrNotFound), tools.RefusalNotFound},
+		{fmt.Errorf("x: %w", doclet.ErrInvalid), tools.RefusalInvalid},
+		{fmt.Errorf("x: %w", doclet.ErrTitleTaken), tools.RefusalExists},
+		{fmt.Errorf("x: %w", doclet.ErrStaleVersion), tools.RefusalStaleVersion},
+		{fmt.Errorf("x: %w", doclet.ErrConflict), tools.RefusalConflict},
+		{fmt.Errorf("x: %w", doclet.ErrNotFound), tools.RefusalNotFound},
+		// AND WHAT NO ARM NAMES, BY THE DOMAINS' ONE TABLE ([WriterClass]).
+		{fmt.Errorf("x: %w", doclet.ErrBadCursor), tools.RefusalInvalid},
+		{fmt.Errorf("x: %w", statelog.ErrExists), tools.RefusalExists},
 		{&statelog.Unavailable{Reason: statelog.ReasonLogFull}, tools.RefusalUnavailable},
-		{errors.New("pages: read the container ENG: disk I/O"), tools.RefusalInternalError},
+		{errors.New("doclet: read the container ENG: disk I/O"), tools.RefusalInternalError},
 	} {
-		if got := pageWriteFailure(t.Context(), "save_page", c.err); !got.Failed || tools.RefusalOf(got) != c.want {
+		if got := pageWriteFailure(t.Context(), "save_page", c.err, ""); !got.Failed || tools.RefusalOf(got) != c.want {
 			t.Errorf("pageWriteFailure(%v) = failed %v class %q, want %q",
 				c.err, got.Failed, tools.RefusalOf(got), c.want)
 		}
+	}
+}
+
+// EVERY CHAT SENTINEL HAS ITS OWN CLASS, on [TestPageWriteFailureClassesEachSentinel]'s
+// reasoning — and the chat store wraps every refusal it decides on what was
+// asked in one of them, so the unmarked remainder is this node's: a condition
+// waiting clears, or a fault. Every row is shaped the way the store builds it:
+// a field refusal from a payload's own validation, the rest wrapping their
+// mark with the sentence after it.
+//
+// Mutation: drop any arm of chatClass and its row goes red.
+func TestChatWriteFailureClassesEachSentinel(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		err  error
+		want tools.Refusal
+	}{
+		{"a field refused", chatlet.ChannelPatch{}.Validate(), tools.RefusalInvalid},
+		// A ROOM THAT TAKES NOTHING MORE is the room's state, which the same
+		// call meets until somebody reopens it — never an argument to change
+		// and nobody's permission to ask for — and a message carrying all
+		// the emoji it may is the message's.
+		{"an archived room", fmt.Errorf("%w: room-1 was archived", chatlet.ErrArchived),
+			tools.RefusalConflict},
+		{"a message carrying all its emoji", fmt.Errorf("%w: the message reached "+
+			"its 32 distinct emoji", chatlet.ErrReactionsFull), tools.RefusalConflict},
+		{"not this actor's", fmt.Errorf("%w: message m1 was written by ana",
+			chatlet.ErrForbidden), tools.RefusalForbidden},
+		// A ROOM A NEWER PEER MADE is this node's to serve once upgraded,
+		// never a permission: told "forbidden", a caller stops asking for
+		// something that lands the moment this node is upgraded.
+		{"a room of a kind this build does not know", fmt.Errorf("%w: room-1 is "+
+			"a \"guild\" room", chatlet.ErrUnknownKind), tools.RefusalUnavailable},
+		{"a name somebody holds", fmt.Errorf("%w: launch", chatlet.ErrNameTaken),
+			tools.RefusalExists},
+		{"a conversation already open", fmt.Errorf("%w: dm-1", chatlet.ErrRoomExists),
+			tools.RefusalExists},
+		{"a lost race", fmt.Errorf("%w: room-1: %w", chatlet.ErrConflict,
+			statelog.ErrConflict), tools.RefusalConflict},
+		{"no such room", fmt.Errorf("%w: room room-1", chatlet.ErrNotFound),
+			tools.RefusalNotFound},
+		// THE LOG'S OWN REFUSAL is the node's condition, and anything
+		// unmarked its fault: a person told to fix their input over a disk
+		// error is the lie these rows pin.
+		{"log refused", &statelog.Unavailable{Reason: statelog.ReasonDeferred},
+			tools.RefusalUnavailable},
+		{"timed out", fmt.Errorf("x: %w", context.DeadlineExceeded), tools.RefusalUnavailable},
+		{"ledger unreadable", errors.New("statelog: read the operation ledger: " +
+			"disk I/O"), tools.RefusalInternalError},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := chatWriteFailure(t.Context(), PostMessageTool, c.err, "")
+			if !got.Failed || tools.RefusalOf(got) != c.want {
+				t.Fatalf("chatWriteFailure(%v) = failed %v class %q, want %q",
+					c.err, got.Failed, tools.RefusalOf(got), c.want)
+			}
+		})
+	}
+}
+
+// AND A REFUSAL OF WHAT A CHAT CALL ASKED IS THE STORE'S OWN SENTENCE: the
+// field, the rule or the room it names, without the package's Go prefix, and
+// none of the wording a tool tells a model about a failure of the node, since
+// nothing failed: the call was refused for what it asked.
+func TestAChatRefusalIsTheStoresOwnSentence(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		got  tools.Result
+		says string
+	}{
+		"invalid": {chatWriteFailure(t.Context(), PostMessageTool,
+			chatlet.ChannelPatch{}.Validate(), ""), "`patch`: a patch sets no field"},
+		"forbidden": {chatWriteFailure(t.Context(), ReactToMessageTool, fmt.Errorf("%w: "+
+			"room-1 is a private room and jane is not in it", chatlet.ErrForbidden), ""),
+			"room-1 is a private room and jane is not in it"},
+		"a room this node cannot serve yet": {chatWriteFailure(t.Context(), PostMessageTool,
+			fmt.Errorf("%w: room-1 is a \"guild\" room — upgrade this node",
+				chatlet.ErrUnknownKind), ""),
+			"room-1 is a \"guild\" room — upgrade this node"},
+		"forbidden read": {chatReadFailure(t.Context(), ReadChannelTool, fmt.Errorf("%w: "+
+			"viewer: this chat read resolved to no seat", chatlet.ErrForbidden)),
+			"viewer: this chat read resolved to no seat"},
+		"invalid read": {chatReadFailure(t.Context(), ReadChannelTool,
+			chatlet.ChannelPatch{}.Validate()), "`patch`: a patch sets no field"},
+	} {
+		if !strings.Contains(c.got.Output, c.says) {
+			t.Errorf("%s: the sentence does not say %q: %s", name, c.says, c.got.Output)
+		}
+		for _, never := range []string{"chatlet:", "did not land", "do not report it as done"} {
+			if strings.Contains(c.got.Output, never) {
+				t.Errorf("%s: a refusal of what was asked carries %q: %s", name, never,
+					c.got.Output)
+			}
+		}
+	}
+}
+
+// A CHAT WRITE NOBODY ANSWERED IS UNKNOWN, and nothing wrapping the answer
+// turns it back. A post the router sent to a data node that never answered
+// may have been said; send_dm's post after its open rewrote every node-class
+// answer as "the message was NOT sent", and that class is the one an unknown
+// outcome is answered in — so the mapper's unknown would reach the caller as a
+// refusal saying the opposite.
+func TestAChatWriteNobodyAnsweredIsUnknown(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("%w (chat.post, asked of data-1, data-2)", estate.ErrOutcomeUnknown)
+	room := chatlet.Written{Channel: chatlet.Channel{ID: "dm-1"}}
+	for name, got := range map[string]tools.Result{
+		"a chat write": chatWriteFailure(t.Context(), PostMessageTool, err, ""),
+		"a direct message's post after its open": directPostFailure(t.Context(),
+			[]string{"sam"}, room, err, ""),
+	} {
+		if !tools.UnknownOf(got) || tools.RefusalOf(got) != tools.RefusalUnavailable {
+			t.Errorf("%s nobody answered: failed %v unknown %v class %q, want an "+
+				"unavailable refusal marked unknown", name, got.Failed,
+				tools.UnknownOf(got), tools.RefusalOf(got))
+		}
+		for _, never := range []string{"nothing was written", "NOT sent", "was not said"} {
+			if strings.Contains(got.Output, never) {
+				t.Errorf("%s nobody answered says %q, which nobody can know: %s",
+					name, never, got.Output)
+			}
+		}
+	}
+	// AND THE DIRECT MESSAGE STILL SAYS ITS CONVERSATION IS OPEN: the open is
+	// a record that landed, and only the post after it is in doubt.
+	if dm := directPostFailure(t.Context(), []string{"sam"}, room, err, ""); !strings.Contains(dm.Output, "is open (dm-1)") {
+		t.Errorf("a direct message's unanswered post does not say its "+
+			"conversation is open: %s", dm.Output)
 	}
 }
 
@@ -271,11 +431,50 @@ func TestTheSharedRefusalsCarryTheirClass(t *testing.T) {
 		"page read, behind":     {pageReadFailure(t.Context(), "get_page", behind), tools.RefusalUnavailable},
 		"tracker read, a fault": {readFailure(t.Context(), "get_work_item", boom), tools.RefusalInternalError},
 		"page read, a fault":    {pageReadFailure(t.Context(), "get_page", boom), tools.RefusalInternalError},
-		"bare failed":           {failed("needs an `item`"), tools.RefusalInvalid},
+		"no Chatlet":            {unconfiguredChat("post_message"), tools.RefusalUnavailable},
+		"chat read, behind":     {chatReadFailure(t.Context(), "read_channel", behind), tools.RefusalUnavailable},
+		"chat read, a fault":    {chatReadFailure(t.Context(), "read_channel", boom), tools.RefusalInternalError},
+		// A CHAT CALLER WITH NOBODY TO ACT AS is forbidden whichever way
+		// it got there: a seat outside a turn, or a request that carries
+		// no person bound to a seat — whose sentence names the binding.
+		"chat outside a turn": {chatActorFailure("post_message", turnctx.ErrNoSeat),
+			tools.RefusalForbidden},
+		"chat with nobody": {chatActorFailure("post_message",
+			errors.New("builtin: this request carries nobody")), tools.RefusalForbidden},
+		"bare failed": {failed("needs an `item`"), tools.RefusalInvalid},
 	} {
 		if !c.got.Failed || tools.RefusalOf(c.got) != c.want {
 			t.Errorf("%s: failed %v class %q, want %q", name, c.got.Failed,
 				tools.RefusalOf(c.got), c.want)
+		}
+	}
+}
+
+// A READ REFUSED FOR WHAT IT ASKED IS TOLD WITHOUT A PACKAGE'S NAME, wherever
+// in the message it sits: a feed's `since` on another log is the tracker's
+// refusal wrapping the framework's ("worklet: this read's request cannot be
+// run: since: statelog: a position on another log: …"), and readFailure
+// printed it whole. The log it is on stays named, because that is what to
+// change.
+//
+// Mutation: print the error with %v again in readFailure, or drop "statelog: "
+// from ReadRefusalSentence, and a row goes red.
+func TestARefusedReadIsToldWithoutAPackagesName(t *testing.T) {
+	t.Parallel()
+	floor := statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 4}
+	foreign := floor.On("CREWLET_TRACKER_LOG")
+	for name, err := range map[string]error{
+		"a feed's since on another log": fmt.Errorf("%w: since: %w", worklet.ErrBadQuery, foreign),
+		"a read's floor on another log": fmt.Errorf("this read's floor: %w", foreign),
+	} {
+		got := readFailure(context.Background(), ListWorkItemsTool, err)
+		switch {
+		case tools.RefusalOf(got) != tools.RefusalInvalid:
+			t.Errorf("%s is classed %q, want invalid", name, tools.RefusalOf(got))
+		case strings.Contains(got.Output, "worklet:") || strings.Contains(got.Output, "statelog:"):
+			t.Errorf("%s tells a model a package's name: %s", name, got.Output)
+		case !strings.Contains(got.Output, "CREWLET_PAGES_LOG"):
+			t.Errorf("%s does not name the log the position is on: %s", name, got.Output)
 		}
 	}
 }
@@ -292,12 +491,12 @@ func TestAnAnswerTheReaderRefusesCarriesItsClass(t *testing.T) {
 		err  error
 		want tools.Refusal
 	}{
-		{"no such comment", fmt.Errorf("x: %w", tracker.ErrNoComment), tools.RefusalNotFound},
-		{"somebody else's question", fmt.Errorf("x: %w", tracker.ErrForbidden),
+		{"no such comment", fmt.Errorf("x: %w", worklet.ErrNoComment), tools.RefusalNotFound},
+		{"somebody else's question", fmt.Errorf("x: %w", worklet.ErrForbidden),
 			tools.RefusalForbidden},
-		{"already answered", fmt.Errorf("x: %w", tracker.ErrAlreadyAnswered),
+		{"already answered", fmt.Errorf("x: %w", worklet.ErrAlreadyAnswered),
 			tools.RefusalAlreadyAnswered},
-		{"not a question", fmt.Errorf("x: %w", tracker.ErrInvalid), tools.RefusalInvalid},
+		{"not a question", fmt.Errorf("x: %w", worklet.ErrInvalid), tools.RefusalInvalid},
 	} {
 		got, ok := answerRefusal(c.err)
 		if !ok || !got.Failed || tools.RefusalOf(got) != c.want {
@@ -305,7 +504,7 @@ func TestAnAnswerTheReaderRefusesCarriesItsClass(t *testing.T) {
 				c.name, ok, got.Failed, tools.RefusalOf(got), c.want)
 		}
 	}
-	if _, ok := answerRefusal(errors.New("tracker: read the ask c1: disk I/O")); ok {
+	if _, ok := answerRefusal(errors.New("worklet: read the ask c1: disk I/O")); ok {
 		t.Error("a read failure was classed as the reader's refusal of an answer")
 	}
 }
@@ -319,11 +518,11 @@ func TestRefreshMemorySaysWhatALimitLeftOff(t *testing.T) {
 	for i := range entries {
 		entries[i] = learning.DiaryEntry{Kind: "long", Content: "note " + strconv.Itoa(i)}
 	}
-	all := renderHintedNotes(entries, "deploys", noteLimit)
+	all := renderHintedNotes(nil, entries, "deploys", noteLimit)
 	if strings.Count(all.Output, "- [long]") != noteLimit || strings.Contains(all.Output, "more that bear") {
 		t.Fatalf("the default did not show every pick:\n%s", all.Output)
 	}
-	some := renderHintedNotes(entries, "deploys", 3)
+	some := renderHintedNotes(nil, entries, "deploys", 3)
 	if strings.Count(some.Output, "- [long]") != 3 || !strings.Contains(some.Output, "+5 more that bear on this") {
 		t.Fatalf("a narrowed list did not say what it left off:\n%s", some.Output)
 	}
@@ -336,7 +535,7 @@ func TestRefreshMemorySaysWhatALimitLeftOff(t *testing.T) {
 func TestAmbiguousAnswerCandidatesAreWholeOrReferenced(t *testing.T) {
 	t.Parallel()
 	opening := strings.Repeat("About the release plan for next week, ", 4)
-	e := &tracker.ErrAmbiguousAnswer{Task: "ENG-1", Actor: "ana", Asks: []tracker.AskCandidate{
+	e := &worklet.ErrAmbiguousAnswer{Task: "ENG-1", Actor: "ana", Asks: []worklet.AskCandidate{
 		{Comment: "c-1", Author: "bo", Body: opening + "should we ship on Friday?"},
 		{Comment: "c-2", Author: "cy", Body: opening + "who signs off the migration?"},
 		{Comment: "c-3", Author: "di", Question: "Pick a region", Body: "context"},
@@ -352,4 +551,32 @@ func TestAmbiguousAnswerCandidatesAreWholeOrReferenced(t *testing.T) {
 	if strings.Contains(got, "long long") || strings.Contains(got, "…") && !strings.Contains(got, "… and more") {
 		t.Errorf("a candidate was cut rather than carried whole or referenced:\n%s", got)
 	}
+}
+
+// A MODE THIS BUILD DOES NOT KNOW IS REFUSED NAMING THE ONES IT DOES, in the
+// tool's own words: the parser's error opens with its package, which both
+// searches printed after their own name ("search_knowledge: knowledge: unknown
+// search mode …").
+//
+// Mutation: print the parser's error again and the prefix check goes red.
+func TestAModeThisBuildDoesNotKnowIsRefusedNamingTheOnesItDoes(t *testing.T) {
+	t.Parallel()
+	for _, tool := range []string{SearchKnowledgeTool, SearchWorkItemsTool} {
+		said := unknownMode(tool, " fuzzy ")
+		for _, want := range []string{tool, `"fuzzy"`, "hybrid", "keyword", "semantic"} {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s's refusal does not say %q: %s", tool, want, said)
+			}
+		}
+		if strings.Contains(said, "knowledge: ") {
+			t.Errorf("%s's refusal carries the parser's package: %s", tool, said)
+		}
+	}
+}
+
+// invalidDecision is the tracker's refusal of a decision with no options, as
+// its writer marks it: a content refusal that is no text cap.
+func invalidDecision() error {
+	_, err := worklet.ValidateDecision(context.Background(), decision.Decision{Question: "Which?"}, nil)
+	return err
 }

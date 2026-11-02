@@ -13,7 +13,7 @@ import (
 // # Why a read of code is a record
 //
 // A `visibility: unit` repository is code the company has said not every seat
-// may read. Every person and every Tier A token reads it anyway (ADR-0058), and
+// may read. Every person and every Tier A token reads it anyway (ADR-0081), and
 // so does every seat the chart relates to its owner, so "who has read it, and
 // how much" is the question somebody answerable for that code asks — and before
 // this record nothing in the engine kept the answer: a fetch was a log line
@@ -336,7 +336,7 @@ func (e CodeCheckFinished) SummaryFor(actor string) string {
 // ChangeMerged records that a change MERGED by a merge record (internal/code's
 // Merge): its target moved onto the commit its merge built, by a record whose
 // decide held the change to its target's merge gate from one snapshot — or
-// recorded a person's override of it (ADR-0066). Published ONCE, by the data
+// recorded a person's override of it (ADR-0089). Published ONCE, by the data
 // node whose committer landed the record, on that record's apply — never by an
 // applier, which every data node runs, and never for a retry its operation
 // ledger collapsed onto the record. A change a push merged — its target pushed
@@ -626,7 +626,7 @@ func (e CodeQueueEjected) SummaryFor(actor string) string {
 }
 
 // CodeTargetBroken records that a protected branch's tip checks found the
-// FIRST landing they failed on (internal/code's Broken, ADR-0068): a red tip
+// FIRST landing they failed on (internal/code's Broken, ADR-0091): a red tip
 // bisected over the branch's landing rows down to the landing whose commit the
 // named required checks failed on, the landing before it having passed them.
 // Published ONCE a landing, by the data node whose committer landed the broken
@@ -647,8 +647,7 @@ type CodeTargetBroken struct {
 	RepoName string `json:"repo_name"`
 
 	// Target is the protected branch, Commit the landing's commit, and Kind
-	// how it landed (internal/code's LandingKinds: pre_land, direct,
-	// push).
+	// how it landed (internal/code's LandingKinds: queue, direct, push).
 	Target string `json:"target"`
 	Commit string `json:"commit"`
 	Kind   string `json:"kind"`

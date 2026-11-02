@@ -138,7 +138,7 @@ export function BrandFact({
       ) : (
         <>
           <Tag size="sm" variant="warning" leadingIcon={<TriangleAlertGlyph size="xs" />}>
-            {adoption ? `An older ${name} brand` : "A brand no longer adopted"}
+            {adoption ? `An older ${name} brand` : "A brand no longer in use"}
           </Tag>{" "}
           <span className="muted">changes at the next publish</span>
         </>

@@ -1,6 +1,7 @@
 package configapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -8,12 +9,10 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
-
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // summaryHeader is what every write on this surface needs.
@@ -67,7 +66,7 @@ func TestAPatchReachesANestedSectionWithoutItsSiblings(t *testing.T) {
 	}
 
 	patchOnly(t, s,
-		`{"providers": {"llm": {"zulu": {"model": "claude-opus-5"}}}}`,
+		`{"providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-opus-5"}}}}`,
 		summaryHeader)
 
 	document := s.activeDocument(t)
@@ -209,8 +208,9 @@ func TestAPatchHonoursIfMatch(t *testing.T) {
 
 	res := s.do(t, http.MethodPatch, "/config", `{"mission": "x"}`,
 		map[string]string{"X-Summary": "a patch", "If-Match": "not-the-active-one"})
-	if res.Code != http.StatusConflict {
-		t.Fatalf("PATCH = %d %s, want 409", res.Code, res.Body.String())
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("PATCH = %d %s, want 412: the condition the request stated is false",
+			res.Code, res.Body.String())
 	}
 	if !strings.Contains(res.Body.String(), "current_revision_id") {
 		t.Errorf("the conflict does not name what to re-read: %s", res.Body.String())
@@ -287,21 +287,31 @@ func TestAPatchAcceptsYAML(t *testing.T) {
 // success in the loser's hand and nothing anywhere to find it by.
 //
 // Driven by moving the pointer out from under a write the way a second node
-// would, which is the only thing a single-process test can do honestly: the
+// would — between this surface's read of the pointer and its compare-and-set —
+// which is the only thing a single-process test can do honestly: the
 // conformance suite proves the store's half on both backends.
 func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t)
+	plane := &interleavedPlane{}
+	s := newSurfaceWith(t, func(o *configapi.Options) {
+		plane.Plane = o.Plane
+		o.Plane = plane
+	})
 	base := s.seed(t, companyDoc)
-
+	peer, err := secrets.Seal(s.cipher, companyJSON(t, companyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
 	// A peer activates something else, expecting the same base this
-	// surface is about to build on.
-	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "from-a-peer", Summary: "a peer got there first",
-		Payload: []byte("{}"), At: pinned, Expect: base,
-		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: pinned},
-	}); err != nil {
-		t.Fatalf("peer activate: %v", err)
+	// surface built on.
+	plane.other = func(ctx context.Context) {
+		if _, err := plane.Plane.Activate(ctx, coord.ActivationRequest{
+			RevisionID: "from-a-peer", Summary: "a peer got there first",
+			Payload: peer, At: pinned, Expect: base,
+			Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: pinned},
+		}); err != nil {
+			t.Errorf("peer activate: %v", err)
+		}
 	}
 
 	res := s.do(t, http.MethodPatch, "/config", `{"mission": "mine"}`, summaryHeader)
@@ -317,12 +327,148 @@ func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 			t.Errorf("the conflict omits %q: %s", want, res.Body.String())
 		}
 	}
-	// AS HISTORY, and nothing more: this node goes on serving the revision
-	// it served, which its reconciler moves on to whatever won.
+	// AS HISTORY, and nothing more: the write activated nothing.
 	s.assertKeptInert(t, decode(t, res))
-	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Header().Get("ETag") != `"`+base+`"` {
-		t.Errorf("GET /config after the refusal serves %s, want the base %s it served before",
-			got.Header().Get("ETag"), base)
+	// And the company is what WON, on this node as on every other, before
+	// any tick here has kept it: the re-read the refusal sends the operator
+	// to answers the revision it names.
+	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Header().Get("ETag") != `"from-a-peer"` {
+		t.Errorf("GET /config after the refusal answers %s, want the revision that won, "+
+			`"from-a-peer"`, got.Header().Get("ETag"))
+	}
+}
+
+// A LOST RACE IS A FAILED PRECONDITION EXACTLY WHERE THE REQUEST NAMED A
+// REVISION (RFC 9110 §13.1.1, [configapi.RacedError.Status]): an If-Match that
+// matched the fleet's revision and then lost the activation's compare-and-set
+// stated a condition that was false before the write could land, 412, as the
+// same tag refused at the check is; a write that named none lost a race it
+// never declared a condition for, and `If-Match: *` declared one ("a company
+// exists") the company that won still satisfies: 409, both. One code
+// throughout, because what moved is the company's revision either way.
+//
+// The race lands between this surface's read of the pointer and its
+// compare-and-set, as a second node's write does ([interleavedPlane]).
+func TestALostRaceIsAFailedPreconditionOnlyWhereARevisionWasNamed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		ifMatch func(base string) string
+		want    int
+	}{
+		{"no If-Match", func(string) string { return "" }, http.StatusConflict},
+		{"If-Match: *", func(string) string { return "*" }, http.StatusConflict},
+		{"If-Match naming the base", func(base string) string { return `"` + base + `"` },
+			http.StatusPreconditionFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s, plane := newRacingSurface(t)
+			base := s.seed(t, companyDoc)
+			plane.other = peerWins(t, s, plane, base)
+			headers := map[string]string{"X-Summary": "a patch"}
+			if v := tc.ifMatch(base); v != "" {
+				headers["If-Match"] = v
+			}
+			res := s.do(t, http.MethodPatch, "/config", `{"mission": "mine"}`, headers)
+			if res.Code != tc.want {
+				t.Fatalf("PATCH = %d %s, want %d", res.Code, res.Body.String(), tc.want)
+			}
+			body := decode(t, res)
+			if body["error"] != "revision_advanced" || body["current_revision_id"] != "from-a-peer" {
+				t.Errorf("refusal = %v, want revision_advanced naming from-a-peer", body)
+			}
+		})
+	}
+}
+
+// A ROUTE THAT JUDGES NO REVISION LOSES ITS RACE AS A CONFLICT, whatever
+// If-Match it carries: the header an entity write sends is the entity's own
+// tag, which held, and a reload and a revert read no If-Match at all, so the
+// revision each lost to is one the request never named. Decided by what the
+// handler judged ([configapi.RacedError.Stated]) rather than by reading the
+// header again, which told each of them a precondition it never stated had
+// failed.
+func TestARouteThatJudgesNoRevisionLosesItsRaceAsAConflict(t *testing.T) {
+	t.Parallel()
+	t.Run("an entity write under its own tag, losing every attempt", func(t *testing.T) {
+		t.Parallel()
+		losing := &losingPlane{}
+		s := newSurfaceWith(t, func(o *configapi.Options) {
+			losing.Plane = o.Plane
+			o.Plane = losing
+		})
+		s.seed(t, entityDoc)
+		read := s.do(t, http.MethodGet, "/config/mcp-servers/tracker", "", nil)
+		tag := read.Header().Get("ETag")
+		if read.Code != http.StatusOK || tag == "" {
+			t.Fatalf("GET /config/mcp-servers/tracker = %d, ETag %q", read.Code, tag)
+		}
+		losing.armed.Store(true)
+		res := s.do(t, http.MethodPut, "/config/mcp-servers/tracker", read.Body.String(),
+			map[string]string{"X-Summary": "move the tracker server", "If-Match": tag})
+		if res.Code != http.StatusConflict || decode(t, res)["error"] != "revision_advanced" {
+			t.Errorf("PUT under the entity's own tag = %d %s, want 409 revision_advanced",
+				res.Code, res.Body.String())
+		}
+	})
+	for _, tc := range []struct {
+		name string
+		path func(first string) string
+	}{
+		{"a reload", func(string) string { return "/config/reload" }},
+		{"a revert", func(first string) string { return "/config/revisions/" + first + "/revert" }},
+	} {
+		t.Run(tc.name+" carrying an If-Match it never reads", func(t *testing.T) {
+			t.Parallel()
+			s, plane := newRacingSurface(t)
+			first := s.seed(t, companyDoc)
+			patchOnly(t, s, `{"mission": "second"}`, summaryHeader)
+			current, _, err := s.active(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			plane.other = peerWins(t, s, plane, current.ID)
+			res := s.do(t, http.MethodPost, tc.path(first), "", map[string]string{
+				"X-Summary": tc.name, "If-Match": `"` + current.ID + `"`,
+			})
+			if res.Code != http.StatusConflict || decode(t, res)["error"] != "revision_advanced" {
+				t.Errorf("POST %s = %d %s, want 409 revision_advanced", tc.path(first),
+					res.Code, res.Body.String())
+			}
+		})
+	}
+}
+
+// newRacingSurface is a surface whose plane lets a case land another writer's
+// activation inside this surface's next one ([interleavedPlane]).
+func newRacingSurface(t *testing.T) (*surface, *interleavedPlane) {
+	t.Helper()
+	plane := &interleavedPlane{}
+	s := newSurfaceWith(t, func(o *configapi.Options) {
+		plane.Plane = o.Plane
+		o.Plane = plane
+	})
+	return s, plane
+}
+
+// peerWins is the other writer: a peer activating a sealed revision of its own,
+// "from-a-peer", expecting base, as a write on another node does.
+func peerWins(t *testing.T, s *surface, plane *interleavedPlane, base string) func(context.Context) {
+	t.Helper()
+	peer, err := secrets.Seal(s.cipher, companyJSON(t, companyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func(ctx context.Context) {
+		if _, err := plane.Plane.Activate(ctx, coord.ActivationRequest{
+			RevisionID: "from-a-peer", Summary: "a peer got there first",
+			Payload: peer, At: pinned, Expect: base,
+			Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api",
+				CreatedAt: pinned},
+		}); err != nil {
+			t.Errorf("peer activate: %v", err)
+		}
 	}
 }
 
@@ -439,15 +585,7 @@ func (s *surface) seedStored(t *testing.T, doc string, mutate func(map[string]an
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := s.configs.InsertActive(t.Context(), store.Revision{
-		CreatedByKind: iam.ActorOperator,
-		Source:        "peer", CreatedBy: "another node", Summary: "seed",
-		Payload: payload, CreatedAt: pinned,
-	})
-	if err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	return id
+	return s.seedPayload(t, payload)
 }
 
 // A QUOTED ENTITY-TAG IS THE STANDARD SPELLING, and it has to work.
@@ -471,7 +609,7 @@ func TestAnExpectAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Serially, because each write advances the revision: the
 			// point is the SPELLING, so each case starts from its own.
-			current, found, err := s.configs.Active(t.Context())
+			current, found, err := s.active(t.Context())
 			if err != nil || !found {
 				t.Fatalf("active: %v", err)
 			}

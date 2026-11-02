@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/host"
 )
 
-// codeSigner names an engine-built commit (host.Signer, ADR-0062) from the
+// codeSigner names an engine-built commit (host.Signer, ADR-0085) from the
 // CURRENT epoch — read per write, so a revision that renames a seat or moves
 // the identity domain signs from its activation on, with no restart, and read
 // ONCE a signature, the seat's role and the domain off the same epoch:

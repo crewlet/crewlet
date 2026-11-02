@@ -42,7 +42,6 @@ func TestAPieceThatIsNotARegularFileDegradesOnlyItself(t *testing.T) {
 		{"report", codingagent.Paths.Findings, "the report the coding agent wrote"},
 		{"error stream", codingagent.Paths.Err, "the error stream"},
 		{"exit status", codingagent.Paths.ExitCode, "its exit status"},
-		{"question", codingagent.Paths.Ask, "the question the coding agent recorded"},
 		// The spend is in both of the next two, so each case finds it in
 		// the other: the stream's last line is what the result file holds.
 		{"event stream", codingagent.Paths.Stream, "the event stream"},

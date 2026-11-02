@@ -1,0 +1,100 @@
+{
+  "name": "GoPhrase",
+  "timezone": "America/Vancouver",
+  "integrations": {
+    "github": {
+      "enabled": true,
+      "webhook_secret": "${GITHUB_WEBHOOK_SECRET}",
+      "provisioning": {"org": "gophrase", "org_webhook": "false"}
+    },
+    "datadog": {
+      "enabled": true,
+      "route_to": "sre",
+      "webhook_token": "${DATADOG_WEBHOOK_TOKEN}",
+      "provisioning": {
+        "site": "datadoghq.com",
+        "api_key": "${DATADOG_API_KEY}",
+        "app_key": "${DATADOG_APP_KEY}",
+        "role": "Datadog Admin Role"
+      }
+    },
+    "gitlab": {
+      "enabled": true,
+      "url": "https://gitlab.example.invalid",
+      "signing_secret": "${GITLAB_SIGNING_SECRET}",
+      "provisioning": {
+        "group": "gophrase",
+        "admin_token": "${GITLAB_ADMIN_TOKEN}",
+        "access_level": "developer",
+        "access_levels": {"qa": "maintainer"}
+      }
+    }
+  },
+  "mcp_servers": [
+    {"name": "github", "transport": "http", "shared": false, "url": "https://api.githubcopilot.com/mcp/"},
+    {"name": "datadog", "transport": "http", "shared": false, "url": "https://mcp.datadoghq.com/v1/mcp",
+     "headers": {"DD_API_KEY": "${DATADOG_API_KEY}"}}
+  ],
+  "roles": [
+    {"name": "Miles", "kind": "human", "handle": "miles", "contact": {"github_login": "fake-owner"}}
+  ],
+  "units": [
+    {
+      "name": "Product and Engineering",
+      "id": "core",
+      "type": "team",
+      "lead": "pm",
+      "roles": [
+        {
+          "name": "Product Manager",
+          "handle": "pm",
+          "mcp_env": {"github": {"Authorization": "Bearer ${GITHUB_APP_TOKEN_PM}"}},
+          "integrations": {"github": {
+            "tier": "read_only",
+            "repos": ["gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"],
+            "app_id": 1000001, "app_slug": "gophrase-product-manager",
+            "installation_id": 2000001, "private_key": "${GITHUB_APP_KEY_PM}"
+          }}
+        },
+        {
+          "name": "Senior Backend Engineer",
+          "handle": "backend-engineer",
+          "mcp_env": {
+            "github": {"Authorization": "Bearer ${GITHUB_APP_TOKEN_BACKEND_ENGINEER}"},
+            "gitlab": {"GITLAB_TOKEN": "${BACKEND_GITLAB_PAT}"}
+          },
+          "sandbox": {"env": {"GITHUB_TOKEN": "${GITHUB_APP_TOKEN_BACKEND_ENGINEER}"}},
+          "integrations": {"github": {
+            "tier": "full_access", "workflows": true,
+            "repos": ["gophrase/backend"],
+            "app_id": 1000002, "app_slug": "gophrase-senior-backend-engineer",
+            "installation_id": 2000002, "private_key": "${GITHUB_APP_KEY_BACKEND_ENGINEER}"
+          }}
+        },
+        {
+          "name": "QA Engineer",
+          "handle": "qa",
+          "mcp_env": {"gitlab": {"Authorization": "Bearer ${GITLAB_TOKEN_QA}"}},
+          "integrations": {"github": {
+            "tier": "review",
+            "repos": ["gophrase/backend", "gophrase/frontend"],
+            "app_id": 1000003, "app_slug": "gophrase-qa-engineer",
+            "installation_id": 2000003, "private_key": "${GITHUB_APP_KEY_QA}"
+          }}
+        },
+        {
+          "name": "SRE",
+          "handle": "sre",
+          "mcp_env": {"datadog": {
+            "DD_APP_KEY": "${DATADOG_APP_KEY}",
+            "DD_APPLICATION_KEY": "${DATADOG_APP_KEY}"
+          }}
+        },
+        {
+          "name": "Designer",
+          "handle": "designer"
+        }
+      ]
+    }
+  ]
+}

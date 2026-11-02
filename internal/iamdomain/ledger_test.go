@@ -112,7 +112,7 @@ func TestARetriedMintHandsOutNoGrants(t *testing.T) {
 	if err := rig.enrol(iamdomain.Creation{
 		PersonID: machine, Kind: iam.KindMachine, Stage: iam.StageActive,
 		Name: "Release pipeline", Login: "ci:release",
-		Grants: []iam.Grant{iam.GrantTracker}, OpID: operationKey(),
+		Grants: []iam.Grant{iam.GrantWorklet}, OpID: operationKey(),
 		Reason: "a service account",
 	}); err != nil {
 		t.Fatalf("enrol the service account: %v", err)
@@ -232,7 +232,7 @@ func TestARetriedIssueOfACollectedInvitationIsAKeyAlreadyUsed(t *testing.T) {
 	rig := newWriteRig(t)
 	seat := rig.vacantSeat("platform-lead")
 	mint := iamdomain.InviteMint{
-		Email: "lapsed@example.com", Grants: []iam.Grant{iam.GrantTracker},
+		Email: "lapsed@example.com", Grants: []iam.Grant{iam.GrantWorklet},
 		Seat: seat,
 		// LAPSED LONG BEFORE THE SWEEP BELOW RUNS, which is what makes the
 		// row one it collects.

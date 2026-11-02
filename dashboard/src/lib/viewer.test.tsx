@@ -48,8 +48,8 @@ describe("who the dashboard thinks you are", () => {
     expect(result.current.kind).toBe("human");
     expect(result.current.owner).toBe("ana");
     expect(result.current.admin).toBe(true);
-    expect(result.current.tracker).toBe(true);
-    expect(result.current.knowledge).toBe(true);
+    expect(result.current.worklet).toBe(true);
+    expect(result.current.doclet).toBe(true);
     expect(result.current.unbound).toBe(false);
     expect(result.current.anonymous).toBe(false);
   });
@@ -60,7 +60,7 @@ describe("who the dashboard thinks you are", () => {
   test("a person no seat holds is UNBOUND, and their record is their login", async () => {
     answering({
       login: "ops.seven",
-      grants: ["tracker"],
+      grants: ["worklet"],
       handle: "",
       owner: "ops.seven",
       name: "",
@@ -71,8 +71,8 @@ describe("who the dashboard thinks you are", () => {
     expect(result.current.login).toBe("ops.seven");
     expect(result.current.owner).toBe("ops.seven");
     expect(result.current.admin).toBe(false);
-    expect(result.current.tracker).toBe(true);
-    expect(result.current.knowledge).toBe(false);
+    expect(result.current.worklet).toBe(true);
+    expect(result.current.doclet).toBe(false);
     expect(result.current.anonymous).toBe(false);
   });
 

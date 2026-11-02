@@ -21,7 +21,7 @@ import (
 // route to the seats whose role carries the health grant (internal/alarmwake),
 // and retried until the broker takes it.
 //
-// ADR-0065: the publish IS the write. The delivery on the inbound stream is
+// ADR-0088: the publish IS the write. The delivery on the inbound stream is
 // the durable record the wakes are derived from, so nothing commits beside it
 // and no publish trails a commit; what this outbox owes is that a transition
 // the tracker handed on is published, in the order it was made, however long
@@ -35,7 +35,7 @@ import (
 // alarmOutboxCap is how many transitions a node holds unpublished before it
 // drops the oldest.
 //
-// 1024: the table raises at most one instance of each node-wide kind and one
+// 2048: the table raises at most one instance of each node-wide kind and one
 // a log of each per-log kind ([statelog.PerLogKinds]), and a data node runs
 // every registered log ([registeredDomains]), so a fire and a clear of EVERY
 // instance on one fits in the bound at least six times over — six flaps of
@@ -43,10 +43,13 @@ import (
 // TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable computes from the table and
 // the register rather than restating a count here, so a kind or a log added
 // past what the bound holds fails there instead of leaving this figure untrue
-// — while a transition is a few hundred bytes, so the outbox stays under half
-// a megabyte. Past it the oldest go first: the newest are nearest the state a
-// woken seat reads anyway.
-const alarmOutboxCap = 1024
+// — while a transition is a few hundred bytes, so the outbox stays under a
+// megabyte. It was 1024 until the code log made a data node's register ten
+// logs, whose 100 instances flap six times in 1200 transitions; the next
+// power of two keeps the six flaps with room for a log or a kind more.
+// Past it the oldest go first: the newest are nearest the state a woken seat
+// reads anyway.
+const alarmOutboxCap = 2048
 
 // alarmRetryBase and alarmRetryCeiling pace a publish the broker refused.
 //

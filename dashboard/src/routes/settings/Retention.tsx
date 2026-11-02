@@ -76,7 +76,9 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { href, useRoute } from "~/app/router.tsx";
 import { ALARMS_AT, alarmKindTitle, alarmLogLines, type AlarmLogLine } from "~/lib/alarms.ts";
+import { authorLabel } from "~/lib/attribution.ts";
 import { bindingTerm, TERM_WORDS } from "~/lib/retention.ts";
+import { andList } from "~/lib/words.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { asSentence, fmtBytes, fmtDateTime, fmtDuration, fmtExact, relTime } from "~/lib/format.ts";
@@ -157,7 +159,8 @@ export function RetentionStatus({ retention }: { retention: QueryResult<Retentio
           Refresh failed ({error}). Showing the last good reading.
         </Callout>
       )}
-      {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
+      <MaintenanceBanners windows={data?.maintenance} now={now} />
+      <UnreadWindowsBanner streams={data?.maintenance_unread} />
       <ServedLevelBanner level={data?.read_level} />
       {data && standing > 0 && <AlarmList alarms={data.alarms} now={now} />}
     </>
@@ -196,10 +199,12 @@ export function AlarmList({ alarms, now }: { alarms: RetentionAlarm[]; now: numb
  *
  * THE NAME IS THE KIND IN WORDS (`lib/alarms.ts`) and the measurement is the
  * engine's own sentence, so this reads the same as the log line and
- * `crewlet retention status`. A single log whose measurement IS the alarm's is
- * folded into it, as the CLI folds it: drawn as both a headline and a line,
- * the one sentence read as two facts. Every other log the alarm stands on says
- * its own measurement under it, as the CLI prints one, so a log a backup holds
+ * `crewlet retention status`. A single measurement that IS the alarm's is
+ * folded into it with the logs it was taken on beside it, as the CLI folds it:
+ * drawn as both a headline and a line, the one sentence read as two facts — a
+ * young fleet's missing backup, measured alike on every log, is one such
+ * sentence naming them all. Every other measurement the alarm stands on is
+ * said under it with its logs, as the CLI prints one, so a log a backup holds
  * says how many records it keeps past its window and the second log of a
  * blocked trim is not read as the first one's.
  */
@@ -221,7 +226,7 @@ export function AlarmItem({ alarm, now }: { alarm: RetentionAlarm; now: number }
         <p>
           {folded && (
             <>
-              <LogLink domain={folded.domains[0] ?? ""} />:{" "}
+              <LogNames domains={folded.domains} />:{" "}
             </>
           )}
           {marked(asSentence(alarm.detail), "inherit")}
@@ -258,7 +263,7 @@ function AlarmLogText({
   if (!line.term) {
     return (
       <>
-        <LogLink domain={line.domains[0] ?? ""} />: {marked(line.detail ?? "", "inherit")}
+        <LogNames domains={line.domains} />: {marked(line.detail ?? "", "inherit")}
       </>
     );
   }
@@ -454,6 +459,7 @@ export function RetentionPanels({
             },
             {
               key: "reported",
+              align: "right",
               header: "Reported",
               shrink: true,
               drop: 1,
@@ -567,6 +573,7 @@ export function SnapshotsCard({
             },
             {
               key: "at",
+              align: "right",
               header: "Taken",
               sortValue: (s) => s.at ?? "",
               cell: (s) =>
@@ -693,13 +700,57 @@ export function ServedLevelBanner({ level }: { level?: string }) {
 }
 
 /**
+ * MaintenanceBanners draws a banner per open capacity window, the oldest first
+ * as the engine orders them. A window is per log and two can be open at once,
+ * each waiting on its own nodes, so one banner for the oldest hid what the other
+ * was waiting on until the first had closed.
+ */
+export function MaintenanceBanners({
+  windows,
+  now,
+}: {
+  windows?: RetentionMaintenance[];
+  now: number;
+}) {
+  return (
+    <>
+      {(windows ?? []).map((op) => (
+        <MaintenanceBanner key={op.stream} op={op} now={now} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * UnreadWindowsBanner names every log whose capacity window the node couldn't
+ * read. It isn't a log with no window: the read that fails is the coordination
+ * read, and leaving the log out of the banners above said there was no window
+ * during exactly the outage this screen is opened in. What it says is what the
+ * answering node knows: it is in service itself (only a node in service answers
+ * this screen), and a data node restarted now won't start in service until its
+ * own read of the window works.
+ */
+export function UnreadWindowsBanner({ streams }: { streams?: string[] }) {
+  if (!streams?.length) return null;
+  return (
+    <Callout variant="warning">
+      Couldn’t read whether a capacity window is open on {andList(streams)}. A data node restarted
+      now won’t start in service until it can read it.
+    </Callout>
+  );
+}
+
+/**
  * MaintenanceBanner is the one thing on this screen that describes an outage
  * in progress rather than a property of the fleet.
  *
- * A capacity operation stops every publisher on every node — no seats, no
- * duties, no scheduler, no write routes — and it was visible on NO screen: an
- * operator watching a company go completely quiet had nothing to look at that
- * said why, and the alarm that names it only fires after an hour of it.
+ * A capacity window holds the whole fleet: no node starts in service while it
+ * is open, and every node restarted for it runs no seats, duties, scheduler or
+ * write routes. It was visible on NO screen: an operator watching a company go
+ * quiet had nothing to look at that said why, and the alarm that names it only
+ * fires after an hour of it. Only a node in service answers this screen, so
+ * the banner says what holds the fleet rather than that publishing has stopped,
+ * which was false of the node drawing it.
  *
  * So it is a banner rather than a panel, above everything, and it carries the
  * three things somebody finding it at an inconvenient hour needs first: how
@@ -709,24 +760,48 @@ export function ServedLevelBanner({ level }: { level?: string }) {
  */
 export function MaintenanceBanner({ op, now }: { op: RetentionMaintenance; now: number }) {
   const missing = op.participants_missing ?? [];
+  // AN ADMISSION FIRST. It holds a window at `opened` whoever has restarted,
+  // and no participant owes it, so a banner that named only who it waits on
+  // read as every node owing something while one node's claim held the window.
+  const held = op.admissions_blocking ?? [];
   return (
     <Callout variant="danger" role="alert">
       <span className="col" style={{ gap: 6 }}>
         <span>
-          <strong>Maintenance on {op.stream}</strong>: publishing is paused. Phase{" "}
-          <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since {relTime(op.since, now)}
-          {op.by && <> ({op.by})</>}. Resizing {fmtBytes(op.original_max_bytes)} to{" "}
-          {fmtBytes(op.target_max_bytes)}.
+          <strong>Maintenance on {op.stream}</strong>: no node starts in service until it closes.
+          Phase <InlineCode>{op.phase}</InlineCode>, attempt {op.attempt}, since{" "}
+          {relTime(op.since, now)}
+          {/* NOT IN PARENTHESES: the author's credential is in its own. */}
+          {op.by && <>, run by {authorLabel(op.by, op.operator_id)}</>}. Resizing{" "}
+          {fmtBytes(op.original_max_bytes)} to {fmtBytes(op.target_max_bytes)}.
         </span>
         {op.blocked && (
+          // THE NODE'S WORDS, NEVER THE CODE: `blocked` is for scripts, and
+          // `capacity_operation_unsealed` told a person nothing they could do.
+          // Every node's answer carries the sentence beside the code, and it
+          // never names who abandoned the window, which the line below does.
           <span>
-            <strong>Blocked:</strong> {op.blocked}. Needs a person.
+            <strong>Needs a person.</strong> {op.blocked_detail}
           </span>
         )}
+        {op.abandoned_by?.by && (
+          <span>Abandoned by {authorLabel(op.abandoned_by.by, op.abandoned_by.operator_id)}.</span>
+        )}
         <span className="t-caption">
-          {missing.length > 0 ? (
-            <>Waiting on {missing.join(", ")}.</>
+          {/* WHAT COULDN'T BE READ IS SAID AS THAT: drawn as an empty list,
+              an unread register read as nothing holding the window. */}
+          {op.admissions_unread ? (
+            <>Couldn’t read whether an admission is holding it. </>
           ) : (
+            held.length > 0 && (
+              <>Held by an admission from {andList(held)}: nothing is sent while it stands. </>
+            )
+          )}
+          {op.acks_unread ? (
+            <>Couldn’t read which nodes have restarted for it, so who it’s waiting on is unknown.</>
+          ) : missing.length > 0 ? (
+            <>Waiting on {andList(missing)}.</>
+          ) : held.length > 0 || op.admissions_unread ? null : (
             // NOBODY OUTSTANDING IS NOT PROGRESS. It is the operation
             // waiting on whoever ran the verb, and rendering it as an
             // empty list would read as "nearly done".

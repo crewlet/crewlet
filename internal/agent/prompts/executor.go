@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // ExecutorHeader is the executor's contract: decide and act in one pass, then
@@ -16,8 +17,10 @@ import (
 //
 //   - "writing about an action does not perform it" — a turn that ended with
 //     a composed reply nobody was sent. It stays here, not only in
-//     `submit_work`'s description, because in text mode the tool protocol is
-//     the engine's own envelope and no CLI harness can teach it;
+//     `submit_work`'s description, because the executor's CLI's own harness
+//     teaches the opposite: there, the final text IS the answer to whoever
+//     asked, and here it reaches nobody — the only way to a person is a tool
+//     of the seat's;
 //   - the discovery sentence — an actor that gave up when the tool it needed
 //     was not already on its surface;
 //   - the full-arc rule — routed comment triggers produced recon only, and
@@ -37,14 +40,15 @@ import (
 const ExecutorHeader = "\n## Your turn" +
 	"\nDecide what to do about the task below and do it, in this one pass. " +
 	"Use tool calls for every action — writing about an action does not " +
-	"perform it. End by calling `submit_work` exactly once, reporting what " +
-	"you actually did." +
+	"perform it. End by calling `" + toolname.SubmitWork + "` exactly once, reporting what " +
+	"you actually did, unless you park on a person's answer as your standing " +
+	"instructions describe." +
 	"\n" +
 	"\n**Finish the arc in this pass:** read, decide, then call the tool " +
 	"that delivers — the reply, the comment, the status change, the create. " +
 	"A turn that gathers data and stops has delivered nothing. If a tool you " +
-	"need is not among your tools, discover it (`list_mcp_server_tools`, then " +
-	"`activate_tool`) before reporting that you cannot act." +
+	"need is not among your tools, discover it (`" + toolname.ListMCPServerTools +
+	"`, then `" + toolname.Activate + "`) before reporting that you cannot act." +
 	"\n" +
 	"\n**Stay reachable on the channel the trigger arrived on**, even when " +
 	"the work lives on another system: filing the ticket is the work, and " +
@@ -58,21 +62,6 @@ const untrustedTextHeading = "\n## Text somebody else wrote"
 
 // KeyUntrustedText is the outline key of that section.
 const KeyUntrustedText = "untrusted_text"
-
-// executorSandboxSection is rendered only where the executor is offered
-// run_sandbox ([ExecutorInput.OffersSandbox]).
-//
-// Gated because it is absent for very nearly every role: unconditional, it
-// would be prose about a tool the seat does not have, on every executor prompt
-// in the company. What the tool does and takes is its own description; what
-// this adds is the one fact about the TURN — it pauses for the run and resumes
-// with its report — which is what stops a seat ending the turn to "report
-// later" and leaving the requester waiting on a run nobody follows up.
-const executorSandboxSection = "\n## Sandbox code work" +
-	"\nReal code work — changing code, running tests, reproducing a bug — " +
-	"goes to `run_sandbox`. This turn pauses while the run works and resumes " +
-	"with its report as the call's result, so act on it in the SAME turn: " +
-	"report the outcome, link the pull request, update the ticket."
 
 // KeyCodeHistory is the outline key of the guidance on answering questions
 // about the company's own code.
@@ -89,8 +78,8 @@ const KeyCodeHistory = "code_history"
 // internal/agent/builtin that holds them to the code tools that package
 // registers, which this package cannot import.
 func CodeHistoryTools() []string {
-	return []string{"code_resolve", "code_read", "code_diff", "code_compare", "code_landed_in", "code_log",
-		"code_blame", "code_get_change"}
+	return []string{toolname.CodeResolve, toolname.CodeRead, toolname.CodeDiff, toolname.CodeCompare,
+		toolname.CodeLandedIn, toolname.CodeLog, toolname.CodeBlame, toolname.CodeGetChange}
 }
 
 // codeHistorySection is the one rule about reading the company's code that no
@@ -99,7 +88,7 @@ func CodeHistoryTools() []string {
 // it — `code_resolve`'s that a branch is resolved once and its commit id
 // passed on — so none of that is repeated here; what is left is the choice a
 // seat makes BEFORE it picks a tool, between a server-side read by commit id,
-// which costs milliseconds, and a clone in a sandbox or the shell a coding CLI
+// which costs milliseconds, and a clone in the box or the shell a coding CLI
 // holds, which costs minutes and the company's git nodes their transfer lane.
 //
 // The tools by their family's name rather than one by one, so the sentence
@@ -113,23 +102,11 @@ const codeHistorySection = "\n## Reading the company's code" +
 	"history went, and whether a commit reached a branch are read on the " +
 	"server with the `code_*` tools, by commit id — never from a clone, which " +
 	"costs minutes for one file. A change's diff, its findings and what changed " +
-	"since your review are read with `code_get_change`."
-
-// codeHistoryBoxSentence closes [codeHistorySection] where the executor is
-// also offered run_sandbox ([ExecutorInput.OffersSandbox]), which then takes
-// `repos` — the code tools and `repos` are offered together, where this node
-// serves the code host — because a repository a coding run is given is cloned
-// BLOBLESS: a `git log -p` or a `git blame` in the box fetches each file's
-// contents over the network as it walks, so the history question a seat might
-// hand the box is the one the server answers fastest: history in a box is
-// for building, not for answering questions. Said only there: to a seat with
-// no sandbox it is prose about a box it never gets.
-const codeHistoryBoxSentence = " A repository `run_sandbox` clones is blobless — each " +
-	"file's contents fetched as git needs them — so its history is for building, not for answering questions."
+	"since your review are read with `" + toolname.CodeGetChange + "`."
 
 // KeyCodeSearch is the outline key of the guidance on searching the company's
 // code.
-const KeyCodeSearch = "code_search"
+const KeyCodeSearch = "code_searching"
 
 // CodeSearchTools are the code tools [codeSearchSection]'s claim rests on: the
 // search. The section renders only where the executor holds it — registered
@@ -137,7 +114,7 @@ const KeyCodeSearch = "code_search"
 // all of or none — so no prompt sends a seat to a search its surface does not
 // carry. Exported for internal/agent/builtin's test that holds it to the tool
 // that package registers, which this package cannot import.
-func CodeSearchTools() []string { return []string{"code_search"} }
+func CodeSearchTools() []string { return []string{toolname.CodeSearch} }
 
 // codeSearchSection is the one rule about SEARCHING the company's code that no
 // tool's description reaches a seat early enough to make: the choice between
@@ -149,7 +126,7 @@ func CodeSearchTools() []string { return []string{"code_search"} }
 // that keep an index — is the tool's description, not repeated here: "every
 // repository" would be false of a `search: grep` one no repo: names.
 const codeSearchSection = "\n## Searching the company's code" +
-	"\nWhere something is defined, used or mentioned is found with `code_search` " +
+	"\nWhere something is defined, used or mentioned is found with `" + toolname.CodeSearch + "` " +
 	"across the repositories you can read — search before reading whole trees."
 
 // KeyCodeWrites is the outline key of the guidance on changing the company's
@@ -167,7 +144,7 @@ const KeyCodeWrites = "code_writes"
 // Exported for the test in internal/agent/builtin that holds them to the code
 // writes that package registers, which this package cannot import.
 func CodeWriteTools() []string {
-	return []string{"code_commit_files", "code_create_repo"}
+	return []string{toolname.CodeCommitFiles, toolname.CodeCreateRepo}
 }
 
 // codeWritesSection is the one rule about CHANGING the company's code that no
@@ -180,7 +157,7 @@ func CodeWriteTools() []string {
 // repository's expiry, which code_create_repo's description says.
 const codeWritesSection = "\n## Changing the company's code" +
 	"\nA small change to a repository — a document, a configuration, a fix of a " +
-	"few lines — is committed on the server with `code_commit_files`; anything to " +
+	"few lines — is committed on the server with `" + toolname.CodeCommitFiles + "`; anything to " +
 	"build or test belongs in a checkout. Your experiments go in a scratch " +
 	"repository, `<your handle>.<name>`."
 
@@ -190,7 +167,7 @@ const KeyCodeMerging = "code_merging"
 // CodeMergeTools are the code tools [codeMergingSection]'s claims rest on: the
 // merge itself. Exported for internal/agent/builtin's test that holds them to
 // the change writes it registers.
-func CodeMergeTools() []string { return []string{"code_merge_change"} }
+func CodeMergeTools() []string { return []string{toolname.CodeMergeChange} }
 
 // codeMergingSection is the one rule about MERGING a change that no tool's
 // description can carry early enough: what a seat does while a change waits.
@@ -201,25 +178,25 @@ func CodeMergeTools() []string { return []string{"code_merge_change"} }
 // rounds on what a wake already delivers. Which preconditions, who clears them
 // and the change's place in its queue are the tool's answer, not repeated here.
 const codeMergingSection = "\n## Merging a change" +
-	"\nA change merges with `code_merge_change` once it is ready. A merge that " +
+	"\nA change merges with `" + toolname.CodeMergeChange + "` once it is ready. A merge that " +
 	"is not ready, or is queued for its checks, is not waited on: end the turn, " +
 	"and a `ready_to_merge` or `merged` wake brings you back."
 
 // ExecutorInput is everything the executor prompt renders beyond the seat
 // itself.
 //
-// Every field is frozen at turn start and none of them varies as the loop
-// runs: that is what makes the prompt byte-identical on round 9 and round 1,
-// which is what the provider's prefix cache is priced on. Work that
-// accumulates DURING the turn belongs in [BuildPhaseUserMessage].
+// Every field is frozen at turn start and none of them varies between the
+// turn's launches: that is what makes the prompt byte-identical on its third
+// run and its first, which is what the provider's prefix cache is priced on.
+// Work that accumulates DURING the turn belongs in [BuildPhaseUserMessage].
 //
 // The zero value renders the plain contract with nothing to discover and no
 // prefetch blocks, which is what most tests want.
 type ExecutorInput struct {
 	// Discoverable is what the executor can reach but does not hold yet,
 	// rendered by [github.com/crewlet/crewlet/internal/tools.Snapshot.Discoverable]:
-	// on the executor, which holds every first-party tool from its first
-	// round, that is its MCP servers by name. Empty renders no section.
+	// on the executor, which holds every first-party tool from its launch,
+	// that is its MCP servers by name. Empty renders no section.
 	Discoverable string
 
 	// AvailableTools is every name on the surface built for this phase,
@@ -269,16 +246,6 @@ type ExecutorInput struct {
 	// Skills is the tool-skill registry. Nil keeps the prompt free of skill
 	// scaffolding entirely.
 	Skills SkillCatalogue
-
-	// OffersSandbox is whether run_sandbox is on the surface this executor
-	// is offered, which is what the sandbox section teaches.
-	//
-	// THE CALLER'S ANSWER, not the role's gate read here: the gate is not
-	// what says a seat holds the tool. A seat whose executor runs in agent
-	// mode is never offered it — it already holds a shell — whatever its
-	// gate says, and the section rendered off the gate told that seat's
-	// coding CLI about a tool its bridge never lists, on every turn.
-	OffersSandbox bool
 }
 
 // BuildExecutor renders the executor's system prompt, and its outline.
@@ -349,10 +316,6 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// seat and costs the prompt cache nothing.
 	b.Heading(KeyUntrustedText, untrustedTextHeading, provenance.StandingInstruction)
 
-	if in.OffersSandbox {
-		b.Heading("sandbox", executorSandboxSection)
-	}
-
 	// FIRST of the prefetched blocks, because it is the trigger's own
 	// context rather than something retrieved about it, and the executor
 	// reads this prompt top-down: what the conversation is before what the
@@ -389,18 +352,14 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// THE LIST ALONE: what a worker is, what it may not do and that it
 	// answers inside this turn is `delegate`'s own description, which
 	// reaches the model with the tool on every round.
-	if in.Workers != "" && slices.Contains(in.AvailableTools, "delegate") {
+	if in.Workers != "" && slices.Contains(in.AvailableTools, toolname.Delegate) {
 		b.Heading("workers", "\n## Your workers", in.Workers)
 	}
 	// AFTER THE WORKERS AND BEFORE THE TOOL SKILLS, because it is a choice
 	// of how to answer — on the server, not in a clone — made before the
 	// how-to of any one tool. Gated on every tool its claims rest on.
 	if holdsAll(in.AvailableTools, CodeHistoryTools()) {
-		section := []string{codeHistorySection}
-		if in.OffersSandbox {
-			section = append(section, codeHistoryBoxSentence)
-		}
-		b.Heading(KeyCodeHistory, section...)
+		b.Heading(KeyCodeHistory, codeHistorySection)
 	}
 	// AND HOW TO FIND WHAT TO READ, right after: the choice made before a
 	// read, of a search over every repository rather than a walk of one.
@@ -447,10 +406,10 @@ const KeyDiscoverableTools = "discoverable_tools"
 // can reach has no section, rather than a heading over "(none)".
 //
 // NOT "Available tools", which is what it was titled while it listed every
-// tool the phase already held. That is the heading a text-mode prompt gives
-// the JSON definitions of the tools the phase DOES hold, in the same
-// conversation, and two sections under one heading saying different things
-// is a model reading whichever it saw last.
+// tool the phase already held. The tools a phase holds reach its CLI as the
+// tools of its MCP server, and a section headed as though it listed them
+// tells the model it may call what it first has to discover — a call the
+// session refuses, since the tool is not on its surface yet.
 func discoverableSection(list string) []string {
 	if strings.TrimSpace(list) == "" {
 		return nil

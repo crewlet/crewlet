@@ -1,0 +1,42 @@
+# This week against last week is one read of spend per week, never two
+# overlapping windows drawn as two identical cards.
+person:
+  apps: [admin]
+page:
+  screen: spend
+  title: Spend
+  params: {}
+  query: {}
+  resources: []
+  selection: null
+  source_revision: url:1a2b3c4d
+  accepts: [spend.range.set, spend.group.set]
+question: Which agents spent the most tokens this week, and how does that compare to last week?
+answers:
+  - route: GET /tokens/series
+    body:
+      series:
+        - {at: "2026-10-12", total_tokens: 0, input_tokens: 0, output_tokens: 0, calls: 0}
+        - {at: "2026-10-19", total_tokens: 3914984, input_tokens: 3800000, output_tokens: 114984, calls: 185}
+      by_group:
+        - {group: seat, label: Miles, total_tokens: 3731582, calls: 160}
+        - {group: seat, label: QA Engineer, total_tokens: 181620, calls: 17}
+  - route: GET /tokens/breakdown
+    body:
+      by_agent:
+        - {role: Miles, handle: miles, total_tokens: 3731582, input_tokens: 3700000, output_tokens: 31582, calls: 160}
+        - {role: QA Engineer, handle: qa, total_tokens: 181620, input_tokens: 170000, output_tokens: 11620, calls: 17}
+script:
+  - call: get_spend
+    args: {days: 7}
+  - call: get_spend_series
+    args: {days: 14, bucket: week}
+  - say: >-
+      Miles spent the most this week, 3.7M tokens, then the QA Engineer with 182K.
+      Last week nothing was spent, so all of it is new this week.
+expect:
+  calls: [get_spend_series]
+  proposals: 0
+  state: completed
+  says: [Miles, last week]
+  shows: ["Spend over time, last 14 days, by week"]

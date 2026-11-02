@@ -116,11 +116,11 @@ func TestAnIndexThatDoesNotResolveIsRefused(t *testing.T) {
 		rule  docindex.Rule
 		words string
 	}{
-		{"not JSON", `{`, nil, docindex.RuleIndex, "not the doc index"},
+		{"not JSON", `{`, nil, docindex.RuleIndex, "doc.json is not JSON"},
 		{"an unknown field", `{"v":1,"tabs":[{"path":"a.md","title":"A"}],"theme":"x"}`, nil,
-			docindex.RuleIndex, "unknown field"},
+			docindex.RuleIndex, "theme is not a key the doc index carries: the top level of doc.json takes v, tabs"},
 		{"two values", `{"v":1,"tabs":[{"path":"a.md","title":"A"}]} {}`, nil, docindex.RuleIndex,
-			"more than one"},
+			"more after its value"},
 		{"another version", `{"v":2,"tabs":[{"path":"a.md","title":"A"}]}`, nil, docindex.RuleIndex,
 			"v is 2"},
 		{"no tabs", `{"v":1,"tabs":[]}`, nil, docindex.RuleIndex, "at least one tab"},

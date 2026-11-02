@@ -27,7 +27,7 @@ test("a press is the button's, not the link's around it", () => {
   const onPress = vi.fn();
   const navigate = vi.fn();
   render(
-    <a href="#/work/ENG-1" onClick={navigate}>
+    <a href="#/worklet/ENG-1" onClick={navigate}>
       <WriteButton write={write()} onPress={onPress}>
         Pin
       </WriteButton>
@@ -102,6 +102,8 @@ test("a refusal the node caused offers to try again, under the same request", ()
       hostRefusal: "",
       retryable: true,
       grants: [],
+      reason: "",
+      remedy: null,
     },
   });
   render(
@@ -125,6 +127,8 @@ test("a refusal the request caused offers no retry: the same request would be re
           hostRefusal: "",
           retryable: false,
           grants: [],
+          reason: "",
+          remedy: null,
         },
       })}
       onPress={() => {}}
@@ -146,6 +150,8 @@ test("an argument the engine names in backticks is drawn as a value, not punctua
           hostRefusal: "",
           retryable: false,
           grants: [],
+          reason: "",
+          remedy: null,
         },
       })}
       onPress={() => {}}
@@ -156,4 +162,56 @@ test("an argument the engine names in backticks is drawn as a value, not punctua
   const alert = screen.getByRole("alert");
   expect(alert.textContent).not.toContain("`");
   expect(alert.querySelector("code")?.textContent).toBe("title");
+});
+
+/** A press the engine refused on authority, by `reason`, naming `grants`. */
+function refusedFor(reason: string, grants: string[], sentence: string) {
+  return write({
+    refusal: {
+      sentence,
+      hint: "",
+      hostRefusal: "",
+      retryable: false,
+      grants,
+      reason,
+      remedy: null,
+    },
+  });
+}
+
+test("a refusal some access clears names that access, in one sentence", () => {
+  render(
+    <WriteButton
+      write={refusedFor("no_grant", ["worklet"], "You don’t have access to this.")}
+      onPress={() => {}}
+    >
+      Pin
+    </WriteButton>,
+  );
+  expect(screen.getByRole("alert").textContent).toContain(
+    "You need Worklet access for this. Ask an admin.",
+  );
+});
+
+// THE RULE DECIDES WHETHER ACCESS IS THE WAY PAST, NEVER THE GRANTS ALONE: a
+// proof gone stale names the access that admitted the reader, and an
+// artifact's role the admin override beside the share its owner makes, so
+// each says its own sentence. Mutation: decide by the grants alone and both
+// rows fail.
+test.each([
+  ["a proof gone stale", "step_up", "Confirm it’s you first."],
+  [
+    "a role on an artifact below the verb's",
+    "role",
+    "Your role on this doesn't allow that. Whoever owns it can share it with you at a higher one.",
+  ],
+])("%s names no access to ask for", (_, reason, sentence) => {
+  render(
+    <WriteButton write={refusedFor(reason, ["admin"], sentence)} onPress={() => {}}>
+      Pin
+    </WriteButton>,
+  );
+  const alert = screen.getByRole("alert");
+  expect(alert.textContent).toContain(sentence);
+  expect(alert.textContent).not.toMatch(/You need .* access/);
 });

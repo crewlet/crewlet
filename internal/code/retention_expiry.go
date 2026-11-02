@@ -299,7 +299,7 @@ type idleRefsPage struct {
 
 // idleSeatRefs lists one page of the refs a seat set in its own namespace
 // whose `at` is at or before q.cutoff, oldest first and keyset after q.after,
-// over code_refs_expiry_idx (replicated 0091) — with the page's repositories
+// over code_refs_expiry_idx (replicated 0114) — with the page's repositories
 // and the position it read them at, in the same transaction. A STALE READ:
 // every deletion is decided again in its committer's own snapshot.
 func (r *Reader) idleSeatRefs(ctx context.Context, q idleRefsQuery) (idleRefsPage, error) {

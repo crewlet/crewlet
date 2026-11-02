@@ -1,0 +1,1135 @@
+package worklet_test
+
+import (
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
+)
+
+// save writes a view the way every caller does: read what it replaces, decide
+// on that, and save against it.
+func save(t *testing.T, w *worklet.Writer, opID string,
+	view worklet.View) (worklet.WriteResult, error) {
+
+	t.Helper()
+	prior, err := w.ViewPrior(t.Context(), view.ID)
+	if err != nil {
+		t.Fatalf("read what saving %s replaces: %v", view.ID, err)
+	}
+	return w.WriteView(t.Context(), opID, view, prior)
+}
+
+// A view fixture the cases vary. The container is the seeded project, which is
+// the only one [newRoundTrip] has applied.
+func aView(id string, mutate func(*worklet.View)) worklet.View {
+	view := worklet.View{
+		ID:        id,
+		Name:      "My work",
+		Type:      worklet.ViewList,
+		Container: worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"},
+		Params:    map[string]string{"assignee": "ana", "sort": "-updated"},
+	}
+	if mutate != nil {
+		mutate(&view)
+	}
+	return view
+}
+
+// strip reads one container's view strip as one viewer.
+func (r *roundTrip) strip(container worklet.Container, viewer string) worklet.ViewListing {
+	r.t.Helper()
+	listing, err := r.reader.Views(r.t.Context(), worklet.ViewQuery{
+		Container: container, Viewer: viewer, Level: statelog.ReadStale,
+	})
+	if err != nil {
+		r.t.Fatalf("Views(%s %s, %q): %v", container.Kind, container.ID, viewer, err)
+	}
+	return listing
+}
+
+func stripKeys(l worklet.ViewListing) []string {
+	out := make([]string, 0, len(l.Views))
+	for _, row := range l.Views {
+		out = append(out, row.Key)
+	}
+	return out
+}
+
+// A SAVED VIEW THAT CANNOT BE RUN IS REFUSED AT THE SAVE.
+//
+// Every one of these is discovered by whoever opens the view otherwise —
+// weeks later, with no way to tell a typo from a grammar change — and the
+// refusal a caller would have got for running the query is the refusal they
+// get for saving it.
+func TestAViewThatCouldNotBeRunIsRefusedAtTheSave(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	cases := []struct {
+		name   string
+		mutate func(*worklet.View)
+		want   string
+	}{
+		{"no id", func(v *worklet.View) { v.ID = "" }, "names no view id"},
+		{"no name", func(v *worklet.View) { v.Name = "   " }, "has no name"},
+		{"a name too long for its tab", func(v *worklet.View) {
+			v.Name = strings.Repeat("x", worklet.MaxViewName+1)
+		}, "shorten the name"},
+		{"a fourth shape", func(v *worklet.View) { v.Type = "gantt" }, "not a view shape"},
+		{"a container kind that is not one", func(v *worklet.View) {
+			v.Container = worklet.Container{Kind: "team", ID: "eng"}
+		}, "not a container a view can belong to"},
+		{"a workspace with an id", func(v *worklet.View) {
+			v.Container = worklet.Container{Kind: worklet.ContainerWorkspace, ID: "ENG"}
+		}, "carries no id"},
+		{"a project with none", func(v *worklet.View) {
+			v.Container = worklet.Container{Kind: worklet.ContainerProject}
+		}, "with no id"},
+		{"a stuffed parameter map", func(v *worklet.View) {
+			v.Params = map[string]string{}
+			for i := range worklet.MaxViewParamKeys + 1 {
+				v.Params["f.field"+string(rune('a'+i%26))+string(rune('a'+i/26))] = "x"
+			}
+		}, "query parameters and"},
+		{"a parameter nothing parses", func(v *worklet.View) {
+			v.Params = map[string]string{"asignee": "ana"}
+		}, "does not parse"},
+		// A VIEW'S PARAMS ARE QUERY KEYS AND NOTHING ELSE, which is
+		// what lets a client spread them straight onto the wire. The
+		// dashboard keeps its own DISPLAY keys on the same address —
+		// `cols`, and `cols.list` / `cols.table` for the two column
+		// sets the one grid has — and reads a saved view's params
+		// beside them; a view that could carry one would take the
+		// board down with a refusal the moment somebody opened it.
+		// Neither is in QueryKeys, so neither can be saved.
+		{"a display key, unqualified", func(v *worklet.View) {
+			v.Params = map[string]string{"cols": "key,title"}
+		}, "does not parse"},
+		{"a display key, per shape", func(v *worklet.View) {
+			v.Params = map[string]string{"cols.list": "key,title"}
+		}, "does not parse"},
+		{"a value the grammar refuses", func(v *worklet.View) {
+			v.Params = map[string]string{"status": "shipped"}
+		}, "does not parse"},
+		// WHICH TASK A CALLER IS STANDING ON is theirs, like a cursor: a
+		// view that pinned one would answer every reader's "3 of 18"
+		// about a task they never opened.
+		{"the task a caller stands on", func(v *worklet.View) {
+			v.Params = map[string]string{"around": "ENG-1"}
+		}, "which a saved view cannot"},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := save(t, r.writer, "op-bad-"+tc.name,
+				aView("v-bad", tc.mutate))
+			if err == nil {
+				t.Fatalf("case %d saved a view that cannot be run", i)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("refusal %q does not say %q", err, tc.want)
+			}
+		})
+	}
+
+	// THE CONTROL: the same fixture, unmutated, saves. Without it every
+	// case above would pass against a verb that refused everything.
+	if _, err := save(t, r.writer, "op-good", aView("v-good", nil)); err != nil {
+		t.Fatalf("the control view was refused: %v", err)
+	}
+}
+
+// ONE VIEW PER CONTAINER IS THE DEFAULT, and the applier is what makes it true.
+//
+// The rule is about the ROWS: a second view claiming the default has to take
+// it from the first in the same transaction, or a tab strip draws two active
+// tabs and a reader needs a tie-break rule nobody wrote down.
+func TestOnlyOneViewInAContainerIsTheDefault(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+
+	for _, id := range []string{"v-1", "v-2"} {
+		if _, err := save(t, r.writer, "op-"+id,
+			aView(id, func(v *worklet.View) { v.Name = id; v.Default = true })); err != nil {
+			t.Fatalf("save %s: %v", id, err)
+		}
+		r.drain()
+	}
+
+	var defaults []string
+	for _, row := range r.strip(eng, "").Views {
+		if row.Default {
+			defaults = append(defaults, row.ID)
+		}
+	}
+	if len(defaults) != 1 || defaults[0] != "v-2" {
+		t.Fatalf("the default is %v, want exactly [v-2]", defaults)
+	}
+
+	// AND WITHDRAWING ONE TAKES NOTHING FROM ANYBODY ELSE: saving v-2
+	// with the flag off leaves the container with no default rather than
+	// handing it back to v-1, which is a gesture the person did not make.
+	if _, err := save(t, r.writer, "op-v-2-off",
+		aView("v-2", func(v *worklet.View) { v.Name = "v-2" })); err != nil {
+		t.Fatalf("withdraw the default: %v", err)
+	}
+	r.drain()
+	for _, row := range r.strip(eng, "").Views {
+		if row.Default {
+			t.Fatalf("view %s is the default after the only one was withdrawn", row.ID)
+		}
+	}
+}
+
+// A PERSONAL VIEW IS PRIVATE TO ITS OWNER, enforced in the query rather than
+// filtered afterwards.
+func TestAPersonalViewReachesNobodyElsesStrip(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+
+	for _, spec := range []struct{ id, owner string }{
+		{"v-shared", ""}, {"v-ana", "ana"}, {"v-bob", "bob"},
+	} {
+		if _, err := save(t, r.writer, "op-"+spec.id,
+			aView(spec.id, func(v *worklet.View) {
+				v.Name, v.Owner = spec.id, spec.owner
+			})); err != nil {
+			t.Fatalf("save %s: %v", spec.id, err)
+		}
+		r.drain()
+	}
+
+	for viewer, want := range map[string][]string{
+		"ana": {"v-ana", "v-shared"},
+		"bob": {"v-bob", "v-shared"},
+		"":    {"v-shared"},
+	} {
+		var saved []string
+		for _, row := range r.strip(eng, viewer).Views {
+			if !row.Builtin {
+				saved = append(saved, row.ID)
+			}
+		}
+		if len(saved) != len(want) {
+			t.Fatalf("viewer %q sees %v, want %v", viewer, saved, want)
+		}
+		for _, id := range want {
+			if !containsString(saved, id) {
+				t.Fatalf("viewer %q sees %v, want %v", viewer, saved, want)
+			}
+		}
+	}
+}
+
+// A PROTECTED VIEW IS ITS OWNER'S, which is what stops a shared board being
+// rearranged under everybody.
+func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// Written by ana, whom the harness's own writer is.
+	if _, err := save(t, r.writer, "op-guarded",
+		aView("v-guarded", func(v *worklet.View) {
+			v.Owner, v.Protected = "ana", true
+		})); err != nil {
+		t.Fatalf("save the protected view: %v", err)
+	}
+	r.drain()
+
+	bob := r.writer.As("bob", worklet.AuthorHuman, worklet.Provenance{})
+	_, err := save(t, bob, "op-guarded-bob",
+		aView("v-guarded", func(v *worklet.View) {
+			v.Owner, v.Protected, v.Name = "ana", true, "bob was here"
+		}))
+	if err == nil {
+		t.Fatal("bob edited a view protected for ana")
+	}
+	if !errors.Is(err, worklet.ErrForbidden) {
+		t.Fatalf("the refusal is %v, want an ErrForbidden a caller can branch on", err)
+	}
+	if !strings.Contains(err.Error(), "ana") {
+		t.Fatalf("the refusal %q does not name whom to ask", err)
+	}
+
+	// ITS OWNER STILL MAY, or "protected" would mean frozen.
+	if _, err := save(t, r.writer, "op-guarded-ana",
+		aView("v-guarded", func(v *worklet.View) {
+			v.Owner, v.Protected, v.Name = "ana", true, "ana renamed it"
+		})); err != nil {
+		t.Fatalf("ana could not edit her own protected view: %v", err)
+	}
+}
+
+// EVERY CONTAINER HAS ITS VIEWS WITHOUT ANYBODY SAVING ONE.
+//
+// That is what makes "required views" moot: a fresh project needs no setup
+// gesture and nothing has to guard against somebody deleting the last view.
+//
+// THE SET IN ORDER, never its size — see [TestEveryImplicitViewsQueryParses],
+// which was a count and reported adding a view as "has 6, want 5".
+func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	want := []string{
+		worklet.ViewKeyList, worklet.ViewKeyBoard, worklet.ViewKeyCalendar,
+		worklet.ViewKeyTimeline, worklet.ViewKeyTable, worklet.ViewKeyTrash,
+	}
+	for _, container := range []worklet.Container{
+		{Kind: worklet.ContainerWorkspace},
+		{Kind: worklet.ContainerProject, ID: "ENG"},
+		{Kind: worklet.ContainerUnit, ID: "engineering"},
+		{Kind: worklet.ContainerPerson, ID: "ana"},
+	} {
+		got := stripKeys(r.strip(container, ""))
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s %s has %v, want %v", container.Kind, container.ID, got, want)
+		}
+		// AND EVERY IMPLICIT ROW SAYS SO, because a caller renders it
+		// from its key rather than editing, protecting or ranking it.
+		for _, row := range r.strip(container, "").Views {
+			if !row.Builtin || row.ID != "" {
+				t.Fatalf("%s is not marked implicit: builtin=%v id=%q",
+					row.Key, row.Builtin, row.ID)
+			}
+		}
+	}
+
+}
+
+// EVERY IMPLICIT VIEW'S OWN PARAMETERS PARSE.
+//
+// They are rendered from this package rather than saved, so [checkView] never
+// sees them — which is exactly why they need their own case: a tab that opens
+// on a parse error is the failure the save-time parse exists to prevent, and
+// the implicit ones are the tabs every company meets first.
+//
+// THE SET RATHER THAN THE COUNT, because a count says nothing about WHICH: a
+// view renamed, dropped and replaced by another passes a count check, and a
+// view added is a failure whose message names a number rather than a tab. This
+// was a count, and adding the timeline turned it into "has 6 views, want 5" —
+// a red build whose message named nothing anybody could act on.
+func TestEveryImplicitViewsQueryParses(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	strip := r.strip(worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}, "")
+	want := []string{
+		worklet.ViewKeyList, worklet.ViewKeyBoard, worklet.ViewKeyCalendar,
+		worklet.ViewKeyTimeline, worklet.ViewKeyTable, worklet.ViewKeyTrash,
+	}
+	if got := stripKeys(strip); !slices.Equal(got, want) {
+		t.Fatalf("a project offers %v, want %v", got, want)
+	}
+	for _, row := range strip.Views {
+		params := make(worklet.MapParams, len(row.Params)+1)
+		for key, value := range row.Params {
+			params[key] = value
+		}
+		params["container"] = "project:ENG"
+		if _, err := worklet.ParseQuery(params, wednesday, time.UTC); err != nil {
+			t.Fatalf("the %s tab's own query does not parse: %v", row.Key, err)
+		}
+	}
+}
+
+// A VIEW'S CREATION FACTS ARE THE STORED ROW'S, and its rank is too.
+//
+// A save that carried either would let a second writer re-attribute a view
+// somebody else made, or drag a shared strip's arrangement by editing one tab.
+func TestASaveCannotReattributeOrRerankAView(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+
+	if _, err := save(t, r.writer, "op-first", aView("v-1", nil)); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+	before := r.strip(eng, "").Views
+
+	bob := r.writer.As("bob", worklet.AuthorHuman, worklet.Provenance{})
+	if _, err := save(t, bob, "op-second",
+		aView("v-1", func(v *worklet.View) {
+			v.Name, v.CreatedBy = "bob renamed it", "bob"
+			v.CreatedAt = wednesday.Add(time.Hour)
+			v.Rank = worklet.Rank("a0")
+		})); err != nil {
+		t.Fatalf("bob's save: %v", err)
+	}
+	r.drain()
+
+	after := r.strip(eng, "").Views
+	if len(before) != len(after) {
+		t.Fatalf("the strip is %d rows, was %d", len(after), len(before))
+	}
+	var got worklet.ViewRow
+	for _, row := range after {
+		if row.ID == "v-1" {
+			got = row
+		}
+	}
+	if got.Name != "bob renamed it" {
+		t.Fatalf("the rename did not land: %q", got.Name)
+	}
+	// THE RANK IS THE STRIP'S, so a save carrying one it did not mint
+	// leaves the arrangement where it was.
+	var want worklet.Rank
+	for _, row := range before {
+		if row.ID == "v-1" {
+			want = row.Rank
+		}
+	}
+	if got.Rank != want {
+		t.Fatalf("the rank moved to %q, was %q", got.Rank, want)
+	}
+}
+
+// A NEW VIEW LANDS AT THE END OF THE STRIP, never in front of whatever the
+// person arranged.
+func TestANewViewLandsAtTheEndOfTheStrip(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+
+	for _, id := range []string{"v-1", "v-2", "v-3"} {
+		if _, err := save(t, r.writer, "op-"+id,
+			aView(id, func(v *worklet.View) { v.Name = id })); err != nil {
+			t.Fatalf("save %s: %v", id, err)
+		}
+		r.drain()
+	}
+
+	var saved []string
+	var last worklet.Rank
+	for _, row := range r.strip(eng, "").Views {
+		if row.Builtin {
+			continue
+		}
+		if row.Rank <= last {
+			t.Fatalf("view %s ranks %q, which is not after %q", row.ID, row.Rank, last)
+		}
+		last = row.Rank
+		saved = append(saved, row.ID)
+	}
+	want := []string{"v-1", "v-2", "v-3"}
+	for i, id := range want {
+		if i >= len(saved) || saved[i] != id {
+			t.Fatalf("the strip is %v, want %v", saved, want)
+		}
+	}
+}
+
+// A VIEWER'S PINS COME FIRST FOR THEM AND NOBODY ELSE.
+//
+// Two orders, concatenated rather than sorted together: within each half the
+// rank is the arrangement somebody made, and one sort over a pinned flag would
+// silently re-rank the shared strip for one reader.
+func TestAPinOrdersOneViewersStripAndNoOthers(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+
+	for _, id := range []string{"v-1", "v-2", "v-3"} {
+		if _, err := save(t, r.writer, "op-"+id,
+			aView(id, func(v *worklet.View) { v.Name = id })); err != nil {
+			t.Fatalf("save %s: %v", id, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-ana",
+		worklet.PersonSubject("ana"), "", worklet.Person{
+			V: 1, Handle: "ana", PinnedViews: []string{"v-3"},
+		}, worklet.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("pin v-3 for ana: %v", err)
+	}
+	r.drain()
+
+	var ana []string
+	for _, row := range r.strip(eng, "ana").Views {
+		if !row.Builtin {
+			if row.ID == "v-3" && !row.Pinned {
+				t.Fatal("ana's pinned view does not say it is pinned")
+			}
+			ana = append(ana, row.ID)
+		}
+	}
+	if len(ana) == 0 || ana[0] != "v-3" {
+		t.Fatalf("ana's strip is %v, want the pin first", ana)
+	}
+
+	var bob []string
+	for _, row := range r.strip(eng, "bob").Views {
+		if !row.Builtin {
+			if row.Pinned {
+				t.Fatalf("view %s is pinned for bob, and the pin is ana's", row.ID)
+			}
+			bob = append(bob, row.ID)
+		}
+	}
+	if len(bob) == 0 || bob[0] != "v-1" {
+		t.Fatalf("bob's strip is %v, want the rank order", bob)
+	}
+}
+
+// A STRIP READ NAMES A CONTAINER THE WRITE COULD HAVE PRODUCED.
+//
+// The spellings a save refuses come back as an EMPTY strip otherwise, which
+// reads exactly like a container nobody has saved a view in.
+func TestAViewReadRefusesTheSpellingsTheWriteRefuses(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	for _, tc := range []struct {
+		name      string
+		container worklet.Container
+		want      string
+	}{
+		{"no kind", worklet.Container{}, "not a container"},
+		{"a kind that is not one", worklet.Container{Kind: "team", ID: "eng"}, "not a container"},
+		{"a workspace with an id", worklet.Container{
+			Kind: worklet.ContainerWorkspace, ID: "ENG"}, "carries no id"},
+		{"a project with none", worklet.Container{
+			Kind: worklet.ContainerProject}, "with no id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := r.reader.Views(t.Context(), worklet.ViewQuery{
+				Container: tc.container, Level: statelog.ReadStale,
+			})
+			if err == nil {
+				t.Fatal("a strip came back for a container no write could produce")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("the refusal %q does not say %q", err, tc.want)
+			}
+		})
+	}
+
+	// AND A READ WITH NO LEVEL IS THE FOURTH STATE THIS PACKAGE REFUSES:
+	// a surface resolves its own default before it reads.
+	if _, err := r.reader.Views(t.Context(), worklet.ViewQuery{
+		Container: worklet.Container{Kind: worklet.ContainerWorkspace},
+	}); err == nil {
+		t.Fatal("a view read with no read level was answered")
+	}
+}
+
+// A SAVE IS REFUSED WHEN THE VIEW IT REPLACES IS NOT THE ONE IT WAS DECIDED ON.
+//
+// A save replaces a view whole, by id, so its authority is decided on the view
+// it overwrites as well as on the one it writes — and a decision taken on a
+// read is only worth something if the write refuses when the read no longer
+// holds. Here the view changes hands between the read and the save, which is
+// refused with a conflict the caller re-reads on; the control is the same save
+// against a fresh read.
+func TestASaveDecidedOnAViewThatChangedIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := save(t, r.writer, "op-shared", aView("v-1", nil)); err != nil {
+		t.Fatalf("save the shared view: %v", err)
+	}
+	r.drain()
+
+	stale, err := r.writer.ViewPrior(t.Context(), "v-1")
+	if err != nil || !stale.Held || stale.Owner != "" {
+		t.Fatalf("the prior of a shared view is %+v (%v)", stale, err)
+	}
+	// SOMEBODY ELSE MAKES IT THEIRS in between.
+	if _, err := save(t, r.writer, "op-taken",
+		aView("v-1", func(v *worklet.View) { v.Owner = "bob" })); err != nil {
+		t.Fatalf("the intervening save: %v", err)
+	}
+	r.drain()
+	_, err = r.writer.WriteView(t.Context(), "op-late",
+		aView("v-1", func(v *worklet.View) { v.Name = "late" }), stale)
+	if !errors.Is(err, statelog.ErrConflict) {
+		t.Fatalf("a save decided on the shared view landed on bob's (err %v)", err)
+	}
+	if !strings.Contains(err.Error(), "bob") {
+		t.Errorf("the refusal does not say whose it is now: %v", err)
+	}
+
+	// THE CONTROL: decided on what is there now, it lands.
+	if _, err := save(t, r.writer, "op-fresh",
+		aView("v-1", func(v *worklet.View) { v.Owner, v.Name = "bob", "fresh" })); err != nil {
+		t.Fatalf("a save decided on the current view was refused: %v", err)
+	}
+}
+
+// A PERSONAL VIEW IS NEVER ITS CONTAINER'S DEFAULT.
+//
+// The default is the landing tab for EVERYBODY, and a personal view is in
+// nobody's strip but its owner's — so accepting one cleared the container's
+// shared default for every other reader, on the authority of a caller who
+// needed no more than their own record to save it. A pin is how a person puts
+// their own view first.
+func TestAPersonalViewCannotBeTheDefault(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	_, err := save(t, r.writer, "op-mine", aView("v-mine", func(v *worklet.View) {
+		v.Owner, v.Default = "ana", true
+	}))
+	if err == nil {
+		t.Fatal("a personal view was saved as its container's default")
+	}
+	if !strings.Contains(err.Error(), "pin") {
+		t.Errorf("the refusal does not say what to do instead: %v", err)
+	}
+	// THE CONTROL: the same view shared, or personal and not the default.
+	if _, err := save(t, r.writer, "op-shared", aView("v-shared", func(v *worklet.View) {
+		v.Default = true
+	})); err != nil {
+		t.Fatalf("a shared default was refused: %v", err)
+	}
+	if _, err := save(t, r.writer, "op-mine-plain", aView("v-mine", func(v *worklet.View) {
+		v.Owner = "ana"
+	})); err != nil {
+		t.Fatalf("a personal view was refused: %v", err)
+	}
+}
+
+func containsString(list []string, want string) bool {
+	for _, got := range list {
+		if got == want {
+			return true
+		}
+	}
+	return false
+}
+
+// A VIEW THAT MOVES NAMES THE STRIP IT LEAVES.
+//
+// A save may change a view's container, and then the apply writes the row OUT
+// of one strip and INTO another. A scope naming only the destination let a
+// write into the strip it left slip past a deferral that covers it — the rule
+// Writer.UpdateTask states verbatim for a project move, said about a view.
+func TestAViewThatMovesNamesBothStrips(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	view := aView("v-move", nil)
+	view.Container = worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+	if _, err := save(t, r.writer, "op-here", view); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+
+	view.Container = worklet.Container{Kind: worklet.ContainerProject, ID: "OPS"}
+	if _, err := save(t, r.writer, "op-there", view); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	r.drain()
+
+	scope := r.scopeOfLastRecord()
+	for _, want := range []string{"ENG", "OPS"} {
+		term := worklet.ScopeTerm{Kind: worklet.TermContainer, ID: want}.Path()
+		// THE CONTAINER COVERS THE TERM, not the other way round: the
+		// record names the OBJECT inside each strip, which is the
+		// narrowest honest term, and a read scoped to the strip
+		// intersects it because the object's path nests under it.
+		var found bool
+		for _, path := range scope.Paths {
+			if statelog.Covers(term, path) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the move carries the scope %v, none of which sits under "+
+				"%s — a read of that strip would never wait for this record",
+				scope.Paths, term)
+		}
+	}
+}
+
+// A PINNED VIEW'S COUNT IS THE VIEW'S OWN TOTAL.
+//
+// The number beside a pin is what the board it opens will say it holds: the
+// `total_hint` of the view RUN — its saved parameters, in the container it was
+// saved in, as this viewer. A second definition of what a view selects would
+// be a sidebar that disagrees with the page it links to.
+func TestPinnedViewCountsAreTheViewsOwnTotal(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+	for i, who := range []string{"ana", "ana", "ana", "bob"} {
+		assign(t, r, fmt.Sprintf("t-%d", i), who)
+	}
+	// A FINISHED ONE, which the view does not ask for: the count must use
+	// the grammar's own default scope, as the board does.
+	done := worklet.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "t-0", "ENG",
+		worklet.NoIfMatch, worklet.TaskPatch{Status: &done}, worklet.ChangeStatus,
+		nil); err != nil {
+		t.Fatalf("finish t-0: %v", err)
+	}
+	r.drain()
+
+	for _, view := range []worklet.View{
+		aView("v-ana", func(v *worklet.View) { v.Name = "Ana's" }),
+		aView("v-bob", func(v *worklet.View) {
+			v.Name, v.Params = "Bob's", map[string]string{"assignee": "bob"}
+		}),
+		// A VIEW THAT NO LONGER COMPILES — the save parses, it does not
+		// resolve fields against the catalogue — so its count is a
+		// refusal on its own row rather than a failed strip.
+		aView("v-gone", func(v *worklet.View) {
+			v.Name, v.Params = "Gone", map[string]string{"f.severity": "high"}
+		}),
+	} {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-pins",
+		worklet.PersonSubject("ana"), "", worklet.Person{
+			V: 1, Handle: "ana", PinnedViews: []string{"v-ana", "v-gone"},
+		}, worklet.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("pin for ana: %v", err)
+	}
+	r.drain()
+
+	listing, err := r.reader.Views(t.Context(), worklet.ViewQuery{
+		Container: eng, Viewer: "ana", Level: statelog.ReadStale,
+		Counts: true, Now: wednesday, Zone: time.UTC,
+	})
+	if err != nil {
+		t.Fatalf("Views with counts: %v", err)
+	}
+	rows := map[string]worklet.ViewRow{}
+	for _, row := range listing.Views {
+		rows[row.Key] = row
+	}
+
+	// THE BOARD'S OWN ANSWER for the same view, which is what the count
+	// has to equal — asked the way every surface that runs a view asks it,
+	// every task on its own row.
+	q, err := r.reader.ExpandedQuery(t.Context(), map[string]any{
+		"view": "v-ana", "container": "project:ENG", "subtasks": "separate",
+	}, worklet.Viewer{Handle: "ana"}, wednesday, time.UTC)
+	if err != nil {
+		t.Fatalf("expand v-ana: %v", err)
+	}
+	q.Level = statelog.ReadStale
+	board, err := r.reader.Tasks(t.Context(), q, wednesday)
+	if err != nil {
+		t.Fatalf("run v-ana: %v", err)
+	}
+	if board.TotalHint != 2 {
+		t.Fatalf("the fixture is wrong: v-ana's board holds %d, want ana's two "+
+			"open tasks", board.TotalHint)
+	}
+	ana := rows["v-ana"]
+	if ana.Count == nil || *ana.Count != board.TotalHint || ana.CountCapped {
+		t.Errorf("v-ana's count is %v (capped %v), want the board's total %d",
+			ana.Count, ana.CountCapped, board.TotalHint)
+	}
+	// NOT PINNED, NOT COUNTED — a count per shared view would be a query
+	// per row of every strip on every poll.
+	if bob := rows["v-bob"]; bob.Count != nil || bob.CountRefused != "" {
+		t.Errorf("v-bob is not pinned for ana and carries a count: %+v", bob)
+	}
+	if gone := rows["v-gone"]; gone.Count != nil ||
+		!strings.Contains(gone.CountRefused, "severity") {
+		t.Errorf("v-gone filters on a field nobody declares and says %+v — "+
+			"want no count and a refusal naming the field", gone)
+	}
+	for _, row := range listing.Views {
+		if row.Builtin && row.Count != nil {
+			t.Errorf("builtin %s carries a count; nobody can pin it", row.Key)
+		}
+	}
+
+	// AND WITHOUT THE ASK, NO COUNTS: a strip is read on every poll, and
+	// the counts are a cost a caller opts into.
+	for _, row := range r.strip(eng, "ana").Views {
+		if row.Count != nil || row.CountRefused != "" {
+			t.Errorf("%s carries a count on a strip that did not ask", row.Key)
+		}
+	}
+
+	// COUNTS NEED A VIEWER, since only a viewer has pins.
+	if _, err := r.reader.Views(t.Context(), worklet.ViewQuery{
+		Container: eng, Level: statelog.ReadStale, Counts: true,
+		Now: wednesday, Zone: time.UTC,
+	}); err == nil {
+		t.Error("a strip nobody is looking at was counted — it has no pins")
+	}
+}
+
+// A PINNED VIEW'S COUNT IS THE LIST ITS ROW OPENS, subtree and all.
+//
+// Every surface that runs a view runs it FLAT — the dashboard's shapes send
+// `subtasks=separate` and `list_work_items` overrules to it — so the grammar's
+// default, a predicate on the ROOT whose subtree rides along unfiltered, is an
+// answer nobody who presses the pin is shown. Counted in that default, an
+// open-work view counted the finished subtasks of every open epic: measured on
+// a seeded company, 39 beside a pin whose list said 36 items, including a view
+// SAVED with the tree mode, which is still run flat.
+func TestAPinnedViewCountsTheListItOpens(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+	// An open epic with one open and one FINISHED subtask, and one open
+	// task on its own: three open tasks, four in the epic's subtree view.
+	for _, id := range []string{"epic", "sub-open", "sub-done", "lone"} {
+		assign(t, r, id, "ana")
+	}
+	epic := "epic"
+	for _, id := range []string{"sub-open", "sub-done"} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-adopt-"+id, id, "ENG",
+			worklet.NoIfMatch, worklet.TaskPatch{Parent: &epic},
+			worklet.ChangeReparented, nil); err != nil {
+			t.Fatalf("adopt %s: %v", id, err)
+		}
+		r.drain()
+	}
+	done := worklet.StatusDone
+	if _, err := r.writer.UpdateTask(t.Context(), "op-done", "sub-done", "ENG",
+		worklet.NoIfMatch, worklet.TaskPatch{Status: &done}, worklet.ChangeStatus,
+		nil); err != nil {
+		t.Fatalf("finish sub-done: %v", err)
+	}
+	r.drain()
+
+	open := map[string]string{"status_group": "not_started,active"}
+	for _, view := range []worklet.View{
+		aView("v-open", func(v *worklet.View) { v.Name, v.Params = "Open", open }),
+		aView("v-tree", func(v *worklet.View) {
+			v.Name = "Open, as a tree"
+			v.Params = map[string]string{"status_group": "not_started,active",
+				"subtasks": "collapsed"}
+		}),
+	} {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-pins",
+		worklet.PersonSubject("ana"), "", worklet.Person{
+			V: 1, Handle: "ana", PinnedViews: []string{"v-open", "v-tree"},
+		}, worklet.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("pin for ana: %v", err)
+	}
+	r.drain()
+
+	run := func(params map[string]any) int {
+		t.Helper()
+		q, err := r.reader.ExpandedQuery(t.Context(), params,
+			worklet.Viewer{Handle: "ana"}, wednesday, time.UTC)
+		if err != nil {
+			t.Fatalf("expand %v: %v", params, err)
+		}
+		q.Level = statelog.ReadStale
+		answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+		if err != nil {
+			t.Fatalf("run %v: %v", params, err)
+		}
+		return answer.TotalHint
+	}
+	// THE FIXTURE BITES: the tree answer carries the finished subtask along
+	// with its open epic, and the list a pin opens does not.
+	if tree, flat := run(map[string]any{"view": "v-open", "container": "project:ENG"}),
+		run(map[string]any{"view": "v-open", "container": "project:ENG",
+			"subtasks": "separate"}); tree != 4 || flat != 3 {
+		t.Fatalf("the fixture is wrong: the tree answer holds %d and the flat one %d, "+
+			"want 4 and 3", tree, flat)
+	}
+
+	listing, err := r.reader.Views(t.Context(), worklet.ViewQuery{
+		Container: eng, Viewer: "ana", Level: statelog.ReadStale,
+		Counts: true, Now: wednesday, Zone: time.UTC,
+	})
+	if err != nil {
+		t.Fatalf("Views with counts: %v", err)
+	}
+	for _, row := range listing.Views {
+		if row.Builtin {
+			continue
+		}
+		flat := run(map[string]any{"view": row.ID, "container": "project:ENG",
+			"subtasks": "separate"})
+		switch {
+		case row.Count == nil:
+			t.Errorf("%s carries no count (refused: %q)", row.ID, row.CountRefused)
+		case *row.Count != flat:
+			t.Errorf("%s counts %d beside a pin whose list holds %d — the "+
+				"count took the tree answer's subtree along", row.ID, *row.Count, flat)
+		}
+	}
+}
+
+// A PINNED VIEW IS COUNTED AS THE PERSON WHO OPENS IT, and the count is the
+// board's total whatever the view names about its reader.
+//
+// Three views, each of which reads its viewer a different way: a saved
+// `f.reviewers=me`, which means whoever opens it; `asked_by=` the viewer's own
+// seat, which is the author of every question they put whatever credential
+// they put it through (iam.ActorFor); and a view saved against a PERSON, which
+// a board runs as saved. The
+// count and the board share one expansion ([Reader.Expand]) — and a saved
+// `me` was once resolved by neither, so the count and the board refused it
+// alike, or, while the count carried a merge of its own, disagreed.
+func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	eng := worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}
+	if _, err := r.writer.WriteFields(t.Context(), "op-people", []worklet.FieldDef{
+		{ID: "f-rev", Slug: "reviewers", Name: "Reviewers", Type: worklet.FieldPeople},
+	}); err != nil {
+		t.Fatalf("WriteFields: %v", err)
+	}
+	r.drain()
+	seedWithFields(t, r, "rev-ana-1", map[string]any{"f-rev": []string{"ana"}})
+	seedWithFields(t, r, "rev-ana-2", map[string]any{"f-rev": []string{"ana", "bob"}})
+	seedWithFields(t, r, "rev-bob", map[string]any{"f-rev": []string{"bob"}})
+	// The founder's questions — one through their token and one from the
+	// dashboard, both authored by their seat — and somebody else's.
+	for task, author := range map[string]string{
+		"by-token": "jane-founder", "by-seat": "jane-founder", "by-other": "cy",
+	} {
+		assign(t, r, task, "ana")
+		askOn(t, r, "op-"+task, task, worklet.Comment{
+			ID: "c-" + task, Task: task, Author: author,
+			AuthorKind: worklet.AuthorHuman, Body: "when?", Ask: "ana",
+			CreatedAt: wednesday,
+		})
+	}
+
+	anaHome := worklet.Container{Kind: worklet.ContainerPerson, ID: "ana"}
+	for _, view := range []worklet.View{
+		aView("v-mine", func(v *worklet.View) {
+			v.Name, v.Params = "To review", map[string]string{"f.reviewers": "me"}
+		}),
+		aView("v-asked", func(v *worklet.View) {
+			v.Name, v.Params = "Asked", map[string]string{"asked_by": "jane-founder"}
+		}),
+		aView("v-home", func(v *worklet.View) {
+			v.Name, v.Container = "Held", anaHome
+			v.Params = map[string]string{"assignee": "ana"}
+		}),
+	} {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	for handle, pins := range map[string][]string{
+		"ana": {"v-mine", "v-home"}, "bob": {"v-mine"},
+		"jane-founder": {"v-asked"},
+	} {
+		if _, err := r.writer.WriteDocument(t.Context(), "op-pins-"+handle,
+			worklet.PersonSubject(handle), "", worklet.Person{
+				V: 1, Handle: handle, PinnedViews: pins,
+			}, worklet.ChangePersonUpdated, nil); err != nil {
+			t.Fatalf("pin for %s: %v", handle, err)
+		}
+		r.drain()
+	}
+
+	// board is what work_items answers for the view, as the viewer.
+	// Asked flat, as every surface that runs a view asks it — see
+	// [TestAPinnedViewCountsTheListItOpens].
+	board := func(viewer worklet.Viewer, params map[string]any) int {
+		t.Helper()
+		params = maps.Clone(params)
+		params["subtasks"] = "separate"
+		q, err := r.reader.ExpandedQuery(t.Context(), params, viewer, wednesday, time.UTC)
+		if err != nil {
+			t.Fatalf("run %v as %s: %v", params, viewer.Handle, err)
+		}
+		q.Level = statelog.ReadStale
+		answer, err := r.reader.Tasks(t.Context(), q, wednesday)
+		if err != nil {
+			t.Fatalf("run %v as %s: %v", params, viewer.Handle, err)
+		}
+		return answer.TotalHint
+	}
+	count := func(container worklet.Container, viewer worklet.Viewer, id string) worklet.ViewRow {
+		t.Helper()
+		listing, err := r.reader.Views(t.Context(), worklet.ViewQuery{
+			Container: container, Viewer: viewer.Handle, Level: statelog.ReadStale,
+			Counts: true, Now: wednesday, Zone: time.UTC,
+		})
+		if err != nil {
+			t.Fatalf("Views(%s) as %s: %v", container.ID, viewer.Handle, err)
+		}
+		for _, row := range listing.Views {
+			if row.ID == id {
+				return row
+			}
+		}
+		t.Fatalf("%s is not on %s's strip for %s", id, container.ID, viewer.Handle)
+		return worklet.ViewRow{}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		container worklet.Container
+		viewer    worklet.Viewer
+		view      string
+		params    map[string]any
+		want      int
+	}{
+		{"a saved me is ana", eng, worklet.Viewer{Handle: "ana"}, "v-mine",
+			map[string]any{"view": "v-mine", "container": "project:ENG"}, 2},
+		{"a saved me is bob", eng, worklet.Viewer{Handle: "bob"}, "v-mine",
+			map[string]any{"view": "v-mine", "container": "project:ENG"}, 2},
+		{"asked_by reaches every ask the founder put", eng,
+			worklet.Viewer{Handle: "jane-founder"}, "v-asked",
+			map[string]any{"view": "v-asked", "container": "project:ENG"}, 2},
+		{"a person's view runs as saved", anaHome, worklet.Viewer{Handle: "ana"},
+			"v-home", map[string]any{"view": "v-home"}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			total := board(tc.viewer, tc.params)
+			if total != tc.want {
+				t.Fatalf("the fixture is wrong: %s's board holds %d for %s, want %d",
+					tc.view, total, tc.viewer.Handle, tc.want)
+			}
+			row := count(tc.container, tc.viewer, tc.view)
+			if row.CountRefused != "" || row.Count == nil || *row.Count != total ||
+				row.CountCapped {
+				got := "none"
+				if row.Count != nil {
+					got = fmt.Sprint(*row.Count)
+				}
+				t.Errorf("%s's count for %s is %s (capped %v, refused %q), want "+
+					"the board's total %d", tc.view, tc.viewer.Handle, got,
+					row.CountCapped, row.CountRefused, total)
+			}
+		})
+	}
+}
+
+// EVERY VIEW A PERSON CAN SEE IS LISTED, WHATEVER CONTAINER IT LIVES IN.
+//
+// The inventory and the sidebar's pins read the workspace strip, so a view
+// saved with a project board's "+ View" appeared in neither — it could be
+// pinned from nowhere, and a pin set another way never reached the sidebar. A
+// project view pinned by its viewer is listed first, carries its container,
+// and is counted IN THAT CONTAINER, which is what opening it runs; somebody
+// else's personal view is in nobody else's listing.
+func TestEveryViewListsAPinnedProjectViewAndCountsItInItsProject(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t1", "t2"} {
+		assign(t, r, id, "ana")
+	}
+	for _, view := range []worklet.View{
+		aView("v-eng", func(v *worklet.View) {
+			v.Name, v.Params = "ENG, Ana's", map[string]string{"assignee": "ana"}
+		}),
+		aView("v-company", func(v *worklet.View) {
+			v.Name, v.Container = "Company", worklet.Container{Kind: worklet.ContainerWorkspace}
+			v.Params = map[string]string{"assignee": "ana"}
+		}),
+		aView("v-private", func(v *worklet.View) { v.Name, v.Owner = "Bo's own", "bo" }),
+	} {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
+			t.Fatalf("save %s: %v", view.ID, err)
+		}
+		r.drain()
+	}
+	if _, err := r.writer.WriteDocument(t.Context(), "op-pins",
+		worklet.PersonSubject("ana"), "", worklet.Person{
+			V: 1, Handle: "ana", PinnedViews: []string{"v-eng"},
+		}, worklet.ChangePersonUpdated, nil); err != nil {
+		t.Fatalf("pin for ana: %v", err)
+	}
+	r.drain()
+
+	// THE FIXTURE BITES: the workspace strip — what both surfaces read —
+	// does not hold the project view at all.
+	for _, row := range r.strip(worklet.Container{Kind: worklet.ContainerWorkspace}, "ana").Views {
+		if row.ID == "v-eng" {
+			t.Fatal("the fixture is wrong: the workspace strip already lists the project view")
+		}
+	}
+
+	listing, err := r.reader.EveryView(t.Context(), worklet.EveryViewQuery{
+		Viewer: "ana", Level: statelog.ReadStale,
+		Counts: true, Now: wednesday, Zone: time.UTC,
+	})
+	if err != nil {
+		t.Fatalf("EveryView: %v", err)
+	}
+	var ids []string
+	for _, row := range listing.Views {
+		ids = append(ids, row.ID)
+	}
+	if want := []string{"v-eng", "v-company"}; !slices.Equal(ids, want) {
+		t.Fatalf("every view for ana is %v, want %v — the pinned project view "+
+			"first, the shared one after it, and nobody else's personal view", ids, want)
+	}
+	pinned := listing.Views[0]
+	switch {
+	case !pinned.Pinned:
+		t.Error("the project view ana pinned is not marked pinned")
+	case pinned.Container != worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}:
+		t.Errorf("the pinned view carries container %+v, want project ENG", pinned.Container)
+	case pinned.Count == nil:
+		t.Errorf("the pinned project view carries no count (refused: %q)", pinned.CountRefused)
+	case *pinned.Count != 2:
+		t.Errorf("the pinned project view counts %d, want the 2 tasks its "+
+			"project list opens on", *pinned.Count)
+	}
+	if listing.Views[1].Count != nil {
+		t.Error("a view that is not pinned was counted")
+	}
+}
+
+// A VIEW'S CREATE MADE AGAIN IS ANSWERED BY THE VIEW IT SAVED.
+//
+// A save decided on no stored view is a create, and its id is the one the
+// caller derived from the create as the work began — so a rebased re-run, whose
+// operation the ledger does not hold, names the view its first attempt saved.
+// It is answered from that row, with nothing published and nothing about the
+// view changed, whatever has happened to it since: refused as a view "saved
+// while this one was being decided", the re-run was told to decide again about
+// its own view.
+func TestAViewsCreateMadeAgainIsAnsweredByItsView(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := save(t, r.writer, "op-create", aView("v-1", nil)); err != nil {
+		t.Fatalf("create the view: %v", err)
+	}
+	r.drain()
+	// RENAMED SINCE, by a save that read it.
+	if _, err := save(t, r.writer, "op-rename",
+		aView("v-1", func(v *worklet.View) { v.Name = "Renamed" })); err != nil {
+		t.Fatalf("rename the view: %v", err)
+	}
+	r.drain()
+	end := r.logEnd(t)
+
+	// THE CREATE AGAIN, under the operation a rebased attempt mints.
+	got, err := r.writer.WriteView(t.Context(), "op-create-rebased",
+		aView("v-1", nil), worklet.ViewPrior{})
+	if err != nil || got.Outcome != statelog.OutcomeApplied || got.Position.Seq != 0 {
+		t.Fatalf("the create made again = (%s at %v, %v), want applied with "+
+			"nothing published", got.Outcome, got.Position, err)
+	}
+	if now := r.logEnd(t); now != end {
+		t.Errorf("the create made again published: the log moved from %d to %d", end, now)
+	}
+	named := ""
+	for _, row := range r.strip(worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}, "").Views {
+		if row.Key == "v-1" {
+			named = row.Name
+		}
+	}
+	if named != "Renamed" {
+		t.Errorf("the create made again left the view named %q, want its "+
+			"rename to stand", named)
+	}
+}

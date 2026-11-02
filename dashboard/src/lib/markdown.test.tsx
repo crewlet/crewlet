@@ -6,14 +6,15 @@ import {
   type RenderOptions,
   nestSections,
   outline,
-  plainText,
   renderInline,
   renderMarkdown,
   splitSections,
   UnbrokenCode,
   imageSources,
+  linkTargets,
   shownImage,
 } from "./markdown.ts";
+import { plainText } from "./markdownText.ts";
 // THE FIXTURES ARE REAL FILES, imported verbatim rather than inlined as
 // template literals: a document written in a `.md` file is a document
 // somebody can read and edit as markdown, and a fixture that only exists
@@ -33,7 +34,7 @@ describe("a href", () => {
     );
     expect(safeHref("http://example.com")).toBe("http://example.com");
     expect(safeHref("mailto:ops@example.com")).toBe("mailto:ops@example.com");
-    expect(safeHref("#/work/ENG-1")).toBe("#/work/ENG-1");
+    expect(safeHref("#/worklet/ENG-1")).toBe("#/worklet/ENG-1");
   });
 
   it("refuses everything else, by allowlist rather than by enumeration", () => {
@@ -207,14 +208,16 @@ describe("a company page", () => {
     // per test that has run.
     const el = draw(source);
     const out = el.querySelector<HTMLAnchorElement>('a[href^="https://docs.crewlet.ai"]');
-    expect(out?.textContent).toBe("the deployment guide");
+    // The words, then the note a screen reader is read: it leaves the
+    // application for a new tab.
+    expect(out?.textContent).toBe("the deployment guide (opens in a new tab)");
     // `noopener` because a page's links are written by an agent from content
     // it read elsewhere; `noreferrer` because this URL names the company.
     expect(out?.getAttribute("target")).toBe("_blank");
     expect(out?.getAttribute("rel")).toBe("noopener noreferrer");
 
     const inApp = el.querySelector<HTMLAnchorElement>('a[href^="#/"]');
-    expect(inApp?.getAttribute("href")).toBe("#/work/ENG-214");
+    expect(inApp?.getAttribute("href")).toBe("#/worklet/ENG-214");
     // An in-app link IS this application: opening it in a tab would break
     // every internal reference a page makes.
     expect(inApp?.getAttribute("target")).toBeNull();
@@ -314,7 +317,7 @@ describe("what the shared grammar adds", () => {
   });
 
   it("reads a link whose label holds an escaped bracket", () => {
-    const el = draw("[a \\] b](#/knowledge/pages/7)");
+    const el = draw("[a \\] b](#/doclet/pages/7)");
     expect(el.querySelector("a")?.textContent).toBe("a ] b");
   });
 });
@@ -751,7 +754,7 @@ describe("emphasis", () => {
     expect(container.querySelector("strong")?.textContent).toBe("the");
     // THE CONTROL: the default is a link.
     const linked = render(<p>{renderInline("see [the guide](https://example.com)")}</p>);
-    expect(linked.container.querySelector("a")?.textContent).toBe("the guide");
+    expect(linked.container.querySelector("a")?.textContent).toBe("the guide (opens in a new tab)");
   });
 
   it("flattens to plain text by the same rules", () => {
@@ -842,22 +845,46 @@ describe("pictures a host resolves", () => {
   });
 });
 
+describe("the links a document names", () => {
+  it("reads every written link once, in order, past emphasis and never in code", () => {
+    // THE SAME WALK AS THE PICTURES: a target inside a code span renders as
+    // text and is no link, a link inside emphasis is one, an address written
+    // bare is one, and a picture's source is a picture rather than a link.
+    const source = [
+      "See [the task](#/worklet/GP-12) and **[the page](#/doclet/pages/p-1)**.",
+      "`[not a link](#/worklet/GP-99)` and ![a picture](img/a.png)",
+      "- [again](#/worklet/GP-12), and https://github.com/acme/api/pull/42 pasted",
+      "> [elsewhere](https://example.com/a) and `https://github.com/acme/api/pull/7`",
+    ].join("\n");
+    expect(linkTargets(source)).toEqual([
+      "#/worklet/GP-12",
+      "#/doclet/pages/p-1",
+      "https://github.com/acme/api/pull/42",
+      "https://example.com/a",
+    ]);
+  });
+});
+
 describe("a picture with no resolver", () => {
   // THE DASHBOARD LOADS PICTURES FROM ITS OWN ORIGIN ONLY (`img-src 'self'
   // data: blob:`), so an `img` naming another origin is a picture the browser
-  // refuses: a Knowledge page's remote picture drew as a broken image.
+  // refuses: a Doclet page's remote picture drew as a broken image.
   it("links to a picture on another origin rather than drawing one the policy refuses", () => {
     const el = draw("![The rota](https://example.com/rota.png)");
     expect(el.querySelector("img")).toBeNull();
     const link = el.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("https://example.com/rota.png");
-    expect(link.textContent).toBe("The rota");
+    // ITS WORDS, without what only a screen reader is told ("opens in a new tab").
+    const words = [...link.querySelectorAll(".crewlet-inline-ref__text")].map((t) => t.textContent);
+    expect(words.join("")).toBe("The rota");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
   });
 
   it("names a link to a picture with no alt text by its address", () => {
     const el = draw("![](https://example.com/rota.png)");
-    expect(el.querySelector("a")?.textContent).toBe("https://example.com/rota.png");
+    expect(el.querySelector("a .crewlet-inline-ref__text")?.textContent).toBe(
+      "https://example.com/rota.png",
+    );
   });
 
   it("shows a picture on the dashboard's own origin", () => {
@@ -866,7 +893,7 @@ describe("a picture with no resolver", () => {
     expect(el.querySelector("img")?.getAttribute("src")).toBe(own);
     expect(shownImage(own)).toBe(own);
     expect(shownImage("https://example.com/rota.png")).toBeNull();
-    expect(shownImage("#/knowledge")).toBeNull();
+    expect(shownImage("#/doclet")).toBeNull();
   });
 });
 
@@ -878,6 +905,59 @@ describe("a link's label", () => {
     const links = el.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0]!.getAttribute("href")).toBe("https://example.com/oncall");
-    expect(links[0]!.textContent).toBe("see https://example.com/a");
+    expect(links[0]!.textContent).toBe("see https://example.com/a (opens in a new tab)");
+  });
+});
+
+describe("prose", () => {
+  // THE CALLER SEES ONLY THE WORDS A READER READS, in reading order, with a
+  // key unique to the render: never a code span, a code block, a link's label
+  // or an image's alt text. Mutation: pass `prose` into a link's label and
+  // "label" reaches it.
+  const seen = (source: string, options: RenderOptions = {}) => {
+    const runs: string[] = [];
+    const keys = new Set<string>();
+    const nodes = renderMarkdown(source, {
+      ...options,
+      prose: (text, key) => {
+        runs.push(text);
+        keys.add(key);
+        return text.toUpperCase();
+      },
+    });
+    const { container } = render(<div>{nodes}</div>);
+    return { runs, keys, text: container.textContent ?? "" };
+  };
+
+  it("hands over each run of prose, in order, and draws what it returns", () => {
+    const { runs, keys, text } = seen("one **two** three\n\n- four");
+    expect(runs).toEqual(["one ", "two", " three", "four"]);
+    expect(keys.size).toBe(runs.length);
+    expect(text).toBe("ONE TWO THREEFOUR");
+  });
+
+  it("never hands over code, a code block or a link's label", () => {
+    const anchor = seen("a `code` [label](https://example.com) b\n\n```\nblock\n```");
+    expect(anchor.runs).toEqual(["a ", " ", " b"]);
+    const checked = seen("[label](https://example.com) c", { links: "checked" });
+    expect(checked.runs).toEqual([" c"]);
+  });
+
+  // EACH BLOCK'S FIRST RUN OPENS IT, so a caller knows a sentence's first word
+  // in a paragraph, a heading, a list item and a table cell, and every later
+  // run of the block does not. Mutation: pass every run `opens` and the runs
+  // after the emphasis open too.
+  it("says which run opens its block", () => {
+    const opened: string[] = [];
+    renderMarkdown(
+      "# Head\n\none **two** three\n\n- four\n- five\n\n| a | b |\n| - | - |\n| c | d |",
+      {
+        prose: (text, _key, opens) => {
+          if (opens) opened.push(text);
+          return text;
+        },
+      },
+    ).forEach((node) => render(<div>{node}</div>));
+    expect(opened).toEqual(["Head", "one ", "four", "five", "a", "b", "c", "d"]);
   });
 });

@@ -3,8 +3,8 @@
 Crewlet integrates with Jira in two directions: agents control Jira via MCP tools, and Jira pushes events to agents via webhooks.
 
 > **Jira is one of two trackers, and it is not the default.** The engine ships
-> its own — `tracker.backend: native`, which is what a company that says
-> nothing gets — and it needs no site, no project and no per-seat account. Set
+> its own, Worklet (`tracker.backend: worklet`, which is what a company that says
+> nothing gets), and it needs no site, no project and no per-seat account. Set
 > `tracker.backend: jira` (or declare this block, which derives it) to run
 > Jira instead. Take that path when your *people* already live in Jira or you
 > have a backlog there; the agents cannot tell the difference. There is
@@ -80,7 +80,7 @@ mcp_servers:
       JIRA_URL: "${JIRA_URL}"           # declare explicitly — the engine does not inject it
 ```
 
-> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/jira/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/browse/{ISSUE-KEY}` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) — `skill_variables.jira_base_url: "https://mycompany.atlassian.net"` — for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` does not: it links to the engine's own tracker and pages through `${crewlet_base_url}`, so a company on Jira gives its link rule a skill of its own.) Note what the server hands back itself: every issue `mcp-atlassian` 0.23.1 returns carries a `browse_url` built from the server's own `JIRA_URL`, so it opens in a browser when that is the site and sits under the gateway when it is the gateway, and on a gateway this prompt-layer variable is the only clickable base an agent has.
+> **Human-clickable links agents share:** with `cloud_id`, the `mcp-atlassian` tools return `api.atlassian.com/ex/jira/{cloud_id}/...` gateway URLs, which colleagues can't open. To have agents share a clickable `…atlassian.net/browse/{ISSUE-KEY}` link, set a [skill variable](../concepts/tool-skills.md#skill-variables) (`skill_variables.jira_base_url: "https://mycompany.atlassian.net"`) for your mention/link Tool Skill to reference. (The bundled `examples/tool-skills/platform-mentions.md` does not: it links to Worklet and Doclet through `${crewlet_base_url}`, so a company on Jira gives its link rule a skill of its own.) Note what the server hands back itself: every issue `mcp-atlassian` 0.23.1 returns carries a `browse_url` built from the server's own `JIRA_URL`, so it opens in a browser when that is the site and sits under the gateway when it is the gateway, and on a gateway this prompt-layer variable is the only clickable base an agent has.
 
 `url` and `cloud_id` are two ways to name one instance, so config validation refuses both together rather than resolving the ambiguity silently — the engine reads through the Cloud gateway when both are set, so the `url` would end up used for links only.
 
@@ -216,7 +216,7 @@ When a lead receives an event via `project_lead_fallback`, the Jira notification
 
 The hint is suppressed for `watcher` / `assignee` / `mention` routings — those carry their own signal of personal involvement and don't need the extra framing. The block deliberately describes the CAPABILITY ("set the assignee") rather than naming a tool, because the deployed MCP server's tool names are not knowable by the engine — see [Tool capabilities](../concepts/tool-capabilities.md).
 
-The `## How to handle this` section follows the routing too, in the same two rules as the [native tracker's](../guides/work-tracker.md#what-wakes-a-seat):
+The `## How to handle this` section follows the routing too, in the same two rules as [Worklet's](../guides/worklet.md#what-wakes-a-seat):
 
 - **Staying out is for a routing nobody is waiting on.** "If its assignee is neither you nor on your team, stay silent" is rendered for a `watcher` (or a routing with no reason), never for `assignee` or `mention`, the two the prompt reads as addressed: the turn engine holds those to an answer, and a mentioned seat is ordinarily asked about somebody else's issue.
 - **Reassigning is for the issue's holder.** Only an `assignee` routing is told how an issue is declined here — reassigned to the right teammate, looked up for their Jira account id, or to the seat's manager if it cannot tell. A mentioned seat is asked about an issue that is not its to move, and a watcher is not asked at all.
@@ -225,11 +225,55 @@ That an addressed wake may not end in silence, and that a decline names the righ
 
 ---
 
+## Per-agent access
+
+Each agent seat that works in Jira or Confluence gets one Atlassian service
+account in the organization, created by the engine with the organization's
+unscoped API key (`integrations.atlassian`). Jira and Confluence are two lanes
+over that one account, each set on the seat and edited on the integration's
+Agents tab:
+
+```yaml
+roles:
+  - name: SRE
+    integrations:
+      jira:
+        enabled: true          # off until turned on
+        project_role: "10101"  # a project role id from the site (GET /rest/api/3/role)
+        projects: [GOP]        # empty: every project the company names
+```
+
+Project keys are compared as Jira matches them, in any case: `gop` is `GOP`,
+within the company's reach and never read as a change.
+
+| What the seat holds | How the engine applies it |
+|---|---|
+| Product access | One grant per product, the same for every agent: Jira's product member role on the site. What an agent may do comes from the role below and each project's permission scheme. |
+| The project role | The seat's account is an actor of that role in each listed project, and of no other role in any project the company or a seat names. The roles offered are the site's own, read live, under their own names. Administrators is an administration role: a raise to it carries a warning and asks for a fresh step-up. |
+| Product access only | The first level offered: the account has Jira and holds no project role, so each project's permission scheme alone decides what it sees. Leave `project_role` and `projects` out. Moving a seat from a role to product access only removes its project roles; a `projects` list needs a role. |
+| The token | One API token for the account, with the scopes of the products the seat is on: Jira's `read:jira-work`, `write:jira-work` and `read:jira-user`, and Confluence's when that lane is on too. Its label, `crewlet-<handle>-<lanes>-<time>`, records which products it reaches, because Atlassian lists a token's label and not its scopes. |
+| Off | The seat's project roles are removed and its token is replaced with one without Jira's scopes, or revoked when the seat is off on Confluence too. Atlassian offers no route that removes one product's access from a service account, so the account keeps its product grant and the Agents tab says so. |
+| Remove | A separate, confirmed action, allowed only while the seat is off on both Jira and Confluence: one account serves both. The service account is deleted. |
+| Rotate | A new token with the same scopes is minted and sealed, then the previous one is revoked. A token made by hand on the account is never touched. |
+
+The token is sealed under `ATLASSIAN_TOKEN_<HANDLE>` and the address Atlassian
+assigned the account under `ATLASSIAN_EMAIL_<HANDLE>`; no document names
+either. The project roles are managed with the site credential in
+`integrations.jira`, whose account needs Administer Projects on the company's
+projects (or Jira administration).
+
+Every pass reads each account back: whether it exists, which products its live
+token reaches, and which role it holds in each project. A role changed by hand
+is restored to the document's setting and reported; the Agents tab offers Keep
+the vendor's setting instead.
+
+---
+
 ## Seat identity
 
 A Jira webhook names people by account id, and nothing in the org chart declares which account a seat holds. Without that mapping every event names a stranger, every routing target is dropped, and the integration is silently inert.
 
-So the engine **asks**: at boot and on every config apply it calls `/myself` with each seat's OWN credential and registers whatever account answers. The credential is read from `mcp_env.atlassian` or `mcp_env.jira` — [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian), the community server these pages run, covers both products, so the documented entry is named `atlassian`; a Jira-only server is named `jira`. Write it as that server reads it: `JIRA_USERNAME` and `JIRA_API_TOKEN` on Cloud, or `JIRA_PERSONAL_TOKEN` alone on Data Center. `mcp-atlassian` reads no other spelling, and given a token without its username it starts with no Jira tool at all. The engine names no variable of its own — it reads the ones the seat's tools use — so for a server that spells them differently it also takes the token under `JIRA_TOKEN`, `ATLASSIAN_API_TOKEN` or `Authorization`, and the address under `JIRA_EMAIL` or `ATLASSIAN_EMAIL`. Declaring the account id beside the token would be cheaper and is the wrong shape: a declaration that disagrees with the credential is a misroute nothing can detect.
+So the engine **asks**: at boot and on every config apply it calls `/myself` with each seat's OWN credential and registers whatever account answers. The credential is the one the engine sealed for the seat (`ATLASSIAN_TOKEN_<HANDLE>` with `ATLASSIAN_EMAIL_<HANDLE>`, see [Per-agent access](#per-agent-access)); for a document written before per-seat access it is read from `mcp_env.atlassian` or `mcp_env.jira`. [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian), the community server these pages run, covers both products, so the documented entry is named `atlassian`; a Jira-only server is named `jira`. Write it as that server reads it: `JIRA_USERNAME` and `JIRA_API_TOKEN` on Cloud, or `JIRA_PERSONAL_TOKEN` alone on Data Center. `mcp-atlassian` reads no other spelling, and given a token without its username it starts with no Jira tool at all. The engine names no variable of its own in such a document: it reads the ones the seat's tools use, so for a server that spells them differently it also takes the token under `JIRA_TOKEN`, `ATLASSIAN_API_TOKEN` or `Authorization`, and the address under `JIRA_EMAIL` or `ATLASSIAN_EMAIL`. Declaring the account id beside the token would be cheaper and is the wrong shape: a declaration that disagrees with the credential is a misroute nothing can detect.
 
 Lookups are cached on the credential, so a config apply that changed something else costs nothing; a rotated token is a cache miss and costs exactly one request. A seat whose lookup fails is left unresolved rather than failing the boot, and logs `jira_seat_identity_unresolved` — it receives no Jira events until the next apply re-resolves it. A company where no seat resolved logs `jira_has_no_seat_identities`.
 
@@ -247,13 +291,15 @@ Jira issues no credentials on a provisioner's behalf — a Cloud API token is cr
 
 - **Which account each seat's credential authenticates as**, and which seats have none. A seat with no account id receives nothing, and nothing else in the engine says so. A lookup the instance did not *answer* — a timeout, a 5xx, a host that does not resolve — is a **fault** the reconcile loop retries rather than a report that the seat has no account: only a credential the instance actually refused is the seat's problem, and reporting the two the same way sent operators to rotate keys that were fine.
 - **Whether every project the org chart names exists**, and whether Jira's own project lead agrees with the org chart's. A disagreement is reported, never failed: a human manager owning a project while an agent triages it is an ordinary arrangement. A project the instance does not have is almost always a typo, and the typo is a routing gap nothing else reports.
-- **The inbound webhook**, on Data Center: registered at `<public-url>/webhooks/jira`, subscribed to exactly the events the parser routes, with the whole body and an HMAC secret. If `webhook_secret` resolves to nothing, a fresh secret is minted into the `${VAR}` it points at and recorded in the sink you chose — unless this deployment has **already sealed** a value under that variable, which is read back and reused instead. That read-back matters to the reconcile loop rather than to this command: a `${VAR}` resolves from a snapshot taken at apply time, so in the window between a pass sealing a secret and something rebuilding that snapshot, the resolver answers empty for a variable the fleet already holds — and without the read-back the loop minted again on every tick, rotating the secret the instance signs with until the snapshot caught up. A secret that already resolves is used as-is — re-registering with a fresh one would make the instance sign every delivery with a key the running engine does not hold. `-recreate-webhook` forces a rotation, which invalidates the secret every other deployment of this company holds.
+- **The inbound webhook**, on Data Center: registered at `<public-url>/webhooks/jira`, subscribed to exactly the events the parser routes, with the whole body and an HMAC secret. If `webhook_secret` resolves to nothing, a fresh secret is minted into the `${VAR}` it points at and recorded in the sink you chose — unless this deployment has **already sealed** a value under that variable, which is read back and reused instead. That read-back matters to the reconcile loop rather than to this command: a `${VAR}` resolves from a snapshot taken at apply time, so in the window between a pass sealing a secret and something rebuilding that snapshot, the resolver answers empty for a variable the fleet already holds — and without the read-back the loop minted again on every tick, rotating the secret the instance signs with until the snapshot caught up. A secret that already resolves is used as-is — re-registering with a fresh one would make the instance sign every delivery with a key the running engine does not hold. `-recreate-webhook` forces a rotation, which invalidates the secret every other deployment of this company holds — and is refused over a literal `webhook_secret`, which has no variable to mint into: point the field at a whole `${VAR}`, or run without the flag to register the literal as it is.
 
 On **Cloud** the webhook is registered exactly as it is on Data Center, through the admin webhook API. The account needs the *Administer Jira* global permission. If you are on the Forge relay instead, leave `-public-url` off and the step is skipped.
 
 Without `-public-url` nothing is registered and the run says so. A hook pointing at the wrong host is worse than no hook, because the instance then reports a healthy integration that delivers into the void. A hook somebody else registered is reported and never touched.
 
-Flags: `-secret-store` / `-env-file PATH` / `-print` (where a minted secret goes — exactly one is required), `-public-url URL`, `-recreate-webhook`, `-dry-run` (read and report, register nothing).
+Flags: `-secret-store` / `-env-file PATH` / `-print` (where a minted secret goes — exactly one is required; with `-env-file` or `-print` a run that would mint the secret, under `-recreate-webhook` or where it resolves to nothing, is refused before it reaches Jira where the company's store holds its `${VAR}`, which the engine reads over anything recorded there — see [a sink the store outranks](../reference/cli.md#a-sink-the-store-outranks)), `-public-url URL`, `-recreate-webhook`, `-dry-run` (read and report, register nothing), `-config PATH` and `-api URL` (where the company's values are read and a `-secret-store` sink records).
+
+The run reads the company's `${VAR}`s — the instance, the org account, the webhook secret and each seat's credential — through the running engine, with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names, and with this node's engine stopped from the fleet's store itself, through the node's own broker or the external one; on a member of a cluster whose engine is stopped it is refused before it reads or registers anything, `-dry-run` and `-recreate-webhook` included ([where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
 
 ---
 
@@ -274,4 +320,4 @@ flowchart TD
 
 There is no engine-side sync layer, no completion-comment automation, and no reconciliation poller: each MCP-tool action an agent takes fires the next webhook, which wakes the next participant — the same loop a human teammate drives. A webhook delivery that is lost is recovered the way it would be for a human: the issue's next activity (a comment, a transition, a nudge from a colleague) re-notifies the routed agents.
 
-See [The Tracker](../concepts/task-engine.md) for why the engine keeps no state of its own on this backend — and for the one it ships, which is the default.
+See [The Tracker](../concepts/task-engine.md) for why the engine keeps no state of its own on this backend, and for Worklet, the one it ships, which is the default.

@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/doclet"
 )
 
 // A PAGE THAT NAMES NO SPACE LANDS IN THE WRITER'S TEAM SPACE, asked of the
@@ -23,17 +23,17 @@ import (
 func TestAPageWithNoSpaceLandsInTheWritersTeamSpace(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		actor  pages.Actor
+		actor  doclet.Actor
 		asked  string
 		filed  string
 		refuse bool
 	}{
 		"a person, through their own token": {
-			actor: pages.Actor{Handle: "jane", Kind: pages.AuthorHuman, OperatorID: "pat:4c1e"},
+			actor: doclet.Actor{Handle: "jane", Kind: doclet.AuthorHuman, OperatorID: "pat:4c1e"},
 			asked: "jane", filed: "HOME",
 		},
 		"a credential nobody is bound through": {
-			actor: pages.Actor{Handle: "token:ops", Kind: pages.AuthorOperator,
+			actor: doclet.Actor{Handle: "token:ops", Kind: doclet.AuthorOperator,
 				OperatorID: "token:ops"},
 			asked: "token:ops", refuse: true,
 		},
@@ -44,7 +44,7 @@ func TestAPageWithNoSpaceLandsInTheWritersTeamSpace(t *testing.T) {
 			var asked []string
 			reg := kbRegistry(t, builtin.PageDeps{
 				Reader: kb, Writer: kb,
-				Actor: func(context.Context, *turnctx.Turn) (pages.Actor, error) {
+				Actor: func(context.Context, *turnctx.Turn) (doclet.Actor, error) {
 					return tc.actor, nil
 				},
 				DefaultContainer: func(handle string) string {

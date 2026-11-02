@@ -85,12 +85,20 @@ func TestEachReasonAsksForSomethingDifferent(t *testing.T) {
 		{gitlab.MRReview,
 			[]string{"requested to review", "If you are not the right reviewer"},
 			[]string{"deliberately", "Evaluate Before Acting", "go quiet"}},
+		// An assigned merge request already exists, so it is not told where
+		// one comes from.
 		{gitlab.MRAssigned,
 			[]string{"been assigned a merge request", "reassign it"},
-			[]string{"requested to review", "coding runtime", "go quiet"}},
+			[]string{"requested to review", "in your own checkout", "go quiet"}},
+		// AN ISSUE'S CODE CHANGE IS THE SEAT'S OWN TO MAKE. The executor
+		// reading this is its own coding run, with its own checkout, so it
+		// is sent to no other runtime, and the merge request it opens
+		// carries its own name.
 		{gitlab.IssueAssigned,
-			[]string{"been assigned an issue", "coding runtime"},
-			[]string{"go quiet"}},
+			[]string{"been assigned an issue",
+				"You make any code change the issue needs yourself, in your own checkout",
+				"open the merge request under your own identity", "reassign it"},
+			[]string{"runtime", "sandbox", "go quiet"}},
 		// A MENTION IS ADDRESSED: the delivery check holds it to an
 		// answer, so it is not told silence is fine when nothing was asked.
 		{gitlab.NoteMention,
@@ -132,7 +140,7 @@ func TestAnUnknownReasonFallsBackToWatching(t *testing.T) {
 // predicted; every other event here reports what somebody DID.
 func TestOnlyAFailedPipelineWakesItsActor(t *testing.T) {
 	t.Parallel()
-	if !(gitlab.Prompt{}).WakesActor(gitlab.PipelineFailed) {
+	if !(gitlab.Prompt{}).WakesActor(gitlabEvent(gitlab.PipelineFailed)) {
 		t.Fatal("a failed pipeline does not reach the person who broke it")
 	}
 	for _, reason := range []string{
@@ -141,7 +149,7 @@ func TestOnlyAFailedPipelineWakesItsActor(t *testing.T) {
 		gitlab.MRMention, gitlab.IssueMention, "merge_request.merge",
 		"pipeline.success", "",
 	} {
-		if (gitlab.Prompt{}).WakesActor(reason) {
+		if (gitlab.Prompt{}).WakesActor(gitlabEvent(reason)) {
 			t.Fatalf("%q wakes its own actor", reason)
 		}
 	}
@@ -344,10 +352,15 @@ func TestThePromptAnswersForGitLab(t *testing.T) {
 		t.Fatalf("the prompt answers for %q", got)
 	}
 	prompts := notify.NewPrompts(gitlab.Prompt{})
-	if !notify.WakesActor(prompts, gitlab.Backend, gitlab.PipelineFailed) {
+	if !notify.WakesActor(prompts, gitlabEvent(gitlab.PipelineFailed)) {
 		t.Fatal("the spine does not reach the actor through the registry")
 	}
-	if notify.WakesActor(prompts, gitlab.Backend, gitlab.NoteComment) {
+	if notify.WakesActor(prompts, gitlabEvent(gitlab.NoteComment)) {
 		t.Fatal("the spine reaches the actor for their own comment")
 	}
+}
+
+// gitlabEvent is one GitLab copy of a notification, as the spine asks about it.
+func gitlabEvent(reason string) notify.Inbound {
+	return notify.Inbound{Source: gitlab.Backend, EventType: reason}
 }

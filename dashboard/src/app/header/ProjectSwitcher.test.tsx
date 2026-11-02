@@ -76,7 +76,7 @@ function actions(): PanelActions & { went: string[] } {
   return {
     went,
     go: (to) => went.push(to.kind === "all" ? "all" : to.key),
-    hrefOf: (to) => (to.kind === "all" ? "#/work" : `#/work/${to.key}`),
+    hrefOf: (to) => (to.kind === "all" ? "#/worklet" : `#/worklet/${to.key}`),
     browse: vi.fn(),
     searchTasks: vi.fn(),
     newProject: vi.fn(),
@@ -136,7 +136,7 @@ describe("the panel, as data", () => {
       keyChip: "FAIR",
       meta: 2,
       accessibleLabel: "Product and Engineering, FAIR, 2 open",
-      href: "#/work/FAIR",
+      href: "#/worklet/FAIR",
       current: true,
     });
     // ZERO IS A FIGURE, drawn as 0.
@@ -216,13 +216,13 @@ describe("the panel, as data", () => {
   test("past eight projects the ones opened last lead, the current one aside", () => {
     const many = [...FAIRSPLIT, ...["P1", "P2", "P3", "P4"].map((k) => project(k, `Project ${k}`))];
     const recents: Recent[] = [
-      { path: ["work", "FAIR"], label: "Product and Engineering", workspace: "work" },
-      { path: ["work", "FAIR-3"], label: "A task", workspace: "work" },
-      { path: ["work", "SPLIT"], label: "Split engine", workspace: "work" },
-      { path: ["work", "OLD"], label: "Archived", workspace: "work" },
-      { path: ["work", "APP"], label: "Mobile app", workspace: "work" },
-      { path: ["work", "P2"], label: "Project P2", workspace: "work" },
-      { path: ["work", "P3"], label: "Project P3", workspace: "work" },
+      { path: ["worklet", "FAIR"], label: "Product and Engineering", workspace: "worklet" },
+      { path: ["worklet", "FAIR-3"], label: "A task", workspace: "worklet" },
+      { path: ["worklet", "SPLIT"], label: "Split engine", workspace: "worklet" },
+      { path: ["worklet", "OLD"], label: "Archived", workspace: "worklet" },
+      { path: ["worklet", "APP"], label: "Mobile app", workspace: "worklet" },
+      { path: ["worklet", "P2"], label: "Project P2", workspace: "worklet" },
+      { path: ["worklet", "P3"], label: "Project P3", workspace: "worklet" },
     ];
     const p = panel({ data: listing(many), recents });
     const recent = p.groups?.find((g) => g.id === "recent");
@@ -251,7 +251,7 @@ describe("the panel, as data", () => {
     expect(p.message?.body).toBe("Archived projects are listed under Projects.");
     const search = p.message?.actions?.[0];
     expect(search?.label).toBe("Search tasks for “invoice”");
-    expect(search?.href).toBe("#/work/search?q=invoice");
+    expect(search?.href).toBe("#/worklet/search?q=invoice");
     search?.onSelect?.();
     expect(a.searchTasks).toHaveBeenCalledWith("invoice");
     expect(p.announcement).toBe("No project matches");
@@ -299,7 +299,7 @@ function mount(answers: Record<string, unknown>, services?: OrgServices, asked: 
     if (what === "viewer") {
       return Promise.resolve({
         login: "ada",
-        grants: ["tracker", "admin"],
+        grants: ["worklet", "admin"],
         handle: "ada",
         owner: "ada",
         name: "Ada",
@@ -357,12 +357,12 @@ describe("in the frame", () => {
     fireEvent.click(
       await within(dialog).findByRole("option", { name: "Split engine, SPLIT, 4 open" }),
     );
-    await waitFor(() => expect(location.hash).toBe("#/work/SPLIT"));
+    await waitFor(() => expect(location.hash).toBe("#/worklet/SPLIT"));
     expect(screen.queryByRole("dialog", { name: "Switch project" })).toBeNull();
   });
 
   test("on Work, the trail's heading is the button, and G then P opens the panel under it", async () => {
-    location.hash = "#/work/tasks";
+    location.hash = "#/worklet/tasks";
     mount({ work_projects: listing(FAIRSPLIT) });
     await settle();
     const button = within(screen.getByRole("heading", { level: 1 })).getByRole("button", {
@@ -383,11 +383,11 @@ describe("in the frame", () => {
     ).toBe("page");
     // TASKS CARRIES OVER, and so does the list's shape.
     fireEvent.click(within(dialog).getByRole("option", { name: "Settle up, SETL, 0 open" }));
-    await waitFor(() => expect(location.hash).toBe("#/work/SETL"));
+    await waitFor(() => expect(location.hash).toBe("#/worklet/SETL"));
   });
 
   test("the lenses beside All projects carry the listing's figures", async () => {
-    location.hash = "#/work";
+    location.hash = "#/worklet";
     mount({ work_projects: listing(FAIRSPLIT) });
     await settle();
     const lenses = screen.getByRole("navigation", { name: "Lens" });
@@ -401,9 +401,9 @@ describe("in the frame", () => {
 // company's projects on it where the company runs Jira, and was refused.
 // Mutation: gate the read on the reader's grant alone and it is asked.
 test("on a company running Jira the switcher asks no projects, even on a Work address", async () => {
-  location.hash = "#/work/tasks";
+  location.hash = "#/worklet/tasks";
   const asked: string[] = [];
-  mount({}, { tracker: "jira", knowledge: "native", code: "none" }, asked);
+  mount({}, { tracker: "jira", knowledge: "doclet", chat: "chatlet", code: "none" }, asked);
   await settle();
   expect(asked.filter((w) => w === "work_projects")).toEqual([]);
   location.hash = "#/";

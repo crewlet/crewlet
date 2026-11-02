@@ -137,6 +137,46 @@ func TestARefusalTheClockLiftsIsRecheckedWhenItLifts(t *testing.T) {
 	}
 }
 
+// A REFUSAL NAMING AN INSTANT ALREADY PAST WAITS FOR ITS SIGNAL, NOT AT ONCE.
+// The clock reached the instant without lifting the condition, so only its
+// event, or the backstop, can: re-checked at the instant it names, the retry
+// was refused at once and re-checked at once for as long as the condition
+// stood, as an answer on a seat whose provider park's probe was out did,
+// thousands of times a second. The condition's own signal still resumes it.
+//
+// Mutation: wait out a past instant as the zero it subtracts to, and the retry
+// is scheduled at once.
+func TestARefusalNamingAnInstantAlreadyPastWaitsForItsSignal(t *testing.T) {
+	t.Parallel()
+	for name, until := range map[string]func(now time.Time) time.Time{
+		"an instant past": func(now time.Time) time.Time { return now.Add(-time.Second) },
+		"the instant now": func(now time.Time) time.Time { return now },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			conditions := answeredAndOwed(t, rig)
+			conditions.refuse(Refusal{Condition: "provider",
+				Reason: "provider limit: default, the seat parked until its models answer",
+				Until:  until(rig.now)})
+			rig.fireRetries()
+			if got := rig.retries.delays(); !slices.Equal(got, []time.Duration{answerWaitBackstop}) {
+				t.Fatalf("a refusal naming %s waits %v, want the %v backstop", name, got,
+					answerWaitBackstop)
+			}
+			conditions.clear()
+			rig.coordinator.Readmit("provider", "swe")
+			if got := rig.retries.delays(); !slices.Equal(got, []time.Duration{0}) {
+				t.Fatalf("after the condition's signal the retry waits %v, want it at once", got)
+			}
+			rig.fireRetries()
+			if calls := rig.resumer.calls(); len(calls) != 1 {
+				t.Fatalf("%d resumes after the signal, want 1", len(calls))
+			}
+		})
+	}
+}
+
 // A SIGNAL THAT LANDS WHILE THE RETRY IS BEING REFUSED IS NOT SLEPT THROUGH.
 //
 // The check and the wait are two steps, and Readmit wakes only an attempt

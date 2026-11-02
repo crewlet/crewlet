@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE FOLDER TREE (ADR-0047: an artifact lives in one folder, and a folder
@@ -321,7 +322,7 @@ func (w *Writer) CreateFolders(ctx context.Context, c Call, in FolderCreateInput
 		return answer, err
 	}
 	if e.outcome == OutcomeRefused {
-		return answer, w.refusal(ctx, "", e.reason, HistorySummary{})
+		return answer, w.refusal(ctx, "", e.reason, HistorySummary{}, 0)
 	}
 	chain, err := w.createdChain(ctx, in.Parent, e.summary.Created)
 	if err != nil {
@@ -350,8 +351,8 @@ func checkFolderCreate(c Call, in FolderCreateInput) (names, keys []string, err 
 		return nil, nil, fmt.Errorf("%w: a person creates top-level folders; create this one "+
 			"inside a folder that already exists", ErrInvalid)
 	case in.Parent == "" && !in.Visibility.Valid():
-		return nil, nil, fmt.Errorf("%w: a top-level folder states who sees it, one of %v",
-			ErrInvalid, FolderVisibilities)
+		return nil, nil, fmt.Errorf("%w: a top-level folder states who sees it, one of %s",
+			ErrInvalid, words.Or(FolderVisibilities))
 	case in.Parent != "" && in.Visibility != "":
 		return nil, nil, fmt.Errorf("%w: a folder inside another is seen by whoever sees its "+
 			"top-level folder, so it states no visibility of its own", ErrInvalid)
@@ -845,7 +846,7 @@ func (w *Writer) folderWritten(ctx context.Context, opID string, res statelog.Re
 	if err != nil || !found || e.outcome != OutcomeRefused {
 		return Written{Result: res}, err
 	}
-	return Written{Result: res}, w.refusal(ctx, "", e.reason, HistorySummary{})
+	return Written{Result: res}, w.refusal(ctx, "", e.reason, HistorySummary{}, 0)
 }
 
 // ---- the reader's folder questions ---------------------------------------- //

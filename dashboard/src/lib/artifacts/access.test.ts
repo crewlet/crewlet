@@ -9,8 +9,10 @@ const PERSON: ViewerState = {
   login: "maya",
   grants: ["artifacts"],
   admin: false,
-  tracker: false,
-  knowledge: false,
+  worklet: false,
+  doclet: false,
+  chatlet: false,
+  chatVendors: [],
   handle: "maya",
   owner: "maya",
   name: "Maya Ortiz",
@@ -23,6 +25,8 @@ const PERSON: ViewerState = {
   asking: false,
   configWriter: false,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
 };
 
 describe("a change to an artifact", () => {

@@ -107,7 +107,7 @@ describe("done, resume and the rail", () => {
   });
 });
 
-describe("adopting a draft", () => {
+describe("publishing a draft", () => {
   test("names what a draft lacks, in the engine's order, then the pair that refuses", () => {
     expect(adoptionProblem(blankBrand("FairSplit"))).toBe("Add a primary logo and colour.");
     expect(adoptionProblem(complete({ logos: {} }))).toBe("Add a primary logo.");
@@ -120,7 +120,7 @@ describe("adopting a draft", () => {
 
   test("says where a draft is offered that it is not ready, and nothing for one that is", () => {
     expect(draftReadiness(blankBrand("FairSplit"))).toBe(
-      "Draft, not ready to adopt: add a primary logo and colour.",
+      "Not ready to publish: add a primary logo and colour.",
     );
     expect(draftReadiness(complete())).toBeUndefined();
   });

@@ -39,6 +39,16 @@
  * else in another tab) does not make this tab's memory theirs. What it does
  * instead is `lib/session.ts`'s `takeSession`: the tab is handed to them, as a
  * sign-in by them here would hand it, with nothing of its last reader kept.
+ *
+ * # And every request names it
+ *
+ * The frame's read and the socket's are of the SESSION, and both can miss a
+ * cookie that moved: a window left visible beside the one that signed in is
+ * never re-read, and its socket hears nothing when the close of its session
+ * did not land. So the reader also travels on every request the tab makes for
+ * them (`main.tsx` installs [currentReader] in `protocol/signin.ts`), and the
+ * engine refuses one whose cookie is anybody else's before it runs — which
+ * `lib/session.ts`'s `sessionMoved` answers by handing the tab over.
  */
 
 import { useSyncExternalStore } from "react";

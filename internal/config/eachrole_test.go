@@ -22,6 +22,7 @@ func TestTheDocumentWalkReachesEverySeatAtEveryDepth(t *testing.T) {
 	c, err := ParseCompany([]byte(strings.TrimSpace(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

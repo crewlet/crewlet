@@ -1,7 +1,7 @@
 /**
  * The eighteen wake reasons, as the dashboard phrases them.
  *
- * The KEYS are the engine's: `tracker.Reasons`, the one reason of eighteen the
+ * The KEYS are the engine's: `worklet.Reasons`, the one reason of eighteen the
  * applier records per change and per recipient, and
  * `internal/api/queries`' wake-reason gate holds them here in both
  * directions — a reason the engine writes with no phrase renders as its own

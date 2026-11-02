@@ -29,7 +29,7 @@ services:
     # exactly like a line with nothing to update, and a green run named a
     # GitLab nobody could identify afterwards. Multi-arch incl. arm64 since
     # 18.1.
-    image: gitlab/gitlab-ee:19.5.0-ee.0
+    image: gitlab/gitlab-ee:19.5.1-ee.0
     profiles: [gitlab]
     hostname: gitlab.local
     shm_size: "256m"                         # image default 64 MB is too small
@@ -220,7 +220,7 @@ services:
 
   # THE ONLY DATABASE IN THIS FILE, and it is Mattermost's, not the
   # engine's. Mattermost requires PostgreSQL; the engine requires no
-  # database service at all — its store is a local file it creates and
+  # database service at all — its store is two local files it creates and
   # owns exclusively — so there is nothing here for this instance to be
   # shared with, and `down -v` on this profile costs a clean chat
   # instance and nothing the engine holds.

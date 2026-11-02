@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { ArtifactPresenceMember } from "~/protocol/index.ts";
+import type { RoomMember } from "~/protocol/index.ts";
 import type { Roster } from "~/lib/artifacts/room.ts";
 import { pageRoster, pageSelf, pageViewer } from "./pageIdentity.ts";
 
@@ -13,7 +13,7 @@ const people = {
   seatName: (handle: string) => (handle === "maya" ? "Maya Ortiz" : handle),
 };
 
-const member = (session: string, seat: string): ArtifactPresenceMember =>
+const member = (session: string, seat: string): RoomMember =>
   ({
     session,
     seat,
@@ -21,9 +21,9 @@ const member = (session: string, seat: string): ArtifactPresenceMember =>
     activity: "viewing",
     focus: {},
     at: "2026-10-19T09:00:00Z",
-  }) as unknown as ArtifactPresenceMember;
+  }) as unknown as RoomMember;
 
-const roster = (...members: ArtifactPresenceMember[]): Roster => ({
+const roster = (...members: RoomMember[]): Roster => ({
   members: new Map(members.map((m) => [m.session, m])),
   counts: null,
   truncated: false,

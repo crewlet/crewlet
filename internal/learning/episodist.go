@@ -200,6 +200,7 @@ func (w *Episodist) episodeOf(t Turn) Episode {
 		PlanSummary:     t.Event.PlanSummary,
 		TaskSummary:     t.Event.TaskSummary,
 		Ask:             t.Ask(),
+		AskProvenance:   t.AskLabel(),
 		ToolSequence:    t.Event.ToolSequence,
 		SkillsUsed:      t.Event.SkillsUsed,
 		ReviewOutcome:   t.Event.ReviewOutcome,

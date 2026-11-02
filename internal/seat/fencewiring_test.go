@@ -30,21 +30,27 @@ import (
 // that can carry it, does". A test cannot assert that a value is correct, but
 // it can assert that nobody quietly dropped the wire.
 var carriers = map[string]string{
-	"engine.RunnerInput": "the engine's per-turn runner input",
-	"runner.Config":      "the phase runner's configuration",
-	"subagent.Config":    "the delegation tool's configuration",
-	"toolloop.Config":    "the model/tool loop that performs the check",
+	"engine.RunnerInput":    "the engine's per-turn runner input",
+	"runner.Config":         "the phase runner's configuration",
+	"subagent.Config":       "the delegation tool's configuration",
+	"toolloop.Config":       "the model/tool loop that performs the check",
+	"sandbox.LaunchRequest": "the executor launch, which asks the fence again once its row exists",
 }
 
-// Agent mode is the one executor path with no entry here, and that is a
-// decision rather than an omission. A coding CLI's run is DETACHED: the phase
+// The executor's RUN, once it is running, is the one thing a turn starts that
+// no fence here reaches, and that is a decision rather than an omission. Every
+// executor is its coding CLI's own run, and that run is DETACHED: the phase
 // suspends the moment it starts, the turn ends, and the run outlives it —
 // deliberately, since its placement is on its own row and the process that
-// collects it is often not the one that launched it. Fencing it would kill an
-// hour of somebody's coding run on an ordinary rebalance and lose its output,
-// to guard against writes the bridge's own run-scoped, expiring credential
-// already bounds. What IS fenced is the resume: the turn that comes back to
-// collect the run runs under the grant the collecting node holds. See
+// collects it is often not the one that launched it. Fencing it while it runs
+// would kill an hour of somebody's coding run on an ordinary rebalance and
+// lose its output, to guard against writes the bridge's own run-scoped,
+// expiring credential already bounds. What IS fenced is either end: the
+// launch — runner.Config's fence when the phase opens, the engine's launcher
+// by a direct call before it opens anything, and sandbox.LaunchRequest's once
+// the run's row exists — and the resume, which runs under the grant the
+// collecting node holds. A person's stop ENDS a running run, but through the
+// coordinator (sandbox.Coordinator.StopSeat), never through this fence. See
 // [seat.Host.Fence].
 
 type literal struct {

@@ -1592,6 +1592,46 @@ func TestARefreshIsSpentByTheSweepItLandsIn(t *testing.T) {
 	}
 }
 
+// A FORCED LOOK AT A SURFACE ANOTHER WRITER HOLDS IS STILL OWED.
+//
+// A save on an integration's Agents tab applies a revision, which sweeps every
+// surface, and starts that integration's access sync, which takes the lease
+// first. The sweep found the surface held, spent its ask and left the card on
+// the settled cadence: minutes of the integration describing the setting the
+// person had just replaced. Kept owed, the next tick looks, once.
+//
+// Mutation: drop the re-arm in [Worker.visit] and the second tick runs nothing.
+func TestAForcedLookAtAHeldSurfaceIsStillOwed(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab}
+	store := newStore(State{Kind: KindGitLab, NextAttemptAt: now.Add(10 * time.Minute)})
+	held := true
+	w := guardedAt(t, now, store, Registration{Reconciler: r},
+		func(ctx context.Context, _ Kind) (context.Context, func(), bool, error) {
+			if held {
+				return nil, nil, false, nil
+			}
+			return ctx, func() {}, true, nil
+		})
+
+	w.MarkStale()
+	w.Tick(context.Background())
+	if r.count() != 0 {
+		t.Fatalf("a held surface ran %d passes", r.count())
+	}
+
+	held = false
+	w.Tick(context.Background())
+	if r.count() != 1 {
+		t.Fatalf("the sweep owed to a held surface was lost: %d passes once it was free", r.count())
+	}
+	// AND OWED ONCE: the look it took spent it, and the cadence is back.
+	w.Tick(context.Background())
+	if r.count() != 1 {
+		t.Fatalf("the owed look outlived the pass that took it: %d passes", r.count())
+	}
+}
+
 // A NIL WORKER TAKES THE ASK AND DOES NOTHING, like MarkStale beside it: a
 // build with no loop wired must not panic an HTTP handler that offers it one.
 func TestRefreshingANilWorkerIsSafe(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // `crewlet retention` — what the log is holding, why, and the gestures that
@@ -74,7 +75,7 @@ func runRetention(environ config.Source, args []string, stdout, stderr io.Writer
 	case "", "help":
 		fmt.Fprintln(stderr, "usage: crewlet retention "+
 			"status|snapshots|ack|evict|readmit|reanchor|verify|"+
-			"set-capacity|maintenance [<config.yaml>] [-url]")
+			"set-capacity|maintenance [<config.yaml>] [-api URL]")
 		return flag.ErrHelp
 	default:
 		return fmt.Errorf("unknown retention command %q", sub)
@@ -115,11 +116,14 @@ type retentionReport struct {
 	Replica   retentionReplicaRow `json:"replica"`
 	Alarms    []retentionAlarm    `json:"alarms"`
 
-	// Maintenance is the capacity operation holding the fleet, absent
-	// when there is none. A POINTER because absent and zeroed are
-	// different answers: a zeroed block claims an operation in phase ""
-	// with nobody outstanding.
-	Maintenance *maintenanceRow `json:"maintenance"`
+	// Maintenance is every capacity operation holding the fleet, the
+	// oldest first, and empty when there is none: a window is per log, and
+	// two can be open at once.
+	Maintenance []maintenanceRow `json:"maintenance"`
+
+	// MaintenanceUnread is every log whose window the node couldn't read,
+	// which is not a log with no window open.
+	MaintenanceUnread []string `json:"maintenance_unread"`
 }
 
 // maintenanceRow is one open capacity operation, as `retention status`
@@ -140,7 +144,18 @@ type maintenanceRow struct {
 	By                  string    `json:"by"`
 	OperatorID          string    `json:"operator_id"`
 	ParticipantsMissing []string  `json:"participants_missing"`
+	AdmissionsBlocking  []string  `json:"admissions_blocking"`
 	Blocked             string    `json:"blocked"`
+
+	// AcksUnread and AdmissionsUnread say the node couldn't read what the
+	// two lists above are formed from, and neither list is then empty: it is
+	// unknown, and this command says so rather than printing a list.
+	AcksUnread       bool `json:"acks_unread"`
+	AdmissionsUnread bool `json:"admissions_unread"`
+
+	// BlockedDetail is the node's sentence for Blocked, which is what this
+	// command prints: who blocked the window and what clears it.
+	BlockedDetail string `json:"blocked_detail"`
 
 	// AbandonedBy is who abandoned it, once somebody has.
 	AbandonedBy capacityParty `json:"abandoned_by"`
@@ -297,11 +312,12 @@ type retentionAlarm struct {
 	Domains []retentionAlarmDomain `json:"domains"`
 }
 
-// retentionAlarmDomain is one log an alarm stands on ([statelog.AlarmDomain]).
+// retentionAlarmDomain is one measurement an alarm stands on and the logs it
+// was taken on ([statelog.AlarmDomain]).
 type retentionAlarmDomain struct {
-	Domain string `json:"domain"`
-	Detail string `json:"detail"`
-	Term   string `json:"term"`
+	Domains []string `json:"domains"`
+	Detail  string   `json:"detail"`
+	Term    string   `json:"term"`
 }
 
 // retentionStatus prints what the log is holding and what is stopping it from
@@ -327,13 +343,16 @@ func retentionStatus(environ config.Source, args []string, stdout, stderr io.Wri
 		return err
 	}
 
-	// MAINTENANCE ABOVE EVERYTHING, because while it is open every number
-	// below it describes a fleet in which nothing is running: no seats, no
-	// duties, no scheduler and no write routes. An operator reading a
+	// MAINTENANCE ABOVE EVERYTHING, because while it is open the fleet is
+	// held: no node starts in service, and every node restarted for it runs
+	// no seats, duties, scheduler or write routes. An operator reading a
 	// blocked trim without knowing that goes looking for the wrong thing.
-	if m := report.Maintenance; m != nil {
-		fmt.Fprintf(stdout, "MAINTENANCE IS OPEN on %s: no publisher is running "+
-			"anywhere in this fleet.\n", m.Stream)
+	// ONLY A NODE IN SERVICE ANSWERS THIS, so the line says what holds the
+	// fleet: "no publisher is running anywhere" was false of the node
+	// printing it. EVERY WINDOW, each waiting on its own nodes.
+	for _, m := range report.Maintenance {
+		fmt.Fprintf(stdout, "MAINTENANCE IS OPEN on %s: no node starts in service "+
+			"until it closes.\n", m.Stream)
 		fmt.Fprintf(stdout, "  phase %s, attempt %d, open since %s",
 			m.Phase, m.Attempt, m.Since.UTC().Format(time.RFC3339))
 		if m.By != "" {
@@ -341,16 +360,32 @@ func retentionStatus(environ config.Source, args []string, stdout, stderr io.Wri
 		}
 		fmt.Fprintln(stdout, ".")
 		if m.Blocked != "" {
-			fmt.Fprintf(stdout, "  BLOCKED: %s. This needs a person, not time.\n",
-				m.Blocked)
+			fmt.Fprintf(stdout, "  BLOCKED, and it needs a person, not time. %s\n",
+				m.BlockedDetail)
 		}
 		if m.AbandonedBy.By != "" {
 			fmt.Fprintf(stdout, "  abandoned by %s.\n", m.AbandonedBy.describe())
 		}
-		if len(m.ParticipantsMissing) > 0 {
-			fmt.Fprintf(stdout, "  waiting on %s.\n",
-				strings.Join(m.ParticipantsMissing, ", "))
-		} else {
+		// AN ADMISSION FIRST: it holds a window at opened whoever has
+		// restarted, and it is the one thing no participant owes, so a
+		// page that named only who it waits on read as every node owing
+		// something while one node's stale claim held the window. WHAT
+		// THE NODE COULDN'T READ IS SAID AS THAT: printed as an empty
+		// list, an unread register read as nobody owing anything.
+		switch {
+		case m.AdmissionsUnread:
+			fmt.Fprintln(stdout, "  couldn't read whether an admission is holding it.")
+		case len(m.AdmissionsBlocking) > 0:
+			fmt.Fprintf(stdout, "  held by an admission from %s: nothing is "+
+				"sent while it stands.\n", words.And(m.AdmissionsBlocking))
+		}
+		switch {
+		case m.AcksUnread:
+			fmt.Fprintln(stdout, "  couldn't read which nodes have restarted for it, "+
+				"so who it's waiting on is unknown.")
+		case len(m.ParticipantsMissing) > 0:
+			fmt.Fprintf(stdout, "  waiting on %s.\n", words.And(m.ParticipantsMissing))
+		case len(m.AdmissionsBlocking) == 0 && !m.AdmissionsUnread:
 			// NOBODY OUTSTANDING IS NOT PROGRESS: it is the
 			// operation waiting on whoever ran the verb, and
 			// printing nothing here reads as "nearly done".
@@ -358,6 +393,22 @@ func retentionStatus(environ config.Source, args []string, stdout, stderr io.Wri
 				"operation is waiting on its operator.")
 		}
 		fmt.Fprintln(stdout)
+	}
+
+	// A WINDOW THE NODE COULDN'T READ IS NOT A LOG WITH NO WINDOW, and said
+	// beside the open ones because it may be one: the read that fails is the
+	// coordination read, during the outage this is often run in. Said as what
+	// the answering node knows: it is in service itself, and a data node
+	// restarted now meets the same read at its boot.
+	if unread := report.MaintenanceUnread; len(unread) > 0 {
+		stream, which := "<log>", " for one of them"
+		if len(unread) == 1 {
+			stream, which = unread[0], ""
+		}
+		fmt.Fprintf(stdout, "This node couldn't read whether a capacity window "+
+			"is open on %s. A data node restarted now won't start in service "+
+			"until it can read it. `crewlet retention maintenance status -stream "+
+			"%s` asks again%s.\n\n", words.And(unread), stream, which)
 	}
 
 	// A DOMAIN THIS NODE REFUSES, BEFORE ANYTHING ELSE ABOUT IT: every
@@ -514,10 +565,12 @@ func retentionNodes(w io.Writer, report retentionReport) {
 	for _, n := range report.Nodes {
 		if len(n.Domains) == 0 {
 			// A COUNTED NODE WITH NO POSITION STILL GETS A ROW.
-			// It is exactly a node between boot and its first
-			// heartbeat — a node adopting a snapshot — and it
-			// blocks every term derived from the counted set, so
-			// dropping the row would hide the block's cause.
+			// It is a live data node whose heartbeat has not yet
+			// written its row, and it blocks every term derived
+			// from the counted set, so dropping the row would hide
+			// the block's cause. (A node adopting a snapshot at
+			// boot is not one: it holds no presence lease yet, and
+			// what keeps its tail is its own pin, under min_hold.)
 			fmt.Fprintf(w, "%s\t-\t-\t-\t-\t-\t-\t%s\t%s\t%s\n",
 				n.NodeID, yesNo(n.Counted), yesNo(n.Live), noteOrStamp(n))
 			continue
@@ -588,11 +641,13 @@ func retentionAlarms(stderr io.Writer, report retentionReport) error {
 // printRetentionAlarm prints one alarm: its kind and measurement, the logs it
 // stands on, and its remedy.
 //
-// ONE LOG IS FOLDED INTO THE HEADLINE. An alarm standing on a single log whose
+// ONE MEASUREMENT IS FOLDED INTO THE HEADLINE. An alarm whose only entry's
 // measurement is the headline's printed that sentence twice, once as the
-// alarm and once as its only log; it reads `kind on log (term): detail`
-// instead. Several logs, or the logs a backup alarm is holding, are one line
-// each under it.
+// alarm and once as its entry; it reads `kind on logs (term): detail`
+// instead. Several entries are one line each under it, each with its own
+// measurement, the logs it was taken on and the term holding them. The report
+// already carries a measurement taken alike on several logs once, naming
+// them, so nothing here folds repeats of its own.
 func printRetentionAlarm(w io.Writer, alarm retentionAlarm) {
 	if len(alarm.Domains) == 1 && alarm.Domains[0].Detail == alarm.Detail {
 		fmt.Fprintf(w, "%s on %s: %s\n  %s\n",
@@ -606,12 +661,14 @@ func printRetentionAlarm(w io.Writer, alarm retentionAlarm) {
 	fmt.Fprintf(w, "  %s\n", alarm.Remedy)
 }
 
-// alarmLog names a log an alarm stands on, with the trim term holding it.
+// alarmLog names the logs one of an alarm's measurements was taken on, with
+// the trim term holding them.
 func alarmLog(d retentionAlarmDomain) string {
+	logs := strings.Join(d.Domains, ", ")
 	if d.Term == "" {
-		return d.Domain
+		return logs
 	}
-	return d.Domain + " (" + d.Term + ")"
+	return logs + " (" + d.Term + ")"
 }
 
 // retentionSnapshots prints the per-node snapshot inventory.
@@ -689,7 +746,7 @@ func retentionAck(environ config.Source, args []string, stdout, stderr io.Writer
 		Position   uint64 `json:"position"`
 		Generation uint32 `json:"generation"`
 	}
-	path := "/work/retention/ack?stream=" + url.QueryEscape(*stream) +
+	path := "/worklet/retention/ack?stream=" + url.QueryEscape(*stream) +
 		"&position=" + strconv.FormatUint(*position, 10)
 	if err := client.post(context.Background(), path, &answer); err != nil {
 		return err
@@ -724,7 +781,7 @@ func retentionGate(environ config.Source, args []string, stdout, stderr io.Write
 	client, err := nodeClientFor(environ, rest, "retention "+verb, stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "",
 			"repeat the node id, because this changes whether that machine's records apply")
-		opID = fs.String("op-id", "",
+		opID = opIDFlag(fs,
 			"the operation id an earlier run of this gesture answered with, to "+
 				"finish it on the logs it did not reach; empty starts a new one")
 		if evict {
@@ -756,17 +813,16 @@ func retentionGate(environ config.Source, args []string, stdout, stderr io.Write
 	// THROUGH THE STATE LOG'S OWN MINT ([statelog.NewOpID]), under the name
 	// the route itself mints with, so the id carries its instant — the node
 	// refuses one that does not, since no ledger could vouch for it — and
-	// reads in the ledger exactly as a node-minted one would.
+	// reads in the ledger exactly as a node-minted one would. The node goes
+	// into that name through [statelog.OpNamePart], as the route's does,
+	// because a node id may hold the dot that begins a step.
 	//
 	// AND ONE THE OPERATOR BROUGHT IS HELD TO THE RULE EVERY SURFACE HOLDS
-	// IT TO ([statelog.CheckCallerOpID]) before anything is asked: the node
-	// refuses it `400 op_id_invalid` anyway, and refused here the error
-	// names the flag rather than a query parameter this command composed.
-	gesture := *opID
-	if gesture == "" {
-		gesture = statelog.NewOpID(time.Now(), verb+"-"+node)
-	} else if err := statelog.CheckCallerOpID(gesture); err != nil {
-		return fmt.Errorf("-op-id: %w", err)
+	// IT TO before anything is asked — [operationFor], which every keyed
+	// write here mints and checks its id through.
+	gesture, err := operationFor(verb+"-"+statelog.OpNamePart(node), *opID)
+	if err != nil {
+		return err
 	}
 	forced := force != nil && *force
 	// THE COMMAND THAT FINISHES THIS GESTURE, with the flags that decide it:
@@ -787,7 +843,7 @@ func retentionGate(environ config.Source, args []string, stdout, stderr io.Write
 	if forced {
 		query.Set("force", "true")
 	}
-	path := fmt.Sprintf("/work/retention/%s/%s?%s", verb, url.PathEscape(node),
+	path := fmt.Sprintf("/worklet/retention/%s/%s?%s", verb, url.PathEscape(node),
 		query.Encode())
 	// PATIENTLY, for the reason [nodeClient.patiently] names: how long a
 	// gesture takes is a property of what it waits on — a write per log,
@@ -880,7 +936,7 @@ func retentionGate(environ config.Source, args []string, stdout, stderr io.Write
 		// difference between a node that has stopped writing and one
 		// that is about to.
 		fmt.Fprintln(stdout, "  A pending log holds the record durably and this node "+
-			"has not applied it yet: the gate takes effect as each node reaches it.")
+			"has not applied it yet: the gate takes effect as each data node reaches it.")
 	}
 	if !answer.Complete {
 		// NOT A FAILURE TO RETRY BLINDLY: the logs that answered hold
@@ -1006,7 +1062,7 @@ type gateAdviceContext struct {
 // # Why the command line renders them, and not the node
 //
 // The node used to send one sentence in this command's vocabulary — "evict it
-// with -force", "run it again without -op-id", "(-url)" — and the dashboard
+// with -force", "run it again without -op-id", "(-api)" — and the dashboard
 // rendered that sentence word for word beside a dialog with none of those
 // flags. So the node now says WHAT to do as a closed set of actions and a
 // sentence naming no surface's controls, and each surface says HOW: here, as
@@ -1029,7 +1085,7 @@ func gateAdvice(actions []string, c gateAdviceContext) []string {
 			}
 		case statelog.GateOtherNode:
 			out = append(out, "run it through another node the fleet still counts: "+
-				"-url <that node> "+c.again)
+				"-api <that node> "+c.again)
 		case statelog.GateReanchor:
 			out = append(out, "crewlet retention reanchor -stream "+c.stream+
 				", then run this again with "+c.again)

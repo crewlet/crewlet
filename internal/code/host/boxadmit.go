@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // A BOX'S ADMISSION: admit for a request under /box/git/ — the same answers to
@@ -219,12 +220,12 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 	g, given := run.grantNamed(name)
 	switch {
 	case !given:
-		b.refuse("not_granted", fmt.Sprintf("this run was not given %s: its run_sandbox call named %s",
-			strconv.Quote(name), grantedNames(run)))
+		b.refuse("not_granted", fmt.Sprintf("this run was not given %s: it has checked out %s; check a "+
+			"repository out with "+toolname.CodeCheckout+" before you fetch or push it", strconv.Quote(name), grantedNames(run)))
 		return admission{}, false
 	case op == auth.GitPush && g.Access < code.AccessWrite:
 		b.refuse("read_only", fmt.Sprintf("this run was given %s to read: a push needs access: write in "+
-			"its run_sandbox call", strconv.Quote(name)))
+			"its "+toolname.CodeCheckout+" call", strconv.Quote(name)))
 		return admission{}, false
 	}
 
@@ -281,7 +282,8 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 		return admission{}, false
 	case repo.ID != g.RepoID:
 		b.refuse("not_granted", fmt.Sprintf("%s is no longer the repository this run was given (renamed "+
-			"since the launch); call run_sandbox again%s", strconv.Quote(name), floorNote))
+			"since it was checked out); check it out again with "+toolname.CodeCheckout+" under its new name%s",
+			strconv.Quote(name), floorNote))
 		return admission{}, false
 	}
 	// ANSWERED UNDER ITS CURRENT NAME, as admit answers a fetch it lets
@@ -445,13 +447,12 @@ func (s *Server) boxHoldFailed(w http.ResponseWriter, r *http.Request, adm admis
 // read: one compare-and-set on the row, taken only when the box is shown
 // something newer than its floor already holds.
 //
-// WHAT IT MOVES is the run's facts alone, whatever the turn's size: the job's
-// suspended conversation and its tool log are kept beside the row
-// (sandbox.PendingRun's note), so a raise reads and writes back a row of a few
-// kilobytes — 0.42 ms at the median on three members, where with them on the
-// row it moved a mebibyte both ways in 16.4 ms (BenchmarkABoxRequestOnItsRun,
+// WHAT IT MOVES is the run's whole row, its job's bridged tool log with it
+// (sandbox.PendingRun.BridgeCalls), so a raise reads and writes back as much
+// as that log holds — 11.1 ms at the median on three members with the log
+// full, a row of 516 173 bytes (BenchmarkABoxRequestOnItsRun,
 // internal/coord/kv) — as the read of the run every request of the box begins
-// with moves it once (Runs.Run: 0.15 ms, where it was 8.4).
+// with moves it once (Runs.Run: 5.8 ms).
 //
 // UNDER context.WithoutCancel, bounded by statelog.ReadBudget: a box that
 // hangs up once it has been shown refs still holds what it was shown, and the

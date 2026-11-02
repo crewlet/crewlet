@@ -8,8 +8,8 @@
  * or by the checks of one commit (a change's), and a narrowing — a state, a
  * check's name — is tested on the rows a page READ, so a page may be short or
  * even empty with a `next`: Load more follows it. The pager is the one every
- * paged list shares (`lib/usePaged.ts`), and holds its first page still from
- * the press of Load more, because the cursor was minted from its last row.
+ * paged list shares (`lib/usePaged.ts`), which joins each page to the one
+ * before it, because the cursor was minted from that page's last row.
  *
  * # One attempt opens in a pane
  *
@@ -46,7 +46,7 @@ import { refName, shortOID } from "~/lib/code.ts";
 import { checkPurposeWord, checkStateTone, checkStateWord } from "~/lib/checks.ts";
 import { fmtBytes, fmtDuration, plural } from "~/lib/format.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import type {
   CodeCheckDetail,
   CodeCheckFailure,
@@ -56,8 +56,7 @@ import type {
 import { commitHref, compareHref } from "../paths.ts";
 
 /**
- * How often a listing's newest page is read again while nothing older is
- * held: HALF A MINUTE. A check ends minutes after it starts, and the code log
+ * How often a listing's newest page is read again: HALF A MINUTE. A check ends minutes after it starts, and the code log
  * pushes nothing to the dashboard, so this read is how a reader watching a
  * run sees it end; the pushes history's minute is for a log people read after
  * the fact.
@@ -214,11 +213,10 @@ export function CheckListing({
   /** Drawn above the grid with every row the pager holds: a section's chart and facets. */
   header?: (rows: readonly CodeCheckRow[], more: boolean) => ReactNode;
 }) {
-  const hold = usePageHold<CodeChecksAnswer>(params);
-  const first = useCodeQuery("code_checks", params, { pollMs: CHECKS_POLL_MS, hold: hold.holding });
+  const first = useCodeQuery("code_checks", params, { pollMs: CHECKS_POLL_MS });
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_checks", { ...params, cursor }),
     (a: CodeChecksAnswer) => a.checks ?? [],
     attemptKey,
@@ -256,7 +254,7 @@ export function CheckListing({
             <Button
               size="small"
               variant="secondary"
-              onClick={paged.older}
+              onClick={paged.next}
               disabled={paged.paging}
               loading={paged.paging}
             >
@@ -269,7 +267,6 @@ export function CheckListing({
           {rows.length > 0 && (
             <span className="t-caption">{plural(rows.length, "attempt")} listed</span>
           )}
-          {paged.held && <span className="t-caption">Paused while you page on.</span>}
         </div>
       )}
       {open && open.repo && (

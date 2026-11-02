@@ -2,7 +2,6 @@ package sandbox
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -99,9 +98,9 @@ const MaxPushedRefs = MaxDeliveredRefBytes / minPushedLineBytes
 const minPushedLineBytes = 16
 
 // shortOIDBytes is how much of an object id a pushed ref's line prints: twelve
-// hex digits, a name for the executor to read beside the branch rather than an
-// id to act on — it reads a branch's commit whole through code_resolve, and
-// the phase record carries every id whole. Twelve rather than git's seven, so
+// hex digits, a name to read beside the branch rather than an id to act on — a
+// branch's commit is read whole through code_resolve, and the phase record
+// carries every id whole. Twelve rather than git's seven, so
 // two commits of one busy repository's line are not told apart by luck.
 const shortOIDBytes = 12
 
@@ -127,7 +126,7 @@ func repoNames(repos []RunRepo) []string {
 	return out
 }
 
-// line is how the resumed executor's text names one pushed ref: its repository
+// line is how the run's report names one pushed ref: its repository
 // and ref, then where it went — created, deleted, moved, or back where it
 // started — how many of the run's pushes moved it where that is more than
 // one, and the change it heads where it heads one. What a result's refs are
@@ -170,9 +169,8 @@ func shortOID(oid string) string {
 // how many more the record names than are listed: more, the refs the read had
 // no room to hold, and every one past the bound.
 //
-// ONE BUDGET WITH THE DELIVERED REFS, the lines counted as the resumed
-// executor reads them: both lists are the run's refs, on one record and in one
-// text, and two budgets would let them disagree about how much of one run's
+// ONE BUDGET WITH THE DELIVERED REFS, the lines counted as the run's report
+// renders them: both lists are the run's refs, on one record and in one text, and two budgets would let them disagree about how much of one run's
 // delivery survives. The run's own lines first, as they always were; the push
 // record has what they leave.
 //
@@ -198,14 +196,14 @@ func boundPushed(refs []PushedRef, more, budget int) ([]PushedRef, int) {
 	return kept, more
 }
 
-// pushedText is what the resumed executor is told of a run's pushes to the
+// pushedText is what the run's report states of the run's pushes to the
 // engine's own code host, "" for a run given no repository there.
 //
 // NEVER OMITTED FOR A RUN THAT HAD REPOSITORIES, because "the run pushed
-// nothing" is the one fact the executor must not infer from silence: a run
-// that pushed nothing is told so, and one whose record could not be read is
-// told THAT, with what to read instead — never a list the executor would take
-// for the whole of it. A run given its repositories to read is told it pushed
+// nothing" is the one fact its reviewer must not infer from silence: a run
+// that pushed nothing says so, and one whose record could not be read says
+// THAT, naming the branches it worked on — never a list a reader would take
+// for the whole of it. A run given its repositories to read says it pushed
 // none, which its grants decide without a read.
 func pushedText(run PendingRun, result Result) string {
 	switch {
@@ -216,8 +214,7 @@ func pushedText(run PendingRun, result Result) string {
 			"not to push to."
 	case result.PushedUnread != "":
 		return "Pushed to this company's code host: unknown — its push record could not be read (" +
-			result.PushedUnread + "); read the branches it worked on (" + branchesOf(Pushable(run.Repos)) +
-			") with code_resolve before you report them."
+			result.PushedUnread + "); the branches it worked on are " + branchesOf(Pushable(run.Repos)) + "."
 	case len(result.Pushed) == 0 && result.PushedElided == 0:
 		return "Pushed to this company's code host: nothing — no push of this run was recorded."
 	}
@@ -226,8 +223,8 @@ func pushedText(run PendingRun, result Result) string {
 		lines = append(lines, ref.line())
 	}
 	if result.PushedElided > 0 {
-		lines = append(lines, fmt.Sprintf("- and %d more ref(s) its push record names, not listed here; "+
-			"read them with code_resolve", result.PushedElided))
+		lines = append(lines, fmt.Sprintf("- and %d more ref(s) its push record names, not listed here",
+			result.PushedElided))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -241,60 +238,8 @@ func branchesOf(repos []RunRepo) string {
 	return strings.Join(named, "; ")
 }
 
-// recloneText is what a parked run whose box was reclaimed is told to call
-// run_sandbox with for its repositories on the engine's own code host: each
-// repository on the branch the run worked on — the branch it pushed to, so its
-// work is in the fresh clone — with its access where it was read and its cone
-// where it had one. The base is left out: it defaults to the branch's head.
-//
-// THE VALUE, NOT A DESCRIPTION OF IT: the branch a call that names none works
-// on is the turn's default, and a run whose call named its own would be cloned
-// on another branch than the one its work is on; so every repository is named
-// with its branch, as run_sandbox's `repos` takes them. JSON, the tool's own
-// argument, so nothing is left to the executor to transcribe.
-func recloneText(repos []RunRepo) string {
-	type openAgain struct {
-		Target string `json:"target"`
-		Title  string `json:"title,omitempty"`
-		Draft  bool   `json:"draft,omitempty"`
-	}
-	type again struct {
-		Repo   string     `json:"repo"`
-		Branch string     `json:"branch"`
-		Access RepoAccess `json:"access,omitempty"`
-		Paths  []string   `json:"paths,omitempty"`
-		// Open is the run's ask to open a change, AS IT WAS: a run that
-		// parked on a question opened none (unopenedAsked), so the run that
-		// finishes its work asks again — for the target its launch resolved,
-		// which a default branch changed since does not move. A run on a
-		// change is cloned on its branch, which still heads it.
-		Open *openAgain `json:"open_change,omitempty"`
-	}
-	value := make([]again, len(repos))
-	for i, r := range repos {
-		value[i] = again{Repo: r.Repo, Branch: r.Branch, Paths: r.Paths}
-		if o := r.Open; o != nil {
-			value[i].Open = &openAgain{Target: strings.TrimPrefix(o.Target, branchRoot), Title: o.Title,
-				Draft: o.Draft}
-		}
-		if r.Access != RepoWrite {
-			// AS IT WAS: a call that names no access is given write where
-			// the seat may push, and a repository this run was given to read
-			// stays one.
-			value[i].Access = r.Access
-		}
-	}
-	raw, err := json.Marshal(value)
-	if err != nil {
-		// A slice of structs of strings always encodes; a failure is a broken
-		// build, not an input.
-		panic(fmt.Sprintf("sandbox: encode a run's repositories: %v", err))
-	}
-	return string(raw)
-}
-
 // PushedRecords is pushed as the phase records carry it ([types.PushedRefRecord]):
-// the run's own record and the resumed executor's.
+// the run's own record and the resumed turn's executor record.
 func PushedRecords(pushed []PushedRef) []types.PushedRefRecord {
 	if len(pushed) == 0 {
 		return nil

@@ -2,7 +2,6 @@ package operator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -14,6 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // MCPPath is the path the MCP transport is served at — the address an
@@ -97,11 +98,15 @@ func (s *Server) mcpServer(cat catalogue) *mcp.Server {
 // anybody, which is the same rule a seat's tools follow and the same reason.
 func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		var args map[string]any
-		if len(req.Params.Arguments) > 0 {
-			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
-				return nil, fmt.Errorf("operator: %s: bad arguments: %w", name, err)
-			}
+		// THE ONE DECODE every transport into a tool shares
+		// ([toolargs.Decode]): through json.Number, so a number past
+		// 2^53 reaches the tool as the caller sent it.
+		args, err := toolargs.Decode(req.Params.Arguments)
+		if err != nil {
+			// THE ARGUMENTS' OWN WORDS ([toolargs.Decode]) after the
+			// tool's name, which is what the assistant called: an
+			// "operator:" in front named this package to it.
+			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 		result, err := s.run(ctx, cat, Call{
 			Transport: types.TransportMCP, Tool: name, Args: args,
@@ -117,7 +122,9 @@ func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 		}
 		return &mcp.CallToolResult{
 			IsError: result.Failed,
-			Content: []mcp.Content{&mcp.TextContent{Text: result.Output}},
+			// THE ASSISTANT READS TEXT, so a note on the arguments is
+			// rendered after the answer ([tools.Rendered]).
+			Content: []mcp.Content{&mcp.TextContent{Text: tools.Rendered(result)}},
 		}, nil
 	}
 }
@@ -151,13 +158,12 @@ func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 // client this repository ships reads that refusal as the end of its
 // connection.
 //
-// # Three answers before any tool runs
+// # Two answers before any tool runs
 //
 // A node that has not been handed a company answers `503
-// no_active_revision`; one whose catalogue is empty — no native half, no
-// search, no seat controls — answers as the route's absence would, since an
-// endpoint that lists no tools reads to an operator as broken; and anything
-// else is served over the catalogue the request found.
+// no_active_revision`, and anything else is served over the catalogue the
+// request found — never an empty one, since [New] requires the seat controls
+// every node can serve whatever backends its company runs.
 //
 // MOUNTED AT [MCPPattern], a POST: a GET for the server-to-client stream and a
 // DELETE to end a session are answered the mux's own 405 naming POST before
@@ -180,13 +186,9 @@ func (s *Server) MCPHandler() http.Handler {
 			return
 		}
 		cat, up := s.catalogueFor()
-		switch {
-		case !up:
+		if !up {
 			httpjson.NoActiveRevision(w, httpjson.Detail{
 				"detail": httpjson.NativeHalvesNotUp})
-			return
-		case len(cat.tools) == 0:
-			httpjson.NoRoute(w, r)
 			return
 		}
 		srv := s.mcpServer(cat)
@@ -202,9 +204,9 @@ func (s *Server) MCPHandler() http.Handler {
 // is what one request may hold in memory. FOUR MEBIBYTES — the SDK's own
 // default, stated here rather than inherited, since it is a promise this
 // surface makes — because every catalogue call fits far below it: the largest
-// is a page's body, at most twice [pages.MaxBody] once escaped as a JSON
+// is a page's body, at most twice [doclet.MaxBody] once escaped as a JSON
 // string, which [MaxActBody] derives. The one argument it does bound is
 // `write_project_file`'s content, the whole file in one string; a file that
-// does not fit goes up through `PUT /work/files/{project}/{path...}`, which
+// does not fit goes up through `PUT /worklet/files/{project}/{path...}`, which
 // streams its body to the object store instead of holding it.
 const MCPMaxBody = 4 << 20

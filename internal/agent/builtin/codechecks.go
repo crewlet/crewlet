@@ -457,12 +457,12 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 		page := out
 		if from == 0 {
 			page.Summary, page.Tail = d.Summary, d.Tail
-			read.fence(fieldPath{}.key("summary"), provenance.SourceCheckLog, nil, false, d.Summary)
-			read.fence(fieldPath{}.key("tail"), provenance.SourceCheckLog, nil, false, d.Tail)
+			read.fenceRepository(fieldPath{}.key("summary"), provenance.SourceCheckLog, d.Summary)
+			read.fenceRepository(fieldPath{}.key("tail"), provenance.SourceCheckLog, d.Tail)
 		}
 		page.Failures = failures[:k]
 		for i, f := range page.Failures {
-			read.fence(fieldPath{}.key("failures").index(i).key("message"), provenance.SourceCheckLog, nil, false,
+			read.fenceRepository(fieldPath{}.key("failures").index(i).key("message"), provenance.SourceCheckLog,
 				f.Message)
 		}
 		if k < len(failures) {
@@ -529,7 +529,7 @@ func (t *codeGetCheckFailures) logPage(ctx context.Context, turn *turnctx.Turn, 
 		out.Log.Cursor = checkCursor{log: true, offset: next, key: d.CheckKey}.String()
 	}
 	read := newForeignRead(turn, c.asker.Seat)
-	read.fence(fieldPath{}.key("log").key("text"), provenance.SourceCheckLog, nil, false, text)
+	read.fenceRepository(fieldPath{}.key("log").key("text"), provenance.SourceCheckLog, text)
 	return read.page(ctx, tool, out, "")
 }
 
@@ -583,7 +583,7 @@ func (g changeRead) checks(ctx context.Context, cursor string) (tools.Result, er
 			page.Checks = append(page.Checks, codeChangeCheck{Name: r.Name, Attempt: r.Attempt, State: r.State,
 				Reason: r.Reason, Required: r.Required, Placement: r.Placement, Reporter: r.Reporter, URL: r.URL,
 				DurationMs: r.DurationMs, Summary: r.Summary})
-			read.fence(fieldPath{}.key("checks").index(i).key("summary"), provenance.SourceCheckLog, nil, false,
+			read.fenceRepository(fieldPath{}.key("checks").index(i).key("summary"), provenance.SourceCheckLog,
 				r.Summary)
 		}
 		// A PAGE CUT WHOLE-ROW AT THE ANSWER resumes after the last line kept,

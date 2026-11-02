@@ -116,6 +116,8 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 		// of its own, and building a fresh check here would close on a
 		// different epoch than the turn that spawned it.
 		Fence: r.cfg.Fence,
+		// The same host the parent's tools are served from.
+		Sessions: r.cfg.Sessions,
 		// Read ONCE, here, rather than per child: the fraction has to be
 		// one number for a whole batch, or later children get a share of
 		// a total their siblings have already spent from.
@@ -123,6 +125,9 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 		Limits:          r.cfg.Subagent.Limits,
 		Publisher:       r.cfg.Publisher,
 		Trace:           r.cfg.Turn.Trace,
+		// The executor's surface is its run's, and every call the run
+		// makes is recorded on the run's one round — see [runRound].
+		Round: runRound,
 		// The parent turn, so every seat-scoped tool in the grant works.
 		// Without it a child is handed tools that always fail.
 		Turn: m.turn,
@@ -135,8 +140,9 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 		// list, and the child's does not exist until subagent builds it.
 		Workers: r.cfg.Subagent.Workers,
 		Guard: func(child *tools.Surface) tools.Guard {
-			return r.guardFor(phase.Subagent, child, nil).tools()
+			return r.guardFor(phase.Subagent, round, child, nil).tools()
 		},
+		Counter: r.counter(),
 		Telemetry: func(ctx context.Context, res subagent.Result) {
 			emit.subagentCompleted(ctx, res)
 			emit.skillsInjected(ctx, phase.Subagent, offer.Drain())
@@ -194,4 +200,13 @@ func (r *Runner) parentRemaining(ctx context.Context) (int, bool) {
 		return 0, false
 	}
 	return remaining, true
+}
+
+// counter is the recorder a worker's surface counts into, or a nil interface
+// when the runner holds none (never a nil pointer inside one).
+func (r *Runner) counter() tools.Counter {
+	if r.cfg.Metrics == nil {
+		return nil
+	}
+	return r.cfg.Metrics
 }

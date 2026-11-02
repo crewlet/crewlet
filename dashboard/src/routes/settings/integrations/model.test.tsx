@@ -19,7 +19,7 @@ import type {
 } from "~/contract/integrations.ts";
 import type { SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import { CATALOG, FindingSubjects } from "./catalogue.tsx";
-import { deriveTool, workingLine, type Tool, type ToolInputs } from "./model.ts";
+import { deriveTool, type ToolInputs } from "./model.ts";
 import { IssueRow } from "./parts.tsx";
 
 afterEach(cleanup);
@@ -58,7 +58,7 @@ function inputs(over: Partial<ToolInputs>): ToolInputs {
     setup: new Map(),
     guarded: false,
     trafficKnown: true,
-    isSeat: () => false,
+    seatOf: () => undefined,
     avatarOf: () => null,
     ...over,
   };
@@ -204,7 +204,7 @@ test("a finding with an address at the app links there by the app's name", () =>
     }),
   );
   expect(tool.issues.map((i) => i.external)).toEqual([
-    { label: "Open Atlassian", href: "https://acme.atlassian.net/admin" },
+    { label: "Fix on Atlassian", href: "https://acme.atlassian.net/admin" },
     undefined,
   ]);
 });
@@ -220,7 +220,7 @@ test("an advisory is a note, and a finding this build does not know un-readies i
       inputs({
         rows: rowsOf({ key: "github", configured: true, reconcile: { phase: "ready", findings } }),
         setup: new Map([["github", listing("github", { seats: [seat] })]]),
-        isSeat: (h) => h === "cto",
+        seatOf: (h) => (h === "cto" ? { name: "CTO", kind: "agent" } : undefined),
       }),
     );
 
@@ -299,8 +299,10 @@ const issueTool = () =>
 
 // THE PROBLEM, WHAT IT IS ABOUT AND THE REMEDY ARE SEPARATE PARTS, never one
 // paragraph: measured as one line, a problem, a name, an instruction and a
-// disclosure summary ran together at one weight.
-test("an issue lays out its problem, subjects and remedy apart, with its fix", () => {
+// disclosure summary ran together at one weight. A WAIT ON A PERSON OFFERS NO
+// CONTROL HERE: "Create apps" was offered for every GitHub wait and opened the
+// settings form.
+test("an issue lays out its problem, subjects and remedy apart", () => {
   const tool = issueTool();
   const onFix = vi.fn();
   const { container } = render(<IssueRow tool={tool} issue={tool.issues[0]!} onFix={onFix} />);
@@ -314,14 +316,78 @@ test("an issue lays out its problem, subjects and remedy apart, with its fix", (
   ).toEqual(["sre-lead", "cs-lead", "swe", "pm"]);
   expect(screen.getByText("Create one per agent, GitHub offers no API for it.")).toBeTruthy();
   expect(screen.getByText("Waiting on you")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Create apps" }));
-  expect(onFix).toHaveBeenCalledWith("agents");
-  // AND HELD, with its reason, where the form behind it cannot open.
+  expect(screen.queryByRole("button")).toBeNull();
+});
+
+// A KEY THE VENDOR REFUSED IS FIXED HERE, by its one control; AND HELD, with
+// its reason, where the form behind it cannot open.
+test("an issue a control here answers offers it, and holds it where the form cannot open", () => {
+  const tool = deriveTool(
+    entry("gitlab"),
+    inputs({
+      rows: rowsOf({
+        key: "gitlab",
+        configured: true,
+        reconcile: {
+          phase: "unconfigured",
+          actor: "operator",
+          findings: [
+            {
+              kind: "credential_rejected",
+              subject: "integrations.gitlab.provisioning.admin_token",
+              detail: "GitLab refused the admin token",
+              phase: "unconfigured",
+            },
+          ],
+        },
+      }),
+      setup: new Map([["gitlab", listing("gitlab")]]),
+    }),
+  );
+  const onFix = vi.fn();
+  render(<IssueRow tool={tool} issue={tool.issues[0]!} onFix={onFix} />);
+  fireEvent.click(screen.getByRole("button", { name: "Replace key" }));
+  expect(onFix).toHaveBeenCalledWith("rotate");
   cleanup();
   const held = { ...tool, blocked: "Reading the setup state needs Admin." };
   render(<IssueRow tool={held} issue={tool.issues[0]!} onFix={onFix} />);
-  fireEvent.click(screen.getByRole("button", { name: "Create apps" }));
+  fireEvent.click(screen.getByRole("button", { name: "Replace key" }));
   expect(onFix).toHaveBeenCalledTimes(1);
+});
+
+// AN AGENT'S OWN WAIT IS ITS ROW'S: the engine marks it `seat`, so the issue
+// says so for the app's page to leave it there, and it offers no control of
+// its own, whatever the vendor.
+test("an agent's own wait is marked as its row's, with no control of its own", () => {
+  const tool = deriveTool(
+    entry("github"),
+    inputs({
+      rows: rowsOf({
+        key: "github",
+        configured: true,
+        reconcile: {
+          phase: "awaiting_admin",
+          actor: "admin",
+          findings: [
+            {
+              kind: "approval_required",
+              subject: "sre",
+              detail: "Add Pull requests to SRE's app permissions",
+              action_url:
+                "https://github.com/organizations/acme/settings/apps/acme-sre/permissions",
+              phase: "awaiting_admin",
+              seat: true,
+            },
+          ],
+        },
+      }),
+      setup: new Map([["github", listing("github")]]),
+    }),
+  );
+  expect(tool.issues).toHaveLength(1);
+  expect(tool.issues[0]!.seat).toBe(true);
+  expect(tool.issues[0]!.fix).toBeUndefined();
+  expect(tool.bucket).toBe("attention");
 });
 
 // A ROW IN A LIST ACROSS APPS SENDS THE READER TO THE APP rather than fixing
@@ -333,11 +399,67 @@ test("an issue listed across apps names its app and links to its page", () => {
       <IssueRow tool={tool} issue={tool.issues[0]!} showTool go="#/company/integrations/github" />
     </Router>,
   );
-  expect(screen.getByText("GitHub:")).toBeTruthy();
+  // THE APP ONCE, under the sentence and never in it: a lead of "GitHub: "
+  // ahead of a finding that named its lane read "GitHub: GitHub: ...".
+  expect(document.querySelector(".int-issue-meta")?.textContent?.trim()).toBe(
+    "Waiting on you·GitHub",
+  );
+  expect(document.querySelector(".int-issue-problem")?.textContent).toBe(
+    "4 agents have no GitHub App of their own.",
+  );
+  expect(document.querySelector(".int-issue-mark")).not.toBeNull();
   expect(screen.getByRole("link", { name: "Open GitHub" }).getAttribute("href")).toBe(
     "#/company/integrations/github",
   );
-  expect(screen.queryByRole("button", { name: "Create apps" })).toBeNull();
+  expect(screen.queryByRole("button")).toBeNull();
+});
+
+// THE AGENTS BY THE CHART'S NAMES, each linking to its page, and what the
+// chart does not have as the subject the engine named.
+test("an issue names its agents as the chart does, and keeps the rest as said", () => {
+  const tool = deriveTool(
+    entry("github"),
+    inputs({
+      rows: rowsOf({
+        key: "github",
+        configured: true,
+        reconcile: {
+          phase: "awaiting_admin",
+          actor: "admin",
+          findings: [
+            {
+              kind: "approval_required",
+              subjects: ["sre", "acme/infra"],
+              detail: "Add Pull requests to SRE's app permissions",
+              action_url:
+                "https://github.com/organizations/acme/settings/apps/acme-sre/permissions",
+              phase: "awaiting_admin",
+            },
+          ],
+        },
+      }),
+      seatOf: (h) =>
+        h === "sre" ? { name: "Site Reliability Engineer", kind: "agent" } : undefined,
+    }),
+  );
+  const issue = tool.issues[0]!;
+  expect(issue.agents).toEqual([
+    { handle: "sre", name: "Site Reliability Engineer", kind: "agent" },
+  ]);
+  render(
+    <Router>
+      <IssueRow tool={tool} issue={issue} showTool go="#/company/integrations/github" />
+    </Router>,
+  );
+  const agents = screen.getByRole("group", { name: "agents, 1" });
+  expect(within(agents).getByRole("link").getAttribute("href")).toBe("#/company/org/seats/sre");
+  expect(agents.textContent).toContain("Site Reliability Engineer");
+  const rest = screen.getByRole("list", { name: "what this is about, 1" });
+  expect(rest.textContent).toBe("acme/infra");
+  // THE BUTTON SAYS THE FIX, at the vendor where only the vendor takes it.
+  expect(screen.getByRole("link", { name: /Fix on GitHub/ }).getAttribute("href")).toBe(
+    "https://github.com/organizations/acme/settings/apps/acme-sre/permissions",
+  );
 });
 
 // A LONG LIST EXPANDS IN PLACE: the rest are folded for width rather than
@@ -356,21 +478,4 @@ test("one subject is shown, not hidden behind a count", () => {
   render(<FindingSubjects subjects={["sre-lead"]} />);
   expect(screen.getByText("sre-lead")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
-});
-
-// A WORKING TOOL'S LINE IS WHOLE SENTENCES: no trailing space when it counts
-// nothing, and no separator glyph between what it does count.
-test.each<[string, Tool["seats"], number | null, string]>([
-  ["counts nothing", [], null, "Working."],
-  ["one agent", [{ status: "ready" }] as Tool["seats"], null, "Working. 1 of 1 agent ready."],
-  [
-    "agents and deliveries",
-    [{ status: "ready" }, { status: "pending" }] as Tool["seats"],
-    14,
-    "Working. 1 of 2 agents ready, 14 deliveries.",
-  ],
-  ["one delivery", [], 1, "Working. 1 delivery."],
-  ["nothing delivered", [], 0, "Working. Nothing delivered yet."],
-])("a working tool's line: %s", (_, seats, delivered, want) => {
-  expect(workingLine({ seats, delivered })).toBe(want);
 });

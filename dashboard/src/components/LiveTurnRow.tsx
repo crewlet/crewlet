@@ -35,7 +35,7 @@
  * anybody else's would open on a lock.
  */
 
-import { StatusDot, Stepper, Tag, useMediaMatch } from "@crewlethq/ui";
+import { StatusDot, Stepper, Tag, useScreenBelow } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
@@ -102,7 +102,7 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   // profile's Current turn does: "Execute · round 1 of 24" left a 358px row no
   // room for Review, which wrapped onto a line of its own behind a dangling
   // connector.
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useScreenBelow(PHONE_BREAKPOINT);
   const { steps, current, detail } = turnSteps(row, { inLabel: !phone });
   const callLine = lastCallLine(row);
   const last = phone && detail ? [detail, callLine].filter(Boolean).join(" · ") : callLine;

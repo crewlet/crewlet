@@ -14,6 +14,64 @@
 // "the same configuration, resolved again", so it would silently rebuild
 // nothing on exactly the operation an operator performs to pick up a rotated
 // secret.
+//
+// # Three facts about a company's configuration
+//
+// What a node knows about its company is three facts, and each has one
+// writer. ADR-0057 is the record; this is the authority.
+//
+//   - The FLEET's revision is the pointer. It is the company: what every
+//     config read answers ("GET /config" and its ETag, the revision list's
+//     `is_active`, every write's base) whenever the pointer can be read, on
+//     every node alike, whatever that node runs. A config write is built on
+//     it and lands only while the pointer still names it
+//     ([coord.ActivationRequest.Expect]); a write that read no pointer lands
+//     only while there is none ([coord.ActivationRequest.ExpectAbsent]).
+//     Only `crewlet run -import-company` replaces it unconditionally, as a
+//     choice made at that node's clock. Each activation says whether it
+//     RESTORES a company the fleet lost or CHOOSES one
+//     ([coord.ActivationRequest.Restore]): a peer that remembers the fleet
+//     moving past a restored revision replaces it, and never a choice, since
+//     instants come from writers' clocks and a choice whose writer's clock ran
+//     behind reads older than it is.
+//   - The BOOT row is what this node starts on ([store.Configs.Boot]).
+//     Online, only the reconciler moves it, and only to the revision the
+//     engine has just APPLIED ([store.Configs.Serve]), so a node never boots
+//     on a revision it refused and never moves it out of pointer order.
+//     It keeps the instant of the activation it applied
+//     ([store.Revision.ServedAt]), which the chart is stamped with at the next
+//     boot, apart from the fleet's latest activation of the same revision.
+//     Offline, a command chooses it as an OFFER built on what the node knew
+//     the company to be ([store.Configs.Offer]) — and on an offer an earlier
+//     start sent and never confirmed, which the fleet may run
+//     ([store.Offer.Unconfirmed]) — and the next boot publishes the offer only
+//     over one of those, pinned to the very activation it read. No config
+//     answer is read from it. What each node boots on IS reported per node in
+//     the fleet view ([coord.NodeApply.Boots]), as a fact of its own rather
+//     than as the revision the node serves: moving this row is a local,
+//     best-effort write, so until a tick repairs one that failed — and every
+//     tick tries, converged or out of retries — the node runs a revision it
+//     would not restart on, and whoever keeps what that node needs in order
+//     to start has to read this one.
+//   - The FLEET'S ROW is the newest pointer revision this node's reconciler
+//     opened, runnable here or not ([store.Configs.SawFleet]). It is the
+//     company as this node knows it when the pointer is gone
+//     ([store.Configs.Restorable]): a node that refused R and runs P restores
+//     R, because every node that could run R does, and P would roll them back.
+//     Every row keeps the fleet's latest activation of its revision
+//     ([store.Revision.ActivatedAt]), the boot row included: a restore asks
+//     for it, and the retention sweep dates the row by it.
+//
+// They used to be one flag, and each reader took it for the fact it needed:
+// a peer that fetched a revision marked it as what it boots on before
+// validating it, and was refused at its next start; a write marked itself
+// local as the pointer moved, and a reconciler a moment behind walked it back;
+// an offline command marked a revision "now", and the next boot published it
+// over a fleet that had moved on.
+//
+// No reader writes. A GET answers the pointer's revision from this node's
+// history or, where it holds none yet, from the body the pointer carries
+// ([RevisionOf]), and the reconciler's next tick keeps the copy.
 package configplane
 
 import (

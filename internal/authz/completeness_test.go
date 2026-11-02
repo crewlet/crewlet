@@ -75,7 +75,7 @@ func TestEveryMountedPatternHasAPolicy(t *testing.T) {
 	mux := http.NewServeMux()
 	router := authz.NewRouter(mux, allow)
 	for _, pattern := range []string{
-		"GET /work/items", "PATCH /work/items/{key}", "GET /config",
+		"GET /worklet/items", "PATCH /worklet/items/{key}", "GET /config",
 	} {
 		if err := router.Handle(pattern, policyFor(pattern), ok200()); err != nil {
 			t.Fatalf("mount %s: %v", pattern, err)
@@ -113,10 +113,30 @@ func TestARouteWithNoPolicyIsRefusedAtTheMount(t *testing.T) {
 		policy  authz.Policy
 		want    string
 	}{
-		{"no action", "GET /work/items", authz.Policy{}, "names no action"},
-		{"a verb with no rule", "GET /work/items",
+		{"no action", "GET /worklet/items", authz.Policy{}, "names no action"},
+		{"a verb with no rule", "GET /worklet/items",
 			authz.Policy{Action: "invent_a_verb"}, "no rule for"},
 		{"no pattern", "", authz.Policy{Action: authz.ActionWorkList}, "needs a pattern"},
+		// WHAT AN EMPTY ADDRESS DOES is a PUT's alone, and says one thing.
+		{"an empty address on a read", "GET /worklet/items",
+			authz.Policy{Action: authz.ActionWorkList}.WhenAbsent(authz.CreatesWhenAbsent()),
+			"only a PUT's address has"},
+		{"an empty address that says nothing", "PUT /config/units/{id}",
+			authz.Policy{Action: authz.ActionOrgWrite}.WhenAbsent(&authz.Absent{}),
+			"or neither"},
+		{"an empty address that says both", "PUT /config/units/{id}",
+			authz.Policy{Action: authz.ActionOrgWrite}.WhenAbsent(
+				&authz.Absent{Creates: true, Elsewhere: "PUT /config"}),
+			"or neither"},
+		// WHAT A WRITE DOES is a POST's to say, since its method does not,
+		// and a route mounted here never calls a tool.
+		{"what a POST does on a PUT", "PUT /config/units/{id}",
+			authz.Policy{Action: authz.ActionOrgWrite}.Destroying(), "its method already says"},
+		{"a mounted POST that calls a tool", "POST /worklet/items",
+			authz.Policy{Action: authz.ActionWorkCreate, Effect: authz.EffectCalls},
+			"does not have"},
+		{"an effect this build does not know", "POST /worklet/items",
+			authz.Policy{Action: authz.ActionWorkCreate, Effect: "vanishes"}, "does not have"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -132,11 +152,11 @@ func TestARouteWithNoPolicyIsRefusedAtTheMount(t *testing.T) {
 	}
 	// AND THE SAME PATTERN TWICE, which ServeMux panics on at runtime and
 	// which is reported here instead, naming the pattern.
-	if err := router.Handle("GET /work/items",
+	if err := router.Handle("GET /worklet/items",
 		authz.Policy{Action: authz.ActionWorkList}, ok200()); err != nil {
 		t.Fatalf("the first mount failed: %v", err)
 	}
-	if err := router.Handle("GET /work/items",
+	if err := router.Handle("GET /worklet/items",
 		authz.Policy{Action: authz.ActionWorkList}, ok200()); err == nil {
 		t.Error("the same pattern mounted twice was accepted, so which handler " +
 			"runs is whichever ServeMux kept")
@@ -187,7 +207,7 @@ func TestEveryGrantIsAskedForBySomeVerb(t *testing.T) {
 // A REQUEST WHOSE CLEANED PATH DIFFERS FROM ITS RAW ONE IS REFUSED.
 //
 // A gate is worth exactly as much as the agreement between what it matched
-// and what a reader thinks it matched. `/work/items/../config` reaches
+// and what a reader thinks it matched. `/worklet/items/../config` reaches
 // ServeMux as one pattern and reads to a person as another.
 //
 // REFUSED, NOT REDIRECTED: ServeMux's own answer is a redirect, which every
@@ -210,7 +230,7 @@ func TestACleanedPathDifferingFromTheRawOneIsRefused(t *testing.T) {
 	t.Parallel()
 	mux := http.NewServeMux()
 	router := authz.NewRouter(mux, allow)
-	if err := router.Handle("GET /work/items",
+	if err := router.Handle("GET /worklet/items",
 		authz.Policy{Action: authz.ActionWorkList}, ok200()); err != nil {
 		t.Fatalf("mount: %v", err)
 	}
@@ -219,14 +239,14 @@ func TestACleanedPathDifferingFromTheRawOneIsRefused(t *testing.T) {
 		path string
 		want int
 	}{
-		{"/work/items", http.StatusOK},
-		{"/work/items/../work/items", http.StatusBadRequest},
-		{"/work//items", http.StatusBadRequest},
-		{"/./work/items", http.StatusBadRequest},
+		{"/worklet/items", http.StatusOK},
+		{"/worklet/items/../worklet/items", http.StatusBadRequest},
+		{"/worklet//items", http.StatusBadRequest},
+		{"/./worklet/items", http.StatusBadRequest},
 		// ENCODED, so the escaped path is already clean and only the
 		// decoded one — which the outer middleware reads and ServeMux
 		// does not redirect — is not.
-		{"/work/items/%2e%2e/work/items", http.StatusBadRequest},
+		{"/worklet/items/%2e%2e/worklet/items", http.StatusBadRequest},
 	} {
 		t.Run(c.path, func(t *testing.T) {
 			t.Parallel()
@@ -269,13 +289,13 @@ func TestAnUndecidableRequestIsNotAForbiddenOne(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			mux := http.NewServeMux()
-			if err := authz.NewRouter(mux, c.guard).Handle("GET /work/items",
+			if err := authz.NewRouter(mux, c.guard).Handle("GET /worklet/items",
 				authz.Policy{Action: authz.ActionWorkList}, ok200()); err != nil {
 				t.Fatalf("mount: %v", err)
 			}
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, httptest.NewRequest(
-				http.MethodGet, "http://x/work/items", nil))
+				http.MethodGet, "http://x/worklet/items", nil))
 			if rec.Code != c.want {
 				t.Errorf("answered %d, want %d", rec.Code, c.want)
 			}
@@ -295,7 +315,7 @@ func TestAnUndecidableRequestIsNotAForbiddenOne(t *testing.T) {
 // undecidable arm.
 func TestTheRoutersOwnRefusalIsTheEnvelope(t *testing.T) {
 	t.Parallel()
-	refused := authz.Decide(t.Context(), grantedOnly(iam.GrantTracker),
+	refused := authz.Decide(t.Context(), grantedOnly(iam.GrantWorklet),
 		authz.ActionConfigWrite, authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
 	if refused.Allowed || refused.Unknown() {
 		t.Fatalf("the fixture decision was %+v, want a plain refusal", refused)
@@ -324,7 +344,13 @@ func TestTheRoutersOwnRefusalIsTheEnvelope(t *testing.T) {
 				t.Fatalf("answered %d, want %d", rec.Code, c.status)
 			}
 			body := envelope(t, rec)
-			if body["error"] != string(c.code) || body["message"] != c.code.Message() {
+			// THE SENTENCE FOR THIS REFUSAL, which for `unauthorized` is
+			// the one its reason chooses — built the way the envelope
+			// builds it rather than typed here.
+			_, _, detail := authz.RefusalFields(c.d)
+			sentence := httpjson.Envelope(c.code, detail)["message"]
+			if body["error"] != string(c.code) || body["message"] != sentence ||
+				sentence == "" {
 				t.Errorf("answered %v, want %s with its sentence", body, c.code)
 			}
 			if c.status == http.StatusServiceUnavailable {
@@ -398,13 +424,13 @@ func TestARefusalRendererRendersOnlyWhatTheRouterRefused(t *testing.T) {
 					}
 					w.WriteHeader(http.StatusTeapot)
 				})
-			if err := router.Handle("GET /work/items",
+			if err := router.Handle("GET /worklet/items",
 				authz.Policy{Action: authz.ActionWorkList}, ok200()); err != nil {
 				t.Fatalf("mount: %v", err)
 			}
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, httptest.NewRequest(
-				http.MethodGet, "http://x/work/items", nil))
+				http.MethodGet, "http://x/worklet/items", nil))
 			switch {
 			case c.rendered && (seen == nil || rec.Code != http.StatusTeapot):
 				t.Errorf("a refusal answered %d without the surface's renderer",
@@ -443,7 +469,10 @@ func policyFor(pattern string) authz.Policy {
 
 // grantedOnly is an active person carrying exactly one permission.
 func grantedOnly(g iam.Grant) iam.Principal {
+	// BOUND TO A SEAT, as every person is (ADR-0032), so a verb made as one
+	// is asked of its permission rather than refused before it.
 	p := person("jane.doe", g)
+	p.Seat = "jane"
 	return p
 }
 
@@ -463,7 +492,7 @@ func TestTheContextGuardDecidesAnUnresolvedCallerAsUnknown(t *testing.T) {
 			return authz.Object{Kind: authz.KindPerson, Owner: "jane.doe"}
 		}}
 	request := func(ctx func(*http.Request) *http.Request) *http.Request {
-		return ctx(httptest.NewRequest(http.MethodPut, "http://x/work/people/jane.doe/inbox", nil))
+		return ctx(httptest.NewRequest(http.MethodPut, "http://x/worklet/people/jane.doe/inbox", nil))
 	}
 
 	unknown := guard(request(func(r *http.Request) *http.Request {
@@ -482,7 +511,7 @@ func TestTheContextGuardDecidesAnUnresolvedCallerAsUnknown(t *testing.T) {
 
 	self := guard(request(func(r *http.Request) *http.Request {
 		return r.WithContext(iam.WithPrincipal(r.Context(),
-			person("jane.doe", iam.GrantTracker)))
+			person("jane.doe", iam.GrantWorklet)))
 	}), policy)
 	if !self.Allowed || self.Reason != authz.ReasonSelf {
 		t.Errorf("the owner of the record decided %+v, want admitted as self", self)

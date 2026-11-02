@@ -13,9 +13,10 @@ import (
 
 // leafSet is everything this package may import beyond the standard library.
 //
-// THREE ENTRIES, and each is argued where the package doc argues the leaf:
+// FOUR ENTRIES, and each is argued where the package doc argues the leaf:
 // the uuid an id is, the identity vocabulary a share's grantor and an
-// authority's actor are written in, and the object a manifest entry names.
+// authority's actor are written in, the object a manifest entry names, and
+// the words a refusal says a set in (a leaf over the standard library).
 // None of them opens a store, dials a broker or reads a clock, which is the
 // property that lets internal/authz and internal/config name an artifact.
 //
@@ -26,6 +27,7 @@ var leafSet = []string{
 	"github.com/google/uuid",
 	"github.com/crewlet/crewlet/internal/iam",
 	"github.com/crewlet/crewlet/internal/objstore",
+	"github.com/crewlet/crewlet/internal/words",
 }
 
 // importsOf is every import of every .go file in this directory whose name

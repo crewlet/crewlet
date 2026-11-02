@@ -635,7 +635,7 @@ func TestRecreatingTheWebhookMintsAFreshSecret(t *testing.T) {
 	_, err := run(t, inst, func(opts *jira.Options) {
 		opts.Sink = sink
 		opts.WebhookBase = "https://engine.example.com"
-		opts.RecreateWebhook = true
+		opts.RecreateWebhook = "-recreate-webhook"
 		opts.Value = func(v string) string {
 			if v == "${JIRA_WEBHOOK_SECRET}" {
 				return "the-live-secret"

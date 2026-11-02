@@ -2,8 +2,8 @@
   {
     "name": "tracker.items",
     "domain": "tracker",
-    "summary": "Work items from the tracker, one row each. `scope` narrows them to the viewer's own (`mine`), the viewer's queue, their priorities, the unassigned triage list, the blocked or the overdue work, each resolved for whoever is viewing.",
-    "access": "people and agents holding the tracker; anybody else is told they cannot read it",
+    "summary": "Work items from Worklet, one row each. `scope` narrows them to the viewer's own (`mine`), the viewer's queue, their priorities, the unassigned triage list, the blocked or the overdue work, each resolved for whoever is viewing.",
+    "access": "people and agents holding Worklet; anybody else is told they cannot read it",
     "params": [
       {
         "key": "scope",
@@ -118,7 +118,7 @@
     "name": "tracker.workload",
     "domain": "tracker",
     "summary": "Open work per assignee across every project: how much each person or agent is carrying.",
-    "access": "people and agents holding the tracker; anybody else is told they cannot read it",
+    "access": "people and agents holding Worklet; anybody else is told they cannot read it",
     "params": [
       {
         "key": "unit",

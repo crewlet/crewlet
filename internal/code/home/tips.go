@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// tip is one protected target's TIP WORK (ADR-0068; internal/code's
+// tip is one protected target's TIP WORK (ADR-0091; internal/code's
 // tipwork.go), decided from the one snapshot t was read in — the landings
 // above the target's green, oldest first, each with the latest attempt of
 // each required check on its commit — in this order:

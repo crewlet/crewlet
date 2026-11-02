@@ -12,9 +12,12 @@
 
 import { toggleStar } from "~/lib/starred.ts";
 import { noteReader } from "~/lib/reader.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { setRailShape } from "./sidebar/railShape.ts";
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
+import { useFillScreen } from "./fill.tsx";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
@@ -27,7 +30,9 @@ import { Home } from "~/routes/home/Home.tsx";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { installWindow } from "~/testing.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "./frame/PageActions.tsx";
-import { Project } from "~/routes/work/Project.tsx";
+import { Project } from "~/routes/worklet/Project.tsx";
+import { ReadCursors, packPosition } from "~/routes/chatlet/cursor.ts";
+import { LoneRoom } from "~/routes/chatlet/testkit.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { withDerived } from "~/test/org.ts";
@@ -77,13 +82,14 @@ const INCOMPLETE: CoverageFacts = {
 
 // EVERY CHUNK THE FRAME DRAWS FROM IS IN BEFORE A CASE STARTS, as in
 // `App.test.tsx`. The frame draws lazy parts of its own — the New task sheet
-// (the Work chunk's), the palette (a chunk of its own), and each peek out of
-// its workspace's chunk — and what these cases assert is what the frame draws
-// and asks, not how long a cold `import()` takes under a test transformer,
-// which a `waitFor` would otherwise be measuring. Loading the Work chunk alone
-// left a peek of another workspace to suspend inside an act the case never
-// awaited, which React says in the console. The loading path is
-// `lazy.test.tsx`'s.
+// (the Worklet chunk's), the palette (a chunk of its own), and each peek out
+// of its workspace's chunk — and what these cases assert is what the frame
+// draws and asks, not how long a cold `import()` takes under a test
+// transformer, which a `waitFor` would otherwise be measuring. Loading the
+// Worklet chunk alone left a peek of another workspace to suspend inside an
+// act the case never awaited, which React says in the console, and left the
+// palette in only for the cases after the first that opened it, so a case run
+// alone found no dialog. The loading path is `lazy.test.tsx`'s.
 beforeAll(async () => {
   await Promise.all(CHUNKS.map((chunk) => loadChunk(chunk)));
 });
@@ -250,7 +256,7 @@ function answering(
       return Promise.resolve(
         answers.viewer ?? {
           login: "U0FOUNDER",
-          grants: ["admin", "tracker", "knowledge"],
+          grants: ["admin", "worklet", "doclet"],
           handle: "ada",
           owner: "ada",
           name: "Ada Lovelace",
@@ -649,7 +655,7 @@ describe("the sidebar's figures", () => {
     // A PIN RUNS THE VIEW: the list with the view's key as `view=`, not the
     // inventory page that describes the view and offers to run it.
     const pin = screen.getByRole("link", { name: /^Blocked, org-wide/ });
-    expect(pin.getAttribute("href")).toBe("#/work/tasks?view=blocked");
+    expect(pin.getAttribute("href")).toBe("#/worklet/tasks?view=blocked");
     expect(pin.textContent).toContain("7");
     expect(screen.queryByText("Not pinned")).toBeNull();
   });
@@ -659,7 +665,7 @@ describe("the sidebar's figures", () => {
   // `work_saved_views` row for it — the only read that can return a project
   // view at all, since the workspace strip holds none.
   test("a pinned project view runs on its project, and is current while it runs", async () => {
-    location.hash = "#/work/ENG?view=mine";
+    location.hash = "#/worklet/ENG?view=mine";
     const { store, socket } = answering({
       work_saved_views: {
         complete: true,
@@ -680,7 +686,7 @@ describe("the sidebar's figures", () => {
     await settle();
     // THE PROJECT IS ITS LEAD, so two pins of one name in two projects differ.
     const pin = screen.getByRole("link", { name: /^ENG\s*My ENG bugs/ });
-    expect(pin.getAttribute("href")).toBe("#/work/ENG?view=mine");
+    expect(pin.getAttribute("href")).toBe("#/worklet/ENG?view=mine");
     expect(pin.getAttribute("aria-current")).toBe("page");
   });
 
@@ -712,6 +718,12 @@ describe("the sidebar's figures", () => {
     expect(asked.some((a) => a.what === "work_my_work")).toBe(false);
     const row = screen.getByRole("link", { name: /^My work/ });
     expect(row.textContent).toContain("3 open, assigned to you");
+    // THE INBOX'S PILL, not the quiet count: the work waits on the viewer.
+    // In the QUIET tone, because nobody asked: the accent is the Inbox's.
+    // Mutation: drop the tone and the class check goes red.
+    const badge = row.querySelector(".crewlet-nav-item__badge");
+    expect(badge?.textContent).toContain("3");
+    expect(badge?.classList.contains("crewlet-nav-item__badge--quiet")).toBe(true);
   });
 
   test("a count that stopped at the engine's ceiling is drawn as a floor", async () => {
@@ -794,7 +806,7 @@ describe("the sidebar's figures", () => {
   // A PROJECT IS NOT A SIDEBAR ROW: it is a scope of Work, switched where
   // Work's trail names it, so the rail carries no group of them.
   test("the sidebar draws no Projects group", async () => {
-    location.hash = "#/work/ENG";
+    location.hash = "#/worklet/ENG";
     const eng = {
       key: "ENG",
       name: "Core platform",
@@ -810,7 +822,7 @@ describe("the sidebar's figures", () => {
     await settle();
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     expect(within(nav).queryByText("Projects")).toBeNull();
-    expect(nav.querySelector('a[href="#/work/ENG"]')).toBeNull();
+    expect(nav.querySelector('a[href="#/worklet/ENG"]')).toBeNull();
     expect(within(nav).queryByRole("button", { name: /^New task in/ })).toBeNull();
   });
 
@@ -892,7 +904,7 @@ describe("the page header", () => {
   // ON AN OBJECT PAGE the crumbs are the way back; a strip of tabs over a
   // task would say it is a fourth kind of list.
   test("no section tabs are drawn on an object's own page", async () => {
-    location.hash = "#/work/ENG-42";
+    location.hash = "#/worklet/ENG-42";
     const { store, socket } = answering({});
     mountShell(store, socket);
     expect(document.querySelector(".section-tabs")).toBeNull();
@@ -938,13 +950,13 @@ describe("the page header", () => {
   });
 
   // ONE KEY FOR A GROUP THE READER HOLDS NONE OF, on the group's label, the
-  // sidebar's rule too: a Tracker-only reader met a key on 13 of 15 rows. A
+  // sidebar's rule too: a Worklet-only reader met a key on 13 of 15 rows. A
   // group with an open row keeps the key on each locked row, and every locked
   // row still says why, as its title and after its name.
   test("a Settings group the reader holds none of draws its key once, on its label", async () => {
     location.hash = "#/settings/spend";
     const { store, socket } = answering({
-      viewer: { login: "t", grants: ["tracker"], handle: "", owner: "t", name: "", kind: "" },
+      viewer: { login: "t", grants: ["worklet"], handle: "", owner: "t", name: "", kind: "" },
     });
     mountShell(store, socket);
     await settle();
@@ -1018,7 +1030,7 @@ describe("the page header", () => {
   // operator questions on a timer behind every screen of every tab.
   const OPERATOR_ANSWERS = ["fleet", "retention"];
   test("the operator answers are asked only while the Settings column is drawn", async () => {
-    for (const where of ["#/home", "#/work", "#/company/budgets", "#/knowledge"]) {
+    for (const where of ["#/home", "#/worklet", "#/company/budgets", "#/doclet"]) {
       location.hash = where;
       const asked: { what: string }[] = [];
       const { store, socket } = answering({}, asked);
@@ -1059,7 +1071,7 @@ describe("the page header", () => {
   test("a Settings row the reader cannot open draws no figure", async () => {
     location.hash = "#/settings/spend";
     const { store, socket } = answering({
-      viewer: { login: "lee", grants: ["tracker"], handle: "", owner: "lee", name: "", kind: "" },
+      viewer: { login: "lee", grants: ["worklet"], handle: "", owner: "lee", name: "", kind: "" },
     });
     mountShell(store, socket);
     act(() => store.applyHealth(healthFrame({ applied_epoch: 2, nodes: 1 })));
@@ -1094,7 +1106,16 @@ describe("the page header", () => {
   test("while a screen publishes the fleet answer the column draws it and asks none", async () => {
     const answer: FleetAnswer = {
       nodes: [
-        { id: "n1", roles: [], broker: "member", seats: 1, config_epoch: 3 },
+        {
+          id: "n1",
+          roles: [],
+          broker: "member",
+          seats: 1,
+          config_epoch: 3,
+          config_status: "ok",
+          config_revision_id: "r3",
+          config_serving_revision_id: "r3",
+        },
         { id: "n2", roles: [], broker: "member", seats: 1, config_epoch: 2 },
       ],
       seats: [],
@@ -1103,6 +1124,7 @@ describe("the page header", () => {
       unmanned_roles: [],
       this_node: "n1",
       target_epoch: 3,
+      activation: { epoch: 3, revision_id: "r3", at: "", summary: "" },
     };
     function Publishing() {
       usePublishFleet(answer);
@@ -1148,7 +1170,7 @@ describe("what the frame holds open", () => {
     ).not.toBeNull();
 
     await act(async () => {
-      location.hash = "#/work";
+      location.hash = "#/worklet";
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
     expect(
@@ -1235,12 +1257,12 @@ test("the engine panel asks the alarms' names only of a reader the report's sect
   }
 });
 
-// A PROJECT'S LENSES ARE BESIDE ITS NAME, on the bar: `Work › ENG Core ·
+// A PROJECT'S LENSES ARE BESIDE ITS NAME, on the bar: `Worklet › ENG Core ·
 // Tasks | About | History | Files`. As a row of their own under it they cost the
 // first screenful a line the approved Board does not spend. And the row on
 // the bar still controls the region in the page, by id.
 test("an object's lenses sit on the page bar beside the breadcrumb and control the page", async () => {
-  location.hash = "#/work/ENG?lens=about";
+  location.hash = "#/worklet/ENG?lens=about";
   const eng = {
     key: "ENG",
     name: "Core platform",
@@ -1269,7 +1291,7 @@ test("an object's lenses sit on the page bar beside the breadcrumb and control t
   expect(panel?.closest("main")).toBeTruthy();
   // AND A PAGE WITH NO LENSES LEAVES THE SLOT EMPTY, which draws nothing.
   cleanup();
-  location.hash = "#/work/views";
+  location.hash = "#/worklet/views";
   const bare = answering({});
   mountShell(bare.store, bare.socket);
   expect(document.getElementById(PAGE_LENSES_SLOT)?.childElementCount).toBe(0);
@@ -1284,9 +1306,12 @@ test("the page header's controls slot spaces a screen's controls at the kit's co
   const slot = document.getElementById(PAGE_ACTIONS_SLOT);
   expect(slot?.classList.contains("gap-2")).toBe(true);
   expect(slot?.classList.contains("gap-1")).toBe(false);
-  // AND THEY END THE BAR: a screen's primary action is the last control, after
-  // the frame's star and link, as the approved designs order it.
-  expect(slot?.parentElement?.lastElementChild).toBe(slot);
+  // AND THEY END THE SCREEN'S PART OF THE BAR: a screen's primary action is
+  // its last control, after the frame's star and link, and the only thing
+  // after it is the Ask button that opens the assistant above its panel (D1).
+  const trigger = document.getElementById("assistant-trigger");
+  expect(trigger).not.toBeNull();
+  expect(slot?.nextElementSibling?.contains(trigger)).toBe(true);
 });
 
 // WHERE THE PEEK IS A COLUMN IS A WIDTH PER FRAME, not one per window.
@@ -1314,15 +1339,22 @@ describe("where the peek is a column", () => {
     setDensity("normal");
   });
 
+  /** What the rail keeps for the list beside a column, as the shell handed it. */
+  function reserve(): string {
+    const rail = document.querySelector<HTMLElement>(".crewlet-peek-rail");
+    expect(rail, "the peek drew no rail").not.toBeNull();
+    return rail!.style.getPropertyValue("--crewlet-peek-rail-reserve");
+  }
+
   test("beside a screen, from the width that leaves its list the floor", async () => {
-    const { win, app } = await peekAt("#/work?peek=seat:ceo", 1159);
+    const { win, app } = await peekAt("#/worklet?peek=seat:ceo", 1159);
     try {
       expect(win.asked).toContain("(width >= 1160px)");
       expect(app.getAttribute("data-peek")).toBe("drawer");
       win.set(1160);
       expect(app.getAttribute("data-peek")).toBe("column");
-      // The track's cap: the gutter, the padding and the list's floor.
-      expect(app.style.getPropertyValue("--peek-reserve")).toBe("494px");
+      // The column's cap: the gutter, the padding and the list's floor.
+      expect(reserve()).toBe("494px");
     } finally {
       win.restore();
     }
@@ -1337,7 +1369,7 @@ describe("where the peek is a column", () => {
       expect(app.getAttribute("data-peek")).toBe("drawer");
       win.set(1396);
       expect(app.getAttribute("data-peek")).toBe("column");
-      expect(app.style.getPropertyValue("--peek-reserve")).toBe("730px");
+      expect(reserve()).toBe("730px");
     } finally {
       win.restore();
     }
@@ -1347,7 +1379,7 @@ describe("where the peek is a column", () => {
   // can read — so the width asked moves with the reader's choice.
   test("at the reader's density", async () => {
     setDensity("comfortable");
-    const { win, app } = await peekAt("#/work?peek=seat:ceo", 1167);
+    const { win, app } = await peekAt("#/worklet?peek=seat:ceo", 1167);
     try {
       expect(win.asked).toContain("(width >= 1168px)");
       expect(app.getAttribute("data-peek")).toBe("drawer");
@@ -1361,7 +1393,7 @@ describe("where the peek is a column", () => {
   // A PHONE IS ONE PANE: the widest phone is a drawer for a peek, as every
   // window under the column's width is, and the sidebar is its drawer too.
   test("on a phone a peek is a drawer, and so is the sidebar", async () => {
-    const { win, app } = await peekAt("#/work?peek=seat:ceo", 639);
+    const { win, app } = await peekAt("#/worklet?peek=seat:ceo", 639);
     try {
       expect(app.getAttribute("data-peek")).toBe("drawer");
       const sidebar = document.querySelector(".crewlet-app-shell__rail");
@@ -1376,34 +1408,52 @@ describe("where the peek is a column", () => {
   });
 
   test("with no peek open, the sheet is one column at every width", async () => {
-    const { win, app } = await peekAt("#/work", 1600);
+    const { win, app } = await peekAt("#/worklet", 1600);
     try {
       expect(app.hasAttribute("data-peek")).toBe(false);
-      expect(app.style.getPropertyValue("--peek-reserve")).toBe("");
+      expect(document.querySelector(".crewlet-peek-rail")).toBeNull();
     } finally {
       win.restore();
     }
   });
 });
 
-// BELOW THE SHELL BREAKPOINT THE SIDEBAR IS A DRAWER, and the keyboard reaches
-// it: Mod+\ opens it, and above the breakpoint — where the sidebar is always
-// on screen — the chord does nothing at all.
-describe("the drawer's key", () => {
+// THE SIDEBAR'S KEY AND ITS TWO SHAPES. Where the sidebar stands beside the
+// page, Mod+\ and the kit's fold control fold it to the compact rail and back,
+// and the reader's choice is kept for them. Below the shell breakpoint the
+// sidebar is a drawer, which is always the full list, and the key opens it.
+describe("the sidebar's key and shape", () => {
   function press(): void {
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "\\", ctrlKey: true }));
     });
   }
 
+  async function mountAt(width: number) {
+    const win = installWindow(width);
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    return win;
+  }
+
+  const shape = () =>
+    document.querySelector(".crewlet-app-shell")?.getAttribute("data-rail") ?? "full";
+  const kept = (reader: string) => localStorage.getItem(`${STORAGE_KEYS.railShape}${reader}`);
+
+  afterEach(() => {
+    // The store is the tab's; a case that folded it hands the next one the
+    // full sidebar it starts from.
+    setRailShape("full");
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
   // AT THE BREAKPOINT'S OWN EDGE, both sides: 1023 is the widest drawer and
-  // 1024 the narrowest window the sidebar is always on screen in.
+  // 1024 the narrowest window the sidebar stands beside the page in.
   test("Mod+\\ opens the sidebar's drawer below the shell breakpoint", async () => {
-    const win = installWindow(1023);
+    const win = await mountAt(1023);
     try {
-      const { store, socket } = answering({});
-      mountShell(store, socket);
-      await settle();
       const sidebar = document.querySelector(".crewlet-app-shell__rail");
       expect(sidebar?.getAttribute("data-open")).not.toBe("true");
       press();
@@ -1413,19 +1463,192 @@ describe("the drawer's key", () => {
     }
   });
 
-  test("and does nothing where the sidebar is already on screen", async () => {
-    const win = installWindow(1024);
+  test("and folds the sidebar where it stands beside the page, and unfolds it again", async () => {
+    const win = await mountAt(1024);
     try {
-      const { store, socket } = answering({});
-      mountShell(store, socket);
-      await settle();
+      expect(shape()).toBe("full");
+      expect(screen.getByRole("link", { name: /^Principles/ })).toBeDefined();
       press();
+      expect(shape()).toBe("compact");
       expect(
         document.querySelector(".crewlet-app-shell__rail")?.getAttribute("data-open"),
       ).not.toBe("true");
+      // FOLDED, the Company group is one tile and its places wait in its flyout.
+      expect(screen.getByRole("button", { name: /^Company/ })).toBeDefined();
+      expect(screen.queryByRole("link", { name: /^Principles/ })).toBeNull();
+      press();
+      expect(shape()).toBe("full");
+      expect(screen.getByRole("link", { name: /^Principles/ })).toBeDefined();
     } finally {
       win.restore();
     }
+  });
+
+  test("the fold control folds it too, and the reader's choice is theirs to keep", async () => {
+    noteReader("p-1");
+    const win = await mountAt(1280);
+    try {
+      act(() => screen.getByRole("button", { name: "Collapse the sidebar" }).click());
+      expect(shape()).toBe("compact");
+      expect(kept("p-1")).toBe(JSON.stringify("compact"));
+      // THE SAME CONTROL, in the same place, unfolds it.
+      expect(screen.getByRole("button", { name: "Expand the sidebar" })).toBeDefined();
+
+      // A RELOAD comes back folded.
+      cleanup();
+      const { store, socket } = answering({});
+      mountShell(store, socket);
+      await settle();
+      expect(shape()).toBe("compact");
+
+      // AND SOMEBODY ELSE AT THIS BROWSER starts from the full sidebar.
+      act(() => noteReader("p-2"));
+      expect(shape()).toBe("full");
+      expect(kept("p-1")).toBe(JSON.stringify("compact"));
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("the drawer is the full list whatever the reader chose, and the choice is kept", async () => {
+    noteReader("p-1");
+    setRailShape("compact");
+    const win = await mountAt(1023);
+    try {
+      expect(shape()).toBe("full");
+      press();
+      expect(document.querySelector(".crewlet-app-shell__rail")?.getAttribute("data-open")).toBe(
+        "true",
+      );
+      expect(screen.getByRole("link", { name: /^Principles/ })).toBeDefined();
+      expect(kept("p-1")).toBe(JSON.stringify("compact"));
+      // Widened, the sidebar is folded again, as the reader left it.
+      win.set(1024);
+      expect(shape()).toBe("compact");
+    } finally {
+      win.restore();
+    }
+  });
+});
+
+// FOLDED, THE SIDEBAR IS THE SAME PLACES: Search, the places about you, one
+// tile per named group whose flyout lists its places, and Settings and the
+// reader's face under the foot's rule.
+describe("the compact sidebar", () => {
+  async function folded(hash = "#/") {
+    setRailShape("compact");
+    location.hash = hash;
+    const win = installWindow(1280);
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    return win;
+  }
+
+  afterEach(() => {
+    setRailShape("full");
+  });
+
+  test("lists the places about you, each a link to where its row goes", async () => {
+    const win = await folded();
+    try {
+      const nav = screen.getByRole("navigation", { name: "Navigation" });
+      for (const name of ["Home", "Inbox", "My work"]) {
+        expect(within(nav).getByRole("link", { name: new RegExp(`^${name}`) })).toBeDefined();
+      }
+      expect(within(nav).getByRole("link", { name: /^Home/ }).getAttribute("href")).toBe("#/home");
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("folds a named group into one tile whose flyout lists its places", async () => {
+    const win = await folded("#/live");
+    try {
+      const tile = screen.getByRole("button", { name: /^Workspace/ });
+      act(() => tile.click());
+      const flyout = await screen.findByRole("menu", { name: "Workspace" });
+      const live = within(flyout).getByRole("menuitem", { name: /^Live/ });
+      expect(live.getAttribute("href")).toBe("#/live");
+      // THE PAGE ON SCREEN IS ONE OF ITS PLACES, and the flyout says which.
+      expect(live.getAttribute("aria-current")).toBe("page");
+      for (const name of ["Worklet", "Chatlet", "Doclet", "Artifacts"]) {
+        expect(
+          within(flyout).getByRole("menuitem", { name: new RegExp(`^${name}`) }),
+        ).toBeDefined();
+      }
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("Search opens the palette the full sidebar's field opens", async () => {
+    const win = await folded();
+    try {
+      act(() => screen.getByRole("button", { name: /^Search/ }).click());
+      expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
+    } finally {
+      win.restore();
+    }
+  });
+
+  // THE ENGINE'S STATUS STANDS UNDER THE MARK, out of the foot, so its panel
+  // opens below it as it does in the full sidebar; and the reader's face is
+  // at the compact tiles' small step, on their line. Mutation: draw the face
+  // at the medium step, or put the status back in the foot, and this fails.
+  test("stands the engine's status under the mark and the face at the tiles' step", async () => {
+    const win = await folded();
+    try {
+      const status = document.querySelector(".crewlet-app-shell__rail-status");
+      expect(status, "the engine's status is drawn").not.toBeNull();
+      expect(status?.closest(".crewlet-app-shell__rail-foot")).toBeNull();
+      const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
+      const face = foot.querySelector(".crewlet-account-row .crewlet-avatar");
+      expect(face?.classList.contains("crewlet-avatar--sm")).toBe(true);
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("keeps Settings in the foot, and the face's menu opens the preferences", async () => {
+    const win = await folded();
+    try {
+      expect(screen.getByRole("link", { name: /^Settings/ }).getAttribute("href")).toBe(
+        "#/settings/models",
+      );
+      act(() => screen.getByRole("button", { name: /, your menu$/ }).click());
+      act(() => screen.getByRole("menuitem", { name: /^Preferences/ }).click());
+      const dialog = await screen.findByRole("dialog", { name: "Preferences" });
+      expect(within(dialog).getByRole("radiogroup", { name: "Mode" })).toBeDefined();
+    } finally {
+      win.restore();
+    }
+  });
+});
+
+// A SCREEN ASKS FOR THE HEIGHT, and Chatlet for it flush to the sheet's
+// edges: the shell hands the kit what was asked, and gives the scroller back
+// when the screen goes.
+describe("the height a screen asks for", () => {
+  function Filling({ flush }: { flush?: boolean }) {
+    useFillScreen(true, { flush });
+    return <div>the filling screen</div>;
+  }
+
+  const root = () => document.querySelector(".crewlet-app-shell")!;
+
+  test("is the remaining height inside the page's inset", () => {
+    frame(<Filling />);
+    expect(root().classList.contains("crewlet-app-shell--fill")).toBe(true);
+    expect(root().classList.contains("crewlet-app-shell--fill-flush")).toBe(false);
+  });
+
+  test("is flush to the sheet's edges where the screen asks for that", () => {
+    const { show } = frame(<Filling flush />);
+    expect(root().classList.contains("crewlet-app-shell--fill-flush")).toBe(true);
+    show(<Bare />);
+    expect(root().classList.contains("crewlet-app-shell--fill")).toBe(false);
+    expect(root().classList.contains("crewlet-app-shell--fill-flush")).toBe(false);
   });
 });
 
@@ -1501,6 +1724,328 @@ describe("the frame's keys", () => {
     frame(<Bare />);
     key("g");
     key("w");
-    expect(location.hash).toBe("#/work");
+    expect(location.hash).toBe("#/worklet");
+  });
+});
+
+// THE ASSISTANT IS A PANEL OF THE FRAME: ⌘. opens it on any page, the frame's
+// arithmetic decides its shape, and Escape inside it closes the assistant and
+// never the peek beside it, which a reader opened to talk about.
+describe("the assistant", () => {
+  afterEach(() => {
+    sessionStorage.clear();
+  });
+
+  async function open(width: number, hash: string, viewer?: Record<string, unknown>) {
+    const win = installWindow(width);
+    location.hash = hash;
+    const { store, socket } = answering(
+      viewer ? { viewer, fleet: { nodes: [] } } : { fleet: { nodes: [] } },
+    );
+    mountShell(store, socket);
+    await settle();
+    await loadChunk("assistant");
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: ".", ctrlKey: true }));
+    });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Ask Crewlet" })).toBeDefined());
+    const app = document.querySelector<HTMLElement>(".app")!;
+    return { win, app };
+  }
+
+  test("⌘. opens it as a column where the frame holds it, and the peek beside it becomes a drawer", async () => {
+    const { win, app } = await open(1440, "#/worklet?peek=seat:ceo");
+    try {
+      expect(app.getAttribute("data-aside")).toBe("column");
+      expect(app.getAttribute("data-peek")).toBe("drawer");
+      // THE TAB REMEMBERS IT, for a reload, and never in the browser's
+      // shared storage.
+      expect(JSON.parse(sessionStorage.getItem("crewlet_assistant_tab") ?? "{}").open).toBe(true);
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("over the page below the column's width, and the whole window on a phone", async () => {
+    const narrow = await open(1100, "#/worklet");
+    try {
+      expect(narrow.app.getAttribute("data-aside")).toBe("overlay");
+      narrow.win.set(600);
+      expect(narrow.app.getAttribute("data-aside")).toBe("sheet");
+    } finally {
+      narrow.win.restore();
+    }
+  });
+
+  test("Escape inside it closes the assistant and leaves an open peek open", async () => {
+    const { win, app } = await open(1600, "#/worklet?peek=seat:ceo");
+    try {
+      expect(app.getAttribute("data-peek")).toBe("column");
+      const heading = screen.getByRole("heading", { name: "Ask Crewlet" });
+      act(() => heading.focus());
+      fireEvent.keyDown(heading, { key: "Escape" });
+      await waitFor(() => expect(app.hasAttribute("data-aside")).toBe(false));
+      expect(location.hash).toContain("peek=");
+      expect(document.querySelector(".crewlet-peek-rail")).not.toBeNull();
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("an assistant the company left off is drawn disabled with its reason, and the panel says why", async () => {
+    const { win } = await open(1440, "#/worklet");
+    try {
+      // THE DEFAULT VIEWER ANSWER CARRIES NO `assistant` MEMBER: an engine
+      // that does not serve it, read as off.
+      expect(screen.getByText("Ask Crewlet is off for this company")).toBeDefined();
+      expect(screen.queryByRole("textbox", { name: "Ask Crewlet" })).toBeNull();
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("a reader the engine allows gets the composer, with the page attached", async () => {
+    const { win } = await open(1440, "#/worklet", {
+      login: "U0FOUNDER",
+      grants: ["admin", "worklet", "doclet"],
+      handle: "ada",
+      owner: "ada",
+      name: "Ada Lovelace",
+      kind: "human",
+      assistant: { available: true },
+    });
+    try {
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "Ask Crewlet" })).toBeDefined(),
+      );
+      expect(
+        screen.getByRole("group", { name: "Attached to this question" }).textContent,
+      ).toContain("Worklet");
+    } finally {
+      win.restore();
+    }
+  });
+
+  // ⌘. FROM THE COMPOSER CLOSES IT WHEREVER IT STANDS OVER THE PAGE. As the
+  // whole window it is a modal, so the frame's own binding stands aside and
+  // the panel answers the press itself; over the page's end edge it is not a
+  // modal, so the binding answers it there, as it does beside the column.
+  test.each([
+    ["over the page's end edge", 1100, "overlay"],
+    ["as the whole window", 600, "sheet"],
+  ])("⌘. from its composer closes it %s", async (_, width, shape) => {
+    const { win, app } = await open(width, "#/worklet", {
+      login: "U0FOUNDER",
+      grants: ["admin", "worklet", "doclet"],
+      handle: "ada",
+      owner: "ada",
+      name: "Ada Lovelace",
+      kind: "human",
+      assistant: { available: true },
+    });
+    try {
+      expect(app.getAttribute("data-aside")).toBe(shape);
+      const box = await screen.findByRole("textbox", { name: "Ask Crewlet" });
+      act(() => box.focus());
+      fireEvent.keyDown(box, { key: ".", ctrlKey: true });
+      await waitFor(() => expect(app.hasAttribute("data-aside")).toBe(false));
+    } finally {
+      win.restore();
+    }
+  });
+});
+
+// A ROOM READS ONLY WHAT SOMEBODY COULD SEE. On a phone the assistant is the
+// whole window, so a message that arrives while the reader talks to it is
+// drawn for nobody, and counted as seen it cleared the room's badge on every
+// device. Over the page's end edge it stands over the transcript, a dialog's
+// veil stands over the whole page, and a tab in the background shows nothing
+// at all. Each such message counts once the room is on screen again; beside
+// the assistant's column the room stays in view and reads on.
+describe("what a chat room in the frame counts as read", () => {
+  afterEach(() => {
+    sessionStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  const at = (seq: number) => ({ stream: "CREWLET_CHAT_LOG", generation: 1, seq });
+  const served = { read_level: "session", complete: true, position: at(40) };
+  const said = (seq: number) => ({
+    message: {
+      v: 1,
+      id: `m-${seq}`,
+      channel_id: "room-1",
+      author: "bo",
+      author_kind: "agent",
+      body: `line ${seq}`,
+      created_at: "2026-01-01T00:00:00Z",
+    },
+    channel_seq: seq,
+    position: at(seq),
+  });
+
+  /**
+   * A room in the frame at `width`, with its read cursor watched: `say` has
+   * the next message arrive and waits until it is drawn and reported, and
+   * `read` is whether the room ever counted that message as seen.
+   */
+  async function roomAt(width: number) {
+    const win = installWindow(width);
+    const answers: Record<string, unknown> = {
+      fleet: { nodes: [] },
+      chat_channel: {
+        ...served,
+        channel: {
+          v: 1,
+          id: "room-1",
+          kind: "public",
+          name: "general",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        revision: 3,
+        message_seq: 1,
+        member: true,
+        members: [],
+      },
+      chat_messages: { ...served, channel_id: "room-1", messages: [said(1)] },
+    };
+    const { store, socket } = answering(answers);
+    const cursors = new ReadCursors({ flush: async () => undefined });
+    const see = vi.spyOn(cursors, "see");
+    mountShell(
+      store,
+      socket,
+      <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
+    );
+    await screen.findByText("line 1");
+    await loadChunk("assistant");
+    const say = async (seq: number) => {
+      answers.chat_messages = {
+        ...served,
+        channel_id: "room-1",
+        messages: [said(seq), said(seq - 1)],
+      };
+      act(() => {
+        store.applyChatChange({
+          channel_id: "room-1",
+          op: "post",
+          op_id: `op-${seq}`,
+          message_id: `m-${seq}`,
+          channel_seq: seq,
+          at: "2026-01-01T00:01:00Z",
+          position: at(seq),
+        } as never);
+      });
+      await screen.findByText(`line ${seq}`);
+      // AND FOR THE TRANSCRIPT TO REPORT IT, which React does in a task of its
+      // own once the row is drawn: a case that read the cursor before that
+      // task ran would pass whether or not the room counted the row.
+      await act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+    };
+    const read = (seq: number) =>
+      see.mock.calls.some(
+        ([room, packed]) => room === "room-1" && packed === packPosition(at(seq)),
+      );
+    return { win, say, read };
+  }
+
+  /** ⌘. opens the assistant, in the shape the frame's arithmetic gives it. */
+  async function openAssistant(): Promise<HTMLElement> {
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: ".", ctrlKey: true }));
+    });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Ask Crewlet" })).toBeDefined());
+    return document.querySelector<HTMLElement>(".app")!;
+  }
+
+  /** Escape from inside the panel closes it, whatever its shape. */
+  async function closeAssistant(app: HTMLElement): Promise<void> {
+    const heading = screen.getByRole("heading", { name: "Ask Crewlet" });
+    act(() => heading.focus());
+    fireEvent.keyDown(heading, { key: "Escape" });
+    await waitFor(() => expect(app.hasAttribute("data-aside")).toBe(false));
+  }
+
+  test("under the assistant as the whole window, a message is read only once it closes", async () => {
+    const { win, say, read } = await roomAt(390);
+    try {
+      expect(read(1)).toBe(true);
+      const app = await openAssistant();
+      expect(app.getAttribute("data-aside")).toBe("sheet");
+      await say(2);
+      expect(read(2), "a message drawn under the sheet was counted as seen").toBe(false);
+      await closeAssistant(app);
+      await waitFor(() => expect(read(2)).toBe(true));
+    } finally {
+      win.restore();
+    }
+  });
+
+  // NOT MODAL, AND STILL OVER THE TRANSCRIPT: the overlay leaves the page live
+  // beside it, with no veil and nothing on the layer stack, so only the
+  // frame's own state can say it stands there.
+  test("under the assistant over the page's end edge, the same", async () => {
+    const { win, say, read } = await roomAt(1100);
+    try {
+      const app = await openAssistant();
+      expect(app.getAttribute("data-aside")).toBe("overlay");
+      await say(2);
+      expect(read(2), "a message drawn under the overlay was counted as seen").toBe(false);
+      await closeAssistant(app);
+      await waitFor(() => expect(read(2)).toBe(true));
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("beside the assistant's column, a message is read as it arrives", async () => {
+    const { win, say, read } = await roomAt(1440);
+    try {
+      const app = await openAssistant();
+      expect(app.getAttribute("data-aside")).toBe("column");
+      await say(2);
+      await waitFor(() => expect(read(2)).toBe(true));
+    } finally {
+      win.restore();
+    }
+  });
+
+  // A DIALOG STANDS OVER THE PAGE TOO, whatever the assistant is doing: the
+  // frame reads the kit's layer stack, so the palette over a room covers it
+  // as the assistant's sheet does.
+  test("behind the palette, a message is read only once it closes", async () => {
+    const { win, say, read } = await roomAt(1440);
+    try {
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+      });
+      const palette = await screen.findByRole("dialog", { name: "Search" });
+      await say(2);
+      expect(read(2), "a message drawn behind the palette was counted as seen").toBe(false);
+      fireEvent.keyDown(palette.querySelector("input")!, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull());
+      await waitFor(() => expect(read(2)).toBe(true));
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("in a tab in the background, a message is read once the tab is in front again", async () => {
+    const { win, say, read } = await roomAt(1440);
+    const shown = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await say(2);
+      expect(read(2), "a message drawn in a hidden tab was counted as seen").toBe(false);
+      shown.mockReturnValue("visible");
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await waitFor(() => expect(read(2)).toBe(true));
+    } finally {
+      win.restore();
+    }
   });
 });

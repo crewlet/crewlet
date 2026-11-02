@@ -262,7 +262,7 @@ type ChangeRouting struct {
 	// RepoName and Title are the repository's name and the change's title as
 	// the record leaves them.
 	RepoName string `json:"repo_name"`
-	Title    string `json:"title"`
+	Title    string `json:"title" untrusted:"name"`
 	// Actor is who made the change the record records — its asker, a push
 	// entry's pusher, and for the home's records of a revision's facts and of
 	// a landing, whoever pushed the revision and whoever pushed the target's
@@ -440,7 +440,7 @@ type Concern struct {
 // changes one landing merges, would hear about whichever routing came first
 // and nothing of the other — the busier the repository, the more news lost. So
 // a notice is keyed on the record, the change and the recipient ([NoticeID],
-// replicated 0105), and a wake's id is derived from the same three.
+// replicated 0128), and a wake's id is derived from the same three.
 // Routings that name one change twice — a push that opens a change and a
 // later push of the same record that merges it — share one builder, so a
 // handle hears about that change once.
@@ -520,7 +520,7 @@ type changeNotices struct {
 // hearer comes in [Concerns]. [Concerns] keeps a handle once a CHANGE, so a
 // handle two of a record's changes concern counts once under each. PURE OVER
 // THE ROUTINGS, as [Concerns] is: the count a change's notices column takes
-// from a record (code_changes.notices, replicated 0102) is the same on every
+// from a record (code_changes.notices, replicated 0125) is the same on every
 // node, whatever the horizon let each write.
 func noticesByChange(routings ...*ChangeRouting) []changeNotices {
 	var out []changeNotices

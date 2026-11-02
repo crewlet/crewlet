@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The window: what the records a restore replays past the copy name.
@@ -272,11 +273,11 @@ func (p *objectPass) noteRecord(l declaringLog, where string, framed []byte) err
 	switch verdict {
 	case statelog.Verified:
 	case statelog.KeyUnknown:
-		return fmt.Errorf("backup: %s: %w (this node holds %v) — a restore replays it "+
+		return fmt.Errorf("backup: %s: %w (this node holds %s) — a restore replays it "+
 			"and it may name a file this backup would not carry; add the key it was "+
 			"signed under to secrets.keys and restart this node, or take the backup "+
 			"from a node that holds it", where, statelog.ErrRecordUnverified,
-			l.verifier.KeyIDs())
+			words.And(l.verifier.KeyIDs()))
 	default:
 		return fmt.Errorf("backup: %s: %w — the log a restore replays holds bytes "+
 			"no node of this fleet signed", where, statelog.ErrRecordTampered)

@@ -1,7 +1,14 @@
 import { describe, expect, test } from "vitest";
 import type { BackupPointRow } from "~/contract/backups.ts";
 import { RestError } from "~/protocol/rest.ts";
-import { backupRefusal, coverWords, isAbsoluteDir, suggestDir, takenBytes } from "./backups.ts";
+import {
+  backupRefusal,
+  coverWords,
+  isAbsoluteDir,
+  oldestRead,
+  suggestDir,
+  takenBytes,
+} from "./backups.ts";
 
 const point = (over: Partial<BackupPointRow>): BackupPointRow => ({
   owner: "node-a",
@@ -161,4 +168,40 @@ test("a cover names its stream, its sequence and its generation", () => {
   expect(coverWords({ stream: "CREWLET_TRACKER_LOG", generation: 2, seq: 900 })).toBe(
     "CREWLET_TRACKER_LOG @900 (generation 2)",
   );
+});
+
+describe("the backup the trims read", () => {
+  // EACH LOG'S TRIM READS ITS OWN POINT, so the figure that matters is the
+  // stalest of them: it is the log the backup-age alarm names first. The
+  // freshest hid a log days past its acknowledgement.
+  test("the oldest point any log's trim reads, and how many there are", () => {
+    const points = [
+      point({
+        owner: "operator",
+        kind: "operator",
+        taken_at: "2026-09-30T11:00:00Z",
+        newest: true,
+      }),
+      point({
+        owner: "operator",
+        kind: "operator",
+        taken_at: "2026-09-27T11:00:00Z",
+        newest: true,
+      }),
+      point({ owner: "node-a", taken_at: "2026-09-20T11:00:00Z", newest: false }),
+    ];
+    const read = oldestRead(points);
+    expect(read?.point.taken_at).toBe("2026-09-27T11:00:00Z");
+    expect(read?.of).toBe(2);
+    expect(oldestRead([point({ newest: false })])).toBeUndefined();
+  });
+
+  // BY INSTANT: a fractional second sorts before a whole one as text.
+  test("instants are compared as instants, not as strings", () => {
+    const read = oldestRead([
+      point({ taken_at: "2026-09-30T12:00:00Z", newest: true }),
+      point({ taken_at: "2026-09-30T12:00:00.5Z", newest: true }),
+    ]);
+    expect(read?.point.taken_at).toBe("2026-09-30T12:00:00Z");
+  });
 });

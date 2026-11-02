@@ -16,7 +16,7 @@
 //
 // # Why it is a package
 //
-// It was written twice, in internal/pages and the org chart's own domain, and
+// It was written twice, in internal/doclet and the org chart's own domain, and
 // the copies had ALREADY DRIFTED: one decoder carried a fourth parameter the other did
 // not have and neither read, which is the shape internal/textcut,
 // internal/whsec and internal/jsprovision each record as the moment a rule

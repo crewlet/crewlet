@@ -136,7 +136,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0050) as a record this domain's applier decodes: the framework owns when
+// ADR-0073) as a record this domain's applier decodes: the framework owns when
 // one is appended, what it removes and the floor its subject names, and the
 // domain owns what a record on its log looks like.
 //

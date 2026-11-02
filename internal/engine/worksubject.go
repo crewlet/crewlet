@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Which work item a turn is on.
@@ -18,8 +18,8 @@ import (
 // the rule that decides which. The rules are tried in order and the
 // first that names an item wins:
 //
-//  1. TRIGGER — the event that woke the turn names the item: a native tracker
-//     wake, a code wake about a change that implements one (ADR-0067), or a
+//  1. TRIGGER: the event that woke the turn names the item, a Worklet
+//     wake, a code wake about a change that implements one (ADR-0090), or a
 //     Jira, GitHub or GitLab webhook about one issue.
 //  2. ASKED_BY — the turn answers a colleague's ask, and inherits the item the
 //     ASKING turn was on. Help given on a task is work on that task.
@@ -63,7 +63,7 @@ var workItemNamers = func() map[string]workItemNamer {
 	for _, source := range []interface {
 		workItemNamer
 		Source() string
-	}{tracker.Prompt{}, code.Prompt{}, jira.Prompt{}, github.Prompt{}, gitlab.Prompt{}} {
+	}{worklet.Prompt{}, code.Prompt{}, jira.Prompt{}, github.Prompt{}, gitlab.Prompt{}} {
 		namers[source.Source()] = source
 	}
 	return namers
@@ -134,7 +134,7 @@ func resumedWorkItem(run sandbox.PendingRun) (*types.WorkItem, types.WorkItemBas
 // writing: the resumed segment may write a second item, and a sole write
 // concluded at the park would then have named an item the whole turn was not
 // on alone. The segment that finishes the turn decides, over everything the
-// turn wrote: the half before a park travels on the suspended conversation
+// turn wrote: the half before a park travels on the parked turn's state
 // (execstate.State.Written) and seeds the resumed segment's set, so "exactly
 // one" is judged over the turn rather than over its last segment.
 func completedWorkItem(item *types.WorkItem, basis types.WorkItemBasis,

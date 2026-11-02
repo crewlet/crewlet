@@ -8,12 +8,14 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // watchdogCompanyDoc is the smallest company that builds an epoch.
 const watchdogCompanyDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -30,7 +32,7 @@ func watchdogEngine(t *testing.T) *Engine {
 	t.Helper()
 	boot := testBootstrap(t)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &boot)
 	// No HTTP surface: this is about the seat host, and binding a port
 	// would make the test fight every other one in the package for it.

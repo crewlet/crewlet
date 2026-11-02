@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Reader answers questions about artifacts from this node's own applied rows.
@@ -69,8 +70,8 @@ type Head struct {
 	ID          artifacts.ID    `json:"id"`
 	Label       artifacts.Label `json:"label"`
 	Kind        artifacts.Kind  `json:"kind"`
-	Title       string          `json:"title"`
-	Description string          `json:"description,omitempty"`
+	Title       string          `json:"title" untrusted:"name"`
+	Description string          `json:"description,omitempty" untrusted:"name"`
 	Icon        string          `json:"icon,omitempty"`
 	Owner       string          `json:"owner"`
 	OwnerKind   iam.ActorKind   `json:"owner_kind"`
@@ -122,7 +123,7 @@ type VersionSummary struct {
 	Base         int                    `json:"base"`
 	RestoredFrom int                    `json:"restored_from,omitempty"`
 	Forced       bool                   `json:"forced,omitempty"`
-	Label        string                 `json:"label,omitempty"`
+	Label        string                 `json:"label,omitempty" untrusted:"name"`
 	Entry        string                 `json:"entry,omitempty"`
 	Contract     string                 `json:"contract,omitempty"`
 	Capabilities []artifacts.Capability `json:"capabilities"`
@@ -153,7 +154,7 @@ type VersionPage struct {
 type Asset struct {
 	Artifact    artifacts.ID    `json:"artifact"`
 	ID          uuid.UUID       `json:"id"`
-	Name        string          `json:"name"`
+	Name        string          `json:"name" untrusted:"name"`
 	ContentType string          `json:"content_type"`
 	Object      objstore.Object `json:"object"`
 	AddedBy     iam.Actor       `json:"added_by"`
@@ -560,7 +561,7 @@ func readHeadTx(ctx context.Context, tx *sql.Tx, id string) (Head, bool, error) 
 }
 
 // readShares reads the shares of every artifact named, in one statement per
-// artifact batch, ordered by audience so a head reads the same on every node.
+// artifact batch, ordered by audience so a head reads the same on every data node.
 func readShares(ctx context.Context, tx *sql.Tx, ids []string) (map[string][]artifacts.Share, error) {
 	out := map[string][]artifacts.Share{}
 	if len(ids) == 0 {
@@ -673,7 +674,8 @@ func (r *Reader) Version(ctx context.Context, id artifacts.ID, number int) (Vers
 			if _, err := mustHead(ctx, tx, id.String()); err != nil {
 				return err
 			}
-			return fmt.Errorf("%w: artifact %s keeps no version %d", ErrNotFound, id, number)
+			return fmt.Errorf("%w: %s: this artifact doesn't keep version %d", ErrNotFound, id,
+				number)
 		}
 		out = v
 		return nil
@@ -909,7 +911,7 @@ func (r *Reader) Trail(ctx context.Context, q TrailQuery) (TrailPage, error) {
 	// own op ([HistoryOps]).
 	if q.Op != "" && !slices.Contains(HistoryOps, q.Op) {
 		return TrailPage{}, fmt.Errorf("%w: %q is not an op an artifact's history records, "+
-			"which are %v", ErrInvalid, q.Op, HistoryOps)
+			"which are %s", ErrInvalid, q.Op, words.And(HistoryOps))
 	}
 	var after trailCursor
 	if q.Cursor != "" {
@@ -992,7 +994,7 @@ func prefixed(prefix, columns string) string {
 // HeldObjects answers which of the digests asked about THIS artifact already
 // names, each with the object that holds it: the carry plan's one question,
 // and nothing wider (a carry never crosses an artifact). Where two of the
-// artifact's objects hold one digest, the lowest key answers, on every node.
+// artifact's objects hold one digest, the lowest key answers, on every data node.
 func (r *Reader) HeldObjects(ctx context.Context, id artifacts.ID, hashes []objstore.Hash) (
 	map[objstore.Hash]objstore.Object, error) {
 
@@ -1255,13 +1257,13 @@ func listSpecFor(v Viewer, q ListQuery) (listSpec, error) {
 	}
 	switch {
 	case !scope.Valid():
-		return listSpec{}, fmt.Errorf("%w: scope %q is not one of %v", ErrInvalid, scope, ListScopes)
+		return listSpec{}, fmt.Errorf("%w: scope %q is not one of %s", ErrInvalid, scope, words.Or(ListScopes))
 	case !sort.Valid():
-		return listSpec{}, fmt.Errorf("%w: sort %q is not one of %v", ErrInvalid, sort, ListSorts)
+		return listSpec{}, fmt.Errorf("%w: sort %q is not one of %s", ErrInvalid, sort, words.Or(ListSorts))
 	case status != StatusLive && status != StatusTrashed:
 		return listSpec{}, fmt.Errorf("%w: status %q is neither live nor trashed", ErrInvalid, status)
 	case q.Kind != "" && !q.Kind.Valid():
-		return listSpec{}, fmt.Errorf("%w: kind %q is not one of %v", ErrInvalid, q.Kind, artifacts.Kinds)
+		return listSpec{}, fmt.Errorf("%w: kind %q is not one of %s", ErrInvalid, q.Kind, words.Or(artifacts.Kinds))
 	case v.Record == "" && !v.Admin:
 		return listSpec{}, fmt.Errorf("%w: a listing names who is viewing it", ErrInvalid)
 	case q.Delimiter != "" && q.Delimiter != ListDelimiter:

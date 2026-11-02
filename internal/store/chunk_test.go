@@ -12,7 +12,7 @@ import (
 // A fixed 999 is wrong in both directions: on an engine with the modern
 // default it is 33× more round trips than necessary, and on one with a lower
 // limit it is a statement the engine refuses — and the refusal arrives at the
-// end of a bulk apply, on a node that was fine yesterday.
+// end of a long apply, on a node that was fine yesterday.
 func TestMultiRowChunksRespectTheProbedLimit(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

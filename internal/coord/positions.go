@@ -126,8 +126,8 @@ type DomainPosition struct {
 // A second domain costs a MAP ENTRY here. The alternative — a bucket per
 // domain — costs a bucket, its retention decision, its replica count and a
 // place in every sweep, for a fact that is always read together anyway: the
-// trim asks "what has every node applied", and it asks it about every domain
-// at once.
+// trim asks "what has every data node applied", and it asks it about every
+// domain at once.
 type NodePositions struct {
 	NodeID string `json:"node_id"`
 
@@ -191,8 +191,25 @@ type NodePositions struct {
 // decide what records every node has finished with, so a key that expired
 // would read as a node that has applied NOTHING — which pins the trim for
 // ever, or, read the other way round, lets it delete records that node still
-// needs. An absent node is removed by an operator's audited gesture, never by
-// a clock.
+// needs.
+//
+// # And no row ever leaves it
+//
+// There is no removal, by a clock or by anybody. An absent node stops pinning
+// the trim through an operator's audited EVICTION, whose tombstone the counted
+// set subtracts from these rows ([statelog.CountedSet], once it is older than
+// the fence window) — never through its row going away. The row is what a
+// READMISSION is judged by (the node's last position against the floor,
+// [statelog.PermitReadmission]), so a register that forgot an evicted node
+// would turn every later readmission of a machine still switched off into a
+// judgement about a node that has never reported anything. A removal verb
+// stood here with no caller, and a register that offers one invites wiring it
+// into the eviction.
+//
+// What bounds the register is the set of node ids a deployment has ever
+// configured: one row per id, replaced wholesale by that node's own
+// heartbeat, so a machine rebuilt under its old id writes over its old row
+// and only an id that is retired for good leaves one behind.
 type PositionRegister interface {
 	// PutPositions writes this node's row, replacing it wholesale.
 	//
@@ -210,23 +227,11 @@ type PositionRegister interface {
 	// donor search picks the newest snapshot. A per-node read would be N
 	// round trips for one answer.
 	Positions(ctx context.Context) ([]NodePositions, error)
-
-	// ForgetPositions removes a node's row, and it is the only way a row
-	// leaves.
-	//
-	// AN EVICTION DOES NOT CALL IT, and must not. What stops the trim
-	// waiting for an evicted node is its TOMBSTONE, which the counted set
-	// subtracts from these keys; the row itself is what a READMISSION is
-	// judged by — the node's last position against the floor — so an
-	// eviction that forgot it would turn every later readmission of a
-	// machine that is still switched off into a judgement about a node
-	// that has never reported anything.
-	ForgetPositions(ctx context.Context, nodeID string) error
 }
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS EIGHT KEY CLASSES, and every one needs the same
+// THE REGISTER HOLDS ELEVEN KEY CLASSES, and every one needs the same
 // retention, which is NONE.
 //
 // Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its
@@ -234,21 +239,35 @@ type PositionRegister interface {
 // window's: [MaintenanceKey], whose existence IS the exclusion,
 // [AdmissionKey], which is one node's positive record that it intends to
 // publish, and [MaintenanceAckKey], which is one participant's evidence that
-// its process restarted. The eighth is [SeatPauseKey], a person's decision
+// its process restarted for one log's window. The eighth is [SeatPauseKey], a person's decision
 // that a seat stops taking work, which an age would lift on a timer nobody
-// set.
+// set. The last two are a model entry's: [ModelRetryKey], a person's request
+// to stop sitting it out, which ages out of meaning by its own stamp, and
+// [DeviceSignInKey], a sign-in in progress, whose lifetime is a field of the
+// record that its readers keep ([DeviceSignIn.Lapsed]) because a bucket age
+// would restart at every update. The eleventh is [SeatAccessKey], the ledger
+// of accounts the engine created at a vendor, which an age would forget while
+// the account still exists there.
 //
 // They share a bucket because they share that retention and because a bucket
 // is a stream with a replica count, a place in every sweep and a retention
 // decision of its own. What none of them may have is an AGE: an expiring
 // position reads as a node that has applied nothing, an expiring operation
 // admits every publisher in the fleet, an expiring admission hides one, an
-// expiring acknowledgement un-seals a barrier that has already run, and an
-// expiring pause resumes a seat nobody resumed. A listing over any class
+// expiring acknowledgement un-seals a barrier that has already run, an
+// expiring pause resumes a seat nobody resumed, and an expiring ledger record
+// orphans a live account. A listing over any class
 // filters on the first segment, and that filter is load-bearing rather than
 // tidy: a hold decoded as a positions row is a node id of "" with a domains
 // map of zero values, which the trim reads as a node that has applied nothing
 // and pins the floor at zero for ever.
+//
+// The chat read state wants the same retention and is deliberately NOT a
+// ninth class: it is the busiest record the fleet writes, and as a class here
+// every person's flush would be ordered through the one raft group, and every
+// chat screen's read answered by the one leader, that serve the trim's inputs
+// and the capacity window. [ChatReads] has a bucket of its own for that (see
+// chatread.go's "Why a bucket of its own").
 func PositionKey(nodeID string) string { return DocumentKey("node", nodeID) }
 
 // Validate reports why a row cannot be written.

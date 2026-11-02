@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // A MERGED CHANGE REVERTED, ON THE GIT NODE (code.WriteRevertChange, M5-D25):
@@ -90,7 +91,8 @@ func (b *building) revertChange(ctx context.Context) (string, code.EngineWriteRe
 	if !m.clean {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := b.conflicted(ctx, m, fmt.Sprintf("the revert of %s does not apply cleanly on %s: %d paths "+
-			"conflict; resolve them in a coding box (run_sandbox), or write the result yourself", named,
+			"conflict; resolve them in a checkout of the repository ("+toolname.CodeCheckout+"), or write the "+
+			"result yourself", named,
 			shortID(tip), len(m.conflicts)+m.omitted))
 		return "", res, true, err
 	}

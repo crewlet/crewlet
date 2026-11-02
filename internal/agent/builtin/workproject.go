@@ -7,9 +7,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // `write_project` — the project settings a TOOL owns, and who owns each.
@@ -18,7 +20,7 @@ import (
 //
 // A project's policy and its tag set are two objects on two subjects, so that
 // every seat's tag add never contends with a lead's field edit (see
-// internal/tracker/project.go). They are ONE TOOL anyway, because the split is
+// internal/worklet/project.go). They are ONE TOOL anyway, because the split is
 // about arbitration and a caller's question is not: "change something about
 // this project" is one thought, and a surface that made it two would leave a
 // model choosing between `write_project` and `write_project_tags` on grounds it
@@ -38,29 +40,29 @@ import (
 // the consumer's interface and the consumer calls both — the seam is "what a
 // project settings tool needs", not "what one tracker subject accepts".
 type ProjectWriter interface {
-	WriteProject(ctx context.Context, opID, key string, edit tracker.ProjectEdit,
-		authority tracker.ProjectAuthority) (tracker.WriteResult, error)
-	WriteTags(ctx context.Context, opID, project string, edit tracker.TagEdit,
-		authority tracker.TagAuthority) (tracker.WriteResult, error)
+	WriteProject(ctx context.Context, opID, key string, edit worklet.ProjectEdit,
+		authority worklet.ProjectAuthority) (worklet.WriteResult, error)
+	WriteTags(ctx context.Context, opID, project string, edit worklet.TagEdit,
+		authority worklet.TagAuthority) (worklet.WriteResult, error)
 
 	// EnsureTags is the INLINE half of the declare rule, used by the
 	// create and update tools rather than by this one: a seat that said
 	// `labels_create_missing` declares what its write is about to use in
 	// one append, before the task's own.
 	EnsureTags(ctx context.Context, opID, project string, tags []string) (
-		[]string, []string, error)
+		[]string, []caveat.Caveat, error)
 }
 
 type writeProject struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*writeProject)(nil)
 
-func (t *writeProject) Name() string { return tracker.WriteProjectTool }
+func (t *writeProject) Name() string { return worklet.WriteProjectTool }
 
 func (t *writeProject) Description() string {
 	return "Change a project's own settings. `tags` is the one part any seat " +
 		"may add to — declare a label before filing work under it, because " +
-		"create_work_item refuses one this project does not have. Renaming or " +
+		worklet.CreateWorkItemTool + " refuses one this project does not have. Renaming or " +
 		"archiving a tag, declaring project fields, setting the default " +
 		"assignee and setting the target date are the project lead's; archiving " +
 		"the project itself takes a person. A project's name, purpose and " +
@@ -114,7 +116,7 @@ func (t *writeProject) Parameters() map[string]any {
 			"fields": map[string]any{
 				"type": "array",
 				"description": "REPLACES this project's own field " +
-					"declarations — send the whole set, read describe_project " +
+					"declarations — send the whole set, read " + worklet.DescribeProjectTool + " " +
 					"first. These sit beside the workspace's, they do not " +
 					"replace them. Each declaration is whole too: a key left " +
 					"out is cleared, `config` and its options included. The " +
@@ -153,10 +155,10 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.WriteProjectTool), nil
+		return notInATurn(worklet.WriteProjectTool), nil
 	}
 	if t.deps.ProjectWriter == nil {
-		return unconfigured(tracker.WriteProjectTool), nil
+		return unconfigured(worklet.WriteProjectTool), nil
 	}
 	key := strings.TrimSpace(argString(args, "project"))
 	if key == "" {
@@ -182,7 +184,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE EMPTY STRING IS NOT A HANDLE. It is a real setting here — it
 	// means triage — so it is left alone rather than resolved.
 	if edit.DefaultAssignee != nil && *edit.DefaultAssignee != "" {
-		who, unknown := t.deps.resolveHandle(ctx, tracker.WriteProjectTool,
+		who, unknown := t.deps.resolveHandle(ctx, worklet.WriteProjectTool,
 			"`default_assignee`", *edit.DefaultAssignee)
 		if unknown != "" {
 			return failed(unknown), nil
@@ -204,9 +206,9 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// touching the policy is the project lead's, and taking the project
 	// out of circulation is that AND never an agent's. Asking the whole
 	// verb as the lead's refused a colleague the one facet
-	// internal/tracker grants them.
+	// internal/worklet grants them.
 	project := authz.Object{Kind: authz.KindProject, Container: key}
-	var authority tracker.ProjectAuthority
+	var authority worklet.ProjectAuthority
 	if !edit.Empty() || len(tagEdit.Rename) > 0 || len(tagEdit.Archive) > 0 {
 		if refusal := t.deps.mayWrite(ctx, authz.ActionProjectPolicy,
 			project); refusal != nil {
@@ -225,6 +227,8 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}
+	// WHAT THE CALL TELLS ITS CALLER beside the change, from both halves.
+	var caveats []caveat.Caveat
 	// THE CALL ANSWERS FOR BOTH RECORDS at the top, and each facet keeps its
 	// own detail beneath it — see [callOutcome].
 	var call callOutcome
@@ -239,19 +243,19 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !tagEdit.Empty() {
 		opID := opIDFor(actor, t.Name(), "tags", key, args)
 		result, err := writer.WriteTags(ctx, opID, key,
-			tagEdit, tracker.TagAuthority{Policy: authority.Policy})
+			tagEdit, worklet.TagAuthority{Policy: authority.Policy})
 		if err != nil {
-			return writeFailure(ctx, actor, tracker.WriteProjectTool, err), nil
+			return writeFailure(ctx, actor, worklet.WriteProjectTool, err), nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
 			// See [writeWorkCatalogue]: the second half waits for the
 			// first, and the whole call is harmless to repeat.
-			next := restateNext(fmt.Sprintf("Read %s with describe_project", key))
+			next := restateNext(fmt.Sprintf("Read %s with "+worklet.DescribeProjectTool, key))
 			if !edit.Empty() {
 				next = "The policy change was NOT written: the call stopped " +
 					"here, before it. " + next
 			}
-			return unknownWrite(actor, tracker.WriteProjectTool,
+			return unknownWrite(actor, worklet.WriteProjectTool,
 				fmt.Sprintf("%s's tag change landed", key), opID,
 				result.Unvouched, next), nil
 		}
@@ -260,9 +264,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		tags := map[string]any{
 			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
-		if len(result.Warnings) > 0 {
-			tags["warnings"] = result.Warnings
-		}
+		caveats = append(caveats, result.Caveats...)
 		out["tags"] = tags
 	}
 	if !edit.Empty() {
@@ -270,7 +272,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		result, err := writer.WriteProject(ctx, opID, key,
 			edit, authority)
 		if err != nil {
-			failure := writeFailure(ctx, actor, tracker.WriteProjectTool, err)
+			failure := writeFailure(ctx, actor, worklet.WriteProjectTool, err)
 			if !tagEdit.Empty() {
 				return partlyWritten(failure, "The tag change was written",
 					"the project settings", call), nil
@@ -278,11 +280,11 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return failure, nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
-			next := restateNext(fmt.Sprintf("Read %s with describe_project", key))
+			next := restateNext(fmt.Sprintf("Read %s with "+worklet.DescribeProjectTool, key))
 			if !tagEdit.Empty() {
 				next = "The tag change WAS written. " + next
 			}
-			return unknownWrite(actor, tracker.WriteProjectTool,
+			return unknownWrite(actor, worklet.WriteProjectTool,
 				fmt.Sprintf("%s's policy change landed", key), opID,
 				result.Unvouched, next), nil
 		}
@@ -295,26 +297,27 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// near-matches are: an instant stored as a day is the writer's
 		// value changed, and a caller told `applied` alone reads it as
 		// stored verbatim.
-		if len(result.Warnings) > 0 {
-			policy["warnings"] = result.Warnings
-		}
+		caveats = append(caveats, result.Caveats...)
 		out["policy"] = policy
 	}
 	call.stamp(out)
-	return jsonResult(out)
+	// ONE LIST AT THE TOP, whichever half raised it ([caveated]): each
+	// sentence names what it is about, and a list nested under a half was
+	// one the act route could not take off a person's receipt.
+	return caveated(out, caveats)
 }
 
 // projectTagEdit reads the three tag facets a caller sent.
-func projectTagEdit(args map[string]any) (tracker.TagEdit, string) {
-	var edit tracker.TagEdit
-	if raw, held := args["tags_add"].([]any); held {
+func projectTagEdit(args map[string]any) (worklet.TagEdit, string) {
+	var edit worklet.TagEdit
+	if raw, held := argval.List(args["tags_add"]); held {
 		for i, entry := range raw {
 			spec, ok := entry.(map[string]any)
 			if !ok {
-				return tracker.TagEdit{}, fmt.Sprintf(
+				return worklet.TagEdit{}, fmt.Sprintf(
 					"Tag %d of `tags_add` is not an object.", i+1)
 			}
-			edit.Add = append(edit.Add, tracker.Tag{
+			edit.Add = append(edit.Add, worklet.Tag{
 				Slug:        strings.TrimSpace(argString(spec, "slug")),
 				Label:       strings.TrimSpace(argString(spec, "label")),
 				Color:       strings.TrimSpace(argString(spec, "color")),
@@ -325,9 +328,9 @@ func projectTagEdit(args map[string]any) (tracker.TagEdit, string) {
 	if raw, held := args["tags_rename"].(map[string]any); held {
 		edit.Rename = make(map[string]string, len(raw))
 		for slug, label := range raw {
-			text, ok := label.(string)
-			if !ok {
-				return tracker.TagEdit{}, fmt.Sprintf(
+			text, ok := argval.String(label)
+			if !ok || label == nil {
+				return worklet.TagEdit{}, fmt.Sprintf(
 					"`tags_rename[%s]` is the tag's new LABEL, as a string.",
 					clip(slug))
 			}
@@ -345,12 +348,12 @@ func projectTagEdit(args map[string]any) (tracker.TagEdit, string) {
 // PRESENCE DECIDES, never the value: `default_assignee: ""` means triage and
 // omitting it means leave it alone, and a reader that could not tell them apart
 // would clear a project's default every time somebody declared a field.
-func projectPolicyEdit(args map[string]any) (tracker.ProjectEdit, string) {
-	var edit tracker.ProjectEdit
+func projectPolicyEdit(args map[string]any) (worklet.ProjectEdit, string) {
+	var edit worklet.ProjectEdit
 	if _, held := args["fields"]; held {
 		fields, refusal := catalogueFields(args)
 		if refusal != "" {
-			return tracker.ProjectEdit{}, refusal
+			return worklet.ProjectEdit{}, refusal
 		}
 		edit.Fields = &fields
 	}
@@ -364,9 +367,9 @@ func projectPolicyEdit(args map[string]any) (tracker.ProjectEdit, string) {
 	if raw, held := args["target_date"]; held {
 		target := ""
 		if raw != nil {
-			text, ok := raw.(string)
+			text, ok := argval.String(raw)
 			if !ok {
-				return tracker.ProjectEdit{}, "`target_date` is a date as a " +
+				return worklet.ProjectEdit{}, "`target_date` is a date as a " +
 					"string, 2026-12-18 — or null to clear it."
 			}
 			target = strings.TrimSpace(text)

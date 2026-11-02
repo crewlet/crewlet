@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +35,34 @@ func TestEveryRowStatesHowRecentAProofItAsksFor(t *testing.T) {
 	}
 	if _, ok := authz.RecencyOf("no.such.verb"); ok {
 		t.Error("RecencyOf knows a verb the table has no row for")
+	}
+}
+
+// A VERB NOTHING UNDOES ASKS A RECENT PROOF, AND THE PURGES AND CHAT'S
+// DESTRUCTIONS ARE SUCH VERBS.
+//
+// What a person approves before a gesture says it cannot be undone where the
+// row says so (authz.IrreversibleOf), so the row is held to both halves: each
+// verb that destroys for good is marked, and a marked verb asks the step-up
+// window, which is the decision "nothing undoes it" was made for. Mutation:
+// unmark a purge, or mark a verb that asks no recent proof, and this fails.
+func TestAVerbNothingUndoesAsksARecentProof(t *testing.T) {
+	t.Parallel()
+	for _, a := range []authz.Action{authz.ActionWorkPurge, authz.ActionPagePurge,
+		authz.ActionArtifactPurge, authz.ActionChatErase, authz.ActionChatPrune,
+		authz.ActionChatRetention} {
+		if gone, _ := authz.IrreversibleOf(a); !gone {
+			t.Errorf("%s destroys for good and its row does not say so", a)
+		}
+	}
+	for _, a := range authz.Actions() {
+		gone, ok := authz.IrreversibleOf(a)
+		if !ok {
+			t.Errorf("%s is listed and IrreversibleOf does not know it", a)
+		}
+		if r, _ := authz.RecencyOf(a); gone && r != iam.RecencyStepUp {
+			t.Errorf("%s is undone by nothing and asks %q, not a recent proof", a, r)
+		}
 	}
 }
 
@@ -159,32 +186,38 @@ func TestEndingSomebodyElsesSessionsAsksForTheAdministratorsProof(t *testing.T) 
 	}
 }
 
-// NO TOOL A SEAT MAY TAKE ASKS FOR A PROOF.
+// NO TOOL A SEAT MAY TAKE ASKS FOR A PROOF, NOR DOES ANY VERB A TOOL ASKS FROM
+// INSIDE ITSELF.
 //
 // A verb a seat's tools are served under carries the tool's own name, with no
-// dot. A seat has no keyboard to prove anything at: a tool row asking for a
-// proof would refuse every seat that holds the grant, with a sentence telling
-// a model to sign in again. A HUMAN-ONLY tool may ask one
-// (code_purge_unreachable, a purge as the work, page and artifact purges are):
-// the table refuses every seat it before the window is read, every credential
-// that reaches the operator's MCP surface with nobody at a keyboard is fresh by
-// construction, so no model is ever told to sign in, and the one caller the
-// window does stop is a person's dashboard session, whose press answers
-// step_up_required and runs the step-up ceremony.
+// dot, and a tool that must read a row before it knows what it is about asks
+// the same gate a dotted verb next — archiving a project, renaming a page,
+// re-routing a task ([toolVerbs]). A seat has no keyboard to prove anything
+// at, and the operator's MCP surface — the same tools, for a person's
+// assistant — is not a step-up surface: either kind of row asking for a proof
+// would refuse every seat that holds the grant, with a sentence telling a
+// model to sign in again. A self arm's own window ([proofAsked]) counts too:
+// it is the one a seat meets on its own record.
 //
-// Mutation: drop humanOnly from code_purge_unreachable's row, or ask a step-up
-// of a tool a seat takes → red.
+// A HUMAN-ONLY tool may ask one (code_purge_unreachable, a purge as the work,
+// page and artifact purges are): the table refuses every seat it before the
+// window is read, every credential that reaches the operator's MCP surface
+// with nobody at a keyboard is fresh by construction, so no model is ever told
+// to sign in, and the one caller the window does stop is a person's dashboard
+// session, whose press answers step_up_required and runs the step-up ceremony.
+//
+// Mutation: give `work.project.archive` a step-up, or `set_priorities`'s self
+// arm one, or drop humanOnly from code_purge_unreachable's row, and this goes
+// red naming the tool or internal/agent/builtin, where
+// the archive tool asks it.
 func TestNoToolAsksForAProof(t *testing.T) {
 	t.Parallel()
-	for _, a := range authz.Actions() {
-		if strings.Contains(string(a), ".") {
+	for _, v := range toolVerbs(t) {
+		if human, _ := authz.HumanOnlyOf(v.verb); human {
 			continue
 		}
-		if human, _ := authz.HumanOnlyOf(a); human {
-			continue
-		}
-		if r, _ := authz.RecencyOf(a); r.Demands() {
-			t.Errorf("the tool %s asks for a %s proof, which no seat can give", a, r)
+		if r, asks := proofAsked(v.verb); asks {
+			t.Errorf("%s asks for a %s proof, which no seat can give", v.how, r)
 		}
 	}
 }
@@ -201,6 +234,8 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 	t.Parallel()
 	unproved := map[authz.Action]string{
 		authz.ActionConfigRead: "a read of the company document changes nothing",
+		authz.ActionPrinciplesRead: "a read of the company's principles changes " +
+			"nothing",
 		authz.ActionSecretList: "a listing of credential names changes nothing, " +
 			"and hands over no value",
 		authz.ActionSetupRead: "a read of what the integrations need changes " +
@@ -211,7 +246,7 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 		authz.ActionCatalogueWrite: "a tool, asked through the operator MCP " +
 			"and a seat's registry, neither of which is a step-up surface",
 		authz.ActionSkillPageWrite: "asked from inside the page tools, on the " +
-			"knowledge surface the design leaves out of step-up",
+			"Doclet surface the design leaves out of step-up",
 		authz.ActionArtifactUsage: "a read of what the company's artifacts " +
 			"hold against their quotas changes nothing",
 		authz.ActionCodeRepoReaders: "a read of who read a unit's repository " +
@@ -222,6 +257,14 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 			"step-up reaches",
 		authz.ActionCodeStatus: "a read of the git nodes' caches changes nothing, " +
 			"and it is a tool a granted seat holds, which no step-up reaches",
+		authz.ActionModelsCheck: "a model's checks change no config and no " +
+			"credential: they spend a few tokens on a call the company already makes",
+		authz.ActionModelsRetry: "a retry changes no config and no credential: " +
+			"it clears a sit-out the vendor's next answer re-imposes if it still holds",
+		authz.ActionChatAutoJoin: "asked from inside `update_channel`, a tool, " +
+			"which no step-up surface reaches; and it destroys nothing: it puts " +
+			"the seats the company takes on later in a public room, and turning " +
+			"it off stops it",
 	}
 	walked := 0
 	for _, a := range authz.Actions() {
@@ -261,9 +304,11 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 func TestAStaleProofIsRefusedExactlyWhereTheRowAsksForOne(t *testing.T) {
 	t.Parallel()
 	// A SEAT-ONLY ROW IS DECIDED AS A SEAT, every other as a person: each
-	// is refused to the other kind before any proof is asked.
+	// is refused to the other kind before any proof is asked. The person is
+	// BOUND TO THEIR SEAT, as every person is (ADR-0032), so a verb made as
+	// a seat is not refused them before the proof either.
 	holding := func(age time.Duration, kind iam.Kind) iam.Principal {
-		p := iam.Principal{ID: uuid.New(), Login: "jane.doe",
+		p := iam.Principal{ID: uuid.New(), Login: "jane.doe", Seat: "jane",
 			Kind: kind, Stage: iam.StageActive, Grants: iam.AllGrants}
 		if kind == iam.KindSeat {
 			p.Login, p.Seat = "sre", "sre"
@@ -334,7 +379,7 @@ func TestAPrincipalTheRuleRefusesIsNotSentToStepUp(t *testing.T) {
 	t.Parallel()
 	stale := iam.Principal{ID: uuid.New(), Login: "jane.doe",
 		Kind: iam.KindPerson, Stage: iam.StageActive,
-		Grants: []iam.Grant{iam.GrantTracker}}
+		Grants: []iam.Grant{iam.GrantWorklet}}
 	d := authz.Decide(t.Context(), stale, authz.ActionSecretReveal,
 		authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, decidedAt)
 	if d.Allowed || d.Reason != authz.ReasonNoGrant || d.Recency != "" {

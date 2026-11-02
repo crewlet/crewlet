@@ -91,16 +91,43 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		row["config_epoch"] = status.Epoch
 		row["config_status"] = status.Status
 		row["config_error"] = status.Error
-		// WHICH REVISION THIS NODE IS ON, which the epoch does not say.
-		//
-		// Carried on the apply record for exactly this reason — its own
-		// doc: "the fleet view is read while nodes are mid-transition,
-		// and a node still on the previous revision is exactly what an
-		// operator is looking for." It was written by every node, stored
-		// by the plane, read into this loop, and dropped here, so the
-		// screen could compare epoch numbers and never name what they
-		// stood for.
+		// WHICH REVISION THIS NODE LAST ATTEMPTED, at `config_epoch`,
+		// with `config_status` saying how that went — which the epoch
+		// alone does not name. It was written by every node, stored by
+		// the plane, read into this loop, and dropped here, so the screen
+		// could compare epoch numbers and never name what they stood for.
 		row["config_revision_id"] = status.RevisionID
+		// AND WHICH ONE IT RUNS, which is not the same question: a node
+		// that refused the fleet's revision goes on serving the one before
+		// it, and "the active revision failed on node-b" is useless
+		// without "node-b is still on P". It is the revision the node
+		// booted on until its first apply; empty from a node that runs no
+		// company, and from a build older than the field.
+		row["config_serving_revision_id"] = status.Serving
+		// AND WHICH ONE IT WOULD COME BACK ON, a third fact again: what a
+		// node boots on moves only once an apply has succeeded, and that
+		// write is local and best effort, so a node runs a revision it
+		// would not restart on for as long as a failed write takes to be
+		// repaired. Whoever keeps what a node needs in order to start — the
+		// Kubernetes operator keeps a revision's sealed credentials while a
+		// node still names it — reads this one rather than the one above.
+		// ABSENT on a node that boots on nothing: one whose own database is
+		// discarded at every start, one that has never applied a revision
+		// and holds no offline choice, and a build older than the field.
+		if status.Boots != "" {
+			row["config_boot_revision_id"] = status.Boots
+		}
+		// AND WHICH EPOCH IT LAST APPLIED, which `config_epoch` is not when
+		// `config_status` says that attempt failed: a refusal says the node
+		// did not reach the epoch, never which one it did reach. A writer
+		// judging whether its save reached each node compares the saved
+		// epoch with this, as a node's own health push compares it with its
+		// live epoch. ABSENT, never 0, from a node that has applied nothing
+		// since it started and from a build older than the field: a 0 is an
+		// epoch a client would compare.
+		if status.Applied > 0 {
+			row["config_applied_epoch"] = status.Applied
+		}
 		// WHEN this node last reported. Without it a node that stopped
 		// reporting is indistinguishable from one that reported the same
 		// epoch a second ago — and the one that stopped is exactly the
@@ -108,9 +135,10 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		row["config_reported_at"] = isoOrEmpty(status.UpdatedAt)
 		// WHAT THAT NODE IS DOING, off its own presence heartbeat.
 		// Absent when the node's heartbeat carried no status (a host
-		// built without a Status hook, or a status read that overran its
-		// share of the beat), and absent is NOT zero: a confident 0 would
-		// draw an idle row for a process that is simply not saying.
+		// built without a Status hook, or a status read that did not
+		// answer within its share of the beat), and absent is NOT zero: a
+		// confident 0 would draw an idle row for a process that is simply
+		// not saying.
 		if live, ok := coord.StatusFromMeta(lease.Meta); ok {
 			row["in_flight"] = live.InFlight
 			row["draining"] = live.Draining
@@ -129,9 +157,9 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			// — for the reason `in_flight` is absent: a confident 0
 			// of 0 reads as "ready" for a process that is simply not
 			// saying.
-			if live.ProjectionsTotal > 0 {
-				row["projections_ready"] = live.ProjectionsReady
-				row["projections_total"] = live.ProjectionsTotal
+			if live.AppliersTotal > 0 {
+				row["appliers_ready"] = live.AppliersReady
+				row["appliers_total"] = live.AppliersTotal
 			}
 			// AND WHETHER THIS NODE SERVES ADMIN — its own
 			// `api.auth.admin`, `serve` or `refuse`.

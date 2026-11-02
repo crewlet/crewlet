@@ -72,7 +72,8 @@ import {
 import {
   ACCESS_WORDS,
   ADMIN,
-  TRACKER,
+  CHATLET,
+  WORKLET,
   accessLabel,
   accessLine,
   expand,
@@ -84,10 +85,11 @@ import { useNow } from "~/lib/clock.ts";
 import { loginProblem } from "~/lib/login.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import { useRest, type RestOptions, type RestResult } from "~/lib/useRest.ts";
-import { rest } from "~/protocol/index.ts";
+import { pathSegment, rest } from "~/protocol/index.ts";
 
 /**
  * The word for a credential the engine reports `revoked`: USED for a reset
@@ -180,7 +182,7 @@ export function useDirectoryMoved(heard: () => void, enabled = true): void {
 /**
  * Access as words — a directory row's, an invitation's, or what a token
  * carries — one tag per part of its [accessLine]: "Admin", or the apps
- * ("Tracker", "Knowledge"), or "Overview only". A name this build does not
+ * ("Worklet", "Doclet"), or "Overview only". A name this build does not
  * know is drawn raw beside them, so a row never looks as if it held less than
  * it does.
  */
@@ -304,11 +306,20 @@ export function AccessPicker({
  *
  *   - NOTHING TICKED is the overview only — the org chart, the agents'
  *     status, spend and their own account — which every signed-in person
- *     reads, and nothing of the tracker or the knowledge base;
- *   - WITHOUT TRACKER, the work the company's agents send to people never
+ *     reads, and nothing of the tracker, the knowledge base or the chat;
+ *   - WITHOUT WORKLET, the work the company's agents send to people never
  *     reaches them: an agent asks a person, assigns them a task or waits on
- *     their answer through the tracker, and their inbox and My work are its.
- *     They can still open and answer a work item an agent asks them about.
+ *     their answer through Worklet, and their inbox and My work are its.
+ *     They can still open and answer a work item an agent asks them about;
+ *   - WITHOUT CHATLET, on a company running Chatlet, what the agents SAY
+ *     to them never reaches them: an agent names a person in a room or
+ *     writes to them directly, and both are read only in Chatlet. Said only
+ *     where the company runs Chatlet (`lib/services.ts`): on a vendor's
+ *     chat, that conversation is the vendor's and this permission reaches
+ *     none of it.
+ *
+ * The tracker's first when both are missing: it is where agents send WORK,
+ * and a person who cannot see it cannot be asked for anything at all.
  *
  * Only for a person: a service account is a credential somebody scripts, and
  * what it needs is the script's business.
@@ -321,14 +332,24 @@ export function AppReachNote({
   /** The access is the reader's own, and the note speaks to them. */
   you?: boolean;
 }) {
+  const chatlet = useServicesRun().chat;
   const have = expand(grants);
   if (!APPS.some((app) => have.includes(app)) && !have.includes(ADMIN)) {
-    return <Callout variant="warning">Overview only: no tasks or pages.</Callout>;
+    return <Callout variant="warning">Overview only: no tasks, pages or chat.</Callout>;
   }
-  if (!have.includes(TRACKER)) {
+  if (!have.includes(WORKLET)) {
     return (
       <Callout variant="warning">
-        Without {accessLabel(TRACKER)}, agents can’t send {you ? "you" : "them"} work.
+        Without {accessLabel(WORKLET)}, agents can’t send {you ? "you" : "them"} work.
+      </Callout>
+    );
+  }
+  if (chatlet && !have.includes(CHATLET)) {
+    return (
+      <Callout variant="warning">
+        Without {accessLabel(CHATLET)}, what agents say to {you ? "you" : "them"} in the
+        company&rsquo;s chat never reaches {you ? "you" : "them"}: a room that names{" "}
+        {you ? "you" : "them"} and a direct message are both read there.
       </Callout>
     );
   }
@@ -412,13 +433,13 @@ export function pressLabel(
  * ONLY A CREDENTIAL IS EVER UNBOUND — a service account or a Tier A token's
  * session acting as itself, which is ordinary — since a person holds a human
  * seat for as long as they exist (ADR-0032). Binding its row to a human seat
- * is what would add the seat's work.
+ * is what would add the seat's work, and on Chatlet the seat's rooms — so `to`
+ * says what the binding opens on the screen that draws it.
  */
-export function UnboundRemedy() {
+export function UnboundRemedy({ to = "get work here" }: { to?: string }) {
   return (
     <>
-      To get work here, bind this account to an open seat:{" "}
-      <InlineCode>crewlet iam bind ID SEAT</InlineCode>.
+      To {to}, bind this account to an open seat: <InlineCode>crewlet iam bind ID SEAT</InlineCode>.
     </>
   );
 }
@@ -1137,7 +1158,7 @@ export function CancelInvitation({
       onConfirm={async () => {
         const answer = await write.run({
           method: "DELETE",
-          path: `/iam/invitations/${encodeURIComponent(row.id)}`,
+          path: `/iam/invitations/${pathSegment(row.id)}`,
         });
         if (!answer) return;
         onChanged();
@@ -1411,11 +1432,11 @@ export function MintTokenDialog({
           {/* A TOKEN CARRYING NOTHING IS STILL A CREDENTIAL, and says what it
               reaches: the overview every signed-in principal reads, and
               nothing of an app — its owner's own inbox, queue and pins
-              included, which are the tracker's. Unsaid, a person holding none
+              included, which are Worklet's. Unsaid, a person holding none
               was offered "Nothing to offer." beside an enabled Mint. */}
           {expand(grants).every((g) => !isGrant(g)) && (
             <Text as="p" variant="caption" tone="secondary">
-              Nothing ticked: overview only. No tasks or pages.
+              Nothing ticked: overview only. No tasks, pages or chat.
             </Text>
           )}
         </>

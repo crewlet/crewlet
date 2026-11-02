@@ -194,7 +194,7 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 // from the record and same-log rows alone, with broker instants, so two nodes at
 // one checkpoint hold the same bytes. The ledger is Divergent: it travels so an
 // adopter can answer a retry of anything its donor applied, and its
-// `applied_at` is each node's own.
+// `applied_at` is each data node's own.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables))
@@ -222,13 +222,13 @@ func (Domain) OpsTable() string { return "artifacts_ops" }
 //
 // FALSE, unlike the tracker's and the pages': a seat reads no artifact on its
 // turn path, so a stalled artifacts copy must not stop a node admitting seats.
-// The copy is still judged, as every domain's is (ADR-0049), and goes out of
+// The copy is still judged, as every domain's is (ADR-0072), and goes out of
 // service for its own readers (a stalled strict replay is a fault, and the
 // framework refuses every read of it), and the estate router and the serving
 // origin decide through a peer that serves.
 func (Domain) GatesSeatAdmission() bool { return false }
 
-// ClaimsIdentity reports that every node's Replicated tables must be
+// ClaimsIdentity reports that every data node's Replicated tables must be
 // byte-identical: N copies of one SQL state from one ordered log.
 func (Domain) ClaimsIdentity() bool { return true }
 

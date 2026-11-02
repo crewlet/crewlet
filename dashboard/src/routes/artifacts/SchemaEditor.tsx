@@ -44,6 +44,7 @@ import type {
   DataOption,
 } from "~/protocol/index.ts";
 import { useKeyedGesture } from "~/lib/keyedWrite.ts";
+import { refuse, useAssistantDraft, type DraftFieldSpec } from "~/app/assistant/draft.ts";
 import { configureSchema } from "~/lib/artifacts/api.ts";
 import {
   PRESET_WORDS,
@@ -81,6 +82,51 @@ const STATUS_TONES: Readonly<
   danger: "Danger",
 };
 
+/**
+ * The fields of a schema's edit, by each collection's place: its title, who
+ * changes it (one of the presets its own control offers, applied as that
+ * control applies it), and its columns, read only.
+ */
+export function schemaFields(count: number): DraftFieldSpec<DataCollection[]>[] {
+  const at = (
+    all: readonly DataCollection[],
+    i: number,
+    change: (c: DataCollection) => DataCollection,
+  ) => all.map((c, j) => (j === i ? change(c) : c));
+  return Array.from({ length: count }, (_, i): DraftFieldSpec<DataCollection[]>[] => [
+    {
+      path: `collections.${i + 1}.title`,
+      label: `Collection ${i + 1} title`,
+      read: (all) => all[i]?.title ?? "",
+      write: (all, title) =>
+        !all[i]
+          ? refuse("That collection is no longer in the schema.")
+          : typeof title !== "string"
+            ? refuse("A collection's title is a line of text.")
+            : at(all, i, (c) => ({ ...c, title })),
+    },
+    {
+      path: `collections.${i + 1}.preset`,
+      label: `Collection ${i + 1}: who changes it`,
+      hint: `One of ${COLLECTION_PRESETS.join(", ")}`,
+      read: (all) => all[i]?.preset ?? "",
+      write: (all, preset) =>
+        !all[i]
+          ? refuse("That collection is no longer in the schema.")
+          : typeof preset === "string" &&
+              (COLLECTION_PRESETS as readonly string[]).includes(preset.trim())
+            ? at(all, i, (c) => withPreset(c, preset.trim() as CollectionPreset))
+            : refuse(`Choose one of ${COLLECTION_PRESETS.join(", ")}.`),
+    },
+    {
+      path: `collections.${i + 1}.columns`,
+      label: `Collection ${i + 1} columns`,
+      read: (all) =>
+        (all[i]?.columns ?? []).map((c) => `${c.label ?? c.key} (${COLUMN_TYPE_WORDS[c.type]})`),
+    },
+  ]).flat();
+}
+
 export function SchemaEditor({
   detail,
   collections,
@@ -107,6 +153,28 @@ export function SchemaEditor({
   const changed = changes > 0;
   const problem = schemaProblem(draft);
   const current = draft.find((c) => c.name === picked) ?? draft[0];
+
+  // WHAT IS OPEN, for the assistant, to an editor of the datastore: each
+  // collection's title, who changes it, and its columns, set through the
+  // editor's own draft; Save, the one schema change, stays the person's.
+  useAssistantDraft<DataCollection[]>(
+    canEdit
+      ? {
+          kind: "client",
+          id: detail.id,
+          step: current ? `collections.${draft.indexOf(current) + 1}` : null,
+          help:
+            "You can set each collection's title and who changes it. Columns are read here: " +
+            "adding, retyping and removing them, and adding collections, are the person's. " +
+            "Saving applies the change for every reader of the sheet.",
+          scope: `The schema of “${detail.title}” (not saved)`,
+          value: draft,
+          fields: schemaFields(draft.length),
+          apply: setDraft,
+          blocked: () => (gesture.busy ? "The schema is being saved." : null),
+        }
+      : null,
+  );
 
   const update = (name: string, change: (c: DataCollection) => DataCollection) =>
     setDraft((was) => was.map((c) => (c.name === name ? change(c) : c)));

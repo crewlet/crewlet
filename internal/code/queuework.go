@@ -30,7 +30,7 @@ import (
 //
 // A fast-forward's commit is its change's head, so its candidate reads the
 // head's checks: a check is a measurement of a commit for its target, whatever
-// purpose queued it (ADR-0068), and a head its gate saw pass needs no run
+// purpose queued it (ADR-0091), and a head its gate saw pass needs no run
 // again.
 
 // QueueDue is one target's queue work as one snapshot holds it

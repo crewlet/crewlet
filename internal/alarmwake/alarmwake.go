@@ -4,7 +4,7 @@
 //
 // # The record a wake derives from
 //
-// ADR-0065. A node's alarm tracker (internal/statelog's Tracker) hands every
+// ADR-0088. A node's alarm tracker (internal/statelog's Tracker) hands every
 // transition it makes — an alarm instance fired, cleared, or found firing by
 // the tracker's first evaluation — to the engine's outbox, which publishes it
 // on the inbound topic as a delivery of this source, retried until the broker

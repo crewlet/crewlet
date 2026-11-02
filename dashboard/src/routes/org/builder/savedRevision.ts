@@ -28,7 +28,8 @@ export interface SavedRevision {
   /**
    * The epoch the write activated, from its answer. `null` when the save's
    * answer was lost and the write was found afterwards by reading the
-   * revision history, which carries no epoch.
+   * revision history, which carries no epoch — until an answer that names
+   * the saved revision supplies it, and [pinSavedEpoch] keeps it.
    */
   readonly epoch: number | null;
 }
@@ -54,6 +55,28 @@ export function recordSavedRevision(saved: SavedRevision): void {
     saved.epoch === null && current?.revisionId === saved.revisionId
       ? { ...saved, epoch: current.epoch }
       : saved;
+  emit();
+}
+
+/**
+ * Keeps the epoch a save without one was found activated at, once an answer
+ * has named it (`AfterSaveStrip.tsx`, `learnedEpoch`).
+ *
+ * LEARNED ONCE AND THEN KEPT. The answers that supply it name the saved
+ * revision only until something else is activated: this node's last attempt
+ * moves on to the next revision, and the fleet's activation does too. Read
+ * again from them on every push, an applied save turned into one that could
+ * not be followed, and a refusal into "activated since", the moment a
+ * colleague activated anything; pinned, every later push is judged against
+ * the epoch the save was activated at.
+ *
+ * ONLY FOR THE SAVE IT WAS LEARNED FOR, and only while it has none: the
+ * follower that learned it pins it from an effect, and a newer save recorded
+ * between that render and the effect is not the one it learned about.
+ */
+export function pinSavedEpoch(revisionId: string, epoch: number): void {
+  if (current?.revisionId !== revisionId || current.epoch !== null) return;
+  current = { ...current, epoch };
   emit();
 }
 

@@ -34,7 +34,7 @@ type Router interface {
 // reads a refusal with no code as NOT THE ENGINE'S: something in front of it
 // answered, and the node may still have done what was asked. So the engine's
 // own "there is nothing here" read as a gateway that swallowed a write: a
-// purge sent to a node with no native tracker, where the route is absent by
+// purge sent to a node with no Worklet, where the route is absent by
 // design, printed "whether the purge landed is unknown" and a retry that met
 // the same 404 for ever — and so did every route a newer CLI or dashboard asks
 // an older node for, and every wrong method.
@@ -98,18 +98,17 @@ func (m *muxRefusal) WriteHeader(status int) {
 // no_route`, naming the method and the path.
 //
 // THE MUX'S OWN ANSWER, and exported for the two other answers that must be
-// INDISTINGUISHABLE from it. A route that IS registered but that this node
-// does not serve NOW — a half this company does not run (the work surface on
-// a company whose tracker is a vendor's, the operator's MCP surface with no
-// native backend), or a route over the engine's native runtime this node's
-// configuration or the mode it started in does not enable, asked at every
-// request — answers in exactly the bytes the route's absence would have: a
-// handler that wrote its own "not served here" would be the one refusal a
-// client told apart from a missing route, and a route that is absent by
-// configuration and one that is absent by build must read the same. And the
-// public listener's refusal of a route that exists on api.port is this answer
-// byte for byte, because a different wording there would tell anybody on the
-// internet that a private admin port exists and which paths it serves.
+// INDISTINGUISHABLE from it. A route that IS registered but has nothing to
+// serve here — the work surface on a company whose tracker is a vendor's, or a
+// route over the engine's native runtime this node's configuration or the mode
+// it started in does not enable, asked at every request — answers in exactly
+// the bytes the route's absence would have: a handler that wrote its own "not
+// served here" would be the one refusal a client told apart from a missing
+// route, and a route that is absent by configuration and one that is absent by
+// build must read the same. And the public listener's refusal of a route that
+// exists on api.port is this answer byte for byte, because a different wording
+// there would tell anybody on the internet that a private admin port exists
+// and which paths it serves.
 //
 // THE HINT NAMES BOTH KINDS OF ABSENCE, because only the first is the path's
 // fault. A node whose configuration or mode does not enable a route has the

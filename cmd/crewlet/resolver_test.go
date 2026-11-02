@@ -7,7 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,6 +27,24 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
+// resolveWith is the resolver a `crewlet gitlab provision` run builds over
+// reads, from the Tier A at bootstrapPath and through apiURL where one is
+// given, saying on notes what it says.
+func resolveWith(t *testing.T, environ config.Source, bootstrapPath, apiURL string,
+	reads []string, notes io.Writer) (*config.Resolver, *companyStore, error) {
+
+	t.Helper()
+	companySecrets, err := openCompanyStore(environ,
+		storeFlags{bootstrap: &bootstrapPath, api: &apiURL},
+		"crewlet gitlab provision")
+	if err != nil {
+		return nil, nil, err
+	}
+	t.Cleanup(companySecrets.Close)
+	resolver, err := companySecrets.resolver(t.Context(), reads, notes)
+	return resolver, companySecrets, err
+}
+
 // A PROVISIONING RUN READS THE SECRET STORE, NOT JUST THE ENVIRONMENT.
 //
 // The chain used to be config.EnvOnly(), so every Tier B ${VAR} an operator
@@ -34,7 +52,8 @@ import (
 // signing secret that is not merely a missing value. Empty is the signal to
 // MINT, so the run replaced a working webhook secret at the third-party app
 // with a fresh one and broke every delivery in flight until the config
-// caught up.
+// caught up. With the engine stopped the run reaches the fleet's store itself,
+// and says so.
 func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -44,12 +63,11 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron,
-		[]string{"GITLAB_SIGNING_SECRET"}, cfg, "", &notes)
+	env, _, err := resolveWith(t, noEnviron, cfg, "",
+		[]string{"GITLAB_SIGNING_SECRET"}, &notes)
 	if err != nil {
-		t.Fatalf("companyResolver: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	defer closeEnv()
 
 	got := env.Value("${GITLAB_SIGNING_SECRET}")
 	if got != "whsec_c3RvcmVkLXNpZ25pbmcta2V5LW9mLTMyLWJ5dGVzIQ==" {
@@ -79,11 +97,10 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 	}
 	t.Setenv("CONFLUENCE_TOKEN", "the-stale-export")
 
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, cfg, "", &bytes.Buffer{})
+	env, _, err := resolveWith(t, noEnviron, cfg, "", []string{"CONFLUENCE_TOKEN"}, &bytes.Buffer{})
 	if err != nil {
-		t.Fatalf("companyResolver: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	defer closeEnv()
 
 	if got := env.Lookup("CONFLUENCE_TOKEN"); got != "the-rotated-one" {
 		t.Fatalf("a stale export shadowed the rotated secret: %q", got)
@@ -91,24 +108,38 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 }
 
 // THE OPERATOR'S OWN CREDENTIAL IS NOT THE COMPANY'S, and does not come
-// from the store.
+// from the store — nor from the process's environment, but from the one the
+// invocation is handed ([runIn]), which for the binary is the process's.
 //
 // A GitLab admin PAT carries `api` scope over the whole group, and the store
-// is replicated to every node holding the keyring. Crewlet never persists
-// one; reading one back would imply it may be kept there — which is how the
-// most powerful credential in the deployment ends up in the shared table
-// beside the seat tokens it exists to mint.
+// is held on the coordination KV, which every node reads and every node's
+// keyring opens. Crewlet never persists one; reading one back would imply it
+// may be kept there — which is how the most powerful credential in the
+// deployment ends up in the shared store beside the seat tokens it exists to
+// mint. And a case that read the process's
+// environment would run on whatever the machine running the suite exports.
+//
+// Not parallel: it exports the credential on the process, to show a run
+// handed an environment without it does not read it there.
+//
+// Mutation: read the store, or the process's environment, and the run finds a
+// provisioning token.
 func TestAnOperatorCredentialIsNotReadFromTheStore(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, cfg, "set", "GITLAB_ADMIN_TOKEN",
 		"-value", "stored-admin-pat"); err != nil {
 		t.Fatalf("seed the store: %v (%s)", err, errs)
 	}
-	if got := operatorCredential("GITLAB_ADMIN_TOKEN"); got != "" {
-		t.Fatalf("an operator credential was read out of the secret store: %q", got)
+	t.Setenv("GITLAB_ADMIN_TOKEN", "process-admin-pat")
+	company := companyAt(t, readerCompanyDoc, untouchedVendor(t))
+	_, _, err := cliIn(t, noEnviron, "gitlab", "provision", company, "-print",
+		"-config", cfg, "-public-url", "https://crewlet.example.com")
+	if err == nil || !strings.Contains(err.Error(), "no provisioning token") {
+		t.Fatalf("err = %v, want the run to find no provisioning token: one was read "+
+			"out of the secret store or the process's environment", err)
 	}
-	t.Setenv("GITLAB_ADMIN_TOKEN", "  exported-admin-pat  ")
-	if got := operatorCredential("GITLAB_ADMIN_TOKEN"); got != "exported-admin-pat" {
+	exported := config.MapSource{"GITLAB_ADMIN_TOKEN": "  exported-admin-pat  "}
+	if got := operatorCredential(exported, "GITLAB_ADMIN_TOKEN"); got != "exported-admin-pat" {
 		t.Errorf("the exported credential did not reach the run: %q", got)
 	}
 }
@@ -123,11 +154,10 @@ func TestWithoutAStoreTheRunSaysWhichChainItUsed(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-here.yaml")
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, missing, "", &notes)
+	env, _, err := resolveWith(t, noEnviron, missing, "", nil, &notes)
 	if err != nil {
 		t.Fatalf("a missing bootstrap is a supported deployment: %v", err)
 	}
-	defer closeEnv()
 
 	t.Setenv("SOME_TOKEN", "from-the-environment")
 	if got := env.Lookup("SOME_TOKEN"); got != "from-the-environment" {
@@ -157,7 +187,7 @@ func TestABootstrapWithNoKeyringIsRefused(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	_, _, _, err := companyResolver(t.Context(), noEnviron, nil, path, "", &notes)
+	_, _, err := resolveWith(t, noEnviron, path, "", nil, &notes)
 	if err == nil {
 		t.Fatal("a keyringless bootstrap was resolved rather than refused")
 	}
@@ -184,7 +214,7 @@ func TestABrokenBootstrapRefusesRatherThanResolvingFromTheEnvironment(t *testing
 	}
 
 	var notes bytes.Buffer
-	if _, _, _, err := companyResolver(t.Context(), noEnviron, nil, path, "", &notes); err == nil {
+	if _, _, err := resolveWith(t, noEnviron, path, "", nil, &notes); err == nil {
 		t.Fatal("a bootstrap that cannot be read was treated as no bootstrap, " +
 			"so a configured store silently became a stale environment")
 	}
@@ -193,25 +223,42 @@ func TestABrokenBootstrapRefusesRatherThanResolvingFromTheEnvironment(t *testing
 	}
 }
 
-// revealNode is a running node's /secrets surface as a read through it meets
-// it: a listing of the names the fleet holds, and each value behind a reveal.
+// revealNode is a running node's /secrets surface as a run reading through it
+// meets it: a listing of the names the fleet holds, POST /secrets/reveal
+// answering the values of the names a batch asks for — refusing the whole
+// batch over a name outside the grammar or a reserved one, as the node does —
+// the single break-glass GET, and the write.
 type revealNode struct {
 	server *httptest.Server
-	held   map[string]string
 
 	mu sync.Mutex
 
+	// held is every value the node holds, by name: what it was made with,
+	// and what [revealNode.hold] has added since, while it serves.
+	held map[string]string
+
 	// refuse, when set, is the status every reveal is answered with, and
 	// its body the engine's own refusal of a machine token.
-	refuse   int
+	refuse int
+
+	// gone is the names the listing still names and a reveal no longer
+	// finds: removed between the two.
+	gone map[string]bool
+
+	// asked is each POST /secrets/reveal batch, and revealed every name a
+	// reveal of either kind asked for; gets is the GET reveals alone.
+	asked    [][]string
 	revealed []string
-	tokens   []string
-	stored   map[string]string
+	gets     []string
+
+	tokens       []string
+	contentTypes []string
+	stored       map[string]string
 }
 
 func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 	t.Helper()
-	n := &revealNode{held: held}
+	n := &revealNode{held: held, gone: map[string]bool{}}
 	n.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
 		n.tokens = append(n.tokens, r.Header.Get("Authorization"))
@@ -225,7 +272,30 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 			}
 			n.stored[name] = string(value)
 			n.mu.Unlock()
-			_, _ = fmt.Fprint(w, `{"updated_by":"token:ops","updated_by_kind":"operator"}`)
+			// AND THE RE-ACTIVATION A NODE MAKES of a value its company
+			// reads (ADR-0070), which a command prints.
+			_, _ = fmt.Fprint(w, `{"updated_by":"token:ops","updated_by_kind":"operator",`+
+				`"read_by":["providers.llm.default.auth.token"],`+
+				`"reload":{"revision_id":"r-2","epoch":7}}`)
+			return
+		}
+		// THE BATCH WRITE, which a provisioning sink records through.
+		if r.Method == http.MethodPut && r.URL.Path == "/secrets" {
+			var batch struct {
+				Values map[string]string `json:"values"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&batch)
+			n.mu.Lock()
+			if n.stored == nil {
+				n.stored = map[string]string{}
+			}
+			maps.Copy(n.stored, batch.Values)
+			n.mu.Unlock()
+			_, _ = fmt.Fprint(w, `{"read_by":{},"reload":null}`)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/secrets/reveal" {
+			n.revealMany(w, r)
 			return
 		}
 		if r.Method != http.MethodGet {
@@ -233,10 +303,12 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 			return
 		}
 		if r.URL.Path == "/secrets" {
+			n.mu.Lock()
 			var rows []map[string]string
 			for name := range n.held {
 				rows = append(rows, map[string]string{"name": name, "key_id": "k1"})
 			}
+			n.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"secrets": rows})
 			return
 		}
@@ -248,15 +320,17 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 		}
 		n.mu.Lock()
 		n.revealed = append(n.revealed, name)
+		n.gets = append(n.gets, name)
 		refuse := n.refuse
+		value, held := n.held[name]
+		gone := n.gone[name]
 		n.mu.Unlock()
 		if refuse != 0 {
 			w.WriteHeader(refuse)
 			_, _ = fmt.Fprint(w, `{"error":"token_refused","detail":"a person must be present"}`)
 			return
 		}
-		value, held := n.held[name]
-		if !held {
+		if !held || gone {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = fmt.Fprint(w, `{"error":"not_found"}`)
 			return
@@ -267,26 +341,105 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 	return n
 }
 
-// boot is a Tier A whose API address is this node's.
-func (n *revealNode) boot(t *testing.T) *config.Bootstrap {
-	t.Helper()
-	host, port, err := net.SplitHostPort(strings.TrimPrefix(n.server.URL, "http://"))
-	if err != nil {
-		t.Fatal(err)
+// revealMany answers POST /secrets/reveal as the node does: the whole batch
+// refused over one name outside the grammar (400) or one reserved (403), and
+// otherwise `values` for what it holds and `missing` for the rest.
+func (n *revealNode) revealMany(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Names []string `json:"names"`
 	}
-	p, err := strconv.Atoi(port)
-	if err != nil {
-		t.Fatal(err)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"error":"invalid_body"}`)
+		return
 	}
-	return bootWithAPI(t, host, p, "")
+	n.mu.Lock()
+	n.asked = append(n.asked, slices.Clone(body.Names))
+	n.revealed = append(n.revealed, body.Names...)
+	n.contentTypes = append(n.contentTypes, r.Header.Get("Content-Type"))
+	refuse := n.refuse
+	n.mu.Unlock()
+	if refuse != 0 {
+		w.WriteHeader(refuse)
+		_, _ = fmt.Fprint(w, `{"error":"token_refused","detail":"a person must be present"}`)
+		return
+	}
+	for _, name := range body.Names {
+		if secrets.Reserved(name) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = fmt.Fprint(w, `{"error":"reserved_name"}`)
+			return
+		}
+		if secrets.CheckName(name) != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(w, `{"error":"invalid_name"}`)
+			return
+		}
+	}
+	values, missing := map[string]string{}, []string{}
+	n.mu.Lock()
+	for _, name := range body.Names {
+		if value, held := n.held[name]; held && !n.gone[name] {
+			values[name] = value
+		} else {
+			missing = append(missing, name)
+		}
+	}
+	n.mu.Unlock()
+	_ = json.NewEncoder(w).Encode(map[string]any{"values": values, "missing": missing})
 }
 
+// requests is how many requests of any kind have reached the node.
+func (n *revealNode) requests() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.tokens)
+}
+
+// reveals is every name a reveal of either kind asked for, sorted.
 func (n *revealNode) reveals() []string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	out := slices.Clone(n.revealed)
 	slices.Sort(out)
 	return out
+}
+
+// batches is every POST /secrets/reveal batch, in order, and the GET reveals.
+func (n *revealNode) batches() (asked [][]string, gets []string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.asked), slices.Clone(n.gets)
+}
+
+// holds is the value the node holds under name, written to it or listed by it.
+func (n *revealNode) holds(name string) (string, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if value, ok := n.stored[name]; ok {
+		return value, true
+	}
+	value, ok := n.held[name]
+	return value, ok
+}
+
+// storedThroughNode is what a `crewlet gitlab provision` run, named -api, reads
+// of the node for reads: its stored values, and what it said.
+func storedThroughNode(t *testing.T, node *revealNode, environ config.Source,
+	reads []string) (*storedValues, string, error) {
+
+	t.Helper()
+	var notes bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "crewlet.yaml")
+	api := node.server.URL
+	companySecrets, err := openCompanyStore(environ, storeFlags{bootstrap: &missing, api: &api},
+		"crewlet gitlab provision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(companySecrets.Close)
+	values, err := companySecrets.stored(t.Context(), reads, &notes)
+	return values, notes.String(), err
 }
 
 // readingCompany reads two variables: a ${VAR} its model's env names, and the
@@ -300,6 +453,7 @@ roles:
     handle: ceo
     goal: Run the company
 providers:
+  sandbox: {fake: true}
   llm:
     default:
       model: sonnet
@@ -312,10 +466,6 @@ providers:
 	return company
 }
 
-// errLockedStore is the error a store a running engine holds opens with.
-var errLockedStore = fmt.Errorf("open store: %w: /var/lib/crewlet/index.db is held by "+
-	"pid 41 on host-a since 2026-01-01T00:00:00Z", store.ErrLocked)
-
 // scopeCompanyDoc reads variables at every kind of field a command reads, and
 // beside each one a variable that command must not read: an entry whose key
 // is another's and a dot; a vendor block's field the command never resolves;
@@ -326,6 +476,7 @@ var errLockedStore = fmt.Errorf("open store: %w: /var/lib/crewlet/index.db is he
 const scopeCompanyDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     default:
       model: sonnet
@@ -368,6 +519,7 @@ roles:
     llm: default
     integrations:
       mattermost:
+        enabled: false
         bot_token: "${MATTERMOST_BOT_CEO}"
 units:
   - name: Engineering
@@ -396,6 +548,7 @@ units:
                 CONFLUENCE_PERSONAL_TOKEN: "${CONFLUENCE_PAT_SWE}"
             integrations:
               mattermost:
+                enabled: false
                 bot_token: "${MATTERMOST_BOT_SWE}"
   - name: Research
     lead: ceo
@@ -444,21 +597,16 @@ func scopeCompany(t *testing.T) (*config.Company, *org.Organization) {
 	return company, organization
 }
 
-// BESIDE A RUNNING ENGINE THE COMPANY'S VALUES ARE READ THROUGH IT — AND A
-// COMMAND REVEALS ONLY WHAT IT READS.
+// THROUGH A RUNNING NODE A COMMAND REVEALS ONLY WHAT IT READS, IN ONE BATCH.
 //
-// The engine holds its store for as long as it runs, and the company's
-// stored values are the fleet's then, inside the engine's own process. Every
-// command that reads the company — `crewlet llm` and the vendor commands —
-// used to stop at the lock, which made `crewlet llm login` impossible beside
-// the seats it signs in. And each value comes back through a REVEAL, logged
-// by name against the caller, so a command asks for what it reads and
-// nothing else: one entry's sign-in for `crewlet llm login`, not its dotted
-// neighbour's, nor every vendor's tokens; a GitLab provision's instance and
-// signing key, not the engine's GitLab token; the seat credentials a reader
-// consults, not the rest of the block they sit in, a unit's credential no
-// seat inherits, or a tool server's that only shares the vendor's name. A
-// name the fleet does not hold is left to the environment without a request.
+// Each value comes back through a REVEAL, logged by name against the caller,
+// so a command asks for what it reads and nothing else: one entry's sign-in
+// for `crewlet llm login`, not its dotted neighbour's, nor every vendor's
+// tokens; a GitLab provision's instance and signing key, not the engine's
+// GitLab token; the seat credentials a reader consults, not the rest of the
+// block they sit in, a unit's credential no seat inherits, or a tool server's
+// that only shares the vendor's name. And it asks for them together, in one
+// POST /secrets/reveal, where it once made one GET per name.
 func TestARunningEngineRevealsOnlyWhatTheCommandReads(t *testing.T) {
 	t.Parallel()
 	company, organization := scopeCompany(t)
@@ -498,10 +646,6 @@ func TestARunningEngineRevealsOnlyWhatTheCommandReads(t *testing.T) {
 			[]string{"JIRA_TOKEN_SWE"},
 		},
 		{
-			"crewlet mattermost provision", mattermostProvisionReads(integrations.Mattermost),
-			[]string{"MATTERMOST_URL"},
-		},
-		{
 			// A bot token at the root and two units down.
 			"crewlet mattermost doctor", mattermostDoctorReads(integrations.Mattermost, organization),
 			[]string{"MATTERMOST_BOT_CEO", "MATTERMOST_BOT_SWE", "MATTERMOST_URL"},
@@ -514,15 +658,17 @@ func TestARunningEngineRevealsOnlyWhatTheCommandReads(t *testing.T) {
 		t.Run(tc.command, func(t *testing.T) {
 			t.Parallel()
 			node := scopeNode(t)
-			var notes bytes.Buffer
-			values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
-				node.boot(t), "crewlet.yaml", tc.reads, errLockedStore, &notes)
+			values, notes, err := storedThroughNode(t, node, tokenEnviron("ops-token"), tc.reads)
 			if err != nil {
 				t.Fatalf("a running engine's store was refused rather than read through it: %v", err)
 			}
-			if !slices.Equal(node.reveals(), tc.want) {
-				t.Errorf("revealed %v, want only what the command reads, %v",
-					node.reveals(), tc.want)
+			asked, gets := node.batches()
+			if len(asked) != 1 || !slices.Equal(asked[0], tc.want) {
+				t.Errorf("asked %v, want one batch of only what the command reads, %v",
+					asked, tc.want)
+			}
+			if len(gets) != 0 {
+				t.Errorf("revealed %v one GET at a time beside the batch", gets)
 			}
 			resolver := config.WithStore(values)
 			for _, name := range tc.want {
@@ -535,31 +681,84 @@ func TestARunningEngineRevealsOnlyWhatTheCommandReads(t *testing.T) {
 					t.Errorf("a request carried %q, not the invocation's own credential", token)
 				}
 			}
-			if !strings.Contains(notes.String(), node.server.URL) ||
-				!strings.Contains(notes.String(), fmt.Sprintf(": %d of", len(tc.want))) {
-				t.Errorf("the run did not say which chain it read, and how much: %q", notes.String())
+			for _, want := range []string{node.server.URL,
+				fmt.Sprintf(": %d of the %d stored values", len(tc.want), len(tc.want)),
+				"in 1 request,"} {
+				if !strings.Contains(notes, want) {
+					t.Errorf("the run did not say which chain it read, and how much (%q): %q",
+						want, notes)
+				}
 			}
 		})
 	}
 }
 
+// ONLY NAMES THE NODE LISTS ARE ASKED FOR. A name the command reads and the
+// node does not hold costs no request and is never named to the node, whose
+// log records every name a batch asks; a name the listing gave and the node
+// no longer finds — removed between the two — falls to the environment, and
+// is not asked for again when it is read.
+func TestOnlyNamesTheNodeListsAreAskedFor(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{"HELD": "v-HELD", "GONE": "v-GONE"})
+	node.gone["GONE"] = true
+	values, notes, err := storedThroughNode(t, node, tokenEnviron("ops-token"),
+		[]string{"GONE", "HELD", "NEVER_STORED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked, _ := node.batches()
+	if want := [][]string{{"GONE", "HELD"}}; len(asked) != 1 || !slices.Equal(asked[0], want[0]) {
+		t.Fatalf("asked %v, want %v: a name the node does not list was sent", asked, want)
+	}
+	if _, ok := values.Lookup("GONE"); ok {
+		t.Error("a name the node answered missing resolved as held")
+	}
+	if _, ok := values.Lookup("NEVER_STORED"); ok {
+		t.Error("a name the node never listed resolved as held")
+	}
+	if asked, _ := node.batches(); len(asked) != 1 {
+		t.Errorf("reading the missing names asked the node again: %v", asked)
+	}
+	if !strings.Contains(notes, ": 1 of the 2 stored values") {
+		t.Errorf("the line does not count what came back of what was asked: %q", notes)
+	}
+}
+
+// NO VALUE THE COMMAND READS IS HELD: the listing alone, which reveals
+// nothing, and the line says so rather than counting zero reveals.
+func TestANodeHoldingNoneOfTheReadsIsAskedNothing(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{"SOMETHING_ELSE": "x"})
+	_, notes, err := storedThroughNode(t, node, tokenEnviron("ops-token"), []string{"GITLAB_URL"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked, gets := node.batches(); len(asked)+len(gets) != 0 {
+		t.Errorf("a node holding none of the reads was asked %v and %v", asked, gets)
+	}
+	if !strings.Contains(notes, "it holds none of the values this command reads") {
+		t.Errorf("the line does not say nothing was revealed: %q", notes)
+	}
+}
+
 // A READ BEYOND WHAT THE COMMAND REVEALS FIRST IS STILL THE FLEET'S VALUE,
-// revealed as it is made and said: a command whose list missed a field it
-// reads resolves what the engine would, rather than reading the stored value
-// as unset — which, for a key a provisioner mints when it resolves empty,
-// replaces a working one. And a name the fleet does not hold costs no
-// request.
+// revealed as it is made — one name, by the same POST — and said: a command
+// whose list missed a field it reads resolves what the engine would, rather
+// than reading the stored value as unset — which, for a key a provisioner
+// mints when it resolves empty, replaces a working one. And a name the fleet
+// does not hold costs no request.
 func TestAReadBeyondTheScopeIsStillTheFleetsValue(t *testing.T) {
 	t.Parallel()
 	node := scopeNode(t)
 	company, _ := scopeCompany(t)
-	var notes bytes.Buffer
-	values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
-		node.boot(t), "crewlet.yaml", gitlabProvisionReads(company.Integrations.GitLab),
-		errLockedStore, &notes)
+	values, _, err := storedThroughNode(t, node, tokenEnviron("ops-token"),
+		gitlabProvisionReads(company.Integrations.GitLab))
 	if err != nil {
 		t.Fatal(err)
 	}
+	var notes bytes.Buffer
+	values.notes = &notes
 	resolver := config.WithStore(values)
 	if got := resolver.Value("${GITLAB_READ_TOKEN}"); got != "v-GITLAB_READ_TOKEN" {
 		t.Errorf("a read beyond the scope resolved to %q, not the fleet's value", got)
@@ -576,10 +775,13 @@ func TestAReadBeyondTheScopeIsStillTheFleetsValue(t *testing.T) {
 	}
 	resolver.Value("${GITLAB_READ_TOKEN}")
 	resolver.Value("${NOT_HELD_BY_THE_FLEET}")
-	want := []string{"GITLAB_READ_TOKEN", "GITLAB_SIGNING_SECRET", "GITLAB_URL"}
-	if !slices.Equal(node.reveals(), want) {
-		t.Errorf("revealed %v, want %v: once each, and nothing the fleet does not hold",
-			node.reveals(), want)
+	asked, gets := node.batches()
+	want := [][]string{{"GITLAB_SIGNING_SECRET", "GITLAB_URL"}, {"GITLAB_READ_TOKEN"}}
+	if len(asked) != len(want) || !slices.Equal(asked[0], want[0]) || !slices.Equal(asked[1], want[1]) {
+		t.Errorf("asked %v, want %v: once each, and nothing the fleet does not hold", asked, want)
+	}
+	if len(gets) != 0 {
+		t.Errorf("a read beyond the scope revealed %v by GET", gets)
 	}
 }
 
@@ -602,9 +804,8 @@ func TestARefusedReadBeyondTheScopeStopsTheRun(t *testing.T) {
 			t.Parallel()
 			node := scopeNode(t)
 			company, _ := scopeCompany(t)
-			values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
-				node.boot(t), "crewlet.yaml", gitlabProvisionReads(company.Integrations.GitLab),
-				errLockedStore, &bytes.Buffer{})
+			values, _, err := storedThroughNode(t, node, tokenEnviron("ops-token"),
+				gitlabProvisionReads(company.Integrations.GitLab))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -636,31 +837,52 @@ func TestARefusedReadBeyondTheScopeStopsTheRun(t *testing.T) {
 	}
 }
 
-// A GITLAB PROVISION BESIDE A RUNNING ENGINE KEEPS THE KEY ITS HOOK SIGNS
-// WITH, reading it through the node — and reveals the two fields it reads
-// and nothing else, none of them as a read beyond its list.
+// A GITLAB PROVISION THROUGH A NODE KEEPS THE KEY ITS HOOK SIGNS WITH, reading
+// it through the node in one batch of the two fields it reads and nothing
+// else, none of them as a read beyond its list — whether or not a Tier A is
+// here, and creating no database where one is: -api names the node, possibly
+// from a machine that is not one.
 func TestAGitLabProvisionThroughANodeRevealsOnlyItsOwnFields(t *testing.T) {
 	t.Parallel()
-	node := scopeNode(t)
-	company := writeFile(t, t.TempDir(), "company.yaml", strings.NewReplacer(
-		"url: https://gitlab.example.com", `url: "${GITLAB_URL}"`,
-		"    enabled: true\n", "    enabled: true\n    token: \"${GITLAB_READ_TOKEN}\"\n",
-	).Replace(gitlabCompanyDoc))
-	var out, errs bytes.Buffer
-	err := runGitLabProvision(tokenEnviron("ops-token"), []string{company, "-dry-run",
-		"-config", bootstrapWithKeyring(t, "k1"), "-api", node.server.URL,
-		"-public-url", "https://crewlet.example.com"}, &out, &errs)
-	if err != nil {
-		t.Fatalf("gitlab provision -dry-run through a node: %v\n%s", err, errs.String())
+	cfg := bootstrapWithKeyring(t, "k1")
+	for name, config := range map[string]string{
+		"with a Tier A here": cfg,
+		"with no Tier A":     filepath.Join(t.TempDir(), "absent.yaml"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			node := scopeNode(t)
+			company := writeFile(t, t.TempDir(), "company.yaml", strings.NewReplacer(
+				"url: https://gitlab.example.com", `url: "${GITLAB_URL}"`,
+				"    enabled: true\n", "    enabled: true\n    token: \"${GITLAB_READ_TOKEN}\"\n",
+			).Replace(gitlabCompanyDoc))
+			var out, errs bytes.Buffer
+			err := runGitLabProvision(invocation{environ: tokenEnviron("ops-token")}, []string{company, "-dry-run",
+				"-config", config, "-api", node.server.URL,
+				"-public-url", "https://crewlet.example.com"}, &out, &errs)
+			if err != nil {
+				t.Fatalf("gitlab provision -dry-run through a node: %v\n%s", err, errs.String())
+			}
+			if !strings.Contains(out.String(), "reused — the configured one already resolves") {
+				t.Errorf("the stored signing key did not reach the plan, which mints over it:\n%s",
+					out.String())
+			}
+			asked, gets := node.batches()
+			if want := []string{"GITLAB_SIGNING_SECRET", "GITLAB_URL"}; len(asked) != 1 ||
+				!slices.Equal(asked[0], want) || len(gets) != 0 {
+				t.Errorf("asked %v and %v, want one batch of the two fields the command reads, %v",
+					asked, gets, want)
+			}
+			if strings.Contains(out.String(), "as it was read") {
+				t.Errorf("the command read beyond the fields it declares:\n%s", out.String())
+			}
+		})
 	}
-	if !strings.Contains(out.String(), "reused — the configured one already resolves") {
-		t.Errorf("the stored signing key did not reach the plan, which mints over it:\n%s", out.String())
-	}
-	if want := []string{"GITLAB_SIGNING_SECRET", "GITLAB_URL"}; !slices.Equal(node.reveals(), want) {
-		t.Errorf("revealed %v, want the two fields the command reads, %v", node.reveals(), want)
-	}
-	if strings.Contains(out.String(), "as it was read") {
-		t.Errorf("the command read beyond the fields it declares:\n%s", out.String())
+	db := storePathOf(t, cfg)
+	for _, path := range []string{db, db + ".lock"} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a run through a named node created %s here: %v", path, err)
+		}
 	}
 }
 
@@ -674,17 +896,17 @@ func TestANamedNodeIsReadWithNoTierAHere(t *testing.T) {
 	node := scopeNode(t)
 	missing := filepath.Join(t.TempDir(), "crewlet.yaml")
 	var notes bytes.Buffer
-	env, boot, closeEnv, err := companyResolver(t.Context(), tokenEnviron("ops-token"),
-		[]string{"GITLAB_SIGNING_SECRET"}, missing, node.server.URL, &notes)
+	env, companySecrets, err := resolveWith(t, tokenEnviron("ops-token"), missing,
+		node.server.URL, []string{"GITLAB_SIGNING_SECRET"}, &notes)
 	if err != nil {
 		t.Fatalf("a named node with no Tier A here: %v", err)
 	}
-	defer closeEnv()
 	if got := env.Lookup("GITLAB_SIGNING_SECRET"); got != "v-GITLAB_SIGNING_SECRET" {
 		t.Errorf("the signing key resolved to %q, not the named node's", got)
 	}
-	if boot != nil || strings.Contains(notes.String(), "environment only") {
-		t.Errorf("the run read the environment alone (Tier A %v): %q", boot, notes.String())
+	if companySecrets.boot != nil || strings.Contains(notes.String(), "environment only") {
+		t.Errorf("the run read the environment alone (Tier A %v): %q",
+			companySecrets.boot, notes.String())
 	}
 }
 
@@ -697,11 +919,10 @@ func TestANamedNodeIsReadWithNoTierAHere(t *testing.T) {
 // replaced it. The value here is put on the fleet's store the way a running
 // node puts it there, and both halves of one provisioning run must see it —
 // at once, as a run holds them: the resolver it plans from and the sink it
-// asks before minting.
+// asks before minting, over the run's one route.
 //
-// Mutation: read a table of the node's own again and both resolve unset; take
-// the store per opener rather than once per process and the sink is refused
-// a second broker on the store directory the resolver's already holds.
+// Mutation: answer a stopped node from anywhere but the fleet's store, and
+// both resolve unset.
 func TestAStoppedNodeReadsWhatTheFleetHolds(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -725,26 +946,29 @@ func TestAStoppedNodeReadsWhatTheFleetHolds(t *testing.T) {
 	}
 	onTheFleet.Close()
 
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron,
-		[]string{"GITLAB_SIGNING_SECRET"}, cfg, "", &bytes.Buffer{})
-	if err != nil {
-		t.Fatalf("companyResolver on a stopped node: %v", err)
-	}
-	defer closeEnv()
-	if got := env.Value("${GITLAB_SIGNING_SECRET}"); got != key {
-		t.Errorf("the resolver read the fleet's signing key as %q", got)
-	}
-
 	flags := flag.NewFlagSet("provision", flag.ContinueOnError)
 	sinks := addSinkFlags(flags)
 	if err := flags.Parse([]string{"-secret-store", "-config", cfg}); err != nil {
 		t.Fatal(err)
 	}
-	sink, closeSink, err := sinks.open(t.Context(), noEnviron, io.Discard)
+	companySecrets, err := openCompanyStore(noEnviron, sinks.store, "crewlet gitlab provision")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(t.Context(), []string{"GITLAB_SIGNING_SECRET"},
+		&bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("resolve on a stopped node: %v", err)
+	}
+	if got := env.Value("${GITLAB_SIGNING_SECRET}"); got != key {
+		t.Errorf("the resolver read the fleet's signing key as %q", got)
+	}
+
+	sink, err := sinks.open(t.Context(), companySecrets, io.Discard)
 	if err != nil {
 		t.Fatalf("open the -secret-store sink beside the resolver: %v", err)
 	}
-	defer closeSink()
 	held, ok, err := sink.Value(t.Context(), "GITLAB_SIGNING_SECRET")
 	if err != nil || !ok || held != key {
 		t.Errorf("the sink read the fleet's key as %q (held %v, err %v): a "+
@@ -752,54 +976,37 @@ func TestAStoppedNodeReadsWhatTheFleetHolds(t *testing.T) {
 	}
 }
 
-// A READ THE NODE REFUSES SAYS BOTH WHY, AND WHAT THE READ NEEDS.
+// ONLY A LOCKED DATABASE IS READ THROUGH THE NODE. Any other failure to reach
+// the store with the engine stopped is a broken node, and answering it through
+// the node's API would replace its message with a connection refused — or
+// with an answer from a node the run was never meant to ask.
 //
-// A machine token is refused every reveal, whatever it carries, and the
-// command has no other way to the values while the engine runs. So the lock
-// and the refusal are both in the error, with the token a reveal takes — and
-// stopping the engine is NOT offered: it would let the command reach the store
-// itself, but a node taken down to read a value is an outage to save a token.
-func TestARefusedReadThroughTheNodeSaysBothWhyAndWhatItTakes(t *testing.T) {
-	t.Parallel()
-	node := newRevealNode(t, map[string]string{"PROXY_URL": "http://proxy.example.com:3128"})
-	node.refuse = http.StatusForbidden
-
-	_, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("pat-of-a-person"),
-		node.boot(t), "crewlet.yaml", llmEntryReads(readingCompany(t), []string{"default"}),
-		errLockedStore, &bytes.Buffer{})
-	if err == nil {
-		t.Fatal("a refused reveal resolved anyway, so a stored value would read as unset")
-	}
-	if !errors.Is(err, store.ErrLocked) {
-		t.Fatalf("the lock's sentinel was lost: %v", err)
-	}
-	for _, want := range []string{"pid 41", "crewlet.yaml", "403", apiTokenEnv, "Tier A"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal omits %q: %v", want, err)
-		}
-	}
-	if strings.Contains(err.Error(), "stop `crewlet run`") {
-		t.Errorf("the refusal offers stopping the engine — an outage to read a "+
-			"value — when the way round is the token: %v", err)
-	}
-}
-
-// ONLY A LOCKED STORE IS READ THROUGH THE NODE. Any other failure is a broken
-// node, and an HTTP attempt would replace its message with a connection
-// refused.
+// Mutation: route every failure of the stopped-engine way in through the
+// node, and the node is asked.
 func TestOnlyALockedStoreIsReadThroughTheNode(t *testing.T) {
 	t.Parallel()
 	node := newRevealNode(t, map[string]string{"PROXY_URL": "http://proxy.example.com:3128"})
-	other := errors.New("the keyring cannot open this store")
-
-	_, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
-		node.boot(t), "crewlet.yaml", llmEntryReads(readingCompany(t), []string{"default"}),
-		other, &bytes.Buffer{})
-	if !errors.Is(err, other) || err.Error() != other.Error() {
-		t.Fatalf("an unrelated failure was not returned as it was: %v", err)
+	cfg := bootstrapForURL(t, node.server.URL)
+	boot, err := loadBootstrapForStore(cfg)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(node.tokens) != 0 {
-		t.Errorf("an unrelated failure was answered with %d requests to the node", len(node.tokens))
+	// A STORE DIRECTORY THAT IS A FILE: no broker starts on it, and nothing
+	// holds the node's database.
+	if err := os.WriteFile(boot.Stream.StoreDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = resolveWith(t, tokenEnviron(cliFixtureToken), cfg, "",
+		llmEntryReads(readingCompany(t), []string{"default"}), &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("a store no broker could start on resolved anyway")
+	}
+	if errors.Is(err, store.ErrLocked) {
+		t.Fatalf("an unrelated failure was read as a running engine: %v", err)
+	}
+	if n := node.requests(); n != 0 {
+		t.Errorf("an unrelated failure was answered with %d requests to the node", n)
 	}
 }
 
@@ -820,12 +1027,11 @@ func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 		filepath.Join(filepath.Dir(cfg), "stream"),
 	}
 
-	env, _, closeEnv, err := companyResolver(t.Context(), tokenEnviron("ops-token"),
-		llmEntryReads(readingCompany(t), []string{"default"}), cfg, node.server.URL, &bytes.Buffer{})
+	env, _, err := resolveWith(t, tokenEnviron("ops-token"), cfg, node.server.URL,
+		llmEntryReads(readingCompany(t), []string{"default"}), &bytes.Buffer{})
 	if err != nil {
-		t.Fatalf("companyResolver through a named node: %v", err)
+		t.Fatalf("resolve through a named node: %v", err)
 	}
-	defer closeEnv()
 	if got := env.Value("${PROXY_URL}"); got != "http://proxy.example.com:3128" {
 		t.Errorf("${PROXY_URL} = %q, not the named node's value", got)
 	}
@@ -836,28 +1042,31 @@ func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 	}
 }
 
-// SLACK RESOLVES NOTHING, so it opens no store for it. What it reads of the
-// deployment is Tier A's address alone, and resolving the company's values
-// there — opening the store, or beside a running engine revealing them
-// through it — would be a credential read for a run that uses none.
-func TestSlackProvisionReadsTierAAndNoStore(t *testing.T) {
+// THE RETIRED SLACK PROVISIONING SAYS WHERE ITS WORK WENT, AND OPENS NO STORE.
+//
+// Each agent's Slack app is created and kept by the reconcile loop now, so the
+// command answers with its retirement before it reads anything: no route is
+// decided, and nothing a store route leaves behind (the database lock, the
+// broker's store directory) is there.
+func TestTheRetiredSlackProvisionSaysWhereItsWorkWent(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
-	storePath := filepath.Join(filepath.Dir(cfg), "index.db")
+	boot, err := loadBootstrapForStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	companyPath := filepath.Join(t.TempDir(), "company.yaml")
 	if err := os.WriteFile(companyPath, []byte(builderCompany), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	var out, errs bytes.Buffer
-	err := run([]string{"slack", "provision", companyPath, "-print", "-config", cfg,
-		"-ledger", filepath.Join(t.TempDir(), "ledger.json")}, &out, &errs)
-	if err != nil {
-		t.Fatalf("slack provision of a company with no Slack seat: %v (%s)", err, errs.String())
+	_, _, err = cliIn(t, noEnviron, "slack", "provision", companyPath, "-print", "-config", cfg)
+	if err == nil || !strings.Contains(err.Error(), "is retired") || !strings.Contains(err.Error(), "Agents tab") {
+		t.Fatalf("slack provision answered %v, want its retirement", err)
 	}
-	if _, err := os.Stat(storePath); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("slack provision opened the store at %s, though it resolves nothing: %v",
-			storePath, err)
+	for _, path := range []string{boot.Store.Path + ".lock", boot.Stream.StoreDir} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the retired command reached the store (%s): %v", path, err)
+		}
 	}
 }
 
@@ -896,20 +1105,20 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 		return strings.Replace(healthyDoctorEntry(t, key, "m"),
 			"auth: {token: fake-headless-token}", `auth: {token: "${`+name+`}"}`, 1)
 	}
-	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  llm:\n"+
+	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n"+
 		signsInFrom("claude", "FLEET_TOKEN")+signsInFrom("other", "OTHER_TOKEN")+
-		"roles:\n  - name: CEO\n    handle: ceo\n    llm: claude\n")
+		"roles:\n  - name: CEO\n    handle: ceo\n    kind: human\n")
 	base := []string{"doctor", "claude", "-no-smoke", "-company", company, "-config", cfg}
 
 	var out, notes bytes.Buffer
-	if err := runLLM(tokenEnviron("ops-token"), base, &out, &notes); err == nil ||
+	if err := runLLM(tokenEnviron("ops-token"), base, strings.NewReader(""), &out, &notes); err == nil ||
 		!strings.Contains(err.Error(), "store.scratch") || !strings.Contains(err.Error(), "-api") {
 		t.Fatalf("a seats node with no node named = %v, want a refusal naming store.scratch and -api", err)
 	}
 
 	out.Reset()
 	if err := runLLM(tokenEnviron("ops-token"), append(base, "-api", node.server.URL),
-		&out, &notes); err != nil {
+		strings.NewReader(""), &out, &notes); err != nil {
 		t.Fatalf("doctor through the named data node: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "problems      : none\n") {
@@ -920,16 +1129,15 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 		t.Errorf("revealed %v, want the token the entry it names reads", node.reveals())
 	}
 
-	where, err := storeLLMSecret(t.Context(), tokenEnviron("ops-token"), cfg, node.server.URL,
+	target, _, err := storeLLMSecret(t.Context(),
+		llmStoreAt(t, tokenEnviron("ops-token"), "login", "-config", cfg, "-api", node.server.URL),
 		"CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-captured")
 	if err != nil {
 		t.Fatalf("store a captured token through the named node: %v", err)
 	}
-	node.mu.Lock()
-	stored := node.stored["CLAUDE_CODE_OAUTH_TOKEN"]
-	node.mu.Unlock()
-	if stored != "sk-ant-oat01-captured" || !strings.Contains(where, node.server.URL) {
-		t.Errorf("the captured token went to %q holding %q, want the named node", where, stored)
+	if stored, _ := node.holds("CLAUDE_CODE_OAUTH_TOKEN"); stored != "sk-ant-oat01-captured" ||
+		!strings.Contains(target.where, node.server.URL) {
+		t.Errorf("the captured token went to %q holding %q, want the named node", target.where, stored)
 	}
 
 	entries, err := os.ReadDir(dir)
@@ -944,16 +1152,17 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 }
 
 // EVERY COMMAND THAT READS THE COMPANY TAKES -api. Each one's values are read
-// through a node when its own has no store of the company's — a seats node,
-// or a machine that is not a node — and both the scratch refusal and the
-// stopped-node note name -api as the way there, so a command without the
-// flag was told to use one it would refuse.
+// through a node when its own cannot reach the company's store — a seats node,
+// a machine that is not a node, or a cluster member whose engine is stopped —
+// and both the scratch refusal and the cluster member's name -api as the way
+// there, so a command without the flag was told to use one it would refuse.
 func TestEveryCommandThatReadsTheCompanyTakesAPI(t *testing.T) {
 	t.Parallel()
 	for _, command := range [][]string{
 		{"confluence", "import"}, {"confluence", "resync"}, {"confluence", "provision"},
 		{"github", "provision"}, {"jira", "provision"}, {"gitlab", "provision"},
-		{"mattermost", "provision"}, {"mattermost", "doctor"}, {"llm", "list"},
+		{"mattermost", "doctor"},
+		{"llm", "list"},
 	} {
 		var out, errs bytes.Buffer
 		err := run(append(command, "-api", "http://127.0.0.1:1", "-h"), &out, &errs)

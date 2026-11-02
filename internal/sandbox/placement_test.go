@@ -10,14 +10,13 @@ import (
 func catalogue(t *testing.T, opts ManagerOptions) (*Manager, error) {
 	t.Helper()
 	opts.Runners = map[string]Runner{"claude-code": NewFakeRunner("claude-code")}
-	opts.DefaultCodingAgent = "claude-code"
 	return NewManager(opts)
 }
 
 // A CATALOGUE WITH MORE THAN ONE CELL AND NO DEFAULT RESOLVES NOTHING BY
 // ITSELF — and is not refused, because it is the shape a company takes when
-// every seat and every agent-mode entry names its own cell, which is what the
-// catalogue exists for.
+// every executor entry names its own cell, which is what the catalogue exists
+// for.
 //
 // What it must never do is resolve a run that names none by taking whichever
 // key the map happened to yield: map order is randomised per run, so the
@@ -190,7 +189,7 @@ func TestARunReconnectsThroughTheBackendThatCreatedIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	spec := m.BuildSpec(SpecInput{Placement: E2B})
+	spec := m.BuildSpec(SpecInput{Placement: E2B, CodingAgent: "claude-code"})
 	box, _, err := m.Acquire(t.Context(), spec, nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
@@ -224,7 +223,7 @@ func TestASpecNamingNoCellTakesTheDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	spec := m.BuildSpec(SpecInput{})
+	spec := m.BuildSpec(SpecInput{CodingAgent: "claude-code"})
 	if spec.Placement != Direct {
 		t.Fatalf("a spec naming no cell resolved to %q, want the catalogue default %q",
 			spec.Placement, Direct)

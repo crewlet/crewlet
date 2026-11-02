@@ -36,10 +36,10 @@ import (
 // in words what disagrees and what to do about it.
 
 // fleetBrokerUsage is the group's usage line.
-const fleetBrokerUsage = "usage: crewlet fleet broker list|remove [<config.yaml>] [-url]\n" +
+const fleetBrokerUsage = "usage: crewlet fleet broker list|remove [<config.yaml>] [-api URL]\n" +
 	"       crewlet fleet broker remove <node-id> -confirm <node-id> [-force]\n" +
 	"       crewlet fleet broker remove -peer <peer-id> -confirm <peer-id> [-force]\n" +
-	"       crewlet fleet broker credential [<config.yaml>] -o FILE [-url]"
+	"       crewlet fleet broker credential [<config.yaml>] -o FILE [-api URL]"
 
 // runFleet dispatches `crewlet fleet`.
 func runFleet(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -125,7 +125,7 @@ type brokerGroupView struct {
 func fleetBrokerList(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var asJSON *bool
 	client, err := nodeClientFor(environ, args, "fleet broker list", stderr, func(fs *flag.FlagSet) {
-		asJSON = fs.Bool("json", false, "print the node's answer as it came, for a script")
+		asJSON = fs.Bool("json", false, "print the node's answer as JSON, for a script")
 	})
 	if err != nil {
 		return err
@@ -135,8 +135,7 @@ func fleetBrokerList(environ config.Source, args []string, stdout, stderr io.Wri
 		return err
 	}
 	if *asJSON {
-		_, err := fmt.Fprintf(stdout, "%s\n", raw)
-		return err
+		return printAnswer(stdout, raw)
 	}
 	var view brokerView
 	if err := json.Unmarshal(raw, &view); err != nil {
@@ -157,7 +156,7 @@ func renderBroker(w io.Writer, v brokerView) error {
 	case g == nil:
 		fmt.Fprintf(w, "The metadata group could not be read: %s\n", v.GroupError)
 	case g.Leader == "":
-		fmt.Fprintf(w, "Metadata group of %s, as %s reports it: NO LEADER — it is "+
+		fmt.Fprintf(w, "Metadata group of %s, as %s reports it: NO LEADER. It is "+
 			"electing one, or it has lost its quorum and can change nothing about "+
 			"itself.\n", g.Cluster, v.GroupFrom)
 	default:
@@ -320,7 +319,7 @@ func fleetBrokerRemove(environ config.Source, args []string, stdout, stderr io.W
 	var force *bool
 	client, err := nodeClientFor(environ, rest, "fleet broker remove", stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "",
-			"repeat the node id (or the peer id) — a removed member no longer counts "+
+			"repeat the node id (or the peer id): a removed member no longer counts "+
 				"in any election")
 		peer = fs.String("peer", "",
 			"name the voter by the peer id the listing shows, for one no member can name")
@@ -343,7 +342,7 @@ func fleetBrokerRemove(environ config.Source, args []string, stdout, stderr io.W
 	if id == "" || *confirm != id {
 		fmt.Fprintln(stderr, fleetBrokerUsage)
 		return errors.New("removing a member changes the quorum every election and every " +
-			"create of the fleet's broker runs on — repeat the id in -confirm")
+			"create of the fleet's broker runs on. Repeat the id in -confirm")
 	}
 	query := url.Values{"confirm": {id}}
 	if *force {

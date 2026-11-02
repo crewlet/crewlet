@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A MERGE RESOLVES BOTH ENDS AND MOVES THE CHILDREN BY DEFAULT.
@@ -48,7 +48,7 @@ func TestAMergeResolvesBothItemsAndMovesTheSubtasks(t *testing.T) {
 	if fold.notify == nil {
 		t.Fatal("the fold told nobody")
 	}
-	if got := fold.notify.Snapshot.Status; got != tracker.StatusCancelled {
+	if got := fold.notify.Snapshot.Status; got != worklet.StatusCancelled {
 		t.Errorf("the wake's snapshot says %q and the fold closes the item", got)
 	}
 }
@@ -116,8 +116,8 @@ func TestNoMergeSequenceMeansNoMergeTool(t *testing.T) {
 func TestAMergeAcrossProjectsNamesTheMoveAndTheArgument(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.writeErr = fmt.Errorf("tracker: ENG-1's subtasks are in ENG: %w",
-		tracker.ErrReparentAcrossProjects)
+	trk.writeErr = fmt.Errorf("worklet: ENG-1's subtasks are in ENG: %w",
+		worklet.ErrReparentAcrossProjects)
 	got := callWork(t, workRegistry(t, builtin.WorkDeps{
 		Reader: trk, Writer: trk.as, Merges: trk.merges,
 	}), builtin.MergeWorkItemTool, map[string]any{"item": "ENG-1", "into": "ENG-2"})

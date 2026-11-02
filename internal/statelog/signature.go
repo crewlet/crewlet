@@ -17,7 +17,7 @@ import (
 //
 // The broker's admission is no authority over a record. An embedded fleet's
 // broker admits only a connection presenting a key derived from this same
-// keyring (ADR-0064), but it decides per connection, and a route's password
+// keyring (ADR-0087), but it decides per connection, and a route's password
 // crosses the fleet network in clear — so anything that captured one is a
 // member — while an external cluster admits whom its operator chooses. And a
 // record on a domain's log is whatever the next node applies: rows every peer

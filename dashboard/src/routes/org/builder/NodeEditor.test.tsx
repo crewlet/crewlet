@@ -130,7 +130,7 @@ function connected(): CompanyDocument {
     name: "Dev",
     goal: "Build",
     mcp_env: { tracker: { TOKEN: "__redacted__", URL: "${TRACKER_URL}" } },
-    sandbox: { enabled: true, run_in: "e2b", env: { KEY: "__redacted__" } },
+    sandbox: { env: { KEY: "__redacted__" }, max_turns: 40 },
     code: { access: "review" },
     integrations: {
       github: {
@@ -162,9 +162,9 @@ describe("applying", () => {
   });
 
   // A seat's project and space are its OWN keys, vendor-neutral, and mean
-  // something on the engine's own tracker and knowledge base, which a company
-  // that connected nothing runs. Written under `integrations:` they were a
-  // block the engine does not have, and the save was refused.
+  // something on Worklet and Doclet, which a company that connected nothing
+  // runs. Written under `integrations:` they were a block the engine does not
+  // have, and the save was refused.
   test("a seat's project and space are offered on the engine's own backends and written on the seat", () => {
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     tab("Work");
@@ -929,7 +929,7 @@ describe("seat fields", () => {
     Object.assign(doc.units![0]!.roles![1]!, {
       llm_review: ["smart", "fast"],
       llm_judge: "fast",
-      sandbox: { enabled: true, run_in: "e2b", env: { KEY: "__redacted__" } },
+      sandbox: { env: { KEY: "__redacted__" }, max_turns: 40 },
       workers: ["researcher", "writer"],
       learning_enabled: false,
     });
@@ -942,12 +942,12 @@ describe("seat fields", () => {
       within(section).getByText(label).closest(".crewlet-fact-list__row") as HTMLElement;
     expect(fact("Models per phase").textContent).toContain("review: smart, then fast");
     expect(fact("Models per phase").textContent).toContain("judge: fast");
-    expect(fact("Sandbox").textContent).toContain("Enabled, runs in e2b");
+    expect(fact("Executor box").textContent).toContain("1 variable · up to 40 turns");
     expect(fact("Workers").textContent).toContain("researcher, writer");
     expect(fact("Learning").textContent).toContain("Off");
     expect(fact("Datadog fallback").textContent).toContain("Another seat");
     // Each says why it is not edited here, and the section links to where it is.
-    expect(fact("Sandbox").textContent).toContain("Edit in the configuration file.");
+    expect(fact("Executor box").textContent).toContain("Edit in the configuration file.");
     expect(
       within(section).getByRole("link", { name: "Open the document" }).getAttribute("href"),
     ).toBe("#/settings/config");
@@ -1012,6 +1012,7 @@ describe("who holds a person's seat", () => {
     project: "",
     config_writer: true,
     config_managed_by: [],
+    chat_vendors: [],
   });
   const seats = vi.fn((input: RequestInfo | URL) =>
     Promise.resolve(
@@ -1041,7 +1042,7 @@ describe("who holds a person's seat", () => {
 
   test("a reader without Admin reads the holding and is offered no gesture", async () => {
     vi.stubGlobal("fetch", seats);
-    edit(keyedState(humanDev()), "seat:dev", { viewer: reader(["tracker", "knowledge"]) });
+    edit(keyedState(humanDev()), "seat:dev", { viewer: reader(["worklet", "doclet"]) });
     const person = await screen.findByRole("region", { name: "Person" });
     expect(await within(person).findByText("This seat is open.")).toBeDefined();
     expect(within(person).queryByRole("button")).toBeNull();
@@ -1333,7 +1334,7 @@ describe("problems", () => {
     const unit = checkWithProblems(keyedState(fixtureCompany()), [
       problemAt(
         ["units", 0, "mcp_env", "tracker", "TOKEN"],
-        "units[0].mcp_env.tracker.TOKEN: names no secret",
+        "units[0].mcp_env.worklet.TOKEN: names no secret",
       ),
     ]);
     edit(unit, "unit:engineering");
@@ -1366,7 +1367,7 @@ describe("problems", () => {
     expect(describesAControl(spaceAlerts[0]!)).toBe(false);
     cleanup();
 
-    // On the engine's own tracker, which the fixture runs, the same problem
+    // On Worklet, which the fixture runs, the same problem
     // sits under the field that wrote it.
     edit(checkWithProblems(keyedState(fixtureCompany()), [projectProblem]), "seat:dev");
     tab("Work");

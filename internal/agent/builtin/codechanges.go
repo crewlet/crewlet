@@ -3,9 +3,9 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE CHANGE READS: code_list_changes, the company's changes a page at a time,
@@ -176,8 +178,9 @@ const (
 // list at once, and at an ordinary row (a revision about three hundred bytes,
 // a finding or a review about a kilobyte, a comment about half of one) under
 // half of one tool answer; a page of long rows is cut whole-row at the answer.
-// The findings' page is also what one re-anchoring places, at most
-// code.MaxReanchors, which the constant below holds at compile time.
+// The findings' page is also at most what one re-anchoring places,
+// code.MaxReanchors, which the constant below holds at compile time, so a
+// page of them is placed by one read (code.Place).
 const (
 	changeRevisionsPage = 25
 	changeFindingsPage  = 25
@@ -186,7 +189,8 @@ const (
 )
 
 // A page of findings is placed in one read: its size may not pass what one
-// re-anchoring places (a negative constant does not compile).
+// re-anchoring places (a negative constant does not compile), since a larger
+// page would cost a turn a read more than it needs.
 const _ = uint(code.MaxReanchors - changeFindingsPage)
 
 // ---- a change as these tools name it ------------------------------------ //
@@ -197,7 +201,7 @@ const _ = uint(code.MaxReanchors - changeFindingsPage)
 // ids and positions that are the code host's own bookkeeping.
 type codeChangeRow struct {
 	Ref         string           `json:"ref"`
-	Title       string           `json:"title"`
+	Title       string           `json:"title" untrusted:"name"`
 	State       code.ChangeState `json:"state"`
 	SourceRef   string           `json:"source_ref"`
 	TargetRef   string           `json:"target_ref"`
@@ -209,7 +213,7 @@ type codeChangeRow struct {
 	Access      string           `json:"access,omitempty"`
 	OpenedAt    time.Time        `json:"opened_at"`
 	ClosedAt    time.Time        `json:"closed_at,omitzero"`
-	CloseReason string           `json:"close_reason,omitempty"`
+	CloseReason string           `json:"close_reason,omitempty" untrusted:"name"`
 	MergedAt    time.Time        `json:"merged_at,omitzero"`
 	MergedVia   code.MergedVia   `json:"merged_via,omitempty"`
 	MergeOID    string           `json:"merge_oid,omitempty"`
@@ -324,14 +328,14 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Cursor: strings.TrimSpace(argString(args, "cursor")), Fresh: seatRead}
 	if s := code.ChangeState(strings.TrimSpace(argString(args, "state"))); s != "" {
 		if !s.Valid() {
-			return failed(fmt.Sprintf("%s: `state` is one of %v, not %q.", t.Name(), code.ChangeStates(),
+			return failed(fmt.Sprintf("%s: `state` is one of %s, not %q.", t.Name(), words.Or(code.ChangeStates()),
 				clip(string(s)))), nil
 		}
 		q.State = s
 	}
 	if n := code.Need(strings.TrimSpace(argString(args, "needs"))); n != "" {
 		if !n.Valid() {
-			return failed(fmt.Sprintf("%s: `needs` is one of %v, not %q.", t.Name(), code.Needs(),
+			return failed(fmt.Sprintf("%s: `needs` is one of %s, not %q.", t.Name(), words.Or(code.Needs()),
 				clip(string(n)))), nil
 		}
 		q.Needs = n
@@ -345,7 +349,7 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// index holds every change the company has, so a listing names what
 		// it walks.
 		return failed(fmt.Sprintf("%s needs to know what to list: a `repo`, a `work` item, a `state`, a "+
-			"`reviewer` or `needs` (%v) — `needs: me` is what waits on you.", t.Name(), code.Needs())), nil
+			"`reviewer` or `needs` (%s) — `needs: me` is what waits on you.", t.Name(), words.Or(code.Needs()))), nil
 	}
 	var repo code.RepoRef
 	if named {
@@ -387,6 +391,13 @@ func (t *codeListChanges) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return codeChangeList{Changes: rows[:k], Next: next, Position: answer.Position}
 	}
 	read := newForeignRead(turn, c.asker.Seat)
+	// A CHANGE'S TITLE AND CLOSE REASON ARE NAMES somebody chose — its owner
+	// at the open, or whoever edited it since, whom the row does not name —
+	// neutralised in place, and the envelope says the company's writers it
+	// does not name had a hand in them (ADR-0040).
+	if len(rows) > 0 {
+		namesBy(read)
+	}
 	k, rendered, err := read.fit(len(rows), page)
 	switch {
 	case err != nil:
@@ -491,23 +502,21 @@ func (t *codeGetChange) Call(ctx context.Context, args map[string]any) (tools.Re
 // rest of a call's arguments, before anything is.
 func changeArg(tool string, args map[string]any) (string, int64, *tools.Result) {
 	repo := strings.TrimSpace(argString(args, "repo"))
-	var number int64
-	switch v := args["change"].(type) {
-	case string:
-		s := strings.TrimSpace(v)
-		if name, n, ok := strings.Cut(s, "!"); ok {
-			if repo != "" && repo != name {
-				r := failed(fmt.Sprintf("%s: `change` %q is a change of repository %q and `repo` names %q — "+
-					"name one repository.", tool, clip(s), clip(name), clip(repo)))
-				return "", 0, &r
-			}
-			repo, s = name, n
+	// `change` IS DECLARED TEXT, read by the check's own readers: a number
+	// the model sent is the text it spells (argval.String), and the number
+	// in it is read by the one integer rule (argval.Whole), so "42", 42 and
+	// "web!42" all name change 42.
+	s := strings.TrimSpace(argString(args, "change"))
+	if name, n, ok := strings.Cut(s, "!"); ok {
+		if repo != "" && repo != name {
+			r := failed(fmt.Sprintf("%s: `change` %q is a change of repository %q and `repo` names %q — "+
+				"name one repository.", tool, clip(s), clip(name), clip(repo)))
+			return "", 0, &r
 		}
-		number, _ = strconv.ParseInt(s, 10, 64)
-	case nil:
-	default:
-		number = int64(argInt(args, "change", 0))
+		repo, s = name, n
 	}
+	whole, _ := argval.Whole(s)
+	number := int64(whole)
 	if number < 1 {
 		r := failed(fmt.Sprintf("%s needs `change`: a change's number on `repo`, or its reference as %s "+
 			"names it (web!42).", tool, CodeListChangesTool))
@@ -549,7 +558,7 @@ func changeCallArgs(tool string, args map[string]any) (changeCall, *tools.Result
 	takes := func(ps ...changePart) bool { return slices.Contains(ps, call.part) }
 	switch {
 	case !call.part.Valid():
-		return refuse(fmt.Sprintf("`part` is one of %v, not %q.", changeParts(), clip(string(call.part))))
+		return refuse(fmt.Sprintf("`part` is one of %s, not %q.", words.Or(changeParts()), clip(string(call.part))))
 	case call.revision < 0 || call.since < 0:
 		return refuse("a revision is numbered from 1.")
 	case call.revision != 0 && !takes(partFiles, partDiff, partFindings):
@@ -690,6 +699,22 @@ func (g changeRead) revision(ctx context.Context, n, latest int64, after statelo
 	return answer.Revisions[0], nil
 }
 
+// revisionAt is [changeRead.revision] as the code domain reads a change's
+// revisions beside each other ([code.ChangeRevisions]): each of a change whose
+// latest is latest, read at session floored at after, its refusal carried as
+// an error ([refusedRead]).
+func (g changeRead) revisionAt(ctx context.Context, latest int64, after statelog.Position) func(int64) (
+	code.RevisionRow, error) {
+
+	return func(n int64) (code.RevisionRow, error) {
+		rev, refusal := g.revision(ctx, n, latest, after)
+		if refusal != nil {
+			return code.RevisionRow{}, refusedRead{refusal}
+		}
+		return rev, nil
+	}
+}
+
 // plural is one where n is 1, many otherwise.
 func plural(n int64, one, many string) string {
 	if n == 1 {
@@ -711,7 +736,7 @@ func (g changeRead) floor(revs ...code.RevisionRow) statelog.Freshness {
 // says, who wrote it, and what its conversation counts.
 type codeChangeDetail struct {
 	codeChangeRow
-	Description  string            `json:"description,omitempty"`
+	Description  string            `json:"description,omitempty" untrusted:"fence"`
 	Authors      []codeAuthor      `json:"authors"`
 	Conversation *codeConversation `json:"conversation,omitempty"`
 }
@@ -834,6 +859,9 @@ func (g changeRead) summary(ctx context.Context, cursor string) (tools.Result, e
 			// change past its open may have rewritten them.
 			read.fence(fieldPath{}.key("change").key("description"), provenance.SourceChangeDescription,
 				[]provenance.Author{read.party(d.Owner, d.OwnerKind)}, d.Version > 1, d.Body)
+			// AND ITS TITLE AND CLOSE REASON, names whose writers the row
+			// does not name ([codeListChanges]'s reason).
+			namesBy(read)
 		}
 		return read, codeChangeSummary{Repo: g.repo.Name, Change: detail, Revisions: revs[:k], Next: next(k),
 			Position: answer.Position}
@@ -935,39 +963,41 @@ type codeChangeDiff struct {
 // diff answers a revision's files or one file's patch: from the revision's
 // recorded base to its head, or — since an earlier revision — the interdiff
 // of the two, kept to the files either touches (code-host.md, "What changed
-// between two revisions").
+// between two revisions") — the two revisions read at once once the head is
+// ([code.ChangeRevisions]), as the API's change question reads them.
 func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, error) {
 	d, head, first, refusal := g.head(ctx, statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil
 	}
-	rev := head
-	if call.revision != 0 && call.revision != head.N {
-		if rev, refusal = g.revision(ctx, call.revision, d.Revision, first); refusal != nil {
-			return *refusal, nil
-		}
+	// THE REVISION READ, AS ITS NUMBER SAYS: the head where none is asked —
+	// so an earlier one is checked against it before either is read.
+	asked := head.N
+	if call.revision != 0 {
+		asked = call.revision
+	}
+	if call.since != 0 && call.since >= asked {
+		return failed(fmt.Sprintf("%s: `since_revision` is a revision before %d, the one read.", g.tool,
+			asked)), nil
+	}
+	rev, since, err := code.ChangeRevisions(head, call.revision, call.since,
+		g.revisionAt(ctx, d.Revision, first))
+	if refusal = refusedIn(err); refusal != nil {
+		return *refusal, nil
+	}
+	if err != nil {
+		// UNREACHABLE: revisionAt answers its refusals alone.
+		return faulted(ctx, g.tool, err, fmt.Sprintf("%s could not read %s's revisions: %s.", g.tool, g.ref(),
+			faultSaid)), nil
 	}
 	revs := []code.RevisionRow{rev}
-	if call.since != 0 {
-		if call.since >= rev.N {
-			return failed(fmt.Sprintf("%s: `since_revision` is a revision before %d, the one read.", g.tool,
-				rev.N)), nil
-		}
-		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
-		since, refusal := g.revision(ctx, call.since, d.Revision, first)
-		if refusal != nil {
-			return *refusal, nil
-		}
-		revs = append(revs, since)
+	if since != nil {
+		revs = append(revs, *since)
 	}
 	for _, r := range revs {
 		if refusal = g.recorded(d, r, call.since == 0); refusal != nil {
 			return *refusal, nil
 		}
-	}
-	var since *code.RevisionRow
-	if call.since != 0 {
-		since = &revs[1]
 	}
 	q, err := code.RevisionDiff(g.repo.ID, rev, since, call.file, call.fileB64)
 	if err != nil {
@@ -986,7 +1016,7 @@ func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, er
 	if df := page.Diff; df != nil && df.Patch != "" {
 		// A PATCH IS THE REPOSITORY'S TEXT, both sides of it, which nobody
 		// this read can name vouches for: fenced as code_diff fences one.
-		read.fence(fieldPath{}.key("diff").key("patch"), provenance.SourceRepoPatch, nil, false, df.Patch)
+		read.fenceRepository(fieldPath{}.key("diff").key("patch"), provenance.SourceRepoPatch, df.Patch)
 		narrow = fmt.Sprintf("The patch spells fence markers, which grow when they are escaped: read the file's "+
 			"lines at the revision's head (%s) with %s and a line range instead.", rev.Head, CodeReadTool)
 	}
@@ -1003,9 +1033,11 @@ func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, er
 func (g changeRead) recorded(d *code.ChangeDetail, r code.RevisionRow, based bool) *tools.Result {
 	switch r.FilesGap(d.State, based) {
 	case code.FilesPending:
-		res := refused(tools.RefusalUnavailable, fmt.Sprintf("%s: revision %d of %s has no recorded base yet: "+
-			"the repository's home git node records each revision's facts against its target within a minute "+
-			"of its push. Try again shortly.", g.tool, r.N, g.ref()))
+		// A WAIT CLEARS IT ([waits]): the home records the facts on its own,
+		// within a minute of the push, and nothing a person does is needed.
+		res := refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("%s: revision %d of %s has no "+
+			"recorded base yet: the repository's home git node records each revision's facts against its "+
+			"target within a minute of its push. Try again shortly.", g.tool, r.N, g.ref()))
 		return &res
 	case code.FilesUnrecorded:
 		res := refused(tools.RefusalNotFound, fmt.Sprintf("%s: %s was %s before its home recorded revision %d's "+
@@ -1053,11 +1085,11 @@ type codeFinding struct {
 	BlobOID        string            `json:"blob_oid"`
 	Severity       code.Severity     `json:"severity"`
 	Category       code.Category     `json:"category"`
-	Title          string            `json:"title"`
-	Body           string            `json:"body,omitempty"`
+	Title          string            `json:"title" untrusted:"name"`
+	Body           string            `json:"body,omitempty" untrusted:"fence"`
 	Suggestion     *string           `json:"suggestion,omitempty"`
 	State          code.FindingState `json:"state"`
-	ResolutionNote string            `json:"resolution_note,omitempty"`
+	ResolutionNote string            `json:"resolution_note,omitempty" untrusted:"name"`
 	ResolvedBy     string            `json:"resolved_by,omitempty"`
 	ResolvedCommit string            `json:"resolved_commit,omitempty"`
 	// At is where its lines are in the revision the answer is of
@@ -1110,6 +1142,13 @@ func (g changeRead) findings(ctx context.Context, call changeCall) (tools.Result
 			// would put in place of its own.
 			raiser := []provenance.Author{read.party(f.Raiser, f.RaiserKind)}
 			at := fieldPath{}.key("findings").index(i)
+			// ITS TITLE IS ITS RAISER'S NAME FOR IT, and a resolution's note
+			// its resolver's, whom the envelope names among nobody it vouches
+			// for as the only writer.
+			read.attribute(raiser, false)
+			if f.ResolutionNote != "" {
+				namesBy(read)
+			}
 			read.fence(at.key("body"), provenance.SourceChangeReview, raiser, false, f.Body)
 			if f.Suggestion != nil {
 				read.fence(at.key("suggestion"), provenance.SourceChangeReview, raiser, false, *f.Suggestion)
@@ -1136,28 +1175,49 @@ func (g changeRead) findings(ctx context.Context, call changeCall) (tools.Result
 
 // place is where each finding of findings is in revision rev of a change whose
 // head revision is head, by the finding's id: what the rows say without a read
-// ([code.PlaceFindings]), and every other finding by ONE re-anchoring read,
-// floored at the head revision — the latest any finding was raised on — and
-// at rev's own head and base. A finding on the old side of a revision whose
-// base is not yet recorded is in neither, unplaced.
+// ([code.PlaceFindings]), and every other finding by the re-anchoring reads
+// the code domain's rule asks ([code.Place]) — one, for a page of this tool's
+// size — floored at the head revision — the latest any finding was raised on
+// — and at rev's own head and base. A finding on the old side of a revision
+// whose base is not yet recorded is in neither, unplaced.
 func (g changeRead) place(ctx context.Context, head, rev code.RevisionRow,
 	findings []code.FindingRow) (map[string]code.FindingPlace, *tools.Result) {
 
-	placed, reanchor := code.PlaceFindings(rev, findings)
-	if reanchor == nil {
-		return placed, nil
-	}
-	answer, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, code.GitQuery{Kind: code.GitReanchor,
-		RepoID: g.repo.ID, Fresh: g.floor(head, rev), Reanchor: reanchor})
-	if refusal != nil {
+	fresh := g.floor(head, rev)
+	placed, err := code.Place(rev, findings, func(reanchor *code.ReanchorQuery) (*code.ReanchorAnswer, error) {
+		answer, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, code.GitQuery{
+			Kind: code.GitReanchor, RepoID: g.repo.ID, Fresh: fresh, Reanchor: reanchor})
+		if refusal != nil {
+			return nil, refusedRead{refusal}
+		}
+		return answer.Reanchor, nil
+	})
+	if refusal := refusedIn(err); refusal != nil {
 		return nil, refusal
 	}
-	if err := code.PlaceAnchors(placed, reanchor, answer.Reanchor); err != nil {
+	if err != nil {
 		r := faulted(ctx, g.tool, fmt.Errorf("builtin: %s: %w", g.ref(), err), fmt.Sprintf("%s could not place "+
 			"%s's findings in revision %d: %s.", g.tool, g.ref(), rev.N, faultSaid))
 		return nil, &r
 	}
 	return placed, nil
+}
+
+// refusedRead carries a read's refusal, already composed as this tool's
+// answer, through the code domain's helpers, which take a caller's reads as
+// functions answering errors ([code.Place]); [refusedIn] takes it back out.
+type refusedRead struct{ r *tools.Result }
+
+func (e refusedRead) Error() string { return e.r.Output }
+
+// refusedIn is the refusal err carries ([refusedRead]), nil where it carries
+// none — no error, or one of the code domain's own, which the caller tells
+// as its fault.
+func refusedIn(err error) *tools.Result {
+	if refused, ok := errors.AsType[refusedRead](err); ok {
+		return refused.r
+	}
+	return nil
 }
 
 // ---- reviews and comments ------------------------------------------------ //
@@ -1180,7 +1240,7 @@ type codeReview struct {
 	Reviewer     string         `json:"reviewer"`
 	ReviewerKind code.PartyKind `json:"reviewer_kind"`
 	Verdict      code.Verdict   `json:"verdict"`
-	Summary      string         `json:"summary,omitempty"`
+	Summary      string         `json:"summary,omitempty" untrusted:"fence"`
 	Findings     int64          `json:"findings"`
 	At           time.Time      `json:"at"`
 }
@@ -1238,7 +1298,7 @@ type codeComment struct {
 	Anchor     *code.CommentAnchor `json:"anchor,omitempty"`
 	Resolved   bool                `json:"resolved,omitempty"`
 	ResolvedBy string              `json:"resolved_by,omitempty"`
-	Body       string              `json:"body"`
+	Body       string              `json:"body" untrusted:"fence"`
 	At         time.Time           `json:"at"`
 }
 

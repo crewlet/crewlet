@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // directory resolves a bearer to a principal the way the guard does, from a
@@ -117,7 +117,7 @@ func list(t *testing.T, sess *mcp.ClientSession) (bool, string) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
-		Name: tracker.ListWorkItemsTool, Arguments: map[string]any{},
+		Name: worklet.ListWorkItemsTool, Arguments: map[string]any{},
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
@@ -142,15 +142,15 @@ func list(t *testing.T, sess *mcp.ClientSession) (bool, string) {
 func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{
-		"ops": machine("token:ops", iam.GrantTracker),
+		"ops": machine("token:ops", iam.GrantWorklet),
 	}}
 	server := operatorServer(t, dir)
 	sess := connectAs(t, server.URL+operator.MCPPath, "ops")
 
 	if refused, out := list(t, sess); refused {
-		t.Fatalf("a credential holding the tracker was refused the board: %s", out)
+		t.Fatalf("a credential holding Worklet was refused the board: %s", out)
 	}
-	dir.set("ops", machine("token:ops", iam.GrantKnowledge))
+	dir.set("ops", machine("token:ops", iam.GrantDoclet))
 	refused, out := list(t, sess)
 	if !refused {
 		t.Fatalf("the board was served after the tracker was withdrawn, on the "+
@@ -158,13 +158,13 @@ func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 	}
 	// IN THE TOOL GATE'S OWN WORDS ([builtin.Refusal]), whatever they are:
 	// the verb, then why it did not run.
-	if lead := builtin.Refusal(tracker.ListWorkItemsTool, errors.New("")); !strings.HasPrefix(out, lead) {
+	if lead := builtin.Refusal(worklet.ListWorkItemsTool, errors.New("")); !strings.HasPrefix(out, lead) {
 		t.Errorf("the refusal does not read as the tool gate's (%q): %s", lead, out)
 	}
 
 	// AND RESTORED, so the refusal above is the grant and not a session
 	// that simply stopped working.
-	dir.set("ops", machine("token:ops", iam.GrantTracker))
+	dir.set("ops", machine("token:ops", iam.GrantWorklet))
 	if refused, out := list(t, sess); refused {
 		t.Fatalf("the board was refused after the tracker came back: %s", out)
 	}
@@ -180,7 +180,7 @@ func TestAGrantWithdrawnMidSessionStopsTheNextCall(t *testing.T) {
 func TestAnotherCredentialCannotRideTheOpenersSession(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{
-		"founder":  machine("token:founder", iam.GrantTracker),
+		"founder":  machine("token:founder", iam.GrantWorklet),
 		"stranger": machine("token:stranger"),
 	}}
 	server := operatorServer(t, dir)
@@ -197,7 +197,7 @@ func TestAnotherCredentialCannotRideTheOpenersSession(t *testing.T) {
 		id = "the-founders-session"
 	}
 	body := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"` +
-		tracker.ListWorkItemsTool + `","arguments":{}}}`
+		worklet.ListWorkItemsTool + `","arguments":{}}}`
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
 		server.URL+operator.MCPPath, strings.NewReader(body))
 	if err != nil {
@@ -240,7 +240,7 @@ func TestAnotherCredentialCannotRideTheOpenersSession(t *testing.T) {
 func TestTheOperatorSurfaceServesOnlyPOST(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{}}
-	dir.set("ops", machine("token:ops", iam.GrantTracker))
+	dir.set("ops", machine("token:ops", iam.GrantWorklet))
 	server := operatorServer(t, dir)
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		req, err := http.NewRequestWithContext(t.Context(), method, server.URL, nil)
@@ -274,14 +274,14 @@ func TestTheOperatorSurfaceServesOnlyPOST(t *testing.T) {
 func TestAnArgumentTheToolDoesNotReadIsRefusedOverMCP(t *testing.T) {
 	t.Parallel()
 	dir := &directory{people: map[string]iam.Principal{
-		"ops": machine("token:ops", iam.GrantTracker),
+		"ops": machine("token:ops", iam.GrantWorklet),
 	}}
 	server := operatorServer(t, dir)
 	sess := connectAs(t, server.URL+operator.MCPPath, "ops")
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
-		Name: tracker.ListWorkItemsTool, Arguments: map[string]any{"stauts": "todo"},
+		Name: worklet.ListWorkItemsTool, Arguments: map[string]any{"stauts": "todo"},
 	})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
@@ -295,5 +295,44 @@ func TestAnArgumentTheToolDoesNotReadIsRefusedOverMCP(t *testing.T) {
 	if !res.IsError || !strings.Contains(out.String(), `"stauts"`) {
 		t.Errorf("a misspelt argument answered isError=%v %q, want it refused "+
 			"by name", res.IsError, out.String())
+	}
+}
+
+// ARGUMENTS THAT DO NOT DECODE ARE TOLD IN WORDS, AFTER THE TOOL'S NAME: the
+// assistant was answered "operator: list_work_items: bad arguments: the
+// arguments are not a JSON object: json: cannot unmarshal array into Go value
+// of type map[string]interface {}" — this package's name and the decoder's
+// Go. Mutation: put either back and this goes red.
+func TestAnAssistantsArgumentsThatDoNotDecodeAreToldInWords(t *testing.T) {
+	t.Parallel()
+	dir := &directory{people: map[string]iam.Principal{
+		"ops": machine("token:ops", iam.GrantWorklet),
+	}}
+	server := operatorServer(t, dir)
+	sess := connectAs(t, server.URL+operator.MCPPath, "ops")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: worklet.ListWorkItemsTool, Arguments: []int{1},
+	})
+	said := ""
+	switch {
+	case err != nil:
+		said = err.Error()
+	case res != nil:
+		for _, c := range res.Content {
+			if text, ok := c.(*mcp.TextContent); ok {
+				said += text.Text
+			}
+		}
+	}
+	want := worklet.ListWorkItemsTool + ": the arguments object is a list where an object belongs"
+	if !strings.Contains(said, want) {
+		t.Errorf("the assistant is told %q, want it to carry %q", said, want)
+	}
+	for _, goWords := range []string{"operator:", "json:", "Go value"} {
+		if strings.Contains(said, goWords) {
+			t.Errorf("the assistant is told %q, which carries %q", said, goWords)
+		}
 	}
 }

@@ -17,7 +17,7 @@ import (
 // words joined by `_`, and one of these among them is a column of spend.
 var spendWords = []string{"spend", "spent", "tokens", "cost", "usd", "cents", "price", "budget", "credits"}
 
-// A CHANGE CARRIES NO SPEND (ADR-0067): no table of the code domain — a
+// A CHANGE CARRIES NO SPEND (ADR-0090): no table of the code domain — a
 // change's rows, its conversation's, every repository row beside them — has a
 // column that counts what a turn spent. A turn woken about a change is charged
 // to the work item the change implements (ADR-0022's trigger), and a sum kept
@@ -59,7 +59,7 @@ func TestChangesHaveNoSpendColumns(t *testing.T) {
 				for _, word := range strings.Split(column, "_") {
 					if slices.Contains(spendWords, word) {
 						t.Errorf("%s.%s counts what a turn spent; a change carries none — the turn is "+
-							"charged to the work item the change implements (ADR-0067)", table, column)
+							"charged to the work item the change implements (ADR-0090)", table, column)
 					}
 				}
 			}

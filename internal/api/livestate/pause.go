@@ -37,8 +37,9 @@ type Paused struct {
 	// Reason is why, in the pauser's words; empty when none was given.
 	Reason string `json:"reason,omitempty"`
 
-	// StopRunning is whether the pause also ended the turn the seat was on
-	// rather than letting it finish.
+	// StopRunning is whether the pause also ended the seat's running work
+	// rather than letting it finish: the turn it was on, at its next round,
+	// and a coding run it had out, at once.
 	StopRunning bool `json:"stop_running"`
 }
 

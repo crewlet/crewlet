@@ -66,7 +66,7 @@ import (
 // lease is sure to last; a renewal the store refuses, or holds on to while its
 // leader moves, costs it nothing, and a step cut off publishes nothing, so the
 // singleton never has two writers. Each renewal first asks whether a copy the
-// duty decides from has gone out of service since the tick began (ADR-0049):
+// duty decides from has gone out of service since the tick began (ADR-0072):
 // if one has, the tick is cut off unrenewed, and gives the duty back once it
 // has returned ([embedDuty.declinedMidTick]).
 //
@@ -251,6 +251,12 @@ func (e *Engine) corpora(estate store.ReplicatedReader) []search.Corpus {
 	// other unsearchable by meaning for ever, with a coverage gauge
 	// reporting the half it did cover as the whole — which is the reading
 	// an operator would act on.
+	//
+	// AND NOT CHAT, deliberately: a conversation is a keyword corpus and
+	// takes no vectors (ADR-0071). A year of a company's messages is
+	// several times the whole vector budget the knowledge base is sized
+	// for, so a chat corpus here would be the knowledge base's own
+	// embeddings paying for it.
 	return []search.Corpus{
 		search.TaskCorpus{DB: estate},
 		search.PageCorpus{DB: estate},

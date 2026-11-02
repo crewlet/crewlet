@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/jsonform"
 )
 
 // EntryPath is where a dashboard's spec lives in its version: the kind's
@@ -213,39 +214,27 @@ func (e *Invalid) Unwrap() error { return ErrInvalid }
 // Parse reads a spec, refusing a field the format does not have rather than
 // dropping it: a misspelt `widgets` is an error naming it, never an empty
 // board. It does not validate; [Read] does, with the version's files.
-func Parse(raw []byte) (*Spec, error) {
+//
+// EVERY STRUCTURAL FAULT AT ONCE ([jsonform.Decode]): an unknown key names the
+// keys its object takes, a wrong type the shape read there.
+func Parse(raw []byte) (*Spec, error) { return parse(raw, jsonform.Decode) }
+
+func parse(raw []byte, decode jsonform.Reader) (*Spec, error) {
 	s := &Spec{}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(s); err != nil {
-		return nil, &Invalid{Findings: []Finding{{Path: EntryPath, Line: lineOf(raw, err),
-			Message: "is not a dashboard spec: " + err.Error()}}}
+	d := decode(raw, Form, jsonform.Subject{File: EntryPath, Format: "the dashboard format"}, s)
+	if len(d.Faults) == 0 {
+		return s, nil
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, &Invalid{Findings: []Finding{{Path: EntryPath,
-			Message: "holds more than one JSON value; a spec is one object"}}}
+	out := &Invalid{Findings: make([]Finding, len(d.Faults))}
+	for i, f := range d.Faults {
+		out.Findings[i] = Finding{Path: EntryPath, Line: f.Line, Message: f.Message}
 	}
-	return s, nil
+	return nil, out
 }
 
-// lineOf is the line a decode error points at, when it says where.
-func lineOf(raw []byte, err error) int {
-	var syntax *json.SyntaxError
-	var typed *json.UnmarshalTypeError
-	var offset int64
-	switch {
-	case errors.As(err, &syntax):
-		offset = syntax.Offset
-	case errors.As(err, &typed):
-		offset = typed.Offset
-	default:
-		return 0
-	}
-	if offset > int64(len(raw)) {
-		offset = int64(len(raw))
-	}
-	return bytes.Count(raw[:offset], []byte("\n")) + 1
-}
+// Form is every key `dashboard.json` may carry and the type of each, derived
+// from [Spec] ([jsonform.Of]): what [Parse] admits and [Reference] lists.
+var Form = jsonform.Of[Spec]()
 
 // Dataset is s's dataset named id.
 func (s *Spec) Dataset(id string) (Dataset, bool) {
@@ -403,12 +392,4 @@ func SourceArgs(src EngineSource, sent map[string]string) (map[string]string, er
 		out[p.Key] = v
 	}
 	return out, nil
-}
-
-func quoteList(values []string) string {
-	q := make([]string, len(values))
-	for i, v := range values {
-		q[i] = strconv.Quote(v)
-	}
-	return strings.Join(q, ", ")
 }

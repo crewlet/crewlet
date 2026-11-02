@@ -44,6 +44,7 @@ func ghostCompanyProvisioning(t *testing.T, url, provisioning string) *Company {
 	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -58,7 +59,8 @@ roles:
     llm: zulu
     integrations:
       mattermost:
-        bot_token: tok-ceo
+        enabled: false
+        bot_token: "${MATTERMOST_BOT_TOKEN_CEO}"
   - name: Founder
     kind: human
     contact:
@@ -74,13 +76,19 @@ roles:
 	return company
 }
 
-// ghostServer is a Mattermost server where the CEO's bot is the only account
-// and nobody holds a person's name.
+// ghostServer is a Mattermost server where the CEO's bot is the only account,
+// the company's team exists, and nobody holds a person's name.
 func ghostServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/users/me") &&
+			r.Header.Get("Authorization") == "Bearer admin-token":
+			// THE PROVISIONING TOKEN IS A SYSTEM ADMIN, so the pass's
+			// preflight, which runs whether or not it has a seat to
+			// provision, has nothing to report about it.
+			w.Write([]byte(`{"id":"admin","username":"admin","roles":"system_admin system_user"}`))
 		case strings.HasSuffix(r.URL.Path, "/users/me"):
 			w.Write([]byte(`{"id":"bot-ceo","username":"ceo","is_bot":true}`))
 		case strings.HasSuffix(r.URL.Path, "/users/usernames"):
@@ -88,6 +96,11 @@ func ghostServer(t *testing.T) *httptest.Server {
 			w.Write([]byte(`[]`))
 		case strings.HasSuffix(r.URL.Path, "/config/client"):
 			w.Write([]byte(`{}`))
+		case strings.HasSuffix(r.URL.Path, "/teams/name/eng"):
+			// THE TEAM THE COMPANY NAMES EXISTS, so the access sync reads
+			// its agents back rather than stopping at a setting the
+			// operator got wrong.
+			w.Write([]byte(`{"id":"team-eng","name":"eng"}`))
 		default:
 			// The websocket among them: the seat keeps reconnecting in
 			// the background, which is no part of what is asserted.
@@ -109,13 +122,18 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 	t.Parallel()
 	chat := ghostServer(t)
 	company := ghostCompany(t, chat.URL)
-	e := &Engine{}
+	// A FLEET STORE, which every engine [New] builds has: the pass reads the
+	// seat access ledger once the Mattermost vendor has opened. And the CEO's
+	// bot token, sealed under its own name as the engine seals it for a
+	// company that provisions its bots.
+	sealed := config.MapSource{"MATTERMOST_BOT_TOKEN_CEO": "tok-ceo"}
+	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}, environ: sealed}
 	e.epoch.current.Store(company)
 
 	tr, err := mattermost.NewTransport(mattermost.TransportOptions{
 		Config: mattermost.Config{
 			URL: chat.URL, Team: "eng",
-			Seats:  mattermost.SeatsFrom(company.Org, nil),
+			Seats:  mattermost.SeatsFrom(company.Org, sealed.Lookup),
 			People: mattermost.PeopleFrom(company.Org, nil),
 		},
 		Publisher: nopPublisher{},
@@ -145,22 +163,27 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 		name string
 		in   setup.PassInput
 		// want is every kind the pass reports, in order: the return's own,
-		// then the person's.
+		// then the person's, then the access sync's. The company has not
+		// been migrated onto per-seat access, so the sync says it left the
+		// agents' accounts as they are.
 		want []integration.FindingKind
 	}{{
 		name: "no administrator token",
 		want: []integration.FindingKind{
 			integration.FindingCredentialMissing, integration.FindingContactUnknown,
+			integration.FindingIdentityMissing,
 		},
 	}, {
 		// AN ADMINISTRATOR TOKEN AND A SINK, so the pass reaches the
-		// reconcile and returns what it found. The CEO's bot token is
-		// written by hand, so there is nothing to mint and the reconcile
-		// answers with no finding of its own: the person is the whole of
-		// what that return reports.
+		// reconcile and returns what it found. The company's half mints
+		// nothing (every bot is the access sync's) and answers with no
+		// finding of its own: the person is the whole of what that return
+		// reports.
 		name: "the reconcile's return",
 		in:   setup.PassInput{Operator: "admin-token", Sink: sink},
-		want: []integration.FindingKind{integration.FindingContactUnknown},
+		want: []integration.FindingKind{
+			integration.FindingContactUnknown, integration.FindingIdentityMissing,
+		},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			findings, err := (&mattermostPass{engine: e}).Run(t.Context(), tc.in)
@@ -217,7 +240,12 @@ func TestAPeopleChangeBringsTheMattermostStatusForward(t *testing.T) {
 	chat := ghostServer(t)
 	company := ghostCompany(t, chat.URL)
 	fleet := memory.NewFleet()
-	e := &Engine{backends: &Backends{Queue: queuememory.New(), Fleet: fleet}}
+	// THE CEO'S BOT TOKEN, sealed under its own name as the engine seals it
+	// for a company that provisions its bots.
+	e := &Engine{
+		backends: &Backends{Queue: queuememory.New(), Fleet: fleet},
+		environ:  config.MapSource{"MATTERMOST_BOT_TOKEN_CEO": "tok-ceo"},
+	}
 	e.epoch.current.Store(company)
 	e.notify.registry = notify.NewRegistry(company.Org, nil)
 
@@ -301,6 +329,12 @@ func TestOnlyAnApplyAnswersAMovedName(t *testing.T) {
 	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/users/me") &&
+			r.Header.Get("Authorization") == "Bearer admin-token":
+			// THE PROVISIONING TOKEN IS A SYSTEM ADMIN, so the pass's
+			// preflight, which runs whether or not it has a seat to
+			// provision, has nothing to report about it.
+			w.Write([]byte(`{"id":"admin","username":"admin","roles":"system_admin system_user"}`))
 		case strings.HasSuffix(r.URL.Path, "/users/me"):
 			w.Write([]byte(`{"id":"bot-ceo","username":"ceo","is_bot":true}`))
 		case strings.HasSuffix(r.URL.Path, "/users/usernames"):
@@ -313,6 +347,7 @@ func TestOnlyAnApplyAnswersAMovedName(t *testing.T) {
 	doc := []byte(fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -327,6 +362,7 @@ roles:
     llm: zulu
     integrations:
       mattermost:
+        enabled: false
         bot_token: tok-ceo
   - name: Founder
     kind: human

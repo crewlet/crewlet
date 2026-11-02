@@ -14,7 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -32,10 +34,10 @@ import (
 // The tool wire names.
 const (
 	UseSkillTool          = "use_skill"
-	QueryEpisodesTool     = "query_episodes"
+	QueryEpisodesTool     = toolname.QueryEpisodes
 	RefreshMemoryTool     = "refresh_memory"
-	ReflectAndPersistTool = "reflect_and_persist"
-	MarkOnboardedTool     = "mark_onboarded"
+	ReflectAndPersistTool = toolname.ReflectAndPersist
+	MarkOnboardedTool     = toolname.MarkOnboarded
 )
 
 // Memory is what the memory tools need from the learning subsystem.
@@ -133,14 +135,14 @@ func (t *useSkill) Call(ctx context.Context, args map[string]any) (tools.Result,
 func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	seat := turn.Handle()
 	if seat == "" {
-		return refused(tools.RefusalForbidden, "use_skill can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, UseSkillTool+" can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.skills == nil {
-		return refused(tools.RefusalUnavailable, "Skill synthesis is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Skill synthesis is not configured on this deployment."), nil
 	}
 	name := strings.TrimSpace(argString(args, "skill_name"))
 	if name == "" {
-		return failed("use_skill needs a `skill_name`."), nil
+		return failed(UseSkillTool + " needs a `skill_name`."), nil
 	}
 
 	// Keyed on THIS seat, so a model naming another agent's skill gets
@@ -150,7 +152,8 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return nodeFailure(ctx, UseSkillTool, err, fmt.Sprintf("Could not load %q", clip(name)), ""), nil
 	}
 	if !found {
-		return refused(tools.RefusalNotFound, t.suggest(ctx, seat, name)), nil
+		return refused(tools.RefusalNotFound,
+			provenance.Neutralise(turn.FenceBoundary(), t.suggest(ctx, seat, name))), nil
 	}
 
 	// Recorded BEFORE the content goes out, and its failure ignored: the
@@ -167,13 +170,17 @@ func (t *useSkill) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	note(ctx, t.events, turn, skillUsed(turn, sk.Name, sk.ID,
 		types.SkillSourceSynthesized, types.KnowledgeReadPage{}))
 
+	// NEUTRALISED under the turn's token (ADR-0040): a synthesized skill is
+	// what a model wrote after reading the turns it drew on, which read
+	// other people's words, and the seat follows it as its own procedure —
+	// so nothing in it may open or close one of the turn's fences.
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", sk.Name)
 	if sk.Description != "" {
 		fmt.Fprintf(&b, "%s\n\n", sk.Description)
 	}
 	b.WriteString(sk.Content)
-	return tools.Result{Output: b.String()}, nil
+	return tools.Result{Output: provenance.Neutralise(turn.FenceBoundary(), b.String())}, nil
 }
 
 // suggest turns "not found" into something the model can act on.
@@ -299,10 +306,10 @@ func (t *queryEpisodes) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	seat := turn.Handle()
 	if seat == "" {
-		return refused(tools.RefusalForbidden, "query_episodes can only be called during a turn, on behalf of a seat."), nil
+		return refused(tools.RefusalForbidden, QueryEpisodesTool+" can only be called during a turn, on behalf of a seat."), nil
 	}
 	if t.episodes == nil {
-		return refused(tools.RefusalUnavailable, "Episode memory is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Episode memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", t.defaultLimit()), 1, maxEpisodeLimit)
 	outcome := strings.TrimSpace(argString(args, "outcome_filter"))
@@ -349,6 +356,9 @@ func (t *queryEpisodes) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		found = keepOutcome(found, outcome, limit)
 		scope += fmt.Sprintf(" that ended %s", clip(outcome))
 	}
+	// THE SCOPE ECHOES WHAT THE SEAT ASKED FOR, its own words, and is only
+	// neutralised beside the fences of the turns below.
+	scope = provenance.Neutralise(turn.FenceBoundary(), scope)
 	if len(found) == 0 {
 		if unsearched > 0 {
 			// NOT NEW WORK — NOT SEARCHED. Recall compares only turns
@@ -396,58 +406,23 @@ func unsearchedNote(n int) string {
 // by its size, and the answer waits at most that long however many turns it
 // carries — where it once waited out the compactor's minute, and its retry,
 // per account, and then thirty seconds for every four rewrites.
+//
+// EACH TURN IS [learning.RenderPastTurn]'S, under the turn's own token: what a
+// past turn was asked is, on most turns, somebody else's words, fenced under
+// the label it was asked with exactly as the turn-start block fences it
+// (ADR-0040), and everything else on the line neutralised.
 func (t *queryEpisodes) render(ctx context.Context, turn *turnctx.Turn, found []learning.Episode) []string {
 	// Each rewrite is the turn's own cost, filed under its run.
 	turns := learning.PastTurns(ctx, found, t.compact.For(turn.Seat, turn.Aux()),
 		learning.EpisodeAccountBytes)
-	out := make([]string, len(found))
+	fence := turn.FenceBoundary()
+	out := make([]string, 0, len(found))
 	for i, ep := range found {
-		out[i] = renderPastTurn(ep, turns[i])
+		if entry := learning.RenderPastTurn(fence, ep, turns[i]); entry != "" {
+			out = append(out, entry+"\n")
+		}
 	}
 	return out
-}
-
-// renderPastTurn is one entry of query_episodes' answer.
-//
-// A RAW TURN is what woke it, what it was asked, how it ended, and what it did.
-// What woke it is the label of the waking event, MARKED as that — the worker
-// prompts' "woken by" — because unmarked, after the date, a model read "Message
-// from Ana: Slack message" as the question it had been asked; what it was asked
-// is the ask the row stores (none for a turn that was told nothing). A
-// COMPACTED ROW stands for a cluster of turns, so it is the pattern, how many
-// turns it stands for and how many of them ended done, and what varied: it has
-// no label and no account of its own, and rendered as a turn it showed nothing
-// but its date.
-func renderPastTurn(ep learning.Episode, past learning.PastTurn) string {
-	var b strings.Builder
-	if ep.Kind == learning.KindCompacted {
-		count := max(ep.Count, 1)
-		fmt.Fprintf(&b, "- %s to %s — %d turns like this: %s\n",
-			ep.StartedAt.Format(time.DateOnly), ep.EndedAt.Format(time.DateOnly), count,
-			ep.CommonTaskPattern)
-		if ep.ReviewOutcome != "" {
-			fmt.Fprintf(&b, "    outcome: %s (%d of %d done)\n", ep.ReviewOutcome, ep.DoneCount(), count)
-		}
-		if notable := strings.TrimSpace(ep.NotablePatterns); notable != "" {
-			fmt.Fprintf(&b, "    what varied: %s\n", notable)
-		}
-		return b.String()
-	}
-	fmt.Fprintf(&b, "- %s", ep.StartedAt.Format(time.RFC3339))
-	if ep.TaskSummary != "" {
-		fmt.Fprintf(&b, " — woken by: %s", ep.TaskSummary)
-	}
-	b.WriteString("\n")
-	if past.Ask != "" {
-		fmt.Fprintf(&b, "    asked: %s\n", past.Ask)
-	}
-	if ep.ReviewOutcome != "" {
-		fmt.Fprintf(&b, "    outcome: %s\n", ep.ReviewOutcome)
-	}
-	if past.Account != "" {
-		fmt.Fprintf(&b, "    what it did: %s\n", past.Account)
-	}
-	return b.String()
 }
 
 // --- refresh_memory ------------------------------------------------------- //
@@ -509,10 +484,10 @@ func (t *refreshMemory) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return refused(tools.RefusalForbidden, "refresh_memory "+why), nil
+		return refused(tools.RefusalForbidden, RefreshMemoryTool+" "+why), nil
 	}
 	if t.diary == nil {
-		return refused(tools.RefusalUnavailable, "Durable memory is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Durable memory is not configured on this deployment."), nil
 	}
 	limit := clampInt(argInt(args, "limit", noteLimit), 1, maxEpisodeLimit)
 
@@ -531,7 +506,7 @@ func (t *refreshMemory) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	for _, e := range entries {
 		fmt.Fprintf(&b, "- [%s] %s\n", e.Kind, e.Content)
 	}
-	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}, nil
+	return tools.Result{Output: noteText(turn, b.String())}, nil
 }
 
 // filtered re-runs the personal-memory relevance filter against a hint.
@@ -544,8 +519,8 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	agentID, hint string, limit int,
 ) (tools.Result, error) {
 	if t.recall == nil {
-		return refused(tools.RefusalUnavailable, "This deployment cannot re-filter your notes by "+
-			"relevance — call refresh_memory without `context_hint` for your "+
+		return refusedBy(tools.RefusalUnavailable, waitless(), "This deployment cannot re-filter your notes by "+
+			"relevance — call "+RefreshMemoryTool+" without `context_hint` for your "+
 			"most recent ones instead."), nil
 	}
 	take := t.hints.take(turn.RunID, hint, t.hintBudget())
@@ -555,14 +530,14 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 		// rather than merely uncharged — see [hintLedger]. Re-rendered
 		// rather than replayed, so a repeat asking for more notes than
 		// the first call printed gets them.
-		return renderHintedNotes(take.Cached, hint, limit), nil
+		return renderHintedNotes(turn, take.Cached, hint, limit), nil
 	case !take.Allowed:
 		// REFUSED with the count, so the model learns the shape of the
 		// limit rather than that the tool became unreliable.
 		return failed(fmt.Sprintf(
 			"You have already re-filtered your notes on %d different hints this "+
 				"turn, which is this company's limit. Re-use one of those hints "+
-				"(that is free), or call refresh_memory without one.",
+				"(that is free), or call "+RefreshMemoryTool+" without one.",
 			take.Spent)), nil
 	}
 
@@ -584,7 +559,7 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 	// an answer, and a repeat of the hint would otherwise cost another
 	// completion to be told it again.
 	t.hints.keep(turn.RunID, hint, entries)
-	return renderHintedNotes(entries, hint, limit), nil
+	return renderHintedNotes(turn, entries, hint, limit), nil
 }
 
 // renderHintedNotes prints a hint's filtered rows, newest-first as the filter
@@ -593,10 +568,10 @@ func (t *refreshMemory) filtered(ctx context.Context, turn *turnctx.Turn,
 // An empty result is NOT a fallback to recency. "The most recent eight" would
 // put a note about one person in front of a turn about another, which is the
 // failure the filter exists to prevent.
-func renderHintedNotes(entries []learning.DiaryEntry, hint string, limit int) tools.Result {
+func renderHintedNotes(turn *turnctx.Turn, entries []learning.DiaryEntry, hint string, limit int) tools.Result {
 	if len(entries) == 0 {
-		return tools.Result{Output: fmt.Sprintf(
-			"Nothing in your notes bears on %s.", clip(hint))}
+		return tools.Result{Output: noteText(turn, fmt.Sprintf(
+			"Nothing in your notes bears on %s.", clip(hint)))}
 	}
 	more := 0
 	if len(entries) > limit {
@@ -613,7 +588,15 @@ func renderHintedNotes(entries []learning.DiaryEntry, hint string, limit int) to
 		// without the one that was left off.
 		fmt.Fprintf(&b, "- (+%d more that bear on this — ask again with a larger `limit`)\n", more)
 	}
-	return tools.Result{Output: strings.TrimRight(b.String(), "\n")}
+	return tools.Result{Output: noteText(turn, b.String())}
+}
+
+// noteText is an answer of the seat's notes as the seat reads it: neutralised
+// under the turn's token (ADR-0040), because a note is what a post-turn model
+// concluded from other people's words, or what the seat wrote mid-turn, and
+// nothing in it may open or close one of the turn's fences.
+func noteText(turn *turnctx.Turn, text string) string {
+	return provenance.Neutralise(turn.FenceBoundary(), strings.TrimRight(text, "\n"))
 }
 
 // hintBudget is the company's max_refreshes_per_turn, or the shipped default.
@@ -663,15 +646,15 @@ func (t *reflectAndPersist) Call(ctx context.Context, args map[string]any) (tool
 func (t *reflectAndPersist) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return refused(tools.RefusalForbidden, "reflect_and_persist "+why), nil
+		return refused(tools.RefusalForbidden, ReflectAndPersistTool+" "+why), nil
 	}
 	if t.diary == nil {
-		return refused(tools.RefusalUnavailable, "Durable memory is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Durable memory is not configured on this deployment."), nil
 	}
 	content := strings.TrimSpace(argString(args, "content"))
 	switch {
 	case content == "":
-		return failed("reflect_and_persist needs `content`: the fact to keep."), nil
+		return failed(ReflectAndPersistTool + " needs `content`: the fact to keep."), nil
 	case len(content) > diaryNoteMax:
 		return failed(fmt.Sprintf(
 			"That note is %d characters and the limit is %d. A note is re-read "+
@@ -736,10 +719,10 @@ func (t *markOnboarded) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *markOnboarded) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[string]any) (tools.Result, error) {
 	agentID, why := seatAgentID(turn)
 	if why != "" {
-		return refused(tools.RefusalForbidden, "mark_onboarded "+why), nil
+		return refused(tools.RefusalForbidden, MarkOnboardedTool+" "+why), nil
 	}
 	if t.onboarding == nil {
-		return refused(tools.RefusalUnavailable, "Onboarding is not configured on this deployment."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "Onboarding is not configured on this deployment."), nil
 	}
 	// REFUSED, not clipped — the same bound reflect_and_persist enforces on
 	// the same store, by the same rule. This used to clip silently, so the

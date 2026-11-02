@@ -1,0 +1,61 @@
+{
+  "_comment": "A cited task's evidence label without a leading copy of one of its keys, for a task keyed GP-20 that was WEB-3. Read by internal/worklet (the write) and dashboard/src/lib/work.test.ts (the drawing), so both strip alike.",
+  "keys": [
+    "GP-20",
+    "WEB-3"
+  ],
+  "cases": [
+    {
+      "label": "GP-20 sitemap fix, blocked on this access",
+      "want": "sitemap fix, blocked on this access"
+    },
+    {
+      "label": "GP-20: sitemap fix",
+      "want": "sitemap fix"
+    },
+    {
+      "label": "GP-20 - sitemap fix",
+      "want": "sitemap fix"
+    },
+    {
+      "label": "GP-20 \u2013 sitemap fix",
+      "want": "sitemap fix"
+    },
+    {
+      "label": "GP-20 \u2014 sitemap fix",
+      "want": "sitemap fix"
+    },
+    {
+      "label": "GP-20 \u00b7 sitemap fix",
+      "want": "sitemap fix"
+    },
+    {
+      "label": "WEB-3 sitemap fix",
+      "want": "sitemap fix"
+    },
+    {
+      "label": "GP-20",
+      "want": ""
+    },
+    {
+      "label": "GP-20-b sitemap fix",
+      "want": "GP-20-b sitemap fix"
+    },
+    {
+      "label": "GP-200 sitemap fix",
+      "want": "GP-200 sitemap fix"
+    },
+    {
+      "label": "GP-20b sitemap fix",
+      "want": "GP-20b sitemap fix"
+    },
+    {
+      "label": "the sitemap fix in GP-20",
+      "want": "the sitemap fix in GP-20"
+    },
+    {
+      "label": "",
+      "want": ""
+    }
+  ]
+}

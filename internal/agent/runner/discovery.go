@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -22,10 +23,10 @@ import (
 // They are per-PHASE, like the submission tools, because activation mutates
 // one surface. Registering them into the shared registry would let one phase's
 // activation leak into the next — or into the next turn.
-const (
-	ListMCPToolsTool = "list_mcp_server_tools"
-	ActivateTool     = "activate_tool"
-)
+//
+// THEIR NAMES ARE internal/toolname's, not this package's: the skill guard,
+// the worker deny list, the prompts and the delivery remedy all have to spell
+// them, and every one of those sits below this package.
 
 // DiscoveryTools returns the pair bound to one surface, reached through a
 // getter.
@@ -41,8 +42,8 @@ const (
 // that lock, and it is exactly the kind of harmless that stops being harmless.
 //
 // EXPORTED for [subagent.Config.Discovery], whose type it matches exactly: a
-// sub-agent's own prompt tells it to call list_mcp_server_tools and
-// activate_tool, so a nil Discovery makes that prompt a lie and costs a wasted
+// sub-agent's own prompt tells it to call both tools by name, so a nil
+// Discovery makes that prompt a lie and costs a wasted
 // round every time the child obeys it.
 //
 // ENTRIES, CARRYING THEIR OWN HINTS, rather than bare tools a caller wraps:
@@ -77,16 +78,18 @@ var discoveryHints = tools.Annotations{
 
 type listMCPTools struct{ surface func() *tools.Surface }
 
-func (t *listMCPTools) Name() string { return ListMCPToolsTool }
+func (t *listMCPTools) Name() string { return toolname.ListMCPServerTools }
 
-// Description says what the call answers and what follows it, in the words a
-// text-mode CLI and an agent-mode one both read truly: "callable from your
-// next round", never "its schema arrives on the next message", which
-// described a vendor's tool channel this engine no longer has.
+// Description says what the call answers and what follows it, in words every
+// CLI reads truly: "callable from your next round" — a CLI that re-lists the
+// server's tools mid-run offers an activated tool at its model's next request,
+// and one that does not is ended after the activation and starts its next run
+// with it — never "its schema arrives on the next message", which described a
+// vendor's tool channel this engine no longer has.
 func (t *listMCPTools) Description() string {
 	return "List the tools one MCP server offers. Your system prompt names " +
 		"your MCP servers, not their tools; use this when you need one and do " +
-		"not know its exact name, then `" + ActivateTool + "` the one you pick."
+		"not know its exact name, then `" + toolname.Activate + "` the one you pick."
 }
 
 func (t *listMCPTools) Parameters() map[string]any {
@@ -149,12 +152,12 @@ func (t *listMCPTools) knownServers() string {
 
 type activateTool struct{ surface func() *tools.Surface }
 
-func (t *activateTool) Name() string { return ActivateTool }
+func (t *activateTool) Name() string { return toolname.Activate }
 
 func (t *activateTool) Description() string {
 	return "Make a tool you can reach but do not hold callable, from your next " +
 		"round on: a tool your system prompt lists to discover, or an MCP tool " +
-		"whose name you got from `" + ListMCPToolsTool + "`. Activate it when " +
+		"whose name you got from `" + toolname.ListMCPServerTools + "`. Activate it when " +
 		"you need it; once is enough."
 }
 
@@ -168,8 +171,17 @@ func (t *activateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Result, error) {
+// activationTarget is the tool an activate_tool call names. ONE READING, for
+// the tool itself and for an executor run taken over while it works, whose
+// surface is rebuilt with every tool its successful activations named
+// ([Runner.ReopenAgentRun]).
+func activationTarget(args map[string]any) string {
 	name, _ := args["name"].(string)
+	return name
+}
+
+func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Result, error) {
+	name := activationTarget(args)
 	if strings.TrimSpace(name) == "" {
 		return tools.Result{
 			Output: "Name a tool to activate.", Failed: true,
@@ -184,7 +196,7 @@ func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Resul
 	// recoverable round and a phase that keeps guessing.
 	return tools.Result{
 		Output: fmt.Sprintf("No tool named %q. If it belongs to an MCP server, call "+
-			"%s to see that server's real tool names.", name, ListMCPToolsTool),
+			"%s to see that server's real tool names.", name, toolname.ListMCPServerTools),
 		Failed: true,
 		Cause:  tools.RefusalNotFound,
 	}, nil

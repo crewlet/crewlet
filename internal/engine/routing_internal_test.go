@@ -118,7 +118,7 @@ func TestASeatWithNoCredentialIsNotReportedAsUnresolved(t *testing.T) {
 
 	e, company := routingEngine(t, srv.URL)
 	// Drop the one credentialled seat's token, leaving a company whose
-	// seats simply do not use the tracker.
+	// seats simply do not use Worklet.
 	for role := range company.Config.EachRole() {
 		delete(role.MCPEnv, "jira")
 	}
@@ -169,6 +169,7 @@ func routingEngine(t *testing.T, instance string) (*Engine, *Company) {
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -272,6 +273,7 @@ func TestTheRetryWillNotWireASurfaceTheStartPathRefuses(t *testing.T) {
 			cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

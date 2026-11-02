@@ -119,7 +119,7 @@ function mount(grants: string[]) {
 // Mutation: send the toolbar's Edit principles to `edit=charter` (the address the builder
 // used to read) and the page opens nothing.
 test("the toolbar's Edit principles opens Company › Principles with the mission in edit", async () => {
-  mount(["admin", "tracker", "knowledge"]);
+  mount(["admin", "worklet", "doclet"]);
   await openFromToolbar("Edit principles");
   const mission = await within(await screen.findByRole("region", { name: "Mission" })).findByRole(
     "textbox",
@@ -139,7 +139,7 @@ test("the toolbar's Edit principles opens Company › Principles with the missio
 // A READER WHO MAY NOT WRITE THEM is offered to open them, and reads them:
 // nothing opens, and the guarded route is never asked.
 test("a reader who may not write them opens Company › Principles to read", async () => {
-  mount(["tracker", "knowledge"]);
+  mount(["worklet", "doclet"]);
   await openFromToolbar("Open principles");
   const region = await screen.findByRole("region", { name: "Mission" });
   expect(within(region).getByText(CHARTER.mission)).toBeDefined();

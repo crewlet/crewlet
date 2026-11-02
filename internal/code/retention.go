@@ -62,11 +62,11 @@ import (
 // a landing below its target's green row — from before the pass's clock less
 // [QueueHistory] less [QueueSweepGrace] is swept ([Store.QueueSweep]) back to
 // the history, one queue_sweep record on its own subject removing up to
-// [QueueSweepRows] rows, the repository stepped again while rows past the
-// history are left. A repository whose queues keep working removes its own
-// history with every candidate, ejection and landing; this is for one whose
-// queues stopped, or whose landings are a person's pushes and its merges'
-// alone. Its listing walks the repositories by their key, a page at a time,
+// [QueueSweepRows] rows and [QueueSweepBytes] of ejections, the repository
+// stepped again while rows past the history are left. A repository whose
+// queues keep working removes its own history with every candidate, ejection
+// and landing; this is for one whose queues stopped, or whose landings are a
+// person's pushes and its merges' alone. Its listing walks the repositories by their key, a page at a time,
 // two seeks each.
 //
 // Then every PURGING repository, whatever the retention: a purge once begun
@@ -85,7 +85,7 @@ import (
 // code.scratch.idle_days is deleted ([Store.ExpireScratch]) — restorable as
 // any deleted repository, then purged by the steps above — unless a LIVE TURN
 // holds it: a turn still running, or detached with a run row, that named it
-// through a code tool, a worker, an agent-mode run's bridge or a launch's
+// through a code tool, a worker, an executor's bridge or a launch's
 // grant. The holds are read through [Retention.Holds] AFTER the expiry fixes
 // its cutoff and each page's position, which is what keeps a hold taken while
 // the pass decides from being lost ([Retention.expireScratch] states the
@@ -240,7 +240,7 @@ type RetentionReport struct {
 	// QueueSweeps counts the queue_sweep records the pass published, across
 	// every repository: each removing up to QueueSweepRows of one
 	// repository's ended queue entries and landings below their green row
-	// past QueueHistory.
+	// past QueueHistory, its ejections within QueueSweepBytes.
 	QueueSweeps int `json:"queue_sweeps"`
 	// QueueSweptRows counts the rows those records remove — each step's
 	// decide's own count of the history before its Through.
@@ -962,7 +962,7 @@ type dueRedirect struct {
 // redirectsDue lists one page of the old names whose redirect ended at or
 // before q.cutoff, oldest first and keyset after q.after — a STALE READ of
 // this node's rows, since every release decides again in its own snapshot —
-// over code_names_redirect_idx (replicated 0068), the >= beside the OR keeping
+// over code_names_redirect_idx (replicated 0091), the >= beside the OR keeping
 // the index's range seek.
 func (r *Reader) redirectsDue(ctx context.Context, q redirectsQuery) ([]dueRedirect, error) {
 	if q.limit <= 0 {
@@ -1026,7 +1026,7 @@ type idlePage struct {
 
 // idleScratch lists one page of the ACTIVE scratch repositories last active at
 // or before q.cutoff, idle longest first and keyset after q.after, over
-// code_repos_idle_idx (replicated 0068) — and the position it read them at,
+// code_repos_idle_idx (replicated 0091) — and the position it read them at,
 // in the same transaction. A STALE READ: every expiry decides again in its
 // own snapshot, and refuses a repository with any record past this page.
 func (r *Reader) idleScratch(ctx context.Context, q idleQuery) (idlePage, error) {

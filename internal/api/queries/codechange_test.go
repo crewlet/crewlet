@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/code"
@@ -169,6 +171,147 @@ func TestTheChangeQuestionsReadAtTheCallersFloor(t *testing.T) {
 					found.Placed, found.Revision)
 			}
 		}
+	}
+}
+
+// A PAGE OF FINDINGS PAST ONE RE-ANCHORING IS PLACED WHOLE: the findings part
+// takes any page the reader serves (up to code.MaxFindingsPerPage, which a
+// screen asks), and a git node's re-anchoring places at most
+// code.MaxReanchors — so a page of findings raised on an earlier revision
+// past that is placed by several re-anchorings, each one a git node takes,
+// all at the head's floor, never refused as the request's mistake naming a
+// field it never sent.
+//
+// Mutation: place the page with one re-anchoring of every anchor → the
+// question refuses the page, red.
+func TestAPageOfFindingsPastOneReanchoringIsPlacedWhole(t *testing.T) {
+	t.Parallel()
+	const findings = 100
+	rows := twoRevisions(atCodeSeq(4800))
+	stub := &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
+		out, err := rows(q)
+		if q.Part == code.PartFindings {
+			out.Findings = nil
+			for i := range findings {
+				out.Findings = append(out.Findings, code.FindingRow{ID: fmt.Sprintf("f%03d", i), Revision: 1,
+					Path: "upload/retry.go", Side: code.SideNew, BlobOID: oid("b"), LineStart: i + 1,
+					LineEnd: i + 1})
+			}
+		}
+		return out, err
+	}, git: func(q code.GitQuery) (code.GitAnswer, error) {
+		out := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Reanchor: &code.ReanchorAnswer{}}
+		for _, a := range q.Reanchor.Anchors {
+			out.Reanchor.Anchors = append(out.Reanchor.Anchors, code.Reanchored{ID: a.ID, Start: a.Start + 2,
+				End: a.End + 2})
+		}
+		return out, nil
+	}}
+	answer, err := askNative(t, queries.Sources{Code: stub}, "code_change", map[string]any{"name": "web",
+		"change": "1", "part": "findings", "limit": fmt.Sprint(findings)})
+	if err != nil {
+		t.Fatalf("a page of %d findings raised on an earlier revision was refused: %v", findings, err)
+	}
+	found, ok := answer.(queries.CodeChangeFindings)
+	if !ok {
+		t.Fatalf("the findings part answered %T", answer)
+	}
+	for i := range findings {
+		id := fmt.Sprintf("f%03d", i)
+		if at := found.Placed[id]; at.Start != i+3 {
+			t.Errorf("finding %s was placed at %+v, want line %d of revision 2", id, at, i+3)
+		}
+	}
+	if len(stub.read) < 2 {
+		t.Errorf("a page of %d findings was placed by %d re-anchorings, want one for every %d", findings,
+			len(stub.read), code.MaxReanchors)
+	}
+	for _, q := range stub.read {
+		if q.Kind != code.GitReanchor || len(q.Reanchor.Anchors) > code.MaxReanchors ||
+			!reflect.DeepEqual(q.Fresh, statelog.FloorAt(statelog.ReadSession, atCodeSeq(20))) {
+			t.Errorf("asked %s of %d anchors at %+v, want a re-anchoring of at most %d at the head's floor", q.Kind,
+				len(q.Reanchor.Anchors), q.Fresh, code.MaxReanchors)
+		}
+	}
+}
+
+// A CHANGE'S TWO REVISIONS ARE READ AT ONCE: what changed in revision 2 since
+// revision 1 of a change whose head is 3 reads the head, then the two
+// revisions — neither needing the other's row — beside each other, each
+// floored at the head's answer, so a node reading the estate through another
+// pays one round trip for the two (code.ChangeRevisions, which the code tools
+// read by too). And a findings page is read beside the revision it is placed
+// in.
+//
+// Mutation: read the two revisions one after the other → each is read
+// alone, red; read the page after the revision → each is read alone, red.
+func TestAChangesTwoRevisionsAreReadAtOnce(t *testing.T) {
+	t.Parallel()
+	answered := atCodeSeq(4800)
+	// meet holds a read until another read after the head's has arrived,
+	// for at most five seconds — far past a loaded runner's scheduling
+	// delay — answering whether it did.
+	both := make(chan struct{})
+	var arrived atomic.Int32
+	meet := func() bool {
+		if arrived.Add(1) == 2 {
+			close(both)
+		}
+		select {
+		case <-both:
+			return true
+		case <-time.After(5 * time.Second):
+			return false
+		}
+	}
+	rev := func(n int64) code.RevisionRow {
+		head := fmt.Sprint(n)
+		return code.RevisionRow{N: n, Head: oid(head), Position: atCodeSeq(uint64(10 * n)),
+			Facts: &code.RevisionFactsRow{TargetRef: "refs/heads/main", TargetOID: oid("a"),
+				TargetPosition: atCodeSeq(uint64(10*n - 1)), BaseOID: oid("a"), Touched: []string{"upload/retry.go"}}}
+	}
+	stub := &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
+		out := code.ReadAnswer{Level: q.Fresh.Level, Position: answered}
+		if q.Cursor == "" && q.Part == "" {
+			out.Change = &code.ChangeDetail{ChangeSummary: code.ChangeSummary{ChangeRow: code.ChangeRow{
+				ID: "change-1", RepoID: webID, Number: 1, State: code.ChangeStateOpen, Revision: 3}}}
+			out.Revisions = []code.RevisionRow{rev(3)}
+			return out, nil
+		}
+		if !meet() {
+			return code.ReadAnswer{}, fmt.Errorf("the read %+v was made alone", q)
+		}
+		switch q.Cursor {
+		case "3":
+			out.Revisions = []code.RevisionRow{rev(2)}
+		case "2":
+			out.Revisions = []code.RevisionRow{rev(1)}
+		}
+		return out, nil
+	}}
+	answer, err := askNative(t, queries.Sources{Code: stub}, "code_change", map[string]any{"name": "web",
+		"change": "1", "part": "diff", "revision": "2", "since_revision": "1", "file": "upload/retry.go"})
+	if err != nil {
+		t.Fatalf("revision 2 since revision 1 was refused: %v", err)
+	}
+	if got, ok := answer.(queries.CodeChangeFiles); !ok || got.Revision != 2 || got.SinceRevision != 1 ||
+		len(stub.read) != 1 || stub.read[0].Interdiff == nil || stub.read[0].Interdiff.ToHead != oid("2") ||
+		stub.read[0].Interdiff.FromHead != oid("1") {
+		t.Errorf("revision 2 since revision 1 was read as %+v by %+v", got, stub.read)
+	}
+	for _, q := range stub.asked[1:] {
+		if !reflect.DeepEqual(q.Fresh, statelog.FloorAt(statelog.ReadSession, answered)) {
+			t.Errorf("a revision was read at %+v, want session at the head's answer", q.Fresh)
+		}
+	}
+
+	// THE FINDINGS PAGE BESIDE THE REVISION IT IS PLACED IN.
+	both = make(chan struct{})
+	arrived.Store(0)
+	stub.asked, stub.read = nil, nil
+	if _, err := askNative(t, queries.Sources{Code: stub}, "code_change", map[string]any{"name": "web",
+		"change": "1", "part": "findings", "revision": "2"}); err != nil {
+		t.Fatalf("the findings in revision 2 were refused: %v", err)
 	}
 }
 

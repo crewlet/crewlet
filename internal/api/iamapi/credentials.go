@@ -91,10 +91,11 @@ type mintBody struct {
 
 	// Grants are what the token carries. They NARROW the owner's and never
 	// widen them — see [iamdomain.Writer.MintToken]. Omitted, the token
-	// carries every permission the owner holds, admin included: a token
-	// acts as its owner, and what keeps it off a gesture that needs a
-	// person is the gesture's own row, not a permission it cannot carry.
-	// A name this build does not know is refused naming the set.
+	// carries every permission the owner holds that the minting party may
+	// confer, admin included where the minter holds it: a token acts as its
+	// owner, and what keeps it off a gesture that needs a person is the
+	// gesture's own row, not a permission it cannot carry. A name this
+	// build does not know is refused naming the set.
 	Grants []iam.Grant `json:"grants"`
 }
 
@@ -151,11 +152,13 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	if _, fromToken := auth.PresentedToken(r.Context()); fromToken {
 		// `token_refused`, the code every gesture a token may not make
 		// answers — `unauthorized`'s sentence is about access the
-		// credential lacks, which contradicted this detail.
-		detail := authz.RefusalDetail(authz.ReasonTokenRefused, nil)
+		// credential lacks, which contradicted this detail — in the
+		// authority table's own mapping ([authz.RefusalFields]).
+		status, code, detail := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonTokenRefused})
 		detail["detail"] = "An access token can't create another token. Sign " +
 			"in, or use an API token."
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused, detail)
+		httpjson.FailWithFields(w, status, code, detail)
 		return
 	}
 	// A TIER A TOKEN HOLDS NO TOKENS OF ITS OWN: it is the deployment's
@@ -256,7 +259,7 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !landed(minted.Result) {
 		if errors.Is(err, iamdomain.ErrInvalidToken) {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-				map[string]string{"detail": err.Error()})
+				map[string]string{"detail": iamdomain.Sentence(err)})
 			return
 		}
 		// AN UNKNOWN MINT HANDS OUT NO VALUE: it has no position to carry,

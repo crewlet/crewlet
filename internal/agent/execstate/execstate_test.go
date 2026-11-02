@@ -3,49 +3,68 @@ package execstate_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/events/types"
-	llm "github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// suspended is a well-formed state: a conversation ending with one unanswered
-// run_sandbox call.
-func suspended() execstate.State {
+// parked is a well-formed state: a turn parked on its executor's run in its
+// second round, with a closed first round behind it.
+func parked() execstate.State {
+	// The founder's words, as the turn read them: a person who holds a seat,
+	// writing in a direct message's thread.
+	founder := provenance.Label{
+		Source: provenance.SourceChatThread, Trust: provenance.TrustColleague,
+		Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "founder"}},
+	}
 	return execstate.State{
-		Version: execstate.Version,
-		Messages: []llm.Message{
-			{Role: "system", Content: "you are an engineer"},
-			{Role: "user", Content: "fix the flake"},
-			{Role: "assistant", ToolCalls: []llm.ToolCall{
-				{ID: "call-1", Name: "run_sandbox", Arguments: map[string]any{"brief": "fix it"}},
-			}},
+		Version:      execstate.Version,
+		ActiveTools:  []string{"send_message", "submit_work"},
+		LoadedSkills: []string{"git-auth"},
+		Round:        2,
+		LaunchMS:     1_840,
+		LaunchedAt:   time.Date(2026, 9, 1, 8, 0, 3, 120_000_000, time.UTC),
+		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it", Calls: []ledger.Call{
+			{Name: "read_file", Args: map[string]any{"path": "flake_test.go"}, Result: "…"},
+		}}},
+		Task:          "fix the flake",
+		Ask:           "the login test flakes on main",
+		AskProvenance: &founder,
+		Interactions: []types.InboundInteraction{{
+			Sender:      types.CanonicalIdentity{Handle: "founder", ExternalID: "U0FOUNDER", Platform: "slack"},
+			Body:        "the login test flakes on main",
+			Provenance:  founder,
+			ChannelKind: types.ChannelDM,
+		}},
+		Written:     []types.WorkItem{{Backend: types.WorkWorklet, ID: "T-1"}},
+		WrittenMany: true,
+		Uncharged:   &execstate.Uncharged{Turns: 1, Input: 900, Output: 120, Workers: 1},
+		SoFar:       &execstate.TurnSoFar{DurationMS: 42_000, Reviews: 2, SentBack: 1, Unaccepted: 1},
+		Context: execstate.Frozen{
+			ThreadContext:       "- **Ana (ana)**: the login test flakes on main",
+			PersonalMemory:      "- always run the suite twice",
+			RelevantKnowledge:   "- **Flaky tests runbook**",
+			EpisodeRecall:       "- fixed a timing flake before",
+			CounterpartyProfile: "Subject: Ana",
+			SynthesizedSkills:   "- **deflake**: the checklist",
+			Conversation:        "Ana: is the flake fixed yet?",
 		},
-		PendingCallID:   "call-1",
-		PendingCallName: "run_sandbox",
-		ActiveTools:     []string{"run_sandbox", "send_message"},
-		LoadedSkills:    []string{"git-auth"},
-		Round:           2,
-		InputTokens:     1200,
-		OutputTokens:    340,
-		ToolExecutions:  []types.ToolExecution{{"name": "read_file", "success": true, "round": 1}},
-		RoundsUsed:      2,
-		RoundNarration: []types.RoundNarration{
-			{"round": 1, "content": "Reading it first."},
-			{"round": 2, "content": "Starting a coding run."},
-		},
-		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it"}},
-		Task:       "fix the flake",
-		Uncharged:  &execstate.Uncharged{Turns: 1, Input: 900, Output: 120, Workers: 1},
-		SoFar:      &execstate.TurnSoFar{DurationMS: 42_000, Reviews: 2, SentBack: 1, Unaccepted: 1},
 	}
 }
 
+// WHAT THE REST OF THE TURN NEEDS SURVIVES THE ROW, because the segment that
+// collects the run is often another process on another node, and every field
+// here is something no other record holds for it.
 func TestAStateRoundTripsThroughTheRow(t *testing.T) {
-	blob, err := execstate.Encode(suspended())
+	t.Parallel()
+	blob, err := execstate.Encode(parked())
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -53,37 +72,38 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Decode = %v, %v", ok, err)
 	}
-	want := suspended()
-	if got.PendingCallID != want.PendingCallID || got.PendingCallName != want.PendingCallName {
-		t.Fatalf("pending call = %q/%q", got.PendingCallID, got.PendingCallName)
+	want := parked()
+	if got.Round != 2 {
+		t.Fatalf("round = %d, want the round the run was launched in", got.Round)
 	}
-	if len(got.Messages) != len(want.Messages) {
-		t.Fatalf("messages = %d, want %d", len(got.Messages), len(want.Messages))
-	}
-	if got.Messages[2].ToolCalls[0].Name != "run_sandbox" {
-		t.Fatalf("the dangling call did not survive: %+v", got.Messages[2])
-	}
-	if got.Round != 2 || got.InputTokens != 1200 || got.OutputTokens != 340 {
-		t.Fatalf("counters lost: %+v", got)
+	// THE LAUNCH'S HALF OF THE PHASE, and where it began: the collection is
+	// often another process, which never saw the launch, and its record
+	// states the phase's whole span and its one timed round from these.
+	if got.LaunchMS != want.LaunchMS || !got.LaunchedAt.Equal(want.LaunchedAt) {
+		t.Fatalf("the launch's segment did not survive: %d ms from %v, want %d ms from %v",
+			got.LaunchMS, got.LaunchedAt, want.LaunchMS, want.LaunchedAt)
 	}
 	if len(got.ActiveTools) != 2 || len(got.LoadedSkills) != 1 {
 		t.Fatalf("surface state lost: %+v", got)
 	}
-	if len(got.ToolExecutions) != 1 || len(got.Iterations) != 1 {
-		t.Fatalf("prior-work state lost: %+v", got)
+	if len(got.Iterations) != 1 || len(got.Iterations[0].Calls) != 1 {
+		t.Fatalf("the closed rounds were lost: %+v", got.Iterations)
 	}
-	// THE ROUNDS THEMSELVES. Nothing else holds them — a suspending phase
-	// publishes no completed event and its progress frames are stream-only —
-	// so a row that loses these loses the pre-suspend half of the phase from
-	// the store for good, and the resumed half renumbers from 1.
-	if got.RoundsUsed != 2 || len(got.RoundNarration) != 2 {
-		t.Fatalf("the pre-suspend rounds were lost: %+v", got)
+	// Each interaction whole, the label its body was read under included: the
+	// post-turn workers fence a body under it, and they read the interactions
+	// off the segment that settles the turn, which re-reads no trigger.
+	if got.Task != want.Task || got.Ask != want.Ask ||
+		!reflect.DeepEqual(got.Interactions, want.Interactions) {
+		t.Fatalf("what the turn was asked, and who said it, was lost: %+v", got)
 	}
-	if got.RoundNarration[0]["content"] != "Reading it first." {
-		t.Fatalf("round 1's narration did not survive: %+v", got.RoundNarration)
+	// WHAT IT WAS ASKED, AND WHO ASKED IT IN WHAT WORDS: the segment that
+	// records the ask reads no trigger, so a label lost here is somebody's
+	// words recorded as nobody's.
+	if got.Ask != want.Ask || !reflect.DeepEqual(got.AskProvenance, want.AskProvenance) {
+		t.Fatalf("the ask came back as %q under %+v", got.Ask, got.AskProvenance)
 	}
-	if got.Task != "fix the flake" {
-		t.Fatalf("task = %q", got.Task)
+	if len(got.Written) != 1 || !got.WrittenMany {
+		t.Fatalf("the turn's write set was lost: %+v", got)
 	}
 	// WHAT NO ITEM HAS BEEN CHARGED FOR YET. The segment that finishes the
 	// turn pays it, and it is often another process on another node, so a
@@ -95,6 +115,12 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	// whole: lost, the turn's earlier spans and reviews count nowhere.
 	if got.SoFar == nil || *got.SoFar != *want.SoFar {
 		t.Fatalf("the turn's measurement so far did not survive: %+v", got.SoFar)
+	}
+	// AND THE CONTEXT THE TURN STARTED WITH, every block of it: the turn's
+	// next launch is built from it in whichever process collected this run,
+	// and a block lost here is one that launch's prompt silently lacks.
+	if got.Context != want.Context {
+		t.Fatalf("the turn-start context did not survive:\n got %+v\nwant %+v", got.Context, want.Context)
 	}
 }
 
@@ -116,16 +142,18 @@ func withVersion(t *testing.T, blob json.RawMessage, version int) json.RawMessag
 
 // A NUMBER COMES BACK AS THE DIGITS IT WENT IN AS. A model passes ids as
 // tool arguments — a Slack timestamp, a database key, a nineteen-digit
-// snowflake — and the resumed loop replays that call to the provider and
-// reads it back into its own ledger. Read as a float64 the snowflake below
-// becomes ...800, which is an argument the model never wrote, a replayed turn
-// the provider sees edited, and an id that names something else.
-func TestNumbersSurviveASuspensionExactly(t *testing.T) {
+// snowflake — and the closed rounds carry those calls across the park into
+// the ledger the next run is briefed from. Read as a float64 the snowflake
+// below becomes ...800, which is an argument the model never wrote and an id
+// that names something else.
+//
+// Mutation: decode with a plain json.Unmarshal, and the snowflake drifts.
+func TestNumbersSurviveAParkExactly(t *testing.T) {
 	t.Parallel()
 	const snowflake = "1234567890123456789"
-	state := suspended()
-	state.Messages[2].ToolCalls[0].Arguments = map[string]any{
-		"brief": "fix it",
+	state := parked()
+	state.Iterations[0].Calls[0].Args = map[string]any{
+		"path":  "flake_test.go",
 		"row":   json.Number(snowflake),
 		"ratio": json.Number("0.1000000000000000055511151231257827"),
 	}
@@ -138,7 +166,7 @@ func TestNumbersSurviveASuspensionExactly(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Decode = %v, %v", ok, err)
 	}
-	args := got.Messages[2].ToolCalls[0].Arguments
+	args := got.Iterations[0].Calls[0].Args
 	if row, _ := args["row"].(json.Number); row.String() != snowflake {
 		t.Errorf("row = %v (%T), want the exact %s", args["row"], args["row"], snowflake)
 	}
@@ -146,9 +174,9 @@ func TestNumbersSurviveASuspensionExactly(t *testing.T) {
 		t.Errorf("ratio = %v (%T), want its digits unchanged", args["ratio"], args["ratio"])
 	}
 
-	// And a second suspension of the resumed conversation writes the same
-	// bytes: what a resume reads is exactly what the next suspend writes,
-	// with no drift a chain of suspensions could compound.
+	// And a second park of the resumed turn writes the same bytes: what a
+	// resume reads is exactly what the next park writes, with no drift a
+	// chain of parks could compound.
 	again, err := execstate.Encode(got)
 	if err != nil {
 		t.Fatalf("re-Encode: %v", err)
@@ -159,9 +187,10 @@ func TestNumbersSurviveASuspensionExactly(t *testing.T) {
 }
 
 // A rolling upgrade means the node that resumes is routinely not the build
-// that suspended. A half-understood conversation must not be acted on.
+// that parked. A half-understood state must not be acted on.
 func TestAnUnknownVersionIsRefusedLoudlyRatherThanReadBestEffort(t *testing.T) {
-	blob, err := execstate.Encode(suspended())
+	t.Parallel()
+	blob, err := execstate.Encode(parked())
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -179,7 +208,8 @@ func TestAnUnknownVersionIsRefusedLoudlyRatherThanReadBestEffort(t *testing.T) {
 // Encode stamps the current version, so a caller cannot write a state claiming
 // to be something else.
 func TestEncodeStampsTheCurrentVersion(t *testing.T) {
-	state := suspended()
+	t.Parallel()
+	state := parked()
 	state.Version = 0
 	blob, err := execstate.Encode(state)
 	if err != nil {
@@ -196,50 +226,10 @@ func TestEncodeStampsTheCurrentVersion(t *testing.T) {
 	}
 }
 
-// Zero dangling calls means there is nothing to resume into.
-func TestAConversationThatAnswersEveryCallCannotBeResumed(t *testing.T) {
-	state := suspended()
-	state.Messages = append(state.Messages, llm.Message{
-		Role: "tool", ToolCallID: "call-1", Content: "already answered",
-	})
-	if _, err := execstate.Encode(state); !errors.Is(err, execstate.ErrNoPendingCall) {
-		t.Fatalf("Encode = %v, want ErrNoPendingCall", err)
-	}
-}
-
-// Two dangling calls means the model answers one and strands the other — and
-// the stranded one is a box nothing will ever collect.
-func TestTwoUnansweredCallsAreRefused(t *testing.T) {
-	state := suspended()
-	state.Messages[2].ToolCalls = append(state.Messages[2].ToolCalls,
-		llm.ToolCall{ID: "call-2", Name: "run_sandbox"})
-
-	if _, err := execstate.Encode(state); !errors.Is(err, execstate.ErrDanglingCalls) {
-		t.Fatalf("Encode = %v, want ErrDanglingCalls", err)
-	}
-}
-
-// The named pending call has to be the one actually left open, or the resume
-// answers a call the conversation already closed.
-func TestThePendingIdMustBeTheCallThatIsActuallyOpen(t *testing.T) {
-	state := suspended()
-	state.PendingCallID = "call-99"
-	if _, err := execstate.Encode(state); !errors.Is(err, execstate.ErrNoPendingCall) {
-		t.Fatalf("Encode = %v, want ErrNoPendingCall", err)
-	}
-}
-
-func TestAStateWithNoPendingCallAtAllIsRefused(t *testing.T) {
-	state := suspended()
-	state.PendingCallID = ""
-	if _, err := execstate.Encode(state); !errors.Is(err, execstate.ErrNoPendingCall) {
-		t.Fatalf("Encode = %v, want ErrNoPendingCall", err)
-	}
-}
-
-// A crash between launching the job and persisting the suspend leaves an empty
+// A crash between launching the job and persisting the park leaves an empty
 // blob. That is an ordinary condition the caller settles, not a broken store.
 func TestAnEmptyBlobIsNotAnError(t *testing.T) {
+	t.Parallel()
 	got, ok, err := execstate.Decode(nil)
 	if err != nil || ok {
 		t.Fatalf("Decode(nil) = %+v, %v, %v; want a clean miss", got, ok, err)
@@ -253,53 +243,21 @@ func TestAnEmptyBlobIsNotAnError(t *testing.T) {
 	}
 }
 
-// The resumed loop must see a completed exchange, not a request the provider
-// would reject as unanswered.
-func TestAnswerClosesThePendingCall(t *testing.T) {
-	state := suspended()
-	msgs := state.Answer("the sandbox run succeeded")
-
-	if len(msgs) != len(state.Messages)+1 {
-		t.Fatalf("Answer produced %d messages, want %d", len(msgs), len(state.Messages)+1)
-	}
-	last := msgs[len(msgs)-1]
-	if last.Role != "tool" || last.ToolCallID != "call-1" || last.Name != "run_sandbox" {
-		t.Fatalf("the answer does not close the call: %+v", last)
-	}
-	if last.Content != "the sandbox run succeeded" {
-		t.Fatalf("content = %q", last.Content)
-	}
-	// The state's own slice is untouched, so a failed resume can be retried
-	// from the same state.
-	if len(state.Messages) != 3 {
-		t.Fatalf("Answer mutated the state: %d messages", len(state.Messages))
-	}
-}
-
-// A validated state must stay valid once its answer is appended, or the
-// resumed loop starts from a conversation the reader would refuse.
-func TestAnAnsweredStateHasNoDanglingCallLeft(t *testing.T) {
-	state := suspended()
-	answered := state
-	answered.Messages = state.Answer("done")
-	if err := answered.Validate(); !errors.Is(err, execstate.ErrNoPendingCall) {
-		t.Fatalf("Validate after Answer = %v; the call should read as closed", err)
-	}
-}
-
 // A version this build does not know — a successor's reshape — is a
 // REFUSAL, not a best-effort read: a reader that decoded a reshaped blob into
 // its own fields would find the ones that moved empty and resume believing
-// every round before the suspend had called nothing — so it would re-fire
+// every round before the park had called nothing — so it would re-fire
 // whatever they delivered.
 //
-// The retired number is one of them: 1 named an earlier shape, and a blob
-// carrying it is refused like any other version this build does not read
-// rather than decoded as this one.
+// The retired numbers are among them, and 2 and 3 matter most: they named a
+// parked engine CONVERSATION, a shape whose shared fields would decode here and
+// be resumed as a run that never existed.
+//
+// Mutation: accept version 3 in Decode, and this goes red.
 func TestAVersionThisBuildDoesNotKnowIsRefused(t *testing.T) {
 	t.Parallel()
-	for _, version := range []int{execstate.Version + 1, 1} {
-		blob, err := execstate.Encode(suspended())
+	for _, version := range []int{execstate.Version + 1, 3, 2, 1} {
+		blob, err := execstate.Encode(parked())
 		if err != nil {
 			t.Fatalf("Encode: %v", err)
 		}

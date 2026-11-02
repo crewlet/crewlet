@@ -134,13 +134,22 @@ func refusedCredential(ctx context.Context) context.Context {
 // guarded route's 401 and nowhere else.
 func (g *Guard) refused(r *http.Request) bool {
 	marked, _ := r.Context().Value(refusedKey{}).(bool)
-	if g.audit == nil || !marked {
-		return marked
+	if marked {
+		g.countFailed(r)
+	}
+	return marked
+}
+
+// countFailed counts one refused bearer from r's source on the audit trail's
+// failure row: [Guard.refused]'s count, and an assistant grant presented over
+// the wire's (assist.go), which is refused before any resolution runs.
+func (g *Guard) countFailed(r *http.Request) {
+	if g.audit == nil {
+		return
 	}
 	g.audit.Failed(r.Context(), authevents.Failure{
 		Source: g.Client(r), Method: types.FailBearer,
 	})
-	return true
 }
 
 // overreached logs a Tier A token a route refused with 403: the token matched

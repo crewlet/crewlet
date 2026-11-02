@@ -63,7 +63,7 @@ func (t *dashboardSources) CallForTurn(_ context.Context, _ *turnctx.Turn,
 	if name := strings.TrimSpace(argString(args, "name")); name != "" {
 		src, ok := dashspec.Source(name)
 		if !ok {
-			return failed(fmt.Sprintf("list_dashboard_sources has no source %q: the catalogue is %s.",
+			return failed(fmt.Sprintf(DashboardSourcesTool+" has no source %q: the catalogue is %s.",
 				name, strings.Join(dashspec.SourceNames(), ", "))), nil
 		}
 		sources = []dashspec.EngineSource{src}
@@ -73,6 +73,6 @@ func (t *dashboardSources) CallForTurn(_ context.Context, _ *turnctx.Turn,
 		"min_refresh_seconds": artifacts.MinRefreshSeconds,
 		"note": "A dataset reads one source: {\"id\": ..., \"title\": ..., \"source\": \"engine\", " +
 			"\"engine\": {\"name\": ..., \"params\": {...}}}, a parameter a literal or " +
-			"{\"param\": \"<filter key>\"}. See the dashboard section of the artifacts skill.",
+			"{\"param\": \"<filter key>\"}. Every key of dashboard.json is one " + ArtifactFormatTool + " call away.",
 	})
 }

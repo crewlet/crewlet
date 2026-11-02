@@ -44,6 +44,35 @@ func TestTheViewTriggersStopBeforeWhatTheyReArm(t *testing.T) {
 	}
 }
 
+// THE CLAIM GATE'S WATCH COMES DOWN BEFORE ANYTHING ITS GATE READS.
+//
+// The watch evaluates the seat-claim gate on its own goroutine whenever a log
+// comes level or the fleet's view lists ([gateWatch]), and the gate reads the
+// core's logs, the native halves the router answers from and the fleet's view
+// the router routes by. Ended after any of them, an event landing in between
+// evaluates a gate over something the teardown has already closed.
+//
+// Mutation: move stopAdmissionWatch below stopNative, stopCore or
+// stopWatchingDataNodes, and this fails naming it.
+func TestTheClaimGatesWatchStopsBeforeWhatItsGateReads(t *testing.T) {
+	t.Parallel()
+	order := callsIn(t, "teardown")
+	watch := slices.Index(order, "stopAdmissionWatch")
+	if watch < 0 {
+		t.Fatalf("the teardown calls %v and never ends the claim gate's watch", order)
+	}
+	for _, read := range []string{"stopNative", "stopCore", "stopWatchingDataNodes"} {
+		at := slices.Index(order, read)
+		if at < 0 {
+			t.Fatalf("the teardown calls %v and no %s", order, read)
+		}
+		if at < watch {
+			t.Errorf("the teardown runs %s before it ends the claim gate's watch, "+
+				"whose gate reads what it stopped", read)
+		}
+	}
+}
+
 // AND THE DUTIES COME DOWN IN THE ORDER THE DOCS STATE: the native half's
 // embedding writer before the core's trim and identity duties, every one
 // before the node gives its duty leases back, and all of that before the
@@ -166,8 +195,8 @@ func TestTheAnswerersAndTheHoldsStopBeforeTheCore(t *testing.T) {
 		return i
 	}
 	for _, answerer := range []string{"stopHistory", "stopSteer", "stopMemoryReads",
-		"stopSandboxTails", "stopSeatPauses", "stopBudgetParks",
-		"stopServingEstate", "stopServingFleetBroker"} {
+		"stopSandboxTails", "stopSandboxHost", "stopSeatPauses", "stopBudgetParks",
+		"stopProviderParks", "stopServingEstate", "stopServingFleetBroker"} {
 		if at(answerer) > at("stopCore") {
 			t.Errorf("the teardown stops the core before %s", answerer)
 		}

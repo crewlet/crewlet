@@ -79,9 +79,49 @@ func (r *run) sanitizeBrandAssets(ctx context.Context) error {
 		f.produce(out)
 	}
 	if len(refusals) > 0 {
+		// THE INDEX IS JUDGED IN THE SAME ANSWER: a refused logo stops the
+		// publish before the format check, which would otherwise wait for
+		// the next attempt to report the index's own faults, so a kit with
+		// a bad SVG and a bad brand.json took two refusals to learn both.
+		index, err := brandformat.CheckIndex(pendingSource{ctx: ctx, run: r})
+		if err != nil {
+			return err
+		}
+		refusals = append(refusals, BrandFindings(index)...)
 		return &lint.Refusal{Findings: refusals}
 	}
 	return nil
+}
+
+// pendingSource is the version a run is composing, before its manifest: every
+// file the publish brings or carries, read from the bytes the run holds or the
+// object it names.
+type pendingSource struct {
+	ctx context.Context
+	run *run
+}
+
+func (p pendingSource) Paths() []string { return p.run.sortedPaths() }
+
+func (p pendingSource) Essence(path string) (string, bool) {
+	f, ok := p.run.files[path]
+	if !ok {
+		return "", false
+	}
+	return f.typ.Essence(), true
+}
+
+func (p pendingSource) Read(path string) ([]byte, error) {
+	f, ok := p.run.files[path]
+	switch {
+	case !ok:
+		return nil, fmt.Errorf("artifactupload: the version holds no %q", path)
+	case f.text != nil:
+		return f.text, nil
+	case f.hasObj:
+		return readObject(p.ctx, p.run.s.objects, f.entry.Object, true)
+	}
+	return nil, fmt.Errorf("artifactupload: %q holds no bytes yet", path)
 }
 
 // brandFindings is a brand refusal's findings in the linter's shape

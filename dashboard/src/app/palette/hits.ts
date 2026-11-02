@@ -15,11 +15,14 @@ import {
   DESTINATIONS,
   SIDEBAR_GROUPS,
   WORKSPACES,
+  closedBy,
+  guardedPath,
   landingPath,
   pathShown,
   serviceShown,
   workspaceRow,
   workspaceShown,
+  type Destination,
   type ServicesRun,
   type SidebarPlace,
   type WorkspaceRow,
@@ -95,7 +98,7 @@ export const SEARCH_MIN = 2;
  *
  * EIGHT in the scope: a ranked answer is opened, not scrolled — the person's
  * next move is one or two of the top rows, and past eight the full search
- * screen (`#/work/search`, one row away) is where the rest belong. THREE in
+ * screen (`#/worklet/search`, one row away) is where the rest belong. THREE in
  * All, where tasks share the list with pages, agents and actions and the
  * approved palette draws two or three of each.
  */
@@ -143,13 +146,6 @@ export const ALL_ROWS_UNDER_ANSWER = 2;
  * is what pushed the actions off the first screen.
  */
 export const SOURCE_CHIPS = 4;
-
-/**
- * How many projects the palette reads to say where a create lands and to
- * offer when it cannot tell: the engine's own cap on the listing (200), so
- * no company's project is missing from the step that picks one.
- */
-export const PROJECT_PAGE = 200;
 
 /**
  * The longest text the engine resolves to a colleague, in UTF-8 bytes:
@@ -329,7 +325,7 @@ export type Standing = { anonymous: true } | { anonymous: false; grants: readonl
  * use for, and was drawn beside every guarded row for a reader who already
  * held the access. To a reader NOBODY SIGNED IN it says "needs sign-in", the
  * step before any access — naming one would tell them to hold something before
- * they are anybody. To a reader who is, it names the access ("needs Tracker
+ * they are anybody. To a reader who is, it names the access ("needs Worklet
  * access").
  */
 export function destinationHits(
@@ -342,7 +338,7 @@ export function destinationHits(
   // A PLACE READING A SERVICE THE COMPANY DOES NOT RUN IS NO DESTINATION, as
   // it is no row (`nav.ts`'s `serviceShown`) — and a workspace's own entry is
   // offered exactly where its row is (`workspaceShown`), because it opens
-  // where the row does: My work, whose landing section is the tracker's, is a
+  // where the row does: My work, whose landing section is Worklet's, is a
   // row where only the code host runs, and its entry opens its Reviews.
   const offered = DESTINATIONS.filter((d) => {
     const row = d.key === d.workspace ? workspaceRow(d.workspace) : undefined;
@@ -352,15 +348,15 @@ export function destinationHits(
   return rankedInTiers(offered, query, (d) => [[d.label], d.keywords ?? []], cap).map((d) => {
     // A WORKSPACE'S OWN ENTRY OPENS WHERE ITS ROW DOES ([landingPath]), and
     // is locked as its row is (`workspaceMissing`): Settings is no lock to a
-    // reader holding Tracker, whose Token spend it opens on.
+    // reader holding Worklet, whose Token spend it opens on. A SECTION is
+    // locked by its address ([lockedHint]), its workspace's access first.
     const row = d.key === d.workspace ? workspaceRow(d.workspace) : undefined;
     const path = row ? landingPath(row, held, runs) : d.path;
-    const needs = row ? workspaceNeeds(row, runs) : d.grants;
     return {
       id: `nav-${d.key}`,
       icon: d.icon,
       label: d.label,
-      hint: lockedHint(d.hint, needs, standing),
+      hint: row ? rowHint(d.hint, row, standing, runs) : lockedHint(d, standing),
       go: () => nav.to(path),
     };
   });
@@ -409,7 +405,7 @@ export function destinationGroups(
  * What opens some part of a workspace, as its sidebar row is locked
  * (`workspaceOpen`): the workspace's own grants, else nothing where any
  * section the company runs is open to every reader, else any grant that opens
- * one of those — so My work needs Tracker where its Reviews is not offered,
+ * one of those — so My work needs Worklet where its Reviews is not offered,
  * and nothing where it is.
  */
 function workspaceNeeds(row: WorkspaceRow, runs: ServicesRun): readonly Grant[] | undefined {
@@ -420,15 +416,26 @@ function workspaceNeeds(row: WorkspaceRow, runs: ServicesRun): readonly Grant[] 
   return [...new Set(sections.flatMap((s) => s.grants ?? []))];
 }
 
-/** A destination's hint, and what it needs where the reader lacks it. */
-function lockedHint(
-  hint: string,
-  grants: readonly Grant[] | undefined,
-  standing: Standing,
-): string {
-  if (standing === null || !grants || grants.length === 0) return hint;
+/** A workspace's own entry's hint, and what opens its row where the reader lacks it ([workspaceNeeds]). */
+function rowHint(hint: string, row: WorkspaceRow, standing: Standing, runs: ServicesRun): string {
+  const needs = workspaceNeeds(row, runs);
+  if (standing === null || !needs || needs.length === 0) return hint;
   if (standing.anonymous) return `${hint} · needs sign-in`;
-  return holdsAny(standing.grants, grants) ? hint : `${hint} · needs ${accessNames(grants)} access`;
+  return holdsAny(standing.grants, needs) ? hint : `${hint} · needs ${accessNames(needs)} access`;
+}
+
+/**
+ * A destination's hint, and what it needs where the reader lacks it — read
+ * off its ADDRESS by the navigation's own rule ([closedBy]): the workspace's
+ * permissions first, since a reader who cannot open Chatlet cannot open its
+ * Mentions, then the section's. The lock a press here would meet is the one
+ * the frame draws, in the same words.
+ */
+function lockedHint(d: Destination, standing: Standing): string {
+  if (standing === null || !guardedPath(d.path)) return d.hint;
+  if (standing.anonymous) return `${d.hint} · needs sign-in`;
+  const closed = closedBy(d.path, standing.grants);
+  return closed ? `${d.hint} · needs ${accessNames(closed.needs)} access` : d.hint;
 }
 
 /**
@@ -570,7 +577,7 @@ export function searchHits(term: string, nav: Navigator, runs: ServicesRun): Hit
             icon: "search",
             label: `Search all work for “${term}”`,
             hint: "ranked as an agent ranks it",
-            go: () => nav.to(["work", "search"], { q: term }),
+            go: () => nav.to(["worklet", "search"], { q: term }),
           } satisfies Hit,
         ]
       : []),
@@ -584,11 +591,11 @@ export function searchHits(term: string, nav: Navigator, runs: ServicesRun): Hit
     ...(runs.knowledge
       ? [
           {
-            id: "search-knowledge",
+            id: "search-doclet",
             icon: "book-open",
-            label: `Knowledge search for “${term}”`,
+            label: `Search Doclet for “${term}”`,
             hint: "every mode, every container",
-            go: () => nav.to(["knowledge"], { q: term }),
+            go: () => nav.to(["doclet"], { q: term }),
           } satisfies Hit,
         ]
       : []),
@@ -695,7 +702,7 @@ export function commandHits(
 }
 
 /**
- * The switcher, as a row: it opens the panel Work's trail opens, from
+ * The switcher, as a row: it opens the panel Worklet's trail opens, from
  * wherever the palette was, rather than going anywhere itself.
  */
 export function switchProjectHit(open: () => void): Hit {

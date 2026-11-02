@@ -29,9 +29,9 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Of is the chart over o. A nil o answers every relation [authz.ErrNoChart].
@@ -152,12 +152,12 @@ func (c chart) LeadsProject(_ context.Context, actor, project string) (bool, err
 	if err != nil {
 		return false, err
 	}
-	key := tracker.ProjectKey(project)
+	key := worklet.ProjectKey(project)
 	if actor == "" || key == "" {
 		return false, nil
 	}
 	for unit := range o.AllUnits() {
-		if tracker.ProjectKey(unit.Project) != key {
+		if worklet.ProjectKey(unit.Project) != key {
 			continue
 		}
 		if lead := o.EffectiveLead(unit); lead != nil && lead.Handle() == actor {
@@ -168,7 +168,7 @@ func (c chart) LeadsProject(_ context.Context, actor, project string) (bool, err
 	// project decides how it is filed, which is the only reading of "the
 	// lead" a one-seat project has.
 	for role := range o.AllRoles() {
-		if tracker.ProjectKey(role.Project) == key && role.Handle() == actor {
+		if worklet.ProjectKey(role.Project) == key && role.Handle() == actor {
 			return true, nil
 		}
 	}
@@ -187,12 +187,12 @@ func (c chart) LeadsContainer(_ context.Context, actor, container string) (bool,
 	if err != nil {
 		return false, err
 	}
-	key := pages.ContainerKey(container)
+	key := doclet.ContainerKey(container)
 	if actor == "" || key == "" {
 		return false, nil
 	}
 	for unit := range o.AllUnits() {
-		if pages.ContainerKey(unit.Space) != key {
+		if doclet.ContainerKey(unit.Space) != key {
 			continue
 		}
 		if lead := o.EffectiveLead(unit); lead != nil && lead.Handle() == actor {
@@ -200,7 +200,7 @@ func (c chart) LeadsContainer(_ context.Context, actor, container string) (bool,
 		}
 	}
 	for role := range o.AllRoles() {
-		if pages.ContainerKey(role.Space) == key && role.Handle() == actor {
+		if doclet.ContainerKey(role.Space) == key && role.Handle() == actor {
 			return true, nil
 		}
 	}

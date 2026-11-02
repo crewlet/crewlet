@@ -26,7 +26,7 @@ func TestATierIsDetectedFromTheKeysADocumentReallyHas(t *testing.T) {
 		{"a units-only company", "units:\n  - name: Engineering\n", TierCompany},
 		{"a roles-only company", "roles:\n  - name: SWE\n", TierCompany},
 		{"mcp servers alone", "mcp_servers:\n  - name: tracker\n", TierCompany},
-		{"turn engine alone", "turn_engine:\n  max_tool_rounds: 4\n", TierCompany},
+		{"turn engine alone", "turn_engine:\n  max_iterations: 4\n", TierCompany},
 		{"scheduling alone", "scheduling:\n  tick_seconds: 30\n", TierCompany},
 		{"a named company", "name: Acme\n", TierCompany},
 		{"a store-only bootstrap", "store:\n  path: ./x.db\n", TierBootstrap},

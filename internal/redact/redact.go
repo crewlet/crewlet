@@ -89,6 +89,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
 )
@@ -1401,6 +1402,7 @@ func trimDebris(s string) string {
 // showed nothing — reading it again for each line: over 32 KiB in lines of 256
 // bytes, 47 to 75 times what [Secrets] costs over it.
 func valueHolds(text string) []valueHold {
+	valueHoldsRead.Add(int64(len(text)))
 	var holds []valueHold
 	var prior [][2]int
 	for from := 0; ; {
@@ -1423,6 +1425,16 @@ func valueHolds(text string) []valueHold {
 	}
 	return holds
 }
+
+// valueHoldsRead counts the bytes [valueHolds] has been handed, for the test
+// that holds [Settled] to one read of its text. That property was timed
+// first, against [Secrets] and then against Settled itself over a text eight
+// times smaller, and both ratios were a claim about how busy the runner was:
+// each passed on a quiet machine and failed in CI's race job beside the other
+// packages. A count of what the text cost to read is the property itself. It
+// is one atomic add a call, and Settled makes one call, or two where the keys
+// were read beside the values.
+var valueHoldsRead atomic.Int64
 
 // valueHold is a password key [valueHolds] reports: where it begins, where the
 // line that decided its value begins, and whether a text cut before that line

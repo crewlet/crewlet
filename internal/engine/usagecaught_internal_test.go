@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE USAGE PUBLISHER WAITS FOR THE USAGE APPLIER, AND FOR NO OTHER.
@@ -31,7 +31,7 @@ func TestTheUsagePublisherWaitsForTheUsageApplierAlone(t *testing.T) {
 	for _, entry := range register() {
 		entries[entry.Domain.Name()] = entry
 	}
-	trackerEntry := entries[tracker.Domain{}.Name()]
+	trackerEntry := entries[worklet.Domain{}.Name()]
 	usageEntry := entries[usage.Domain{}.Name()]
 	trackerRunner := seamsRunner(t, s, trackerEntry)
 	usageRunner := seamsRunner(t, s, usageEntry)

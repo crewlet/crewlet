@@ -12,10 +12,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
 import { CommandPalette } from "./Palette.tsx";
+import { AssistantControlContext, type AssistantControl } from "../assistant/control.ts";
 import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
 import { ANSWER_IDLE_MS, CODE_HITS, destinationHits } from "./hits.ts";
 import { QUIET_MS } from "~/lib/useQuiet.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { Router, href } from "../router.tsx";
 import { DESTINATIONS } from "../nav.ts";
@@ -30,6 +32,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -46,10 +49,11 @@ const EVERY_ACT = ["update_work_item", "create_work_item", "answer_knowledge"];
 
 const JANE: ViewerState = {
   login: "founder",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   admin: true,
-  tracker: true,
-  knowledge: true,
+  worklet: true,
+  doclet: true,
+  chatlet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -62,6 +66,9 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
+  chatVendors: [],
 };
 
 const ANONYMOUS: ViewerState = {
@@ -69,8 +76,9 @@ const ANONYMOUS: ViewerState = {
   login: "",
   grants: [],
   admin: false,
-  tracker: false,
-  knowledge: false,
+  worklet: false,
+  doclet: false,
+  chatlet: false,
   handle: "",
   owner: "",
   name: "",
@@ -88,7 +96,7 @@ const UNBOUND: ViewerState = {
   ...ANONYMOUS,
   login: "ci",
   owner: "ci",
-  grants: ["tracker"],
+  grants: ["worklet"],
   acts: EVERY_ACT,
   anonymous: false,
   unbound: true,
@@ -143,7 +151,7 @@ let posted: { tool: string; body: { request_id: string; args: Record<string, unk
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
   });
 }
 
@@ -168,11 +176,14 @@ function mount({
   answers = {},
   hash = "#/",
   agents = [{ id: "swe", agent_id: "a-swe", role: "SWE", handle: "swe", activity: "working" }],
+  assistant,
 }: {
   viewer?: ViewerState;
   answers?: Answers;
   hash?: string;
   agents?: Record<string, unknown>[];
+  /** The frame's hold on the assistant; absent, the frame offers none. */
+  assistant?: AssistantControl;
 } = {}) {
   location.hash = hash;
   vi.mocked(useViewer).mockReturnValue(viewer);
@@ -199,7 +210,13 @@ function mount({
         <Router>
           {/* THE FRAME'S SWITCHER, which "Switch project…" opens. */}
           <ProjectSwitcherProvider>
-            <CommandPalette onClose={closed} onShowKeys={keys} />
+            {assistant ? (
+              <AssistantControlContext.Provider value={assistant}>
+                <CommandPalette onClose={closed} onShowKeys={keys} />
+              </AssistantControlContext.Provider>
+            ) : (
+              <CommandPalette onClose={closed} onShowKeys={keys} />
+            )}
           </ProjectSwitcherProvider>
         </Router>
       </ClientContext.Provider>
@@ -339,6 +356,77 @@ describe("scopes and sigils", () => {
     expect(screen.getByText("Teams")).toBeDefined();
     expect(screen.getByText("Platform")).toBeDefined();
     expect(screen.getByText("SWE")).toBeDefined();
+  });
+});
+
+// A DESTINATION SAYS WHAT OPENS IT BEFORE A PRESS, read from the navigation's
+// own table: Chatlet is the Chatlet app's, so a reader holding Worklet and
+// Doclet but not Chatlet is told which access to ask for — and a reader
+// holding it is told nothing. Mutation: drop the row's `grants` and the first
+// case goes red; lock on the table's grants whatever the reader holds and the
+// second does.
+describe("a destination's lock", () => {
+  const WITHOUT_CHATLET: ViewerState = {
+    ...JANE,
+    grants: ["worklet", "doclet"],
+    admin: false,
+    chatlet: false,
+  };
+
+  test.each([
+    ["without Chatlet", WITHOUT_CHATLET, true],
+    [
+      "holding Chatlet",
+      { ...WITHOUT_CHATLET, grants: ["worklet", "doclet", "chatlet"], chatlet: true },
+      false,
+    ],
+  ])("Chatlet's lock, to a reader %s", async (_, viewer, locked) => {
+    const p = mount({ viewer });
+    await p.type("chat");
+    expect(/· needs Chatlet access$/.test(p.row(/^Chatlet$/).textContent ?? "")).toBe(locked);
+  });
+
+  // A SECTION IS LOCKED BY ITS WORKSPACE FIRST, as the frame refuses it: a
+  // reader who cannot open Chatlet cannot open its Threads, and one who cannot
+  // open Doclet is told Doclet before Agent diaries' own Admin. Read
+  // off a section's own list, every section of a workspace that names the
+  // app — Worklet's, My work's, Chatlet's — was offered with no lock at all, and
+  // the press opened onto the refusal. Mutation: lock by the section's own
+  // grants alone and the Threads and Asked of me rows go red.
+  test.each([
+    { term: "threads", label: /^Threads$/, viewer: WITHOUT_CHATLET, needs: "Chatlet" },
+    { term: "search chat", label: /^Search chat$/, viewer: WITHOUT_CHATLET, needs: "Chatlet" },
+    {
+      term: "asked of me",
+      label: /^Asked of me$/,
+      viewer: { ...WITHOUT_CHATLET, grants: ["doclet"] },
+      needs: "Worklet",
+    },
+    {
+      term: "diaries",
+      label: /^Agent diaries$/,
+      viewer: { ...WITHOUT_CHATLET, grants: ["worklet"] },
+      needs: "Doclet",
+    },
+    { term: "diaries", label: /^Agent diaries$/, viewer: WITHOUT_CHATLET, needs: "Admin" },
+  ])("$term is locked naming $needs access where the reader lacks it", async (c) => {
+    const p = mount({ viewer: c.viewer });
+    await p.type(c.term);
+    expect(p.row(c.label).textContent).toMatch(new RegExp(`· needs ${c.needs} access$`));
+  });
+
+  test("a section whose workspace and own access the reader holds is not locked", async () => {
+    const p = mount({ viewer: { ...WITHOUT_CHATLET, grants: ["chatlet"], chatlet: true } });
+    await p.type("threads");
+    expect(p.row(/^Threads$/).textContent).not.toMatch(/needs/);
+  });
+
+  // CHATLET OPENS ON ACTIVITY, so Activity is the workspace's own entry rather
+  // than a section of its own, and its name still finds it.
+  test("Activity is found as Chatlet, its landing", async () => {
+    const p = mount({ viewer: { ...WITHOUT_CHATLET, grants: ["chatlet"], chatlet: true } });
+    await p.type("activity");
+    expect(p.row(/^Chatlet$/)).toBeTruthy();
   });
 });
 
@@ -500,6 +588,47 @@ describe("an id pasted out of a log", () => {
   });
 });
 
+test("a term typed fast keeps every keystroke, and the searches ask its last spelling", async () => {
+  const p = mount({
+    answers: {
+      work_search: async () => ({ ...OUTCOME, hits: [HIT], available: true }),
+      knowledge: async () => ({ ...OUTCOME, hits: [], available: true }),
+      colleague: async () => ({ match: null, candidates: [] }),
+    },
+  });
+  const input = p.input as HTMLInputElement;
+  // KEYSTROKES AS A BROWSER DELIVERS THEM WHEN THEY QUEUE UP: one native
+  // input event after another, each flushed by React on its own, outside
+  // `act`. A search asked with the term as typed set state from its effect
+  // after every keystroke, and React counted those towards its nested-update
+  // limit until it threw a keystroke away (error #185). `act` drains every
+  // update between keystrokes and would hide that.
+  const environment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean | undefined };
+  const wasActEnvironment = environment.IS_REACT_ACT_ENVIRONMENT;
+  const errors: unknown[] = [];
+  const onError = (event: ErrorEvent) => errors.push(event.error ?? event.message);
+  const logged = vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args));
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  const typed = "cluster join under packet loss and the flaky sign in test ".repeat(4).trim();
+  window.addEventListener("error", onError);
+  environment.IS_REACT_ACT_ENVIRONMENT = false;
+  try {
+    for (const key of typed) {
+      setValue.call(input, input.value + key);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  } finally {
+    environment.IS_REACT_ACT_ENVIRONMENT = wasActEnvironment;
+    window.removeEventListener("error", onError);
+    logged.mockRestore();
+  }
+  await act(async () => {});
+
+  expect(errors).toEqual([]);
+  expect(input.value).toBe(typed);
+  expect(asked.filter((a) => a.kind === "work_search").at(-1)?.params).toMatchObject({ q: typed });
+});
+
 describe("the task search has four answers, kept apart", () => {
   const answering = (reply: (q: string) => Promise<unknown>): Answers => ({
     work_search: (params) => reply(String(params.q)),
@@ -627,6 +756,38 @@ describe("the knowledge answer", () => {
       .closest(".palette-answer")!;
     expect(lead.textContent).toMatch(/tokens/);
     expect(lead.textContent).not.toMatch(/[$€£¥]|USD|cost|price/i);
+  });
+
+  // A REFUSAL IS TOLD IN THE ENGINE'S OWN WORDS where it has them: the act
+  // route answers a refusal's `detail` only in a person's words (ADR-0060),
+  // and a spent budget's says whose ceiling it was and that nothing was sent,
+  // which the dashboard's one sentence for the class cannot.
+  test("a refused question is told in the engine's words", async () => {
+    vi.useFakeTimers();
+    const said =
+      "The company's token budget for this window is spent, so nothing was sent. It comes back when the window resets, or as soon as the ceiling is raised.";
+    engine((tool) =>
+      tool === "answer_knowledge"
+        ? json(
+            {
+              error: "budget_exhausted",
+              message:
+                "The token budget for this window is spent, so nothing was spent on this. Raise it, or wait for the window to turn over.",
+              detail: said,
+              remedy: { setting: "company_token_budget" },
+              tool,
+              op_id: "op-1",
+            },
+            409,
+          )
+        : json({ error: "not_found", detail: "no" }, 404),
+    );
+    const p = mount();
+    await p.type(QUESTION);
+    await settle(ANSWER_IDLE_MS);
+    await settle(0);
+    expect(screen.getByText(said)).toBeDefined();
+    expect(screen.queryByText(ACT_ERRORS.budget_exhausted)).toBeNull();
   });
 
   test("a new term abandons the question before it, which is never drawn", async () => {
@@ -830,11 +991,11 @@ describe("the actions, made as the person", () => {
     expect(posted.map((x) => [x.tool, x.body.args])).toEqual([
       ["create_work_item", { title: "rotate the join timeout", project: "ENG" }],
     ]);
-    expect(location.hash).toBe("#/work/ENG-431");
+    expect(location.hash).toBe("#/worklet/ENG-431");
   });
 
   test("create on a task page files into that task's project", async () => {
-    const p = mount({ answers: TASKS, hash: "#/work/OPS-7" });
+    const p = mount({ answers: TASKS, hash: "#/worklet/OPS-7" });
     await p.type("rotate the join timeout");
     const where = within(p.row(/Create task/)).getByText("in OPS · Operations");
     expect(where.getAttribute("title")).toBe("OPS: the project you are on");
@@ -932,7 +1093,7 @@ describe("the actions, made as the person", () => {
   // A WRITE ROW IS NEVER HIDDEN: it is drawn for every reader, and where
   // this browser cannot act its hint is the sentence that says why — and a
   // press on it says so again instead of doing anything. (A reader holding no
-  // Tracker is sent no task search, so no task is at hand to assign.)
+  // Worklet is sent no task search, so no task is at hand to assign.)
   test.each([
     ["an anonymous reader", ANONYMOUS, WRITE_REASONS.anonymous, [/Ask an agent/, /Create task/]],
     [
@@ -1046,7 +1207,7 @@ describe("the actions, made as the person", () => {
       },
     });
     await p.type("cluster join");
-    expect(p.row(/Create task/).textContent).toContain("No projects yet. Add one in Work.");
+    expect(p.row(/Create task/).textContent).toContain("No projects yet. Add one in Worklet.");
   });
 
   // WHO HOLDS IT NOW is said on the assign step, from the picker's own read.
@@ -1296,7 +1457,7 @@ describe("projects, the switcher and the full search", () => {
     ]);
     expect(rows[1]!.textContent).toContain("3 open");
     fireEvent.click(rows[0]!);
-    expect(location.hash).toBe("#/work/OPS");
+    expect(location.hash).toBe("#/worklet/OPS");
     expect(p.closed).toHaveBeenCalled();
   });
 
@@ -1323,7 +1484,7 @@ describe("projects, the switcher and the full search", () => {
     const p = mount();
     await p.type("invoice");
     fireEvent.click(p.row("Search all work for “invoice”"));
-    expect(location.hash).toBe("#/work/search?q=invoice");
+    expect(location.hash).toBe("#/worklet/search?q=invoice");
   });
 });
 
@@ -1387,44 +1548,47 @@ describe("a screen found by what it holds", () => {
   // A LABEL STILL WINS: a screen called what was typed is never pushed under
   // one that merely holds the word. "s" starts two of Account's words
   // ("sessions", "security"), which a flat ranking scored ahead of every label
-  // with an "s" in its middle — Tasks, Projects, Agents.
+  // with an "s" in its middle — Tasks, Projects, Agents. Chatlet holds it only
+  // in its words too ("messages", "rooms"), so every screen found that way is
+  // ranked after every label that has one.
   test("every label match ranks above a keyword match, however good", () => {
     const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
     const hits = destinationHits("s", nav, Infinity, null, {
       tracker: true,
       knowledge: true,
       code: true,
+      chat: true,
     }).map((h) => h.label);
     // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
-    // ("Account"), and never one after the other.
+    // ("Account", "Chatlet"), and never one after the other.
     const firstKeyword = hits.findIndex((label) => !label.toLowerCase().includes("s"));
-    expect(hits.slice(firstKeyword)).toEqual(expect.arrayContaining(["Account"]));
+    expect(firstKeyword).toBeGreaterThan(0);
+    expect(hits.slice(firstKeyword)).toEqual(expect.arrayContaining(["Account", "Chatlet"]));
     for (const label of hits.slice(firstKeyword)) expect(label.toLowerCase()).not.toContain("s");
     for (const label of hits.slice(0, firstKeyword)) expect(label.toLowerCase()).toContain("s");
     expect(hits).toContain("Tasks");
   });
 
-  // SETTINGS OPENS WHERE THE READER MAY READ: a reader holding only Tracker
-  // was sent to Models & keys, which is Admin's, and its entry read "needs
-  // Admin access" although Token spend and Expensive tasks are theirs.
-  // Mutation: go to the workspace's own path and the press lands on the lock.
-  test("a reader holding only Tracker opens Settings on Token spend, unlocked", () => {
+  // SETTINGS OPENS ON MODELS FOR EVERY READER: each model's condition is
+  // every member's to read, so the landing is never a lock. Mutation: give
+  // the Models section a grant and a Worklet-only reader is sent elsewhere.
+  test("a reader holding only Worklet opens Settings on Models, unlocked", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
-    const runs = { tracker: true, knowledge: true, code: true };
+    const runs = { tracker: true, knowledge: true, chat: true, code: true };
     const settings = destinationHits(
       "settings",
       nav,
       Infinity,
       {
         anonymous: false,
-        grants: ["tracker"],
+        grants: ["worklet"],
       },
       runs,
     ).find((h) => h.id === "nav-settings")!;
     expect(settings.hint).not.toMatch(/needs/);
     settings.go();
-    expect(to).toHaveBeenCalledWith(["settings", "spend"]);
+    expect(to).toHaveBeenCalledWith(["settings", "models"]);
     const admin = destinationHits(
       "settings",
       nav,
@@ -1440,8 +1604,8 @@ describe("a screen found by what it holds", () => {
   });
 
   // A WORKSPACE'S ENTRY IS OFFERED WHERE ITS ROW IS: My work's landing
-  // section is the tracker's, but the row is offered wherever the tracker or
-  // the code host runs, so a company on another tracker that hosts its code
+  // section is Worklet's, but the row is offered wherever Worklet or the
+  // code host runs, so a company on another tracker that hosts its code
   // here finds My work in the palette, and it opens on Reviews — and one
   // hosting neither finds no entry for it. Mutation: filter the workspace's
   // entry by its landing section's service, and the first lookup is empty.
@@ -1453,10 +1617,11 @@ describe("a screen found by what it holds", () => {
         "work",
         nav,
         Infinity,
-        { anonymous: false, grants: ["tracker"] },
+        { anonymous: false, grants: ["worklet"] },
         {
           tracker: false,
           knowledge: true,
+          chat: true,
           code,
         },
       ).find((h) => h.id === "nav-me");
@@ -1468,12 +1633,12 @@ describe("a screen found by what it holds", () => {
   });
 
   // AND IT IS LOCKED AS ITS ROW IS: where the engine hosts no code its
-  // Reviews is offered nowhere, so a reader without Tracker is told what
+  // Reviews is offered nowhere, so a reader without Worklet is told what
   // would open My work rather than sent to the Queue's refusal; where it
   // hosts code, Reviews is theirs and the entry says nothing of access.
   // Mutation: weigh every section's grants whatever the company runs, and the
   // first hint names no access.
-  test("My work's entry needs Tracker exactly where its Reviews is not offered", () => {
+  test("My work's entry needs Worklet exactly where its Reviews is not offered", () => {
     const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
     const hint = (code: boolean) =>
       destinationHits(
@@ -1481,9 +1646,9 @@ describe("a screen found by what it holds", () => {
         nav,
         Infinity,
         { anonymous: false, grants: [] },
-        { tracker: true, knowledge: true, code },
+        { tracker: true, knowledge: true, chat: true, code },
       ).find((h) => h.id === "nav-me")?.hint;
-    expect(hint(false)).toMatch(/needs Tracker access$/);
+    expect(hint(false)).toMatch(/needs Worklet access$/);
     expect(hint(true)).toBeDefined();
     expect(hint(true)).not.toMatch(/needs/);
   });
@@ -1629,4 +1794,39 @@ describe("artifacts", () => {
     expect(screen.queryByText("get_artifact")).toBeNull();
     expect(screen.getByText("artifact_lint")).toBeTruthy();
   });
+});
+
+// THE QUESTION, ASKED OF THE ASSISTANT: offered only where this reader may
+// ask, and handed to the frame's own control, which opens the panel with it.
+test("a typed question can be asked of the assistant, where the reader may ask", async () => {
+  const ask = vi.fn();
+  const p = mount({ assistant: { open: false, unavailable: null, toggle: () => {}, ask } });
+  await p.type("why did spend go up");
+  const row = p.row("Ask Crewlet: “why did spend go up”");
+  await act(async () => {
+    fireEvent.click(row);
+  });
+  expect(ask).toHaveBeenCalledWith("why did spend go up");
+  expect(p.closed).toHaveBeenCalled();
+  cleanup();
+  const q = mount();
+  await q.type("why did spend go up");
+  expect(screen.queryByText("Ask Crewlet: “why did spend go up”")).toBeNull();
+});
+
+// THE LAST ANSWER, NEVER ENTER'S BY DEFAULT: the assistant's row closes the
+// list (05-ux-design, "Keyboard"), and with nothing found the row Enter takes
+// is not the artifacts scope either, which only moves the reader to another
+// scope.
+test("the assistant's row is last, and the artifacts scope is not what Enter takes", async () => {
+  const ask = vi.fn();
+  mount({ assistant: { open: false, unavailable: null, toggle: () => {}, ask } });
+  const box = screen.getByRole("combobox");
+  await act(async () => {
+    fireEvent.change(box, { target: { value: "why did spend go up" } });
+  });
+  const options = screen.getAllByRole("option");
+  expect(options.at(-1)?.textContent).toContain("Ask Crewlet: “why did spend go up”");
+  const id = box.getAttribute("aria-activedescendant") ?? "";
+  expect(document.getElementById(id)?.textContent ?? "").not.toContain("in artifacts");
 });

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
@@ -21,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -131,14 +133,17 @@ func (s *Service) Routes(mux authz.Mux) error {
 	for _, route := range []struct {
 		pattern string
 		handler http.HandlerFunc
+		policy  authz.Policy
 	}{
-		{"POST /artifacts/{id}/data/writes", s.writes},
-		{"POST /artifacts/{id}/data/undo", s.undo},
-		{"POST /artifacts/{id}/data/state", s.state},
-		{"PUT /artifacts/{id}/data/schema", s.schema},
-		{"GET /artifacts/{id}/data/export.csv", s.export},
+		{"POST /artifacts/{id}/data/writes", s.writes, pre.Rewriting()},
+		{"POST /artifacts/{id}/data/undo", s.undo, pre.Rewriting()},
+		{"POST /artifacts/{id}/data/state", s.state, pre.Rewriting()},
+		// A SCHEMA BELONGS TO AN ARTIFACT, and replacing it makes none.
+		{"PUT /artifacts/{id}/data/schema", s.schema, pre.WhenAbsent(authz.AddedElsewhere(
+			"An artifact is created with POST /artifacts, and its data schema is written here once it exists."))},
+		{"GET /artifacts/{id}/data/export.csv", s.export, pre},
 	} {
-		if err := router.Handle(route.pattern, pre, route.handler); err != nil {
+		if err := router.Handle(route.pattern, route.policy, route.handler); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -192,7 +197,7 @@ func (s *Service) admitWith(w http.ResponseWriter, r *http.Request, action authz
 	case errors.As(err, &refused):
 		operator.RefuseDecision(w, r, action, refused.Decision)
 	case errors.Is(err, artifactsdomain.ErrTrashed):
-		dataGone(w, "the artifact is in the trash; its data is not served until it is restored")
+		trashed(w, "the artifact is in the trash; its data is not served until it is restored")
 	case errors.Is(err, artifactsapi.ErrRecordUnwritten):
 		log.WarnContext(r.Context(), "artifacts_elevated_read_unrecorded", "artifact", id.String(),
 			"error", err.Error())
@@ -208,15 +213,20 @@ func (s *Service) admitWith(w http.ResponseWriter, r *http.Request, action authz
 // served, so nothing is written to it until it is restored.
 func writable(w http.ResponseWriter, a artifactsapi.Admission) bool {
 	if a.Head.Status == artifactsdomain.StatusTrashed {
-		dataGone(w, "the artifact is in the trash; restore it to write its data")
+		trashed(w, "the artifact is in the trash; restore it to write its data")
 		return false
 	}
 	return true
 }
 
-// dataGone is `410 data_gone`: an artifact whose data is not served.
-func dataGone(w http.ResponseWriter, detail string) {
-	httpjson.FailWith(w, http.StatusGone, httpjson.CodeDataGone, map[string]string{"detail": detail})
+// trashed is `409 artifact_trashed`, the answer every artifacts route gives an
+// artifact in the trash: the artifact's state, which its owner's restore
+// changes. NOT `410 data_gone`, which is a purge's — a store that will never
+// come back — and which a trashed artifact's data is not: answered as gone, a
+// client stopped asking about data a restore brings back whole.
+func trashed(w http.ResponseWriter, detail string) {
+	httpjson.FailWith(w, http.StatusConflict, httpjson.CodeArtifactTrashed,
+		map[string]string{"detail": detail})
 }
 
 // Via is the surface a write declares it came through. A browser session
@@ -255,7 +265,7 @@ func (s *Service) origin(w http.ResponseWriter, r *http.Request, a artifactsapi.
 			invalid(w, "the version the page names is not one this artifact keeps")
 			return "", false
 		case err != nil:
-			unavailable(w, err, "this node could not read the page's version")
+			unavailableAbout(w, r, err, "this node could not read the page's version")
 			return "", false
 		case !slices.Contains(v.Capabilities, capability):
 			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeForbidden, map[string]string{
@@ -287,7 +297,7 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": plainjson.Unreadable("the body", err)})
 		return false
 	}
 	return true
@@ -385,7 +395,7 @@ func (s *Service) state(w http.ResponseWriter, r *http.Request) {
 	}
 	doc, err := artifactdata.StateDocID(iam.RecordOwner(a.Principal), body.Key)
 	if err != nil {
-		invalid(w, strings.TrimPrefix(err.Error(), artifactdata.ErrInvalid.Error()+": "))
+		invalid(w, said(err))
 		return
 	}
 	op := artifacts.DataOp{Op: artifacts.DataDelete, Collection: artifactdata.StateCollection,
@@ -469,7 +479,7 @@ func (s *Service) export(w http.ResponseWriter, r *http.Request) {
 		// answered as an empty file rather than a body-less 200.
 		out.start()
 	case err != nil && !out.started:
-		readFailed(w, err)
+		readFailed(w, r, err)
 	case err != nil:
 		// A STORE THAT STOPPED ANSWERING HALF-WAY: the rows already sent
 		// cannot be recalled, so the connection is cut rather than ended
@@ -528,7 +538,7 @@ func answer(w http.ResponseWriter, r *http.Request, key string, res artifactdata
 		httpjson.Write(w, http.StatusAccepted, body)
 		return
 	case statelog.OutcomeUnknown:
-		operator.UnknownOutcome(w, key, res.Result.Unvouched, "", map[string]any{"op_id": key})
+		operator.UnknownOutcome(w, key, res.Result.Unvouched, map[string]any{"op_id": key})
 		return
 	}
 	body["verdict"], body["seq"] = string(res.Verdict), res.Seq
@@ -546,7 +556,10 @@ func answer(w http.ResponseWriter, r *http.Request, key string, res artifactdata
 	case artifacts.DataForbidden:
 		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeForbidden, body)
 	case artifacts.DataQuota:
-		httpjson.FailWithFields(w, http.StatusRequestEntityTooLarge, httpjson.CodeDataQuota, body)
+		// THE ONE ANSWER A QUOTA HAS on every surface, the tools' class
+		// `quota_exceeded` included: the state of what the company holds,
+		// which no other request changes.
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeQuotaExceeded, body)
 	case artifacts.DataGone:
 		httpjson.FailWithFields(w, http.StatusGone, httpjson.CodeDataGone, body)
 	default:
@@ -562,11 +575,23 @@ func answer(w http.ResponseWriter, r *http.Request, key string, res artifactdata
 // [artifacts.DataVerdict].
 const verdictPending = "pending"
 
+// said is err as a detail a person reads: a lost race in the state log's words
+// for a person ([statelog.Sentence]), as every surface tells one, and any other
+// refusal in the datastore's own sentence ([artifactdata.Sentence]). This
+// surface cut "artifactdata: " from the front and left the rest, so a refusal
+// read "invalid: …" and a lost race carried the broker subject it was lost on.
+func said(err error) string {
+	if words, ok := statelog.Sentence(err); ok {
+		return words
+	}
+	return artifactdata.Sentence(err)
+}
+
 // writeFailed renders a write refused before anything was appended, or one
 // whose outcome nobody can establish.
 func writeFailed(w http.ResponseWriter, r *http.Request, key string, err error) {
 	var limited *artifactdata.RateLimited
-	detail := map[string]string{"detail": strings.TrimPrefix(err.Error(), "artifactdata: ")}
+	detail := map[string]string{"detail": said(err)}
 	switch {
 	case errors.As(err, &limited):
 		httpjson.ThrottledWith(w, httpjson.CodeWriteBudget, limited.RetryAfter, httpjson.Detail{
@@ -587,15 +612,15 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key string, err error) 
 	case errors.Is(err, artifactdata.ErrInvalid):
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid, detail)
 	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
-		operator.Interrupted(w, r, key, "write_artifact_data", err)
+		operator.Interrupted(w, r, key, string(authz.ActionArtifactDataWrite), err)
 	default:
-		unavailable(w, err, "this node could not write the artifact's data")
+		unavailableAbout(w, r, err, "this node could not write the artifact's data")
 	}
 }
 
 // readFailed renders a read that could not be answered.
-func readFailed(w http.ResponseWriter, err error) {
-	detail := map[string]string{"detail": strings.TrimPrefix(err.Error(), "artifactdata: ")}
+func readFailed(w http.ResponseWriter, r *http.Request, err error) {
+	detail := map[string]string{"detail": said(err)}
 	switch {
 	case errors.Is(err, artifactdata.ErrGone):
 		httpjson.FailWith(w, http.StatusGone, httpjson.CodeDataGone, detail)
@@ -604,7 +629,7 @@ func readFailed(w http.ResponseWriter, err error) {
 	case errors.Is(err, artifactdata.ErrInvalid), errors.Is(err, artifactdata.ErrBadCursor):
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams, detail)
 	default:
-		unavailable(w, err, "this node could not read the artifact's data")
+		unavailableAbout(w, r, err, "this node could not read the artifact's data")
 	}
 }
 
@@ -614,9 +639,30 @@ func invalid(w http.ResponseWriter, detail string) {
 		map[string]string{"detail": detail})
 }
 
+// unavailableAbout is [unavailable] for a read or a write of the estate that
+// failed: a CONDITION of the node is told in a person's words for it
+// ([builtin.ConditionSentence]), which say whether to come back exactly as the
+// Retry-After does, and its error goes to the log ([operator.LogCondition]);
+// anything else is this node's own fault, `500` with its error logged as one,
+// which no wait clears — it was a 503 in detail, so a client came back for a
+// fault. Neither sent the error anywhere before, and "could not write the
+// artifact's data" was the whole answer to a log at its ceiling, under no
+// Retry-After.
+func unavailableAbout(w http.ResponseWriter, r *http.Request, err error, detail string) {
+	if said, ok := builtin.ConditionSentence(err); ok {
+		operator.LogCondition(r.Context(), log, "artifact_data_unavailable", err,
+			"artifact", r.PathValue("id"))
+		unavailable(w, err, said)
+		return
+	}
+	log.ErrorContext(r.Context(), "artifact_data_failed", "artifact", r.PathValue("id"),
+		"what", detail, "error", err.Error())
+	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+}
+
 // unavailable is a 503 whose cause says whether, and when, to come back.
 func unavailable(w http.ResponseWriter, cause error, detail string) {
 	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-		httpjson.RetrySeconds(statelog.RetryAfter(cause, authz.RetryUndecidedSeconds*time.Second)),
+		httpjson.RetrySeconds(builtin.RetryAfter(cause, authz.RetryUndecidedSeconds*time.Second)),
 		httpjson.Detail{"detail": detail})
 }

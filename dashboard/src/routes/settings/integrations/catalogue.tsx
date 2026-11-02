@@ -20,7 +20,7 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
@@ -36,6 +36,7 @@ import {
   TableStatusCell,
   TableTextCell,
   Tag,
+  Tooltip,
   type Tone,
 } from "@crewlethq/ui";
 import {
@@ -57,6 +58,7 @@ import { useNow } from "~/lib/clock.ts";
 import {
   fmtDate,
   fmtDateTime,
+  inTime,
   plural,
   relTime,
   tsKey,
@@ -66,8 +68,9 @@ import {
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { ADMIN, needsWords } from "~/lib/access.ts";
+import { authorityWords } from "~/lib/refusal.ts";
 import { useRest } from "~/lib/useRest.ts";
 import type { EventRecord, SetupRun } from "~/protocol/types.ts";
 import {
@@ -77,6 +80,7 @@ import {
   type ReconcileFinding,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
+import type { Model, Tool } from "./model.ts";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
 // five-value union beside the one the design system publishes, which is the
@@ -442,61 +446,60 @@ export function integrationFacts(
       : undefined;
   const counted = (pick: (row: IntegrationRow) => number | null | undefined): number | null =>
     traffic.known ? total(present, pick) : null;
+  const coalesced = counted((r) => r.coalesced);
+  // EVERY VALUE IS PLAIN TEXT at the value's size, so the line holds the
+  // labels' size and the values' and nothing else. What the engine merged
+  // into a pending wake rides on Delivered, the count it qualifies.
   return [
     {
       label: "Delivered",
       value: (
-        <TableNumberCell
-          value={counted((r) => r.inbound)}
-          title="Deliveries that reached a seat"
-          format={fmtCount}
-        />
+        <Tooltip
+          content={
+            coalesced === null
+              ? "Deliveries that reached a seat"
+              : `Deliveries that reached a seat. ${fmtCount(coalesced)} more were merged into a pending wake.`
+          }
+        >
+          <span tabIndex={0}>{fmtCount(counted((r) => r.inbound))}</span>
+        </Tooltip>
       ),
       note: covered,
     },
     {
-      // NO NOTE ON THE OTHER TWO, although the same window covers them — the
-      // engine counts the drops and merges over exactly the window
-      // `traffic_since` names, never over a page of its own: a fact line
-      // whose every value carries the same footnote is one nobody reads,
-      // which is what `Fact.note` says about itself. The three counts are
-      // read together and the first one states what they all cover.
+      // NO NOTE ON DROPPED, although the same window covers it: the engine
+      // counts drops over exactly the window `traffic_since` names, and the
+      // first count states what they both cover.
       label: "Dropped",
-      value: (
-        <TableNumberCell
-          value={counted((r) => r.skipped)}
-          title="verified, and turned into work for nobody"
-          format={fmtCount}
-        />
-      ),
-    },
-    {
-      label: "Coalesced",
-      value: (
-        <TableNumberCell
-          value={counted((r) => r.coalesced)}
-          title="Merged into a pending wake"
-          format={fmtCount}
-        />
-      ),
+      value: fmtCount(counted((r) => r.skipped)),
     },
     {
       // THE LOOP'S OWN CLOCK, which is the one thing a card never says: it
-      // reports what the last pass CONCLUDED and never when that was, so a
-      // surface checked a moment ago and one nothing has looked at in an hour
-      // read identically.
-      label: "Last pass",
-      value: (
-        <TableDateCell value={latestOf(present, (r) => r.reconcile?.last_attempt_at)} now={now} />
-      ),
-    },
-    {
-      label: "Next pass",
-      value: (
-        <TableDateCell value={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} now={now} />
+      // reports what the last pass CONCLUDED and never when that was.
+      label: "Sync",
+      value: syncWords(
+        latestOf(present, (r) => r.reconcile?.last_attempt_at),
+        soonestOf(present, (r) => r.reconcile?.next_attempt_at),
+        now,
       ),
     },
   ];
+}
+
+/**
+ * The loop's clock as one value: "30m ago · next in 10m". A next sync whose
+ * time has passed is DUE or OVERDUE, never "ago": a time in the past is not
+ * when the next one is.
+ */
+export function syncWords(last: string | null, next: string | null, now: number): string {
+  const parts = [last ? relTime(last, now) : "Not yet"];
+  if (next) {
+    const until = tsKey(next) - now;
+    if (until > 30_000) parts.push(`next ${inTime(next, now)}`);
+    else if (until > -60_000) parts.push("next due now");
+    else parts.push(`next overdue by ${fmtDuration(Math.round(-until / 60_000) * 60_000)}`);
+  }
+  return parts.join(" · ");
 }
 
 /**
@@ -884,6 +887,29 @@ function postManifest(answer: AppManifest): void {
 }
 
 /**
+ * The gesture a person takes at the vendor for one agent of a tool (GitHub's
+ * create and install), by handle: the one an integration's Agents tab and an
+ * agent's Access tab both draw, or null where the agent has none or the
+ * reader cannot take it.
+ */
+export function seatStepFor(tool: Tool, model: Model): (handle: string) => ReactNode {
+  const rows = new Map(
+    tool.seats.filter((r) => r.seat?.step && r.toolKey).map((r) => [r.handle, r]),
+  );
+  return (handle) => {
+    const row = rows.get(handle);
+    return row?.seat && row.toolKey && !model.guarded ? (
+      <SeatStep
+        app={tool.entry.name}
+        toolKey={row.toolKey}
+        seat={row.seat}
+        managed={model.managed}
+      />
+    ) : null;
+  };
+}
+
+/**
  * The one act an agent's own app is waiting on, as the control that does it.
  *
  * TWO STEPS, TWO CONTROLS, because they are two acts by a person. One app is
@@ -924,7 +950,7 @@ export function SeatStep({
     setBusy(true);
     setRefused("");
     try {
-      const answer = (await rest.post(`/setup/integrations/${toolKey}/app`, {
+      const answer = (await rest.post(`/setup/integrations/${pathSegment(toolKey)}/app`, {
         seat: seat.handle,
       })) as AppManifest;
       postManifest(answer);
@@ -1065,8 +1091,8 @@ export function useSetup(): {
   byKey: Map<string, SetupToolState>;
   base: SetupListing["external_url"] | null;
   guarded: boolean;
-  /** The access the refusal named, when [guarded] — see `lib/access.ts`'s `needsWords`. */
-  needs: string[];
+  /** The refusal, when [guarded] — said through `lib/refusal.ts`'s `authorityWords`. */
+  refused: RestError | null;
   /**
    * True until this read has answered ONCE, however it answered.
    *
@@ -1117,7 +1143,7 @@ export function useSetup(): {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
     base: listing?.external_url ?? null,
     guarded: setup.error?.unauthorized ?? false,
-    needs: setup.error?.grants ?? [],
+    refused: setup.error?.unauthorized ? setup.error : null,
     // ANSWERED, not answered WELL. A refusal is a state the screen can render
     // honestly, with the banner and no buttons; waiting is not.
     loading: setup.loading,
@@ -1231,6 +1257,7 @@ export function SurfaceDeliveries({ surface, name }: { surface: string; name: st
             columns={[
               {
                 key: "at",
+                align: "right",
                 header: "Arrived",
                 shrink: true,
                 sortValue: (e) => tsKey(e.timestamp),
@@ -1392,7 +1419,7 @@ function useSetupRuns(kinds: string[]): {
   runs: SetupRun[];
   scope: string;
   guarded: boolean;
-  needs: string[];
+  refused: RestError | null;
   loading: boolean;
 } {
   // THE KEY IS THE DEPENDENCY, not the array. A caller derives its kinds from
@@ -1421,7 +1448,7 @@ function useSetupRuns(kinds: string[]): {
       const answers = (await Promise.all(
         key
           .split(",")
-          .map((one) => rest.get(`/setup/integrations/${encodeURIComponent(one)}/runs`, signal)),
+          .map((one) => rest.get(`/setup/integrations/${pathSegment(one)}/runs`, signal)),
       )) as RunListing[];
       return {
         runs: answers
@@ -1440,7 +1467,7 @@ function useSetupRuns(kinds: string[]): {
     runs,
     scope: answer.data?.scope ?? "",
     guarded: answer.error?.unauthorized ?? false,
-    needs: answer.error?.grants ?? [],
+    refused: answer.error?.unauthorized ? answer.error : null,
     loading: answer.loading,
   };
 }
@@ -1470,7 +1497,7 @@ function useSetupRun(
   run: SetupRun | null;
   missing: boolean;
   guarded: boolean;
-  needs: string[];
+  refused: RestError | null;
   loading: boolean;
 } {
   // FOLLOWED TO ITS END, and only while it is going: the row that opened this
@@ -1480,7 +1507,7 @@ function useSetupRun(
     kind === "" || id === "" ? null : `${kind}/${id}`,
     (signal) =>
       rest.get(
-        `/setup/integrations/${encodeURIComponent(kind)}/runs/${encodeURIComponent(id)}`,
+        `/setup/integrations/${pathSegment(kind)}/runs/${pathSegment(id)}`,
         signal,
       ) as Promise<SetupRun>,
     { pollMs: running ? PASS_POLL_MS : undefined },
@@ -1493,7 +1520,7 @@ function useSetupRun(
     run,
     missing: answer.error?.status === 404,
     guarded: answer.error?.unauthorized ?? false,
-    needs: answer.error?.grants ?? [],
+    refused: answer.error?.unauthorized ? answer.error : null,
     loading: answer.loading,
   };
 }
@@ -1593,7 +1620,7 @@ function concludedLine(run: SetupRun): string {
  */
 export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   const now = useNow();
-  const { runs, scope, guarded, needs, loading } = useSetupRuns(kinds);
+  const { runs, scope, guarded, refused, loading } = useSetupRuns(kinds);
   // WHICH PASS IS OPEN, as the surface AND the id rather than the id alone:
   // the detail route is keyed on both, and a tool has several kinds — an id on
   // its own could not say which surface's pass it was once the listing that
@@ -1613,7 +1640,7 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
         <Card.Header icon={<RotateCwGlyph size="sm" />}>
           <Card.Title>Provisioning passes</Card.Title>
         </Card.Header>
-        <span className="t-caption">{needsWords("Seeing passes", needs)}</span>
+        <span className="t-caption">{authorityWords("Seeing passes", refused)}</span>
       </Card>
     );
   }
@@ -1621,6 +1648,7 @@ export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] })
   const columns: DataGridColumn<SetupRun>[] = [
     {
       key: "ran",
+      align: "right",
       header: "Ran",
       shrink: true,
       sortValue: (run) => tsKey(run.started_at),
@@ -1771,7 +1799,7 @@ function PassDetail({
   name: string;
   now: number;
 }) {
-  const { run, missing, guarded, needs, loading } = useSetupRun(kind, id);
+  const { run, missing, guarded, refused, loading } = useSetupRun(kind, id);
 
   if (loading && !run) return <Skeleton variant="text" rows={4} label="Loading" />;
   if (missing) {
@@ -1788,7 +1816,7 @@ function PassDetail({
     return (
       <div className="int-row-note">
         <span className="int-row-note-text">
-          <span className="int-row-note-when">{needsWords("Reading one pass", needs)}</span>
+          <span className="int-row-note-when">{authorityWords("Reading one pass", refused)}</span>
         </span>
       </div>
     );

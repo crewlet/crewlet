@@ -207,7 +207,7 @@ func ensureWebhook(ctx context.Context, opts Options) WebhookResult {
 	}
 	switch {
 	case !found:
-		if opts.Sink == nil {
+		if opts.ReadOnly {
 			// A CHECK CREATES NOTHING, on the same terms as an account:
 			// the missing definition is the fact a check exists to
 			// report.
@@ -229,7 +229,7 @@ func ensureWebhook(ctx context.Context, opts Options) WebhookResult {
 	case sameWebhook(current, want):
 		// Already what this deployment wants, which is the ordinary
 		// answer on every tick after the first.
-	case opts.Sink == nil:
+	case opts.ReadOnly:
 		out.Blocked = &Unregistered{
 			Kind:    integration.FindingIngressBlocked,
 			Subject: name,

@@ -14,6 +14,7 @@ import { BrokerMembership, brokerRows, groupSummary, voterState } from "./FleetB
 import { Router } from "~/app/router.tsx";
 import { engineFile } from "~/test/engineFiles.ts";
 import type { FleetBrokerAnswer } from "~/protocol/index.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 const golden = engineFile<FleetBrokerAnswer>("internal/api/testdata/fleet_broker_answer.json");
 function answer(): FleetBrokerAnswer {
@@ -48,7 +49,7 @@ function engine(reply: { status: number; body: unknown }): URL[] {
       sent.push(new URL(String(input), "http://engine.test"));
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );

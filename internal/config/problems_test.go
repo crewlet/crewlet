@@ -140,9 +140,9 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 			// its path sits in.
 			name: "a config rule inside a nested seat",
 			doc: "name: Acme\nunits:\n  - name: Eng\n    roles:\n      - name: Dev\n" +
-				"        integrations:\n          slack: {signing_secret: \"${S}\"}\n",
+				"        integrations:\n          slack: {bot_token: \"xoxb-${REST}\"}\n",
 			messageHas: "bot_token",
-			want:       []located{{"units[0].roles[0].integrations.slack.bot_token", "missing", "dev", ""}},
+			want:       []located{{"units[0].roles[0].integrations.slack.bot_token", "shape", "dev", ""}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -157,24 +157,27 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 	}
 }
 
-// The five rules that refuse a key on a human seat, by their messages: the org
+// The six rules that refuse a key on a human seat, by their messages: the org
 // model's, over every field a running seat alone reads, and the config
-// layer's four admission rules — over what a seat holds on a code host, its
-// code access tier and its own GitHub App, which nothing running reads off a
-// human seat, over the health grant, which the chart answers for an agent
-// only, and over its avatar, which the org model carries no field for.
+// layer's five admission rules: over its code access tier and its own GitHub
+// App, which nothing running reads off a human seat, over the health grant,
+// which the chart answers for an agent only, over its avatar, which the org
+// model carries no field for, and over an integration account the engine
+// manages for a seat, which a human seat does not hold.
 const (
 	agentOnlyOnHuman  = "agent-only field set on a human seat"
 	codeAccessOnHuman = "a human seat has no code access tier"
 	githubAppOnHuman  = "a human seat has no GitHub App"
 	healthOnHuman     = "a human seat carries no health grant"
 	avatarOnHuman     = "a human seat is drawn as the person it is"
+
+	seatAccessOnHumanSeat = "a human seat holds no account the engine manages"
 )
 
 // humanSeatRules is every rule that refuses a key on a human seat: the org
-// model's, then the config layer's four.
+// model's, then the config layer's five.
 var humanSeatRules = []string{agentOnlyOnHuman, codeAccessOnHuman, githubAppOnHuman,
-	healthOnHuman, avatarOnHuman}
+	healthOnHuman, avatarOnHuman, seatAccessOnHumanSeat}
 
 // humanSeatKey is one key a seat is authored with, as a human seat would
 // carry it.
@@ -205,8 +208,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"llm_subagent", "main", agentOnlyOnHuman},
 	{"llm_auxiliary", "main", agentOnlyOnHuman},
 	{"llm_judge", "main", agentOnlyOnHuman},
-	{"llm_sandbox", "main", agentOnlyOnHuman},
-	{"sandbox", "{enabled: true}", agentOnlyOnHuman},
+	{"sandbox", "{max_turns: 5}", agentOnlyOnHuman},
 	{"token_budget", "{day: 5}", agentOnlyOnHuman},
 	{"workers", "[researcher]", agentOnlyOnHuman},
 	{"learning_enabled", "false", agentOnlyOnHuman},
@@ -219,8 +221,12 @@ var humanSeatKeys = []humanSeatKey{
 	{"mcp_env", "{atlassian: {JIRA_USERNAME: sarah}}", agentOnlyOnHuman},
 	{"behavioral_guidelines", "[Reply fast]", agentOnlyOnHuman},
 	{"code", "{access: review}", codeAccessOnHuman},
-	{"integrations.github", "{repos: [acme/api]}", githubAppOnHuman},
+	{"integrations.github", "{enabled: false}", githubAppOnHuman},
 	{"health_tools", "true", healthOnHuman},
+	{"integrations.datadog", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.gitlab", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.jira", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.confluence", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 
@@ -546,20 +552,11 @@ func TestAParserProblemCarriesItsLineAndNoSegmentsWhenUnplaced(t *testing.T) {
 // A REFERENCE THAT RESOLVES TO NOTHING IS LOCATED WHERE IT WAS WRITTEN: a lead
 // at the unit's `lead`, a unit reference at the seat's `unit`, a manages entry
 // at the index it was written at (normalization rewrites the list, so the
-// normalized position is not it), and an access level at its key.
+// normalized position is not it).
 func TestReferenceWarningsAreLocatedWhereTheyWereWritten(t *testing.T) {
 	t.Parallel()
 	cfg := parsed(t, `
 name: Acme
-integrations:
-  gitlab:
-    enabled: true
-    url: https://gitlab.example.com
-    signing_secret: "${GITLAB_SIGNING_SECRET}"
-    provisioning:
-      group: acme
-      access_levels:
-        former.engineer: maintainer
 roles:
   - name: CEO
     manages: [eng, ghost]
@@ -590,9 +587,6 @@ units:
 		{"lead", "units[0].children[0].lead", "", "Platform", "Platform", "phantom",
 			config.Path{"units", 0, "children", 0, "lead"}},
 		{"manages", "roles[0].manages[1]", "ceo", "", "CEO", "ghost", config.Path{"roles", 0, "manages", 1}},
-		{"gitlab_access_level", "integrations.gitlab.provisioning.access_levels.former.engineer", "", "",
-			"integrations.gitlab.provisioning.access_levels", "former.engineer",
-			config.Path{"integrations", "gitlab", "provisioning", "access_levels", "former.engineer"}},
 	}
 	if !reflect.DeepEqual(got, expected) {
 		t.Errorf("warnings =\n%+v\nwant\n%+v", got, expected)
@@ -684,5 +678,56 @@ func TestAnAdmittedCompanyHasNoAdmissionWarnings(t *testing.T) {
 	}
 	if got := cfg.Warnings(); len(got) != 1 || got[0].Kind != config.WarningDanglingReference {
 		t.Errorf("warnings = %+v, want the one dangling manages entry", got)
+	}
+}
+
+// WITHOUT FAULTS AT THE PLACES A CALLER NAMES, EVERY OTHER FAULT STAYS.
+//
+// A write that knows why a masked credential could not be restored says so in
+// its own words, and drops the validator's fault there rather than reporting
+// one place twice. What it may not drop is anything else: a document with a
+// masked key and a blank name is told about both. The validator places every
+// fault it finds (a located error per fault), so the walk has to see through
+// that as [config.Problems] does.
+//
+// Mutation: match only a bare fault, never a located one, and the masked key
+// is reported twice; drop a whole join on its first match, and the blank name
+// goes too.
+func TestWithoutFaultsAtLeavesEveryOtherFault(t *testing.T) {
+	t.Parallel()
+	company := parsed(t, `
+name: ""
+providers:
+  llm:
+    zulu:
+      model: claude-sonnet-5
+      auth:
+        token: "`+config.Redacted+`"
+        credential_bundle: "${KEY}"
+`)
+	masked := company.UnresolvedMasks()
+	if len(masked) != 1 {
+		t.Fatalf("masks = %v, want the one key", masked)
+	}
+	invalid := company.Validate()
+	pathsOf := func(err error) []string {
+		var out []string
+		for _, p := range config.Problems(err) {
+			out = append(out, p.Path)
+		}
+		slices.Sort(out)
+		return out
+	}
+	want := []string{"name", "providers.llm.zulu.auth.token"}
+	if got := pathsOf(invalid); !slices.Equal(got, want) {
+		t.Fatalf("the document's problems are at %v, want %v", got, want)
+	}
+	if got := pathsOf(config.WithoutFaultsAt(invalid, masked)); !slices.Equal(got,
+		[]string{"name"}) {
+		t.Errorf("without the masked key the problems are at %v, want the blank "+
+			"name alone", got)
+	}
+	if got := pathsOf(config.WithoutFaultsAt(invalid, nil)); !slices.Equal(got, want) {
+		t.Errorf("naming no place left the problems at %v, want %v", got, want)
 	}
 }

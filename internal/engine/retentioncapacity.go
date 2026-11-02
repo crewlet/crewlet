@@ -77,11 +77,14 @@ func (r *retention) capacity(ctx context.Context) {
 //
 // # Why the age is read off the disk and not off the register
 //
-// The register says a backup was TAKEN. The directory says one EXISTS, and the
-// two differ in exactly the cases the alarm is for — a copy that was taken and
-// then deleted, a volume that was never mounted, a schedule pointing at a path
-// nobody ships from. In every one of those the register reports a protected
-// fleet and the disk reports an unprotected one.
+// The register says a backup was ANNOUNCED. The directory says one still
+// EXISTS. The trim's backup term and the `backup_age` alarm read the register —
+// they have to, since the node holding the duty can never see a directory on
+// another host — so this gauge is the one reading that notices the cases where
+// the two differ: a copy announced and then deleted, a volume that was never
+// mounted, a schedule pointing at a path nobody ships from. In every one of
+// those the register, and so the trim and the alarm, still count the copy, and
+// the disk says it is gone.
 //
 // So this walks the register for the points THIS NODE announced — the only
 // artefacts whose directory is reachable from this process — and reads their
@@ -98,35 +101,41 @@ func (r *retention) backupGauges(ctx context.Context) {
 		return
 	}
 	if holds, err := r.fleet.Holds(ctx); err == nil {
-		// A COUNT THAT DOES NOT RETURN TO ZERO IS A BACKUP THAT CRASHED
-		// MID-COPY. The pin outlives its owner until the stale bound
-		// expires it, and until then the trim does not advance — which
-		// has no other symptom at all until the log walks into its
-		// ceiling.
+		// A COUNT THAT DOES NOT RETURN TO ZERO IS A HOLDER THAT CRASHED
+		// — a backup mid-copy, or a join before its node was counted.
+		// Nothing but its owner removes a hold, and until the stale bound
+		// expires it the trim does not advance — which has no other
+		// symptom at all until the log walks into its ceiling.
 		r.metrics.Set(metrics.BackupHolds, float64(len(holds)), nil)
 	}
 	points, err := r.fleet.BackupPoints(ctx)
 	if err != nil {
 		return
 	}
-	newest, found := time.Time{}, false
+	// ONE INSTANT for every directory, and the duty's own: the age is a
+	// difference of two clocks, and reading the wall clock here put this
+	// gauge on a different clock from every report and evaluation beside it.
+	now := r.clock()
+	youngest, found := time.Duration(0), false
 	for _, point := range points {
 		if point.Owner != r.nodeID || point.Dir == "" {
 			continue
 		}
-		at, ok, err := backup.Newest(point.Dir)
+		// THROUGH [backup.Age], which states the clamp once: a manifest
+		// written on a host whose clock runs ahead is age zero rather than
+		// a negative age below every threshold.
+		age, ok, err := backup.Age(point.Dir, now)
 		if err != nil {
 			log.WarnContext(ctx, "backup_age_unreadable", "dir", point.Dir,
 				"err", err)
 			continue
 		}
-		if ok && at.After(newest) {
-			newest, found = at, true
+		if ok && (!found || age < youngest) {
+			youngest, found = age, true
 		}
 	}
 	if found {
-		r.metrics.Set(metrics.BackupAge,
-			max(time.Since(newest).Seconds(), 0), nil)
+		r.metrics.Set(metrics.BackupAge, youngest.Seconds(), nil)
 	}
 }
 

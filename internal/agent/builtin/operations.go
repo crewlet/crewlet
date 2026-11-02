@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // operations is how a write tool's call names its OPERATION on the one surface
@@ -26,9 +25,9 @@ import (
 // `op_id` without holding it to its call would run another call under an
 // operation promised to make nothing twice. So the families hold this value,
 // and what stays each family's own is only what a turn's call or a request
-// DERIVES from what it carries ([opIDFor]; the artifacts' derivation under
-// [artifactCallNamespace]), because each derivation's namespace is fixed for
-// the life of the format.
+// DERIVES from what it carries ([opIDFor] over [callOpKey], the one derivation
+// a turn's call takes), because each derivation's namespace is fixed for the
+// life of the format.
 //
 // # Why a caller with no turn needs one at all
 //
@@ -94,7 +93,7 @@ type operations struct {
 // optional field writes one.
 func (o operations) bind(tool string, args map[string]any, seeded bool) (op, refusal string) {
 	raw, brought := args[opIDArg]
-	if text, ok := raw.(string); ok && text == "" {
+	if text, _ := argval.String(raw); text == "" {
 		brought = false
 	}
 	if !o.callerOperations || seeded {
@@ -110,11 +109,11 @@ func (o operations) bind(tool string, args map[string]any, seeded bool) (op, ref
 	if !brought {
 		return statelog.NewOpID(o.mintedAt(), call), ""
 	}
-	held, _ := raw.(string)
+	held, _ := argval.String(raw)
 	if err := statelog.CheckCallerOpID(held); err != nil {
 		return "", fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
 	}
-	if !answeredFor(held, call) {
+	if !statelog.OpNamed(held, call) {
 		return "", fmt.Sprintf("%s refused that `op_id`, and nothing was "+
 			"written: it was answered for another call — another tool, or "+
 			"this one with other arguments — and an op_id finishes only the "+
@@ -193,6 +192,10 @@ const opIDArg = "op_id"
 // change apart with certainty, which is all this check is for — a caller can
 // mint any id that carries an instant anyway, so this is not a credential.
 // The `op_id` itself is left out of it, since the first call carried none.
+//
+// JOINED BY A DASH, because the name is one segment of the grammar and a dot
+// begins a step: joined by one, the name was escaped whole and an operator
+// reading the ledger could no longer see which tool an id was minted for.
 func callName(tool string, args map[string]any) string {
 	rest := make(map[string]any, len(args))
 	for key, value := range args {
@@ -200,21 +203,13 @@ func callName(tool string, args map[string]any) string {
 			rest[key] = value
 		}
 	}
-	return tool + "." + turnctx.ArgsDigest(rest)[:callDigestLen]
+	return tool + "-" + turnctx.ArgsDigest(rest)[:callDigestLen]
 }
 
 // callDigestLen is how many hex digits of the arguments' digest an operator's
 // operation id carries: 64 bits, far past any accidental collision, in an id
 // of at most 76 bytes with the longest tool of any family that offers one
 // (create_artifact_folder: 36 + 1 + 22 + 1 + 16) — well inside
-// [statelog.MaxCallerOpIDBytes].
+// [statelog.MaxCallerOpIDBytes], and a name well inside one segment
+// ([statelog.MaxOpSegmentBytes]).
 const callDigestLen = 16
-
-// answeredFor reports whether op was minted for call: a uuid and exactly that
-// name ([statelog.NewOpID]'s grammar), with no step after it — a step's id
-// handed back would be a NEW call's operation deriving new objects.
-func answeredFor(op, call string) bool {
-	uuidLen := len(uuid.Nil.String())
-	return len(op) == uuidLen+1+len(call) && op[uuidLen] == '.' &&
-		op[uuidLen+1:] == call
-}

@@ -9,20 +9,19 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // The Mattermost half of provisioning: one bot account per agent seat, in
-// the team, in the channels, with an access token minted into the variable
-// the config points at.
+// the team, in its channels, holding its roles, with an access token the
+// engine seals under the seat's own name. The per-seat access sync drives it
+// (accessvendor.go); this file is the admin API it calls and the names it
+// derives.
 //
-// # No manifest, no OAuth, no ledger
+// # No manifest, no OAuth
 //
-// This is the GitLab shape rather than Slack's. An admin token
-// mints a bot's access token directly, so there is no app to install, no
-// browser round trip to broker, and nothing to remember between runs — the
-// server IS the ledger, and a reconcile reads it.
+// This is the GitLab shape rather than Slack's. An admin token mints a bot's
+// access token directly, so there is no app to install and no browser round
+// trip to broker.
 //
 // # A bot only hears what it has joined
 //
@@ -30,38 +29,6 @@ import (
 // channels is not a convenience here: a bot that exists, authenticates and
 // is in no channel is an agent that never wakes, and the failure is silent
 // on both sides.
-
-// PlanFor walks the org for seats that need a Mattermost bot.
-func PlanFor(o *org.Organization, cfg *config.Mattermost) (*provision.Plan, error) {
-	if cfg == nil || !cfg.Enabled {
-		return nil, errors.New("mattermost: the company config does not enable mattermost")
-	}
-	if strings.TrimSpace(cfg.Team) == "" {
-		return nil, errors.New(
-			"mattermost: integrations.mattermost.team is unset — channels are " +
-				"team-scoped, so a bot cannot be placed without it")
-	}
-	plan := &provision.Plan{}
-	for seat := range o.AllRoles() {
-		if !seat.IsAgent() || seat.Mattermost.IsZero() {
-			continue
-		}
-		handle := seat.Handle()
-		name, ok := provision.SoleVar(seat.Mattermost.BotToken)
-		if !ok {
-			plan.Note("%s: mattermost.bot_token is %s rather than a whole "+
-				"${VAR} reference, so there is nowhere to mint a token — "+
-				"point it at a variable, or manage this bot by hand",
-				handle, provision.Shape(seat.Mattermost.BotToken))
-			continue
-		}
-		plan.Add(provision.Seat{
-			Handle: handle, Role: seat.Name, TokenVar: name,
-			Email: BotEmail(cfg.Provisioning, handle),
-		})
-	}
-	return plan, nil
-}
 
 // BotUsername is a seat's bot username.
 //
@@ -77,11 +44,6 @@ func BotUsername(p *config.MattermostProvisioning, handle string) string {
 		prefix = strings.TrimSpace(p.UsernamePrefix)
 	}
 	return strings.ToLower(prefix + handle)
-}
-
-// BotEmail is the address a bot account is created with.
-func BotEmail(p *config.MattermostProvisioning, handle string) string {
-	return BotUsername(p, handle) + "@noreply.crewlet.invalid"
 }
 
 // BotDisplayName is what a person sees beside the bot's posts.
@@ -130,7 +92,7 @@ type Bot struct {
 func (c *Client) BotByUsername(ctx context.Context, username string) (User, bool, error) {
 	user, err := c.UserByUsername(ctx, username)
 	if err != nil {
-		if isStatus(err, http.StatusNotFound) {
+		if isNotFound(err) {
 			return User{}, false, nil
 		}
 		return User{}, false, err
@@ -195,35 +157,10 @@ func (c *Client) Tokens(ctx context.Context, userID string) ([]Token, error) {
 func (c *Client) RevokeToken(ctx context.Context, tokenID string) error {
 	_, err := c.request(ctx, http.MethodPost, "/users/tokens/revoke",
 		map[string]string{"token_id": tokenID}, nil, false)
-	if isStatus(err, http.StatusNotFound) {
+	if isNotFound(err) {
 		return nil
 	}
 	return err
-}
-
-// RevokeTokens removes every access token on an account.
-//
-// THE ROLLBACK PATH FOR A BOT THIS RUN CREATED, and only that: nothing else
-// has ever minted on it, so taking everything takes exactly what this run
-// caused. On a bot that already existed the rollback revokes by id instead —
-// sweeping it would take an administrator's own token with no way to tell.
-func (c *Client) RevokeTokens(ctx context.Context, userID string) error {
-	tokens, err := c.Tokens(ctx, userID)
-	if err != nil {
-		return err
-	}
-	var stuck []string
-	for _, t := range tokens {
-		if err := c.RevokeToken(ctx, t.ID); err != nil {
-			stuck = append(stuck, t.ID)
-		}
-	}
-	if len(stuck) > 0 {
-		return fmt.Errorf("mattermost: these tokens on %s could not be revoked "+
-			"and are still live — remove them by hand: %s",
-			userID, strings.Join(stuck, ", "))
-	}
-	return nil
 }
 
 // RevokeMinted removes every token this tool minted on an account under one
@@ -273,7 +210,7 @@ func (c *Client) TeamByName(ctx context.Context, name string) (Team, bool, error
 	var out Team
 	_, err := c.request(ctx, http.MethodGet, "/teams/name/"+name, nil, &out, true)
 	if err != nil {
-		if isStatus(err, http.StatusNotFound) {
+		if isNotFound(err) {
 			return Team{}, false, nil
 		}
 		return Team{}, false, err
@@ -306,7 +243,7 @@ func (c *Client) TeamMember(ctx context.Context, teamID, userID string) (bool, e
 	}
 	_, err := c.request(ctx, http.MethodGet, "/teams/"+url.PathEscape(teamID)+
 		"/members/"+url.PathEscape(userID), nil, &out, true)
-	if isStatus(err, http.StatusNotFound) {
+	if isNotFound(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -337,8 +274,9 @@ func (c *Client) AddChannelMember(ctx context.Context, channelID, userID string)
 	return err
 }
 
-// isStatus reports an error carrying a particular HTTP status.
-func isStatus(err error, status int) bool { return Status(err) == status }
+// isNotFound reports an error carrying a 404: the thing asked about is not
+// there, which several reads answer as absent rather than as a failure.
+func isNotFound(err error) bool { return Status(err) == http.StatusNotFound }
 
 // isConflictStatus reports "this already exists" in the shapes Mattermost
 // uses for it.

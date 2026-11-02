@@ -1,5 +1,6 @@
-// What this fleet has backed up: the point each owner last announced, and
-// every backup a person asked a node for.
+// What this fleet has backed up: the point each node last announced, the
+// operator's newest acknowledgement of each log, and every backup a person
+// asked a node for.
 
 package queries
 
@@ -57,13 +58,15 @@ type BackupsAnswer struct {
 	// node's verified copy, `operator` the acknowledgement alone.
 	Policy config.BackupFloor `json:"policy"`
 
-	// Points is each owner's NEWEST backup, as the fleet's register holds
-	// it — one row per node that has backed up, plus the operator's
-	// acknowledgement. Newest first.
+	// Points is the fleet's register as it holds it: each node's NEWEST
+	// backup, one row per node that has backed up, and the operator's
+	// newest acknowledgement of each log, one row per log acknowledged —
+	// an acknowledgement names one log, so it is filed under it
+	// ([coord.BackupPointKey]). Newest first.
 	Points []BackupPointRow `json:"points"`
 
 	// History is every backup a person asked a node for, newest first,
-	// from the runtime audit every node keeps for the event-retention
+	// from the runtime audit every data node keeps for the event-retention
 	// window — failures included, which the register cannot hold.
 	History []BackupRunRow `json:"history"`
 
@@ -76,8 +79,9 @@ type BackupsAnswer struct {
 	Coverage eventfan.Coverage `json:"coverage"`
 }
 
-// BackupPointRow is one owner's newest backup — a manifest's claims, as its
-// taker announced them to the fleet.
+// BackupPointRow is one node's newest backup — a manifest's claims, as its
+// taker announced them to the fleet — or the operator's newest
+// acknowledgement of one log.
 type BackupPointRow struct {
 	Owner string          `json:"owner"`
 	Kind  BackupOwnerKind `json:"kind"`
@@ -94,10 +98,13 @@ type BackupPointRow struct {
 	// Covers is how far the copy reaches in each state-log stream.
 	Covers []BackupCover `json:"covers"`
 	// Counted — the trim may count it: the policy takes this owner's word
-	// and the copy was verified. Only the newest counted point is read.
+	// and the copy was verified. Each log's trim reads only the newest
+	// counted point that covers it.
 	Counted bool `json:"counted"`
-	// Newest — this is the point the trim's backup term reads: the newest
-	// verified one the policy counts.
+	// Newest — some log's backup term reads this point: for at least one
+	// log it covers, it is the newest verified point the policy counts.
+	// More than one row can carry it, and under `operator` one per log
+	// acknowledged does.
 	Newest bool `json:"newest"`
 }
 
@@ -130,24 +137,39 @@ type BackupRunRow struct {
 
 // backups answers what this fleet has backed up.
 //
-// TWO SOURCES FOR TWO QUESTIONS. The register holds one point per owner — the
-// newest, which is all the trim needs — so it cannot say that last night's
-// copy failed or that three were taken this week. The runtime audit can: every
-// `POST /backup`, which `crewlet backup` is a client of, leaves one row on the
-// node that took it, failures included. Neither is derived from the other.
+// TWO SOURCES FOR TWO QUESTIONS. The register holds one point per node and one
+// per acknowledged log — the newest, which is all the trim needs — so it
+// cannot say that last night's copy failed or that three were taken this week.
+// The runtime audit can: every `POST /backup`, which `crewlet backup` is a
+// client of, leaves one row on the node that took it, failures included.
+// Neither is derived from the other.
 func (s Sources) backups(ctx context.Context, _ Params) (any, error) {
 	points, err := s.Backups.BackupPoints(ctx)
 	if err != nil {
 		return nil, err
 	}
-	operatorOnly := s.BackupFloor == config.BackupFloorOperator
+	countedPoints := coord.CountedBackups(points, s.BackupFloor == config.BackupFloorOperator)
 	counted := map[string]bool{}
-	for _, p := range coord.CountedBackups(points, operatorOnly) {
-		counted[p.Owner] = true
+	for _, p := range countedPoints {
+		counted[coord.BackupPointKey(p)] = true
 	}
-	// THE SAME RULE THE TRIM TAKES, through the same two functions, so the
-	// row this screen marks newest is the point the backup term reads.
-	newest, haveNewest := coord.NewestBackup(coord.CountedBackups(points, operatorOnly))
+	// THE SAME RULE THE TRIM TAKES, PER LOG, through the same two functions,
+	// so a row this screen marks newest is a point some log's backup term
+	// reads. Every log any point reaches is asked: the newest counted point
+	// overall is not that, since it reads for the logs it covers and for no
+	// other — under `operator`, one acknowledgement's log alone.
+	read := map[string]bool{}
+	logs := map[string]bool{}
+	for _, p := range points {
+		for stream := range p.Streams {
+			logs[stream] = true
+		}
+	}
+	for stream := range logs {
+		if newest, ok := coord.NewestBackupOf(countedPoints, stream); ok {
+			read[coord.BackupPointKey(newest)] = true
+		}
+	}
 
 	policy := s.BackupFloor
 	if policy == "" {
@@ -155,11 +177,12 @@ func (s Sources) backups(ctx context.Context, _ Params) (any, error) {
 	}
 	out := BackupsAnswer{Policy: policy, Points: []BackupPointRow{}, History: []BackupRunRow{}}
 	for _, p := range points {
+		key := coord.BackupPointKey(p)
 		row := BackupPointRow{
 			Owner: p.Owner, Kind: BackupOwnerNode, TakenAt: p.At.UTC(), Dir: p.Dir,
 			Verified: p.Verified, Bytes: p.Bytes, Covers: []BackupCover{},
-			Counted: counted[p.Owner] && p.Verified,
-			Newest:  haveNewest && p.Owner == newest.Owner,
+			Counted: counted[key] && p.Verified,
+			Newest:  read[key],
 		}
 		if p.Owner == coord.OperatorBackupOwner {
 			row.Kind = BackupOwnerOperator
@@ -175,13 +198,21 @@ func (s Sources) backups(ctx context.Context, _ Params) (any, error) {
 		out.Points = append(out.Points, row)
 	}
 	slices.SortFunc(out.Points, func(a, b BackupPointRow) int {
-		return cmp.Or(b.TakenAt.Compare(a.TakenAt), cmp.Compare(a.Owner, b.Owner))
+		// THE LOG BREAKS A TIE between two acknowledgements given in one
+		// instant: they share an owner, and an order that left them to
+		// the register's listing would differ between two reads.
+		return cmp.Or(b.TakenAt.Compare(a.TakenAt), cmp.Compare(a.Owner, b.Owner),
+			cmp.Compare(firstStream(a), firstStream(b)))
 	})
 
+	// AT THE ANSWER'S OWN INSTANT ([Sources.Now]), as the register is read:
+	// the history's retention floor is counted from it, so the two halves of
+	// one answer stand at one time, whatever clock the answer was asked on.
 	listing, coverage, err := s.Events.List(ctx, store.ListQuery{
 		Type:   types.BackupRequested{}.EventType(),
 		Source: types.OperatorSource,
 		Limit:  BackupHistoryPage,
+		At:     s.clock(),
 	})
 	if err != nil {
 		return nil, err
@@ -201,4 +232,13 @@ func (s Sources) backups(ctx context.Context, _ Params) (any, error) {
 		})
 	}
 	return out, nil
+}
+
+// firstStream is the first log a row reaches, in its covers' own order — the
+// one log an acknowledgement names.
+func firstStream(row BackupPointRow) string {
+	if len(row.Covers) == 0 {
+		return ""
+	}
+	return row.Covers[0].Stream
 }

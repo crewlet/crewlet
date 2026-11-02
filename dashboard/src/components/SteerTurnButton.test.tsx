@@ -1,21 +1,25 @@
 /**
- * Steer is offered only where a note can reach the turn.
+ * Steer is offered on every turn that is still going.
  *
- * A note enters a turn at the top of its next round in the ENGINE'S OWN loop
- * (`internal/agent/steer`). A turn parked on a coding run is in nobody's loop
- * but the run's — its own `run_sandbox`, or an executor that runs as a coding
- * agent — and the engine would answer `steer_unsupported` one press too late.
- * So the control is drawn and HELD there, with the reason and what to do
- * instead, for a reader who could otherwise press it.
+ * A note to a turn in the engine's own loop is read at its next round; one to
+ * a turn whose coding run is out waits on the run's record and is read by the
+ * run at its next step, after its question is answered, or by the review that
+ * follows it (`internal/agent/steer`). Only an ended turn holds the control,
+ * with the reason — and what the engine answered about WHEN the note is read is
+ * what the toast says.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { SteerTurnButton } from "./writes.tsx";
+import { steerReadsSentence } from "~/lib/steer.ts";
 import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
-import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
+import { STEER_NOTE_MAX_RUNES, STEER_READS } from "~/contract/steer.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 vi.mock("~/lib/store-hooks.ts", () => ({
   useConnection: vi.fn(),
@@ -26,10 +30,11 @@ vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const JANE: ViewerState = {
   login: "founder",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet"],
   admin: true,
-  tracker: true,
-  knowledge: true,
+  worklet: true,
+  doclet: true,
+  chatlet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -42,6 +47,9 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
+  chatVendors: [],
 };
 
 beforeEach(() => {
@@ -52,6 +60,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -64,32 +73,100 @@ function heldBecause(button: HTMLElement): string {
 
 describe("SteerTurnButton", () => {
   test("is pressable on a turn running in the engine's own loop", () => {
-    render(<SteerTurnButton turnId="t-1" seat="CEO" running parked={false} />);
+    render(<SteerTurnButton turnId="t-1" seat="CEO" running />);
     const steer = screen.getByRole("button", { name: /Steer/ });
     expect(steer.hasAttribute("disabled") || steer.getAttribute("aria-disabled") === "true").toBe(
       false,
     );
     fireEvent.click(steer);
     expect(screen.getByRole("dialog", { name: "Steer CEO's turn" })).toBeTruthy();
-    expect(screen.getByText(new RegExp(`0 of ${STEER_NOTE_MAX_RUNES} characters`))).toBeTruthy();
+    expect(
+      screen.getByText(
+        new RegExp(`reads it at its next step\\. 0 of ${STEER_NOTE_MAX_RUNES} characters`),
+      ),
+    ).toBeTruthy();
   });
 
-  test("is held on a turn inside a coding agent's own loop, saying why", () => {
-    render(<SteerTurnButton turnId="t-1" seat="CEO" running parked />);
+  test("is pressable on a turn whose coding run is out — the note waits on the run", () => {
+    // A turn parked on its run is still running to the screen (its stage is
+    // `parked`), and that is all the control asks.
+    render(<SteerTurnButton turnId="t-1" seat="CEO" running />);
+    const steer = screen.getByRole("button", { name: /Steer/ });
+    expect(heldBecause(steer)).not.toMatch(/coding run is working/);
+    fireEvent.click(steer);
+    expect(screen.getByRole("dialog", { name: "Steer CEO's turn" })).toBeTruthy();
+  });
+
+  test("is held on a turn that has ended", () => {
+    render(<SteerTurnButton turnId="t-1" seat="CEO" running={false} />);
     const steer = screen.getByRole("button", { name: /Steer/ });
     expect(steer.hasAttribute("disabled") || steer.getAttribute("aria-disabled") === "true").toBe(
       true,
     );
-    expect(heldBecause(steer)).toMatch(
-      /A coding run is working\. Answer it, or comment on the task\./,
-    );
+    expect(heldBecause(steer)).toMatch(/The turn has ended\./);
     fireEvent.click(steer);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+});
 
-  test("is held on a turn that has ended", () => {
-    render(<SteerTurnButton turnId="t-1" seat="CEO" running={false} parked={false} />);
-    const steer = screen.getByRole("button", { name: /Steer/ });
-    expect(heldBecause(steer)).toMatch(/The turn has ended\./);
+// A NOTE THE TURN REFUSES ON ITS BOUNDS SAYS WHICH BOUND, in the words that
+// tell a person what to do next: one that holds as many unread notes as it may
+// takes this note once it has read them, and one that has taken all it takes
+// never will. Neither is a write that collided with another, which "look again,
+// then retry" would tell them it was.
+//
+// THE ANSWER CARRIES NO DETAIL: the act route answers a refusal in a person's
+// words or in none (ADR-0060), and nobody has worded either bound for a
+// person, so the dashboard's sentence for the code is the whole of it. The
+// tool's own sentence, which names the turn and its count for a model, is
+// never the answer's detail.
+describe("a note the turn refuses on its bounds", () => {
+  test.each(["notes_full", "notes_spent"] as const)("%s is said in its own words", async (code) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: code }), {
+            status: 409,
+            headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+          }),
+      ),
+    );
+    render(
+      <LayerHost>
+        <ToastProvider>
+          <SteerTurnButton turnId="t-1" seat="CEO" running />
+        </ToastProvider>
+      </LayerHost>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Steer/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Steer CEO's turn" });
+    fireEvent.change(within(dialog).getByLabelText("Note"), { target: { value: "use staging" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send note" }));
+    await waitFor(() => expect(within(dialog).getByText(ACT_ERRORS[code])).toBeTruthy());
+    // A COLLISION'S WORDS ARE LOOKED FOR IN THE TEXT: a `conflict` is said in
+    // the engine's words, and has no fixed sentence of the dashboard's to find.
+    expect(dialog.textContent).not.toMatch(/look again|retry/i);
+    expect(dialog.textContent).not.toMatch(/collided/);
+  });
+});
+
+describe("steerReadsSentence", () => {
+  test("says when the turn reads the note, for every value the engine answers", () => {
+    expect(steerReadsSentence({ outcome: "pending", reads: "next_step" })).toBe(
+      "It reads it at its next step.",
+    );
+    expect(steerReadsSentence({ outcome: "pending", reads: "after_answer" })).toMatch(
+      /waiting on a question; it reads the note once that is answered/,
+    );
+    for (const reads of STEER_READS) {
+      expect(steerReadsSentence({ reads })).toBeTruthy();
+    }
+  });
+
+  test("says nothing of its own for an answer it cannot read", () => {
+    expect(steerReadsSentence({ reads: "some_later_value" })).toBeUndefined();
+    expect(steerReadsSentence({})).toBeUndefined();
+    expect(steerReadsSentence(null)).toBeUndefined();
   });
 });

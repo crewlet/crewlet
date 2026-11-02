@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -23,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -46,6 +49,10 @@ type App struct {
 	// stopRooms unregisters the socket's rooms from the appliers they hear,
 	// before the service stops.
 	stopRooms []func()
+
+	// chatLive is the process's chat hub, which the socket carries chat
+	// through. The App's to mount and never to start or stop.
+	chatLive *stream.ChatHub
 
 	// runtime is the engine this process runs beside. See NodeRuntime.
 	runtime NodeRuntime
@@ -134,6 +141,8 @@ type App struct {
 
 	// routes is every pattern mounted, in mount order. See [routeTable].
 	routes []string
+	// policies are the guarded routes' policies. See [routeTable].
+	policies map[string]authz.Policy
 }
 
 // routeTable is the one mux every surface mounts on, keeping the pattern of
@@ -152,6 +161,18 @@ type App struct {
 type routeTable struct {
 	mux      *http.ServeMux
 	patterns []string
+	// policies are the guarded routes' verbs, each reported by the
+	// [authz.Router] that mounted it ([authz.PolicyMux]), so a walk can
+	// classify a guarded route by the verb it is decided by.
+	policies map[string]authz.Policy
+}
+
+// MountedWith keeps the policy a guarded route was mounted with.
+func (t *routeTable) MountedWith(pattern string, p authz.Policy) {
+	if t.policies == nil {
+		t.policies = map[string]authz.Policy{}
+	}
+	t.policies[pattern] = p
 }
 
 func (t *routeTable) Handle(pattern string, handler http.Handler) {
@@ -292,7 +313,7 @@ type guardedMounter interface {
 // been applied yet), which [CodeSurface] answers per request — never the seam
 // that asks.
 //
-// What stays optional is what a real node can lack: a native tracker (a company
+// What stays optional is what a real node can lack: Worklet (a company
 // on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
 // unset environment variable), and the defaults a test injects.
 type Options struct {
@@ -335,6 +356,32 @@ type Options struct {
 	// which every node serving the API holds from boot — ingress requires
 	// the `data` role (ADR-0025).
 	Tokens *auth.Tokens
+
+	// --- the Dashboard Assistant's grants (WP1) ---
+
+	// Delegations mints and checks the assistant's grants, and Dispatcher
+	// sends the assistant's tool calls through this API's own handler with
+	// them (ADR-0050). The two are ONE PAIR (the dispatcher sends what the
+	// delegations mint), and New binds the delegations to this API's guard
+	// and the dispatcher to this API's handler, so a grant is accepted only
+	// by the chain it was minted for.
+	//
+	// NIL IS AN API WITH NO ASSISTANT: every grant-shaped bearer is refused,
+	// over the wire and in process alike.
+	Delegations *auth.Delegations
+	Dispatcher  *auth.Dispatcher
+
+	// --- the Dashboard Assistant's routes (WP8) ---
+
+	// Assistant is the Dashboard Assistant's routes under /assistant/ and
+	// the `assistant` member of `viewer` (internal/api/assistantapi). It
+	// needs the grant pair above: a turn's every call carries a grant the
+	// delegations mint and the dispatcher sends, so an Assistant without
+	// them is refused at New.
+	//
+	// NIL IS AN API WITH NO ASSISTANT: no route under /assistant/, and the
+	// viewer answers it `disabled`.
+	Assistant *assistantapi.Surface
 
 	// AuthEvents is where the guard counts a refused credential.
 	// REQUIRED: the engine
@@ -393,6 +440,23 @@ type Options struct {
 	// company's state until it closed on its own.
 	Credentials CredentialFeed
 
+	// ChatLive is the company's own chat on this node's sockets: the
+	// process's chat hub ([NewEngineChatLive]), whose committed frames, presence
+	// and read-state pushes the socket carries for each viewer the room
+	// admits. [New] mounts the socket over it and says so to it
+	// ([stream.ChatHub.AttachSockets]) — which is what makes it follow a
+	// peer's batches while this node's own copy is out of service, and
+	// what starts its read-state push — and neither starts nor stops it:
+	// the hub is the PROCESS's, attached to the engine on every node
+	// whether or not that node serves an API.
+	//
+	// REQUIRED, for Inbox's reason: a hub exists on every node, so a nil
+	// one here is a wiring mistake, and the screen it costs — a room that
+	// never updates while a person is talking in it — looks exactly like
+	// a quiet company. A company whose chat is not the engine's simply
+	// gives it nothing to say.
+	ChatLive *stream.ChatHub
+
 	// State is the projection to serve. Nil builds an empty one on
 	// [Options.Now].
 	//
@@ -422,7 +486,7 @@ type Options struct {
 	// other source left
 	// nil makes its questions UNREGISTERED rather than failing, which is the
 	// honest answer for a node that does not have that surface at all (no
-	// knowledge backend, no native tracker) and distinct from an empty one.
+	// knowledge backend, no Worklet) and distinct from an empty one.
 	Sources queries.Sources
 
 	// QueueBackend names the broker, for the health body.
@@ -481,7 +545,7 @@ type Options struct {
 	// exactly where the first person is invited.
 	IAM guardedMounter
 
-	// Work serves the human write surface over the company's own tracker
+	// Work serves the human write surface over Worklet
 	// and knowledge base, normally a workapi.Service: the same tools a seat
 	// and the operator's assistant hold, as routes a person reaches from a
 	// browser or a script.
@@ -527,6 +591,19 @@ type Options struct {
 	// else leaves out; `crewlet run` always wires it.
 	Rooms *Rooms
 
+	// Objectives is the node's service objective meter, which every
+	// committed change the socket pushes is timed into (change visibility,
+	// [stream.Objectives]). Nil records nothing; `crewlet run` always wires
+	// the engine's.
+	Objectives stream.Objectives
+
+	// Models serves the model routes under /llm/providers/ and
+	// /llm/device-sign-ins/, normally an llmapi.Service: a model's
+	// credential tested before it is stored, its checks, a retry of a
+	// sit-out, a host login's status and a device sign-in. The reads beside
+	// them are questions ([queries.Sources.Models]).
+	Models guardedMounter
+
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
 	Secrets guardedMounter
@@ -539,21 +616,23 @@ type Options struct {
 	// It belongs to the API rather than to the engine because the route is
 	// served by whichever node the box can reach, which need not be the
 	// node whose engine minted the endpoint. That is why the token is
-	// signed rather than stored.
+	// signed rather than stored. A node without the ingress role serves it
+	// beside its probes, to its own host's boxes alone ([Probes]).
 	OtelReceiver *sandbox.OtelReceiver
 
 	// Bridge serves a running seat's tool surface to a coding agent over
 	// MCP. Nil serves none, and the route is then ABSENT for the same
 	// reason OtelReceiver's is.
 	//
-	// Unlike OtelReceiver it is NOT a split-deployment surface: a session
-	// is a live tool surface in the process that opened it, so it must be
-	// the ENGINE's own bridge, served by the node that runs the seat. A
-	// node without the ingress role serves it beside its probes and
-	// nothing else, through [Probes].
+	// Unlike OtelReceiver it is the ENGINE's own: a session is a live tool
+	// surface in the process holding the run's seat, and this bridge holds
+	// this process's sessions and relays a call for any other seat to its
+	// holder (internal/api/mcpbridge). A node without the ingress role
+	// serves it beside its probes, to its own host's boxes alone
+	// ([Probes]).
 	Bridge *mcpbridge.Bridge
 
-	// Operator is the company's own tracker and knowledge base as ONE tool
+	// Operator is Worklet and Doclet as ONE tool
 	// catalogue, served to the people who run it — over MCP for an
 	// operator's own AI assistant, and over the act route for a person at
 	// the dashboard (ADR-0024) — and the one dispatch the human write
@@ -562,9 +641,9 @@ type Options struct {
 	//
 	// ONE SERVER, BUILT ONCE, WHOSE CATALOGUE IS READ PER CALL: the
 	// catalogue is the native halves', which a node meets at its first
-	// company. A request before that answers `503 no_active_revision`, and
-	// one to a node whose catalogue is empty answers as the route's absence
-	// would. [HumanSurfaces.Mount] is what hands it over.
+	// company, beside the seat controls every node serves. A request before
+	// that answers `503 no_active_revision`. [HumanSurfaces.Mount] is what
+	// hands it over.
 	//
 	// GUARDED, like every route the exemption list does not name. It
 	// writes to the company, and the request's principal is what lands on
@@ -601,7 +680,7 @@ type Options struct {
 	// code domain's reads under /code/ on every node, asked of the engine on
 	// every request, with the box tokens a box route on a node serving no
 	// code host verifies by before it says why: see [CodeSurface]. /git/
-	// and /code/ are never on api.public (ADR-0055); /box/git/ is, admitted
+	// and /code/ are never on api.public (ADR-0078); /box/git/ is, admitted
 	// by the run. REQUIRED, for [Options]' reason.
 	Code CodeSurface
 
@@ -701,6 +780,15 @@ func New(opts Options) (*App, error) {
 		identity:    opts.Identity,
 	}
 	var err error
+	// --- the Dashboard Assistant's grants (WP1) ---
+	if opts.Dispatcher != nil && opts.Dispatcher.Delegations() != opts.Delegations {
+		return nil, errors.New("api: Options.Dispatcher sends grants that " +
+			"Options.Delegations did not mint; build it with auth.NewDispatcher " +
+			"over the same delegations")
+	}
+	if err = a.guard.BindDelegations(opts.Delegations); err != nil {
+		return nil, fmt.Errorf("api: %w", err)
+	}
 	a.stream, err = stream.NewService(state, stream.Options{
 		Health: a.streamHealth,
 		// The SAME set /ready refuses on, read from the one place it is
@@ -745,6 +833,11 @@ func New(opts Options) (*App, error) {
 		// THE ARTIFACT ROOMS, every half or none ([Rooms]).
 		Rooms:   opts.Rooms.streamRooms(),
 		Metrics: opts.Rooms.metrics(),
+		// THE NODE'S OBJECTIVE METER, whatever the company keeps: every
+		// committed change the socket pushes is timed into it, an inbox
+		// movement as much as a room's, and a meter carried by the rooms
+		// left the inbox untimed on every node that serves none.
+		Objectives: opts.Objectives,
 
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
@@ -753,13 +846,13 @@ func New(opts Options) (*App, error) {
 		return nil, fmt.Errorf("api: %w", err)
 	}
 	// AND WHAT EACH ARTIFACT'S APPLIERS COMMITTED, pushed to the sockets in
-	// its room, with every room told to re-read whenever this node's copies
-	// leave or return to service.
+	// its room: this node's own appliers while its copy serves and a sound
+	// peer's, relayed, while it does not, with every room told to re-read at
+	// each switch (the engine's live relay).
 	if r := opts.Rooms; r != nil && r.Feed != nil {
 		a.stopRooms = append(a.stopRooms,
 			r.Feed.OnArtifactsMoved(a.stream.ArtifactsMoved),
 			r.Feed.OnArtifactDataMoved(a.stream.ArtifactDataMoved))
-		r.Feed.SetOnArtifactsServing(a.stream.ArtifactsCopy)
 	}
 	// AND WHOSE INBOX MOVED, pushed to the sockets watching each seat —
 	// and when what this node hears has a gap, every watched inbox read
@@ -769,6 +862,11 @@ func New(opts Options) (*App, error) {
 	// AND WHOSE CREDENTIALS MOVED, deciding the sockets opened with them
 	// again.
 	opts.Credentials.SetOnIdentityMoved(a.pushIdentityMoved)
+	// AND THE COMPANY'S OWN CHAT, on the socket mounted below — told so
+	// once this app is built, not before: a build that failed past here
+	// serves no socket, and a hub told otherwise would follow a peer's
+	// batches for nobody.
+	a.chatLive = opts.ChatLive
 
 	tree := opts.Assets
 	if tree == nil {
@@ -821,6 +919,12 @@ func New(opts Options) (*App, error) {
 	// buttons work. A caller that supplied its own keeps it.
 	if sources.Acts == nil && opts.Operator != nil {
 		sources.Acts = opts.Operator.Acts
+	}
+	// --- the Dashboard Assistant's routes (WP8) ---
+	// WHETHER THE ASK PILL IS LIT, from the surface whose routes the pill
+	// opens, so the viewer and a refused question cannot disagree.
+	if sources.Assistant == nil && opts.Assistant != nil {
+		sources.Assistant = opts.Assistant.Viewer
 	}
 	// WHO MAY CHANGE THE COMPANY DOCUMENT, from the same Tier A the config
 	// surface enforces it from, so the viewer offers exactly the edits that
@@ -879,13 +983,27 @@ func New(opts Options) (*App, error) {
 	if err := a.mountCode(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the code host's routes: %w", err)
 	}
-	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer))
+	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer, a.chatLive))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
 	// holds, offered to a person's own assistant over MCP and to the person
 	// themself over the act route. Under its own
 	// prefix rather than under /mcp/, which is exempt from the guard
 	// wholesale for the sandbox bridge — see operator.MCPPath.
 	a.mountOperator(mux, opts.Operator)
+	// --- the Dashboard Assistant's routes (WP8) ---
+	// THE ASSISTANT, every route on one of its two verbs. Its grants are
+	// refused under this prefix whatever they carry (auth.AssistantPrefix),
+	// so it can never be reached through itself.
+	if opts.Assistant != nil {
+		if opts.Delegations == nil || opts.Dispatcher == nil {
+			return nil, errors.New("api: Options.Assistant needs Options.Delegations and " +
+				"Options.Dispatcher: every call a turn makes carries a grant they mint " +
+				"and send")
+		}
+		if err := opts.Assistant.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the assistant surface: %w", err)
+		}
+	}
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an
@@ -906,7 +1024,7 @@ func New(opts Options) (*App, error) {
 	// whole company. Its per-run token is in the path instead. So is the
 	// tool bridge's; and a coding box's git, the third edge, is mounted with
 	// the code host's routes above, its run's token its Basic password.
-	a.mountOTLP(mux, opts.OtelReceiver)
+	mountOTLP(mux, opts.OtelReceiver)
 	mountBridge(mux, opts.Bridge)
 	// The config surface, every route on a grant, reads included:
 	// reading it exposes the whole company document and writing it
@@ -914,22 +1032,34 @@ func New(opts Options) (*App, error) {
 	//
 	// These three, like the chart below, fail the boot on a route mounted
 	// with no policy — see [guardedMounter] for what they decided before.
+	//
+	// A REFUSED WRITE to the config, the secrets or a model logs one line
+	// ([refusalMux]), under the surface's own logger; setup is the
+	// first-run wizard's and logs its own outcomes.
 	for _, surface := range []struct {
 		name string
 		m    guardedMounter
+		log  *slog.Logger
 	}{
-		{"config", opts.Config},
+		{"config", opts.Config, logging.Get("api.config")},
 		// /secrets is how a rotation reaches a fleet at all — the
 		// coordination broker is inside the engine's process on the
 		// default topology, so no second process can write the store —
 		// and its listing alone says which credentials a company holds.
-		{"secrets", opts.Secrets},
+		{"secrets", opts.Secrets, logging.Get("api.secrets")},
 		// Connecting an integration without a shell, reads included —
 		// the list of which credentials a company has NOT configured is
 		// worth as much to an attacker as the ones it has.
-		{"setup", opts.Setup},
+		{"setup", opts.Setup, nil},
+		// A MODEL'S CREDENTIAL, CHECKS AND SIGN-INS, each route on its
+		// own verb (internal/api/llmapi).
+		{"models", opts.Models, logging.Get("api.llm")},
 	} {
-		if err := surface.m.Routes(mux); err != nil {
+		var mounted authz.Mux = mux
+		if surface.log != nil {
+			mounted = refusalMux{Mux: mux, log: surface.log}
+		}
+		if err := surface.m.Routes(mounted); err != nil {
 			return nil, fmt.Errorf("api: mount the %s surface: %w", surface.name, err)
 		}
 	}
@@ -1015,6 +1145,7 @@ func New(opts Options) (*App, error) {
 	// drained exactly once, and which socket answers it is decided by one
 	// predicate rather than by which of two muxes somebody registered it on.
 	a.routes = mux.patterns
+	a.policies = mux.policies
 	chain := a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(
 		a.drainGate(httpjson.Mux(mux.mux)))))
 	// EACH SOCKET SAYS WHETHER IT IS HTTPS BY ITS OWN ADDRESS
@@ -1026,11 +1157,31 @@ func New(opts Options) (*App, error) {
 	// exactly where the deployment had published them over https.
 	if opts.Bootstrap == nil || !opts.Bootstrap.API.Public.Enabled() {
 		a.handler = servedOn(opts.Bootstrap, false, chain)
-		return a, nil
+	} else {
+		a.handler = servedOn(opts.Bootstrap, false, partition(false, chain))
+		a.public = servedOn(opts.Bootstrap, true, partition(true, chain))
 	}
-	a.handler = servedOn(opts.Bootstrap, false, partition(false, chain))
-	a.public = servedOn(opts.Bootstrap, true, partition(true, chain))
+	// --- the Dashboard Assistant's dispatcher (WP1) ---
+	if err := bindDispatcher(opts.Dispatcher, a.handler); err != nil {
+		return nil, err
+	}
+	a.chatLive.AttachSockets()
 	return a, nil
+}
+
+// --- the Dashboard Assistant's dispatcher (WP1) ---
+
+// bindDispatcher binds the assistant's dispatcher, when there is one, to the
+// handler api.port serves: the whole chain a click meets, and never the public
+// listener's, which serves none of the routes a grant may reach.
+func bindDispatcher(d *auth.Dispatcher, h http.Handler) error {
+	if d == nil {
+		return nil
+	}
+	if err := d.Bind(h); err != nil {
+		return fmt.Errorf("api: %w", err)
+	}
+	return nil
 }
 
 // servedOn is the outermost wrapping of everything one of a node's sockets
@@ -1040,9 +1191,20 @@ func New(opts Options) (*App, error) {
 //
 // ONE WRAPPING for the full surface and the boot surface api.port and
 // api.public serve before it ([Boot]), so a request a node refuses while it
-// starts carries the headers the same request carries once it serves.
+// starts carries the headers the same request carries once it serves. Among
+// them [httpjson.EngineHeader], set first, so every answer says it is the
+// engine's, a refusal no handler thought about included.
 func servedOn(bootstrap *config.Bootstrap, public bool, h http.Handler) http.Handler {
-	return pagepolicy.Apply(authz.CanonicalPath(h), servedOverHTTPS(bootstrap, public))
+	return pagepolicy.Apply(markedAsEngine(authz.CanonicalPath(h)), servedOverHTTPS(bootstrap, public))
+}
+
+// markedAsEngine sets [httpjson.EngineHeader] on the answer before anything
+// beneath it writes one: a header set after the status line is dropped.
+func markedAsEngine(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(httpjson.EngineHeader, httpjson.EngineHeaderValue)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // partition serves the requests on one side of [auth.Public] and answers every
@@ -1109,6 +1271,7 @@ func (o Options) missing() error {
 		{"Runtime", o.Runtime == nil},
 		{"Inbox", o.Inbox == nil},
 		{"Credentials", o.Credentials == nil},
+		{"ChatLive", o.ChatLive == nil},
 		{"Sources.Company", o.Sources.Company == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
@@ -1123,6 +1286,7 @@ func (o Options) missing() error {
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
+		{"Models", o.Models == nil},
 		{"Retention", o.Retention == nil},
 		{"Code", o.Code == nil},
 		{"Capacity", o.Capacity == nil},
@@ -1158,15 +1322,15 @@ func (o Options) missing() error {
 // operator token and "somebody resolved" meant "the operator". The guard in
 // front of every route answers the same question and no other: is there a
 // principal. So once a person could sign in holding nothing but the company's
-// overview, or a pipeline hold the tracker alone, every one of them could
+// overview, or a pipeline hold Worklet alone, every one of them could
 // clear a spend ceiling, copy the node's whole durable state to a directory of
 // their choosing, move the floor the trim deletes against, and evict a machine
 // from the fleet. Through [authz.Router] each route is refused `403` naming
 // admin, and a route mounted without a policy is a boot failure rather than an
 // open door.
 //
-// THE READS TOO — the maintenance status and the reanchor confirmation value
-// — because `/work/retention*` is the deployment's surface whole, which is
+// THE READS TOO (the maintenance status and the reanchor confirmation value),
+// because `/worklet/retention*` is the deployment's surface whole, which is
 // what the `retention` question already declares: a map of which machine
 // holds what, and the value a reanchor must echo, are not the company's
 // working state.
@@ -1185,8 +1349,10 @@ func (o Options) missing() error {
 func (a *App) mountDeployment(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(authz.NoChart{}))
 	var failures []error
-	a.deploymentRoutes(func(pattern string, h http.HandlerFunc) {
-		if err := router.Handle(pattern, deploymentPolicy(pattern), h); err != nil {
+	a.deploymentRoutes(func(pattern string, does authz.Effect, h http.HandlerFunc) {
+		policy := deploymentPolicy(pattern)
+		policy.Effect = does
+		if err := router.Handle(pattern, policy, h); err != nil {
 			failures = append(failures, err)
 		}
 	})
@@ -1195,17 +1361,18 @@ func (a *App) mountDeployment(mux authz.Mux) error {
 
 // deploymentRoutes names every route [App.mountDeployment] mounts, through the
 // mount it is handed: separate from the router, so a walk can read the whole
-// list without standing the deployment up.
-func (a *App) deploymentRoutes(mount func(string, http.HandlerFunc)) {
+// list without standing the deployment up. A POST says what it does
+// ([authz.Effect]); every other route passes none.
+func (a *App) deploymentRoutes(mount func(string, authz.Effect, http.HandlerFunc)) {
 	// A POST, and a read posture of any kind never opens it: copying every
 	// credential and every seat's memory to a path the caller names is not
 	// a read. There is no budget reset beside it — a window's turnover IS
 	// the reset (ADR-0019), and a raw reset would re-arm a company mid-window.
-	mount("POST /backup", a.serveBackup)
+	mount("POST /backup", authz.EffectCreates, a.serveBackup)
 	// The move of the company's files to an S3 bucket: a copy every
 	// object passes through, and on the final pass the fleet's record of
 	// where its files are. See objectsmigrate.go.
-	mount("POST /objects/migrate", a.serveMigrateObjects)
+	mount("POST /objects/migrate", authz.EffectRewrites, a.serveMigrateObjects)
 	// The three retention gestures that write. See retention.go.
 	a.mountRetention(mount)
 	// The capacity window's own control surface. It is the one thing a
@@ -1255,6 +1422,11 @@ type Inbound struct {
 	// baked into every app this engine creates points at the webhook mux.
 	AppFlow webhooks.AppCompleter
 
+	// SlackInstalls finishes an install a seat's Slack install link began,
+	// on the landing every agent's Slack app redirects to. Nil answers
+	// such an arrival 503. See [webhooks.Options.SlackInstalls].
+	SlackInstalls webhooks.SlackInstaller
+
 	// Recheck asks the reconcile loop to look at GitHub immediately, when
 	// a person has just finished installing an agent's app there.
 	//
@@ -1277,6 +1449,8 @@ func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, now func() time.Tim
 		Recheck:    in.Recheck,
 		Configured: a.Configured,
 		Now:        now,
+
+		SlackInstalls: in.SlackInstalls,
 	})
 	if err != nil {
 		return fmt.Errorf("api: %w", err)
@@ -1325,7 +1499,7 @@ func (a *App) pushInboxMoved(moved []inbox.Movement) {
 	for _, m := range moved {
 		a.stream.InboxChanged(stream.InboxChange{
 			Source: m.Source, Handle: m.Handle, UnreadDelta: m.UnreadDelta,
-			Subject: m.Subject, Reason: m.Reason,
+			Subject: m.Subject, Reason: m.Reason, Stored: m.At,
 		})
 	}
 }
@@ -1516,34 +1690,38 @@ func (a *App) Queries() *queries.Registry { return a.queries }
 // two to disagree about what "unauthorized" means.
 func (a *App) answer(ctx context.Context, what string, params map[string]any) (any, error) {
 	data, err := a.queries.Answer(ctx, what, params)
+	var refusal *queries.Refusal
 	switch {
 	case err == nil:
 		return data, nil
 	case errors.Is(err, queries.ErrUnknown):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnknownQuery, what)
-	case errors.Is(err, queries.ErrUnauthenticated),
-		errors.Is(err, queries.ErrUnauthorized):
-		// BOTH ONTO ONE SOCKET CODE, deliberately. The vocabulary here is
-		// shared with the dashboard, and the distinction the REST mapping
-		// draws — present something, versus the thing you presented does
-		// not carry this — has no consumer over a socket: every one
-		// authenticates at its handshake, so the unauthenticated arm is
-		// unreachable and a second code would be a wire change with
-		// nothing to read it.
+	case errors.As(err, &refusal):
+		// A REFUSAL ON AUTHORITY SAYS WHY, as it does over REST, and in the
+		// SAME WORDS: [stream.RefusedFor] answers it through the authority
+		// table's one mapping, so the code, the rule's reason and the grants
+		// that would have admitted the caller are the ones the REST twin
+		// writes. It was reduced to the question's name here once, so the one
+		// channel the dashboard reads was the one on which "you may not"
+		// could not say what would change that — and then spelled
+		// `unauthorized` here for itself, which a refusal the mapping words
+		// otherwise would have reached the dashboard as.
 		//
-		// AND A REFUSAL ON AUTHORITY SAYS WHY, as it does over REST: the
-		// rule's reason and the grants that would have admitted the
-		// caller travel on the frame. It was reduced to the question's
-		// name here, so the one channel the dashboard reads was the one
-		// on which "you may not" could not say what would change that.
-		var refusal *queries.Refusal
-		if errors.As(err, &refusal) {
-			return nil, &stream.RefusedError{What: what,
-				Refused: *stream.NewRefused(refusal.Reason, refusal.Grants)}
-		}
-		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
+		// A QUESTION ASKED BY NOBODY ([queries.ErrUnauthenticated]) has no
+		// arm here and is answered as the fault it is: every socket
+		// authenticates at its handshake and closes when its credential
+		// ends, so a question on one that reaches the registry unresolved
+		// means this node lost who the socket is — which no refusal a client
+		// acts on describes.
+		return nil, stream.RefusedFor(what, refusal.Decision)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
+	case errors.Is(err, queries.ErrArtifactTrashed):
+		return nil, fmt.Errorf("%w: %s", stream.ErrArtifactTrashed, what)
+	case errors.Is(err, queries.ErrUnknownProvider):
+		// A REQUEST TO CHANGE, as a refused parameter is: the socket has
+		// one code for that, and the detail names the provider.
+		return nil, &stream.BadParamsError{What: what, Detail: err.Error()}
 	case errors.Is(err, queries.ErrBadParams):
 		// TRANSLATED RATHER THAN LEFT TO THE DEFAULT, which is what it
 		// was: an untranslated refusal reached the socket as an
@@ -1586,7 +1764,7 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 	data, err := a.queries.AnswerWith(r.Context(), what,
 		queries.FromQuery(r.URL.Query()))
 	if err != nil {
-		writeQueryError(w, what, err)
+		writeQueryError(w, r, what, err)
 		return
 	}
 	writeAnswer(w, r, data)
@@ -1603,7 +1781,10 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 // objects, so the one family of routes a dashboard reads most often was the
 // one whose refusals carried no sentence, and the code a client branched on
 // was the only thing it had to show.
-func writeQueryError(w http.ResponseWriter, what string, err error) {
+func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err error) {
+	var denied *queries.NotPermitted
+	var refusal *queries.Refusal
+	var revision *stream.RevisionError
 	var unserved *stream.Unserved
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
@@ -1616,7 +1797,18 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// up — stated because the mapping is this function's to get right
 		// whatever happens to run in front of it.
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
-	case errors.Is(err, queries.ErrUnauthorized):
+	case errors.As(err, &denied):
+		// 403 UNDER THE DOMAIN'S OWN WORD: a grant the question's own domain
+		// derives — a repository's, from the chart — is not the authority
+		// table's, carries no decision for [authz.RefusalFields] to map and no
+		// permission that would admit the caller, and answers with the
+		// domain's sentence: `not_permitted`, the word a refused push prints
+		// for the same refusal. Ahead of the table's arm, and never left to
+		// the default one: it is [queries.ErrUnauthorized] too, which names
+		// no decision.
+		httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeNotPermitted,
+			map[string]string{"detail": denied.Detail})
+	case errors.As(err, &refusal):
 		// 403 AND NOT 401, because the caller has already been
 		// identified. This refusal is a GRANT one — the guard in front
 		// of this resolved somebody, and the question needs authority
@@ -1632,29 +1824,17 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// the guard answers it for a credential that is absent or
 		// refused, before this function is reached at all.
 		//
-		// AND IT SAYS WHY: the rule's reason and the grants that would
-		// have admitted the caller, carried on the registry's refusal
-		// rather than rewritten here — the same two fields every other
-		// refusal on authority answers with.
-		//
-		// A GRANT THE QUESTION'S OWN DOMAIN DERIVES — a repository's, from
-		// the chart — is not the table's, carries neither a reason nor a
-		// permission that would admit the caller, and answers under the
-		// domain's own word with the domain's sentence: `not_permitted`,
-		// the word a refused push prints for the same refusal.
-		var denied *queries.NotPermitted
-		if errors.As(err, &denied) {
-			httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeNotPermitted,
-				map[string]string{"detail": denied.Detail})
-			return
-		}
-		var refusal *queries.Refusal
-		if !errors.As(err, &refusal) {
-			httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
-			return
-		}
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			authz.RefusalDetail(refusal.Reason, refusal.Grants))
+		// AND IT SAYS WHY, in the AUTHORITY TABLE'S OWN MAPPING
+		// ([authz.RefusalFields]): the code, the rule's reason and the
+		// grants that would have admitted the caller, from the decision the
+		// registry's refusal carries whole — the answer every other surface
+		// gives the same refusal. It wrote `unauthorized` here for itself,
+		// which agreed with the mapping only for as long as no question was
+		// refused for a stale proof. A bare [queries.ErrUnauthorized] names
+		// no decision, and is answered by the default arm as the fault it
+		// is.
+		status, code, detail := authz.RefusalFields(refusal.Decision)
+		httpjson.FailWithFields(w, status, code, detail)
 	case errors.Is(err, queries.ErrBadParams):
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a
@@ -1664,6 +1844,11 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// `message` cannot say which one.
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			httpjson.Detail{"detail": queries.RefusalDetail(err)})
+	case errors.Is(err, queries.ErrUnknownProvider):
+		// 422: the parameter is well formed and names nothing the
+		// catalogue holds, which the page answers with free text.
+		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeUnknownProvider,
+			httpjson.Detail{"detail": err.Error()})
 	case errors.Is(err, queries.ErrNotFound):
 		// AND WHICH ABSENCE, where the question says: a repository nobody
 		// declared and a company hosting no code are both `not_found`, told
@@ -1679,6 +1864,18 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 			said["reason"] = missing.Reason
 		}
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, said)
+	case errors.As(err, &revision):
+		// A REVISION THIS NODE CANNOT OPEN, under the /config route's own
+		// code and words, as the socket's frame carries them: answered by
+		// the default arm, a missing key was a 500 nobody could act on.
+		httpjson.FailWith(w, http.StatusConflict, revision.Code,
+			map[string]string{"detail": revision.Detail})
+	case errors.Is(err, queries.ErrArtifactTrashed):
+		// THE ARTIFACTS ROUTES' OWN ANSWER for the same artifact, so a
+		// question and the route beside it say one thing about it.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeArtifactTrashed,
+			map[string]string{"detail": "the artifact is in the trash; its data is not " +
+				"served until it is restored"})
 	case errors.As(err, &unserved):
 		// A SURFACE THIS NODE SERVES NONE OF NOW, under its own code — a
 		// native question on a node with no company yet
@@ -1721,13 +1918,18 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// AND THE REFUSAL SAYS WHAT IT IS — its code and its words, the
 		// remedy — through [stream.UnavailableOf], the same reading the
 		// socket's error frame is built from.
+		//
+		// THE REFUSAL'S OWN DETAIL GOES TO THE LOG ([stream.LogUnavailable]):
+		// it names positions and settings for whoever runs the node, and
+		// the answer's words are a person's sentence for the refusal.
+		stream.LogUnavailable(r.Context(), log, "api_query_unavailable", err, "what", what)
 		u := stream.UnavailableOf(err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, u.RetryAfter, u.Fields())
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
 		// database path or a driver's own message, and nothing about
 		// holding a grant makes a caller somebody that path is for.
-		log.Warn("api_query_failed", "what", what, "error", err)
+		stream.LogFailed(r.Context(), log, "api_query_failed", err, "what", what)
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeQueryFailed)
 	}
 }

@@ -18,8 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // ONE STOP IS ONE LINE, AND THE ENGINE DOES NOT ADD ITS OWN.
@@ -43,13 +44,13 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
-	stream := tracker.Domain{}.Stream().Name
+	stream := worklet.Domain{}.Stream().Name
 
 	// FIRST BOOT, and a checkpoint committed under the stream it ran on.
 	back, err := OpenBackends(t.Context(), &b, cfg, nil)
@@ -65,7 +66,7 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 	if !ok {
 		t.Fatalf("the stream is %T, not the JetStream backend", back.Queue)
 	}
-	created := e.core.Load().log.Domain(tracker.Domain{}.Name()).runner.StreamCreatedAt()
+	created := e.core.Load().log.Domain(worklet.Domain{}.Name()).runner.StreamCreatedAt()
 	if err := back.Store.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO statelog_cursor
@@ -104,7 +105,7 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 		t.Fatalf("New again: %v", err)
 	}
 	t.Cleanup(func() { e2.Stop(context.Background()) })
-	running := e2.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := e2.core.Load().log.Domain(worklet.Domain{}.Name())
 	waitUntil(t, 10*time.Second, "the tracker's applier to stop on the recreated log",
 		func() bool { return running.runner.Stopped() != nil })
 	// EVERY APPLY LOOP ENDED AND WAITED FOR, so whatever the engine writes
@@ -114,7 +115,7 @@ func TestAnApplierThatStopsIsWrittenOnceAndByTheStateLog(t *testing.T) {
 	var stops []map[string]any
 	for _, record := range logs.records(t) {
 		if record["msg"] == "statelog_applier_stopped" &&
-			record["domain"] == (tracker.Domain{}).Name() {
+			record["domain"] == (worklet.Domain{}).Name() {
 			stops = append(stops, record)
 		}
 	}

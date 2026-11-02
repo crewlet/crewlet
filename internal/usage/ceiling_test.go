@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -18,11 +20,15 @@ import (
 // Crossing the ceiling must never drop a day: the stream is created to refuse
 // rather than discard, the publisher reports the refusal as a full log rather
 // than as a transient failure, and the alarm that tells an operator names THIS
-// domain — a node with five logs is told which one is full, not that something
-// is.
+// domain — a node with several logs is told which one is full, not that
+// something is.
 func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 	t.Parallel()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	// THE BROKER'S OWN LIMIT DECLARED ([brokertest.StoreMaxBytes]): the case
+	// fills the log's ceiling, never the broker's, so the broker's limit is
+	// not read off the runner's free disk either.
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -87,7 +93,7 @@ func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 			continue
 		}
 		for _, d := range a.Domains {
-			if d.Domain == domain && strings.Contains(d.Detail, "ceiling") {
+			if slices.Contains(d.Domains, domain) && strings.Contains(d.Detail, "ceiling") {
 				named = true
 			}
 		}

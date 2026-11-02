@@ -50,8 +50,8 @@ func TestACompanyFileWithAFaultyCharterImportsWithWarnings(t *testing.T) {
 		"an empty store": seedStore,
 		"a store holding another company": func(t *testing.T) *store.DB {
 			db := seedStore(t)
-			if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
-				seedOf(parse(t, companyYAML)), fixtureCipher, testNode, quiet()); err != nil {
+			if err := bootSeed(t, db, coordmemory.NewFleet(),
+				seedOf(parse(t, companyYAML)), fixtureCipher); err != nil {
 				t.Fatal(err)
 			}
 			return db
@@ -65,8 +65,7 @@ func TestACompanyFileWithAFaultyCharterImportsWithWarnings(t *testing.T) {
 			return out.String(), err
 		},
 		"the boot seed": func(t *testing.T, db *store.DB) (string, error) {
-			return "", seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
-				overrideOf(faulty), fixtureCipher, testNode, quiet())
+			return "", bootSeed(t, db, coordmemory.NewFleet(), overrideOf(faulty), fixtureCipher)
 		},
 	}
 	for storeName, open := range stores {
@@ -77,11 +76,9 @@ func TestACompanyFileWithAFaultyCharterImportsWithWarnings(t *testing.T) {
 				if _, err := write(t, db); err != nil {
 					t.Fatalf("a company file with a faulty charter was refused: %v", err)
 				}
-				active, found, err := db.Configs().Active(t.Context())
-				if err != nil || !found {
-					t.Fatalf("nothing is active after the import: %v", err)
-				}
-				document, err := openStored(fixtureCipher, active)
+				// WHAT THIS NODE BOOTS ON NOW, as an offline import's
+				// offer or the boot seed's applied import.
+				document, err := openStored(fixtureCipher, bootRow(t, db))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -141,9 +138,10 @@ func TestValidateWarnsAboutAFaultyCharterAndPasses(t *testing.T) {
 func TestAnImportToARunningNodeWarnsAboutTheCharter(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
+	fleet := coordmemory.NewFleet()
 	svc, err := configapi.New(configapi.Options{
-		Store: db, Plane: coordmemory.NewFleet(), Cipher: fixtureCipher,
-		Holders: func(context.Context, []string, time.Time) (map[string]configapi.SeatHolder, error) {
+		Store: db, Plane: fleet, Cipher: fixtureCipher, Node: "core-1",
+		Holders: func(context.Context, func(string) bool, time.Time) (map[string]configapi.SeatHolder, error) {
 			return map[string]configapi.SeatHolder{}, nil
 		},
 	})
@@ -174,22 +172,17 @@ func TestAnImportToARunningNodeWarnsAboutTheCharter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+	storeAndActivate(t, db, fleet, store.Revision{
 		Source: "file", CreatedBy: testNode, CreatedByKind: iam.ActorSystem,
 		Summary: "the stored company", Payload: sealed, CreatedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatal(err)
-	}
+	})
 	restored := []byte(strings.Replace(stored, strings.Repeat("m", 1100), strings.Repeat("o", 1200), 1))
 
 	client := &configClient{base: server.URL, http: httpx.Client(apiTimeout), answerCap: maxConfigResponseBytes}
 	if _, _, err := client.Import(t.Context(), restored, "restore last week's file"); err != nil {
 		t.Fatalf("an import to a running node was refused for its charter: %v", err)
 	}
-	active, _, err := db.Configs().Active(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	active := fleetsRevision(t, db, fleet)
 	if active.Source != "file" || active.CreatedBy != "token:ops" || active.Summary != "restore last week's file" {
 		t.Errorf("the import is recorded as %+v, want an import from a file by token:ops with its summary", active)
 	}

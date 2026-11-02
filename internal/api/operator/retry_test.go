@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
-	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -38,7 +36,7 @@ func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.
 		},
 	})})
 	sess := dialOperator(t, s,
-		machine("token:founder", iam.GrantTracker))
+		machine("token:founder", iam.GrantWorklet))
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -95,7 +93,7 @@ func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.
 // every write the call makes derives from that. An `op_id` in an act's
 // arguments would be a second answer to "which operation is this" — one the
 // caller picked, beside the one its request names — so it is refused `400`
-// as the caller's to change, naming where the operation goes, and nothing is
+// as the caller's to change, naming the argument that has to go, and nothing is
 // written.
 func TestAnActCannotNameAnOperationBesideItsKey(t *testing.T) {
 	t.Parallel()
@@ -113,10 +111,8 @@ func TestAnActCannotNameAnOperationBesideItsKey(t *testing.T) {
 		t.Errorf("an act naming op_id beside its key answered %d %v, want 400 "+
 			"invalid_body", status, answer)
 	}
-	if detail, _ := answer["detail"].(string); !containsAll(detail, opkey.Header,
-		operator.OperationArg) {
-
-		t.Errorf("the refusal %q does not say where the operation goes", detail)
+	if answer["field"] != operator.OperationArg {
+		t.Errorf("the refusal %v does not name the argument that has to go", answer)
 	}
 	if _, ops := work.writes(); len(ops) != 0 {
 		t.Errorf("the act reached the tracker under %v", ops)
@@ -144,14 +140,4 @@ func answered(t *testing.T, sess *mcp.ClientSession, name string,
 		t.Fatalf("%s answered no JSON (%v): %s", name, err, text)
 	}
 	return out
-}
-
-// containsAll reports whether s holds every one of parts.
-func containsAll(s string, parts ...string) bool {
-	for _, part := range parts {
-		if !strings.Contains(s, part) {
-			return false
-		}
-	}
-	return true
 }

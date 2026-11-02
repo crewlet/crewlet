@@ -77,7 +77,7 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 	if found {
 		scope = append([]string{NamePath(NameToken(name))}, parts...)
 	}
-	opID := statelog.NewOpID(time.Now(), "code.purge")
+	opID := statelog.NewOpID(time.Now(), "code_purge")
 	at := s.now()
 	var done, wrote bool
 	result, err := s.publisher.Publish(ctx, statelog.Request{

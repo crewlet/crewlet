@@ -32,7 +32,7 @@ import (
 // multi-pack-index as a CHAIN OF PUBLISHED LAYERS, each git's own incremental
 // layer with its bitmap and the commit-graph layer over the same packs,
 // stores each layer's bytes in the object store and names it on the code log
-// (code.LayerRef, ADR-0051's Derived standing); every git node INSTALLS that
+// (code.LayerRef, ADR-0074's Derived standing); every git node INSTALLS that
 // chain: each layer fetched, held to its row (code.CheckLayer), and placed
 // byte for byte as the maintainer's git wrote it, both chain files written by
 // this cache from the rows' order. No node writes a multi-pack-index layer of

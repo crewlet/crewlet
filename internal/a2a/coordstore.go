@@ -76,38 +76,25 @@ func (s *CoordStore) CountMessage(ctx context.Context, id string, at time.Time) 
 	return ch.Messages, nil
 }
 
-// CloseIdle closes every open channel idle since before cutoff.
+// Idle lists every open channel idle since before cutoff.
 //
-// Listed then closed one at a time rather than swept in one call, because the
-// caller needs to know WHICH channels closed: each one is an ask that was
-// never answered, and publishing that is how an operator finds a seat that has
-// stopped replying.
-//
-// The instant is the discriminator. A channel already closed between the list
-// and the close comes back carrying the OTHER writer's instant, and is left
-// out — the sweep is a claimed singleton duty, but a party closing its own
-// channel mid-sweep is ordinary, and reporting it would draw two closes on a
-// dashboard for one channel.
-func (s *CoordStore) CloseIdle(ctx context.Context, cutoff, at time.Time) ([]Channel, error) {
+// Listed, and closed one at a time by the sweep that decides on each
+// ([Sweeper.SweepIdle]): the caller needs to know WHICH channels it closed —
+// each is an ask that was never answered, and publishing that is how an
+// operator finds a seat that has stopped replying — and which ones it must
+// not, because their answer is still owed.
+func (s *CoordStore) Idle(ctx context.Context, cutoff time.Time) ([]Channel, error) {
 	open, err := s.channels.OpenChannels(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("a2a: list open channels: %w", err)
 	}
-	var closed []Channel
+	var idle []Channel
 	for _, ch := range open {
-		if !ch.LastAt.Before(cutoff) {
-			continue
+		if ch.LastAt.Before(cutoff) {
+			idle = append(idle, fromCoord(ch))
 		}
-		got, found, err := s.channels.CloseChannel(ctx, ch.ID, at)
-		if err != nil {
-			return nil, fmt.Errorf("a2a: close idle channel %s: %w", ch.ID, err)
-		}
-		if !found || !got.ClosedAt.Equal(at) {
-			continue
-		}
-		closed = append(closed, fromCoord(got))
 	}
-	return closed, nil
+	return idle, nil
 }
 
 // Purge deletes channels closed before cutoff.

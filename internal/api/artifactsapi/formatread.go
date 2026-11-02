@@ -65,7 +65,8 @@ type formatCache[T any] struct {
 	// index is the file a failure to read names when the read itself does not.
 	index func(v artifactsdomain.Version) string
 
-	// what the format calls itself in a refusal: "slide format".
+	// name is what a version of the kind is, as a person's refusal says it:
+	// "slide deck".
 	name string
 
 	// objects are where a version's files are read from.
@@ -98,7 +99,7 @@ func newFormatCache[T any](objects Objects, name string, refused error,
 
 // newDeckCache reads decks through the slide format.
 func newDeckCache(objects Objects) *formatCache[slideformat.Deck] {
-	return newFormatCache(objects, "slide format", slideformat.ErrRefused,
+	return newFormatCache(objects, "slide deck", slideformat.ErrRefused,
 		func(artifactsdomain.Version) string { return slideformat.IndexPath },
 		func(src manifestSource, v artifactsdomain.Version) (slideformat.Deck, int64, error) {
 			deck, err := slideformat.Read(src)
@@ -114,7 +115,7 @@ func newDeckCache(objects Objects) *formatCache[slideformat.Deck] {
 
 // newDocCache reads docs through the doc format.
 func newDocCache(objects Objects) *formatCache[docindex.Doc] {
-	return newFormatCache(objects, "doc format", docindex.ErrRefused,
+	return newFormatCache(objects, "document", docindex.ErrRefused,
 		func(v artifactsdomain.Version) string { return v.Manifest.Entry },
 		func(src manifestSource, v artifactsdomain.Version) (docindex.Doc, int64, error) {
 			doc, err := docindex.Read(src, v.Manifest.Entry)
@@ -129,7 +130,7 @@ func newDocCache(objects Objects) *formatCache[docindex.Doc] {
 // newCanvasCache reads designs' canvases through the canvas format, held to
 // the version as their publish was.
 func newCanvasCache(objects Objects) *formatCache[canvasformat.Canvas] {
-	return newFormatCache(objects, "design format", canvasformat.ErrInvalid,
+	return newFormatCache(objects, "design", canvasformat.ErrInvalid,
 		func(artifactsdomain.Version) string { return canvasformat.Path },
 		func(src manifestSource, v artifactsdomain.Version) (canvasformat.Canvas, int64, error) {
 			canvas, err := canvasformat.Read(src, v.Manifest)
@@ -166,10 +167,15 @@ func (c *formatCache[T]) read(w http.ResponseWriter, r *http.Request, a Admissio
 	switch {
 	case errors.Is(err, c.refused):
 		// A VERSION PUBLISHED UNDER THE FORMAT that no longer reads under
-		// it: the format moved under a version no release ever shipped.
+		// it: the format moved under a version no release ever shipped. IN
+		// A PERSON'S WORDS, the format's own findings to the log: the detail
+		// was "does not read in this build's slide format: " and the
+		// format's Go error, package name and all.
+		log.WarnContext(r.Context(), "artifacts_version_unreadable", "artifact",
+			a.Head.ID.String(), "version", v.Number, "error", err.Error())
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeContentRefused, map[string]string{
-			"detail": "version " + strconv.Itoa(v.Number) + " does not read in this build's " +
-				c.name + ": " + err.Error()})
+			"detail": "Version " + strconv.Itoa(v.Number) + " can't be shown: this version " +
+				"of Crewlet can't read it as a " + c.name + ". Publishing it again fixes that."})
 		return value, false
 	case errors.As(err, &unread):
 		contentFailed(w, r, a.Head.ID, unread.path, unread.err)

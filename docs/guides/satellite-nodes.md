@@ -17,7 +17,7 @@ A satellite comes in two shapes, and the difference is the `data` role:
 
 | | `roles: [seats]` — **stateless** | `roles: [data, seats]` — **holds data** |
 |---|---|---|
-| Its store | Scratch: deleted at every boot, and no copy of the tracker or knowledge base | Its own full copy of the replicated estate |
+| Its store | Scratch: deleted at every boot, and no copy of the tracker, the knowledge base or chat | Its own full copy of the replicated estate |
 | Its broker | A **leaf** of the members' — no JetStream, no replica, no vote | A cluster **member**, holding replicas (a data node on a leaf is refused) |
 | Disk it needs | Its seats' memory and working rows, nothing else | The whole company's history |
 | Its seats' tools | Read and write through a data node, over the broker | Read and write its own copy, through the same router |
@@ -56,9 +56,9 @@ not a request handler you can route, it is a place where things run:
 | Moves to the satellite | Stays on the core |
 |---|---|
 | The agent instance, its state and its turns | The HTTP API, the dashboard, every integration's webhooks |
-| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the sweeps, the trim, the sandbox waiter, the learning passes |
+| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the sandbox waiter, the maintenance sweep, the identity sweep, the trim, the embeddings, the learning passes, the integration reconcile, the object store's collector, the trash reaper, Chatlet's message horizon and the code-retention duty — on whichever core node holds `workers` |
 | Its LLM calls, its knowledge searches, its tool calls | Every other seat's agents and MCP servers |
-| Its sandbox launches, if the role is sandboxed | The company config, the leases and the ledgers — all shared, in the coordination slot |
+| Its executor runs' launches, and a `direct` or `container` box itself, on the satellite's own host | The company config, the leases and the ledgers — all shared, in the coordination slot |
 
 The MCP row is the one that makes this feature what it is. A seat's
 stdio MCP servers are children of the process holding its lease, so
@@ -74,9 +74,10 @@ Slack message routed to that agent works exactly as before.
 
 Whether a satellite is also a **replica** is the `data` role's answer and
 nothing else's. A satellite that holds data applies every one of the
-company's shared state logs — the work tracker, the knowledge base, the
-search vectors, the identity directory and every node's usage history —
-into its own database, exactly as a core node does. A stateless one applies
+company's shared state logs (Worklet, Doclet, the
+search vectors, the identity directory, every data node's usage history, the
+artifacts, their datastores, Ask Crewlet's conversations and
+Chatlet) into its own database, exactly as a core node does. A stateless one applies
 none of them and asks a data node instead. See
 [what a satellite holds](#what-a-satellite-holds) before you choose a host
 for either.
@@ -201,7 +202,8 @@ company document it fetches from its peers is sealed under the fleet keyring
 and authenticated by that seal; every request it sends a data node's estate
 service is signed under it, because the data node runs a write as the actor
 the request names and the broker's admission vouches for a connection, never
-a request; and a seat in agent mode is handed a per-run token signed under it.
+a request; and every seat's executor run is handed a per-run token signed under
+it.
 `crewlet validate` refuses a Tier A file without it, naming `secrets.keys`;
 generate a key once with `crewlet secrets keygen` and give every node the same
 material.
@@ -212,21 +214,25 @@ without templating the file. There is a `-roles` flag for the same
 reason; labels have no flag, because `${VAR}` already covers it.
 
 `api.port` can stay set, and one config file works for both shapes: a node
-without the `ingress` role binds it for its [probes](#probe-it) alone —
-`/health` and `/ready` — and serves no API, no dashboard and no webhook on it
-(`api_probes_listening`). Every other path answers `404`, or `401` for a write
-or an always-guarded prefix, exactly as an unknown path does on an ingress
-node. The one route it adds is for a seat in
-[agent mode](../concepts/llm-backends.md#the-tool-bridge): its box
-calls the seat's tools back over `/mcp/{token}`, and only the node that runs
-the seat can answer, so a satellite with `CREWLET_MCP_BRIDGE_URL` set serves
-that route (`tool_bridge=true` on the same line) — beside the probes, or on
-`api.public.port` when the file sets one (`public_addr` on the same line names
-it), since the bridge is a route a sandbox outside your network calls (see
-[Deployment → Exposing webhooks without the admin API](deployment.md#exposing-webhooks-without-the-admin-api)).
-With `api.port: 0` the satellite binds nothing at all, which is the shape for a
-host that must accept no connection of any kind — at the price of no probe
-and no agent mode.
+without the `ingress` role binds it for its [probes](#probe-it) —
+`/health` and `/ready` — and serves the network no API, no dashboard and no
+webhook on it (`api_probes_listening`). Every other path answers `404`, or
+`401` for a write or an always-guarded prefix, exactly as an unknown path does
+on an ingress node. A seat pinned here adds no route the network can reach
+either. Its executor's box calls the seat's tools back over
+[`/mcp/{token}`](../concepts/llm-backends.md#the-tool-bridge): a `direct` box,
+a process of the satellite's own host, dials the satellite's `api.port` on
+loopback, where the satellite serves the bridge to its own host alone — so a
+satellite with no address the rest of the fleet can reach runs its `direct`
+seats with nothing to set, provided `api.host` takes every interface or a
+loopback address. A box in any other cell dials the fleet's bridge address —
+the ingress nodes — and the ingress node a call reaches relays it to the
+satellite over the broker connection the satellite already dialled, so give
+the satellite the same `CREWLET_MCP_BRIDGE_URL` as every other node wherever
+such a box runs. With `api.port: 0` the satellite binds nothing at all, which
+is the shape for a host that must accept no connection of any kind — at the
+price of no probe, and of its `direct` boxes needing that address too; its
+seats' executors still reach their tools.
 
 ### 2. Pin the role
 
@@ -278,9 +284,11 @@ crewlet run
 ```
 
 `crewlet migrate` is **per node, not per fleet**. There is no shared database
-to migrate from elsewhere: it applies the pending schema migrations to the one
-local store file its Tier A config names, and every node owns its file
-exclusively.
+to migrate from elsewhere: it applies the pending schema migrations to the two
+local store files its Tier A config names — the node's own and the replicated
+estate beside it — and every node owns its files exclusively. A satellite
+without `data` has nothing to migrate: its store is scratch, and `migrate`
+refuses it.
 
 Or, if you would rather not put roles in the file:
 
@@ -360,8 +368,9 @@ Two failures to know by sight:
 
 ## What a satellite holds
 
-The work tracker, the knowledge base, the search vectors, the identity
-directory and every node's usage history are [replicated state
+Worklet, Doclet, the search vectors, the identity
+directory, every data node's usage history, the artifacts, their datastores,
+Ask Crewlet's conversations and Chatlet are [replicated state
 machines](replication.md).
 Each is one ordered log the whole fleet shares, and every **data** node
 applies every log into its own copy of the rows — so it answers questions
@@ -411,18 +420,18 @@ before you need them:
   that did start: a node applying half the logs serves rows derived from
   one while another's records pile up unapplied, and nothing above it can
   tell that apart from a node that is merely behind.
-- **Every live data node counts for every log's trim.** A data node that
-  has published no position for a log yet is between boot and its first
-  heartbeat, so it is counted at position zero and holds that log's floor
-  for that one heartbeat. A stateless satellite is never counted. (See the
-  counted set in [Retention](retention.md#the-six-terms).)
+- **Every live data node counts for every log's trim.** A live data node
+  that has published no position for a log yet is counted at position zero,
+  and holds that log's floor until its row lands. A stateless satellite is
+  never counted. (See the counted set in
+  [Retention](retention.md#the-six-terms).)
 
 At boot every data node logs the logs it started, whether or not it serves
 HTTP — which on a `roles: [data, seats]` satellite is the one place to look,
 because such a node serves no API on its port:
 
 ```
-statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage]"
+statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage artifacts artifactdata assistant chat code]"
 ```
 
 ---
@@ -437,8 +446,8 @@ the dependency surface before choosing a host for it:
   live there. A network so restricted that neither is reachable cannot
   host a satellite. Its own store file is local, so that one costs
   nothing.
-- **For a stateless satellite, a data node that answers.** Its seats' tracker
-  and knowledge-base tools, their knowledge search and its tool-skill walks
+- **For a stateless satellite, a data node that answers.** Its seats' tracker,
+  knowledge-base and chat tools, their searches and its tool-skill walks
   are each a request to a data node over the broker — no inbound port, the
   same link. It is admitted to claim seats only once a data node answers
   that its own copy is level with its logs, and while none answers its tools
@@ -463,10 +472,10 @@ the dependency surface before choosing a host for it:
   rule, no public URL: the satellite dials out to the broker and
   coordination slot and is never dialled back. That is what makes this
   shape workable in a zone the rest of the fleet is not in. What reaches
-  `api.port` is the orchestrator's probes and, if a seat pinned here runs
-  in agent mode, that seat's box calling its `/mcp/{token}` bridge — the
-  box must be able to dial this node for that one. `api.port: 0` closes
-  both.
+  `api.port` is the orchestrator's probes, and nothing else: a seat pinned
+  here has its executor box's tool calls relayed to it over the broker by
+  an ingress node, so the box never dials this node. `api.port: 0`
+  closes the probes too.
 
 ---
 
@@ -527,25 +536,39 @@ key is rejected, since the company schema forbids unknown fields.)
 
 ---
 
-## Sandboxed seats
+## Agent seats and their boxes
 
-A [sandboxed](../concepts/code-sandbox.md) seat can be pinned like any
-other, with three network facts the engine cannot check for you:
+Every agent seat's executor runs in a [box](../concepts/code-sandbox.md),
+so a seat pinned here brings three facts the engine cannot check
+for you:
 
-- The satellite **launches** the sandbox, so it must reach the sandbox
-  provider (E2B cloud, or your self-hosted `domain`).
-- Whichever node holds the `sandbox-waiter` duty **polls** it. On a
-  satellite (`roles: [seats]`) that duty is on a core node by
+- The satellite **launches** the run. For an `e2b` cell it must reach the
+  sandbox provider (E2B cloud, or your self-hosted `domain`); a `direct` or
+  `container` cell runs on the satellite's own host, where `direct` needs
+  the coding CLI installed, and `container` the container runtime and an
+  image with the coding CLI in it.
+- Whichever node holds the `sandbox-waiter` duty **polls** an `e2b`
+  box. On a satellite (`roles: [seats]`) that duty is on a core node by
   construction — so check that node's reachability too, not just the
-  satellite's.
+  satellite's. A `direct` or `container` box is the satellite's own: it
+  polls, collects and reclaims it itself, with no duty, and a seat that
+  moves to another node asks the satellite to read the box back (see
+  [Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
 - `CREWLET_SANDBOX_OTEL_RECEIVER_URL` must name an address the *sandbox*
   can reach, which means an ingress node. It is explicit config and is
   never derived from whichever node launched the run, so a satellite
-  never advertises itself by accident.
+  never advertises itself by accident. `CREWLET_MCP_BRIDGE_URL`, which
+  every seat's executor box off the satellite's host dials, is the same: an
+  ingress node's address, the same value on every node, and the ingress node
+  a box's call reaches relays it to the satellite over the broker. The one
+  address a satellite derives is its own listener on loopback, which only its
+  own `direct` boxes are handed — for the bridge, and for telemetry where the
+  satellite forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` — and which it serves to
+  its own host alone, so it advertises nothing to the network.
 
-Pinning a sandboxed seat to a node that cannot reach the provider gives
-you a seat that claims cleanly and fails every run. The engine knows
-what a node *says it is*, never what it can talk to.
+Pinning an agent seat to a node that cannot reach its executor's sandbox
+provider gives you a seat that claims cleanly and fails every run. The engine
+knows what a node *says it is*, never what it can talk to.
 
 ---
 

@@ -1,0 +1,62 @@
+-- A purge is served by what each pack holds.
+--
+-- A person's purge request (0087) asks for every object the repository held
+-- when they asked to be judged by a purge — kept because a ref reached it at a
+-- purge's scan, or dropped — and 0087 judged that by when each pack's ROW was
+-- added: served once no live pack was added at or before the request. Every
+-- rewrite adds its outputs at its own position, so a rewrite that judged
+-- nothing made old content read as new. A compaction of the packs a request
+-- waits on — one already in flight when the person asked, or the compactor's
+-- next pass — left no pack a purge's cycle could take, and the request open
+-- for ever with the objects still live; and an expunge on the maintainer's own
+-- schedule, which keeps what a ref drop left within its grace, served the
+-- request at its commit with that content still live in its kept packs.
+--
+-- So every pack row names the position its CONTENT dates from as a purge reads
+-- it, content_position: nothing in the pack reached the repository, or was last
+-- judged by a purge's scan, before it. The applier writes it from the record
+-- and the rows the record retires, so no payload carries it:
+--
+--   - a push's pack: the push's own position — what it brings reaches the
+--     repository there;
+--   - a compaction's outputs, a publication's repack among them, the packs an
+--     expunge's begin writes where it keeps what a ref drop left (its grace,
+--     on the maintainer's own schedule), and an expunge's rescue: the least of
+--     the rows it retires — moving content judges none of it;
+--   - the packs a PURGE's begin writes — one keeping nothing a ref drop left —
+--     its scan's position, where it judged them: what it keeps a ref reached
+--     there, and what it leaves dropping its commit retires, but for the rescue
+--     cut from them, which so dates from that scan too.
+--
+-- A request is SERVED once no pack of its repository dates from before it — at
+-- its own apply, for a repository holding no pack, and at every expunge's
+-- commit, which leaves no pack dropping. Each is one seek of
+-- code_packs_content_idx that stops at its first row. A purge's cycle takes the
+-- live packs whose content dates from before the request it serves.
+--
+-- code_packs_retired carries the column too, so a retired row is the row
+-- code_packs held but its state, as 0080 states.
+--
+-- Every date is derived from the records alone, so a node replaying the log
+-- writes every one again. And every node writes it from the first record it
+-- applies, under the code domain's stated condition (internal/code's
+-- record.go): no build that carries the domain has run without this column —
+-- none of it is on main — so no node holds rows an older build applied while
+-- another holds their dates, which an expunge's apply would judge a request by
+-- apart.
+--
+-- The default, 0, is below every position: a row that never stated its date
+-- reads as content no purge has judged, which can keep a request open and
+-- never serve one. SQLite requires a default of a NOT NULL column added to a
+-- table, and every row the applier writes states its own.
+--
+-- Class: code_packs and code_packs_retired stay reproducible: the column is
+-- written only by the applier, from the records that add and retire packs.
+ALTER TABLE code_packs ADD COLUMN content_position INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE code_packs_retired ADD COLUMN content_position INTEGER NOT NULL DEFAULT 0;
+
+-- (repo_id, content_position): whether any pack of a repository dates from
+-- before a position is the first entry of the repository's range, so a request
+-- is judged in one seek however many packs the repository holds. What it costs
+-- is an entry a pack row, written and deleted with the row — one a push.
+CREATE INDEX code_packs_content_idx ON code_packs (repo_id, content_position);    -- Applier requestServed: whether a pack of the repository dates from before a purge request

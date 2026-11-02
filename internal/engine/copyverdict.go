@@ -9,7 +9,7 @@ import (
 )
 
 // copyVerdict is what the estate's router reads of this node's copy of the
-// estate, PER DOMAIN (ADR-0049): which domains' copies are WRONG
+// estate, PER DOMAIN (ADR-0072): which domains' copies are WRONG
 // ([stateLog.judgeCopy] says what that means), and of the rest, which answer
 // requests now.
 //

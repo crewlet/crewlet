@@ -63,14 +63,14 @@ func TestEveryObjectFieldIsOneItsToolDeclares(t *testing.T) {
 
 // AND A PERSONAL VERB WITH NO HANDLE IS ABOUT THE CALLER.
 //
-// The other half of the same bug: the three that take no argument must still
+// The other half of the same bug: the four that take no argument must still
 // reach their class with an owner, or [authz.ClassOwnRecord] reads the empty
 // one as [authz.ReasonUnnamed] and refuses. Mutating [subject.objectFor]'s
 // personal default to leave the owner empty turns this red.
 func TestAPersonalVerbWithNoHandleIsAboutTheCaller(t *testing.T) {
 	t.Parallel()
 	caller := iam.Principal{Kind: iam.KindSeat, Seat: "ana", Stage: iam.StageActive}
-	for _, name := range []string{"my_work", "mark_inbox", "set_pins"} {
+	for _, name := range []string{"my_work", "mark_inbox", "set_pins", "mark_chat_read"} {
 		got := subjectOf[name].objectFor(caller, nil)
 		if got.Owner != "ana" {
 			t.Errorf("%s with no argument is about %q, want the caller — a "+
@@ -183,5 +183,6 @@ func toolsWithArguments() []tools.Callable {
 		&getArtifact{}, &publishArtifact{}, &updateArtifact{},
 		&shareArtifact{}, &unshareArtifact{}, &uploadArtifactAsset{}, &moveArtifact{},
 		&readArtifactData{}, &queryArtifactData{}, &writeArtifactData{}, &setArtifactSchema{},
+		&editMessage{}, &deleteMessage{}, &markChatRead{},
 	}
 }

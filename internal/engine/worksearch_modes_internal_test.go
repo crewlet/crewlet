@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The item search's mode, through the wiring this package owns.
@@ -27,7 +27,7 @@ import (
 // the one line between them — [itemRanker.RankItems] building the fan-out's
 // query — so every `work_search`, and the dashboard's mode control over it,
 // could rank hybrid whatever was asked while both suites stayed green. These
-// cases stand the real chain up: a [tracker.Searcher] over [itemRanker] over a
+// cases stand the real chain up: a [worklet.Searcher] over [itemRanker] over a
 // [search.FanOut] with a [search.NodeScanner] on an indexed task corpus.
 
 const (
@@ -105,8 +105,8 @@ func modeTestEmbed(t *testing.T, fake *embeddings.Fake, text string) []float32 {
 
 // modeTestSearcher is the production chain over db and index, with vectors
 // as the node's query-vector cache (nil is a node with no provider).
-func modeTestSearcher(db *store.DB, index *search.Indexer, vectors *search.QueryVectors) *tracker.Searcher {
-	return tracker.NewSearcher(db.Replicated().Reader(), itemRanker{
+func modeTestSearcher(db *store.DB, index *search.Indexer, vectors *search.QueryVectors) *worklet.Searcher {
+	return worklet.NewSearcher(db.Replicated().Reader(), itemRanker{
 		index: index,
 		fan: &search.FanOut{
 			Self:    "n1",
@@ -136,7 +136,7 @@ func modeTestSettle(t *testing.T, index *search.Indexer) {
 	t.Fatal("the indexer never settled")
 }
 
-func hitIDs(answer tracker.SearchAnswer) []string {
+func hitIDs(answer worklet.SearchAnswer) []string {
 	out := make([]string, 0, len(answer.Hits))
 	for _, h := range answer.Hits {
 		out = append(out, h.ID)
@@ -183,7 +183,7 @@ func TestWorkSearchHonoursTheModeThroughTheFanOut(t *testing.T) {
 			return slices.Contains(ids, "t.words") && slices.Contains(ids, "t.meaning")
 		}, "both tasks"},
 	} {
-		answer, err := searcher.Search(t.Context(), tracker.SearchQuery{
+		answer, err := searcher.Search(t.Context(), worklet.SearchQuery{
 			Text: modeTestQuery, Mode: tc.mode,
 		})
 		if err != nil {
@@ -234,7 +234,7 @@ func TestASemanticWorkSearchWithNoProviderSaysSoEvenWhileBuilding(t *testing.T) 
 			knowledge.DegradedEmbeddingFailed},
 	} {
 		searcher := modeTestSearcher(db, index, tc.vectors)
-		answer, err := searcher.Search(t.Context(), tracker.SearchQuery{
+		answer, err := searcher.Search(t.Context(), worklet.SearchQuery{
 			Text: modeTestQuery, Mode: knowledge.ModeSemantic,
 		})
 		if err != nil {
@@ -246,9 +246,9 @@ func TestASemanticWorkSearchWithNoProviderSaysSoEvenWhileBuilding(t *testing.T) 
 				tc.name, answer.ServedMode, hitIDs(answer), answer.Degraded, tc.want)
 		}
 
-		if _, err := searcher.Search(t.Context(), tracker.SearchQuery{
+		if _, err := searcher.Search(t.Context(), worklet.SearchQuery{
 			Text: modeTestQuery,
-		}); !errors.Is(err, tracker.ErrIndexBuilding) {
+		}); !errors.Is(err, worklet.ErrIndexBuilding) {
 			t.Errorf("%s: a hybrid search on a building index answered %v, "+
 				"want ErrIndexBuilding", tc.name, err)
 		}
@@ -276,13 +276,13 @@ func TestAWorkSearchHitCarriesItsOwnPriority(t *testing.T) {
 	}
 	index := search.NewIndexerOver(db, db.Replicated().Reader(), []search.LexicalSource{search.TaskSource{}})
 	modeTestSettle(t, index)
-	answer, err := modeTestSearcher(db, index, nil).Search(t.Context(), tracker.SearchQuery{
+	answer, err := modeTestSearcher(db, index, nil).Search(t.Context(), worklet.SearchQuery{
 		Text: modeTestQuery, Mode: knowledge.ModeKeyword,
 	})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if len(answer.Hits) != 1 || answer.Hits[0].Priority != tracker.PriorityHigh {
+	if len(answer.Hits) != 1 || answer.Hits[0].Priority != worklet.PriorityHigh {
 		t.Fatalf("hits = %+v, want t.urgent carrying priority high", answer.Hits)
 	}
 }

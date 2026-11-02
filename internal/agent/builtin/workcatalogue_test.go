@@ -9,12 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // What a model declares is what the tracker judges values against.
 //
-// The coercion table reads seven settings off a [tracker.FieldDef] — the
+// The coercion table reads seven settings off a [worklet.FieldDef]: the
 // precision it refuses extra decimals against, the bounds, the time flag, the
 // multi cap, the unit and the progress mode — and NOTHING could put any of
 // them there: the tool read `options` and dropped the rest on the floor. So
@@ -25,7 +25,7 @@ import (
 //
 // These cases are the mapping, which is the half that lives in THIS package:
 // what a declaration does once it is made is the tracker's own suite
-// (internal/tracker/coerce_test.go pins each rule against the same Config),
+// (internal/worklet/coerce_test.go pins each rule against the same Config),
 // and a second copy of that table here would certify nothing but itself. Each
 // case therefore names the value the declaration buys, so the pair reads as
 // one sentence across the two packages.
@@ -34,16 +34,16 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		config map[string]any
-		want   func(*testing.T, tracker.FieldConfig)
+		want   func(*testing.T, worklet.FieldConfig)
 	}{
 		{
-			// tracker: `3.14` lands at precision 2 and `3.14159` is
+			// worklet: `3.14` lands at precision 2 and `3.14159` is
 			// refused naming the rule. At precision 1, `0.6` lands
 			// and `0.65` is refused — and it could only ever be 0,
 			// so `0.6` was refused on every field this tool made.
 			name:   "precision",
 			config: map[string]any{"precision": json.Number("1")},
-			want: func(t *testing.T, got tracker.FieldConfig) {
+			want: func(t *testing.T, got worklet.FieldConfig) {
 				if got.Precision != 1 {
 					t.Errorf("precision = %d, want 1 — at 0 the field refuses "+
 						"0.6 and the caller has no way to widen it",
@@ -51,13 +51,13 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 				}
 			},
 		}, {
-			// tracker: a value below Min or above Max is refused
+			// worklet: a value below Min or above Max is refused
 			// naming the bound.
 			name: "a range",
 			config: map[string]any{
 				"min": json.Number("1"), "max": json.Number("10"),
 			},
-			want: func(t *testing.T, got tracker.FieldConfig) {
+			want: func(t *testing.T, got worklet.FieldConfig) {
 				if got.Min == nil || *got.Min != 1 {
 					t.Errorf("min = %v, want 1", got.Min)
 				}
@@ -71,7 +71,7 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 			// below zero" would be one declaration.
 			name:   "a floor of zero",
 			config: map[string]any{"min": json.Number("0")},
-			want: func(t *testing.T, got tracker.FieldConfig) {
+			want: func(t *testing.T, got worklet.FieldConfig) {
 				if got.Min == nil {
 					t.Fatal("a minimum of 0 was read as no minimum, so a field " +
 						"that refuses negatives cannot be declared")
@@ -81,23 +81,23 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 				}
 			},
 		}, {
-			// tracker: with Time set a bare date is refused rather
+			// worklet: with Time set a bare date is refused rather
 			// than given an invented midnight, and an instant keeps
 			// its time instead of being truncated to the day.
 			name:   "the time flag",
 			config: map[string]any{"time": true},
-			want: func(t *testing.T, got tracker.FieldConfig) {
+			want: func(t *testing.T, got worklet.FieldConfig) {
 				if !got.Time {
 					t.Error("time = false, so a date field can never hold an " +
 						"instant and every timestamp is truncated")
 				}
 			},
 		}, {
-			// tracker: Multi is the DECLARATION's own flag, and what
+			// worklet: Multi is the DECLARATION's own flag, and what
 			// lets a dropdown hold more than one option.
 			name:   "the multi flag",
 			config: map[string]any{"multi": true},
-			want: func(t *testing.T, got tracker.FieldConfig) {
+			want: func(t *testing.T, got worklet.FieldConfig) {
 				if !got.Multi {
 					t.Error("multi = false, so this field can only ever hold one")
 				}
@@ -105,7 +105,7 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 		}, {
 			name:   "the unit",
 			config: map[string]any{"unit": " h "},
-			want: func(t *testing.T, got tracker.FieldConfig) {
+			want: func(t *testing.T, got worklet.FieldConfig) {
 				if got.Unit != "h" {
 					t.Errorf("unit = %q, want %q trimmed", got.Unit, "h")
 				}
@@ -113,7 +113,7 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 		}, {
 			name:   "the progress mode",
 			config: map[string]any{"progress": "manual"},
-			want: func(t *testing.T, got tracker.FieldConfig) {
+			want: func(t *testing.T, got worklet.FieldConfig) {
 				if got.Progress != "manual" {
 					t.Errorf("progress = %q, want manual", got.Progress)
 				}
@@ -125,7 +125,7 @@ func TestEveryFieldSettingReachesTheDeclaration(t *testing.T) {
 			config: map[string]any{"options": []any{
 				map[string]any{"slug": "high", "name": "High"},
 			}},
-			want: func(t *testing.T, got tracker.FieldConfig) {
+			want: func(t *testing.T, got worklet.FieldConfig) {
 				if len(got.Options) != 1 || got.Options[0].Slug != "high" {
 					t.Fatalf("options = %+v, want the one declared", got.Options)
 				}
@@ -190,18 +190,18 @@ func TestAppliesToReachesTheDeclaration(t *testing.T) {
 // nothing.
 func TestADeclarationRoundTripsFromTheRead(t *testing.T) {
 	t.Parallel()
-	served := tracker.FieldDef{
-		ID: "f1", Slug: "severity", Name: "Severity", Type: tracker.FieldDropdown,
+	served := worklet.FieldDef{
+		ID: "f1", Slug: "severity", Name: "Severity", Type: worklet.FieldDropdown,
 		AppliesTo: []string{"bug"},
-		Config: tracker.FieldConfig{
+		Config: worklet.FieldConfig{
 			Multi: true,
-			Options: []tracker.Option{
+			Options: []worklet.Option{
 				{ID: "o1", Slug: "high", Name: "High"},
 				{ID: "o2", Slug: "low", Name: "Low"},
 			},
 		},
 	}
-	encoded, err := json.Marshal([]tracker.FieldDef{served})
+	encoded, err := json.Marshal([]worklet.FieldDef{served})
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestAnOmittedConfigClearsTheFieldsSettings(t *testing.T) {
 // going out of step with the other two.
 //
 // What this case asserts is the forwarding: the tracker's own suite
-// (internal/tracker/config_test.go) owns the refusal's wording, and if this
+// (internal/worklet/config_test.go) owns the refusal's wording, and if this
 // tool swallowed the key again that suite would stay green while no caller
 // could ever trip it.
 func TestASettingReachesTheGateThatRefusesIt(t *testing.T) {
@@ -283,26 +283,26 @@ func TestASettingReachesTheGateThatRefusesIt(t *testing.T) {
 		name      string
 		fieldType string
 		config    map[string]any
-		carries   func(tracker.FieldConfig) bool
+		carries   func(worklet.FieldConfig) bool
 	}{
 		{
 			name: "a precision on a text field", fieldType: "text",
 			config:  map[string]any{"precision": json.Number("2")},
-			carries: func(c tracker.FieldConfig) bool { return c.Precision == 2 },
+			carries: func(c worklet.FieldConfig) bool { return c.Precision == 2 },
 		}, {
 			name: "options on a number field", fieldType: "number",
 			config: map[string]any{"options": []any{
 				map[string]any{"slug": "high", "name": "High"},
 			}},
-			carries: func(c tracker.FieldConfig) bool { return len(c.Options) == 1 },
+			carries: func(c worklet.FieldConfig) bool { return len(c.Options) == 1 },
 		}, {
 			name: "a time flag on a number field", fieldType: "number",
 			config:  map[string]any{"time": true},
-			carries: func(c tracker.FieldConfig) bool { return c.Time },
+			carries: func(c worklet.FieldConfig) bool { return c.Time },
 		}, {
 			name: "a range on a text field", fieldType: "text",
 			config:  map[string]any{"min": json.Number("1")},
-			carries: func(c tracker.FieldConfig) bool { return c.Min != nil },
+			carries: func(c worklet.FieldConfig) bool { return c.Min != nil },
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -404,7 +404,7 @@ func TestAProjectDeclaresFieldsInTheSameGrammar(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	reg := projectRegistry(t, trk, chartLeads)
-	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+	got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
 		"project": "ENG",
 		"fields": []any{map[string]any{
 			"slug": "effort", "name": "Effort", "type": "number",
@@ -442,10 +442,10 @@ func TestAProjectDeclaresFieldsInTheSameGrammar(t *testing.T) {
 func TestTheDeclarationSchemaNamesEverySetting(t *testing.T) {
 	t.Parallel()
 	catalogue := fieldItems(t, catalogueTool(t, newFakeTracker()).Parameters(),
-		tracker.WriteWorkCatalogueTool, "fields")
+		worklet.WriteWorkCatalogueTool, "fields")
 	project := fieldItems(t, seatTool(t,
 		projectRegistry(t, newFakeTracker(), chartLeads),
-		tracker.WriteProjectTool).Parameters(), tracker.WriteProjectTool, "fields")
+		worklet.WriteProjectTool).Parameters(), worklet.WriteProjectTool, "fields")
 
 	for _, key := range []string{
 		"id", "slug", "name", "description", "type", "applies_to", "required",
@@ -481,22 +481,22 @@ func TestTheDeclarationSchemaNamesEverySetting(t *testing.T) {
 // ---- helpers ------------------------------------------------------------ //
 
 // errTrackerRefusedTheField is the tracker's own refusal, quoted from
-// internal/tracker/config.go's `unusable`, so this package asserts that the
+// internal/worklet/config.go's `unusable`, so this package asserts that the
 // message REACHES a model rather than re-deciding what it says.
 var errTrackerRefusedTheField = &refusal{
-	"tracker: field owner is a text and carries a precision, which only a " +
+	"worklet: field owner is a text and carries a precision, which only a " +
 		"number, progress and rollup field uses — a setting its type cannot " +
 		"read is one stored, replicated and applied by nothing",
 }
 
 // refusal is a refusal the tracker wrote, as it writes one: its own sentence,
-// MARKED [tracker.ErrInvalid] — an unmarked error is the node's failure, which
+// MARKED [worklet.ErrInvalid]; an unmarked error is the node's failure, which
 // is never told in the domain's words.
 type refusal struct{ text string }
 
 func (r *refusal) Error() string { return r.text }
 
-func (r *refusal) Unwrap() error { return tracker.ErrInvalid }
+func (r *refusal) Unwrap() error { return worklet.ErrInvalid }
 
 // catalogueTool is `write_work_catalogue` as an OPERATOR holds it, which is
 // the only registry it is in: a declaration is the company's vocabulary, and a
@@ -511,12 +511,12 @@ func catalogueTool(t *testing.T, trk *fakeTracker) tools.Callable {
 			Reader: trk, Writer: trk.as,
 			CatalogueWriter: func(builtin.Actor) builtin.CatalogueWriter { return trk },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+				return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 			},
 		},
 		Authorize: builtin.Decide(chartLeads),
 	}) {
-		if tool.Name() == tracker.WriteWorkCatalogueTool {
+		if tool.Name() == worklet.WriteWorkCatalogueTool {
 			return tool
 		}
 	}
@@ -528,7 +528,7 @@ func callCatalogue(t *testing.T, trk *fakeTracker, args map[string]any) tools.Re
 	t.Helper()
 	got, err := catalogueTool(t, trk).Call(everyGrant(), args)
 	if err != nil {
-		t.Fatalf("%s: %v", tracker.WriteWorkCatalogueTool, err)
+		t.Fatalf("%s: %v", worklet.WriteWorkCatalogueTool, err)
 	}
 	return got
 }

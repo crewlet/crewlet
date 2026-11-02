@@ -13,8 +13,8 @@ import (
 // THE DASHBOARD DECLARES EXACTLY THE HEALTH THE ENGINE REPORTS.
 //
 // `EngineHealth` (`contract/health.ts`) is the dashboard's type for
-// [api.Health], which the `health` push carries whole — and `HealthAlarms` its
-// type for the alarm count nested in it. It had drifted with
+// [api.Health], which the `health` push carries whole — and `HealthAlarms`,
+// `HealthObjects` and `ConfigAttempt` its types for the structs nested in it. It had drifted with
 // nothing to say so: `stall_lag_seconds` and `unproven_seconds` — the lag that
 // climbs towards the watchdog ending the process, and the seats a teardown
 // stranded — were on the wire and in no declaration, so no screen could read
@@ -40,6 +40,7 @@ func TestTheDashboardDeclaresExactlyTheHealthTheEngineReports(t *testing.T) {
 		{"EngineHealth", reflect.TypeFor[api.Health](), 10},
 		{"HealthAlarms", reflect.TypeFor[api.HealthAlarms](), 2},
 		{"HealthObjects", reflect.TypeFor[api.HealthObjects](), 1},
+		{"ConfigAttempt", reflect.TypeFor[api.ConfigAttempt](), 3},
 	} {
 		t.Run(pair.declaration, func(t *testing.T) {
 			t.Parallel()

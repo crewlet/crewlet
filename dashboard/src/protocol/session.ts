@@ -39,7 +39,13 @@ import { SESSION_QUERIES } from "../contract/domains.ts";
 /** A log a write lands in and a read can wait on. */
 export type SessionDomain = keyof typeof SESSION_QUERIES;
 
-/** A position as the engine spells it: `<stream>@<generation>:<sequence>`. */
+/**
+ * A point on one of the engine's state logs: the three fields
+ * `internal/statelog.Position` marshals, and the parsed form of the string the
+ * engine spells it as, `<stream>@<generation>:<sequence>` ([parsePosition]).
+ * The ONE declaration — `types.ts` re-exports it for the answers that carry
+ * one.
+ */
 export interface LogPosition {
   stream: string;
   generation: number;
@@ -49,7 +55,7 @@ export interface LogPosition {
 /**
  * A position off the wire, or null for one this client cannot read.
  *
- * THE ENGINE'S OWN GRAMMAR (`tracker.ParseLogPosition`), so the value handed
+ * THE ENGINE'S OWN GRAMMAR (`statelog.ParsePosition`), so the value handed
  * back as `min_position` is one the engine will accept: a stream name, then a
  * generation and a sequence that are both non-negative integers.
  */
@@ -85,6 +91,40 @@ export function isLater(next: LogPosition, held: LogPosition): boolean {
   if (next.stream !== held.stream) return true;
   if (next.generation !== held.generation) return next.generation > held.generation;
   return next.seq > held.seq;
+}
+
+/**
+ * What a write moved when its writer cannot name the questions: every one this
+ * tab is asking. A change the Dashboard Assistant applied for the person may
+ * go through any route of the engine (a brand adopted, a seat changed through
+ * the configuration), and no table of routes to questions would stay true, so
+ * every live read asks again, quietly: each `useQuery`, and each `useRest`.
+ * A rare, human-paced event, against a screen that otherwise drew what it held
+ * before the change until it was reloaded.
+ */
+export const EVERY_QUESTION = "*";
+
+/**
+ * Two positions on ONE log in log order: negative when `a` is earlier, zero
+ * when they are the same point, positive when `a` is later.
+ *
+ * GENERATION FIRST, for [isLater]'s reason, then the sequence — and nothing
+ * else, because the log's own order is exact and clock-free where an instant
+ * is neither: the broker's RFC 3339 instant trims trailing zeros, so as text
+ * `…:05.12Z` sorts after `…:05.123456789Z` and `…:05Z` after every fraction
+ * of its own second. For a list ordered by what happened most recently on a
+ * log — a tab's live chat rooms, the rooms it has seen — this is the order.
+ * Two positions on DIFFERENT streams have no order between them, and a caller
+ * comparing across logs has a bug this cannot repair.
+ *
+ * NO POSITION IS EARLIEST OF ALL: a frame from a build that sent none is the
+ * one nothing can say is recent, so it sorts before every position rather
+ * than throwing or comparing as zero by accident.
+ */
+export function comparePositions(a: LogPosition | null, b: LogPosition | null): number {
+  if (!a || !b) return (a ? 1 : 0) - (b ? 1 : 0);
+  if (a.generation !== b.generation) return a.generation - b.generation;
+  return a.seq - b.seq;
 }
 
 /** Heard when a domain was written from this tab: its floor rose. */
@@ -142,7 +182,11 @@ export class SessionFloors {
    * where it reads several — or one the write names as moving beside it.
    */
   static moves(kind: string, domain: SessionDomain | null, refreshes: readonly string[]): boolean {
-    return (domain !== null && domainsOf(kind).includes(domain)) || refreshes.includes(kind);
+    return (
+      (domain !== null && domainsOf(kind).includes(domain)) ||
+      refreshes.includes(kind) ||
+      refreshes.includes(EVERY_QUESTION)
+    );
   }
 
   /**

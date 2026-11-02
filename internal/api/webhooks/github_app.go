@@ -3,14 +3,17 @@ package webhooks
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"html/template"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -227,7 +230,9 @@ const githubAppTemplate = `<!doctype html>
           }
           clearInterval(tick);
           note.textContent = "Taking you to GitHub.";
-          window.location.href = link.href;
+          // REPLACED, NOT PUSHED: this page's address carries the spent
+          // link, so Back from GitHub's install page asked for it again.
+          window.location.replace(link.href);
         }, 1000);
         // A PERSON WHO CLICKS FIRST IS NOT SENT TWICE: the timer would fire
         // mid-navigation and reload GitHub's install page under them.
@@ -246,10 +251,10 @@ const githubAppTemplate = `<!doctype html>
 // derived from: its own inline style and script, by hash, and nothing else.
 //
 // A view for each branch that holds a block, because only the install arrival
-// carries the script. The page is unauthenticated and renders a seat name and
-// GitHub's refusal text from the query, and it shares an origin with the
-// dashboard, whose requests carry a signed-in person's session: a hash policy
-// means that even markup the template failed to escape could run nothing.
+// carries the script. The page is unauthenticated and renders a seat's handle
+// from the query, and it shares an origin with the dashboard, whose requests
+// carry a signed-in person's session: a hash policy means that even markup the
+// template failed to escape could run nothing.
 var githubAppPolicyViews = []any{
 	githubAppView{Heading: "App not created", Error: "refused"},
 	githubAppView{
@@ -289,12 +294,64 @@ type githubAppView struct {
 type AppCompleter interface {
 	// Complete converts the one-time code and records the app on the seat
 	// the state names, returning that seat.
+	//
+	// A FAILURE SAYS WHAT THE PERSON IS TOLD: an error in its chain that is
+	// a [toldFailure] carries what went wrong and what to do, in the
+	// completer's words, with the status the page answers, whether an app
+	// now exists at GitHub, whether anything is left to do and, for a stop
+	// whose outcome isn't known yet, its own heading, because only the
+	// completer knows which step stopped. The error's own text is the log's.
 	Complete(ctx context.Context, code, state string) (string, error)
 
 	// InstallURL is where the operator installs the app a seat now has,
 	// or empty when it has none yet.
-	InstallURL(seat string) string
+	InstallURL(ctx context.Context, seat string) string
 }
+
+// toldFailure is a failure that carries what a person is told about it: see
+// [AppCompleter.Complete].
+type toldFailure interface {
+	// Told is what happened and what to do about it.
+	Told() string
+	// Status is the status the page answers with.
+	Status() int
+	// Created reports whether GitHub had handed the app over when the
+	// creation stopped, which the heading says: "App not created" above a
+	// sentence that begins "GitHub created the app" was the page's most
+	// prominent line contradicting its body.
+	Created() bool
+	// Done reports a request with nothing left to do, which the page says
+	// as done rather than as a failure.
+	Done() bool
+	// Heading is the stop's own heading, which the agent's handle follows,
+	// where the completer words one, and empty where Created decides it. A
+	// record whose activation went unanswered may already be the agent's,
+	// and "App created, but not finished" above it would deny the agent an
+	// app it may be running.
+	Heading() string
+}
+
+// What the return page tells a person about a creation that did not finish,
+// where nothing in the failure said. Every sentence names what to do, and
+// none quotes an error: the page is a person's, and the error is the log's.
+const (
+	// appNotFinished is a failure the completer did not word: this engine's
+	// own fault, which a person reports rather than retries blindly.
+	appNotFinished = "Crewlet couldn't finish creating the app. Ask an admin to check " +
+		"Crewlet's logs, then start again from Company › Integrations."
+
+	// appNoCode is a creation GitHub sent back without its one-time code.
+	appNoCode = "GitHub didn't send back a code, so Crewlet couldn't finish creating " +
+		"the app. Start again from Company › Integrations."
+
+	// appCancelled is GitHub's `access_denied`: the person declined.
+	appCancelled = "The app creation was cancelled on GitHub. Start again from " +
+		"Company › Integrations when you're ready."
+
+	// appRefused is any other refusal GitHub sent back.
+	appRefused = "GitHub didn't create the app. Check that you can create apps for " +
+		"the organization, then start again from Company › Integrations."
+)
 
 // GitHubRechecker asks the reconcile loop to look at GitHub NOW.
 //
@@ -355,10 +412,14 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 
 	switch {
 	case q.Get("error") != "":
-		// GitHub declines with a reason in the query, and it is the
-		// operator's to read: they cancelled, or they may not create
-		// apps on that organization.
+		// GitHub declines with a reason in the query: they cancelled, or
+		// they may not create apps on that organization. WORDED HERE and
+		// never quoted: anybody can send a browser to this page with any
+		// text in the query, and this page is on the dashboard's origin, so
+		// the query's words are the log's.
 		view.Heading, view.Error, status = "App not created", describeRefusal(q), http.StatusBadRequest
+		log.Warn("github_app_create_refused", "error", q.Get("error"),
+			"description", q.Get("error_description"))
 
 	case strings.TrimSpace(q.Get("installed")) != "":
 		// THE INSTALL ARRIVAL. GitHub names the seat and the installation
@@ -385,7 +446,14 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 		// always said so: this is word for word the message it already
 		// showed whenever the write failed.
 		view.Heading = "App installed for"
-		view.Seat = strings.TrimSpace(q.Get("installed"))
+		// ONLY A HANDLE IS NAMED: the query is whatever the caller typed,
+		// and anything that cannot be a seat's handle is no seat this
+		// page should claim was installed for. The page then names none.
+		if seat := strings.TrimSpace(q.Get("installed")); iam.ValidSeatHandle(seat) {
+			view.Seat = seat
+		} else {
+			view.Heading = "App installed"
+		}
 		view.Done = true
 		// AND THE LOOP IS ASKED TO LOOK NOW, which is the half that makes
 		// the sentence below true.
@@ -406,12 +474,19 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 		// a build with no loop wired — is a fall back to the cadence
 		// rather than a failure, and the operator is told which they are
 		// waiting on rather than a number that is right in one case.
+		//
+		// "THIS AGENT" ONLY BESIDE A HANDLE: a page that names none says
+		// "the agent", or the sentence points at nothing on it.
+		agent := "the agent"
+		if view.Seat != "" {
+			agent = "this agent"
+		}
 		if r.askRecheck() {
 			view.Message = "Crewlet is looking at GitHub now. GitHub's page " +
-				"under Company › Integrations shows this agent ready in a moment."
+				"under Company › Integrations shows " + agent + " ready in a moment."
 		} else {
 			view.Message = "Crewlet picks the installation up on its next " +
-				"reconcile pass, within a minute if this agent was set up " +
+				"reconcile pass, within a minute if " + agent + " was set up " +
 				"just now and up to ten minutes on a surface that has been " +
 				"waiting a while. Press Check now on GitHub's Agents tab, under " +
 				"Company › Integrations, to look immediately."
@@ -419,22 +494,50 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 
 	case strings.TrimSpace(q.Get("code")) == "":
 		view.Heading, status = "App not created", http.StatusBadRequest
-		view.Error = "GitHub did not send a code, so there is nothing to convert."
+		view.Error = appNoCode
 
 	default:
 		seat, err := r.appFlow.Complete(req.Context(), q.Get("code"), q.Get("state"))
+		var told toldFailure
 		switch {
+		case err != nil && errors.As(err, &told) && told.Done():
+			// A LINK PRESENTED AGAIN WHOSE AGENT HAS ITS APP: the person's
+			// own refresh of the page that finished the creation, or Back
+			// from GitHub's install page. Nothing is wrong, so nothing says
+			// so, and the install stays one button away without a
+			// countdown sending them back to GitHub uninvited.
+			view.Heading, view.Seat, view.Done = "App created for", seat, true
+			view.Message = told.Told()
+			view.InstallURL = r.appFlow.InstallURL(req.Context(), seat)
+			log.Info("github_app_link_reused", "seat", seat, "error", err.Error())
 		case err != nil:
-			view.Heading, status = "App not created", http.StatusBadRequest
-			// NAMED, NEVER QUOTED FROM THE RESPONSE. The conversion body
-			// carries the app's private key, so the message an operator
-			// reads is this engine's own wording.
-			view.Error = err.Error()
+			// THE COMPLETER'S WORDS, NEVER THE ERROR'S. The error names
+			// the step's own machinery (a link refused, a secret it was
+			// sealing, a token the config refused) and a person can act on
+			// none of it: what they can do depends on which step stopped,
+			// which only the completer knows. The error is the log's. So
+			// is the status: 400 on every stop filed a key this engine
+			// failed to save under the person's mistake.
+			view.Error, status = appNotFinished, http.StatusInternalServerError
+			created, heading := false, ""
+			if errors.As(err, &told) && told.Told() != "" {
+				view.Error, created, heading = told.Told(), told.Created(), told.Heading()
+				if failed := told.Status(); failed >= http.StatusBadRequest {
+					status = failed
+				}
+			}
 			view.Seat = seat
+			view.Heading = stoppedHeading(created, seat != "")
+			if heading != "" {
+				// THE COMPLETER'S OWN HEADING, where the stop has one: an
+				// outcome it can't confirm yet is headed as that, never as
+				// a creation that stopped.
+				view.Heading = heading
+			}
 			log.Warn("github_app_create_failed", "seat", seat, "error", err.Error())
 		default:
 			view.Seat = seat
-			view.InstallURL = r.appFlow.InstallURL(seat)
+			view.InstallURL = r.appFlow.InstallURL(req.Context(), seat)
 			view.Done = view.InstallURL == ""
 			if view.InstallURL != "" {
 				view.InstallDelay = installCountdownSeconds
@@ -447,6 +550,11 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 	page, policy := githubAppPage()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	pagepolicy.Set(w.Header(), policy)
+	// NEVER STORED: what this page says is what one request found, and its
+	// address carries a link that is spent the first time it is used, so a
+	// copy a browser kept answered a refresh with a creation's outcome
+	// after the agent's state had moved on.
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	// Rendered straight to the response: the template is a constant this
 	// package's tests render, so the only way this errors is a broken
@@ -456,19 +564,34 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// describeRefusal turns GitHub's own refusal into a sentence.
+// stoppedHeading is the heading over a creation that stopped: whether GitHub
+// had handed the app over, which the sentence below it goes on to say, and
+// whether a handle follows it. "App not created" beside a handle read as a
+// sentence missing its word, and above "GitHub created the app" it was the
+// page's most prominent line saying the opposite of its body.
+func stoppedHeading(created, named bool) string {
+	switch {
+	case created && named:
+		return "App created, but not finished, for"
+	case created:
+		return "App created, but not finished"
+	case named:
+		return "App not created for"
+	default:
+		return "App not created"
+	}
+}
+
+// describeRefusal is GitHub's own refusal as the person is told it: a
+// cancellation, or any other refusal, in this page's words.
 //
-// Its `error_description` is written for a person and is the better text when
-// it is there; the bare code is all there is otherwise.
-func describeRefusal(q map[string][]string) string {
-	first := func(key string) string {
-		if values := q[key]; len(values) > 0 {
-			return strings.TrimSpace(values[0])
-		}
-		return ""
+// NOT ITS `error_description`, which was shown as it came: GitHub writes it
+// for a person, but this route is unauthenticated, so it is whatever the
+// address that brought the browser here says, printed on the dashboard's own
+// origin as though Crewlet said it. The log keeps GitHub's words.
+func describeRefusal(q url.Values) string {
+	if strings.TrimSpace(q.Get("error")) == "access_denied" {
+		return appCancelled
 	}
-	if described := first("error_description"); described != "" {
-		return described
-	}
-	return "GitHub refused the app creation: " + first("error")
+	return appRefused
 }

@@ -46,12 +46,14 @@
  * the turns that ENDED — `agent_turn_completed` with `suspended=false`, one
  * record per turn, since a turn that parked on a coding run writes a
  * completion for the segment that parked it — counted by the engine over the
- * whole window on every node, with the failed share of each bar drawn at its
- * foot. The list is paged; the axis is not.
+ * whole window on every data node, with the failed share of each bar drawn at
+ * its foot. The list is paged; the axis is not.
  */
 
 import { useMemo } from "react";
-import { useParam } from "~/app/router.tsx";
+import { useNavigator, useParam } from "~/app/router.tsx";
+import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { choiceKey, urlAction, windowKey } from "~/app/assistant/urlAction.ts";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import {
@@ -64,20 +66,22 @@ import {
   TableEntityCell,
   TableNumberCell,
   Tag,
+  peekClickHandler,
+  TimeRangePicker,
 } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { spanWords, useTimeRange } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { TurnWhatCell, UnsettledCell, plainSeat } from "~/app/frame/cells.tsx";
@@ -116,6 +120,18 @@ export const TURN_PAGE = 100;
 
 /** The two orders the engine's turn list answers in (`store.TurnQuery.Sort`). */
 export const TURN_SORTS = ["-started", "-tokens"] as const;
+
+/** The orders as the Order control words them, one per [TURN_SORTS]. */
+const TURN_ORDERS: { value: (typeof TURN_SORTS)[number]; label: string }[] = [
+  { value: "-started", label: "Newest" },
+  { value: "-tokens", label: "Most tokens" },
+];
+
+/** Which turns the list holds, as the control words them; every turn is the key's absence. */
+const WHICH_TURNS = [
+  { value: "true", label: "Carried a failure" },
+  { value: "false", label: "Clean" },
+];
 
 /**
  * What the axis says while the list is narrowed by failure.
@@ -180,12 +196,9 @@ export function Turns() {
     [since, until, sort, seat, failed],
   );
   // A NEW FILTER OR WINDOW IS A NEW LIST, and its first page is never
-  // followed by the last one's second; and from the press of Load older the
-  // first page is HELD (`lib/usePaged.ts`): its cursor was minted from its
-  // last turn, and read again under turns that ended since it would push its
-  // last ones out of both pages.
-  const hold = usePageHold<TurnsAnswer>(params);
-  const list = useQuery("turns", params, { pollMs: 20_000, hold: hold.holding });
+  // followed by the last one's second; one that moves while older pages are
+  // drawn is joined to them by the pager (`lib/usePaged.ts`).
+  const list = useQuery("turns", params, { pollMs: 20_000 });
   const series = useQuery(
     "event_series",
     { ...ENDED_TURNS, since, until, bucket, ...(seat ? { seat } : {}) },
@@ -196,8 +209,8 @@ export function Turns() {
   // shown, so "Load older" is offered on an empty page too. It is OPAQUE:
   // handed back as `before` exactly as it came, never built from a row.
   const paged = usePaged(
-    hold,
     list,
+    params,
     (before) => socket.query("turns", { ...params, before }),
     turnsOf,
     turnIdOf,
@@ -242,13 +255,36 @@ export function Turns() {
     [index.seats],
   );
 
+  // --- assistant page actions (WP12) ---
+  // A VIEW OF WHAT THE READER CAN ALREADY READ, written as the controls below
+  // write it: a seat from the menu's own agent seats, the two switches, and
+  // the window from this screen's offer.
+  const nav = useNavigator();
+  useAssistantContext({
+    actions: urlAction("turns.filter.apply", {
+      scope: "Turns list filters and window (view only)",
+      keys: {
+        window: windowKey(TURN_OFFER, () => now),
+        seat: choiceKey(
+          "Seat",
+          seats.map((s) => ({ value: s.handle, label: s.name })),
+          "filter",
+        ),
+        failed: choiceKey("Which turns", WHICH_TURNS, "filter"),
+        sort: choiceKey("Order", TURN_ORDERS, "filter", "-started"),
+      },
+      nav,
+    }),
+  });
+  // --- end assistant page actions (WP12) ---
+
   const total = series.data?.total ?? 0;
   const failedTotal = series.data?.failed ?? 0;
 
   return (
     <>
       <PageActions>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
       </PageActions>
 
       <Card>
@@ -276,8 +312,8 @@ export function Turns() {
             bucket={bucket}
             total={total}
             noun="turn"
-            // THE ENGINE'S COUNT, over the whole window and every node that
-            // answered — never the page this screen happens to hold.
+            // THE ENGINE'S COUNT, over the whole window and every data node
+            // that answered — never the page this screen happens to hold.
             over="window"
             axis
             now={now}
@@ -314,11 +350,7 @@ export function Turns() {
           label="Which turns"
           value={failed || "all"}
           onValueChange={(v) => setFailed(v === "all" ? "" : v)}
-          options={[
-            { value: "all", label: "All" },
-            { value: "true", label: "Carried a failure" },
-            { value: "false", label: "Clean" },
-          ]}
+          options={[{ value: "all", label: "All" }, ...WHICH_TURNS]}
         />
         <span className="spacer" />
         <SegmentedControl
@@ -327,10 +359,7 @@ export function Turns() {
           label="Order"
           value={sort}
           onValueChange={setSort}
-          options={[
-            { value: "-started", label: "Newest" },
-            { value: "-tokens", label: "Most tokens" },
-          ]}
+          options={TURN_ORDERS}
         />
       </div>
 
@@ -362,18 +391,19 @@ export function Turns() {
           rowHref={(t) => peekHref({ kind: "turn", id: t.turn_id })}
           onRowActivate={(t, e) => {
             const go = () => openPeek({ kind: "turn", id: t.turn_id });
-            // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's
+            // THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's
             // one copy of "which clicks mean elsewhere" and reads a mouse
             // event; the `enter` chord carries no button at all.
             if (!("button" in e)) {
               go();
               return;
             }
-            rowPeekHandler(go)?.(e);
+            peekClickHandler(go)?.(e);
           }}
           columns={[
             {
               key: "started",
+              align: "right",
               header: "Started",
               shrink: true,
               cell: (t) => <TableDateCell value={t.started_at} now={now} />,
@@ -394,6 +424,10 @@ export function Turns() {
             {
               key: "summary",
               header: "What it did",
+              // THE POINT OF THE LIST, so it has a floor, and the figures give
+              // way before it does (`drop`): beside the assistant it was drawn
+              // 15px wide, one letter of its head over "n…" in every row.
+              floor: "10rem",
               // A TURN STILL RUNNING says what it is doing and what it is on,
               // from the push (`runningNow`): the store's row has neither yet.
               cell: (t) => {
@@ -427,6 +461,7 @@ export function Turns() {
               header: <span title="Self-iterate rounds">Iterations</span>,
               label: "Iterations",
               shrink: true,
+              drop: 1,
               align: "right",
               cell: (t) =>
                 t.complete ? (
@@ -439,6 +474,7 @@ export function Turns() {
               key: "tokens",
               header: "Tokens",
               shrink: true,
+              drop: 3,
               align: "right",
               cell: (t) =>
                 t.complete ? (
@@ -451,6 +487,7 @@ export function Turns() {
               key: "took",
               header: "Took",
               shrink: true,
+              drop: 2,
               align: "right",
               // A RUNNING TURN HAS NO DURATION, and its zero would make the
               // busiest turns look like the cheapest — so the cell is handed
@@ -473,7 +510,7 @@ export function Turns() {
             <Button
               size="small"
               variant="secondary"
-              onClick={paged.older}
+              onClick={paged.next}
               disabled={paging}
               loading={paging}
             >
@@ -491,15 +528,6 @@ export function Turns() {
           {rows.length > 0 && (
             <span className="t-caption">{plural(rows.length, "turn")} listed</span>
           )}
-          {/* SAID ONLY ONCE IT IS TRUE: until then the first page is read
-              again every twenty seconds. */}
-          {paged.held && (
-            <span className="t-caption">
-              {sort === "-started"
-                ? "Paused while you page back."
-                : "Paused while more are loaded."}
-            </span>
-          )}
         </div>
       )}
     </>
@@ -511,7 +539,7 @@ export function barsOf(series: EventSeries | null | undefined): Bar[] {
   return (series?.bars ?? []).map((b) => ({ at: b.at, count: b.count, failed: b.failed }));
 }
 
-/** What a turn IS beyond finished — re-run, parked, running, failed — or nothing. */
+/** What a turn IS beyond finished — re-run, parked, stopped, running, failed — or nothing. */
 function TurnState({
   turn: t,
   reruns,
@@ -523,7 +551,8 @@ function TurnState({
   open: OpenState;
 }) {
   const rerun = !!t.work_key && (reruns.get(t.work_key) ?? 0) > 1;
-  if (!rerun && !t.parked && (open === "" || open === "unknown") && !t.failed) return null;
+  if (!rerun && !t.parked && !t.stopped && (open === "" || open === "unknown") && !t.failed)
+    return null;
   return (
     <span className="row gap-1">
       {/* A RE-RUN SAYS SO. A turn id names one run, so a trigger that failed
@@ -541,6 +570,13 @@ function TurnState({
       {t.parked && (
         <Tag appearance="outline" title="Waiting on its coding run">
           parked
+        </Tag>
+      )}
+      {/* A PERSON STOPPED IT, which is not a failure and is not drawn as one:
+          the neutral outline the other states that are nobody's fault wear. */}
+      {t.stopped && (
+        <Tag appearance="outline" title="A person paused the seat and stopped this turn">
+          stopped
         </Tag>
       )}
       {/* NO COMPLETION RECORD is two states, and the overlay tells them apart

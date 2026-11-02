@@ -2,9 +2,12 @@ package code_test
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"reflect"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -164,16 +167,17 @@ func TestAFindingIsPlacedWithoutAReadWhereTheRowsSay(t *testing.T) {
 		finding("new-side", 1, code.SideNew)}
 
 	rev := measured(2, "head-2", oidOf("base"), 20, 18)
-	placed, reanchor := code.PlaceFindings(rev, page)
+	placed, reads := code.PlaceFindings(rev, page)
 	if want := map[string]code.FindingPlace{"here": {Start: 10, End: 12}}; !maps.Equal(placed, want) {
 		t.Errorf("placed without a read %v, want %v", placed, want)
 	}
-	want := &code.ReanchorQuery{Base: oidOf("base"), Head: rev.Head, Anchors: []code.LineAnchor{
+	want := []*code.ReanchorQuery{{Base: oidOf("base"), Head: rev.Head, Anchors: []code.LineAnchor{
 		{ID: "old-side", Path: "retry.go", Side: code.SideOld, BlobOID: oidOf("old-side"), Start: 10, End: 12},
-		{ID: "new-side", Path: "retry.go", Side: code.SideNew, BlobOID: oidOf("new-side"), Start: 10, End: 12}}}
-	if !reflect.DeepEqual(reanchor, want) {
-		t.Fatalf("the re-anchoring asked is %+v, want %+v", reanchor, want)
+		{ID: "new-side", Path: "retry.go", Side: code.SideNew, BlobOID: oidOf("new-side"), Start: 10, End: 12}}}}
+	if !reflect.DeepEqual(reads, want) {
+		t.Fatalf("the re-anchorings asked are %+v, want %+v", reads, want)
 	}
+	reanchor := reads[0]
 	if err := code.PlaceAnchors(placed, reanchor, &code.ReanchorAnswer{Anchors: []code.Reanchored{
 		{ID: "new-side", Start: 14, End: 16}, {ID: "old-side", Gone: true}}}); err != nil {
 		t.Fatalf("a whole answer was refused: %v", err)
@@ -194,18 +198,215 @@ func TestAFindingIsPlacedWithoutAReadWhereTheRowsSay(t *testing.T) {
 	}
 
 	unrelated := measured(2, "head-2", "", 20, 18)
-	placed, reanchor = code.PlaceFindings(unrelated, page)
-	if placed["old-side"] != (code.FindingPlace{Gone: true}) || reanchor == nil ||
-		len(reanchor.Anchors) != 1 || reanchor.Anchors[0].ID != "new-side" || reanchor.Base != "" {
+	placed, reads = code.PlaceFindings(unrelated, page)
+	if placed["old-side"] != (code.FindingPlace{Gone: true}) || len(reads) != 1 ||
+		len(reads[0].Anchors) != 1 || reads[0].Anchors[0].ID != "new-side" || reads[0].Base != "" {
 		t.Errorf("in a revision sharing no history placed %v and asked %+v, want the old side gone and the new "+
-			"side one anchor", placed, reanchor)
+			"side one anchor", placed, reads)
 	}
 	unmeasured := code.RevisionRow{N: 2, Head: oidOf("head-2"), Position: atSeq(20)}
-	placed, reanchor = code.PlaceFindings(unmeasured, page)
-	if _, held := placed["old-side"]; held || reanchor == nil || len(reanchor.Anchors) != 1 {
-		t.Errorf("in an unmeasured revision placed %v and asked %+v, want the old side unplaced", placed, reanchor)
+	placed, reads = code.PlaceFindings(unmeasured, page)
+	if _, held := placed["old-side"]; held || len(reads) != 1 || len(reads[0].Anchors) != 1 {
+		t.Errorf("in an unmeasured revision placed %v and asked %+v, want the old side unplaced", placed, reads)
 	}
-	if placed, reanchor = code.PlaceFindings(rev, page[:1]); reanchor != nil || len(placed) != 1 {
-		t.Errorf("a page of the revision's own findings asked %+v, want no read", reanchor)
+	if placed, reads = code.PlaceFindings(rev, page[:1]); reads != nil || len(placed) != 1 {
+		t.Errorf("a page of the revision's own findings asked %+v, want no read", reads)
+	}
+}
+
+// A PAGE OF FINDINGS IS PLACED WHATEVER ITS SIZE: a git node's re-anchoring
+// places at most code.MaxReanchors anchors, and the reader serves a page of up
+// to code.MaxFindingsPerPage findings, every one of which may need one — so a
+// page past one read is cut into reads that each pass the git node's own
+// check, that together ask every anchor once, and that keep the anchors of
+// one pair of blobs in one read wherever the page allows; and every read's
+// answer is folded in, however the reads interleave, while a read that is
+// refused answers that refusal — the first in the reads' order.
+//
+// Mutations: one read of every anchor → the read the git node refuses, red;
+// cut the page in its own order → a pair split across reads, red; fold in only
+// the first read's answer → findings unplaced, red; answer the last refusal →
+// the wrong refusal, red.
+func TestAPageOfFindingsIsPlacedWhateverItsSize(t *testing.T) {
+	t.Parallel()
+	rev := measured(2, "head-2", oidOf("base"), 20, 18)
+	// A FULL PAGE raised on revision 1, interleaving its files, so a page
+	// cut in its own order puts each file in every read: file i%5, each
+	// file's findings on one blob of it.
+	var page []code.FindingRow
+	for i := range code.MaxFindingsPerPage {
+		path := fmt.Sprintf("pkg/file%d.go", i%5)
+		page = append(page, code.FindingRow{ID: fmt.Sprintf("f%03d", i), Revision: 1, Path: path,
+			Side: code.SideNew, BlobOID: oidOf(path), LineStart: i + 1, LineEnd: i + 1})
+	}
+	placed, reads := code.PlaceFindings(rev, page)
+	if len(placed) != 0 {
+		t.Errorf("placed %d findings of another revision without a read, want none", len(placed))
+	}
+	wantReads := (code.MaxFindingsPerPage + code.MaxReanchors - 1) / code.MaxReanchors
+	if len(reads) != wantReads {
+		t.Fatalf("a page of %d findings asked %d re-anchorings, want %d of at most %d", len(page), len(reads),
+			wantReads, code.MaxReanchors)
+	}
+	asked := map[string]int{}
+	pairIn := map[string]map[int]bool{}
+	for i, q := range reads {
+		if err := (code.GitQuery{Kind: code.GitReanchor, RepoID: "01920000-0000-7000-8000-000000000001",
+			Asker:    code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ci"},
+			Reanchor: q}).Validate(); err != nil {
+			t.Errorf("re-anchoring %d is one no git node takes: %v", i, err)
+		}
+		for _, a := range q.Anchors {
+			asked[a.ID]++
+			if pairIn[a.BlobOID] == nil {
+				pairIn[a.BlobOID] = map[int]bool{}
+			}
+			pairIn[a.BlobOID][i] = true
+		}
+	}
+	for _, f := range page {
+		if asked[f.ID] != 1 {
+			t.Errorf("finding %s was asked in %d re-anchorings, want 1", f.ID, asked[f.ID])
+		}
+	}
+	// 40 findings a file, 64 a read: a file is split across two reads at
+	// most where its findings sit together, and every read holds every file
+	// where they do not.
+	for blob, in := range pairIn {
+		if len(in) > 2 {
+			t.Errorf("the pair of blob %s was diffed by %d reads, want at most 2", blob, len(in))
+		}
+	}
+
+	ask := func(q *code.ReanchorQuery) (*code.ReanchorAnswer, error) {
+		out := &code.ReanchorAnswer{}
+		for _, a := range q.Anchors {
+			out.Anchors = append(out.Anchors, code.Reanchored{ID: a.ID, Start: a.Start + 1, End: a.End + 1})
+		}
+		return out, nil
+	}
+	placed, err := code.Place(rev, page, ask)
+	if err != nil {
+		t.Fatalf("a page answered whole was refused: %v", err)
+	}
+	for _, f := range page {
+		if at, ok := placed[f.ID]; !ok || at.Start != f.LineStart+1 {
+			t.Errorf("finding %s placed %+v (%t), want line %d", f.ID, at, ok, f.LineStart+1)
+		}
+	}
+
+	// THE FIRST REFUSAL IN THE READS' ORDER, however late it arrives: the
+	// first read is refused only once the second has been.
+	first, second := errors.New("first"), errors.New("second")
+	secondDone := make(chan struct{})
+	refusing := func(q *code.ReanchorQuery) (*code.ReanchorAnswer, error) {
+		switch q.Anchors[0].ID {
+		case reads[0].Anchors[0].ID:
+			<-secondDone
+			return nil, first
+		case reads[1].Anchors[0].ID:
+			defer close(secondDone)
+			return nil, second
+		}
+		return ask(q)
+	}
+	if _, err := code.Place(rev, page, refusing); !errors.Is(err, first) {
+		t.Errorf("a page two of whose reads were refused answered %v, want the first read's refusal", err)
+	}
+	misplacing := func(q *code.ReanchorQuery) (*code.ReanchorAnswer, error) {
+		out, _ := ask(q)
+		out.Anchors = out.Anchors[1:]
+		return out, nil
+	}
+	if _, err := code.Place(rev, page, misplacing); !errors.Is(err, code.ErrMisplaced) {
+		t.Errorf("a read answering one anchor short answered %v, want ErrMisplaced", err)
+	}
+}
+
+// meeting is a barrier of two reads, each answering whether the other arrived
+// while it waited: a read made only after the other has answered meets
+// nobody. meetWait bounds the wait — far past a loaded runner's scheduling
+// delay, and short enough that a read made alone fails the case quickly.
+type meeting struct {
+	arrived atomic.Int32
+	both    chan struct{}
+}
+
+const meetWait = 5 * time.Second
+
+func newMeeting() *meeting { return &meeting{both: make(chan struct{})} }
+
+func (m *meeting) meet() bool {
+	if m.arrived.Add(1) == 2 {
+		close(m.both)
+	}
+	select {
+	case <-m.both:
+		return true
+	case <-time.After(meetWait):
+		return false
+	}
+}
+
+// A CHANGE'S REVISIONS ARE READ AT ONCE: once its head is read, the revision
+// asked about and the earlier one an interdiff reads from need nothing of
+// each other, so neither waits for the other's answer — a node reading the
+// estate through another pays one round trip for the two; the head is never
+// read again; and of two refusals the one answered is the revision asked
+// about's, however late it arrives.
+//
+// Mutations: AtOnce reads one after the other → the two reads never meet,
+// red; read the head again → a read too many, red; answer the first refusal
+// to arrive → the earlier revision's, red.
+func TestAChangesRevisionsAreReadAtOnce(t *testing.T) {
+	t.Parallel()
+	head := measured(3, "head-3", oidOf("base"), 30, 28)
+	m := newMeeting()
+	var reads atomic.Int32
+	rev, earlier, err := code.ChangeRevisions(head, 2, 1, func(n int64) (code.RevisionRow, error) {
+		reads.Add(1)
+		if !m.meet() {
+			return code.RevisionRow{}, fmt.Errorf("revision %d was read alone", n)
+		}
+		return measured(n, fmt.Sprintf("head-%d", n), oidOf("base"), uint64(10*n), uint64(10*n-2)), nil
+	})
+	if err != nil || rev.N != 2 || earlier == nil || earlier.N != 1 || reads.Load() != 2 {
+		t.Fatalf("revisions 2 and 1 were read as %d, %+v in %d reads (%v), want each once, at once", rev.N, earlier,
+			reads.Load(), err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		n, since  int64
+		wantReads int32
+	}{
+		{"the head by its number", 3, 0, 0},
+		{"the head by default", 0, 0, 0},
+		{"the head since an earlier revision", 3, 1, 1},
+	} {
+		var reads atomic.Int32
+		rev, earlier, err := code.ChangeRevisions(head, tc.n, tc.since, func(n int64) (code.RevisionRow, error) {
+			reads.Add(1)
+			return measured(n, fmt.Sprintf("head-%d", n), "", 0, 0), nil
+		})
+		if err != nil || rev.N != head.N || rev.Head != head.Head || reads.Load() != tc.wantReads ||
+			(earlier != nil) != (tc.since != 0) {
+			t.Errorf("%s: read revision %d and %+v in %d reads (%v), want the head unread and %d reads", tc.name,
+				rev.N, earlier, reads.Load(), err, tc.wantReads)
+		}
+	}
+
+	asked, since := errors.New("no revision 2"), errors.New("no revision 1")
+	sinceDone := make(chan struct{})
+	_, _, err = code.ChangeRevisions(head, 2, 1, func(n int64) (code.RevisionRow, error) {
+		if n == 1 {
+			defer close(sinceDone)
+			return code.RevisionRow{}, since
+		}
+		<-sinceDone
+		return code.RevisionRow{}, asked
+	})
+	if !errors.Is(err, asked) {
+		t.Errorf("two refused revisions answered %v, want the revision asked about's refusal", err)
 	}
 }

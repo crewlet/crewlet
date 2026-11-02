@@ -39,7 +39,7 @@ func (r *coordRig) phases() []types.AgentPhaseCompleted {
 // executor that launched it publishes nothing when it suspends, and its
 // resumed record states the executor's own rounds. So every token a coding run
 // spent reached the budget counter and nothing a person reads — the spend
-// rollup and each node's daily usage are folded from these records alone.
+// rollup and each data node's daily usage are folded from these records alone.
 //
 // ONCE, however often the tail is retried: the first resume here fails, the
 // claim is handed back and the completion comes round again, and a second copy
@@ -53,7 +53,7 @@ func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
 	rig.runner.Finish(Result{
 		Success: true, Text: "fixed the flake", DeliveredRefs: []string{"pr/42"},
 		InputTokens: 9000, OutputTokens: 700, CacheReadTokens: 6000, CacheWriteTokens: 1500,
-		CostUSD: 0.42,
+		CostUSD: 0.42, Turns: 31,
 	})
 	rig.resumer.failWith(errors.New("the node lost the seat mid-resume"))
 
@@ -86,6 +86,11 @@ func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
 	}
 	if rec.CostUSD != 0.42 {
 		t.Errorf("cost_usd = %v, want what the run's CLI reported", rec.CostUSD)
+	}
+	// AND ITS CALLS: the model turns its CLI's loop took, as it reported
+	// them, which every spend figure counts this record by.
+	if rec.CLITurns != 31 {
+		t.Errorf("cli_turns = %d, want the run's 31", rec.CLITurns)
 	}
 	// THE IDENTITY: the executor iteration that launched it and the job.
 	if rec.TurnID != "t1" || rec.Iteration != rigIteration || rec.LaunchID != launched.LaunchID {
@@ -159,13 +164,15 @@ func TestTheTranscriptRidesThePhaseRecordRedacted(t *testing.T) {
 // runtoken opens with, which internal/redact knows. A runner redacts what it
 // collects; this holds the boundary the records leave by, the publish, with a
 // runner that redacted nothing: every record the coordinator publishes for the
-// run — its report, its transcript, its failure, its question, and the answer
-// it resumes the turn with — carries the marker and none of the tokens.
+// run (its report, its transcript, its failure, its question, and the answer
+// it resumes the turn with) carries the marker and none of the tokens. A
+// question is redacted where its ask is recorded ([Ask.Redacted]), so the
+// question's case asks through the store with the tokens in its context.
 //
-// Mutation: skip the publish's redaction of a box's result (runPhase's and
-// park's), and the report's, the failure's and the question's records carry
-// the tokens; drop the run-token rule from internal/redact, and every case
-// does.
+// Mutation: skip the publish's redaction of a box's result (runPhase's), or
+// the ask's where it is recorded, and the report's, the failure's and the
+// question's records carry the tokens; drop the run-token rule from
+// internal/redact, and every case does.
 func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 	t.Parallel()
 	const engine = "https://engine.example.com"
@@ -186,15 +193,15 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 		t.Fatalf("runtoken.New: %v", err)
 	}
 
-	for name, result := range map[string]func(printed string) Result{
-		"a report": func(printed string) Result {
-			return Result{Success: true, Text: "my setup:\n" + printed, Transcript: "[tool] bash: env\n" + printed}
+	for name, result := range map[string]func(printed string) (Result, *Ask){
+		"a report": func(printed string) (Result, *Ask) {
+			return Result{Success: true, Text: "my setup:\n" + printed, Transcript: "[tool] bash: env\n" + printed}, nil
 		},
-		"a failure": func(printed string) Result {
-			return Result{Error: "the bridge refused me:\n" + printed, Transcript: "[tool] bash: cat .mcp.json\n" + printed}
+		"a failure": func(printed string) (Result, *Ask) {
+			return Result{Error: "the bridge refused me:\n" + printed, Transcript: "[tool] bash: cat .mcp.json\n" + printed}, nil
 		},
-		"a question": func(printed string) Result {
-			return Result{NeedsInput: true, AskTo: "requester", Question: "is this right?\n" + printed}
+		"a question": func(printed string) (Result, *Ask) {
+			return Result{}, &Ask{Question: "is this right?", Context: "my setup:\n" + printed, To: AskToRequester}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -202,14 +209,18 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 			rig := newCoordRig(t)
 			run := rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
-			endpoint := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"]
+			endpoint := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, false, time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"]
 			tokens := []string{
 				strings.TrimPrefix(endpoint, engine+"/otlp/"),
 				bridge.Mint("7c9e6679f4a14f3a9d1c0b2e8f5a6d3b~"+run.TurnID, time.Hour),
 			}
 			printed := "OTEL_EXPORTER_OTLP_ENDPOINT=" + endpoint + "\n" +
 				`{"mcpServers": {"crewlet": {"type": "http", "url": "` + engine + "/mcp/" + tokens[1] + `"}}}`
-			rig.runner.Finish(result(printed))
+			finished, asked := result(printed)
+			if asked != nil {
+				rig.ask("t1", *asked)
+			}
+			rig.runner.Finish(finished)
 
 			payload, ev := rig.completion("t1")
 			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -246,7 +257,7 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 
 // TWO LAUNCHES IN ONE TURN ARE TWO SPANS.
 //
-// A resumed executor may call run_sandbox again in the same iteration, which
+// A resumed turn may relaunch its executor in the same iteration, which
 // is a second job with its own start, its own spend and its own record. The
 // record of the first must not tell the second it was already published, and
 // the second's clock starts at its own launch rather than the row's creation.
@@ -261,7 +272,6 @@ func TestTwoLaunchesInOneTurnAreTwoSpans(t *testing.T) {
 		rig.resumer.mu.Unlock()
 		rig.now = rig.now.Add(time.Minute)
 		req := launchReq(r.TurnID)
-		req.ReuseBox = r.SandboxID
 		req.Model = "claude-opus-5"
 		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
@@ -317,10 +327,8 @@ func TestEveryCollectedRunIsPublishedWithItsOutcome(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.runner.Finish(Result{
-		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		InputTokens: 300, CostUSD: 0.05,
-	})
+	rig.ask("asks", Ask{Question: "which branch?", To: AskToRequester})
+	rig.runner.Finish(Result{InputTokens: 300, CostUSD: 0.05})
 	payload, ev := rig.completion("asks")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
@@ -399,7 +407,7 @@ func TestARunsNegativeUsageIsReadAsNothingSpent(t *testing.T) {
 	rig.runner.Finish(Result{
 		Success: true, Text: "done",
 		InputTokens: -50_000, OutputTokens: 700, CacheReadTokens: -1, CacheWriteTokens: 300,
-		CostUSD: -4.2,
+		CostUSD: -4.2, Turns: -3,
 	})
 
 	payload, ev := rig.completion("t1")
@@ -420,5 +428,10 @@ func TestARunsNegativeUsageIsReadAsNothingSpent(t *testing.T) {
 		t.Errorf("the record reads %d in / %d out / %d total, cache %d/%d, $%v; want "+
 			"0/700/700, 0/300, $0", rec.InputTokens, rec.OutputTokens, rec.TotalTokens,
 			rec.CacheReadTokens, rec.CacheWriteTokens, rec.CostUSD)
+	}
+	// A NEGATIVE TURN COUNT IS NONE REPORTED, which counts the run as the
+	// one call the engine asked for rather than as calls taken off.
+	if rec.CLITurns != 0 {
+		t.Errorf("cli_turns = %d, want a negative count read as none", rec.CLITurns)
 	}
 }

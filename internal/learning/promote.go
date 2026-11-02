@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -284,7 +285,9 @@ func (p *Promoter) promoteUnit(ctx context.Context, writer PromotionWriter, unit
 	completion, err := member.Provider.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: PromotionSystemPrompt},
-			{Role: llm.RoleUser, Content: buildPromotionPrompt(unit, best)},
+			// A TOKEN FOR THE CALL, though it carries no fence: every
+			// skill is neutralised under it ([buildPromotionPrompt]).
+			{Role: llm.RoleUser, Content: buildPromotionPrompt(provenance.NewBoundary(), unit, best)},
 		},
 	})
 	if err != nil {
@@ -421,19 +424,24 @@ Answer exactly {} if they do not actually share a procedure — similar tools do
 not always mean the same work.`
 
 // buildPromotionPrompt renders the converging skills for the model.
-func buildPromotionPrompt(unit PromotionUnit, c SiblingCluster) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Team: %s\n%d agents wrote %d skills around this tool run:\n%s\n",
+//
+// Each skill is the seats' own, written by an earlier pass over turns that
+// read other people's words, and is neutralised under b (ADR-0040): what the
+// model writes back is a page every seat of the team may come to follow, so
+// nothing here may open or close a fence.
+func buildPromotionPrompt(b provenance.Boundary, unit PromotionUnit, c SiblingCluster) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "Team: %s\n%d agents wrote %d skills around this tool run:\n%s\n",
 		unit.ID, c.DistinctAgents(), len(c.Skills), strings.Join(c.Sequence, " -> "))
 	for i, sk := range c.Skills {
 		if i >= promotionPromptSkills {
-			fmt.Fprintf(&b, "\n(and %d more, all similar)\n", len(c.Skills)-promotionPromptSkills)
+			fmt.Fprintf(&out, "\n(and %d more, all similar)\n", len(c.Skills)-promotionPromptSkills)
 			break
 		}
-		fmt.Fprintf(&b, "\n### %s (by %s)\n%s\n\n%s\n",
-			sk.Name, sk.AgentHandle, sk.Description, sk.Content)
+		out.WriteString(provenance.Neutralise(b, fmt.Sprintf("\n### %s (by %s)\n%s\n\n%s\n",
+			sk.Name, sk.AgentHandle, sk.Description, sk.Content)))
 	}
-	return b.String()
+	return out.String()
 }
 
 // renderPromotion is the page body, in markdown.

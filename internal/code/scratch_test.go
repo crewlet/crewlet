@@ -386,7 +386,7 @@ func TestAHoldRecordMovesNoActivity(t *testing.T) {
 }
 
 // A HOLD RECORD COSTS THE LOG ONE SMALL RECORD — the figure the code log's
-// day weighs a hold's rate by (internal/tracker's codeHoldRecordBytes): a
+// day weighs a hold's rate by (internal/worklet's codeHoldRecordBytes): a
 // record a turn appends for each idle scratch repository it names, in every
 // turn that names it. What it takes is measured as the day measures a push
 // (BenchmarkPushLogBytes): the log's stream grown by the one record, as the
@@ -440,7 +440,7 @@ func TestAHoldRecordCostsTheLogOneSmallRecord(t *testing.T) {
 }
 
 // holdRecordBytes is the most one hold record of a scratch repository takes
-// the code log as the engine writes one, the figure internal/tracker's
+// the code log as the engine writes one, the figure internal/worklet's
 // codeHoldRecordBytes weighs such a hold at (a seat branch's is
 // refHoldRecordBytes). 896 BYTES: the longest measures 865 here, at the harness's clock
 // — an authored instant with no fractional second — and the log's first

@@ -22,13 +22,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// maxLoginBody bounds what a sign-in will read.
+// MaxLoginBodyBytes bounds what a sign-in will read.
 //
 // FOUR KILOBYTES, which is a login, a password and a six-digit code with room
 // to spare — and it is deliberately small because this route is UNGUARDED:
 // whoever can reach the port can post to it, so the body limit is one of the
 // few things bounding what an anonymous caller can make this node allocate.
-const maxLoginBody = 4 << 10
+//
+// EXPORTED because it also bounds the longest password anybody can sign in to
+// this engine with, so the CLI reads a password piped to it no further.
+const MaxLoginBodyBytes = 4 << 10
 
 // loginRequest is what a sign-in presents.
 type loginRequest struct {
@@ -122,7 +125,7 @@ const (
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
 
-	body, err := httpjson.ReadBody(w, r, maxLoginBody)
+	body, err := httpjson.ReadBody(w, r, MaxLoginBodyBytes)
 	if err != nil {
 		httpjson.Refuse(w, err)
 		return
@@ -811,7 +814,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		// record that it was used. Signing somebody in on a code that
 		// stays usable is the replay the spend exists to close, so the
 		// honest answer is that this node cannot finish the sign-in now.
-		writeFailed(w, r, "api_second_factor_unspent", spend.OpID, err)
+		gestureFailed(w, r, "api_second_factor_unspent", spend.OpID, err)
 		return factorUse{}, false
 	case !built(spend):
 		// AND NOT A SPEND EITHER: nothing can establish whether it is on
@@ -1028,7 +1031,7 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 				s.personRemoved(w, r, how)
 				return loginResponse{}, false
 			}
-			writeFailed(w, r, "api_step_up_close_failed", closeOp, closeErr)
+			gestureFailed(w, r, "api_step_up_close_failed", closeOp, closeErr)
 			return loginResponse{}, false
 		}
 		if !landed(closed) {
@@ -1087,7 +1090,7 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		// the epoch and the generation a bearer carries are the decide's,
 		// and nothing can prove they are the landed record's — so no
 		// bearer, and signing in again opens a session of its own.
-		writeFailed(w, r, "api_sign_in_session_failed", sessionOpID(lineage), err)
+		gestureFailed(w, r, "api_sign_in_session_failed", sessionOpID(lineage), err)
 		return loginResponse{}, false
 	}
 	if !landed(opened.Result) {

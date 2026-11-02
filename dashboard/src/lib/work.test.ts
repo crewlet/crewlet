@@ -8,6 +8,8 @@
  * visible in a diff and none of them throws.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, test } from "vitest";
 // THE ONE MARK, from the design system rather than re-spelled here: a test
 // carrying its own copy of the glyph goes green on whatever is written.
@@ -72,6 +74,7 @@ import {
   answersAddress,
   itemAddress,
   turnItem,
+  labelAfterKey,
 } from "./work.ts";
 import type {
   WorkActivityRecord,
@@ -314,7 +317,7 @@ test("a history entry renders every field in the reader's own vocabulary", () =>
   );
 });
 
-// AND A DELTA NEVER RENDERS AS NO CHANGE. `internal/tracker/wake.go` compares
+// AND A DELTA NEVER RENDERS AS NO CHANGE. `internal/worklet/wake.go` compares
 // the WHOLE instant precisely so that moving a due time inside one day is a
 // change at all; printed as a day, both sides read "Sep 19, 2026" and the line
 // claims a field moved to where it already was.
@@ -523,7 +526,7 @@ test("a people delta reads as the seat's name where the chart knew it", () => {
   );
 });
 
-// A NOTIFICATION IS ADDRESSED AND A LOG IS NOT. `tracker.prioritisedWake` writes
+// A NOTIFICATION IS ADDRESSED AND A LOG IS NOT. `worklet.prioritisedWake` writes
 // the card the woken seat reads — "…of your priorities" — which is correct for
 // that seat and second person to every other reader of the company-wide log.
 // The record names whose it is (a person subject's id IS the handle), so the
@@ -726,7 +729,7 @@ test("the three scope segments are three real questions", () => {
 });
 
 // AND TWO OF THE THREE HAVE TO SAY `show_closed`, because a status group
-// alone cannot widen the answer: `internal/tracker/read.go` ANDs an
+// alone cannot widen the answer: `internal/worklet/read.go` ANDs an
 // unconditional `t.status_group IN ('not_started','active')` unless the key
 // is set. So `done,closed` without it is the intersection of two disjoint
 // halves — Closed returned NOTHING on every company, and All returned
@@ -1157,7 +1160,7 @@ test("the project list comes from the listing, falling back to the rows", () => 
 // The calendar
 // ---------------------------------------------------------------------------
 
-// MONDAY FIRST, because `internal/tracker/dates.go` pins the week's start
+// MONDAY FIRST, because `internal/worklet/dates.go` pins the week's start
 // there: a saved view carrying `sow`/`eow` means Monday, and a grid that
 // started on Sunday would draw "this week" across two of its own rows.
 test("a month's grid starts on the Monday on or before the first", () => {
@@ -1655,7 +1658,7 @@ test("an asker's lock carries the asker and nothing naming a viewer, on every sh
   expect(askedByParams("ada")).toEqual({ asked_by: "ada" });
 });
 
-// AND NO LOCK LEAVES THE KEY ALONE, which is what keeps `#/work` the screen it
+// AND NO LOCK LEAVES THE KEY ALONE, which is what keeps `#/worklet` the screen it
 // was: the assignee filter there is a chip a reader added and can take off.
 test("without a lock the assignee is whatever the reader and the view said", () => {
   expect(
@@ -1828,12 +1831,12 @@ test("a saved view's change is named by the view, not by its storage", () => {
 });
 
 // A TURN'S TASK CARRIES NO COLLISION FLAG: it is the turn's record, not a
-// tracker row, so its key may be one another task claimed first. A native
+// tracker row, so its key may be one another task claimed first. A Worklet
 // task is therefore addressed by its id, which every question about a task
-// takes, and a vendor item — whose id is the vendor's — by its key.
-test("a turn's task is addressed by its id where it is native, and by its key elsewhere", () => {
-  const native = { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" };
-  expect(itemAddress(turnItem(native))).toBe("t-dup");
+// takes, and a vendor item (whose id is the vendor's) by its key.
+test("a turn's task is addressed by its id where it is Worklet's, and by its key elsewhere", () => {
+  const worklet = { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" };
+  expect(itemAddress(turnItem(worklet))).toBe("t-dup");
   const jira = { backend: "jira", id: "10042", key: "OPS-3", project: "OPS" };
   expect(itemAddress(turnItem(jira))).toBe("OPS-3");
   // An answer about the task is the answer to the question either way.
@@ -1841,4 +1844,20 @@ test("a turn's task is addressed by its id where it is native, and by its key el
   expect(answersAddress("OPS-3", "", "OPS-3")).toBe(true);
   expect(answersAddress("t-dup", "t-claimant", "ENG-7")).toBe(false);
   expect(answersAddress("", "", "")).toBe(false);
+});
+
+// A CITED TASK'S LABEL IS DRAWN WITHOUT THE KEY BEFORE IT, by the rule the
+// engine stores it by: one case table, read by both, so a label stored before
+// the engine stripped it ("GP-20 GP-20 sitemap fix") reads once too.
+//
+// Mutation: return the label as given and every stripping case fails.
+test("an evidence label loses a leading copy of the task's key, by the engine's own cases", () => {
+  const table = JSON.parse(
+    readFileSync(
+      join(process.cwd(), "..", "internal", "worklet", "testdata", "evidence_labels.json"),
+      "utf8",
+    ),
+  ) as { keys: string[]; cases: { label: string; want: string }[] };
+  expect(table.cases.length).toBeGreaterThanOrEqual(10);
+  for (const c of table.cases) expect(labelAfterKey(c.label, table.keys), c.label).toBe(c.want);
 });

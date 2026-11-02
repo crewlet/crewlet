@@ -18,7 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning/memread"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // WorkSearcher is the ranked item search, as this surface needs it.
@@ -27,7 +27,7 @@ import (
 // index is this node's own and the rows are the fleet's, which the searcher
 // already reconciles.
 type WorkSearcher interface {
-	Search(ctx context.Context, q tracker.SearchQuery) (tracker.SearchAnswer, error)
+	Search(ctx context.Context, q worklet.SearchQuery) (worklet.SearchAnswer, error)
 }
 
 // SeatMemory is a seat's memory and its conversation ledger, answered by the
@@ -44,7 +44,7 @@ type WorkSearcher interface {
 // this package from the org its answer is made of, so the node that answers
 // never resolves a handle against an org the asker's may differ from.
 type SeatMemory interface {
-	Memory(ctx context.Context, seat memread.Seat, limit int) (memread.Memory, error)
+	Memory(ctx context.Context, seat memread.Seat, q memread.MemoryQuery) (memread.Memory, error)
 	Episode(ctx context.Context, seat memread.Seat, id string) (memread.EpisodeDetail, error)
 	Threads(ctx context.Context, seat memread.Seat, conversation string, limit int) (memread.Threads, error)
 	Overview(ctx context.Context, seats []memread.Seat) (memread.Overview, error)
@@ -52,8 +52,8 @@ type SeatMemory interface {
 
 // DefaultSearchLimit is what a caller that names none gets.
 //
-// TWENTY-FIVE, against a seat's own [tracker.SearchLimit] of 20 and under the
-// reader's [tracker.MaxSearchLimit] ceiling of 50 — so it is a real default
+// TWENTY-FIVE, against a seat's own [worklet.SearchLimit] of 20 and under the
+// reader's [worklet.MaxSearchLimit] ceiling of 50, so it is a real default
 // rather than a second spelling of either. The two callers want different
 // numbers: a tool's answer is read into a PROMPT, where every row costs
 // context the turn could spend on the work, and a screen's is SCANNED, where a
@@ -87,18 +87,18 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	if err = searchTextRefusal(text); err != nil {
 		return nil, err
 	}
-	answer, err := s.WorkSearch.Search(ctx, tracker.SearchQuery{
+	answer, err := s.WorkSearch.Search(ctx, worklet.SearchQuery{
 		Text: text, Limit: p.Int("limit", DefaultSearchLimit), Mode: mode,
 	})
 	switch {
-	case errors.Is(err, tracker.ErrIndexBuilding):
+	case errors.Is(err, worklet.ErrIndexBuilding):
 		out := map[string]any{
-			"hits":      []tracker.Ranked{},
+			"hits":      []worklet.Ranked{},
 			"mode":      string(mode),
 			"available": false,
 			"reason":    "building",
-			"note": "this node joined recently and is still indexing the company's work — " +
-				"items that exist are simply not findable from here yet",
+			"note": "this node joined recently and is still indexing the company's work, " +
+				"so items that exist are simply not findable from here yet",
 		}
 		outcome(out, knowledge.Outcome{})
 		return out, nil
@@ -109,7 +109,7 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	if hits == nil {
 		// An EMPTY SLICE, never null: a client that renders `hits.length`
 		// on the answer should not have to guard the field as well.
-		hits = []tracker.Ranked{}
+		hits = []worklet.Ranked{}
 	}
 	out := map[string]any{"hits": hits, "mode": string(mode), "available": true}
 	outcome(out, answer.Outcome)
@@ -157,7 +157,7 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	answer, err := s.Work.Routing(ctx, tracker.RoutingQuery{
+	answer, err := s.Work.Routing(ctx, worklet.RoutingQuery{
 		RecordID: record,
 		// THE HORIZON THIS COMPANY IS ACTUALLY RUNNING, read per call
 		// from the current epoch — which is the whole reason the

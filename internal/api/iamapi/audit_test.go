@@ -65,13 +65,13 @@ func TestTheDirectoryAnnouncesWhatItChanged(t *testing.T) {
 		t.Parallel()
 		r := newRig(t)
 		got := r.as(administrator(), http.MethodPost, "/iam/credentials",
-			map[string]any{"label": "ci", "grants": []string{"knowledge"}})
+			map[string]any{"label": "ci", "grants": []string{"doclet"}})
 		if got.status != http.StatusCreated {
 			t.Fatalf("mint answered %d: %v", got.status, got.body)
 		}
 		row := only[types.IAMCredentialMinted](t, r.audit)
 		if row.Kind != types.CredentialToken || row.Owner != alice.String() ||
-			len(row.Grants) != 1 || row.Grants[0] != "knowledge" ||
+			len(row.Grants) != 1 || row.Grants[0] != "doclet" ||
 			row.By != "founder" || row.Credential == "" || row.ExpiresAt.IsZero() {
 			t.Errorf("minted row = %+v", row)
 		}

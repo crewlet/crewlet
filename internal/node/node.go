@@ -17,6 +17,10 @@
 // queue knows about subscriptions and nothing about seats, the seat host knows
 // about seats and nothing about subscriptions. See [Node.EnsureMailboxes],
 // which converges that rather than re-creating it.
+//
+// The third is the ADMISSION every turn on this node passes, whatever road it
+// arrives by: [Node.AdmitTurn], which the mailbox's handler and the sandbox
+// coordinator's resume both ask before they start one (ADR-0063).
 package node
 
 import (
@@ -27,6 +31,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -78,8 +83,9 @@ type Config struct {
 	// presence heartbeat. Nil publishes none, which reads as "did not
 	// say" rather than as an idle node.
 	//
-	// The beat bounds it: see [seat.Config].Status.
-	Status func(context.Context) coord.NodeStatus
+	// The beat bounds it, and an error means it did not answer: see
+	// [seat.Config].Status.
+	Status func(context.Context) (coord.NodeStatus, error)
 
 	// GitBackground is what this node's git cache gives its background
 	// work now, written on every beat beside the status and never in it:
@@ -156,6 +162,17 @@ type Config struct {
 	// that may already have moved.
 	SeatAdmitted func(ctx context.Context, seat placement.Seat)
 
+	// SeatTurnEnded runs when a turn admitted on a seat ([Node.AdmitTurn])
+	// is released after another turn was refused behind it ([ErrSeatBusy]),
+	// so what was refused learns at that moment that it may try again. Not
+	// for a release nobody waited behind. Nil does nothing. It never fails
+	// anything: the turn is already over.
+	//
+	// The engine's is a recorded answer whose resume arrived while another
+	// of the seat's turns was running, and waits for it to end rather than
+	// re-checking on a timer.
+	SeatTurnEnded func(handle string)
+
 	// SeatDone runs after the mailbox is detached. It never fails a
 	// release: the seat is already gone from this node, and its durable
 	// state belongs to the store rather than to this process.
@@ -220,6 +237,17 @@ type Node struct {
 	// turns is the per-node concurrency gate every turn passes through.
 	turns *gate
 
+	// running is the one turn each seat has admitted and not yet released,
+	// by handle: a seat runs one turn at a time ([ErrSeatBusy]). Guarded by
+	// mu.
+	running map[string]*admission
+	// admissions numbers the admissions that hold a seat's inbox, so each
+	// holds it under a reason of its own ([HoldSeatTurn]).
+	admissions atomic.Uint64
+	// refusedBusy, where set, runs as a turn refused on a busy seat lets go
+	// of mu, for a case that stands the seat's release in that moment.
+	refusedBusy func(handle string)
+
 	// acksLost is the queue's [acksLoss] signal, and nil — never closed —
 	// for a queue without one.
 	acksLost <-chan struct{}
@@ -267,6 +295,7 @@ func New(cfg Config) (*Node, error) {
 		cfg:      cfg,
 		log:      logging.Get("node").With("node_id", cfg.NodeID),
 		attached: map[uuid.UUID]string{},
+		running:  map[string]*admission{},
 		mail:     newMailboxes(),
 		turns:    newGate(cfg.MaxConcurrent),
 		cut:      make(chan struct{}),
@@ -397,9 +426,9 @@ const drainLogInterval = 10 * time.Second
 //     for a node that will never claim again.
 //  2. Quiesce every held seat: no NEW work is taken, and the seats keep
 //     renewing so the turns already running can finish.
-//  3. Once no handler is running, release the seats — mailbox intact, lease
-//     given back, so a peer can take over immediately rather than waiting
-//     out a TTL.
+//  3. Once no handler and no turn is running ([Node.waitInFlight]), release
+//     the seats: mailbox intact, lease given back, so a peer can take over
+//     immediately rather than waiting out a TTL.
 //
 // Step 3 waits INDEFINITELY, bounded only by ctx. That is deliberate: a turn
 // parked mid-LLM-round is making progress a timer cannot see, and cutting it
@@ -501,7 +530,7 @@ func (n *Node) Drain(ctx context.Context) {
 	}
 
 	for {
-		remaining, err := n.cfg.Queue.WaitForHandlers(wait, drainLogInterval)
+		remaining, err := n.waitInFlight(wait)
 		if n.acksGone() {
 			n.cutOnce.Do(func() { close(n.cut) })
 			if remaining > 0 {
@@ -530,6 +559,25 @@ func (n *Node) Drain(ctx context.Context) {
 
 	n.host.ReleaseAll(stop, seat.ReasonDrain)
 	n.log.Info("drain_complete", "still_held", len(n.host.Held()))
+}
+
+// waitInFlight waits up to one [drainLogInterval] for this node's work to end,
+// and reports how much is left.
+//
+// TWO COUNTS, because neither covers the other. The queue's handlers are every
+// delivery being worked, a turn among them or not (a control-topic event that
+// starts none). The gate's slots are every turn ([Node.AdmitTurn]), whether a
+// delivery started it or not: a recorded answer's retried resume runs on the
+// sandbox coordinator's own timer and holds a slot and no handler. The slots
+// are waited for once no handler is left, since a handler that admits a turn
+// holds its slot no longer than itself. Each wait is one reporting interval,
+// so a drain still logs at least that often.
+func (n *Node) waitInFlight(ctx context.Context) (int, error) {
+	handlers, err := n.cfg.Queue.WaitForHandlers(ctx, drainLogInterval)
+	if err != nil || handlers > 0 {
+		return handlers, err
+	}
+	return n.turns.waitIdle(ctx, drainLogInterval)
 }
 
 // --- seat.Hooks -----------------------------------------------------------
@@ -603,51 +651,21 @@ func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, _ coord.Leas
 	}
 }
 
-// runTurn gates every turn on still owning the seat.
+// runTurn is a mailbox delivery's turn, admitted as every turn on this node is
+// ([Node.AdmitTurn]).
 //
-// The check is FRESHNESS, not membership: it certifies that a successful
-// renew is recent enough that this node's ownership still holds. It is an
-// optimization — correctness lives in the epoch-fenced writes a turn makes —
-// but it is the optimization that stops a node starting minutes of work on a
-// seat it has already lost.
-//
-// Losing the seat DEFERS the delivery rather than failing it: the events are
-// healthy, and a successor is already entitled to them.
+// A seat mid-turn is WAITED FOR, never refused, so its mail spends no delivery
+// on it (see [Node.admit]). Any other refusal DEFERS the delivery rather than
+// failing it: the events are healthy and nothing has been done with them, so
+// leaving them unacked hands them straight on, to the seat's successor, rather
+// than waiting out a redelivery timer.
 func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) queue.Result {
-	if _, ok := n.host.MayStart(handle); !ok {
+	ctx, release, err := n.AdmitTurn(mailboxTurn(ctx), handle)
+	if err != nil {
 		n.host.NoteDeliveryDeferred(handle)
-		return queue.Defer("seat is not owned here")
-	}
-	// THE SLOT AFTER THE OWNERSHIP CHECK and before the turn, which is
-	// before its first model round-trip. Ordered this way because a turn
-	// on a seat this node has lost must not sit in the queue for a slot
-	// it has no business taking — the successor is already entitled to
-	// the delivery.
-	release, ok := n.turns.acquire(ctx)
-	if !ok {
-		// DRAINING, or the delivery's own context ended. Deferred, not
-		// failed: the events are healthy and nothing has been done with
-		// them, so leaving them unacked hands them straight on rather
-		// than waiting out a redelivery timer.
-		n.host.NoteDeliveryDeferred(handle)
-		return queue.Defer("node is draining, so this turn was not started")
+		return queue.Defer(err.Error())
 	}
 	defer release()
-	// ENDED BY A DRAIN THAT CANNOT WAIT FOR IT, and by nothing else here:
-	// once the queue's acknowledgements can no longer land, this turn's
-	// outcome will not be recorded and its seat's successor runs the same
-	// delivery again, so every side effect it makes from then on is made
-	// twice. See [Node.Drain]. The watcher's lifetime is the turn's: the
-	// deferred cancel ends it however the turn returns.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go func() {
-		select {
-		case <-n.cut:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
 	return n.cfg.Turn(ctx, handle, evs)
 }
 
@@ -746,6 +764,11 @@ func (n *Node) ResumeClaiming(ctx context.Context) {
 
 // InFlightTurns is how many turns hold a concurrency slot right now.
 func (n *Node) InFlightTurns() int { return n.turns.inFlight() }
+
+// TurnsWaiting is how many turns are parked for a concurrency slot right now,
+// because the node is at node.max_concurrent. A turn counts
+// here from the moment it asks for a slot until it takes one or gives up.
+func (n *Node) TurnsWaiting() int { return int(n.turns.waiting.Load()) }
 
 // acksGone reports whether the queue's [acksLoss] signal has closed. A queue
 // without one leaves the channel nil, which never has, and the default arm

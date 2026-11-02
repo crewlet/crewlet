@@ -39,6 +39,12 @@ var (
 // answering with a value naming what it was asked.
 type apiArtifacts struct{}
 
+// artifactsGate is the artifacts' one admission over estate, with no chart.
+func artifactsGate(estate apiArtifacts) artifactsapi.Gate {
+	return artifactsapi.Gate{Heads: estate, Chart: authz.NoChart{}, Marks: estate, Roster: estate,
+		Limits: func() artifacts.Limits { return artifacts.Limits{CompanyBytes: 1, Artifacts: 1} }}
+}
+
 func (apiArtifacts) Brand(context.Context, statelog.Freshness) (artifactsdomain.Adoption, bool, error) {
 	return artifactsdomain.Adoption{}, false, nil
 }
@@ -193,8 +199,7 @@ func (apiArtifacts) Seats(context.Context) ([]artifactsapi.RosterSeat, error) { 
 func TestTheArtifactsRoutesAndQuestionsShareOneMux(t *testing.T) {
 	t.Parallel()
 	estate := apiArtifacts{}
-	gate := artifactsapi.Gate{Heads: estate, Chart: authz.NoChart{}, Marks: estate, Roster: estate,
-		Limits: func() artifacts.Limits { return artifacts.Limits{CompanyBytes: 1, Artifacts: 1} }}
+	gate := artifactsGate(estate)
 	ready, err := objectives.NewBeacon(objectives.NewMeter(nil, nil), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -203,7 +208,7 @@ func TestTheArtifactsRoutesAndQuestionsShareOneMux(t *testing.T) {
 		Objects: estate, Ready: ready, Uploads: func() (artifactsapi.Pipeline, error) {
 			return nil, artifactupload.ErrInvalid
 		},
-		WorkItems: func() (artifactsapi.WorkItems, error) { return nil, artifactsapi.ErrTrackerNotUp }})
+		WorkItems: func() (artifactsapi.WorkItems, error) { return nil, artifactsapi.ErrWorkletNotUp }})
 	if err != nil {
 		t.Fatal(err)
 	}

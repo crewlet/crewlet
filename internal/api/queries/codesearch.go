@@ -57,7 +57,7 @@ type CodeSearcher interface {
 
 // codeSearchFloorless is why `code_search` refuses a floor.
 const codeSearchFloorless = "code_search takes no floor: it answers at the tip of each repository it names " +
-	"(`tips`), and a hit's file is read at that commit — read_level is linearizable, stale or " +
+	"(`tips`), and a hit's file is read at that commit; read_level is linearizable, stale or " +
 	"consistent_prefix, the level the repositories it searches are listed at"
 
 // codeSearch answers `code_search`: `q`, the search in codeindex's grammar,

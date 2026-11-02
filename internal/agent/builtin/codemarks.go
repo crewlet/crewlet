@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -13,11 +12,13 @@ import (
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A PERSON'S MARKS OVER THEIR CODE NOTICES: the operator tool
-// `code_mark_inbox`, the code log's half of what `mark_inbox` is on the
-// tracker's. A person's inbox is composed from every native domain's notices,
+// `code_mark_inbox`, the code log's half of what `mark_inbox` is on
+// Worklet's. A person's inbox is composed from every native domain's notices,
 // and each domain keeps the marks over its own on its own log
 // (internal/inbox): a position is a coordinate on ONE stream, so a gesture
 // crossing two logs would be two decides that cannot be one. So each domain's
@@ -52,7 +53,7 @@ func (t *codeMarkInbox) Description() string {
 		"back, `snooze` puts them off until a time, `unsnooze` brings a snoozed one back now. `read_through` " +
 		"reads everything up to a position on the code log — the newest code notice you have seen, as " +
 		"`<stream>@<generation>:<sequence>` — and never moves your position backwards. Only what you name " +
-		"changes. Your work notices are marked with mark_inbox: each domain keeps its own marks."
+		"changes. Your work notices are marked with " + worklet.MarkInboxTool + ": each domain keeps its own marks."
 }
 
 func (t *codeMarkInbox) Parameters() map[string]any {
@@ -94,22 +95,12 @@ func (t *codeMarkInbox) Parameters() map[string]any {
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
 				"description": "Which code reasons land in the PRIMARY half of your code notices, the rest " +
-					"being context. One of: " + codeReasonList(code.Reasons()) + ". An empty list takes the " +
-					"shipped default (" + codeReasonList(code.DefaultPrimaryReasons) + ") rather than making " +
+					"being context. One of: " + words.Or(code.Reasons()) + ". An empty list takes the " +
+					"shipped default (" + words.And(code.DefaultPrimaryReasons) + ") rather than making " +
 					"nothing primary; omit it to leave your choice as it is.",
 			},
 		},
 	})
-}
-
-// codeReasonList is reasons as one sentence, derived rather than typed so a
-// reason added to the code host is named here the day it is.
-func codeReasonList(reasons []code.Reason) string {
-	names := make([]string, 0, len(reasons))
-	for _, r := range reasons {
-		names = append(names, string(r))
-	}
-	return strings.Join(names, ", ")
 }
 
 func (t *codeMarkInbox) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -133,7 +124,7 @@ func (t *codeMarkInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if bad != "" {
 		return failed(bad), nil
 	}
-	gesture, bad := gestureOf(args, code.Reasons(), codeReasonList(code.Reasons()))
+	gesture, bad := gestureOf(args, code.Reasons(), words.And(code.Reasons()))
 	if bad != "" {
 		return failed(bad), nil
 	}

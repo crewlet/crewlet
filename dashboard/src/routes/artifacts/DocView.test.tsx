@@ -10,12 +10,14 @@ import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { DocView } from "./DocView.tsx";
+import { context, draftField, openFrame, setDraft } from "./draftTesting.ts";
 import { WithKindBar } from "~/test/kindControls.tsx";
 import { Router } from "~/app/router.tsx";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import type { ArtifactDetail, ArtifactDoc } from "~/protocol/index.ts";
 import { append, loadRichEditor, retype } from "~/test/richEditor.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 beforeAll(() => loadRichEditor());
 
@@ -64,7 +66,10 @@ let sent: { method: string; path: string; ifMatch: string | null; body: unknown 
 let publishAnswer: () => Response;
 
 const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+  });
 
 beforeEach(() => {
   location.hash = `#/artifacts/${ID}`;
@@ -389,4 +394,33 @@ test("a tab both renamed is the person's to keep or take, and the save waits for
   const tabs = screen.getByRole("list", { name: "Tabs of On-call handbook" });
   expect(within(tabs).getByRole("button", { name: "Read me" })).toBeDefined();
   expect(await screen.findByText("Version 3 is merged into your draft.")).toBeDefined();
+});
+
+// THE EDIT IS THE ASSISTANT'S TO READ while the doc is edited, over the
+// version it is based on, and a change it proposes is saved as the writer's
+// own edit: one changed passage against that version.
+test("the open edit is the assistant's to read, and a draft.set is saved as the writer's edit", async () => {
+  openFrame("artifact");
+  const onPublished = show();
+  fireEvent.click((await screen.findAllByRole("button", { name: "Edit" }))[0]!);
+  await screen.findByRole("button", { name: "Save" });
+  expect(context().draft).toMatchObject({ kind: "client", id: ID, revision: "2", step: "tabs.1" });
+  expect(draftField("tabs.2.title")).toMatchObject({ value: "On call", editable: true });
+  expect(draftField("tabs.1.text")?.value).toBe(START);
+  expect(setDraft({ "tabs.1.text": START.replace("ten minutes", "five minutes") })).toMatchObject({
+    outcome: "applied",
+  });
+  await waitFor(() => expect(editor().textContent).toContain("five minutes"));
+  expect(setDraft({ "tabs.2.title": " " })).toMatchObject({
+    outcome: "invalid",
+    reason: "Give the tab a title.",
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(onPublished).toHaveBeenCalledWith(3));
+  const body = sent.find((r) => r.method === "POST")!.body as {
+    edits: { path: string; old_str: string; new_str: string }[];
+  };
+  expect(body.edits).toEqual([
+    expect.objectContaining({ path: "tabs/start.md", old_str: "ten", new_str: "five" }),
+  ]);
 });

@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -263,10 +264,14 @@ func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, er
 	}
 	call, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
+	// ONE TOKEN FOR THE CALL, never a turn's: what the turn was asked is
+	// fenced under it, and what this call answers is a skill the seat will
+	// follow as its own procedure.
+	fence := provenance.NewBoundary()
 	completion, err := member.Provider.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: SynthesisSystemPrompt},
-			{Role: llm.RoleUser, Content: buildSynthesisPrompt(t)},
+			{Role: llm.RoleUser, Content: buildSynthesisPrompt(fence, t)},
 		},
 	})
 	if err != nil {
@@ -404,6 +409,11 @@ nothing specific to one instance.`
 // skill will draft one for any turn at all, and a catalogue of turns
 // restated as skills is worse than an empty one: it costs prompt budget on
 // every future turn to show the model things it already knew.
+//
+// IT ENDS ON THE STANDING SENTENCE ON FENCES ([provenance.StandingInstruction]),
+// the one the seat's own prompt carries: what the turn was asked and what was
+// said to it reach this call fenced under a token minted for the call
+// (ADR-0040), and the sentence is what says a fence is somebody's words.
 const SynthesisSystemPrompt = `You distil a completed agent turn into a
 REUSABLE skill — a short procedure the same agent could follow next time it
 faces this kind of task — or into nothing.
@@ -416,20 +426,21 @@ lookup, or a run whose tools were incidental has no reusable shape: answer
 exactly {}.
 
 Name the tools in order, say what to check between them, and say when the
-procedure does NOT apply. ` + skillGenerality
+procedure does NOT apply. ` + skillGenerality + "\n\n" + provenance.StandingInstruction
 
-// buildSynthesisPrompt renders the one turn the draft is distilled from.
-func buildSynthesisPrompt(t Turn) string {
+// buildSynthesisPrompt renders the one turn the draft is distilled from, what
+// it was asked fenced under fence as the turn read it ([describeTurn]).
+func buildSynthesisPrompt(fence provenance.Boundary, t Turn) string {
 	var b strings.Builder
 	b.WriteString("Turn summary:\n")
-	describeTurn(&b, t, t.Ask())
+	describeTurn(&b, fence, t, t.Ask(), t.AskLabel())
 	b.WriteString("\n- Tools called, in order: ")
 	b.WriteString(strings.Join(t.Event.ToolSequence, " -> "))
 	b.WriteString("\n- Outcome: ")
-	b.WriteString(t.Event.ReviewOutcome)
+	b.WriteString(provenance.Neutralise(fence, t.Event.ReviewOutcome))
 	if t.Role != nil {
 		b.WriteString("\n- The agent's role: ")
-		b.WriteString(t.Role.Name)
+		b.WriteString(provenance.Neutralise(fence, t.Role.Name))
 	}
 	return b.String()
 }

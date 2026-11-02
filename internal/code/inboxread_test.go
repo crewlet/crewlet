@@ -1,6 +1,9 @@
 package code_test
 
 import (
+	"context"
+	"database/sql"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -9,7 +12,94 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
+
+// codeSource is the code host's half of a composed inbox over n's reader,
+// asked as ada — the shape internal/api/queries' codeInbox reads it in.
+type codeSource struct{ n *node }
+
+func (codeSource) Name() string { return "code" }
+
+func (s codeSource) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
+	answer, err := s.n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadInbox, Asker: ada, Cursor: q.Cursor,
+		Limit: q.Limit, Inbox: &code.InboxQuery{Handle: q.Handle, Unread: q.Unread, PrimaryOnly: q.PrimaryOnly,
+			Snoozed: q.Snoozed, Now: harnessAt}})
+	if err != nil {
+		return inbox.SourcePage{}, err
+	}
+	page := inbox.SourcePage{Next: answer.Next, Level: answer.Level, Complete: true}
+	for _, n := range answer.Inbox.Notices {
+		page.Notices = append(page.Notices, inbox.Notice{RecordID: n.RecordID, At: n.At,
+			Position: inbox.Position{Stream: n.LogStream, Generation: n.LogGeneration, Seq: n.LogSeq}})
+	}
+	return page, nil
+}
+
+// A DELETED REPOSITORY'S NOTICES HOLD NO PAGE OF THE INBOX BACK: founder's
+// four newest code notices are about a change on a repository deleted and not
+// yet purged — which keeps its notices until its purge — and the fifth about
+// one on a repository founder still reads. Composed in pages of three, the
+// code host's first page scans three of the deleted repository's notices and
+// answers none of them, its cursor past them; the next page resumes there and
+// reaches the fifth notice, and the inbox ends.
+//
+// Mutation: keep the code host's cursor where a composed page took none of its
+// notices (internal/inbox's Compose) — every page rescans the same three and
+// the fifth notice is never reached, red.
+func TestADeletedRepositorysNoticesHoldNoPageOfTheInboxBack(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	n.ensure("gone", described("one"), t1)
+	n.ensure("kept", described("two"), t1)
+	gone, kept := n.mustID("gone"), n.mustID("kept")
+	n.deleteAt(gone, harnessAt.Add(-time.Hour))
+	notice := func(tx *sql.Tx, record, repo string, seq uint64) error {
+		at := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: seq}
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO code_notifications (record_id, recipient,
+			recipient_kind, repo_id, change_id, change_ref, reason, addressed, fallback_only, fallback_rank, excerpt,
+			created_at, log_seq, log_stream, log_generation)
+			VALUES (?, 'founder', 'person', ?, ?, ?, 'mention', 1, 0, 0, '', ?, ?, ?, 1)`,
+			record, repo, repo+"-change", repo+"!1", store.EncodeTime(harnessAt), at.Packed(), at.Stream)
+		return err
+	}
+	if err := n.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		for i := range 4 {
+			if err := notice(tx, fmt.Sprintf("gone-record-%d", i), gone, uint64(9001+i)); err != nil {
+				return err
+			}
+		}
+		return notice(tx, "kept-record", kept, 9000)
+	}); err != nil {
+		t.Fatalf("seed founder's notices: %v", err)
+	}
+	var all []string
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 4 {
+			t.Fatalf("founder's inbox did not end after %d pages: read %v", pages, all)
+		}
+		page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeExclude,
+			Limit: 3, Cursor: cursor}, []inbox.Source{codeSource{n: n}})
+		if err != nil {
+			t.Fatalf("Compose at %q: %v", cursor, err)
+		}
+		for _, notice := range page.Notices {
+			all = append(all, notice.RecordID)
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if want := []string{code.NoticeID("kept-record", kept+"-change")}; !slices.Equal(all, want) {
+		t.Errorf("founder's composed inbox reads %v, want the notice on the repository they still read, %v", all,
+			want)
+	}
+}
 
 // CODE NOTICES ARE HELD TO THE REPOSITORY GRANT: founder heard about a change
 // on the company's `web` and one on Sales' `visibility: unit` repository; read

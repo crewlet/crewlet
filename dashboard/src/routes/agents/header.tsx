@@ -38,7 +38,7 @@ import { Button, ButtonLink, Combobox, Input, type ComboboxOption } from "@crewl
 import { PencilGlyph, PlusGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { href, useNavigator } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { usePeekControls, usePeek } from "~/app/frame/DetailRail.tsx";
+import { usePeekControls, usePeek } from "~/app/frame/peekAddress.ts";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import { CONFIG_WRITE_GRANT, useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
@@ -173,7 +173,7 @@ export function AgentsHeader({
  * the page shows: the Org chart's sections.
  *
  * ASKED THE GATE THE BUILDER ASKS (`useOrgWriteAccess`): a reader holding only
- * Tracker was offered an enabled Edit org beside a disabled Add seat, and the
+ * Worklet was offered an enabled Edit org beside a disabled Add seat, and the
  * page it opened refused them. Never hidden: the control says why.
  */
 export function EditOrgButton() {

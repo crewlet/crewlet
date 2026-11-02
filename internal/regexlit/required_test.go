@@ -168,10 +168,10 @@ func TestRequiredAdmitsEveryMatch(t *testing.T) {
 		"%d non-matching texts skipped", len(patterns), filtered, matched, rejected)
 }
 
-// words are literal runs, each with a rune whose folding is the hard case: an
+// literals are literal runs, each with a rune whose folding is the hard case: an
 // ASCII letter with a non-ASCII partner, a non-ASCII orbit that lowers
 // inconsistently, U+FFFD, and punctuation the gates write.
-var words = []string{
+var literals = []string{
 	"ADR-", "types.", "kind", "class", "Sk", "metrics", "env", "_", ":", "{",
 	"ſ", "\U0000212A", "é", "σ", "ς", "Σ", "\U000000B5", "\U0000FFFD", "x\U0000FFFDy", "%s", " ",
 }
@@ -182,13 +182,13 @@ var classes = []string{
 	"[FS]", `[A-Za-z0-9_]`, ".", "[σς]",
 }
 
-// vocabulary is what the generated patterns are written from: the words and
+// vocabulary is what the generated patterns are written from: the literals and
 // classes above, and a flag in three of every six.
 var vocabulary = regexlittest.Vocabulary{
-	Flags: []string{"(?i)", "(?s)", "(?m)", "", "", ""}, Words: words, Classes: classes,
+	Flags: []string{"(?i)", "(?s)", "(?m)", "", "", ""}, Words: literals, Classes: classes,
 }
 
-// noise is context a match is embedded in: words, separators, a newline, the
+// noise is context a match is embedded in: literals, separators, a newline, the
 // escapes, and a byte that is not UTF-8.
 func noise(rng *rand.Rand) string {
 	pieces := []string{"a", "Z", " ", "\n", ".", "ſ", "\U0000212A", "\xff", "ADR", "e", "-", "σ"}

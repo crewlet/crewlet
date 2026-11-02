@@ -55,7 +55,7 @@ import (
 // # A repository is its grant's, the health grant or not
 //
 // The health grant gives a seat the deployment's view, never a repository's
-// content or rows beyond its own repository grant (ADR-0058): code_status's
+// content or rows beyond its own repository grant (ADR-0081): code_status's
 // one-repository form resolves the name as the code tools do, refused
 // `not_permitted` where the seat may not read it, and the hottest repositories
 // a git node names are held to the same grant — a seat's answer leaves out
@@ -66,7 +66,7 @@ import (
 // # And, in a turn somebody woke, theirs too
 //
 // Those repository reads are code reads, which the requester ceiling holds
-// (ADR-0058, [CodeDeps.callerOn]): in a turn a colleague seat woke, each is
+// (ADR-0081, [CodeDeps.callerOn]): in a turn a colleague seat woke, each is
 // read for that seat as well, so the hot list leaves out what the colleague
 // may not read and counts it withheld, and the one-repository form is refused
 // as the code tools refuse a read above the ceiling; a turn a stranger woke,
@@ -244,12 +244,10 @@ type nodeHealth struct {
 
 // nodeStatus is the live half of a node's heartbeat (coord.NodeStatus).
 type nodeStatus struct {
-	InFlight         int       `json:"in_flight"`
-	Draining         bool      `json:"draining"`
-	StartedAt        time.Time `json:"started_at,omitzero"`
-	Posture          string    `json:"posture,omitempty"`
-	ProjectionsReady int       `json:"projections_ready,omitempty"`
-	ProjectionsTotal int       `json:"projections_total,omitempty"`
+	InFlight  int       `json:"in_flight"`
+	Draining  bool      `json:"draining"`
+	StartedAt time.Time `json:"started_at,omitzero"`
+	Posture   string    `json:"posture,omitempty"`
 	// AlarmsEvaluated is whether the node has an alarm table it evaluated,
 	// and Alarms the kinds it found firing, the longest-standing first —
 	// present, empty or not, exactly where it did.
@@ -266,7 +264,7 @@ type alarmMark struct {
 func (t *fleetHealth) Call(ctx context.Context, _ map[string]any) (tools.Result, error) {
 	leases, err := t.deps.Leases.ListLive(ctx, coord.ClassNode)
 	if err != nil {
-		return refusedBy(tools.RefusalUnavailable, err, "fleet_health could not read the fleet's "+
+		return refusedBy(tools.RefusalUnavailable, err, FleetHealthTool+" could not read the fleet's "+
 			"presence from the coordination store just now, so it says nothing rather than show a "+
 			"fleet with nodes missing. Try again shortly."), nil
 	}
@@ -302,8 +300,7 @@ func nodeHealthOf(profile placement.NodeProfile, lease coord.Lease, now time.Tim
 	}
 	s := &nodeStatus{
 		InFlight: live.InFlight, Draining: live.Draining, StartedAt: live.StartedAt.UTC(),
-		Posture: live.Posture, ProjectionsReady: live.ProjectionsReady,
-		ProjectionsTotal: live.ProjectionsTotal, AlarmsEvaluated: live.AlarmsEvaluated,
+		Posture: live.Posture, AlarmsEvaluated: live.AlarmsEvaluated,
 	}
 	if live.AlarmsEvaluated {
 		// THE MARKS AS THE NODE GAVE THEM, in its order — the longest-standing
@@ -418,7 +415,7 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	report, err := t.deps.Status.CodeStatus(ctx, "")
 	if err != nil {
-		return refusedBy(tools.RefusalUnavailable, err, "code_status could not ask the git nodes "+
+		return refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not ask the git nodes "+
 			"just now. Try again shortly."), nil
 	}
 	answer := codeStatusFleet{Nodes: make([]gitNodeStatus, 0, len(report.Statuses)),
@@ -468,7 +465,7 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 	}
 	report, err := t.deps.Status.CodeStatus(ctx, repo.ID)
 	if err != nil {
-		return refusedBy(tools.RefusalUnavailable, err, "code_status could not ask the git nodes "+
+		return refusedBy(tools.RefusalUnavailable, err, CodeStatusTool+" could not ask the git nodes "+
 			"just now. Try again shortly."), nil
 	}
 	answer := codeStatusRepo{Repo: repo.Name, ID: repo.ID, Nodes: make([]repoOnNode, 0, len(report.Statuses)),
@@ -488,7 +485,7 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 // judge is which of the repositories entries name the caller may read, and how
 // many it may not.
 //
-// AN OPERATOR READS EVERY REPOSITORY (ADR-0058: a person maintains every one,
+// AN OPERATOR READS EVERY REPOSITORY (ADR-0081: a person maintains every one,
 // and a token reads every one), so a person's answer is judged without a read
 // — and a person's call is no deputy, so it reads for nobody else either.
 // A SEAT is held to its own grant, through the code tools' one resolution of a

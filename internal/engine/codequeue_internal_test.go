@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A QUEUED CLOSE IS WRITTEN AS ITS ENQUEUER (M5-D27): the work item of a
@@ -30,9 +30,9 @@ func TestAQueuedCloseIsWrittenAsItsEnqueuer(t *testing.T) {
 		want builtin.Actor
 	}{
 		{"a seat", code.Principal{Kind: code.PrincipalAgent, Seat: "dev"},
-			builtin.Actor{Handle: "dev", Kind: tracker.AuthorAgent}},
+			builtin.Actor{Handle: "dev", Kind: worklet.AuthorAgent}},
 		{"a person", code.Principal{Kind: code.PrincipalOperator, Seat: "founder", OperatorID: "pat:ada"},
-			builtin.Actor{Handle: "founder", Kind: tracker.AuthorHuman, OperatorID: "pat:ada"}},
+			builtin.Actor{Handle: "founder", Kind: worklet.AuthorHuman, OperatorID: "pat:ada"}},
 	} {
 		got, err := enqueuerActor(c.as)
 		if err != nil || got.Handle != c.want.Handle || got.Kind != c.want.Kind ||
@@ -53,7 +53,7 @@ func TestAQueuedCloseIsWrittenAsItsEnqueuer(t *testing.T) {
 		As:       code.Principal{Kind: code.PrincipalAgent, Seat: "dev"},
 		WorkItem: types.WorkItem{Backend: types.WorkJira, ID: "10042", Key: "ENG-42"},
 	})
-	if !errors.Is(err, errQueueCloseNotNative) {
-		t.Fatalf("closing a Jira issue answered %v, want it refused as not the engine's own tracker's", err)
+	if !errors.Is(err, errQueueCloseNotWorklet) {
+		t.Fatalf("closing a Jira issue answered %v, want it refused as not Worklet's", err)
 	}
 }

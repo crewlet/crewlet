@@ -15,6 +15,20 @@ export interface ReconcileFinding {
   kind: string;
   subject?: string;
   /**
+   * A finding about one agent's own account that the agent's access record
+   * also carries (a step waiting on a person, a refusal of its sync). The
+   * Agents tab draws it on that agent's row, so the integration's list of
+   * issues leaves it out; it still counts toward the integration's phase.
+   */
+  seat?: boolean;
+  /**
+   * The finding's lead, a few words a list sets in bold ahead of `detail`
+   * ("GitHub can't reach this engine"). Every advisory carries one, which is
+   * what the integration's notes lead with; a finding without one is read by
+   * its sentence alone.
+   */
+  title?: string;
+  /**
    * What is wrong, in one sentence — and only that.
    *
    * What to do about it is `remedy` and which things it is about is
@@ -228,4 +242,38 @@ export interface IntegrationsAnswer {
   /** Which nodes the traffic counts were read from — a delivery is stored on
    *  whichever node received it — or null when no store could be read. */
   coverage?: Coverage | null;
+}
+
+/**
+ * The apps a link can belong to, as `link_hosts` names them
+ * (`queries.LinkHostKind`).
+ */
+export type LinkHostKind = "github" | "gitlab" | "mattermost" | "jira" | "confluence";
+
+/**
+ * Where one of the company's apps lives in a browser: its kind and base
+ * address, and a code host's owners. Every reader may ask for these
+ * (`link_hosts`), where the `integrations` answer is an administrator's, so it
+ * carries no repository, project, team, credential or health.
+ *
+ * Held against what the engine sends by
+ * `internal/api/queries.TestTheLinkHostsAnswerCarriesHostsAndNothingElse`.
+ */
+export interface LinkHost {
+  kind: LinkHostKind;
+  /** Scheme, host, port and path, with no trailing slash: `https://gitlab.example.com/scm`. */
+  url: string;
+  /**
+   * A code host's organizations or top-level groups, lower case and sorted:
+   * the owners a bare `owner/repo` in prose is read as a repository under,
+   * and the only owners a reference or an address on the host is linked
+   * under, so a host with none links none (`lib/inlineTokens.ts`). Absent on
+   * every other kind.
+   */
+  owners?: string[];
+}
+
+/** The `link_hosts` answer. */
+export interface LinkHostsAnswer {
+  hosts: LinkHost[];
 }

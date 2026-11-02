@@ -10,12 +10,44 @@
 
 import { describe, expect, test, vi } from "vitest";
 import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
-import { MAX_PHASES, Store } from "./store.ts";
+import { MAX_CHAT_LIVE, MAX_CHAT_ROOMS, MAX_PHASES, Store } from "./store.ts";
 import { LiveSocket, QueryError } from "./socket.ts";
 import { nodeCountLabel } from "../lib/format.ts";
-import type { EventEnvelope, FeedRow, OverlayRow } from "./types.ts";
+import type {
+  ChatChange,
+  ChatPresencePush,
+  EventEnvelope,
+  FeedRow,
+  OverlayRow,
+  RoomMember,
+} from "./types.ts";
 import { healthFrame } from "~/test/health.ts";
 import { eventually } from "~/test/settle.ts";
+
+/** The engine's sentence for a read refused on a log at its ceiling
+ *  (`statelog.ConditionSentence`), which is what a frame's `detail` carries:
+ *  never the refusal's own detail, which stays in the node's log. */
+const FULL_LOG =
+  "There's no room left to save this kind of change, so the node answering this can't " +
+  "confirm it has the latest ones. An administrator needs to make room for it.";
+
+/** One member of a room, as the presence hub presents it. */
+function member(seat: string, over: Partial<RoomMember> = {}): RoomMember {
+  return {
+    session: `${seat}-tab`,
+    seat,
+    kind: "human",
+    activity: "viewing",
+    focus: {},
+    at: "2026-01-01T00:00:00Z",
+    ...over,
+  };
+}
+
+/** A `chat_presence` roster: the room whole, as a socket joining it is handed it. */
+function roster(room: string, ...members: RoomMember[]): ChatPresencePush {
+  return { channel_id: room, roster: true, upsert: members, leave: [], truncated: false };
+}
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -50,6 +82,38 @@ describe("agent overlays", () => {
     expect(row?.handle).toBe("pm");
     expect(row?.activity).toBe("working");
     expect(row?.current_phase).toBe("execute");
+  });
+
+  test("a push that says nothing new keeps every row and tells nobody", () => {
+    // Every push decodes into new objects. A row re-sent unchanged (a seat's
+    // state beside another seat's change, the same refusal once a second)
+    // used to replace the row held, and every screen keyed on it drew it
+    // again: the Inbox redrew thirteen times a second for nothing visible.
+    const store = new Store();
+    store.applySnapshot({
+      agents: [
+        { id: "pm", agent_id: "a-pm", role: "PM", handle: "pm", activity: "idle" },
+        { id: "qa", agent_id: "a-qa", role: "QA", handle: "qa", activity: "idle" },
+      ],
+    });
+    store.applyAgents([{ agent_id: "a-pm", activity: "stopped", stopped_reason: "provider" }]);
+    const held = store.state.agents;
+    const told = vi.fn();
+    store.subscribe(["agents"], told);
+    for (let i = 0; i < 20; i++) {
+      store.applyAgents([
+        { agent_id: "a-pm", activity: "stopped", stopped_reason: "provider" },
+        { agent_id: "a-qa", activity: "idle" },
+      ]);
+    }
+    expect(told).not.toHaveBeenCalled();
+    expect(store.state.agents).toBe(held);
+
+    // A push that moves one row replaces that row and no other.
+    store.applyAgents([{ agent_id: "a-qa", activity: "working" }]);
+    expect(told).toHaveBeenCalledTimes(1);
+    expect(store.state.agents[0]).toBe(held[0]);
+    expect(store.state.agents[1]).not.toBe(held[1]);
   });
 
   test("a keyed object is DISCARDED rather than half-applied", () => {
@@ -277,6 +341,30 @@ describe("connection state", () => {
     expect(store.state.health).toBeNull();
   });
 
+  // WHAT THE NODE LAST SAID OUTLIVES THE SOCKET, and the tab keeps it: a
+  // follower of a configuration write asks that rather than whether the node
+  // is up, and one mounted during a drop has no earlier render to keep it
+  // from (`lib/useLastHealth.ts`).
+  test("a dropped socket keeps the last frame the tab received", () => {
+    const store = new Store();
+    expect(store.state.lastHealth).toBeNull();
+    const pushed = healthFrame({ applied_epoch: 4 });
+    store.applyHealth(pushed);
+    store.setConnected(false);
+    expect(store.state.health).toBeNull();
+    expect(store.state.lastHealth).toBe(pushed);
+    // An empty frame is no frame the node sent.
+    store.applyHealth(null);
+    expect(store.state.lastHealth).toBe(pushed);
+    // The snapshot's health is a frame like the push.
+    const snapped = healthFrame({ applied_epoch: 5 });
+    store.applySnapshot({ health: snapped, agents: [] });
+    expect(store.state.lastHealth).toBe(snapped);
+    // A refusal drops the company, never the node's own health.
+    store.setAccessRefused("your seat is no longer in the chart");
+    expect(store.state.lastHealth).toBe(snapped);
+  });
+
   // A TAB STILL CONNECTING IS NOT A TAB THAT LOST THE ENGINE. Both are
   // disconnected, and only the second has been answered, by a close or by a
   // failed dial; the engine panel draws an amber dot for that one alone, and
@@ -407,7 +495,15 @@ describe("a live call's heavy fields", () => {
         trigger: null,
         in_progress: true,
         updated_at: "2026-10-06T09:00:00Z",
-        versions: { prompt: 0, response: 0, narration: 0, executions: 0, rounds: 0, ...versions },
+        versions: {
+          prompt: 0,
+          response: 0,
+          narration: 0,
+          executions: 0,
+          rounds: 0,
+          invocations: 0,
+          ...versions,
+        },
         ...carried,
         ...over,
       } as never,
@@ -485,19 +581,20 @@ describe("a live call's heavy fields", () => {
     expect(stale).toEqual(["a-pm"]);
   });
 
-  // A CALL BUILT AGAIN UNDER ITS OWN KEY IS NEWER IN EVERY FIELD. A suspended
-  // Execute phase's checkpoint clears its call, and its resumed rounds stream
-  // under the same turn, phase and iteration; a tab that missed the push
-  // clearing it and the first push after holds the call from before the
-  // suspension. The engine never hands a version out twice, so the next push
-  // names versions past every one the tab holds: a field it carries is taken,
-  // and one it leaves out says the tab is behind, and is fetched whole. Counted
-  // per call, the resumed versions were below the held ones, and the tab kept
-  // the old call and asked for nothing — the engine's half of that is
+  // A CALL BUILT AGAIN UNDER ITS OWN KEY IS NEWER IN EVERY FIELD. A parked
+  // turn's resume that runs again — held for its seat's budget, or retried —
+  // opens its review again under the turn, phase and iteration the attempt
+  // before it used, whose completion cleared the call; a tab that missed the
+  // push clearing it and the first push after holds the earlier attempt's
+  // call. The engine never hands a version out twice, so the next push names
+  // versions past every one the tab holds: a field it carries is taken, and one
+  // it leaves out says the tab is behind, and is fetched whole. Counted per
+  // call, the later attempt's versions were below the held ones, and the tab
+  // kept the old call and asked for nothing — the engine's half of that is
   // livestate's TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore.
   //
   // Mutation: stop reporting a field left out at a newer version, and the
-  // prompt from before the suspension stays on screen.
+  // earlier attempt's prompt stays on screen.
   test("takes a call built again under its key, after missing its clearing", () => {
     const store = seated();
     store.applyAgents([
@@ -506,7 +603,7 @@ describe("a live call's heavy fields", () => {
         { ...prompt, ...narration(3), response: "old" },
       ),
     ]);
-    // The clearing push and the resumed call's first push were dropped.
+    // The clearing push and the later attempt's first push were dropped.
     const stale = store.applyAgents([
       pushed({ prompt: 9, response: 11, narration: 11 }, { ...narration(1), response: "new" }),
     ]);
@@ -515,29 +612,31 @@ describe("a live call's heavy fields", () => {
     expect(call?.round_narration).toHaveLength(1);
     expect(stale).toEqual(["a-pm"]);
 
-    const resumed = { prompt: "resume it", prompt_messages: [{ role: "system", content: "lead" }] };
+    const again = { prompt: "judge it", prompt_messages: [{ role: "system", content: "lead" }] };
     store.applyLiveCall({
       agent_id: "a-pm",
       handle: "pm",
       live_call:
         pushed(
           { prompt: 9, response: 11, narration: 11 },
-          { ...resumed, ...narration(1), response: "new" },
+          { ...again, ...narration(1), response: "new" },
         ).live_call ?? null,
       live_call_seq: 0,
     });
     call = store.state.agents[0]?.live_call;
-    expect(call?.prompt).toBe("resume it");
+    expect(call?.prompt).toBe("judge it");
     expect(call?.versions).toMatchObject({ prompt: 9, response: 11, narration: 11 });
   });
 
   // A STATUS READER IS NEVER SENT A BODY, so a withheld call — every body
   // version zero, no body key, `body_withheld` — is never behind for one:
   // asked for whole, the engine would answer the same status again. Its
-  // rounds are status and still merge as any call's do. The CONTROL is the
-  // case below, where a version moved past the copy held is fetched.
+  // rounds and its CLI runs are status and still merge as any call's do. The
+  // CONTROL is the case below, where a version moved past the copy held is
+  // fetched.
   // Mutation: count a withheld body field as one the tab is behind on, and a
-  // status reader asks for its call on every push.
+  // status reader asks for its call on every push; treat the runs as body,
+  // and the status reader loses them.
   test("a status reader never refetches a live call", () => {
     const store = seated();
     const socket = new LiveSocket(store);
@@ -545,8 +644,11 @@ describe("a live call's heavy fields", () => {
     const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
     const withheld = (rounds: number) =>
       pushed(
-        { rounds },
-        { rounds: Array.from({ length: rounds }, () => ({})) },
+        { rounds, invocations: rounds },
+        {
+          rounds: Array.from({ length: rounds }, () => ({})),
+          invocations: Array.from({ length: rounds }, () => ({})),
+        },
         {
           body_withheld: true,
         },
@@ -558,8 +660,9 @@ describe("a live call's heavy fields", () => {
     const call = store.state.agents[0]?.live_call;
     expect(call?.body_withheld).toBe(true);
     expect(call?.prompt).toBeUndefined();
-    expect(call?.versions).toMatchObject({ prompt: 0, narration: 0, rounds: 3 });
+    expect(call?.versions).toMatchObject({ prompt: 0, narration: 0, rounds: 3, invocations: 3 });
     expect(call?.rounds).toHaveLength(3);
+    expect(call?.invocations).toHaveLength(3);
   });
 
   // A BODY HELD A MOMENT BEFORE IS NOT KEPT once the engine withholds it: a
@@ -619,7 +722,7 @@ describe("a live_call answer the socket delivers late", () => {
       phase,
       iteration: 0,
       in_progress: true,
-      versions: { prompt: 1, response: 1, narration: 1, executions: 1, rounds: 1 },
+      versions: { prompt: 1, response: 1, narration: 1, executions: 1, rounds: 1, invocations: 1 },
     } as never,
   });
   // The same running call at `seq`, its narration at version `narration`,
@@ -634,7 +737,7 @@ describe("a live_call answer the socket delivers late", () => {
     live_call_seq: seq,
     live_call: {
       ...running(seq).live_call,
-      versions: { prompt: 1, response: 1, narration, executions: 1, rounds: 1 },
+      versions: { prompt: 1, response: 1, narration, executions: 1, rounds: 1, invocations: 1 },
       ...carried,
       ...over,
     } as never,
@@ -647,6 +750,7 @@ describe("a live_call answer the socket delivers late", () => {
     response: "",
     tool_executions: [],
     rounds: [],
+    invocations: [],
     round_narration: Array.from({ length: n }, (_, i) => ({ round: i + 1, content: `r${i + 1}` })),
   });
 
@@ -855,7 +959,7 @@ describe("a refused query", () => {
         error: "unavailable",
         retry_after: 4,
         refusal: "log_full",
-        detail: "the tracker log is at its ceiling",
+        detail: FULL_LOG,
       }),
     );
     const err = await asked.catch((e: unknown) => e);
@@ -863,7 +967,7 @@ describe("a refused query", () => {
     expect((err as QueryError).message).toBe("unavailable");
     expect((err as QueryError).refusal).toEqual({
       code: "log_full",
-      detail: "the tracker log is at its ceiling",
+      detail: FULL_LOG,
       retryAfter: 4,
     });
   });
@@ -881,12 +985,32 @@ describe("a refused query", () => {
         kind: "error",
         id: 1,
         error: "bad_params",
-        detail: "days=91, and a spend window is 1 to 90 company days — ask for at most 90",
+        detail: "days=91, and a spend window is 1 to 90 company days. Ask for at most 90",
       }),
     );
     const err = (await asked.catch((e: unknown) => e)) as QueryError;
     expect(err.message).toBe("bad_params");
-    expect(err.detail).toMatch(/ask for at most 90/);
+    expect(err.detail).toMatch(/Ask for at most 90/);
+  });
+
+  // A REVISION THE NODE CANNOT OPEN SAYS WHAT FIXES IT. The engine writes
+  // that refusal for the reader too — which key, or which document — and a
+  // rejection carrying only the code left the config screen a fixed line.
+  test("a revision refusal's sentence reaches the rejection", async () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    const asked = socket.query("config");
+    socket.onMessage(
+      JSON.stringify({
+        kind: "error",
+        id: 1,
+        error: "unreadable_fleet_revision",
+        detail: "Add the key the fleet seals under to this node's secrets.keys and restart it.",
+      }),
+    );
+    const err = (await asked.catch((e: unknown) => e)) as QueryError;
+    expect(err.message).toBe("unreadable_fleet_revision");
+    expect(err.detail).toMatch(/secrets\.keys/);
   });
 
   test("a refusal that names no wait carries none", async () => {
@@ -915,5 +1039,473 @@ describe("a refused query", () => {
     expect(store.state.budget).toEqual(uncapped);
     store.applyBudget(null);
     expect(store.state.budget).toBeNull();
+  });
+});
+
+describe("chat", () => {
+  function change(over: Partial<ChatChange> = {}): ChatChange {
+    return {
+      channel_id: "room-1",
+      op: "post",
+      op_id: "op-1",
+      message_id: "m-1",
+      channel_seq: 1,
+      author: "ada",
+      author_kind: "human",
+      at: "2026-01-01T00:00:00Z",
+      position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
+      ...over,
+    };
+  }
+
+  test("the first frame for a room sets the live mark without claiming the tab is behind", () => {
+    // A tab that has just connected is not behind on a room it has never
+    // seen. Measured against zero instead, every room would open with a
+    // phantom hole and a refetch nobody needed.
+    const store = new Store();
+    store.applyChatChange(change({ channel_seq: 4_211 }));
+    expect(store.state.chat.rooms["room-1"]?.seq).toBe(4_211);
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(1);
+  });
+
+  test("a redelivered frame is the same record, not a second message", () => {
+    // The op id is the record's own idempotency key. A reconnect that
+    // overlaps, or a hub that re-sent, hands the same frame twice — and
+    // counting it twice is a message rendered twice everywhere a screen
+    // counts these.
+    const store = new Store();
+    store.applyChatChange(change());
+    const version = store.version("chat");
+    store.applyChatChange(change());
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(1);
+    // And it does not even wake a listener: nothing about the room moved.
+    expect(store.version("chat")).toBe(version);
+  });
+
+  test("a late frame never moves the live mark backwards", () => {
+    // Out of order is LATE, not new. A mark that went down would leave a
+    // screen re-reading a room it is already ahead of for ever.
+    const store = new Store();
+    store.applyChatChange(change({ op_id: "op-9", channel_seq: 9 }));
+    store.applyChatChange(change({ op_id: "op-7", channel_seq: 7 }));
+    expect(store.state.chat.rooms["room-1"]?.seq).toBe(9);
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(2);
+  });
+
+  test("the live tail is bounded per room, and so is the number of rooms", () => {
+    // A tab left open on a busy company holds a bounded amount of chat, the
+    // way MAX_EVENTS and MAX_PHASES already bound their slices. Frames arrive
+    // for every room the viewer may READ, which is wider than their rail, so
+    // the room bound is a real ceiling rather than a restatement of one.
+    const store = new Store();
+    for (let i = 0; i < MAX_CHAT_LIVE + 40; i++) {
+      store.applyChatChange(change({ op_id: `op-${i}`, channel_seq: i + 1 }));
+    }
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(MAX_CHAT_LIVE);
+    // Newest first, so the bound drops the OLDEST frame.
+    expect(store.state.chat.rooms["room-1"]?.changes[0]?.op_id).toBe(`op-${MAX_CHAT_LIVE + 39}`);
+
+    for (let i = 0; i < MAX_CHAT_ROOMS + 10; i++) {
+      store.applyChatChange(
+        change({
+          channel_id: `other-${i}`,
+          op_id: `other-op-${i}`,
+          // The log position is what orders the eviction, so it has to move.
+          position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1_000 + i },
+        }),
+      );
+    }
+    expect(Object.keys(store.state.chat.rooms).length).toBeLessThanOrEqual(MAX_CHAT_ROOMS);
+  });
+
+  test("the count a screen re-reads on moves on every frame, past both bounds", () => {
+    // WHAT A SCREEN RE-READS ON has to move on every accepted frame and on
+    // nothing else. The frames a room holds are bounded, so the length of
+    // what is held stands still past the bound — the room that re-read on
+    // it stopped re-reading at its two-hundredth frame.
+    const store = new Store();
+    for (let i = 0; i <= MAX_CHAT_LIVE; i++) {
+      store.applyChatChange(change({ op_id: `op-${i}`, channel_seq: i + 1 }));
+    }
+    const room = store.state.chat.rooms["room-1"];
+    expect(room?.changes).toHaveLength(MAX_CHAT_LIVE);
+    expect(room?.frame).toBe(MAX_CHAT_LIVE + 1);
+    expect(store.state.chat.frames).toBe(MAX_CHAT_LIVE + 1);
+
+    // A REDELIVERY MOVES NEITHER: it is the same record.
+    store.applyChatChange(change({ op_id: `op-${MAX_CHAT_LIVE}`, channel_seq: MAX_CHAT_LIVE + 1 }));
+    expect(store.state.chat.frames).toBe(MAX_CHAT_LIVE + 1);
+
+    // A ROOM EVICTED AND HEARD FROM AGAIN comes back ABOVE every number it
+    // had: a count that started again at one could land on the very number a
+    // screen holds, and that screen would not re-read.
+    const before = room!.frame;
+    for (let i = 0; i < MAX_CHAT_ROOMS; i++) {
+      store.applyChatChange(
+        change({
+          channel_id: `other-${i}`,
+          op_id: `other-op-${i}`,
+          position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1_000 + i },
+        }),
+      );
+    }
+    expect(store.state.chat.rooms["room-1"]).toBeUndefined();
+    store.applyChatChange(
+      change({
+        op_id: "op-back",
+        position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 5_000 },
+      }),
+    );
+    expect(store.state.chat.rooms["room-1"]?.frame).toBeGreaterThan(before);
+    // AND THE TAB'S TOTAL counted every one of them, the rooms it let go
+    // included — a sum of what the rooms hold would have stood still.
+    expect(store.state.chat.frames).toBe(MAX_CHAT_LIVE + 1 + MAX_CHAT_ROOMS + 1);
+  });
+
+  test("forgetting a seat keeps the frame count, which is nobody's", () => {
+    const store = new Store();
+    store.applyChatChange(change());
+    store.forgetSeat();
+    expect(store.state.chat.rooms).toEqual({});
+    expect(store.state.chat.frames).toBe(1);
+    // AND EVERY FRAME IT COUNTED IS LET GO OF, so a screen asking what
+    // arrived since one it answered is told it cannot say.
+    expect(store.state.chat.dropped).toBe(1);
+  });
+
+  test("every frame held says which accepted frame it was", () => {
+    // WHAT A SCREEN ASKS "WHAT ARRIVED SINCE" WITH, across rooms as well as
+    // within one: two rooms' frames arrive in the order the hub sent them,
+    // which a position cannot say.
+    const store = new Store();
+    store.applyChatChange(change({ op_id: "op-a" }));
+    store.applyChatChange(change({ channel_id: "room-2", op_id: "op-b" }));
+    store.applyChatChange(change({ op_id: "op-c" }));
+    expect(store.state.chat.rooms["room-1"]?.changes.map((held) => held.frame)).toEqual([3, 1]);
+    expect(store.state.chat.rooms["room-2"]?.changes.map((held) => held.frame)).toEqual([2]);
+    expect(store.state.chat.dropped).toBe(0);
+  });
+
+  test("a frame let go of by either bound is the latest one let go of", () => {
+    // WHAT TELLS "NOTHING ARRIVED" FROM "WHAT ARRIVED IS GONE": a screen
+    // holding a frame below this one cannot say what changed since.
+    const store = new Store();
+    for (let i = 0; i <= MAX_CHAT_LIVE; i++) {
+      store.applyChatChange(change({ op_id: `op-${i}`, channel_seq: i + 1 }));
+    }
+    // The room's first frame was pushed off its list.
+    expect(store.state.chat.dropped).toBe(1);
+    const newest = store.state.chat.rooms["room-1"]!.frame;
+    for (let i = 0; i < MAX_CHAT_ROOMS; i++) {
+      store.applyChatChange(
+        change({
+          channel_id: `other-${i}`,
+          op_id: `other-op-${i}`,
+          position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1_000 + i },
+        }),
+      );
+    }
+    // And then the whole room, whose newest frame goes with it.
+    expect(store.state.chat.rooms["room-1"]).toBeUndefined();
+    expect(store.state.chat.dropped).toBe(newest);
+  });
+
+  // THE LOG'S ORDER, NOT THE INSTANT'S TEXT. The broker's instant is RFC 3339
+  // with its trailing zeros trimmed, so as text `…:05Z` sorts after every
+  // fraction of its own second: ordered that way, the room that was quietest
+  // read as the busiest and was the one kept.
+  test("eviction drops the room earliest on the log, whatever its instant reads as text", () => {
+    const store = new Store();
+    store.applyChatChange(
+      change({
+        channel_id: "quiet",
+        op_id: "quiet-op",
+        at: "2026-01-01T00:00:05Z",
+        position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
+      }),
+    );
+    for (let i = 0; i < MAX_CHAT_ROOMS; i++) {
+      store.applyChatChange(
+        change({
+          channel_id: `busy-${i}`,
+          op_id: `busy-op-${i}`,
+          at: "2026-01-01T00:00:05.123456789Z",
+          position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 2 + i },
+        }),
+      );
+    }
+    const rooms = store.state.chat.rooms;
+    expect(rooms["quiet"]).toBeUndefined();
+    expect(Object.keys(rooms)).toHaveLength(MAX_CHAT_ROOMS);
+  });
+
+  test("a room's newest moment is the latest on the log, and a late frame cannot move it back", () => {
+    const store = new Store();
+    store.applyChatChange(
+      change({
+        op_id: "op-a",
+        at: "2026-01-01T00:00:05.123456789Z",
+        position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 8 },
+      }),
+    );
+    // LATER ON THE LOG, though its instant sorts earlier as text.
+    store.applyChatChange(
+      change({
+        op_id: "op-b",
+        at: "2026-01-01T00:00:05.12Z",
+        position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 9 },
+      }),
+    );
+    // And a late frame, delivered after it.
+    store.applyChatChange(
+      change({
+        op_id: "op-c",
+        at: "2026-01-01T00:00:06Z",
+        position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 7 },
+      }),
+    );
+    expect(store.state.chat.rooms["room-1"]?.position?.seq).toBe(9);
+  });
+
+  test("a frame with no room or no op id is dropped rather than filed under nothing", () => {
+    const store = new Store();
+    store.applyChatChange(change({ channel_id: "" }));
+    store.applyChatChange(change({ op_id: "" }));
+    expect(Object.keys(store.state.chat.rooms)).toHaveLength(0);
+  });
+
+  test("a degraded snapshot does not blank the open conversation", () => {
+    // The 5 s REST snapshot carries no chat at all. Applying one has to leave
+    // the transcript, the presence and the read state exactly where they
+    // were, or an engine that is merely unreachable empties the screen every
+    // five seconds.
+    const store = new Store();
+    store.applyChatChange(change());
+    store.applyChatPresence(roster("room-1", member("ada")));
+    store.applyChatRead({ handle: "ada", cursors: { "room-1": 42 } });
+    store.applySnapshot({ agents: [] });
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(1);
+    expect(store.state.chatPresence.rooms["room-1"]?.members?.map((m) => m.seat)).toEqual(["ada"]);
+    expect(store.state.chatRead?.cursors?.["room-1"]).toBe(42);
+  });
+
+  test("a roster replaces a room's members and a change merges into them", () => {
+    // THE HUB'S FAN-OUT: the room whole as the socket joins it, then only
+    // what moved. Merged rather than replaced, a roster would leave whoever
+    // left while this socket was elsewhere; replaced rather than merged, a
+    // change would empty the room of everybody it did not mention.
+    const store = new Store();
+    store.applyChatPresence(
+      roster("room-1", member("ada", { activity: "editing" }), member("cy"), member("eve")),
+    );
+    store.applyChatPresence({
+      channel_id: "room-1",
+      upsert: [member("ada"), member("bo")],
+      leave: ["cy-tab"],
+      truncated: false,
+    });
+    const held = store.state.chatPresence.rooms["room-1"]?.members ?? [];
+    // EVE IS NOT MENTIONED AND IS STILL HERE.
+    expect(held.map((m) => [m.seat, m.activity])).toEqual([
+      ["ada", "viewing"],
+      ["eve", "viewing"],
+      ["bo", "viewing"],
+    ]);
+    store.applyChatPresence(roster("room-1", member("dee")));
+    expect(store.state.chatPresence.rooms["room-1"]?.members?.map((m) => m.seat)).toEqual(["dee"]);
+  });
+
+  test("a room left with nobody in it is forgotten, and one naming no room changes nothing", () => {
+    // THE ENGINE TAKES A SOCKET OUT OF A ROOM WITH A ROSTER NAMING NOBODY —
+    // the tab moved on, or the room narrowed past its reader — and the room
+    // it was shown must not stand.
+    const store = new Store();
+    store.applyChatPresence(roster("room-1", member("ada")));
+    store.applyChatPresence(roster("room-2", member("bo")));
+    store.applyChatPresence(roster("room-1"));
+    expect(store.state.chatPresence.rooms["room-1"]).toBeUndefined();
+    store.applyChatPresence({
+      channel_id: "room-2",
+      upsert: null,
+      leave: ["bo-tab"],
+      truncated: false,
+    });
+    expect(store.state.chatPresence.rooms).toEqual({});
+    // A ROOM PAST ITS TOP COUNTS WHO IT DOES NOT PRESENT, and is not empty.
+    store.applyChatPresence({
+      channel_id: "room-3",
+      roster: true,
+      upsert: [],
+      leave: [],
+      counts: { human: 3, agent: 0 },
+      truncated: true,
+    });
+    expect(store.state.chatPresence.rooms["room-3"]?.counts).toEqual({ human: 3, agent: 0 });
+    const woke = vi.fn();
+    store.subscribe(["chatPresence"], woke);
+    store.applyChatPresence({
+      channel_id: "",
+      upsert: [member("ada")],
+      leave: [],
+      truncated: false,
+    });
+    store.applyChatPresence(null);
+    expect(woke).not.toHaveBeenCalled();
+  });
+
+  test("an unread read state is null rather than an empty cursor set", () => {
+    // Null is "nobody could look"; an empty cursor map is "you have read
+    // nothing anywhere". A screen badging a whole company unread because a
+    // coordination read failed is what keeping them apart prevents.
+    const store = new Store();
+    expect(store.state.chatRead).toBeNull();
+    store.applyChatRead(null);
+    expect(store.state.chatRead).toBeNull();
+    store.applyChatRead({ handle: "ada", cursors: {} });
+    expect(store.state.chatRead?.cursors).toEqual({});
+  });
+
+  test("a read state below the revision held is late, and is dropped", () => {
+    // Two flushes from one person land B then A, A's state carrying B's
+    // change — and B's push can still arrive after A's. Kept by arrival, the
+    // older frame would put back a cursor the record has already moved past.
+    const store = new Store();
+    const fn = vi.fn();
+    store.subscribe(["chatRead"], fn);
+    store.applyChatRead({ handle: "ada", cursors: { "room-1": 9, "room-2": 4 }, revision: 12 });
+    store.applyChatRead({ handle: "ada", cursors: { "room-2": 4 }, revision: 11 });
+    expect(store.state.chatRead?.cursors).toEqual({ "room-1": 9, "room-2": 4 });
+    expect(fn).toHaveBeenCalledTimes(1);
+    // AND A NEWER ONE REPLACES IT WHOLE, a mute lifted included.
+    store.applyChatRead({
+      handle: "ada",
+      cursors: { "room-1": 9, "room-2": 7 },
+      muted: [],
+      revision: 13,
+    });
+    expect(store.state.chatRead?.cursors?.["room-2"]).toBe(7);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  // THE REVISION ORDERS ONE SEAT'S STATES AND NOTHING ELSE. On the
+  // coordination KV it is the bucket's own sequence, so the last seat's
+  // latest flush can carry a higher number than the next seat's whole record:
+  // compared across the two, the next seat's rail answer and every push were
+  // dropped as "late" until it happened to write again — which is what a tab
+  // meets when the seat its session is bound to moves.
+  test("a read state naming another seat replaces the one held, whatever its revision", () => {
+    const store = new Store();
+    store.applyChatRead({
+      handle: "ana",
+      cursors: { "room-a": 9 },
+      muted: ["room-a"],
+      revision: 10,
+    });
+    store.applyChatRead({ handle: "bo", cursors: { "room-b": 2 }, revision: 3 });
+    expect(store.state.chatRead?.handle).toBe("bo");
+    expect(store.state.chatRead?.muted).toBeUndefined();
+    // …and within that seat, the order is the revision's again.
+    store.applyChatRead({ handle: "bo", cursors: {}, revision: 2 });
+    expect(store.state.chatRead?.cursors).toEqual({ "room-b": 2 });
+  });
+
+  test("a new seat takes the last seat's rooms and presence with it", () => {
+    // A FRAME CARRIES ITS ROOM'S NAME AND AN EXCERPT, and reaches a socket
+    // only for a room its seat may read — kept, the last seat's private rooms
+    // would sit in the tab of whoever holds the next.
+    const store = new Store();
+    store.applyChatRead({ handle: "ana", cursors: {}, revision: 10 });
+    store.applyChatChange(change({ channel_id: "ana-private", excerpt: "salary review" }));
+    store.applyChatPresence(roster("ana-private", member("ana")));
+    const woke = vi.fn();
+    store.subscribe(["chat", "chatPresence"], woke);
+    store.applyChatRead({ handle: "bo", cursors: {}, revision: 3 });
+    expect(store.state.chat.rooms).toEqual({});
+    expect(store.state.chatPresence.rooms).toEqual({});
+    expect(woke).toHaveBeenCalled();
+    // THE SAME SEAT'S NEXT STATE TAKES NOTHING.
+    store.applyChatChange(change({ channel_id: "bo-room" }));
+    store.applyChatRead({ handle: "bo", cursors: {}, revision: 4 });
+    expect(Object.keys(store.state.chat.rooms)).toEqual(["bo-room"]);
+  });
+
+  test("forgetting the seat empties every chat slice and wakes each", () => {
+    const store = new Store();
+    store.applyChatChange(change());
+    store.applyChatPresence(roster("room-1", member("ana")));
+    store.applyChatRead({ handle: "ana", cursors: { "room-1": 4 }, revision: 10 });
+    const woke = { chat: vi.fn(), chatPresence: vi.fn(), chatRead: vi.fn() };
+    for (const [slice, fn] of Object.entries(woke)) store.subscribe([slice as never], fn);
+    store.forgetSeat();
+    expect(store.state.chat.rooms).toEqual({});
+    expect(store.state.chatPresence.rooms).toEqual({});
+    expect(store.state.chatRead).toBeNull();
+    for (const fn of Object.values(woke)) expect(fn).toHaveBeenCalledTimes(1);
+    // AND A STATE THAT FOLLOWS IS KEPT, however low its revision: there is
+    // nothing held to be older than.
+    store.applyChatRead({ handle: "bo", cursors: {}, revision: 3 });
+    expect(store.state.chatRead?.revision).toBe(3);
+  });
+
+  // A REFUSAL DROPS WHAT THE ENGINE SERVED, chat included — a frame names a
+  // room and quotes it — and KEEPS THE COUNT: an empty state's zero would hand
+  // a screen holding frame 3 a count that comes back to 3, and every frame
+  // until the count passed it again would read as already answered.
+  test("a refusal drops every chat slice and keeps the frame count", () => {
+    const store = new Store();
+    store.applyChatChange(change());
+    store.applyChatChange(change({ op_id: "op-2" }));
+    store.applyChatPresence(roster("room-1", member("ana")));
+    store.applyChatRead({ handle: "ana", cursors: { "room-1": 4 }, revision: 10 });
+    const woke = { chat: vi.fn(), chatPresence: vi.fn(), chatRead: vi.fn() };
+    for (const [slice, fn] of Object.entries(woke)) store.subscribe([slice as never], fn);
+    store.setAccessRefused("seat_unavailable");
+    expect(store.state.chat.rooms).toEqual({});
+    expect(store.state.chatPresence.rooms).toEqual({});
+    expect(store.state.chatRead).toBeNull();
+    expect(store.state.chat.frames).toBe(2);
+    expect(store.state.chat.dropped).toBe(2);
+    for (const fn of Object.values(woke)) expect(fn).toHaveBeenCalled();
+    // AND THE NEXT FRAME IS ABOVE EVERY NUMBER A SCREEN HELD.
+    store.setAccessRefused(null);
+    store.applyChatChange(change({ op_id: "op-3" }));
+    expect(store.state.chat.rooms["room-1"]?.frame).toBe(3);
+  });
+
+  // A FRAME NAMING NO ROOM IS THE ENGINE SAYING THIS TAB MAY HAVE MISSED
+  // FRAMES ANYWHERE — its relay switched source, or the hub could not deliver
+  // a batch. Dropped as unfileable, as it once was, the last messages before a
+  // quiet spell stayed missing until a reload.
+  test("a frame naming no room is a gap every screen re-reads on", () => {
+    const store = new Store();
+    store.applyChatChange(change());
+    const woke = vi.fn();
+    store.subscribe(["chat"], woke);
+    store.applyChatChange({ channel_id: "" });
+    expect(woke).toHaveBeenCalledTimes(1);
+    // COUNTED, so the rail moves; and everything before it is let go of, so a
+    // screen asking what arrived is told it cannot say.
+    expect(store.state.chat.frames).toBe(2);
+    expect(store.state.chat.dropped).toBe(2);
+    expect(store.state.chat.gap).toBe(2);
+    // WHAT DID ARRIVE STAYS: the room's own frames are not a gap's to take.
+    expect(store.state.chat.rooms["room-1"]?.changes).toHaveLength(1);
+    // A SECOND GAP IS A SECOND RE-READ, never collapsed into the first.
+    store.applyChatChange({ channel_id: "" });
+    expect(store.state.chat.gap).toBe(3);
+  });
+
+  test("each chat slice wakes only its own listeners", () => {
+    // Presence moves with every keystroke re-asserted in the room and every
+    // phase a seat at work moves to, whatever the conversation does, so a
+    // rail that woke on it would re-render the channel list on each.
+    const store = new Store();
+    const fn = vi.fn();
+    store.subscribe(["chat"], fn);
+    store.applyChatPresence(roster("room-1", member("ada")));
+    store.applyChatRead({ handle: "ada", cursors: {} });
+    expect(fn).not.toHaveBeenCalled();
+    store.applyChatChange(change());
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

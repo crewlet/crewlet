@@ -11,15 +11,17 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { useState } from "react";
 import { ToastProvider } from "@crewlethq/ui";
 
-import { useAct } from "./useAct.ts";
+import { caveatToast, useAct } from "./useAct.ts";
 import { useQuery } from "./useQuery.ts";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { session } from "~/protocol/session.ts";
 import { eventually } from "~/test/settle.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 // NO ORG: the company's services are not known, so every write is the
 // engine's to decide, as on a node that has not sent its chart yet.
@@ -32,10 +34,11 @@ vi.mock("./viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const BOUND: ViewerState = {
   login: "jane.founder",
-  grants: ["tracker"],
+  grants: ["worklet"],
   admin: false,
-  tracker: true,
-  knowledge: false,
+  worklet: true,
+  doclet: false,
+  chatlet: false,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -48,6 +51,9 @@ const BOUND: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  assistant: "disabled",
+  assistantModel: null,
+  chatVendors: [],
 };
 
 interface Sent {
@@ -129,7 +135,7 @@ function engine(answer: () => Response) {
 const json = (payload: unknown, status: number) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
   });
 
 /** A screen that reads a tracker question and pins a view. */
@@ -188,6 +194,51 @@ test("pending tells the person this node has not applied it, and the reads wait 
   expect(session.floor("tracker")).toBe("CREWLET_TRACKER_LOG@1:901");
 });
 
+// A WRITE WHOSE ANSWER SAYS MORE SAYS IT: a press whose label reads the tool's
+// receipt (`landed`) is told in those words — a note the turn reads once its
+// question is answered is not "not applied yet" — and the generic sentence
+// stands where the receipt says nothing the label can read.
+test("a press that reads its receipt is told in the receipt's words", async () => {
+  engine(() =>
+    json(
+      { tool: "set_pins", outcome: "pending", receipt: { reads: "later" }, position: null },
+      200,
+    ),
+  );
+  function Said({ landed }: { landed: (receipt: unknown) => string | undefined }) {
+    const pin = useAct("set_pins");
+    return (
+      <WriteButton
+        write={pin}
+        onPress={() => void pin.run({ views: { add: ["v1"] } }, { done: "Pinned Triage", landed })}
+      >
+        Pin
+      </WriteButton>
+    );
+  }
+  const reading = (receipt: unknown) =>
+    (receipt as { reads?: string } | null)?.reads === "later" ? "It is read later." : undefined;
+  const view = render(
+    <ToastProvider>
+      <Said landed={reading} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText("It is read later.")).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/This node has not applied it yet/)).toBeNull();
+  view.unmount();
+
+  render(
+    <ToastProvider>
+      <Said landed={() => undefined} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText(/This node has not applied it yet/)).length).toBeGreaterThan(
+    0,
+  );
+});
+
 // UNKNOWN IS NEVER RETRIED ON ITS OWN, and a Retry the person presses sends
 // the SAME operation key: the engine takes it as the write's identity, so the
 // retry is the first attempt again rather than a second change.
@@ -207,13 +258,13 @@ test("unknown stays on screen, and its Retry sends the same operation key", asyn
   expect(posts[0]!.opId).toBeTruthy();
   expect(posts[1]!.opId).toBe(posts[0]!.opId);
 
-  // AND A NEW PRESS IS A NEW OPERATION — made once the retry's answer has
-  // landed, because the request leaving is not the press ending: while one is
-  // out the control is busy and takes no click, so a press made as soon as the
-  // retry was SENT was dropped whenever its answer was slow to land.
-  const pin = screen.getByRole("button", { name: "Pin" });
-  await waitFor(() => expect(pin.getAttribute("aria-busy")).toBeNull());
-  fireEvent.click(pin);
+  // AND A NEW PRESS IS A NEW OPERATION, pressed once the retry has answered:
+  // a button whose write is still out is busy and takes no press, so pressed
+  // a commit early the press went nowhere.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Pin" }).getAttribute("aria-busy")).toBeNull(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
   await waitFor(() => expect(posts).toHaveLength(3));
   expect(posts[2]!.opId).not.toBe(posts[0]!.opId);
 });
@@ -286,11 +337,34 @@ test("a refusal is drawn beside the control and stays until the next press", asy
   );
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
-  const refusal = () => document.querySelector(".write-refusal");
+  const refusal = () => document.querySelector(".crewlet-refusal-strip");
   await eventually(() => expect(refusal()?.textContent).toContain("views: v9 is not a view"));
   expect(refusal()?.getAttribute("role")).toBe("alert");
   await runPendingTimers();
   expect(refusal()?.textContent).toContain("views: v9 is not a view");
+});
+
+// A REFUSAL IS DRAWN IN A PERSON'S WORDS (ADR-0060): the engine's detail is a
+// sentence written for whoever pressed, drawn as plain text with no value
+// marked in it; and a refusal nobody worded for a person carries no detail,
+// so its code's own sentence is what is drawn.
+test("a refusal is drawn in the person's words, or in its code's own sentence", async () => {
+  const person =
+    "That choice is not one of this decision's options. Pick one of the options shown, or answer in words.";
+  engine(() => json({ error: "invalid", tool: "set_pins", detail: person }, 422));
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  const refusal = () => document.querySelector(".crewlet-refusal-strip");
+  await waitFor(() => expect(refusal()?.textContent).toContain(person));
+  expect(refusal()?.querySelector("code")).toBeNull();
+  cleanup();
+
+  const floor =
+    "That change was refused, and nothing was written. Check what was entered, then try again.";
+  engine(() => json({ error: "invalid", tool: "set_pins", message: floor }, 422));
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  await waitFor(() => expect(refusal()?.textContent).toContain(floor));
 });
 
 /** A screen that pins a view and reads back the refusal its press came to. */
@@ -319,7 +393,7 @@ test("a refusal on authority carries the grants the engine named, and draws them
         error: "unauthorized",
         tool: "set_pins",
         reason: "needs access this person does not hold",
-        grants: ["tracker"],
+        grants: ["worklet"],
       },
       403,
     ),
@@ -331,10 +405,10 @@ test("a refusal on authority carries the grants the engine named, and draws them
     </ToastProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
-  const refusal = () => document.querySelector(".write-refusal");
+  const refusal = () => document.querySelector(".crewlet-refusal-strip");
   await waitFor(() => expect(refusal()).not.toBeNull());
-  expect(seen).toMatchObject({ grants: ["tracker"] });
-  expect(refusal()?.textContent).toContain("You need Tracker access for this. Ask an admin.");
+  expect(seen).toMatchObject({ grants: ["worklet"] });
+  expect(refusal()?.textContent).toContain("You need Worklet access for this. Ask an admin.");
 });
 
 // AND A REFUSAL THAT IS NOT ON AUTHORITY NAMES NONE, rather than a grant
@@ -350,9 +424,9 @@ test("a refusal that is not on authority carries no grants", async () => {
     </ToastProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
-  await waitFor(() => expect(document.querySelector(".write-refusal")).not.toBeNull());
+  await waitFor(() => expect(document.querySelector(".crewlet-refusal-strip")).not.toBeNull());
   expect(seen).toMatchObject({ grants: [] });
-  expect(document.querySelector(".write-refusal")?.textContent).not.toContain("Needs");
+  expect(document.querySelector(".crewlet-refusal-strip")?.textContent).not.toContain("Needs");
 });
 
 // OFFLINE IS DISABLED, NEVER QUEUED.
@@ -429,4 +503,157 @@ test("an abandoned press resolves with null and reports nothing", async () => {
   controller.abort();
   await waitFor(() => expect(got).toHaveBeenCalledWith(null));
   expect(screen.queryByText(/Could not confirm/)).toBeNull();
+});
+
+/** Two presses through `run`, the second naming the first's operation key. */
+function Repeat({ onResult }: { onResult: (r: unknown) => void }) {
+  const pin = useAct("set_pins");
+  const [first, setFirst] = useState("");
+  return (
+    <>
+      <button
+        onClick={() =>
+          void pin
+            .run({ views: { add: ["v1"] } }, { done: "Pinned", quiet: true })
+            .then((r) => setFirst(r?.opId ?? ""))
+        }
+      >
+        First
+      </button>
+      <button
+        onClick={() =>
+          void pin
+            .run({ views: { add: ["v1"] } }, { done: "Pinned", quiet: true }, { opId: first })
+            .then(onResult)
+        }
+      >
+        Again
+      </button>
+    </>
+  );
+}
+
+// A CALLER THAT KEEPS ITS OWN PRESSES REPEATS ONE UNDER ITS KEY. The chat
+// outbox holds a row per message nobody answered for, each with a Retry of its
+// own, so the hook's one held refusal cannot be what a retry reads — and a
+// retry sent under a fresh key is a second message rather than the first again.
+test("a press naming an earlier press's operation key is that press again", async () => {
+  const posts = engine(() => json({ tool: "set_pins", outcome: "unknown" }, 504));
+  const got = vi.fn();
+  render(
+    <ToastProvider>
+      <Repeat onResult={got} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "First" }));
+  await waitFor(() => expect(posts).toHaveLength(1));
+  await new Promise((r) => setTimeout(r, 20));
+  fireEvent.click(screen.getByRole("button", { name: "Again" }));
+  await waitFor(() => expect(got).toHaveBeenCalled());
+  expect(posts).toHaveLength(2);
+  expect(posts[0]!.opId).toBeTruthy();
+  expect(posts[1]!.opId).toBe(posts[0]!.opId);
+  expect(got.mock.calls[0]![0]).toMatchObject({ opId: posts[0]!.opId });
+});
+
+// LAST IN THE FILE, because the tab's floor it raises is shared with every
+// case above. THE INCIDENT: answering a decision left a toast that never went away,
+// telling a person to "Use ask: backend-engineer", the receipt's `warnings`
+// written for a model. A press is told the engine's PERSON words from
+// `caveats`, and the receipt's model words are never drawn.
+test("a press is told its caveats in a person's words, never the receipt's model words", async () => {
+  engine(() =>
+    json(
+      {
+        tool: "set_pins",
+        outcome: "applied",
+        position: "CREWLET_TRACKER_LOG@1:990",
+        receipt: { warnings: ["Use ask: backend-engineer, if you are expecting a reply."] },
+        caveats: [
+          {
+            code: "unaddressed_comment",
+            message: "@backend-engineer will see this comment, but it does not ask them anything.",
+            action: "none",
+          },
+        ],
+      },
+      200,
+    ),
+  );
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText(/does not ask them anything/)).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/Use ask:/)).toBeNull();
+});
+
+// A PENDING PRESS'S CAVEATS ARE SAID AFTER ITS OWN SENTENCE, in one toast.
+test("a pending press's caveats follow its own sentence", () => {
+  expect(
+    caveatToast(
+      [{ code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" }],
+      "Sent. This node has not applied it yet.",
+    ),
+  ).toEqual({
+    variant: "info",
+    message: "Sent. This node has not applied it yet. Saved as 2026-03-04.",
+  });
+});
+
+// A CONTROL THAT DRAWS ITS PRESS'S CAVEATS ITSELF is not told them again in
+// the toast: the board draws a card's missed place beside the board.
+test("a press whose control draws its caveats toasts the press alone", async () => {
+  engine(() =>
+    json(
+      {
+        tool: "set_pins",
+        outcome: "applied",
+        position: "CREWLET_TRACKER_LOG@1:991",
+        receipt: {},
+        caveats: [
+          { code: "lane_changed_not_placed", message: "Drawn by the board.", action: "none" },
+        ],
+      },
+      200,
+    ),
+  );
+  function Drawer() {
+    const pin = useAct("set_pins");
+    return (
+      <WriteButton
+        write={pin}
+        onPress={() =>
+          void pin.run({ views: { add: ["v1"] } }, { done: "Pinned Triage", drawsCaveats: true })
+        }
+      >
+        Pin
+      </WriteButton>
+    );
+  }
+  render(
+    <ToastProvider>
+      <Drawer />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  expect((await screen.findAllByText("Pinned Triage")).length).toBeGreaterThan(0);
+  expect(screen.queryByText("Drawn by the board.")).toBeNull();
+});
+
+test("a caveat that asks nothing goes by itself, and one that needs a person stays", () => {
+  expect(caveatToast([])).toBeNull();
+  // NOTHING TO DO: the kit's info toast, which goes by itself.
+  expect(
+    caveatToast([
+      { code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" },
+      { code: "body_links_capped", message: "Only the first 25 are linked.", action: "none" },
+    ]),
+  ).toEqual({ variant: "info", message: "Saved as 2026-03-04. Only the first 25 are linked." });
+  // ONE THAT NEEDS A PERSON makes the press's toast a warning, which the kit
+  // keeps until it is dismissed.
+  expect(
+    caveatToast([
+      { code: "date_truncated", message: "Saved as 2026-03-04.", action: "none" },
+      { code: "default_assignee_gone", message: "Assign it to someone.", action: "required" },
+    ]),
+  ).toEqual({ variant: "warning", message: "Saved as 2026-03-04. Assign it to someone." });
 });

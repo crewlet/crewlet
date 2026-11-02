@@ -205,11 +205,24 @@ type PassInput struct {
 	// Recreate re-registers hooks with a fresh secret. DESTRUCTIVE across
 	// deployments: the previous secret stops working everywhere else this
 	// company runs, so a caller must confirm it deliberately.
-	Recreate bool
+	//
+	// SPELLED BY THE CALLER that set it ([provision.FreshSwitch]) — the
+	// setup route's own body field — and handed to the vendor's pass as
+	// it is, so a refusal of it names the field that caller sent rather
+	// than a command-line flag. Empty is not asked, which is what the
+	// reconcile loop hands every pass.
+	Recreate provision.FreshSwitch
 
 	// Operator is the transient third-party app credential, when the pass needs
 	// one. Never persisted, and never logged.
 	Operator string
+
+	// By is who the run is for: the person who pressed the button, or the
+	// reconcile loop. It is what a credential the run seals is recorded as
+	// sealed by, where the Agents tab says who sealed a seat's key and when.
+	// The sink records the same party on every row it writes; this carries
+	// it to the records the sink cannot see.
+	By iam.Actor
 }
 
 // BaseKey is the Tier A key a webhook base was read from, as a pass names it

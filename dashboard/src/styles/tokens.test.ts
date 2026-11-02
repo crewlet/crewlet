@@ -27,21 +27,19 @@ import { describe, expect, test } from "vitest";
  *
  * # What a fallback means
  *
- * `var(--peek-w, 420px)` is DELIBERATE: a property a script sets at runtime,
- * with the default written at the point of use. A two-argument `var()` is
+ * `var(--crewlet-peek-rail-reserve, 0px)` is DELIBERATE: a property a script
+ * sets at runtime, with the default written at the point of use. A two-argument `var()` is
  * therefore exempt — it cannot fail silently, because the fallback IS the
  * value when nothing sets it.
  *
  * # And a property only a script can declare
  *
- * Some values have no honest default. `--peek-reserve` is what the peek's
- * track leaves the list, and it differs by the screen (Settings draws a
- * column inside it) and by the density: any literal fallback is right for
- * one frame and wrong for another, which is the bug it exists to prevent. So
- * the shell publishes it on the same element, in the same render, as the
- * attribute that makes it read ([SCRIPT_DECLARED]), and it counts as declared
- * only while that script still spells it — a rename on either side fails
- * here as it would for a sheet.
+ * Some values have no honest default. `--budget-tracks` is the one track
+ * list a budget row and the seats' table are both handed, and any literal
+ * fallback would be a second list. So the screen publishes it on the same
+ * element, in the same render, that reads it ([SCRIPT_DECLARED]), and it
+ * counts as declared only while that script still spells it: a rename on
+ * either side fails here as it would for a sheet.
  */
 
 const SRC = fileURLToPath(new URL("..", import.meta.url));
@@ -52,11 +50,6 @@ const require_ = createRequire(import.meta.url);
  * writes it — see "a property only a script can declare" above.
  */
 const SCRIPT_DECLARED: { name: string; by: string; why: string }[] = [
-  {
-    name: "--peek-reserve",
-    by: "app/Shell.tsx",
-    why: "listReserve() for the frame on screen, set on .app with data-peek=column",
-  },
   {
     name: "--budget-tracks",
     by: "routes/spend/Budgets.tsx",
@@ -111,6 +104,20 @@ function sheets(): { name: string; text: string }[] {
   return [...ours(), ...theirs];
 }
 
+/**
+ * The kit's own sheet, which `main.tsx` imports whole (the design system's
+ * single-sheet build, `vite.config.ts`'s DESIGN_SYSTEM_SHEET), read for what
+ * it DECLARES only: a scale the kit sets on the root for a family of its parts
+ * (the chat transcript's `--crewlet-chat-*`) is one our sheets line up with.
+ * What it reads is the kit's own business and its own suite's.
+ */
+function kitSheet(): { name: string; text: string } {
+  return {
+    name: "@crewlethq/ui/styles.css",
+    text: readFileSync(require_.resolve("@crewlethq/ui/styles.css"), "utf8"),
+  };
+}
+
 /** The names [SCRIPT_DECLARED] covers. */
 function scriptDeclared(): string[] {
   return SCRIPT_DECLARED.map((d) => d.name);
@@ -153,10 +160,16 @@ export function declaresPalette(all: { name: string; text: string }[]): string[]
 export function undeclared(
   all: { name: string; text: string }[],
   scripted: string[] = [],
+  declaresOnly: { name: string; text: string }[] = [],
 ): string[] {
   const declared = new Set<string>(scripted);
-  for (const { text } of all) {
-    for (const m of text.matchAll(/^\s*(--[a-zA-Z0-9_-]+)\s*:/gm)) declared.add(m[1]!);
+  // A DECLARATION OPENS A LINE, A BLOCK OR FOLLOWS ANOTHER ONE: the kit's
+  // built sheet writes a rule's custom properties on one line (its
+  // `.crewlet-kind--doc { --crewlet-kind-ink: ...; --crewlet-kind-fill: ... }`
+  // family), and a reader of line starts alone read those as declared by
+  // nothing.
+  for (const { text } of [...all, ...declaresOnly]) {
+    for (const m of text.matchAll(/(?:^|[{;])\s*(--[a-zA-Z0-9_-]+)\s*:/gm)) declared.add(m[1]!);
   }
   const missing: string[] = [];
   for (const { name, text } of all) {
@@ -174,7 +187,7 @@ export function undeclared(
 
 describe("the token namespace", () => {
   test("every var() with no fallback names a property something declares", () => {
-    expect(undeclared(sheets(), scriptDeclared())).toEqual([]);
+    expect(undeclared(sheets(), scriptDeclared(), [kitSheet()])).toEqual([]);
   });
 
   // A SCRIPT'S DECLARATION IS A CLAIM ABOUT THE SCRIPT, so it is read there:
@@ -224,6 +237,17 @@ describe("the token namespace", () => {
       ["--by-script"],
     );
     expect(missing).toEqual(["fake.css:1 reads --by-nobody, which nothing declares"]);
+  });
+
+  test("it can tell: a property a one-line rule declares is declared", () => {
+    // THE KIT'S BUILT SHEET declares a kind's properties on the rule's own
+    // line, and a sheet of ours reads them under a card that wears the class.
+    const missing = undeclared(
+      [{ name: "fake.css", text: ".a {\n  color: var(--kind-ink);\n  fill: var(--kind-nope);\n}" }],
+      [],
+      [{ name: "kit.css", text: ".kind--doc { --kind-hue: blue; --kind-ink: navy; }" }],
+    );
+    expect(missing).toEqual(["fake.css:3 reads --kind-nope, which nothing declares"]);
   });
 
   test("it can tell — a property nobody declares is caught, a fallback is not", () => {

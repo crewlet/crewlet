@@ -2,7 +2,9 @@ package authz
 
 import (
 	"context"
+	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,17 +37,19 @@ const (
 	// administrator holds through [iam.Expand].
 	ClassApp Class = "app"
 
-	// ClassAnyApp — a gesture that draws on whichever apps the caller uses:
-	// a question answered from the company's pages and its work, which
-	// searches each half only for a caller who holds its app. Whoever holds
-	// any one app; a caller with none is told every app would do.
+	// ClassAnyApp — a gesture that draws on whichever of SEVERAL apps the
+	// caller uses: a question answered from the company's pages and its
+	// work, which searches each half only for a caller who holds its app.
+	// Whoever holds any one of the row's apps ([rule.anyOf]); a caller with
+	// none of them is told that any one of THEM would do — never an app the
+	// gesture draws nothing from.
 	ClassAnyApp Class = "any_app"
 
 	// ClassAppOrAsked — a work item somebody may be ASKED about. Whoever
 	// holds the row's app, OR the person an open ask on the item names
 	// ([Object.Asked]): a colleague who put a question to somebody needs
 	// them to be able to read it and answer, and a person who answers
-	// questions is not thereby somebody who uses the tracker.
+	// questions is not thereby somebody who uses Worklet.
 	//
 	// THE ASKED ARM IS NARROW BY CONSTRUCTION. It admits only a caller an
 	// OPEN ask names, and only once a surface has read the item and
@@ -112,8 +116,11 @@ const (
 
 	// ClassTidy — taking one's own work out of circulation and putting it
 	// back: trashing, restoring and renaming a page, removing and restoring
-	// a work item. Its container's lead, the admin path, OR whoever WROTE
-	// it ([Object.Author]: a page's creator, an item's reporter).
+	// a work item, archiving a chat room and opening it again. Its
+	// container's lead, the admin path, OR whoever WROTE it ([Object.Author]:
+	// a page's creator, an item's reporter, a room's creator). A unit's room
+	// has its UNIT as its container, so the unit's lead is the lead asked; a
+	// named room has none, so nobody but its creator and admin tidies it.
 	//
 	// THE AUTHOR ARM IS WHAT MAKES IT ITS OWN CLASS rather than
 	// [ClassDestructive]. Somebody who filed a duplicate or drafted a page in
@@ -156,8 +163,10 @@ const (
 	// may file work in a project and may not carry it away again.
 	ClassDestructive Class = "destructive"
 
-	// ClassAuthored — editing and removing a comment, on a page or on a
-	// work item. Whoever wrote it, or the admin path.
+	// ClassAuthored — editing and removing a remark: a comment on a page or
+	// on a work item, a chat message. Whoever wrote it, or the admin path —
+	// and the admin path decides on the UNREAD remark ([Object.Unresolved]),
+	// so a moderator never has to read a message to take it down.
 	ClassAuthored Class = "authored"
 
 	// ClassAdmin — running the company: configuration, secrets,
@@ -232,15 +241,21 @@ var relationClasses = []Class{
 // never succeed, on every retry, for ever. The reason is a closed value a
 // caller can branch on; that is what it is for.
 //
-// THEN THE HUMAN-ONLY AND SEAT-ONLY BARS, which are facts about the VERB and
-// therefore decided before any class reads any relation — see
-// [rule.humanOnly] and [rule.seatOnly] — and the PERSON-PRESENT bar where it
+// THEN THE HUMAN-ONLY, SEAT-ONLY AND SEATED BARS, which are facts about the
+// VERB and therefore decided before any class reads any relation — see
+// [rule.humanOnly], [rule.seatOnly] and [rule.seated] — and the PERSON-PRESENT
+// bar where it
 // covers every arm, for the same reason: a machine token is refused a verb
 // that needs somebody at a keyboard before any class weighs what it carries
 // ([rule.presence]). Where the bar spares the self arm it is asked once the
 // class has said which arm admitted. One exception keeps a bar from naming
 // what it should not: an artifact the caller holds no relation to is answered
 // not found, exactly as the shared class answers them ([concealed]).
+//
+// THEN THE ASSISTANT'S BARS, for the same reason and with the same
+// concealment ([assistBar]): a request made through the Dashboard Assistant
+// is refused a verb it never takes, and, under a read grant, a row it only
+// carries as an approved request or a row that needs a person present.
 //
 // THEN A SEAT GRANT, where the row names one, and for an AGENT only: its role
 // carrying the grant is the whole of its answer ([rule.seatGrant]), and the
@@ -265,8 +280,39 @@ var relationClasses = []Class{
 // identity refuses an ADMITTED principal whose proof is older than that
 // window ([ReasonStepUp], naming the window in [Decision.Recency]). Last,
 // because every earlier answer is one a fresher proof would not change.
+//
+// A GESTURE OF SEVERAL DECISIONS is answered in this same order by [Combine],
+// so a write decided part by part is refused as one question would have been.
 func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Chart,
 	now time.Time) Decision {
+
+	return decide(ctx, p, a, o, chart, now, Checking(ctx))
+}
+
+// checkKey marks a request context as a check ([WithCheck]).
+type checkKey struct{}
+
+// WithCheck is ctx marked as a check of its route's write: what the router
+// sets for a request [IsCheck] admits, so every decision the handler asks
+// beside the route's own (a seat decided where it sits, the company's own
+// verb) is decided as the same check, at the read's proof.
+func WithCheck(ctx context.Context) context.Context {
+	return context.WithValue(ctx, checkKey{}, true)
+}
+
+// Checking reports a context [WithCheck] marked.
+func Checking(ctx context.Context) bool {
+	marked, _ := ctx.Value(checkKey{}).(bool)
+	return marked
+}
+
+// decide is [Decide] for a request that is, or is not, a check of its write
+// ([IsCheck], ADR-0055). A check is the write's verb decided by every rule the
+// write is, but two: the proof it asks is the read's, since it changes
+// nothing, and an assistant's read grant may carry it on a row the assistant
+// otherwise sends only as an approved request ([assistBar]).
+func decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Chart,
+	now time.Time, check bool) Decision {
 
 	if !p.Stage.MayAct() {
 		return Decision{Reason: ReasonStage}
@@ -289,9 +335,18 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	if r.seatOnly && p.Kind != iam.KindSeat {
 		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonSeatOnly})
 	}
+	// AND A VERB MADE AS A SEAT IS NOT A CREDENTIAL'S ACTING AS ITSELF,
+	// whatever it holds: no permission gives it a seat to be answered or
+	// attributed as. See [rule.seated].
+	if r.seated && !seated(p) {
+		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonUnseated})
+	}
 	_, throughToken := p.MachineToken()
 	if throughToken && r.presence == PresenceRequired {
 		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonTokenRefused})
+	}
+	if bar, barred := assistBar(p, a, r, check); barred {
+		return concealed(ctx, p, r, o, chart, bar)
 	}
 	var d Decision
 	if r.seatGrant != "" && p.Kind == iam.KindSeat {
@@ -314,17 +369,92 @@ func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 		return Decision{Reason: ReasonTokenRefused}
 	}
 	need := recencyFor(r, d)
+	if check {
+		need = iam.RecencyAny
+	}
 	if p.Proved(need, now) {
 		return d
 	}
 	return Decision{Reason: ReasonStepUp, Recency: need, Grants: d.Grants}
 }
 
-// concealed is a bar on the VERB (an agent taking a person's verb, a token
-// taking one that needs somebody present) answered for the object it was
-// asked of: the bar itself, except where the object is an artifact the caller
-// holds NO RELATION to, which is answered exactly as [ClassShared] answers
-// such a caller, not found.
+// assistBar is the bar a request made through the Dashboard Assistant meets
+// on this row, and whether it meets one (ADR-0052).
+//
+// THE CLASS OF THE CREDENTIAL DECIDES, NEVER ITS SPELLING: a principal whose
+// [iam.Principal.Via] names the assistant's class is the assistant's, whether
+// or not what follows parses, exactly as internal/iamdomain reads a machine
+// token's. [iam.Principal.Assisted] answers false for a malformed name, and a
+// bar keyed on it would admit the assistant through any row whose grant id
+// it got wrong.
+//
+// TWO BARS, BOTH FACTS ABOUT THE VERB AND THE GRANT, so both are asked before
+// the class, beside the person-present bar they mirror:
+//
+//   - a verb the assistant never takes ([assistantNever]) is
+//     [ReasonAssistRefused]. The zero class reads as never, so a row nobody
+//     decided fails closed here as well as failing the build;
+//   - a read grant on a row the assistant only carries as an approved
+//     request, or on a row needing a person at the keyboard on ANY arm, is
+//     [ReasonAssistScope]. Any scope but exec reads as read, so a grant whose
+//     scope is missing or unknown reaches reads alone.
+//
+// A PERSON-PRESENT ROW IS ADMITTED TO AN EXEC GRANT, and that is the presence
+// it asks for rather than an exception to it. The row keeps a machine token
+// out because a token proves nobody is at a keyboard; an exec grant carries
+// exactly one request whose server-rendered preview the person approved from
+// their own browser, a moment ago, under their own session and Origin, at the
+// step-up the row asks (ADR-0051). That approval IS the person at the
+// keyboard, deciding this request. A read grant carries no such gesture, so it
+// is refused every presence row, the self arm of a row that spares it for a
+// machine token included.
+//
+// BEFORE THE CLASS rather than after it admits, unlike the step-up: no answer
+// the chart could give would lift either bar, and asked after the class a
+// node that could not read its chart would answer "ask me again" (503) to a
+// grant that can never take the verb. And an exec grant is not held to the
+// one verb its proposal named, because a write asks dotted verbs from inside
+// its tool; the request guard binds an exec grant to the one request the
+// person approved, which is what limits it to one write.
+//
+// A CHECK OF AN APPROVED ROW IS A READ GRANT'S TOO ([IsCheck], ADR-0055): it
+// stores nothing, so it is the preview's question of the route, asked before
+// any card is drawn. The person-present bar still holds for it.
+func assistBar(p iam.Principal, a Action, r rule, check bool) (Decision, bool) {
+	if !strings.HasPrefix(p.Via, iam.AssistPrefix) {
+		return Decision{}, false
+	}
+	class := assistOf(a, r)
+	readable := class == AssistRead || (check && class == AssistApprove)
+	switch {
+	case class != AssistRead && class != AssistApprove:
+		return Decision{Reason: ReasonAssistRefused}, true
+	case p.AssistScope != iam.AssistScopeExec &&
+		(!readable || r.presence != PresenceOptional):
+		return Decision{Reason: ReasonAssistScope}, true
+	}
+	return Decision{}, false
+}
+
+// assistedRead reports a principal acting through an assistant grant that is
+// not an approved request's: a read grant, or one whose scope is missing or
+// unknown, which reads as read.
+func assistedRead(p iam.Principal) bool {
+	return strings.HasPrefix(p.Via, iam.AssistPrefix) && p.AssistScope != iam.AssistScopeExec
+}
+
+// readMethod reports a method that only reads.
+func readMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
+}
+
+// concealed is a bar on the VERB (an agent taking a person's verb, a person
+// taking an agent's, a credential acting as no seat taking a verb made as
+// one, a token taking one that needs somebody present) answered for the
+// object it was asked of: the bar itself, except where the object is an
+// artifact the caller holds NO RELATION to, which is answered exactly as
+// [ClassShared] answers such a caller, not found. Every bar takes it, so a
+// bar on any verb passes one rule whichever verbs carry it today.
 //
 // THE BAR WOULD OTHERWISE BE AN EXISTENCE ORACLE. A surface reads the head
 // before it decides, so an id nothing holds is answered 404 there, and a bar
@@ -385,15 +515,17 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		return granted(p, r.app)
 
 	case ClassAnyApp:
-		// ANY ONE APP, and a refusal names every one of them: holding
-		// either would admit, and admin is left out because it covers
-		// both ([Decision.Grants]).
-		for _, app := range iam.Apps {
+		// ANY ONE OF THE ROW'S APPS, and a refusal names every one of
+		// them: holding any would admit, and admin is left out because it
+		// covers them all ([Decision.Grants]). A row naming none admits
+		// nobody and names nothing, on [granted]'s reasoning about an
+		// empty permission — a walk refuses such a row.
+		for _, app := range r.anyOf {
 			if p.Can(app) {
-				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, iam.Apps...)
+				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, r.anyOf...)
 			}
 		}
-		return consulting(Decision{Reason: ReasonNoGrant}, iam.Apps...)
+		return consulting(Decision{Reason: ReasonNoGrant}, r.anyOf...)
 
 	case ClassAppOrAsked:
 		if p.Can(r.app) {
@@ -539,6 +671,14 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 			return Decision{Reason: ReasonNotLead, Err: ErrUnresolved}
 		}
 		if o.Container == "" {
+			if o.Kind == KindChannel {
+				// A NAMED ROOM BELONGS TO NO UNIT, which is its shape
+				// rather than a field nobody filled: there is no lead
+				// to ask, so it is its creator's and admin's. Refused
+				// as unnamed, a colleague was told the call named no
+				// container — a fix nobody could make.
+				return consulting(Decision{Reason: ReasonNotAuthor}, adminGrant)
+			}
 			return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 		}
 		return consulting(leadsByKind(ctx, chart, actorOf(p), o), adminGrant)
@@ -569,7 +709,18 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 
 	case ClassAuthored:
 		if o.Author == "" {
-			return Decision{Reason: ReasonUnnamed}
+			if !o.Unresolved {
+				return Decision{Reason: ReasonUnnamed}
+			}
+			// NOBODY HAS READ THE REMARK, so nobody knows who wrote it:
+			// admin is admitted on the unread row — which is what lets a
+			// moderator take down a message in a room they cannot read,
+			// never shown it — and anybody else reads it and decides
+			// again on its author.
+			if p.Can(adminGrant) {
+				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
+			}
+			return Decision{Reason: ReasonNotAuthor, Err: ErrUnresolved}
 		}
 		if p.Login != "" && p.Login == o.Author {
 			return consulting(Decision{Allowed: true, Reason: ReasonAuthor}, adminGrant)
@@ -807,18 +958,39 @@ func leadsProject(ctx context.Context, chart Chart, actor, project string) Decis
 	return Decision{Reason: ReasonNotLead}
 }
 
-// leadsByKind asks the chart about the container a task, a project, a page or
-// a page container is filed in, by the relation its KIND names.
+// leadsByKind asks the chart about the container a task, a project, a page, a
+// page container or a unit's chat room is filed in, by the relation its KIND
+// names.
 //
 // THE KIND PICKS THE RELATION, for [Chart.LeadsContainer]'s reason: a page
-// container and a tracker project are two key classes a unit declares in two
-// fields, and one relation asked with the other's key matches only a company
-// that spelled them the same.
+// container, a tracker project and a unit are three key classes, and one
+// relation asked with another's key matches only a company that spelled them
+// the same — a unit's room asked as a project refused its unit's lead
+// everywhere a project was not spelt like the unit.
 func leadsByKind(ctx context.Context, chart Chart, actor string, o Object) Decision {
-	if o.Kind == KindContainer || o.Kind == KindPage {
+	switch o.Kind {
+	case KindContainer, KindPage:
 		return leadsContainer(ctx, chart, actor, o.Container)
+	case KindChannel:
+		return leadsUnit(ctx, chart, actor, o.Container)
 	}
 	return leadsProject(ctx, chart, actor, o.Container)
+}
+
+// seated reports whether p acts AS A SEAT — the one question [rule.seated]
+// asks.
+//
+// [iam.ActorFor]'s ANSWER, never a field read here: a principal is seated
+// exactly when the one attribution function names it by a seat — an agent by
+// its own, a person by the human seat the identity directory binds them to —
+// so the bar refuses exactly the principals whose writes would be attributed
+// to a credential rather than a seat, and nobody else.
+func seated(p iam.Principal) bool {
+	switch iam.ActorFor(p).Kind {
+	case iam.ActorAgent, iam.ActorHuman:
+		return true
+	}
+	return false
 }
 
 // actorOf is the handle the CHART knows this principal by.

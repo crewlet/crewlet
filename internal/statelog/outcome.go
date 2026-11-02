@@ -42,6 +42,13 @@ const (
 	// OutcomePending says the record is DURABLE at its position and what
 	// it produced is unresolved HERE. Every other node will apply it.
 	//
+	// WHICH IS WHY A COPY IS JUDGED BEFORE IT IS ANSWERED PENDING. A write
+	// the broker collapsed onto another node's copy of its operation is
+	// durable at that copy, and the copy applies nowhere if its writer was
+	// evicted while it was in flight — so it is pending only where that
+	// writer still stands at the copy's position, and unknown otherwise
+	// ([Publisher.unresolved]).
+	//
 	// NEVER a failure and never "applied": a caller told this has a
 	// position to resolve with later, which is a different thing to do
 	// than retry.
@@ -515,7 +522,10 @@ func (r Reason) FromGate() bool {
 // polled every two seconds a node that would not answer until somebody
 // upgraded or readmitted it. And the zero is the only honest hint there is:
 // [Refused.RetryAfter] already says so for a read, and [Reason.Retryable]
-// says it for a write, which carries no hint of its own.
+// says it for a write — whose one hint of its own is another node's copy of
+// it under a gate that blames that copy's writer ([Unavailable.RetryAfter]),
+// which the node that refused takes itself once the log's duplicate window
+// has let go of the operation.
 func RetryAfter(err error, otherwise time.Duration) time.Duration {
 	var refused *Refused
 	if errors.As(err, &refused) {
@@ -528,8 +538,13 @@ func RetryAfter(err error, otherwise time.Duration) time.Duration {
 		return otherwise
 	}
 	var unavailable *Unavailable
-	if errors.As(err, &unavailable) && !unavailable.Reason.Retryable() {
-		return 0
+	if errors.As(err, &unavailable) {
+		switch {
+		case unavailable.RetryAfter > 0:
+			return unavailable.RetryAfter
+		case !unavailable.Reason.Retryable():
+			return 0
+		}
 	}
 	return otherwise
 }
@@ -555,18 +570,29 @@ var ErrConflict = errors.New("statelog: conflict")
 //
 // A REASON AND A DETAIL rather than a message, because two different readers
 // need it: a surface switches on the reason to decide whether to retry
-// elsewhere, and a person reads the detail to find out what to change.
+// elsewhere, and whoever runs the node reads the detail to find out what to
+// change.
 //
-// THE DETAIL IS WRITTEN FOR THAT PERSON, and every surface sends it on — so it
-// is composed by this package, naming positions, versions, settings and the
-// words a broker chose for its refusal, and never an error's own text: a
-// store's error is a driver's message or a database path, and it goes to the
-// log. [Refused.Detail] is held to the same rule.
+// THE DETAIL IS WRITTEN FOR WHOEVER RUNS THE NODE — composed by this package,
+// naming positions, versions, settings and the words a broker chose for its
+// refusal, and never an error's own text: a store's error is a driver's
+// message or a database path. It goes to the node's log, and to the gate and
+// retention tooling an operator drives; a person is told the reason in
+// [ConditionSentence]'s words instead, which carry none of it.
+// [Refused.Detail] is held to the same rule.
 type Unavailable struct {
 	Reason   Reason
 	Detail   string
 	Position Position
 	OpID     string
+
+	// RetryAfter is how long to wait before bringing the same operation
+	// back, set only where waiting clears a refusal its reason alone says it
+	// does not ([Reason.Retryable]): another node's copy, named by
+	// CopyWriter, which the log's duplicate window collapses the operation
+	// id onto until it lets go of it — the window's length, the longest
+	// that can take from when the copy landed. Zero everywhere else.
+	RetryAfter time.Duration
 
 	// CopyWriter names ANOTHER node when the record at Position is that node's
 	// copy of this operation rather than this node's own, AND the gate that

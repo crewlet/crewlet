@@ -97,20 +97,25 @@ func TestASilentFileTransferIsAbandonedAndSaysWhy(t *testing.T) {
 	}
 }
 
-// A FILE WRITE CAN BE SENT TWICE, and says how long it is. The idle bound's
-// progress wrapper hides the buffer a request would otherwise take both from:
-// without the length the body goes out chunked, and without GetBody the
-// transport cannot retry a write on a fresh connection when the server closed
-// the first before reading it (an HTTP/2 GOAWAY) — which the plain buffer the
-// write used to send could.
+// A FILE WRITE CAN BE SENT TWICE, and says how long it is — each request of
+// it: the upload of the content and the move that puts it in place. The idle
+// bound's progress wrapper hides the buffer a request would otherwise take
+// both from: without the length a body goes out chunked, and without GetBody
+// the transport cannot retry a request on a fresh connection when the server
+// closed the first before reading it (an HTTP/2 GOAWAY) — which the plain
+// buffer the write used to send could.
 func TestAFileWriteCarriesItsLengthAndCanBeSentAgain(t *testing.T) {
 	t.Parallel()
-	var sent, again []byte
-	var length int64
+	type request struct {
+		path        string
+		sent, again []byte
+		length      int64
+	}
+	var requests []request
 	c := &envdClient{host: "http://box.example.com", fileIdle: time.Minute,
 		http: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
-			length = r.ContentLength
-			sent, _ = io.ReadAll(r.Body)
+			got := request{path: r.URL.Path, length: r.ContentLength}
+			got.sent, _ = io.ReadAll(r.Body)
 			if r.GetBody == nil {
 				return nil, errors.New("the request cannot be sent again")
 			}
@@ -118,18 +123,32 @@ func TestAFileWriteCarriesItsLengthAndCanBeSentAgain(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			again, _ = io.ReadAll(body)
+			got.again, _ = io.ReadAll(body)
+			requests = append(requests, got)
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")),
 				Request: r}, nil
 		})}}
 	if err := c.writeFile(t.Context(), "/home/user/.crewlet/brief.md", []byte("fix the flake")); err != nil {
 		t.Fatalf("writeFile: %v", err)
 	}
-	if length != int64(len(sent)) || length == 0 {
-		t.Errorf("Content-Length %d for a %d-byte body; want the body's own length", length, len(sent))
+	var paths []string
+	for _, r := range requests {
+		paths = append(paths, r.path)
 	}
-	if !bytes.Equal(sent, again) || !bytes.Contains(sent, []byte("fix the flake")) {
-		t.Errorf("the body sent again differs from the one sent: %q vs %q", again, sent)
+	if len(requests) != 2 || paths[0] != "/files" || paths[1] != "/filesystem.Filesystem/Move" {
+		t.Fatalf("the write made the requests %v; want the upload, then the move", paths)
+	}
+	for _, r := range requests {
+		if r.length != int64(len(r.sent)) || r.length == 0 {
+			t.Errorf("%s: Content-Length %d for a %d-byte body; want the body's own length", r.path, r.length,
+				len(r.sent))
+		}
+		if !bytes.Equal(r.sent, r.again) {
+			t.Errorf("%s: the body sent again differs from the one sent: %q vs %q", r.path, r.again, r.sent)
+		}
+	}
+	if !bytes.Contains(requests[0].sent, []byte("fix the flake")) {
+		t.Errorf("the upload carried %q, not the content", requests[0].sent)
 	}
 }
 

@@ -8,8 +8,8 @@
  * the wrong one for the question that follows it — *why is THIS one stuck,
  * and which node is pinning it*. That second question is answered by facts
  * scattered across two cards and one table: the domain's own six terms live
- * in the retention card, and every node's position for it lives folded into a
- * per-node column that shows every domain at once. A reader chasing one
+ * in the retention card, and every data node's position for it lives folded
+ * into a per-node column that shows every domain at once. A reader chasing one
  * domain had to read the whole fleet to find its rows.
  *
  * `domains` was reserved as a path segment before anything routed it. This is
@@ -73,9 +73,9 @@ export function DomainScreen({ name }: { name: string }) {
 
   const domain = data?.domains?.find((d) => d.domain === name);
 
-  // EVERY NODE'S POSITION IN THIS ONE DOMAIN. The fleet's own table has this
-  // folded into a cell that lists every domain a node reports, so reading one
-  // domain's rows meant reading every node's cell and filtering by eye.
+  // EVERY DATA NODE'S POSITION IN THIS ONE DOMAIN. The fleet's own table has
+  // this folded into a cell that lists every domain a node reports, so reading
+  // one domain's rows meant reading every node's cell and filtering by eye.
   const positions = useMemo<Position[]>(() => {
     const nodes: RetentionNode[] = data?.nodes ?? [];
     const out: Position[] = [];
@@ -205,6 +205,7 @@ export function DomainScreen({ name }: { name: string }) {
                     },
                     {
                       key: "position",
+                      align: "right",
                       header: "Position",
                       shrink: true,
                       sortValue: (p) => p.seq,
@@ -224,6 +225,7 @@ export function DomainScreen({ name }: { name: string }) {
                     },
                     {
                       key: "generation",
+                      align: "right",
                       header: "Generation",
                       shrink: true,
                       sortValue: (p) => p.generation,
@@ -240,6 +242,7 @@ export function DomainScreen({ name }: { name: string }) {
                     },
                     {
                       key: "behind",
+                      align: "right",
                       header: "Behind",
                       shrink: true,
                       sortValue: (p) => p.lag ?? 0,

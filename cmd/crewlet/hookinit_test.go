@@ -32,21 +32,26 @@ import (
 //
 //   - hookInitPackageBytes, 256 KiB, for one package: the largest any package
 //     of this module allocates at init today is redact's, about 195 KB of
-//     patterns (10 KB of it the engine's own run-token shape), with config's
-//     beside it at 185, and the webhooks pages parsed at init were 315 KB —
+//     patterns (10 KB of it the engine's own run-token shape), with the event
+//     types' next at 84, and the webhooks pages parsed at init were 315 KB —
 //     about 2 ms of every push — before they were built at their first
 //     request. A package that needs more builds it at first use
 //     (sync.OnceValue), as the password blocklist does (140 KB) and the code
 //     cache's file-name patterns do (215 KB).
-//   - hookInitBytes, 1.5 MiB, for the module: about 1.37 MB today, 1.41 under
-//     the race detector (it was 1.1 MB before the artifact packages and the
-//     larger redaction tables were linked beside the code host, and the brand
-//     and the drawing allowlist came in with their tables built at first use;
-//     it had reached 1.62 under the race detector, past this bound, before the
-//     code cache's file-name patterns were compiled at first use too), so a
-//     second webhooks-sized global anywhere fails it, while a toolchain's
-//     change to what a compiled pattern allocates, within the 160 KB left
-//     under the race detector, does not.
+//   - hookInitBytes, 1.5 MiB, for the module: about 1.31 MB today, 1.35
+//     under the race detector. It was 1.1 MB before the artifact packages and
+//     the larger redaction tables were linked beside the code host, and the
+//     brand and the drawing allowlist came in with their tables built at
+//     first use; it had reached 1.62 under the race detector, past this
+//     bound, before the code cache's file-name patterns were compiled at first
+//     use too. Merged beside main's Dashboard Assistant, Chatlet and artifacts
+//     it reached 2.47 MB, 2.55 under the race detector, with config and the
+//     assistant's wire each past the package bound: 26 grammars in 11
+//     packages compiled at init, most a bounded repeat (`{0,63}`), which
+//     compiles to a program holding every count. Compiled at first use, they
+//     left 1.31 MB. So a second webhooks-sized global anywhere fails it,
+//     while a toolchain's change to what a compiled pattern allocates, within
+//     the 220 KB left under the race detector, does not.
 const (
 	hookInitPackageBytes = 256 << 10
 	hookInitBytes        = 3 << 19

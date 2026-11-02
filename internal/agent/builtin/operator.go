@@ -15,7 +15,7 @@ import (
 //
 // Every entry here is the same value [Register] files into a seat's registry.
 // The only thing that differs is who a write is attributed to, and that is
-// [WorkDeps.Actor] — a single field — rather than a second copy of ten tools.
+// [WorkDeps.Actor] — a single field — rather than a second copy of the tools.
 // Two copies drift on exactly the parts nobody looks at: which field is
 // trimmed, which default applies, what a refusal says. Only one of the two is
 // ever tested, and it is never the copy that broke.
@@ -25,16 +25,16 @@ import (
 // The tools that only make sense INSIDE a turn: the memory tools (a diary
 // belongs to a seat, and an operator has none), the skill tools (a skill is
 // loaded into a phase), `a2a_ask` (a colleague ask is answered by waking a
-// seat, and there is nobody here for the answer to come back to),
-// `run_sandbox` (a detached run resumes a suspended phase that does not
-// exist — though a run a seat parked on a question IS a person's to answer,
-// which is `answer_run`), and `lookup_colleague` — which would be useful, but resolves
-// against the turn's own org and has no other source.
+// seat, and there is nobody here for the answer to come back to), and
+// `lookup_colleague` — which would be useful, but resolves against the turn's
+// own org and has no other source. A run a seat parked on a question IS a
+// person's to answer, though, which is `answer_run`.
 //
-// What is left is the surface an operator's assistant actually needs: read
-// the board, file and move work, read and write the wiki, search what the
-// company knows, read and change the company's code, and read the
-// deployment's health.
+// What is left is the surface an operator's assistant actually needs — and
+// the dashboard, which makes every change it makes through this catalogue
+// (ADR-0024): read the board, file and move work, read and write the wiki,
+// search what the company knows, talk in the company's own chat, read and
+// change the company's code, and read the deployment's health.
 
 // OperatorDeps are the halves an operator surface can serve.
 type OperatorDeps struct {
@@ -63,6 +63,15 @@ type OperatorDeps struct {
 	// zero value omits both.
 	Health HealthDeps
 
+	// Chat is the company's own chat. Its [ChatDeps.Actor] is the
+	// request's principal ([PrincipalChatActor]): a person writes as the
+	// `kind: human` seat their credential is bound to — a room renders a
+	// speaker by seat, so that is the handle every message carries — with
+	// the credential beside it. A credential acting as itself is refused
+	// every chat verb, the reads included, by the table first
+	// (`unseated`) and by the tools after it.
+	Chat ChatDeps
+
 	// Org is the company this surface is about, resolved per call because
 	// a config apply replaces it. An operator has no turn and therefore no
 	// org to read from one, so search_knowledge takes it from here — and
@@ -79,8 +88,9 @@ type OperatorDeps struct {
 	// admin was refused here while every HTTP route allowed.
 	//
 	// NIL REFUSES EVERYTHING, on [Deps.Authorize]'s rule. Pushed down
-	// into [OperatorDeps.Work] and [OperatorDeps.Pages] by
-	// [OperatorTools], so a caller cannot set the three differently.
+	// into [OperatorDeps.Work], [OperatorDeps.Pages] and
+	// [OperatorDeps.Chat] by [OperatorTools], so a caller cannot set the
+	// four differently.
 	Authorize Authorizer
 
 	// Runs answers a parked coding run by its turn — see answerrun.go.
@@ -105,7 +115,7 @@ type OperatorDeps struct {
 // OperatorTools is the catalogue for one operator surface.
 //
 // A tool whose dependency is absent is OMITTED, on [Register]'s own rule: a
-// company on Jira has no native tracker, and an assistant shown a tool that
+// company on Jira has no Worklet, and an assistant shown a tool that
 // always fails learns to distrust the whole catalogue.
 //
 // The order is the order an operator's assistant meets them in: read before
@@ -113,6 +123,7 @@ type OperatorDeps struct {
 // two boots of one config advertise the same list.
 func OperatorTools(deps OperatorDeps) []tools.Callable {
 	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
+	deps.Chat.Authorize = deps.Authorize
 	// A CALL HERE IS AN OPERATION ITS CALLER HOLDS, because there is no
 	// turn to derive one from: every write answers with its `op_id`, and
 	// the call brought back with it is that operation again ([operations]).
@@ -124,7 +135,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	deps.Work.ops = operations{callerOperations: true}
 	deps.Artifacts.ops = operations{callerOperations: true, now: deps.Artifacts.Now}
 	deps.Code.ops = operations{callerOperations: true}
-	work, pages := deps.Work, deps.Pages
+	work, pages, talk := deps.Work, deps.Pages, deps.Chat
 	candidates := []candidate{
 		{&listWorkItems{deps: work}, work.Reader != nil},
 		{&getWorkItem{deps: work}, work.Reader != nil},
@@ -207,6 +218,36 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// codemarks.go. Beside the code writes, on their terms: a surface
 		// that changes none of the company's code marks none of it either.
 		{&codeMarkInbox{deps: deps.Code}, deps.Code.serves() && deps.Code.Writer != nil},
+		// EVERY CHAT GESTURE A PERSON MAKES, because the dashboard makes
+		// them through this catalogue (ADR-0024): read the rooms, find
+		// what was said, say something, react, move one's own membership
+		// — the nine a seat holds — and the furniture only a person
+		// arranges, which no seat is given: a room made or its settings
+		// changed, its whole membership stated, a message rewritten or
+		// taken back, a conversation opened before its first word, and
+		// how far one has read. See chatoperator.go for why each is a
+		// person's.
+		{&listChannels{deps: talk}, talk.Reader != nil},
+		{&readChannel{deps: talk}, talk.Reader != nil},
+		{&searchMessages{deps: talk}, talk.Search != nil},
+		{&postMessage{deps: talk}, talk.Writer != nil},
+		{&replyInThread{deps: talk}, talk.Writer != nil},
+		{&sendDM{deps: talk}, talk.Writer != nil},
+		{&reactToMessage{deps: talk}, talk.Writer != nil},
+		{&joinChannel{deps: talk}, talk.Writer != nil},
+		{&leaveChannel{deps: talk}, talk.Writer != nil},
+		// THE THREE DECIDED AFTER A READ need the reader as well: whose
+		// words a message is, and who made a room and which unit holds
+		// it, are on the rows ([ChatDeps.remarkAuthority],
+		// [ChatDeps.archiveAuthority]).
+		{&editMessage{deps: talk}, talk.Writer != nil && talk.Reader != nil},
+		{&deleteMessage{deps: talk}, talk.Writer != nil && talk.Reader != nil},
+		{&createChannel{deps: talk}, talk.Writer != nil},
+		{&openDM{deps: talk}, talk.Writer != nil},
+		{&updateChannel{deps: talk}, talk.Writer != nil && talk.Reader != nil},
+		{&setChannelMembers{deps: talk}, talk.Writer != nil},
+		{&addChannelMembers{deps: talk}, talk.Writer != nil},
+		{&markChatRead{deps: talk}, talk.Cursors != nil},
 	}
 	candidates = slices.Concat(candidates,
 		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps),
@@ -248,8 +289,8 @@ func answerable(deps OperatorDeps) bool {
 // [AnswerDeps.Cache] carries in: the catalogue is built per request, so a cache
 // built here would be one request's. A company that moves to another
 // knowledge backend never reads the last one's answers from it, because an
-// answer is keyed on the corpus position and only a native knowledge base has
-// one ([answerKnowledge.cacheKey]).
+// answer is keyed on the corpus position and only Doclet has one
+// ([answerKnowledge.cacheKey]).
 func newAnswerKnowledge(deps OperatorDeps) *answerKnowledge {
 	return &answerKnowledge{
 		search: deps.Knowledge, items: deps.Work.Search, org: deps.Org,

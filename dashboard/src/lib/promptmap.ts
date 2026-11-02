@@ -44,7 +44,7 @@ export interface OutlineSection {
   /** The builder's key, or `h<n>` for a section the headings gave. */
   key: string;
   /**
-   * The title, as INLINE MARKDOWN (`the \`run_sandbox\` tool`): the map's
+   * The title, as INLINE MARKDOWN (`the \`submit_work\` tool`): the map's
    * title, or the heading's own text. "" only for a lead run the headings
    * gave, which has no heading and no builder to name it.
    */

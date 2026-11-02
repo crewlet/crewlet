@@ -24,10 +24,10 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-var nativeItem = types.WorkItem{Backend: types.WorkNative, ID: "t-1", Key: "ENG-1", Project: "ENG"}
+var workletItem = types.WorkItem{Backend: types.WorkWorklet, ID: "t-1", Key: "ENG-1", Project: "ENG"}
 
 // segmentSpend is one segment's runner tally, with every figure a charge reads
 // set to something distinct.
@@ -120,8 +120,8 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 		// dispatch named nothing for.
 		sole *types.WorkItem
 	}{
-		{name: "an item from the trigger", item: &nativeItem},
-		{name: "an item from a sole write", sole: &nativeItem},
+		{name: "an item from the trigger", item: &workletItem},
+		{name: "an item from a sole write", sole: &workletItem},
 		{name: "no item at all"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 
 			charged := 0
 			for _, c := range []segmentCharge{parked, finished} {
-				if c.native() {
+				if c.onWorklet() {
 					charged += c.record.Spend.Tokens()
 				}
 			}
@@ -171,9 +171,9 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 // A RESUMED SEGMENT PAYS WHAT THE ENGINE SPENT ON ITS JOB.
 //
 // Between the segment that launched a coding run and the one that resumes from
-// it, the engine spends on the job with no segment running: an agent-mode
-// run's bridged calls — the auxiliary rewrites its tools asked for, the workers
-// it delegated to — and the condensation of the run's account at collection.
+// it, the engine spends on the job with no segment running: a run's bridged
+// calls — the auxiliary rewrites its tools asked for, the workers it delegated
+// to — and the condensation of the run's account at collection.
 // The resume request carries it, and the resumed segment's charge adds each
 // figure where its own of the same kind goes.
 //
@@ -182,7 +182,7 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 func TestAResumedSegmentPaysWhatTheEngineSpentOnItsJob(t *testing.T) {
 	t.Parallel()
 	ended := time.Unix(1_700_000_060, 0).UTC()
-	resume := resumeTel(&nativeItem, nil, 0, 0)
+	resume := resumeTel(&workletItem, nil, 0, 0)
 	resume.jobEngine = jobEngineSpend
 	spend := segmentSpend(1)
 	got := resume.chargeFor(spend, turn.Result{Decision: phase.Done}, nil, ended).record.Spend
@@ -225,12 +225,12 @@ func TestASuspendedTurnIsCountedOnceAndPaidInFull(t *testing.T) {
 	ended := time.Unix(1_700_000_060, 0).UTC()
 
 	t.Run("charged at dispatch", func(t *testing.T) {
-		parked := dispatchTel(&nativeItem).chargeFor(segmentSpend(1),
+		parked := dispatchTel(&workletItem).chargeFor(segmentSpend(1),
 			turn.Result{Suspended: true}, nil, ended)
-		finished := resumeTel(&nativeItem, nil, 4000, 700).chargeFor(segmentSpend(1),
+		finished := resumeTel(&workletItem, nil, 4000, 700).chargeFor(segmentSpend(1),
 			turn.Result{Decision: phase.Done}, nil, ended)
-		if !parked.native() || !finished.native() {
-			t.Fatal("a segment of a turn on a native item charged nothing")
+		if !parked.onWorklet() || !finished.onWorklet() {
+			t.Fatal("a segment of a turn on a Worklet item charged nothing")
 		}
 		if parked.record.Spend.Turns+finished.record.Spend.Turns != 1 {
 			t.Fatalf("one turn counted %d times across its segments",
@@ -256,14 +256,14 @@ func TestASuspendedTurnIsCountedOnceAndPaidInFull(t *testing.T) {
 	t.Run("charged at the end by a sole write", func(t *testing.T) {
 		parked := dispatchTel(nil).chargeFor(segmentSpend(1),
 			turn.Result{Suspended: true}, nil, ended)
-		if parked.native() || parked.carry == nil || parked.carry.Turns != 1 {
+		if parked.onWorklet() || parked.carry == nil || parked.carry.Turns != 1 {
 			t.Fatalf("a parked segment on nothing charged %v and handed on %+v, "+
-				"want nothing charged and the turn handed on", parked.native(), parked.carry)
+				"want nothing charged and the turn handed on", parked.onWorklet(), parked.carry)
 		}
 		resume := resumeTel(nil, parked.carry, 4000, 700)
-		resume.written = turnctx.WrittenFrom([]types.WorkItem{nativeItem}, false)
+		resume.written = turnctx.WrittenFrom([]types.WorkItem{workletItem}, false)
 		finished := resume.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Done}, nil, ended)
-		if !finished.native() || finished.record.Task != "t-1" {
+		if !finished.onWorklet() || finished.record.Task != "t-1" {
 			t.Fatalf("the finishing segment charged %+v, want its sole write", finished.record)
 		}
 		if finished.record.Spend.Turns != 1 {
@@ -278,16 +278,16 @@ func TestASuspendedTurnIsCountedOnceAndPaidInFull(t *testing.T) {
 
 // AN UNATTRIBUTED TURN CHARGES NOTHING.
 //
-// A turn on nothing, or on another tracker's item, has no native row to add
-// to — and a charge that guessed an item would put one turn's cost on work it
+// A turn on nothing, or on another tracker's item, has no Worklet row to add
+// to, and a charge that guessed an item would put one turn's cost on work it
 // was not doing.
 func TestAnUnattributedTurnChargesNothing(t *testing.T) {
 	t.Parallel()
 	ended := time.Unix(1_700_000_060, 0).UTC()
 	jira := types.WorkItem{Backend: types.WorkJira, ID: "10001", Key: "OPS-1"}
 	two := dispatchTel(nil)
-	two.written.Add(nativeItem)
-	two.written.Add(types.WorkItem{Backend: types.WorkNative, ID: "t-2", Key: "ENG-2"})
+	two.written.Add(workletItem)
+	two.written.Add(types.WorkItem{Backend: types.WorkWorklet, ID: "t-2", Key: "ENG-2"})
 
 	for name, c := range map[string]segmentCharge{
 		"on nothing": dispatchTel(nil).chargeFor(segmentSpend(1),
@@ -297,8 +297,8 @@ func TestAnUnattributedTurnChargesNothing(t *testing.T) {
 		"writing two items": two.chargeFor(segmentSpend(1),
 			turn.Result{Decision: phase.Done}, nil, ended),
 	} {
-		if c.native() {
-			t.Errorf("a turn %s charged %+v to the native tracker", name, c.record)
+		if c.onWorklet() {
+			t.Errorf("a turn %s charged %+v to Worklet", name, c.record)
 		}
 		if c.carry != nil {
 			t.Errorf("a finished turn %s handed on %+v, which nothing will ever pay", name, c.carry)
@@ -313,7 +313,7 @@ func TestAnUnattributedTurnChargesNothing(t *testing.T) {
 // one turn must reach two.
 func TestASegmentsOperationIDIsStableAcrossARetry(t *testing.T) {
 	t.Parallel()
-	first := dispatchTel(&nativeItem)
+	first := dispatchTel(&workletItem)
 	first.resumed, first.launchID = true, "launch-1"
 	retry := first
 	retry.startedAt = retry.startedAt.Add(time.Minute)
@@ -322,10 +322,15 @@ func TestASegmentsOperationIDIsStableAcrossARetry(t *testing.T) {
 		retry.chargeFor(segmentSpend(2), turn.Result{Decision: phase.Done}, nil, ended); a.opID != b.opID {
 		t.Fatalf("a re-run segment named a new operation: %q then %q", a.opID, b.opID)
 	}
+	var never time.Time
 	for _, pair := range [][2]string{
-		{segmentOpID("run-1", "", false, time.Time{}), segmentOpID("run-1", "launch-1", true, time.Time{})},
-		{segmentOpID("run-1", "launch-1", true, time.Time{}), segmentOpID("run-1", "launch-2", true, time.Time{})},
-		{segmentOpID("run-1", "", false, time.Time{}), segmentOpID("run-2", "", false, time.Time{})},
+		{segmentOpID("run-1", "", segmentDispatch, never), segmentOpID("run-1", "launch-1", segmentResume, never)},
+		{segmentOpID("run-1", "launch-1", segmentResume, never), segmentOpID("run-1", "launch-2", segmentResume, never)},
+		{segmentOpID("run-1", "", segmentDispatch, never), segmentOpID("run-2", "", segmentDispatch, never)},
+		// A STOP'S CLOSE IS A SEGMENT OF ITS OWN: under the park's id the
+		// ledger would collapse it, and the task would read parked for good.
+		{segmentOpID("run-1", "", segmentDispatch, never), segmentOpID("run-1", "", segmentStop, never)},
+		{segmentOpID("run-1", "launch-1", segmentResume, never), segmentOpID("run-1", "launch-1", segmentStop, never)},
 	} {
 		if pair[0] == pair[1] {
 			t.Errorf("two segments share the operation %q", pair[0])
@@ -339,9 +344,9 @@ type fakeRecorder struct {
 	err   error
 }
 
-func (f *fakeRecorder) RecordTurn(_ context.Context, opID string, _ tracker.TurnRecord) (tracker.WriteResult, error) {
+func (f *fakeRecorder) RecordTurn(_ context.Context, opID string, _ worklet.TurnRecord) (worklet.WriteResult, error) {
 	f.calls = append(f.calls, opID)
-	return tracker.WriteResult{}, f.err
+	return worklet.WriteResult{}, f.err
 }
 
 // A CHARGE THAT CANNOT BE WRITTEN DOES NOT FAIL THE TURN.
@@ -350,11 +355,11 @@ func (f *fakeRecorder) RecordTurn(_ context.Context, opID string, _ tracker.Turn
 // and a tracker that refuses it costs the task its share and nothing else.
 func TestAnUnwritableChargeIsLoggedNotRaised(t *testing.T) {
 	t.Parallel()
-	c := dispatchTel(&nativeItem).chargeFor(segmentSpend(1),
+	c := dispatchTel(&workletItem).chargeFor(segmentSpend(1),
 		turn.Result{Decision: phase.Done}, nil, time.Unix(1_700_000_060, 0).UTC())
 	rec := &fakeRecorder{err: errors.New("the tracker is behind")}
 	(&Engine{}).chargeSegment(t.Context(), rec, c)
-	if len(rec.calls) != 1 || rec.calls[0] != segmentOpID(fixtureRun, "", false, time.Time{}) {
+	if len(rec.calls) != 1 || rec.calls[0] != segmentOpID(fixtureRun, "", segmentDispatch, time.Time{}) {
 		t.Fatalf("the recorder was asked %v, want the dispatch segment once", rec.calls)
 	}
 }
@@ -376,7 +381,7 @@ func TestASegmentsOperationIDIsMintedAtTheRunsStart(t *testing.T) {
 		t.Fatal("the fixture run id carries no instant, so this case proves nothing")
 	}
 	for _, id := range []string{
-		segmentOpID(fixtureRun, "", false, time.Time{}), segmentOpID(fixtureRun, "launch-1", true, time.Time{}),
+		segmentOpID(fixtureRun, "", segmentDispatch, time.Time{}), segmentOpID(fixtureRun, "launch-1", segmentResume, time.Time{}),
 	} {
 		if err := statelog.CheckCallerOpID(id); err != nil {
 			t.Errorf("segment id %q is outside the operation-id grammar: %v", id, err)
@@ -405,7 +410,7 @@ func TestARebasedSegmentIsMintedAtItsRebase(t *testing.T) {
 		t.Fatal("the fixture run id carries no instant, so this case proves nothing")
 	}
 	rebased := began.Add(40 * 24 * time.Hour)
-	id := segmentOpID(fixtureRun, "launch-1", true, rebased)
+	id := segmentOpID(fixtureRun, "launch-1", segmentResume, rebased)
 	if err := statelog.CheckCallerOpID(id); err != nil {
 		t.Fatalf("rebased segment id %q is outside the operation-id grammar: %v", id, err)
 	}
@@ -413,15 +418,15 @@ func TestARebasedSegmentIsMintedAtItsRebase(t *testing.T) {
 		t.Errorf("rebased segment id %q was minted at %v (%v), want the rebase %v",
 			id, at, minted, rebased)
 	}
-	if again := segmentOpID(fixtureRun, "launch-1", true, rebased); again != id {
+	if again := segmentOpID(fixtureRun, "launch-1", segmentResume, rebased); again != id {
 		t.Errorf("a retry carrying the same rebase named %q, want %q", again, id)
 	}
-	if id == segmentOpID(fixtureRun, "launch-1", true, time.Time{}) {
+	if id == segmentOpID(fixtureRun, "launch-1", segmentResume, time.Time{}) {
 		t.Error("a rebased segment derived the id its run's start mints")
 	}
 	// AND THE CHARGE CARRIES IT: the telemetry's rebase is what the
 	// segment's charge is published under.
-	tel := dispatchTel(&nativeItem)
+	tel := dispatchTel(&workletItem)
 	tel.resumed, tel.launchID, tel.rebasedTo = true, "launch-1", rebased
 	c := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Done}, nil,
 		rebased.Add(time.Minute))
@@ -442,14 +447,14 @@ func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 	ended := time.Unix(1_700_000_060, 0).UTC()
 	spend := segmentSpend(1)
 	spend.Review = strings.Repeat("add a test for the timeout path. ", 40)
-	spend.AllTools = []string{"create_branch", "run_sandbox", "run_sandbox",
-		"search_knowledge", "run_sandbox", runner.SubmitWorkTool}
+	spend.AllTools = []string{"create_branch", "tracker_comment", "tracker_comment",
+		"search_knowledge", "tracker_comment", runner.SubmitWorkTool}
 	res := turn.Result{
 		Decision:   phase.Done,
 		LastReview: &turn.Review{Decision: phase.Done, CompletedWork: "added the retry"},
 	}
 
-	got := dispatchTel(&nativeItem).chargeFor(spend, res, nil, ended).record
+	got := dispatchTel(&workletItem).chargeFor(spend, res, nil, ended).record
 
 	if got.Summary != "added the retry" {
 		t.Errorf("summary = %q, want the reviewer's account of what landed", got.Summary)
@@ -458,8 +463,8 @@ func TestATurnRecordSaysWhatTheSegmentDid(t *testing.T) {
 		t.Errorf("review = %d bytes, want the send-back's notes whole until the write",
 			len(got.Review))
 	}
-	want := []tracker.TurnTool{
-		{Name: "create_branch", Calls: 1}, {Name: "run_sandbox", Calls: 3},
+	want := []worklet.TurnTool{
+		{Name: "create_branch", Calls: 1}, {Name: "tracker_comment", Calls: 3},
 		{Name: "search_knowledge", Calls: 1},
 	}
 	if !slices.Equal(got.Tools, want) {
@@ -478,14 +483,14 @@ func TestAFailedSegmentNamesThePhaseThatBroke(t *testing.T) {
 	spend := segmentSpend(1)
 	spend.FailedIn = "review"
 
-	failed := dispatchTel(&nativeItem).chargeFor(spend, turn.Result{Decision: phase.Failed},
+	failed := dispatchTel(&workletItem).chargeFor(spend, turn.Result{Decision: phase.Failed},
 		errors.New("provider refused"), ended).record
 	if failed.Outcome != string(phase.Failed) || failed.FailedIn != "review" {
 		t.Errorf("a failed segment recorded outcome %q in %q, want failed in review",
 			failed.Outcome, failed.FailedIn)
 	}
 
-	done := dispatchTel(&nativeItem).chargeFor(spend, turn.Result{Decision: phase.Done},
+	done := dispatchTel(&workletItem).chargeFor(spend, turn.Result{Decision: phase.Done},
 		nil, ended).record
 	if done.FailedIn != "" {
 		t.Errorf("a segment that ended %q names a failed phase %q", done.Outcome, done.FailedIn)
@@ -527,7 +532,7 @@ func TestATurnCardIsWholeRewrittenOrPointedAway(t *testing.T) {
 		t.Errorf("a long account was not rewritten and marked: %q", got)
 	}
 	got := turnCard(t.Context(), compact.Bound{}, long)
-	if len(got) > tracker.MaxTurnSummary || strings.Contains(got, "investigated") ||
+	if len(got) > worklet.MaxTurnSummary || strings.Contains(got, "investigated") ||
 		!strings.Contains(got, "open the turn") {
 		t.Errorf("an account with no rewrite was %q, want a pointer to the turn and no fragment", got)
 	}
@@ -552,7 +557,7 @@ func TestACardsRewriteIsChargedToItsTask(t *testing.T) {
 	e := &Engine{auxSpend: auxspend.NewLedger(pub)}
 	e.epoch.current.Store(c)
 
-	tel := dispatchTel(&nativeItem)
+	tel := dispatchTel(&workletItem)
 	tel.handle = seat.Handle()
 	tel.auxSpent.Add(segmentAux(1))
 	charge := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Done}, nil,
@@ -606,7 +611,7 @@ func TestATurnTheBudgetEndedStillGetsItsCard(t *testing.T) {
 	if m.Held(t.Context()) == nil {
 		t.Fatal("the meter holds nothing; this case asserts nothing")
 	}
-	tel := dispatchTel(&nativeItem)
+	tel := dispatchTel(&workletItem)
 	tel.handle, tel.budget = seat.Handle(), m
 	charge := tel.chargeFor(segmentSpend(1), turn.Result{Decision: phase.Failed}, nil,
 		time.Unix(1_700_000_060, 0).UTC())
@@ -629,11 +634,11 @@ func (p *cardRewriter) Complete(context.Context, llm.Request) (*llm.Completion, 
 	return &llm.Completion{Model: "aux", Content: p.answer, InputTokens: p.in, OutputTokens: p.out}, nil
 }
 
-// A RESUMED SEGMENT'S END COUNTS THE WORKERS ITS RUN DELEGATED TO. An
-// agent-mode run's workers ran over the tool bridge while no segment was
-// running, so the segment that resumes from the run is the one that pays for
-// them — and its completion is the one record of the turn that can say they
-// ran, beside the workers it delegated to itself.
+// A RESUMED SEGMENT'S END COUNTS THE WORKERS ITS RUN DELEGATED TO. A run's
+// workers ran over the tool bridge while no segment was running, so the
+// segment that resumes from the run is the one that pays for them — and its
+// completion is the one record of the turn that can say they ran, beside the
+// workers it delegated to itself.
 //
 // Mutation: leave the job's workers out of the completion, and this goes red.
 func TestAResumedSegmentsEndCountsItsRunsWorkers(t *testing.T) {
@@ -740,4 +745,94 @@ func TestTheRecordThatEndsATurnStatesTheWholeTurn(t *testing.T) {
 				"its last segment alone", got.Turn)
 		}
 	})
+}
+
+// A STOP THAT CLOSES A TURN AT ITS PARK CHARGES ONLY WHAT THE PARK LEFT UNPAID.
+//
+// A person's stop can land between a launch and its park: the segment that
+// would have parked has ended and charged, and the frame then closes the turn
+// as stopped with a segment of its own. Built from the parking segment's
+// telemetry, that close charged the item the segment's job, its bridged spend,
+// its auxiliary calls and its wall time a second time, under the stop's own
+// operation id, which the tracker's ledger does not collapse; and a turn the
+// park charged to nothing lost the segment's whole spend, since only the park
+// the stop refused would have carried it on. Across the park and the close, the
+// item is charged everything the turn spent, once, and its turn counted once.
+//
+// Mutation: close with the parking segment's telemetry, and the two charges add
+// up to more than the turn spent on an item, and to none of the park's spend on
+// a turn that charged nothing at its park.
+func TestAStopAtTheParkChargesOnlyWhatTheParkLeftUnpaid(t *testing.T) {
+	t.Parallel()
+	ended := time.Unix(1_700_000_060, 0).UTC()
+	closedAt := ended.Add(time.Minute)
+	stop := &stopError{handle: "dev"}
+	sole := turnctx.WrittenFrom([]types.WorkItem{workletItem}, false)
+	carried := &execstate.Uncharged{Turns: 1, Rounds: 2, Input: 900, Output: 90, WallMs: 4000}
+
+	for _, tc := range []struct {
+		name string
+		// parking is the segment that would have parked; rollup is what it
+		// and the segments before it spent, which the item is owed once, and
+		// turns how many turns it counts across the park and the close.
+		parking func() turnTelemetry
+		rollup  int
+		turns   int
+	}{
+		{"a dispatch on an item", func() turnTelemetry { return dispatchTel(&workletItem) },
+			rollupOf(segmentSpend(1), segmentAux(1), 0, 0), 1},
+		{"a resume on an item", func() turnTelemetry {
+			tel := resumeTel(&workletItem, nil, 4000, 700)
+			tel.jobEngine = jobEngineSpend
+			return tel
+		}, rollupOf(segmentSpend(1), segmentAux(1), 4000, 700) + engineTokens(jobEngineSpend), 0},
+		{"a dispatch on nothing that wrote one item", func() turnTelemetry {
+			tel := dispatchTel(nil)
+			tel.written = sole
+			return tel
+		}, rollupOf(segmentSpend(1), segmentAux(1), 0, 0), 1},
+		{"a resume on nothing that wrote one item", func() turnTelemetry {
+			tel := resumeTel(nil, carried, 4000, 700)
+			tel.jobEngine = jobEngineSpend
+			tel.written = sole
+			return tel
+		}, rollupOf(segmentSpend(1), segmentAux(1), 4000, 700) + engineTokens(jobEngineSpend) +
+			carried.Input + carried.Output, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tel := tc.parking()
+			tel.auxSpent.Add(segmentAux(1))
+			parked := tel.chargeFor(segmentSpend(1), turn.Result{Suspended: true}, nil, ended)
+			closing := tel.closingAfter(parked, closedAt).chargeFor(runner.Spend{}, turn.Result{}, stop,
+				closedAt)
+
+			if !closing.onWorklet() {
+				t.Fatal("the close charged nothing, so the item never hears the turn ended")
+			}
+			if closing.opID == parked.opID {
+				t.Fatal("the close shares the park's operation id, and the ledger collapses it into the park")
+			}
+			if closing.record.Outcome != segmentStopped {
+				t.Fatalf("the close's outcome is %q, want %q", closing.record.Outcome, segmentStopped)
+			}
+			charged, turns := 0, 0
+			for _, c := range []segmentCharge{parked, closing} {
+				if c.onWorklet() {
+					charged += c.record.Spend.Tokens()
+					turns += c.record.Spend.Turns
+				}
+			}
+			if charged != tc.rollup || turns != tc.turns {
+				t.Fatalf("the item was charged %d tokens and %d turns across the park and the close, "+
+					"for a turn that spent %d and counts %d", charged, turns, tc.rollup, tc.turns)
+			}
+			// AND NOTHING OF ITS OWN: the close ran no phase, called no
+			// model and took no time, so it pays what the park handed on.
+			if want := addUncharged(worklet.TurnSpend{}, parked.carry); closing.record.Spend != want {
+				t.Fatalf("the close charged %+v, want only what the park handed on, %+v",
+					closing.record.Spend, want)
+			}
+		})
+	}
 }

@@ -1,0 +1,43 @@
+# A brief of the decision open in the Inbox, whose task was deleted between
+# the list and the brief: the task's own read answers 404, so the row about it
+# is dropped, the verdict counts the rows the person can act on (none), and
+# the about line still says what the page was about.
+person:
+  apps: [worklet]
+page:
+  screen: inbox
+  title: Inbox
+  params: {}
+  query: {}
+  resources: [{kind: task, id: ENG-50}]
+  selection: {kind: task, id: ENG-50, noun: decision}
+  source_revision: url:6b5a4c3d
+  accepts: []
+mode: brief
+question: Brief me on this decision
+answers:
+  - route: GET /worklet/decisions
+    body:
+      items:
+        - kind: ask
+          at: "2026-10-26T08:00:00Z"
+          ask: {key: ENG-50, title: Approve the rollout, body: "Can I roll it out today?", asked_by: pm}
+  - route: GET /worklet/{id}
+    status: 404
+    body:
+      error: {code: not_found, message: No such task.}
+script:
+  - call: list_decisions
+  - call: answer_brief
+    args:
+      about: The Product Manager asks whether to roll ENG-50 out today.
+      needs:
+        - {ref_kind: task, ref_id: ENG-50, do: "Answer ENG-50: roll it out today?", tone: warning, action: open}
+expect:
+  calls: [list_decisions, answer_brief]
+  proposals: 0
+  state: completed
+  brief:
+    needs: []
+    verdict: Nothing needs you
+  shows: [The Product Manager asks whether to roll ENG-50 out today.]

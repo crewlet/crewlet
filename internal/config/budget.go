@@ -100,8 +100,8 @@ var (
 // errTokenBudgetShape is the refusal of a budget that is neither a mapping nor
 // a number, in both encodings.
 var errTokenBudgetShape = errors.New("token_budget must be a mapping of " +
-	"ceilings per calendar window — `day`, `week` and `month`, each " +
-	"optional — e.g. `token_budget: {day: 2000000}`")
+	"ceilings per calendar window (`day`, `week` and `month`, each " +
+	"optional), e.g. `token_budget: {day: 2000000}`")
 
 // oneNumberRefusal is the refusal of `token_budget: <number>`, in both
 // encodings: the author's own number in the example when it could be a
@@ -115,7 +115,7 @@ func oneNumberRefusal(value string) string {
 	return "token_budget is a ceiling per calendar window, not one number: " +
 		"one number was a ceiling for the life of the deployment, which no " +
 		"window is. Write it under the window it should reset on, e.g. " +
-		"`token_budget: {month: " + example + "}` — `day`, `week` and `month` " +
+		"`token_budget: {month: " + example + "}`. `day`, `week` and `month` " +
 		"are each optional, and a window with no key has no ceiling"
 }
 
@@ -351,18 +351,33 @@ func (b TokenBudget) IdleUnder(seat org.TokenCeilings) []IdleCeiling {
 // Sentence is what an author is told about an idle ceiling of the seat called
 // handle: which company ceiling reaches first, and the two ways out.
 func (i IdleCeiling) Sentence(handle string) string {
+	return i.sentence(fmt.Sprintf("seat %q's token_budget", handle), "this seat a turn",
+		"a seat", "this seat")
+}
+
+// AssistantSentence is [IdleCeiling.Sentence] for the ceiling every person's
+// assistant spend is held to (`assistant.token_budget`), which the company's
+// reaches first for the same reason a seat's does.
+func (i IdleCeiling) AssistantSentence() string {
+	return i.sentence("assistant.token_budget", "a person's question",
+		"Ask Crewlet", "each person")
+}
+
+// sentence is the one wording of an idle ceiling: key is the budget's key as
+// an author writes it, refused what it would refuse, spender whose spend is
+// the company's too, and held who a lower ceiling holds to a share.
+func (i IdleCeiling) sentence(key, refused, spender, held string) string {
 	reason := fmt.Sprintf("the company's (%d)", i.Limit)
 	if i.Over != i.Window {
 		reason = fmt.Sprintf("the company's token_budget.%s (%d), and a %s lies inside one %s",
 			i.Over, i.Limit, i.Window, i.Over)
 	}
 	return fmt.Sprintf(
-		"seat %q's token_budget.%s (%d) is at or above %s, so it can "+
-			"never refuse this seat a turn: everything a seat spends is "+
-			"the company's spend too, so the company's ceiling is reached "+
-			"first. Remove it, or lower it below %d to hold this seat to "+
-			"a share of the company's",
-		handle, i.Window, i.Ceiling, reason, i.Limit)
+		"%s.%s (%d) is at or above %s, so it can never refuse %s: everything "+
+			"%s spends is the company's spend too, so the company's ceiling is "+
+			"reached first. Remove it, or lower it below %d to hold %s to a "+
+			"share of the company's",
+		key, i.Window, i.Ceiling, reason, refused, spender, i.Limit, held)
 }
 
 // budgetWarnings is every ceiling in the company that can never refuse a
@@ -377,11 +392,23 @@ func (i IdleCeiling) Sentence(handle string) string {
 // "this seat may spend 5M a day" beside a company capped at 2M believes the
 // seat has a headroom it does not — and that is what a warning is for.
 //
+// The ceiling each person's assistant is held to (`assistant.token_budget`) is
+// judged the same two ways: its own windows against each other, and against
+// the company's, since a person's assistant spend is the company's too. The
+// Budgets screen checks a change to it as it checks the company's and a
+// seat's, so a ceiling that can never refuse a question is said before it is
+// saved.
+//
 // Agent seats only. A human seat carrying a budget is refused as a conflict,
 // and a warning beside that refusal would be advice about a key that has to
 // go anyway.
 func (c *Company) budgetWarnings() []Warning {
 	out := c.TokenBudget.warnings(field("token_budget"))
+	assistant := at(field("assistant"), "token_budget")
+	out = append(out, c.Assistant.TokenBudget.warnings(assistant)...)
+	for _, idle := range c.TokenBudget.IdleUnder(c.Assistant.TokenBudget.Ceilings()) {
+		out = append(out, advisory(at(assistant, string(idle.Window)), idle.AssistantSentence()))
+	}
 	for role, path := range c.EachRole() {
 		seat := role.Seat()
 		if !seat.IsAgent() {
@@ -398,4 +425,87 @@ func (c *Company) budgetWarnings() []Warning {
 		out = append(out, own...)
 	}
 	return out
+}
+
+// validateExecutorFloor refuses a token ceiling below the room an executor
+// launch needs (turn_engine.executor_min_budget_tokens), on every scope a seat
+// that runs an executor is judged by: its own `token_budget`, and the
+// company's.
+//
+// RUNNABLE, because such a seat never runs. Every executor launch is refused
+// while a capped window of either scope has less than the floor left, and the
+// refusal parks the seat until the window turns over — but a ceiling below the
+// floor has less than the floor left at the window's very first token, so the
+// seat parks as starved before its first launch and every window it ever opens
+// leaves it parked. Nothing at run time says why beyond "starved"; this is the
+// one place the two settings meet.
+//
+// AT THE CEILING, naming both remedies, because either is the author's to
+// choose: raise the ceiling to the floor, or lower the floor to the ceiling —
+// knowing that a floor below one request of a run admits runs that cannot
+// finish their first round. The company's ceiling binds every executor seat,
+// so it is refused once, naming the first such seat and how many more; a
+// company with no seat that runs an executor caps nothing a launch reads, and
+// is not refused.
+//
+// A ceiling below one token is not judged here: [TokenBudget.validate] and the
+// seat's own validation refuse it, and a second refusal of the same key would
+// be advice about a value that has to go anyway.
+func (c *Company) validateExecutorFloor() error {
+	floor := c.TurnEngine.ExecutorFloor()
+	if floor <= 0 {
+		return nil
+	}
+	var p problems
+	first, seats := "", 0
+	for seat := range c.executorSeats() {
+		handle := seat.role.Seat().Handle()
+		if seats == 0 {
+			first = handle
+		}
+		seats++
+		here := at(seat.path, "token_budget")
+		ceilings := seat.role.TokenBudget.Ceilings()
+		for _, window := range period.Periods {
+			ceiling, capped := ceilings[window]
+			if !capped || ceiling < 1 || ceiling >= floor {
+				continue
+			}
+			p.add(at(here, string(window)), ErrConflict,
+				"seat %q's token_budget.%s (%d) is below turn_engine.executor_min_budget_tokens "+
+					"(%d), the room an executor launch needs: every launch is refused while a "+
+					"window has less than that left, and this one never has more, so the seat "+
+					"parks as starved before its first run and never launches one. Raise this "+
+					"ceiling to at least %d, or lower turn_engine.executor_min_budget_tokens to "+
+					"at most %d (0 turns the floor off)",
+				handle, window, ceiling, floor, floor, ceiling)
+		}
+	}
+	if seats == 0 {
+		return p.err()
+	}
+	who := fmt.Sprintf("seat %q", first)
+	switch {
+	case seats == 2:
+		who += " and 1 more seat"
+	case seats > 2:
+		who += fmt.Sprintf(" and %d more seats", seats-1)
+	}
+	company := c.TokenBudget.Ceilings()
+	for _, window := range period.Periods {
+		ceiling, capped := company[window]
+		if !capped || ceiling < 1 || ceiling >= floor {
+			continue
+		}
+		p.add(at(field("token_budget"), string(window)), ErrConflict,
+			"token_budget.%s (%d) is below turn_engine.executor_min_budget_tokens (%d), the "+
+				"room an executor launch needs: every seat that runs an executor is judged by "+
+				"the company's ceilings too, and a launch is refused while a window has less "+
+				"than the floor left, which this one always has, so %s would park as starved "+
+				"before a first run and never launch one. Raise this ceiling to at least %d, "+
+				"or lower turn_engine.executor_min_budget_tokens to at most %d (0 turns the "+
+				"floor off)",
+			window, ceiling, floor, who, floor, ceiling)
+	}
+	return p.err()
 }

@@ -22,6 +22,7 @@ import {
   phaseDuration,
   phaseStart,
   rounds,
+  runGroups,
   streamedPhases,
   toolCalls,
   transcriptLength,
@@ -397,7 +398,7 @@ describe("the round ledger", () => {
   });
 
   test("a row nothing timed reads as not recorded, never as instant", () => {
-    const [untimed] = toolCalls([{ name: "run_sandbox", round: 1 }]);
+    const [untimed] = toolCalls([{ name: "create_work_item", round: 1 }]);
     expect(untimed).toMatchObject({ durationMs: 0, origin: "", server: "" });
   });
 });
@@ -680,12 +681,12 @@ describe("delegated workers", () => {
     expect(live.key).toBe(done.key);
   });
 
-  // TWO CODING RUNS IN ONE ITERATION ARE TWO ROWS. A resumed executor that
-  // calls run_sandbox again launches a second run of the same iteration, and
-  // keyed on the three parts alone the map kept the last one to arrive — the
-  // first run, its report and its spend simply were not on the page. The
-  // executor that resumed from a run names it too, and keeps its three-part
-  // key, or it would stop matching the live call it replaces.
+  // TWO CODING RUNS IN ONE ITERATION ARE TWO ROWS. A run that parked on a
+  // question and is relaunched on its answer is a second launch of the same
+  // iteration, and keyed on the three parts alone the map kept the last one to
+  // arrive — the first run, its report and its spend simply were not on the
+  // page. The executor that resumed from a run names it too, and keeps its
+  // three-part key, or it would stop matching the live call it replaces.
   test("a coding run is keyed on its launch, and the executor that collected it is not", () => {
     const first = fromPhaseEvent(phaseEvent({ phase: "sandbox", launch_id: "job-1" }))!;
     const second = fromPhaseEvent(phaseEvent({ phase: "sandbox", launch_id: "job-2" }))!;
@@ -769,7 +770,7 @@ describe("what a coding run's record left out", () => {
       transcriptElidedLines: 0,
       transcriptElidedBytes: 307_200,
     };
-    expect(transcriptLength(partial)).toBe("2 lines, 300 KB left out");
+    expect(transcriptLength(partial)).toBe("2 lines, 300 KiB left out");
   });
 
   test("refs the record does not list are counted even when it lists none", () => {
@@ -892,7 +893,7 @@ describe("a phase's duration", () => {
   });
 
   test("an unmeasured phase reports nothing rather than zero", () => {
-    // An agent-mode executor's rounds ran inside a coding CLI's own loop in
+    // An executor run's rounds ran inside its coding CLI's own loop in
     // another process, so the engine measured no loop of its own and the
     // field is 0. Rendering that as "0ms" would put a confident number on a
     // phase that took four minutes.
@@ -991,5 +992,165 @@ describe("the row's column is the authority for a stored record, the payload for
   test("falls back to the payload for a frame nothing has stored", () => {
     const done = fromPhaseEvent(phaseEvent({ work_key: "wk-live" }))!;
     expect(done.workKey).toBe("wk-live");
+  });
+});
+
+/**
+ * EVERY CALL IN FLIGHT, AND EVERY CLI RUN, reach the record from both shapes a
+ * phase arrives in — and a call keeps its own id from the moment it runs to
+ * the row it answers as.
+ *
+ * Mutation: read one running call, drop a run's rounds or the call's id, or
+ * leave a finished record holding a call in flight, and this fails.
+ */
+describe("the calls in flight and the CLI runs", () => {
+  const run = {
+    started_at: "2026-01-01T00:00:01Z",
+    duration_ms: 4_000,
+    provider_key: "claude-max",
+    model: "claude-sonnet-5",
+    outcome: "stopped",
+    first_round: 1,
+    last_round: 2,
+    requests_observed: true,
+    input_tokens: 1_000,
+    output_tokens: 50,
+    cache_read_tokens: 800,
+    cache_write_tokens: 0,
+    tool_calls: 2,
+  };
+
+  test("a live call lists every call it is running, each with its id", () => {
+    const rec = fromLiveCall(
+      liveCall({
+        running_calls: [
+          { id: "c1", round: 3, name: "read_file", arguments: '{"path":"a"}', started_at: "x" },
+          // A reader withheld the body is sent no arguments.
+          { id: "c2", round: 3, name: "run_tests", started_at: "y" },
+        ],
+        invocations: [run],
+      }),
+      "PM",
+    );
+    expect(rec.runningCalls).toEqual([
+      { id: "c1", round: 3, name: "read_file", arguments: '{"path":"a"}', startedAt: "x" },
+      { id: "c2", round: 3, name: "run_tests", arguments: "", startedAt: "y" },
+    ]);
+    expect(rec.invocations).toEqual([
+      {
+        run: 1,
+        startedAt: run.started_at,
+        durationMs: 4_000,
+        providerKey: "claude-max",
+        model: "claude-sonnet-5",
+        outcome: "stopped",
+        firstRound: 1,
+        lastRound: 2,
+        requestsObserved: true,
+        inputTokens: 1_000,
+        outputTokens: 50,
+        cacheReadTokens: 800,
+        toolCalls: 2,
+      },
+    ]);
+  });
+
+  test("a finished record carries its runs and its calls' ids, and nothing in flight", () => {
+    const done = fromPhaseEvent(
+      phaseEvent({
+        invocations: [run, { ...run, first_round: 0, last_round: 0, requests_observed: false }],
+        tool_executions: [
+          {
+            name: "read_file",
+            round: 1,
+            arguments: "{}",
+            result: "a",
+            success: true,
+            call_id: "c1",
+          },
+        ],
+      }),
+    )!;
+    expect(done.runningCalls).toEqual([]);
+    expect(done.invocations.map((r) => [r.run, r.firstRound, r.requestsObserved])).toEqual([
+      [1, 1, true],
+      [2, 0, false],
+    ]);
+    expect(done.tools[0]?.callId).toBe("c1");
+  });
+
+  test("a round's calls in flight follow its calls that answered", () => {
+    const [round] = rounds(
+      toolCalls([{ name: "read_file", round: 1, arguments: "{}", result: "", success: true }]),
+      [],
+      null,
+      [
+        { id: "c2", round: 1, name: "run_tests", arguments: "", startedAt: "" },
+        { id: "c3", round: 1, name: "post", arguments: "", startedAt: "" },
+      ],
+    );
+    expect(round?.tools.map((t) => t.name)).toEqual(["read_file"]);
+    expect(round?.running.map((c) => c.id)).toEqual(["c2", "c3"]);
+    // A round whose every call is still running is opened by them.
+    const [opened] = rounds([], [], null, [
+      { id: "c9", round: 4, name: "run_tests", arguments: "", startedAt: "" },
+    ]);
+    expect([opened?.round, opened?.running.length]).toEqual([4, 1]);
+  });
+});
+
+/**
+ * A PHASE'S ROUNDS GROUP UNDER THE RUN THAT NAMED THEM, by round number:
+ * every run is a group — one that made no request too — and the rounds past
+ * every run are a last group of their own, the run in flight's. A round no run
+ * claims keeps its place, credited to nobody.
+ *
+ * Mutation: drop a run with no rounds, file the trailing rounds under the
+ * last run, or drop an unclaimed round, and this fails.
+ */
+describe("a phase's rounds under its CLI runs", () => {
+  const ledger = (...numbers: number[]) =>
+    rounds(
+      [],
+      numbers.map((round) => ({ round, content: `r${round}`, declined: false })),
+    );
+  const run = (n: number, first: number, last: number) => ({
+    run: n,
+    startedAt: "",
+    durationMs: 0,
+    providerKey: "",
+    model: "",
+    outcome: "end",
+    firstRound: first,
+    lastRound: last,
+    requestsObserved: true,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    toolCalls: 0,
+  });
+  const shape = (groups: ReturnType<typeof runGroups>) =>
+    groups.map((g) => [g.run?.run ?? null, g.rounds.map((r) => r.round)]);
+
+  test("each run holds the rounds it names, and the rest are the run in flight's", () => {
+    expect(
+      shape(runGroups(ledger(1, 2, 3, 4, 5), [run(1, 1, 2), run(2, 0, 0), run(3, 3, 4)])),
+    ).toEqual([
+      [1, [1, 2]],
+      [2, []],
+      [3, [3, 4]],
+      [null, [5]],
+    ]);
+  });
+
+  test("with no run on the record, every round is one group credited to no run", () => {
+    expect(shape(runGroups(ledger(1, 2), []))).toEqual([[null, [1, 2]]]);
+  });
+
+  test("a round before a run that no run claims keeps its place", () => {
+    expect(shape(runGroups(ledger(1, 2, 3), [run(1, 2, 3)]))).toEqual([
+      [null, [1]],
+      [1, [2, 3]],
+    ]);
   });
 });

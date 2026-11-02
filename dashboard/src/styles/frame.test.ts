@@ -191,54 +191,35 @@ function mentioning(css: string, selector: string): { sel: string; body: string 
 }
 
 describe("the frame's layout", () => {
-  // THE PEEK'S SHAPE IS ONE ATTRIBUTE WITH TWO VALUES, AND NO WIDTH HERE.
+  // THE PEEK'S SHAPE IS THE SHELL'S DECISION AND THE KIT'S DRAWING, AND NO
+  // STYLESHEET HERE TAKES EITHER BACK.
   //
-  // It was two media queries on one literal — a column at `width >= 1112px`,
-  // a drawer at `width < 1112px` — and the literal was wrong twice over: it
-  // left out the screen's padding and scroller gutter, so the list beside a
-  // peek was 396px at the threshold that promised it 444, and it could not
-  // know that Settings draws a 236px column INSIDE the screen, so a peek at
-  // 1280 left Settings' nodes grid 328px and cut its columns off. A media
-  // query cannot see which screen is on or the reader's density, so the shell
-  // decides (`app/layout.ts`) and writes `data-peek`. What this holds is that
-  // nothing in a stylesheet decides it a second time.
-  test("the peek is a column or a drawer by attribute, and no stylesheet gives it a width", () => {
-    const css = sheet("frame.css");
-    // EVERY VALUE THE SHEET ANSWERS is one of the shell's two. `true` was the
-    // last spelling; a rule still keyed on it would match nothing and say so
-    // to nobody.
-    const values = [...css.matchAll(/\[data-peek(?:="([^"]*)")?\]/g)].map((m) => m[1] ?? "");
-    expect(new Set(values)).toEqual(new Set(["column", "drawer"]));
-    // AND NONE OF IT IS BEHIND A WIDTH, in any sheet: a peek rule inside a
-    // media query is a second opinion about where the column fits.
+  // It was two media queries on one literal, a column at `width >= 1112px`
+  // and a drawer below it, and the literal was wrong twice over: it left out
+  // the screen's padding and scroller gutter, so the list beside a peek was
+  // 396px at the threshold that promised it 444, and it could not know that
+  // Settings draws a 236px column INSIDE the screen. A media query cannot see
+  // which screen is on or the reader's density, so the shell decides
+  // (`app/layout.ts`) and hands the kit `peekShape`; the kit's `PeekRail`
+  // draws the column, the drawer, the veil and the grip. What this holds is
+  // that nothing in a stylesheet of ours decides the shape a second time or
+  // lays the rail out over the kit: a rule keyed on `data-peek` or giving the
+  // rail a width, a position or a grid track is a second opinion that drifts.
+  test("no stylesheet here decides the peek's shape or lays out its rail", () => {
     for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
-      for (const { prelude, body } of mediaBodies(sheet(name))) {
-        expect(body, `${name}: ${prelude} decides the peek's shape`).not.toMatch(
-          /data-peek|\.peek-(?:rail|veil|grip)\b/,
+      const css = sheet(name).replace(/\/\*[\s\S]*?\*\//g, "");
+      expect(css, `${name} keys a rule on the peek's shape`).not.toMatch(/data-peek/);
+      // The retired rail's own classes, which nothing renders any more.
+      expect(css, `${name} styles the retired rail`).not.toMatch(
+        /\.peek-(?:rail|veil|grip|bar|body)\b/,
+      );
+      for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+        if (!/\.crewlet-peek-rail(?![\w-])(?!__body)/.test(m[1]!)) continue;
+        expect(m[2], `${name}: ${m[1]!.trim()} lays out the kit's rail`).not.toMatch(
+          /(?:^|;|\s)(?:width|position|grid-[a-z-]+|inset|right|left)\s*:/,
         );
       }
     }
-    // The column side: the sheet becomes a grid whose second track is the
-    // reader's width, CAPPED at what the sheet can give with the list at its
-    // floor — and whose fallback is the resting width the threshold assumes.
-    const grid = block(css, '.app[data-peek="column"] .crewlet-app-shell__sheet');
-    expect(grid).toMatch(/display:\s*grid/);
-    const track =
-      /grid-template-columns:\s*minmax\(0, 1fr\)\s+min\(var\(--peek-w, (\d+)px\), 100% - var\(--peek-reserve\)\)/.exec(
-        grid,
-      );
-    expect(
-      track,
-      "the peek's track is not the reader's width capped by the reserve",
-    ).not.toBeNull();
-    expect(Number(track![1])).toBe(PEEK_WIDTH);
-    for (const part of [".page-head", ".crewlet-app-shell__main", ".peek-rail"]) {
-      expect(block(css, `.app[data-peek="column"] ${part}`), part).toMatch(/grid-row:\s*\d/);
-    }
-    // The drawer side: fixed, over a veil, with no grip to drag.
-    expect(block(css, '.app[data-peek="drawer"] .peek-rail')).toMatch(/position:\s*fixed/);
-    expect(block(css, '.app[data-peek="drawer"] .peek-veil')).toMatch(/display:\s*block/);
-    expect(block(css, '.app[data-peek="drawer"] .peek-grip')).toMatch(/display:\s*none/);
   });
 
   // EVERY TERM OF THE THRESHOLD IS HELD AGAINST THE RULE THAT DRAWS IT.
@@ -262,11 +243,13 @@ describe("the frame's layout", () => {
     expect(block(sheet("base.css"), "::-webkit-scrollbar")).toMatch(
       new RegExp(`width:\\s*${SCROLLBAR_GUTTER}px`),
     );
-    // The screen's padding: the kit's content column, and the section body
-    // beside Settings' column, which takes the kit's back and gives the same.
+    // The screen's padding: the kit's content column, by the shell's own
+    // side inset (20px at this width), and the section body beside Settings'
+    // column, which takes the kit's back and gives the same.
     expect(block(kit, ".crewlet-app-shell__content")).toMatch(
-      /padding:\s*var\(--spacing-5\) var\(--spacing-5\)/,
+      /padding:\s*var\(--crewlet-app-shell-inset\);/,
     );
+    expect(kit).toMatch(/--crewlet-app-shell-inset:\s*var\(--spacing-5\);/);
     expect(block(kit, ".crewlet-section-frame__body")).toMatch(
       /padding:\s*var\(--spacing-5\) var\(--spacing-5\)/,
     );
@@ -455,7 +438,7 @@ describe("the frame's layout", () => {
   // WRAPPED RATHER THAN CLAMPED, and the clamp's own gate is why this test
   // can say so: `text.test.ts` holds `.clamp` to a single copy in base.css, so
   // a second one here would fail there. What bounds the value instead is the
-  // engine's own `tracker.MaxTitle`, and there is no uniform row height to
+  // engine's own `worklet.MaxTitle`, and there is no uniform row height to
   // protect — a card is already a stack of six to twelve labelled lines.
   test("a card's value wraps, because the column that justified cutting it is gone", () => {
     const css = sheet("frame.css");
@@ -971,7 +954,7 @@ describe("a task's activity", () => {
   // IN THE SHEET because there is nowhere else: jsdom computes no layout, so
   // every case that renders these stays green whether the text wraps or
   // ellipses. The other direction is covered already — each class is declared
-  // here and written only by `routes/work/item/Activity.tsx`, so
+  // here and written only by `routes/worklet/item/Activity.tsx`, so
   // classes.test.ts fails if either side alone goes back.
   test("a task's activity wraps rather than ellipsing what changed", () => {
     const css = sheet("screens.css");
@@ -1318,17 +1301,36 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".inbox-list")).toMatch(/padding:\s*var\(--spacing-2\) var\(--spacing-3\)/);
   });
 
-  // A LONE CARD TAKES ITS ROW: without Crewlet Works a seat's Assigned work
+  // A LONE CARD TAKES ITS ROW: without Worklet a seat's Assigned work
   // draws nothing, and Turns per day sat beside a 334px hole.
   test("a seat's pair gives a lone card the whole row", () => {
     expect(block(css, ".prof-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
   });
 
+  // A TAB BAR STANDS ONE STEP ABOVE ITS PANEL, on every tabbed detail, by one
+  // token: an integration's page and a turn (`.tab-detail`, the bar and its
+  // panel as siblings), a seat's profile and the org builder's node editor
+  // (the panel's own top padding) and a room's details (its first section).
+  // Each stood its host's own gap below the bar, 16 to 20px. Mutation: give
+  // any of them a step of its own and its line goes red.
+  test("a tab bar stands the one shared step above its panel", () => {
+    const tokens = sheet("tokens.css");
+    expect(tokens).toMatch(/--tab-panel-gap:\s*var\(--spacing-2\);/);
+    expect(block(sheet("components.css"), ".tab-detail")).toMatch(/gap:\s*var\(--tab-panel-gap\);/);
+    expect(block(css, ".node-editor-panel")).toMatch(/padding:\s*var\(--tab-panel-gap\) /);
+    expect(
+      block(sheet("chatlet-panes.css"), ".chat-pane-scroll > .chat-pane-section:first-child"),
+    ).toMatch(/padding-top:\s*var\(--tab-panel-gap\);/);
+  });
+
   // THE SEAT PAGE IS ON THE SHELL'S GUTTER, the one the page bar's trail
-  // starts at: at 28px its head and body stood 8px right of the crumb.
+  // starts at: at 28px its head and body stood 8px right of the crumb. The
+  // body's TOP is the shared step under a tab bar (`--tab-panel-gap`).
   test("a seat's head and body start where the page bar's trail does", () => {
     expect(block(css, ".prof-head")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\) 0/);
-    expect(block(css, ".prof-body")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\)/);
+    expect(block(css, ".prof-body")).toMatch(
+      /padding:\s*var\(--tab-panel-gap\) var\(--spacing-5\)/,
+    );
   });
 
   // THE COMPANY'S BUDGET ROW STANDS ON THE SEATS' COLUMNS: its cells take the
@@ -1337,9 +1339,12 @@ describe("the Spend overview's rows", () => {
   test("the company's budget row takes the seats' columns and the cell's inset", () => {
     expect(block(css, ".budget-row")).toMatch(/grid-template-columns:\s*var\(--budget-tracks\);/);
     expect(block(css, ".budget-row > *")).toMatch(/padding:\s*var\(--spacing-3\);/);
-    expect(block(kitSheet(), ".crewlet-data-grid__cell")).toMatch(
-      /padding:\s*var\(--spacing-1\) var\(--spacing-3\);/,
-    );
+    // The kit sets a cell's inline inset through its own properties, so a
+    // grid's first column can meet its edge; a body column's is
+    // the 12px this row matches.
+    const cell = block(kitSheet(), ".crewlet-data-grid__cell");
+    expect(cell).toMatch(/--crewlet-data-grid-cell-start:\s*var\(--spacing-3\);/);
+    expect(cell).toMatch(/--crewlet-data-grid-cell-end:\s*var\(--spacing-3\);/);
     expect(block(css, ".budget-tile")).not.toMatch(/background/);
   });
 
@@ -1479,7 +1484,7 @@ test("no screen cancels the content column's padding with a negative margin", ()
  * column cap (`frame.css`, "NO MAX WIDTH") because these screens are tiles,
  * tables and boards that want the width a wide window bought, and prose takes
  * `--size-measure` where it needs one. A screen's own column capped at
- * `--size-content-max` brings the same defect back on one screen: Knowledge's
+ * `--size-content-max` brings the same defect back on one screen: Doclet's
  * landing and a space's outline sat in a 1600px column against the left edge
  * of a 2560px sheet. Mutation: cap `.knowledge-home` again and this names it.
  */

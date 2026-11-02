@@ -8,7 +8,7 @@ import { useMemo } from "react";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { Card, EmptyState, EmptyValue, Tag, InlineCode, TableTextCell } from "@crewlethq/ui";
 import { CalendarGlyph } from "@crewlethq/icons/glyphs";
-import { peekHref } from "~/app/frame/DetailRail.tsx";
+import { peekHref } from "~/app/frame/peekAddress.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { describe as describeCron } from "~/lib/cron.ts";
@@ -93,6 +93,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
             // `next_run`, and only the second is a defect.
             key: "next",
             header: "Next",
+            align: "right",
             shrink: true,
             sortValue: (row) => tsKey(row.next_run) || Number.MAX_SAFE_INTEGER,
             cell: (row) =>
@@ -115,6 +116,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
           {
             key: "task",
             header: "Task",
+            sortValue: (row) => row.task,
             cell: (row) => <TableTextCell>{row.task}</TableTextCell>,
           },
         ]}

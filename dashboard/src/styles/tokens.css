@@ -38,6 +38,14 @@
      follows the header at every setting. */
   --row-inline: var(--spacing-4);
 
+  /* THE STEP BETWEEN A TAB BAR AND ITS PANEL, wherever a detail draws one:
+     an integration's page, a seat's profile, a turn, the org builder's node
+     editor, a room's details. One step, so a tab bar reads as the head of what
+     it switches rather than as a section standing a section's gap above it.
+     Spent by `.tab-detail` (`components.css`) where the panel is the bar's
+     sibling, and as the panel's top padding where the panel pads itself. */
+  --tab-panel-gap: var(--spacing-2);
+
   /* One band of controls: a control plus the toolbar's own padding. Derived
      rather than measured, so a change to either input moves the band and the
      offset below it together. */

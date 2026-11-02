@@ -8,14 +8,15 @@
  * reader the frame is still asking about.
  */
 
-/** An admin, bound to the seat `jane`: every app is included. */
+/** An admin, bound to the seat `jane`: every app is included — and listed, as
+ *  the engine reports an admin's grants, expanded. */
 export const ADMIN_VIEWER = {
   login: "founder",
   owner: "jane",
   handle: "jane",
   name: "Jane Founder",
   kind: "human",
-  grants: ["admin", "tracker", "knowledge"],
+  grants: ["admin", "worklet", "doclet", "chatlet"],
   acts: [],
 };
 
@@ -23,7 +24,7 @@ export const ADMIN_VIEWER = {
  * What the frame itself asks of the socket on every screen, answered as the
  * engine answers an admin with nothing waiting: who is reading, the composed
  * inbox's count every signed-in reader is asked for, and the queue count a
- * reader holding Tracker is asked for. A suite's own answers come first.
+ * reader holding Worklet is asked for. A suite's own answers come first.
  */
 export const FRAME_ANSWERS: Readonly<Record<string, unknown>> = {
   viewer: ADMIN_VIEWER,

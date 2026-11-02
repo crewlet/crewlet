@@ -12,7 +12,7 @@
  * THE FILTER IS THE SCREEN'S, AND FIXED. The screen that mounts a listing
  * decides what it IS — this work item's changes, this owner's — so there is no
  * bar to narrow it; its rows page with Load more as the Changes listing's do,
- * its first page held still from the press (`lib/usePaged.ts`), and its Show
+ * each page joined to the one before it (`lib/usePaged.ts`), and its Show
  * all is that listing, narrowed the same way, where the reader can widen it.
  */
 
@@ -33,7 +33,7 @@ import { useNow } from "~/lib/clock.ts";
 import { changePath, parseChangeRef, verdictWord } from "~/lib/code.ts";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
-import { usePageHold, usePaged } from "~/lib/usePaged.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import type {
   CodeChangeSummary,
@@ -86,15 +86,13 @@ export function ChangeList({
   // screen drawn on a cold load before the org projection lands asks nothing
   // the engine may refuse as a question it does not answer.
   const ask = useServicesAsk();
-  const hold = usePageHold<CodeChangesAnswer>(params);
   const first = useCodeQuery("code_changes", params, {
     enabled: enabled && ask.code,
     pollMs: CODE_LIST_POLL_MS,
-    hold: hold.holding,
   });
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_changes", { ...params, cursor }),
     changesOf,
     changeIdOf,
@@ -116,8 +114,8 @@ export function ChangeList({
       >
         <ChangesGrid
           rows={rows}
-          onLoadMore={paged.more ? paged.older : undefined}
-          loadedNote={loadedNote(paged.more, paged.held, rows.length, "change")}
+          onLoadMore={paged.more ? paged.next : undefined}
+          loadedNote={loadedNote(paged.more, rows.length, "change")}
         />
       </QueryState>
       {paged.pageError && <PageFailed error={paged.pageError} />}
@@ -133,15 +131,13 @@ export function ChangeList({
 export function ReviewList({ reviewer, empty }: { reviewer: string; empty: ListEmpty }) {
   const params = { reviewer };
   const ask = useServicesAsk();
-  const hold = usePageHold<CodeReviewsAnswer>(params);
   const first = useCodeQuery("code_reviews", params, {
     enabled: reviewer !== "" && ask.code,
     pollMs: CODE_LIST_POLL_MS,
-    hold: hold.holding,
   });
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_reviews", { ...params, cursor }),
     reviewsOf,
     reviewIdOf,
@@ -162,8 +158,8 @@ export function ReviewList({ reviewer, empty }: { reviewer: string; empty: ListE
       >
         <ReviewsGrid
           rows={rows}
-          onLoadMore={paged.more ? paged.older : undefined}
-          loadedNote={loadedNote(paged.more, paged.held, rows.length, "review")}
+          onLoadMore={paged.more ? paged.next : undefined}
+          loadedNote={loadedNote(paged.more, rows.length, "review")}
         />
       </QueryState>
       {paged.pageError && <PageFailed error={paged.pageError} />}
@@ -171,9 +167,8 @@ export function ReviewList({ reviewer, empty }: { reviewer: string; empty: ListE
   );
 }
 
-function loadedNote(more: boolean, held: boolean, n: number, what: string): string | undefined {
-  if (!more && !held) return undefined;
-  return `${plural(n, what)} loaded${held ? ", paused while more are loaded" : ""}`;
+function loadedNote(more: boolean, n: number, what: string): string | undefined {
+  return more ? `${plural(n, what)} loaded` : undefined;
 }
 
 /**

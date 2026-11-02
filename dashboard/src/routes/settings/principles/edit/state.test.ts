@@ -5,11 +5,12 @@
  */
 
 import { describe, expect, test } from "vitest";
+import { healthFrame } from "~/test/health.ts";
 import {
   INITIAL,
   effective,
-  hasSettled,
   isDirty,
+  landedView,
   reducer,
   type Action,
   type EditingState,
@@ -92,7 +93,7 @@ describe("reducer", () => {
       { type: "use_theirs", part: "mission", shownWas: "Ship it" },
     );
     expect(state.sessions.mission).toBeUndefined();
-    expect(state.landed.mission).toEqual({ value: "Theirs", epoch: null, shownWas: "Ship it" });
+    expect(state.landed.mission).toEqual({ value: "Theirs", activated: null, shownWas: "Ship it" });
   });
 
   test("nothing is typed while a save is in flight", () => {
@@ -113,10 +114,20 @@ describe("reducer", () => {
       open,
       { type: "change", part: "mission", draft: "New" },
       { type: "saving", part: "mission" },
-      { type: "saved", part: "mission", value: "New", epoch: 4, shownWas: "Ship it" },
+      {
+        type: "saved",
+        part: "mission",
+        value: "New",
+        activated: { revisionId: "r4", epoch: 4 },
+        shownWas: "Ship it",
+      },
     );
     expect(state.sessions.mission).toBeUndefined();
-    expect(state.landed.mission).toEqual({ value: "New", epoch: 4, shownWas: "Ship it" });
+    expect(state.landed.mission).toEqual({
+      value: "New",
+      activated: { revisionId: "r4", epoch: 4 },
+      shownWas: "Ship it",
+    });
     expect(reducer(state, { type: "settle", part: "mission" }).landed.mission).toBeUndefined();
   });
 });
@@ -172,25 +183,58 @@ describe("seeding from the engine's charter", () => {
   });
 });
 
-describe("hasSettled", () => {
-  const landed = { value: "New", epoch: 4, shownWas: "Old" };
+describe("a landed save", () => {
+  const landed = { value: "New", activated: { revisionId: "r4", epoch: 4 }, shownWas: "Old" };
+  const applied = (epoch: number) => healthFrame({ applied_epoch: epoch });
 
-  test("not while the page still shows what the save replaced", () => {
-    expect(hasSettled(landed, "Old", 3)).toBe(false);
+  test("is applying while the page still shows what the save replaced", () => {
+    expect(landedView(landed, "Old", applied(3))).toBe("applying");
   });
 
-  test("once the page shows the saved words", () => {
-    expect(hasSettled(landed, "New", 3)).toBe(true);
+  // NO PUSH YET is no news: the save is where it landed, never settled by a
+  // standing nobody reported. Mutation: settle a save with no push behind it
+  // and this reads settled.
+  test("is applying while the page has had no push from this node", () => {
+    expect(landedView(landed, "Old", null)).toBe("applying");
+  });
+
+  test("is settled once the page shows the saved words", () => {
+    expect(landedView(landed, "New", applied(3))).toBe("settled");
   });
 
   // A LATER CHANGE BY SOMEBODY ELSE is the page's to show, not this save's
   // words over it.
-  test("once the page shows anything newer than it did", () => {
-    expect(hasSettled(landed, "A colleague's", 3)).toBe(true);
+  test("is settled once the page shows anything newer than it did", () => {
+    expect(landedView(landed, "A colleague's", applied(3))).toBe("settled");
   });
 
-  test("once this node has applied the save's epoch", () => {
-    expect(hasSettled(landed, "Old", 4)).toBe(true);
-    expect(hasSettled({ ...landed, epoch: null }, "Old", 99)).toBe(false);
+  test("is settled once this node has applied the save's epoch", () => {
+    expect(landedView(landed, "Old", applied(4))).toBe("settled");
+    expect(landedView({ ...landed, activated: null }, "Old", applied(99))).toBe("applying");
+  });
+
+  // A REFUSAL LEAVES THE APPLIED EPOCH WHERE IT WAS, so read by it alone a
+  // refused save drew the saved words, "shown as soon as this node applies"
+  // them, for as long as the page stayed open. Mutation: judge the save by
+  // the applied epoch alone and this reads applying.
+  test("is refused once this node's attempt at its revision failed", () => {
+    const refused = healthFrame({
+      applied_epoch: 3,
+      config_attempt: { epoch: 4, revision_id: "r4", status: "error" },
+    });
+    expect(landedView(landed, "Old", refused)).toBe("refused");
+    // The page moving on settles it all the same.
+    expect(landedView(landed, "A colleague's", refused)).toBe("settled");
+  });
+
+  // A LATER ACTIVATION THIS NODE TRIED FIRST and refused: it will not come
+  // back to this save, so the projection is the answer. Mutation: leave a
+  // passed save applying and the saved words are drawn for good.
+  test("is settled once this node has passed its revision for a later one", () => {
+    const passed = healthFrame({
+      applied_epoch: 3,
+      config_attempt: { epoch: 5, revision_id: "r5", status: "error" },
+    });
+    expect(landedView(landed, "Old", passed)).toBe("settled");
   });
 });

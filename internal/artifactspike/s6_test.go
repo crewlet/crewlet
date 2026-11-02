@@ -44,7 +44,7 @@ const (
 	//
 	// LONGER THAN THE WHOLE PATH CAN TAKE: a focus change waits out the
 	// sending node's coalescing window and then the receiving node's (each
-	// a second over [artifacts.PresenceCoalesceRate]) before a socket sees
+	// a second over [presence.CoalesceRate]) before a socket sees
 	// it, and a probe moved again inside that path is coalesced away and
 	// never shown at all, which would read as a lost frame rather than a
 	// slow one.
@@ -53,10 +53,10 @@ const (
 
 // BenchmarkS6PresenceFanOut runs a room of 30, 50 and 200 viewers, each
 // moving its focus once a second (an active reader) and ten times a second
-// (the per-socket ceiling, [artifacts.PresenceClientRate]).
+// (the per-socket ceiling, [presence.ClientRate]).
 func BenchmarkS6PresenceFanOut(b *testing.B) {
 	for _, viewers := range []int{30, 50, 200} {
-		for _, rate := range []int{1, artifacts.PresenceClientRate} {
+		for _, rate := range []int{1, presence.ClientRate} {
 			b.Run(fmt.Sprintf("viewers=%d/moves-per-s=%d", viewers, rate), func(b *testing.B) {
 				for range b.N {
 					fanOut(b, viewers, rate)
@@ -112,8 +112,8 @@ type presenceNode struct {
 // in order, and the instant a watched focus region first appeared on it.
 type roomScreen struct {
 	mu      sync.Mutex
-	members map[string]artifacts.PresenceMember
-	counts  *artifacts.PresenceCounts
+	members map[string]presence.Member
+	counts  *presence.Counts
 	seen    map[string]time.Time
 }
 
@@ -159,7 +159,7 @@ func startPresence(b *testing.B, q *js.Queue, id string) *presenceNode {
 		b.Fatalf("%s: build the presence wire: %v", id, err)
 	}
 	n := &presenceNode{queue: &countingQueue{q: q}, sockets: stream.NewHub(),
-		screen: &roomScreen{members: map[string]artifacts.PresenceMember{}, seen: map[string]time.Time{}}}
+		screen: &roomScreen{members: map[string]presence.Member{}, seen: map[string]time.Time{}}}
 	// THE FLEET'S READ BUDGET is what the engine hands the join-time ask;
 	// two seconds is the API's own read deadline.
 	n.hub, err = presence.New(presence.Options{Queue: n.queue, Wire: wire, Node: id,
@@ -171,7 +171,10 @@ func startPresence(b *testing.B, q *js.Queue, id string) *presenceNode {
 		now := time.Now()
 		n.screen.apply(c, now)
 		// AS THE SOCKET SERVICE PUSHES IT (stream.Service.PresenceChanged).
-		n.sockets.Broadcast(stream.PushArtifact(stream.KindArtifactPresence, c.Artifact, c, now))
+		artifact := artifacts.ID(c.Room.ID)
+		n.sockets.Broadcast(stream.PushArtifact(stream.KindArtifactPresence, artifact,
+			stream.ArtifactPresence{Artifact: artifact, Upsert: c.Upsert, Leave: c.Leave,
+				Counts: c.Counts, Truncated: c.Truncated}, now))
 	})
 	if err := n.hub.Start(b.Context()); err != nil {
 		b.Fatalf("%s: start the presence hub: %v", id, err)
@@ -196,12 +199,16 @@ func (n *presenceNode) join(b *testing.B, id artifacts.ID, seat string, done <-c
 	c := stream.NewClient(stream.NewAudience(iam.Principal{Login: seat, Stage: iam.StageActive,
 		Grants: []iam.Grant{iam.GrantAdmin}}, nil))
 	n.sockets.Register(c)
-	session, _, err := n.hub.Join(id, presence.Local{Seat: seat, Kind: iam.ActorHuman})
+	// THE SOCKET JOINS IN THE HAND, as the socket's own join does: in the
+	// room's delivery order (presence.Hub.Join).
+	session, err := n.hub.Join(presence.ArtifactRoom(id),
+		presence.Local{Seat: seat, Kind: iam.ActorHuman},
+		func(session string, _ presence.Roster) bool {
+			_, _, ok := n.sockets.JoinArtifact(c, id, artifacts.RoleViewer, session)
+			return ok
+		})
 	if err != nil {
 		b.Fatalf("join %s to the room: %v", seat, err)
-	}
-	if _, _, ok := n.sockets.JoinArtifact(c, id, artifacts.RoleViewer, session); !ok {
-		b.Fatalf("join %s's socket to the room: the hub does not hold it", seat)
 	}
 	n.clients++
 	go func() {
@@ -273,9 +280,9 @@ func fanOut(b *testing.B, viewers, rate int) {
 			// interval rather than land together.
 			time.Sleep(time.Duration(rnd.Int64N(int64(interval))))
 			for time.Now().Before(stop) {
-				focus := artifacts.Focus{Collection: sheetCollection,
+				focus := presence.Focus{Collection: sheetCollection,
 					Doc: docID(rnd.IntN(seededRows)), Field: "status"}
-				if err := vw.node.hub.Update(id, vw.session, artifacts.PresenceViewing, focus); err != nil {
+				if err := vw.node.hub.Update(presence.ArtifactRoom(id), vw.session, presence.Viewing, focus); err != nil {
 					b.Errorf("a viewer's focus: %v", err)
 					return
 				}
@@ -290,8 +297,8 @@ func fanOut(b *testing.B, viewers, rate int) {
 	for k := 0; time.Now().Add(presenceProbeEvery).Before(stop); k++ {
 		region := fmt.Sprintf("probe-%d", k)
 		moved := time.Now()
-		if err := probe.node.hub.Update(id, probe.session, artifacts.PresenceEditing,
-			artifacts.Focus{Region: region}); err != nil {
+		if err := probe.node.hub.Update(presence.ArtifactRoom(id), probe.session, presence.Editing,
+			presence.Focus{Region: region}); err != nil {
 			b.Fatalf("the probe's focus: %v", err)
 		}
 		time.Sleep(presenceProbeEvery)

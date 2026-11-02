@@ -4,12 +4,14 @@ Crewlet uses a **one Slack app per agent** model — each agent gets its own bot
 
 > **Prerequisites.** You need a Slack **workspace you administer** (create one if you don't have it). The engine's API endpoint must be **reachable by Slack over public HTTPS** so the Events API can deliver webhooks, and so the OAuth install can land (for local development, use a tunnel such as ngrok or cloudflared).
 
+> **This is one of three chat backends, and the axis is exclusive.** A Slack app — the org-level `integrations.slack` block **or any seat's own**, since Slack's credentials are per seat — puts this company on `chat.backend: vendor`. The engine's own chat ([Chatlet](../concepts/chatlet.md)) is what a company gets when it declares no vendor chat surface at all, and naming `chat.backend: chatlet` beside a Slack app is **refused at validation**: two live chat homes means a person replies in one while the agents read the other, with no rule anywhere to say which conversation was real. Slack and [Mattermost](mattermost.md) together are fine — two workspaces with different people in them is what an org migrating between them looks like for months.
+
 There are two ways to create those apps:
 
-- **[Automated (recommended)](#automated-setup-crewlet-slack-provision)** — `crewlet slack provision` creates and maintains every app through Slack's [App Manifest APIs](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/). One config token to bootstrap, one authorize click per agent, and every secret lands in `.env` automatically.
-- **[Manual](#manual-setup)** — click through [api.slack.com/apps](https://api.slack.com/apps) per agent.
+- **[Automated (recommended)](#per-agent-access-from-the-agents-tab)**: the engine creates and keeps every app through Slack's [App Manifest APIs](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/). One app configuration token entered on the connect form, one **Allow** click per agent from the Agents tab, and every secret Slack serves is sealed in the fleet's encrypted secret store under a name the engine derives for the seat.
+- **[Manual](#manual-setup)**: click through [api.slack.com/apps](https://api.slack.com/apps) per agent, and hand each app's two values in on the connect form.
 
-Both end in the same place: per-agent credentials referenced from the company YAML ([Configure in YAML](#configure-in-yaml)).
+Both end in the same place: each agent's own app, its credentials sealed and bound to its transport and its Slack tool ([Configure in YAML](#configure-in-yaml)).
 
 ---
 
@@ -21,43 +23,96 @@ bot token and signing secret. Paste the two values Slack shows on the app's own
 page and the engine seals them, gives the seat a `${VAR}` pointing at each, and
 activates. Each seat's own delivery address is shown beside its fields.
 
-**It does not create the apps.** Creating one goes through Slack's app-manifest
-API, which authenticates with an app configuration token Slack issues only by
-hand from its own pages, and which your organisation may not permit at all.
-Where those tokens are available, [`crewlet slack provision`](#automated-setup-crewlet-slack-provision)
-below remains the automated path and does the whole thing. Where they are not,
+**Without an app-configuration token it does not create the apps.** Creating
+one goes through Slack's app-manifest API, which authenticates with an app
+configuration token Slack issues only by hand from its own pages, and which
+your organisation may not permit at all. Where one is sealed, the engine
+creates and keeps every agent's app itself ([Per-agent access from the Agents
+tab](#per-agent-access-from-the-agents-tab)). Where one is not,
 connect Slack from the dashboard's Company › Integrations: every agent gets its
 own block there carrying the manifest its app is created from, so building each
 app is a copy, a paste into Slack's **From an app manifest** flow, an install,
 and the two values pasted back. See the [manual setup](#manual-setup) for the
 same steps done entirely by hand.
 
+### Per-agent access from the Agents tab
+
+Each agent is turned on or off on the integration's **Agents** tab, and the
+engine keeps its app in line on every pass. Slack has no roles: an agent's app
+holds the bot scopes in [its manifest](#bot-scopes-and-events), shown on the tab
+read-only, and it reads and posts wherever it is invited. Nothing else is set
+per agent.
+
+**The engine creates the apps** once an app-configuration token is sealed for
+the company. Create one at [api.slack.com/apps](https://api.slack.com/apps) and
+paste its refresh token into **App configuration token** on Slack's connect
+form, under Company › Integrations. The engine seals it as
+`SLACK_APP_CONFIG_TOKEN`, points `integrations.slack.app_config_token` at it,
+and from then on keeps the token pair in that one sealed value, rotating it
+when less than half an hour of its life is left (a pass creating apps at
+Slack's rate of about one a minute needs that long) and saving each new pair
+before using it, because Slack's refresh token works once. A rotation and its
+save finish even when the pass that started them is cancelled, and a token
+Slack refuses as expired early is renewed once and the call retried. The field is always one whole `${VAR}`, never the
+token itself. Without one, the engine does not manage the company's Slack apps,
+and they are set up as described below.
+
+The install stays a person's click: the tab shows a waiting step with
+**Install**, which mints a link valid for fifteen minutes and once, and sends
+you to Slack's approval page. When Slack sends you back to
+`/webhooks/slack-oauth`, the engine checks the link, confirms the approval
+belongs to that agent's app, and seals the bot token. A link used twice,
+expired or edited is refused, and the page says what to do instead.
+
+| Action | What happens at Slack |
+|---|---|
+| Turn on, first time | The engine creates the app from its manifest and seals its client secret and signing secret (served once, so an app that cannot be sealed is deleted again). A person approves the install. |
+| Turn off | The engine revokes the bot token (`auth.revoke`). The app and its OAuth client are kept. |
+| Turn back on | A person approves the install again; Slack issues a bot token only to an install. |
+| Rotate | The engine revokes the bot token, and a person approves a reinstall, which issues a new one. |
+| Remove (only when off) | The engine deletes the app (`apps.manifest.delete`) and clears every value sealed for it once Slack confirms. Where Slack refuses the configuration token, the tab links to the app's page to delete it by hand. |
+
+A scope or setting changed in Slack's console is restored from the engine's
+manifest on the next pass and reported. A bot token keeps the scopes it was
+installed with, so where a scope was added or removed at Slack the engine also
+revokes the bot token and a person approves a reinstall, which issues a token
+with exactly the manifest's scopes. A bot token revoked or an app
+uninstalled by somebody at Slack is never reinstalled automatically, in case it
+was incident response: the tab offers **Turn back on** or **Keep off**.
+
+**The engine names every value.** A seat's values are sealed as
+`SLACK_BOT_TOKEN_<HANDLE>`, `SLACK_SIGNING_SECRET_<HANDLE>`,
+`SLACK_CLIENT_SECRET_<HANDLE>` and `SLACK_CLIENT_ID_<HANDLE>`. The transport and
+the seat's Slack tool server are both given the one bot token, so the two
+cannot drift apart, and no document edit can point a seat's token at another
+variable.
+
 ### Disconnecting
 
-Disconnect removes `integrations.slack` from the company document, which
-retires the transport: the engine stops talking to Slack and the per-seat
-webhook routes stop turning deliveries into work.
+Disconnect turns every agent off first: the engine revokes each bot token, so
+no agent posts once the disconnect has started. It then removes
+`integrations.slack` from the company document, which retires the transport:
+the engine stops talking to Slack and the per-seat webhook routes stop turning
+deliveries into work.
 
-**Tick *also remove the accounts Crewlet created* and each agent's
-`integrations.slack` block goes too, along with the sealed values it named** —
-`SLACK_BOT_TOKEN_*`, `SLACK_SIGNING_SECRET_*`, whatever the `${VAR}`s are
-called. That is safe here in a way it would not be elsewhere: Slack shows both
-values on the app's own settings page on every visit, so anything deleted can
-be read back by whoever owns the app. Leave it unticked and every credential
-stays where it is.
+**Tick *also remove the accounts Crewlet created*** and the engine deletes each
+agent's app at Slack with the app-configuration token, clears the values
+sealed for it (`SLACK_BOT_TOKEN_<HANDLE>`, `SLACK_SIGNING_SECRET_<HANDLE>`,
+`SLACK_CLIENT_SECRET_<HANDLE>` and `SLACK_CLIENT_ID_<HANDLE>`) once Slack
+confirms the app is gone, and removes each agent's `integrations.slack` block.
+Where an app cannot be deleted that way (no usable configuration token, or
+Slack refused it), the Agents tab links to its page,
+**Settings › Basic Information › Delete App**, and the disconnect stays in
+progress until every app is gone: dropping the integration first would drop
+the only token that confirms the deletion, while an app nobody deleted could
+still be installed again.
 
-**Deleting the apps is yours to do**, either way. Slack's `apps.manifest.delete`
-authenticates with an app-configuration token Slack issues only by hand — the
-same credential this surface exists because you may not have — so the
-disconnect names each agent's app and links to the page it is deleted from:
-**Settings › Basic Information › Delete App**.
-
-Until an app is deleted it can still post as that agent to anyone holding its
-bot token, which is the reason the handover is a list rather than a sentence.
+Leave it unticked and every app and its OAuth client is kept, so turning an
+agent back on after a reconnect is an install a person approves.
 
 ## Configure in YAML
 
-`integrations.slack: {}` (org-level) is a marker that enables the Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** reads `role.integrations.slack` (`bot_token` and `signing_secret`, both required together), and the **Slack MCP subprocess** reads `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`. The transport both writes and reads on that token: it raises the working indicator, and at the start of a turn woken in a thread it calls `conversations.replies` so the agent is handed the conversation rather than told to go and fetch it (see [the thread block](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)). That needs no new scope — the `*:history` scopes the manifest already requests cover it — and it reads as that app, so a channel the bot is not in answers `not_in_channel` and the turn runs without the block. `conversations.replies` pages from the *oldest* end, so a thread past ~1000 messages cannot be read to its newest end: the agent is then handed the newest of what was reached plus a note that the block stops short and the rest has to be read with its chat tools, never a truncated thread presented as the whole one. Name the same `${VAR}` in both — one credential, two readers, no secret duplicated:
+`integrations.slack: {}` (org-level) is a marker that enables the Slack **transport**; its one setting is [`typing_status`](#working-status-is-thinking). The Slack **MCP tool** server is a separate `mcp_servers` entry (`shared: false`). Per agent, the Slack identity has two consumers: the **transport** (the bot token and the signing secret), and the **Slack MCP subprocess**, which reads the same bot token as `SLACK_MCP_XOXB_TOKEN`. The engine binds the one sealed token to both, so neither is named in the document. The transport both writes and reads on that token: it raises the working indicator, and at the start of a turn woken in a thread it calls `conversations.replies` so the agent is handed the conversation rather than told to go and fetch it (see [the thread block](../concepts/agent-runtime.md#the-thread-a-turn-was-woken-in)). That needs no new scope, the `*:history` scopes the manifest already requests cover it, and it reads as that app, so a channel the bot is not in answers `not_in_channel` and the turn runs without the block. `conversations.replies` pages from the *oldest* end, so a thread past ~1000 messages cannot be read to its newest end: the agent is then handed the newest of what was reached plus a note that the block stops short and the rest has to be read with its chat tools, never a truncated thread presented as the whole one. A seat that is on needs only its `enabled`:
 
 ```yaml
 integrations:
@@ -66,7 +121,7 @@ integrations:
 
 mcp_servers:
   - name: slack
-    shared: false                        # per-agent identity (token from role.mcp_env.slack)
+    shared: false                        # per-agent identity: the engine binds each seat's bot token
     command: npm
     args: ["exec", "--yes", "--", "slack-mcp-server@1.3.0", "--transport", "stdio"]
     tool_prefix: "slack_"
@@ -81,130 +136,85 @@ units:
     lead: engineer                                        # the lead seat's handle
     roles:
       - name: Engineer
-        integrations:                                     # per-agent transport identity
+        integrations:
           slack:
-            bot_token: "${SLACK_BOT_TOKEN_ENGINEER}"
-            signing_secret: "${SLACK_SIGNING_SECRET_ENGINEER}"
+            enabled: true                                 # the engine names and binds its credentials
         mcp_env:
           slack:
-            SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_ENGINEER}"   # same token, the Slack MCP
             SLACK_MCP_CHANNELS_CACHE: "/var/cache/crewlet/slack/engineer-channels.json"   # this seat's own
       - name: Designer
         integrations:
           slack:
-            bot_token: "${SLACK_BOT_TOKEN_DESIGNER}"
-            signing_secret: "${SLACK_SIGNING_SECRET_DESIGNER}"
+            enabled: true
         mcp_env:
           slack:
-            SLACK_MCP_XOXB_TOKEN: "${SLACK_BOT_TOKEN_DESIGNER}"
             SLACK_MCP_CHANNELS_CACHE: "/var/cache/crewlet/slack/designer-channels.json"
 ```
 
-**The two `env` switches are what let an agent answer.** [slack-mcp-server](https://github.com/korotovsky/slack-mcp-server) registers its write tools only when told to: without `SLACK_MCP_ADD_MESSAGE_TOOL` it never offers `conversations_add_message`, its one tool that posts, so a seat receives every message, reasons about a reply and has no tool to send it with, and the channel stays quiet while the server reports itself healthy. (The 1.1 releases that had the tool registered it and refused every call without the variable, which ends the same way.) `"true"` lets the agent post in every channel and DM its bot can reach; a comma-separated list of channel ids, or of `!`-prefixed ids to exclude, narrows that, as the server's own [settings](https://github.com/korotovsky/slack-mcp-server/blob/v1.3.0/README.md#environment-variables-quick-reference) describe — and anything else is read as such a list, so `"false"` registers the tool and lets it post only in a channel whose id is `false`, which is none. A narrowed list mutes the seat wherever it is addressed outside it, and a seat is addressed wherever its bot has been invited. `SLACK_MCP_REACTION_TOOL` is the same switch for `reactions_add` and `reactions_remove`, which the [`reactions:write`](#bot-scopes-and-events) scope is requested for. Neither is a credential, so both sit in the server entry's `env`, which every seat's instance starts with, rather than in each seat's `mcp_env`. And in `env` rather than in an `--enabled-tools` argument: the server registers a tool that argument names, but every call reads the environment alone, so a tool switched on only on the command line is offered and refuses each post. The release is pinned so a working run names the build it ran: `npm exec` with `@latest` runs whatever was published last, and a later release that changes what a tool is called, or what has to be set before it exists, would arrive unannounced.
+**The two `env` switches are what let an agent answer.** [slack-mcp-server](https://github.com/korotovsky/slack-mcp-server) registers its write tools only when told to: without `SLACK_MCP_ADD_MESSAGE_TOOL` it never offers `conversations_add_message`, its one tool that posts, so a seat receives every message, reasons about a reply and has no tool to send it with, and the channel stays quiet while the server reports itself healthy. (The 1.1 releases that had the tool registered it and refused every call without the variable, which ends the same way.) `"true"` lets the agent post in every channel and DM its bot can reach; a comma-separated list of channel ids, or of `!`-prefixed ids to exclude, narrows that, as the server's own [settings](https://github.com/korotovsky/slack-mcp-server/blob/v1.3.0/README.md#environment-variables-quick-reference) describe — and anything else is read as such a list, so `"false"` registers the tool and lets it post only in a channel whose id is `false`, which is none. A narrowed list mutes the seat wherever it is addressed outside it, and a seat is addressed wherever its bot has been invited. `SLACK_MCP_REACTION_TOOL` is the same switch for `reactions_add` and `reactions_remove`, which the [`reactions:write`](#bot-scopes-and-events) scope is requested for. Neither is a credential, so both sit in the server entry's `env`, which every seat's instance starts with, rather than in each seat's `mcp_env`. And in `env` rather than in an `--enabled-tools` argument: the server registers a tool that argument names, but every call reads the environment alone, so a tool switched on only on the command line is offered and refuses each post. The release is pinned so a working run names the build it ran: `npm exec` with `@latest` runs whatever was published last, and a later release that changes what a tool is called, or what has to be set before it exists, would arrive unannounced. The bundled tool skills depend on it too: the mentions, channel, hand-off and directives skills trigger on this release's tool names under the entry's `slack_` prefix (`slack_conversations_add_message`, `slack_channels_me`, `slack_channels_list`, `slack_users_search`), so a seat posting on Slack is taught Slack's `<@member-id>` mentions and thread replies before its first post. Under another prefix, or after a release that renamed one of those tools, the skills would go quiet without a sound.
 
 **Each seat names a channel cache of its own.** slack-mcp-server keeps the channels its bot can see in a file, and by default names that file after the workspace alone (`<team id>_channels_cache_v2.json`, in the user's cache directory) and serves it for 24 hours without asking Slack again. Every seat's server on one node runs as the same user against the same workspace, so without `SLACK_MCP_CHANNELS_CACHE` they share one file, and whichever wrote it last decides what `channels_list` tells the rest: the private channels and DMs that bot is in, named to seats that are not, and none of the reader's own. Give each seat a path no other seat uses. The directory has to exist for the list to outlive a restart; where it does not, the server keeps the list in memory and fetches it afresh at every start, which is still that seat's own.
 
-The `bot_token` drives the transport (the seat's own identity at start, and the working indicator); the same value, named as `SLACK_MCP_XOXB_TOKEN`, drives the Slack MCP tools — two independent subsystems, one credential referenced in two places. `signing_secret` is transport-only — it verifies this seat's inbound deliveries and nothing else reads it. Both live on `role.integrations.slack`, in the file and through the API alike. There is no per-seat channel setting: the engine's transport posts no message, so it has nothing to aim, and the room a seat talks in is [`units[].channel`](../concepts/organization-model.md), which the executor prompt renders as the team channel for whichever chat backend the company runs.
+The bot token drives the transport (the seat's own identity at start, and the working indicator) and, as `SLACK_MCP_XOXB_TOKEN`, the Slack MCP tools: two independent subsystems, one sealed credential. The signing secret is transport-only: it verifies this seat's inbound deliveries and nothing else reads it. Both are sealed as `SLACK_BOT_TOKEN_<HANDLE>` and `SLACK_SIGNING_SECRET_<HANDLE>`. There is no per-seat channel setting: the engine's transport posts no message, so it has nothing to aim, and the room a seat talks in is [`units[].channel`](../concepts/organization-model.md), which the executor prompt renders as the team channel for whichever chat backend the company runs.
 
-Write this block **first**, with `${VAR}` placeholders — the automated provisioning below reads the placeholder names out of the YAML and fills exactly those variables in `.env`. Whole-value placeholders are required (`"${SLACK_BOT_TOKEN_ENGINEER}"`, not a literal token) so the provisioner knows which env vars to write. Declaring the block at all means declaring **both** credentials: a seat with only a `bot_token` receives messages it can never answer, and one with only a `signing_secret` answers 503 to every delivery while the app's own settings page reports a healthy request URL — so config validation rejects either half on its own, naming the missing field. Whether each one is a placeholder or a literal is a separate question, and config validation's only opinion on it is that a `bot_token` is one or the other — never a reference inside other text (`xoxb-${REST}`), which the transport, resolving the token only when it is one whole `${VAR}`, would send as written: a literal marks a credential you manage by hand, so `crewlet slack provision` reports that half and leaves it alone rather than editing your company document. A **mixed** pair therefore loads and runs, but the seat is only half provisionable — the run says which half and why, and the other value stays yours to paste in.
+**An app created by hand** (no app configuration token) is handed in as an external credential: its block names `bot_token` and `signing_secret` as whole `${VAR}`s, which the connect form writes when you paste the two values Slack shows on the app's own page. A `bot_token` is one whole `${VAR}` or a literal, never a reference inside other text (`xoxb-${REST}`), which the transport would send as written.
 
 ---
 
-## Automated Setup: `crewlet slack provision`
+## Automated setup
 
-```
-crewlet slack provision company.yaml -secret-store -public-url https://your-server.com
-```
+The engine creates every agent's app once an app configuration token is on the
+company block, and a person approves each install from the Agents tab: see
+[Per-agent access from the Agents tab](#per-agent-access-from-the-agents-tab).
 
-For every Slack-enabled agent seat (a role whose `integrations.slack` credentials are `${VAR}` references) the command:
+### Upgrading from `crewlet slack provision`
 
-1. Builds the canonical app manifest — app name from `role.name`, bot display name from the handle, the [bot scopes](#bot-scopes-and-events) both credential consumers need, event subscriptions pointed at `<public-url>/webhooks/slack/{handle}`, and the OAuth redirect at `<public-url>/webhooks/slack-oauth`.
-2. Calls [`apps.manifest.create`](https://docs.slack.dev/reference/methods/apps.manifest.create/) on the first run, or `apps.manifest.update` on later ones, keyed by the local ledger. **A ledgered app whose manifest fingerprint has not changed is skipped entirely** — the manifest endpoints are Tier 1 rate limited to roughly one request a minute, so a no-op re-run over seven seats would otherwise spend minutes achieving nothing.
-3. Records the app in the ledger (`slack-apps.json` beside the company YAML) and writes the returned **signing secret** into whichever `${VAR}` the YAML's `signing_secret` points at, through the sink you chose.
-4. Walks you through the one step Slack has no API for: **an authorize click per app.** It prints the install URL; after you click **Allow** the browser lands on the API's `/webhooks/slack-oauth` page showing a short-lived code — paste it back and the command exchanges it (`oauth.v2.access`) for the **bot token**, recorded into the `bot_token` variable.
+The retired `crewlet slack provision` command made each agent's app from your
+machine and kept what Slack returned in a local ledger, `slack-apps.json`.
+Nothing on the engine reads that file, so moving a company onto the engine's
+own setup takes three steps.
 
-**One seat failing does not cost the others.** A mistyped code paste or a refused manifest is recorded against that handle, the remaining seats still provision, and the command exits non-zero naming what failed. Everything completed is durable — the ledger is written after every mutation — so re-running resumes rather than starting over.
+1. **Enter an app configuration token on Slack's connect form.** Generate a
+   fresh one from [api.slack.com/apps](https://api.slack.com/apps) (Your App
+   Configuration Tokens) rather than reusing the pair in `slack-apps.json`,
+   which Slack may have rotated or expired since the command last ran. On its
+   next sync the engine adopts each app the command made by the seat's working
+   bot token, so no app is created twice.
+2. **Store each app's OAuth client.** Slack serves an app's client id and
+   secret only once, at creation, so the command's ledger holds the only
+   copy, and an adopted app cannot be installed again (after it is turned off,
+   or for a rotate) until both are in the secret store. Pipe each value
+   straight from the ledger so it is never shown on screen or written to shell
+   history, once per agent handle:
 
-Afterwards: invite each bot to its channels (`/invite @handle`) and restart `crewlet run` so the engine reads the new credentials.
+   ```sh
+   jq -r '.apps["senior-engineer"].client_id' slack-apps.json \
+     | crewlet secrets set SLACK_CLIENT_ID_SENIOR_ENGINEER
+   jq -r '.apps["senior-engineer"].client_secret' slack-apps.json \
+     | crewlet secrets set SLACK_CLIENT_SECRET_SENIOR_ENGINEER
+   ```
 
-> **A bot token carries only the scopes it was minted with.** Pushing a new manifest does not give an existing token a new scope — the app has to be installed again, which is what `-reinstall` is for. It is destructive on its own: the new install revokes the token every running node is currently authenticating with, so plan the restart that follows it.
-
-### Where the secrets go
-
-The same three-way choice every provisioning command in Crewlet takes, and there is **no default** — a run with nowhere to put what it mints would create live credentials and print none of them:
-
-- `-secret-store` — the fleet's [encrypted secret store](../concepts/secret-store.md), written through this node's engine while it runs and, with it stopped, reached by the command itself through the node's own broker or the external one ([Which store the CLI writes](../concepts/secret-store.md#which-store-the-cli-writes)); `-config` names this node, and `-api` a running node to write through instead. A running engine resolves through a snapshot of the store it rebuilds at each configuration apply, so re-activate the current revision afterwards with `POST /config/reload` to a node that is up — [`crewlet config activate`](../reference/cli.md#crewlet-config-activate), the same gesture offline, opens the node's database and so runs only while its engine is stopped; a stopped engine reads the values when it starts.
-- `-env-file PATH` — a `.env` file, which then has to be sourced and the engine restarted.
-- `-print` — stdout, for moving the values into a password manager or a deployment system this binary knows nothing about.
-
-### One-time bootstrap: the app configuration token
-
-The manifest APIs authenticate with an **app configuration token**, which Slack only issues manually: go to [api.slack.com/apps](https://api.slack.com/apps) → **Your App Configuration Tokens** → **Generate Token**, then pass its *refresh* token:
-
-```bash
-export SLACK_CONFIG_REFRESH_TOKEN="xoxe-1-..."     # or pass -config-token
-```
-
-The run exchanges it for a 12-hour access token and **records both in the ledger before using either**. That ordering is not tidiness: Slack's rotation is single-use in both directions — the call that returns a new refresh token invalidates the one it was given — so a run that rotated and failed to persist the result would lock you out of your own apps. For the same reason a still-valid access token is reused rather than rotated again, and the shell export above only ever bootstraps the first run.
+   The variable is the handle in upper case with each character other than a
+   letter or digit written as `_`. Never pass these values with `-value`,
+   which exposes them in the process list and shell history.
+3. **Delete `slack-apps.json`** once every client is stored. It holds each
+   app's client secret and signing secret in plain text, and the engine never
+   reads it.
 
 ### Ordering and URL verification
 
-Run the API server **before** provisioning, publicly reachable at `-public-url`:
+The API must be publicly reachable at the deployment's webhook address before
+an app is created: Slack verifies each app's events **Request URL** with a
+`url_verification` challenge, and the API answers it unconditionally, with no
+engine, company config or credentials needed. That exemption is deliberate and
+safe: the response is a pure echo of the caller's own challenge, and it has to
+work because an app's signing secret is sealed only once Slack has created the
+app, so a verified handshake would be impossible and the app could never be
+installed. If an app's Request URL still shows *unverified* in its settings
+page, click **Verify** there.
 
-```bash
-crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port 8000   # unconfigured is fine
-```
-
-Slack verifies each app's events **Request URL** with a `url_verification` challenge, and the API answers it unconditionally — no engine, company config or credentials needed. That exemption is deliberate and safe: the response is a pure echo of the caller's own challenge, and it has to work because during provisioning the signing secret does not exist yet, so a verified handshake would be impossible and the app could never be installed. If an app's Request URL still shows *unverified* in its settings page, click **Verify** there.
-
-Slack requires HTTPS for both URLs — for local development put a tunnel (ngrok, cloudflared) in front and pass its URL.
-
-### Flags
-
-| Flag | Description |
-|------|-------------|
-| `-public-url URL` | Public HTTPS base URL of the Crewlet API. **Required**: every app's request URL and redirect URL are built from it, so an app created without one delivers nowhere and cannot be installed. |
-| `-secret-store` / `-env-file PATH` / `-print` | Where the minted bot token and signing secret go — exactly one, no default. |
-| `-config PATH` | Tier A config naming this node's store and secret keyring (default `crewlet.yaml`): what `-secret-store` reaches the fleet's store through, and seals each value under. |
-| `-api URL` | A running node to record credentials through, and to read back each seat's recorded token before deciding whether to install again. Default: this node's engine when it runs, and the fleet's store itself when it is stopped. Name one from a node that holds no data, from a member of a cluster whose engine is stopped, or from a machine that is not a node, with one of its Tier A tokens in `CREWLET_API_TOKEN` — each read is a reveal, which a machine token is refused. |
-| `-config-token TOKEN` | The app-configuration **refresh** token; empty reads `$SLACK_CONFIG_REFRESH_TOKEN`. **Bootstrap only** — see [The ledger beats the shell](#the-ledger-beats-the-shell). |
-| `-ledger PATH` | The app ledger (default: `slack-apps.json` beside the company YAML). |
-| `-handles a,b` | Only provision these handles. Worth having against a method that allows about one request a minute: fixing one seat in a company of twenty should not cost twenty minutes. |
-| `-reinstall` | Redo the OAuth install even where a bot token is already recorded. Required for a scope change to take effect, and destructive — it revokes the seat's current token. |
-| `-no-install` | Create and update the apps and write the signing secrets, then print the authorize URLs instead of asking for codes. For a non-interactive run, e.g. pushing a scope change from CI. |
-| `-dry-run` | Print the plan **and check every manifest** through `apps.manifest.validate`, which writes nothing. No app is created, no manifest pushed, no install run — and the sink is not opened, so it prompts for no passphrase. The check is the reason a dry run touches the network at all: `apps.manifest.create` is rate limited to roughly one request a minute, so discovering a malformed manifest from the create costs a minute per seat *and* leaves the seats before the bad one already created. Validating needs a config token, so a dry run that cannot get one prints the plan and says the manifests were not checked — that is a note, not a failure, because an operator who has not made a config token yet is exactly the person reading the plan. It does make one write: getting the config token may rotate it, and a rotation has to be persisted the moment Slack answers. |
-
-### The ledger (`slack-apps.json`)
-
-Maps each handle to its Slack `app_id`, the fingerprint of the last-pushed manifest (what makes unchanged re-runs free), and the credentials **Slack only returns once, at creation**: the OAuth client id and secret (needed to redo an install later) and the signing secret. It also holds the rotating app-configuration token pair.
-
-#### The ledger beats the shell
-
-Slack's config-token rotation is **single-use in both directions**: every successful rotate invalidates the refresh token it was given. So the value in a `SLACK_CONFIG_REFRESH_TOKEN` export is dead the moment this command first used it, and preferring it over the ledger's stored pair would trade the only live way back into the operator's apps for a token Slack has already retired — on every run after the first, for ever. `-config-token` and the variable therefore **seed a ledger that holds nothing, and are ignored once it does**. There is no way to force the shell's value short of clearing `config_token` out of the ledger by hand, which is the honest shape: if the stored pair is wrong, the pair is what has to change.
-
-#### Recovering from an app deleted in the console
-
-A ledger entry naming an app that no longer exists is worse than no entry: its manifest fingerprint still matches, so the seat reads as **kept**, while the bot token in its `${VAR}` authenticates as nothing. Every run therefore probes each recorded app with `apps.manifest.validate` before deciding anything — one call against an id the run already holds — and reads `app_not_found` / `invalid_app_id` / `invalid_app` as *gone*. A gone app is replaced: the entry is dropped, a fresh app is created, and the run says so. The install re-runs even though the `${VAR}` still holds a value, because the replacement record carries no bot user id and that is the half of "already installed" that can only come from a completed OAuth exchange — so the stale token is overwritten rather than trusted.
-
-A **permission** refusal is not an absence and is never treated as one: an app this credential may not touch still exists, and replacing it would leave two apps for one seat.
-
-#### Adopting an app you created by hand
-
-Create the app in the Slack console, then add its entry to the ledger yourself:
-
-```json
-{"apps": {"swe": {"app_id": "A0…", "client_id": "…", "client_secret": "…", "signing_secret": "…"}}}
-```
-
-From there `crewlet slack provision` takes over — it pushes the manifest, records the signing secret and runs the install. A **half**-seeded entry is refused naming exactly what to copy: an app id alone builds an authorize URL with an empty `client_id`, which Slack answers with a page saying nothing useful, or an `invalid_client_id` from the exchange minutes later.
-
-#### One authorize URL per seat, and they look alike
-
-The OAuth exchange's answer names the app it was for, and the run **refuses a code belonging to a different app than the seat's**, recording nothing. Pasting the URL printed for one agent into another agent's prompt would otherwise mint that app's bot token into this seat's `${VAR}` — and the seat would post as a colleague, with nothing anywhere reporting it. An app per seat is only an identity boundary if the identities cannot cross.
-
-It is a **secrets file** — written `0600` through a temp file and a rename, because a truncate-then-write interrupted half way would destroy values that cannot be read back. It is gitignored by name in the repo's own `.gitignore`; if you keep your company document elsewhere, gitignore it there too. Committing it publishes credentials nothing can rotate for you.
-
-Why a file at all, when no other third-party app needs one: two of those four values have no field in the company config (nothing in the running engine reads a client id), and Slack has no method that reads them back. Deleting the ledger makes the next run create duplicate apps, since Slack has no API to list the ones you already have.
+Slack requires HTTPS for both URLs; for local development, put a tunnel
+(ngrok, cloudflared) in front and set the webhook address to its URL.
 
 ### Bot scopes and events
 
@@ -251,9 +261,9 @@ Bot events: `app_mention`, `message.channels`, `message.groups`, `message.im`, `
 
 ## Manual Setup
 
-The click-through equivalent of the provisioner, for when you cannot (or do not want to) use configuration tokens.
+The click-through equivalent of the automated setup, for when you cannot (or do not want to) use an app configuration token.
 
-**Do this from Company › Integrations if you can.** Connect Slack there and every agent gets its own block carrying **the manifest its app is created from**: the same definition `crewlet slack provision` pushes, with that agent's scopes, events and request URL already in it. Copy it, paste it into Slack, install, and paste the two values back. That is Steps 1 to 3 below in one paste, and it removes the failure this section's hand-built path invites, which is a single missing scope (see the [cache note](#bot-scopes-and-events)) turning into a bot that installs, reports success and sees an empty workspace.
+**Do this from Company › Integrations if you can.** Connect Slack there and every agent gets its own block carrying **the manifest its app is created from**: the same definition the engine creates apps from, with that agent's scopes, events and request URL already in it. Copy it, paste it into Slack, install, and paste the two values back. That is Steps 1 to 3 below in one paste, and it removes the failure this section's hand-built path invites, which is a single missing scope (see the [cache note](#bot-scopes-and-events)) turning into a bot that installs, reports success and sees an empty workspace.
 
 The steps below are the same thing done by hand.
 
@@ -279,6 +289,10 @@ For each app:
 4. Copy the **Bot User OAuth Token** (`xoxb-...`)
 5. Go to **Basic Information** > **App Credentials** and copy the **Signing Secret**
 
+If you cancel the install, or Slack doesn't approve it, the page Slack sends you
+to says so and tells you to go back to the app's settings in Slack and install it
+again.
+
 ### Step 3: Enable Events API (Per App)
 
 For each app:
@@ -292,7 +306,7 @@ For each app:
 3. Subscribe to bot events: `app_mention`, `message.channels`, `message.groups`, `message.im`, `message.mpim`
 4. Click **Save Changes**
 
-Then paste each pair into that agent's block in Company › Integrations, or export them as `SLACK_BOT_TOKEN_*` / `SLACK_SIGNING_SECRET_*` (or put them in `.env`) under the names your YAML references.
+Then paste each pair into that agent's block in Company › Integrations, or store each value under the name your YAML references with [`crewlet secrets set`](../reference/cli.md#crewlet-secrets-set) — a running node re-activates the revision that reads it as it stores it, as the command says after the write — or export them as `SLACK_BOT_TOKEN_*` / `SLACK_SIGNING_SECRET_*` in the engine's own environment before it starts. The engine reads no `.env` file ([Environment variables](../reference/environment-variables.md)).
 
 > **The `signing_secret` is what makes the endpoint usable.** `/webhooks/slack/{handle}` is
 > exempt from the API's bearer token because it verifies Slack's own signature instead — so
@@ -458,7 +472,7 @@ integrations:
 | Mode | Shows the status when… |
 |---|---|
 | `always` *(default)* | every Slack-triggered turn, including passive top-level channel messages and `@here` / `@channel` broadcasts |
-| `addressed` | a human is plausibly waiting on **this** agent: a DM or group DM, a direct `@mention` (including `app_mention`), or a thread the agent already follows |
+| `addressed` | a human is plausibly waiting on **this** agent: a DM or group DM, a direct `@mention` (including `app_mention`), or a thread the agent is in because it was named there — a thread it merely spoke in, or one a broadcast started, does not count |
 
 > **There is no `off`.** What it bought was a company whose agents think in
 > silence for minutes at a time, which is the state this feature exists to
@@ -466,8 +480,10 @@ integrations:
 > `addressed`, which is the same judgement made per message rather than once
 > for the deployment.
 
-`addressed` deliberately excludes passive channel traffic and collective
-addresses. Every bot in a channel is woken by a top-level message, and the
+`addressed` deliberately excludes passive channel traffic, collective
+addresses, and the replies in a thread the agent only spoke in or that a
+broadcast started. Every bot in a
+channel is woken by a top-level message, and the
 [triage prompt](../concepts/turn-engine.md) tells most of them to stay
 silent — so `always` in a shared channel with five agents lights up five
 indicators for a message none of them will answer. Use `always` in a
@@ -530,7 +546,9 @@ By default, agents only receive thread replies in threads they are **following**
 2. **Collective address** — `<!channel>` or `<!here>`
 3. **Participation** — the agent replies in the thread. Because the reply goes out through the Slack MCP tools rather than the engine, the follow is recorded from Slack's own **echo** of that message: the parser writes it on the way past as it suppresses the seat's own post, which is also what lets a node record a follow for a seat it is not running.
 
+A **top-level** message that mentions the agent, or the room, starts the thread its own `ts` becomes, so the agent hears the answers without being named again — and it follows that thread for the same reason. The reason is what decides whether a reply [obliges an answer](../concepts/turn-engine.md#who-is-waiting-and-how-they-get-an-answer) and raises the [`addressed` indicator](#working-status-is-thinking): a thread the agent was named in does, while one a broadcast started, or one it merely spoke in, only lets it hear what is said there. A follow keeps the **strongest** reason it was ever recorded for — a mention, then a collective address, then participation — so an `@here` in a thread the agent was named in reaches it as a broadcast and still obliges an answer, and the agent's own posts refresh a follow without weakening it. That holds when two messages in one thread are parsed on two nodes at once: each write is decided against the record it replaces.
+
 Thread tracking state is persisted in the fleet's [coordination store](../concepts/coordination.md), keyed by backend, so it survives engine restarts *and* is visible to whichever node claims the next reply — an inbound message is parsed by one node of the fleet, and a follow only that node could see would make a non-mention reply reach its seat by chance. Bot messages are automatically ignored to prevent loops.
 
-A follow is dropped after **90 days without activity**. Nothing sweeps it: the horizon is the coordination bucket's own age, and every re-assert (a mention, a collective address, the agent posting) rewrites the record, so the age is a true last-activity stamp rather than a creation date and the broker expires what has gone quiet. The asymmetry is what sets the number: a dropped stale follow costs at most one missed non-mention reply, and the next mention re-follows through the ordinary path above, while keeping every follow forever grows a record that is read on the hot path of every inbound message.
+A follow is dropped after **90 days without activity**, and nothing else ends one — there is no way to make an agent stop following a thread sooner. Nothing sweeps it either: the horizon is the coordination bucket's own age, and every re-assert (a mention, a collective address, the agent posting) rewrites the record — a reply that only rides the follow is not one — so the age is a true last-activity stamp rather than a creation date and the broker expires what has gone quiet. The asymmetry is what sets the number: a dropped stale follow costs at most one missed non-mention reply, and the next mention re-follows through the ordinary path above, while keeping every follow forever grows a record that is read on the hot path of every inbound message.
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -125,11 +126,21 @@ type ManifestOptions struct {
 	// collide on the second one. [AppName] builds one that does not.
 	Name string
 
-	// DeliveryURL is where GitHub posts this app's events. Empty creates
-	// the app with delivery switched OFF rather than pointed nowhere,
-	// because an app delivering into a void looks healthy at GitHub and
-	// receives nothing here.
+	// DeliveryURL is where GitHub posts this app's events: the seat's own
+	// delivery address on this engine.
 	DeliveryURL string
+
+	// DeliveryOff creates the app with NO webhook and no event
+	// subscriptions. It is set where GitHub cannot reach the address
+	// ([Deliverable]). GitHub validates a manifest's hook whether or not it
+	// is active: it refuses a hook with no url, a url it cannot reach
+	// ("isn't reachable over the public Internet (localhost)"), and event
+	// subscriptions with no hook ("Hook url cannot be blank"). So the only
+	// manifest GitHub accepts from an engine it cannot reach is one with
+	// neither. The agent still acts on GitHub through the app, since pushes,
+	// pull requests and reviews are all outbound; a webhook is added on the
+	// app at GitHub once the engine has a public address.
+	DeliveryOff bool
 
 	// RedirectURL is where GitHub returns the browser with the one-time
 	// code. Required: without it the code is displayed to the operator
@@ -140,11 +151,11 @@ type ManifestOptions struct {
 	// which is a separate act from creating the app.
 	SetupURL string
 
-	// Tier is how much this seat may do, which decides the permissions the
-	// app is created with. An app cannot be widened later without every
-	// operator re-approving it, so this is the one field worth getting
-	// right at creation.
-	Tier Tier
+	// Permissions are what this seat may do, which the app is registered
+	// with (D5: least privilege for a leaked key). Widening it later needs
+	// the app's owner and then the organization, so this is the one field
+	// worth getting right at creation.
+	Permissions Permissions
 
 	// Homepage is the `url` field, which GitHub requires. It is the only
 	// required field in the whole manifest.
@@ -213,11 +224,13 @@ func runePrefix(s string, n int) string {
 // BuildManifest describes the app one seat needs.
 func BuildManifest(opts ManifestOptions) Manifest {
 	// BORN POINTING AT THE ENGINE, so an app never spends its first
-	// minutes delivering nowhere. With no address the hook is created
-	// INACTIVE rather than pointed at a placeholder, because an inactive
-	// hook is a state the operator can see and a wrong URL is not.
-	hook := map[string]any{"active": false}
-	if url := strings.TrimSpace(opts.DeliveryURL); url != "" {
+	// minutes delivering nowhere. Where GitHub cannot reach the engine the
+	// app is created with no hook and no events at all ([ManifestOptions]
+	// DeliveryOff says why), never pointed at a placeholder: an app with
+	// no webhook is a state GitHub's settings page shows, and a wrong URL
+	// is one that looks healthy and arrives nowhere.
+	var hook map[string]any
+	if url := strings.TrimSpace(opts.DeliveryURL); url != "" && !opts.DeliveryOff {
 		hook = map[string]any{"url": url, "active": true}
 	}
 	home := strings.TrimSpace(opts.Homepage)
@@ -234,10 +247,78 @@ func BuildManifest(opts ManifestOptions) Manifest {
 		SetupURL:       strings.TrimSpace(opts.SetupURL),
 		SetupOnUpdate:  true,
 		HookAttributes: hook,
-		DefaultEvents:  ManifestEvents,
-		DefaultPerms:   opts.Tier.Permissions(),
+		DefaultEvents:  eventsFor(hook),
+		DefaultPerms:   opts.Permissions.Token(),
 	}
 }
+
+// eventsFor is the events an app subscribes to: none without a hook, since
+// GitHub refuses a manifest that subscribes to events with nowhere to send
+// them.
+func eventsFor(hook map[string]any) []string {
+	if hook == nil {
+		return nil
+	}
+	return ManifestEvents
+}
+
+// Deliverable reports whether GitHub can deliver a webhook to base, this
+// deployment's webhook address ([config.API.WebhookBase]). enterprise is
+// whether the company runs Enterprise Server rather than github.com.
+//
+// AN APP'S DELIVERY ADDRESS IS BAKED IN AT CREATION, and only a person at
+// GitHub changes it afterwards. So an address GitHub can never reach is not
+// written into a manifest at all: the app is created with no webhook and no
+// event subscriptions ([BuildManifest]), which is a state GitHub's own
+// settings page shows, rather than pointed at an address that fails every
+// delivery while the app reads as healthy. That is what a local engine is: one a person
+// reaches at `http://localhost:8200`, whose agents act on GitHub perfectly
+// well through their apps and hear nothing back from it.
+//
+// TWO READINGS OF "REACHABLE", because the two products sit in different
+// places. github.com delivers from the public internet, so it reaches no
+// loopback, private, link-local or unspecified address and no name that is
+// not a public domain: a single label (`devbox`), `localhost` and the
+// `.localhost`, `.local`, `.internal`, `.lan` and `.home.arpa` suffixes,
+// which no public resolver answers. An Enterprise Server runs inside the
+// company's own network and routinely delivers to private addresses, so
+// there only an address that names the server's own host (loopback, an
+// unspecified address, `localhost`) is refused. Either way the scheme is
+// http or https, which is what GitHub accepts for a hook.
+func Deliverable(base string, enterprise bool) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return false
+		}
+		return enterprise || (!ip.IsPrivate() && !ip.IsLinkLocalUnicast() &&
+			!ip.IsLinkLocalMulticast() && !ip.IsInterfaceLocalMulticast())
+	}
+	if enterprise {
+		return true
+	}
+	if !strings.Contains(host, ".") {
+		return false
+	}
+	for _, private := range privateSuffixes {
+		if strings.HasSuffix(host, private) {
+			return false
+		}
+	}
+	return true
+}
+
+// privateSuffixes are the name suffixes no public resolver answers: mDNS's
+// `.local`, and the names reserved or conventional for private networks
+// (RFC 8375's `.home.arpa`, ICANN's `.internal`, the routers' `.lan`).
+var privateSuffixes = []string{".local", ".internal", ".lan", ".home.arpa"}
 
 // ActionURL is where the operator's browser POSTs the manifest.
 //
@@ -369,6 +450,17 @@ func ManageURL(webBase, org, slug string) string {
 	return appSettingsPage(webBase, org, slug, "advanced")
 }
 
+// PermissionsURL is the app's permissions page, where its owner changes what
+// the app asks every installation for.
+//
+// THE ONLY PLACE AN APP IS WIDENED. A manifest is read once, at creation, so
+// an app created before its seat opted in to more never asks for it on its
+// own: its owner adds the permission here, and GitHub then asks the
+// installation to approve it before any token can carry it.
+func PermissionsURL(webBase, org, slug string) string {
+	return appSettingsPage(webBase, org, slug, "permissions")
+}
+
 // appSettingsPage is one page of an app's settings, or "" when there is no
 // slug to address it by, because a broken link costs the trip to find out.
 //
@@ -437,12 +529,50 @@ type Installation struct {
 	} `json:"account"`
 	RepositorySelection string `json:"repository_selection"`
 	SuspendedAt         string `json:"suspended_at"`
+
+	// SuspendedBy is who suspended it, as GitHub records it, or nil. Read
+	// for who can lift it ([Installation.SuspendedByPerson]); whether THIS
+	// ENGINE suspended it is the account ledger's to say, never inferred
+	// from a login.
+	SuspendedBy *struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"suspended_by"`
+
+	// HTMLURL is the installation's settings page at GitHub, where an
+	// organization owner reviews a permission request and changes which
+	// repositories it covers.
+	HTMLURL string `json:"html_url"`
 }
+
+// RepositorySelectionAll is GitHub's value for an installation that covers
+// every repository the account holds, now and later.
+const RepositorySelectionAll = "all"
 
 // Suspended reports an installation the account has switched off. Its tokens
 // are refused, and the fix is a person's, so it is worth telling apart from
 // an installation that is simply gone.
 func (i Installation) Suspended() bool { return strings.TrimSpace(i.SuspendedAt) != "" }
+
+// SuspendedByPerson reports a suspension a person placed at GitHub (an
+// organization owner on the installation's page), as opposed to one an app
+// placed through the API. A person's suspension is a decision made at GitHub,
+// so it is lifted there by a person, never by this engine on its own.
+//
+// AN ASSUMPTION, and guarded. GitHub documents `suspended_by` as null or a
+// Simple User, whose `type` is "User" or "Bot"
+// (https://docs.github.com/en/rest/apps/apps#get-an-installation-for-the-authenticated-app),
+// and documents the suspend and unsuspend endpoints as answering 204 or 404
+// (https://docs.github.com/en/rest/apps/apps#unsuspend-an-app-installation).
+// It does not say which account an app's own API suspension records; this
+// reads a User as a person and a Bot (the app's own account) as the app. If
+// GitHub records an app's suspension as a User, this engine only stops lifting
+// a suspension it could have lifted, and where it records a person's as a
+// Bot, the unsuspend GitHub refuses becomes the same person's step
+// ([liftRefused]).
+func (i Installation) SuspendedByPerson() bool {
+	return i.Suspended() && i.SuspendedBy != nil && strings.EqualFold(i.SuspendedBy.Type, "User")
+}
 
 // InstallationToken is a credential for one installation, and it expires.
 type InstallationToken struct {
@@ -570,32 +700,43 @@ func (c *AppClient) Exists(ctx context.Context) (bool, error) {
 // Installation reads one installation back.
 func (c *AppClient) Installation(ctx context.Context, id int64) (*Installation, error) {
 	out := new(Installation)
-	path := "/app/installations/" + strconv.FormatInt(id, 10)
+	path := installationPath(id)
 	if err := c.call(ctx, http.MethodGet, path, nil, out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// MintToken issues a token for one installation, scoped to the tier.
+// MintToken issues a token for one installation, scoped to perms.
 //
-// SCOPED DOWN AT MINT TIME, which is where the tier becomes real. The app may
-// hold more than the tier asks for, because a person installed it and a
-// person can widen it; the token carries only what the tier lists, so a
-// read-only seat cannot write even on an installation that could.
+// SCOPED DOWN AT MINT TIME, which is where a seat's permissions become real.
+// The app may hold more than the seat asks for, because a person installed it
+// and a person can widen it; the token carries only what perms lists, so a
+// read-only seat cannot write even on an installation that could. The other
+// direction is GitHub's to refuse: a request naming a permission the
+// installation does not hold mints nothing, which the seat-app pass reports
+// as the seat's shortfall ([Permissions.Short]).
 //
 // Repositories narrow it further where the seat names any. Empty means every
 // repository the installation covers, which is what the operator chose when
 // they installed it.
 func (c *AppClient) MintToken(
-	ctx context.Context, installationID int64, tier Tier, repos []string,
+	ctx context.Context, installationID int64, perms Permissions, repos []string,
 ) (*InstallationToken, error) {
-	body := map[string]any{"permissions": tier.Permissions()}
+	return c.mint(ctx, installationID, perms.Token(), repos)
+}
+
+// mint issues one installation token carrying exactly perms, narrowed to
+// repos where any are named.
+func (c *AppClient) mint(
+	ctx context.Context, installationID int64, perms map[string]string, repos []string,
+) (*InstallationToken, error) {
+	body := map[string]any{"permissions": perms}
 	if names := repoNames(repos); len(names) > 0 {
 		body["repositories"] = names
 	}
 	out := new(InstallationToken)
-	path := "/app/installations/" + strconv.FormatInt(installationID, 10) + "/access_tokens"
+	path := installationPath(installationID) + "/access_tokens"
 	if err := c.call(ctx, http.MethodPost, path, body, out); err != nil {
 		return nil, err
 	}
@@ -609,8 +750,12 @@ func (c *AppClient) MintToken(
 // its access. Deleting the record here and leaving the installation would
 // leave an app able to act with nothing watching it.
 func (c *AppClient) Uninstall(ctx context.Context, installationID int64) error {
-	path := "/app/installations/" + strconv.FormatInt(installationID, 10)
-	return c.call(ctx, http.MethodDelete, path, nil, nil)
+	return c.call(ctx, http.MethodDelete, installationPath(installationID), nil, nil)
+}
+
+// installationPath is one installation's address on the app endpoints.
+func installationPath(id int64) string {
+	return "/app/installations/" + strconv.FormatInt(id, 10)
 }
 
 // repoNames takes the bare repository names GitHub's token endpoint wants.
@@ -645,6 +790,15 @@ func (c *AppClient) call(ctx context.Context, method, path string, body, out any
 	if err != nil {
 		return err
 	}
+	return c.send(ctx, assertion, method, path, body, out)
+}
+
+// send performs one request with bearer as its credential: the app's
+// assertion for the app endpoints ([AppClient.call]), or an installation
+// token for the few reads GitHub serves only to an installation
+// ([AppClient.InstallationRepositories]).
+func (c *AppClient) send(ctx context.Context, bearer, method, path string, body, out any) error {
+	var err error
 	var reader *strings.Reader
 	if body != nil {
 		encoded, encodeErr := json.Marshal(body)
@@ -662,7 +816,7 @@ func (c *AppClient) call(ctx context.Context, method, path string, body, out any
 	if err != nil {
 		return fmt.Errorf("github: build %s %s: %w", method, path, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+assertion)
+	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", APIVersion)
 	if body != nil {
@@ -681,7 +835,7 @@ func (c *AppClient) call(ctx context.Context, method, path string, body, out any
 		// with nothing to say so.
 		return &APIError{
 			Method: method, Path: path, Status: res.StatusCode,
-			Detail: httpx.ReadRefusal(res),
+			Detail: httpx.ReadRefusal(res), RateLimited: rateLimited(res),
 		}
 	}
 	if out == nil {

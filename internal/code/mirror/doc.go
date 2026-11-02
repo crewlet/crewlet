@@ -3,7 +3,7 @@
 // mirror's first fill), a PULL MIRROR's syncs ([code.RepoSettings.MirrorFrom])
 // and a PUSH MIRROR's pushes ([code.RepoSettings.MirrorTo]) — M6-D16 and
 // M6-D19. The home is the first git node of the repository's rendezvous order
-// over the live git nodes (ADR-0059), and [Mirrors] is a worker of its loop
+// over the live git nodes (ADR-0082), and [Mirrors] is a worker of its loop
 // (internal/code/home's Loop, through that package's Worker interface, which
 // this package satisfies without importing it): its listing is the
 // `imports_due` and `mirrors_due` reads (internal/code's ReadImportsDue and

@@ -114,8 +114,8 @@ func (f *Fetcher) RecallMemories(ctx context.Context, seat *org.Role, agentID, h
 	// THE HINT IS THE ASK: it is the executor's own account of what the
 	// task is about, written after recon, and the whole of what the filter
 	// and the vector are judged against here.
-	request := Request{Seat: seat, AgentID: agentID, Task: hint, Ask: hint, Senders: senders,
-		Aux: aux}
+	request := Request{Seat: seat, AgentID: agentID, Task: hint, Ask: PlainAsk(hint),
+		Senders: senders, Aux: aux}
 	candidates := f.memoryCandidates(ctx, request, f.vectorFor(ctx, request, nil))
 	if len(candidates) == 0 {
 		return nil, nil

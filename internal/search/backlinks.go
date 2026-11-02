@@ -17,7 +17,7 @@ import (
 //
 // The links are rows of THIS NODE's index (`page_links`, node migration 0036),
 // written by [Indexer.Upsert] from exactly the bodies it tokenises, through the
-// grammar `pages.Links` owns. So what a page lists is what this node's index
+// grammar `doclet.Links` owns. So what a page lists is what this node's index
 // holds: a body saved a moment ago lists its links once the indexer's next lap
 // has read it, which is the same staleness a search over the same index has —
 // and a node still building its index says so through the searcher's own
@@ -121,6 +121,15 @@ const BacklinksLimit = 50
 var ErrIndexBuilding = errors.New("search: this node's index has not finished its first " +
 	"build, so it cannot yet say what links to a page")
 
+// linkedFromStatement is every document linking to one page, by the page's
+// lowered id: named for the lexical plan gate, which holds every reader of
+// kb_docs to the plan it runs under ([lexicalCorpusStatement]).
+const linkedFromStatement = `
+		SELECT d.source, d.source_id
+		  FROM page_links l
+		  JOIN kb_docs d ON d.id = l.doc_id
+		 WHERE l.target_id = ?`
+
 // LinkedFrom answers which pages and tasks link to one page, by the page's id,
 // or [ErrIndexBuilding] while this node's index is still on its first lap.
 func (x *Indexer) LinkedFrom(ctx context.Context, pageID string) (Backlinks, error) {
@@ -134,11 +143,7 @@ func (x *Indexer) LinkedFrom(ctx context.Context, pageID string) (Backlinks, err
 	if target == "" {
 		return out, nil
 	}
-	rows, err := x.db.SQL().QueryContext(ctx, `
-		SELECT d.source, d.source_id
-		  FROM page_links l
-		  JOIN kb_docs d ON d.id = l.doc_id
-		 WHERE l.target_id = ?`, target)
+	rows, err := x.db.SQL().QueryContext(ctx, linkedFromStatement, target)
 	if err != nil {
 		return out, fmt.Errorf("search: read the links to page %s: %w", pageID, err)
 	}
@@ -189,10 +194,8 @@ func (x *Indexer) LinkedFrom(ctx context.Context, pageID string) (Backlinks, err
 func linkedPages(ctx context.Context, tx *sql.Tx, ids []string) ([]PageLink, error) {
 	out := []PageLink{}
 	for chunk := range slices.Chunk(ids, ScanBatch) {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT id, container, title FROM pages_heads
-			 WHERE status = 'published' AND id IN (`+binds(len(chunk))+`)`,
-			anyOf(chunk)...)
+		statement, args := LinkedPagesRead(chunk)
+		rows, err := tx.QueryContext(ctx, statement, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -219,12 +222,20 @@ func linkedPages(ctx context.Context, tx *sql.Tx, ids []string) ([]PageLink, err
 	return out, nil
 }
 
+// LinkedPagesRead is [linkedPages]' statement over one batch of ids, and its
+// arguments. See the package doc's "a read of another domain's table".
+func LinkedPagesRead(ids []string) (string, []any) {
+	return `
+			SELECT id, container, title FROM pages_heads
+			 WHERE status = 'published' AND id IN (` + binds(len(ids)) + `)`, anyOf(ids)
+}
+
 // relatedTasks is the tasks that name this page as a linked page — through
 // `tracker_relations_other_idx`, the reverse edge the tracker keeps for
 // exactly this question.
 func relatedTasks(ctx context.Context, tx *sql.Tx, pageID string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT task_id FROM tracker_relations WHERE other_id = ? AND kind = 'page'`, pageID)
+	statement, args := RelatedTasksRead(pageID)
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +249,14 @@ func relatedTasks(ctx context.Context, tx *sql.Tx, pageID string) ([]string, err
 		out = append(out, id)
 	}
 	return out, rows.Err()
+}
+
+// RelatedTasksRead is [relatedTasks]' statement and its arguments. See the
+// package doc's "a read of another domain's table".
+func RelatedTasksRead(pageID string) (string, []any) {
+	return `
+		SELECT task_id FROM tracker_relations WHERE other_id = ? AND kind = 'page'`,
+		[]any{pageID}
 }
 
 // linkedTasks names the live tasks among the cited and the related ids, by
@@ -261,10 +280,8 @@ func linkedTasks(ctx context.Context, tx *sql.Tx, cited, related []string) ([]Ta
 	ids := slices.Sorted(maps.Keys(via))
 	out := []TaskLink{}
 	for chunk := range slices.Chunk(ids, ScanBatch) {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT id, key, key_collision, title, status FROM tracker_tasks
-			 WHERE removed_at IS NULL AND id IN (`+binds(len(chunk))+`)`,
-			anyOf(chunk)...)
+		statement, args := LinkedTasksRead(chunk)
+		rows, err := tx.QueryContext(ctx, statement, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -332,4 +349,12 @@ func splitKey(key string) (string, int) {
 		n = n*10 + int(r-'0')
 	}
 	return project, n
+}
+
+// LinkedTasksRead is [linkedTasks]' statement over one batch of ids, and its
+// arguments. See the package doc's "a read of another domain's table".
+func LinkedTasksRead(ids []string) (string, []any) {
+	return `
+			SELECT id, key, key_collision, title, status FROM tracker_tasks
+			 WHERE removed_at IS NULL AND id IN (` + binds(len(ids)) + `)`, anyOf(ids)
 }

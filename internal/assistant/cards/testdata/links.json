@@ -1,0 +1,167 @@
+[
+  {
+    "label": "Open artifact",
+    "screen": "artifact",
+    "href": "#/artifacts/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+  },
+  {
+    "label": "Artifacts",
+    "screen": "artifacts",
+    "href": "#/artifacts"
+  },
+  {
+    "label": "Backups",
+    "screen": "backups",
+    "href": "#/settings/backups"
+  },
+  {
+    "label": "Budgets",
+    "screen": "budgets",
+    "href": "#/company/budgets"
+  },
+  {
+    "label": "Open room",
+    "screen": "chatlet",
+    "href": "#/chatlet/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+  },
+  {
+    "label": "Activity",
+    "screen": "chatlet-activity",
+    "href": "#/chatlet/activity"
+  },
+  {
+    "label": "Search chat",
+    "screen": "chatlet-search",
+    "href": "#/chatlet/search"
+  },
+  {
+    "label": "Configuration",
+    "screen": "config",
+    "href": "#/settings/config/revisions"
+  },
+  {
+    "label": "ENG",
+    "screen": "container",
+    "href": "#/doclet/ENG"
+  },
+  {
+    "label": "Doclet",
+    "screen": "doclet",
+    "href": "#/doclet"
+  },
+  {
+    "label": "Home",
+    "screen": "home",
+    "href": "#/home"
+  },
+  {
+    "label": "Inbox",
+    "screen": "inbox",
+    "href": "#/inbox"
+  },
+  {
+    "label": "Integrations",
+    "screen": "integrations",
+    "href": "#/company/integrations"
+  },
+  {
+    "label": "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+    "screen": "item",
+    "href": "#/worklet/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+  },
+  {
+    "label": "Now running",
+    "screen": "live",
+    "href": "#/live"
+  },
+  {
+    "label": "My work",
+    "screen": "me",
+    "href": "#/me"
+  },
+  {
+    "label": "Nodes",
+    "screen": "nodes",
+    "href": "#/settings/nodes"
+  },
+  {
+    "label": "Org chart",
+    "screen": "org-chart",
+    "href": "#/company/org"
+  },
+  {
+    "label": "Open page",
+    "screen": "page",
+    "href": "#/doclet/pages/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+  },
+  {
+    "label": "Principles",
+    "screen": "principles",
+    "href": "#/company/principles"
+  },
+  {
+    "label": "ENG",
+    "screen": "project",
+    "href": "#/worklet/ENG"
+  },
+  {
+    "label": "Roster",
+    "screen": "roster",
+    "href": "#/company/org/roster"
+  },
+  {
+    "label": "Open coding run",
+    "screen": "runs",
+    "href": "#/live/runs/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+  },
+  {
+    "label": "Schedules",
+    "screen": "schedules",
+    "href": "#/company/schedules"
+  },
+  {
+    "label": "Open seat",
+    "screen": "seat",
+    "href": "#/company/org/seats/pm"
+  },
+  {
+    "label": "Token spend",
+    "screen": "spend",
+    "href": "#/settings/spend"
+  },
+  {
+    "label": "Expensive tasks",
+    "screen": "spend-tasks",
+    "href": "#/settings/spend/tasks"
+  },
+  {
+    "label": "Open team",
+    "screen": "teams",
+    "href": "#/company/org/teams/platform"
+  },
+  {
+    "label": "Open turn",
+    "screen": "turn",
+    "href": "#/live/turns/5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+  },
+  {
+    "label": "Turns",
+    "screen": "turns",
+    "href": "#/live/turns"
+  },
+  {
+    "label": "Projects",
+    "screen": "worklet-projects",
+    "href": "#/worklet"
+  },
+  {
+    "label": "Search",
+    "screen": "worklet-search",
+    "href": "#/worklet/search"
+  },
+  {
+    "label": "Tasks",
+    "screen": "worklet-tasks",
+    "href": "#/worklet/tasks"
+  }
+]

@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The metric half of the standard OTel environment.
@@ -329,6 +330,6 @@ func newMetricExporter(
 		return exp, nil
 	default:
 		return nil, fmt.Errorf("%s=%q is not one of %s",
-			ProtocolVar, p, strings.Join(Protocols, ", "))
+			ProtocolVar, p, words.Or(Protocols))
 	}
 }

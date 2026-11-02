@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -220,12 +221,21 @@ func TestParallelRangesRunsAtMostItsWorkers(t *testing.T) {
 			if err := parallelRanges(t.Context(), tc.workers, tc.n, func(from, to int) {
 				mu.Lock()
 				defer mu.Unlock()
-				ran[goroutineOf(t)] = true
+				ran[goroutineOf()] = true
 				for i := from; i < to; i++ {
 					seen[i]++
 				}
 			}); err != nil {
 				t.Fatalf("split: %v", err)
+			}
+			// Judged here, on the test's own goroutine, once every worker
+			// has returned: fn runs on the workers, where a FailNow is not
+			// allowed. A name that is not one would fold every worker into
+			// one key and pass the bound below with nothing counted.
+			for name := range ran {
+				if !strings.HasPrefix(name, "goroutine ") {
+					t.Fatalf("a stack that does not start by naming its goroutine: %q", name)
+				}
 			}
 			if limit := max(tc.workers, 1); len(ran) > limit {
 				t.Errorf("split onto %d goroutines, want at most %d", len(ran), limit)
@@ -241,13 +251,13 @@ func TestParallelRangesRunsAtMostItsWorkers(t *testing.T) {
 
 // goroutineOf names the goroutine it runs on, from the first line of its own
 // stack ("goroutine 42 [running]:").
-func goroutineOf(t *testing.T) string {
-	t.Helper()
+//
+// It judges nothing and takes no [testing.T]: it runs on the workers
+// [parallelRanges] starts, and a test may call FailNow only from its own
+// goroutine, so its caller checks every name once the split has returned.
+func goroutineOf() string {
 	buf := make([]byte, 64)
 	line, _, _ := bytes.Cut(buf[:runtime.Stack(buf, false)], []byte(" ["))
-	if !bytes.HasPrefix(line, []byte("goroutine ")) {
-		t.Fatalf("a stack that does not start by naming its goroutine: %q", line)
-	}
 	return string(line)
 }
 

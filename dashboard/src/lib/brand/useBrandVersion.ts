@@ -9,7 +9,7 @@
  */
 
 import { useMemo } from "react";
-import type { BrandDocument, RestError } from "~/protocol/index.ts";
+import type { ArtifactActor, BrandDocument, RestError } from "~/protocol/index.ts";
 import { useQuery } from "../useQuery.ts";
 import { useRest } from "../useRest.ts";
 import { versionText } from "../artifacts/api.ts";
@@ -26,6 +26,12 @@ export interface BrandVersionRead {
   source: BrandSource | null;
   /** Why the version could not be read: unreachable, or no brand this page reads. */
   error: RestError | null;
+  /**
+   * Who published the version and when, from its manifest: the last edit of a
+   * draft a setup left, since every Continue publishes one. Null until the
+   * manifest answers, and where it names nobody.
+   */
+  edited: { by: ArtifactActor; at: string } | null;
 }
 
 /** Read `version` of `kit`; nothing while `kit` is null or `version` is 0. */
@@ -46,8 +52,11 @@ export function useBrandVersion(kit: string | null, version: number): BrandVersi
   }, [kit, version, document, files]);
   const loading = on && (read.loading || manifest.loading);
   const error = read.error;
+  const by = manifest.data?.author;
+  const at = manifest.data?.created_at;
+  const edited = useMemo(() => (by?.name && at ? { by, at } : null), [by, at]);
   return useMemo(
-    () => ({ loading, document: document ?? null, source, error }),
-    [loading, document, source, error],
+    () => ({ loading, document: document ?? null, source, error, edited }),
+    [loading, document, source, error, edited],
   );
 }

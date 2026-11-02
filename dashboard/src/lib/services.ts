@@ -1,17 +1,18 @@
 /**
  * Which of Crewlet's own services the company runs, as the engine says it.
  *
- * # Three services
+ * # Four services
  *
- * A company runs Crewlet Works (the engine's own tracker: projects, tasks,
- * the Inbox's updates and My work) or another tracker in its place, Jira, or
- * none at all; Crewlet Knowledge (the engine's own pages) or Confluence, or
- * none; and it hosts its git repositories in the engine (`code.native`, the
- * Code workspace) or does not. The engine resolves which from the company
- * document and hands it to every reader on the org projection (`services`,
- * `contract/services.ts`): the socket's first frame, every `org` push and
- * `GET /org`. So nothing here probes for it, and a company that switches a
- * backend is drawn anew on the push that publishes it.
+ * A company runs Worklet (the engine's own tracker: projects, tasks, the
+ * Inbox's updates and My work) or another tracker in its place, Jira, or none
+ * at all; Doclet (the engine's own knowledge base: spaces and pages) or
+ * Confluence, or none; Chatlet (the engine's own rooms) or the Mattermost or
+ * Slack it declares, or none; and it hosts its git repositories in the engine
+ * (`code.native`, the Code workspace) or does not. The engine resolves which
+ * from the company document and hands it to every reader on the org
+ * projection (`services`, `contract/services.ts`): the socket's first frame,
+ * every `org` push and `GET /org`. So nothing here probes for it, and a
+ * company that switches a backend is drawn anew on the push that publishes it.
  *
  * # What the dashboard does with it
  *
@@ -31,43 +32,56 @@
  * refused on a guess either.
  */
 
-import type { ServicesRun } from "~/app/nav.ts";
+import type { Service, ServicesRun } from "~/app/nav.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import { useOrg } from "./store-hooks.ts";
 
 export type { Service, ServicesRun } from "~/app/nav.ts";
 export type { OrgServices } from "~/contract/services.ts";
 
+/** Each of Crewlet's own services by its product name, as every screen says it. */
+export const SERVICE_NAMES: Readonly<Record<Service, string>> = {
+  tracker: "Worklet",
+  knowledge: "Doclet",
+  chat: "Chatlet",
+  code: "Code",
+};
+
 /**
  * Every answer, each ONE object, so a memo keyed on what runs moves only when
  * the engine's answer does rather than on every render of the reader. Built
- * once over every combination, keyed on the three in order.
+ * once over every combination, keyed on the four in order.
  */
-const RUN = new Map<string, ServicesRun>();
-for (const tracker of [true, false]) {
-  for (const knowledge of [true, false]) {
-    for (const code of [true, false]) {
-      RUN.set(runKey(tracker, knowledge, code), { tracker, knowledge, code });
-    }
-  }
-}
+const RUN: ReadonlyMap<string, ServicesRun> = new Map(
+  [true, false].flatMap((tracker) =>
+    [true, false].flatMap((knowledge) =>
+      [true, false].flatMap((chat) =>
+        [true, false].map((code): [string, ServicesRun] => [
+          runKey(tracker, knowledge, chat, code),
+          Object.freeze({ tracker, knowledge, chat, code }),
+        ]),
+      ),
+    ),
+  ),
+);
 
 /** The key of one combination in [RUN]. */
-function runKey(tracker: boolean, knowledge: boolean, code: boolean): string {
-  return `${tracker}/${knowledge}/${code}`;
+function runKey(tracker: boolean, knowledge: boolean, chat: boolean, code: boolean): string {
+  return `${tracker}/${knowledge}/${chat}/${code}`;
 }
 
 /** The one object for a combination. */
-function run(tracker: boolean, knowledge: boolean, code: boolean): ServicesRun {
-  return RUN.get(runKey(tracker, knowledge, code))!;
+function run(tracker: boolean, knowledge: boolean, chat: boolean, code: boolean): ServicesRun {
+  return RUN.get(runKey(tracker, knowledge, chat, code))!;
 }
 
 /** Which services run, from what the engine said: every one, until it has said. */
 export function servicesRun(services: OrgServices | null | undefined): ServicesRun {
-  if (!services) return run(true, true, true);
+  if (!services) return run(true, true, true, true);
   return run(
-    services.tracker === "native",
-    services.knowledge === "native",
+    services.tracker === "worklet",
+    services.knowledge === "doclet",
+    services.chat === "chatlet",
     services.code === "native",
   );
 }
@@ -96,7 +110,7 @@ export function useServicesRun(): ServicesRun {
  */
 export function useServicesAsk(): ServicesRun {
   const org = useOrg();
-  return org === null ? run(false, false, false) : servicesRun(org.services ?? null);
+  return org === null ? run(false, false, false, false) : servicesRun(org.services ?? null);
 }
 
 /** Whether the org projection has arrived, so what the company runs is no longer a guess. */
@@ -107,4 +121,25 @@ export function useOrgArrived(): boolean {
 /** Whether the engine has said what the company runs. */
 export function useServicesKnown(): boolean {
   return useBackends() !== null;
+}
+
+/** A vendor chat surface's name as a person reads it. */
+const CHAT_VENDOR_NAMES: Readonly<Record<string, string>> = {
+  mattermost: "Mattermost",
+  slack: "Slack",
+};
+
+/**
+ * Where a company's chat is when it is a vendor's, as one phrase: "Slack",
+ * "Mattermost and Slack", or "a vendor's chat" where nothing names them.
+ *
+ * ONE SPELLING FOR EVERY PLACE THAT SAYS IT: the notice an address under Chatlet
+ * draws (`app/ServiceNotice.tsx`) and Chatlet's card on Company ›
+ * Integrations. The names are the `viewer` answer's `chat_vendors`, told to a
+ * reader holding Chatlet; the org projection says only that the chat is a
+ * vendor's.
+ */
+export function chatVendorName(vendors: readonly string[]): string {
+  const names = vendors.map((vendor) => CHAT_VENDOR_NAMES[vendor] ?? vendor);
+  return names.length ? names.join(" and ") : "a vendor's chat";
 }

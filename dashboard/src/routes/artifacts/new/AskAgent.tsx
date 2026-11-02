@@ -47,7 +47,7 @@ import { useParam } from "~/app/router.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { Builder } from "~/lib/artifacts/builders.ts";
 import type { Refusal } from "~/lib/useAct.ts";
-import { youNeedWords } from "~/lib/access.ts";
+import { accessToAsk } from "~/lib/authorityRemedy.ts";
 import { BrandAgentNote } from "~/components/brand.tsx";
 import { titleProblem } from "./create.ts";
 import { WhoBuildsIt, type WhoBuildsItState } from "./WhoBuildsIt.tsx";
@@ -147,9 +147,7 @@ export function taskRefusal(refusal: Refusal | null, title = "The task was not f
   if (!refusal) return null;
   return (
     <Callout variant="danger" title={title} live="polite">
-      {refusal.grants.length > 0
-        ? `${youNeedWords(refusal.grants)} Ask an admin.`
-        : [refusal.sentence, refusal.hint].filter(Boolean).join(" ")}
+      {accessToAsk(refusal) ?? [refusal.sentence, refusal.hint].filter(Boolean).join(" ")}
     </Callout>
   );
 }

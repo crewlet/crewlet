@@ -45,10 +45,11 @@ func TestImportStoresTheWholeCompany(t *testing.T) {
 		if _, errs, err := configCmd(t, cfg, "import", file); err != nil {
 			t.Fatalf("import: %v (%s)", err, errs)
 		}
-		company, _, err := companyFromStore(t.Context(), cfg)
+		plan, err := bootOn(t, cfg, tierBSeed{}, quiet())
 		if err != nil {
 			t.Fatalf("read the stored company: %v", err)
 		}
+		company := plan.company
 		handles := map[string]bool{}
 		for role := range company.EachRole() {
 			handles[role.Handle] = true

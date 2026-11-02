@@ -6,8 +6,12 @@ import (
 	"log/slog"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The log as a CHANGE FEED, which is a second consumer over the same stream.
@@ -53,9 +57,28 @@ type domainFeed struct {
 	// own rule then acknowledges and skips. Every notification stops, and
 	// the only symptom is a log line blaming the record.
 	verify *statelog.Verifier
+
+	// estate and applied are THIS NODE's replicated estate and the domain's
+	// own applier, for a translator that derives a wake from what the
+	// applier DECIDED about a record rather than from the record alone —
+	// chat's, whose applier decides every message at its position
+	// ([chatlet.Decisions]). Zero on a feed built where no core runs, which
+	// is the register's own check of what each entry declares.
+	estate  store.ReplicatedReader
+	applied *statelog.Runner
 }
 
-// Consume implements [tracker.DomainConsumer] and [pages.DomainConsumer].
+// One adapter serves every domain that declares a wake feed, so each domain's
+// own consumer seam is asserted here rather than left to whichever register
+// entry happens to hand it over.
+var (
+	_ worklet.DomainConsumer = domainFeed{}
+	_ doclet.DomainConsumer  = domainFeed{}
+	_ chatlet.DomainConsumer = domainFeed{}
+)
+
+// Consume implements each feed-declaring domain's DomainConsumer —
+// [worklet.DomainConsumer], [doclet.DomainConsumer] and [chatlet.DomainConsumer].
 func (f domainFeed) Consume(ctx context.Context, group string) (changefeed.Records, error) {
 	g, err := f.log.Group(ctx, group)
 	if err != nil {
@@ -84,7 +107,7 @@ type domainRecords struct {
 // downstream is handed a byte of it — the framework's rule for every reader of
 // a signed log, and the feed is the second one. What travels on
 // [changefeed.Record.Payload] is therefore the BODY: the wake's own
-// translators decode it again ([tracker.DecodeEnvelope], [pages.Decode]), so a
+// translators decode it again ([worklet.DecodeEnvelope], [doclet.Decode]), so a
 // framed payload here would fail in a package that never heard of a frame.
 //
 // THE OPERATION ID IS THE DELIVERY'S IDENTITY, taken from the envelope every
@@ -144,16 +167,9 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 					"a build that can read it")
 		default:
 			return &changefeed.Message{
-				Record: changefeed.Record{
-					ID:       env.OpID,
-					Position: delivery.Seq,
-					Stream:   r.stream,
-					Gen:      uint64(env.Gen),
-					Key:      delivery.Subject,
-					Payload:  body,
-				},
-				Ack: delivery.Ack,
-				Nak: delivery.Nak,
+				Record: feedRecord(r.stream, env, body, delivery),
+				Ack:    delivery.Ack,
+				Nak:    delivery.Nak,
 			}, nil
 		}
 		if err := delivery.Ack(); err != nil {
@@ -164,6 +180,23 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 
 // Stop ends this process's consumption; the durable position survives.
 func (r *domainRecords) Stop() error { return r.group.Stop() }
+
+// feedRecord is one verified delivery of a log as the change feed reads it:
+// the envelope's operation id and generation, the delivery's place on stream,
+// its subject, the broker's instant for it — what the wake it becomes is timed
+// from — and the opened body.
+func feedRecord(stream string, env statelog.Envelope, body []byte,
+	delivery *jetstream.DomainDelivery) changefeed.Record {
+	return changefeed.Record{
+		ID:       env.OpID,
+		Position: delivery.Seq,
+		Stream:   stream,
+		Gen:      uint64(env.Gen),
+		Key:      delivery.Subject,
+		StoredAt: delivery.StoredAt,
+		Payload:  body,
+	}
+}
 
 // feedFor is the wake feed one running domain declares: the translator that
 // reads its records and the opener over its own log, or a nil translator for a
@@ -197,7 +230,9 @@ func (e *Engine) feedFor(running *runningLog) (changefeed.Translator, changefeed
 			// second reader, and a domain decoder handed the frame reads
 			// every record in the company as undecodable. See
 			// [domainFeed.verify].
-			verify: running.verifier,
+			verify:  running.verifier,
+			estate:  e.feedEstate(),
+			applied: running.runner,
 		})
 	}
 	if err := checkFeed(running.domain, translator); err != nil {
@@ -207,6 +242,15 @@ func (e *Engine) feedFor(running *runningLog) (changefeed.Translator, changefeed
 		return nil, nil, nil
 	}
 	return translator, opener, nil
+}
+
+// feedEstate is this node's replicated estate as a wake feed reads it, or the
+// zero reader where no core runs.
+func (e *Engine) feedEstate() store.ReplicatedReader {
+	if c := e.core.Load(); c != nil && c.log != nil {
+		return c.log.estate().Reader()
+	}
+	return store.ReplicatedReader{}
 }
 
 // checkFeed refuses a wake feed that disagrees with its domain's declaration,

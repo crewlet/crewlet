@@ -16,8 +16,8 @@
  *
  * The live socket admits every principal the engine resolves whose stage may
  * act (`internal/api/stream`): what a reader may SEE on it is decided per push
- * by their access — the overview for everybody, a seat's transcript for its
- * lead and an admin, the tracker's pushes for whoever holds Tracker — so a
+ * by their access (the overview for everybody, a seat's transcript for its
+ * lead and an admin, Worklet's pushes for whoever holds Worklet), so a
  * person invited with no app still reads the org chart, the agents' status
  * and their own account. So the frame dials for every session it reads and
  * holds nothing back for one that holds no app; access given later reaches

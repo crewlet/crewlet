@@ -130,11 +130,13 @@ const MaxPayloadBytes = 8 << 20
 // ([EventQueue.Serve] says how far). What it costs in memory is sixty-four
 // of the largest answer THAT registration serves, and most answer in a few
 // kilobytes (a steer, a sandbox tail, the fleet broker's member exchange).
-// Three can fill an answer up to [MaxPayloadBytes]: the fleet turn-detail
-// scatter (internal/eventfan), the memory read (internal/learning/memread)
-// and the estate router's answers (internal/estate) — whose paged usage reads
-// are cut at a quarter of the message, so one reaches the cap only by one
-// oversized record. One of those at the cap, every answer at the ceiling, is
+// Four can fill an answer up to [MaxPayloadBytes]: the fleet turn-detail
+// scatter (internal/eventfan), the memory read (internal/learning/memread),
+// a box's read back by its host (internal/engine's sandbox host, whose result
+// is cut to the first of the carries the broker takes) and the estate
+// router's answers (internal/estate) — whose paged usage reads are cut at a
+// quarter of the message, so one reaches the cap only by one oversized
+// record. One of those at the cap, every answer at the ceiling, is
 // 512 MiB held at once — a bound nothing here reaches in practice, because an
 // answer that large is a dashboard or a seat reading a whole window and
 // sixty-four of them in flight on one registration is sixty-four such readers
@@ -606,7 +608,10 @@ type EventQueue interface {
 	// or simply not serving this subject is the ordinary case, and only
 	// the caller knows what a missing answer costs it — an error would
 	// force every caller to unwrap one to find out how many it got. An
-	// error means the ask could not be made at all.
+	// error means the ask could not be made at all — never a request
+	// handed to the broker whose delivery could not be confirmed, which
+	// may have reached a server: a caller reads an error as "nobody
+	// received it", and acts on that by asking again.
 	//
 	// A BROKER THIS NODE CANNOT REACH IS REFUSED BEFORE ANYTHING IS SENT,
 	// with ErrUnavailable — never written into a client's reconnect buffer

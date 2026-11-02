@@ -213,7 +213,7 @@ func fullToken() credential.TokenRow {
 		Verifier:   credential.TokenVerifier(machineID, machineSecret),
 		ExpiresAt:  tokenNow.Add(24 * time.Hour),
 		RevokedAt:  tokenNow.Add(-time.Hour),
-		Grants:     []iam.Grant{iam.GrantTracker, iam.GrantKnowledge},
+		Grants:     []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
 		Epoch:      2,
 		Generation: 1, FleetGeneration: 4,
 		Owner: credential.TokenOwner{

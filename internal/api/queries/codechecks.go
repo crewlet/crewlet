@@ -171,7 +171,7 @@ func checkAttempt(p Params) (*code.CheckQuery, error) {
 		Target: strings.TrimSpace(p.String("target")), Attempt: int(n)}
 	if c.Target == "" {
 		return nil, fmt.Errorf("%w: target: an attempt is named beside the branch it was checked for, in full "+
-			"(refs/heads/main) — one commit is checked for every branch a change heading it merges into",
+			"(refs/heads/main): one commit is checked for every branch a change heading it merges into",
 			ErrBadParams)
 	}
 	return c, nil
@@ -242,7 +242,7 @@ func (s Sources) codeCheckLog(ctx context.Context, p Params) (any, error) {
 			"kept no log: a failed run keeps one, and this one is %s", c.Attempt, c.Name, c.OID, c.Target, c.State)}
 	case named != nil && *named != c.Log.Object:
 		return nil, &NotFound{Reason: ReasonNoLog, Detail: fmt.Sprintf("attempt %d of check %s of %s for %s "+
-			"keeps the log %s, not %s: its ending was replaced since — ask for that one", c.Attempt, c.Name, c.OID,
+			"keeps the log %s, not %s: its ending was replaced since; ask for that one", c.Attempt, c.Name, c.OID,
 			c.Target, c.Log.Object, *named)}
 	case offset > c.Log.Size:
 		return nil, fmt.Errorf("%w: offset %d is past the end of a log of %d bytes", ErrBadParams, offset,

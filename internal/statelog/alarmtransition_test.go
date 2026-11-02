@@ -42,7 +42,7 @@ func TestATrackerHandsOnEveryTransitionOnce(t *testing.T) {
 	trim := func(logs ...string) statelog.Alarm {
 		a := statelog.Alarm{Kind: statelog.KindTrimBlocked, Detail: "a trim is held"}
 		for _, l := range logs {
-			a.Domains = append(a.Domains, statelog.AlarmDomain{Domain: l, Detail: "held on " + l})
+			a.Domains = append(a.Domains, statelog.AlarmDomain{Domains: []string{l}, Detail: "held on " + l})
 		}
 		return a
 	}

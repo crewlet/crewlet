@@ -196,7 +196,7 @@ func sandboxPayload(turnID string) map[string]any {
 	return map[string]any{
 		"turn_id": turnID, "role": "Coder", "agent_handle": "coder",
 		"agent_id": "a-9", "coding_agent": "claude", "sandbox_id": "sb-1",
-		"task": "fix the build",
+		"task": "fix the build", "provider_key": "spare", "model": "claude-haiku",
 	}
 }
 
@@ -211,6 +211,11 @@ func TestASandboxRunIsTrackedThenDropped(t *testing.T) {
 	}
 	if runs[0].Status != "running" || runs[0].Task != "fix the build" {
 		t.Errorf("entry = %+v", runs[0])
+	}
+	// THE MEMBER THE RUN WAS LAUNCHED ON, which a running run is drawn with.
+	if runs[0].ProviderKey != "spare" || runs[0].Model != "claude-haiku" {
+		t.Errorf("entry names %q/%q, want the member the run was launched on",
+			runs[0].ProviderKey, runs[0].Model)
 	}
 
 	s.Apply(env("sandbox_run_completed", map[string]any{"turn_id": "tn-1"}))
@@ -330,6 +335,25 @@ func TestAFailedRunLeavesTheSandboxesSet(t *testing.T) {
 	}
 	if runs := s.ActiveSandboxes(); len(runs) != 0 {
 		t.Errorf("runs = %+v, want the lost run gone", runs)
+	}
+}
+
+// A STOPPED RUN LEAVES THE SET AT ONCE: a person who paused the seat to stop
+// it is looking at the panel, and a run drawn as running until the next
+// reconcile reads as a stop that did not work.
+func TestAStoppedRunLeavesTheSandboxesSetAtOnce(t *testing.T) {
+	t.Parallel()
+	s := sandboxState(t)
+	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
+	change := s.Apply(env("sandbox_run_stopped", map[string]any{
+		"turn_id": "tn-1", "role": "Coder", "stopped_by": "jane", "stopped_by_kind": "human",
+	}, id("e-stopped")))
+
+	if !change.Sandboxes {
+		t.Error("a stopped run did not move the sandbox set")
+	}
+	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+		t.Errorf("runs = %+v, want the stopped run gone", runs)
 	}
 }
 
@@ -593,25 +617,23 @@ func TestAMistypedNumberReadsAsZeroRatherThanPanicking(t *testing.T) {
 
 func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 	t.Parallel()
-	// Several payloads name the same thing two ways — a phase names its
-	// model, and falls back to the provider entry that served it. The
-	// fallback only helps if an EMPTY first value falls through to it.
-	// On a pinned clock: the window ages on the projection's clock, and
-	// on the wall clock these stamps left it long ago.
-	s := stoppedAt(t, defaultTS)
-	s.Apply(env("agent_phase_completed", map[string]any{
-		"agent_id": "a-1", "model": "", "provider_key": "anthropic", "turn_id": "tn-1",
-	}, id("p1")))
-	if got := s.SpendRecords(); len(got) != 1 || got[0].Model != "anthropic" {
-		t.Fatalf("records = %+v, want an empty model to fall through to provider_key", got)
+	// Several payloads name the same thing two ways: a failure event names
+	// its kind as `last_error_kind`, and some only as `kind`. The fallback
+	// only helps if an EMPTY first value falls through to it.
+	s := livestate.New()
+	s.Apply(env("llm_unavailable", map[string]any{
+		"agent_id": "a-1", "last_error_kind": "", "kind": "auth", "turn_id": "tn-1",
+	}, id("u1")))
+	if got := overlayOf(t, s, "a-1").LastError; got == nil || got.Kind != "auth" {
+		t.Fatalf("last error = %+v, want an empty last_error_kind to fall through to kind", got)
 	}
 
-	s2 := stoppedAt(t, defaultTS)
-	s2.Apply(env("agent_phase_completed", map[string]any{
-		"agent_id": "a-1", "model": "claude-sonnet-5", "provider_key": "anthropic", "turn_id": "tn-1",
-	}, id("p1")))
-	if got := s2.SpendRecords(); len(got) != 1 || got[0].Model != "claude-sonnet-5" {
-		t.Errorf("records = %+v, want the first name to win over its fallback", got)
+	s2 := livestate.New()
+	s2.Apply(env("llm_unavailable", map[string]any{
+		"agent_id": "a-1", "last_error_kind": "rate_limit", "kind": "auth", "turn_id": "tn-1",
+	}, id("u1")))
+	if got := overlayOf(t, s2, "a-1").LastError; got == nil || got.Kind != "rate_limit" {
+		t.Errorf("last error = %+v, want the first name to win over its fallback", got)
 	}
 }
 

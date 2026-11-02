@@ -3,6 +3,7 @@ package stream
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -30,7 +31,10 @@ import (
 // like a watch: allowed puts the socket in the room at the role the decision
 // found, refused is a `not_found` error frame (a caller with no relation is
 // told the artifact does not exist, in the words an id nothing holds is
-// answered with), and undecidable an `unavailable` one with its retry hint.
+// answered with) — or `artifact_trashed` for a caller the artifact is
+// disclosed to while it is in the trash, whose content no room carries until
+// its owner restores it — and undecidable an `unavailable` one with its retry
+// hint.
 // None closes the socket. The join is DECIDED AGAIN on every decision of the
 // socket's credential and on every movement that can narrow who may read the
 // artifact (a share or an unshare, the trash, a transfer, a purge): a refusal
@@ -54,15 +58,15 @@ import (
 // held before would push documents, judged on a share that may just have been
 // withdrawn, to a reader nobody vouched for.
 //
-// # Every node pushes from its own appliers
+// # Every data node pushes from the appliers it hears
 //
 // Every node serving the API is a data node and applies both artifact logs, so
-// each pushes to its own sockets from its own appliers after each commit, and
-// nothing is forwarded between nodes. A node whose copy is OUT OF SERVICE
-// withholds its appliers' pushes (they describe a copy nobody vouches for) and
-// tells every room to re-read when it leaves service and again when it
-// returns, while the reads themselves are answered by a sound data node through
-// the estate router.
+// each pushes to its own sockets from its own appliers after each commit. A
+// node whose copy is OUT OF SERVICE hears a sound peer's appliers instead,
+// relayed (the engine's live relay, one source at a time for every domain),
+// while the reads themselves are answered by a sound data node through the
+// estate router; and every switch of source reaches the rooms as the domains'
+// own reset, which re-reads and decides again every room on the node.
 //
 // # A datastore push is shaped per reader
 //
@@ -97,8 +101,9 @@ func (r Rooms) serves() bool {
 type ArtifactAccess interface {
 	// Standing is p's role on artifact id, decided as reading it is
 	// (`get_artifact`): the role, EMPTY for a caller the artifact is
-	// answered as absent to (no relation to it, in the trash, purged, never
-	// created), and an error for a node that could not decide.
+	// answered as absent to (no relation to it, purged, never created),
+	// [artifactsdomain.ErrTrashed] for one it is disclosed to while it is in
+	// the trash, and any other error for a node that could not decide.
 	Standing(ctx context.Context, p iam.Principal, id artifacts.ID) (artifacts.Role, error)
 }
 
@@ -112,10 +117,10 @@ type DataStores interface {
 
 // Presence is this node's presence hub as the socket uses it.
 type Presence interface {
-	Join(id artifacts.ID, who presence.Local) (string, artifacts.PresenceRoster, error)
-	Update(id artifacts.ID, session string, activity artifacts.PresenceActivity,
-		focus artifacts.Focus) error
-	Leave(id artifacts.ID, session string)
+	Join(room presence.Room, who presence.Local, hand presence.Hand) (string, error)
+	Update(room presence.Room, session string, activity presence.Activity,
+		focus presence.Focus) error
+	Leave(room presence.Room, session string)
 	OnChange(fn func(presence.Change)) (stop func())
 }
 
@@ -134,12 +139,23 @@ const (
 // (`through`), with `resync` set when the socket's `since` cannot be caught up
 // incrementally and the collections must be read whole.
 type ArtifactJoined struct {
-	Artifact artifacts.ID             `json:"artifact"`
-	Session  string                   `json:"session"`
-	Role     artifacts.Role           `json:"role"`
-	Roster   artifacts.PresenceRoster `json:"roster"`
-	Through  int64                    `json:"through"`
-	Resync   bool                     `json:"resync"`
+	Artifact artifacts.ID    `json:"artifact"`
+	Session  string          `json:"session"`
+	Role     artifacts.Role  `json:"role"`
+	Roster   presence.Roster `json:"roster"`
+	Through  int64           `json:"through"`
+	Resync   bool            `json:"resync"`
+}
+
+// ArtifactPresence is an `artifact_presence` push: one artifact room's
+// fan-out ([presence.Change]), the room named by its artifact as every other
+// artifact frame names it.
+type ArtifactPresence struct {
+	Artifact  artifacts.ID      `json:"artifact"`
+	Upsert    []presence.Member `json:"upsert"`
+	Leave     []string          `json:"leave"`
+	Counts    *presence.Counts  `json:"counts,omitempty"`
+	Truncated bool              `json:"truncated"`
 }
 
 // ArtifactChange is an `artifact_changed` push: which artifact, what moved,
@@ -266,13 +282,19 @@ func roomRedecideDelay(attempts int, err error) time.Duration {
 }
 
 // roomWork is the rooms whose memberships wait to be decided again: now
-// (pending), or at a due instant after an undecidable answer (due), with the
-// number of undecidable answers in a row each room has had (misses), which
-// is what its next backoff is sized by.
+// (pending), or once a backoff after an undecidable answer runs out (due, the
+// backoff's timer), with the number of undecidable answers in a row each room
+// has had (misses), which is what its next backoff is sized by.
+//
+// A BACKOFF IS A TIMER, NEVER A DUE INSTANT. An instant would be read off a
+// clock and compared with another reading of it, and the service's clock
+// ([Options.Now]) is the one every decision and stamp here is taken at, which
+// a test pins: a backoff measured on it never runs out. A timer measures the
+// delay itself and reads no clock at all.
 type roomWork struct {
 	mu      sync.Mutex
 	pending map[artifacts.ID]bool
-	due     map[artifacts.ID]time.Time
+	due     map[artifacts.ID]*time.Timer
 	misses  map[artifacts.ID]int
 	wake    chan struct{}
 
@@ -285,7 +307,7 @@ type roomWork struct {
 // the service's, ended by [Service.Stop].
 func (s *Service) startRooms() {
 	ctx, cancel := context.WithCancel(context.Background())
-	s.work = &roomWork{pending: map[artifacts.ID]bool{}, due: map[artifacts.ID]time.Time{},
+	s.work = &roomWork{pending: map[artifacts.ID]bool{}, due: map[artifacts.ID]*time.Timer{},
 		misses: map[artifacts.ID]int{}, wake: make(chan struct{}, 1),
 		stop: cancel, done: make(chan struct{})}
 	s.stopPresence = s.rooms.Presence.OnChange(s.PresenceChanged)
@@ -335,11 +357,21 @@ func (s *Service) joinArtifact(ctx context.Context, client *Client, req request)
 	}
 	principal, how := iam.From(ctx)
 	if how != iam.Resolved {
-		client.Reply(refuse(CodeUnauthorized))
+		// A JOIN ASKED BY NOBODY IS A FAULT, as a question asked by nobody
+		// is: every socket authenticates at its handshake and closes when
+		// its credential ends, so a join reaching here unresolved means this
+		// node lost who the socket is — which no refusal a client acts on
+		// describes, and an `unauthorized` naming no decision least of all.
+		log.ErrorContext(ctx, "stream_room_join_unresolved",
+			"artifact", id.String(), "resolution", string(how))
+		client.Reply(refuse(CodeQueryFailed))
 		return
 	}
 	role, err := s.rooms.Access.Standing(ctx, principal, id)
 	switch {
+	case errors.Is(err, artifactsdomain.ErrTrashed):
+		client.Reply(refuse(CodeArtifactTrashed))
+		return
 	case err != nil:
 		log.InfoContext(ctx, "stream_room_undecidable", "login", principal.Login,
 			"artifact", id.String(), "error", err.Error())
@@ -363,9 +395,35 @@ func (s *Service) joinArtifact(ctx context.Context, client *Client, req request)
 	}
 	resync := storeErr != nil || req.Since <= 0 || req.Since < floor
 
-	session, roster, err := s.rooms.Presence.Join(id, presence.Local{
-		Seat: presenceSeat(principal), Kind: presenceKind(principal)})
-	if err != nil {
+	// THE ROSTER IS HANDED IN THE ROOM'S DELIVERY ORDER ([presence.Hub.Join]),
+	// and the hand is where the socket joins the room and is answered: every
+	// fan-out the presence hub handed [Service.PresenceChanged] before the
+	// join is one the roster holds, and every one after finds the socket in
+	// the room and reaches it behind the answer, both being sends to its one
+	// queue. Joined and answered after the presence join returned, a fan-out
+	// taken in between either reached the socket ahead of the answer — and
+	// the roster behind it put back what the fan-out had moved on — or, sent
+	// before the socket was in the room, reached nobody, and the tab showed
+	// that member as they were until they moved again.
+	var replaced string
+	_, err = s.rooms.Presence.Join(presence.ArtifactRoom(id), presence.Local{
+		Seat: presenceSeat(principal), Kind: presenceKind(principal)},
+		func(session string, roster presence.Roster) bool {
+			var joined bool
+			_, replaced, joined = s.hub.JoinArtifact(client, id, role, session)
+			if !joined {
+				// THE SOCKET LEFT while the join was being decided.
+				return false
+			}
+			client.Reply(Envelope{Kind: KindResult, ID: req.ID, What: artifactJoinWhat,
+				Data: ArtifactJoined{Artifact: id, Session: session, Role: role,
+					Roster: roster, Through: through, Resync: resync}})
+			return true
+		})
+	switch {
+	case errors.Is(err, presence.ErrDeclined):
+		return
+	case err != nil:
 		log.WarnContext(ctx, "stream_room_presence_refused", "artifact", id.String(),
 			"error", err.Error())
 		env := refuse(CodeUnavailable)
@@ -373,18 +431,9 @@ func (s *Service) joinArtifact(ctx context.Context, client *Client, req request)
 		client.Reply(env)
 		return
 	}
-	_, replaced, ok := s.hub.JoinArtifact(client, id, role, session)
-	if !ok {
-		// THE SOCKET LEFT while the join was being decided.
-		s.rooms.Presence.Leave(id, session)
-		return
-	}
 	if replaced != "" {
-		s.rooms.Presence.Leave(id, replaced)
+		s.rooms.Presence.Leave(presence.ArtifactRoom(id), replaced)
 	}
-	client.Reply(Envelope{Kind: KindResult, ID: req.ID, What: artifactJoinWhat,
-		Data: ArtifactJoined{Artifact: id, Session: session, Role: role, Roster: roster,
-			Through: through, Resync: resync}})
 }
 
 // presenceSeat is the name a member is shown under: the one the principal's
@@ -412,7 +461,7 @@ func (s *Service) leaveArtifact(client *Client, req request) {
 		return
 	}
 	if session, ok := s.hub.LeaveArtifact(client, id); ok {
-		s.rooms.Presence.Leave(id, session)
+		s.rooms.Presence.Leave(presence.ArtifactRoom(id), session)
 	}
 }
 
@@ -432,7 +481,8 @@ func (s *Service) presenceFrame(ctx context.Context, client *Client, req request
 	if !ok {
 		return
 	}
-	if err := s.rooms.Presence.Update(id, session, req.Activity, req.Focus); err != nil {
+	if err := s.rooms.Presence.Update(presence.ArtifactRoom(id), session, req.Activity,
+		req.Focus); err != nil {
 		log.DebugContext(ctx, "stream_presence_refused", "artifact", id.String(),
 			"error", err.Error())
 	}
@@ -444,17 +494,26 @@ func (s *Service) leave(client *Client) {
 	if s.rooms.serves() {
 		for id, m := range s.hub.Artifacts(client) {
 			if session, ok := s.hub.LeaveArtifactIf(client, id, m.Join); ok {
-				s.rooms.Presence.Leave(id, session)
+				s.rooms.Presence.Leave(presence.ArtifactRoom(id), session)
 			}
 		}
 	}
 	s.hub.Unregister(client)
 }
 
-// PresenceChanged pushes one room's presence fan-out to the sockets in it.
-// Called on the presence hub's goroutine; never blocks.
+// PresenceChanged pushes one artifact room's presence fan-out to the sockets in
+// it. A room of any other kind is not this socket surface's: the hub's every
+// sink hears every room and keeps the kind it serves. Called on the presence
+// hub's goroutine, in its delivery order — a join's roster among the fan-outs
+// ([Service.joinArtifact]); never blocks.
 func (s *Service) PresenceChanged(c presence.Change) {
-	s.hub.Broadcast(PushArtifact(KindArtifactPresence, c.Artifact, c, s.now()))
+	if c.Room.Kind != presence.RoomArtifact {
+		return
+	}
+	id := artifacts.ID(c.Room.ID)
+	s.hub.Broadcast(PushArtifact(KindArtifactPresence, id, ArtifactPresence{
+		Artifact: id, Upsert: c.Upsert, Leave: c.Leave, Counts: c.Counts,
+		Truncated: c.Truncated}, s.now()))
 }
 
 // ArtifactsMoved pushes what one committed artifacts batch moved to each
@@ -465,7 +524,7 @@ func (s *Service) PresenceChanged(c presence.Change) {
 // the pushes and the suspension are in memory, and every decision runs on the
 // service's own goroutine.
 func (s *Service) ArtifactsMoved(moved []artifactsdomain.Moved) {
-	if !s.rooms.serves() || s.withholding.Load() {
+	if !s.rooms.serves() {
 		return
 	}
 	now := s.now()
@@ -481,8 +540,10 @@ func (s *Service) ArtifactsMoved(moved []artifactsdomain.Moved) {
 			}
 			continue
 		}
-		s.hub.Broadcast(PushArtifact(KindArtifactChanged, m.Artifact, ArtifactChange{
-			Artifact: m.Artifact, What: m.What, Head: m.Head, Position: m.Position}, now))
+		visible(s.judge, s.hub.Broadcast(PushArtifact(KindArtifactChanged, m.Artifact,
+			ArtifactChange{Artifact: m.Artifact, What: m.What, Head: m.Head, Position: m.Position},
+			now)), m.At)
+		s.observeLag("changed", m.At, now)
 		if narrows(m.What) {
 			s.hub.Suspend(m.Artifact)
 			s.queueDecision(m.Artifact)
@@ -505,7 +566,7 @@ func narrows(what artifactsdomain.MoveKind) bool {
 // artifact's room, shaped per reader. Called on the apply loop's goroutine;
 // never blocks.
 func (s *Service) ArtifactDataMoved(moved []artifactdata.Moved) {
-	if !s.rooms.serves() || s.withholding.Load() {
+	if !s.rooms.serves() {
 		return
 	}
 	now := s.now()
@@ -515,37 +576,28 @@ func (s *Service) ArtifactDataMoved(moved []artifactdata.Moved) {
 			s.rereadData(now)
 			continue
 		case m.Purged:
-			s.hub.Broadcast(PushArtifact(KindArtifactData, m.Artifact,
-				ArtifactData{Artifact: m.Artifact, Gone: true}, now))
+			visible(s.judge, s.hub.Broadcast(PushArtifact(KindArtifactData, m.Artifact,
+				ArtifactData{Artifact: m.Artifact, Gone: true}, now)), m.At)
 			continue
 		case len(m.Docs) == 0 && !m.Schema:
 			continue
 		}
-		s.hub.Broadcast(PushArtifact(KindArtifactData, m.Artifact, dataPush{
+		visible(s.judge, s.hub.Broadcast(PushArtifact(KindArtifactData, m.Artifact, dataPush{
 			artifact: m.Artifact, deltas: m.Docs, schema: m.Schema,
-			through: m.Through.Packed()}, now))
-		s.observeLag(m, now)
+			through: m.Through.Packed()}, now)), m.At)
+		s.observeLag("data", m.At, now)
 	}
 }
 
-// observeLag records how long after the broker stored the batch's newest record
-// its push was fanned out: the commit-to-socket lag the datastore's live view
-// is held to.
-func (s *Service) observeLag(m artifactdata.Moved, now time.Time) {
-	if s.metrics == nil {
+// observeLag records how long after the broker stored a record its push of
+// kind (`changed`, an artifact's movement; `data`, a datastore's documents)
+// was fanned out: the commit-to-socket lag a room's live view is held to.
+func (s *Service) observeLag(kind string, stored, now time.Time) {
+	if s.metrics == nil || stored.IsZero() {
 		return
 	}
-	var newest time.Time
-	for _, w := range m.Writes {
-		if w.At.After(newest) {
-			newest = w.At
-		}
-	}
-	if newest.IsZero() {
-		return
-	}
-	s.metrics.Observe(metrics.ArtifactsPushLag, max(0, now.Sub(newest)),
-		metrics.Attrs{"kind": "data"})
+	s.metrics.Observe(metrics.ArtifactsPushLag, max(0, now.Sub(stored)),
+		metrics.Attrs{"kind": kind})
 }
 
 // rereadData tells every room on this node its datastore pushes may have gaps.
@@ -554,25 +606,6 @@ func (s *Service) rereadData(now time.Time) {
 		s.hub.Broadcast(PushArtifact(KindArtifactData, id,
 			ArtifactData{Artifact: id, Resync: true}, now))
 	}
-}
-
-// ArtifactsCopy is this node's artifact copies going out of service (false) or
-// back into it (true). While out, its appliers' pushes are withheld; at each
-// switch every room is told to re-read, because what moved across it is not
-// replayed and the reads are answered by a sound data node meanwhile.
-func (s *Service) ArtifactsCopy(serving bool) {
-	if !s.rooms.serves() {
-		return
-	}
-	if s.withholding.Swap(!serving) == !serving {
-		return
-	}
-	now := s.now()
-	for _, id := range s.hub.RoomsHeld() {
-		s.hub.Broadcast(PushArtifact(KindArtifactChanged, id, ArtifactChange{
-			Artifact: id, What: artifactsdomain.MoveReset}, now))
-	}
-	s.rereadData(now)
 }
 
 // queueDecision asks the decider to decide id's room again.
@@ -585,17 +618,23 @@ func (s *Service) queueDecision(id artifacts.ID) {
 
 // retryDecision asks the decider to decide id's room again after a backoff,
 // because a decision about one of its members could not be reached (err). A
-// retry already scheduled keeps its instant, so several members missing in one
+// retry already scheduled keeps its timer, so several members missing in one
 // pass, or a credential recheck missing beside it, cost one backoff step and
 // not one each.
 func (s *Service) retryDecision(id artifacts.ID, err error) {
 	s.work.mu.Lock()
-	if _, scheduled := s.work.due[id]; !scheduled {
-		s.work.misses[id]++
-		s.work.due[id] = time.Now().Add(roomRedecideDelay(s.work.misses[id], err))
+	defer s.work.mu.Unlock()
+	if _, scheduled := s.work.due[id]; scheduled {
+		return
 	}
-	s.work.mu.Unlock()
-	s.wakeDecider()
+	s.work.misses[id]++
+	s.work.due[id] = time.AfterFunc(roomRedecideDelay(s.work.misses[id], err), func() {
+		s.work.mu.Lock()
+		delete(s.work.due, id)
+		s.work.pending[id] = true
+		s.work.mu.Unlock()
+		s.wakeDecider()
+	})
 }
 
 // settleDecision records that every member of id's room was decided, so its
@@ -616,9 +655,9 @@ func (s *Service) wakeDecider() {
 	}
 }
 
-// takeDecisions is every room due to be decided now, sorted, taken off the
-// queue, and how long until the next scheduled one (zero for none).
-func (s *Service) takeDecisions(now time.Time) ([]artifacts.ID, time.Duration) {
+// takeDecisions is every room due to be decided now, sorted and taken off the
+// queue: each queued room, and each whose backoff has run out.
+func (s *Service) takeDecisions() []artifacts.ID {
 	s.work.mu.Lock()
 	defer s.work.mu.Unlock()
 	ids := make([]artifacts.ID, 0, len(s.work.pending))
@@ -626,21 +665,19 @@ func (s *Service) takeDecisions(now time.Time) ([]artifacts.ID, time.Duration) {
 		ids = append(ids, id)
 	}
 	clear(s.work.pending)
-	var next time.Duration
-	for id, at := range s.work.due {
-		if wait := at.Sub(now); wait > 0 {
-			if next == 0 || wait < next {
-				next = wait
-			}
-			continue
-		}
-		delete(s.work.due, id)
-		if !slices.Contains(ids, id) {
-			ids = append(ids, id)
-		}
-	}
 	slices.SortFunc(ids, func(a, b artifacts.ID) int { return strings.Compare(a.String(), b.String()) })
-	return ids, next
+	return ids
+}
+
+// stopBackoffs stops every backoff still waiting to run out, once the decider
+// that would take its room has ended.
+func (s *Service) stopBackoffs() {
+	s.work.mu.Lock()
+	defer s.work.mu.Unlock()
+	for id, timer := range s.work.due {
+		timer.Stop()
+		delete(s.work.due, id)
+	}
 }
 
 // decideRooms decides queued rooms again until ctx ends: each as soon as it is
@@ -648,12 +685,9 @@ func (s *Service) takeDecisions(now time.Time) ([]artifacts.ID, time.Duration) {
 // is due.
 func (s *Service) decideRooms(ctx context.Context) {
 	defer close(s.work.done)
-	timer := time.NewTimer(time.Hour)
-	timer.Stop()
-	defer timer.Stop()
+	defer s.stopBackoffs()
 	for {
-		ids, next := s.takeDecisions(time.Now())
-		for _, id := range ids {
+		for _, id := range s.takeDecisions() {
 			var undecided error
 			for _, m := range s.hub.Members(id) {
 				if err := s.decideMember(ctx, m.Client.Audience().Principal(), id, m); err != nil {
@@ -669,21 +703,13 @@ func (s *Service) decideRooms(ctx context.Context) {
 				s.settleDecision(id)
 			}
 		}
-		if len(ids) > 0 {
-			// A retry the pass just scheduled is collected by the next
-			// take, which also sizes the timer to it.
-			continue
-		}
-		if next > 0 {
-			timer.Reset(next)
-		}
+		// A ROOM QUEUED DURING THE PASS, or a backoff run out, has already
+		// signalled wake, so the next take collects it at once.
 		select {
 		case <-ctx.Done():
 			return
 		case <-s.work.wake:
-		case <-timer.C:
 		}
-		timer.Stop()
 	}
 }
 
@@ -714,6 +740,13 @@ func (s *Service) recheckRooms(ctx context.Context, client *Client) {
 // ended by ctx, returns nil: there is nothing left to ask about.
 func (s *Service) decideMember(ctx context.Context, p iam.Principal, id artifacts.ID, m RoomMember) error {
 	role, err := s.rooms.Access.Standing(ctx, p, id)
+	var refused httpjson.Code = CodeNotFound
+	if errors.Is(err, artifactsdomain.ErrTrashed) {
+		// THE TRASH WITHDRAWS THE ROOM as a refusal does, under its own
+		// code: the member may read the artifact again once it is
+		// restored, which not_found would tell it never to expect.
+		role, err, refused = "", nil, CodeArtifactTrashed
+	}
 	switch {
 	case err != nil:
 		if ctx.Err() != nil {
@@ -731,9 +764,9 @@ func (s *Service) decideMember(ctx context.Context, p iam.Principal, id artifact
 		if !ok {
 			return nil
 		}
-		s.rooms.Presence.Leave(id, session)
+		s.rooms.Presence.Leave(presence.ArtifactRoom(id), session)
 		log.InfoContext(ctx, "stream_room_withdrawn", "login", p.Login, "artifact", id.String())
-		m.Client.Reply(Envelope{Kind: KindError, What: artifactJoinWhat, Error: CodeNotFound,
+		m.Client.Reply(Envelope{Kind: KindError, What: artifactJoinWhat, Error: refused,
 			Artifact: id.String()})
 		return nil
 	}

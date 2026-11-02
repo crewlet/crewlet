@@ -116,6 +116,29 @@ func TestTheSuiteCatchesEveryLie(t *testing.T) {
 			lie(func(setup.Check) (setup.Verdict, error) {
 				return setup.Works("works"), nil
 			})},
+		{"a check made with a field that is not on the list",
+			"a check made with other fields names them on a checkable field",
+			func() setuptest.Vendor {
+				v := honest()
+				v.Requirements[1].CheckWith = []string{"region"}
+				return v
+			}()},
+		{"a check made with a field that has its own test",
+			"a check made with other fields names them on a checkable field",
+			func() setuptest.Vendor {
+				v := honest()
+				v.Requirements = append(v.Requirements,
+					setup.Requirement{Field: "pair", Kind: setup.KindSecret, Checkable: true,
+						CheckWith: []string{"url", "token"}})
+				return v
+			}()},
+		{"a group on a field that is not checkable",
+			"a check made with other fields names them on a checkable field",
+			func() setuptest.Vendor {
+				v := honest()
+				v.Requirements[2].CheckWith = []string{"url"}
+				return v
+			}()},
 		{"no checkable field at all", "every checkable field works against an accepting vendor",
 			func() setuptest.Vendor {
 				v := honest()

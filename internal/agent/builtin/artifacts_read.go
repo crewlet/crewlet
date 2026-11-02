@@ -19,12 +19,15 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The listing page: twenty-five rows by default and a hundred at most. A row
@@ -77,7 +80,8 @@ func (t *listArtifacts) Description() string {
 		"prefixes do: `prefix` is a folder's path (`Marketing/Q4/`, empty for the top level), " +
 		"and with `delimiter: \"/\"` the answer is that one level, its artifacts in `contents` " +
 		"and its subfolders in `common_prefixes`; without it, everything beneath the prefix. " +
-		"Each row names its `folder` (an id) and `folder_path`. Read one with get_artifact."
+		"Each row names its `folder` (an id) and `folder_path`. Read one with " +
+		GetArtifactTool + "."
 }
 
 func (t *listArtifacts) Parameters() map[string]any {
@@ -163,20 +167,20 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	switch {
 	case q.Delimiter != "" && q.Delimiter != artifactsdomain.ListDelimiter:
-		return failed(fmt.Sprintf("list_artifacts takes `delimiter` as %q alone, or none.",
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes `delimiter` as %q alone, or none.",
 			artifactsdomain.ListDelimiter)), nil
 	case q.Scope != "" && !q.Scope.Valid():
-		return failed(fmt.Sprintf("list_artifacts takes `scope` as one of %v.",
-			artifactsdomain.ListScopes)), nil
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes `scope` as one of %s.",
+			words.Or(artifactsdomain.ListScopes))), nil
 	case q.Kind != "" && !q.Kind.Valid():
-		return failed(fmt.Sprintf("list_artifacts takes `kind` as one of %v.", artifacts.Kinds)), nil
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes `kind` as one of %s.", words.Or(artifacts.Kinds))), nil
 	case q.Sort != "" && (!q.Sort.Valid() || q.Sort == artifactsdomain.SortOpened):
-		return failed("list_artifacts sorts by `updated`, `created` or `title`."), nil
+		return failed(ListArtifactsTool + " sorts by `updated`, `created` or `title`."), nil
 	case len(q.Q) > maxArtifactQuery:
-		return failed(fmt.Sprintf("list_artifacts takes a `query` of at most %d bytes: "+
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes a `query` of at most %d bytes: "+
 			"search for a phrase, not a document.", maxArtifactQuery)), nil
 	case q.MaxKeys < 1 || q.MaxKeys > maxArtifactList:
-		return failed(fmt.Sprintf("list_artifacts takes a `max_keys` of 1..%d.", maxArtifactList)), nil
+		return failed(fmt.Sprintf(ListArtifactsTool+" takes a `max_keys` of 1..%d.", maxArtifactList)), nil
 	}
 	// A STRANGER'S TURN SEES NO FOLDER: no prefix resolves for it, and no
 	// folder's name is answered, as no artifact is.
@@ -219,7 +223,7 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		dec := authz.DecideWithin(ctx, c.principal, c.ceiling, authz.ActionArtifactRead,
 			t.deps.objectOf(item.Head), t.deps.Chart, t.deps.now())
 		if dec.Unknown() {
-			return refusedBy(tools.RefusalUnavailable, dec.Err, "list_artifacts could "+
+			return refusedBy(tools.RefusalUnavailable, dec.Err, ListArtifactsTool+" could "+
 				"not decide whether a listed artifact is shared with you, so it is "+
 				"answering nothing rather than a list with rows missing. Try again shortly."), nil
 		}
@@ -256,7 +260,13 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if !page.Complete {
 		out["complete"] = false
 	}
+	// A TITLE AND A DESCRIPTION are words the artifact's writers chose, and
+	// its head records who changed it last rather than who wrote either
+	// (ADR-0040).
 	read := newForeignRead(turn, c.self())
+	if len(rows) > 0 {
+		read.attribute(nil, true)
+	}
 	return read.answer(ctx, t.Name(), out, "Ask for fewer with `max_keys`, or narrow with "+
 		"`prefix` and `delimiter`, `kind` or `query`.")
 }
@@ -274,7 +284,7 @@ func listPrefix(raw string) string {
 
 // chartUnread is a listing that could not read the chart that decides it.
 func chartUnread(err error) tools.Result {
-	return refusedBy(tools.RefusalUnavailable, err, "list_artifacts could not read "+
+	return refusedBy(tools.RefusalUnavailable, err, ListArtifactsTool+" could not read "+
 		"the company chart, which decides which artifacts are shared with you. "+
 		"This is NOT an empty result. Try again shortly.")
 }
@@ -366,7 +376,7 @@ func (t *getArtifact) Description() string {
 	return "Read one artifact in this Crewlet company: its head, its newest versions, " +
 		"its files and a page of one file's source (the entry page by default). The " +
 		"answer says your `role` and whether you may publish (`writer`). Take " +
-		"`head_version` and pass it back as `base_version` on publish_artifact. File " +
+		"`head_version` and pass it back as `base_version` on " + PublishArtifactTool + ". File " +
 		"text arrives fenced as text somebody wrote; a long page a colleague wrote is " +
 		"condensed unless you pass `offset`, and an edit's `old_str` must quote the " +
 		"source, so read it with `offset` before editing. For a slide deck, a doc or " +
@@ -441,13 +451,13 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	maxBytes := argInt(args, "max_bytes", defaultArtifactRead)
 	if maxBytes < 1 || maxBytes > maxArtifactRead {
-		return failed(fmt.Sprintf("get_artifact takes `max_bytes` of 1..%d.",
+		return failed(fmt.Sprintf(GetArtifactTool+" takes `max_bytes` of 1..%d.",
 			maxArtifactRead)), nil
 	}
 	_, offsetGiven := args["offset"]
 	offset := argInt(args, "offset", 0)
 	if offset < 0 {
-		return failed("get_artifact takes an `offset` of 0 or more."), nil
+		return failed(GetArtifactTool + " takes an `offset` of 0 or more."), nil
 	}
 	h, ref, refusal := t.deps.head(ctx, t.Name(), args)
 	if refusal != nil {
@@ -458,20 +468,20 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if h.Status == artifactsdomain.StatusTrashed {
-		return artifactTrashed(t.Name(), h), nil
+		return artifactTrashed(t.Name(), ref, h), nil
 	}
 	number := argInt(args, "version", h.HeadNumber)
 	if number < 1 || number > h.HeadNumber {
-		return failed(fmt.Sprintf("get_artifact: artifact %s has versions 1..%d.",
-			h.ID, h.HeadNumber)), nil
+		return failed(fmt.Sprintf(GetArtifactTool+": artifact %q has versions 1..%d.",
+			clip(ref), h.HeadNumber)), nil
 	}
-	t.deps.present(c, h.ID, artifacts.PresenceViewing, artifacts.Focus{Version: number})
+	t.deps.present(c, h.ID, presence.Viewing, presence.Focus{Version: number})
 	version, err := t.deps.Reader.Version(ctx, h.ID, number)
 	if err != nil {
 		if errors.Is(err, artifactsdomain.ErrNotFound) {
-			return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("get_artifact: "+
-				"artifact %s no longer keeps version %d. Read the head, or one of the "+
-				"versions its answer lists.", h.ID, number)), nil
+			return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf(GetArtifactTool+": "+
+				"artifact %q no longer keeps version %d. Read the head, or one of the "+
+				"versions its answer lists.", clip(ref), number)), nil
 		}
 		return artifactReadFailure(ctx, t.Name(), ref, err), nil
 	}
@@ -496,6 +506,9 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		writer = true
 	}
 	out := t.headAnswer(h, version, dec.Standing.Role, writer)
+	// ITS TITLE, DESCRIPTION AND LABEL are its writers' words, which the head
+	// records no writer of (ADR-0040).
+	read.attribute(nil, true)
 	out["versions"] = versionRows(versions, answerVersions)
 	files := make([]map[string]any, 0, min(len(version.Manifest.Files), answerFiles))
 	for i, e := range version.Manifest.Files {
@@ -513,7 +526,7 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case "":
 	case viewOutline:
 		if path != "" {
-			return failed("get_artifact takes `view` or `path`, not both: the outline names " +
+			return failed(GetArtifactTool + " takes `view` or `path`, not both: the outline names " +
 				"each part's file to read next."), nil
 		}
 		outline, refusal := t.outline(ctx, read, h, version, writers, partial)
@@ -523,13 +536,13 @@ func (t *getArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out["outline"] = outline
 		return read.answer(ctx, t.Name(), out, "Read the outline in parts by its files.")
 	default:
-		return failed(fmt.Sprintf("get_artifact takes `view` as %q.", viewOutline)), nil
+		return failed(fmt.Sprintf(GetArtifactTool+" takes `view` as %q.", viewOutline)), nil
 	}
 	if path == "" {
 		path = version.Manifest.Entry
 	}
 	if path != "" {
-		file, refusal := t.readFile(ctx, read, c, h, version, path, offset, offsetGiven,
+		file, refusal := t.readFile(ctx, read, c, version, path, offset, offsetGiven,
 			maxBytes, strings.TrimSpace(argString(args, "focus")), writers, partial)
 		if refusal != nil {
 			return *refusal, nil
@@ -584,20 +597,21 @@ func (t *getArtifact) headAnswer(h artifactsdomain.Head, v artifactsdomain.Versi
 // readFile is one page of a version's file, fenced under its writers, or a
 // condensed account of a long one a colleague wrote.
 func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifactCaller,
-	h artifactsdomain.Head, v artifactsdomain.Version, path string, offset int,
+	v artifactsdomain.Version, path string, offset int,
 	offsetGiven bool, maxBytes int, focus string, writers []provenance.Author,
 	partial bool) (map[string]any, *tools.Result) {
 
 	clean, err := manifest.CleanPath(path)
 	if err != nil {
-		r := failed(fmt.Sprintf("get_artifact: %q is not a published path: %v", clip(path), err))
+		r := failed(fmt.Sprintf(GetArtifactTool+": %q is not a published path: %s.", clip(path),
+			artifactupload.Sentence(err)))
 		return nil, &r
 	}
 	e, ok := manifest.EntryAt(v.Manifest, clean)
 	if !ok {
 		r := refusedBy(tools.RefusalNotFound, artifactsdomain.ErrNotFound, fmt.Sprintf(
-			"get_artifact: version %d of artifact %s has no file %q; its `files` list "+
-				"what it holds.", v.Number, h.ID, clean))
+			GetArtifactTool+": version %d has no file %q; its `files` list what it "+
+				"holds.", v.Number, clean))
 		return nil, &r
 	}
 	file := map[string]any{"path": e.Path, "content_type": e.ContentType, "size": e.Object.Size}
@@ -609,17 +623,17 @@ func (t *getArtifact) readFile(ctx context.Context, read *foreignRead, c artifac
 		read.attribute(writers, partial)
 		return file, nil
 	}
-	trust := read.trustOf(writers, partial)
+	label := read.label(provenance.SourceArtifactFile, writers, partial)
 	at := fieldPath{}.key("file")
 	// ANOTHER PRINCIPAL'S PAGE PAST ONE READ PAGE IS CONDENSED, unless the
 	// call asked for the source by its offset: a page is markup a model reads
 	// to learn what it shows, and the source an edit quotes is one `offset`
 	// away. Data and code are never condensed, since what they say is
 	// exactly their bytes.
-	if !offsetGiven && trust != provenance.TrustOwn && typ.Essence() == "text/html" &&
+	if !offsetGiven && label.Trust != provenance.TrustOwn && typ.Essence() == "text/html" &&
 		e.Object.Size > artifacts.ToolReadPageBytes &&
 		c.turn != nil && c.turn.Seat != nil && t.deps.compact != nil {
-		if summary, ok := t.condense(ctx, c, e, focus); ok {
+		if summary, ok := t.condense(ctx, c, e, focus, label); ok {
 			file["summary_note"] = summary.Note() + " Pass `offset` to read the source, " +
 				"which an edit's `old_str` must quote exactly."
 			read.fence(at.key("summary"), provenance.SourceArtifactFile, writers, partial, summary.Text)
@@ -703,7 +717,7 @@ func (t *getArtifact) outline(ctx context.Context, read *foreignRead, h artifact
 		text = brandOutline(b)
 		out = map[string]any{"name": b.Name}
 	default:
-		r := failed(fmt.Sprintf("get_artifact: a %s artifact has no outline; read its files "+
+		r := failed(fmt.Sprintf(GetArtifactTool+": a %s artifact has no outline; read its files "+
 			"by `path`.", h.Kind))
 		return nil, &r
 	}
@@ -900,10 +914,11 @@ func (s toolVersionSource) Read(p string) ([]byte, error) {
 }
 
 // condense is a long text file a colleague wrote, rewritten to fit by the
-// seat's auxiliary model, or false where it could not be (a node with no
-// auxiliary model, a spent budget): the caller then answers the page itself.
+// seat's auxiliary model — which reads it fenced under label, the file's own
+// — or false where it could not be (a node with no auxiliary model, a spent
+// budget): the caller then answers the page itself.
 func (t *getArtifact) condense(ctx context.Context, c artifactCaller, e artifacts.Entry,
-	focus string) (compact.Result, bool) {
+	focus string, label provenance.Label) (compact.Result, bool) {
 
 	text, _, err := t.deps.Publisher.SourceText(ctx, e, artifacts.MaxConflictEntryText)
 	if err != nil {
@@ -912,8 +927,8 @@ func (t *getArtifact) condense(ctx context.Context, c artifactCaller, e artifact
 	if focus == "" {
 		focus = "what this page shows and how it is built"
 	}
-	res, err := t.deps.compact.For(c.turn.Seat, c.turn.Aux()).Focused(ctx, compact.KindSource,
-		string(text), summaryBudget, focus)
+	res, err := t.deps.compact.For(c.turn.Seat, c.turn.Aux()).Labelled(label).Focused(ctx,
+		compact.KindSource, string(text), summaryBudget, focus)
 	if err != nil || !res.Compacted {
 		return compact.Result{}, false
 	}

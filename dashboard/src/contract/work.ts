@@ -5,7 +5,7 @@
  *
  * Each is the ENGINE's — the query grammar refuses what it does not know, and
  * the applier writes what it writes — and each is held against it in both
- * directions by `internal/tracker/client_gate_test.go`. A separate build in a
+ * directions by `internal/worklet/client_gate_test.go`. A separate build in a
  * separate language cannot import a Go identifier, so the copy is kept here,
  * in one place, where the gate can find it.
  */
@@ -13,10 +13,10 @@
 /**
  * The renderings a view may be drawn in, and there are no others.
  *
- * HELD AGAINST THE ENGINE'S OWN CLOSED SET by a Go gate —
- * `internal/tracker/client_gate_test.go` — because this is a copy the
+ * HELD AGAINST THE ENGINE'S OWN CLOSED SET by a Go gate
+ * (`internal/worklet/client_gate_test.go`), because this is a copy the
  * dashboard has to keep: it is a separate build in a separate language and
- * cannot import `tracker.ViewTypes`. A shape the engine mints that this union
+ * cannot import `worklet.ViewTypes`. A shape the engine mints that this union
  * does not name is a tab that renders a blank body, and one named here the
  * engine refuses is a branch nothing can reach. Both are silent.
  *
@@ -38,12 +38,12 @@ export type WorkViewShape = "list" | "board" | "calendar" | "timeline" | "table"
  * grammar's own sort keys.
  *
  * `DataGrid` writes the column's key straight into `sort=`, which the work
- * grid (`routes/work/shapes/Grid.tsx`) sends to the engine, and `ParseQuery`
+ * grid (`routes/worklet/shapes/Grid.tsx`) sends to the engine, and `ParseQuery`
  * REFUSES a sort key it does not know rather than ignoring it. So one wrong
  * header does not mis-sort a column: it takes the whole board down with a
  * refusal, on the click.
  *
- * Held against the grammar by `internal/tracker/client_gate_test.go`, because
+ * Held against the grammar by `internal/worklet/client_gate_test.go`, because
  * this is a copy the dashboard has to keep — a separate build in a separate
  * language cannot import a Go identifier. The grid's `SortKey` union over it
  * makes a typo a compile error; the gate makes a RENAME in the engine one. It covers BOTH sets, which
@@ -65,9 +65,9 @@ export const COLUMN_SORT_KEYS = [
  * The orderings the ENGINE takes for the projects directory, as the
  * dashboard's own copy.
  *
- * It is a copy by necessity — this is a separate build in a separate language
- * and cannot import `tracker.ProjectSorts` — so a Go gate holds it against
- * that list in both directions (`internal/tracker/client_gate_test.go`). The
+ * It is a copy by necessity (this is a separate build in a separate language
+ * and cannot import `worklet.ProjectSorts`), so a Go gate holds it against
+ * that list in both directions (`internal/worklet/client_gate_test.go`). The
  * drift it catches is silent and total: a header carrying a key the engine
  * refuses turns one click into a `bad_params` refusal over the whole screen,
  * and an ordering the engine grew that no header offers is one nobody can
@@ -98,7 +98,7 @@ export const PROJECT_SORT_KEYS = [
  *
  * AND A PHRASE, because `kind.replaceAll("_", " ")` after an actor's name reads
  * "ada watchers". A kind carries deltas exactly when an APPLY CAN COMPARE TWO
- * DOCUMENTS for it, and `tracker.TaskDeltas` now compares every field a patch
+ * DOCUMENTS for it, and `worklet.TaskDeltas` now compares every field a patch
  * can move — so `watchers`, `checklist`, `archived` and `reparented` say what
  * moved and this phrase says what happened. What still reaches the reader
  * through this column ALONE is what no comparison can produce: the comment
@@ -109,8 +109,8 @@ export const PROJECT_SORT_KEYS = [
  * rule is, because a field added to the comparison tomorrow would falsify a
  * number nothing here gates.
  *
- * ONE DECLARATION, held against `tracker.ChangeKinds` by
- * `internal/tracker/client_gate_test.go`: this is a closed set the engine owns
+ * ONE DECLARATION, held against `worklet.ChangeKinds` by
+ * `internal/worklet/client_gate_test.go`: this is a closed set the engine owns
  * and the dashboard cannot import, and a kind that lands in Go without landing
  * here draws the fallback mark and a bare word for ever, silently.
  *
@@ -155,7 +155,7 @@ export const CHANGES = [
  * The axes a board may be cut on, with what each is called in the picker.
  *
  * A COPY OF THE ENGINE'S `groupKeys`, held against it by
- * `internal/tracker/client_gate_test.go` in both directions: a value here the
+ * `internal/worklet/client_gate_test.go` in both directions: a value here the
  * grammar refuses takes the whole board down with a refusal, and a key the
  * engine takes that this list never names is an arrangement only a hand-edited
  * URL can reach — which is what `project` was until the gate named it. The
@@ -191,7 +191,7 @@ export const GROUP_AXES: readonly { value: string; label: string; workspace?: bo
  * field that was wrong. Bytes rather than characters, because the engine
  * counts bytes — an accented or non-Latin title reaches the cap in fewer
  * characters than it looks. Held against the engine's figure by
- * `internal/tracker/client_gate_test.go`: a copy above it sends titles the
+ * `internal/worklet/client_gate_test.go`: a copy above it sends titles the
  * engine refuses, and one below it refuses titles the engine would take.
  */
 export const TASK_TITLE_MAX_BYTES = 256;
@@ -210,7 +210,7 @@ export const TASK_BODY_MAX_BYTES = 32768;
  * it rather than cutting it. The field used to carry `maxLength={80}` — a
  * figure the engine never held, in characters rather than bytes — so a pasted
  * name was cut by the browser, silently, short of what the engine would take.
- * Held by `internal/tracker/client_gate_test.go`.
+ * Held by `internal/worklet/client_gate_test.go`.
  */
 export const VIEW_NAME_MAX_BYTES = 128;
 
@@ -222,3 +222,17 @@ export const VIEW_NAME_MAX_BYTES = 128;
  * Held by the same gate.
  */
 export const DECISION_QUESTION_MAX_BYTES = 300;
+
+/**
+ * The chat surfaces a structured ask's `inform` may name — where the asker
+ * said it would report what was decided — as the engine's `InformSurfaces`
+ * names them: `mattermost`, `slack`, and `chat`, the engine's own.
+ *
+ * A copy the dashboard keeps because a separate build cannot import a Go
+ * identifier, held against the engine's in both directions by
+ * `internal/worklet/client_gate_test.go`. It has drifted once already: the
+ * engine added `chat` while this said only the two vendors, so every decision
+ * on a company running its own chat carried a surface the type said could not
+ * occur.
+ */
+export type InformSurface = "mattermost" | "slack" | "chat";

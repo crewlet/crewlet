@@ -116,7 +116,7 @@ func sameCeilings(got, want map[period.Period]int) bool {
 func applyByTick(t *testing.T, n *node, what string, done func(*engine.Company) bool) {
 	t.Helper()
 	backends := n.engine.Backends()
-	reconciler, err := n.engine.NewReconciler(engine.ReconcilerOptions{
+	reconciler, err := n.engine.NewReconciler(t.Context(), engine.ReconcilerOptions{
 		Store: backends.Store, Fleet: backends.Fleet, Queue: backends.Queue,
 		NodeID: n.id,
 	})

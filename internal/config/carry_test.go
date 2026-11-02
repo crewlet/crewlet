@@ -73,9 +73,9 @@ func TestAWriteKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 		want:    `{"mcp_servers": [{"name": "b", "future": "b"}, {"name": "a", "future": "a"}]}`,
 	}, {
 		name:    "inside a seat's nested block",
-		stored:  `{"roles": [{"name": "Dev", "sandbox": {"enabled": true, "future": 1, "setup": [{"name": "deps", "future": "deps"}]}}]}`,
-		written: `{"roles": [{"name": "Dev", "sandbox": {"enabled": false, "setup": [{"name": "deps"}]}}]}`,
-		want:    `{"roles": [{"name": "Dev", "sandbox": {"enabled": false, "future": 1, "setup": [{"name": "deps", "future": "deps"}]}}]}`,
+		stored:  `{"roles": [{"name": "Dev", "sandbox": {"max_turns": 5, "future": 1, "setup": [{"name": "deps", "future": "deps"}]}}]}`,
+		written: `{"roles": [{"name": "Dev", "sandbox": {"max_turns": 7, "setup": [{"name": "deps"}]}}]}`,
+		want:    `{"roles": [{"name": "Dev", "sandbox": {"max_turns": 7, "future": 1, "setup": [{"name": "deps", "future": "deps"}]}}]}`,
 	}, {
 		// A key this build knows and the write left out was removed on
 		// purpose, and a block the write removed takes its unknown keys

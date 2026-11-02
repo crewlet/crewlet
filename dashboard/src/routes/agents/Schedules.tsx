@@ -46,6 +46,7 @@ import {
   TableTextCell,
   PageNote,
   type DataGridActivationEvent,
+  peekClickHandler,
 } from "@crewlethq/ui";
 import {
   CalendarGlyph,
@@ -57,7 +58,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -612,7 +613,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   /**
    * A row's click, for the two grids whose rows point at a schedule.
    *
-   * THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one copy
+   * THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's one copy
    * of "which clicks mean elsewhere" and reads a mouse event — ⌘, ctrl,
    * shift, alt and the middle button belong to the browser, which is what
    * keeps the row a real link to the schedule's page. The `enter` chord
@@ -624,7 +625,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
       go();
       return;
     }
-    rowPeekHandler(go)?.(e);
+    peekClickHandler(go)?.(e);
   }
 
   // THE THREE SEGMENTS SPELLED OUT rather than `detail` reused, because this
@@ -773,6 +774,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 key: "task",
                 header: "Task",
                 floor: "8rem",
+                sortValue: (s) => s.task,
                 cell: (s) => <TableTextCell>{s.task}</TableTextCell>,
               },
               {
@@ -794,6 +796,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               },
               {
                 key: "next",
+                align: "right",
                 header: "Next",
                 shrink: true,
                 sortValue: (s) => tsKey(s.next_run) || Number.MAX_SAFE_INTEGER,
@@ -817,6 +820,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
               },
               {
                 key: "last",
+                align: "right",
                 header: "Last",
                 shrink: true,
                 drop: 1,
@@ -860,6 +864,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             columns={[
               {
                 key: "fired",
+                align: "right",
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),
@@ -939,6 +944,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 // ends in an ellipsis, over the tick's own label in the title.
                 key: "due",
                 header: "For the tick",
+                align: "right",
                 shrink: true,
                 drop: 2,
                 sortValue: (r) => tsKey(r.scheduled_at),
@@ -1072,6 +1078,7 @@ function OneSchedule({
             columns={[
               {
                 key: "fired",
+                align: "right",
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),

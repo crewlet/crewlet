@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
@@ -22,7 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // countingClaim is a duty's claim that counts how often it was asked and
@@ -46,16 +47,16 @@ func (c *countingClaim) giveBack(context.Context) (bool, error) {
 func wrongCopyNode(domain string) *Engine {
 	e := &Engine{backends: &Backends{}}
 	withCore(e)
-	e.native.Store(&native{trackerReader: &tracker.Reader{}})
+	e.native.Store(&native{trackerReader: &worklet.Reader{}})
 	e.local = localWith(e, time.Now, func(context.Context, *core) copyVerdict {
 		return wrongOn(domain)
 	})
 	return e
 }
 
-// everyLog is a state log running every registered domain, as the trim walks
-// it.
-func everyLog() *stateLog {
+// everyRegisteredLog is a state log running every registered domain, as the
+// trim walks it.
+func everyRegisteredLog() *stateLog {
 	var runs []*runningLog
 	for _, d := range registeredDomains() {
 		runs = append(runs, &runningLog{domain: d, spec: d.Stream()})
@@ -91,7 +92,7 @@ func collectorReferences(t *testing.T) collect.References {
 	return refs
 }
 
-// A DUTY DECLINES WHILE A COPY IT DECIDES FROM IS OUT OF SERVICE — ADR-0049.
+// A DUTY DECLINES WHILE A COPY IT DECIDES FROM IS OUT OF SERVICE — ADR-0072.
 //
 // A fleet-singleton duty that decides from a domain's rows decides for the
 // whole fleet: the embedding duty publishes the vectors every node applies —
@@ -123,13 +124,16 @@ func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 		"the trim": {
 			decidesFrom: trimCounts(),
 			turn: func(t *testing.T, e *Engine, claim *countingClaim) {
-				r := &retention{state: everyLog(), nodeID: "node-a", claim: claim.claim,
+				r := &retention{state: everyRegisteredLog(), nodeID: "node-a", claim: claim.claim,
 					giveBack: claim.giveBack, copies: e.copyOutOfService}
 				r.tick(t.Context())
 			},
 		},
 		"the object collector": {
-			decidesFrom: []string{trackerName, codeName, artifactsdomain.Domain{}.Name()},
+			// Every domain a Required table is declared in: a person's
+			// conversation files are Ask Crewlet's.
+			decidesFrom: []string{trackerName, codeName, artifactsdomain.Domain{}.Name(),
+				assistantdomain.Domain{}.Name()},
 			turn: func(t *testing.T, e *Engine, claim *countingClaim) {
 				e.collectorTurn(t.Context(), claim.claim,
 					newCollectorDuty(nil, copiesNamedBy(refs), claim.giveBack))
@@ -191,14 +195,14 @@ func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 	}
 
 	counted := trimCounts()
-	if trim := (&retention{state: everyLog()}).decidesFrom(); !slices.Equal(trim, counted) {
+	if trim := (&retention{state: everyRegisteredLog()}).decidesFrom(); !slices.Equal(trim, counted) {
 		t.Errorf("the trim decides from %v, want the logs whose evictions or "+
 			"anchors it counts, %v", trim, counted)
 	}
 	// A LOG THAT WRITES ANCHORS AND CLAIMS NO IDENTITY, which no registered
 	// domain is today: the trim still counts its anchors from this node's
 	// rows, so it still decides from its copy.
-	anchored := anchorsWithoutIdentity{tracker.Domain{}}
+	anchored := anchorsWithoutIdentity{worklet.Domain{}}
 	only := &stateLog{logs: newLogSet([]*runningLog{{domain: anchored, spec: anchored.Stream()}})}
 	if trim := (&retention{state: only}).decidesFrom(); !slices.Equal(trim, []string{anchored.Name()}) {
 		t.Errorf("the trim decides from %v over a log that writes anchors and claims "+
@@ -255,7 +259,7 @@ func TestADeclinedDutyIsAnnouncedOnceAndResumes(t *testing.T) {
 	set(wrongOn(trackerName))
 	e := &Engine{backends: &Backends{}}
 	withCore(e)
-	e.native.Store(&native{trackerReader: &tracker.Reader{}})
+	e.native.Store(&native{trackerReader: &worklet.Reader{}})
 	e.local = localWith(e, time.Now, func(context.Context, *core) copyVerdict { return *verdict.Load() })
 	rejudge := func() {
 		e.local.mu.Lock()

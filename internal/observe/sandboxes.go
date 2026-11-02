@@ -149,13 +149,16 @@ func SandboxRecords(runs []sandbox.PendingRun) []livestate.SandboxRecord {
 		entry := livestate.SandboxEntry{
 			TurnID: run.TurnID, Role: run.Role, AgentHandle: run.AgentHandle,
 			AgentID: run.AgentID, CodingAgent: run.CodingAgent, SandboxID: run.SandboxID,
+			// THE MEMBER THAT TOOK THE JOB, as the launch recorded it.
+			ProviderKey: run.Launch.ProviderKey, Model: run.Launch.Model,
 			// The label the announcement carried, kept on the record for
 			// exactly this: an entry this process never saw announced is
 			// named as the one it did see would have been.
 			Task:      run.Label,
 			Status:    status,
 			StartedAt: isoOrEmpty(started),
-			Question:  run.Question, Audience: run.Audience,
+			Question:  run.Question, QuestionContext: run.QuestionContext,
+			Decision: run.Decision, Audience: run.Audience,
 			// WHO THE QUESTION IS PUT TO, which only the record knows: a
 			// reader whose own record is among them is shown the
 			// question whatever their reach to the seat that asked —

@@ -11,7 +11,8 @@
  * retry an unknown answer asks for) or `keyedWrite`.
  */
 
-import { rest } from "~/protocol/index.ts";
+import { pathSegments } from "~/lib/segment.ts";
+import { pathSegment, rest } from "~/protocol/index.ts";
 import type {
   ArtifactAudience,
   ArtifactDeckAnswer,
@@ -36,7 +37,7 @@ import type { KeyedRequest } from "../keyedWrite.ts";
 import type { DesignLayout } from "./designLayout.ts";
 import { audienceKey } from "./words.ts";
 
-const base = (id: string) => `/artifacts/${encodeURIComponent(id)}`;
+const base = (id: string) => `/artifacts/${pathSegment(id)}`;
 
 /**
  * Where a new artifact is placed, as every create's body says it: the task it
@@ -69,7 +70,11 @@ export function patchArtifact(
 
 /** Set or clear one version's label (`PATCH /artifacts/{id}/versions/{n}`). Empty clears it. */
 export function labelVersion(id: string, number: number, label: string): Omit<KeyedRequest, "key"> {
-  return { method: "PATCH", path: `${base(id)}/versions/${number}`, body: { label } };
+  return {
+    method: "PATCH",
+    path: `${base(id)}/versions/${pathSegment(String(number))}`,
+    body: { label },
+  };
 }
 
 /** Publish version `number` again as a new version, every file carried (`POST …/versions/{n}/restore`). */
@@ -80,7 +85,7 @@ export function restoreVersion(
 ): Omit<KeyedRequest, "key"> {
   return {
     method: "POST",
-    path: `${base(id)}/versions/${number}/restore`,
+    path: `${base(id)}/versions/${pathSegment(String(number))}/restore`,
     body: {},
     headers: ifMatch(head),
   };
@@ -103,7 +108,7 @@ export function shareArtifact(
 export function unshareArtifact(id: string, audience: ArtifactAudience): Omit<KeyedRequest, "key"> {
   return {
     method: "DELETE",
-    path: `${base(id)}/shares/${audienceKey(audience).split(":").map(encodeURIComponent).join(":")}`,
+    path: `${base(id)}/shares/${pathSegment(audienceKey(audience))}`,
   };
 }
 
@@ -161,7 +166,7 @@ export function fileArtifacts(
   return { method: "POST", path: "/artifacts/folder-moves", body: { items } };
 }
 
-const folderBase = (id: string) => `/artifact-folders/${encodeURIComponent(id)}`;
+const folderBase = (id: string) => `/artifact-folders/${pathSegment(id)}`;
 
 /**
  * Make a folder (`POST /artifact-folders`): in `parent`, which decides who
@@ -408,7 +413,7 @@ export function writeState(
 /** A collection exported as CSV, under its read rule, to an editor (`GET …/data/export.csv`), as its text. */
 export async function exportCSV(id: string, collection: string): Promise<string> {
   const blob = await rest.blob(
-    `/artifacts/${encodeURIComponent(id)}/data/export.csv?collection=${encodeURIComponent(collection)}`,
+    `/artifacts/${pathSegment(id)}/data/export.csv?${new URLSearchParams({ collection })}`,
   );
   return blob.text();
 }
@@ -421,7 +426,7 @@ export function versionFile(
   signal?: AbortSignal,
 ): Promise<Blob> {
   return rest.blob(
-    `/artifacts/${encodeURIComponent(id)}/versions/${number}/files/${path.split("/").map(encodeURIComponent).join("/")}`,
+    `/artifacts/${pathSegment(id)}/versions/${pathSegment(String(number))}/files/${pathSegments(path)}`,
     signal,
   );
 }
@@ -440,7 +445,7 @@ export async function mintFrame(
   document?: string,
   options: ReadOptions = {},
 ): Promise<ArtifactFrame> {
-  const res = await rest.request("POST", `/artifacts/${encodeURIComponent(id)}/tickets`, {
+  const res = await rest.request("POST", `/artifacts/${pathSegment(id)}/tickets`, {
     body: {
       ...(version > 0 ? { version } : {}),
       ...(document ? { document } : {}),
@@ -491,7 +496,7 @@ export async function readDeck(
   signal: AbortSignal,
 ): Promise<ArtifactDeckAnswer> {
   return (await rest.get(
-    `/artifacts/${encodeURIComponent(id)}/versions/${version}/deck`,
+    `/artifacts/${pathSegment(id)}/versions/${pathSegment(String(version))}/deck`,
     signal,
   )) as ArtifactDeckAnswer;
 }
@@ -512,7 +517,7 @@ export async function readOutline(
   signal: AbortSignal,
 ): Promise<ArtifactOutline> {
   return (await rest.get(
-    `/artifacts/${encodeURIComponent(id)}/versions/${version}/outline`,
+    `/artifacts/${pathSegment(id)}/versions/${pathSegment(String(version))}/outline`,
     signal,
   )) as ArtifactOutline;
 }
@@ -526,7 +531,7 @@ export async function readBoard(
 ): Promise<DashboardBoardAnswer> {
   const res = await rest.request(
     "GET",
-    `/artifacts/${encodeURIComponent(id)}/versions/${version}/dashboard`,
+    `/artifacts/${pathSegment(id)}/versions/${pathSegment(String(version))}/dashboard`,
     previewQuery({ ...options, signal }),
   );
   return res.body as DashboardBoardAnswer;
@@ -545,7 +550,7 @@ export async function readDataset(
 ): Promise<DashboardDatasetAnswer> {
   const res = await rest.request(
     "GET",
-    `/artifacts/${encodeURIComponent(id)}/versions/${version}/sources/${encodeURIComponent(dataset)}`,
+    `/artifacts/${pathSegment(id)}/versions/${pathSegment(String(version))}/sources/${pathSegment(dataset)}`,
     { query: { ...params }, signal },
   );
   return res.body as DashboardDatasetAnswer;
@@ -561,7 +566,7 @@ export async function previewSource(
   params: Readonly<Record<string, string>>,
   signal: AbortSignal,
 ): Promise<DashboardSourcePreview> {
-  const res = await rest.request("GET", `/artifacts/sources/preview/${encodeURIComponent(name)}`, {
+  const res = await rest.request("GET", `/artifacts/sources/preview/${pathSegment(name)}`, {
     query: { ...params },
     signal,
   });
@@ -713,7 +718,7 @@ export async function uploadFiles(
   const intent = (
     id === null
       ? await rest.request("POST", "/artifacts/uploads", ask)
-      : await rest.request("POST", `/artifacts/${encodeURIComponent(id)}/uploads`, ask)
+      : await rest.request("POST", `/artifacts/${pathSegment(id)}/uploads`, ask)
   ).body as ArtifactUploadIntent;
   const carried = new Set(intent.carried ?? []);
   for (const t of intent.transfers ?? []) {
@@ -724,12 +729,17 @@ export async function uploadFiles(
     // from the answer: the transfer route is the engine's own, and a client
     // that put bytes wherever an answer pointed would trust that answer with
     // the reader's credential.
-    const upload = encodeURIComponent(intent.upload);
-    const segments = t.path.split("/").map(encodeURIComponent).join("/");
+    // THE PATH A LITERAL AT EACH CALL, which is what the dev proxy's gate reads.
     if (typeof f.body === "string") {
-      await rest.putText(`/artifacts/uploads/${upload}/files/${segments}`, f.body);
+      await rest.putText(
+        `/artifacts/uploads/${pathSegment(intent.upload)}/files/${pathSegments(t.path)}`,
+        f.body,
+      );
     } else {
-      await rest.putBytes(`/artifacts/uploads/${upload}/files/${segments}`, f.body);
+      await rest.putBytes(
+        `/artifacts/uploads/${pathSegment(intent.upload)}/files/${pathSegments(t.path)}`,
+        f.body,
+      );
     }
   }
   return {
@@ -766,7 +776,7 @@ export async function readDoc(
   signal: AbortSignal,
 ): Promise<ArtifactDocAnswer> {
   return (await rest.get(
-    `/artifacts/${encodeURIComponent(id)}/versions/${version}/doc`,
+    `/artifacts/${pathSegment(id)}/versions/${pathSegment(String(version))}/doc`,
     signal,
   )) as ArtifactDocAnswer;
 }
@@ -778,7 +788,7 @@ export async function readSource(
   signal: AbortSignal,
 ): Promise<ArtifactSource> {
   return (await rest.get(
-    `/artifacts/${encodeURIComponent(id)}/versions/${version}/source`,
+    `/artifacts/${pathSegment(id)}/versions/${pathSegment(String(version))}/source`,
     signal,
   )) as ArtifactSource;
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // AN ASSIGNMENT'S REASON IS THE CHANGE'S EXCERPT, so it reaches both the wake
@@ -31,7 +31,7 @@ func TestAReassignmentReasonReachesTheWakeAndTheHistory(t *testing.T) {
 			"excerpt is what the history row stores and the wake renders, so "+
 			"a reason that is not on it reaches nobody", got, why)
 	}
-	if trk.kinds[0] != tracker.ChangeAssignee {
+	if trk.kinds[0] != worklet.ChangeAssignee {
 		t.Errorf("the change kind is %q, want assignee", trk.kinds[0])
 	}
 }
@@ -88,13 +88,13 @@ func TestAChecklistChangeIsAGestureNotACollection(t *testing.T) {
 			"have formed it from its own read", *patch.Checklists)
 	}
 	intent := patch.Checklist
-	if intent == nil || intent.Op != tracker.ChecklistAddList || intent.List == "" ||
+	if intent == nil || intent.Op != worklet.ChecklistAddList || intent.List == "" ||
 		len(intent.Items) != 2 || intent.Items[0].ID == "" ||
 		intent.Items[0].ID == intent.Items[1].ID || intent.Items[1].Name != "announce" {
 		t.Fatalf("the gesture is %+v, want add_list with a minted list id and "+
 			"two minted items in order", intent)
 	}
-	if trk.kinds[0] != tracker.ChangeChecklist {
+	if trk.kinds[0] != worklet.ChangeChecklist {
 		t.Errorf("the change kind is %q, want checklist", trk.kinds[0])
 	}
 

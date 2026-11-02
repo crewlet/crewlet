@@ -794,7 +794,7 @@ func TestAMissingPackIsAskedAgainLinearizably(t *testing.T) {
 // A PACK RETIRED UNDER A ROUND IS ASKED ABOUT AGAIN: even a linearizable
 // round's barrier is taken before it downloads what its snapshot names, and a
 // row can leave the log while it downloads — a compaction retires the packs it
-// merged into one, and once their grace has passed (ADR-0051) the collector
+// merged into one, and once their grace has passed (ADR-0074) the collector
 // deletes their objects. So the store's not-found is asked of the log's head
 // once more, and a head that no longer names the pack converges the round to
 // what the log holds now: the merged pack, which holds every object the

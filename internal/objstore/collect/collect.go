@@ -19,7 +19,7 @@
 // would be a second answer to which objects exist, and the two would drift
 // the first time a write landed in one and not the other.
 //
-// Every declared table is REQUIRED, RETIRED or DERIVED (ADR-0051). All three
+// Every declared table is REQUIRED, RETIRED or DERIVED (ADR-0074). All three
 // keep the objects their rows name from collection; only a required table's
 // are the company's to account for, so only those are audited, and only those
 // a backup copies, counts or asks after (on `nats` a retired or derived
@@ -56,12 +56,15 @@
 //     objstore.RecordWithin, which is shorter than the grace by more than
 //     any two nodes' clocks disagree — so a key past the grace is one no
 //     write can name any more, however late a record arrives.
-//   - No declared table, of any standing, names it in an estate that
-//     is CURRENT — the pass first waits for everything each domain's log had
-//     committed when it started ([Source.Barrier]) — and COMPLETE: a record
-//     this node could not decode might be the one naming the object, so a
-//     pass that meets one stops judging. What it deleted before is reported
-//     beside why it stopped.
+//   - No declared table, of any standing, names it in an estate that is
+//     CURRENT and COMPLETE.
+//     Current: before it judges its first object, the pass waits for
+//     everything each domain's log had committed by then, and so by the
+//     moment it started ([Source.Barrier]). A pass with nothing past the
+//     grace takes no barrier and writes nothing to any log. Complete: a
+//     record this node could not decode might be the one naming the
+//     object, so a pass that meets one stops judging. What it deleted
+//     before is reported beside why it stopped.
 //
 // THE GRACE IS AN UPLOAD'S, NEVER A REPLACED VERSION'S. Both instants date
 // the object's upload, and nothing records when a row stopped naming it: an
@@ -876,15 +879,28 @@ func stopped(ctx context.Context, pass string) error {
 	return fmt.Errorf("objstore/collect: the %s was stopped: %w", pass, context.Cause(ctx))
 }
 
+// errPin stops a pass whose estate could not be brought current: it judges
+// nothing, and reports why beside what it had deleted before.
+type errPin struct{ err error }
+
+func (e errPin) Error() string { return e.err.Error() }
+func (e errPin) Unwrap() error { return e.err }
+
 // errIncomplete stops a pass that met an estate it cannot call complete.
 var errIncomplete = errors.New("a record this node could not apply may refer to objects in the store")
 
 func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff time.Time) error {
-	v, err := c.opts.References.pin(ctx)
-	if err != nil {
-		r.Skipped = err.Error()
-		return err
-	}
+	// THE ESTATE IS PINNED AT THE FIRST JUDGEMENT, not before the listing:
+	// a pass that finds nothing past the grace decides nothing, and a
+	// barrier it took anyway would be a record on every domain's log each
+	// hour, and on every log a node boots with, written for no reader. A
+	// pin taken after the listing began is still at least as new as the
+	// moment the pass began, which is all the rule asks: every name a key
+	// past the grace will ever have was written before then.
+	var (
+		v      view
+		pinned bool
+	)
 	// THE DELETIONS RUN BESIDE THE LISTING, at most [deleteConcurrency] at
 	// once: the listing goes on judging the next batch while the last one's
 	// are in flight, and waits only when all of them are. The estate is still
@@ -950,6 +966,13 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 			return nil
 		}
 		defer func() { batch = batch[:0] }()
+		if !pinned {
+			at, perr := c.opts.References.pin(dctx)
+			if perr != nil {
+				return errPin{perr}
+			}
+			v, pinned = at, true
+		}
 		refs, complete, rerr := c.opts.References.referenced(dctx, batch, v)
 		if rerr != nil {
 			return rerr
@@ -984,7 +1007,7 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		return nil
 	}
 	backend := c.opts.Store.Backend()
-	err = backend.List(dctx, func(info objstore.Info) error {
+	err := backend.List(dctx, func(info objstore.Info) error {
 		// THE GRAMMAR IS READ HERE, not by the backend: see the package
 		// doc for the two kinds of name.
 		k, ours := keyNamed(info.Name)
@@ -1028,6 +1051,10 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 			derr = errors.Join(derr, err)
 		}
 		return fmt.Errorf("objstore/collect: %w", derr)
+	}
+	if pe := (errPin{}); errors.As(err, &pe) {
+		r.Skipped = pe.err.Error()
+		return pe.err
 	}
 	if errors.Is(err, errIncomplete) {
 		r.Skipped = err.Error()

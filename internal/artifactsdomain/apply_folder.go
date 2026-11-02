@@ -538,7 +538,7 @@ func (a *Applier) applyMove(ctx context.Context, tx *sql.Tx, c applyContext, id 
 	if err != nil {
 		return 0, err
 	}
-	a.move(id, MoveFolder, head.epoch, head.head, c.position)
+	a.move(c, id, MoveFolder, head.epoch, head.head)
 	return 1 + n, nil
 }
 

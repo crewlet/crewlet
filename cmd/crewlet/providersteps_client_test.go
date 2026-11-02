@@ -253,13 +253,19 @@ func (w *stepWalk) llm(line string, args []string) {
 			companyPath = args[i+1]
 		}
 	}
-	company, keys, resolver, closeResolver, err := loadLLMConfig(w.t.Context(), noEnviron,
-		companyPath, defaultBootstrapPath, "", args[0], key, io.Discard)
+	bootstrapPath, apiURL := defaultBootstrapPath, ""
+	companySecrets, err := openCompanyStore(noEnviron,
+		storeFlags{bootstrap: &bootstrapPath, api: &apiURL}, "crewlet llm "+args[0])
+	if err != nil {
+		w.t.Fatalf("`%s` reads Tier A from %s, and cannot: %v", line, bootstrapPath, err)
+	}
+	defer companySecrets.Close()
+	company, keys, resolver, err := loadLLMConfig(w.t.Context(), companyPath, companySecrets,
+		args[0], key, io.Discard)
 	if err != nil {
 		w.t.Fatalf("`%s` reads the company from %s, and cannot: %v",
 			line, companyPath, err)
 	}
-	defer closeResolver()
 	if _, err := cliAgents(company, keys, resolver); err != nil {
 		w.t.Fatalf("`%s`: %v", line, err)
 	}

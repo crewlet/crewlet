@@ -39,7 +39,7 @@ func TestTheHomesQueueWorkIsOneSnapshotOfOneTarget(t *testing.T) {
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
 		set(featureRef, code.ZeroOID, oidOf("B"))))
 	open := opening(repo, featureRef, mainRef, dev)
-	item := types.WorkItem{Backend: types.WorkNative, ID: "task-9", Key: "ENG-412", Project: "ENG"}
+	item := types.WorkItem{Backend: types.WorkWorklet, ID: "task-9", Key: "ENG-412", Project: "ENG"}
 	open.Open.WorkItem = &item
 	opened, err := c.ProposeChange(t.Context(), open)
 	requireChanged(t, opened, err)

@@ -353,7 +353,7 @@ func TestAPurgedStoreStaysPurged(t *testing.T) {
 	if err := n.writer.PurgeArtifactState(t.Context(), jane, "another-step", sheet); err != nil {
 		t.Fatalf("a second purge: %v", err)
 	}
-	// A WRITE RECORD THAT RACED THE PURGE is gated on every node: applied
+	// A WRITE RECORD THAT RACED THE PURGE is gated on every data node: applied
 	// after the marker, it writes nothing.
 	n.holdApplier()
 	late, err := artifactdata.Encode(artifactdata.MutationRecord{
@@ -467,5 +467,28 @@ func TestWhatABatchMovedIsToldWithItsShapingFacts(t *testing.T) {
 	}
 	if len(n.moved[1].Docs) != 0 || n.moved[1].Writes[0].Verdict != artifacts.DataForbidden {
 		t.Fatalf("the refused write moved %+v", n.moved[1])
+	}
+}
+
+// AN UNDO ON AN ARTIFACT WHOSE DATASTORE WAS NEVER WRITTEN NAMES NO ID A PERSON
+// NEVER CHOSE. The route answers any artifact that declares the datastore, so
+// the refusal reaches a person and a model: it named the artifact by its uuid
+// after "no such document", the wrong noun for a store that does not exist.
+// The error keeps the id for the log, right after the sentinel, where Sentence
+// cuts it.
+//
+// Mutation: put the id back in the sentence's middle, or drop the cut of
+// ErrNotFound from Sentence, and the sentence carries the uuid.
+func TestAnUndoWithNoStoreNamesNoID(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	empty := artifacts.IDFor("no-store-here")
+	_, err := n.writer.Undo(t.Context(), person("jane", artifacts.RoleEditor), empty, 5)
+	said := artifactdata.Sentence(err)
+	if !errors.Is(err, artifactdata.ErrNotFound) || !strings.Contains(err.Error(), empty.String()) {
+		t.Fatalf("the undo answered %v, want ErrNotFound naming %s for the log", err, empty)
+	}
+	if strings.Contains(said, empty.String()) || said != "this artifact's data has no write 5 to undo" {
+		t.Errorf("a person is told %q", said)
 	}
 }

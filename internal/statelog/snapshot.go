@@ -511,7 +511,7 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 	// THE CHECKSUM COVERS THE SCRUBBED BYTES, which is the second reason
 	// the scrub is the donor's: a checksum taken before it would certify
 	// a file nobody sends.
-	digest, err := store.FileDigest(part)
+	digest, err := store.FileDigest(ctx, part)
 	if err != nil {
 		discard()
 		return Manifest{}, err

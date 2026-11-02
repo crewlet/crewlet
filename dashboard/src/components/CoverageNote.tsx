@@ -1,13 +1,14 @@
 /**
  * What a fleet answer is MISSING, said where the answer is drawn.
  *
- * The fleet's turn-level history is not replicated: every node keeps the
- * events it published, and a read asks every live node at query time
- * (ADR-0021). An answer can therefore be short a node — one that did not
- * answer inside the read budget, or that runs a build speaking another
- * version of the scatter — and the engine says so, by name, in the answer's
- * `coverage`. A screen that drew the rows and dropped that sentence would
- * show a short list exactly like a quiet company.
+ * The fleet's turn-level history is not replicated: each data node keeps the
+ * events it published and the events it keeps in custody for a node without
+ * `data`, and a read asks every live data node at query time (ADR-0021). An
+ * answer can therefore be short a node — one that did not answer inside the
+ * read budget, or that runs a build speaking another version of the scatter —
+ * and the engine says so, by name, in the answer's `coverage`. A screen that
+ * drew the rows and dropped that sentence would show a short list exactly
+ * like a quiet company.
  *
  * ONE NOTE FOR EVERY ANSWER A SCREEN DREW FROM. A list and its axis are two
  * scatters, and a node silent on one is usually silent on both; the note

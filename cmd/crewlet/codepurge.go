@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -38,14 +39,14 @@ import (
 // request rather than recording a second.
 
 // codePurgeTool is the tool the command calls.
-const codePurgeTool = "code_purge_unreachable"
+const codePurgeTool = string(authz.ActionCodePurgeUnreachable)
 
 // codePurge is one purge request.
 func codePurge(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	name, rest := splitSubject(args)
 	var opID *string
 	client, err := nodeClientFor(environ, rest, "code purge-unreachable", stderr, func(fs *flag.FlagSet) {
-		opID = fs.String("op-id", "",
+		opID = opIDFlag(fs,
 			"retry an `unknown` outcome with the id it printed, so the retry is the same request; "+
 				"empty starts a new one")
 	})
@@ -103,7 +104,7 @@ func codePurge(environ config.Source, args []string, stdout, stderr io.Writer) e
 		(refused.Unsettled || refused.OpID != "") {
 		if refused.Unvouched {
 			return fmt.Errorf("%w\n\nThis node cannot tell whether it was recorded and will answer the same "+
-				"way until it can: run it through another node with -url <that node> -op-id %s — never a "+
+				"way until it can: run it through another node with -api <that node> -op-id %s, never a "+
 				"fresh id", err, operation)
 		}
 		return fmt.Errorf("%w\n\nTo find out, %s", err, retry)
@@ -113,7 +114,7 @@ func codePurge(environ config.Source, args []string, stdout, stderr io.Writer) e
 	}
 	r := answer.Receipt
 	if answer.Outcome == string(statelog.OutcomeUnknown) {
-		fmt.Fprintf(stdout, "purge %s: unknown — the node could not confirm the request. To find out, %s\n",
+		fmt.Fprintf(stdout, "purge %s: unknown: the node could not confirm the request. To find out, %s\n",
 			name, retry)
 		return nil
 	}

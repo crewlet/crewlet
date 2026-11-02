@@ -56,6 +56,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -63,6 +64,7 @@ import {
 } from "react";
 
 import { screenScroller } from "~/lib/scroller.ts";
+import { fragmentSegment } from "~/lib/segment.ts";
 
 export interface Route {
   /** Path segments, already decoded. `#/seats/pm` → `["seats", "pm"]`. */
@@ -140,7 +142,7 @@ export function buildHash(
   path: readonly string[],
   query?: URLSearchParams | Record<string, string>,
 ): string {
-  const p = path.map((s) => encodeURIComponent(s)).join("/");
+  const p = path.map(fragmentSegment).join("/");
   const q =
     query instanceof URLSearchParams
       ? query
@@ -342,12 +344,17 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
  * Holds every move to another entry while `guard` is set, and a reload or a
  * closed tab asks first: for work that exists nowhere else, such as an
  * editor's typed changes. `null` holds nothing.
+ *
+ * HELD AND RELEASED WITH THE COMMIT THAT DRAWS IT, as a layout effect: a
+ * passive one ran after the browser had painted, so for that moment a screen
+ * already saying "Saved" still asked before the tab closed, and one showing
+ * unsaved writing did not yet.
  */
 export function useLeaveGuard(guard: LeaveGuard | null): void {
   const latest = useRef(guard);
   latest.current = guard;
   const holding = guard !== null;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!holding) return;
     const entry = { ask: (to: Route, leave: () => void) => latest.current?.(to, leave) ?? false };
     guards.push(entry);
@@ -365,7 +372,8 @@ export function useLeaveGuard(guard: LeaveGuard | null): void {
  * builder's draft in session storage) but not the tab going away.
  */
 export function useUnloadGuard(holding: boolean): void {
-  useEffect(() => (holding ? holdUnload({}) : undefined), [holding]);
+  // With the commit that draws it, for [useLeaveGuard]'s reason.
+  useLayoutEffect(() => (holding ? holdUnload({}) : undefined), [holding]);
 }
 
 export interface Navigator {

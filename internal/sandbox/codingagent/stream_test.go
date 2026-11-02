@@ -61,9 +61,9 @@ func TestADeadJobWithAStreamPastTheCapIsDone(t *testing.T) {
 	b.Put(paths(b).Result(), pastTheCap(b, `{"type":"text","part":{"text":"still going"}}`))
 	b.ExecFunc = alive(false)
 
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || !done {
-		t.Fatalf("Poll = %v, %v; want the dead job found done whatever its stream's size", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobEnded {
+		t.Fatalf("Poll = %v, %v; want the dead job found ended whatever its stream's size", state, err)
 	}
 }
 
@@ -90,8 +90,8 @@ func TestAStreamsEndNeverEndsARun(t *testing.T) {
 			`{"type":"result","subtype":"success","result":"Fixed it."}`,
 		}, "\n"))
 		b.ExecFunc = alive(true)
-		if done, err := runner.Poll(t.Context(), b, handle); done || err != nil {
-			t.Errorf("%s: Poll = %v, %v; want a live wrapper still running", name, done, err)
+		if state, err := runner.Poll(t.Context(), b, handle); state != sandbox.JobRunning || err != nil {
+			t.Errorf("%s: Poll = %v, %v; want a live wrapper still running", name, state, err)
 		}
 	}
 }
@@ -107,12 +107,14 @@ func TestAReadThatFailsNeverSkipsTheLivenessProbe(t *testing.T) {
 	b.ReadErr = func(string) error { return errBoxUnreadable }
 
 	b.ExecFunc = alive(false)
-	if done, err := runner.Poll(t.Context(), b, handle); !done || err != nil {
-		t.Errorf("a dead job behind an unreadable box polled %v, %v; want done", done, err)
+	if state, err := runner.Poll(t.Context(), b, handle); state != sandbox.JobEnded || err != nil {
+		t.Errorf("a dead job behind an unreadable box polled %v, %v; want ended", state, err)
 	}
 	b.ExecFunc = alive(true)
-	if done, err := runner.Poll(t.Context(), b, handle); done || !errors.Is(err, errBoxUnreadable) {
-		t.Errorf("a live job behind an unreadable box polled %v, %v; want not done and the read's error", done, err)
+	if state, err := runner.Poll(t.Context(), b, handle); state != sandbox.JobRunning ||
+		!errors.Is(err, errBoxUnreadable) {
+		t.Errorf("a live job behind an unreadable box polled %v, %v; want running and the read's error",
+			state, err)
 	}
 }
 
@@ -135,8 +137,8 @@ func TestACLIThatExitsIsNotPolledThroughItsOutput(t *testing.T) {
 			return nil
 		}
 		b.ExecFunc = alive(true)
-		if done, err := runner.Poll(t.Context(), b, handle); done || err != nil {
-			t.Errorf("%s: Poll = %v, %v; want only the marker and the probe asked", name, done, err)
+		if state, err := runner.Poll(t.Context(), b, handle); state != sandbox.JobRunning || err != nil {
+			t.Errorf("%s: Poll = %v, %v; want only the marker and the probe asked", name, state, err)
 		}
 	}
 }
@@ -211,9 +213,9 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 }
 
 // THE ERROR STREAM IS READ FROM ITS END, at most what a condensation can take,
-// and what was not read is said by size. It reaches the resumed executor as
-// the failure's detail, so its unread start is marked rather than silent; and
-// its end — the line naming what broke — is always there.
+// and what was not read is said by size. It reaches the run's reviewer as the
+// failure's detail, so its unread start is marked rather than silent; and its
+// end — the line naming what broke — is always there.
 //
 // The read itself is held to the bound too, not only what is shown from it:
 // the box is asked for the bound plus the redaction's context and no more, and
@@ -272,8 +274,8 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 // could not read, the exit status, the CLI's error — and the error stream used
 // to be read to the compactor's whole input and carried behind them, so every
 // failure built around a long stderr was a few hundred bytes over what the
-// compactor reads, refused before a model was asked, and the resumed executor
-// read the uncondensed fallback although a model was configured.
+// compactor reads, refused before a model was asked, and the run's record
+// carried the uncondensed fallback although a model was configured.
 //
 // Every sentence a failure can open with, at once, in front of the longest
 // error stream — in lines, and as one line with no break in it, which is kept
@@ -310,7 +312,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 				t.Fatal(err)
 			}
 			b.Put(p.Result(), string(result))
-			b.Put(p.Ask(), strings.Repeat("q", b.ReadCap()+1)) // a piece that cannot be read
+			b.Put(p.Findings(), strings.Repeat("r", b.ReadCap()+1)) // a piece that cannot be read
 			b.Put(p.Err(), stderr)
 			b.Put(p.ExitCode(), "1")
 
@@ -323,7 +325,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 					len(res.Error), len(res.Error)-testFailureBound, testFailureBound)
 			}
 			for _, want := range []string{
-				"the question the coding agent recorded", // the refused piece, first
+				"the report the coding agent wrote", // the refused piece, first
 				"the coding agent exited with status 1",
 				"error_during_execution: the provider answered 529",
 				"were not read: a run's failure is read from its end",
@@ -332,7 +334,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 					t.Errorf("the failure lost %q: %.400q", want, res.Error)
 				}
 			}
-			if !strings.HasPrefix(res.Error, "the question the coding agent recorded") {
+			if !strings.HasPrefix(res.Error, "the report the coding agent wrote") {
 				t.Errorf("the failure opens %.120q; want the piece that could not be read first", res.Error)
 			}
 			if !strings.HasSuffix(res.Error, "FATAL: the last line") {
@@ -406,32 +408,6 @@ func TestAReportPastTheCapDegradesOnlyItself(t *testing.T) {
 	}
 }
 
-// A QUESTION PAST THE CAP IS NOT PARKED ON. Nobody could be shown it, so the
-// run does not wait for an answer to it; it reads as not succeeded, saying so.
-func TestAQuestionPastTheCapIsNotParkedOn(t *testing.T) {
-	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
-	b.Put(p.Findings(), "Outcome: blocked")
-	b.Put(p.Ask(), `{"question":"`+strings.Repeat("q", b.ReadCap())+`","to":"team"}`)
-	b.Put(p.ExitCode(), "0")
-
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if res.NeedsInput || res.Success {
-		t.Errorf("needs input %v, success %v; want neither", res.NeedsInput, res.Success)
-	}
-	if !strings.Contains(res.Error, "the question the coding agent recorded") {
-		t.Errorf("the refusal is not said: %q", res.Error)
-	}
-	if res.Text != "Outcome: blocked" {
-		t.Errorf("the report = %q; want it still collected", res.Text)
-	}
-}
-
 // A BOX THAT COULD NOT BE READ IS AN ERROR, not a smaller result: that is the
 // box failing, which the coordinator answers, and it is not a piece that was
 // too large to read.
@@ -441,7 +417,7 @@ func TestAnUnreadableBoxIsAnErrorNotAPiece(t *testing.T) {
 	b := box(t, runner)
 	p := paths(b)
 	b.Put(p.Findings(), "Outcome: succeeded")
-	for _, path := range []string{p.Result(), p.Err(), p.ExitCode(), p.Findings(), p.Ask()} {
+	for _, path := range []string{p.Result(), p.Err(), p.ExitCode(), p.Findings()} {
 		b.ReadErr = func(read string) error {
 			if read == path {
 				return errBoxUnreadable

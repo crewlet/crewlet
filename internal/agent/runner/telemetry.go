@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -177,7 +178,8 @@ func (r *Runner) emitter() emitter {
 // the first fan-out.
 type Spend struct {
 	// The model that actually served each phase, which is not necessarily
-	// the configured one: a fallback chain records who answered.
+	// the configured one: a fallback chain records who answered, and for
+	// the executor the member of its chain the launch picked.
 	ExecuteModel string
 	ReviewModel  string
 
@@ -257,8 +259,8 @@ type Spend struct {
 	JudgeOutput int
 
 	// Rounds is the provider rounds the turn's completed phases ran, as
-	// each phase record states them — so a resumed phase counts the rounds
-	// before its suspend as well as after, exactly as its tokens do.
+	// each phase record states them — one for each executor run collected,
+	// whose turns are its CLI's own.
 	Rounds int
 
 	// SentBack is how many reviews returned the work for another pass: the
@@ -415,7 +417,7 @@ func (e emitter) on() bool { return e.pub != nil }
 // it is still answering. Consumers read RoundNum+1 as "rounds so far", which
 // is why the sentinel is -1 and not 0 — a 0 would claim a round had finished.
 func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
-	system, user prompts.Prompt, seed []llm.Message, surface *tools.Surface, caps roundCaps,
+	system, user prompts.Prompt, surface *tools.Surface, caps roundCaps,
 ) {
 	// BEFORE THE PUBLISHER GATE, and off the same `ph` the event below
 	// carries. The working indicator is not telemetry: a runner whose phases
@@ -464,7 +466,7 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 		WorkItem:     e.workItem(),
 	}, e.traceFor(ctx)))
 
-	e.promptSize(ctx, ph, iteration, system.Text, user.Text, seed, surface)
+	e.promptSize(ctx, ph, iteration, system.Text, user.Text, surface)
 }
 
 // skillsInjected records what a prompt's tool-skill catalogue offered: one
@@ -524,10 +526,8 @@ type roundCaps struct {
 //
 // The ceiling is the extension policy's where extensions are on, and NEVER
 // below the cap itself: with extensions off the phase cannot be granted a
-// round beyond the cap, and a resumed executor re-enters with a fresh budget on
-// top of its pre-suspend rounds, which can lift its cap past a ceiling
-// configured for a phase that never parked. A ceiling below the cap would tell
-// a reader the phase had overrun a limit it never had.
+// round beyond the cap, and a ceiling below the cap would tell a reader the
+// phase had overrun a limit it never had.
 func capsOf(policy extension.Policy, maxRounds int) roundCaps {
 	ceiling := maxRounds
 	if policy.Enabled {
@@ -562,10 +562,11 @@ func (e emitter) workItem() *types.WorkItem {
 // to clone the active name list and has released it before it looks a tool up,
 // and neither caller of started holds that lock.
 //
-// AGENT MODE COUNTS THE ARRAY TOO, although the launcher is handed the system
-// and user text alone. Those definitions reach the coding CLI over the MCP
-// bridge and that CLI's own model is billed for every one of them, so leaving
-// them out would report the engine's cheapest-looking phase as its slimmest.
+// THE ARRAY IS COUNTED FOR EVERY PHASE, although none puts it in the prompt
+// text: a phase on this host has its CLI list the definitions from its
+// session, and the executor's run from the MCP bridge in its box, and the
+// CLI's own model is billed for every one of them either way, so leaving them
+// out would report the most tool-heavy phase as the slimmest.
 //
 // The token figure is approximate by construction and says so in its field
 // name: a real count needs the vendor's own tokenizer, which differs per model
@@ -576,7 +577,7 @@ func (e emitter) workItem() *types.WorkItem {
 // MEASURED IN BYTES, which is what len() of a Go string is — see
 // [types.PromptSize] for why bytes rather than characters.
 func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
-	system, user string, seed []llm.Message, surface *tools.Surface,
+	system, user string, surface *tools.Surface,
 ) {
 	if !e.on() {
 		return
@@ -590,16 +591,15 @@ func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
 	if surface != nil {
 		defs = surface.ToolDefs()
 	}
-	m, err := measurePrompt(system, user, seed, defs)
+	m, err := measurePrompt(system, user, defs)
 	if err != nil {
-		// The row still goes out, short one term, and it is worth more
-		// than a phase with no measurement at all — whatever could not be
-		// encoded here is what the provider call after it is about to
+		// The row still goes out, short its tool term, and it is worth
+		// more than a phase with no measurement at all — whatever could not
+		// be encoded here is what the provider call after it is about to
 		// reject for the same reason. The log line is the only place that
-		// says WHICH term came up short, because the row itself cannot:
-		// a tool_bytes of 0 beside a non-zero tool_count is visible, but
-		// a conversation measured short of its own tool-call arguments
-		// reads as a perfectly ordinary figure.
+		// says WHICH tool came up short, because the row itself cannot: a
+		// tool_bytes of 0 beside a non-zero tool_count is visible, and
+		// nothing more.
 		log.WarnContext(ctx, "prompt_size_measure_failed", "phase", ph,
 			"turn_id", e.turn.RunID, "error", err)
 	}
@@ -613,7 +613,6 @@ func (e emitter) promptSize(ctx context.Context, ph phase.Phase, iteration int,
 		ApproximateTokens: m.approximateTokens(),
 		SystemBytes:       m.system,
 		UserBytes:         m.user,
-		MessageBytes:      m.messages,
 		ToolBytes:         m.tools,
 		ToolCount:         m.toolCount,
 	}, e.traceFor(ctx)))
@@ -632,14 +631,13 @@ const bytesPerToken = 4
 type promptMeasure struct {
 	system    int
 	user      int
-	messages  int
 	tools     int
 	toolCount int
 }
 
 // approximateTokens is the whole prompt over one ratio.
 func (m promptMeasure) approximateTokens() int {
-	return (m.system + m.user + m.messages + m.tools) / bytesPerToken
+	return (m.system + m.user + m.tools) / bytesPerToken
 }
 
 // measurePrompt sizes what a phase is about to send.
@@ -648,71 +646,20 @@ func (m promptMeasure) approximateTokens() int {
 // for the same reason: arithmetic that can only be exercised through a live
 // runner is arithmetic nobody re-measures.
 //
-// A SEEDED phase and a fresh one are measured as the loop sends them, which is
-// exclusively one or the other: a resumed loop re-enters its saved messages
-// and the system and user strings are ignored (see [phaseRun], which switches
-// on the same nil), so counting them here would report bytes no provider
-// receives — and counting only them is what reported every resumed executor at
-// 0/0.
-//
-// THE TWO TERMS ARE MEASURED INDEPENDENTLY and the first failure is returned
-// with both of them filled as far as they got. The caller publishes the row
-// either way, and a term zeroed because a different term could not be encoded
-// is a number nobody can interpret.
-func measurePrompt(system, user string, seed []llm.Message, defs []llm.ToolDef) (promptMeasure, error) {
-	m := promptMeasure{toolCount: len(defs)}
-	var failure error
-	if seed == nil {
-		m.system, m.user = len(system), len(user)
-	} else {
-		m.messages, failure = seedBytes(seed)
-	}
+// THE TEXT IS MEASURED WHATEVER THE TOOLS DO: a tool term that cannot be
+// encoded comes back as the error beside a measure whose text terms are
+// whole, because the caller publishes the row either way and a term zeroed
+// because a different term could not be encoded is a number nobody can
+// interpret.
+func measurePrompt(system, user string, defs []llm.ToolDef) (promptMeasure, error) {
+	m := promptMeasure{system: len(system), user: len(user), toolCount: len(defs)}
 	// Not named `tools`: this file imports the package of that name, and a
 	// local that shadows it is a compile error waiting for the next line
 	// added here.
 	size, err := toolDefBytes(defs)
 	m.tools = size
-	if failure == nil {
-		failure = err
-	}
-	return m, failure
+	return m, err
 }
-
-// seedBytes is what a parked conversation weighs: every message's text and
-// the arguments of the tool calls in it. It returns what it managed to count
-// alongside any failure, because the row goes out regardless.
-//
-// A tool call's id and name are out of the sum: bounded identifiers beside
-// arguments that run to kilobytes, which would make this figure move with a
-// vendor's id format instead of with the prompt.
-func seedBytes(seed []llm.Message) (int, error) {
-	total := 0
-	for _, msg := range seed {
-		total += len(msg.Content)
-		for _, tc := range msg.ToolCalls {
-			if len(tc.Arguments) == 0 {
-				total += emptyArgsBytes
-				continue
-			}
-			encoded, err := json.Marshal(tc.Arguments)
-			if err != nil {
-				// NAME THE CALL, as toolDefBytes names the tool: json
-				// reports the offending Go type and a parked
-				// conversation holds one per round.
-				return total, fmt.Errorf("measuring the parked conversation: the "+
-					"arguments of tool call %q cannot be encoded as JSON: %w",
-					tc.Name, err)
-			}
-			total += len(encoded)
-		}
-	}
-	return total, nil
-}
-
-// emptyArgsBytes is what an argument-less tool call weighs: the two bytes of
-// `{}` its arguments are written as, rather than the four json.Marshal answers
-// for a nil map. A `null` there is a shape no model is ever shown.
-const emptyArgsBytes = len(`{}`)
 
 // toolDefBytes is the compact JSON size of a tool-definition array.
 //
@@ -724,10 +671,9 @@ const emptyArgsBytes = len(`{}`)
 // exists for.
 //
 // WHICH MAKES IT A FLOOR, stated on [types.PromptSize.ToolBytes] where a
-// reader of the row will find it: the backend sends MORE than this. The
-// cli-agent text backend renders the same definitions indented inside a
-// fenced catalogue, and an agent-mode run's CLI reads them over MCP in its own
-// vendor's wrapping.
+// reader of the row will find it: the model is sent MORE than this. Its CLI
+// reads the definitions over MCP, annotations and all, and hands them to its
+// model in its own vendor's wrapping.
 func toolDefBytes(defs []llm.ToolDef) (int, error) {
 	if len(defs) == 0 {
 		return 0, nil
@@ -763,10 +709,12 @@ type toolDefWire struct {
 	Parameters  map[string]any `json:"parameters,omitempty"`
 }
 
-// fallback records one hand-off inside a phase's provider chain.
+// fallback records one hand-off inside a phase's provider chain — a call's,
+// or the executor launch's pick of the member that takes its run.
 //
-// Wired at the two places a chain is built, because the chain itself must not
-// publish: it is handed to a sub-agent and to every phase alike, and a
+// Wired at the places a chain is walked — a phase's calls, a worker's, and
+// the launch through [AgentRunRequest.OnFallback] — because the chain itself
+// must not publish: it is handed to a sub-agent and to every phase alike, and a
 // provider that knew about the event stream would have to be given a turn id
 // it has no business holding. [chain.Options.OnFallback] exists for exactly
 // this, and for a while nothing wired it — so the type was registered,
@@ -781,6 +729,21 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 	if !e.on() {
 		return
 	}
+	// WHEN THE HEAD IS BACK, where its vendor said: what a screen showing
+	// the seat carried onto its fallback names.
+	var resets *time.Time
+	var fromCLI string
+	var fromSubscription bool
+	if _, at, limited := llm.LimitedUntil(f.Err); limited {
+		if !at.IsZero() {
+			utc := at.UTC()
+			resets = &utc
+		}
+		var failure *llm.Error
+		if errors.As(f.Err, &failure) {
+			fromCLI, fromSubscription = failure.Agent, failure.Subscription
+		}
+	}
 	e.publish(ctx, events.New(types.ProviderFallback{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
@@ -794,6 +757,10 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 		FromProviderKey: f.From,
 		ToProviderKey:   f.To,
 		ErrorKind:       f.Kind.String(),
+		ResetsAt:        resets,
+
+		FromCLI:          fromCLI,
+		FromSubscription: fromSubscription,
 	}, e.traceFor(ctx)))
 }
 
@@ -835,7 +802,9 @@ func (e emitter) progress(ctx context.Context, ph phase.Phase, iteration int, re
 		MaxRounds:        caps.max,
 		RoundCeiling:     caps.ceiling,
 		RoundStartedAt:   res.RoundStartedAt,
-		RunningCall:      runningCall(res.Running),
+		RunStartedAt:     utcOrZero(res.RunStartedAt),
+		RunningCalls:     runningCalls(res.Running),
+		Invocations:      phaseInvocations(res.Invocations),
 		WorkItem:         e.workItem(),
 		// RoundsUsed is 1-based and RoundNum is 0-based; see the sentinel
 		// above. Subtracting rather than counting separately keeps the two
@@ -857,7 +826,8 @@ type phaseRecord struct {
 	Phase     phase.Phase
 	Iteration int
 	// System and User are the phase's opening prompts with their
-	// outlines; both zero on a phase that re-entered a conversation.
+	// outlines; both zero on the collection of an executor's run, which
+	// opens no conversation of its own.
 	System    prompts.Prompt
 	User      prompts.Prompt
 	Result    toolloop.Result
@@ -905,10 +875,14 @@ type phaseRecord struct {
 	Available []string
 	Catalogue []string
 
-	// Run says which box this phase ran in, where that is not this process.
-	// The zero value is the native tool loop, which is what all but the
-	// resumed Execute phases are.
+	// Run says which run and box this phase was, where that is not this
+	// process. The zero value is a phase that ran on this host, which is
+	// what every phase but the executor is.
 	Run RunRecord
+
+	// RunSteers is what a collected coding run read of the turn's notes —
+	// see [phaseResult.RunSteers].
+	RunSteers []types.PhaseSteer
 
 	// Failed and Err describe a phase that died instead of finishing. The
 	// rest of the record is then PARTIAL rather than absent: a phase that
@@ -1012,7 +986,6 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 	if !e.on() {
 		return
 	}
-	hostRound, _ := toolloop.CallRound(ctx)
 	ev := types.AgentPhaseCompleted{
 		Agent:    e.turn.AgentID,
 		RoleName: e.role,
@@ -1037,10 +1010,13 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		// standalone sibling of the turn's own phases.
 		HostPhase:     types.PhaseExecute,
 		HostIteration: e.hostIteration,
-		// And the ROUND whose delegate call spawned it, off the context
-		// the call ran under — which is how a worker is placed under its
-		// call rather than anywhere in a phase of forty rounds.
-		HostRound: hostRound,
+		// And the ROUND whose delegate call spawned it — which is how a
+		// worker is placed under its call rather than anywhere in the
+		// phase. Only the executor's run delegates, over the bridge, and
+		// every call it makes is on the run's one round ([runRound]), so
+		// that is the round every worker names. See
+		// [subagent.Config.Round].
+		HostRound: runRound,
 		// WHICH task and WHICH template. A call of eight otherwise
 		// produces eight records distinguishable only by their prompts,
 		// and the one an operator is looking for is the one that failed.
@@ -1138,7 +1114,8 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ToolExecutions:   toolExecutions(rec.Result.Executions),
 		RoundNarration:   roundNarration(rec.Result.Narration),
 		Rounds:           phaseRounds(rec.Result.Rounds),
-		Steers:           phaseSteers(rec.Result.Steers),
+		Steers:           append(phaseSteers(rec.Result.Steers), rec.RunSteers...),
+		Invocations:      phaseInvocations(rec.Result.Invocations),
 		InputTokens:      rec.Result.InputTokens,
 		OutputTokens:     rec.Result.OutputTokens,
 		TotalTokens:      rec.Result.InputTokens + rec.Result.OutputTokens,
@@ -1168,10 +1145,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		// renders as an unknown backend rather than as the normal one.
 		//
 		// It was a CONSTANT here, on every phase, which is why nothing in
-		// the tree ever produced BackendSandbox: a detached coding run and
-		// three rounds in this process reported the same backend, and the
-		// two most expensive things a seat does were indistinguishable in
-		// the event log.
+		// the tree ever produced BackendSandbox: an executor's run and three
+		// rounds in this process reported the same backend, and the two
+		// most expensive things a seat does were indistinguishable in the
+		// event log.
 		Backend:         types.BackendNative,
 		ConversationKey: e.turn.ConversationKey,
 		Failed:          rec.Failed,
@@ -1201,6 +1178,10 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
 }
 
+// SandboxKindPrefix opens the error kind of a failure a coding sandbox's
+// backend classed: `sandbox_` and the class ([sandbox.Why]).
+const SandboxKindPrefix = "sandbox_"
+
 // StoppedKind is the error kind a phase and a turn a person stopped carry: not
 // a failure class, but the one word that says why the record has an error and
 // no failure.
@@ -1218,6 +1199,14 @@ const StoppedKind = "stopped"
 // underneath, so the field would carry the same meaningless token for every
 // unclassified failure while looking specific. One honest generic beats a
 // specific-looking constant.
+//
+// A CODING SANDBOX'S CLASS is one of them, as `sandbox_<class>`
+// ([sandbox.WhyOf]): every executor is its coding CLI's run in a box, and a
+// box that could not be started — its provider not answering, refusing the
+// key, a setup somebody has to fix — failed the phase as `error`, while the
+// backend that met it had said what it was. Read before a deadline its chain
+// carries, since a provider's request that ran out of time is the provider
+// not answering.
 func ErrorKind(err error) string {
 	var provider *llm.Error
 	switch {
@@ -1229,6 +1218,11 @@ func ErrorKind(err error) string {
 		// Not a failure at all, and named so: a person paused the seat
 		// and asked for its running turn to stop.
 		return StoppedKind
+	}
+	if why, ok := sandbox.WhyOf(err); ok {
+		return SandboxKindPrefix + string(why)
+	}
+	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return llm.KindTimeout.String()
 	case errors.Is(err, context.Canceled):
@@ -1284,14 +1278,20 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			"round":     ex.Round,
 		}
 		// ONLY WHAT WAS MEASURED. An execution nobody timed — a call
-		// whose arguments did not parse, answered rather than run, or an
-		// agent-mode run's bridged call — has no start, and writing
-		// `duration_ms: 0` for it would state an instant call. Absent is
-		// the honest spelling of "not recorded", and it is the one every
-		// reader already treats that way.
+		// whose arguments did not parse, answered rather than run, on
+		// this host or over the executor's bridge — has no start, and
+		// writing `duration_ms: 0` for it would state an instant call.
+		// Absent is the honest spelling of "not recorded", and it is the
+		// one every reader already treats that way.
 		if !ex.StartedAt.IsZero() {
 			row["started_at"] = ex.StartedAt.UTC().Format(time.RFC3339Nano)
 			row["duration_ms"] = int(ex.Duration / time.Millisecond)
+		}
+		// The call's own id, which tells two calls of one response apart
+		// — a CLI may run them side by side — and is what a live row's
+		// running call is matched to once it settles.
+		if ex.CallID != "" {
+			row["call_id"] = ex.CallID
 		}
 		if ex.Origin != "" {
 			row["origin"] = ex.Origin
@@ -1332,27 +1332,28 @@ func phaseRounds(rounds []toolloop.Round) []types.PhaseRound {
 	return out
 }
 
-// phaseSteers renders the notes a phase read in their wire shape, or nil.
+// phaseSteers renders the notes a phase's loop read in their wire shape — each
+// at the round whose provider call first saw it, at a round's opening — or nil.
 func phaseSteers(marks []toolloop.SteerMark) []types.PhaseSteer {
 	if len(marks) == 0 {
 		return nil
 	}
 	out := make([]types.PhaseSteer, 0, len(marks))
 	for _, m := range marks {
-		out = append(out, types.PhaseSteer{Round: m.Round, NoteID: m.ID})
+		out = append(out, types.PhaseSteer{Round: m.Round, NoteID: m.ID,
+			Boundary: types.SteerBoundaryRound})
 	}
 	return out
 }
 
-// steered records that a phase read a person's note, at the round whose
-// provider call first saw it.
-func (e emitter) steered(ctx context.Context, ph phase.Phase, iteration, round int, n steer.Note) {
+// steered records that the turn read a person's note, where read says: at the
+// opening of a round of the engine's loop, or in a coding run's brief.
+func (e emitter) steered(ctx context.Context, read steer.Read) {
 	if !e.on() {
 		return
 	}
-	ev := e.steerEvent(n, types.SteerDelivered)
-	ev.Phase, ev.Iteration, ev.Round = types.Phase(ph), iteration, round
-	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
+	at := read.Reading
+	e.publish(ctx, events.New(steer.Record(e.steerTurn(), read.Note, &at), e.traceFor(ctx)))
 }
 
 // steerExpired records a note the turn took and never read.
@@ -1360,29 +1361,49 @@ func (e emitter) steerExpired(ctx context.Context, n steer.Note) {
 	if !e.on() {
 		return
 	}
-	e.publish(ctx, events.New(e.steerEvent(n, types.SteerExpired), e.traceFor(ctx)))
+	e.publish(ctx, events.New(steer.Record(e.steerTurn(), n, nil), e.traceFor(ctx)))
 }
 
-func (e emitter) steerEvent(n steer.Note, outcome types.SteerOutcome) types.AgentTurnSteered {
-	return types.AgentTurnSteered{
-		Agent: e.turn.AgentID, AgentHandle: e.handle, RoleName: e.role,
-		TurnID: e.turn.RunID, WorkKey: e.turn.WorkKey,
-		NoteID: n.ID, Outcome: outcome, Note: n.Text,
-		SteeredBy: n.By, SteeredByKind: string(n.ByKind), OperatorID: n.OperatorID,
-		SentAt: utcOrZero(n.At),
-	}
+// steerTurn is the turn a note this runner records was sent to.
+func (e emitter) steerTurn() steer.Turn {
+	return steer.Turn{Agent: e.turn.AgentID, AgentHandle: e.handle, Role: e.role,
+		TurnID: e.turn.RunID, WorkKey: e.turn.WorkKey}
 }
 
-// runningCall renders the call in flight, or nil when none is — so the key is
-// absent on every frame but the one published immediately before a call.
-func runningCall(c *toolloop.RunningCall) *types.RunningCall {
-	if c == nil {
+// runningCalls renders the calls in flight, or nil when none is — so the key
+// is absent on every frame but those published while a call runs.
+func runningCalls(calls []toolloop.RunningCall) []types.RunningCall {
+	if len(calls) == 0 {
 		return nil
 	}
-	return &types.RunningCall{
-		Round: c.Round, Name: c.Name, Arguments: encodeArgs(c.Args),
-		StartedAt: c.StartedAt.UTC(),
+	out := make([]types.RunningCall, len(calls))
+	for i, c := range calls {
+		out[i] = types.RunningCall{
+			ID: c.ID, Round: c.Round, Name: c.Name, Arguments: encodeArgs(c.Args),
+			StartedAt: c.StartedAt.UTC(),
+		}
 	}
+	return out
+}
+
+// phaseInvocations renders a phase's CLI runs in their wire shape.
+func phaseInvocations(runs []toolloop.Invocation) []types.PhaseInvocation {
+	if len(runs) == 0 {
+		return nil
+	}
+	out := make([]types.PhaseInvocation, len(runs))
+	for i, r := range runs {
+		out[i] = types.PhaseInvocation{
+			StartedAt: utcOrZero(r.StartedAt), DurationMS: int(r.Duration.Milliseconds()),
+			ProviderKey: r.ProviderKey, Model: r.Model, Outcome: string(r.Outcome),
+			FirstRound: r.FirstRound, LastRound: r.LastRound,
+			RequestsObserved: r.RequestsObserved,
+			InputTokens:      r.InputTokens, OutputTokens: r.OutputTokens,
+			CacheReadTokens: r.CacheRead, CacheWriteTokens: r.CacheWrite,
+			ToolCalls: r.Calls,
+		}
+	}
+	return out
 }
 
 // utcOrZero is t in UTC, or the zero time left zero — which `omitzero` drops,

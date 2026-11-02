@@ -7,7 +7,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { WorkGrid } from "~/routes/work/shapes/Grid.tsx";
+import { WorkGrid } from "~/routes/worklet/shapes/Grid.tsx";
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 
 /**
@@ -251,10 +251,13 @@ function grouped() {
             chrome={{}}
             now={Date.parse("2031-04-16T00:00:00Z")}
             workspace
-            hrefOf={(r) => `#/work/${r.key}`}
+            hrefOf={(r) => `#/worklet/${r.key}`}
             onOpen={() => {}}
             onOverflow={() => {}}
-            overflowHref={() => "#/work"}
+            overflowHref={() => "#/worklet"}
+            sort=""
+            defaultSort="-updated"
+            onSort={() => {}}
           />
         </Router>
       </ViewerProvider>

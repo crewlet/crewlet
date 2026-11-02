@@ -29,7 +29,7 @@ func (n *node) publishCheck(repo string, op code.OpKind, payload any) (statelog.
 		return statelog.Result{}, err
 	}
 	subject, scope := code.ChecksSubject(repo), code.Scope{code.ChecksPath(repo)}
-	opID := statelog.NewOpID(time.Now(), "code."+string(op))
+	opID := statelog.NewOpID(time.Now(), "code_"+string(op))
 	res, err := n.pub.Publish(n.t.Context(), statelog.Request{
 		Subject: statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
 		Scope:   scope.Set(), OpID: opID, Pattern: statelog.PatternAdditive,
@@ -268,7 +268,7 @@ func TestAPurgedRepositorysCheckWritesNothing(t *testing.T) {
 	}
 }
 
-// A CHECK'S LOG IS NAMED BY THE ENDING THAT KEEPS ONE (ADR-0052's contract for
+// A CHECK'S LOG IS NAMED BY THE ENDING THAT KEEPS ONE (ADR-0075's contract for
 // a Required table): an ending carrying a log names the attempt's
 // code_check_logs row and its object, spelled as the walk spells the row; an
 // ending carrying none names NOTHING — never a removal, since the join may keep
@@ -455,7 +455,7 @@ func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 		}
 		record, err := code.Encode(code.MutationRecord{
 			RecordEnvelope: code.RecordEnvelope{
-				OpID: statelog.NewOpID(harnessAt, "code.checks"), Subject: code.ChecksSubject(repo), Op: tc.op,
+				OpID: statelog.NewOpID(harnessAt, "code_checks"), Subject: code.ChecksSubject(repo), Op: tc.op,
 				CreatedAt: harnessAt, Gen: 1<<32 - 1, Writer: nodeID, Scope: code.Scope{code.ChecksPath(repo)},
 			},
 			Mutation: body, Actor: nodeID, ActorKind: code.ActorSystem,

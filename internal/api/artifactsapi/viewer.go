@@ -151,7 +151,7 @@ func chartActor(p iam.Principal) string {
 func (g Gate) Visible(ctx context.Context, p iam.Principal, items []artifactsdomain.ListItem) (
 	[]artifactsdomain.ListItem, error) {
 
-	now := g.now()
+	now := g.decidedAt(ctx)
 	out := make([]artifactsdomain.ListItem, 0, len(items))
 	for _, item := range items {
 		shown, err := authz.Visible(ctx, p, g.object(item.Head), g.Chart, now)
@@ -205,7 +205,7 @@ func (g Gate) List(ctx context.Context, reads Lister, p iam.Principal, q artifac
 func (g Gate) shownRole(ctx context.Context, p iam.Principal, head artifactsdomain.Head) (
 	artifacts.Role, error) {
 
-	d := authz.Decide(ctx, p, authz.ActionArtifactRead, g.object(head), g.Chart, g.now())
+	d := authz.Decide(ctx, p, authz.ActionArtifactRead, g.object(head), g.Chart, g.decidedAt(ctx))
 	if d.Unknown() {
 		return "", d.Err
 	}

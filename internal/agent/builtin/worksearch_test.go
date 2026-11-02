@@ -6,7 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/knowledge"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A SEAT CAN FIND AN ITEM BY WHAT IT SAYS, and until this it could not.
@@ -18,7 +18,7 @@ import (
 func TestASeatCanSearchWorkItemsByWhatTheySay(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.ranked = []tracker.Ranked{
+	trk.ranked = []worklet.Ranked{
 		{ID: "i1", Key: "ENG-7", Title: "Flaky checkout", Snippet: "…no backoff…"},
 	}
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Search: trk})
@@ -46,7 +46,7 @@ func TestASeatCanSearchWorkItemsByWhatTheySay(t *testing.T) {
 func TestASearchOnABuildingIndexSaysSoRatherThanAnsweringEmpty(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.searchErr = tracker.ErrIndexBuilding
+	trk.searchErr = worklet.ErrIndexBuilding
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Search: trk})
 
 	got := callWork(t, reg, builtin.SearchWorkItemsTool, map[string]any{"text": "anything"})
@@ -87,7 +87,7 @@ func TestNoIndexMeansNoSearchTool(t *testing.T) {
 func TestARankedAnswerNumbersItsPlaces(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.ranked = []tracker.Ranked{
+	trk.ranked = []worklet.Ranked{
 		{ID: "i1", Key: "ENG-7", Title: "first", Rank: 1},
 		{ID: "i2", Key: "ENG-9", Title: "second", Rank: 2},
 	}
@@ -114,7 +114,7 @@ func TestARankedAnswerNumbersItsPlaces(t *testing.T) {
 func TestAPartialWorkSearchSaysSoToTheSeat(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.ranked = []tracker.Ranked{{ID: "i1", Key: "ENG-7", Title: "Flaky checkout"}}
+	trk.ranked = []worklet.Ranked{{ID: "i1", Key: "ENG-7", Title: "Flaky checkout"}}
 	trk.partialSearch = true
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Search: trk})
 
@@ -152,7 +152,7 @@ func TestAPartialWorkSearchSaysSoToTheSeat(t *testing.T) {
 func TestAWorkSearchTakesItsModeAndSaysWhenItWasNotServed(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.ranked = []tracker.Ranked{{ID: "i1", Key: "ENG-7", Title: "Flaky checkout"}}
+	trk.ranked = []worklet.Ranked{{ID: "i1", Key: "ENG-7", Title: "Flaky checkout"}}
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Search: trk})
 
 	if got := callWork(t, reg, builtin.SearchWorkItemsTool, map[string]any{

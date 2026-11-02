@@ -262,11 +262,11 @@ func TestOnlyAFailedWorkflowRunWakesItsActor(t *testing.T) {
 	// somebody did, which that somebody already knows — so the actor is
 	// suppressed unless the prompt says otherwise, and this is the one
 	// exception in the engine.
-	if !(github.Prompt{}).WakesActor(github.WorkflowFailed) {
+	if !(github.Prompt{}).WakesActor(notify.Inbound{Source: github.Backend, EventType: github.WorkflowFailed}) {
 		t.Error("the one self-action exception is not declared, so the only " +
 			"person who can fix a red build is never told")
 	}
-	if (github.Prompt{}).WakesActor(github.CommentAdded) {
+	if (github.Prompt{}).WakesActor(notify.Inbound{Source: github.Backend, EventType: github.CommentAdded}) {
 		t.Error("a comment wakes its own author")
 	}
 }
@@ -670,6 +670,54 @@ func TestTheDirectedPromptsSayDifferentThings(t *testing.T) {
 	}
 	if strings.Contains(got, "go quiet") {
 		t.Errorf("the review request restates the engine's own delivery rule:\n%s", got)
+	}
+}
+
+// AN ASSIGNED ISSUE'S CODE CHANGE IS THE SEAT'S OWN TO MAKE.
+//
+// The executor reading the wake is the seat's coding run, with its own
+// checkout, shell and git, so the prompt sends it to no other runtime, and the
+// pull request it opens carries its own name. An assigned pull request already
+// exists and is not told where one comes from. Both say how an assignment is
+// declined on this host: it is moved to whoever it belongs to.
+func TestAnAssignedIssueIsTheSeatsOwnToChange(t *testing.T) {
+	t.Parallel()
+	build := func(reason, numberKey, number string) string {
+		return (github.Prompt{}).Build(notify.Inbound{
+			Source: github.Backend, Subject: "Add the rate limiter",
+			Body: "The API has none", Sender: "lead",
+			Metadata: map[string]string{
+				"event_type": reason, "repo": "acme/api", numberKey: number,
+			},
+		}, nil)
+	}
+
+	issue := build(github.IssueAssigned, "issue_number", "3")
+	for _, want := range []string{
+		"been assigned an issue", "acme/api#3",
+		"You make any code change the issue needs yourself, in your own checkout",
+		"open the pull request under your own identity",
+		"reassign it",
+	} {
+		if !strings.Contains(issue, want) {
+			t.Errorf("the assigned issue does not say %q:\n%s", want, issue)
+		}
+	}
+	for _, elsewhere := range []string{"runtime", "sandbox"} {
+		if strings.Contains(issue, elsewhere) {
+			t.Errorf("the assigned issue sends the seat to a %s other than its own run:\n%s",
+				elsewhere, issue)
+		}
+	}
+
+	pr := build(github.PRAssigned, "pr_number", "7")
+	for _, want := range []string{"been assigned a pull request", "acme/api#7", "reassign it"} {
+		if !strings.Contains(pr, want) {
+			t.Errorf("the assigned pull request does not say %q:\n%s", want, pr)
+		}
+	}
+	if strings.Contains(pr, "in your own checkout") {
+		t.Errorf("the assigned pull request is told where a pull request comes from:\n%s", pr)
 	}
 }
 
@@ -1141,10 +1189,10 @@ func TestAnAccountWithNoLoginIsRefused(t *testing.T) {
 func TestAHookIsCreatedWithTheShapeTheEdgeReads(t *testing.T) {
 	t.Parallel()
 	client, rec := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+		_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 	})
 	if _, err := client.CreateRepoWebhook(context.Background(), "acme", "api",
-		"https://x/webhooks/github", "s3cret"); err != nil {
+		"https://x.example.com/webhooks/github", "s3cret"); err != nil {
 		t.Fatal(err)
 	}
 	body := rec.postedTo(t, "/repos/acme/api/hooks")
@@ -1365,7 +1413,7 @@ func TestASeatThatNamesNoCredentialIsNotAFinding(t *testing.T) {
 			Name:  "Acme",
 			Roles: []*org.Role{{Name: "SRE Lead", DeclaredHandle: "sre-lead"}},
 		},
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1410,7 +1458,7 @@ func TestASeatWhoseNamedCredentialResolvesToNothingIsAFinding(t *testing.T) {
 		},
 		// The variable is unset, which is the whole case: the document
 		// names a credential and the environment does not answer.
-		Value: func(string) string { return "" }, WebhookBase: "https://x",
+		Value: func(string) string { return "" }, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1456,7 +1504,7 @@ func TestOneOrgHookReplacesThePerRepositoryOnes(t *testing.T) {
 	t.Parallel()
 	client, rec := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`[]`))
@@ -1471,7 +1519,7 @@ func TestOneOrgHookReplacesThePerRepositoryOnes(t *testing.T) {
 			},
 		},
 		Value:       func(v string) string { return v },
-		WebhookBase: "https://x",
+		WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1498,7 +1546,7 @@ func TestAnOrgHookRefusalFallsBackToRepositories(t *testing.T) {
 		}
 		switch {
 		case r.Method == http.MethodPost:
-			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 		case strings.HasSuffix(r.URL.Path, "/hooks"):
 			_, _ = w.Write([]byte(`[]`))
 		default:
@@ -1514,7 +1562,7 @@ func TestAnOrgHookRefusalFallsBackToRepositories(t *testing.T) {
 	}
 	res, err := github.Reconcile(context.Background(), github.Options{
 		Client: client, Config: cfg,
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatalf("auto failed instead of falling back: %v", err)
@@ -1541,7 +1589,7 @@ func TestAnOrgHookRefusalFallsBackToRepositories(t *testing.T) {
 	cfg.Provisioning.OrgWebhook = config.ContainerWebhookRequire
 	if _, err := github.Reconcile(context.Background(), github.Options{
 		Client: client, Config: cfg,
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	}); err == nil {
 		t.Fatal("org_webhook: true accepted a deployment with no org hook")
 	}
@@ -1564,7 +1612,7 @@ func TestOneUnhookableRepositoryDoesNotStopTheRest(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/repos/acme/old"):
 			_, _ = w.Write([]byte(`{"full_name": "acme/old", "archived": true, "permissions": {"admin": true}}`))
 		case r.Method == http.MethodPost:
-			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 		case strings.HasSuffix(r.URL.Path, "/hooks"):
 			_, _ = w.Write([]byte(`[]`))
 		default:
@@ -1580,7 +1628,7 @@ func TestOneUnhookableRepositoryDoesNotStopTheRest(t *testing.T) {
 				Repos: []string{"acme/gone", "acme/readonly", "acme/old", "acme/api"},
 			},
 		},
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatalf("one bad repository failed the whole run: %v", err)
@@ -1620,7 +1668,7 @@ func TestAWorkingSecretIsNotReminted(t *testing.T) {
 	t.Parallel()
 	client, rec := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`[]`))
@@ -1639,7 +1687,7 @@ func TestAWorkingSecretIsNotReminted(t *testing.T) {
 			}
 			return v
 		},
-		Sink: sink, WebhookBase: "https://x",
+		Sink: sink, WebhookBase: "https://x.example.com",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1659,7 +1707,7 @@ func TestAnUnsetSecretIsMintedIntoItsOwnVariable(t *testing.T) {
 	t.Parallel()
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x/webhooks/github"}}`))
+			_, _ = w.Write([]byte(`{"id": 1, "config": {"url": "https://x.example.com/webhooks/github"}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`[]`))
@@ -1675,7 +1723,7 @@ func TestAnUnsetSecretIsMintedIntoItsOwnVariable(t *testing.T) {
 		// Resolves to nothing, which is the mid-setup state: the config
 		// names a variable and nobody has set it.
 		Value: func(string) string { return "" },
-		Sink:  sink, WebhookBase: "https://x",
+		Sink:  sink, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1714,13 +1762,77 @@ func TestALiteralSecretWithNoValueIsRefused(t *testing.T) {
 			Provisioning: &config.GitHubProvisioning{Org: "acme"},
 		},
 		Value: func(string) string { return "" },
-		Sink:  &recordingSink{}, WebhookBase: "https://x",
+		Sink:  &recordingSink{}, WebhookBase: "https://x.example.com",
 	})
 	if err == nil {
 		t.Fatal("an unmintable secret registered a hook anyway")
 	}
 	if !strings.Contains(err.Error(), "webhook_secret") {
 		t.Errorf("the refusal does not name the field to fix: %v", err)
+	}
+}
+
+// THE RECREATE SWITCH OVER A LITERAL IS REFUSED FOR WHAT IT IS. The literal
+// resolves — to itself — and names no variable, so the refusal written for a
+// slot that resolved to nothing ("set that variable") was wrong on both
+// counts, and it never named the switch or the way on that needs no edit: a
+// run without it registers the literal as it is. Nothing is minted and no
+// hook is touched first.
+//
+// NAMED AS ITS CALLER SPELLS IT: `-recreate-webhooks` for `crewlet github
+// provision`, `recreate_webhooks` for the setup route, whose caller has no
+// flag, so a refusal naming one would send them nowhere.
+func TestRecreatingHooksOverALiteralSecretNamesTheSwitchAndBothWaysOn(t *testing.T) {
+	t.Parallel()
+	const literal = "a-literal-webhook-secret-nobody-should-see"
+	for _, fresh := range []provision.FreshSwitch{"-recreate-webhooks", "recreate_webhooks"} {
+		t.Run(string(fresh), func(t *testing.T) {
+			t.Parallel()
+			var writes atomic.Int32
+			client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					writes.Add(1)
+				}
+				_, _ = w.Write([]byte(`[]`))
+			})
+			sink := &recordingSink{}
+			_, err := github.Reconcile(context.Background(), github.Options{
+				Client: client,
+				Config: &config.GitHub{
+					Enabled: true, WebhookSecret: literal,
+					Provisioning: &config.GitHubProvisioning{Org: "acme"},
+				},
+				Value:            func(v string) string { return v },
+				Sink:             sink,
+				WebhookBase:      "https://x.example.com",
+				RecreateWebhooks: fresh,
+			})
+			if err == nil {
+				t.Fatalf("%s over a literal webhook_secret went ahead", fresh)
+			}
+			for _, want := range []string{
+				"integrations.github.webhook_secret is a literal",
+				string(fresh) + " has no variable to mint a fresh one into",
+				"at a whole ${VAR} and re-run with " + string(fresh),
+				"run without " + string(fresh) + " to register the value it holds as it is",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q:\n%v", want, err)
+				}
+			}
+			if fresh == "recreate_webhooks" && strings.Contains(err.Error(), "-recreate") {
+				t.Errorf("the setup route's refusal names a command-line flag:\n%v", err)
+			}
+			if strings.Contains(err.Error(), literal) {
+				t.Errorf("the refusal repeats the secret:\n%v", err)
+			}
+			if len(sink.recorded) != 0 {
+				t.Errorf("the refused run recorded %v", sink.recorded)
+			}
+			if n := writes.Load(); n != 0 {
+				t.Errorf("%d write(s) reached GitHub before the refusal", n)
+			}
+		})
 	}
 }
 
@@ -1870,7 +1982,7 @@ func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
 func TestAPassWithNoOrgTokenReportsNothing(t *testing.T) {
 	t.Parallel()
 	res, err := github.Reconcile(t.Context(), github.Options{
-		Config: &config.GitHub{Enabled: true}, WebhookBase: "https://x",
+		Config: &config.GitHub{Enabled: true}, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatalf("a pass with no credential failed: %v", err)
@@ -2042,7 +2154,7 @@ func TestAConvergedPassRewritesNoWebhook(t *testing.T) {
 	t.Parallel()
 	events, _ := json.Marshal(github.WebhookEvents)
 	existing := fmt.Sprintf(
-		`[{"id":1,"active":true,"events":%s,"config":{"url":"https://x/webhooks/github"}}]`,
+		`[{"id":1,"active":true,"events":%s,"config":{"url":"https://x.example.com/webhooks/github"}}]`,
 		events)
 
 	var writes atomic.Int64
@@ -2064,7 +2176,7 @@ func TestAConvergedPassRewritesNoWebhook(t *testing.T) {
 			Enabled: true, WebhookSecret: "s3cret",
 			Provisioning: &config.GitHubProvisioning{Repos: []string{"acme/api"}},
 		},
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2084,7 +2196,7 @@ func TestADisabledWebhookIsRewritten(t *testing.T) {
 	t.Parallel()
 	events, _ := json.Marshal(github.WebhookEvents)
 	existing := fmt.Sprintf(
-		`[{"id":1,"active":false,"events":%s,"config":{"url":"https://x/webhooks/github"}}]`,
+		`[{"id":1,"active":false,"events":%s,"config":{"url":"https://x.example.com/webhooks/github"}}]`,
 		events)
 
 	var writes atomic.Int64
@@ -2106,7 +2218,7 @@ func TestADisabledWebhookIsRewritten(t *testing.T) {
 			Enabled: true, WebhookSecret: "s3cret",
 			Provisioning: &config.GitHubProvisioning{Repos: []string{"acme/api"}},
 		},
-		Value: func(v string) string { return v }, WebhookBase: "https://x",
+		Value: func(v string) string { return v }, WebhookBase: "https://x.example.com",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -2148,6 +2260,146 @@ func TestAPullRequestIsOneWorkItemWhicheverFaceWokeTheTurn(t *testing.T) {
 		got, ok := github.Prompt{}.WorkItem(copies[0].Inbound.Metadata)
 		if !ok || got != want {
 			t.Errorf("the %s face names %+v (%v), want %+v", name, got, ok, want)
+		}
+	}
+}
+
+// A LOCAL ENGINE HEARS NOTHING FROM GITHUB, AND THAT IS SAID ON A READY CARD.
+//
+// An engine a person reaches at `http://localhost:8200` has an address, and
+// GitHub cannot deliver to it. Registering a hook there would fail every
+// delivery while reading as registered, and reporting it as ingress_blocked
+// would put Action required over agents that push, open pull requests and
+// review perfectly well through their own apps. So nothing is registered, and
+// one advisory says what does not arrive and which setting makes it arrive.
+func TestAnAddressGitHubCannotReachRegistersNothingAndIsAnAdvisory(t *testing.T) {
+	t.Parallel()
+	client, rec := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+	res, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{
+			Enabled: true, WebhookSecret: "s3cret",
+			Provisioning: &config.GitHubProvisioning{
+				Org: "gophrase", OrgWebhook: "true",
+			},
+		},
+		Value:          func(v string) string { return v },
+		WebhookBase:    "http://localhost:8200",
+		WebhookBaseKey: "api.external_url",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created := rec.posted(); len(created) != 0 {
+		t.Fatalf("hooks were registered at an unreachable address: %v", created)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingCoveragePartial ||
+		findings[0].Subject != "api.external_url" {
+		t.Fatalf("findings = %+v, want one coverage advisory on api.external_url", findings)
+	}
+	// A LEAD, THEN WHAT DOES NOT ARRIVE AND WHAT STILL WORKS, then the one
+	// setting that makes it arrive, each in its own field so the notes list
+	// lays them out.
+	if findings[0].Title == "" {
+		t.Error("the advisory has no lead for the notes list to set in bold")
+	}
+	for _, says := range []string{"`http://localhost:8200`", "push"} {
+		if !strings.Contains(findings[0].Detail, says) {
+			t.Errorf("the advisory does not say %q: %s", says, findings[0].Detail)
+		}
+	}
+	if !strings.Contains(findings[0].Remedy, "`api.external_url`") {
+		t.Errorf("the remedy does not name the setting: %q", findings[0].Remedy)
+	}
+	if phase := integration.Classify(findings).Phase; phase != integration.PhaseReady {
+		t.Errorf("the card reads %s, want ready: the agents are working", phase)
+	}
+}
+
+// A SEAT'S OWN APP TOKEN IS ITS APP ACTING, NOT AN ACCOUNT TO LOOK UP.
+//
+// `Bearer ${GITHUB_APP_TOKEN_<HANDLE>}` is the documented GitHub tool
+// credential of a seat with its own app. Read as a personal credential, it
+// was sent to GET /user before the app existed (the variable unissued, so the
+// request carried the word "Bearer" and came back 401), and after the app
+// existed it would be refused anyway, since GitHub answers GET /user for no
+// installation token. The app's account is its slug, so the scan passes the
+// key over: no lookup, no reveal asked for, and no "resolved to nothing"
+// fault for a seat that is waiting for its app.
+func TestASeatsOwnAppTokenIsNeverLookedUpAsAnAccount(t *testing.T) {
+	t.Parallel()
+	ownToken := "Bearer ${" + github.SeatVar("backend-engineer", github.FieldAppToken) + "}"
+	seat := &org.Role{Name: "Backend Engineer", DeclaredHandle: "backend-engineer",
+		MCPEnv: map[string]map[string]string{github.SeatEnv: {"Authorization": ownToken}}}
+	issued := func(v string) string {
+		// As the seat's own resolution would answer it once issued: the
+		// scan must not look it up even then.
+		return strings.ReplaceAll(v, "${"+github.SeatVar("backend-engineer", github.FieldAppToken)+"}", "ghs_issued")
+	}
+	if got := github.CredentialOf(seat, issued); got != "" {
+		t.Errorf("the seat's own app token was read as a personal credential: %q", got)
+	}
+	if reads := github.CredentialReads(&org.Organization{Name: "Acme", Roles: []*org.Role{seat}}); len(reads) != 0 {
+		t.Errorf("the scan asks to read %v for a seat whose only credential is its app's", reads)
+	}
+
+	// A PERSONAL CREDENTIAL BESIDE IT IS STILL ONE, under another key.
+	both := &org.Role{Name: "Backend Engineer", DeclaredHandle: "backend-engineer",
+		MCPEnv: map[string]map[string]string{github.SeatEnv: {
+			"Authorization": ownToken, "GH_TOKEN": "ghp_person",
+		}}}
+	if got := github.CredentialOf(both, issued); got != "ghp_person" {
+		t.Errorf("a personal credential beside the app token = %q, want it read", got)
+	}
+
+	// ANOTHER SEAT'S APP TOKEN IS NOT THIS SEAT'S, and is read like any
+	// other reference: here it resolves to nothing, so it is no credential.
+	borrowed := &org.Role{Name: "Planner", DeclaredHandle: "planner",
+		MCPEnv: map[string]map[string]string{github.SeatEnv: {"Authorization": ownToken}}}
+	if got := github.CredentialOf(borrowed, func(string) string { return "Bearer " }); got != "" {
+		t.Errorf("a scheme with nothing after it was read as a credential: %q", got)
+	}
+
+	// AND THE PROVISIONING REPORT CALLS THE WAITING SEAT NO FAULT.
+	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	})
+	res, err := github.Reconcile(context.Background(), github.Options{
+		Client: client,
+		Config: &config.GitHub{Enabled: true, WebhookSecret: "s3cret"},
+		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
+		Value:  func(string) string { return "" }, WebhookBase: "https://x.example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findings := res.Findings(); len(findings) != 0 {
+		t.Errorf("a seat waiting for its own app produced %+v", findings)
+	}
+}
+
+// A SCHEME WITH NOTHING AFTER IT IS NO CREDENTIAL. `Bearer ${TOKEN}` with
+// TOKEN unset resolves to "Bearer ", and reading the word as the token sent
+// GitHub a request it could only refuse, reported as a bad credential rather
+// than as the variable nobody set.
+func TestAnEmptySchemeIsNoCredential(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]string{
+		"Bearer ":           "",
+		"  bearer  ":        "",
+		"token":             "",
+		"Bearer ghp_a":      "ghp_a",
+		"token  ghp_b ":     "ghp_b",
+		"ghp_c":             "ghp_c",
+		"Bearer ghp_d junk": "",
+	} {
+		seat := &org.Role{Name: "Engineer", DeclaredHandle: "eng",
+			MCPEnv: map[string]map[string]string{github.SeatEnv: {"Authorization": value}}}
+		if got := github.CredentialOf(seat, func(v string) string { return v }); got != want {
+			t.Errorf("%q: credential = %q, want %q", value, got, want)
 		}
 	}
 }

@@ -80,5 +80,6 @@ test("a share the engine marks invalid is listed with why, and Remove withdraws 
   await eventually(() => expect(keyedWrite).toHaveBeenCalled());
   const req = vi.mocked(keyedWrite).mock.calls[0]![0];
   expect(req.method).toBe("DELETE");
-  expect(req.path).toBe(`/artifacts/${ID}/shares/seat:token:maya`);
+  // ONE SEGMENT, its colons escaped: the engine's router reads it back as `seat:token:maya`.
+  expect(req.path).toBe(`/artifacts/${ID}/shares/seat%3Atoken%3Amaya`);
 });

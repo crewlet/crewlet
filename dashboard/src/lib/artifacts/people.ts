@@ -20,10 +20,10 @@ import {
   type SheetCellPresence,
   type SheetPerson,
 } from "@crewlethq/ui";
-import type { ArtifactAudience, ArtifactPresenceMember, OrgProjection } from "~/protocol/index.ts";
+import type { ArtifactAudience, RoomMember, OrgProjection } from "~/protocol/index.ts";
 import type { BridgePerson } from "~/runtime/bridge.ts";
-import { loginKind, loginWords, tierATokenOf } from "../login.ts";
-import { indexOrg, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
+import { loginKind, tierATokenOf } from "../login.ts";
+import { indexOrg, nameOfIn, principalOfSeat, type OrgIndex, type Unit } from "../seats.ts";
 import { useOrg } from "../store-hooks.ts";
 import { plural } from "../format.ts";
 import { tabOfRegion } from "./doc.ts";
@@ -82,7 +82,7 @@ export function principalOfUnit(unit: Unit | undefined, key: string): Principal 
  * person, or an agent between turns, has none.
  */
 export function memberTurn(
-  roster: ReadonlyMap<string, ArtifactPresenceMember>,
+  roster: ReadonlyMap<string, RoomMember>,
   member: Pick<PresenceMember, "id" | "kind">,
 ): string {
   return member.kind === "agent" ? (roster.get(member.id)?.turn ?? "") : "";
@@ -92,7 +92,7 @@ export function memberTurn(
 export function artifactPeople(org: OrgProjection | null | undefined): ArtifactPeople {
   const index = indexOrg(org);
   const units = new Map(index.units.map((u) => [u.id, u]));
-  const nameOf = (handle: string) => index.byHandle.get(handle)?.name ?? loginWords(handle);
+  const nameOf = nameOfIn(index);
   const pagePerson = (handle: string, kind?: "human" | "agent"): BridgePerson => {
     const seat = index.byHandle.get(handle);
     const person: BridgePerson = {
@@ -199,10 +199,7 @@ const NO_PLACE: PresencePlace = { row: () => null, field: () => null, region: ()
  * Where a member is, in words, after the verb: "row 4, Gate", "version 3".
  * What the presence rail and a badge's name say.
  */
-export function memberLocation(
-  member: ArtifactPresenceMember,
-  place: PresencePlace = NO_PLACE,
-): string {
+export function memberLocation(member: RoomMember, place: PresencePlace = NO_PLACE): string {
   const f = member.focus;
   if (f.collection && f.doc) {
     const row = place.row(f.collection, f.doc) ?? "a row";
@@ -254,7 +251,7 @@ export function selfWords(ownTabs: number): string {
  * while present (`held`).
  */
 export function presenceMembers(
-  members: readonly ArtifactPresenceMember[],
+  members: readonly RoomMember[],
   people: ArtifactPeople,
   held: ReadonlyMap<string, NodeHue>,
   place: PresencePlace = NO_PLACE,
@@ -286,7 +283,7 @@ export function presenceMembers(
 
 /** The members on cells of one collection, as the sheet outlines them. */
 export function cellPresence(
-  members: readonly ArtifactPresenceMember[],
+  members: readonly RoomMember[],
   drawn: readonly PresenceMember[],
   collection: string,
 ): SheetCellPresence[] {

@@ -16,14 +16,15 @@
  * states precisely.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 import { Tag } from "@crewlethq/ui";
 
 import { QueryState, SeatCard } from "./common.tsx";
 import { drawnClasses } from "~/testing.tsx";
 import type { Seat } from "~/lib/seats.ts";
-import type { AgentRow, LiveCall } from "~/protocol/index.ts";
+import { setStepUpConfirmer, type AgentRow, type LiveCall } from "~/protocol/index.ts";
+import { page } from "~/lib/session.ts";
 
 afterEach(cleanup);
 
@@ -133,6 +134,37 @@ test("a seat card links through seatPath, so an empty handle still reaches a pag
 // A REFUSAL WITH THE ENGINE'S SENTENCE SAYS THE SENTENCE. The generic
 // `bad_params` banner says only that the engine refused; the engine's words
 // name the parameter, so they replace it.
+// A CONDITION OF THE NODE IS THE ENGINE'S OWN SENTENCE, which names what to do
+// and agrees with whether waiting changes it. It was a fixed "Try another node"
+// for every refusal no wait clears, which contradicted the engine where every
+// node is refused alike (a full log, maintenance), and a fixed "Still catching
+// up" for one that clears whatever the engine said. Mutation: draw the fixed
+// banners again and both rows lose the engine's words.
+test("an unavailable answer says the engine's own sentence for the condition", () => {
+  const full =
+    "There's no room left to save this kind of change. An administrator needs to make room for it.";
+  render(
+    <QueryState
+      error="unavailable"
+      refusal={{ code: "log_full", detail: full, retryAfter: 0 }}
+      loading={false}
+    />,
+  );
+  expect(screen.getByText(full)).toBeTruthy();
+  expect(screen.queryByText(/Try another node/)).toBeNull();
+  cleanup();
+  const behind =
+    "The node answering this hasn't caught up with the latest changes yet. Try again in a moment.";
+  render(
+    <QueryState
+      error="unavailable"
+      refusal={{ code: "behind", detail: behind, retryAfter: 3 }}
+      loading={false}
+    />,
+  );
+  expect(screen.getByText(behind)).toBeTruthy();
+});
+
 test("a bad_params refusal with the engine's sentence shows the sentence, not the guess", () => {
   render(<QueryState error="bad_params" detail="days=91 is past the ninety" loading={false} />);
   expect(
@@ -142,4 +174,121 @@ test("a bad_params refusal with the engine's sentence shows the sentence, not th
   cleanup();
   render(<QueryState error="bad_params" loading={false} />);
   expect(screen.getByText("The engine refused this request.")).toBeTruthy();
+});
+
+// A REVISION THE NODE CANNOT OPEN SHOWS THE ENGINE'S SENTENCE, which names the
+// key or the document that brings it back; without one, the screen's own line
+// for the code. It was `query_failed`'s "the engine failed to answer".
+test("a revision the node cannot open shows what fixes it", () => {
+  render(
+    <QueryState
+      error="unreadable_fleet_revision"
+      detail="Add the key to this node's secrets.keys and restart it."
+      loading={false}
+    />,
+  );
+  expect(screen.getByText("Add the key to this node's secrets.keys and restart it.")).toBeTruthy();
+  cleanup();
+  render(<QueryState error="unsealed_fleet_revision" loading={false} />);
+  expect(screen.getByText(/arrived without a seal/)).toBeTruthy();
+  cleanup();
+  // A SEAL THIS BUILD DOESN'T READ is no missing seal: it names the newer
+  // build, and its sentence is shown as the others are.
+  render(
+    <QueryState
+      error="unknown_seal_revision"
+      detail="A newer build of Crewlet most likely sealed it. Upgrade this node."
+      loading={false}
+    />,
+  );
+  expect(screen.getByText(/Upgrade this node/)).toBeTruthy();
+  cleanup();
+  render(<QueryState error="unknown_seal_revision" loading={false} />);
+  expect(screen.getByText(/sealed in a form this build doesn’t read/)).toBeTruthy();
+});
+
+// A REFUSAL NO ACCESS WOULD CLEAR SAYS WHICH RULE DECIDED, in that rule's own
+// sentence (`contract/authority.ts`): a credential bound to no seat is told the
+// binding, a token the person it acts for, somebody else's record that it is
+// somebody else's, and a reader below an artifact's role that its owner can
+// share it higher. One sentence for every empty list told each of them that
+// what they lacked was leading somebody. Mutation: draw one sentence for every
+// empty list and the rows go red; drop the fallback and the last does.
+test.each([
+  ["unseated", /bind it to a human seat/],
+  ["token_refused", /Access tokens can’t do this/],
+  ["not_lead", /Only its lead in the org chart/],
+  ["seat_only", /Only an agent can do this/],
+  ["role", /Its owner can share it with you at a higher one/],
+  ["ceiling", /working for can’t do this, so the agent can’t either/],
+  ["a_reason_from_a_newer_engine", /^You can’t see this, and no access would change that\./],
+])("a refusal by %s that names no access says so in its own sentence", (reason, said) => {
+  render(<QueryState error="unauthorized" refusal={{ reason, grants: [] }} loading={false} />);
+  const callout = screen.getByText(new RegExp(`Refused as`)).closest(".crewlet-callout")!;
+  expect(callout.textContent).toMatch(said);
+  expect(callout.textContent).toContain(reason);
+});
+
+// A REFUSAL OFFERS WHAT CLEARS ITS OWN RULE, and nothing where no reader can.
+//
+// The banner offered Sign in for every rule. A reader whose proof had gone
+// stale was sent to sign in again rather than to confirm who they are; one
+// whose account is not active signed in to the same refusal; and a stale
+// proof's grants — what ADMITTED the reader — were drawn as "needs Admin
+// access" to an admin. Mutation: offer Sign in for every reason and the
+// step_up, stage, unknown_action, seat_only, role and ceiling rows fail; draw
+// the grants whatever the reason and the step_up row says "needs Admin access"
+// and the role row names Admin where its owner's share is the remedy.
+test.each([
+  ["no_grant", ["worklet"], "Sign in", /needs Worklet access/],
+  ["not_lead", ["admin"], "Sign in", /needs Admin access/],
+  ["step_up", ["admin"], "Confirm it’s you", /Confirm it’s you, then try again/],
+  ["stage", [], "Try again", /Your account isn’t active/],
+  ["unseated", [], "Sign in as yourself", /bind it to a human seat/],
+  ["token_refused", [], "Sign in as yourself", /Access tokens can’t do this/],
+  ["unknown_action", [], "Reload", /no rule for that request/],
+  ["seat_only", ["admin"], null, /Only an agent can do this/],
+  ["role", ["admin"], "Try again", /Its owner can share it with you at a higher one/],
+  ["ceiling", [], null, /working for can’t do this/],
+  ["unnamed", [], null, /didn’t say what it’s about/],
+  ["a_reason_from_a_newer_engine", [], null, /no access would change that/],
+  ["a_reason_from_a_newer_engine", ["chatlet"], "Sign in", /needs Chatlet access/],
+])("a refusal by %s naming %j offers %s", (reason, grants, control, said) => {
+  render(<QueryState error="unauthorized" refusal={{ reason, grants }} loading={false} />);
+  const callout = screen.getByText(new RegExp(`Refused as`)).closest(".crewlet-callout")!;
+  expect(callout.textContent).toMatch(said);
+  const buttons = [...callout.querySelectorAll("button")].map((b) => b.textContent);
+  expect(buttons).toEqual(control === null ? [] : [control]);
+  if (reason === "step_up" || reason === "role") {
+    expect(callout.textContent).not.toMatch(/needs Admin access/);
+  }
+});
+
+// EACH CONTROL DOES WHAT IT SAYS: Confirm asks the one step-up ceremony, and
+// asking again reloads this screen, after an admin has acted. Mutation: point
+// Confirm at the sign-in and the first assertion fails.
+test("a stale proof's control asks for the step-up, and an inactive account's reloads", () => {
+  const asked = vi.fn(() => Promise.resolve(false));
+  const uninstall = setStepUpConfirmer(asked);
+  const reload = vi.spyOn(page, "reloadInto").mockImplementation(() => {});
+  try {
+    render(
+      <QueryState
+        error="unauthorized"
+        refusal={{ reason: "step_up", grants: ["admin"] }}
+        loading={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Confirm it’s you/ }));
+    expect(asked).toHaveBeenCalledTimes(1);
+    cleanup();
+    render(
+      <QueryState error="unauthorized" refusal={{ reason: "stage", grants: [] }} loading={false} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Try again/ }));
+    expect(reload).toHaveBeenCalledWith(location.hash);
+  } finally {
+    uninstall();
+    reload.mockRestore();
+  }
 });

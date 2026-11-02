@@ -1,0 +1,556 @@
+/*
+ * Settings › Models, proposed: placement only. Every surface, colour and type
+ * is a kit component's or a design token; nothing here draws a value of its own.
+ */
+
+.models-page,
+.models-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.models-alarms {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.models-health {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--spacing-0);
+  min-width: 0;
+}
+
+.models-health__detail {
+  font-variant-numeric: tabular-nums;
+}
+
+.models-host {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+}
+
+.models-host > * {
+  align-self: stretch;
+}
+
+.models-waiting {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.models-doctor,
+.models-checklist,
+.models-repoint,
+.models-problems {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.models-doctor__line {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  gap: var(--spacing-3);
+  align-items: start;
+}
+
+.models-doctor__detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.models-repoint__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem);
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.models-choices {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: var(--spacing-2) var(--spacing-3);
+  margin: 0;
+}
+
+.models-choices dt {
+  font-weight: var(--font-weight-medium);
+}
+
+.models-choices dd {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.models-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin: 0;
+  padding-inline-start: var(--spacing-5);
+}
+
+.models-steps > li {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+/* A command or a code to copy fills the line it stands on (a node's login, a device code's step), so it reads as one line to copy. */
+.models-copy-block {
+  align-self: stretch;
+}
+
+/* The Assistant's one picker, as wide as a cell's on the grid under it. */
+.models-roles__picker {
+  inline-size: 14rem;
+  max-inline-size: 100%;
+}
+
+/* The Assistant on By job: its name, its one picker and what it is, on one line that wraps. */
+.models-roles__assistant {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+
+@media (width < 640px) {
+  .models-doctor__line,
+  .models-repoint__row,
+  .models-choices {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A list of what changed: each line's dot, then its words, which wrap. */
+.models-checklist > li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--spacing-2);
+}
+
+.models-field-error {
+  color: var(--color-feedback-danger-ink);
+}
+
+.models-review-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+/* Review's list of the seats that change model, one change to a line. */
+.models-changes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding-inline-start: var(--spacing-4);
+}
+
+/* Who uses it: the seat chips and the summary lines. */
+.models-who__seats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.models-who__seats-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+
+.models-who__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* A named CLI mark: the mark's own box, so the tooltip anchors on it and the row centres it. */
+.models-cli-mark {
+  display: inline-flex;
+  flex: none;
+}
+
+/* The tooltip's breakdown: one use to a line. */
+.models-uses-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+/* The add wizard's keyboard wrapper takes no box, so the wizard still fills its screen. */
+.models-keys {
+  display: contents;
+}
+
+/* A job named by its glyph and its word, in the word's ink. */
+.models-job {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* A stored credential on an edit: its secret and age on one line, Replace at its end. */
+.models-stored {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2) var(--spacing-3);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+/* By job's seat cell: the seat, and under it "Everything" where one model runs every job. */
+.models-seat-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* A wizard area a deep link focuses: it takes focus to move the reader there, and draws no ring of its own. */
+.models-focus-target:focus {
+  outline: 2px solid transparent;
+}
+
+/* The review's note on models a change leaves unused: one quiet line each. */
+.models-orphans {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+}
+
+/* ── The list, its alarms and By job (Overview.tsx, Alarms.tsx, ByJob.tsx) ── */
+
+/* An alarm's one line, then its disclosure of who it stops and what the engine recorded. */
+.models-alarm,
+.models-alarm__details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.models-alarm__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding-inline-start: var(--spacing-4);
+}
+
+/*
+ * A model's row head: its CLI's mark centred against the two lines beside it
+ * (the owner's call, over the earlier level-with-the-key), and the key and
+ * model id one line each with an ellipsis, whole in the tooltip (design QA
+ * M15).
+ */
+.models-entry-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  max-inline-size: 100%;
+}
+
+/*
+ * A label over its value, one line each: a model's key over its id, a
+ * sign-in's route over its secret's name. ONE RULE FOR BOTH, so the two pairs
+ * a row draws are spaced alike by construction.
+ */
+.models-pair {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* A cell's words raised over the row's link, as a link to the row's page drawn as its text. */
+.models-row-reveal {
+  display: block;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.models-clamp {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * Used by: the first use and its "+N" on one line, the seats under them,
+ * plain text that reads as the row does and a link only under the pointer or
+ * the keyboard's focus. The use's name gives way with an ellipsis; the count
+ * never does, so two uses never read as one (QA M16).
+ */
+.models-uses {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.models-uses__line {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.models-uses__lead {
+  overflow: hidden;
+}
+
+.models-uses__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models-uses__more {
+  flex: none;
+  color: var(--color-text-secondary);
+}
+
+.models-uses:hover .models-uses__label {
+  text-decoration: underline;
+}
+
+.models-uses:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* By job's cell: the picker the column's width, its notes under it. */
+.models-byjob__cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  inline-size: 100%;
+  min-width: 0;
+}
+
+/*
+ * THE PICKER FILLS ITS CELL AND ITS LIST DOES NOT (QA M1). An auto-width
+ * picker's list is at least as wide as the trigger and otherwise as wide as
+ * its options, so a model's name, condition and id are never cut to the
+ * column; the bounds are the kit's own properties for an auto picker.
+ */
+.models-byjob__picker .models-byjob__select {
+  --crewlet-select-auto-min-width: 100%;
+  --crewlet-select-auto-max-width: 100%;
+}
+
+.models-byjob__menu {
+  max-inline-size: min(28rem, calc(100vw - 2 * var(--spacing-4)));
+}
+
+.models-byjob__notes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+}
+
+/* A cell whose model will not answer says so in the warning ink (QA M19). */
+.models-byjob__cell--alarm .models-byjob__health {
+  color: var(--color-feedback-warning-ink);
+}
+
+/*
+ * One model's page and its four dialogs (EntryPage, flows/TestDialog,
+ * RetryDialog, DeviceDialog, RemoveDialog, HostLogin).
+ */
+
+/* The page's cards two by two where the width allows, one column on a phone. */
+.models-entry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: var(--spacing-4);
+  align-items: start;
+}
+
+/* A secret's name on one line, the whole name in its title (QA M15). */
+.models-clip {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The vendor's own sentence: quiet, and wrapping inside its callout. */
+.models-said {
+  overflow-wrap: anywhere;
+}
+
+/* Who runs on it: a category's name, then its seats and backups beside it, as list rows (QA Minor 16). */
+.models-who,
+.models-who__seat-list,
+.models-host__nodes,
+.models-revision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.models-who__category {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  gap: var(--spacing-3);
+  align-items: start;
+}
+
+.models-who__seats-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.models-who__seat-list {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+
+.models-who__seat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--spacing-1);
+  min-width: 0;
+  max-inline-size: 100%;
+}
+
+/* A long seat name is cut to one line; its chip's title holds the whole name. */
+.models-who__seat > * {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A place a removal moves: one line, the whole place in its title. */
+.models-repoint__place {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models-revision {
+  gap: var(--spacing-1);
+  overflow-wrap: anywhere;
+}
+
+/* One node's login: its state, when it was checked, and the command to make one. */
+.models-host__node {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+/* The device code's steps, with the waiting status and the note on the steps' own edge (QA Minor 11). */
+.models-device {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+.models-device__status,
+.models-device__note {
+  padding-inline-start: var(--spacing-5);
+}
+
+@media (width < 640px) {
+  .models-who__category {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--spacing-2);
+  }
+}
+
+/*
+ * The model wizard (routes/settings/models/wizard): its own lines, beside the
+ * kit's fields and choices.
+ */
+
+/* A pasted credential, and the way back to the stored one at the field's start edge (design QA Minor 4). */
+.models-credential {
+  align-items: flex-start;
+}
+
+.models-credential > :not(.models-credential__keep) {
+  align-self: stretch;
+}
+
+.models-credential__keep {
+  margin-block-start: calc(-1 * var(--spacing-1));
+}
+
+/* A choice's detail: what it does, then what it replaces and its note, each on a line of its own (design QA Minor 9). */
+.models-choice-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-0);
+}
+
+/* Review: the fallbacks a write drops, one quiet line each. */
+.models-dropped {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One problem to a line: the field and the sentence, then the step that fixes it as a link (design QA M9). */
+.models-problems__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+/* Review's Test call row: its word, and the way to run it. */
+.models-test-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+/* A long name or model id on one line, whole on hover (design QA M15). */
+.models-review-head__names {
+  min-width: 0;
+}

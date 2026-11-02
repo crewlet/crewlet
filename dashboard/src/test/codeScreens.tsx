@@ -13,6 +13,7 @@ import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store, type OrgProjection } from "~/protocol/index.ts";
+import { engineJson } from "~/test/engineAnswer.ts";
 import { withDerived } from "~/test/org.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 
@@ -24,14 +25,11 @@ export const CODE_ORG = withDerived({
     { name: "CTO", handle: "cto" },
     { name: "Jane Founder", handle: "jane", kind: "human" },
   ],
-  services: { tracker: "native", knowledge: "native", code: "native" },
+  services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "native" },
 }) as unknown as OrgProjection;
 
-export const jsonAnswer = (payload: unknown, status = 200) =>
-  new Response(JSON.stringify(payload), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
+/** An answer as the engine writes one, its mark included ([engineJson]). */
+export const jsonAnswer = (payload: unknown, status = 200) => engineJson(payload, status);
 
 /**
  * The engine's REST answers: `answers` maps a question's path

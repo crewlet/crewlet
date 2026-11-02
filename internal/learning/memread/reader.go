@@ -6,12 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -143,11 +144,12 @@ func (r *Reader) budget() time.Duration {
 }
 
 // Memory is one seat's memory, answered by its holder.
-func (r *Reader) Memory(ctx context.Context, seat Seat, limit int) (Memory, error) {
-	req := request{Version: WireVersion, Question: QuestionMemory, Seat: seat, Limit: limit}
+func (r *Reader) Memory(ctx context.Context, seat Seat, q MemoryQuery) (Memory, error) {
+	req := request{Version: WireVersion, Question: QuestionMemory, Seat: seat,
+		Limit: q.Limit, SkillsOrder: q.Skills}
 	var out Memory
 	holder, err := r.read(ctx, req, &out, func(ctx context.Context) (any, error) {
-		return r.Local.Memory(ctx, seat, limit)
+		return r.Local.Memory(ctx, seat, q)
 	})
 	if err != nil {
 		return Memory{}, err
@@ -217,7 +219,7 @@ func (r *Reader) read(ctx context.Context, req request, out any,
 		if err := json.Unmarshal(body, out); err != nil {
 			return "", fmt.Errorf("memread: decode an answer: %w", err)
 		}
-		return NodeOf(r.Owner), nil
+		return config.IncarnationNode(r.Owner), nil
 	}
 	if r.Queue == nil {
 		return answerHere()
@@ -248,7 +250,7 @@ func (r *Reader) read(ctx context.Context, req request, out any,
 // named, and only that process answers, so a holder that restarted since is
 // silent rather than answered for by its successor.
 func (r *Reader) ask(ctx context.Context, req request, owner string, out any) (string, error) {
-	node := NodeOf(owner)
+	node := config.IncarnationNode(owner)
 	req.Owner = owner
 	raw, err := json.Marshal(req)
 	if err != nil {
@@ -279,14 +281,6 @@ func (r *Reader) ask(ctx context.Context, req request, owner string, out any) (s
 		ErrUnavailable, node, req.Seat.Handle, r.budget())
 }
 
-// NodeOf is the node an incarnation belongs to: the stable id before the
-// incarnation's own suffix (config.NewIncarnation writes `<node>:<uuid>`),
-// which is what a reader knows the node by.
-func NodeOf(owner string) string {
-	node, _, _ := strings.Cut(owner, ":")
-	return node
-}
-
 // request is one read, addressed to the incarnation the asker's lease read
 // named — or, for an overview, to every incarnation `Seats` names, each asked
 // about the seats listed under it.
@@ -301,6 +295,8 @@ type request struct {
 	Owner        string   `json:"owner,omitempty"`
 	Limit        int      `json:"limit,omitempty"`
 	Conversation string   `json:"conversation,omitempty"`
+	// SkillsOrder is the order a [QuestionMemory] read lists the skills in.
+	SkillsOrder learning.SkillOrder `json:"skills_order,omitempty"`
 	// Episode names the one episode a [QuestionEpisode] read is about.
 	Episode string            `json:"episode,omitempty"`
 	Seats   map[string][]Seat `json:"seats,omitempty"`
@@ -358,7 +354,8 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []uuid.U
 		)
 		switch req.Question {
 		case QuestionMemory:
-			answer, err = local.Memory(ctx, req.Seat, req.Limit)
+			answer, err = local.Memory(ctx, req.Seat,
+				MemoryQuery{Limit: req.Limit, Skills: req.SkillsOrder})
 		case QuestionThreads:
 			answer, err = local.Threads(ctx, req.Seat, req.Conversation, req.Limit)
 		case QuestionEpisode:

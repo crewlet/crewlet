@@ -307,7 +307,7 @@ func TestSeedingNothingMovesNothing(t *testing.T) {
 
 func TestSeedReportsWhichNodesItCovered(t *testing.T) {
 	t.Parallel()
-	// The seed reads every live node's store. Which ones answered is what
+	// The seed reads every live data node's store. Which ones answered is what
 	// says whether the history a restarted node shows is the fleet's or is
 	// missing a node, and a projection that kept it to itself would make a
 	// short feed indistinguishable from a quiet company.
@@ -397,5 +397,22 @@ func TestSeedDoesNotOverwriteWhatTheStreamAlreadySaid(t *testing.T) {
 	}})
 	if last := overlayOf(t, s, "Lead").LastTurn; last == nil || last.TurnID != "live" {
 		t.Errorf("last turn = %+v, want the stream's newer one kept", last)
+	}
+}
+
+// A TURN A PERSON STOPPED IS SEEDED AS STOPPED, as it was watched: a restart
+// must not turn the seat's "its last turn was stopped" into "it ended", nor —
+// for a stopped turn that had also failed somewhere — into "it failed".
+func TestSeedSaysAStoppedTurnWasStopped(t *testing.T) {
+	t.Parallel()
+	s := seededState(t)
+	base := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+	s.Seed(livestate.History{Turns: []store.Turn{
+		{TurnID: "stopped", AgentID: "Lead", AgentRole: "Engineer", StartedAt: base,
+			EndedAt: base.Add(time.Minute), Complete: true, Stopped: true, Failed: true},
+	}})
+
+	if last := overlayOf(t, s, "Lead").LastTurn; last == nil || last.Outcome != livestate.OutcomeStopped {
+		t.Errorf("last turn = %+v, want it seeded as stopped", last)
 	}
 }

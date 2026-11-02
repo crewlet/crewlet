@@ -33,6 +33,14 @@ import (
 //
 // It costs the class's write rate on this node's connection for as long as it
 // runs: for the presence class, one message per node per presence heartbeat.
+//
+// NOT A [watchRecords] FAMILY, though both are watches of a bucket. What that
+// one function keeps in one place is a certified FIRST ANSWER and the
+// revision filter that keeps a late change from undoing it, because a family
+// watched there is a copy the node replaces its own with. This watch has no
+// first answer — its caller lists for that ([coord.LeaseView]) — and is a
+// HINT the caller lists again on, so a late or repeated write costs a listing
+// and nothing else.
 func (s *Store) WatchLive(ctx context.Context, class coord.Class) (<-chan coord.LeaseWrite, error) {
 	if err := checkClass(class); err != nil {
 		return nil, err

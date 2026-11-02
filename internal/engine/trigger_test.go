@@ -70,7 +70,7 @@ func TestEveryWakeTypeHandsTheTurnItsAsk(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := engine.DescribeTrigger([]*events.Event{tc.event})
+			got := engine.DescribeTrigger([]*events.Event{tc.event}, "")
 			for _, want := range tc.want {
 				if !strings.Contains(got, want) {
 					t.Errorf("the turn's ask is missing %q\ngot: %q", want, got)
@@ -114,7 +114,7 @@ func TestACoalescedPartitionKeepsEveryConstituentsAsk(t *testing.T) {
 		Body: "Blocked on the migration — see PROJ-4.",
 	}, events.TraceContext{})
 
-	got := engine.DescribeTrigger([]*events.Event{first, second})
+	got := engine.DescribeTrigger([]*events.Event{first, second}, "")
 	for _, want := range []string{"Can you take the deploy today?", "Blocked on the migration — see PROJ-4."} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the coalesced ask lost %q\ngot: %q", want, got)
@@ -127,7 +127,7 @@ func TestACoalescedPartitionKeepsEveryConstituentsAsk(t *testing.T) {
 func TestATriggerWithNoAskStillNamesItself(t *testing.T) {
 	t.Parallel()
 	ev := events.New(types.TaskAssigned{RoleName: "Engineer"}, events.TraceContext{})
-	if got := engine.DescribeTrigger([]*events.Event{ev}); strings.TrimSpace(got) == "" {
+	if got := engine.DescribeTrigger([]*events.Event{ev}, ""); strings.TrimSpace(got) == "" {
 		t.Error("a trigger with no readable ask produced a blank task")
 	}
 }

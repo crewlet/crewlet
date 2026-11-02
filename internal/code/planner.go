@@ -15,7 +15,7 @@ package code
 // 100 000-ref repository took 29.8 s. code_packs' key and code_packs_added_idx
 // are the same pair. So a statement that compares a key past its first column
 // NAMES the key's index ([refsKey], [packsKey]), and the planner then seeks the
-// whole of it — internal/tracker's field filter does the same, for the same
+// whole of it — internal/worklet's field filter does the same, for the same
 // reason. The name is the driver's own for a PRIMARY KEY's index, and naming it
 // is also a GUARD: a schema change that renames it fails every such statement
 // with `no such index` at its first run, rather than leaving a push apply
@@ -63,12 +63,12 @@ const (
 	// refsKey is code_refs' PRIMARY KEY index, (repo_id, ref).
 	refsKey = "sqlite_autoindex_code_refs_1"
 	// liveRefsKey is code_refs_live_idx, (repo_id, ref) WHERE target != ''
-	// (replicated migration 0054): the live refs alone, in key order.
+	// (replicated migration 0077): the live refs alone, in key order.
 	liveRefsKey = "code_refs_live_idx"
 	// packsKey is code_packs' PRIMARY KEY index, (repo_id, pack_id, part).
 	packsKey = "sqlite_autoindex_code_packs_1"
 	// changesNumberKey is code_changes_number_idx, (repo_id, number)
-	// (replicated migrations 0058 and 0066): a repository's changes in number
+	// (replicated migrations 0081 and 0089): a repository's changes in number
 	// order, which is the only way to a repository's revisions, authors and
 	// bodies — they carry no repo_id of their own.
 	changesNumberKey = "code_changes_number_idx"
@@ -81,7 +81,7 @@ const (
 	// code_packs_retired_repo_idx as packsKey does with code_packs_added_idx.
 	retiredKey = "sqlite_autoindex_code_packs_retired_1"
 	// dropsKey is code_ref_drops' PRIMARY KEY index, (repo_id, at, position,
-	// ref, old) (replicated migration 0061): a repository's ref drops by the
+	// ref, old) (replicated migration 0084): a repository's ref drops by the
 	// instant their records landed, the one order every statement over them
 	// reads — the push apply's expiry, a purge part's and the final purge's
 	// removal, and the purge's bounded count. It is the table's only index,

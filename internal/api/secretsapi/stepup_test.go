@@ -42,7 +42,7 @@ func TestACredentialWriteAndARevealAskForARecentProof(t *testing.T) {
 	fleet := coordmem.NewFleet()
 	svc, err := secretsapi.New(secretsapi.Options{
 		Fleet: fleet, Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1",
-		Now: func() time.Time { return clock },
+		Now: func() time.Time { return clock }, Config: &company{},
 	})
 	if err != nil {
 		t.Fatalf("secretsapi.New: %v", err)

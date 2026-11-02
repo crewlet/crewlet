@@ -8,9 +8,9 @@ import (
 )
 
 // AppFor is the app a kind of object belongs to: a task, a project and a saved
-// view are the tracker's, a page and a page container the knowledge base's,
-// and every other kind (a person, a unit, the company, an artifact) belongs
-// to no app.
+// view are the tracker's, a page and a page container the knowledge base's, a
+// chat room and a message the chat's, and every other kind (a person, a unit,
+// the company, an artifact) belongs to no app.
 //
 // AN ARTIFACT BELONGS TO NO APP and is not everybody's either: it is decided
 // per object, by its shares ([ClassShared]), so the `artifacts` app gates
@@ -21,14 +21,16 @@ import (
 // that cites it, a seat's current task — carries rows of more than one kind
 // to readers who may use only one of the apps, and each of those surfaces
 // asking "which app is this row?" for itself is how one of them comes to show
-// a task to somebody without the tracker. Asked here, the answer is one
+// a task to somebody without Worklet. Asked here, the answer is one
 // function over the same kinds the authority table decides on.
 func AppFor(k ObjectKind) iam.Grant {
 	switch k {
 	case KindTask, KindProject, KindView:
-		return iam.GrantTracker
+		return iam.GrantWorklet
 	case KindPage, KindContainer:
-		return iam.GrantKnowledge
+		return iam.GrantDoclet
+	case KindChannel, KindMessage:
+		return iam.GrantChatlet
 	}
 	return ""
 }

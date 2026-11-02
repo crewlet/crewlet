@@ -3,6 +3,7 @@ package authapi_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // stepUpRig is the sign-in rig with one live session presented: a cookie the
@@ -170,6 +172,25 @@ func TestAStepUpThatCannotEndWhatItReplacesChangesNothing(t *testing.T) {
 			rec.Header().Get("Retry-After") == "" {
 			t.Errorf("answered %d with Retry-After %q, want 503 carrying one",
 				rec.Code, rec.Header().Get("Retry-After"))
+		}
+		if len(r.estate.starts) != 0 {
+			t.Errorf("opened %+v beside a session it could not end", r.estate.starts)
+		}
+	})
+	// A CLOSE THAT LOST ITS RACE is the step-up made again, told in the
+	// words for a gesture: the person has nothing to look at again.
+	// Mutation: answer it through writeFailed and the sentence goes red.
+	t.Run("the close lost its race", func(t *testing.T) {
+		t.Parallel()
+		r := newStepUpRig(t, session.RowValid)
+		r.estate.closeErr = fmt.Errorf("iamdomain: publish: %w: the session "+
+			"kept changing under this write", statelog.ErrConflict)
+		rec := r.stepUp(t)
+		var body map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusConflict || body["detail"] != authapi.GestureRaced {
+			t.Errorf("answered %d %v, want 409 in the words for a gesture",
+				rec.Code, body)
 		}
 		if len(r.estate.starts) != 0 {
 			t.Errorf("opened %+v beside a session it could not end", r.estate.starts)

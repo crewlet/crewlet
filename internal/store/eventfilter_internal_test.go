@@ -40,6 +40,7 @@ func TestEveryPartiallyIndexedFilterSeeksItsIndex(t *testing.T) {
 		{"work_item", ListQuery{WorkItem: "native:t-1"}, "crewlet_events_work_item_idx"},
 		{"channel_id", ListQuery{ChannelID: "ch-1"}, "crewlet_events_channel_idx"},
 		{"agent_id", ListQuery{AgentID: "id-sre"}, "crewlet_events_agent_id_time_idx"},
+		{"answered_by", ListQuery{AnsweredBy: "ana"}, "crewlet_events_answered_by_idx"},
 	} {
 		query, args := c.q.listSQL(DefaultListLimit, now())
 		plan := planOf(t, db, query, args)
@@ -95,20 +96,21 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 // about. Selecting the rows in a derived table and grouping outside it is what
 // makes the planner seek a column's groups (see [EventLog]); the axis's bars
 // group over the table itself by an expression over `event_time`, and seek as
-// they are. Read back for the EXACT statement each read runs: a turn's traces,
-// the turn list and its share of named turns, every filter of the facet
-// counts, and every filter of the axis's bars — the category's too — at every
-// bucket width Histogram draws, each over a window it answers rather than
-// refuses. The ones with an index of their own seek it, and none of them,
-// whatever it filters on, intersects the key.
+// they are. Read back for the EXACT statement each read runs: a turn's traces
+// and the nodes that published it, the turn list and its share of named
+// turns, every filter of the facet counts, and every filter of the axis's
+// bars — the category's too — at every bucket width Histogram draws, each
+// over a window it answers rather than refuses. The ones with an index of
+// their own seek it, and none of them, whatever it filters on, intersects the
+// key.
 //
 // A read that names a WINDOW seeks it too, on the filter's index: the count of
 // notification outcomes is two types over `[since, at)`, and the planner seeks
 // the type alone for `event_type IN (…)` and reads every row of it the log
 // holds — so each of its seeks must carry the time range as well.
 //
-// Mutation: select [turnTracesSQL]'s, [ListQuery.facetSQL]'s or
-// [TurnQuery.partialsSQL]'s rows from the table rather than from a derived
+// Mutation: select [turnTracesSQL]'s, [turnNodesSQL]'s, [ListQuery.facetSQL]'s
+// or [TurnQuery.partialsSQL]'s rows from the table rather than from a derived
 // table, and its cases read the key — a range of it for the traces, `MULTI-
 // INDEX AND` for a filtered facet count or a unit of work's turns. Force the
 // primary key under [HistogramQuery.barsSQL]'s statement for one bucket width
@@ -141,6 +143,8 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 	var reads []read
 	q, a := turnTracesSQL("tn-1", at)
 	reads = append(reads, read{"a turn's traces", q, a, "crewlet_events_turn_idx", false})
+	q, a = turnNodesSQL("tn-1", at)
+	reads = append(reads, read{"a turn's nodes", q, a, "crewlet_events_turn_idx", false})
 	q, a = OutcomeQuery{Since: at.Add(-time.Hour), At: at}.countSQL(at)
 	reads = append(reads, read{"the notification outcomes", q, a, "crewlet_events_type_time_idx", true})
 	failed := true

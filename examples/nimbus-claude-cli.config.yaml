@@ -8,35 +8,45 @@
 #
 # Bring the pair up end to end:
 #
+#     # 0. What this file reads from the environment, which every command
+#     #    given -config below needs: the keyring every node needs — see
+#     #    `secrets:` below; `crewlet secrets keygen -key-id 2026-01` prints
+#     #    the export line + snippet — and this node's own API token.
+#     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
+#     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
+#
 #     # 1. Chat: the server, an admin, the team, the channels, the bots.
 #     docker compose --profile mattermost up -d --wait
 #     COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
 #
 #     # 2. The model: authenticate the `claude` CLI inside Crewlet's own
-#     #    directory, then prove it end to end BEFORE the first turn.
-#     crewlet llm login default -from-host      # or -capture-token
-#     crewlet llm doctor default
+#     #    directory (-capture-token in place of -from-host mints a headless
+#     #    token instead), then prove it end to end BEFORE the first turn.
+#     #    With this node's engine stopped both reach the fleet's secret
+#     #    store themselves, through the node's own broker on
+#     #    ./nimbus-data/stream (which nimbus.config.yaml shares); once the
+#     #    engine runs, they go through it, with
+#     #    CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER".
+#     crewlet llm login  default -from-host -company examples/nimbus-claude-cli.company.yaml \
+#                                           -config  examples/nimbus-claude-cli.config.yaml
+#     crewlet llm doctor default            -company examples/nimbus-claude-cli.company.yaml \
+#                                           -config  examples/nimbus-claude-cli.config.yaml
 #
-#     # 3. This node's own API token, the tool bridge the engineers'
-#     #    agent-mode runs dial back on, and go.
-#     export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
-#     export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"   # = api.port below
+#     # 3. Go.  Every seat's executor run is a `direct` box on this
+#     #    machine and dials api.port below on loopback for its tools.
 #     set -a; . ./.env; set +a          # MATTERMOST_URL + the bot tokens
 #                                       #   the bootstrap wrote
 #     crewlet run -config examples/nimbus-claude-cli.config.yaml \
 #                 -company examples/nimbus-claude-cli.company.yaml
 #
-#     # The keyring every node needs — see `secrets:` below.
-#     # `crewlet secrets keygen -key-id 2026-01` prints the export line + snippet:
-#     export CREWLET_SECRET_KEY_2026_01="<base64 key from `crewlet secrets keygen`>"
-#
 # THERE ARE NO EXTERNAL SERVICES HERE apart from the chat server the
 # compose file starts.  The stream is a NATS JetStream server embedded in
-# this process and the store is one local file, so a single binary in an
-# empty directory is a working company — no broker to operate, no database
-# to provision, nothing to point a DSN at.  Both slots take an external
-# address when a deployment outgrows that; see docs/guides/deployment.md
-# and docs/guides/fleet.md.
+# this process and the store is two local files (the node's own and the
+# replicated estate beside it), so a single binary in an empty directory
+# is a working company — no broker to operate, no database to provision,
+# nothing to point a DSN at.  The stream takes an external address when a
+# deployment outgrows that; see docs/guides/deployment.md and
+# docs/guides/fleet.md.
 #
 # Restart-only Tier A fields only:
 #   - stream      : where the durable event log lives
@@ -84,11 +94,10 @@ logging:
 #
 # store_dir is NOT optional, and not merely inadvisable: leaving it empty
 # selects an in-memory server, and this company's own records live on that
-# stream.  The people who sign in to it do whatever backends it names —
-# the identity estate is a state-log domain — and its work items and its
-# pages do too, because it runs the engine's own tracker and knowledge
-# base (see tracker.backend and knowledge.backend in the company
-# document).  A restart would recreate those logs empty and this node
+# stream.  The people who sign in to it do whatever backends it names (the
+# identity estate is a state-log domain), and its work items and its pages
+# do too, because it runs Worklet and Doclet (see tracker.backend and
+# knowledge.backend in the company document).  A restart would recreate those logs empty and this node
 # would stop serving for good, so the engine refuses to boot without one
 # rather than losing the records — `crewlet validate` refuses it too,
 # naming stream.store_dir.  That is a rule about a broker MEMBER, which a
@@ -157,18 +166,25 @@ node:
                                        #   stream.leaf.urls — see
                                        #   docs/guides/satellite-nodes.md
   # labels: {zone: eu-west}            # what a role's placement selector matches
-  # max_concurrent: 32                 # agent turns THIS PROCESS runs at once.
+  # max_concurrent: 32                 # turn segments this process runs
+                                       #   at once, whatever starts one: a
+                                       #   new turn up to the park at its
+                                       #   executor's launch, a run's
+                                       #   collection and its review, a
+                                       #   person's answer carrying a run on.
+                                       #   The executor run in its box holds
+                                       #   no slot (each seat runs at most one).
                                        #   Per node, so a fleet's ceiling is
                                        #   N x this.  Omit for the default (32),
                                        #   which is above the seat count of a
                                        #   single-node company.  NOT the same
                                        #   knob as the providers.llm entry's own
-                                       #   max_concurrent in the company YAML,
-                                       #   which caps that provider's
-                                       #   subprocesses — and on this pair that
-                                       #   one (4) is the binding ceiling, not
-                                       #   this one: a turn past it waits in
-                                       #   this process for a CLI slot.
+                                       #   max_concurrent in the company YAML
+                                       #   (4), which caps that entry's CLI
+                                       #   processes on this host: a reviewer,
+                                       #   worker or side pass past it waits
+                                       #   in this process for a CLI slot,
+                                       #   while executor runs are not counted.
 
 api:
   host: "0.0.0.0"
@@ -176,16 +192,16 @@ api:
   # process — one process serves engine + dashboard + webhooks.  Open the
   # dashboard at http://localhost:8000/ once it is up.
   #
-  # IT ALSO SERVES THE MCP TOOL BRIDGE the three engineering seats need:
-  # their executor runs as the coding CLI's own agentic loop in a box, and
-  # the seat's tools reach that box back over /mcp/{token} here.  Set
-  # CREWLET_MCP_BRIDGE_URL to a URL the box can dial — for a `direct` box
-  # on this machine that is http://127.0.0.1:<this port>.  Change the port
-  # and change that variable with it; without it agent mode is refused at
-  # launch rather than started with no tools.  In a fleet the URL must
-  # address the NODE and never a load balancer: a bridge session is a live
-  # tool surface in one process, and a peer that never held it answers 401
-  # for ever.
+  # IT ALSO SERVES THE MCP TOOL BRIDGE every agent seat needs: each seat's
+  # executor runs as its coding CLI's own agentic loop in a box, and the
+  # seat's tools reach that box back over /mcp/{token} here.  A `direct`
+  # box on this machine dials this port on loopback, which the node
+  # derives from the socket it binds — nothing to set, and `port: 0`
+  # would leave every executor launch refused.  A `container` or `e2b`
+  # box needs CREWLET_MCP_BRIDGE_URL, a URL that box can dial.  In a
+  # fleet the URL is the fleet's, the same on every node: any node
+  # serving the API, a load balancer in front of several included,
+  # relays each call to the node holding the seat.
   #
   # 8000 rather than 80, deliberately.  The only reason to bind the plain
   # http port is so a webhook URL an external service registers needs no

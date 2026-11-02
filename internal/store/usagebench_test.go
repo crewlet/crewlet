@@ -26,7 +26,7 @@ import (
 // reads add is paid on every such tick, and a derived day may add 150 ms — 1 %
 // of the tick. Grouped by fields read out of each row's payload the reads
 // added 272 ms (334 ms against 62 ms), so the fields the statement groups and
-// sums on are columns of their own (node/0052, and node/0053 each record's
+// sums on are columns of their own (node/0059, and node/0060 each record's
 // count of reads), on which the records add 116 ms (193 ms against 77 ms,
 // beside another session's builds; 86 ms, 151 against 65, when each row was
 // one read and counted). Every figure was taken with `-benchtime 5x -count 1`

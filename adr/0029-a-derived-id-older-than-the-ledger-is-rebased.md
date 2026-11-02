@@ -52,4 +52,9 @@ framework does). Which identity a turn's ids are seeded from — the work key or
 the run — is [ADR-0017](0017-a-turn-id-names-one-run.md)'s. And it does not make
 the collapse survive the line: an attempt judged just short of the horizon and
 a retry judged just past it write under two instants, which is the cost this
-decision accepts against every write lost.
+decision accepts against every write lost. That cost is an OPERATION written
+twice, never an object made twice where the object's id is the key of its own
+row: a work-item comment's, a created item's and a created view's are derived
+from the call's key as the work began (`builtin`'s `asBegun`), so a rebased
+attempt names what the attempt before it posted, filed or saved, and the
+tracker answers it from that row with nothing published.

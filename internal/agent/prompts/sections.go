@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The shared section builders. Each returns the section's lines, or nil when
@@ -311,7 +312,7 @@ func planRoster(s Seat, a *rosterAllowance) roster {
 // name, a handle or a platform id, so an omission is one call away instead of
 // a dead end.
 func rosterGapLine(n int) string {
-	return "and " + strconv.Itoa(n) + " more — `lookup_colleague` names them"
+	return "and " + strconv.Itoa(n) + " more — `" + toolname.LookupColleague + "` names them"
 }
 
 // rosterHead is the ladder's SECOND rung: the one line that names a report
@@ -340,7 +341,8 @@ func rosterHead(report *org.Role) string {
 // verbatim, since a literal "${SLACK_ID}" in a prompt is a mention that can
 // never match an account), so this renderer is tied to no one platform. A seat
 // whose contact identities the identity directory withholds renders none of
-// them ([Seat.Withheld]).
+// them ([Seat.Withheld]). On the engine's own chat a person is ALSO reachable
+// by their seat's handle, with or without any of those ([Seat.Chatlet]).
 func rosterProfile(s Seat, report *org.Role) []string {
 	parts := []string{rosterHead(report)}
 	if report.Backstory != "" {
@@ -371,6 +373,13 @@ func rosterProfile(s Seat, report *org.Role) []string {
 				"to the seat, and expect no reply meanwhile.")
 	}
 	addressable := false
+	if s.Chatlet {
+		// THE ENGINE'S OWN CHAT READS A HANDLE, so a person is
+		// addressable there whatever accounts they hold elsewhere —
+		// their mentions and conversations wait in their own chat,
+		// and the dashboard is where they read it.
+		parts = append(parts, "  - Chat: @"+report.Handle())
+	}
 	if report.Contact != nil {
 		seen := make(map[string]bool)
 		for _, id := range report.Contact.ResolvedIdentities(s.Env) {
@@ -396,6 +405,12 @@ func rosterProfile(s Seat, report *org.Role) []string {
 	if report.Availability != "" {
 		parts = append(parts, "  - Availability: "+report.Availability)
 	}
+	if s.Chatlet {
+		// NOTHING MORE TO SAY on the engine's own chat: the handle above
+		// reaches them there, and how a human is handed work and that they
+		// answer asynchronously is the `## Human colleagues` note's, once.
+		return parts
+	}
 	if addressable {
 		// NOTHING MORE TO SAY about a person with an account: how a human
 		// is reached and handed work, and that they answer asynchronously,
@@ -404,12 +419,12 @@ func rosterProfile(s Seat, report *org.Role) []string {
 		// allowance that buys profiles.
 		return parts
 	}
-	// NOBODY TO @-MENTION, which is the one way this person differs from
-	// the note. A person may hold an operator credential and no chat
-	// account at all — they read their dashboard inbox — and telling an
-	// agent to mention them anyway produces a message addressed to a handle
-	// that resolves to nobody, which reads to everyone else as work handed
-	// over.
+	// NOBODY TO @-MENTION, on a company whose chat is a vendor's or nobody's,
+	// which is the one way this person differs from the note. A person may
+	// hold an operator credential and no chat account at all — they read
+	// their dashboard inbox — and telling an agent to mention them anyway
+	// produces a message addressed to a handle that resolves to nobody,
+	// which reads to everyone else as work handed over.
 	return append(parts,
 		"  - No chat or code-host account, so nobody to @-mention: assign "+
 			"their work to them in the PM tool, where they read it.")
@@ -490,15 +505,20 @@ func BuildHumanColleaguesNote(s Seat) []string {
 	if !human {
 		return nil
 	}
-	return []string{
-		"\n## Human colleagues",
-		"Seats marked (human) or **human teammate** — `kind: human` in " +
-			"`lookup_colleague` — are held by people. Reach them with an " +
-			"@-mention on the team's chat or a comment where the work lives, " +
-			"never over A2A, and hand them work by assigning it in the PM " +
-			"tool. They reply asynchronously: give them the full context, " +
-			"then finish your turn — their reply wakes you.",
+	note := "Seats marked (human) or **human teammate** — `kind: human` in " +
+		"`" + toolname.LookupColleague + "` — are held by people. Reach them with an " +
+		"@-mention on the team's chat or a comment where the work lives, " +
+		"never over A2A, and hand them work by assigning it in the PM " +
+		"tool. They reply asynchronously: give them the full context, " +
+		"then finish your turn — their reply wakes you."
+	if s.Chatlet {
+		// ON THE ENGINE'S OWN CHAT a person answers to the handle their
+		// profile gives, and a direct message is a tool of its own: said
+		// once, here, rather than in every profile.
+		note += " On the company's own chat, mention a person by the @handle " +
+			"their profile gives, or message them directly with `" + toolname.SendDM + "`."
 	}
+	return []string{"\n## Human colleagues", note}
 }
 
 // BuildOrgMissionVisionSection renders org-wide mission + vision, when set.
@@ -661,7 +681,7 @@ func BuildUnitContextSection(s Seat) []string {
 
 // escalationTool is the tool the escalation guidance names — the one a seat
 // asks a decision through. The guidance renders only when the seat holds it.
-const escalationTool = "comment_on_work_item"
+const escalationTool = toolname.CommentOnWorkItem
 
 // BuildEscalationSection is how a seat asks for a decision it cannot make.
 //
@@ -702,7 +722,7 @@ func BuildEscalationSection(availableTools []string) []string {
 			"off something your role does not own, or one you are genuinely " +
 			"torn on, ask the person who decides with an `ask` and a " +
 			"`decision` — on the work item with `" + escalationTool + "`, or " +
-			"with `create_work_item` when there is no item yet.",
+			"with `" + toolname.CreateWorkItem + "` when there is no item yet.",
 		"Then END THIS TURN BLOCKED ON THAT BRANCH. Do not pick an option " +
 			"yourself and do not wait or poll: finish whatever does not depend " +
 			"on the answer, and stop. Their answer wakes you with the option " +

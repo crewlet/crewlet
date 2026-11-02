@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -19,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -64,18 +67,24 @@ func seatKinds(_ context.Context, handle string) (iam.ActorKind, error) {
 
 // harnessCeiling is the byte ceiling every harness provisions its log at.
 //
-// A QUARTER OF TIER A'S FLOOR, and tighter is the honest direction: the broker
-// reserves a stream's whole ceiling on disk the moment it creates it, so a
-// suite that runs a dozen logs at once at the gibibyte floor asks a developer's
-// disk for a dozen gibibytes it never writes. At this ceiling the gate reserve
-// still takes its full fleet term out of the top of the log, so every write here
-// is admitted against an ordinary ceiling smaller than any production log has.
+// A QUARTER OF TIER A'S FLOOR, and tighter is the honest direction: at this
+// ceiling the gate reserve still takes its full fleet term out of the top of
+// the log, so every write here is admitted against an ordinary ceiling smaller
+// than any production log has. What the broker reserves for it is accounting
+// against that broker's own declared limit ([brokertest.StoreMaxBytes]) and
+// claims nothing on disk, so the figure is chosen for the gate and not for the
+// machine running the suite.
 const harnessCeiling = config.ArtifactsLogMaxBytesFloor / 4
 
 // openLog stands up a broker and the artifacts log on it, at [harnessCeiling].
 func openLog(t *testing.T) *js.DomainLog {
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
+	// its cap from the runner's free space it takes three quarters of it,
+	// and would refuse even this log's quarter gibibyte on a runner with
+	// less than a third of one free, whatever the case under it does.
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -480,4 +489,26 @@ func (n *node) table(name string) string {
 		n.t.Fatalf("read table %s: %v", name, err)
 	}
 	return out
+}
+
+// seedAssets writes count asset rows naming size bytes each straight into this
+// node's copy of artifact id, the state a decide meets on an asset store at its
+// caps — rows no test could otherwise reach without a thousand writes.
+func (n *node) seedAssets(id artifacts.ID, count int, size int64) {
+	n.t.Helper()
+	if err := n.db.Tx(n.t.Context(), func(tx *sql.Tx) error {
+		for i := range count {
+			if _, err := tx.ExecContext(n.t.Context(), `
+				INSERT INTO artifact_assets (artifact_id, asset_id, name, content_type,
+					object, size, added_by, added_by_kind, added_at, version)
+				VALUES (?,?,?,?,?,?,?,?,?,?)`, id.String(), uuid.NewString(),
+				fmt.Sprintf("seeded-%d.png", i), "image/png",
+				fmt.Sprintf("seeded-%s-%d", id, i), size, "jane", "human", 0, 1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		n.t.Fatalf("seed %d assets on %s: %v", count, id, err)
+	}
 }

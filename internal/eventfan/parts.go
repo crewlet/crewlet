@@ -172,13 +172,19 @@ func tracePartOf(ctx context.Context, log *store.EventLog, id string, at time.Ti
 
 // turnPart is one node's share of one turn: its oldest rows, its newest ones
 // when the oldest did not reach them, how many it keeps and the ones it holds
-// unsettled ([tracePart]'s two fields, for its reason), and the traces it
-// touched with when.
+// unsettled ([tracePart]'s two fields, for its reason), the traces it touched
+// with when, and the nodes that PUBLISHED the rows it holds.
+//
+// NODES IS ASKED OF THE ROWS ([store.EventLog.TurnNodes]), never inferred from
+// which node answered: a data node keeps the events of a node without `data`
+// in custody, so the node holding a turn's rows is not, in general, a node it
+// ran on.
 type turnPart struct {
 	Head      []store.EventRecord  `json:"head"`
 	Closing   []store.EventRecord  `json:"closing,omitempty"`
 	Total     int                  `json:"total"`
 	Traces    []store.TurnTrace    `json:"traces"`
+	Nodes     []string             `json:"nodes"`
 	Unsettled []store.UnsettledRow `json:"unsettled,omitempty"`
 }
 
@@ -280,7 +286,7 @@ func readTurnPart(ctx context.Context, log store.EventSnapshot, id string, at ti
 	if err != nil {
 		return turnPart{}, err
 	}
-	part := turnPart{Head: head, Total: len(head), Traces: []store.TurnTrace{}}
+	part := turnPart{Head: head, Total: len(head), Traces: []store.TurnTrace{}, Nodes: []string{}}
 	// THE READ STOPPED AT THE CAP, not at the end of the turn: the read is
 	// oldest first, so what a long turn loses is its ENDING. So a cut view
 	// gets its ending back and reports the gap in the MIDDLE.
@@ -311,6 +317,15 @@ func readTurnPart(ctx context.Context, log store.EventSnapshot, id string, at ti
 		logger.WarnContext(ctx, "turn_traces_unavailable", "turn", id, "error", tracesErr)
 	} else {
 		part.Traces = traces
+	}
+	// AND WHERE IT RAN, asked of the rows for the same reason and degrading
+	// the same way: a page that cannot say where its turn ran still shows
+	// the turn.
+	nodes, nodesErr := log.TurnNodes(ctx, id, at)
+	if nodesErr != nil {
+		logger.WarnContext(ctx, "turn_nodes_unavailable", "turn", id, "error", nodesErr)
+	} else {
+		part.Nodes = nodes
 	}
 	named, err := log.Unsettled(ctx, "turn_id", id, at)
 	if err != nil {

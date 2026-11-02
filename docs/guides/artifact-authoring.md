@@ -2,8 +2,8 @@
 
 How to write an [artifact](../concepts/artifacts.md) that publishes cleanly,
 opens fast and works for everybody it is shared with, whether a person writes
-it, the CLI publishes it or an agent builds it in a sandbox. The rules here are
-the ones the engine enforces at publish; the page's runtime API is the
+it, the CLI publishes it or an agent publishes it with its tools. The rules
+here are the ones the engine enforces at publish; the page's runtime API is the
 [artifact runtime reference](../reference/artifact-runtime.md).
 
 ---
@@ -295,10 +295,17 @@ published; leave anything else out with `-exclude` (`-exclude '*.map'
 -exclude drafts`). See [CLI](../reference/cli.md#crewlet-artifacts).
 
 **From an agent**, through `create_artifact` and `publish_artifact`. An agent
-building in a sandbox passes `from_sandbox` and the engine reads the files out
-of the box itself; small changes go as `edits` (`old_str` and `new_str` pairs
-against the base version), which saves most of the output a whole-file
-republish would cost. Every publish names `base_version`; when somebody else
+publishes what it built as inline `content` and `files` (at most 1 MiB per
+call) or copies a project's file in with `from_project_file`; a seat's
+executor run publishes a larger build from its own box, with `from_sandbox` for
+a file and `source: {sandbox}` for a directory, while it works — the engine
+reads a box only for the run working in it. It refuses the sources `not_running`
+to a call from another seat's turn, or from a run parked on a question,
+collected or torn down; `forbidden` to a caller that is not an agent seat; and
+`unavailable` on a node that runs no sandbox
+([Code Sandbox](../concepts/code-sandbox.md#how-a-coding-task-runs)).
+Small changes go as `edits` (`old_str` and `new_str` pairs against the base
+version), which saves most of the output a whole-file republish would cost. Every publish names `base_version`; when somebody else
 published since, the tool answers with the live version, who published it,
 when, the changed paths and the start of each changed file, so the agent
 merges and publishes again rather than discarding a colleague's work.
@@ -467,10 +474,9 @@ body background.
   path), so the canvas the person drew is the one that fills in.
 - **Publish it** with `crewlet artifacts publish <dir>` (a `canvas.json` makes
   it a `design`), or from an agent with `create_artifact`, `kind: "design"`
-  and `source: {sandbox: "dist"}` for a build, or `files`. The entry is
-  `canvas.json` whether or not you name it. Revise one board at a time with
-  `edits` on its file; `get_artifact` with `view: "outline"` lists every
-  board's file, title and frame first.
+  and `files`. The entry is `canvas.json` whether or not you name it. Revise
+  one board at a time with `edits` on its file; `get_artifact` with
+  `view: "outline"` lists every board's file, title and frame first.
 
 ---
 

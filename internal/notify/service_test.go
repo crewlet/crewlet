@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -442,7 +443,15 @@ func TestAWakeCarriesItsChangesPositionOnTheEnvelope(t *testing.T) {
 func TestADirectMessageThreadReplyRejoinsItsConversation(t *testing.T) {
 	h := newService(t, func(o *notify.Options, _ *harness) {
 		o.Prompts = o.Prompts.With(notify.ChatPrompt{
-			Backend: "chat", Label: "Chat", DirectKinds: []string{"D"},
+			Backend: "chat", Label: "Chat",
+			// THROUGH THE RULE, which is where a backend's answer to
+			// "was this direct" lives now: one value the prompt, the
+			// delivery obligation and the working indicator all read,
+			// so they cannot hold three opinions about one message.
+			Address: notify.AddressRule{
+				DirectKinds: []string{"D"},
+				Follows:     notify.AddressingFollows(),
+			},
 		})
 	})
 
@@ -1000,7 +1009,7 @@ func TestASharedMetadataMapIsNotStampedInPlace(t *testing.T) {
 // A PRODUCER'S OWN WAKE ID SURVIVES ONTO THE EVENT, so a duplicate is
 // recognisable as one.
 //
-// The engine's own producers — the native tracker and knowledge base — derive
+// The engine's own producers, Worklet and Doclet, derive
 // their wake ids from the change and the recipient, because their first
 // dedupe layer FAILS OPEN by design: a coordination store that cannot be
 // reached must not silently stop notifications. What slips through it is
@@ -1112,5 +1121,39 @@ func TestTheWakeCarriesTheSurfaceItsRecipientOwes(t *testing.T) {
 		if n.Owes != want {
 			t.Errorf("%s's wake owes %q, want %q", handle, n.Owes, want)
 		}
+	}
+}
+
+// A WAKE NAMES THE TOKEN ITS BODY WAS FENCED UNDER. The trigger is built here,
+// where no turn exists to lend one, so the delivery mints a token for the wake
+// alone, fences the body under it before the prompt renders it and records it
+// on the notification — the only way the turn that reads the trigger can tell
+// those fences from anything that merely looks like one, and move them onto
+// its token. The prompt here writes the body as it is handed it, which is how
+// every prompt is written: the fence is the spine's.
+//
+// Mutation: drop the stamp and the wake names no token; mint it after the
+// prompt is built and the body is fenced under another; build the prompt over
+// the raw body and nothing is fenced at all.
+func TestAWakeNamesTheTokenItsPromptFencedUnder(t *testing.T) {
+	h := newService(t, func(o *notify.Options, _ *harness) {
+		o.Prompts = notify.NewPrompts(tracker{})
+	})
+	h.parser.out = []notify.Routed{to(notify.Recipient{Handle: "engineering-lead"}, "please look")}
+	if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("Handle = %+v, want an ack", got)
+	}
+	woken := h.inbox(t, "engineering-lead")
+	if len(woken) != 1 {
+		t.Fatalf("the seat was woken %d times", len(woken))
+	}
+	n, _ := events.DataAs[*types.ExternalNotification](woken[0])
+	b := provenance.Boundary(n.FenceBoundary)
+	if !b.Valid() {
+		t.Fatalf("the wake names fence token %q, want one minted for it", n.FenceBoundary)
+	}
+	if fences := provenance.Fences(n.Body, b); len(fences) != 1 ||
+		provenance.Unfence(b, fences[0]) != "please look" {
+		t.Fatalf("the prompt's fence is not under the token the wake names:\n%s", n.Body)
 	}
 }

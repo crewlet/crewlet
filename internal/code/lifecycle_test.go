@@ -25,7 +25,7 @@ import (
 var lcPerson = code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:founder", Seat: "founder"}
 
 // lcOp mints a caller's operation id, as a tool's call is given one.
-func lcOp() string { return statelog.NewOpID(time.Now(), "code.test") }
+func lcOp() string { return statelog.NewOpID(time.Now(), "code_test") }
 
 // unitOwned and seatOwned are a repository's owner.
 func unitOwned(ref string) code.Owner { return code.Owner{Kind: code.OwnerUnit, Ref: ref} }
@@ -598,7 +598,7 @@ func TestAProtectRequestIsRefusedARuleNoRecordMayCarry(t *testing.T) {
 	n.lands(lcGate(lcPerson, id, main, persons, gateTo(gate)))
 }
 
-// A PROTECTION BINDS EVERY SEAT, ITS UNIT'S LEAD INCLUDED (ADR-0058): a seat
+// A PROTECTION BINDS EVERY SEAT, ITS UNIT'S LEAD INCLUDED (ADR-0081): a seat
 // that maintains a repository may add a protection rule or tighten one, and
 // never remove one or loosen one, whatever its grant — that is a person's. Each
 // control is judged against the rule the repository's rows hold for the

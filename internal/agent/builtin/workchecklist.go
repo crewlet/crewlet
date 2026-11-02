@@ -9,7 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The two arguments update_work_item grew for the item's own page: a REASON an
@@ -21,9 +22,9 @@ import (
 // FIVE HUNDRED because it is a sentence to the person receiving the work —
 // "you own the rollout now, ops has the rest" — and anything longer is the
 // conversation, which has a comment thread of its own. It rides the change's
-// excerpt ([tracker.Notify.Excerpt]), which is what the history row stores and
+// excerpt ([worklet.Notify.Excerpt]), which is what the history row stores and
 // the wake renders, so it is also held to that excerpt's byte ceiling
-// ([tracker.MaxExcerpt]) and REFUSED past either rather than cut: a reason
+// ([worklet.MaxExcerpt]) and REFUSED past either rather than cut: a reason
 // silently truncated is a reason somebody reads as finished.
 const MaxAssignmentReason = 500
 
@@ -46,25 +47,25 @@ func assignmentReason(args map[string]any) (string, string) {
 	if _, assigning := args["assignee"]; !assigning {
 		return "", "`reason` explains an ASSIGNMENT and this call sets no " +
 			"`assignee`. To explain any other change, comment on the item " +
-			"with comment_on_work_item."
+			"with " + worklet.CommentOnWorkTool + "."
 	}
 	if n := utf8.RuneCountInString(reason); n > MaxAssignmentReason {
 		return "", fmt.Sprintf("`reason` is %d characters and an assignment "+
 			"carries at most %d — say it in a sentence, and put the rest in a "+
 			"comment.", n, MaxAssignmentReason)
 	}
-	if len(reason) > tracker.MaxExcerpt {
+	if len(reason) > worklet.MaxExcerpt {
 		return "", fmt.Sprintf("`reason` is %d bytes and the line an "+
 			"assignment carries holds at most %d — shorten it, and put the "+
-			"rest in a comment.", len(reason), tracker.MaxExcerpt)
+			"rest in a comment.", len(reason), worklet.MaxExcerpt)
 	}
 	return reason, ""
 }
 
 // checklistSchema is the `checklist` argument's shape.
 func checklistSchema() map[string]any {
-	ops := make([]any, 0, len(tracker.ChecklistOps))
-	for _, op := range tracker.ChecklistOps {
+	ops := make([]any, 0, len(worklet.ChecklistOps))
+	for _, op := range worklet.ChecklistOps {
 		ops = append(ops, string(op))
 	}
 	return map[string]any{
@@ -74,7 +75,7 @@ func checklistSchema() map[string]any {
 			"{list, name, assignee?}; remove_item {item}; rename_item {item, " +
 			"name}; set_done {item, done}; assign_item {item, assignee} " +
 			"(\"\" for nobody). Lists and items are named by the ids " +
-			"get_work_item shows; the change is applied to the checklists as " +
+			GetWorkItemTool + " shows; the change is applied to the checklists as " +
 			"they are when it lands, so somebody else's tick in the meantime " +
 			"is kept.",
 		"properties": map[string]any{
@@ -98,7 +99,7 @@ func checklistSchema() map[string]any {
 // rather than adding a second one, and two different gestures in one turn are
 // two operations with ids of their own.
 func (d WorkDeps) checklistIntent(ctx context.Context, args map[string]any,
-	opID string) (*tracker.ChecklistIntent, string) {
+	opID string) (*worklet.ChecklistIntent, string) {
 
 	raw, held := args["checklist"]
 	if !held || raw == nil {
@@ -109,43 +110,43 @@ func (d WorkDeps) checklistIntent(ctx context.Context, args map[string]any,
 		return nil, "`checklist` is one change, as an object: " +
 			"{\"op\": \"set_done\", \"item\": \"<id>\", \"done\": true}."
 	}
-	op := tracker.ChecklistOp(strings.TrimSpace(argString(spec, "op")))
+	op := worklet.ChecklistOp(strings.TrimSpace(argString(spec, "op")))
 	if !op.Valid() {
 		return nil, fmt.Sprintf("%q is not a checklist change. The changes are: %s.",
 			clip(string(op)), checklistOps())
 	}
-	intent := &tracker.ChecklistIntent{
+	intent := &worklet.ChecklistIntent{
 		Op:   op,
 		List: strings.TrimSpace(argString(spec, "list")),
 		Item: strings.TrimSpace(argString(spec, "item")),
 		Name: strings.TrimSpace(argString(spec, "name")),
 	}
 	switch op {
-	case tracker.ChecklistAddList:
+	case worklet.ChecklistAddList:
 		intent.List = mintedID(opID, "list")
 		for i, name := range argStrings(spec, "items") {
-			intent.Items = append(intent.Items, tracker.ChecklistItem{
+			intent.Items = append(intent.Items, worklet.ChecklistItem{
 				ID: mintedID(opID, "item-"+strconv.Itoa(i)), Name: name,
 			})
 		}
-	case tracker.ChecklistAddItem:
+	case worklet.ChecklistAddItem:
 		intent.Item = mintedID(opID, "item")
-	case tracker.ChecklistSetDone:
-		done, held := spec["done"].(bool)
+	case worklet.ChecklistSetDone:
+		done, held := argval.Bool(spec["done"])
 		if !held {
 			return nil, "set_done needs `done`: true to tick the item, false to untick it."
 		}
 		intent.Done = done
 	}
 	if _, named := spec["assignee"]; named &&
-		(op == tracker.ChecklistAddItem || op == tracker.ChecklistAssignItem) {
+		(op == worklet.ChecklistAddItem || op == worklet.ChecklistAssignItem) {
 		handle, refusal := d.resolveHandle(ctx, UpdateWorkItemTool,
 			"`checklist.assignee`", argString(spec, "assignee"))
 		if refusal != "" {
 			return nil, refusal
 		}
 		intent.Assignee = handle
-	} else if op == tracker.ChecklistAssignItem {
+	} else if op == worklet.ChecklistAssignItem {
 		return nil, "assign_item needs `assignee` — a seat's handle, or \"\" to give the item to nobody."
 	}
 	return intent, ""
@@ -163,8 +164,8 @@ func mintedID(opID, what string) string {
 
 // checklistOps is the gestures as a refusal names them.
 func checklistOps() string {
-	names := make([]string, 0, len(tracker.ChecklistOps))
-	for _, op := range tracker.ChecklistOps {
+	names := make([]string, 0, len(worklet.ChecklistOps))
+	for _, op := range worklet.ChecklistOps {
 		names = append(names, string(op))
 	}
 	return strings.Join(names, ", ")

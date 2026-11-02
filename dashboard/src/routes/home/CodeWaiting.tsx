@@ -13,18 +13,23 @@
  * A READER BOUND TO NO SEAT is asked no review — the engine has nobody to ask
  * it of — so the card lists what waits on a person and says why the first
  * half is not there.
+ *
+ * NO GAP TO SAY: the code host's listings carry no flag of what they could
+ * not account for, since each is one estate copy's answer at the level it
+ * names rather than a gather over nodes, so both halves pass an empty `gaps`
+ * and the kit still decides what an empty half says.
  */
 
-import { Card, EmptyState, Tag } from "@crewlethq/ui";
+import { Card, Tag } from "@crewlethq/ui";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
-import { peekHref, usePeekControls } from "~/app/frame/DetailRail.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeSummary } from "~/protocol/index.ts";
 import { CODE_LIST_POLL_MS } from "~/routes/code/ChangeList.tsx";
 import { changeObject, changesHref } from "~/routes/code/paths.ts";
+import { WidgetQuery } from "./board/kit.tsx";
 
 /**
  * How many changes each half lists: THREE, the count "Needs your decision"
@@ -65,13 +70,14 @@ export function CodeWaiting() {
         <section aria-label="Asking your review" className="col gap-1">
           <span className="t-label">Asking your review</span>
           {seated ? (
-            <QueryState
+            <WidgetQuery
               error={mine.error}
               refusal={mine.refusal}
               loading={mine.loading && !mine.data}
+              gaps={[]}
             >
               <WaitingRows rows={asked} none="No change is asking your review." />
-            </QueryState>
+            </WidgetQuery>
           ) : (
             <span className="t-caption">
               A review is asked of a seat, and you are signed in as {viewer.login || "nobody"},
@@ -81,22 +87,23 @@ export function CodeWaiting() {
         </section>
         <section aria-label="Waiting on a person" className="col gap-1">
           <span className="t-label">Waiting on a person</span>
-          <QueryState
+          <WidgetQuery
             error={person.error}
             refusal={person.refusal}
             loading={person.loading && !person.data}
+            gaps={[]}
+            empty={
+              waiting.length === 0 && asked.length === 0
+                ? {
+                    headingLevel: "none",
+                    title: "Nothing waits on a person",
+                    hint: "A change whose approval or blocker only a person can settle appears here.",
+                  }
+                : undefined
+            }
           >
-            {waiting.length === 0 && asked.length === 0 ? (
-              <EmptyState
-                size="compact"
-                headingLevel="none"
-                title="Nothing waits on a person"
-                description="A change whose approval or blocker only a person can settle appears here."
-              />
-            ) : (
-              <WaitingRows rows={waiting} none="No change waits on a person." />
-            )}
-          </QueryState>
+            <WaitingRows rows={waiting} none="No change waits on a person." />
+          </WidgetQuery>
         </section>
       </Card.Body>
     </Card>

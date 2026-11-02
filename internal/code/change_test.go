@@ -44,6 +44,34 @@ func TestAChangesStatesAreAClosedSet(t *testing.T) {
 	}
 }
 
+// A LANDING IS SPELLED AS THE MERGE OF ITS ROUTE IS: a landing row's kind and
+// the merged_via of the change it landed name the queue, a direct merge and a
+// push with one word each, so a reader of the landings beside the change rows
+// — the REST reads, the dashboard, a target_broken event's kind — meets one
+// vocabulary, never a landing policy's name for a route that has none.
+//
+// Mutation: spell LandedQueue "pre_land" again — red.
+func TestALandingIsSpelledAsTheMergeOfItsRoute(t *testing.T) {
+	t.Parallel()
+	if want := []code.LandingKind{"queue", "direct", "push"}; !slices.Equal(code.LandingKinds(), want) {
+		t.Errorf("LandingKinds = %v, want %v", code.LandingKinds(), want)
+	}
+	for _, k := range code.LandingKinds() {
+		if !k.Valid() {
+			t.Errorf("%s is in the set and Valid says it is not", k)
+		}
+		if !code.MergedVia(k).Valid() {
+			t.Errorf("landing kind %s is no way a change merges (MergedVias %v)", k, code.MergedVias())
+		}
+	}
+	if len(code.LandingKinds()) != len(code.MergedVias()) {
+		t.Errorf("%d landing kinds for %d ways a change merges", len(code.LandingKinds()), len(code.MergedVias()))
+	}
+	if code.LandingKind("pre_land").Valid() || code.LandingKind("").Valid() {
+		t.Error("a landing kind no build writes reads as valid")
+	}
+}
+
 // EVERY CHANGE TABLE IS CLASSIFIED, AND HELD TO THE CLASS ITS MIGRATION
 // STATES. The rows a change is kept in — code_changes, and every code table
 // that names a change by a change_id — are found from the schema rather than
@@ -124,7 +152,7 @@ func classWord(class statelog.TableClass) string {
 // statesClass reports whether one sentence of a `-- Class:` paragraph names
 // table and says word — ONE SENTENCE rather than the paragraph, because a
 // paragraph that classes several tables states each table's class beside its
-// name: 0058's says its three change tables are reproducible and, in the next
+// name: 0081's says its three change tables are reproducible and, in the next
 // sentence, that code_repos stays so, and a paragraph-wide match would still
 // pass with the first sentence calling them anything else.
 func statesClass(paragraph, table, word string) bool {

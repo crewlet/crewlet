@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE REF HOLD (M3-decisions M3-O61, M3-O65): a seat's turn holds every seat's
@@ -403,7 +403,7 @@ func TestAChangeWriteHoldsTheSeatBranchItDependsOn(t *testing.T) {
 }
 
 // A CALL'S SEAT BRANCHES ARE HELD IN ONE ROW WRITE (M3-boxes §10.6.5): a turn
-// with a run row — a resumed executor, an agent-mode run's bridged calls —
+// with a run row — a resumed executor, a run's bridged calls —
 // whose call depends on two seats' branches (a comparison's base and head, a
 // commit and the branch it asks about, a change's source and target) writes
 // both keys on its row in ONE compare-and-set, not one each, before the
@@ -790,7 +790,7 @@ func TestAnIdleScratchRepositoryIsRecordedOncePerTurn(t *testing.T) {
 	}
 
 	repo := host.detail.RepoRef
-	actor := builtin.Actor{Kind: tracker.AuthorAgent, Handle: "agent-cto"}
+	actor := builtin.Actor{Kind: worklet.AuthorAgent, Handle: "agent-cto"}
 	again := writerTurn(t)
 	for range 2 {
 		if err := builtin.HoldRepo(t.Context(), again, writer, actor, repo, nil); err != nil {

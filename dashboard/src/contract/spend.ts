@@ -18,6 +18,13 @@ export const GROUPS = [
 ] as const;
 
 /**
+ * The splits only an admin is answered: a `provider` band is one of the
+ * company's `providers.llm` entries, which is its configuration (Settings,
+ * Models), so `token_series` refuses that split to everybody else.
+ */
+export const ADMIN_GROUPS: readonly string[] = ["provider"];
+
+/**
  * The four bands a phase breakdown is drawn in, and the data series each one
  * takes — the engine folds every phase into one of them ONCE
  * (`tokens.PhaseBand`: execute and a coding run are Execute, review is Review,

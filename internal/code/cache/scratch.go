@@ -55,7 +55,7 @@ import (
 // builtin/pack-objects.c's read_stdin_packs: revs.no_kept_objects over the
 // packs kept in core). A merge excludes no pack — every object of its inputs
 // is written, an object a pack it does not merge also holds among them
-// (ADR-0060) — so over the incarnation the walk went from a roll's newest
+// (ADR-0083) — so over the incarnation the walk went from a roll's newest
 // commits down the repository's WHOLE HISTORY, keeping a parsed object for
 // every object it met: measured at the review that found it, on the node pin,
 // a merge of eight one-commit packs (32 objects) beside a history of 400 032

@@ -200,7 +200,7 @@ func TestCopilotChargesItsUsageReportOnce(t *testing.T) {
 		t.Fatal("the copilot profile reads no usage report, so every call is charged an estimate")
 	}
 	prov := &Provider{profile: p, model: "claude-sonnet-4.5", now: time.Now}
-	comp, err := prov.completion(t.Context(), "prompt", false, &rawResult{stdout: "ok\n"}, report)
+	comp, err := prov.completion(t.Context(), "prompt", &rawResult{stdout: "ok\n"}, report)
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}

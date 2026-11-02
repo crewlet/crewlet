@@ -34,7 +34,7 @@ var Linearizable = statelog.Freshness{Level: statelog.ReadLinearizable}
 var Stale = statelog.Freshness{Level: statelog.ReadStale}
 
 // Reader is who a check reads the rows as: a person, an operator credential
-// bound to a human seat, whom no chart and no visibility narrows (ADR-0058) —
+// bound to a human seat, whom no chart and no visibility narrows (ADR-0081) —
 // so what a case judges the caches by is never filtered by a grant it is not
 // about.
 var Reader = code.Principal{Kind: code.PrincipalOperator, OperatorID: "codetest-reader", Seat: "reader"}

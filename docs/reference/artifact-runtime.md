@@ -165,7 +165,7 @@ withdraws the page's room and every later call rejects with `forbidden`.
 
 A collection is read and written by name. Every write is one engine write: a
 batch of ops applied all or nothing, decided by the engine in the store's log
-order, identically on every node.
+order, identically on every data node.
 
 ```ts
 interface Doc<T = Record<string, Json>> {

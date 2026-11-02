@@ -87,7 +87,7 @@ const (
 	KindBarrier ObjectKind = "barrier"
 
 	// KindTrimmed is the trim's record that removes the arbitration anchors
-	// below what the log no longer holds — [statelog.TrimmedKind], ADR-0050
+	// below what the log no longer holds — [statelog.TrimmedKind], ADR-0073
 	// — on one subject per floor, which the subject's id names. The
 	// framework removes the anchors in the transaction that applies it; this
 	// domain writes nothing for it, and has the case that says so.

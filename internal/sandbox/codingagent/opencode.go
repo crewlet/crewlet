@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -84,6 +85,22 @@ const openCodeStopWait = 5 * time.Second
 // OpenCode otherwise resolves a bare "<provider>/<model>" against a catalogue
 // AND the vendor's default endpoint — so a custom gateway plus an unlisted
 // model either fails to resolve or silently hits the wrong host.
+//
+// A PERSON'S NOTES REACH THE RUN AT ITS NEXT STEP, through a plugin of the
+// run's own that its server loads (opencode_steer.js, written by
+// [OpenCode.WriteConfig]): while the run's session works, it polls the bridge's
+// notes route ([sandbox.SteerWiring.URL]) and admits each note into the
+// session's inbox as a steer, which OpenCode hands the model after the tool
+// results of the step in flight — or after a final step that called no tool —
+// as a user message, and reports delivered, which the plugin confirms to the
+// engine. Each with `resume: false`, so a note that arrives once the session
+// has settled starts nothing the run would not see, and waits for the run's
+// review. Measured against a stub model API: on OpenCode 2.0.32 and 2.1.4, a
+// note admitted during a tool call or during the final model call is read in
+// the same execution; on 2.1.4, one admitted after it settles starts nothing.
+// What switches it off — a managed policy that denies the plugin
+// (`integration.use`) — leaves a run that succeeds without asking for its notes
+// once, which the collection says (internal/sandbox, steer_reader_never_ran).
 type OpenCode struct{}
 
 var _ CLI = OpenCode{}
@@ -94,6 +111,15 @@ func NewOpenCode() *Runner { return New(OpenCode{}) }
 // Name is the coding agent's key in the runner registry.
 func (OpenCode) Name() string { return OpenCodeName }
 
+// Resumes says OpenCode continues a session it reported: naming the session
+// is the whole of continuing it ([openCodeSessionFor]).
+func (OpenCode) Resumes() bool { return true }
+
+// NoteInstruction is the standing instruction about notes an OpenCode run is
+// given: it takes a person's notes between its steps, through the plugin its
+// configuration loads — see [OpenCode].
+func (OpenCode) NoteInstruction() string { return OpenCodeSteerInstruction }
+
 // Command is the run: a short shell script, because OpenCode 2 has to be
 // driven through a server of the run's own rather than in one command.
 //
@@ -102,8 +128,9 @@ func (OpenCode) Name() string { return OpenCodeName }
 // into the binary and shared by every box on a host, which outlives the run
 // and keeps the environment, and so the credentials, of whichever run started
 // it — or, with `--standalone`, starts a server inside the run and sends the
-// brief at once. That second shape is what text calls use and it is wrong
-// here: it sends the brief before the run's MCP servers have connected, and
+// brief at once. That second shape is what the engine's runs on its own host
+// use, and it is wrong here: it sends the brief before the run's MCP servers
+// have connected, and
 // 2.0 fixes a step's tools as the step starts, so the first step of every
 // run — measured on 2.0.32, the first step of every run with a server
 // declared — was offered none of the seat's bridged tools, which only
@@ -111,6 +138,16 @@ func (OpenCode) Name() string { return OpenCodeName }
 // loopback port of its own, waits until every MCP server the run declares
 // has left `pending` (`api mcp.list`, bounded by [openCodeMCPWait]), runs the
 // brief against that server, and stops it.
+//
+// THE RUN'S CONFIGURATION, ON ITS SERVER ALONE. The script reads the file
+// [OpenCode.WriteConfig] wrote ([Paths.OpenCodeConfig]) and hands its content
+// to `opencode serve` as OPENCODE_CONFIG_CONTENT, which OpenCode ranks above a
+// repository's own opencode.json and .opencode/; a run with no such file is
+// refused before a login is imported or a server started. A run wired to its
+// turn's notes ([sandbox.RunRequest.Steer]) hands the server
+// CREWLET_STEER_SESSION too — the session the run works in, which the notes
+// plugin admits notes to and follows ([OpenCode]) — on the same command, so
+// nothing else the script runs is handed it.
 //
 // THE BRIEF ON STDIN ([Output.BriefOnStdin]), because OpenCode re-quotes an
 // argv prompt; the session NAMED, by an id minted here, so the usage report
@@ -146,8 +183,12 @@ func (OpenCode) Name() string { return OpenCodeName }
 // drops the final step's counts, while the session the run worked in holds
 // the whole total, so the script prints it as one last line of its own type
 // ([openCodeUsageEvent]) once the run has ended.
+//
+// AND, FOR A RUN WIRED TO ITS NOTES, NO STEER LEFT PENDING: once the run has
+// ended, every note the plugin admitted and OpenCode never delivered is
+// cancelled in the session, before the server stops ([openCodeLeftoverSteers]).
 func (OpenCode) Command(req sandbox.RunRequest, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, paths, newOpenCodeSession(), openCodeTimes{
+	return "sh -c " + sandbox.ShellQuote(openCodeScript(req, paths, openCodeSessionFor(req), openCodeTimes{
 		listen: openCodeListenWait, mcp: openCodeMCPWait, sync: openCodeLoginSync, stop: openCodeStopWait,
 	}))
 }
@@ -174,6 +215,19 @@ func newOpenCodeSession() string {
 	// crashes the process rather than return an error since Go 1.24.
 	_, _ = rand.Read(raw[:])
 	return hex.EncodeToString(raw[:])
+}
+
+// openCodeSessionFor is the session a run works in: the asking run's own, where
+// this one carries it on with the answer ([sandbox.RunRequest.Resume]),
+// and a fresh one otherwise. OpenCode CONTINUES a session it already holds, and
+// a continued box holds the asking run's — so naming it is the whole of
+// continuing it. The id the session report gave ([sandbox.Result.SessionID])
+// carries the `ses_` the script adds, which comes off here.
+func openCodeSessionFor(req sandbox.RunRequest) string {
+	if id := strings.TrimPrefix(req.Resume, "ses_"); id != "" {
+		return id
+	}
+	return newOpenCodeSession()
 }
 
 // openCodeScript is the run's script for one session id, exporting a login the
@@ -203,16 +257,19 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	next := sandbox.ShellQuote(paths.CredentialDocument() + ".next")
 	loop := sandbox.ShellQuote(paths.CredentialDocument() + ".sync")
 	srv := sandbox.ShellQuote(paths.WorkDir() + "/opencode-server")
+	vrr := sandbox.ShellQuote(paths.WorkDir() + "/opencode-version")
+	cfg := sandbox.ShellQuote(paths.OpenCodeConfig())
 	sid := "ses_" + session
 
 	run := []string{"opencode", "run", "--server", `"$url"`, "--format", "json",
 		"--title", "crewlet", "--session", sandbox.ShellQuote(sid)}
-	// THE ENTRY'S MODEL AS WRITTEN. It is the string every text call on
+	// THE ENTRY'S MODEL AS WRITTEN. It is the string every run on the host on
 	// the same providers.llm entry hands `opencode run --model`, which
 	// OpenCode splits at its first slash into a provider and a model — so
 	// `anthropic/claude-sonnet-5` or `openrouter/anthropic/claude-sonnet-5`
 	// means one thing in both places, signed in by the login or the key of
-	// the provider it names. The engine refuses every other CLI's entry here.
+	// the provider it names. A launch passes over every other CLI's entry,
+	// so none reaches here.
 	if req.Model != "" {
 		run = append(run, "--model", sandbox.ShellQuote(req.Model))
 	}
@@ -220,25 +277,26 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
+	// ABSENT AND FAILING ARE TWO ANSWERS. One sentence for any failure of
+	// `--version` told a run whose opencode was installed but could not start
+	// (not executable, busy, crashing) to install it, and dropped the words it
+	// failed with, though that stderr is the run's transcript when nothing else
+	// was written.
+	line(`command -v opencode > /dev/null || { echo 'crewlet: no opencode on the box PATH' >&2; exit 127; }`)
 	// 1.x prints a bare version, 2.x `opencode v2.…`.
-	line(`v=$(opencode --version < /dev/null 2> /dev/null) || { echo 'crewlet: no opencode on the box PATH' >&2; exit 127; }`)
+	line(`v=$(opencode --version < /dev/null 2> %s) || { st=$?; echo "crewlet: opencode is on the box PATH, but opencode --version failed with exit $st:" >&2; cat %s >&2; rm -f %s; exit 1; }`, vrr, vrr, vrr)
+	line(`rm -f %s`, vrr)
 	line(`case "$v" in [0-9]*) echo "crewlet: this box runs OpenCode $v; the opencode runner drives OpenCode 2 (the @opencode/cli package) — install it in the box image" >&2; exit 1;; esac`)
 	line(`unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD`)
-	line(`imported= spid= xpid=`)
-	// end: stop one process of the script's own, bounded ([openCodeStopWait]),
-	// killing it only if it is still there at the end of the wait.
-	//
-	// NO PROCESS IS NOTHING TO STOP, and it is TESTED rather than left to
-	// `kill` refusing an empty operand: dash and bash refuse it, but busybox
-	// ash — the sh of an Alpine image, which OpenCode 2's musl builds are for
-	// — answers both `kill ""` and `kill -0 ""` with success and signals
-	// nothing, so an end with no process waited out the whole bound: five
-	// seconds at the end of every run given no login, where the exporter
-	// never started, and ten after a signal.
-	line(`end() { [ -n "$1" ] || return 0; kill "$1" 2> /dev/null || return 0; i=0; while kill -0 "$1" 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); done; kill -0 "$1" 2> /dev/null && kill -9 "$1" 2> /dev/null; return 0; }`,
-		int(times.stop/(100*time.Millisecond)))
-	line(`stop() { end "$spid"; spid=; }`)
-	line(`unsync() { end "$xpid"; xpid=; }`)
+	// THE RUN'S CONFIGURATION, read before anything starts, and refused where
+	// there is none: handed nothing, the server would run on whatever
+	// documents the image and the checkout hold, with neither the run's
+	// posture nor its servers. A shell variable, never exported: it is handed
+	// to the server alone.
+	line(`config=$(cat %s) && [ -n "$config" ] || { echo 'crewlet: the run has no OpenCode configuration at '%s >&2; exit 1; }`,
+		cfg, cfg)
+	line(`imported= spid= xpid= xout=%s`, loop)
+	b.WriteString(openCodeStops(times.stop))
 	// holds: the file is a whole, non-empty JSON array.
 	line(`holds() { t=$(tr -d '[:space:]' < "$1") || return 1; case "$t" in '['*']') [ "$t" != '[]' ];; *) return 1;; esac; }`)
 	// keep FILE FLAGS...: one export into FILE, moved over the document only
@@ -258,7 +316,17 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`  imported=1`)
 	line(`fi`)
 
-	line(`opencode serve --hostname 127.0.0.1 --port 0 < /dev/null > %s 2>&1 &`, srv)
+	// ON THE SERVER ALONE: it runs the session, so it is the one process
+	// that reads the run's configuration — and, for a run wired to its notes,
+	// the session the notes plugin it loads admits them to. The run's client
+	// and its `api` calls are answered by it, and the login's import and
+	// export, which run before it or beside it, are handed none of it.
+	steered := ""
+	if req.Steer.Set() {
+		steered = "CREWLET_STEER_SESSION=" + sandbox.ShellQuote(sid) + " "
+	}
+	line(`OPENCODE_CONFIG_CONTENT="$config" %sopencode serve --hostname 127.0.0.1 --port 0 < /dev/null > %s 2>&1 &`,
+		steered, srv)
 	line(`spid=$!`)
 	line(`deadline=$(( $(date +%%s) + %d ))`, int(times.listen.Seconds()))
 	line(`until grep -q '^server listening on ' %s 2> /dev/null && grep -q '^server password ' %s 2> /dev/null; do`, srv, srv)
@@ -273,17 +341,8 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`url=$(sed -n 's/^server listening on //p' %s)`, srv)
 	line(`OPENCODE_PASSWORD=$(sed -n 's/^server password //p' %s); export OPENCODE_PASSWORD`, srv)
 	line(`rm -f %s`, srv)
-	// The loop, in a subshell of its own, which starts with none of the
-	// script's traps: a SIGTERM there ends its sleep at once, and an export
-	// it is in once that export has finished — see the serialisation above.
-	// The sleep is reaped before it goes, so a stopped loop leaves nothing in
-	// the job's group. And its pid is FORGOTTEN once the sleep is reaped: a
-	// SIGTERM that arrives during an export, up to an interval later, would
-	// otherwise signal a pid the system is free to have handed to another
-	// process by then — and a `direct` box shares the host's pids.
 	line(`if [ -n "$imported" ]; then`)
-	line(`  ( z=; trap '[ -z "$z" ] || { kill "$z" 2> /dev/null; wait "$z"; }; exit 0' TERM; while :; do sleep %s & z=$!; wait "$z"; z=; keep %s --server "$url"; done ) < /dev/null > /dev/null 2>&1 &`,
-		strconv.FormatFloat(times.sync.Seconds(), 'f', -1, 64), loop)
+	line(`  %s &`, openCodeExporter(times.sync, loop))
 	line(`  xpid=$!`)
 	line(`fi`)
 
@@ -301,6 +360,11 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 
 	line(`%s`, strings.Join(run, " "))
 	line(`code=$?`)
+	// NOTHING THE PLUGIN ADMITTED IS LEFT IN THE SESSION once the run has
+	// ended: see [openCodeLeftoverSteers].
+	if req.Steer.Set() {
+		line(`%s`, openCodeLeftoverSteers(sid))
+	}
 	line(`report=$(opencode api --server "$url" session.get --param sessionID=%s < /dev/null 2> /dev/null) && case "$report" in '{'*) printf '{"type":"%s","report":%%s}\n' "$report";; esac`,
 		sandbox.ShellQuote(sid), openCodeUsageEvent)
 	line(`unsync`)
@@ -308,6 +372,130 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	line(`stop; trap - EXIT TERM INT HUP`)
 	line(`exit "$code"`)
 	return b.String()
+}
+
+// openCodeStops is the script's three stops: end, which stops one process of
+// the script's own, bounded by stop ([openCodeStopWait]) and killing it only
+// if it is still there at the end of the wait; and stop and unsync, which end
+// its server and its login exporter ([openCodeExporter]).
+//
+// NO PROCESS IS NOTHING TO STOP, and it is TESTED rather than left to `kill`
+// refusing an empty operand: dash and bash refuse it, but busybox ash — the
+// sh of an Alpine image, which OpenCode 2's musl builds are for — answers both
+// `kill ""` and `kill -0 ""` with success and signals nothing, so an end with
+// no process waited out the whole bound: five seconds at the end of every run
+// given no login, where the exporter never started, and ten after a signal.
+//
+// THE EXPORTER IS TOLD AGAIN until it goes (end's second operand), because
+// the first SIGTERM can be lost. The exporter is a subshell forked while the
+// script traps SIGTERM, so it starts with the script's handler for it; dash
+// clears that handler as the subshell begins, and a SIGTERM the handler took
+// before then is dropped as untrapped. So a stop sent before the subshell has
+// run (a signal to the job as its server comes up, or a run that ends at once
+// on a host too busy to have run the subshell) reached an exporter that could
+// not hear it. Measured with a stop sent straight after the fork, one
+// exporter at a time: all 100 of 100 lost under dash and 1 to 3 of 100 under
+// bash, each waiting out the whole bound and then killing the exporter with
+// its sleep still running, which left that sleep in the job's group for an
+// interval. The loss is certain only while the fork has not run, so under
+// load, where it often runs first, fewer are lost. A repeat goes only to a pid
+// `kill -0` still finds, as every probe of end's does, so it shares end's one
+// residual: a pid the script reaped during the tenth of a second before the
+// probe, which the system could hand out again only by wrapping its whole pid
+// space within that tenth.
+//
+// UNSYNC DROPS THE EXPORTER'S FILE ITSELF ($xout) once end has returned,
+// whatever ended the exporter: one that heard the stop drops it as it goes
+// ([openCodeExporter]), but one still in an export when end's bound ran out
+// is killed with SIGKILL, which runs no trap, and its file stayed beside the
+// document holding a second copy of the login.
+//
+// THE SERVER IS TOLD ONCE. It is stopped long after it starts on every path
+// but a signal in its first instant, where a lost SIGTERM costs the bound and
+// then the kill, and a repeat would tell a server that is already shutting
+// down, stopping its own MCP servers, to stop again.
+func openCodeStops(stop time.Duration) string {
+	return fmt.Sprintf(`end() { [ -n "$1" ] || return 0; kill "$1" 2> /dev/null || return 0; i=0; while kill -0 "$1" 2> /dev/null && [ "$i" -lt %d ]; do sleep 0.1; i=$((i+1)); [ -z "$2" ] || { kill -0 "$1" 2> /dev/null && kill "$1" 2> /dev/null; }; done; kill -0 "$1" 2> /dev/null && kill -9 "$1" 2> /dev/null; return 0; }
+stop() { end "$spid"; spid=; }
+unsync() { end "$xpid" again; xpid=; [ -z "$xout" ] || rm -f "$xout"; }
+`, int(stop/(100*time.Millisecond)))
+}
+
+// openCodeExporter is the login exporter: a subshell that exports the login
+// into file and over the document every sync ([openCodeLoginSync]) while the
+// run works, until [openCodeStops]' unsync stops it.
+//
+// A subshell of its own, with a SIGTERM trap of its own: a SIGTERM there ends
+// its sleep at once, and an export it is in once that export has finished —
+// see the serialisation in [openCodeScript]. The sleep is reaped before it
+// goes, so a stopped exporter leaves nothing in the job's group. And its pid
+// is FORGOTTEN the command after the sleep is reaped (`z=`, right after
+// `wait`): a SIGTERM that arrives during an export, up to an interval later,
+// would otherwise signal a pid the system is free to have handed to another
+// process by then, and a `direct` box shares the host's pids. It shares end's
+// residual ([openCodeStops]): a stop whose trap runs between the reap and
+// `z=` signals that pid, which the system could have handed out again only by
+// wrapping its whole pid space within those two commands.
+//
+// A SIGTERM BETWEEN STARTING THE SLEEP AND HOLDING ITS PID is kept rather than
+// acted on: `w` is set across those two steps, and the trap only records the
+// stop there (`s`), which the exporter acts on once `z` holds the sleep. Acted
+// on, the trap found no pid, exited, and left the sleep running in the job's
+// group for the rest of its interval.
+//
+// THE SLEEP IS ENDED WITH SIGKILL, never SIGTERM, for the reason unsync tells
+// the exporter more than once ([openCodeStops]): the sleep is forked while the
+// exporter traps SIGTERM, and until it has run far enough to drop that trap a
+// SIGTERM lands on the inherited handler and is lost. A stop kept across the
+// fork is acted on the instant after it, so under dash most such SIGTERMs
+// were lost and the exporter waited out the whole interval on a sleep it had
+// told to go. SIGKILL has no handler to land on, and a sleep has nothing to
+// shut down.
+//
+// AN EXPORT IT WAS STOPPED IN IS DROPPED WHOLE: its file (`out`, a variable
+// so that no path is quoted inside the quoted trap) is removed as the
+// exporter goes, where it hears the stop. A stop is acted on between
+// commands, so it could land after an export that keep had not yet moved
+// over the document, which left a second copy of the login beside the
+// document for the rest of the box's life, under no rule a teardown follows.
+// After a move there is nothing to remove. An exporter still in an export
+// when the stop's bound runs out is killed, and no trap runs: unsync drops
+// the file for that one ([openCodeStops]).
+func openCodeExporter(sync time.Duration, file string) string {
+	return fmt.Sprintf(`( z= w= s= out=%[2]s; trap 'if [ -n "$w" ]; then s=1; else [ -z "$z" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; }; rm -f "$out"; exit 0; fi' TERM; while :; do w=1; sleep %[1]s & z=$!; w=; [ -z "$s" ] || { kill -9 "$z" 2> /dev/null; wait "$z"; exit 0; }; wait "$z"; z=; keep "$out" --server "$url"; done ) < /dev/null > /dev/null 2>&1`,
+		strconv.FormatFloat(sync.Seconds(), 'f', -1, 64), file)
+}
+
+// openCodeLeftoverSteers is the script's line that cancels every steer the run's
+// notes plugin admitted to session sid and OpenCode never delivered, run once
+// `opencode run` has exited and before the server is stopped.
+//
+// A NOTE ADMITTED AS THE SESSION SETTLED STAYS IN ITS INBOX. The plugin admits
+// with `resume: false` and stops at the execution's settle, and a note whose
+// admission lands after OpenCode's last look at the inbox is neither delivered
+// nor confirmed — so it waits on the run's record, where the review or the next
+// launch's brief reads it. But it also stays pending in the session's own
+// inbox, which is durable and survives the server's restart: a run carried on
+// in the same box and session, with a person's answer, had OpenCode put it in
+// front of the next prompt, while the continuation's brief carried it too —
+// the model read the note twice, and the record said once. Measured on 2.1.4
+// with the server restarted between the two runs, as the script restarts it:
+// the second run's request carried the pending note before its own prompt, and
+// carried nothing once the item was cancelled (`session.inbox.cancel`), the
+// inbox listing empty after.
+//
+// ONLY THE PLUGIN'S OWN: an id of the shape it admits under ([OpenCodeInboxID],
+// `msg_` and 32 lowercase hexadecimal digits), as the `id` of an item — read
+// out of the listing as text, since a box may have no JSON parser, and a note's
+// own text cannot match it: its quotes are escaped in the listing. A failed
+// listing or cancel costs nothing more than the duplicate it was there to
+// prevent.
+func openCodeLeftoverSteers(sid string) string {
+	session := sandbox.ShellQuote(sid)
+	return `pending=$(opencode api --server "$url" session.inbox.list --param sessionID=` + session +
+		` < /dev/null 2> /dev/null) && for id in $(printf '%s\n' "$pending" | grep -o '"id":"msg_[0-9a-f]\{32\}"' | sed 's/^"id":"//; s/"$//' | sort -u); do ` +
+		`opencode api --server "$url" session.inbox.cancel --param sessionID=` + session +
+		` --param inboxID="$id" < /dev/null > /dev/null 2>&1; done`
 }
 
 // openCodeReadiness is the script's test of one `mcp.list` answer, `$s`, against
@@ -381,9 +569,11 @@ func jsonStringify(s string) string {
 	return b.String()
 }
 
-// WriteConfig renders opencode.json in OpenCode 2's own format: the run's
-// posture, the scoped MCP surface and the instruction file its system text is
-// written to.
+// WriteConfig renders the run's configuration in OpenCode 2's own format — the
+// run's posture, the scoped MCP surface and the instruction file its system
+// text is written to — at [Paths.OpenCodeConfig], beside the run's other
+// artefacts, and returns that path. The run's script hands its content to the
+// run's server as OPENCODE_CONFIG_CONTENT ([OpenCode.Command]).
 //
 // 2.0's FORMAT, NOT 1.x's, though 2.0 still reads 1.x's by translating it
 // (its migration guide: servers move under `mcp.servers`, `enabled` becomes
@@ -398,14 +588,62 @@ func jsonStringify(s string) string {
 // inside the box where the agent could read it back and echo it into its
 // report.
 //
+// OUT OF THE CHECKOUT, AND ABOVE THE REPOSITORY'S OWN. OpenCode takes no config
+// flag, and of the two variables that hand a process a configuration of its
+// own, OPENCODE_CONFIG — a file's path — ranks BELOW a repository's
+// opencode.json and .opencode/, while OPENCODE_CONFIG_CONTENT ranks above them.
+// 2.x reads its configuration in this order, a later document winning: managed
+// policies, well-known, global, OPENCODE_CONFIG, the project's opencode.json,
+// its .opencode/, OPENCODE_CONFIG_CONTENT, managed settings (core/src/config.ts,
+// the same at 2.0.0, 2.0.32 and 2.1.4). So the file is written here and its
+// content handed over, where one written into the checkout would replace the
+// repository's own opencode.json: that is left as it is and loads beneath the
+// run's — the way Claude Code loads a repository's .claude/settings.json
+// beneath --settings. Measured
+// on 2.0.32 and 2.1.4 with a repository whose own opencode.json and
+// .opencode/opencode.json disable the bridge and deny every permission: the
+// bridge connected and the shell ran.
+//
+// EVERY ENTRY THE RUN OWNS SAYS IT IS ON (`disabled: false`): OpenCode
+// combines the documents it reads, and a document beneath this one may
+// disable a server or an agent under the name this one declares. How a release combines them differs by kind — 2.1.4
+// replaces a server's entry whole and updates an agent's field by field — so
+// the run states the field rather than rest on either.
+//
+// THE MCP SERVERS' VALUES ARE FILES ([openCodeValueFiles]), written before the
+// configuration that names them, so the content holds each value's path and
+// never the value — as the server's environment holds no password
+// ([OpenCode.Command]). The notes plugin's route is one such value.
+//
+// THE NOTES PLUGIN, for a run wired to its turn's notes
+// ([sandbox.RunRequest.Steer]): written into a directory of its own
+// ([Paths.OpenCodeSteerPlugin]) before the server that loads it starts, and
+// named in `plugins` with the route as its one option. A `plugins` list is
+// combined across the documents OpenCode reads in their order — an entry is an
+// addition, or a removal by id written `-<id>` — so this document's entry, read
+// last, is added after any removal a document beneath it makes. Measured on
+// 2.0.32 and 2.1.4 with a repository whose own opencode.json and .opencode/
+// remove the plugin: it loaded, with its option read from its file.
+//
+// EVERY PATH THE CONFIGURATION NAMES IS UNDER THE BOX'S WORK DIRECTORY — the
+// instruction file, the plugin, every value — and OpenCode replaces `{env:…}`
+// and `{file:…}` in the configuration's text before it parses it, so a box
+// whose home that text cannot name is refused before anything is written
+// ([openCodeReferable]).
+//
 // IT IS WRITTEN ON EVERY RUN, including one that names no server. The posture
-// keys below are not decoration a minimal run can go without — and because
-// this CLI takes no config flag, the file's LOCATION is
-// the wiring, so a run that writes nothing does not run on the vendor's
-// defaults: it runs on whatever the PREVIOUS run left in the checkout, which
-// on a reused box is that run's MCP block with its dead per-run bridge URL in
-// it.
-func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+// keys below are not decoration a minimal run can go without, and a run that
+// wrote none would not run on the vendor's defaults or on a previous run's
+// file — the clear removed that ([Runner.ClearArtifacts]) — but not at all: the
+// script refuses to start a server it has no configuration for.
+func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+	if req.System != "" || len(req.MCPServers) > 0 || req.Steer.Set() {
+		if err := openCodeReferable(paths.WorkDir()); err != nil {
+			return "", fmt.Errorf("codingagent: this box's home %q cannot be named in an OpenCode "+
+				"run's configuration: %w; a local box's home is under providers.sandbox.local.state_dir, "+
+				"which needs a path without such characters", paths.Home, err)
+		}
+	}
 	cfg := map[string]any{
 		"$schema": "https://opencode.ai/config.json",
 		// Sharing is disabled: a run's transcript is company work, and
@@ -427,7 +665,11 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 		//
 		// `question` is the one tool denied: it asks a PERSON, through a form
 		// a headless run cancels, and a run that has something to ask has
-		// `crewlet-ask`, which reaches the seat that started it.
+		// `ask_and_wait` on its bridge, which parks it on a person's answer.
+		//
+		// The rules of every document OpenCode reads are added together in
+		// its order, so these come after a repository's own and, the last
+		// match winning, decide.
 		"permissions": []map[string]string{
 			{"action": "*", "resource": "*", "effect": "allow"},
 			{"action": "question", "resource": "*", "effect": "deny"},
@@ -440,9 +682,42 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 		// for an undo a headless run never offers — on a large checkout a
 		// copy of its tree per step, for nothing.
 		"snapshots": false,
+		// THE AGENT THE RUN IS, stated rather than inherited, for the
+		// reason the permissions are: the turn cap below is set on an
+		// agent, and an image whose own config named another default would
+		// run the brief on an agent the cap never reached.
+		"default_agent": openCodeAgent,
 	}
+	// THE RUN'S TURN CAP, on that agent: `steps`, OpenCode's bound on its
+	// agent's iterations, after which the agent answers in text and the run
+	// ends — Claude Code's --max-turns ([ClaudeCode.Command]) in this CLI's
+	// own vocabulary. It is the one bound on an executor's work
+	// (providers.sandbox.default_max_turns and a seat's role.sandbox.max_turns,
+	// already reconciled into Limits), so a run on this CLI that did not
+	// carry it ran without one. Absent at zero, which is uncapped: OpenCode
+	// refuses a step count below one.
+	if req.Limits.MaxTurns > 0 {
+		cfg["agents"] = map[string]any{
+			openCodeAgent: map[string]any{"steps": req.Limits.MaxTurns, "disabled": false},
+		}
+	}
+	values := &openCodeValueFiles{dir: paths.OpenCodeValues()}
 	if len(req.MCPServers) > 0 {
-		cfg["mcp"] = map[string]any{"servers": openCodeMCP(req.MCPServers)}
+		cfg["mcp"] = map[string]any{"servers": openCodeMCP(req.MCPServers, values)}
+	}
+	if req.Steer.Set() {
+		if err := box.WriteFile(ctx, paths.OpenCodeSteerPlugin()+"/"+openCodeSteerEntry, openCodeSteerPlugin); err != nil {
+			return "", fmt.Errorf("codingagent: writing OpenCode's notes plugin: %w", err)
+		}
+		cfg["plugins"] = []map[string]any{{
+			"package": paths.OpenCodeSteerPlugin(),
+			"options": map[string]string{"url": values.ref(req.Steer.URL)},
+		}}
+	}
+	for _, v := range values.files {
+		if err := box.WriteFile(ctx, v.path, []byte(v.value)); err != nil {
+			return "", fmt.Errorf("codingagent: writing a value of OpenCode's configuration: %w", err)
+		}
 	}
 	// THE SYSTEM TEXT AS AN INSTRUCTION FILE, named by its absolute path.
 	// OpenCode has no flag that adds to its system prompt; it adds every
@@ -463,26 +738,111 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 	// And this file is rewritten on every run, so a reused box never carries
 	// a previous run's entry. ABSOLUTE, because a relative entry is matched
 	// by walking up from the working directory.
-	if req.System != "" {
-		if err := box.WriteFile(ctx, paths.System(), []byte(req.System)); err != nil {
+	//
+	// TOLD OF NOTES on a run wired to them ([withNoteInstruction]): the
+	// plugin that reads them is named by this same configuration, which the
+	// run's server is started with.
+	system := req.System
+	if req.Steer.Set() {
+		system = withNoteInstruction(system, o.NoteInstruction())
+	}
+	if system != "" {
+		if err := box.WriteFile(ctx, paths.System(), []byte(system)); err != nil {
 			return "", fmt.Errorf("codingagent: writing the system prompt: %w", err)
 		}
 		cfg["instructions"] = []string{paths.System()}
 	}
-	blob, err := json.MarshalIndent(cfg, "", "  ")
+	blob, err := openCodeJSON(cfg)
 	if err != nil {
 		return "", err
 	}
-	// opencode.json in the WORKING DIRECTORY, which is the checkout: the CLI
-	// takes no --config flag, so the file's location is the wiring.
-	path := paths.Home + "/" + sandbox.WorkspaceSubdir + "/opencode.json"
-	if err := box.WriteFile(ctx, path, blob); err != nil {
-		return "", err
+	if err := box.WriteFile(ctx, paths.OpenCodeConfig(), blob); err != nil {
+		return "", fmt.Errorf("codingagent: writing OpenCode's configuration: %w", err)
 	}
-	return path, nil
+	return paths.OpenCodeConfig(), nil
 }
 
-// openCodeMCP translates the generic launch specs into OpenCode 2's schema.
+// openCodeJSON is v as the configuration's text: indented, and with `&`, `<`
+// and `>` written as themselves. OpenCode finds a `{file:<path>}` reference in
+// the TEXT, before it parses it ([openCodeReferable]), so a path encoding/json
+// escaped for HTML — `&` as `\u0026` — would name a file that is not there.
+func openCodeJSON(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return nil, fmt.Errorf("codingagent: rendering OpenCode's configuration: %w", err)
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
+}
+
+// openCodeAgent is the OpenCode agent a run runs as: `build`, the CLI's own
+// default primary agent — the one with every tool, which a run that writes
+// code is. Its config is OpenCode 2's `agents.<name>`, whose `steps` carries the
+// run's turn cap.
+const openCodeAgent = "build"
+
+// openCodeValueFiles is the values a run's configuration names by reference:
+// each MCP server's url, header value and environment value, and the notes
+// plugin's route, one file apiece under [Paths.OpenCodeValues], named `v1`,
+// `v2`, … in the order the configuration asks for them — servers by name, a
+// server's headers and environment by key, then the plugin's — so the same
+// request writes the same files.
+//
+// OpenCode replaces `{file:<path>}` with the file's content, its surrounding
+// whitespace TRIMMED and JSON-escaped (core/src/config/variable.ts, the same
+// in 2.0.32 and 2.1.4), so a value arrives as written save for whitespace at
+// either end — which a url or a header value carries nothing in (HTTP drops a
+// header value's own), and which an environment value that has it arrives
+// without. A reference to a file
+// that is missing reads as empty, with a warning only in OpenCode's own log,
+// so the files are written before the configuration that names them.
+type openCodeValueFiles struct {
+	dir   string
+	files []openCodeValueFile
+}
+
+// openCodeValueFile is one value and the file it is written to.
+type openCodeValueFile struct{ path, value string }
+
+// ref is the reference naming value's file, which it records for writing.
+// Every file is the directory and `v<n>` in it, and [OpenCode.WriteConfig]
+// already held the work directory above it to what a reference can carry.
+func (v *openCodeValueFiles) ref(value string) string {
+	path := v.dir + "/v" + strconv.Itoa(len(v.files)+1)
+	v.files = append(v.files, openCodeValueFile{path: path, value: value})
+	return "{file:" + path + "}"
+}
+
+// openCodeReferable is nil where `{file:<path>}` names path to OpenCode — and
+// where the path, and any below it, can stand in the configuration's text as
+// itself — and otherwise says why it cannot. OpenCode replaces every
+// `{env:[^}]+}` and then every `{file:[^}]+}` in the configuration's text before
+// it parses it, and resolves a relative path against the working directory,
+// which is the checkout — so a path is named only where it is absolute, holds
+// no brace to open a reference of its own or end one early, and is carried by
+// the JSON text as itself: no `"`, `\`, control character, U+2028 or U+2029,
+// which the text holds escaped and OpenCode would read as part of the path, and
+// nothing that is not UTF-8, which the text holds as U+FFFD.
+func openCodeReferable(path string) error {
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("the path %q is not absolute", path)
+	}
+	if strings.ContainsAny(path, "{}") {
+		return fmt.Errorf("the path %q holds a brace, which opens or ends a reference", path)
+	}
+	ref := "{file:" + path + "}"
+	if text, err := openCodeJSON(ref); err != nil || string(text) != `"`+ref+`"` {
+		return fmt.Errorf("the path %q holds a character the configuration's text cannot "+
+			"carry as itself", path)
+	}
+	return nil
+}
+
+// openCodeMCP translates the generic launch specs into OpenCode 2's schema,
+// every value a server is configured with — its url, each header value, each
+// environment value — a reference to a file of values ([openCodeValueFiles]).
 //
 // EVERY SERVER'S TOOLS ARE OFFERED DIRECTLY (`codemode: false`). 2.0's default
 // is Code Mode, where a server's tools are reachable only from JavaScript the
@@ -493,17 +853,21 @@ func (OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbo
 //
 // A REMOTE SERVER NEVER STARTS OAUTH (`oauth: false`): 2.0 tries it by default
 // on a remote server that refuses a request, and a headless run has nobody to
-// complete it — the bridge authenticates with the run's token, in its headers.
-func openCodeMCP(servers map[string]sandbox.MCPServer) map[string]any {
+// complete it — the bridge authenticates with the run's token, which is a
+// segment of the endpoint's URL path rather than a header.
+//
+// EVERY SERVER IS ON (`disabled: false`) — see [OpenCode.WriteConfig].
+func openCodeMCP(servers map[string]sandbox.MCPServer, values *openCodeValueFiles) map[string]any {
 	out := make(map[string]any, len(servers))
-	for name, s := range servers {
-		entry := map[string]any{"codemode": false}
+	for _, name := range slices.Sorted(maps.Keys(servers)) {
+		s := servers[name]
+		entry := map[string]any{"codemode": false, "disabled": false}
 		if s.Transport == sandbox.TransportHTTP {
 			entry["type"] = "remote"
-			entry["url"] = s.URL
+			entry["url"] = values.ref(s.URL)
 			entry["oauth"] = false
 			if len(s.Headers) > 0 {
-				entry["headers"] = s.Headers
+				entry["headers"] = openCodeRefs(s.Headers, values)
 			}
 			out[name] = entry
 			continue
@@ -523,9 +887,19 @@ func openCodeMCP(servers map[string]sandbox.MCPServer) map[string]any {
 		entry["type"] = "local"
 		entry["command"] = cmd
 		if len(s.Env) > 0 {
-			entry["environment"] = s.Env
+			entry["environment"] = openCodeRefs(s.Env, values)
 		}
 		out[name] = entry
+	}
+	return out
+}
+
+// openCodeRefs is a header or environment map with every value a reference to
+// its file, taken in key order.
+func openCodeRefs(m map[string]string, values *openCodeValueFiles) map[string]string {
+	out := make(map[string]string, len(m))
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		out[k] = values.ref(m[k])
 	}
 	return out
 }
@@ -574,11 +948,14 @@ type openCodeEvent struct {
 	Name  string          `json:"name"`
 	Error json.RawMessage `json:"error"`
 	Part  struct {
-		Tool   string         `json:"tool"`
-		Text   string         `json:"text"`
-		Reason string         `json:"reason"`
-		Input  *openCodeInput `json:"input"`
-		State  struct {
+		// MessageID is the message the part belongs to: each step of a
+		// run is a message of its own.
+		MessageID string         `json:"messageID"`
+		Tool      string         `json:"tool"`
+		Text      string         `json:"text"`
+		Reason    string         `json:"reason"`
+		Input     *openCodeInput `json:"input"`
+		State     struct {
 			Status string         `json:"status"`
 			Error  string         `json:"error"`
 			Output string         `json:"output"`
@@ -649,8 +1026,24 @@ func decodeOpenCodeEvent(line []byte) (openCodeEvent, bool) {
 
 // openCodeEvents decodes one stream into the answer and a readable
 // transcript, read whole or followed across reads ([Decoder]).
+//
+// THE ANSWER IS THE LAST MESSAGE'S TEXT, never every step's joined. Each step
+// of a run is a message of its own (`part.messageID`), and a run handed a
+// person's note after it had written an answer goes on to a later step that
+// answers again — `run --format json` prints no event for the note, so the
+// stream reads as two answers in a row (measured on 2.0.32 and 2.1.4). Joined,
+// the run's result was the answer the note superseded followed by the one it
+// asked for; and a run that narrated its way through its steps ("running the
+// tests first") reported the narration as part of its answer. The transcript
+// keeps every step's text, and the report the run writes is what the result
+// prefers anyway ([Paths.Findings]).
 type openCodeEvents struct {
+	// answers is the text of the latest message that produced any, in
+	// order, and message that message's id. A text event that names no
+	// message belongs to the latest one: only a message that names itself
+	// and differs ends it, so a stream that names none is read whole.
 	answers    []string
+	message    string
 	transcript transcriptLines
 	errText    string
 	sawEvent   bool
@@ -705,7 +1098,7 @@ func (d *openCodeEvents) Line(line []byte) {
 	case "text":
 		if chunk := strings.TrimSpace(ev.Part.Text); chunk != "" {
 			if !d.following {
-				d.answers = append(d.answers, chunk)
+				d.answer(ev.Part.MessageID, chunk)
 			}
 			d.transcript.add(chunk)
 		}
@@ -719,6 +1112,19 @@ func (d *openCodeEvents) Line(line []byte) {
 			d.usage = ev.Report
 		}
 	}
+}
+
+// answer adds one text event's chunk to the answer: after the latest message's
+// text where the event is that message's, or names none; in its place where it
+// names a later one.
+func (d *openCodeEvents) answer(message, chunk string) {
+	if message != "" {
+		if d.message != "" && message != d.message {
+			d.answers = d.answers[:0]
+		}
+		d.message = message
+	}
+	d.answers = append(d.answers, chunk)
 }
 
 func (d *openCodeEvents) keepPlain(line []byte) {
@@ -779,6 +1185,12 @@ func (d *openCodeEvents) Result() sandbox.Result {
 		res.CostUSD = u.Data.Cost
 		res.SessionID = u.Data.ID
 	}
+	// NO TURN COUNT ([sandbox.Result.Turns]): the session report carries
+	// none, and the stream's step markers cannot be counted — 2.0.32 prints
+	// `step_start` for a run's first step and, in nearly every multi-step
+	// run measured, not for the steps after it — so a count read off them
+	// would be one for most runs and right only by luck. None reported is
+	// a run counted as the one call the engine asked for.
 	if !success {
 		res.Error = d.errText
 		if res.Error == "" {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A CHANGE OPENED BY A PUSH: `git push -o change` opens a change on the one
@@ -85,10 +86,10 @@ type ChangeOption struct {
 	// Title is one line, at most [MaxChangeTitleBytes]: the option's, or the
 	// subject of the commit the push set its source to, which the receiver
 	// fills in where the options name none.
-	Title string `json:"title"`
+	Title string `json:"title" untrusted:"name"`
 	// Body is the change's description, at most [MaxChangeBodyBytes] — one
 	// line, since git takes no line break in a push option.
-	Body string `json:"body,omitempty"`
+	Body string `json:"body,omitempty" untrusted:"fence"`
 	// Draft opens it as a draft, not yet asking to be merged.
 	Draft bool `json:"draft,omitempty"`
 }
@@ -271,10 +272,7 @@ func ChangeSource(cmds []Command) (int, ChangeRefusal, string) {
 	case 1:
 		return source, "", ""
 	}
-	named := strings.Join(branches[:min(len(branches), 2)], " and ")
-	if len(branches) > 2 {
-		named = fmt.Sprintf("%s and %d more", strings.Join(branches[:2], ", "), len(branches)-2)
-	}
+	named := words.AndMore(branches, 2)
 	return -1, ChangeRefusalAmbiguousSource, fmt.Sprintf("this push sets %d branches (%s), and a change "+
 		"proposes one: push the change's branch alone with -o change", len(branches), named)
 }

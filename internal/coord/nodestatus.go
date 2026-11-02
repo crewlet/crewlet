@@ -2,6 +2,7 @@ package coord
 
 import (
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -128,6 +129,11 @@ type NodeStatus struct {
 	// see WHY a node left rotation: /ready reports a bare 503 either way,
 	// and "draining" and "cannot apply epoch 41" call for opposite
 	// responses.
+	//
+	// EMPTY when the node could not read its control plane, beside a status
+	// that is otherwise whole: the reader's fail-open answer there is serve,
+	// which is right for the node's own readiness probe and a confident lie
+	// on a peer's screen.
 	Posture string
 
 	// StartedAt is when the node's ENGINE was built, which is when the node
@@ -135,25 +141,27 @@ type NodeStatus struct {
 	// instant on its own health body.
 	StartedAt time.Time
 
-	// Projections is how many of this node's document projections have
-	// caught up, out of how many it runs. Zero of zero is a node running
-	// no native backend, which is every company on the vendor ones.
+	// AppliersReady and AppliersTotal are how many of this node's
+	// state-log appliers — one per registered domain, run from boot on
+	// every data node whatever its company runs — have caught up with
+	// their logs, out of how many it runs. Zero of zero is a node without
+	// `data`, which runs no log.
 	//
 	// # Why it is here and not on /ready
 	//
-	// A node mid-hydration is HEALTHY. It serves its dashboard, answers
-	// its probes and runs the duties it holds; what it does not do is
-	// take on NEW seats, because a seat whose tools read an incomplete
-	// projection answers "there is no such item" — and a seat acts on
-	// that. So the fact belongs where an operator asking "why is the new
-	// node holding nothing" can see it, which is the fleet view, and NOT
-	// where it would take the node out of rotation.
+	// A node still catching up is HEALTHY. It serves its dashboard,
+	// answers its probes and runs the duties it holds; what it does not do
+	// is take on NEW seats, because a seat whose tools read a copy that is
+	// behind answers "there is no such item" — and a seat acts on that.
+	// So the fact belongs where an operator asking "why is the new node
+	// holding nothing" can see it, which is the fleet view, and NOT where
+	// it would take the node out of rotation.
 	//
 	// Two integers rather than a bool: "3 of 5" and "0 of 2" are the two
 	// readings an operator needs to tell apart, and a bool collapses
 	// them.
-	ProjectionsReady int
-	ProjectionsTotal int
+	AppliersReady int
+	AppliersTotal int
 
 	// AdminPosture is this node's own `api.auth.admin`: whether it grants
 	// admin to those who hold it (`serve`) or clamps admin away and keeps
@@ -196,6 +204,23 @@ type NodeStatus struct {
 	// the fan-out whose partial answers the file head refused.
 	MCP []MCPServerStatus
 
+	// Models is what this node knows about each configured model entry,
+	// one row per entry of its ACTIVE revision ([ModelStatus]). Nil is
+	// "this node runs none".
+	//
+	// On the heartbeat for MCP's reason: a model's sit-out, its last answer
+	// and its last refusal are each node's own (a node's process meets the
+	// vendor's limit, and its memory keeps the window), every node already
+	// re-sends its status, and the Models page reading one lease listing
+	// answers for the fleet without asking each node in turn. A node that
+	// did not report is a column of its own on that page, never a row of
+	// zeros.
+	Models []ModelStatus
+
+	// Runners is whether each executor cell can start a box on this node,
+	// as its runner probe last found it. Nil is a node that has not probed
+	// (one that runs no executor, or one still booting).
+	Runners *RunnerStatus
 	// Alarms are the alarms this node's own table has firing as of the
 	// beat: ONE MARK PER KIND however many logs a kind stands on, the
 	// longest-standing first — the order the node's health envelope takes
@@ -257,6 +282,192 @@ type AlarmMark struct {
 	// already up does not make it look newer.
 	Since time.Time
 }
+
+// ModelStatus is one configured model entry, as ONE node holds it at the
+// beat.
+//
+// THE NODE'S OWN VIEW, never the fleet's: the sign-in route is what THIS node
+// resolves (a variable may be set in one node's environment and not
+// another's), and the sit-out, the last answer and the last failure are this
+// node's memory of its own calls. The reader joins the rows across nodes.
+type ModelStatus struct {
+	// Key is the entry's key in `providers.llm`.
+	Key string
+
+	// Plan is the first [ModelPlanChars] hex characters of the entry's
+	// sign-in identity, and "" when nothing signs it in. A PREFIX AND
+	// NEVER THE WHOLE: it is enough for a reader to say "these entries
+	// share one sign-in", which is all a reader of the lease needs, and the
+	// whole identity is a credential's fingerprint nothing publishes.
+	Plan string
+
+	// SignIn is the route this node resolves the entry's sign-in through,
+	// in cliagent's words (token, credentials, api-key, env, inherit-env,
+	// environment, none), and Resolves whether its credential resolved
+	// here.
+	SignIn   string
+	Resolves bool
+
+	// SittingOut is the window the entry sits out on this node, nil when
+	// it sits out none.
+	SittingOut *ModelSitOut
+
+	// LastAnswer is when the entry's sign-in last answered a call on this
+	// node, zero when it has not since this process started.
+	LastAnswer time.Time
+
+	// LastFailure is the latest failure of the entry's sign-in on this
+	// node, nil when there is none.
+	LastFailure *ModelFailure
+
+	// Parked is the seats THIS node holds parked on a chain naming the
+	// entry, by agent id as MCP rows name seats (ADR-0013). On the wire it is
+	// the [MaxModelParkedSeats] longest-waiting of them; ParkedCount is how
+	// many there are and ParkedSince when the first of them parked, so a
+	// reader says "and N more" and dates the wait without the whole list.
+	Parked      []ParkedSeat
+	ParkedCount int
+	ParkedSince time.Time
+
+	// HostLogin is the entry's CLI login on this node's disk, only for an
+	// entry that signs in with credential files: nil for every other.
+	HostLogin *HostLogin
+}
+
+// ModelSitOut is a sit-out window on the wire.
+type ModelSitOut struct {
+	// Until is when the entry is tried again, ResetsAt when the vendor said
+	// the limit lifts (zero where it named no instant), and Since the
+	// report that opened the window.
+	Until, ResetsAt, Since time.Time
+
+	// Window is which of the vendor's limits it is, in cliagent's words
+	// (session, weekly, model, unknown).
+	Window string
+
+	// Said is the head of the vendor's own sentence, bounded to
+	// [MaxModelSaidBytes].
+	Said string
+}
+
+// ModelFailure is a failure on the wire: its llm kind (auth, rate_limit,
+// timeout, server, fatal), when, and the head of what the CLI said, bounded to
+// [MaxModelSaidBytes].
+type ModelFailure struct {
+	Kind string
+	At   time.Time
+	Said string
+}
+
+// ParkedSeat is one seat parked on a chain naming an entry, since when.
+type ParkedSeat struct {
+	Seat  uuid.UUID
+	Since time.Time
+}
+
+// HostLoginState is a CLI login's state as its own status command reports it.
+type HostLoginState string
+
+const (
+	// HostSignedIn is a status command that exited 0.
+	HostSignedIn HostLoginState = "signed_in"
+	// HostSignedOut is one that exited 1, the CLIs' own "not logged in".
+	HostSignedOut HostLoginState = "signed_out"
+	// HostLoginUnknown is anything else: the command could not run, timed
+	// out, or exited with a code that is no answer.
+	HostLoginUnknown HostLoginState = "unknown"
+)
+
+// Valid reports whether the state is one this build names.
+func (s HostLoginState) Valid() bool {
+	switch s {
+	case HostSignedIn, HostSignedOut, HostLoginUnknown:
+		return true
+	}
+	return false
+}
+
+// HostLogin is an entry's CLI login on one node's disk.
+type HostLogin struct {
+	State HostLoginState
+
+	// Method is how it signed in, as the CLI says (claude.ai, console,
+	// chatgpt), and Account the account it names, bounded to
+	// [MaxModelAccountBytes]. Either may be empty: not every CLI says.
+	Method, Account string
+
+	// Detail is why the state is unknown, bounded to [MaxModelSaidBytes].
+	Detail string
+
+	// CheckedAt is when the status command last ran.
+	CheckedAt time.Time
+}
+
+// RunnerState is whether one executor cell can start a box on a node.
+type RunnerState string
+
+const (
+	// RunnerReady is a cell whose probe passed.
+	RunnerReady RunnerState = "ready"
+	// RunnerNotReady is a declared cell whose probe failed.
+	RunnerNotReady RunnerState = "not_ready"
+	// RunnerUnconfigured is a cell `providers.sandbox` does not declare.
+	RunnerUnconfigured RunnerState = "unconfigured"
+)
+
+// Valid reports whether the state is one this build names.
+func (s RunnerState) Valid() bool {
+	switch s {
+	case RunnerReady, RunnerNotReady, RunnerUnconfigured:
+		return true
+	}
+	return false
+}
+
+// RunnerStatus is each executor cell's readiness on one node.
+type RunnerStatus struct {
+	Direct, Container, E2B RunnerCell
+}
+
+// RunnerCell is one cell's probe result: its state, what the probe found, and
+// for a cell that is not ready the one thing to do about it. Detail and Fix
+// are bounded to [MaxModelSaidBytes].
+type RunnerCell struct {
+	State     RunnerState
+	Detail    string
+	Fix       string
+	CheckedAt time.Time
+}
+
+// ModelPlanChars is how much of a sign-in identity a heartbeat carries: twelve
+// hex characters, 48 bits, which tells a company's handful of sign-ins apart
+// and reverses to nothing.
+const ModelPlanChars = 12
+
+// MaxModelSaidBytes bounds the text a model row or a runner cell carries: the
+// vendor's sentence behind a sit-out or a failure, a login's detail, a probe's
+// finding and its fix.
+//
+// 240, because the useful part is the head: "You've hit your session limit ·
+// resets 4:30pm (America/Vancouver)" is 66 bytes, a CLI's auth refusal is a
+// line, and a probe's fix is one sentence. A row carries text only while a
+// failure or a sit-out stands, so the bound costs a healthy entry nothing on a
+// beat re-sent every [ReconcileInterval]; the whole sentence is in the node's
+// own `cli_agent_limit_reported` line.
+const MaxModelSaidBytes = 240
+
+// MaxModelParkedSeats bounds the parked seats a model row names on the wire:
+// EIGHT, the longest-waiting first. A row's size must not grow with the
+// company: every seat of a hundred-seat company parked on one plan would put
+// a hundred ids on a beat re-sent every [ReconcileInterval]. Eight is what a
+// person reads before "and N more", and the count and the earliest instant
+// travel whole beside them.
+const MaxModelParkedSeats = 8
+
+// MaxModelAccountBytes bounds a host login's account (an email or an org
+// name): 120 bytes, past any real address, so a CLI that printed something
+// else there cannot grow the beat.
+const MaxModelAccountBytes = 120
 
 // MCPServerStatus is one configured MCP server, as ONE node runs it at the
 // beat.
@@ -370,12 +581,12 @@ func (s NodeStatus) Meta() map[string]any {
 		// posture differs from everybody's.
 		out["admin"] = string(s.AdminPosture)
 	}
-	if s.ProjectionsTotal > 0 {
-		// OMITTED where the node runs none, so a peer on the vendor
-		// backends reads absent rather than "0 of 0" — which a reader
-		// would otherwise have to know is not a stalled projection.
-		out["projections_ready"] = s.ProjectionsReady
-		out["projections_total"] = s.ProjectionsTotal
+	if s.AppliersTotal > 0 {
+		// OMITTED where the node runs none — a node without `data` — so
+		// it reads absent rather than "0 of 0", which a reader would
+		// otherwise have to know is not a stalled applier.
+		out["appliers_ready"] = s.AppliersReady
+		out["appliers_total"] = s.AppliersTotal
 	}
 	if len(s.MCP) > 0 {
 		rows := make([]map[string]any, len(s.MCP))
@@ -411,6 +622,20 @@ func (s NodeStatus) Meta() map[string]any {
 		}
 		out["mcp"] = rows
 	}
+	if len(s.Models) > 0 {
+		rows := make([]map[string]any, len(s.Models))
+		for i, m := range s.Models {
+			rows[i] = m.meta()
+		}
+		out["models"] = rows
+	}
+	if s.Runners != nil {
+		out["runners"] = map[string]any{
+			"direct":    s.Runners.Direct.meta(),
+			"container": s.Runners.Container.meta(),
+			"e2b":       s.Runners.E2B.meta(),
+		}
+	}
 	if s.AlarmsEvaluated {
 		// PRESENT, AND A LIST, wherever the node evaluated its table — an
 		// EMPTY list included, which is the claim that nothing is firing
@@ -429,16 +654,107 @@ func (s NodeStatus) Meta() map[string]any {
 	return out
 }
 
+// meta is one model row on the wire. Every optional part is OMITTED when
+// unset, so a healthy entry's row is its key, its plan and its route.
+func (m ModelStatus) meta() map[string]any {
+	row := map[string]any{"key": m.Key, "sign_in": m.SignIn, "resolves": m.Resolves}
+	if m.Plan != "" {
+		row["plan"] = textcut.Bytes(m.Plan, ModelPlanChars)
+	}
+	if o := m.SittingOut; o != nil {
+		sit := map[string]any{
+			"until":  stamp(o.Until),
+			"since":  stamp(o.Since),
+			"window": o.Window,
+			"said":   textcut.Within(o.Said, MaxModelSaidBytes),
+		}
+		if !o.ResetsAt.IsZero() {
+			sit["resets_at"] = stamp(o.ResetsAt)
+		}
+		row["sitting_out"] = sit
+	}
+	if !m.LastAnswer.IsZero() {
+		row["last_answer"] = stamp(m.LastAnswer)
+	}
+	if f := m.LastFailure; f != nil {
+		row["last_failure"] = map[string]any{
+			"kind": f.Kind, "at": stamp(f.At),
+			"said": textcut.Within(f.Said, MaxModelSaidBytes),
+		}
+	}
+	if len(m.Parked) > 0 {
+		named := slices.Clone(m.Parked)
+		slices.SortFunc(named, func(a, b ParkedSeat) int {
+			if c := a.Since.Compare(b.Since); c != 0 {
+				return c
+			}
+			return strings.Compare(a.Seat.String(), b.Seat.String())
+		})
+		count, since := max(m.ParkedCount, len(named)), named[0].Since
+		if !m.ParkedSince.IsZero() && m.ParkedSince.Before(since) {
+			since = m.ParkedSince
+		}
+		named = named[:min(len(named), MaxModelParkedSeats)]
+		parked := make([]map[string]any, len(named))
+		for i, p := range named {
+			parked[i] = map[string]any{"seat": p.Seat.String(), "since": stamp(p.Since)}
+		}
+		row["parked"] = parked
+		row["parked_count"] = count
+		row["parked_since"] = stamp(since)
+	}
+	if h := m.HostLogin; h != nil {
+		login := map[string]any{"state": string(h.State), "checked_at": stamp(h.CheckedAt)}
+		if h.Method != "" {
+			login["method"] = textcut.Within(h.Method, MaxModelSaidBytes)
+		}
+		if h.Account != "" {
+			login["account"] = textcut.Within(h.Account, MaxModelAccountBytes)
+		}
+		if h.Detail != "" {
+			login["detail"] = textcut.Within(h.Detail, MaxModelSaidBytes)
+		}
+		row["host_login"] = login
+	}
+	return row
+}
+
+// meta is one runner cell on the wire.
+func (c RunnerCell) meta() map[string]any {
+	cell := map[string]any{"state": string(c.State), "checked_at": stamp(c.CheckedAt)}
+	if c.Detail != "" {
+		cell["detail"] = textcut.Within(c.Detail, MaxModelSaidBytes)
+	}
+	if c.Fix != "" {
+		cell["fix"] = textcut.Within(c.Fix, MaxModelSaidBytes)
+	}
+	return cell
+}
+
+// stamp is an instant on the wire: RFC 3339 in UTC to the nanosecond, so a
+// model's last answer and its last failure on two nodes still order the way
+// they happened when they land in the same second.
+func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+// instant reads [stamp]'s spelling back, zero for anything else.
+func instant(v any) time.Time {
+	at, err := time.Parse(time.RFC3339Nano, stringFromMeta(v))
+	if err != nil {
+		return time.Time{}
+	}
+	return at.UTC()
+}
+
 // StatusFromMeta reads a peer's status off a presence lease's Meta, and
 // reports whether the node published one at all.
 //
 // # Absent is not zero
 //
-// A node that publishes no status — its status hook overran its budget on
-// that beat, so its heartbeat carried the placement half alone — is not a node
-// with no work in flight. Reporting it as 0 would draw an idle row for a
-// process that is simply not saying, which is the confident-zero mistake the
-// whole surface is written to avoid.
+// A node that publishes no status — its status hook did not answer within its
+// share of that beat, so its heartbeat carried the placement half alone — is
+// not a node with no work in flight. Reporting it as 0 would draw an idle row
+// for a process that is simply not saying, which is the confident-zero mistake
+// the whole surface is written to avoid.
 //
 // A key this build does not know is IGNORED rather than refused: a successor
 // sharing the fleet publishes what it adds beside what this build reads, and a
@@ -450,11 +766,11 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		return NodeStatus{}, false
 	}
 	status := NodeStatus{
-		InFlight:         intFromMeta(raw["in_flight"]),
-		Posture:          stringFromMeta(raw["posture"]),
-		ProjectionsReady: intFromMeta(raw["projections_ready"]),
-		ProjectionsTotal: intFromMeta(raw["projections_total"]),
-		AdminPosture:     iam.AdminPosture(stringFromMeta(raw["admin"])),
+		InFlight:      intFromMeta(raw["in_flight"]),
+		Posture:       stringFromMeta(raw["posture"]),
+		AppliersReady: intFromMeta(raw["appliers_ready"]),
+		AppliersTotal: intFromMeta(raw["appliers_total"]),
+		AdminPosture:  iam.AdminPosture(stringFromMeta(raw["admin"])),
 	}
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {
@@ -485,6 +801,22 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		}
 		m.Shared, _ = row["shared"].(bool)
 		status.MCP = append(status.MCP, m)
+	}
+	for _, r := range listFromMeta(raw["models"]) {
+		row, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		if m, ok := modelFromMeta(row); ok {
+			status.Models = append(status.Models, m)
+		}
+	}
+	if runners, ok := raw["runners"].(map[string]any); ok {
+		status.Runners = &RunnerStatus{
+			Direct:    cellFromMeta(runners["direct"]),
+			Container: cellFromMeta(runners["container"]),
+			E2B:       cellFromMeta(runners["e2b"]),
+		}
 	}
 	status.Alarms, status.AlarmsEvaluated = alarmsFromMeta(raw["alarms"])
 	return status, true
@@ -522,6 +854,77 @@ func alarmsFromMeta(v any) ([]AlarmMark, bool) {
 		out = append(out, m)
 	}
 	return out, true
+}
+
+// modelFromMeta reads one model row, reporting false for a row naming no
+// entry: a row a reader cannot attribute is dropped rather than drawn
+// unnamed, as an MCP row is.
+func modelFromMeta(row map[string]any) (ModelStatus, bool) {
+	key := stringFromMeta(row["key"])
+	if key == "" {
+		return ModelStatus{}, false
+	}
+	m := ModelStatus{
+		Key:        key,
+		Plan:       stringFromMeta(row["plan"]),
+		SignIn:     stringFromMeta(row["sign_in"]),
+		LastAnswer: instant(row["last_answer"]),
+	}
+	m.Resolves, _ = row["resolves"].(bool)
+	if sit, ok := row["sitting_out"].(map[string]any); ok {
+		m.SittingOut = &ModelSitOut{
+			Until:    instant(sit["until"]),
+			ResetsAt: instant(sit["resets_at"]),
+			Since:    instant(sit["since"]),
+			Window:   stringFromMeta(sit["window"]),
+			Said:     stringFromMeta(sit["said"]),
+		}
+	}
+	if f, ok := row["last_failure"].(map[string]any); ok {
+		m.LastFailure = &ModelFailure{
+			Kind: stringFromMeta(f["kind"]),
+			At:   instant(f["at"]),
+			Said: stringFromMeta(f["said"]),
+		}
+	}
+	m.ParkedCount = intFromMeta(row["parked_count"])
+	m.ParkedSince = instant(row["parked_since"])
+	for _, p := range listFromMeta(row["parked"]) {
+		seat, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		// A row naming no seat is a park nobody can be told about, and
+		// is dropped for [seatFromMeta]'s reason.
+		if id := seatFromMeta(seat["seat"]); id != uuid.Nil {
+			m.Parked = append(m.Parked, ParkedSeat{Seat: id, Since: instant(seat["since"])})
+		}
+	}
+	if h, ok := row["host_login"].(map[string]any); ok {
+		m.HostLogin = &HostLogin{
+			State:     HostLoginState(stringFromMeta(h["state"])),
+			Method:    stringFromMeta(h["method"]),
+			Account:   stringFromMeta(h["account"]),
+			Detail:    stringFromMeta(h["detail"]),
+			CheckedAt: instant(h["checked_at"]),
+		}
+	}
+	return m, true
+}
+
+// cellFromMeta reads one runner cell; a cell the peer did not send reads with
+// an empty state, which [RunnerState.Valid] tells apart from every answer.
+func cellFromMeta(v any) RunnerCell {
+	cell, ok := v.(map[string]any)
+	if !ok {
+		return RunnerCell{}
+	}
+	return RunnerCell{
+		State:     RunnerState(stringFromMeta(cell["state"])),
+		Detail:    stringFromMeta(cell["detail"]),
+		Fix:       stringFromMeta(cell["fix"]),
+		CheckedAt: instant(cell["checked_at"]),
+	}
 }
 
 // listFromMeta accepts the typed slice this build writes and the []any a JSON

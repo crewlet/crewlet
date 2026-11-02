@@ -163,7 +163,7 @@ func TestASubtreeIsAddedWholeRatherThanLeafByLeaf(t *testing.T) {
 // addition is reported as a whole subtree and needs none.
 func wideCompanyDoc(model string) string {
 	doc := strings.Builder{}
-	doc.WriteString("name: Acme\nproviders:\n  llm:\n")
+	doc.WriteString("name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n")
 	for i := range configapi.MaxChanges + 10 {
 		fmt.Fprintf(&doc, "    p%04d: {model: %s}\n", i, model)
 	}

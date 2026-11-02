@@ -6,7 +6,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // SeatEnv is the mcp_env server whose credentials belong to Datadog.
@@ -14,14 +13,19 @@ import (
 // FROM THE ORG MODEL'S OWN TABLE: see [org.EngineReadMCPEnv].
 const SeatEnv = org.MCPEnvDatadog
 
-// CredentialKeys are the spellings a seat's application key arrives under.
+// CredentialKeys are the spellings a Datadog application key takes in a seat's
+// `mcp_env.datadog` block.
 //
-// A LIST rather than one name, for the reason GitLab's is: a company writes
-// its own mcp_env, and refusing to find a credential because it was spelled
-// the other obvious way is a silent no-op an operator cannot debug.
+// NOTHING READS A SEAT'S KEY FROM THERE ANY MORE: the engine seals each seat's
+// key under the name it derives ([seataccess.SinkName]) and binds it to the
+// seat's tool itself (D15). The list is what the document rules refuse in a
+// seat's mcp_env for a managed integration (D4) and what the migration
+// recognises when it moves a seat's key under the engine's name, so it names
+// every spelling a company has written, DD_APPLICATION_KEY (the header
+// Datadog's MCP server reads) among them.
 //
 //nolint:gochecknoglobals // an immutable list, not state
-var CredentialKeys = []string{"DD_APP_KEY", "DATADOG_APP_KEY", "app_key"}
+var CredentialKeys = []string{"DD_APP_KEY", "DATADOG_APP_KEY", "app_key", "DD_APPLICATION_KEY"}
 
 // DefaultEmailDomain is what a service account's address is built under when
 // the company names none.
@@ -32,80 +36,6 @@ var CredentialKeys = []string{"DD_APP_KEY", "DATADOG_APP_KEY", "app_key"}
 // mean a bounce, or worse a delivery, for an account that is not a person.
 const DefaultEmailDomain = "agents.crewlet.invalid"
 
-// DefaultRole is the Datadog role an agent account is created holding.
-//
-// READ ONLY, deliberately, and it is the honest default for accounts nothing
-// yet authenticates with: an agent that only needs to be woken by an alert
-// needs no write at all. A company whose agents act in Datadog names a wider
-// role explicitly, which is a decision somebody makes rather than one this
-// engine makes for them.
-const DefaultRole = RoleReadOnly
-
-// PlanFor is the seats this company wants a Datadog identity for.
-//
-// A seat opts IN by naming a ${VAR} in its mcp_env datadog block, exactly as
-// every other provisioned app works: the variable is where the minted key is
-// written, and a seat with nowhere to put one is a seat this pass leaves
-// alone rather than an error.
-func PlanFor(o *org.Organization, cfg *config.Datadog) (*provision.Plan, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("datadog: the company config has no datadog block")
-	}
-	if cfg.Provisioning == nil {
-		return nil, fmt.Errorf(
-			"datadog: integrations.datadog.provisioning is unset, so there is " +
-				"no organization to create identities in")
-	}
-	plan := &provision.Plan{}
-	if o == nil {
-		return plan, nil
-	}
-	for seat := range o.AllRoles() {
-		if !seat.IsAgent() {
-			// A human seat is a person with their own Datadog login;
-			// minting one an account would create a second identity for
-			// somebody who already has one.
-			continue
-		}
-		handle := seat.Handle()
-		block := seat.MCPEnv[SeatEnv]
-		if len(block) == 0 {
-			continue
-		}
-		key, value := firstCredential(block)
-		if key == "" {
-			continue
-		}
-		name, ok := provision.SoleVar(value)
-		if !ok {
-			// THE NOTE NAMES THE SHAPE, NEVER THE VALUE: it is printed in
-			// a report an operator pastes into a ticket, and the value is
-			// either a credential or a string containing one.
-			plan.Note("%s: mcp_env.datadog.%s is not a whole ${VAR} reference, "+
-				"so there is nowhere to write a minted key — point it at a "+
-				"variable, or manage this seat's key by hand", handle, key)
-			continue
-		}
-		plan.Add(provision.Seat{
-			Handle:   handle,
-			Role:     seat.Name,
-			TokenVar: name,
-			Email:    AccountEmail(cfg.Provisioning, handle),
-		})
-	}
-	return plan, nil
-}
-
-// firstCredential finds the key a seat's block carries its app key under.
-func firstCredential(block map[string]string) (string, string) {
-	for _, key := range CredentialKeys {
-		if value := strings.TrimSpace(block[key]); value != "" {
-			return key, value
-		}
-	}
-	return "", ""
-}
-
 // AccountEmail is the address one seat's service account is created with.
 //
 // DERIVED, so the pass that creates an account and the teardown that disables
@@ -114,10 +44,7 @@ func firstCredential(block map[string]string) (string, string) {
 // FROM THE HANDLE, which is immutable (ADR-0013), so the address is stable for
 // the life of the seat: Datadog will not change an account's address at all.
 func AccountEmail(p *config.DatadogProvisioning, handle string) string {
-	domain := DefaultEmailDomain
-	if p != nil && strings.TrimSpace(p.EmailDomain) != "" {
-		domain = strings.TrimSpace(p.EmailDomain)
-	}
+	domain := emailDomain(p)
 	// `crewlet-`, the same prefix GitLab's service accounts carry, so a
 	// person reading a user list at either app can see at a glance which
 	// accounts this engine made. NOT `agent-`: that string is a queue
@@ -140,10 +67,13 @@ func AccountName(role, handle string) string {
 	return role + " (Crewlet)"
 }
 
-// RoleName is the Datadog role agent accounts are created holding.
-func RoleName(p *config.DatadogProvisioning) string {
-	if p != nil && strings.TrimSpace(p.Role) != "" {
-		return strings.TrimSpace(p.Role)
+// emailDomain is the domain every agent account's address is built under:
+// the company's, or [DefaultEmailDomain]. One function, so the address a
+// pass creates an account under, the listing that finds it again and the
+// orphan check that judges it cannot disagree about a stray space.
+func emailDomain(p *config.DatadogProvisioning) string {
+	if p != nil && strings.TrimSpace(p.EmailDomain) != "" {
+		return strings.TrimSpace(p.EmailDomain)
 	}
-	return DefaultRole
+	return DefaultEmailDomain
 }

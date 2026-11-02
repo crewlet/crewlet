@@ -36,7 +36,7 @@ const suiteOtherStream = "CREWLET_SUITE_OTHER_LOG"
 const suiteTrimWriter = "suite-trim"
 
 // TrimmedAnchorsGoAndAZeroWriteIsFenced certifies the trim's trimmed record
-// (ADR-0050) end to end over the candidate's own applier, encoder and read
+// (ADR-0073) end to end over the candidate's own applier, encoder and read
 // seam: a domain whose log writes anchors supplies the record and the
 // framework can use it, its applier takes it — through the framework's own
 // runner — removing exactly this log's anchors below the floor and writing

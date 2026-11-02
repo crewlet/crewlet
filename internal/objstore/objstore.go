@@ -69,14 +69,14 @@
 // Which objects SHOULD exist is not a list this package keeps: every row that
 // refers to an object names it, and the declared tables
 // (internal/objstore/references) are the whole inventory. Each declared table
-// is Required, Retired or Derived (ADR-0051): all three keep the objects their
+// is Required, Retired or Derived (ADR-0074): all three keep the objects their
 // rows name from collection, and only a Required table's are audited, and
 // copied, counted or asked after by a backup — a retired or derived object's
 // bytes ride a `nats` backup's stream snapshot uncounted, like anything else
 // the bucket holds — while a store move copies a Required table's objects and
 // a Derived one's. The first Derived objects are a repository's published
 // layers, which one git node builds and every other installs only once it has
-// checked them, and which a restore leaves to be published again (ADR-0061).
+// checked them, and which a restore leaves to be published again (ADR-0084).
 // The collector (internal/objstore/collect) deletes what
 // nothing names once it is past a grace measured both from when the backend
 // stored it and from when its key was minted — and [RecordWithin] is the bound
@@ -88,7 +88,7 @@
 // objects ([ReferenceTable.Records], the domain's own decoder): a backup
 // restores a copy of the rows and replays the log from the copy's position, so
 // what it owes is what the copy names AND what every record it replays names
-// (ADR-0052). The collector reads rows alone and never the log.
+// (ADR-0075). The collector reads rows alone and never the log.
 package objstore
 
 import (
@@ -321,7 +321,7 @@ func (o Object) Validate() error {
 // [AssumedClockSkew].
 //
 // TWELVE HOURS: half the collector's day, and comfortably more than the
-// slowest upload the engine accepts — a file of tracker.MaxFileBytes at the
+// slowest upload the engine accepts: a file of worklet.MaxFileBytes at the
 // [MiBPace] floor is eight and a half hours from the key's minting to the
 // last byte stored — plus the write that follows it. The two inequalities are
 // pinned by one test where every constant they name can be imported
@@ -419,13 +419,13 @@ type ReferenceTable struct {
 	// domain's applier keeps the records of it this node could not apply
 	// yet (statelog's DeferredTable).
 	//
-	// WHAT A BACKUP READS PAST ITS STORE COPY (internal/backup, ADR-0052): a
+	// WHAT A BACKUP READS PAST ITS STORE COPY (internal/backup, ADR-0075): a
 	// restore brings the copy back and replays that log from the copy's
 	// position — and a build that can read a deferred record applies it —
 	// so the objects the restored rows name include every object a record
 	// of either names. A Required table states both
 	// ([ReferenceTable.ValidateLog]); a Retired or Derived one may leave them
-	// empty, since no backup carries either (ADR-0051).
+	// empty, since no backup carries either (ADR-0074).
 	Log      string
 	Deferred string
 
@@ -486,7 +486,7 @@ func JoinOwner(owner ...string) string { return strings.Join(owner, "/") }
 // Standing is what a declared table's rows are to the company: references it
 // is owed, retired ones that keep their objects only for a grace, or derived
 // ones naming objects the engine can build again from what it is owed —
-// ADR-0051, whose rationale is internal/objstore/references' package doc.
+// ADR-0074, whose rationale is internal/objstore/references' package doc.
 //
 // ONE TABLE OF OBLIGATIONS, which the collector, its audit, the backup, a
 // store move and the references gate each read off the standing and none

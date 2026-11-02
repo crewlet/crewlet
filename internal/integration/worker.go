@@ -932,10 +932,22 @@ func (w *Worker) visit(ctx context.Context, kind Kind, forced bool, now time.Tim
 				"this surface, so it did not touch it")
 		return
 	case !held:
-		// SOMEBODY IS ALREADY DOING THIS — an operator's pass, or a
-		// teardown. Nothing is recorded, for the reason above and one
-		// more: a fault written here would describe as broken a surface
-		// that is at this moment being provisioned successfully.
+		// SOMEBODY IS ALREADY DOING THIS: an operator's pass, an access
+		// sync, or a teardown. Nothing is recorded, for the reason above
+		// and one more: a fault written here would describe as broken a
+		// surface that is at this moment being provisioned successfully.
+		//
+		// AND A FORCED LOOK STAYS OWED. The ask that forced it (a config
+		// apply's sweep, a refresh) was spent on the way here, so dropped
+		// now it was lost: a save on the Agents tab applies a revision and
+		// starts that integration's access sync, the sync takes the lease
+		// first, and the sweep the save was owed waited out the settled
+		// cadence instead, minutes of a card describing the setting the
+		// person had just replaced. Kept as a refresh, the next tick asks
+		// again, and the one after the holder lets go takes it.
+		if forced {
+			w.refreshing.Store(kind, struct{}{})
+		}
 		log.InfoContext(ctx, "integration_reconcile_deferred",
 			"integration", kind.String(),
 			"detail", "another writer holds this surface; the next tick tries again")
@@ -1276,12 +1288,13 @@ func StampRegistration(state *State, current string) []Finding {
 	return []Finding{{
 		Kind:    FindingRegistrationOrphaned,
 		Subject: previous,
+		Title:   "An old registration is still delivering",
 		Detail: fmt.Sprintf(
-			"this engine registered %q and now registers %q, so %q is still "+
-				"there and nothing manages it — it keeps delivering, which is "+
-				"why it was not removed. Repoint anything naming %q at %q, "+
-				"then delete %q at the third-party app",
-			previous, current, previous, previous, current, previous),
+			"this engine registered %q and now registers %q. %q is still "+
+				"there, unmanaged, and keeps delivering, so it was not removed",
+			previous, current, previous),
+		Remedy: fmt.Sprintf("Repoint anything naming %q at %q, then delete %q "+
+			"at the third-party app", previous, current, previous),
 	}}
 }
 

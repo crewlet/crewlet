@@ -3,6 +3,7 @@ package configapi_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -174,7 +175,7 @@ func TestACharterWriteIsANewRevisionOfTheWholeDocument(t *testing.T) {
 
 	// AUDITED AS EVERY CONFIGURATION WRITE IS: a revision naming its author,
 	// its credential and what it changed, and the activation on the feed.
-	active, _, err := s.configs.Active(t.Context())
+	active, _, err := s.active(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestACharterWriteRecordsTheSummaryItWasGiven(t *testing.T) {
 	if res.Code != http.StatusOK {
 		t.Fatalf("PUT = %d %s", res.Code, res.Body)
 	}
-	active, _, err := s.configs.Active(t.Context())
+	active, _, err := s.active(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +299,9 @@ type interleavedPlane struct {
 }
 
 func (p *interleavedPlane) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
-	if p.raced.CompareAndSwap(false, true) {
+	// ONCE THE CASE HAS SAID WHAT RACES, so the seed's own activation
+	// passes straight through.
+	if p.other != nil && p.raced.CompareAndSwap(false, true) {
 		p.other(ctx)
 	}
 	return p.Plane.Activate(ctx, req)
@@ -332,7 +335,7 @@ func TestACharterWriteThatLosesARaceToAnUnrelatedWriteIsTriedAgain(t *testing.T)
 	if code != http.StatusOK {
 		t.Fatalf("the draft = %d %v, want it written on the second attempt", code, body)
 	}
-	active, _, err := s.configs.Active(t.Context())
+	active, _, err := s.active(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,6 +451,25 @@ func TestACharterBodyNamesAllThreeFieldsAndNothingElse(t *testing.T) {
 	}
 }
 
+// A BODY THAT DOES NOT DECODE IS TOLD IN WORDS, as every body on this surface
+// is, never in encoding/json's. Mutation: answer the decoder's own error and
+// the field name goes missing behind Go's type names.
+func TestACharterBodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	for body, want := range map[string]string{
+		`{"mission":"m","vision":"v","policies":[],"name":"Other"}`: `In the body, "name" isn't a field this takes.`,
+		`{"mission":"m","vision":"v","policies":[]} {}`:             "The body has more after its JSON value, which is all it may hold.",
+	} {
+		s := newSurface(t)
+		s.seed(t, charterDoc)
+		_, tag := s.readCharter(t)
+		res := s.do(t, http.MethodPut, "/config/charter", body, map[string]string{"If-Match": tag})
+		if got := decode(t, res)["detail"]; res.Code != http.StatusBadRequest || got != want {
+			t.Errorf("%s = %d %v, want 400 saying %q", body, res.Code, got, want)
+		}
+	}
+}
+
 // NOTHING TO WRITE IS WRITTEN AS NOTHING: a revision that changes nothing
 // still re-activates on every node and rebuilds every seat. The comparison is
 // of the TRIMMED draft, which is what would be stored.
@@ -525,7 +547,7 @@ func TestTheCharterIsAnAdministratorsToReadAndWrite(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t, charterDoc)
 	_, tag := s.readCharter(t)
-	s.grants = []iam.Grant{iam.GrantTracker, iam.GrantKnowledge}
+	s.grants = slices.Clone(iam.Apps)
 	for _, req := range []struct{ method, body string }{
 		{http.MethodGet, ""},
 		{http.MethodPut, `{"mission":"m","vision":"","policies":[]}`},
@@ -598,10 +620,13 @@ func TestTheDashboardReadsTheCharterTheEngineSends(t *testing.T) {
 // history one save can leave behind.
 func TestACharterWriteThatKeepsLosingIsToldSo(t *testing.T) {
 	t.Parallel()
+	losing := &losingPlane{}
 	s := newSurfaceWith(t, func(o *configapi.Options) {
-		o.Plane = &racingPlane{Plane: o.Plane, winner: "another-revision"}
+		losing.Plane = o.Plane
+		o.Plane = losing
 	})
 	s.seed(t, charterDoc)
+	losing.armed.Store(true)
 	_, tag := s.readCharter(t)
 	code, body, _ := s.putCharter(t, tag, config.Charter{Mission: "m", Policies: []string{}}, "")
 	if code != http.StatusConflict || body["error"] != string(httpjson.CodeRevisionAdvanced) {
@@ -611,6 +636,21 @@ func TestACharterWriteThatKeepsLosingIsToldSo(t *testing.T) {
 		t.Errorf("the node holds %d revisions, want the seed and one inert revision "+
 			"for each of three attempts", n)
 	}
+}
+
+// losingPlane refuses every activation once armed, as a fleet whose pointer
+// another writer moves before each of this one's lands.
+type losingPlane struct {
+	coord.Plane
+	armed atomic.Bool
+}
+
+func (p *losingPlane) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
+	if p.armed.Load() {
+		return coord.Activation{}, fmt.Errorf("%w: another write landed first",
+			coord.ErrActivationRaced)
+	}
+	return p.Plane.Activate(ctx, req)
 }
 
 // A SAVE SENT AGAIN IS ANSWERED, NOT REFUSED: the retry of a write whose

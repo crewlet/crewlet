@@ -7,9 +7,8 @@ import "time"
 // newer one wrote: the instant that configuration was activated, in Unix
 // MILLISECONDS.
 //
-// Two writers stamp with it — the tracker's projects ([tracker.Writer.ApplyChart])
-// and the knowledge base's containers ([pages.Store.EnsureContainer]) — and
-// each compares a stamp only against its own kind's. One definition anyway,
+// Two writers stamp with it, Worklet's projects ([worklet.Writer.ApplyChart])
+// and Doclet's containers ([doclet.Store.EnsureContainer]), and each compares a stamp only against its own kind's. One definition anyway,
 // because the rule is the control plane's rather than either writer's, and the
 // first copy of it that drifted (a seconds resolution beside a milliseconds
 // one) would make "which configuration wrote this" a question with two
@@ -25,8 +24,14 @@ import "time"
 // every node would be a record per row for a value nobody changed. The
 // activation's instant is the fleet's: stamped once by the node that
 // activated, carried on the pointer every node reads ([coord.Activation.At]),
-// and kept as a node's active revision's `activated_at`, so a boot reads the
-// same instant the reconcile applied.
+// and kept as the boot row's `served_at` ([store.Revision.ServedAt]) once this
+// node has applied it, so a boot reads the same instant the reconcile applied.
+// NOT the row's `activated_at`, which is the fleet's LATEST activation of the
+// revision — raised by a re-activation this node refused, without an apply —
+// so a boot that stamped with it would carry an activation the reconcile never
+// applied, which is the confusion the two columns exist to keep apart. (An
+// offline change not yet published boots with none: no activation has
+// stamped it, and the first apply of the one that publishes it does.)
 //
 // # An instant rather than a counter
 //
@@ -50,6 +55,6 @@ import "time"
 // — but the activation pointer publishes each one LATER, at this resolution,
 // than the one it replaces (coord.ActivationAt, decided inside the
 // compare-and-set that moves the pointer), so a later activation always
-// carries a later stamp whichever node's clock made it. The work-tracker guide
+// carries a later stamp whichever node's clock made it. The Worklet guide
 // still asks for synchronised clocks, because the stamps are read off them.
 func ActivationStamp(activatedAt time.Time) int64 { return activatedAt.UTC().UnixMilli() }

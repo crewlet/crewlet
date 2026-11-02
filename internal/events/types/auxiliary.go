@@ -71,12 +71,14 @@ const (
 	AuxStageReflection AuxStage = "reflection"
 
 	// AuxStageBackground is spent on no turn: the episode compaction,
-	// skill clustering and skill promotion passes.
+	// skill clustering and skill promotion passes, and the provider park's
+	// probe.
 	AuxStageBackground AuxStage = "background"
 
 	// AuxStageOperator is spent for a PERSON: a question answered from the
-	// knowledge base on the operator surface. A person has no seat budget,
-	// so it is charged to the company's windows alone.
+	// knowledge base on the operator surface, and every round of their
+	// Dashboard Assistant. A person has no seat budget, so it is charged to
+	// the company's windows alone.
 	AuxStageOperator AuxStage = "operator"
 )
 
@@ -118,10 +120,32 @@ const (
 	AuxSkillClustering AuxPurpose = "skill_clustering"
 	// AuxSkillPromotion promotes sibling skills to a unit's skill.
 	AuxSkillPromotion AuxPurpose = "skill_promotion"
+	// AuxProviderProbe asks a limited chain whether its usage limit has
+	// lifted: one short call when the first of its entries is tried again,
+	// outside any delivery, for every seat parked on it
+	// (internal/engine/providerpark.go).
+	AuxProviderProbe AuxPurpose = "provider_probe"
 
 	// AuxAnswerKnowledge answers a person's question from the company's
 	// pages and work items.
 	AuxAnswerKnowledge AuxPurpose = "answer_knowledge"
+
+	// AuxAssistantTurn is a round of a person's Dashboard Assistant turn:
+	// recorded here on the operator stage, and charged to the company's
+	// windows by the turn's own meter (internal/assistant).
+	AuxAssistantTurn AuxPurpose = "assistant_turn"
+	// AuxAssistantTitle names a person's assistant conversation after its
+	// first answer.
+	AuxAssistantTitle AuxPurpose = "assistant_title"
+	// AuxAssistantDeepWork is a person's deep-work run: a coding CLI's own
+	// loop, recorded once when it ends with every token it reported, and
+	// charged to the company's windows by the turn's meter (ADR-0054).
+	AuxAssistantDeepWork AuxPurpose = "assistant_deep_work"
+	// AuxAssistantBrief is a round of a person's brief turn (a Dashboard
+	// Assistant turn in brief mode): recorded apart from their questions,
+	// so what briefs cost is read on its own, and charged to the company's
+	// windows by the turn's own meter like any turn's.
+	AuxAssistantBrief AuxPurpose = "assistant_brief"
 )
 
 // auxCondensePrefix is what every compaction's purpose begins with.
@@ -133,7 +157,7 @@ const auxCondensePrefix = "condense_"
 // both directions.
 var auxCondenseKinds = []string{
 	"conversation", "thread", "argument", "tool_error", "produced",
-	"source", "task", "answer", "outcome", "report", "question",
+	"source", "task", "answer", "outcome", "report",
 }
 
 // AuxCondense is the purpose of a compaction of one kind of text:
@@ -148,8 +172,9 @@ func AuxCondenseKinds() []string { return slices.Clone(auxCondenseKinds) }
 var auxPurposes = []AuxPurpose{
 	AuxMemoryFilter, AuxKnowledgeQuery, AuxEpisodeSummary,
 	AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
-	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion,
-	AuxAnswerKnowledge,
+	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion, AuxProviderProbe,
+	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle, AuxAssistantDeepWork,
+	AuxAssistantBrief,
 }
 
 // AuxPurposes is every purpose this build publishes, compactions included.

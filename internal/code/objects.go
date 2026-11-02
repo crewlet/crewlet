@@ -13,7 +13,7 @@ import (
 )
 
 // PackReferences declares code_packs: every pack bundle a push stored is named
-// by a row here. REQUIRED (ADR-0051): a repository's bytes are the company's,
+// by a row here. REQUIRED (ADR-0074): a repository's bytes are the company's,
 // audited daily and carried by every backup — and declared in
 // internal/objstore/references, or the collector would delete every pack a day
 // after it was written.
@@ -30,7 +30,7 @@ var PackReferences = objstore.ReferenceTable{
 // RetiredPackReferences declares code_packs_retired: the packs a record
 // retired, each keeping its object from the collector for [RetireGrace] until
 // the code-retention duty's retire_sweep records remove its row — RETIRED
-// (ADR-0051), the first table any domain declares so, and reviewed with its
+// (ADR-0074), the first table any domain declares so, and reviewed with its
 // grace, its largest object and its sweep in internal/objstore/references.
 //
 // The collector asks it as it asks every declared table; the audit and the
@@ -47,7 +47,7 @@ var RetiredPackReferences = objstore.ReferenceTable{
 }
 
 // LayerReferences declares code_layer_parts: the objects a published layer's
-// bytes are stored in. DERIVED (ADR-0051): any git node can build the layer
+// bytes are stored in. DERIVED (ADR-0074): any git node can build the layer
 // again from the packs code_packs names, so the collector keeps a part while a
 // row names it, the audit never reads the table — a lost part costs a
 // publication, never data, and `objects_missing` is the alarm for lost data —
@@ -66,7 +66,7 @@ var LayerReferences = objstore.ReferenceTable{
 }
 
 // CheckLogReferences declares code_check_logs: the log a failed check's run
-// kept, one object a row names. REQUIRED (ADR-0051): the log is what a reader
+// kept, one object a row names. REQUIRED (ADR-0074): the log is what a reader
 // of a failed check is told to read, and nothing builds it again — the run is
 // gone — so it is audited, carried by every backup and copied by a store
 // move, and declared in internal/objstore/references, or the collector would

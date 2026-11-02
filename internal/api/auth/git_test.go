@@ -501,19 +501,25 @@ func TestAGitUnavailableSaysWhetherToComeBack(t *testing.T) {
 
 // A SENTENCE IS ONE LINE: git prints each line of a refusal's body as a
 // `remote:` line of its own, so a sentence spanning two reaches a person as a
-// refusal broken in two. Every caller passes a sentence of its own making, so
-// one carrying a newline inside it is the caller's bug, and a test build —
-// where every caller's sentence is exercised — panics on it rather than
-// write it; a production build folds it onto one line rather than fail a
-// refusal over its punctuation.
-func TestGitTextRefusesASentenceOfTwoLines(t *testing.T) {
+// refusal broken in two. Every caller passes a sentence of its own making,
+// and one that still carries a newline inside it is folded onto one line
+// rather than fail a refusal over its punctuation, its trailing newlines
+// trimmed and one written.
+//
+// Mutation: write the sentence as it came, and the folded cases are red.
+func TestGitTextFoldsASentenceOntoOneLine(t *testing.T) {
 	t.Parallel()
-	defer func() {
-		if recover() == nil {
-			t.Error("a sentence of two lines was written rather than refused")
+	for _, tc := range []struct{ in, want string }{
+		{"this node is draining", "this node is draining\n"},
+		{"this node is draining\n\n", "this node is draining\n"},
+		{"this node is draining\nretry in 30 s\n", "this node is draining retry in 30 s\n"},
+	} {
+		rec := httptest.NewRecorder()
+		auth.GitText(rec, http.StatusServiceUnavailable, tc.in)
+		if got := rec.Body.String(); got != tc.want {
+			t.Errorf("GitText(%q) wrote %q, want %q", tc.in, got, tc.want)
 		}
-	}()
-	auth.GitText(httptest.NewRecorder(), http.StatusServiceUnavailable, "this node is draining\nretry in 30 s\n")
+	}
 }
 
 // EVERY REFUSAL ON A GIT ROUTE IS ONE GIT PRINTS — not the 401 alone.

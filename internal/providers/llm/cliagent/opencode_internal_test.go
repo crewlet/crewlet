@@ -102,7 +102,7 @@ func TestOpenCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 	}{
 		"a seat at work": {
 			agent: true, writes: p.AppendSystemPrompt.File.Name, not: p.SystemPrompt.File.Name,
-			body: harnessNote + harnessToolsNote + "\n\n" + identity,
+			body: harnessNote + "\n\n" + identity,
 		},
 		"a side pass": {
 			agent: false, selects: true, writes: p.SystemPrompt.File.Name, not: p.AppendSystemPrompt.File.Name,
@@ -131,9 +131,6 @@ func TestOpenCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 				{Role: llm.RoleSystem, Content: identity},
 				{Role: llm.RoleUser, Content: "status?"},
 			}}
-			if tc.agent {
-				req.Tools = []llm.ToolDef{{Name: "read_file", Description: "read a file"}}
-			}
 			comp, err := ask(t, prov, req)
 			if err != nil {
 				t.Fatalf("Complete: %v", err)

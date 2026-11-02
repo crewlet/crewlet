@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Writing ONE entity: the draft PUT /config/{kind}/{id} applies.
@@ -49,6 +50,9 @@ type ApplyEntityRequest struct {
 	// Expect is the revision the caller built this edit on, empty for
 	// unconditional. See [ApplyRequest.Expect].
 	Expect string
+
+	// Engine marks the engine's own write. See [ApplyRequest.Engine].
+	Engine bool
 }
 
 // ApplyEntity splices one entity into the active revision and activates it.
@@ -57,12 +61,51 @@ func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Appl
 	if err != nil {
 		return Applied{}, err
 	}
-	d.by = req.By
+	d.by, d.engine = req.By, req.Engine
 	prepared, err := s.prepare(ctx, d)
 	if err != nil {
 		return Applied{}, err
 	}
 	return s.commit(ctx, prepared, req.Summary)
+}
+
+// CheckEntity is a dry run of one entity write from inside this process: the
+// entity spliced into a copy of the fleet's revision (replacing the one under
+// id, or with create added beside the rest) and the whole document held to
+// the rules a write is, exactly as `PUT /config/{kind}/{id}?dry_run=true`
+// does. Nothing is stored. It answers the proposed company, which is what the
+// model routes test a draft entry from (internal/api/llmapi): a model a person
+// is creating or changing the sign-in of is tested as the document would run
+// it before the document is written.
+//
+// The refusals are the write's: a [*ManagedError] for a credential a managed
+// document refuses, an [*EntityError] for an entity the collection cannot
+// take, and a [*ValidationError] for a company the entity leaves invalid.
+func (s *Service) CheckEntity(ctx context.Context, kind, id string, body []byte,
+	create bool, by iam.Actor) (*config.Company, error) {
+
+	d, err := entityDraft(kind, id, asText(body), "", create)
+	if err != nil {
+		return nil, err
+	}
+	d.by = by
+	prepared, err := s.prepare(ctx, d)
+	if err != nil {
+		return nil, err
+	}
+	return prepared.company, nil
+}
+
+// ActiveCompany is the fleet's company, UNREDACTED, and the revision it is.
+// For an in-process caller that has to resolve what an entry reads (the model
+// routes, which test and seal its credential); never answered to a caller as
+// it stands. [ErrNoActiveRevision] when the fleet runs none.
+func (s *Service) ActiveCompany(ctx context.Context) (*config.Company, string, error) {
+	company, revision, err := s.activeCompany(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return company, revision.ID, nil
 }
 
 // EntityError reports an entity write the document refused: no such entity,
@@ -80,8 +123,8 @@ func (e *EntityError) Unwrap() error { return e.Err }
 func entityDraft(kind, id string, body submitted, expect string, create bool) (draft, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
-		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q (want one of %v)",
-			ErrUnknownEntityKind, kind, EntityKinds())}
+		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q isn't one of %s",
+			ErrUnknownEntityKind, kind, words.Or(EntityKinds()))}
 	}
 	return draft{
 		expect: expect, requireActive: true,
@@ -89,7 +132,7 @@ func entityDraft(kind, id string, body submitted, expect string, create bool) (d
 		// that no longer exists is valid on its own and breaks the
 		// company, and a per-entity surface is exactly where that gets
 		// introduced.
-		rules: authoredRules,
+		rules: authoredRules, authored: true,
 		build: func(b base) (*config.Company, []byte, error) {
 			// A SECOND COPY, so the splice lands on a document that still
 			// has everything the caller did not send, and the prior stays

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -16,7 +15,7 @@ import (
 // end rather than as one of these.
 func TestTheStopReasonSetIsClosedAndEmptyIsUnreported(t *testing.T) {
 	t.Parallel()
-	for _, r := range []llm.StopReason{llm.StopEnd, llm.StopToolUse} {
+	for _, r := range []llm.StopReason{llm.StopEnd, llm.StopToolUse, llm.StopCap} {
 		if !r.Valid() {
 			t.Errorf("%q: Valid() = false, want true", r)
 		}
@@ -88,82 +87,55 @@ func TestSendDropsEmptyFragmentsAndKeepsRestarts(t *testing.T) {
 	llm.Request{}.Send(llm.Delta{Content: "nobody asked"}) // no callback: no panic
 }
 
-// fill sets every exported field reachable from v to a non-zero value derived
-// from seed, so a field that is not copied cannot pass as an equal zero.
-func fill(v reflect.Value, seed string) {
-	switch v.Kind() {
-	case reflect.String:
-		v.SetString(seed)
-	case reflect.Int, reflect.Int64:
-		v.SetInt(int64(len(seed)))
-	case reflect.Bool:
-		v.SetBool(true)
-	case reflect.Slice:
-		s := reflect.MakeSlice(v.Type(), 1, 1)
-		fill(s.Index(0), seed)
-		v.Set(s)
-	case reflect.Uint8:
-		v.SetUint(uint64(seed[0]))
-	case reflect.Map:
-		m := reflect.MakeMap(v.Type())
-		val := reflect.New(v.Type().Elem()).Elem()
-		fill(val, seed)
-		m.SetMapIndex(reflect.ValueOf(seed), val)
-		v.Set(m)
-	case reflect.Interface:
-		v.Set(reflect.ValueOf(seed))
-	case reflect.Struct:
-		for i := range v.NumField() {
-			if v.Type().Field(i).IsExported() {
-				fill(v.Field(i), seed+"."+v.Type().Field(i).Name)
-			}
+// WHAT WAS SHOWN NEVER QUIETLY DIFFERS FROM WHAT IS TRUE. Reconcile appends
+// only when the shown text is a prefix of the answer, and otherwise starts
+// the reader over with the whole answer, so applying its result to the shown
+// text always yields the answer exactly.
+func TestReconcileAlwaysLandsOnTheAnswer(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		shown, want, tail string
+		restart           bool
+	}{
+		{"", "", "", false},
+		{"", "The sea", "The sea", false},
+		{"The sea", "The sea", "", false},
+		{"The sea", "The sea stays", " stays", false},
+		{"The sea st", "The tide", "The tide", true},
+		{"The sea stays", "The sea", "The sea", true},
+	}
+	for _, c := range cases {
+		tail, restart := llm.Reconcile(c.shown, c.want)
+		if tail != c.tail || restart != c.restart {
+			t.Errorf("Reconcile(%q, %q) = (%q, %v), want (%q, %v)",
+				c.shown, c.want, tail, restart, c.tail, c.restart)
+		}
+		landed := c.shown + tail
+		if restart {
+			landed = tail
+		}
+		if landed != c.want {
+			t.Errorf("Reconcile(%q, %q) lands the reader on %q", c.shown, c.want, landed)
 		}
 	}
 }
 
-// A COMPLETION'S TURN CARRIES EVERYTHING THE TWO SHARE. The assistant turn a
-// conversation grows by is built in one place, and this holds that place to
-// the two types: every field of the answer that the turn also has is copied,
-// and a field added to EITHER type fails here until it is decided — copied,
-// or named below as belonging to one side only.
-func TestACompletionsTurnCarriesEverythingItShares(t *testing.T) {
+// A LIMIT'S WINDOW IS ONE OF A CLOSED SET. A reader that draws one (the Models
+// screen) is held to LimitWindows, so what Valid admits and what the set lists
+// are one list: a window added to one and not the other fails here.
+func TestALimitWindowIsOneOfTheClosedSet(t *testing.T) {
 	t.Parallel()
-	var c llm.Completion
-	fill(reflect.ValueOf(&c).Elem(), "c")
-	m := c.Message()
-
-	if m.Role != llm.RoleAssistant {
-		t.Errorf("role = %q, want assistant", m.Role)
-	}
-
-	// The turn's own fields: a role, and the three that describe a tool
-	// RESULT rather than an answer.
-	turnOnly := map[string]bool{"Role": true, "ToolCallID": true, "Name": true, "Failed": true}
-	// The answer's own: who served it and what it cost and why it stopped
-	// — the round's record, not the conversation's.
-	answerOnly := map[string]bool{
-		"Model": true, "ProviderKey": true, "StopReason": true,
-		"InputTokens": true, "OutputTokens": true, "CacheRead": true, "CacheWrite": true,
-	}
-	cv, mv := reflect.ValueOf(c), reflect.ValueOf(m)
-	for i := range mv.NumField() {
-		name := mv.Type().Field(i).Name
-		if turnOnly[name] {
-			continue
-		}
-		field := cv.FieldByName(name)
-		if !field.IsValid() {
-			t.Errorf("Message.%s has no counterpart on Completion: copy it in Completion.Message or name it turn-only here", name)
-			continue
-		}
-		if !reflect.DeepEqual(field.Interface(), mv.Field(i).Interface()) {
-			t.Errorf("Message.%s = %v, want the completion's %v", name, mv.Field(i), field)
+	for _, w := range llm.LimitWindows {
+		if !w.Valid() {
+			t.Errorf("%q is in LimitWindows and not Valid", w)
 		}
 	}
-	for i := range cv.NumField() {
-		name := cv.Type().Field(i).Name
-		if !answerOnly[name] && !mv.FieldByName(name).IsValid() {
-			t.Errorf("Completion.%s reaches no turn: give Message the field or name it answer-only here", name)
+	for _, w := range []llm.LimitWindow{"", "five_hour", "seven_day", "monthly"} {
+		if w.Valid() {
+			t.Errorf("%q is Valid and not in LimitWindows", w)
 		}
+	}
+	if len(llm.LimitWindows) != 4 {
+		t.Errorf("LimitWindows has %d windows, want session, weekly, model and unknown", len(llm.LimitWindows))
 	}
 }

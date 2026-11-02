@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
@@ -13,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // MOVING THE FLEET'S FILES TO AN S3 BUCKET: `crewlet objects migrate --to s3`.
@@ -201,7 +201,7 @@ func (e *Engine) migrationReferences() (collect.References, error) {
 		return nil, migrationRefused("this node holds no copy of the company's records; run the " +
 			"migration against a data node")
 	}
-	estates := objectEstatesFor(n, e.ArtifactsReader())
+	estates := objectEstatesFor(n, e.ArtifactsReader(), e.AssistantReader())
 	if len(estates) == 0 {
 		return nil, migrationRefused("this node holds no copy of the company's records; run the " +
 			"migration against a data node")
@@ -230,9 +230,12 @@ func (e *Engine) fenced(ctx context.Context) error {
 		for _, a := range admissions {
 			nodes = append(nodes, a.NodeID)
 		}
-		return migrationRefused("%s may still publish records naming objects (each holds an "+
-			"admission): restart every node in maintenance mode, or exclude one that is gone "+
-			"for good with `crewlet retention maintenance exclude`", strings.Join(nodes, ", "))
+		// NO EXCLUSION TO OFFER, for [Engine.openCapacity]'s reason: an
+		// exclusion is a gesture on an open capacity window, and a final
+		// pass is none.
+		return migrationRefused("these nodes may still publish records naming objects, since "+
+			"each holds an admission: %s. Restart each in maintenance mode. A node withdraws "+
+			"its admission when it stops", words.And(nodes))
 	}
 	if !e.StateLogHydrated(ctx) {
 		return migrationRefused("this node has not applied the company's records to the end of " +

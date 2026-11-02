@@ -105,6 +105,12 @@ func (s *Store) put(ctx context.Context, key Key, r io.Reader, limit int64, m Pu
 	switch {
 	case in.err != nil:
 		return Object{}, in.err
+	case err != nil && ctx.Err() != nil:
+		// THE CALLER'S OWN CONTEXT ENDED while the backend held the put,
+		// which says so whatever the backend's library called it.
+		return Object{}, fmt.Errorf("objstore: store the object: %w: %w", ctx.Err(), err)
+	case err != nil && !errors.Is(err, ErrFull):
+		return Object{}, fmt.Errorf("objstore: store the object: %w: %w", ErrUnanswered, err)
 	case err != nil:
 		return Object{}, fmt.Errorf("objstore: store the object: %w", err)
 	case !in.ended:

@@ -9,7 +9,7 @@ import (
 // THE REST BASE IS DERIVED, NEVER THE RAW URL — and on Enterprise Server the
 // difference is destructive rather than cosmetic.
 //
-// [github.ReconcileSeatApps] reads a 404 from the installation endpoints as an
+// [github.AdoptSeatApps] reads a 404 from the installation endpoints as an
 // app GitHub no longer has, and FORGETS the seat's app: the id, the slug and
 // the pointer to a private key GitHub issues once and never reissues. Handed
 // `https://ghe.example.com` as the API base, every call goes to a path the

@@ -102,6 +102,28 @@ type Source interface {
 	PurgeTrashed(ctx context.Context, id string, cutoff time.Time, opID string) error
 }
 
+// Termed is a [Source] whose items keep a term of their own rather than the
+// reaper's: the assistant's conversations, kept `assistant.retention_days` after
+// they were last used, beside a trash every other source keeps thirty days.
+//
+// OPTIONAL, and asked at every pass rather than once, because the term is
+// company configuration that an apply may change while the duty runs. A term
+// under [MinTerm] fails that source's pass and purges nothing: the floor is
+// the reaper's guard against a mistake destroying what people expected to keep,
+// whichever source states the term.
+//
+// A TERM MAY BE UNKNOWN, and Term then answers why. The assistant's is the
+// term of the revision the fleet's activation pointer names, which a node that
+// does not run that very revision cannot know, and a term guessed in its
+// place is one the company may have lengthened: every item between the two
+// would be purged for good. An unknown term fails that source's pass the way a
+// term under the floor does, and purges nothing of it, so what it would have
+// purged waits for a pass that can read the term. The other sources keep the
+// reaper's term and are reaped as ever.
+type Termed interface {
+	Term(ctx context.Context) (time.Duration, error)
+}
+
 // Reports is where the reaper keeps its last report: the coordination store's
 // trash reap record (coord.TrashReaps), narrowed to the two calls made here.
 type Reports interface {
@@ -272,6 +294,10 @@ type SourceReport struct {
 	Skipped int `json:"skipped"`
 	Failed  int `json:"failed"`
 
+	// Cutoff is the instant this source's items had to be untouched since
+	// for its term ([Termed]), and zero where it keeps the reaper's.
+	Cutoff time.Time `json:"cutoff,omitzero"`
+
 	// More says the pass stopped at [MaxPerPass] with items still due.
 	More bool `json:"more,omitempty"`
 
@@ -405,7 +431,17 @@ func (r *Reaper) Pass(ctx context.Context) (Report, error) {
 	}
 	var failures []error
 	for _, src := range r.sources {
-		got, err := r.reap(ctx, src, slot, report.Cutoff)
+		cutoff, own, err := sourceCutoff(ctx, src, slot, report.Cutoff)
+		if err != nil {
+			report.Sources = append(report.Sources, SourceReport{Source: src.Name(),
+				Error: err.Error()})
+			failures = append(failures, fmt.Errorf("trashreap: %s: %w", src.Name(), err))
+			continue
+		}
+		got, err := r.reap(ctx, src, slot, cutoff)
+		if own {
+			got.Cutoff = cutoff
+		}
 		report.Sources = append(report.Sources, got)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("trashreap: %s: %w", src.Name(), err))
@@ -435,6 +471,29 @@ func (r *Reaper) Pass(ctx context.Context) (Report, error) {
 		failures = append(failures, fmt.Errorf("trashreap: record the pass: %w", err))
 	}
 	return report, errors.Join(failures...)
+}
+
+// sourceCutoff is the cutoff src is reaped at in the pass of slot: its own
+// term's ([Termed]), or the reaper's, and whether it is its own. A term the
+// source cannot state is an error, and so no cutoff at all.
+func sourceCutoff(ctx context.Context, src Source, slot,
+	reaperCutoff time.Time) (time.Time, bool, error) {
+
+	termed, ok := src.(Termed)
+	if !ok {
+		return reaperCutoff, false, nil
+	}
+	term, err := termed.Term(ctx)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("the source's term is unknown, so nothing "+
+			"of it is purged until a pass can read it: %w", err)
+	}
+	if term < MinTerm {
+		return time.Time{}, false, fmt.Errorf("the source's term of %v is under the %v "+
+			"minimum, so nothing is purged until it states one a person could take an "+
+			"item back within", term, MinTerm)
+	}
+	return slot.Add(-term), true, nil
 }
 
 // schedule is when the pass after report is due.

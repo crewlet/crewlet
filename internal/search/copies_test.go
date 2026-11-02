@@ -23,7 +23,7 @@ type copiesOf struct {
 func (c copiesOf) Serves(_ context.Context, src search.Source) bool { return !c.out[src] }
 func (c copiesOf) VectorsServe(context.Context) bool                { return !c.vectorsOut }
 
-// A PARTICIPANT WHOSE COPY IS OUT OF SERVICE COVERS NOTHING — ADR-0049.
+// A PARTICIPANT WHOSE COPY IS OUT OF SERVICE COVERS NOTHING — ADR-0072.
 //
 // A copy out of service is wrong rather than behind, and the index over it is
 // over rows that stopped being the fleet's. Scanned anyway, the participant

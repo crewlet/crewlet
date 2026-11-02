@@ -25,7 +25,7 @@ func TestAnUnknownGrantIsKeptAndIgnored(t *testing.T) {
 		Login:  "jane.doe",
 		Kind:   KindPerson,
 		Stage:  StageActive,
-		Grants: []Grant{GrantKnowledge, fromTheFuture, GrantAdmin},
+		Grants: []Grant{GrantDoclet, fromTheFuture, GrantAdmin},
 	}
 
 	if err := p.Validate(); err != nil {
@@ -44,10 +44,10 @@ func TestAnUnknownGrantIsKeptAndIgnored(t *testing.T) {
 	}
 	// AND AN APP IS ITS OWN, without admin: the knowledge holder reads
 	// pages and files no work.
-	app := Principal{Grants: []Grant{GrantKnowledge}}
-	if !app.Can(GrantKnowledge) || app.Can(GrantTracker) || app.Can(GrantAdmin) {
-		t.Errorf("an app holder can %v / %v / %v, want knowledge alone",
-			app.Can(GrantKnowledge), app.Can(GrantTracker), app.Can(GrantAdmin))
+	app := Principal{Grants: []Grant{GrantDoclet}}
+	if !app.Can(GrantDoclet) || app.Can(GrantWorklet) || app.Can(GrantAdmin) {
+		t.Errorf("an app holder can %v / %v / %v, want Doclet alone",
+			app.Can(GrantDoclet), app.Can(GrantWorklet), app.Can(GrantAdmin))
 	}
 
 	// THE CONTROL. Validate has to be able to refuse something, or the

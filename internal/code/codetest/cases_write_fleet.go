@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ENGINE WRITE'S FLEET CASES (ADR-0059, ADR-0062): what only more than one
+// THE ENGINE WRITE'S FLEET CASES (ADR-0082, ADR-0085): what only more than one
 // git node can make of a write asked through the estate's routing
 // (code.git_write) — the member it is asked through, the home that builds it,
 // the home that dies under it, a member behind the company's configuration.
@@ -27,7 +27,7 @@ func (rc *repoCase) writesOf(id string) []code.PushRow {
 	return rows
 }
 
-// F40: EVERY MEMBER ROUTES AN ENGINE WRITE TO THE REPOSITORY'S HOME (ADR-0059).
+// F40: EVERY MEMBER ROUTES AN ENGINE WRITE TO THE REPOSITORY'S HOME (ADR-0082).
 // A seat's write asked through each member's own router — the home's among
 // them, which asks its own git half in process at its place — is built by the
 // repository's home and by no other member: the git node that built a write is
@@ -72,7 +72,7 @@ func everyMemberRoutesAnEngineWriteToTheHome(t *testing.T, c Cluster) {
 	rc.converged()
 }
 
-// F41: AN ENGINE WRITE WHOSE HOME DIES AFTER ITS APPEND IS ONE PUSH (ADR-0062).
+// F41: AN ENGINE WRITE WHOSE HOME DIES AFTER ITS APPEND IS ONE PUSH (ADR-0085).
 // The repository's home builds a seat's write and lands it — its proposal
 // answered, its record durable — and dies before it answers: a CRASH at
 // code.HostAfterPropose, never a Block (F21's rule), and the member KILLED,

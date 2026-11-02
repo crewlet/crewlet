@@ -21,7 +21,7 @@ var ErrNoChart = errors.New("authz: this surface holds no company chart, so " +
 //   - somebody else's record named by a LOGIN, to a caller who leads
 //     somebody — the chart can say whether they lead its holder only of the
 //     seat the login resolves to;
-//   - a work item to a caller without the tracker app ([ClassAppOrAsked]) —
+//   - a work item to a caller without the Worklet app ([ClassAppOrAsked]):
 //     whether an open ask on it names them is on the row;
 //   - a row whose container and author nobody has read ([ClassTidy],
 //     [ClassContainer], [ClassDestructive]) — which project or space it is

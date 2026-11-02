@@ -43,7 +43,7 @@ rest.
 
 It does not decide **which CLIs are supported**: that is the profile table in
 `internal/providers/llm/cliagent/cliprofile`, and adding one is a profile, not
-a backend. It does not decide **how a CLI is driven** — text mode behind the
-engine's tool loop or agent mode as the executor, the per-seat homes, the
-envelope tool channel — which is `cliagent`'s own doc. And it does not touch
+a backend. It does not decide **how a CLI is driven** — on this host or in a
+box, the per-seat homes — which is `cliagent`'s own doc, nor how a phase's
+tools reach it, which is [ADR-0049](0049-a-phases-tools-reach-its-cli-as-one-mcp-server.md). And it does not touch
 **embeddings**, whose client stays an SDK for the reason above.

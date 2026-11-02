@@ -6,8 +6,8 @@
  *
  * The four tiles and the fortnight chart are ONE answer — `seat_activity`
  * with `previous` — so "+9 vs last week" and the chart's first seven columns
- * are the same days, summed from every node's usage rows rather than from the
- * answering node's event log. The first-pass rate is the engine's own
+ * are the same days, summed from every data node's usage rows rather than
+ * from the answering node's event log. The first-pass rate is the engine's own
  * percentage over REVIEWED turns (a turn nobody reviewed has no verdict), the
  * median and the p90 are its quantiles, and the tokens tile is the seat's
  * CAPPED window where it has one, so the figure and its ceiling are one
@@ -19,13 +19,13 @@
  * memory, no turn list, no phase history: the engine never spawns a person,
  * so every one of those reads would be a question about a thing that cannot
  * exist. What it shows is their day (theirs, their lead's or an admin's to
- * read, each with Tracker), the work assigned to them and who they are.
+ * read, each with Worklet), the work assigned to them and who they are.
  *
  * # Status for everybody, the rest by access
  *
  * An agent's figures, its state and its setup's public half are the
- * overview's. Its open work and the task its turn is on are the tracker's,
- * asked only with Tracker; its memory and its turns' tokens are its trail,
+ * overview's. Its open work and the task its turn is on are Worklet's,
+ * asked only with Worklet; its memory and its turns' tokens are its trail,
  * asked only by an admin or its lead (`profile.ts`' `mayReadTrail`) — and
  * each part a reader may not read is drawn locked, saying what opens it.
  */
@@ -44,7 +44,7 @@ import {
   StatusDot,
   Stepper,
   Tag,
-  useMediaMatch,
+  useScreenBelow,
 } from "@crewlethq/ui";
 import { BrainGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
@@ -105,6 +105,7 @@ import {
   failedIn,
   feedRows,
   fortnight,
+  lastTurnEnded,
   mayReadRecord,
   mayReadTrail,
   placementWords,
@@ -118,7 +119,8 @@ import {
   workersWords,
   type SeatTab,
 } from "./profile.ts";
-import { ADMIN, TRACKER, WITHHELD_WHY, needsWords } from "~/lib/access.ts";
+import { ADMIN, WORKLET, WITHHELD_WHY, needsWords } from "~/lib/access.ts";
+import { RunQuestionLine } from "~/components/RunQuestion.tsx";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { ModelChain, YourAccount } from "./shared.tsx";
 import { answersAddress, detailItem, itemAddress, itemPath, turnItem } from "~/lib/work.ts";
@@ -359,7 +361,7 @@ function CurrentTurn({
   const runs = useServicesRun();
   const ask = useServicesAsk();
   const sandboxes = useSandboxes();
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useScreenBelow(PHONE_BREAKPOINT);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
   const turnId = turnIdOf(agent);
@@ -374,7 +376,7 @@ function CurrentTurn({
   const itemTurns = useQuery(
     "work_item_turns",
     { id: asked, limit: 1 },
-    { enabled: viewer.tracker && runs.tracker && onTurn && asked !== "" },
+    { enabled: viewer.worklet && runs.tracker && onTurn && asked !== "" },
   );
   // WHAT THE TASK IS CALLED, read by the turn's own item — never a lookup in
   // the Assigned-work card's top five: a turn on a task outside those five
@@ -383,7 +385,7 @@ function CurrentTurn({
   const item = useQuery(
     "work_item",
     { id: asked },
-    { enabled: viewer.tracker && ask.tracker && onTurn && asked !== "" },
+    { enabled: viewer.worklet && ask.tracker && onTurn && asked !== "" },
   );
   // THE PHASES THIS TURN HAS RECORDED, for its tokens: the seat's newest
   // turn row is this turn's once any phase of it has completed.
@@ -421,8 +423,7 @@ function CurrentTurn({
         </Card.Header>
         {last && (
           <p className="prof-turn-last">
-            Its last turn {last.outcome === "failed" ? "failed" : "ended"}{" "}
-            {relTime(last.ended_at, now)}.
+            Its last turn {lastTurnEnded(last.outcome)} {relTime(last.ended_at, now)}.
           </p>
         )}
       </Card>
@@ -470,7 +471,7 @@ function CurrentTurn({
           key ? (
             <span className="prof-turn-about">
               {ordinal ? `Turn ${ordinal} on ` : "On "}
-              <a className="work-key mono" href={href(["work", opens])}>
+              <a className="work-key mono" href={href(["worklet", opens])}>
                 {key}
               </a>
               {title && ` · ${title}`}
@@ -507,7 +508,8 @@ function CurrentTurn({
       </div>
       {asking && (
         <p className="prof-turn-ask">
-          Its coding run is waiting on a question: {sandbox?.question || "(no question recorded)"}
+          Its coding run is waiting on a question:{" "}
+          <RunQuestionLine question={sandbox?.question} empty="(no question recorded)" />
         </p>
       )}
       {rows.length > 0 ? (
@@ -561,12 +563,12 @@ function AssignedWork({
   const self = isOwnSeat(viewer, seat.handle);
   const rows = work.data?.items ?? [];
   const total = work.data?.total_hint ?? rows.length;
-  // CREWLET WORKS' CARD, not drawn where the company runs none: no task is
+  // WORKLET'S CARD, not drawn where the company runs none: no task is
   // assigned anybody here, and a lock would say there was one to open.
   if (!runs.tracker) return null;
-  if (!viewer.tracker) {
-    // THE TRACKER'S, and never asked without it: drawn locked — once the
-    // viewer has said so, and waited for until it has.
+  if (!viewer.worklet) {
+    // WORKLET'S, and never asked without it: drawn locked once the viewer
+    // has said so, and waited for until it has.
     return (
       <Card padding="none" className="prof-card">
         <Card.Header>
@@ -575,7 +577,7 @@ function AssignedWork({
         {viewer.loading ? (
           <Skeleton variant="text" rows={3} label="Checking your access" />
         ) : (
-          <GrantRequired size="compact" grants={[TRACKER]} reader={viewer.login} />
+          <GrantRequired size="compact" grants={[WORKLET]} reader={viewer.login} />
         )}
       </Card>
     );
@@ -585,7 +587,7 @@ function AssignedWork({
       <Card.Header
         actions={
           total > 0 ? (
-            <a className="t-link" href={href(["work", "tasks"], { assignee: seat.handle })}>
+            <a className="t-link" href={href(["worklet", "tasks"], { assignee: seat.handle })}>
               All {total.toLocaleString()}
               {work.data?.total_capped ? "+" : ""}
             </a>
@@ -1067,14 +1069,14 @@ function HumanOverview({
 }: OverviewProps) {
   const viewer = useViewer();
   // A PERSON RECORD IS THEIRS: their unread notices, the order they mean to
-  // work in and who set it. The engine answers it to a Tracker holder who is
+  // work in and who set it. The engine answers it to a Worklet holder who is
   // its owner, leads them or is an admin — so it is asked where this page can
   // tell it will be answered ([mayReadRecord]), and WITHHELD by a sentence
   // elsewhere rather than drawn as a person with nothing to do.
   const self = isOwnSeat(viewer, seat.handle);
   // NOBODY HOLDS THE SEAT, so nobody's day is read: the holding callout
   // above offers to fill it, and the stats would be about nobody.
-  // AND NOT AT ALL where the company runs no Crewlet Works, whose record it
+  // AND NOT AT ALL where the company runs no Worklet, whose record it
   // is: the day is not drawn, rather than drawn withheld.
   const runs = useServicesRun();
   const mayRead = !unheld && runs.tracker && mayReadRecord(viewer, index, seat.handle);
@@ -1201,9 +1203,9 @@ function HumanOverview({
               <Card.Title as="h3">Their day</Card.Title>
             </Card.Header>
             <p className="prof-note">
-              {viewer.tracker
+              {viewer.worklet
                 ? "Their day is theirs: their lead and an admin read it too."
-                : needsWords("Their day", [TRACKER])}
+                : needsWords("Their day", [WORKLET])}
             </p>
           </Card>
         )}

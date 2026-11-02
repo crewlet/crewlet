@@ -16,8 +16,8 @@
  * The root is a directory's listing (`code_tree`); any other path is asked as a
  * file (`code_blob`), which the git node answers with the directory's listing
  * where the path names one, so a path is one read whatever it turns out to be.
- * A listing and a file are read a page at a time, the first page held still
- * from the press of Load more (`lib/usePaged.ts`), and a file's pages
+ * A listing and a file are read a page at a time, each page joined to the one
+ * before it (`lib/usePaged.ts`), and a file's pages
  * concatenate to its bytes, a line longer than a page continued on the next.
  *
  * # A Permalink names the commit
@@ -44,7 +44,7 @@ import {
 import { fmtBytes, fmtCount, fmtDateTime, plural } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
-import { usePageHold, usePaged, type Paged } from "~/lib/usePaged.ts";
+import { usePaged, type Paged } from "~/lib/usePaged.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type {
   CodeBlameCommit,
@@ -111,11 +111,10 @@ function RootListing({ repo, rev, path, onRev }: Place) {
     () => ({ name: repo.name, ...(rev ? { ref: rev } : {}) }),
     [repo.name, rev],
   );
-  const hold = usePageHold<CodeGitAnswer>(params);
-  const first = useCodeQuery("code_tree", params, { hold: hold.holding });
+  const first = useCodeQuery("code_tree", params);
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_tree", { ...params, cursor }),
     entriesOf,
     partId,
@@ -155,11 +154,10 @@ function PathView({
     () => ({ name: repo.name, path, ...(rev ? { ref: rev } : {}) }),
     [repo.name, path, rev],
   );
-  const hold = usePageHold<CodeGitAnswer>(params);
-  const first = useCodeQuery("code_blob", params, { hold: hold.holding });
+  const first = useCodeQuery("code_blob", params);
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_blob", { ...params, cursor }),
     entriesOf,
     partId,
@@ -333,7 +331,7 @@ function Pager({ paged, what }: { paged: Paged<PathPart, CodeGitAnswer>; what: s
         <Button
           size="small"
           variant="secondary"
-          onClick={paged.older}
+          onClick={paged.next}
           disabled={paged.paging}
           loading={paged.paging}
         >
@@ -528,11 +526,10 @@ function Blame({
     () => ({ name: repo.name, path, ...(rev ? { ref: rev } : {}) }),
     [repo.name, path, rev],
   );
-  const hold = usePageHold<CodeGitAnswer>(params);
-  const first = useCodeQuery("code_blame", params, { hold: hold.holding });
+  const first = useCodeQuery("code_blame", params);
   const paged = usePaged(
-    hold,
     first,
+    params,
     (cursor) => codeRest.query("code_blame", { ...params, cursor }),
     (a: CodeGitAnswer): readonly CodeBlameLine[] => a.blame?.lines ?? [],
     (l: CodeBlameLine) => String(l.line),
@@ -615,7 +612,7 @@ function Blame({
             <Button
               size="small"
               variant="secondary"
-              onClick={paged.older}
+              onClick={paged.next}
               disabled={paged.paging}
               loading={paged.paging}
             >

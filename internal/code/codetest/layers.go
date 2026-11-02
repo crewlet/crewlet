@@ -19,7 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// THE PUBLISHED LAYERS AS A CASE READS THEM (ADR-0061): every cache synced at
+// THE PUBLISHED LAYERS AS A CASE READS THEM (ADR-0084): every cache synced at
 // the log's head holds an installed chain that is a PREFIX of the rows' chain,
 // in the rows' order, every installed layer's files passing the check every
 // git node holds a layer to (code.CheckLayer) over packs the copy holds — M2's

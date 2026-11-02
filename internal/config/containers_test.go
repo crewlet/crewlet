@@ -7,7 +7,7 @@ import (
 )
 
 // THE GRAMMAR IS THE NARROWEST BACKEND'S, and that is what makes the org
-// chart portable: a native company that wrote a key Jira cannot hold would
+// chart portable: a company on Worklet that wrote a key Jira cannot hold would
 // have to rename its whole hierarchy on the day it switched, with every item
 // key it ever minted pointing at the old name.
 func TestAContainerKeyIsPortableAcrossBackends(t *testing.T) {

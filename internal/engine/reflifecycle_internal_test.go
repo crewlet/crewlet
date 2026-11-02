@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -22,10 +23,11 @@ import (
 // asked of the real code-retention pass a node builds — its listing, its
 // proposals to the repository's committer through the estate router, and the
 // committer's decide — over the real code host's rows. The turns are the
-// engine's own: its launcher resolving a run's repositories, and the seat's
-// code tools, each through the node's code seam (CodeToolDeps); and what the
-// pass asks of the live turns is the engine's own holds reader over the run
-// store the launches wrote and the node's registry of running turns.
+// engine's own: its launches, the checkouts that resolve a run's repositories
+// and the seat's code tools, each through the node's code seam
+// (CodeToolDeps); and what the pass asks of the live turns is the engine's own
+// holds reader over the run store the launches wrote and the node's registry
+// of running turns.
 //
 // THE BOXES ARE THE LAUNCH RIG'S, never the node's own sandbox runtime: the
 // rig's coordinator is never started, so a parked run stays parked until a
@@ -59,12 +61,10 @@ units:
         handle: swe
         llm: zulu
         code: {access: full_access}
-        sandbox: {enabled: true}
       - name: QA
         handle: qa
         llm: zulu
         code: {access: full_access}
-        sandbox: {enabled: true}
 code:
   native: true
   repos:
@@ -104,16 +104,33 @@ func (lc *refLifecycle) deps(skew time.Duration) builtin.CodeDeps {
 	return deps
 }
 
-// launch launches turn's run on the node's code seam with repos, and answers
-// its row.
+// launch launches turn's run as the engine's executor launch opens its job —
+// the turn's holds sealed for the row and handed to it, the row's writer
+// attached once it exists ([launchHolds]) — granting it no repository
+// (ADR-0086), then checks each of repos out on that job through the node's
+// code seam, as the run's bridged `code_checkout` does ([runCheckouts]), and
+// answers its row.
 func (lc *refLifecycle) launch(t *testing.T, turn *turnctx.Turn, repos ...builtin.RepoRequest) sandbox.PendingRun {
 	t.Helper()
-	l := &launcher{engine: lc.rig.e, code: lc.deps(0)}
-	if _, err := l.Launch(t.Context(), turn, builtin.SandboxRequest{Brief: "fix the failing test",
-		Repos: repos}); err != nil {
-		t.Fatalf("Launch: %v", err)
+	ctx := t.Context()
+	hold := launchHolds(turn.Holding(), lc.rig.pending, turn.RunID)
+	opened, err := lc.rig.pending.BeginLaunch(ctx, sandbox.PendingRun{TurnID: turn.RunID,
+		AgentHandle: turn.Seat.Handle(), AgentID: "a-1", Role: turn.Seat.Name,
+		CodingAgent: codingagent.ClaudeCodeName, Placement: string(lc.rig.placement), Reply: "tool",
+		CodeHolds: hold.ids, CreatedAt: time.Now().UTC()}, sandbox.Fence{})
+	if err != nil {
+		hold.settle(err)
+		t.Fatalf("begin the launch: %v", err)
 	}
-	row, found, err := lc.rig.pending.Get(t.Context(), turn.RunID)
+	hold.opened(opened.LaunchID)
+	desk := runCheckouts{engine: lc.rig.e, deps: func() builtin.CodeDeps { return lc.deps(0) }}
+	for _, req := range repos {
+		got, err := desk.Checkout(ctx, turn, opened.LaunchID, req)
+		if err != nil || got.Outcome != sandbox.GrantAdded {
+			t.Fatalf("the checkout of %s answered %+v, %v; want it added", req.Repo, got, err)
+		}
+	}
+	row, found, err := lc.rig.pending.Get(ctx, turn.RunID)
 	if err != nil || !found {
 		t.Fatalf("the launched run's row: found %v, %v", found, err)
 	}
@@ -178,15 +195,16 @@ func (lc *refLifecycle) exists(t *testing.T, repo *code.RepoDetail, ref string) 
 const eng42 = "refs/heads/seats/swe/ENG-42"
 
 // parkRelaunched drives the relaunch scenario: swe's eng42 on web was last
-// pushed by an earlier turn; a native executor on ENG-42 calls run_sandbox
-// with web, its box checking the branch out and pushing nothing, and parks;
-// answered, the resumed executor relaunches with api alone — the row's grants
-// no longer name web — and parks again, its frame returning. It answers the
+// pushed by an earlier turn; a Worklet executor on ENG-42 checks web out with
+// code_checkout, its box checking the branch out and pushing nothing, and
+// parks; answered, the resumed executor's fresh launch — a reset that carries
+// no grant of the job before it — checks out api alone, so the row's grants
+// no longer name web, and parks again, its frame returning. It answers the
 // run's turn id.
 func (lc *refLifecycle) parkRelaunched(t *testing.T) string {
 	t.Helper()
 	lc.seatPush(t, "swe", lc.web, eng42, oidAt(42))
-	item := &types.WorkItem{Backend: types.WorkNative, ID: "task-42", Key: "ENG-42"}
+	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "task-42", Key: "ENG-42"}
 	turn := lc.rig.turn(t, "swe", item)
 	frame := lc.turns.running(turn.Holds)
 	first := lc.launch(t, turn, builtin.RepoRequest{Repo: lc.web.Name})
@@ -202,16 +220,16 @@ func (lc *refLifecycle) parkRelaunched(t *testing.T) string {
 	return turn.RunID
 }
 
-// A BRANCH AN EARLIER LAUNCH GRANTED IS HELD, through the node's own pass: a
-// run's first launch was given web on swe's seats/swe/ENG-42, which an earlier
-// turn pushed; its relaunch was given api alone, so the row's grants no
+// A BRANCH AN EARLIER JOB CHECKED OUT IS HELD, through the node's own pass: a
+// run's first job checked out web on swe's seats/swe/ENG-42, which an earlier
+// turn pushed; its relaunch checked out api alone, so the row's grants no
 // longer name web; a fortnight and an hour after that push, with no turn
 // running, the pass keeps the branch — held from the row, which kept every
-// ref either launch resolved.
+// ref either job's checkouts resolved.
 //
 // Mutation: resolveRunRepos skipping HoldRef → the branch expired under the
 // second park, red.
-func TestABranchAnEarlierLaunchGrantedIsHeld(t *testing.T) {
+func TestABranchAnEarlierJobCheckedOutIsHeld(t *testing.T) {
 	t.Parallel()
 	lc := newRefLifecycle(t)
 	lc.parkRelaunched(t)
@@ -220,7 +238,7 @@ func TestABranchAnEarlierLaunchGrantedIsHeld(t *testing.T) {
 		t.Errorf("the pass under the second park = %+v, want %s held and nothing expired", report, eng42)
 	}
 	if !lc.exists(t, lc.web, eng42) {
-		t.Errorf("web's %s was expired under a parked run whose first launch was granted it", eng42)
+		t.Errorf("web's %s was expired under a parked run whose first job checked it out", eng42)
 	}
 }
 
@@ -261,12 +279,12 @@ func TestABranchIsExpiredOnTimeOnceItsRunEnds(t *testing.T) {
 // A BRANCH A PARKED RUN ONLY READ IS HELD: qa's seats/qa/fixtures on web was
 // last pushed 337 hours ago by the pass's clock — due, and older than
 // code.RefHoldRecordAfter. The pass reads its page and then the live holds,
-// and only once that read has answered (nothing held) does a native executor
+// and only once that read has answered (nothing held) does a Worklet executor
 // of another seat, swe, resolve the branch with code_resolve — the one hold
 // the pass cannot have seen, which the read records on the code log because
 // the branch is that old. The pass proposes, and the committer keeps the
 // branch: the expiry is answered stale, the hold recorded after the page
-// listed it (refs_kept 1). The executor then calls run_sandbox naming no
+// listed it (refs_kept 1). The executor then launches checking out no
 // repository and parks, its frame returning: every later pass keeps the
 // branch from the row (refs_held 1).
 //
@@ -334,9 +352,8 @@ func TestABranchAParkedRunOnlyReadIsHeld(t *testing.T) {
 	}
 }
 
-// A BRIDGED RUN HOLDS THE BRANCH IT WROTE: an agent-mode run — the launch
-// rig's agent-mode box driving the MCP bridge — makes a bridged
-// code_commit_files creating seats/swe/notes on the project repository web, a
+// A BRIDGED RUN HOLDS THE BRANCH IT WROTE: an executor's run — the launch
+// rig's box driving the MCP bridge — makes a bridged code_commit_files creating seats/swe/notes on the project repository web, a
 // branch no launch granted, through the node's code seam, so the write lands
 // on the node's code host; its hold is on the run's row before the write is
 // sent. The run parks on a question and the node restarts: a fresh registry
@@ -350,7 +367,7 @@ func TestABridgedRunHoldsTheBranchItWrote(t *testing.T) {
 	t.Parallel()
 	lc := newRefLifecycle(t)
 	const notes = "refs/heads/seats/swe/notes"
-	c, seat := splitLoginCompany(t, "api", "codex")
+	c, seat := executorCompany(t)
 	var commit tools.Callable
 	for _, tool := range builtin.CodeTools(lc.deps(0)) {
 		if tool.Name() == builtin.CodeCommitFilesTool {

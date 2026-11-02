@@ -13,7 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A TURN'S END FOLLOWS ITS COST: every in-turn auxiliary record, its card's
@@ -25,22 +27,22 @@ import (
 // stood below the turn list's for the same turn. The card is the case that
 // shows it: its rewrite used to be made after the completion, inside the
 // charge's write, so it could not be on the stream before it whatever the
-// ledger did. Driven through a real runTurn on a native task, whose account is
+// ledger did. Driven through a real runTurn on a Worklet task, whose account is
 // past what a card holds.
 func TestATurnsEndFollowsEveryInTurnRecord(t *testing.T) {
 	t.Parallel()
 	e, served := spendingEngine(t)
 	q := e.backends.Queue.(*memory.Queue)
 	e.auxSpend = auxspend.NewLedger(q)
-	swapModel(t, e, longAccountModel{})
+	model := longAccountModel()
+	swapModel(t, e, model)
+	rig := rigRuns(t, e, modelPlayer(t, model.pick))
 
-	if _, err := e.runTurn(t.Context(), Request{
+	runToItsEnd(t, e, rig, Request{
 		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
 		WorkSince: time.Now().UTC(),
 		Events:    []*events.Event{taskWake("task-9", "ENG-9")},
-	}); err != nil {
-		t.Fatalf("runTurn: %v", err)
-	}
+	})
 
 	card, ended := -1, -1
 	for i, ev := range q.History() {
@@ -61,10 +63,22 @@ func TestATurnsEndFollowsEveryInTurnRecord(t *testing.T) {
 		t.Fatalf("the card's rewrite was published at %d and the turn's end at %d: the end "+
 			"must follow every in-turn record", card, ended)
 	}
-	turns, _ := served.recorded()
-	if len(turns) != 1 || !strings.HasPrefix(turns[0].Summary, condensedCard) {
-		t.Fatalf("the task was charged %+v, want one turn carrying the rewritten card", turns)
+	if ended := endingCharge(t, served); !strings.HasPrefix(ended.Summary, condensedCard) {
+		t.Fatalf("the segment that ended the turn charged %+v, want it carrying the rewritten card",
+			ended)
 	}
+}
+
+// endingCharge is the charge of the segment that ended a turn which parked
+// once on its executor's run: the second of the two the task was handed.
+func endingCharge(t *testing.T, served *servedWriter) worklet.TurnRecord {
+	t.Helper()
+	turns, _ := served.recorded()
+	if len(turns) != 2 {
+		t.Fatalf("the task was charged %+v, want the two segments of a turn that parked on its run",
+			turns)
+	}
+	return turns[1]
 }
 
 // A TURN'S END IS WHERE ITS SEGMENT ENDED, NOT WHERE ITS END WAS PUBLISHED.
@@ -74,7 +88,7 @@ func TestATurnsEndFollowsEveryInTurnRecord(t *testing.T) {
 // own clock there measured the rewrite into the turn's duration, which then
 // disagreed with the task's turn row, stamped a moment earlier, for the same
 // segment. Both are measured to the one instant the segment ended. Driven
-// through a real runTurn on a native task whose card needs a rewrite, with a
+// through a real runTurn on a Worklet task whose card needs a rewrite, with a
 // rewrite slow enough to show in either figure.
 //
 // Mutation: let the completion read its own clock again, and duration_ms
@@ -84,15 +98,15 @@ func TestATurnsEndIsMeasuredWhereItsSegmentEnded(t *testing.T) {
 	e, served := spendingEngine(t)
 	q := e.backends.Queue.(*memory.Queue)
 	e.auxSpend = auxspend.NewLedger(q)
-	swapModel(t, e, slowRewriteModel{delay: 200 * time.Millisecond})
+	model := slowRewriteModel(200 * time.Millisecond)
+	swapModel(t, e, model)
+	rig := rigRuns(t, e, modelPlayer(t, model.pick))
 
-	if _, err := e.runTurn(t.Context(), Request{
+	runToItsEnd(t, e, rig, Request{
 		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
 		WorkSince: time.Now().UTC(),
 		Events:    []*events.Event{taskWake("task-9", "ENG-9")},
-	}); err != nil {
-		t.Fatalf("runTurn: %v", err)
-	}
+	})
 
 	var completed *types.TurnCompleted
 	for _, ev := range q.History() {
@@ -103,12 +117,12 @@ func TestATurnsEndIsMeasuredWhereItsSegmentEnded(t *testing.T) {
 	if completed == nil {
 		t.Fatal("no turn_completed was published")
 	}
-	turns, _ := served.recorded()
-	if len(turns) != 1 || !strings.HasPrefix(turns[0].Summary, condensedCard) {
-		t.Fatalf("the task was charged %+v, want one turn carrying the rewritten card — "+
-			"without a rewrite the case exercises nothing", turns)
+	ended := endingCharge(t, served)
+	if !strings.HasPrefix(ended.Summary, condensedCard) {
+		t.Fatalf("the segment that ended the turn charged %+v, want it carrying the rewritten "+
+			"card — without a rewrite the case exercises nothing", ended)
 	}
-	if got, want := completed.DurationMS, turns[0].Spend.WallMs; got != want {
+	if got, want := completed.DurationMS, ended.Spend.WallMs; got != want {
 		t.Fatalf("turn_completed says the turn took %d ms and the task's turn row %d ms: "+
 			"the card's rewrite was measured into one of them", got, want)
 	}
@@ -120,27 +134,27 @@ func TestATurnsEndIsMeasuredWhereItsSegmentEnded(t *testing.T) {
 
 // slowRewriteModel is [longAccountModel] whose rewrites — the calls offering no
 // tools — take a while to answer.
-type slowRewriteModel struct{ delay time.Duration }
-
-func (slowRewriteModel) Model() string { return "billing" }
-
-func (m slowRewriteModel) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	if len(req.Tools) == 0 {
+func slowRewriteModel(delay time.Duration) phasedCLI {
+	m := longAccountModel()
+	text := m.text
+	m.text = func(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 		select {
-		case <-time.After(m.delay):
+		case <-time.After(delay):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+		return text(ctx, req)
 	}
-	return longAccountModel{}.Complete(ctx, req)
+	return m
 }
 
 // swapModel puts one provider behind every chain the spending engine's seat
-// resolves — its phases and its auxiliary model alike.
+// resolves — its phases and its auxiliary model alike — ahead of the entry its
+// executor launches on, which it keeps.
 func swapModel(t *testing.T, e *Engine, p llm.Provider) {
 	t.Helper()
 	c := *e.Company()
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: p}})
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: p}, runnerEntry(t)})
 	if err != nil {
 		t.Fatalf("phase registry: %v", err)
 	}
@@ -150,24 +164,21 @@ func swapModel(t *testing.T, e *Engine, p llm.Provider) {
 
 // longAccountModel answers each phase as billingModel does, with a reviewer's
 // account past what a task's card holds, and a rewrite with a short one.
-type longAccountModel struct{}
-
-func (longAccountModel) Model() string { return "billing" }
-
-func (longAccountModel) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	if len(req.Tools) == 0 {
-		return &llm.Completion{Model: "billing", Content: "Looked; nothing to do.",
-			InputTokens: 400, OutputTokens: 8}, nil
-	}
-	for _, tool := range req.Tools {
-		if tool.Name == runner.SubmitReviewTool {
-			return &llm.Completion{Model: "billing", ToolCalls: []llm.ToolCall{{
-				ID: "c1", Name: runner.SubmitReviewTool, Arguments: map[string]any{
+func longAccountModel() phasedCLI {
+	return phasedCLI{
+		model: "billing",
+		pick: func(offered []string) llmtest.Run {
+			if offers(offered, runner.SubmitReviewTool) {
+				return calling(runner.SubmitReviewTool, map[string]any{
 					"decision":       "done",
 					"completed_work": strings.Repeat("The seat read the task and found nothing to do. ", 20),
-				},
-			}}, InputTokens: billedInput, OutputTokens: billedOutput}, nil
-		}
+				}, llm.Usage{Input: billedInput, Output: billedOutput})
+			}
+			return billingRun(offered)
+		},
+		text: func(context.Context, llm.Request) (*llm.Completion, error) {
+			return &llm.Completion{Model: "billing", Content: "Looked; nothing to do.",
+				InputTokens: 400, OutputTokens: 8}, nil
+		},
 	}
-	return billingModel{}.Complete(ctx, req)
 }

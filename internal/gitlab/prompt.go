@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Prompt is what a code-host event asks of the seat it reached.
@@ -19,10 +20,11 @@ import (
 //
 // WHAT IT SAYS IS WHAT ONLY THE ENGINE KNOWS: why the seat is reading this,
 // the item by the reference a person would paste, the product facts a model
-// would not assume (a close that means stop, where an issue's code changes
-// go), and how each ask is declined on this host. How to review a diff or
-// fix a red pipeline is the model's own, and that a direct ask may not end in
-// silence is the executor's contract — neither is restated here.
+// would not assume (a close that means stop, who makes an issue's code change
+// and under whose name), and how each ask is declined on this host. How to
+// review a diff or fix a red pipeline is the model's own, and that a direct
+// ask may not end in silence is the executor's contract — neither is restated
+// here.
 //
 // NOTHING HERE NAMES A TOOL — the deployed MCP server's tool names are not
 // knowable by the engine. See docs/concepts/tool-capabilities.md.
@@ -97,7 +99,7 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 // The test is "did something happen BECAUSE of me that I do not yet know
 // about". A build is the answer because it runs asynchronously, minutes
 // after the push, and reports a result nobody could have predicted.
-func (Prompt) WakesActor(eventType string) bool { return eventType == PipelineFailed }
+func (Prompt) WakesActor(n notify.Inbound) bool { return n.EventType == PipelineFailed }
 
 // DigestBody implements [notify.Prompt]: comments keep their body, item
 // snapshots collapse.
@@ -144,6 +146,20 @@ func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 // together.
 func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
 	return p.PartitionKey(metadata, subject)
+}
+
+// Provenance implements [notify.Prompt]: what the parser stated — a note by
+// its writer while it is fresh, an issue's or merge request's description by
+// its opener on the hook that opened it and by nobody named after — and, for a
+// notification built without the parser, a remark for a note's reasons and a
+// description for every other.
+func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	fallback := provenance.SourceWorkDescription
+	switch n.Metadata["event_type"] {
+	case NoteMention, NoteComment:
+		fallback = provenance.SourceWorkComment
+	}
+	return notify.Stated(n, parties, fallback)
 }
 
 // Build implements [notify.Prompt].
@@ -198,11 +214,17 @@ func assigned(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("**Assigned by:** " + senderLabel(n, parties) + "\n\n" +
 		"**Description:**\n" + orElse(n.Body, "(no description)") + "\n\n")
 	if !mr {
-		// A FACT ABOUT THIS ENGINE, not advice: where code changes go, and
-		// whose name the merge request they produce carries.
-		b.WriteString("Code changes go through your sandboxed coding runtime," +
-			" which opens a merge request under your own identity on the code" +
-			" host. ")
+		// A FACT ABOUT THIS ENGINE, not advice: who makes the change, and
+		// whose name the merge request carries. The executor reading this IS
+		// the seat's coding run, with its own checkout, shell and git, so the
+		// change is its own to make: there is no other runtime to hand it
+		// to, and a prompt that names one has the seat look for something
+		// that does not exist. The request opens under the seat's own
+		// identity, so what the code host says about it afterwards — a
+		// review, a merge — reaches the seat that wrote it.
+		b.WriteString("You make any code change the issue needs yourself, in" +
+			" your own checkout, and open the merge request under your own" +
+			" identity on the code host. ")
 	}
 	b.WriteString("If the work is not yours, reassign it to whoever it belongs to.\n")
 }

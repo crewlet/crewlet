@@ -29,7 +29,14 @@
  */
 
 import { classifyConfigRefusal, type ConfigAnswer, type ConfigRefusal } from "./configAnswer.ts";
-import { isAbort, rest, RestError, type QueryValue, type RestResponse } from "./rest.ts";
+import {
+  isAbort,
+  pathSegment,
+  rest,
+  RestError,
+  type QueryValue,
+  type RestResponse,
+} from "./rest.ts";
 import type { CompanyDocument, ConfigWarning, Derived } from "./types.ts";
 
 /**
@@ -38,11 +45,19 @@ import type { CompanyDocument, ConfigWarning, Derived } from "./types.ts";
  */
 export async function answerOf(call: Promise<RestResponse>): Promise<ConfigAnswer> {
   try {
-    const { status, body, etag } = await call;
-    return { status, body, etag };
+    const { status, body, etag, marked } = await call;
+    return { status, body, etag, fromEngine: marked };
   } catch (err) {
     if (isAbort(err)) throw err;
-    if (err instanceof RestError) return { status: err.status, body: err.body, etag: null };
+    if (err instanceof RestError) {
+      return {
+        status: err.status,
+        body: err.body,
+        etag: null,
+        fromEngine: err.marked,
+        retryAfter: err.retryAfterSeconds,
+      };
+    }
     return {
       status: 0,
       body: {
@@ -50,6 +65,7 @@ export async function answerOf(call: Promise<RestResponse>): Promise<ConfigAnswe
         detail: err instanceof Error ? err.message : "The engine could not be reached.",
       },
       etag: null,
+      fromEngine: false,
     };
   }
 }
@@ -85,11 +101,11 @@ export const configTransport = {
       }),
     ),
   /** `GET /config`. Its entity tag names the active revision. */
-  current: (signal: AbortSignal): Promise<ConfigAnswer> =>
-    answerOf(rest.request("GET", "/config", { signal })),
+  current: (signal?: AbortSignal): Promise<ConfigAnswer> =>
+    answerOf(rest.request("GET", "/config", signal ? { signal } : {})),
   /** `GET /config/revisions/{id}`. */
   revision: (id: string, signal: AbortSignal): Promise<ConfigAnswer> =>
-    answerOf(rest.request("GET", `/config/revisions/${encodeURIComponent(id)}`, { signal })),
+    answerOf(rest.request("GET", `/config/revisions/${pathSegment(id)}`, { signal })),
 };
 
 /** The active document, or why there is none to read. */
@@ -124,7 +140,7 @@ export type ConfigWriteOutcome =
   | ConfigRefusal;
 
 /** Read the active company document and the tag naming its revision. */
-export async function getConfig(signal: AbortSignal): Promise<ConfigRead> {
+export async function getConfig(signal?: AbortSignal): Promise<ConfigRead> {
   const answer = await configTransport.current(signal);
   if (answer.status === 200 && isRecord(answer.body) && answer.etag) {
     return {
@@ -210,7 +226,12 @@ export type EntityRead =
       readonly kind: "entity";
       /** The entity itself, redacted — the body the write takes back. */
       readonly entity: Record<string, unknown>;
-      /** The DOCUMENT's tag: an entity is a slice of one revision. */
+      /**
+       * THE ENTITY'S OWN TAG, as its GET answers it: the precondition a write
+       * of this entity (a replacement, a removal) takes back. Not the
+       * document's: a removal sent the document's tag and was refused 412 for
+       * every model, since the engine decides it on the entry it removes.
+       */
       readonly etag: string;
     }
   /** Nothing in the active revision carries this id, or nothing is active. */
@@ -218,8 +239,8 @@ export type EntityRead =
   | ConfigRefusal;
 
 /**
- * Read one entity of the active revision, with the tag of the revision it was
- * read from — the pair [putEntity] and [dryRunEntity] take back.
+ * Read one entity of the active revision, with its own tag: the pair
+ * [putEntity], [dryRunEntity] and a removal take back.
  */
 export async function getEntity(
   kind: EntityPath,
@@ -227,7 +248,7 @@ export async function getEntity(
   signal: AbortSignal,
 ): Promise<EntityRead> {
   const answer = await answerOf(
-    rest.request("GET", `/config/${kind}/${encodeURIComponent(id)}`, { signal }),
+    rest.request("GET", `/config/${pathSegment(kind)}/${pathSegment(id)}`, { signal }),
   );
   if (answer.status === 200 && isRecord(answer.body) && answer.etag) {
     return { kind: "entity", entity: answer.body, etag: answer.etag };
@@ -268,7 +289,7 @@ export async function dryRunEntity(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+      rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
         query: { dry_run: "true" },
         headers: { "If-Match": etag },
         body: entity,
@@ -293,7 +314,7 @@ export async function putEntity(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+      rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
         headers: { "If-Match": etag },
         body: { ...entity, _summary: summary },
         signal,
@@ -329,7 +350,7 @@ export async function dryRunCreate(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+      rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
         query: { dry_run: "true" },
         headers: CREATE_ONLY,
         body: entity,
@@ -349,7 +370,7 @@ export async function createEntity(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+      rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
         headers: CREATE_ONLY,
         body: { ...entity, _summary: summary },
         signal,

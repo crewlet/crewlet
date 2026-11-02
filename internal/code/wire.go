@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE READ WIRE: the queries a reader answers and the answers it gives. They
@@ -65,7 +66,9 @@ type RepoRef struct {
 	// committer, which refuses it there, recorded, from the rows.
 	Mirrored      bool   `json:"mirrored,omitempty"`
 	DefaultBranch string `json:"default_branch"`
-	Description   string `json:"description,omitempty"`
+	// Description is what the repository says about itself, a line whoever
+	// created or last changed it chose: somebody's words (ADR-0040).
+	Description string `json:"description,omitempty" untrusted:"name"`
 	// Protections are its rules AS A PUSH IS JUDGED BY THEM ([PushRule]),
 	// sorted by pattern — never a rule's merge gate. This row is what the
 	// admission of every git request reads, every page of a git node's sync
@@ -277,7 +280,7 @@ type PackRow struct {
 	// nothing in it reached the repository after it. A push's pack and a
 	// merge's arrived at their own record; every rewrite's output — a
 	// compaction's, an expunge's, a rescue — at the latest of the packs it
-	// replaced, since moving content brings none (replicated 0100). An
+	// replaced, since moving content brings none (replicated 0123). An
 	// expunge on its maintainer's schedule keeps a pack that arrived within
 	// [PruneGrace] whole (internal/code/compact). Zero where it is not known:
 	// a pack a cache adopted before a round served its row. A read's
@@ -494,7 +497,7 @@ func (row PushRow) brief() PushRow {
 // derived from the commits, whose committer header any client may write.
 //
 // THE ROW'S COLUMN HAS NO DOMAIN VALUE AS ITS DEFAULT (the empty string, in
-// replicated 0063), and a row naming no way this build knows is refused by
+// replicated 0086), and a row naming no way this build knows is refused by
 // every reader of it (scanPush): an apply that forgot the column would
 // otherwise read as one way or the other.
 type PushVia string
@@ -662,7 +665,7 @@ type IntroducedQuery struct {
 // push beside it costs the read more pages and never one page more than
 // that. An index on the run would hold an entry for every box push on every
 // data node for the history's 181 days to serve that one read a run
-// (replicated 0070 says what it would cost); BenchmarkRunPushes measures what
+// (replicated 0093 says what it would cost); BenchmarkRunPushes measures what
 // the scan costs instead.
 type RunPushesQuery struct {
 	Run   string            `json:"run"`
@@ -1158,7 +1161,7 @@ type ReadQuery struct {
 	// and serves only what BOTH may read: a listing leaves out what either
 	// may not, and a read the asker's own grant covers and the ceiling's
 	// does not is [ErrAboveCeiling]. Judged where the read is answered, as
-	// the asker's grant is (ADR-0058), and never where the turn runs: a
+	// the asker's grant is (ADR-0081), and never where the turn runs: a
 	// ceiling judged against the repository a turn resolved once would keep
 	// admitting a seat a later activation shut out of it for the rest of
 	// the turn, while the asker's own grant was judged afresh at every read.
@@ -1166,7 +1169,7 @@ type ReadQuery struct {
 	// ONLY A SEAT, AND ONLY BESIDE A SEAT: a person's or a token's read is
 	// its own, which no ceiling bounds, and a seat is the one requester
 	// whose grant reads the chart — a person maintains every repository
-	// (ADR-0055) and a stranger reads none, both settled where the turn runs
+	// (ADR-0078) and a stranger reads none, both settled where the turn runs
 	// before any read is asked. Refused on `introduced`, on `run_pushes` and
 	// on the duty listings `compaction_due`, `publication_due` and
 	// `expunge_due`, which no principal makes.
@@ -2374,7 +2377,7 @@ type RepoDetail struct {
 }
 
 // RemoteState is a repository's other hosts as its row holds them
-// (code_repos, replicated 0095): zero for a repository with no mirror that was
+// (code_repos, replicated 0118): zero for a repository with no mirror that was
 // never imported. A read's answer, never a record's field, so none of it takes
 // a versionedFields row; the records that write the columns name theirs
 // (mirror.go).
@@ -2441,9 +2444,11 @@ type ChangeRow struct {
 	RepoID string `json:"repo_id"`
 	// Number is the change's on its repository — web!42's 42 — the
 	// repository's next_change at the apply that opened it.
-	Number int64       `json:"number"`
-	Title  string      `json:"title"`
-	State  ChangeState `json:"state"`
+	Number int64 `json:"number"`
+	// Title is the line its owner opened it with, or whoever edited it since
+	// chose: somebody's words (ADR-0040).
+	Title string      `json:"title" untrusted:"name"`
+	State ChangeState `json:"state"`
 	// SourceRef is the branch whose head the change proposes, and TargetRef
 	// the branch it proposes it into, each in full (refs/heads/feature).
 	SourceRef string `json:"source_ref"`
@@ -2475,7 +2480,7 @@ type ChangeRow struct {
 	// MergedAt exactly while it is merged, with how (MergedVia) and the commit
 	// its target was merged at (MergeOID).
 	ClosedAt    time.Time `json:"closed_at,omitzero"`
-	CloseReason string    `json:"close_reason,omitempty"`
+	CloseReason string    `json:"close_reason,omitempty" untrusted:"name"`
 	MergedAt    time.Time `json:"merged_at,omitzero"`
 	MergedVia   MergedVia `json:"merged_via,omitempty"`
 	MergeOID    string    `json:"merge_oid,omitempty"`
@@ -2524,7 +2529,7 @@ type ChangeSummary struct {
 type ChangeDetail struct {
 	ChangeSummary
 	// Body is its description, "" for none.
-	Body string `json:"body,omitempty"`
+	Body string `json:"body,omitempty" untrusted:"fence"`
 	// Authors is everyone who wrote it — whoever opened it, and everyone whose
 	// push moved its head — by handle.
 	Authors []ChangeAuthor `json:"authors"`
@@ -2566,7 +2571,7 @@ type ReviewRow struct {
 	ReviewerKind PartyKind         `json:"reviewer_kind"`
 	OperatorID   string            `json:"operator_id,omitempty"`
 	Verdict      Verdict           `json:"verdict"`
-	Summary      string            `json:"summary,omitempty"`
+	Summary      string            `json:"summary,omitempty" untrusted:"fence"`
 	Findings     int64             `json:"findings"`
 	TurnID       string            `json:"turn_id,omitempty"`
 	Model        string            `json:"model,omitempty"`
@@ -2666,11 +2671,11 @@ type FindingRow struct {
 	LineEnd          int               `json:"line_end"`
 	Severity         Severity          `json:"severity"`
 	Category         Category          `json:"category"`
-	Title            string            `json:"title"`
-	Body             string            `json:"body,omitempty"`
+	Title            string            `json:"title" untrusted:"name"`
+	Body             string            `json:"body,omitempty" untrusted:"fence"`
 	Suggestion       *string           `json:"suggestion,omitempty"`
 	State            FindingState      `json:"state"`
-	ResolutionNote   string            `json:"resolution_note,omitempty"`
+	ResolutionNote   string            `json:"resolution_note,omitempty" untrusted:"name"`
 	ResolvedBy       string            `json:"resolved_by,omitempty"`
 	ResolvedByKind   PartyKind         `json:"resolved_by_kind,omitempty"`
 	ResolvedCommit   string            `json:"resolved_commit,omitempty"`
@@ -2712,7 +2717,7 @@ type CommentRow struct {
 	ResolvedBy       string            `json:"resolved_by,omitempty"`
 	ResolvedByKind   PartyKind         `json:"resolved_by_kind,omitempty"`
 	TurnID           string            `json:"turn_id,omitempty"`
-	Body             string            `json:"body"`
+	Body             string            `json:"body" untrusted:"fence"`
 	Position         statelog.Position `json:"position"`
 	At               time.Time         `json:"at"`
 }
@@ -3067,7 +3072,7 @@ type GitQuery struct {
 	// Asker is who reads, REQUIRED — a zero or invalid one is [ErrInvalid] —
 	// and held to the repository's read grant by the git node that answers,
 	// from its own epoch's chart ([GrantOf]): a seat by its relation to the
-	// repository, a person or a token by ADR-0055's rules, which read no
+	// repository, a person or a token by ADR-0078's rules, which read no
 	// chart. Never trusted for anything but the grant. REFUSED on a read the
 	// engine makes on its own account ([GitQuery.EnginesOwn]), which names
 	// none.
@@ -3113,7 +3118,7 @@ type GitQuery struct {
 	// kind issues.
 	Cursor string `json:"cursor,omitempty"`
 	// Home is set on the attempt a walk makes of the ONE node it lets FILL a
-	// copy it does not hold (ADR-0059): its EFFECTIVE HOME — the first git
+	// copy it does not hold (ADR-0082): its EFFECTIVE HOME — the first git
 	// node of the repository's order once the walk's demotions are applied —
 	// and, only where that node answered that no copy serving the read is
 	// coming there ([UnreadyReason.PassesFill]: behind its configuration, a
@@ -3505,7 +3510,7 @@ func WirePath(p string) (text, b64 string) {
 // is the git node's to judge.
 func (q GitQuery) Validate() error {
 	if !q.Kind.Valid() {
-		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, GitReadKinds())
+		return fmt.Errorf("%w: kind: %q is not one of %s", ErrInvalid, q.Kind, words.Or(GitReadKinds()))
 	}
 	if id, err := uuid.Parse(q.RepoID); err != nil || id.String() != q.RepoID {
 		return fmt.Errorf("%w: repo_id: %q is not a repository's id", ErrInvalid, q.RepoID)
@@ -3792,7 +3797,7 @@ func (q ReanchorQuery) validate() error {
 			return fmt.Errorf("%w: %s.id: %q names two anchors, whose answers would read as one", ErrInvalid,
 				field, a.ID)
 		case !a.Side.Valid():
-			return fmt.Errorf("%w: %s.side: %q is not one of %v", ErrInvalid, field, a.Side, Sides())
+			return fmt.Errorf("%w: %s.side: %q is not one of %s", ErrInvalid, field, a.Side, words.Or(Sides()))
 		case a.Side == SideOld && q.Base == "":
 			return fmt.Errorf("%w: %s.side: an anchor on the old side is placed in the revision's base, which "+
 				"reanchor.base names", ErrInvalid, field)

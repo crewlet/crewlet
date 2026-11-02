@@ -4,7 +4,7 @@
 
 **A glibc userland, on linux.** Crewlet is one binary with no runtime to
 install: it embeds its event stream (a NATS JetStream server) and its database
-is a local file it creates. There is no broker to operate and nothing to point
+is two local files it creates. There is no broker to operate and nothing to point
 a DSN at.
 
 It is not, however, a *static* binary on linux, and it is worth knowing why
@@ -21,7 +21,7 @@ Two things are worth having anyway, for what runs *around* it:
 - **[uv](https://docs.astral.sh/uv/)** — many MCP servers are launched with
   `uvx`, so a company whose roles use one needs it on the engine's PATH.
 - **Docker** — only for the local integration loops (GitLab,
-  Mattermost) and for the container mode of the
+  Mattermost) and for the `container` cell of the
   [code sandbox](../concepts/code-sandbox.md).
 
 ### A coding CLI
@@ -40,6 +40,13 @@ path with `overrides.binary`):
 | Open models on any provider, a local server included | `opencode` | `opencode` | **OpenCode 2** — `@opencode/cli` on npm. Not 1.x's `opencode-ai`, which cannot run the engine's profile |
 
 [Supported CLIs](../concepts/llm-backends.md#supported-clis) lists the rest.
+Only `claude-code` and `opencode` can run a seat's **executor** — its CLI's own
+run in a [code sandbox](../concepts/code-sandbox.md) box — so every agent seat
+needs one of them in its `llm` chain; the others serve the reviewer, workers
+and side passes. The executor's CLI runs in the box rather than as the engine's
+child: on the engine host for a `direct` cell, and inside the image of a
+`container` cell or the template of an `e2b` one, which must carry it too.
+
 In a fleet it is every node whose `node.roles` include `seats` (which run the
 turns) or `workers` (which run the learning passes on each seat's auxiliary
 model) — and the machine you run `crewlet llm login` and `crewlet llm doctor`
@@ -69,8 +76,10 @@ RUN apt-get update \
 USER crewlet
 ```
 
-— `2.1.263` because it is the release the `claude-code` profile's flags, output
-paths and limit sentences were measured against; take a newer one when
+— `2.1.263`, a release pinned exactly: the hooks a seat's coding run takes a
+person's notes through need Claude Code 2.1.163 or later (an older release runs
+without them) and were measured on 2.1.263 and 2.1.310, and the `claude-code` profile's flags, output paths and
+limit sentences on 2.1.303 and 2.1.310; take a newer one when
 `crewlet llm doctor` passes against it. Give the container a volume for the state directory
 (`CREWLET_LLM_CLI_HOME=/var/lib/crewlet/llm-cli`, say), so a login survives a
 restart. A login made on another machine reaches the container as a
@@ -189,9 +198,11 @@ working company:
   points the same config slot at an external NATS server — the client code is
   identical, so it is a connection choice rather than a second backend. See
   [Fleet](../guides/fleet.md).
-- the **store** is one local file this process owns *exclusively*. Not a
-  shared database, and no DSN: two engines pointed at one file corrupt it.
-  Coordination between nodes goes through a separate KV slot, never the file.
+- the **store** is two local files this process owns *exclusively* — the
+  node's own (`store.path`), and the replicated estate beside it
+  (`store.replicated_path`). Not a shared database, and no DSN: two engines
+  pointed at one file corrupt it. Coordination between nodes goes through a
+  separate KV slot, never a file.
 
 ### The compose file is for the integrations
 

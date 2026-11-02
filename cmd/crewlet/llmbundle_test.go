@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,7 @@ func bundledEntryWithLogout(t *testing.T, bundle, logout string) (flags []string
 	}
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     sub:
       agent: custom
@@ -57,9 +59,11 @@ providers:
         status_args: %s
         login_args: %s%s
 roles:
+  # A person's seat: the custom entry stands in for a CLI this suite
+  # cannot install, and it can run no seat's executor.
   - name: CEO
     handle: ceo
-    llm: sub
+    kind: human
 `, state, binary, status, signIn, logoutArgs))
 	return []string{"-company", company, "-config", filepath.Join(dir, "absent.yaml")},
 		filepath.Join(state, "custom", "credentials", "creds.json")
@@ -88,7 +92,7 @@ func llmBundle(t *testing.T, body string) string {
 	if err := os.WriteFile(login, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	blob, err := p.ExportBundle()
+	blob, err := p.ExportBundle(t.Context())
 	if err != nil {
 		t.Fatalf("ExportBundle: %v", err)
 	}
@@ -112,19 +116,26 @@ func codexBundle(t *testing.T, body string) string {
 	if err := os.WriteFile(login, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	blob, err := p.ExportBundle()
+	blob, err := p.ExportBundle(t.Context())
 	if err != nil {
 		t.Fatalf("ExportBundle: %v", err)
 	}
 	return blob
 }
 
-// runSub runs `crewlet llm <sub> sub` with extra flags against the company.
+// runSub runs `crewlet llm <sub> sub` with extra flags against the company,
+// with nothing on stdin.
 func runSub(t *testing.T, flags []string, sub string, extra ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	return runSubIn(t, strings.NewReader(""), flags, sub, extra...)
+}
+
+// runSubIn is [runSub] with stdin piped in.
+func runSubIn(t *testing.T, stdin io.Reader, flags []string, sub string, extra ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
 	args := append(append([]string{sub, "sub"}, extra...), flags...)
-	err = runLLM(noEnviron, args, &out, &errOut)
+	err = runLLM(noEnviron, args, stdin, &out, &errOut)
 	return out.String(), errOut.String(), err
 }
 
@@ -194,7 +205,7 @@ func TestALogoutOutlastsTheCommandsThatRestoreTheBundle(t *testing.T) {
 	if err == nil {
 		t.Error("doctor called a logged-out entry with no sign-in healthy")
 	}
-	if !strings.Contains(stdout, "removed by `crewlet llm logout`") || strings.Contains(stdout, "export the bundle again") {
+	if !strings.Contains(stdout, "removed by `crewlet llm logout`") || strings.Contains(stdout, "Export the bundle again") {
 		t.Errorf("doctor reports the logout as something else:\n%s", stdout)
 	}
 	if got := readLogin(t, login); got != "" {
@@ -233,7 +244,7 @@ func TestTheCommandsThatAnswerAsTheEngineRestoreTheBundleFirst(t *testing.T) {
 				args = append(args, "sub")
 			}
 			args = append(append(args, c.extra...), flags...)
-			err := runLLM(noEnviron, args, &out, &errOut)
+			err := runLLM(noEnviron, args, strings.NewReader(""), &out, &errOut)
 			if (err != nil) != c.fails {
 				t.Fatalf("%s: %v\n%s%s", c.command, err, out.String(), errOut.String())
 			}
@@ -263,7 +274,7 @@ func TestABundleFromAnotherCLIIsRefusedByTheCommandsThatRestoreIt(t *testing.T) 
 	if err == nil {
 		t.Error("doctor called an entry whose bundle is another CLI's healthy")
 	}
-	for _, want := range []string{`it names "codex"`, "export the bundle again (`crewlet llm export sub`)"} {
+	for _, want := range []string{`it names "codex"`, "Export the bundle again (`crewlet llm export sub`)"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("doctor does not say %q:\n%s", want, stdout)
 		}
@@ -309,19 +320,8 @@ func TestTheCommandsThatReplaceTheLoginDoNotRestoreItFirst(t *testing.T) {
 	})
 	t.Run("import", func(t *testing.T) {
 		flags, login := bundledEntry(t, llmBundle(t, `{"token":"k-bundled"}`))
-		stdin := filepath.Join(t.TempDir(), "bundle")
-		if err := os.WriteFile(stdin, []byte(llmBundle(t, `{"token":"k-imported"}`)), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		f, err := os.Open(stdin) //nolint:gosec // the test's own file
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer func() { _ = f.Close() }()
-		was := os.Stdin
-		os.Stdin = f
-		defer func() { os.Stdin = was }()
-		if _, stderr, err := runSub(t, flags, "import"); err != nil {
+		stdin := strings.NewReader(llmBundle(t, `{"token":"k-imported"}`))
+		if _, stderr, err := runSubIn(t, stdin, flags, "import"); err != nil {
 			t.Fatalf("import: %v (%s)", err, stderr)
 		}
 		if got := readLogin(t, login); got != `{"token":"k-imported"}` {

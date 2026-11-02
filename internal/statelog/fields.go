@@ -24,7 +24,7 @@ import (
 //     it readable, decodes the record, drops the field it has no home for and
 //     applies what is left. Its rows then differ from every upgraded node's for
 //     that object, permanently, on tables a fleet compares byte for byte —
-//     and nothing reports it, because every node applied "the same" record.
+//     and nothing reports it, because every data node applied "the same" record.
 //   - Stamped at the BUILD's version, every record the new build writes is
 //     unreadable to an older node the moment the build's version moves — the
 //     ones that carry nothing new included. The older half of the fleet then

@@ -1,7 +1,15 @@
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, cleanup, act } from "@testing-library/react";
-import { LayerHost, Modal } from "@crewlethq/ui";
-import { PrefixWindow, isTyping, useKeyChords, type Chord, type Sequence } from "./keys.ts";
+import { render, cleanup, act, fireEvent } from "@testing-library/react";
+import { LayerHost, Modal, usePopupLayer } from "@crewlethq/ui";
+import {
+  PrefixWindow,
+  isTyping,
+  useKeyChords,
+  useModalLayerOpen,
+  type Chord,
+  type Sequence,
+} from "./keys.ts";
 
 afterEach(cleanup);
 
@@ -335,5 +343,91 @@ describe("a control keeps the key that activates it", () => {
     press("Enter");
     expect(run).toHaveBeenCalledTimes(2);
     bare.remove();
+  });
+});
+
+describe("whether a modal surface stands over the page", () => {
+  /** What the hook answers, in a component nothing else re-renders. */
+  function Watch() {
+    return <output aria-label="covered">{String(useModalLayerOpen())}</output>;
+  }
+
+  /** A dialog and a menu, each opened and closed by its own state, so the
+   *  watcher beside them is re-rendered by the stack and nothing else. */
+  function Surfaces() {
+    const [dialog, setDialog] = useState(false);
+    const [menu, setMenu] = useState(false);
+    const popup = usePopupLayer({ open: menu, onDismiss: () => setMenu(false) });
+    return (
+      <>
+        <button onClick={() => setDialog(true)}>open the dialog</button>
+        <button onClick={() => setMenu((open) => !open)}>toggle the menu</button>
+        {menu && <div ref={popup.panelRef}>a menu</div>}
+        <Modal open={dialog} title="A dialog" onClose={() => setDialog(false)}>
+          <button onClick={() => setDialog(false)}>close it</button>
+        </Modal>
+      </>
+    );
+  }
+
+  // AS A VALUE THAT MOVES, which `isModalLayerOpen` read at a press is not. A
+  // chat room counts what it drew as seen only while nothing covers it, and
+  // counts it the moment the cover goes, so the answer has to re-render the
+  // page when a dialog opens and when it closes. The kit publishes no feed of
+  // its stack, and this is the case that fails if the one the hook reads, a
+  // closed popup's place in the band, stopped moving with it.
+  it("follows a modal opening and closing, and a menu is not one", () => {
+    const view = render(
+      <LayerHost>
+        <Watch />
+        <Surfaces />
+      </LayerHost>,
+    );
+    const covered = () => view.getByLabelText("covered").textContent;
+    expect(covered()).toBe("false");
+
+    // A MENU IS ON THE STACK AND COVERS NOTHING: it is not modal, and the
+    // page's keys still reach past it.
+    fireEvent.click(view.getByText("toggle the menu"));
+    expect(view.getByText("a menu")).toBeDefined();
+    expect(covered()).toBe("false");
+    fireEvent.click(view.getByText("toggle the menu"));
+
+    fireEvent.click(view.getByText("open the dialog"));
+    expect(covered()).toBe("true");
+    fireEvent.click(view.getByText("close it"));
+    expect(covered()).toBe("false");
+  });
+});
+
+// ALT AND SHIFT ARE COMPARED WHERE A CHORD NAMES THEM, and only there. A
+// screen that moves between rooms on Alt with an arrow, and between unread
+// rooms on Alt and Shift with the same arrow, holds two chords for one key;
+// compared on the key alone, both fired for either press, and the bare arrow
+// that scrolls a list fired them too.
+describe("a chord that names Alt or Shift", () => {
+  it("fires only with what it names held, and never for the bare key", () => {
+    const step = vi.fn();
+    const unread = vi.fn();
+    bind([
+      { key: "arrowdown", alt: true, shift: false, run: step },
+      { key: "arrowdown", alt: true, shift: true, run: unread },
+    ]);
+    press("ArrowDown");
+    expect(step).not.toHaveBeenCalled();
+    expect(unread).not.toHaveBeenCalled();
+    press("ArrowDown", { altKey: true });
+    expect(step).toHaveBeenCalledTimes(1);
+    expect(unread).not.toHaveBeenCalled();
+    press("ArrowDown", { altKey: true, shiftKey: true });
+    expect(step).toHaveBeenCalledTimes(1);
+    expect(unread).toHaveBeenCalledTimes(1);
+  });
+
+  it("a chord that names neither fires whatever is held, as before", () => {
+    const next = vi.fn();
+    bind([{ key: "j", run: next }]);
+    press("j", { shiftKey: true });
+    expect(next).toHaveBeenCalledTimes(1);
   });
 });

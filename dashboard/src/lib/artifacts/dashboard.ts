@@ -87,7 +87,7 @@ const DAY_MONTH_YEAR: DateShape = Object.freeze({ ...DAY_MONTH, year: "numeric" 
 
 /**
  * A value in its column's own words: a tracker status, status group or
- * priority as Work names it, an agent's activity as the Agents page does, and
+ * priority as Worklet names it, an agent's activity as the Agents page does, and
  * any other value as its text. The id is what a filter compared; this is what
  * a reader is shown.
  */

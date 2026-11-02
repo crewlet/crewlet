@@ -74,7 +74,7 @@ func TestAnUnadvertisedHintTravelsAsItself(t *testing.T) {
 	}
 	// WHERE IT LANDS is the registry's own answer, handed in rather than
 	// re-derived from the origin: a proven read-only MCP tool delivers
-	// nowhere, and the native tracker's comment tool delivers although it
+	// nowhere, and Worklet's comment tool delivers although it
 	// is a builtin.
 	if got.Delivers != "slack" {
 		t.Errorf("delivers = %q", got.Delivers)

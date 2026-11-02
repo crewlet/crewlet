@@ -140,7 +140,7 @@ func (s *Store) Activate(ctx context.Context, activatedAt time.Time) (Activation
 	}
 	epoch := configplane.ActivationStamp(activatedAt)
 	at := s.now()
-	opID := statelog.NewOpID(time.Now(), "code.activate")
+	opID := statelog.NewOpID(time.Now(), "code_activate")
 	subject := CompanySubject()
 	scope := []string{ActivationPath()}
 	var superseded bool
@@ -683,7 +683,7 @@ func (s *Store) unchanged(ctx context.Context, a Activation, declared []Declared
 	_, err := s.publisher.Publish(ctx, statelog.Request{
 		Subject: CompanySubject().statelog(),
 		Scope:   statelog.ScopeSet{Paths: []string{DomainPath()}},
-		OpID:    statelog.NewOpID(time.Now(), "code.declared"),
+		OpID:    statelog.NewOpID(time.Now(), "code_declared"),
 		Pattern: statelog.PatternArbitrated, Session: a.at,
 		Decide: func(tx *sql.Tx, _ statelog.Stamp) (statelog.Decision, error) {
 			found = nil
@@ -892,7 +892,7 @@ func (s *Store) claim(ctx context.Context, a Activation, name string, settings R
 	subject := NameSubject(name)
 	newID := uuid.Must(uuid.NewV7()).String()
 	scope := []string{NamePath(token), RepoPath(newID)}
-	opID := statelog.NewOpID(time.Now(), "code.create")
+	opID := statelog.NewOpID(time.Now(), "code_create")
 	at := s.now()
 	var superseded, wrote bool
 	result, err := s.publisher.Publish(ctx, statelog.Request{
@@ -959,7 +959,7 @@ func (s *Store) settle(ctx context.Context, a Activation, id string,
 
 	subject := RepoSubject(id)
 	scope := []string{RepoPath(id)}
-	opID := statelog.NewOpID(time.Now(), "code.settings")
+	opID := statelog.NewOpID(time.Now(), "code_settings")
 	at := s.now()
 	var (
 		out        Ensured
@@ -1064,7 +1064,7 @@ func (s *Store) DeleteRepo(ctx context.Context, a Activation, repoID string) (bo
 	}
 	subject := RepoSubject(repoID)
 	scope := []string{RepoPath(repoID)}
-	opID := statelog.NewOpID(time.Now(), "code.delete")
+	opID := statelog.NewOpID(time.Now(), "code_delete")
 	at := s.now()
 	var wrote, superseded bool
 	result, err := s.publisher.Publish(ctx, statelog.Request{

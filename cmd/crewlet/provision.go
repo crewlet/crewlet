@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"os"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/gitlab"
@@ -20,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The provisioning commands, and the flags they share.
@@ -32,14 +34,45 @@ import (
 // because every one has to be found and revoked by hand. So there is no
 // default: the operator says where, up front, and a run with no answer is
 // refused before it touches anything.
+//
+// # A sink the company's store outranks
+//
+// `-env-file` and `-print` hand what a run mints to the operator, for the
+// engine to read from its environment — and the engine resolves every `${VAR}`
+// from the company's secret store FIRST. So where the store holds a name the
+// run mints into, what the run records is never read: the vendor holds the new
+// value and the engine goes on with the stored one. For a seat's token that is
+// the outage the re-run rule exists to prevent — GitLab retires a seat's
+// earlier tokens once a new one is recorded, so a seat the engine runs on the
+// stored token is locked out — and for a webhook secret it is a hook re-keyed
+// with a key the engine does not hold, every delivery refused. A `gitlab
+// provision -rotate -env-file`, the remedy for a leaked key, would re-key the
+// hook while the engine went on verifying with the leaked one.
+//
+// So a run with one of those sinks that has a store to ask — the running node
+// or the one -api names, or the fleet's store reached directly with this
+// node's engine stopped — is refused before it reaches
+// the vendor where the store holds any name it can mint into
+// ([sinkFlags.refuseOutranked]): every planned seat's token, since whether a
+// seat is kept or re-minted is settled against the vendor, part way through
+// the run; and a webhook secret the run would mint, under its flag for a fresh
+// one or where the reference resolves to nothing. Asking the sink instead
+// would not do: an env file's value for a name the store also holds is not the
+// one the engine runs on, so a seat kept because that value still
+// authenticates is reported healthy on a token the engine does not use.
+// `-secret-store` is the one sink the store does not outrank: it reads each
+// stored value back, and records over it.
 
-// sinkFlags is the shared --secret-store / --env-file / --print choice.
+// sinkFlags is the shared --secret-store / --env-file / --print choice, and the
+// store a run reads the company's values from and records into.
 type sinkFlags struct {
 	secretStore *bool
 	envFile     *string
 	print       *bool
-	bootstrap   *string
-	api         *string
+
+	// store is the run's `-config` and `-api`: -secret-store records
+	// through the route the run's reads take ([companyStore]).
+	store storeFlags
 }
 
 func addSinkFlags(fs *flag.FlagSet) sinkFlags {
@@ -50,54 +83,190 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 			"record minted credentials in this .env file"),
 		print: fs.Bool("print", false,
 			"print minted credentials to stdout and persist nothing"),
-		bootstrap: bootstrapFlag(fs),
-		// THE SAME FLAG `crewlet secrets` takes, and for the same
-		// reason: a running engine holds the fleet's store, so
-		// -secret-store writes through its API.
-		api: fs.String("api", "",
-			"a running node to read the company's stored values and record "+
-				"credentials through; default is this node's engine at the "+
-				"api.host:port in -config when it runs, and the fleet's store "+
-				"itself when it is stopped"),
+		store: addStoreFlags(fs),
 	}
 }
 
-// readAPIFlag adds -api to a command that reads the company and records
-// nothing: the node its stored values are read through ([companyResolver]).
-//
-// THE SAME FLAG the provisioning commands, `crewlet llm` and `crewlet
-// secrets` take, and needed for the same cases: a node that holds no data
-// has no store of the company's to read, and a machine that is not a node has
-// none at all, so the values are a node's that does.
-func readAPIFlag(fs *flag.FlagSet) *string {
-	return fs.String("api", "",
-		"a running node to read the company's stored values through; default "+
-			"is this node's engine when it runs, and the fleet's store itself "+
-			"when it is stopped")
-}
-
-// bootstrapFlag adds the -config flag: the Tier A document naming this
-// node's store and the keyring that opens it.
-//
-// EVERY command that reads Tier B takes it, not only the ones that WRITE a
-// credential. The store is where a rotated secret lives, so a command
-// resolving a company's ${VAR} without it reads an empty string for
-// everything the operator has already rotated. See [companyResolver].
-func bootstrapFlag(fs *flag.FlagSet) *string {
-	return fs.String("config", defaultBootstrapPath,
-		"Tier A config: this node's store and its secret keyring")
-}
-
 // open builds the chosen sink, refusing an ambiguous or absent choice.
+// -secret-store records into the run's own store ([companyStore.recordInto]),
+// which companySecrets owns and closes.
 //
 // stdout is threaded through rather than read from a package variable, and
 // that is not tidiness: the variable it replaced was written by each of the
 // three provision commands just before this call, so two running at once
 // raced on it — which the race detector caught the moment the CLI's tests
 // ran in parallel. A writer is an argument the caller already has.
-func (s sinkFlags) open(ctx context.Context, environ config.Source, stdout io.Writer) (
-	provision.TokenSink, func(), error) {
+func (s sinkFlags) open(ctx context.Context, companySecrets *companyStore, stdout io.Writer) (
+	provision.TokenSink, error) {
 
+	if err := s.check(); err != nil {
+		return nil, err
+	}
+	switch {
+	case *s.print:
+		return provision.NewPrintSink(stdout)
+	case *s.envFile != "":
+		return provision.NewEnvFileSink(*s.envFile)
+	}
+
+	store, err := companySecrets.recordInto(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sink := provision.NewSecretStoreSink(store, hostAuthor())
+	if store.target.throughNode {
+		client, _ := store.target.secretBackend.(*secretsClient)
+		if client == nil {
+			return nil, errors.New("a store reached through a node has no client to re-activate it with")
+		}
+		return &nodeSecretSink{SecretStoreSink: sink, reload: client.Reload,
+			retries: flushRetries}, nil
+	}
+	return sink, nil
+}
+
+// nodeSecretSink is the secret store reached through a running node: each
+// value sealed the moment it is minted with its re-activation deferred, and
+// ONE re-activation at the end of the run (ADR-0070), `POST /config/reload`,
+// which seals nothing: a value somebody rotated while the run went on is never
+// written back over.
+//
+// A RE-ACTIVATION THAT FAILS IS NEVER A ROLLBACK. The values are sealed and the
+// accounts they belong to exist, so a run whose flush could not re-activate
+// the company has done its work; the next step says what is left, and nothing
+// is revoked.
+type nodeSecretSink struct {
+	*provision.SecretStoreSink
+
+	// reload re-activates the company the node runs ([secretsClient.Reload]).
+	reload func(ctx context.Context, summary string) (*configapi.Reloaded, error)
+
+	// retries is how long Flush waits before each retry: [flushRetries],
+	// and nothing in a test.
+	retries []time.Duration
+
+	mu       sync.Mutex
+	recorded []string
+	// outcome is what the flush's re-activation did, for the next step:
+	// nil before a flush that had anything to re-activate.
+	outcome *flushOutcome
+}
+
+// flushOutcome is what a flush's re-activation did.
+type flushOutcome struct {
+	revision string
+	epoch    int64
+	failed   error
+}
+
+// Record implements [provision.TokenSink]: sealed now, re-activated at Flush.
+func (s *nodeSecretSink) Record(ctx context.Context, name, value string) error {
+	if err := s.SecretStoreSink.Record(ctx, name, value); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !slices.Contains(s.recorded, name) {
+		s.recorded = append(s.recorded, name)
+	}
+	return nil
+}
+
+// Discard implements [provision.TokenSink]: a rolled-back value is not
+// re-activated at the end.
+func (s *nodeSecretSink) Discard(ctx context.Context) error {
+	s.mu.Lock()
+	s.recorded = nil
+	s.mu.Unlock()
+	return s.SecretStoreSink.Discard(ctx)
+}
+
+// Flush implements [provision.TokenSink]: the run's one re-activation, for
+// every value it sealed.
+//
+// IT RETURNS NO ERROR FOR A RE-ACTIVATION THAT FAILED, because an error from
+// Flush rolls the run back, revoking credentials that are sealed and good: the
+// outcome is the next step's to say ([nodeSecretSink.NextStep]). A transient
+// failure is retried first ([flushRetries]). A run that dies before its flush
+// leaves its values sealed and inactive until the company is next
+// re-activated, by `POST /config/reload` or any write that activates it.
+func (s *nodeSecretSink) Flush(ctx context.Context) error {
+	s.mu.Lock()
+	names := slices.Clone(s.recorded)
+	s.mu.Unlock()
+	if len(names) == 0 {
+		return s.SecretStoreSink.Flush(ctx)
+	}
+	summary := "reload: provisioning sealed " + strings.Join(names, ", ")
+	outcome := &flushOutcome{}
+	for attempt := 0; ; attempt++ {
+		reloaded, err := s.reload(ctx, summary)
+		if err == nil {
+			outcome = &flushOutcome{revision: reloaded.RevisionID, epoch: reloaded.Epoch}
+			break
+		}
+		outcome.failed = err
+		if attempt >= len(s.retries) || !transientFlush(err) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			outcome.failed = errors.Join(err, ctx.Err())
+		case <-time.After(s.retries[attempt]):
+			continue
+		}
+		break
+	}
+	s.mu.Lock()
+	s.outcome = outcome
+	if outcome.failed == nil {
+		s.recorded = nil
+	}
+	s.mu.Unlock()
+	return s.SecretStoreSink.Flush(ctx)
+}
+
+// NextStep implements [provision.TokenSink]: nothing, once the run's
+// re-activation landed; the re-activation to make, with why, when it did not.
+func (s *nodeSecretSink) NextStep() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch out := s.outcome; {
+	case out == nil:
+		return "nothing more: the node re-activates the revision that reads the values " +
+			"this run sealed at the end of the run"
+	case out.failed != nil:
+		return fmt.Sprintf("the values are sealed and the running company was NOT re-activated "+
+			"(%v): POST /config/reload to a node that is up re-activates it", out.failed)
+	default:
+		return fmt.Sprintf("nothing more: the node re-activated the company once, as revision "+
+			"%s, epoch %d, so the running fleet reads the values this run sealed", out.revision, out.epoch)
+	}
+}
+
+// flushRetries is how long a provisioning run's flush waits before each
+// retry of its re-activation: two retries, two then five seconds, which is a
+// coordination store's leader election (the config surface answers one with
+// Retry-After: 2) with room to spare, and short enough that a person at the
+// terminal is told within ten seconds that it did not land. A sink built in a
+// test waits none.
+var flushRetries = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// transientFlush reports whether a flush's failure may pass on its own: a
+// node that did not answer or answered 5xx, or a re-activation that lost a
+// race with another write. A refusal is not.
+func transientFlush(err error) bool {
+	var refused *nodeRefusal
+	if !errors.As(err, &refused) {
+		return true
+	}
+	return refused.Status >= http.StatusInternalServerError ||
+		refused.Code == string(httpjson.CodeRevisionAdvanced)
+}
+
+// check refuses an ambiguous or absent choice of sink, before anything reads
+// or opens one.
+func (s sinkFlags) check() error {
 	chosen := 0
 	for _, on := range []bool{*s.secretStore, *s.envFile != "", *s.print} {
 		if on {
@@ -106,400 +275,185 @@ func (s sinkFlags) open(ctx context.Context, environ config.Source, stdout io.Wr
 	}
 	switch {
 	case chosen == 0:
-		return nil, nil, fmt.Errorf("%w: pass -secret-store, -env-file PATH or -print",
+		return fmt.Errorf("%w: pass -secret-store, -env-file PATH or -print",
 			provision.ErrNoSink)
 	case chosen > 1:
 		// REFUSED RATHER THAN ORDERED. Writing to two places doubles the
 		// number of copies of a live credential, and picking one by
 		// precedence would put it somewhere the operator did not ask for.
-		return nil, nil, errors.New(
+		return errors.New(
 			"name exactly one of -secret-store, -env-file and -print")
 	}
-
-	switch {
-	case *s.print:
-		sink, err := provision.NewPrintSink(stdout)
-		return sink, func() {}, err
-	case *s.envFile != "":
-		sink, err := provision.NewEnvFileSink(*s.envFile)
-		return sink, func() {}, err
-	}
-
-	sv, closeStore, err := openSecretStore(ctx, environ, *s.bootstrap, *s.api)
-	if err != nil {
-		return nil, nil, err
-	}
-	return provision.NewSecretStoreSink(sinkStore{sv}, hostAuthor()), closeStore, nil
+	return nil
 }
 
-// sinkStore is a secret target as a provisioning sink's store. The author a
-// row records is the store's to report and a sink has nobody to tell, so the
-// answer is dropped here rather than widening the sink's own seam.
-type sinkStore struct{ *secretTarget }
+// describe names the sink a run with no `-secret-store` chose, as a refusal
+// names it.
+func (s sinkFlags) describe() string {
+	if *s.print {
+		return "this run's output (-print)"
+	}
+	return "the env file " + *s.envFile
+}
+
+// refuseOutranked refuses a run whose sink the company's store outranks — an
+// env file, or the run's own output — where that store holds any of mintsInto,
+// the variables the run can mint a value into; the vendor is named for what
+// the refusal says it would hold. See the package doc's "A sink the company's
+// store outranks" for why.
+//
+// It asks the store by its listing alone, through the run's route: a
+// provisioner that has read the company has decided that route already, and
+// one that reads nothing else — Slack with no `-secret-store` — decides it
+// here, before it prints anything. A run with no store (no Tier A file and no
+// -api) has nothing to be outranked by, and a run that mints into nothing has
+// nothing to ask.
+func (s sinkFlags) refuseOutranked(ctx context.Context, companySecrets *companyStore,
+	vendor string, mintsInto []string, notes io.Writer) error {
+
+	if *s.secretStore || len(mintsInto) == 0 {
+		return nil
+	}
+	held, store, err := companySecrets.holding(ctx, mintsInto, notes)
+	if err != nil || len(held) == 0 {
+		return err
+	}
+	return &outrankedSinkError{command: companySecrets.command, vendor: vendor,
+		store: store, sink: s.describe(), names: held}
+}
+
+// errOutrankedSink is the refusal of a provisioning run whose sink the
+// company's secret store outranks, where the store holds a name the run can
+// mint into ([sinkFlags.refuseOutranked]).
+var errOutrankedSink = errors.New("the company's secret store outranks this run's sink")
+
+// outrankedSinkError is that refusal: the store and the names it holds, the
+// sink the run chose, and the two ways forward.
+type outrankedSinkError struct {
+	command, vendor string
+	// store is where the run read the store's names, as said.
+	store string
+	// sink is the sink the run chose, as said.
+	sink string
+	// names is every variable the run can mint into that the store holds.
+	names []string
+}
+
+// Is makes the refusal [errOutrankedSink].
+func (e *outrankedSinkError) Is(target error) bool { return target == errOutrankedSink }
+
+func (e *outrankedSinkError) Error() string {
+	refs := make([]words.Said, len(e.names))
+	for i, name := range e.names {
+		refs[i] = words.Said("${" + name + "}")
+	}
+	return fmt.Sprintf("%s: the company's secret store (%s) holds %s, which this run "+
+		"can mint into, and the only place it would record a new value is %s. The "+
+		"engine resolves every ${VAR} from that store before its environment, so what "+
+		"the run minted would never be read: %s would hold it, and the engine would go "+
+		"on with the stored value. Record with -secret-store instead, which reads the "+
+		"stored value back and writes into that store, or remove the value from the "+
+		"store first (crewlet secrets unset NAME). Nothing was sent to %s.",
+		e.command, e.store, words.And(refs), e.sink, e.vendor, e.vendor)
+}
+
+// freshSwitch is a provisioning command's flag for a fresh webhook secret —
+// `-recreate-webhooks` on github and confluence, `-recreate-webhook` on jira —
+// declared once, by name.
+//
+// THE FLAG AND ITS SPELLING ARE ONE DECLARATION. A pass refuses the switch
+// over a secret the company document holds as a literal, naming it as the
+// surface that set it spells it ([provision.FreshSwitch]), so the command
+// hands its pass the name it parsed. A boolean flag beside a separate literal
+// spelling could drift apart, and the refusal would then send the operator to
+// a flag the command does not have.
+type freshSwitch struct {
+	name string
+	on   *bool
+}
+
+// addFreshSwitch declares the flag named name on fs.
+func addFreshSwitch(fs *flag.FlagSet, name, usage string) freshSwitch {
+	return freshSwitch{name: name, on: fs.Bool(name, false, usage)}
+}
+
+// value is the flag as a pass takes it: spelled as the command declares it
+// (`-recreate-webhooks`, the spelling its usage prints, whichever form the
+// operator typed it in), and empty where the run did not pass it, which is
+// [provision.FreshSwitch]'s "not asked".
+func (f freshSwitch) value() provision.FreshSwitch {
+	if f.on == nil || !*f.on {
+		return ""
+	}
+	return provision.FreshSwitch("-" + f.name)
+}
+
+// webhookMintsInto is the variable a run can mint a webhook secret into: the
+// whole `${VAR}` ref names, where the run registers a hook at all, and either
+// asked for a fresh secret or ref resolves to nothing — a secret that resolves
+// is registered as it is. base is the address the run registers its hooks at,
+// and empty where it registers none: no webhook address, or nothing to
+// register one on (GitHub with no `integrations.github.provisioning`), which
+// its caller knows and this does not.
+func webhookMintsInto(ref string, fresh bool, value func(string) string, base string) []string {
+	name := soleVarOf(ref)
+	if name == "" || base == "" || !fresh && strings.TrimSpace(value(ref)) != "" {
+		return nil
+	}
+	return []string{name}
+}
+
+// gitlabMintsInto is every variable a `crewlet gitlab provision` run can mint
+// into: the signing secret, where its plan mints or rotates one. A seat's
+// token is per-seat access, minted by the engine's sync, never by this run.
+func gitlabMintsInto(signing gitlab.SigningPlan) []string {
+	if signing.Action == gitlab.SigningMint || signing.Action == gitlab.SigningRotate {
+		return []string{signing.Var}
+	}
+	return nil
+}
+
+// sinkStore is the run's store as a provisioning sink's: writes go to its
+// route, and a read back is answered from the values the run read up front
+// ([storedValues.get]), with a one-name read for a held name nothing read
+// yet — so a provisioning run through a node reveals the seats' tokens it
+// checks in its first batch rather than one request each, part way through.
+//
+// The author a row records is the store's to report and a sink has nobody to
+// tell, so the answer is dropped here rather than widening the sink's own
+// seam.
+type sinkStore struct {
+	target *secretTarget
+	values *storedValues
+}
 
 func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) error {
 
-	_, err := s.secretTarget.Set(ctx, name, value, by, source, now)
-	return err
+	// DURABLE NOW, RE-ACTIVATED ONCE: a minted credential is sealed the
+	// moment it exists (provision.TokenSink.Record), and the run's last
+	// write re-activates for every value it sealed ([nodeSecretSink.Flush]),
+	// so a run that mints N credentials moves a running fleet onto one
+	// epoch rather than N.
+	if _, err := s.target.SetMany(ctx, map[string]string{name: value}, by, source, now,
+		true); err != nil {
+		return err
+	}
+	s.values.recorded(name, value)
+	return nil
 }
 
-// companyResolver builds the chain a run resolves Tier B ${VAR} references
-// through: the company's secret store first, the environment behind it.
-//
-// THE SAME ORDER THE ENGINE USES, and it has to be the same one. Every
-// command below reads the company's own values — the instance URL, the
-// workspace, the webhook signing secret, the engine's read token — and a run
-// that saw only the environment read an EMPTY STRING for every one an
-// operator had already put in the store. That is not merely a missing value
-// for the GitLab signing secret: empty is the signal to MINT, so the run
-// replaced a working webhook secret at the third-party app with a fresh one and broke
-// every delivery in flight until the config caught up. The store is where a
-// rotated secret lives; a tool that provisions against it has to read it.
-//
-// # One store, and the running engine decides the way in
-//
-// The same way [openSecretStore] decides where a write goes. The company's
-// values are the fleet's, on the coordination KV, whether or not this node's
-// engine runs. A RUNNING engine holds this node's database under an OS lock
-// ([store.ErrLocked]) for as long as it runs, and the values are read through
-// its API ([storedThroughTheRunningNode]); refusing instead made every one of
-// these commands, and `crewlet llm`, unusable beside the node they exist to
-// serve. A STOPPED one leaves the store to this command, which reaches it
-// itself ([openFleetStore]) — never a table of the node's own, which the
-// fleet never read: a run that resolved from one read every value the fleet
-// held as unset, and minted over a working signing secret. An explicit apiURL
-// is the command's instruction, and the read follows it rather than this
-// node, WHETHER OR NOT a Tier A is at this one: a command run against a named
-// node from a machine that is not one would otherwise reach, or create, a
-// store at the Tier A path — or with no file there, read the environment
-// alone — and resolve every stored value as unset.
-//
-// ONLY WHAT THIS COMMAND READS is fetched, either way in — the variables in
-// reads, which each command takes from the fields it resolves and the tables
-// its readers loop over. Through a node each value comes back through
-// `GET /secrets/{name}?reveal=true`: the one route that hands a credential
-// out, logged by name against the caller and refused to a machine token.
-// Revealing every value the company reads, for a command that reads two of
-// them, put the whole credential set in this process and the node's log for
-// nothing: `crewlet llm login` for one entry revealed every vendor's tokens,
-// and a GitLab provision every model's. Read directly, the same scope keeps a
-// row sealed under a key the ring no longer holds from failing a command
-// that never reads it. Names rather than document paths, because a path
-// prefix cannot tell an entry `gpt-5` from `gpt-5.1`, nor a tool server
-// `github` from `github.internal`. See [storedValues] for why they are read
-// before the command runs rather than one at a time as each is read.
-//
-// A node that holds no data (`store.scratch`) has no store of the company's
-// to open, and is refused unless apiURL names one that does.
-//
-// # When there is no store
-//
-// A run with no bootstrap at this path resolves from the environment alone —
-// the command is run somewhere other than a node, with `-public-url` naming
-// the deployment — so it is a NOTE rather than a failure, and it is a note
-// rather than silence: a mistyped -config resolving nothing has exactly the
-// destructive outcome above, and an operator has to be able to see which
-// chain ran. A bootstrap that exists always names a keyring, because Tier A
-// refuses one that does not.
-//
-// A bootstrap that exists and cannot be read fails the run instead. Someone
-// who configured a store and did not get it must not have their secrets
-// quietly resolved from a stale export.
-//
-// IT ALSO HANDS BACK THE TIER A IT LOADED ([companyBootstrap]), which every
-// caller now needs and none of them should load a second time. Nil when there
-// is no Tier A file at all.
-func companyResolver(ctx context.Context, environ config.Source, reads []string,
-	bootstrapPath, apiURL string, notes io.Writer) (*config.Resolver, *config.Bootstrap, func(), error) {
+func (s sinkStore) Get(_ context.Context, name string) (string, error) {
+	return s.values.get(name)
+}
 
-	boot, err := companyBootstrap(bootstrapPath)
+func (s sinkStore) Unset(ctx context.Context, name string) (bool, error) {
+	removed, err := s.target.Unset(ctx, name)
 	if err != nil {
-		return nil, nil, nil, err
+		return false, err
 	}
-	if strings.TrimSpace(apiURL) != "" {
-		client, cerr := newSecretsClient(environ, boot, apiURL)
-		if cerr != nil {
-			return nil, nil, nil, cerr
-		}
-		values, rerr := storedThrough(ctx, client, reads, notes)
-		if rerr != nil {
-			return nil, nil, nil, fmt.Errorf("read the company's stored values "+
-				"through %s: %w%s", client.base, rerr, revealRemedy(rerr))
-		}
-		return config.WithStore(values), boot, func() {}, nil
-	}
-	if boot == nil {
-		fmt.Fprintf(notes, "no %s: resolving ${VAR} from the environment only.\n",
-			bootstrapPath)
-		return config.EnvOnly(), nil, func() {}, nil
-	}
-	// A NODE THAT HOLDS NO DATA IS SENT TO ONE THAT DOES. Its own file is
-	// scratch — the previous run's, deleted at every boot — and the fleet it
-	// serves runs elsewhere: on the embedded topology it is a leaf of the
-	// members', with no store of its own to start, and on an external broker
-	// the nodes holding the company's data are the ones running it. So the
-	// way to the company's values is a running node that holds data, whose
-	// API authenticates and logs each read, and the run is told to name one
-	// rather than resolve every stored value as unset: it is a seats node,
-	// where the logins `crewlet llm` makes are made.
-	if boot.Store.Scratch {
-		return nil, nil, nil, fmt.Errorf("%s is a node that holds no data "+
-			"(store.scratch), so the company's stored values are read through "+
-			"a node that does: name one with -api, or run this on one",
-			bootstrapPath)
-	}
-	fs, closeFleet, err := openFleetStore(ctx, boot, bootstrapPath)
-	if err != nil {
-		values, rerr := storedThroughTheRunningNode(ctx, environ, boot, bootstrapPath,
-			reads, err, notes)
-		if rerr != nil {
-			return nil, nil, nil, rerr
-		}
-		return config.WithStore(values), boot, func() {}, nil
-	}
-	// THE STORE STAYS OPEN UNTIL THE CALLER IS DONE WITH THE RESOLVER: a read
-	// outside the command's scope is still answered from it, as it is made
-	// ([storedValues]).
-	fleet, err := fleetSecrets(fs, boot)
-	if err == nil {
-		var values *storedValues
-		if values, err = storedIn(ctx, fleet, reachedDirectly(fs), false, reads, notes); err == nil {
-			return config.WithStore(values), boot, closeFleet, nil
-		}
-	}
-	closeFleet()
-	return nil, nil, nil, fmt.Errorf("read the company's stored values: %w", err)
-}
-
-// companyBootstrap is the Tier A a command reading the company runs under,
-// or nil when there is no file at this path — a supported way to run one,
-// away from any node. A file that exists and does not load is the error.
-//
-// Its own function because one command needs the document and resolves
-// nothing: `crewlet slack provision` reads only where vendors reach this
-// deployment ([webhookBase]), and resolving the company's values for it would
-// open the store, or reveal credentials through the running node, for a run
-// that reads none of them.
-func companyBootstrap(bootstrapPath string) (*config.Bootstrap, error) {
-	if _, err := os.Stat(bootstrapPath); errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	return loadBootstrapForStore(bootstrapPath)
-}
-
-// revealRemedy is what a read through a node that failed tells the operator to
-// change: the token, where the node refused it, and nothing more where it did
-// not — a node that is down, draining or failing answers the same for any
-// token, and naming the token then sends an operator to change one that works.
-func revealRemedy(err error) string {
-	if refusedTheToken(err) {
-		return revealTakesATierAToken
-	}
-	return ""
-}
-
-// revealTakesATierAToken is what a read through a node that was refused
-// tells the operator to change: reading a value is a reveal, which the
-// authority table gives admin with a person present, so a machine token —
-// which acts for its owner with nobody there — is refused it whatever it
-// carries, and the token that reads is one of Tier A's.
-const revealTakesATierAToken = "\n\nEach value is read with a reveal, which takes admin and " +
-	"a person present: " + apiTokenEnv + " must hold one of Tier A's api.auth " +
-	"tokens, since a machine token is refused a reveal whatever it carries"
-
-// storedThroughTheRunningNode answers a locked store with the values the
-// command reads, through the node holding it — the read half of
-// [throughTheRunningNode], and [store.ErrLocked] is the only error it routes
-// for the same reason: every other failure is a broken node, whose own
-// message an HTTP attempt would replace with a connection refused.
-func storedThroughTheRunningNode(ctx context.Context, environ config.Source,
-	boot *config.Bootstrap, bootstrapPath string, reads []string,
-	err error, notes io.Writer) (*storedValues, error) {
-
-	if !errors.Is(err, store.ErrLocked) {
-		return nil, err
-	}
-	client, cerr := newSecretsClient(environ, boot, "")
-	if cerr == nil {
-		var values *storedValues
-		if values, cerr = storedThrough(ctx, client, reads, notes); cerr == nil {
-			return values, nil
-		}
-	}
-	// BOTH FACTS, as a write's refusal gives them: the lock alone reads as
-	// "blocked, no way forward", and the API's complaint alone as though
-	// nothing were holding the store. Stopping the engine would let this
-	// command reach the store itself, but it is not offered as the way
-	// round: a node taken down to read a value is an outage to save a token.
-	return nil, fmt.Errorf("%w\n\n%s's database is held by the process named "+
-		"above. While that is its engine, the company's stored values are read "+
-		"through its API — and they cannot be: %w%s%s", err, bootstrapPath, cerr,
-		revealRemedy(cerr), heldByACommand)
-}
-
-// storedThrough reads, through a running node, the stored values a command
-// reads, and says on notes that it did.
-func storedThrough(ctx context.Context, client *secretsClient, reads []string,
-	notes io.Writer) (*storedValues, error) {
-
-	return storedIn(ctx, client, "the running node at "+client.base, true, reads, notes)
-}
-
-// storeReader is what reading a command's values asks of the store, whichever
-// way in: through a running node's API, or directly.
-type storeReader interface {
-	List(ctx context.Context) ([]secrets.Record, error)
-	Get(ctx context.Context, name string) (string, error)
-}
-
-// storedIn reads the stored values a command reads from the store behind
-// reader, reached as where says, and says on notes that it did.
-//
-// THE LISTING FIRST, which reveals nothing: a name the command reads and the
-// fleet does not hold is left to the environment without a request. A name
-// that went between the listing and its read is absent the same way.
-func storedIn(ctx context.Context, reader storeReader, where string, throughNode bool,
-	reads []string, notes io.Writer) (*storedValues, error) {
-
-	rows, err := reader.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	values := &storedValues{
-		values:      map[string]string{},
-		held:        make(map[string]bool, len(rows)),
-		read:        func(name string) (string, error) { return reader.Get(ctx, name) },
-		where:       where,
-		throughNode: throughNode,
-		notes:       notes,
-	}
-	for _, row := range rows {
-		values.held[row.Name] = true
-	}
-	for _, name := range unionReads(reads) {
-		if _, _, err := values.readLocked(name); err != nil {
-			return nil, err
-		}
-	}
-	// SAID EVERY TIME, as the environment-only chain is: which chain ran is
-	// what an operator reads first when a value is not the one they set —
-	// and through a node, each read is a line in its log under their token.
-	if throughNode {
-		fmt.Fprintf(notes, "resolving ${VAR} through %s: %d of the stored values "+
-			"this command reads revealed there, each logged by name.\n",
-			where, len(values.values))
-	} else {
-		fmt.Fprintf(notes, "resolving ${VAR} from %s: %d of the stored values "+
-			"this command reads held there.\n", where, len(values.values))
-	}
-	return values, nil
-}
-
-// storedValues is the stored values one command reads: a [config.Source] over
-// the fleet's rows that reads only what is read — through the running node
-// that holds them, or from the store itself while this node's engine is
-// stopped.
-//
-// # The command's scope is read before it runs
-//
-// Not one value at a time as the command reads it, which would read no more
-// and fail worse. A read is a [config.Source] lookup, which has no error to
-// return: a read that failed — a reveal the node refused, which it refuses a
-// machine token every one; a row sealed under a key the ring no longer holds —
-// could only come back as "unset", and unset is what tells a provisioning run
-// to MINT, so a GitLab provision would replace the key a working hook signs
-// with because it could not read the one in the store. Read up front, the
-// same failure stops the command before it has done anything.
-//
-// # A read outside the scope is still answered from the fleet
-//
-// Read as it is made, and said on notes. A command whose scope missed a field
-// it reads — a new one, say — then resolves the fleet's value rather than the
-// environment's, which is the engine's answer; resolving it as unset would be
-// the same mint. That read has no error to return either, so a failed one
-// PANICS: the run stops where it is, as it would on a vendor's own failure
-// part way through, rather than going on to act on a value it does not have.
-type storedValues struct {
-	// mu guards values and held: a provisioner may read from more than one
-	// goroutine, and a read is a request the lock holds across.
-	mu sync.Mutex
-
-	// values is every stored value read so far, by name.
-	values map[string]string
-
-	// held is every name the store listed, less those found gone since.
-	held map[string]bool
-
-	// read reads one value from the store.
-	read func(name string) (string, error)
-
-	// where names the way to the store, for what is said on notes, and
-	// throughNode whether it is a node's API, whose reads are reveals.
-	where       string
-	throughNode bool
-	notes       io.Writer
-}
-
-// Lookup implements [config.Source].
-func (n *storedValues) Lookup(name string) (string, bool) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if value, ok := n.values[name]; ok {
-		return value, true
-	}
-	if !n.held[name] {
-		return "", false
-	}
-	value, ok, err := n.readLocked(name)
-	if err != nil {
-		panic(readFailed{fmt.Errorf("read ${%s} from %s: %w — stopping rather "+
-			"than resolving a stored value as unset%s",
-			name, n.where, err, revealRemedy(err))})
-	}
-	if ok {
-		// THE SAME WORDS THE COMMAND'S FIRST LINE USED for its way in: a
-		// read through a node is a reveal, logged there by name against
-		// the caller, and the operator is told so for this one as for the
-		// rest.
-		if n.throughNode {
-			fmt.Fprintf(n.notes, "revealed ${%s} through %s as it was read, beyond "+
-				"the values this command reveals before it runs; logged there by "+
-				"name.\n", name, n.where)
-		} else {
-			fmt.Fprintf(n.notes, "read ${%s} from %s as it was read, beyond the "+
-				"values this command reads before it runs.\n", name, n.where)
-		}
-	}
-	return value, ok
-}
-
-// readFailed is a read of a stored value that failed part way through a
-// command, carried by a panic out of the [storedValues.Lookup] that has no
-// error to return, and answered at the command's top as the error it is
-// ([runIn]). A panic, because the alternative answer — unset — is the one that
-// mints.
-type readFailed struct{ err error }
-
-func (r readFailed) Error() string { return r.err.Error() }
-func (r readFailed) Unwrap() error { return r.err }
-
-// readLocked reads one held name, reporting whether the store still held it.
-// n.mu is held, or n is not yet shared.
-func (n *storedValues) readLocked(name string) (string, bool, error) {
-	if !n.held[name] {
-		return "", false, nil
-	}
-	value, err := n.read(name)
-	switch {
-	case errors.Is(err, secrets.ErrNotFound):
-		delete(n.held, name)
-		return "", false, nil
-	case err != nil:
-		return "", false, err
-	}
-	n.values[name] = value
-	return value, true, nil
+	s.values.forgot(name)
+	return removed.Removed, nil
 }
 
 // fieldReads is every variable these fields reference, each once, sorted:
@@ -521,174 +475,141 @@ func unionReads(lists ...[]string) []string {
 }
 
 // operatorCredential reads the human operator's own credential, from the
-// ENVIRONMENT ALONE.
+// invocation's ENVIRONMENT ALONE ([runIn]): the process's, for every run of
+// the binary.
 //
-// Deliberately NOT through [companyResolver], which every company value goes
-// through. This is the operator's credential rather than the company's, and
+// Deliberately NOT through [companyStore.resolver], which every company value
+// goes through. This is the operator's credential rather than the company's, and
 // the difference is not bookkeeping: a GitLab admin PAT carries `api` scope
-// over the whole group, and the secret store is replicated to every node
-// that holds the keyring. Crewlet never persists one, and reading one back
-// from the store would imply it may be kept there — which is how the most
-// powerful credential in the deployment ends up in the shared table beside
-// the seat tokens it exists to mint.
-func operatorCredential(name string) string {
-	return strings.TrimSpace(config.EnvOnly().Lookup(name))
+// over the whole group, and the secret store is held on the coordination KV,
+// which every node reads and every node's keyring opens. Crewlet never
+// persists one, and reading one back from the store would imply it may be
+// kept there — which is how the most powerful credential in the deployment
+// ends up in the shared store beside the seat tokens it exists to mint.
+//
+// THE INVOCATION'S, NOT THE PROCESS'S, as the node credential is: a case that
+// reads the process's runs on whatever the machine running the suite exports,
+// and a Slack refresh token is spent by the rotation a run makes with it.
+func operatorCredential(environ config.Source, name string) string {
+	value, _ := environ.Lookup(name)
+	return strings.TrimSpace(value)
 }
 
 // gitlabProvisionReads is every variable `crewlet gitlab provision` reads of
 // the company: the instance, and the key its hooks sign with, which it mints
 // when that resolves empty — the names a running node is asked to reveal
-// ([companyResolver]). Not the engine's read token, which it never uses: it
+// ([companyStore.resolver]). Not the engine's read token, which it never uses: it
 // works with the operator's admin token, read from the environment alone
 // ([operatorCredential]).
 func gitlabProvisionReads(cfg *config.GitLab) []string {
 	return fieldReads(cfg.URL, cfg.SigningSecret)
 }
 
-// runGitLabProvision is `crewlet gitlab provision`.
-func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
+// runGitLabProvision is `crewlet gitlab provision`: the company-level half of
+// GitLab, which is the group check, the webhook and its signing secret. Each
+// agent's account, role and token are per-seat access, set on the
+// integration's Agents tab and applied by the engine.
+func runGitLabProvision(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("gitlab provision", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	sinks := addSinkFlags(fs)
 	adminToken := fs.String("admin-token", "",
-		"a GitLab token permitted to create service accounts; empty reads "+
-			"GITLAB_ADMIN_TOKEN")
+		"the GitLab token the integration provisions with (a group Owner's, or "+
+			"an instance administrator's); empty reads GITLAB_ADMIN_TOKEN")
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook; "+
 			"defaults to "+publicURLDefault)
 	rotate := fs.Bool("rotate", false,
-		"mint a fresh token for every seat, including seats whose current "+
-			"one still works (the engine has to be restarted after)")
-	decommission := fs.Bool("decommission", false,
-		"delete managed service accounts whose seats have left the config")
-	mode := fs.String("mode", "",
-		"where service accounts are owned: group (the default, and all "+
-			"GitLab.com offers) or instance (self-managed only; needs an "+
-			"instance-administrator token). Defaults to "+
-			"integrations.gitlab.provisioning.mode")
-	expiryDays := fs.Int("token-expiry-days", 0,
-		"lifetime for minted tokens; 0 sends none and lets the instance "+
-			"policy decide")
+		"mint a fresh webhook signing secret into the variable signing_secret "+
+			"names wherever the hook is registered (the run then says what the "+
+			"engine needs to read it)")
 	dryRun := fs.Bool("dry-run", false,
 		"print what the run would do and touch nothing")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	// PASSED ONLY WHEN THE OPERATOR TYPED IT, so the flag's default
-	// cannot be told from a deliberate zero.
-	var expiry *int
-	// AND THE MODE ONLY WHEN THEY TYPED IT, so the flag can be told from the
-	// document's own answer. The document is where this lives now — the
-	// engine's own passes read it and cannot read a flag — and a flag that
-	// silently defaulted to "group" would put the command line back in
-	// disagreement with the loop on the one input that decides which route
-	// creates, mints for and deletes every account.
-	var modeGiven bool
-	fs.Visit(func(f *flag.Flag) {
-		switch f.Name {
-		case "token-expiry-days":
-			expiry = expiryDays
-		case "mode":
-			modeGiven = true
-		}
-	})
 	companyPath, given := onePositional(fs, companyPath)
 	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet gitlab provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-mode group|instance] [-rotate] [-decommission] "+
-				"[-token-expiry-days N] [-dry-run]")
+				"[-rotate] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
-	}
-	if expiry != nil && *expiry < 0 {
-		return errors.New("-token-expiry-days must not be negative")
-	}
-	// REFUSED BEFORE THE CONFIG IS EVEN LOADED. A typo here is the one
-	// input that decides which endpoint every account is created on, and
-	// discovering it from a 404 half way through a run leaves an operator
-	// working out which seats landed.
-	if modeGiven && !gitlab.Mode(*mode).Valid() {
-		return fmt.Errorf("-mode %q is not one of %s",
-			*mode, strings.Join(gitlab.Modes(), ", "))
 	}
 
 	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}
-	organization, err := company.Organization()
-	if err != nil {
-		return err
-	}
 	cfg := company.Integrations.GitLab
-	plan, err := gitlab.PlanFor(organization, cfg)
-	if err != nil {
-		return err
+	if cfg == nil || !cfg.Enabled || cfg.Provisioning == nil {
+		return errors.New("integrations.gitlab is not enabled with a provisioning " +
+			"block, so there is no group to reconcile")
+	}
+	// THE SINK IS CHOSEN BEFORE THE ROUTE IS DECIDED: a run naming none, or
+	// two, is a mistake in its command line, and it is told so before a
+	// broker has started to read the store.
+	if !*dryRun {
+		if err = sinks.check(); err != nil {
+			return err
+		}
 	}
 
 	// RESOLVED BEFORE THE PLAN IS PRINTED, because the plan's most
-	// consequential line depends on it: whether this run will replace the
-	// key a working hook signs with. Reading the store is not a mutation of
-	// it, so a -dry-run does it too — a dry run that could not say this
-	// would be silent about the one outcome an operator most needs warning
-	// of. With the engine stopped that read starts this node's broker, which
-	// on a node that has never booted creates the fleet's buckets as the
-	// engine's first boot would (engine.OpenFleetStore): the store is made,
-	// not changed.
+	// consequential line depends on it: whether this run will replace the key
+	// a working hook signs with. Reading the store is not a mutation of it, so
+	// a -dry-run does it too.
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ,
-		gitlabProvisionReads(cfg), *sinks.bootstrap,
-		*sinks.api, stdout)
+	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
+		"crewlet gitlab provision")
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(ctx, gitlabProvisionReads(cfg), stdout)
+	if err != nil {
+		return err
+	}
+	boot := companySecrets.boot
 
-	// WHERE a minted secret belongs, from the config's own reference — the
-	// same mint-into-${VAR} contract the seat tokens follow. Empty when
-	// signing_secret is a literal, which the reconcile refuses rather than
-	// half-configuring.
-	// RESOLVED ONCE, for the reason the Slack command states: the value is
-	// read in three places here and three separate reads of the flag is
-	// how one of them disagrees with the others.
+	// RESOLVED ONCE: the value is read in three places here, and three
+	// separate reads of the flag is how one of them disagrees with the others.
 	base, baseKey := webhookBase(*publicURL, boot), webhookBaseKey(boot)
-
 	signingVar := soleVarOf(cfg.SigningSecret)
 	signing := gitlab.PlanSigningSecret(
 		env.Value(cfg.SigningSecret), signingVar, *rotate, base != "", baseKey)
 
-	// THE PLAN IS PRINTED EITHER WAY, and it is the SAME plan the run
-	// uses. A --dry-run that re-derived it separately would be a second
-	// implementation that can disagree with the real one about what it
-	// was going to do.
-	printPlan(stdout, plan, "a GitLab credential (mcp_env."+gitlab.SeatEnv+"."+gitlab.CredentialKeys[0]+")")
+	// A REAL RUN THE STORE OUTRANKS IS REFUSED BEFORE ITS PLAN PRINTS: the
+	// plan says what it would mint, and none of it happens.
+	if !*dryRun {
+		if err = sinks.refuseOutranked(ctx, companySecrets, "GitLab",
+			gitlabMintsInto(signing), stdout); err != nil {
+			return err
+		}
+	}
+
+	// THE PLAN IS PRINTED EITHER WAY, and it is the SAME plan the run uses.
 	fmt.Fprintln(stdout, signing.Describe())
+	fmt.Fprintln(stdout, "Agents' GitLab accounts are per-seat access: set them on "+
+		"the integration's Agents tab, and the engine applies them.")
 	if *dryRun {
 		fmt.Fprintln(stdout, "\n-dry-run: nothing was created, minted or registered.")
 		return nil
 	}
-	if plan.Empty() {
-		return nil
-	}
 
-	sink, closeSink, err := sinks.open(ctx, environ, stdout)
+	sink, err := sinks.open(ctx, companySecrets, stdout)
 	if err != nil {
 		return err
 	}
-	defer closeSink()
-
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = operatorCredential("GITLAB_ADMIN_TOKEN")
+		token = operatorCredential(inv.environ, "GITLAB_ADMIN_TOKEN")
 	}
 	if token == "" {
-		return errors.New(
-			"no administrator token: pass -admin-token or export " +
-				"GITLAB_ADMIN_TOKEN. The seats' own tokens are what this run " +
-				"MINTS, so it cannot bootstrap itself from them")
+		return errors.New("no provisioning token: pass -admin-token or export " +
+			"GITLAB_ADMIN_TOKEN")
 	}
 	client, err := gitlab.NewClient(gitlab.ClientOptions{
 		URL: env.Value(cfg.URL), Token: token,
@@ -696,15 +617,13 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 	if err != nil {
 		return err
 	}
-
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
-		Client: client, Config: cfg, Plan: plan, Sink: sink,
+		Client: client, Config: cfg, Sink: sink,
 		WebhookBase:      base,
 		WebhookBaseKey:   baseKey,
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
-		Rotate:           *rotate, Decommission: *decommission, ExpiryDays: expiry,
-		Mode: accountMode(cfg, modeGiven, *mode),
+		Rotate:           *rotate,
 	})
 	if err != nil {
 		return err
@@ -713,43 +632,14 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 	return nil
 }
 
-// printPlan renders what a run intends to do.
-// The `what` names the credential a seat would have to reference, because
-// an empty plan is almost always a config that names none — and "nothing to
-// do" without saying what was looked for sends an operator to the third-party app.
-func printPlan(w io.Writer, plan *provision.Plan, what string) {
-	if plan.Empty() {
-		fmt.Fprintf(w, "No seat references %s, so there is nothing to provision.\n", what)
-	} else {
-		fmt.Fprintf(w, "%d seat(s) to provision:\n", len(plan.Seats))
-		for _, seat := range plan.Seats {
-			fmt.Fprintf(w, "  %-16s %s → %s\n", seat.Handle, seat.Role, seat.TokenVar)
-		}
-	}
-	printNotes(w, plan.Notes)
-}
-
 // printResult renders what a run did.
 //
 // THE REPORT ENDS WITH THE NOTES, because they are the part an operator has
 // to act on: the run itself either worked or returned an error, while a note
-// is a seat that was skipped and will keep being skipped.
+// is something it could not do and will keep reporting.
 func printResult(w io.Writer, res *gitlab.Result, sink provision.TokenSink) {
 	fmt.Fprintf(w, "\nRecorded in %s.\n", sink.Describe())
 	printNextStep(w, res.Recorded, sink)
-	if len(res.Created) > 0 {
-		fmt.Fprintf(w, "Created %d account(s): %s\n",
-			len(res.Created), strings.Join(res.Created, ", "))
-	}
-	if len(res.Rotated) > 0 {
-		fmt.Fprintf(w, "Minted a token for %d seat(s): %s\n",
-			len(res.Rotated), strings.Join(res.Rotated, ", "))
-	}
-	printKept(w, res.Kept)
-	if len(res.Decommissioned) > 0 {
-		fmt.Fprintf(w, "Deleted %d account(s) whose seats have left: %s\n",
-			len(res.Decommissioned), strings.Join(res.Decommissioned, ", "))
-	}
 	if res.Hooked != "" {
 		// WHERE, not just whether. A group hook covers every project in
 		// the group including ones added later; a set of project hooks
@@ -784,22 +674,6 @@ func printNextStep(w io.Writer, recorded int, sink provision.TokenSink) {
 	fmt.Fprintf(w, "Next: %s\n", sink.NextStep())
 }
 
-// printKept reports the seats a run deliberately did not touch.
-//
-// SAID OUT LOUD, because it is the successful outcome of a re-run: a report
-// that mentioned only what changed would read as a run that did nothing,
-// and the operator's next move would be to reach for -rotate — which is
-// exactly the outage this behaviour exists to prevent.
-func printKept(w io.Writer, kept []string) {
-	if len(kept) == 0 {
-		return
-	}
-	fmt.Fprintf(w, "Left %d seat(s) alone — their credential still works, "+
-		"and rotating it would revoke what the running engine is using: %s\n"+
-		"  (pass -rotate to mint fresh ones, and restart the engine after)\n",
-		len(kept), strings.Join(kept, ", "))
-}
-
 func printNotes(w io.Writer, notes []string) {
 	if len(notes) == 0 {
 		return
@@ -814,10 +688,13 @@ func printNotes(w io.Writer, notes []string) {
 type vendorCommand struct {
 	sub  string
 	args string // the operand spelling shown in usage, without the vendor
-	// run takes the invocation's environment ([runIn]) first, because a
-	// command that stores what it mints may reach the running node's
-	// /secrets with the credential read from it.
-	run func(environ config.Source, args []string, stdout, stderr io.Writer) error
+	// run takes the invocation ([runIn]) first, because a command that
+	// stores what it mints may reach the running node's /secrets with the
+	// credential read from its environment, a command that takes an
+	// operator credential (GitLab's, Mattermost's, Slack's) reads it from
+	// there ([operatorCredential]), and Slack's reaches its Web API through
+	// the invocation's client.
+	run func(inv invocation, args []string, stdout, stderr io.Writer) error
 }
 
 // vendorCommands is the whole vendor CLI surface, and it is the ONLY list.
@@ -841,17 +718,41 @@ var vendorCommands = map[string][]vendorCommand{
 	"jira": {
 		{"provision", "<company.yaml>", runJiraProvision},
 	},
-	"slack": {
-		{"provision", "<company.yaml>", runSlackProvision},
-	},
+	// EVERY SLACK COMMAND IS RETIRED ([retiredCommands]); the vendor stays
+	// routed so a command line copied from an older guide says where its
+	// work went.
+	"slack": {},
 	"confluence": {
 		{"provision", "<company.yaml>", runConfluenceProvision},
 		{"import", "<company.yaml> <directory>", runConfluenceImport},
 		{"resync", "<company.yaml>", runConfluenceResync},
 	},
 	"mattermost": {
-		{"provision", "<company.yaml>", runMattermostProvision},
 		{"doctor", "<company.yaml>", runMattermostDoctor},
+	},
+}
+
+// retiredCommands are the subcommands a release removed, each with what an
+// operator does instead. Answered in place of the generic unknown-command
+// error, so a command line copied from an older guide says where its work
+// went rather than that it never existed.
+//
+//nolint:gochecknoglobals // a fixed table, not state
+var retiredCommands = map[string]map[string]string{
+	"slack": {
+		"provision": "each agent's Slack app is now created and kept by the reconcile loop " +
+			"with the app configuration token entered on Slack's connect form, and " +
+			"installed with Install on the Slack integration's Agents tab. An app the " +
+			"command made is adopted by its bot token. To let it be installed again, " +
+			"store its OAuth client from slack-apps.json with `crewlet secrets set " +
+			"SLACK_CLIENT_ID_<HANDLE>` and `crewlet secrets set SLACK_CLIENT_SECRET_<HANDLE>`, " +
+			"each value piped on stdin rather than passed with -value, then delete " +
+			"slack-apps.json; the Slack guide's upgrade notes show the commands",
+	},
+	"mattermost": {
+		"provision": "each agent's Mattermost bot, its roles, its channels and its token " +
+			"are now managed from the Mattermost integration's Agents tab and applied " +
+			"by the reconcile loop; `crewlet mattermost doctor` checks an install",
 	},
 }
 
@@ -864,10 +765,10 @@ var vendorCommands = map[string][]vendorCommand{
 var errUnknownSub = errors.New("unknown command")
 
 // runIntegration dispatches `crewlet <vendor> <command>`.
-func runIntegration(environ config.Source, vendor string, args []string, stdout, stderr io.Writer) error {
+func runIntegration(inv invocation, vendor string, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	commands := vendorCommands[vendor]
-	if len(commands) == 0 {
+	if len(commands) == 0 && len(retiredCommands[vendor]) == 0 {
 		// Unreachable through run(), whose case list and this table are
 		// asserted equal. Answered rather than panicked because a caller
 		// inside the process is not an operator to be crashed at.
@@ -875,8 +776,11 @@ func runIntegration(environ config.Source, vendor string, args []string, stdout,
 	}
 	for _, command := range commands {
 		if command.sub == sub {
-			return command.run(environ, rest, stdout, stderr)
+			return command.run(inv, rest, stdout, stderr)
 		}
+	}
+	if instead, retired := retiredCommands[vendor][sub]; retired {
+		return fmt.Errorf("`crewlet %s %s` is retired: %s", vendor, sub, instead)
 	}
 	if sub != "" && sub != "help" {
 		return fmt.Errorf("%w: %s %q", errUnknownSub, vendor, sub)
@@ -894,6 +798,10 @@ func printVendorUsage(w io.Writer, vendor string, commands []vendorCommand) {
 		}
 		fmt.Fprintf(w, "%s crewlet %s %s %s\n", lead, vendor, command.sub, command.args)
 	}
+	retired := retiredCommands[vendor]
+	for _, sub := range slices.Sorted(maps.Keys(retired)) {
+		fmt.Fprintf(w, "retired: crewlet %s %s: %s\n", vendor, sub, retired[sub])
+	}
 }
 
 // soleVarOf is the variable a whole ${VAR} reference names, or empty.
@@ -905,158 +813,16 @@ func soleVarOf(value string) string {
 	return name
 }
 
-// mattermostProvisionReads is every variable `crewlet mattermost provision`
-// reads of the company: the instance's address alone — the name a running
-// node is asked to reveal ([companyResolver]). The bots' tokens are what it
-// mints, and it works with the operator's admin token.
-func mattermostProvisionReads(cfg *config.Mattermost) []string {
-	if cfg == nil {
-		return nil
-	}
-	return fieldReads(cfg.URL)
-}
-
-// runMattermostProvision is `crewlet mattermost provision`.
-func runMattermostProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
-	companyPath, args := splitSubject(args)
-
-	fs := flag.NewFlagSet("mattermost provision", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	sinks := addSinkFlags(fs)
-	adminToken := fs.String("admin-token", "",
-		"a Mattermost token for a system administrator; empty reads MATTERMOST_ADMIN_TOKEN")
-	rotate := fs.Bool("rotate", false,
-		"mint a fresh token for every bot, including bots whose current "+
-			"one still works (the engine has to be restarted after)")
-	only := fs.String("handles", "",
-		"provision only these seat handles, comma-separated; empty does all")
-	decommission := fs.Bool("decommission", false,
-		"disable managed bot accounts whose seats have left the config")
-	dryRun := fs.Bool("dry-run", false,
-		"print what the run would do and touch nothing")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	companyPath, given := onePositional(fs, companyPath)
-	if given != 1 {
-		fmt.Fprintln(stderr,
-			"usage: crewlet mattermost provision <company.yaml> "+
-				"[-secret-store|-env-file PATH|-print] [-handles a,b] "+
-				"[-rotate] [-decommission] [-dry-run]")
-		return errors.New("name exactly one company document")
-	}
-
-	company, err := config.LoadCompanyToRun(companyPath, nil)
-	if err != nil {
-		return err
-	}
-	organization, err := company.Organization()
-	if err != nil {
-		return err
-	}
-	cfg := company.Integrations.Mattermost
-	plan, err := mattermost.PlanFor(organization, cfg)
-	if err != nil {
-		return err
-	}
-
-	printPlan(stdout, plan, "a Mattermost bot token (its role's mattermost.bot_token)")
-	if *dryRun {
-		fmt.Fprintln(stdout, "\n-dry-run: nothing was created, joined or minted.")
-		return nil
-	}
-	if plan.Empty() {
-		return nil
-	}
-
-	ctx := context.Background()
-	sink, closeSink, err := sinks.open(ctx, environ, stdout)
-	if err != nil {
-		return err
-	}
-	defer closeSink()
-
-	env, _, closeEnv, err := companyResolver(ctx, environ,
-		mattermostProvisionReads(cfg), *sinks.bootstrap,
-		*sinks.api, stdout)
-	if err != nil {
-		return err
-	}
-	defer closeEnv()
-
-	token := strings.TrimSpace(*adminToken)
-	if token == "" {
-		token = operatorCredential("MATTERMOST_ADMIN_TOKEN")
-	}
-	if token == "" {
-		return errors.New(
-			"no administrator token: pass -admin-token or export " +
-				"MATTERMOST_ADMIN_TOKEN. The bots' own tokens are what this " +
-				"run MINTS, so it cannot bootstrap itself from them")
-	}
-	client, err := mattermost.NewClient(mattermost.ClientOptions{
-		URL: env.Value(cfg.URL), Token: token,
-	})
-	if err != nil {
-		return err
-	}
-
-	res, err := mattermost.Reconcile(ctx, mattermost.Options{
-		Client: client, Config: cfg, Org: organization, Plan: plan, Sink: sink,
-		Rotate: *rotate, Decommission: *decommission, Only: splitHandles(*only),
-	})
-	if err != nil {
-		return err
-	}
-	printChatResult(stdout, res, sink.Describe())
-	return nil
-}
-
-// printChatResult renders what a Mattermost run did.
-func printChatResult(w io.Writer, res *mattermost.Result, where string) {
-	fmt.Fprintf(w, "\nRecorded in %s.\n", where)
-	if len(res.Created) > 0 {
-		fmt.Fprintf(w, "Created %d bot(s): %s\n",
-			len(res.Created), strings.Join(res.Created, ", "))
-	}
-	if len(res.Renamed) > 0 {
-		fmt.Fprintf(w, "Renamed %d bot(s) to match the company document: %s\n",
-			len(res.Renamed), strings.Join(res.Renamed, ", "))
-	}
-	if len(res.Rotated) > 0 {
-		fmt.Fprintf(w, "Minted a token for %d bot(s): %s\n",
-			len(res.Rotated), strings.Join(res.Rotated, ", "))
-	}
-	if len(res.Decommissioned) > 0 {
-		fmt.Fprintf(w, "Disabled %d departed bot(s): %s\n",
-			len(res.Decommissioned), strings.Join(res.Decommissioned, ", "))
-	}
-	printKept(w, res.Kept)
-	// THE CHANNELS ARE THE PART TO CHECK. A bot receives only what its
-	// channels deliver, so this line is the difference between an agent
-	// that wakes and one that never does.
-	for _, seat := range sortedKeys(res.Joined) {
-		fmt.Fprintf(w, "  %-16s channels: %s\n", seat,
-			strings.Join(res.Joined[seat], ", "))
-	}
-	printNotes(w, res.Notes)
-}
-
-func sortedKeys(m map[string][]string) []string {
-	out := slices.Sorted(maps.Keys(m))
-	return out
-}
-
 // mattermostDoctorReads is every variable `crewlet mattermost doctor` reads
 // of the company: the instance and its team, and each seat's bot token, which
 // its checks authenticate with ([mattermost.SeatTokenReads]) — the names a
-// running node is asked to reveal ([companyResolver]).
+// running node is asked to reveal ([companyStore.resolver]).
 func mattermostDoctorReads(cfg *config.Mattermost, o *org.Organization) []string {
 	return unionReads(fieldReads(cfg.URL, cfg.Team), mattermost.SeatTokenReads(o))
 }
 
 // runMattermostDoctor is `crewlet mattermost doctor`.
-func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runMattermostDoctor(inv invocation, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("mattermost doctor", flag.ContinueOnError)
@@ -1069,8 +835,7 @@ func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io
 			"Site URL is held to it and the browser probe is sent there. Empty "+
 			"reads MATTERMOST_PUBLIC_URL; with neither, the Site URL is judged "+
 			"on its own")
-	bootstrap := bootstrapFlag(fs)
-	apiURL := readAPIFlag(fs)
+	storeAt := addStoreFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -1096,16 +861,20 @@ func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, environ,
-		mattermostDoctorReads(cfg, organization), *bootstrap, *apiURL, stdout)
+	companySecrets, err := openCompanyStore(inv.environ, storeAt,
+		"crewlet mattermost doctor")
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.resolver(ctx, mattermostDoctorReads(cfg, organization), stdout)
+	if err != nil {
+		return err
+	}
 
 	token := strings.TrimSpace(*adminToken)
 	if token == "" {
-		token = operatorCredential("MATTERMOST_ADMIN_TOKEN")
+		token = operatorCredential(inv.environ, "MATTERMOST_ADMIN_TOKEN")
 	}
 	// AN EMPTY TOKEN IS FINE. The checks that need one borrow a seat's,
 	// because those are the credentials the engine authenticates with —
@@ -1161,7 +930,7 @@ func printDoctor(w io.Writer, report *mattermost.Report) {
 		// SAID OUT LOUD: one failing line with nothing after it reads
 		// as "one thing is wrong", when what it means is "nothing else
 		// was even asked".
-		fmt.Fprintln(w, "\nThe checks stopped here — everything below this "+
+		fmt.Fprintln(w, "\nThe checks stopped here: everything below this "+
 			"would have reported a consequence rather than a cause. Fix it "+
 			"and run again.")
 	case report.Healthy():
@@ -1276,22 +1045,4 @@ func webhookBaseKey(boot *config.Bootstrap) string {
 		api = boot.API
 	}
 	return api.WebhookBaseKey()
-}
-
-// accountMode is where this run owns the accounts it creates.
-//
-// THE DOCUMENT IS THE DEFAULT and the flag is a one-invocation override, the
-// way `-public-url` overrides Tier A's webhook address. The flag used to
-// be the only source, which made this a fact only the person who typed it
-// knew — and the engine provisions the same company from the same document
-// with no flag to read, so the two disagreed on the one input that decides
-// which route creates an account, mints its tokens and deletes it.
-func accountMode(cfg *config.GitLab, given bool, flagged string) gitlab.Mode {
-	if given {
-		return gitlab.Mode(flagged)
-	}
-	if cfg == nil {
-		return gitlab.ModeGroup
-	}
-	return gitlab.Mode(cfg.Provisioning.ModeOrDefault())
 }

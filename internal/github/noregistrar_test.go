@@ -2,7 +2,6 @@ package github_test
 
 import (
 	"context"
-	"slices"
 	"strings"
 	"testing"
 
@@ -164,112 +163,13 @@ func TestAPassAskedForNoHookReportsNoRegistrar(t *testing.T) {
 	}
 }
 
-// AN AGENT WITH NO APP IS ACTION REQUIRED, NOT A GREEN CARD.
-//
-// The engine builds its seat list from the seats carrying an
-// `integrations.github` block, because that block is where an app's id, slug
-// and key are recorded — so a seat that has never had one is absent from the
-// pass's input and the "no app" arm cannot be reached for it. The card read
-// Connected over an agent that could do nothing.
-//
-// APPROVAL_REQUIRED, so the phase is awaiting_admin and the actor is a
-// person: the engine can do nothing at all until somebody creates the app at
-// GitHub, and "Setting up agents" would wait for an act nobody is performing.
-func TestAgentsWithNoAppAreReportedAsNeedingAPerson(t *testing.T) {
-	t.Parallel()
-	if github.SeatsWithNoApp(nil) != nil {
-		t.Error("a company whose every agent has an app reported one anyway")
-	}
-	f := github.SeatsWithNoApp([]string{"sre-lead"})
-	if f == nil {
-		t.Fatal("an agent with no app of its own was reported as nothing")
-	}
-	if f.Kind != integration.FindingApprovalRequired {
-		t.Errorf("reported as %s, want approval_required: the engine can "+
-			"never create an app, so no phase owed to the engine is honest",
-			f.Kind)
-	}
-	if phase, actor := f.Kind.Verdict(); phase == integration.PhaseReady ||
-		actor == integration.ActorEngine {
-		t.Errorf("verdict is %s/%s, which reads as nothing to do", phase, actor)
-	}
-	// ONE AGENT IS NAMED AND NOT COUNTED. "1 agent(s) have no GitHub App"
-	// was wrong in three ways at once: the parenthesis reads as machine
-	// output in the one place a person is being asked to act, the verb does
-	// not agree, and the handle it is about was a metre further down the
-	// card when there was room for it right here.
-	if !strings.Contains(f.Detail, "sre-lead") {
-		t.Errorf("the finding does not name the agent:\n%s", f.Detail)
-	}
-	if strings.Contains(f.Detail, "(s)") || strings.Contains(f.Detail, "1 agent") {
-		t.Errorf("one agent is counted rather than named:\n%s", f.Detail)
-	}
-	if strings.Contains(f.Detail, " have ") {
-		t.Errorf("the verb does not agree with one agent:\n%s", f.Detail)
-	}
-}
-
-// AND MANY OF THEM ARE ONE FINDING, WITH THE WHOLE LIST BESIDE IT.
-//
-// Creating an app is the same act for every seat that has none, so N of them
-// is one sentence rather than N rows on the card. The sentence carries the
-// COUNT and nothing else — `detail` is the card's status line and the engine
-// caps it, so a fifty-agent company would be a wall cut off mid-handle — and
-// every handle travels in Subjects, where a card lays them out.
-//
-// It used to name three of them inline as well, and that is what this now
-// pins the absence of: a renderer showing both put every short list on
-// screen twice, a centimetre apart, once as prose and once as the list.
-func TestManyAgentsWithNoAppAreOneReadableFinding(t *testing.T) {
-	t.Parallel()
-	handles := []string{"a", "b", "c", "d", "e", "f"}
-	f := github.SeatsWithNoApp(handles)
-	if f == nil {
-		t.Fatal("six agents with no app reported nothing")
-	}
-	if len(f.Detail) > integration.MaxDetailLength {
-		t.Errorf("the sentence is %d characters, over the cap that would cut "+
-			"it mid-handle", len(f.Detail))
-	}
-	// THE SENTENCE NAMES NONE OF THEM, and says how many.
-	for _, handle := range handles {
-		if strings.Contains(f.Detail, " "+handle+",") ||
-			strings.Contains(f.Detail, " "+handle+" ") {
-			t.Errorf("the sentence splices %q into itself, so a card "+
-				"rendering the sentence and the list shows it twice:\n%s",
-				handle, f.Detail)
-		}
-	}
-	if !strings.Contains(f.Detail, "6 agents") {
-		t.Errorf("the sentence does not say how many, so a reader with only "+
-			"a string learns nothing about the size of it:\n%s", f.Detail)
-	}
-	// AND THE LIST IS ALL OF THEM, in the order it was given.
-	if !slices.Equal(f.Subjects, handles) {
-		t.Errorf("subjects = %v, want every handle", f.Subjects)
-	}
-	// AND WHAT TO DO IS ITS OWN FIELD, so a card can lay it out under the
-	// problem rather than render one paragraph carrying both.
-	if f.Remedy == "" {
-		t.Error("the finding says what is wrong and not what to do about it")
-	}
-	if strings.Contains(f.Detail, f.Remedy) {
-		t.Error("the remedy is glued into the sentence as well as carried " +
-			"beside it")
-	}
-	// AND IT DOES NOT SEND A READER TO THE SCREEN THEY ARE ON.
-	if strings.Contains(f.Remedy, "Integrations") {
-		t.Errorf("the remedy names the screen it is rendered on: %q", f.Remedy)
-	}
-}
-
 // THE RECOMMENDED ARRANGEMENT REPORTS NOTHING TO DO.
 //
 // A company whose agents each carry their own app hears about the
 // repositories those apps are installed on, and that is the answer the form
 // opens on. It was reported two ways and both were wrong: as an
 // `ingress_blocked` finding naming the organization token, which reads as
-// Action required over agents receiving events perfectly well — and, from the
+// Action required over agents receiving events perfectly well, and, from the
 // other branch, as "integrations.github.provisioning.repos is empty, so there
 // is nothing left to hook", which describes a gap that is not there.
 //
@@ -345,22 +245,25 @@ func TestTheCoverageIsStatedOnAReadyCard(t *testing.T) {
 	}
 	// BOTH HALVES. What is covered alone reads as a complete answer; what is
 	// not alone reads as a fault.
-	for _, want := range []string{"covering", "Not covering", "crewbed"} {
+	for _, want := range []string{"installed on", "none for the rest of crewbed"} {
 		if !strings.Contains(got.Detail, want) {
 			t.Errorf("the sentence does not mention %q:\n%s", want, got.Detail)
 		}
+	}
+	if got.Title == "" {
+		t.Error("the note has no lead for the notes list to set in bold")
 	}
 	// AND ITS REMEDY IS THE TOKEN, NEVER AN INSTALL.
 	//
 	// Installing an agent's app cannot widen this and never will — no App
 	// carries `admin:org_hook` at any permission — so prescribing one is
 	// telling somebody to repeat the thing that did not work. Matched on
-	// the clause after the dash rather than on the word "install", which
-	// appears in the descriptive half ("the repositories your agents' apps
-	// are installed on") perfectly correctly.
-	_, remedy, found := strings.Cut(got.Detail, "—")
-	if !found {
-		t.Fatalf("the sentence offers no remedy clause:\n%s", got.Detail)
+	// the remedy rather than on the word "install", which appears in the
+	// sentence ("the repositories your agents' apps are installed on")
+	// perfectly correctly.
+	remedy := got.Remedy
+	if remedy == "" {
+		t.Fatalf("the note offers no remedy:\n%+v", got)
 	}
 	if !strings.Contains(remedy, "integrations.github.token") {
 		t.Errorf("the remedy does not name the field that widens this:\n%s", remedy)
@@ -408,9 +311,9 @@ func TestTheNamedRepositoryPathIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if res.Coverage != "" {
+	if res.Coverage.Kind != "" {
 		t.Errorf("a company with no apps was told its agents' apps cover "+
-			"something: %q", res.Coverage)
+			"something: %+v", res.Coverage)
 	}
 }
 
@@ -450,7 +353,7 @@ func TestTheOldDefaultIsReportedAsCoverageNotAsABlock(t *testing.T) {
 				"and is held out of ready:\n%s", f.Kind, f.Detail)
 		}
 	}
-	if res.Coverage == "" {
+	if res.Coverage.Kind == "" {
 		t.Error("the card says nothing at all about what this company's " +
 			"agents do and do not hear about")
 	}

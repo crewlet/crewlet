@@ -12,7 +12,7 @@ import { modules } from "../test/source.ts";
  * and "Everything else … is **neutral**, and its identity is carried by its
  * name, its icon and its position." uilet's own tone contract says the same: "a
  * tone says what a thing IS, never who it is". `components/common.tsx` and
- * `routes/work/SavedViews.tsx` each restate it in a comment beside a call site.
+ * `routes/worklet/SavedViews.tsx` each restate it in a comment beside a call site.
  *
  * It decayed anyway. The work item's Woke panel drew its "N asked" summary chip
  * and one recipient's reason pill in `variant="brand"`, which resolves to
@@ -79,7 +79,7 @@ const ACCENT: Site[] = [
     why: "The badge in the sidebar's account row IS the reader — `ring` is the kit's selected badge, and this is the one badge that means \"you\". Nobody, and an answer still out, are not ringed.",
   },
   {
-    file: "routes/work/SavedViews.tsx",
+    file: "routes/worklet/SavedViews.tsx",
     line: `<Tag key="pinned" variant="brand" title="Pinned by you">`,
     why: "A pin is PER READER; the view's own facts beside it are outline. The screen's own comment states the rule, and `viewMarks` is the ONE place that draws it — the grid and the facts block each had their own copy, already drifted.",
   },

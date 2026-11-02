@@ -1,8 +1,8 @@
 /**
  * The facts a node wears, and the one that had no reader at all.
  *
- * `internal/api/queries/fleet.go` has written `projections_ready` /
- * `projections_total` on every node row since they were added, with a comment
+ * `internal/api/queries/fleet.go` has written `appliers_ready` /
+ * `appliers_total` on every node row since they were added, with a comment
  * saying where the fact belongs: "the fleet view", because it is the answer to
  * "why is the new node holding nothing". The client type never declared them
  * and no screen read them, so the answer carried the fact and nobody could see
@@ -24,16 +24,42 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
-import type { FleetNode } from "~/protocol/types.ts";
+import type { FleetActivation, FleetNode } from "~/protocol/types.ts";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
 
 function node(over: Partial<FleetNode> = {}): FleetNode {
   return { id: "n1", roles: [], broker: "member", seats: 0, config_epoch: 3, ...over };
 }
 
-function fact(n: FleetNode, label: string) {
-  return nodeFacts({ node: n, target: 3 }).find((f) => f.label === label);
+/** The revision the fleet activated at epoch 3, and the one before it. */
+const ACTIVE = "01JACTIVE00000000000000000A";
+const PREVIOUS = "01JPREVIOUS000000000000000P";
+const activation: FleetActivation = {
+  epoch: 3,
+  revision_id: ACTIVE,
+  at: "2026-10-26T08:00:00Z",
+  summary: "",
+};
+const AT3 = { activation };
+
+function fact(n: FleetNode, label: string, answer: { activation?: FleetActivation | null } = AT3) {
+  return nodeFacts({ node: n, answer }).find((f) => f.label === label);
 }
+
+/** A node that runs the revision the fleet activated at epoch 3. */
+const runsActive: Partial<FleetNode> = {
+  config_status: "ok",
+  config_revision_id: ACTIVE,
+  config_serving_revision_id: ACTIVE,
+};
+
+/** A node that refused it at epoch 3 and runs the one before. */
+const refusedIt: Partial<FleetNode> = {
+  config_status: "error",
+  config_error: "env var CREWLET_X is not set",
+  config_revision_id: ACTIVE,
+  config_serving_revision_id: PREVIOUS,
+};
 
 describe("the broker column", () => {
   afterEach(cleanup);
@@ -64,10 +90,10 @@ describe("nodeFacts", () => {
   test("a node that is still replaying says how far it has come", () => {
     // Two integers, not a bool: "3 of 5" and "0 of 2" are the two readings an
     // operator has to tell apart, which is why the engine sends a pair.
-    expect(fact(node({ projections_ready: 3, projections_total: 5 }), "Copies")?.value).toBe(
+    expect(fact(node({ appliers_ready: 3, appliers_total: 5 }), "Copies")?.value).toBe(
       "3 of 5 ready",
     );
-    expect(fact(node({ projections_ready: 0, projections_total: 2 }), "Copies")?.value).toBe(
+    expect(fact(node({ appliers_ready: 0, appliers_total: 2 }), "Copies")?.value).toBe(
       "0 of 2 ready",
     );
   });
@@ -77,13 +103,13 @@ describe("nodeFacts", () => {
   // two tracks on one line and carries the whole string in its title.
   test("the build version is one token, titled with the whole string", () => {
     const version = "v0.0.0-20260929172955-0123456789ab";
-    const f = nodeFacts({ node: node(), target: 3, version }).find((x) => x.label === "Version");
+    const f = nodeFacts({ node: node(), answer: AT3, version }).find((x) => x.label === "Version");
     expect(f?.token).toBe(true);
     render(<>{f?.value}</>);
     expect(screen.getByText(version).getAttribute("title")).toBe(version);
     cleanup();
     // Unknown stays a worded empty, never a token-styled blank.
-    expect(nodeFacts({ node: node(), target: 3 }).find((x) => x.label === "Version")?.token).toBe(
+    expect(nodeFacts({ node: node(), answer: AT3 }).find((x) => x.label === "Version")?.token).toBe(
       undefined,
     );
   });
@@ -93,7 +119,7 @@ describe("nodeFacts", () => {
     // non-zero, so a dash here would claim a reading the engine does not keep
     // — and `FactLine` drops an empty value, which is the honest rendering.
     expect(fact(node(), "Copies")?.value).toBe("");
-    expect(fact(node({ projections_total: 0 }), "Copies")?.value).toBe("");
+    expect(fact(node({ appliers_total: 0 }), "Copies")?.value).toBe("");
   });
 
   // THE ROLES ARE A FACT, AND A SET: the Nodes table gives its Roles column
@@ -111,10 +137,253 @@ describe("nodeFacts", () => {
     // A node can hold the current revision and still be replaying the log its
     // state is derived from; only one of those makes its seats servable.
     const labels = nodeFacts({
-      node: node({ projections_ready: 1, projections_total: 4 }),
-      target: 3,
+      node: node({ appliers_ready: 1, appliers_total: 4 }),
+      answer: AT3,
     }).map((f) => f.label);
     expect(labels.indexOf("Copies")).toBe(labels.indexOf("Epoch") + 1);
+  });
+
+  // THE EPOCH IS THE ONE IT ATTEMPTED. A node that refused the target reports
+  // the target's epoch, and the epoch-only rule called its lag "current".
+  test("a node that refused the active revision is not current, and its lag says so", () => {
+    expect(fact(node(runsActive), "Lag")?.value).toBe("current");
+    expect(fact(node(refusedIt), "Epoch")?.value).toBe("3 of 3");
+    expect(fact(node(refusedIt), "Lag")?.value).toBe(
+      `refused the active revision; runs ${PREVIOUS.slice(0, 10)}`,
+    );
+  });
+
+  test("a node at the target epoch on another revision is not current", () => {
+    const other = node({
+      ...runsActive,
+      config_revision_id: PREVIOUS,
+      config_serving_revision_id: PREVIOUS,
+    });
+    expect(fact(other, "Lag")?.value).not.toBe("current");
+    expect(fact(other, "Lag")?.value).toBe(`on another revision, ${PREVIOUS.slice(0, 10)}`);
+  });
+
+  test("with no activation there is no target, so no lag and no denominator", () => {
+    const lag = fact(node(runsActive), "Lag", { activation: null });
+    expect(lag?.value).not.toBe("current");
+    render(<>{lag?.value}</>);
+    expect(screen.getByText("No revision activated yet")).toBeDefined();
+    cleanup();
+    expect(fact(node(runsActive), "Epoch", { activation: null })?.value).toBe("3");
+  });
+});
+
+// WHETHER A NODE RUNS THE FLEET'S REVISION, on every part of the screen that
+// says it: the tile, the row, and the node's Running panel. Each case is one
+// the epoch-only rule got wrong — a refusal and another revision both report
+// the target's epoch, and an answer with no activation has no target.
+describe("whether a node runs the fleet's revision", () => {
+  class InertWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSED = 3;
+    readyState = InertWebSocket.CONNECTING;
+    send(): void {}
+    close(): void {}
+  }
+
+  const fleet = (nodes: FleetNode[], active: FleetActivation | null = activation) => ({
+    nodes,
+    seats: [],
+    duties: [],
+    unplaceable: [],
+    unmanned_roles: [],
+    this_node: nodes[0]?.id ?? "",
+    target_epoch: active?.epoch ?? 0,
+    activation: active,
+  });
+
+  function mount(answer: ReturnType<typeof fleet>, id?: string) {
+    Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+    location.hash = id ? `#/settings/nodes/${id}` : "#/settings/nodes";
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+      what === "fleet" ? Promise.resolve(answer) : new Promise(() => {});
+    return render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <SessionReading>
+          <ViewerProvider>
+            <Router>
+              <Fleet node={id} />
+            </Router>
+          </ViewerProvider>
+        </SessionReading>
+      </ClientContext.Provider>,
+    );
+  }
+
+  /** The Behind on config tile's figure. */
+  function behindTile(container: HTMLElement) {
+    const tile = [...container.querySelectorAll<HTMLElement>(".crewlet-statcard")].find((c) =>
+      c.textContent?.includes("Behind on config"),
+    );
+    expect(tile, "the tile is drawn").toBeDefined();
+    return tile!.querySelector(".crewlet-statcard__number")?.textContent;
+  }
+
+  afterEach(() => {
+    cleanup();
+    location.hash = "#/";
+  });
+
+  test("the tile counts a refusal and another revision, and the rows say which", async () => {
+    const view = mount(
+      fleet([
+        node({ id: "current-0", ...runsActive }),
+        node({ id: "refused-0", ...refusedIt }),
+        node({ id: "other-0", ...runsActive, config_revision_id: PREVIOUS }),
+      ]),
+    );
+    expect(await screen.findAllByText("refused-0")).not.toHaveLength(0);
+    expect(behindTile(view.container)).toBe("2");
+    const row = (id: string) =>
+      [...view.container.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")].find((r) =>
+        r.textContent?.includes(id),
+      )!;
+    expect(within(row("refused-0")).getByText("refused")).toBeDefined();
+    expect(within(row("other-0")).getByText("elsewhere")).toBeDefined();
+    expect(within(row("current-0")).queryByText(/behind|refused|elsewhere/)).toBeNull();
+  });
+
+  test("an answer with no activation counts no node behind", async () => {
+    const view = mount(fleet([node({ id: "lone-0", config_epoch: 1, ...refusedIt })], null));
+    expect(await screen.findAllByText("lone-0")).not.toHaveLength(0);
+    expect(behindTile(view.container)).toBe("0");
+    expect(screen.getByText("no target epoch")).toBeDefined();
+  });
+
+  /** The node page's Running card. */
+  async function runningPanel() {
+    const title = await screen.findByText("Running", { selector: ".crewlet-card__title" });
+    const card = title.closest<HTMLElement>(".crewlet-card");
+    expect(card, "the Running card is drawn").not.toBeNull();
+    return card!;
+  }
+
+  test("a refused node's Running panel names the refusal and what it runs", async () => {
+    mount(fleet([node({ id: "refused-0", ...refusedIt })]), "refused-0");
+    const panel = await runningPanel();
+    expect(
+      within(panel).getByText(`refused the active revision; runs ${PREVIOUS.slice(0, 10)}`),
+    ).toBeDefined();
+    expect(within(panel).queryByText("running the active revision")).toBeNull();
+    expect(within(panel).getByText(/env var CREWLET_X is not set/)).toBeDefined();
+  });
+
+  test("a current node's Running panel says it runs the active revision", async () => {
+    mount(fleet([node({ id: "current-0", ...runsActive })]), "current-0");
+    const panel = await runningPanel();
+    expect(within(panel).getByText("running the active revision")).toBeDefined();
+  });
+});
+
+// A MISSING POSTURE IS ONE OF TWO ABSENCES, and the dash says which, in the
+// node's row and among its facts alike. A node that could not read its control
+// plane on a heartbeat still publishes the rest of its status, so its row
+// carries `in_flight` and no posture; one whose heartbeat carried no status
+// carries neither. Both used to read "This node has published no presence
+// heartbeat", which neither is: a listed node holds the presence lease its
+// heartbeat renews. The words are the dash's title as well as what a screen
+// reader hears, since a sighted reader otherwise sees one dash for both.
+describe("a node's posture", () => {
+  class InertWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSED = 3;
+    readyState = InertWebSocket.CONNECTING;
+    send(): void {}
+    close(): void {}
+  }
+
+  const UNREAD = "This node could not read the control plane on its last heartbeat";
+  const SILENT = "This node's last heartbeat carried no status";
+
+  /** A status published whole but for its posture, as such a heartbeat sends it. */
+  const unread = node({
+    id: "unread-0",
+    in_flight: 2,
+    draining: false,
+    started_at: "2020-05-01T08:00:00Z",
+  });
+  /** No status at all: no in-flight count and no posture. */
+  const silent = node({ id: "silent-0" });
+  const serving = node({ id: "serving-0", in_flight: 0, draining: false, posture: "serve" });
+
+  /** Draws the Nodes screen over these nodes, and answers each one's row by id. */
+  async function rowsOf(nodes: FleetNode[]) {
+    Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+    location.hash = "#/settings/nodes";
+    const answer = {
+      nodes,
+      seats: [],
+      duties: [],
+      unplaceable: [],
+      unmanned_roles: [],
+      this_node: nodes[0]!.id,
+      target_epoch: 3,
+    };
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+      what === "fleet" ? Promise.resolve(answer) : new Promise(() => {});
+    const view = render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <SessionReading>
+          <ViewerProvider>
+            <Router>
+              <Fleet />
+            </Router>
+          </ViewerProvider>
+        </SessionReading>
+      </ClientContext.Provider>,
+    );
+    expect(await screen.findAllByText(nodes[0]!.id)).not.toHaveLength(0);
+    return (id: string) =>
+      [...view.container.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")].find((r) =>
+        r.textContent?.includes(id),
+      )!;
+  }
+
+  /** The node's Posture fact, drawn as its page and its peek draw it. */
+  function postureFact(n: FleetNode) {
+    return render(<>{fact(n, "Posture")?.value}</>).container;
+  }
+
+  afterEach(() => {
+    cleanup();
+    location.hash = "#/";
+  });
+
+  test("a status without a posture is a control plane the node could not read", async () => {
+    const row = await rowsOf([unread, silent]);
+    // Its title for a sighted reader, and the same words for a screen reader.
+    expect(within(row("unread-0")).getByTitle(UNREAD).textContent).toContain(UNREAD);
+    expect(within(row("silent-0")).queryByTitle(UNREAD)).toBeNull();
+    cleanup();
+    expect(within(postureFact(unread)).getByTitle(UNREAD).textContent).toContain(UNREAD);
+  });
+
+  test("a heartbeat that carried no status says so, never that the node sent none", async () => {
+    const row = await rowsOf([silent, unread]);
+    expect(within(row("silent-0")).getByTitle(SILENT).textContent).toContain(SILENT);
+    expect(within(row("unread-0")).queryByTitle(SILENT)).toBeNull();
+    expect(screen.queryByText(/published no presence heartbeat/)).toBeNull();
+    cleanup();
+    expect(within(postureFact(silent)).getByTitle(SILENT).textContent).toContain(SILENT);
+  });
+
+  test("a posture the node read is its own word, the same tag in its row and its facts", async () => {
+    const row = await rowsOf([serving]);
+    const tone = (el: HTMLElement) => el.closest(".crewlet-tag")?.className ?? "";
+    expect(tone(within(row("serving-0")).getByText("serve"))).toContain("crewlet-tag--success");
+    cleanup();
+    expect(tone(within(postureFact(serving)).getByText("serve"))).toContain("crewlet-tag--success");
   });
 });
 
@@ -556,7 +825,23 @@ describe("the Nodes table", () => {
       return {
         heads: heads(grid),
         hidden: grid.parentElement?.querySelector(".crewlet-data-grid__foot")?.textContent ?? "",
+        stacked: grid.hasAttribute("data-stacked"),
       };
+    }
+
+    // The narrowest the grid still draws as columns. Squeezed past it, the
+    // kit's DataGrid stacks its rows into cards, which hide nothing, so the
+    // full give-way set is read one step before the grid stacks.
+    async function squeezedToColumns() {
+      let last = await drawn(486);
+      for (let width = 476; width > 0; width -= 10) {
+        cleanup();
+        const at = await drawn(width);
+        if (at.stacked) break;
+        last = at;
+      }
+      cleanup();
+      return last;
     }
 
     test("beside a peek it gives way whole columns, and never cuts one to a letter", async () => {
@@ -585,12 +870,18 @@ describe("the Nodes table", () => {
       expect(at.hidden).not.toContain("Hidden to fit");
     });
 
-    // A COLUMN HIDDEN IN FAVOUR OF THE PEEK HAS TO BE IN IT. Squeezed to
-    // nothing, every column that can give way does — and each one it names is
-    // a fact the node's own peek draws, so closing nothing and opening the
-    // node still answers what the row stopped saying.
-    test("every column it can give way is one the node's peek carries", async () => {
+    test("squeezed past its columns it stacks into card rows and hides nothing", async () => {
       const at = await drawn(160);
+      expect(at.stacked).toBe(true);
+      expect(at.hidden).not.toContain("Hidden to fit");
+    });
+
+    // A COLUMN HIDDEN IN FAVOUR OF THE PEEK HAS TO BE IN IT. Squeezed as far
+    // as it still draws columns, every column that can give way does, and
+    // each one it names is a fact the node's own peek draws, so closing
+    // nothing and opening the node still answers what the row stopped saying.
+    test("every column it can give way is one the node's peek carries", async () => {
+      const at = await squeezedToColumns();
       const hidden = at.hidden.replace(/^.*Hidden to fit:\s*/, "").split(/,\s*|\s+and\s+/);
       expect(hidden.sort()).toEqual(["Broker", "In flight", "Lease", "Roles", "Up since"]);
       cleanup();

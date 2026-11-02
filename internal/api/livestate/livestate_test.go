@@ -157,7 +157,7 @@ func TestAnEventNamingOnlyARoleMovesNothing(t *testing.T) {
 //
 // It reads the PHASE events, not a task lifecycle: the five task_* types this
 // projection used to branch on had no publisher at all — they described an
-// engine-owned task object the native tracker replaced — so `working` and
+// engine-owned task object Worklet replaced, so `working` and
 // `idle` have always come from here.
 func TestATurnRunsAndFinishes(t *testing.T) {
 	t.Parallel()
@@ -198,17 +198,19 @@ func TestAGuardBreachIsAFailedTurnNotAStop(t *testing.T) {
 	}
 }
 
-// AN UNREACHABLE PROVIDER STOPS THE SEAT, and says so in the reason — the one
-// engine-detected failure that is a stop, because every wake the seat takes
-// until the provider answers fails the same way.
-func TestAnUnreachableProviderStopsTheSeat(t *testing.T) {
+// A CHAIN THAT RAN OUT IS A FAILED TURN, NOT A STOP. Nothing says the failure
+// lasts, and the seat's next wake may find a provider answering; the stop for a
+// limit that does last is the provider park's (provider_test.go). While this
+// event stopped the seat, a seat retried into a usage limit every second read
+// working, then stopped, then working again, on every screen that drew it.
+func TestAnExhaustedChainIsAFailedTurnNotAStop(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	s.Apply(env("llm_unavailable", map[string]any{"agent_id": "Lead"}))
 	got := overlayOf(t, s, "Lead")
-	if got.Activity != livestate.ActivityStopped || got.StoppedReason == nil ||
-		*got.StoppedReason != livestate.StoppedProvider {
-		t.Errorf("activity = %q (%v), want stopped/provider", got.Activity, got.StoppedReason)
+	if got.Activity != livestate.ActivityIdle || got.StoppedReason != nil {
+		t.Errorf("activity = %q (%v), want idle: a failed turn does not stop a seat",
+			got.Activity, got.StoppedReason)
 	}
 	if got.LastError == nil || got.LastError.Kind != "llm_unavailable" {
 		t.Errorf("last error = %+v, want the event type as its kind", got.LastError)

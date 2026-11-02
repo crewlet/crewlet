@@ -13,13 +13,15 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The operator catalogue's WRITES are what the dashboard's act transport and
@@ -40,27 +42,87 @@ import (
 // everyWriteCall is one successful call of every operator write, against the
 // fakes [writeSurface] builds.
 var everyWriteCall = map[string]map[string]any{
-	tracker.CreateWorkItemTool: {"title": "Rotate the key", "project": "ENG",
+	worklet.CreateWorkItemTool: {"title": "Rotate the key", "project": "ENG",
 		"labels": []any{"ops"}, "labels_create_missing": true, "waiting_on": []any{"ENG-2"}},
-	tracker.UpdateWorkItemTool: {"item": "ENG-1", "status": "in_progress",
+	worklet.UpdateWorkItemTool: {"item": "ENG-1", "status": "in_progress",
 		"waiting_on": map[string]any{"add": []any{"ENG-3"}}},
-	tracker.CommentOnWorkTool:      {"item": "ENG-1", "body": "on it"},
-	tracker.MergeWorkItemTool:      {"item": "ENG-2", "into": "ENG-1"},
-	tracker.SaveWorkViewTool:       {"container": "project:ENG", "name": "Mine", "type": "list"},
-	tracker.WriteWorkCatalogueTool: {"types": []any{map[string]any{"slug": "bug", "name": "Bug"}}, "fields": []any{}},
-	tracker.SetPrioritiesTool:      {"items": []any{"ENG-1"}},
-	tracker.SetPinsTool:            {"views": map[string]any{"add": []any{"v-1"}}},
-	tracker.MarkInboxTool:          {"read": []any{"r-1"}},
-	tracker.WriteProjectTool: {"project": "ENG",
+	worklet.CommentOnWorkTool:      {"item": "ENG-1", "body": "on it"},
+	worklet.MergeWorkItemTool:      {"item": "ENG-2", "into": "ENG-1"},
+	worklet.SaveWorkViewTool:       {"container": "project:ENG", "name": "Mine", "type": "list"},
+	worklet.WriteWorkCatalogueTool: {"types": []any{map[string]any{"slug": "bug", "name": "Bug"}}, "fields": []any{}},
+	worklet.SetPrioritiesTool:      {"items": []any{"ENG-1"}},
+	worklet.SetPinsTool:            {"views": map[string]any{"add": []any{"v-1"}}},
+	worklet.MarkInboxTool:          {"read": []any{"r-1"}},
+	worklet.WriteProjectTool: {"project": "ENG",
 		"tags_add": []any{map[string]any{"slug": "ops", "label": "Ops"}}, "default_assignee": ""},
-	tracker.RemoveWorkItemTool:  {"item": "ENG-1"},
-	tracker.RestoreWorkItemTool: {"item": "ENG-5"},
-	tracker.MoveWorkItemTool:    {"item": "ENG-1", "project": "OPS"},
-	tracker.PlaceWorkItemTool: {"item": "ENG-1", "before": "ENG-2",
+	worklet.RemoveWorkItemTool:  {"item": "ENG-1"},
+	worklet.RestoreWorkItemTool: {"item": "ENG-5"},
+	worklet.MoveWorkItemTool:    {"item": "ENG-1", "project": "OPS"},
+	worklet.PlaceWorkItemTool: {"item": "ENG-1", "before": "ENG-2",
 		"status": "in_progress", "if_match": 7},
 	builtin.WritePageTool:     {"title": "Runbook", "body": "step one", "container": "ENG"},
 	builtin.SavePageTool:      {"page": "p1", "base_version": 4, "body": "step two", "title": "Deploy Book"},
 	builtin.CommentOnPageTool: {"page": "p1", "body": "is this current?"},
+	// THE CHAT GESTURES, every one the dashboard makes — the read-state
+	// flush included, which appends nothing ([appendsNoRecord]).
+	builtin.PostMessageTool:   {"channel": chatRoomID, "body": "standup moved"},
+	builtin.ReplyInThreadTool: {"channel": chatRoomID, "reply_to": "m1", "body": "ok"},
+	builtin.SendDMTool:        {"to": []any{"agent-ceo"}, "body": "a word"},
+	builtin.ReactToMessageTool: {"channel": chatRoomID, "message_id": "m1",
+		"emoji": ":+1:"},
+	builtin.JoinChannelTool:  {"channel": chatRoomID},
+	builtin.LeaveChannelTool: {"channel": chatRoomID},
+	chatlet.EditMessageTool: {"channel": chatRoomID, "message_id": "m1",
+		"body": "on it, by noon"},
+	chatlet.DeleteMessageTool: {"channel": chatRoomID, "message_id": "m1"},
+	chatlet.CreateChannelTool: {"channel": "launch", "kind": "private",
+		"members": []any{"agent-ceo"}},
+	chatlet.OpenDMTool:        {"to": []any{"agent-ceo"}},
+	chatlet.UpdateChannelTool: {"channel": chatRoomID, "topic": "the launch"},
+	chatlet.SetChannelMembersTool: {"channel": chatRoomID, "members": []any{"jane",
+		map[string]any{"handle": "agent-ceo", "follow_all": true}}},
+	chatlet.AddChannelMembersTool: {"channel": chatRoomID, "members": []any{"agent-ceo"}},
+	chatlet.MarkChatReadTool: {"cursors": map[string]any{chatRoomID: 12.0},
+		"mute": []any{chatRoomID}},
+}
+
+// appendsNoRecord are the operator writes that append nothing to any log, each
+// with why — and every gate below holds them to THAT, explicitly, rather than
+// leaving them out: an answer at the top is still what the act transport lifts,
+// so it must say `applied` at no position, and no record may reach a writer.
+//
+// `mark_chat_read` writes a person's read state to the coordination store, a
+// compare-and-set that has landed when it answers: there is no record whose
+// outcome could be pending, no position a read could wait for, and no
+// operation to derive — a cursor only advances and a mute states one room's,
+// so the same flush twice is the same state. Its one `unknown` is a put whose
+// answer was lost, which is the store's to report rather than a record's
+// (TestAFlushWhoseAnswerWasLostIsUnknown).
+var appendsNoRecord = map[string]string{
+	chatlet.MarkChatReadTool: "a read-state flush is a compare-and-set in the " +
+		"coordination store, on no log",
+}
+
+// answersAppliedAtNoPosition is the receipt a write that appends no record
+// must answer with, and that it appended none.
+func answersAppliedAtNoPosition(t *testing.T, name string, answer map[string]any,
+	w *ledgerFake, callsBefore int) {
+
+	t.Helper()
+	if answer["outcome"] != string(statelog.OutcomeApplied) {
+		t.Errorf("%s answered outcome %v, want applied — it landed when it "+
+			"answered: %v", name, answer["outcome"], answer)
+	}
+	if position, stated := answer["position"]; !stated || position != nil {
+		t.Errorf("%s answered position %v, want null at the top — there is no "+
+			"record a read could wait for: %v", name, answer["position"], answer)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.calls != callsBefore {
+		t.Errorf("%s (%s) appended %d records", name, appendsNoRecord[name],
+			w.calls-callsBefore)
+	}
 }
 
 // EVERY WRITE ANSWERS FOR EVERY RECORD IT APPENDED, AT THE TOP. The writers
@@ -74,7 +136,14 @@ func TestEveryOperatorWriteAnswersForEveryRecordItAppended(t *testing.T) {
 	catalogue := writeSurface(w)
 	for name, tool := range catalogue {
 		t.Run(name, func(t *testing.T) {
+			w.mu.Lock()
+			before := w.calls
+			w.mu.Unlock()
 			answer, last := w.call(t, tool, request(1), everyWriteCall[name])
+			if _, none := appendsNoRecord[name]; none {
+				answersAppliedAtNoPosition(t, name, answer, w, before)
+				return
+			}
 			if answer["outcome"] != string(statelog.OutcomePending) {
 				t.Errorf("%s answered outcome %v at the top, want pending — its "+
 					"records were all pending, and the transport lifts this key "+
@@ -102,6 +171,15 @@ func TestARetriedOperatorWriteDerivesTheSameOperations(t *testing.T) {
 			first := w.opsOf(t, tool, request(11), everyWriteCall[name])
 			retry := w.opsOf(t, tool, request(11), everyWriteCall[name])
 			other := w.opsOf(t, tool, request(22), everyWriteCall[name])
+			if why, none := appendsNoRecord[name]; none {
+				// NOTHING TO DERIVE, AND NOTHING DERIVED: a repeat is
+				// the same state rather than the same operation.
+				if len(first)+len(retry)+len(other) != 0 {
+					t.Errorf("%s (%s) derived operations %v, %v, %v", name,
+						why, first, retry, other)
+				}
+				return
+			}
 			if len(first) == 0 {
 				t.Fatalf("%s reached no writer at all, so this case certifies nothing", name)
 			}
@@ -141,6 +219,13 @@ func TestARequestsAnswerNamesTheRequestNotAnOpID(t *testing.T) {
 
 			w := newLedgerFake(statelog.OutcomeUnknown)
 			tool := writeSurface(w)[name]
+			if _, none := appendsNoRecord[name]; none {
+				// NO LEDGER TO LOSE AN ACKNOWLEDGEMENT: a log whose every
+				// write is unknown leaves this one applied at no position.
+				answer, _ := w.call(t, tool, request(67), args)
+				answersAppliedAtNoPosition(t, name, answer, w, 0)
+				return
+			}
 			got, err := tool.Call(w.asked(t, tool, request(67), args), args)
 			if err != nil {
 				t.Fatalf("call: %v", err)
@@ -162,8 +247,8 @@ func TestARequestsAnswerNamesTheRequestNotAnOpID(t *testing.T) {
 	}
 	// AND WHERE THE REPEAT IS THE SAME OPERATION, it is the request's.
 	w := newLedgerFake(statelog.OutcomeUnknown)
-	tool := writeSurface(w)[tracker.UpdateWorkItemTool]
-	args := everyWriteCall[tracker.UpdateWorkItemTool]
+	tool := writeSurface(w)[worklet.UpdateWorkItemTool]
+	args := everyWriteCall[worklet.UpdateWorkItemTool]
 	got, err := tool.Call(w.asked(t, tool, request(68), args), args)
 	if err != nil {
 		t.Fatalf("call: %v", err)
@@ -180,7 +265,7 @@ func TestARequestsAnswerNamesTheRequestNotAnOpID(t *testing.T) {
 // applied: the call is `pending` at the second's position, never `applied`.
 func TestATwoRecordWriteAnswersItsLessCertainOutcome(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{tracker.WriteProjectTool, tracker.WriteWorkCatalogueTool} {
+	for _, name := range []string{worklet.WriteProjectTool, worklet.WriteWorkCatalogueTool} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			w := newLedgerFake(statelog.OutcomeApplied)
@@ -207,7 +292,7 @@ func TestATwoRecordWriteAnswersItsLessCertainOutcome(t *testing.T) {
 // transport tells a person is unknown rather than done.
 func TestATwoRecordWriteWithAnUnknownRecordIsUnknown(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{tracker.WriteProjectTool, tracker.WriteWorkCatalogueTool} {
+	for _, name := range []string{worklet.WriteProjectTool, worklet.WriteWorkCatalogueTool} {
 		for which, script := range map[string][]statelog.Outcome{
 			"the first":  {statelog.OutcomeUnknown, statelog.OutcomeApplied},
 			"the second": {statelog.OutcomeApplied, statelog.OutcomeUnknown},
@@ -248,8 +333,8 @@ func TestATwoRecordWriteWithAnUnknownRecordIsUnknown(t *testing.T) {
 func TestARefusedSecondRecordReportsTheFirstLanded(t *testing.T) {
 	t.Parallel()
 	for name, landed := range map[string]string{
-		tracker.WriteProjectTool:       "The tag change was written",
-		tracker.WriteWorkCatalogueTool: "The types were replaced",
+		worklet.WriteProjectTool:       "The tag change was written",
+		worklet.WriteWorkCatalogueTool: "The types were replaced",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -298,13 +383,13 @@ func requestKeyOf(ctx context.Context) string {
 // writeSurface is the operator catalogue's writes over one recording fake,
 // with the actors carrying the request's key the context names — the shape a
 // keyed surface builds: the tracker's as [builtin.Actor.WorkKey] with its
-// instant, the knowledge base's as [pages.Actor.OpKey].
+// instant, the knowledge base's as [doclet.Actor.OpKey].
 func writeSurface(w *ledgerFake) map[string]tools.Callable {
 	trk := newFakeTracker()
-	trk.tasks["ENG-5"] = tracker.TaskDetail{
-		Task: tracker.Task{ID: "id-5", Key: "ENG-5", Project: "ENG",
-			Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted,
-			Removed: &tracker.Tombstone{By: "ops", At: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}},
+	trk.tasks["ENG-5"] = worklet.TaskDetail{
+		Task: worklet.Task{ID: "id-5", Key: "ENG-5", Project: "ENG",
+			Status: worklet.StatusTodo, StatusGroup: worklet.GroupNotStarted,
+			Removed: &worklet.Tombstone{By: "ops", At: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}},
 		Complete: true,
 	}
 	kb := newFakeKB()
@@ -326,14 +411,28 @@ func writeSurface(w *ledgerFake) map[string]tools.Callable {
 			Actor: func(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
 				key := requestKeyOf(ctx)
 				since, _ := statelog.OpMintedAt(key)
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator,
+				return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator,
 					OperatorID: "ops", WorkKey: key, WorkSince: since}, nil
 			},
 		},
 		Pages: builtin.PageDeps{
 			Reader: kb, Writer: w,
-			Actor: func(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
-				return pages.Actor{Handle: "ops", Kind: pages.AuthorOperator,
+			Actor: func(ctx context.Context, _ *turnctx.Turn) (doclet.Actor, error) {
+				return doclet.Actor{Handle: "ops", Kind: doclet.AuthorOperator,
+					OperatorID: "ops", OpKey: requestKeyOf(ctx)}, nil
+			},
+		},
+		// THE BOUND SEAT AS AUTHOR, KIND HUMAN AND THE CREDENTIAL BESIDE
+		// IT, with the request's key on the actor — the attribution the
+		// operator surface's chat actor builds. A reader, which the
+		// gestures decided after a read are served with; every call here
+		// names its room by id, and the caller holds admin, so none reads.
+		// And a read-state store, so the one write that appends no record
+		// is served and held to that ([appendsNoRecord]).
+		Chat: builtin.ChatDeps{
+			Reader: newFakeChat(), Writer: w, Cursors: fakeCursors{},
+			Actor: func(ctx context.Context, _ *turnctx.Turn) (chatlet.Actor, error) {
+				return chatlet.Actor{Handle: "jane", Kind: chatlet.AuthorHuman,
 					OperatorID: "ops", OpKey: requestKeyOf(ctx)}, nil
 			},
 		},
@@ -384,9 +483,12 @@ type ledgerFake struct {
 	script []statelog.Outcome
 	// failAt refuses the Nth write with a conflict, 1-based; 0 never.
 	failAt int
-	seq    uint64
-	calls  int
-	ops    []string
+	// stop, when set, is what a move, a removal or a restore answers beside
+	// the record its root landed: the walk over the rest stopped.
+	stop  error
+	seq   uint64
+	calls int
+	ops   []string
 }
 
 func newLedgerFake(outcome statelog.Outcome) *ledgerFake {
@@ -403,8 +505,9 @@ func (f *ledgerFake) asked(t *testing.T, _ tools.Callable, request string,
 		t.Fatalf("request key %q: %v", request, err)
 	}
 	// A PERSON, because the operator surface's callers are people and
-	// machines and never a seat — and place_work_item is human-only.
-	return withRequestKey(personHolding(iam.AllGrants...), request)
+	// machines and never a seat — and place_work_item is human-only —
+	// BOUND TO A HUMAN SEAT, because every chat verb is made as one.
+	return withRequestKey(personBoundTo("jane", iam.AllGrants...), request)
 }
 
 // call runs one tool under a request and answers its decoded result and the
@@ -468,64 +571,73 @@ func (f *ledgerFake) record(op string) (statelog.Result, error) {
 	return statelog.Result{Outcome: outcome, Position: at, OpID: op, Version: at.Packed()}, nil
 }
 
-func (f *ledgerFake) written(op string) (tracker.WriteResult, error) {
+func (f *ledgerFake) written(op string) (worklet.WriteResult, error) {
 	r, err := f.record(op)
-	return tracker.WriteResult{Result: r}, err
+	return worklet.WriteResult{Result: r}, err
 }
 
-func (f *ledgerFake) CreateTask(_ context.Context, opID string, _ tracker.Task,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+func (f *ledgerFake) CreateTask(_ context.Context, opID string, _ worklet.Task,
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 	r, err := f.written(opID)
 	r.Key = "ENG-9"
 	return r, err
 }
 
-func (f *ledgerFake) CreateTaskAsking(ctx context.Context, opID string, task tracker.Task,
-	_ tracker.Comment, notify *tracker.Notify) (tracker.WriteResult, error) {
+func (f *ledgerFake) CreateTaskAsking(ctx context.Context, opID string, task worklet.Task,
+	_ worklet.Comment, notify *worklet.Notify) (worklet.WriteResult, error) {
 	return f.CreateTask(ctx, opID, task, notify)
 }
 
 func (f *ledgerFake) UpdateTask(_ context.Context, opID, _, _ string, _ uint64,
-	_ tracker.TaskPatch, _ tracker.ChangeKind, _ *tracker.Notify) (tracker.WriteResult, error) {
+	_ worklet.TaskPatch, _ worklet.ChangeKind, _ *worklet.Notify) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 
-func (f *ledgerFake) Depend(_ context.Context, opID string, _ tracker.DependencyChange,
-	_ tracker.Leads) (tracker.DependencyResult, error) {
+func (f *ledgerFake) Depend(_ context.Context, opID string, _ worklet.DependencyChange,
+	_ worklet.Leads) (worklet.DependencyResult, error) {
 	r, err := f.written(opID)
-	return tracker.DependencyResult{WriteResult: r}, err
+	return worklet.DependencyResult{WriteResult: r}, err
 }
 
 func (f *ledgerFake) MergeDuplicates(_ context.Context, opID, _, _ string, _ bool,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 
 func (f *ledgerFake) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
-	return f.written(opID)
+	_ *worklet.Notify) (worklet.WriteResult, error) {
+	return f.stopped(f.written(opID))
 }
 
 func (f *ledgerFake) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
-	return f.written(opID)
+	_ *worklet.Notify) (worklet.WriteResult, error) {
+	return f.stopped(f.written(opID))
+}
+
+// stopped is a walk's answer: its root's record, and [ledgerFake.stop] where
+// one is set.
+func (f *ledgerFake) stopped(r worklet.WriteResult, err error) (worklet.WriteResult, error) {
+	if err == nil && f.stop != nil {
+		return r, f.stop
+	}
+	return r, err
 }
 
 // PlaceTask appends the two records a drag across lanes is, each at its own
 // derived step — the way the tracker's own sequence derives them.
-func (f *ledgerFake) PlaceTask(_ context.Context, opID string, place tracker.Place,
-	_ *tracker.Notify) (tracker.PlaceResult, error) {
-	out := tracker.PlaceResult{Version: int64(place.IfMatch)}
+func (f *ledgerFake) PlaceTask(_ context.Context, opID string, place worklet.Place,
+	_ *worklet.Notify) (worklet.PlaceResult, error) {
+	out := worklet.PlaceResult{Version: int64(place.IfMatch)}
 	if place.Status != nil {
 		lane, err := f.written(statelog.StepOpID(opID, "lane"))
 		if err != nil {
-			return tracker.PlaceResult{}, err
+			return worklet.PlaceResult{}, err
 		}
 		out.Lane, out.Version = lane, lane.Version
 	}
 	order, err := f.written(statelog.StepOpID(opID, "order"))
 	if err != nil {
-		return tracker.PlaceResult{}, err
+		return worklet.PlaceResult{}, err
 	}
 	out.Order, out.Rank = order, "a0V"
 	return out, nil
@@ -534,55 +646,58 @@ func (f *ledgerFake) PlaceTask(_ context.Context, opID string, place tracker.Pla
 // MoveTaskToProject is the cross-project move: one record here, at the move's
 // own operation.
 func (f *ledgerFake) MoveTaskToProject(_ context.Context, opID, _, target string,
-	_ *tracker.Notify) (tracker.WriteResult, error) {
+	_ *worklet.Notify) (worklet.WriteResult, error) {
 	r, err := f.written(opID)
 	r.Key = target + "-3"
-	return r, err
+	return f.stopped(r, err)
 }
 
-func (f *ledgerFake) WriteView(_ context.Context, opID string, _ tracker.View,
-	_ tracker.ViewPrior) (tracker.WriteResult, error) {
+func (f *ledgerFake) WriteView(_ context.Context, opID string, _ worklet.View,
+	_ worklet.ViewPrior) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 
-func (f *ledgerFake) ViewPrior(context.Context, string) (tracker.ViewPrior, error) {
-	return tracker.ViewPrior{}, nil
+// ViewPrior holds every view a case names, as a shared tab on ENG: a save
+// naming an id no view holds is refused before it writes anything.
+func (f *ledgerFake) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
+	return worklet.ViewPrior{Held: true,
+		Container: worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}}, nil
 }
 
-func (f *ledgerFake) WriteTypes(_ context.Context, opID string, _ []tracker.TaskType) (tracker.WriteResult, error) {
+func (f *ledgerFake) WriteTypes(_ context.Context, opID string, _ []worklet.TaskType) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 
-func (f *ledgerFake) WriteFields(_ context.Context, opID string, _ []tracker.FieldDef) (tracker.WriteResult, error) {
+func (f *ledgerFake) WriteFields(_ context.Context, opID string, _ []worklet.FieldDef) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 
 func (f *ledgerFake) MarkInbox(_ context.Context, opID, _ string,
-	_ inbox.Gesture[tracker.Reason], _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ inbox.Gesture[worklet.Reason], _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 
 func (f *ledgerFake) WritePins(_ context.Context, opID, _ string,
-	_ tracker.PinGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ worklet.PinGesture, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 
 func (f *ledgerFake) WritePriorities(_ context.Context, opID, _ string, _ []string,
-	_ *uint64, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
+	_ *uint64, _ worklet.PersonAuthority) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 
-func (f *ledgerFake) WriteProject(_ context.Context, opID, _ string, _ tracker.ProjectEdit,
-	_ tracker.ProjectAuthority) (tracker.WriteResult, error) {
+func (f *ledgerFake) WriteProject(_ context.Context, opID, _ string, _ worklet.ProjectEdit,
+	_ worklet.ProjectAuthority) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 
-func (f *ledgerFake) WriteTags(_ context.Context, opID, _ string, _ tracker.TagEdit,
-	_ tracker.TagAuthority) (tracker.WriteResult, error) {
+func (f *ledgerFake) WriteTags(_ context.Context, opID, _ string, _ worklet.TagEdit,
+	_ worklet.TagAuthority) (worklet.WriteResult, error) {
 	return f.written(opID)
 }
 
-func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string) ([]string, []string, error) {
+func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string) ([]string, []caveat.Caveat, error) {
 	if _, err := f.record(opID); err != nil {
 		return nil, nil, err
 	}
@@ -590,39 +705,129 @@ func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string
 }
 
 // The knowledge base's writes. Their operation is derived INSIDE the store
-// from the actor's key ([pages.Actor.OpKey]), so the key is what is recorded —
+// from the actor's key ([doclet.Actor.OpKey]), so the key is what is recorded,
 // keyed with the verb, so a save and its rename under one key are still two
 // entries.
 
-func (f *ledgerFake) pageWrite(verb, key string) (pages.Written, error) {
+// The chat writes. Their operation is derived INSIDE the store from the
+// actor's key, as a page write's is, so the key is what is recorded — with the
+// verb, so a direct message's open and post under one key are two entries.
+
+func (f *ledgerFake) chatWrite(verb string, actor chatlet.Actor) (chatlet.Written, error) {
+	r, err := f.record(verb + ":" + actor.OpKey)
+	return chatlet.Written{
+		Channel:  chatlet.Channel{ID: chatRoomID, Name: chatRoomName, Kind: chatlet.KindPublic},
+		Revision: uint64(r.Position.Packed()), ChangeID: r.OpID, Outcome: r,
+	}, err
+}
+
+func (f *ledgerFake) Post(_ context.Context, actor chatlet.Actor, _ string,
+	_ chatlet.NewMessage) (chatlet.Written, error) {
+	return f.chatWrite("post", actor)
+}
+
+func (f *ledgerFake) Reply(_ context.Context, actor chatlet.Actor, _, _ string,
+	_ chatlet.NewMessage) (chatlet.Written, error) {
+	return f.chatWrite("reply", actor)
+}
+
+func (f *ledgerFake) OpenDirect(_ context.Context, actor chatlet.Actor, _ []string) (
+	chatlet.Written, bool, error) {
+	w, err := f.chatWrite("open", actor)
+	return w, err == nil, err
+}
+
+func (f *ledgerFake) React(_ context.Context, actor chatlet.Actor, _, _, _ string) (
+	chatlet.Written, error) {
+	return f.chatWrite("react", actor)
+}
+
+func (f *ledgerFake) Unreact(_ context.Context, actor chatlet.Actor, _, _, _ string) (
+	chatlet.Written, error) {
+	return f.chatWrite("unreact", actor)
+}
+
+func (f *ledgerFake) Join(_ context.Context, actor chatlet.Actor, _ string) (chatlet.Written, error) {
+	return f.chatWrite("join", actor)
+}
+
+func (f *ledgerFake) Leave(_ context.Context, actor chatlet.Actor, _ string) (chatlet.Written, error) {
+	return f.chatWrite("leave", actor)
+}
+
+func (f *ledgerFake) CreateChannel(_ context.Context, actor chatlet.Actor,
+	_ chatlet.NewChannel) (chatlet.Written, error) {
+	return f.chatWrite("create", actor)
+}
+
+// PatchChannel answers the room as the patch leaves it: the settings the call
+// named, and the purpose the room already had where it named none, which is
+// somebody else's — so the receipt echoing the room's settings has words other
+// principals wrote in it, labelled for a model and answered to a person as
+// they were stored.
+func (f *ledgerFake) PatchChannel(_ context.Context, actor chatlet.Actor, _ string,
+	patch chatlet.ChannelPatch, _ chatlet.ChannelAuthority) (chatlet.Written, error) {
+	written, err := f.chatWrite("patch", actor)
+	written.Channel.Purpose = "Ship the launch on time."
+	if patch.Topic != nil {
+		written.Channel.Topic = *patch.Topic
+	}
+	if patch.Purpose != nil {
+		written.Channel.Purpose = *patch.Purpose
+	}
+	return written, err
+}
+
+func (f *ledgerFake) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
+	_ []chatlet.Member) (chatlet.Written, error) {
+	return f.chatWrite("members", actor)
+}
+
+func (f *ledgerFake) AddMembers(_ context.Context, actor chatlet.Actor, _ string,
+	handles []string) (chatlet.Written, []string, error) {
+	written, err := f.chatWrite("add", actor)
+	return written, handles, err
+}
+
+func (f *ledgerFake) Edit(_ context.Context, actor chatlet.Actor, _, _ string,
+	_ chatlet.EditMessage) (chatlet.Written, error) {
+	return f.chatWrite("edit", actor)
+}
+
+func (f *ledgerFake) Delete(_ context.Context, actor chatlet.Actor, _, _ string,
+	_ chatlet.MessageAuthority) (chatlet.Written, error) {
+	return f.chatWrite("delete", actor)
+}
+
+func (f *ledgerFake) pageWrite(verb, key string) (doclet.Written, error) {
 	r, err := f.record(verb + ":" + key)
-	return pages.Written{Page: pages.Page{ID: "p1", Version: 5}, Revision: uint64(r.Position.Packed()),
+	return doclet.Written{Page: doclet.Page{ID: "p1", Version: 5}, Revision: uint64(r.Position.Packed()),
 		ChangeID: r.OpID, Outcome: r}, err
 }
 
-func (f *ledgerFake) Create(_ context.Context, actor pages.Actor, _ pages.NewPage) (pages.Written, error) {
+func (f *ledgerFake) Create(_ context.Context, actor doclet.Actor, _ doclet.NewPage) (doclet.Written, error) {
 	return f.pageWrite("create", actor.OpKey)
 }
 
-func (f *ledgerFake) SavePage(_ context.Context, actor pages.Actor, _ string, _ pages.Save) (pages.Written, error) {
+func (f *ledgerFake) SavePage(_ context.Context, actor doclet.Actor, _ string, _ doclet.Save) (doclet.Written, error) {
 	return f.pageWrite("save", actor.OpKey)
 }
 
-func (f *ledgerFake) Rename(_ context.Context, actor pages.Actor, _, _ string,
-	_ bool) (pages.Written, error) {
+func (f *ledgerFake) Rename(_ context.Context, actor doclet.Actor, _, _ string,
+	_ bool) (doclet.Written, error) {
 	return f.pageWrite("rename", actor.OpKey)
 }
 
-func (f *ledgerFake) EditComment(_ context.Context, actor pages.Actor, _, commentID,
-	_ string) (pages.Comment, pages.Written, error) {
+func (f *ledgerFake) EditComment(_ context.Context, actor doclet.Actor, _, commentID,
+	_ string) (doclet.Comment, doclet.Written, error) {
 	w, err := f.pageWrite("edit", actor.OpKey)
-	return pages.Comment{ID: commentID}, w, err
+	return doclet.Comment{ID: commentID}, w, err
 }
 
-func (f *ledgerFake) Comment(_ context.Context, actor pages.Actor, _ string,
-	_ pages.NewComment) (pages.Comment, pages.Written, error) {
+func (f *ledgerFake) Comment(_ context.Context, actor doclet.Actor, _ string,
+	_ doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 	w, err := f.pageWrite("comment", actor.OpKey)
-	return pages.Comment{ID: "m1"}, w, err
+	return doclet.Comment{ID: "m1"}, w, err
 }
 
 // TWO DIFFERENT CALLS UNDER ONE REQUEST ARE TWO OPERATIONS. A turn's calls
@@ -637,19 +842,19 @@ func (f *ledgerFake) Comment(_ context.Context, actor pages.Actor, _ string,
 func TestTwoDifferentCallsUnderOneKeyAreTwoOperations(t *testing.T) {
 	t.Parallel()
 	cases := map[string][2]map[string]any{
-		tracker.SaveWorkViewTool: {
+		worklet.SaveWorkViewTool: {
 			{"id": "v-1", "container": "project:ENG", "name": "Mine", "type": "list"},
 			{"id": "v-1", "container": "project:ENG", "name": "Mine, this week", "type": "list"},
 		},
-		tracker.WriteProjectTool: {
+		worklet.WriteProjectTool: {
 			{"project": "ENG", "tags_add": []any{map[string]any{"slug": "ops", "label": "Ops"}}},
 			{"project": "ENG", "tags_archive": []any{"ops"}},
 		},
-		tracker.WriteWorkCatalogueTool: {
+		worklet.WriteWorkCatalogueTool: {
 			{"types": []any{map[string]any{"slug": "bug", "name": "Bug"}}},
 			{"types": []any{map[string]any{"slug": "bug", "name": "Defect"}}},
 		},
-		tracker.CreateWorkItemTool: {
+		worklet.CreateWorkItemTool: {
 			{"title": "One", "project": "ENG", "labels": []any{"ops"}, "labels_create_missing": true},
 			{"title": "Two", "project": "ENG", "labels": []any{"sre"}, "labels_create_missing": true},
 		},

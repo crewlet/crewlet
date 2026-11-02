@@ -15,7 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The person tools: one human's inbox, queue and pins.
@@ -29,7 +31,7 @@ import (
 //
 // # The authority is the engine's, not this package's
 //
-// Every rule about who may write what lives in internal/tracker: the inbox and
+// Every rule about who may write what lives in internal/worklet: the inbox and
 // the pins only on behalf of the person whose they are, the priorities also by
 // a LEAD for somebody in their line. What these tools add is the org lookup
 // the tracker deliberately does not do — this package has a chart and that one
@@ -61,26 +63,26 @@ import (
 // nobody admitted.
 type PersonWriter interface {
 	MarkInbox(ctx context.Context, opID, handle string,
-		gesture inbox.Gesture[tracker.Reason],
-		authority tracker.PersonAuthority) (tracker.WriteResult, error)
+		gesture inbox.Gesture[worklet.Reason],
+		authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	WritePins(ctx context.Context, opID, handle string,
-		gesture tracker.PinGesture,
-		authority tracker.PersonAuthority) (tracker.WriteResult, error)
+		gesture worklet.PinGesture,
+		authority worklet.PersonAuthority) (worklet.WriteResult, error)
 	WritePriorities(ctx context.Context, opID, handle string,
 		priorities []string, ifMatch *uint64,
-		authority tracker.PersonAuthority) (tracker.WriteResult, error)
+		authority worklet.PersonAuthority) (worklet.WriteResult, error)
 }
 
 // PersonReader is the read side.
 type PersonReader interface {
-	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
+	Person(ctx context.Context, q worklet.PersonQuery, now time.Time) (worklet.PersonState, error)
 }
 
 type getPerson struct{ deps WorkDeps }
 
 var _ tools.Callable = (*getPerson)(nil)
 
-func (t *getPerson) Name() string { return tracker.GetPersonTool }
+func (t *getPerson) Name() string { return worklet.GetPersonTool }
 
 func (t *getPerson) Description() string {
 	return "One person's own state: what is in their inbox, what they have " +
@@ -100,22 +102,22 @@ func (t *getPerson) Parameters() map[string]any {
 
 func (t *getPerson) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
 	if t.deps.Reader == nil {
-		return unconfigured(tracker.GetPersonTool), nil
+		return unconfigured(worklet.GetPersonTool), nil
 	}
 	name := strings.TrimSpace(argString(args, "handle"))
 	if name == "" {
 		return failed("Name whose state to read with `handle`."), nil
 	}
-	handle, refusal := t.deps.personRecord(ctx, tracker.GetPersonTool,
+	handle, refusal := t.deps.personRecord(ctx, worklet.GetPersonTool,
 		authz.ActionPersonRead, name, readAsNamed)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	state, err := t.deps.Reader.Person(ctx, tracker.PersonQuery{
+	state, err := t.deps.Reader.Person(ctx, worklet.PersonQuery{
 		Handle: handle, Level: seatReadLevel,
 	}, t.deps.now())
 	if err != nil {
-		return readFailure(ctx, tracker.GetPersonTool, err), nil
+		return readFailure(ctx, worklet.GetPersonTool, err), nil
 	}
 	return jsonResult(state)
 }
@@ -124,7 +126,7 @@ type setPriorities struct{ deps WorkDeps }
 
 var _ tools.Callable = (*setPriorities)(nil)
 
-func (t *setPriorities) Name() string { return tracker.SetPrioritiesTool }
+func (t *setPriorities) Name() string { return worklet.SetPrioritiesTool }
 
 func (t *setPriorities) Description() string {
 	return "Set the order somebody means to work in — your own, or somebody " +
@@ -132,7 +134,7 @@ func (t *setPriorities) Description() string {
 		"record, so they can see who chose it; their own next change clears " +
 		"that. An order is a statement about every entry at once, so the " +
 		"list you send is the whole list — pass `if_match` with the version " +
-		"get_person answered and it is refused if the list changed since."
+		worklet.GetPersonTool + " answered and it is refused if the list changed since."
 }
 
 func (t *setPriorities) Parameters() map[string]any {
@@ -150,7 +152,7 @@ func (t *setPriorities) Parameters() map[string]any {
 			},
 			"if_match": map[string]any{
 				"type": "integer",
-				"description": "The `version` get_person answered for this " +
+				"description": "The `version` " + worklet.GetPersonTool + " answered for this " +
 					"person. Given, the write is REFUSED if their record " +
 					"changed since you read it — a reorder made from an " +
 					"old screen would otherwise put back an order somebody " +
@@ -168,7 +170,7 @@ func (t *setPriorities) Call(ctx context.Context, args map[string]any) (tools.Re
 func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	actor, writer, refusal := t.person(ctx, turn, tracker.SetPrioritiesTool, args)
+	actor, writer, refusal := t.person(ctx, turn, worklet.SetPrioritiesTool, args)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -189,14 +191,14 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// nobody called that. [subjectOf] marks this verb `inTool` for exactly
 	// that reason, and [WorkDeps.personRecord] is the one relation decision
 	// the call gets.
-	handle, refusal := t.deps.personRecord(ctx, tracker.SetPrioritiesTool,
+	handle, refusal := t.deps.personRecord(ctx, worklet.SetPrioritiesTool,
 		authz.ActionPrioritiesSet, argString(args, "handle"),
 		func(typed string) (string, string) {
 			// A TYPED NAME IS RESOLVED AGAINST THE CHART, because a
 			// typo here writes a whole PERSON RECORD for somebody who
 			// does not exist — a queue nobody will ever read, and a
 			// wake routed to a handle Route drops in silence.
-			return t.deps.resolveHandle(ctx, tracker.SetPrioritiesTool,
+			return t.deps.resolveHandle(ctx, worklet.SetPrioritiesTool,
 				"`handle`", typed)
 		})
 	if refusal != nil {
@@ -205,7 +207,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// AND THE GESTURE BAR IS THE TRACKER'S OWN, passed rather than
 	// decided: a seat that LEADS somebody is admitted by the table above
 	// and still may not re-order their queue, because that is a hand-off
-	// in disguise. See [tracker.PersonAuthority].
+	// in disguise. See [worklet.PersonAuthority].
 	authority := admittedWrite(actor)
 	// EVERY ENTRY IS RESOLVED TO AN ID, because the list is stored as ids
 	// and read back by joining on them — and this tool's own description
@@ -217,7 +219,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	items := argStrings(args, "items")
 	resolved := make([]string, 0, len(items))
 	for _, ref := range items {
-		id, unresolved := t.deps.resolveRef(ctx, tracker.SetPrioritiesTool,
+		id, unresolved := t.deps.resolveRef(ctx, worklet.SetPrioritiesTool,
 			"`items`", ref)
 		if unresolved != nil {
 			return *unresolved, nil
@@ -231,7 +233,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if _, given := args["if_match"]; given {
 		version := argInt(args, "if_match", -1)
 		if version < 0 {
-			return failed("`if_match` is the `version` get_person answered, " +
+			return failed("`if_match` is the `version` " + worklet.GetPersonTool + " answered, " +
 				"a whole number of zero or more."), nil
 		}
 		expected := uint64(version)
@@ -240,25 +242,25 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	opID := opIDFor(actor, t.Name(), "prio", handle, args)
 	result, err := writer.WritePriorities(ctx, opID, handle, resolved, ifMatch,
 		authority)
-	if errors.Is(err, tracker.ErrStaleVersion) {
+	if errors.Is(err, worklet.ErrStaleVersion) {
 		// THE LIST MOVED, and the remedy names the read that shows it —
 		// the generic sentence sends a caller to get_work_item, which
 		// knows nothing about a person's queue.
 		return refusedBy(tools.RefusalStaleVersion, err, fmt.Sprintf("%s was "+
-			"refused: %v. Nothing is wrong with your order — somebody "+
+			"refused: %s. Nothing is wrong with your order — somebody "+
 			"changed this person's record after you read it. Call "+
-			"get_person again and decide from the list it shows now.",
-			tracker.SetPrioritiesTool, err)), nil
+			worklet.GetPersonTool+" again and decide from the list it shows now.",
+			worklet.SetPrioritiesTool, worklet.Sentence(err))), nil
 	}
 	if err != nil {
-		return writeFailure(ctx, actor, tracker.SetPrioritiesTool, err), nil
+		return writeFailure(ctx, actor, worklet.SetPrioritiesTool, err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		return unknownWrite(actor, tracker.SetPrioritiesTool,
+		return unknownWrite(actor, worklet.SetPrioritiesTool,
 			fmt.Sprintf("%s's priorities were set", handle), opID,
 			result.Unvouched, unknownNext(result.Unvouched,
-				sameCall(actor, tracker.SetPrioritiesTool),
-				"Read the list with get_person",
+				sameCall(actor, worklet.SetPrioritiesTool),
+				"Read the list with "+worklet.GetPersonTool,
 				"it sets the same list again, which changes nothing")), nil
 	}
 	t.deps.settle(ctx, result.Position)
@@ -272,7 +274,7 @@ type setPins struct{ deps WorkDeps }
 
 var _ tools.Callable = (*setPins)(nil)
 
-func (t *setPins) Name() string { return tracker.SetPinsTool }
+func (t *setPins) Name() string { return worklet.SetPinsTool }
 
 func (t *setPins) Description() string {
 	return "Change your own pinned views and starred things. A pin puts a " +
@@ -304,7 +306,7 @@ func (t *setPins) Parameters() map[string]any {
 	})
 }
 
-// setChangeSchema is one [tracker.SetChange] as an argument: a delta, or the
+// setChangeSchema is one [worklet.SetChange] as an argument: a delta, or the
 // whole set, and never both.
 func setChangeSchema(item map[string]any, description string) map[string]any {
 	list := map[string]any{"type": "array", "items": item}
@@ -324,7 +326,7 @@ func (t *setPins) Call(ctx context.Context, args map[string]any) (tools.Result, 
 func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	actor, writer, refusal := t.deps.personWriter(ctx, turn, tracker.SetPinsTool, args)
+	actor, writer, refusal := t.deps.personWriter(ctx, turn, worklet.SetPinsTool, args)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -336,7 +338,7 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // caller has already decided — see [SetPinsFor].
 func (d WorkDeps) writePins(ctx context.Context, actor Actor, writer PersonWriter,
 	handle string, args map[string]any,
-	authority tracker.PersonAuthority) tools.Result {
+	authority worklet.PersonAuthority) tools.Result {
 
 	views, bad := viewChange(args)
 	if bad != "" {
@@ -346,17 +348,17 @@ func (d WorkDeps) writePins(ctx context.Context, actor Actor, writer PersonWrite
 	if bad != "" {
 		return failed(bad)
 	}
-	opID := opIDFor(actor, tracker.SetPinsTool, "pins", handle, args)
+	opID := opIDFor(actor, worklet.SetPinsTool, "pins", handle, args)
 	result, err := writer.WritePins(ctx, opID, handle,
-		tracker.PinGesture{Views: views, Favorites: favorites}, authority)
+		worklet.PinGesture{Views: views, Favorites: favorites}, authority)
 	if err != nil {
-		return writeFailure(ctx, actor, tracker.SetPinsTool, err)
+		return writeFailure(ctx, actor, worklet.SetPinsTool, err)
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		return unknownWrite(actor, tracker.SetPinsTool,
+		return unknownWrite(actor, worklet.SetPinsTool,
 			fmt.Sprintf("%s's pins were set", handle), opID, result.Unvouched,
-			unknownNext(result.Unvouched, sameCall(actor, tracker.SetPinsTool),
-				"Read them with get_person",
+			unknownNext(result.Unvouched, sameCall(actor, worklet.SetPinsTool),
+				"Read them with "+worklet.GetPersonTool,
 				"it sets the same lists again, which changes nothing"))
 	}
 	d.settle(ctx, result.Position)
@@ -371,11 +373,11 @@ type markInbox struct{ deps WorkDeps }
 
 var _ tools.Callable = (*markInbox)(nil)
 
-func (t *markInbox) Name() string { return tracker.MarkInboxTool }
+func (t *markInbox) Name() string { return worklet.MarkInboxTool }
 
 func (t *markInbox) Description() string {
 	return "Move your own inbox by one gesture. Name notices by the " +
-		"`record_id` work_inbox gives them: `read` marks them done, " +
+		"`record_id` " + worklet.WorkInboxTool + " gives them: `read` marks them done, " +
 		"`unread` brings them back, `snooze` puts them off until a time, " +
 		"`unsnooze` brings a snoozed one back now. `read_through` reads " +
 		"everything up to a log position — pass the newest notice you have " +
@@ -426,24 +428,14 @@ func (t *markInbox) Parameters() map[string]any {
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
 				"description": "Which wake reasons land in the PRIMARY half " +
-					"of `work_inbox`, the rest being context. One of: " +
-					reasonList() + ". An empty list takes the shipped " +
-					"default (" + defaultPrimaryList() + ") rather than " +
+					"of `" + worklet.WorkInboxTool + "`, the rest being context. One of " +
+					words.Or(worklet.Reasons) + ". An empty list takes the shipped " +
+					"default (" + words.And(worklet.DefaultPrimaryReasons) + ") rather than " +
 					"making nothing primary; omit it to leave your choice " +
 					"as it is.",
 			},
 		},
 	})
-}
-
-// defaultPrimaryList is the shipped split as one sentence, derived for the
-// reason [reasonList] is derived.
-func defaultPrimaryList() string {
-	names := make([]string, 0, len(tracker.DefaultPrimaryReasons))
-	for _, reason := range tracker.DefaultPrimaryReasons {
-		names = append(names, string(reason))
-	}
-	return strings.Join(names, ", ")
 }
 
 func (t *markInbox) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -453,7 +445,7 @@ func (t *markInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	actor, writer, refusal := t.deps.personWriter(ctx, turn, tracker.MarkInboxTool, args)
+	actor, writer, refusal := t.deps.personWriter(ctx, turn, worklet.MarkInboxTool, args)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -465,22 +457,22 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // caller has already decided — see [MarkInboxFor].
 func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWriter,
 	handle string, args map[string]any,
-	authority tracker.PersonAuthority) tools.Result {
+	authority worklet.PersonAuthority) tools.Result {
 
 	gesture, bad := inboxGesture(args)
 	if bad != "" {
 		return failed(bad)
 	}
-	opID := opIDFor(actor, tracker.MarkInboxTool, "inbox", handle, args)
+	opID := opIDFor(actor, worklet.MarkInboxTool, "inbox", handle, args)
 	result, err := writer.MarkInbox(ctx, opID, handle, gesture, authority)
 	if err != nil {
-		return writeFailure(ctx, actor, tracker.MarkInboxTool, err)
+		return writeFailure(ctx, actor, worklet.MarkInboxTool, err)
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		return unknownWrite(actor, tracker.MarkInboxTool,
+		return unknownWrite(actor, worklet.MarkInboxTool,
 			fmt.Sprintf("%s's inbox was marked", handle), opID, result.Unvouched,
-			unknownNext(result.Unvouched, sameCall(actor, tracker.MarkInboxTool),
-				"Read it with work_inbox",
+			unknownNext(result.Unvouched, sameCall(actor, worklet.MarkInboxTool),
+				"Read it with "+worklet.WorkInboxTool,
 				"it marks the same notices again, which changes nothing"))
 	}
 	d.settle(ctx, result.Position)
@@ -503,7 +495,7 @@ func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWrit
 // administrator unsticking a departed person's queue — a person at a screen,
 // never a seat in a turn. So the TOOLS stay narrow, and the one surface that
 // serves that administrator (the HTTP write surface, `PUT
-// /work/people/{handle}/inbox` and `…/pins`) reaches the same parsing, the
+// /worklet/people/{handle}/inbox` and `…/pins`) reaches the same parsing, the
 // same writer and the same receipt through here. Two copies of "read an inbox
 // mark out of a body" would drift on exactly the parts nobody re-reads: which
 // entries are dropped, what a bad reason is refused with.
@@ -527,12 +519,12 @@ func (d WorkDeps) writeInbox(ctx context.Context, actor Actor, writer PersonWrit
 func MarkInboxFor(ctx context.Context, deps WorkDeps, name string,
 	args map[string]any) tools.Result {
 
-	actor, writer, refusal := deps.personWriter(ctx, nil, tracker.MarkInboxTool, args)
+	actor, writer, refusal := deps.personWriter(ctx, nil, worklet.MarkInboxTool, args)
 	if refusal != nil {
 		return *refusal
 	}
-	whose, refusal := deps.personRecord(ctx, tracker.MarkInboxTool,
-		authz.ActionInboxMark, name, deps.chartRecord(tracker.MarkInboxTool))
+	whose, refusal := deps.personRecord(ctx, worklet.MarkInboxTool,
+		authz.ActionInboxMark, name, deps.chartRecord(worklet.MarkInboxTool))
 	if refusal != nil {
 		return *refusal
 	}
@@ -543,12 +535,12 @@ func MarkInboxFor(ctx context.Context, deps WorkDeps, name string,
 func SetPinsFor(ctx context.Context, deps WorkDeps, name string,
 	args map[string]any) tools.Result {
 
-	actor, writer, refusal := deps.personWriter(ctx, nil, tracker.SetPinsTool, args)
+	actor, writer, refusal := deps.personWriter(ctx, nil, worklet.SetPinsTool, args)
 	if refusal != nil {
 		return *refusal
 	}
-	whose, refusal := deps.personRecord(ctx, tracker.SetPinsTool,
-		authz.ActionPinsSet, name, deps.chartRecord(tracker.SetPinsTool))
+	whose, refusal := deps.personRecord(ctx, worklet.SetPinsTool,
+		authz.ActionPinsSet, name, deps.chartRecord(worklet.SetPinsTool))
 	if refusal != nil {
 		return *refusal
 	}
@@ -729,11 +721,11 @@ func (d WorkDeps) chartRecord(tool string) func(string) (string, string) {
 //
 // AUTHORIZED IS ALWAYS TRUE HERE and that is not a rubber stamp: nothing
 // reaches this without the table having answered for the record it names, and
-// [tracker.ownRecord] compares the actor to the handle before it ever reads
+// [worklet.ownRecord] compares the actor to the handle before it ever reads
 // this. What the value carries that matters is the GESTURE bar, which is the
 // tracker's own and not the table's.
-func admittedWrite(actor Actor) tracker.PersonAuthority {
-	return tracker.PersonAuthority{Authorized: true, Agent: !actor.Kind.Person()}
+func admittedWrite(actor Actor) worklet.PersonAuthority {
+	return worklet.PersonAuthority{Authorized: true, Agent: !actor.Kind.Person()}
 }
 
 // person resolves the actor and the writer for a priority write.
@@ -768,8 +760,8 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 
 // inboxGesture reads mark_inbox's arguments, or the sentence refusing them —
 // [gestureOf] over the tracker's reasons.
-func inboxGesture(args map[string]any) (inbox.Gesture[tracker.Reason], string) {
-	return gestureOf(args, tracker.Reasons, reasonList())
+func inboxGesture(args map[string]any) (inbox.Gesture[worklet.Reason], string) {
+	return gestureOf(args, worklet.Reasons, words.And(worklet.Reasons))
 }
 
 // gestureOf reads an inbox mark's arguments — `read`, `unread`, `unsnooze`,
@@ -788,7 +780,7 @@ func gestureOf[R ~string](args map[string]any, reasons []R, list string) (inbox.
 	g.Unread = argStrings(args, "unread")
 	g.Unsnooze = argStrings(args, "unsnooze")
 	if raw, held := args["snooze"]; held {
-		items, ok := raw.([]any)
+		items, ok := argval.List(raw)
 		if !ok {
 			return g, "`snooze` is a list of `{record_id, until}`."
 		}
@@ -840,7 +832,11 @@ func gestureOf[R ~string](args map[string]any, reasons []R, list string) (inbox.
 
 // changeOf reads one set_pins argument as its three lists, or the sentence
 // refusing it.
-func changeOf(args map[string]any, key string) (set, add, remove []any,
+//
+// read is how each list is read: [argval.StringItems] for a list of ids, which
+// takes the single string a model sends for one, and [argval.List] for a list
+// of objects.
+func changeOf(args map[string]any, key string, read func(any) ([]any, bool)) (set, add, remove []any,
 	hasSet bool, bad string) {
 
 	raw, held := args[key]
@@ -858,7 +854,7 @@ func changeOf(args map[string]any, key string) (set, add, remove []any,
 		if !present || value == nil {
 			return nil, false, ""
 		}
-		items, ok := value.([]any)
+		items, ok := read(value)
 		if !ok {
 			return nil, false, fmt.Sprintf("`%s.%s` is a list.", key, name)
 		}
@@ -878,15 +874,15 @@ func changeOf(args map[string]any, key string) (set, add, remove []any,
 }
 
 // viewChange reads the pinned views' change.
-func viewChange(args map[string]any) (tracker.SetChange[string], string) {
-	set, add, remove, hasSet, bad := changeOf(args, "views")
+func viewChange(args map[string]any) (worklet.SetChange[string], string) {
+	set, add, remove, hasSet, bad := changeOf(args, "views", argval.StringItems)
 	if bad != "" {
-		return tracker.SetChange[string]{}, bad
+		return worklet.SetChange[string]{}, bad
 	}
 	strs := func(items []any) []string {
 		out := make([]string, 0, len(items))
 		for _, item := range items {
-			if v, ok := item.(string); ok {
+			if v, ok := argval.String(item); ok && item != nil {
 				out = append(out, strings.TrimSpace(v))
 			} else {
 				out = append(out, "")
@@ -894,7 +890,7 @@ func viewChange(args map[string]any) (tracker.SetChange[string], string) {
 		}
 		return out
 	}
-	change := tracker.SetChange[string]{Add: strs(add), Remove: strs(remove)}
+	change := worklet.SetChange[string]{Add: strs(add), Remove: strs(remove)}
 	if hasSet {
 		whole := strs(set)
 		change.Set = &whole
@@ -903,27 +899,27 @@ func viewChange(args map[string]any) (tracker.SetChange[string], string) {
 }
 
 // favoriteChange reads the starred things' change.
-func favoriteChange(args map[string]any) (tracker.SetChange[tracker.Favorite], string) {
-	set, add, remove, hasSet, bad := changeOf(args, "favorites")
+func favoriteChange(args map[string]any) (worklet.SetChange[worklet.Favorite], string) {
+	set, add, remove, hasSet, bad := changeOf(args, "favorites", argval.List)
 	if bad != "" {
-		return tracker.SetChange[tracker.Favorite]{}, bad
+		return worklet.SetChange[worklet.Favorite]{}, bad
 	}
-	favs := func(name string, items []any) ([]tracker.Favorite, string) {
-		out := make([]tracker.Favorite, 0, len(items))
+	favs := func(name string, items []any) ([]worklet.Favorite, string) {
+		out := make([]worklet.Favorite, 0, len(items))
 		for i, item := range items {
 			fields, ok := item.(map[string]any)
 			if !ok {
 				return nil, fmt.Sprintf("Favourite %d of `favorites.%s` is not "+
 					"an object with `kind` and `id`.", i+1, name)
 			}
-			out = append(out, tracker.Favorite{
+			out = append(out, worklet.Favorite{
 				Kind: strings.TrimSpace(argString(fields, "kind")),
 				ID:   strings.TrimSpace(argString(fields, "id")),
 			})
 		}
 		return out, ""
 	}
-	var change tracker.SetChange[tracker.Favorite]
+	var change worklet.SetChange[worklet.Favorite]
 	if change.Add, bad = favs("add", add); bad != "" {
 		return change, bad
 	}
@@ -946,15 +942,15 @@ func favoriteChange(args map[string]any) (tracker.SetChange[tracker.Favorite], s
 // separately from [PersonReader] because they are different questions: one is
 // the person's own marks, the other is what the company asked of them.
 type InboxReader interface {
-	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (
-		tracker.InboxAnswer, error)
+	Inbox(ctx context.Context, q worklet.InboxQuery, now time.Time) (
+		worklet.InboxAnswer, error)
 }
 
 type workInbox struct{ deps WorkDeps }
 
 var _ tools.Callable = (*workInbox)(nil)
 
-func (t *workInbox) Name() string { return tracker.WorkInboxTool }
+func (t *workInbox) Name() string { return worklet.WorkInboxTool }
 
 func (t *workInbox) Description() string {
 	return "What the company has asked of somebody, newest first: every " +
@@ -962,7 +958,9 @@ func (t *workInbox) Description() string {
 		"whether they have read it. The PRIMARY half is what they have said " +
 		"is theirs to act on — mentions, questions, their own work — and the " +
 		"rest is context. This is the durable record the engine wrote when " +
-		"the change landed, so it is there whether or not anybody was online."
+		"the change landed, so it is there whether or not anybody was online. " +
+		"Each notice's text arrives fenced as text its change's maker wrote; " +
+		"the two fence lines are a label, not part of the notice."
 }
 
 func (t *workInbox) Parameters() map[string]any {
@@ -976,8 +974,8 @@ func (t *workInbox) Parameters() map[string]any {
 			"reasons": map[string]any{
 				"type":  "array",
 				"items": map[string]any{"type": "string"},
-				"description": "Narrow to these wake reasons. One of: " +
-					reasonList() + ". Omit for every reason, which is not " +
+				"description": "Narrow to these wake reasons. One of " +
+					words.Or(worklet.Reasons) + ". Omit for every reason, which is not " +
 					"the same as the primary half — that CLASSIFIES and this " +
 					"FILTERS.",
 			},
@@ -1011,7 +1009,7 @@ func (t *workInbox) Parameters() map[string]any {
 				"description": "The `next_cursor` of the previous page.",
 			},
 			"limit": map[string]any{
-				"type": "number",
+				"type": "integer",
 				"description": fmt.Sprintf("How many notices, at most %d.",
 					inbox.MaxRows),
 			},
@@ -1022,24 +1020,24 @@ func (t *workInbox) Parameters() map[string]any {
 
 func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
 	if t.deps.Inbox == nil {
-		return unconfigured(tracker.WorkInboxTool), nil
+		return unconfigured(worklet.WorkInboxTool), nil
 	}
 	name := strings.TrimSpace(argString(args, "handle"))
 	if name == "" {
 		return failed("Name whose inbox to read with `handle`."), nil
 	}
-	handle, refusal := t.deps.personRecord(ctx, tracker.WorkInboxTool,
+	handle, refusal := t.deps.personRecord(ctx, worklet.WorkInboxTool,
 		authz.ActionInboxRead, name, readAsNamed)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	q := tracker.InboxQuery{
+	q := worklet.InboxQuery{
 		Handle:      handle,
 		PrimaryOnly: argBool(args, "primary_only"),
 		Unread:      argBool(args, "unread"),
 		Snoozed:     inbox.SnoozeExclude,
 		Cursor:      strings.TrimSpace(argString(args, "cursor")),
-		Limit:       int(argFloat(args, "limit")),
+		Limit:       argInt(args, "limit", 0),
 		Level:       seatReadLevel,
 	}
 	if raw := strings.TrimSpace(argString(args, "snoozed")); raw != "" {
@@ -1050,10 +1048,10 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 		}
 	}
 	for _, raw := range argStrings(args, "reasons") {
-		reason := tracker.Reason(strings.TrimSpace(raw))
-		if !slices.Contains(tracker.Reasons, reason) {
+		reason := worklet.Reason(strings.TrimSpace(raw))
+		if !slices.Contains(worklet.Reasons, reason) {
 			return failed(fmt.Sprintf("%q is not a wake reason. The reasons "+
-				"are: %s.", raw, reasonList())), nil
+				"are: %s.", raw, words.And(worklet.Reasons))), nil
 		}
 		q.Reasons = append(q.Reasons, reason)
 	}
@@ -1066,28 +1064,36 @@ func (t *workInbox) Call(ctx context.Context, args map[string]any) (tools.Result
 	}
 	answer, err := t.deps.Inbox.Inbox(ctx, q, t.deps.now())
 	if err != nil {
-		return readFailure(ctx, tracker.WorkInboxTool, err), nil
+		return readFailure(ctx, worklet.WorkInboxTool, err), nil
 	}
-	return jsonResult(answer)
+	// EACH NOTICE'S TEXT IS ITS CHANGE'S MAKER'S WORDS, fenced under them as
+	// the activity feed fences the same change (ADR-0040); an ask's decision
+	// is a name the notice records no writer of.
+	//
+	// READ AS THE CALLER, so a notice of their own change is their own words:
+	// the operator surface's actor, the person or credential asking.
+	self := ""
+	if actor, err := t.deps.actor(ctx, nil); err == nil {
+		self = actor.Handle
+	}
+	read := newForeignRead(nil, self)
+	for i, n := range answer.Notices {
+		fenceExcerpt(read, fieldPath{}.key("notices").index(i).key("excerpt"),
+			n.Kind, n.Actor, n.ActorKind, n.Excerpt)
+		if n.Ask != nil {
+			namesBy(read)
+		}
+	}
+	return read.answer(ctx, worklet.WorkInboxTool, answer,
+		"Ask for fewer with `limit`, or narrow with `reasons` or `since`.")
 }
 
-// snoozeScopeNames is the three scopes, derived from the inbox's own list
-// for the reason [reasonList] is.
+// snoozeScopeNames is the three scopes, derived from the inbox's own list so
+// a scope added there is offered here without a copy to keep in step.
 func snoozeScopeNames() []string {
 	out := make([]string, 0, len(inbox.SnoozeScopes))
 	for _, scope := range inbox.SnoozeScopes {
 		out = append(out, string(scope))
 	}
 	return out
-}
-
-// reasonList is the wake reasons as one sentence, DERIVED rather than typed
-// out: a reason added to the set has to reach the description, and a literal
-// list is the reader it would not reach.
-func reasonList() string {
-	names := make([]string, 0, len(tracker.Reasons))
-	for _, reason := range tracker.Reasons {
-		names = append(names, string(reason))
-	}
-	return strings.Join(names, ", ")
 }

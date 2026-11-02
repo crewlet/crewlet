@@ -2,8 +2,6 @@ package datadog_test
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -13,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // orphansFinding pulls the one advisory this file is about off a result.
@@ -55,22 +52,10 @@ func TestServiceAccountsNoSeatClaimsAreReported(t *testing.T) {
 			{"id":"u3","attributes":{"email":"jane@acme.example","service_account":false}}
 		]}`)
 	}
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
-		w http.ResponseWriter, r *http.Request,
-	) {
-		if r.Method == http.MethodPost {
-			_, _ = w.Write([]byte(
-				`{"data":{"id":"k1","attributes":{"key":"fresh","name":"crewlet"}}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
-	}
 
-	s := newSink()
-	s.held["SRE_DD_KEY"] = "already-held"
 	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
-		Creds: pair, Sink: s,
+		Client: reg.client(t), Config: cfgWith(), Creds: pair,
+		Managed: []string{"crewlet-sre@agents.test.invalid"},
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -130,17 +115,10 @@ func TestAConvergedOrganizationReportsNoOrphans(t *testing.T) {
 			{"id":"u1","attributes":{"email":"crewlet-sre@agents.test.invalid","service_account":true}}
 		]}`)
 	}
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
-		w http.ResponseWriter, _ *http.Request,
-	) {
-		_, _ = w.Write([]byte(`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
-	}
 
-	s := newSink()
-	s.held["SRE_DD_KEY"] = "already-held"
 	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
-		Creds: pair, Sink: s,
+		Client: reg.client(t), Config: cfgWith(), Creds: pair,
+		Managed: []string{"crewlet-sre@agents.test.invalid"},
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -180,17 +158,10 @@ func TestADisabledOrphanIsAlreadyWhereTheNoteAsks(t *testing.T) {
 			{"id":"u3","attributes":{"email":"agent-cs-live@agents.test.invalid","service_account":true}}
 		]}`)
 	}
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
-		w http.ResponseWriter, _ *http.Request,
-	) {
-		_, _ = w.Write([]byte(`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
-	}
 
-	s := newSink()
-	s.held["SRE_DD_KEY"] = "already-held"
 	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
-		Creds: pair, Sink: s,
+		Client: reg.client(t), Config: cfgWith(), Creds: pair,
+		Managed: []string{"crewlet-sre@agents.test.invalid"},
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -235,25 +206,13 @@ func TestARealDomainNeedsTheCrewletPrefix(t *testing.T) {
 			{"id":"u3","attributes":{"email":"build-robot@acme.example","service_account":true}}
 		]}`)
 	}
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
-		w http.ResponseWriter, _ *http.Request,
-	) {
-		_, _ = w.Write([]byte(`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
-	}
 
 	cfg := &config.Datadog{Provisioning: &config.DatadogProvisioning{
 		Site: "datadoghq.com", EmailDomain: "acme.example",
 	}}
-	plan := &provision.Plan{}
-	plan.Add(provision.Seat{
-		Handle: "sre", Role: "SRE", TokenVar: "SRE_DD_KEY",
-		Email: "crewlet-sre@acme.example",
-	})
-
-	s := newSink()
-	s.held["SRE_DD_KEY"] = "already-held"
 	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfg, Plan: plan, Creds: pair, Sink: s,
+		Client: reg.client(t), Config: cfg, Creds: pair,
+		Managed: []string{"crewlet-sre@acme.example"},
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -272,377 +231,6 @@ func TestARealDomainNeedsTheCrewletPrefix(t *testing.T) {
 	}
 }
 
-// A TEARDOWN OVER AN ALREADY-DISABLED ACCOUNT STILL MARKS IT.
-//
-// Both the marker and the disable used to sit behind `if !account.Disabled`,
-// and the seat was reported removed either way — so a teardown that met an
-// account already off wrote no marker and swore the work was done. There is
-// no way back from that: every later connect takes the unmarked-disabled arm
-// and refuses for ever, because the marker can now never appear.
-//
-// Reached by an ordinary disconnect twice, by a disconnect after somebody
-// disabled the account by hand, and by a teardown retried after a partial
-// failure. Measured: crewlet-sre-lead@agents.crewlet.invalid, disabled, title
-// empty, the card at degraded/admin after six attempts.
-func TestATeardownMarksAnAccountThatIsAlreadyDisabled(t *testing.T) {
-	t.Parallel()
-	reg := newRegion(t)
-	orgOK(reg)
-
-	account := struct {
-		disabled bool
-		title    string
-	}{disabled: true}
-	var disables int
-	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintf(w, `{"data":[{"id":"u1","attributes":{
-			"email":"crewlet-sre@agents.test.invalid","service_account":true,
-			"disabled":%t,"title":%q}}]}`, account.disabled, account.title)
-	}
-	reg.handle["/api/v2/users/u1"] = func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodDelete:
-			disables++
-			account.disabled = true
-		case http.MethodPatch:
-			var body struct {
-				Data struct{ Attributes map[string]any } `json:"data"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			if title, set := body.Data.Attributes["title"].(string); set {
-				account.title = title
-			}
-		}
-		_, _ = w.Write([]byte(`{"data":{"id":"u1"}}`))
-	}
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
-		w http.ResponseWriter, _ *http.Request,
-	) {
-		_, _ = w.Write([]byte(`{"data":[]}`))
-	}
-
-	removed, err := datadog.Teardown(context.Background(), datadog.TeardownOptions{
-		Client: reg.client(t), Config: cfgWith(), Creds: pair,
-		Plan: planWith("sre"), RemoveSeats: true,
-	})
-	if err != nil {
-		t.Fatalf("Teardown: %v", err)
-	}
-	if account.title != datadog.DisconnectedTitle {
-		t.Errorf("title = %q over an account that was already disabled: "+
-			"nothing records that this engine decommissioned it, so every "+
-			"later connect refuses for ever", account.title)
-	}
-	// AND IT IS NOT DISABLED AGAIN, because it already is: the request
-	// would change nothing and cost one round trip per seat per retry.
-	if disables != 0 {
-		t.Errorf("%d disable(s) sent to an account that was already off", disables)
-	}
-	if len(removed.Accounts) != 1 {
-		t.Errorf("removed = %+v, want the seat reported once it is marked "+
-			"and off", removed.Accounts)
-	}
-}
-
-// AND A CONNECT AFTER THAT GETS THE ACCOUNT BACK.
-//
-// The whole point of the marker: the cycle this leaves behind has to be one
-// the operator can complete from the product, rather than one that needs
-// somebody in Datadog's own UI.
-func TestAConnectAfterADoubleDisconnectReEnablesTheAccount(t *testing.T) {
-	t.Parallel()
-	reg := newRegion(t)
-	orgOK(reg)
-
-	account := struct {
-		disabled bool
-		title    string
-	}{disabled: true, title: datadog.DisconnectedTitle}
-	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprintf(w, `{"data":[{"id":"u1","attributes":{
-			"email":"crewlet-sre@agents.test.invalid","service_account":true,
-			"disabled":%t,"title":%q}}]}`, account.disabled, account.title)
-	}
-	reg.handle["/api/v2/users/u1"] = func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPatch {
-			var body struct {
-				Data struct{ Attributes map[string]any } `json:"data"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			if off, set := body.Data.Attributes["disabled"].(bool); set {
-				account.disabled = off
-			}
-			if title, set := body.Data.Attributes["title"].(string); set {
-				account.title = title
-			}
-		}
-		_, _ = w.Write([]byte(`{"data":{"id":"u1"}}`))
-	}
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
-		w http.ResponseWriter, r *http.Request,
-	) {
-		if r.Method == http.MethodPost {
-			_, _ = w.Write([]byte(
-				`{"data":{"id":"k1","attributes":{"key":"fresh","name":"crewlet"}}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"data":[]}`))
-	}
-
-	s := newSink()
-	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
-		Creds: pair, Sink: s,
-	})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if account.disabled {
-		t.Error("the connect left the account disabled, so the cycle still " +
-			"ends in Datadog's own UI or another dead account")
-	}
-	if account.title != "" {
-		t.Errorf("title = %q after the connect: a live account still marked "+
-			"disconnected would be re-enabled again on every pass", account.title)
-	}
-	for _, seat := range res.Seats {
-		if seat.Err != nil {
-			t.Errorf("%s: %v", seat.Handle, seat.Err)
-		}
-	}
-}
-
-// THE REFUSAL HANDS THE OPERATOR SOMEWHERE TO GO.
-//
-// "re-enable it at Datadog if that was not deliberate" is the right decision
-// and was, on its own, an instruction with nothing behind it: the finding
-// carried a kind, a subject and a sentence, and the screen had no re-enable
-// affordance — so somebody reading it had to find the account themselves,
-// over an engine that holds the credentials and is declining to use them on
-// purpose.
-func TestASeatRefusalNamesWhereToActOnIt(t *testing.T) {
-	t.Parallel()
-	reg := newRegion(t)
-	orgOK(reg)
-	// AN ACCOUNT SOMEBODY ELSE DISABLED: off, and carrying no marker of
-	// this engine's.
-	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"u1","attributes":{
-			"email":"crewlet-sre@agents.test.invalid","service_account":true,
-			"disabled":true,"title":""}}]}`)
-	}
-
-	s := newSink()
-	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
-		Creds: pair, Sink: s,
-	})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	var found bool
-	for _, f := range res.Findings() {
-		if f.Subject != "sre" {
-			continue
-		}
-		found = true
-		if f.ActionURL == "" {
-			t.Errorf("the refusal says %q and offers nowhere to do it", f.Detail)
-		}
-		// THE CONSOLE, not the API host: they differ by a subdomain on
-		// every region, and a link to the second opens JSON.
-		if !strings.HasPrefix(f.ActionURL, "https://app.") {
-			t.Errorf("action_url = %q, which is not the Datadog console", f.ActionURL)
-		}
-	}
-	if !found {
-		t.Fatalf("findings = %v, none about the disabled seat", res.Findings())
-	}
-}
-
-// A KEY THIS ENGINE CANNOT READ IS REPLACED, NOT REPORTED AT AN OPERATOR.
-//
-// Datadog serves a key's value once, so a key on a seat's own service account
-// with nothing sealed for the seat is a value NOBODY in the company holds: the
-// agent authenticates from the ${VAR} and the ${VAR} is empty. The pass used
-// to stop the whole surface on Action required and tell a person to "delete
-// the key at Datadog and run this again" — an API call it is itself
-// authenticated for, holding the very credentials it listed the key with.
-// Measured on a live company: the Datadog card sat at Action required over one
-// seat, indefinitely, with nothing retrying and nothing broken but this.
-//
-// The engine's own teardown already settles the question the refusal was
-// asking: revokeAppKeys takes EVERY key on an agent's account, because "the
-// account exists solely because this engine created it". Both cannot be right.
-func TestAnUnreadableKeyIsReplacedRatherThanReported(t *testing.T) {
-	t.Parallel()
-	reg := newRegion(t)
-	orgOK(reg)
-	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"u1","attributes":{
-			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`)
-	}
-	var deleted []string
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
-		w http.ResponseWriter, r *http.Request,
-	) {
-		if r.Method == http.MethodPost {
-			_, _ = w.Write([]byte(
-				`{"data":{"id":"k2","attributes":{"key":"fresh-value","name":"crewlet"}}}`))
-			return
-		}
-		_, _ = w.Write([]byte(
-			`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
-	}
-	reg.handle["/api/v2/service_accounts/u1/application_keys/k1"] = func(
-		w http.ResponseWriter, r *http.Request,
-	) {
-		if r.Method == http.MethodDelete {
-			deleted = append(deleted, "k1")
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}
-
-	// THE SINK HOLDS NOTHING, which is the whole premise: the value is
-	// gone and the key it belongs to cannot be recovered from anywhere.
-	s := newSink()
-	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
-		Creds: pair, Sink: s,
-	})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if len(res.Seats) != 1 {
-		t.Fatalf("seats = %+v", res.Seats)
-	}
-	if res.Seats[0].Err != nil {
-		t.Fatalf("the seat was refused rather than repaired: %v", res.Seats[0].Err)
-	}
-	if !slices.Equal(deleted, []string{"k1"}) {
-		t.Errorf("deleted %v, want the unreadable key gone before a new one "+
-			"is minted: two keys where one is dead is the state this repairs",
-			deleted)
-	}
-	if !res.Seats[0].KeyMinted {
-		t.Error("no replacement was minted, so the seat still cannot act")
-	}
-	if got := s.held["SRE_DD_KEY"]; got != "fresh-value" {
-		t.Errorf("sealed %q, want the replacement recorded", got)
-	}
-	// AND THE CARD IS CLEAN. The whole point is that nothing is left for a
-	// person to do.
-	for _, f := range res.Findings() {
-		if f.Subject == "sre" {
-			t.Errorf("the repaired seat still reports %q", f.Detail)
-		}
-	}
-}
-
-// AND A KEY THIS ENGINE DID NOT WRITE IS LEFT ALONE.
-//
-// The repair is narrower than the teardown's sweep, and deliberately: a
-// teardown must leave NO live credential on a decommissioned account, so a key
-// it cannot attribute is exactly the hazard it exists to remove. A repair only
-// has to give this seat a working credential, and minting is ADDITIVE — so it
-// can spare a key somebody else put there and still fix the seat, which the
-// teardown has no way to do.
-func TestARepairSparesAKeyThisEngineDidNotWrite(t *testing.T) {
-	t.Parallel()
-	reg := newRegion(t)
-	orgOK(reg)
-	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"u1","attributes":{
-			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`)
-	}
-	var deleted []string
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
-		w http.ResponseWriter, r *http.Request,
-	) {
-		if r.Method == http.MethodPost {
-			_, _ = w.Write([]byte(
-				`{"data":{"id":"k9","attributes":{"key":"fresh-value","name":"crewlet"}}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"data":[
-			{"id":"k1","attributes":{"name":"crewlet"}},
-			{"id":"k2","attributes":{"name":"terraform"}}
-		]}`))
-	}
-	for _, id := range []string{"k1", "k2"} {
-		reg.handle["/api/v2/service_accounts/u1/application_keys/"+id] = func(
-			w http.ResponseWriter, r *http.Request,
-		) {
-			if r.Method == http.MethodDelete {
-				deleted = append(deleted, id)
-			}
-			w.WriteHeader(http.StatusNoContent)
-		}
-	}
-
-	s := newSink()
-	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
-		Creds: pair, Sink: s,
-	})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if !slices.Equal(deleted, []string{"k1"}) {
-		t.Errorf("deleted %v, want only the key this engine's own mint names",
-			deleted)
-	}
-	if res.Seats[0].Err != nil || !res.Seats[0].KeyMinted {
-		t.Errorf("the seat was not repaired: err=%v minted=%v",
-			res.Seats[0].Err, res.Seats[0].KeyMinted)
-	}
-}
-
-// A FAILURE THIS ENGINE CAUSED DOES NOT SEND SOMEBODY TO DATADOG.
-//
-// Every seat failure carried the console link once, on the reasoning that each
-// is something a person settles there. An unreadable secret store is not: it
-// is this engine's own fault, on this engine's own side, and a link to
-// somebody else's user administration under it costs the trip and teaches an
-// operator that the link means nothing.
-func TestAStoreFailureLinksNowhereAtTheVendor(t *testing.T) {
-	t.Parallel()
-	reg := newRegion(t)
-	orgOK(reg)
-	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"u1","attributes":{
-			"email":"crewlet-sre@agents.test.invalid","service_account":true}}]}`)
-	}
-	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
-		w http.ResponseWriter, _ *http.Request,
-	) {
-		_, _ = w.Write([]byte(`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
-	}
-
-	s := newSink()
-	s.readErr = errors.New("seal: keyring unavailable")
-	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
-		Creds: pair, Sink: s,
-	})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	var found bool
-	for _, f := range res.Findings() {
-		if f.Subject != "sre" {
-			continue
-		}
-		found = true
-		if f.ActionURL != "" {
-			t.Errorf("a store failure this engine owns links to %q", f.ActionURL)
-		}
-	}
-	if !found {
-		t.Fatalf("findings = %v, none about the seat", res.Findings())
-	}
-}
-
 // AND THE VENDOR'S LINK IS THE PAGE, NOT A GUESSED FILTER.
 //
 // It carried `?filter=disabled` on the theory that a re-enable starts from the
@@ -652,29 +240,38 @@ func TestAStoreFailureLinksNowhereAtTheVendor(t *testing.T) {
 // to look at, which costs exactly the trip the link was added to save.
 func TestTheVendorLinkIsThePageItself(t *testing.T) {
 	t.Parallel()
+	link := newRegion(t).client(t).UsersURL()
+	if strings.Contains(link, "?") || !strings.HasSuffix(link, "/organization-settings/users") {
+		t.Errorf("users link = %q, want the user administration itself: a query "+
+			"nothing has established the vendor honours can hide the account "+
+			"somebody followed the link to find", link)
+	}
+}
+
+// AN ACCOUNT THE ACCESS SYNC MANAGES IS NEVER AN ORPHAN. This pass manages no
+// agent's account, so judged against nothing it called every agent's live
+// account an orphan; what the ledger and the document name is spared.
+func TestAccountsTheAccessSyncManagesAreNotOrphans(t *testing.T) {
+	t.Parallel()
 	reg := newRegion(t)
 	orgOK(reg)
 	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"data":[{"id":"u1","attributes":{
-			"email":"crewlet-sre@agents.test.invalid","service_account":true,
-			"disabled":true,"title":""}}]}`)
+		fmt.Fprint(w, `{"data":[
+			{"id":"u1","attributes":{"email":"crewlet-sre@agents.test.invalid","service_account":true}},
+			{"id":"u2","attributes":{"email":"crewlet-dba@agents.test.invalid","service_account":true}},
+			{"id":"u3","attributes":{"email":"crewlet-gone@agents.test.invalid","service_account":true}}
+		]}`)
 	}
-
 	res, err := datadog.Reconcile(context.Background(), datadog.Options{
-		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
-		Creds: pair, Sink: newSink(),
+		Client: reg.client(t), Config: cfgWith(), Creds: pair,
+		// One by the ledger's id, one by a document seat's address.
+		Managed: []string{"u1", "Crewlet-DBA@agents.test.invalid"},
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	for _, f := range res.Findings() {
-		if f.Subject != "sre" {
-			continue
-		}
-		if strings.Contains(f.ActionURL, "?") {
-			t.Errorf("action_url = %q, want the user administration itself: a "+
-				"query nothing has established the vendor honours can hide "+
-				"the account somebody followed the link to find", f.ActionURL)
-		}
+	f, found := orphansFinding(t, res)
+	if !found || !slices.Equal(f.Subjects, []string{"crewlet-gone@agents.test.invalid"}) {
+		t.Errorf("orphans = %+v, want only the account nothing manages", f.Subjects)
 	}
 }

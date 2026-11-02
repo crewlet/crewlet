@@ -19,10 +19,11 @@ import (
 // a restart, a deploy or a node joining a fleet showed an operator a company
 // that had apparently done nothing, beside a store that said otherwise.
 //
-// EVERY HALF IS THE FLEET'S, read from every live node's event store
-// (internal/eventfan): each node's store holds what that node published and
-// nothing else, so a seed read from this node alone described a third of a
-// three-node fleet, and a node that joined showed nothing its peers had done.
+// EVERY HALF IS THE FLEET'S, read from every live data node's event store
+// (internal/eventfan): each one holds what that node published and the custody
+// batches it keeps, and nothing else, so a seed read from this node alone
+// described a third of a three-node fleet, and a node that joined showed
+// nothing its peers had done.
 // Which nodes answered is [History.Coverage], reported as the seed's
 // coverage rather than hidden.
 type History struct {
@@ -111,7 +112,10 @@ func (s *LiveState) seedTurns(turns []store.Turn) []string {
 				continue
 			}
 			outcome := OutcomeCompleted
-			if t.Failed {
+			switch {
+			case t.Stopped:
+				outcome = OutcomeStopped
+			case t.Failed:
 				outcome = OutcomeFailed
 			}
 			ended := t.EndedAt.UTC().Format(time.RFC3339Nano)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -57,7 +56,8 @@ import (
 // there is an error the answer names (the local backend's own sentence).
 
 // LiveReading is one live reading of one job's account of itself, advanced a
-// read at a time by the node that owns the run — what [Runner.Follow] begins.
+// read at a time by the node that reads the run's box — what [Runner.Follow]
+// begins.
 type LiveReading interface {
 	// Read reads what the job has said since the last Read, from a box
 	// attached for the purpose ([Provider.Attach]): nothing is written,
@@ -92,6 +92,10 @@ type LiveRead struct {
 	Finished bool
 	// AsOf is when the box was read.
 	AsOf time.Time
+	// Spent is every token the job's model calls have reported since the
+	// reading began, for a caller that stops a run at a cap while it works.
+	// Zero for a CLI whose stream reports none until it ends.
+	Spent int
 }
 
 // LiveReuse is how long one read of a box answers everybody watching it before
@@ -354,8 +358,12 @@ func (f *liveFeed) current(ctx context.Context) (liveSnapshot, error) {
 	case f.err != nil:
 		return liveSnapshot{}, f.err
 	}
-	return liveSnapshot{}, fmt.Errorf("sandbox: reading the box of run %s took longer than this "+
-		"request could wait; it goes on, and the next request reads what it found", f.run.TurnID)
+	// THE BOX HAS NOT ANSWERED YET, which is the box not answering in the
+	// time this request had: the read goes on, and the next request is
+	// answered from what it finds.
+	return liveSnapshot{}, unanswered(ctx, fmt.Errorf("sandbox: reading the box of run %s "+
+		"took longer than this request could wait; it goes on, and the next request reads "+
+		"what it found: %w", f.run.TurnID, ctx.Err()))
 }
 
 // refresh reads the box once, under the reading's own budget rather than any
@@ -384,16 +392,20 @@ func (f *liveFeed) refresh(done chan struct{}) {
 func (f *liveFeed) readBox(ctx context.Context) (LiveRead, error) {
 	// A reading that ended — the node stopped, or the launch was let go —
 	// reads nothing, whatever a backend would make of a dead context.
+	//
+	// A WAIT CLEARS IT ([ErrTailUnanswered]): the node is stopping and its
+	// seats go elsewhere, or the launch stopped running and the next request
+	// reads that.
 	if err := ctx.Err(); err != nil {
-		return LiveRead{}, fmt.Errorf("sandbox: the reading of run %s has ended: %w", f.run.TurnID, err)
+		return LiveRead{}, fmt.Errorf("sandbox: the reading of run %s has ended: %w: %w",
+			f.run.TurnID, ErrTailUnanswered, err)
 	}
 	var m *Manager
 	if f.feeds.manager != nil {
 		m = f.feeds.manager()
 	}
 	if m == nil {
-		return LiveRead{}, errors.New("sandbox: this node owns the run and has no sandbox " +
-			"backend to reach its box with — providers.sandbox was removed by an apply")
+		return LiveRead{}, errNoBackend()
 	}
 	run := f.run
 	// ATTACHED, NEVER RECONNECTED: a read changes nothing, and Connect wakes

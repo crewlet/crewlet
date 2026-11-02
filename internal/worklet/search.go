@@ -1,0 +1,291 @@
+package worklet
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// RANKED SEARCH OVER WORK ITEMS, which is the half of "find the thing I half
+// remember" the board's query language cannot answer.
+//
+// # Why this is the tracker's and not the knowledge seam's
+//
+// `search_knowledge` reads through [knowledge.Searcher], which is
+// BACKEND-NEUTRAL by design and has Confluence behind it on a company that
+// runs one — and Confluence has no work items. Widening that seam to carry
+// tasks would make "what do we already know about this" depend on which
+// backend answered, which is the one thing that package exists to prevent. Its
+// [knowledge.Hit] is page-shaped for the same reason: a space key, a page id
+// and an ancestor chain, none of which a work item has.
+//
+// So the tracker gets its own verb, over the same index, exactly as it has its
+// own board beside the wiki's own list.
+//
+// # What the board's `q` is, and why it is not this
+//
+// The grammar's `q` is a SUBSTRING of the key or the title, composed into the
+// board query with every other filter — a cheap predicate that pages, sorts
+// and groups with the rest, and the right tool for "the item whose key I am
+// half sure of". It cannot see a description, it cannot rank, and no amount of
+// filtering turns it into either. Both stay: one narrows a list, the other
+// orders a corpus.
+
+// Ranked is one work item as a ranked search answers it.
+type Ranked struct {
+	ID  string `json:"id"`
+	Key string `json:"key"`
+
+	// KeyCollision is [TaskRow.KeyCollision] for a hit: the key is one
+	// another task claimed first, so it opens THAT task and this hit is
+	// reached by its id. A ranked answer is the list a person opens an
+	// item FROM, which is exactly where a hit that opens its neighbour
+	// would be indistinguishable from one that does not. See
+	// [ItemAddress].
+	KeyCollision bool `json:"key_collision,omitempty"`
+
+	Title    string `json:"title" untrusted:"name"`
+	Project  string `json:"project"`
+	Type     string `json:"type"`
+	Status   Status `json:"status"`
+	Assignee string `json:"assignee,omitempty"`
+	// Priority is the item's own, so a ranked answer says how much a hit
+	// matters beside what it is — the palette draws it as the Board does,
+	// and a seat weighing which of twenty hits to open reads it as the
+	// board's reader would.
+	Priority Priority `json:"priority"`
+	// Rank is this hit's 1-based place in the answer.
+	//
+	// A PLACE AND NOT A SCORE, because a place is what the fan-out
+	// actually produces: [search.Answer] carries fused KEYS, best first,
+	// and the arithmetic that ordered them — score within a method, RRF
+	// across methods, per slice — is finished before a coordinator sees
+	// them. A `score` field here could only ever have serialised zero,
+	// which is the same defect as every other value in this tree with no
+	// writer, wearing a number's clothes.
+	Rank int `json:"rank"`
+
+	// Snippet is the index's own excerpt, which is what makes a ranked
+	// answer readable without opening every hit.
+	Snippet string `json:"snippet,omitempty" untrusted:"fence"`
+}
+
+// RankedDoc is one candidate as the INDEX knows it, before this package says
+// what it is a hit ON.
+//
+// NO SCORE, for [Ranked.Rank]'s reason: the scores travel in the candidates
+// beside it ([search.Candidates]), and what a hit carries out of a fusion is
+// its place.
+type RankedDoc struct {
+	ID      string
+	Snippet string
+}
+
+// SearchQuery is one ranked item search.
+type SearchQuery struct {
+	// Text is plain language.
+	Text string
+
+	// Limit caps the answer. Zero takes [SearchLimit]; past
+	// [MaxSearchLimit] is served the ceiling.
+	Limit int
+
+	// Mode is how to rank, in the knowledge search's own vocabulary —
+	// one set of three modes for both of the engine's ranked searches.
+	// The zero value is hybrid.
+	Mode knowledge.Mode
+}
+
+// SearchAnswer is a ranked item search's hits and what the search did — the
+// mode it served, what it covered and why it served less than was asked
+// ([knowledge.Outcome]).
+type SearchAnswer struct {
+	Hits []Ranked `json:"hits"`
+	knowledge.Outcome
+}
+
+// RankedCandidates is the index's answer over one corpus: each method's top
+// candidates with their scores, the item behind every key, and what the
+// ranking did.
+type RankedCandidates struct {
+	Candidates search.Candidates
+	Docs       map[string]RankedDoc
+	knowledge.Outcome
+}
+
+// Ranker is the index seam, declared here because this is the caller.
+//
+// THE INDEX IS THIS NODE'S OWN and the rows are the fleet's, which is why the
+// two halves of this search are two reads rather than a join — the same estate
+// boundary every other reader here crosses the same way.
+type Ranker interface {
+	// Candidates is each method the query's mode runs, its top candidates
+	// for the text with their scores, by the index's own document key —
+	// the work item behind each key with the index's excerpt of it — and
+	// what the ranking did.
+	Candidates(ctx context.Context, q SearchQuery) (RankedCandidates, error)
+
+	// Building reports an index that has not caught up with this node's
+	// own rows, so a caller can tell "nothing matched" from "not indexed
+	// yet" — which are different answers a person acts on differently.
+	Building(ctx context.Context) bool
+}
+
+// SearchLimit is how many ranked items one search answers with.
+//
+// TWENTY, which is a screen and is also what a model can weigh in one read. A
+// ranked answer is not a board: the caller's next move is to open one or two
+// of them, so the value of the twenty-first is near zero while its cost in an
+// answer's budget is the same as the first's.
+const SearchLimit = 20
+
+// MaxSearchLimit caps what a caller may ask for.
+const MaxSearchLimit = 50
+
+// Searcher answers a ranked item search over this node's corpus.
+type Searcher struct {
+	db   store.ReplicatedReader
+	rank Ranker
+}
+
+// NewSearcher builds one over this node's store and its index.
+func NewSearcher(db store.ReplicatedReader, rank Ranker) *Searcher {
+	return &Searcher{db: db, rank: rank}
+}
+
+// ErrIndexBuilding reports an index that has not caught up.
+//
+// ITS OWN SENTINEL, because the caller's answer differs from every other
+// refusal: nothing is wrong, the company's work is simply not all searchable
+// yet, and the honest thing to tell a seat is "ask again" rather than "there
+// is nothing" — which it would otherwise act on by filing a duplicate.
+var ErrIndexBuilding = fmt.Errorf("worklet: the search index is still building")
+
+// Search ranks the company's work items against plain text, up to q's limit
+// items, best first.
+//
+// THE FUSED ORDER IS WALKED PAST AN ITEM REMOVED SINCE IT WAS INDEXED, rather
+// than cut first and filtered after: the index is behind this node's rows by
+// design, so a removed leader costs the answer that item and never a place. And
+// THE PLACE IS COUNTED OVER WHAT SURVIVES, so the numbering has no gap a reader
+// would take for a result that went missing.
+func (s *Searcher) Search(ctx context.Context, q SearchQuery) (SearchAnswer, error) {
+	switch {
+	case s == nil || s.rank == nil || s.db.IsZero():
+		return SearchAnswer{}, fmt.Errorf("worklet: this node has no search index")
+	case !q.Mode.Valid():
+		return SearchAnswer{}, fmt.Errorf("worklet: unknown search mode %q; "+
+			"the modes are hybrid, keyword and semantic", q.Mode)
+	}
+	limit := q.Limit
+	switch {
+	case limit <= 0:
+		limit = SearchLimit
+	case limit > MaxSearchLimit:
+		limit = MaxSearchLimit
+	}
+	ranked, err := s.rank.Candidates(ctx, q)
+	if err != nil {
+		return SearchAnswer{}, err
+	}
+	answer := SearchAnswer{Hits: make([]Ranked, 0, limit), Outcome: ranked.Outcome}
+	if len(ranked.Docs) == 0 {
+		// THE GATE IS ASKED ONLY ON AN EMPTY ANSWER, because that is the
+		// only answer it changes: a search that found something has
+		// found it whether or not the index is still catching up, and
+		// asking every time would put one indexed count on every call.
+		//
+		// AND ONLY WHEN THE WORDS WERE RANKED. The gate is the LEXICAL
+		// index's state; a semantic search never read that index, and
+		// one that ran nothing at all (no provider, a failed query
+		// vector) already carries the degradation that explains its
+		// empty answer — which "still building" would throw away,
+		// telling the reader to wait for something that will not
+		// change what they were told.
+		if lexicalRan(ranked.ServedMode) && s.rank.Building(ctx) {
+			return SearchAnswer{}, ErrIndexBuilding
+		}
+		return answer, nil
+	}
+	rows, err := s.itemsByID(ctx, ranked.Docs)
+	if err != nil {
+		return SearchAnswer{}, err
+	}
+	for _, key := range ranked.Candidates.Fused() {
+		doc, named := ranked.Docs[key]
+		if !named {
+			continue
+		}
+		row, held := rows[doc.ID]
+		if !held {
+			// INDEXED AND GONE. The index is behind this node's own
+			// rows by design — see the indexer's own orphan sweep —
+			// so a hit whose item has been removed since is walked
+			// past rather than reported as an item nobody can open.
+			continue
+		}
+		row.Snippet, row.Rank = doc.Snippet, len(answer.Hits)+1
+		answer.Hits = append(answer.Hits, row)
+		if len(answer.Hits) == limit {
+			break
+		}
+	}
+	return answer, nil
+}
+
+// lexicalRan reports whether an answer served in this mode read the lexical
+// index. The EMPTY mode is a search that ranked nothing, so it read nothing —
+// which [knowledge.Mode.Resolved] alone would call hybrid.
+func lexicalRan(served knowledge.Mode) bool {
+	return served != "" && served.Lexical()
+}
+
+// rankedItemsStatement is [Searcher.itemsByID]'s read of n ranked hits, named
+// for the plan test.
+func rankedItemsStatement(n int) string {
+	return `
+		SELECT id, key, key_collision, project_key, type, title, status,
+		       assignee, priority
+		  FROM tracker_tasks
+		 WHERE removed_at IS NULL AND id IN (` + placeholders(n) + `)`
+}
+
+// itemsByID reads what a ranked hit has to carry, for one batch of candidates.
+//
+// ONE QUERY over the whole batch rather than a read per hit: the candidates
+// are bounded by twice [search.FuseN], and a read per hit would answer each
+// from a different instant.
+func (s *Searcher) itemsByID(ctx context.Context, docs map[string]RankedDoc) (map[string]Ranked, error) {
+	ids := make([]any, 0, len(docs))
+	for _, doc := range docs {
+		ids = append(ids, doc.ID)
+	}
+	out := make(map[string]Ranked, len(ids))
+	err := s.db.Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, rankedItemsStatement(len(ids)), ids...)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var row Ranked
+			var collision int
+			if err := rows.Scan(&row.ID, &row.Key, &collision, &row.Project,
+				&row.Type, &row.Title, &row.Status, &row.Assignee,
+				&row.Priority); err != nil {
+				return err
+			}
+			row.KeyCollision = collision == 1
+			out[row.ID] = row
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read the ranked items: %w", err)
+	}
+	return out, nil
+}

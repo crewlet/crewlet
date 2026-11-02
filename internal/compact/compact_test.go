@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 )
@@ -35,9 +36,25 @@ func (m *model) Complete(_ context.Context, r llm.Request) (*llm.Completion, err
 		return nil, m.err
 	}
 	user := r.Messages[len(r.Messages)-1].Content
-	text := user[strings.Index(user, "<<<TEXT\n")+len("<<<TEXT\n") : strings.LastIndex(user, "\nTEXT>>>")]
+	text := fenced(user)
 	m.shown = append(m.shown, text)
 	return &llm.Completion{Content: m.answer(text, len(m.asked))}, nil
+}
+
+// fenced is the text inside the one fence a rewrite's prompt carries, or the
+// whole prompt when it carries none — which a test then reads as the text
+// having reached the model unfenced.
+func fenced(user string) string {
+	const opener = "[untrusted:"
+	at := strings.Index(user, opener)
+	if at < 0 || len(user) < at+len(opener)+16 {
+		return user
+	}
+	b := provenance.Boundary(user[at+len(opener) : at+len(opener)+16])
+	if inner := provenance.Unfence(b, user[at:]); inner != user[at:] {
+		return inner
+	}
+	return user
 }
 
 func (m *model) calls() int {
@@ -127,7 +144,7 @@ func TestTheBudgetIsStatedToTheModel(t *testing.T) {
 	if !strings.Contains(system, "how do I rotate the signing key?") {
 		t.Fatalf("a source's question is not in the instructions:\n%s", system)
 	}
-	if len(m.asked[0].Tools) != 0 {
+	if m.asked[0].Tools != nil {
 		t.Fatal("a rewrite offers no tools")
 	}
 	// WHAT THE NOTE PROMISES, THE MODEL IS TOLD. Every rewrite is announced

@@ -22,6 +22,27 @@
 // And it is where a case reaches into what a store copy does while it runs:
 // [CopyHold] stops a copy at its VACUUM INTO, its connection drawn and its view
 // held, so several copies can be stood at one point at once.
+// # The plan gates' vocabulary
+//
+// A domain that holds its tables to their indexes (internal/worklet's
+// TestEveryIndexServesARegisteredQuery, internal/doclet' own) asks the planner
+// rather than reading the DDL, because an index's trailing comment naming a
+// reader is a CLAIM and only the plan says whether that reader reaches it.
+// What every such gate reads is here, once: a statement's plan ([PlanTree],
+// [Plan], through either estate's [Handle] — the node's own file as much as
+// the replicated estate), what a plan line says about an index ([IndexesIn],
+// [Seeks], [Walks], [Sorts], [ScansHeap], [Decorrelated]), what the schema
+// declares ([IndexesOn]), and every statement the module's source spells
+// against a table ([StatementLiterals]), which is what holds a gate's
+// registered set COMPLETE. Two gates with a copy each of a plan's spelling are
+// two gates a driver bump can blind one at a time — and a gate's private
+// reading had already planned a copy of the statement it held — so a walk of
+// every Go file of the module, tests included, refuses an EXPLAIN QUERY PLAN
+// spelled in a literal anywhere but plan.go
+// (TestEveryPlanIsReadThroughStoretest). Package store's own files are the one
+// exemption: its internal tests cannot import this package, which imports
+// theirs, and none of its statements is a correlated aggregate the shared
+// reading would catch.
 package storetest
 
 import (
@@ -95,16 +116,24 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"RecordSkipsUntrackedTypes", testRecordUntracked},
 		{"NullUnconstrainedWorkKey", testWorkKeyNull},
 		{"AWorkKeyFilterAnswersForEveryRunOfOneTrigger", testWorkKeyFilter},
-		{"OnlyOneRevisionIsActive", testOnlyOneRevisionIsActive},
-		{"AnInsertedRevisionIsHistoryUntilActivated", testAnInsertedRevisionIsHistoryUntilActivated},
-		{"ActivatingAMissingRevisionChangesNothing", testActivatingAMissingRevisionChangesNothing},
+		{"OneRowBootsAndOneIsTheFleets", testOneRowBootsAndOneIsTheFleets},
+		{"AnInsertedRevisionIsHistory", testAnInsertedRevisionIsHistory},
+		{"AWriteCannotArriveMarked", testAWriteCannotArriveMarked},
+		{"ARevisionSeenFromTheFleetMovesNoBootRow", testARevisionSeenFromTheFleetMovesNoBootRow},
+		{"TheFleetsInstantRisesAndTheServedOneStays", testTheFleetsInstantRisesAndTheServedOneStays},
+		{"AnOfferReplacesTheBootRowAndKeepsItsBase", testAnOfferReplacesTheBootRowAndKeepsItsBase},
+		{"ServingClearsEveryOffer", testServingClearsEveryOffer},
+		{"PlanAndConfirmNameTheBootOfferOrNothing", testPlanAndConfirmNameTheBootOfferOrNothing},
+		{"OfferingAStoredRevision", testOfferingAStoredRevision},
+		{"RestorableIsTheFleetsRevisionUnlessAnOfferIsBuiltOnIt", testRestorableIsTheFleetsRevisionUnlessAnOfferIsBuiltOnIt},
 		{"PayloadRoundTrips", testPayloadRoundTrips},
 		{"RevisionsListInInsertionOrder", testRevisionsListInInsertionOrder},
 		{"ARevisionRecordsWhatWroteIt", testARevisionRecordsWhatWroteIt},
 		{"AWriteThatDoesNotSayWhatWroteItIsRefused", testAnUnattributedWriteIsRefused},
-		{"AnAdoptedRevisionKeepsItsOriginsAuthor", testAnAdoptedRevisionKeepsItsOriginsAuthor},
-		{"AnAdoptionRefusesARevisionThatNamesNobody", testAnAdoptionRefusesARevisionThatNamesNobody},
-		{"AReAdoptionKeepsTheKnownAuthor", testAReAdoptionKeepsTheKnownAuthor},
+		{"AFleetCopyKeepsItsOriginsAuthor", testAFleetCopyKeepsItsOriginsAuthor},
+		{"AFleetCopyRefusesARevisionThatNamesNobody", testAFleetCopyRefusesARevisionThatNamesNobody},
+		{"AFleetCopyKeepsTheKnownAuthor", testAFleetCopyKeepsTheKnownAuthor},
+		{"AWriteOnABaseThisNodeNeverHeldKeepsTheBaseFirst", testAWriteOnABaseThisNodeNeverHeldKeepsTheBaseFirst},
 		// NOT HERE: the token counter. It is fleet state now, certified
 		// by coordtest against both coordination backends — a counter
 		// this node kept privately was the whole defect (migration
@@ -942,35 +971,13 @@ func testRelatedIndexed(t *testing.T, db *store.DB) {
 		t.Fatalf("a seat with no events got %d rows", len(quiet))
 	}
 
-	var plan string
-	rows, err := db.SQL().QueryContext(ctx, `EXPLAIN QUERY PLAN
+	plan := strings.Join(Plan(t, db, `
 		SELECT crewlet_events.event_id FROM crewlet_events
 		JOIN crewlet_event_parties
 		  ON crewlet_event_parties.event_time = crewlet_events.event_time
 		 AND crewlet_event_parties.event_id = crewlet_events.event_id
 		WHERE crewlet_event_parties.party = ?
-		ORDER BY crewlet_events.event_time DESC LIMIT 50`, "a-lead")
-	if err != nil {
-		t.Fatalf("explain: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	cols, err := rows.Columns()
-	if err != nil {
-		t.Fatalf("explain columns: %v", err)
-	}
-	for rows.Next() {
-		cells := make([]any, len(cols))
-		into := make([]any, len(cols))
-		for i := range cells {
-			into[i] = &cells[i]
-		}
-		if err := rows.Scan(into...); err != nil {
-			t.Fatalf("explain scan: %v", err)
-		}
-		for _, cell := range cells {
-			plan += fmt.Sprintf("%v ", cell)
-		}
-	}
+		ORDER BY crewlet_events.event_time DESC LIMIT 50`, []any{"a-lead"}), "\n")
 	if strings.Contains(plan, "SCAN crewlet_events") {
 		t.Fatalf("the related filter scans the log rather than seeking an index:\n%s", plan)
 	}

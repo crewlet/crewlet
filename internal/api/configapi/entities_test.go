@@ -3,6 +3,7 @@ package configapi_test
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -296,6 +297,11 @@ func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 		for _, method := range []string{
 			http.MethodDelete, http.MethodPost, http.MethodPatch,
 		} {
+			// A MODEL IS THE ONE COLLECTION REMOVED BY ADDRESS, with every
+			// dependant repointed in the same write (removal_test.go).
+			if kind == configapi.EntityLLMProviders && method == http.MethodDelete {
+				continue
+			}
 			res := s.do(t, method, "/config/"+kind+"/ceo", "", nil)
 			if res.Code != http.StatusMethodNotAllowed {
 				t.Errorf("%s /config/%s/ceo = %d, want 405 — an entity path serves "+
@@ -327,6 +333,7 @@ func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 const entityDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -639,5 +646,66 @@ func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
 				t.Errorf("the problem %q is not a line of the detail: %s", problems[0].Message, res.Body)
 			}
 		})
+	}
+}
+
+// AN ENTITY'S PRECONDITION IS THE ENTITY, NOT THE DOCUMENT.
+//
+// An edit of one seat read at its tag lands although the document moved
+// meanwhile for another reason (a ceiling patched on the company), because
+// the seat it edits is still what was read; an edit read before the seat
+// itself changed is refused 412 version_moved with the seat as it stands and
+// its tag. The QA run: the assistant's proposal of one seat's budget went
+// stale when a colleague added another seat. Mutation: tag an entity with the
+// document's revision and the first write is refused 409 revision_advanced.
+func TestAnEntitysPreconditionIsTheEntityNotTheDocument(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, companyDoc)
+	read := s.do(t, http.MethodGet, "/config/llm-providers/zulu", "", nil)
+	tag := read.Header().Get("ETag")
+	if read.Code != http.StatusOK || tag == "" {
+		t.Fatalf("GET = %d %s, with no ETag", read.Code, read.Body)
+	}
+	if again := s.do(t, http.MethodGet, "/config/llm-providers/zulu", "",
+		map[string]string{"If-None-Match": tag}); again.Code != http.StatusNotModified {
+		t.Errorf("a read naming the entity's own tag = %d, want 304", again.Code)
+	}
+
+	// ANOTHER PART OF THE DOCUMENT MOVES.
+	if res := s.do(t, http.MethodPatch, "/config", `{"token_budget": {"day": 5000000}}`,
+		summaryHeader); res.Code != http.StatusCreated {
+		t.Fatalf("PATCH = %d %s", res.Code, res.Body)
+	}
+	if moved := s.do(t, http.MethodGet, "/config/llm-providers/zulu", "", nil); moved.Header().
+		Get("ETag") != tag {
+		t.Errorf("an unrelated change moved the entity's tag from %s to %s", tag,
+			moved.Header().Get("ETag"))
+	}
+	edit := func(model, ifMatch string) *httptest.ResponseRecorder {
+		return s.do(t, http.MethodPut, "/config/llm-providers/zulu",
+			`{"model": "`+model+`", "auth": {"token": "__redacted__", "credential_bundle": "${ROTATED}"}}`,
+			map[string]string{"X-Summary": "an entity", "If-Match": ifMatch})
+	}
+	if res := edit("claude-opus-5", tag); res.Code != http.StatusCreated {
+		t.Fatalf("an edit of an entity nobody else touched = %d %s, want it written", res.Code,
+			res.Body)
+	}
+
+	// THE ENTITY ITSELF MOVED since the tag was read.
+	res := edit("claude-haiku-5", tag)
+	var refusal struct {
+		Error string         `json:"error"`
+		ETag  string         `json:"etag"`
+		Now   map[string]any `json:"current"`
+	}
+	if res.Code != http.StatusPreconditionFailed || json.Unmarshal(res.Body.Bytes(), &refusal) != nil ||
+		refusal.Error != "version_moved" || refusal.Now["model"] != "claude-opus-5" ||
+		refusal.ETag == "" || refusal.ETag == tag {
+		t.Errorf("an edit read before the entity moved = %d %s, want 412 version_moved with "+
+			"the entity now", res.Code, res.Body)
+	}
+	if res := edit("claude-haiku-5", refusal.ETag); res.Code != http.StatusCreated {
+		t.Errorf("the same edit at the entity's tag now = %d %s", res.Code, res.Body)
 	}
 }

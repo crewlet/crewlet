@@ -40,7 +40,16 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, PageFailed, QueryState } from "~/components/common.tsx";
-import { Button, Card, FilterChip, Input, Skeleton, Tag, InlineCode } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  FilterChip,
+  Input,
+  Skeleton,
+  Tag,
+  InlineCode,
+  TimeRangePicker,
+} from "@crewlethq/ui";
 import { XGlyph, SearchGlyph, ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useClient, useEngineHealth, useEvents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -59,7 +68,7 @@ import {
   windowParam,
 } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
-import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { Histogram } from "~/ui/Histogram.tsx";
 import { FacetRail } from "~/ui/FacetRail.tsx";
 import { CATEGORIES } from "~/contract/categories.ts";
@@ -349,7 +358,7 @@ export function Activity() {
     <>
       <PageActions>
         <Tag appearance="outline">{windowLabel(range.window)}</Tag>
-        <TimeRangePicker range={range} ariaLabel="Window" />
+        <TimeRangePicker {...rangePickerProps(range, "Window")} />
         {filtered ? (
           <Button
             leadingIcon={<XGlyph size="xs" />}
@@ -402,10 +411,10 @@ export function Activity() {
               noun="event"
               // THE ENGINE COUNTED THESE, over the whole window and through the
               // same predicate the listing filters with — which is the claim
-              // the tracker's own log cannot make about its bars, and the
+              // Worklet's own log cannot make about its bars, and the
               // reason the scope is a prop rather than an assumption.
               over="window"
-              // THE SAME FRAME AS THE TRACKER'S LOG, dates included: a reader
+              // THE SAME FRAME AS WORKLET'S LOG, dates included: a reader
               // who has learnt one log in this product has learnt the other,
               // and an axis on one of them only is two frames again.
               axis
@@ -488,9 +497,15 @@ export function Activity() {
       </div>
 
       {/* A NODE THAT DID NOT ANSWER is named where the rows are drawn: the
-          log is every node's, read at query time (ADR-0021), and a short
-          answer that did not say so would read exactly like a quiet company. */}
-      <CoverageNote coverage={[series.data?.coverage, ...pageCoverage]} what="this log" />
+          log is every data node's, read at query time (ADR-0021), and a short
+          answer that did not say so would read exactly like a quiet company.
+          The LIVE rows at the top are the push, which this node seeded at
+          boot from every node it could reach (`seeded_from`), so a node its
+          seed missed is one more node this log may be missing. */}
+      <CoverageNote
+        coverage={[series.data?.coverage, ...pageCoverage, engine?.seeded_from]}
+        what="this log"
+      />
 
       {/* THE CLOSED SET, so a category with nothing in it is still offered:
           that says the category exists and is quiet, which is an answer — and

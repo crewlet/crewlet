@@ -106,6 +106,7 @@ func validateIntegrationDoc(t *testing.T, block, body string) error {
 	doc := `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     fast:
       model: claude-golden

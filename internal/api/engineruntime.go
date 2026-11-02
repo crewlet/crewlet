@@ -51,14 +51,13 @@ func newEngineRuntime(e *engine.Engine, reconciler *engine.Reconciler) (engineRu
 // that runs e: its runtime over the same engine and reconciler, under the same
 // requirements, as [NewEngineRuntime] — so a node's /health says the same thing
 // whichever surface serves it — its node id, the roles its presence lease
-// advertises, and its agent-mode tool bridge where it runs seats. With
-// api.public set the command serves that bridge on a listener of its own
-// ([BridgeOnly]) rather than beside the probes.
+// advertises, and, where it runs seats, the engine's own bridge and telemetry
+// receiver for the boxes it launches on this host.
 //
 // ONE WIRING, here rather than in the command that serves it, so that
 // `crewlet run` and the end-to-end suite probe a node through the same code: a
 // copy in the suite is a harness that agrees with itself, and a regression in
-// which runtime, which roles or which bridge the command hands the surface
+// which runtime or which roles the command hands the surface
 // would pass every suite that probed the copy.
 func EngineProbeOptions(boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler,
@@ -79,13 +78,12 @@ func EngineProbeOptions(boot *config.Bootstrap, e *engine.Engine,
 		Bootstrap: boot, Runtime: runtime, NodeID: nodeID,
 		Roles: profile.Roles.Names(), QueueBackend: e.Backends().Queue.Backend(),
 	}
-	// A BRIDGED SESSION IS A LIVE TOOL SURFACE IN THE PROCESS THAT OPENED IT,
-	// so the node running the agent-mode seat is the only node its box can
-	// reach — and only a node running seats opens one. THROUGH THE PREDICATE
-	// the listener on api.public was bound by, before this engine existed
-	// ([PublicListener]), so the bridge is served exactly where it was bound.
-	if bridge := e.Bridge(); servesBridge(profile.RunsSeats(), bridge != nil) {
-		opts.Bridge = bridge
+	// ONLY WHERE THE NODE LAUNCHES BOXES: the seats role. A node without it
+	// may still build a bridge — the fleet's variable is the same on every
+	// node, and its relay verifies a token — but no box on this host dials
+	// it, so its listener serves the network's probes and nothing beside.
+	if profile.RunsSeats() {
+		opts.Bridge, opts.OtelReceiver = e.Bridge(), e.OtelReceiver()
 	}
 	return opts, nil
 }
@@ -127,7 +125,7 @@ func (r engineRuntime) Tools() []ToolInfo {
 	entries := snapshot.Entries()
 	// THE REGISTRY'S OWN PREDICATE for where a tool delivers, never
 	// re-derived here: it is not "was this served by MCP" — a proven
-	// read-only MCP tool delivers nowhere, and the native tracker's
+	// read-only MCP tool delivers nowhere, and Worklet's
 	// comment tool delivers although it is a builtin. A second derivation
 	// would show one answer on the screen and enforce another at the fence.
 	delivers := snapshot.Deliveries()
@@ -228,6 +226,10 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		// responses.
 		Posture:      string(r.reconciler.Posture(ctx)),
 		AppliedEpoch: r.reconciler.Applied(),
+	}
+	if attempt, ok := r.reconciler.Attempt(); ok {
+		state.ConfigAttempt = &ConfigAttempt{Epoch: attempt.Epoch,
+			RevisionID: attempt.RevisionID, Status: attempt.Status}
 	}
 	return state
 }

@@ -7,15 +7,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A FAULT IN A DOMAIN NO SEAT DEPENDS ON SHEDS NO SEAT AND WITHHOLDS NO CLAIM —
 // even on a node whose view of the fleet cannot name a peer — while a fault in
-// one a seat does still makes the node's seats depend on that view (ADR-0049).
+// one a seat does still makes the node's seats depend on that view (ADR-0072).
 //
 // A wrong vectors copy goes out of service for the vectors alone: the seat copy
 // — the tracker and the knowledge base — is still this node's, so the node
@@ -32,7 +32,7 @@ func TestAFaultInADomainThatGatesNoSeatShedsNone(t *testing.T) {
 	e := dataNodeOver(t, view, now, func(context.Context, *core) copyVerdict {
 		return *verdict.Load()
 	})
-	e.native.Store(&native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{}})
+	e.native.Store(&native{trackerReader: &worklet.Reader{}, pageReader: &doclet.Reader{}})
 	rejudge := func() {
 		e.local.mu.Lock()
 		e.local.slot = verdictSlot{}
@@ -91,7 +91,7 @@ func TestALaggingDomainHoldsBackOnlyItsOwnOperations(t *testing.T) {
 	t.Parallel()
 	e := &Engine{backends: &Backends{}}
 	withCore(e)
-	e.native.Store(&native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{}})
+	e.native.Store(&native{trackerReader: &worklet.Reader{}, pageReader: &doclet.Reader{}})
 	l := localWith(e, time.Now, func(context.Context, *core) copyVerdict {
 		return laggingOn(pagesName)
 	})
@@ -154,7 +154,7 @@ func TestABlipOnOneDomainKeepsOnlyThatDomainsVerdict(t *testing.T) {
 	verdict := wrongOn(trackerName)
 	e := &Engine{backends: &Backends{}}
 	withCore(e)
-	e.native.Store(&native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{}})
+	e.native.Store(&native{trackerReader: &worklet.Reader{}, pageReader: &doclet.Reader{}})
 	l := localWith(e, func() time.Time { return now },
 		func(context.Context, *core) copyVerdict { return verdict })
 	serves := func(domain string) bool {

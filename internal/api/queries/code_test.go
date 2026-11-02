@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,6 +60,9 @@ type stubCode struct {
 	// sourced counts the asks of the source itself: CodeReads, RepoReaders,
 	// CheckLogs and CodeSearcher.
 	sourced int
+	// mu guards asked and read, which a question's reads asked at once
+	// append to from goroutines of their own (code.AtOnce).
+	mu sync.Mutex
 }
 
 // CodeSearcher is the stub itself, on CodeReads' terms.
@@ -164,7 +168,9 @@ func stubRepo(name string) *code.RepoDetail {
 }
 
 func (s *stubCode) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	s.mu.Lock()
 	s.asked = append(s.asked, q)
+	s.mu.Unlock()
 	if s.answer != nil {
 		return s.answer(q)
 	}
@@ -199,7 +205,9 @@ func (s *stubCode) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswe
 }
 
 func (s *stubCode) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	s.mu.Lock()
 	s.read = append(s.read, q)
+	s.mu.Unlock()
 	if s.git != nil {
 		return s.git(q)
 	}

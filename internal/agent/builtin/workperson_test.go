@@ -12,7 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/words"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A SEAT NEVER RE-ORDERS SOMEBODY ELSE'S QUEUE, and a person does.
@@ -32,12 +33,12 @@ import (
 func TestASeatNeverReordersSomebodyElsesQueue(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		kind      tracker.AuthorKind
+		kind      worklet.AuthorKind
 		wantAgent bool
 	}{
-		"an operator token": {tracker.AuthorOperator, false},
-		"a human":           {tracker.AuthorHuman, false},
-		"a seat":            {tracker.AuthorAgent, true},
+		"an operator token": {worklet.AuthorOperator, false},
+		"a human":           {worklet.AuthorHuman, false},
+		"a seat":            {worklet.AuthorAgent, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			person := &personSpy{}
@@ -57,7 +58,7 @@ func TestASeatNeverReordersSomebodyElsesQueue(t *testing.T) {
 					t.Fatalf("register %s: %v", tool.Name(), err)
 				}
 			}
-			got := callWork(t, reg, tracker.SetPrioritiesTool, map[string]any{
+			got := callWork(t, reg, worklet.SetPrioritiesTool, map[string]any{
 				"handle": "alice", "items": []any{"ENG-1"},
 			})
 			if got.Failed {
@@ -91,7 +92,7 @@ func TestAPriorityGivenAsAKeyIsResolved(t *testing.T) {
 	person := &personSpy{}
 	reg := operatorRegistry(t, trk, person)
 
-	got := callWork(t, reg, tracker.SetPrioritiesTool, map[string]any{
+	got := callWork(t, reg, worklet.SetPrioritiesTool, map[string]any{
 		"handle": "alice", "items": []any{"ENG-1"},
 	})
 	if got.Failed {
@@ -112,7 +113,7 @@ func TestAPriorityNamingNoTaskIsRefused(t *testing.T) {
 	person := &personSpy{}
 	reg := operatorRegistry(t, trk, person)
 
-	got := callWork(t, reg, tracker.SetPrioritiesTool, map[string]any{
+	got := callWork(t, reg, worklet.SetPrioritiesTool, map[string]any{
 		"handle": "alice", "items": []any{"ENG-404"},
 	})
 	if !got.Failed {
@@ -134,7 +135,7 @@ func operatorRegistry(t *testing.T, trk *fakeTracker, person builtin.PersonWrite
 			Writer:       trk.as,
 			PersonWriter: func(builtin.Actor) builtin.PersonWriter { return person },
 			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+				return builtin.Actor{Handle: "ops", Kind: worklet.AuthorOperator}, nil
 			},
 		},
 		Authorize: builtin.Decide(chartLeads),
@@ -155,9 +156,9 @@ type personSpy struct {
 	opID       string
 	priorities []string
 	ifMatch    *uint64
-	authority  tracker.PersonAuthority
-	inbox      inbox.Gesture[tracker.Reason]
-	pins       tracker.PinGesture
+	authority  worklet.PersonAuthority
+	inbox      inbox.Gesture[worklet.Reason]
+	pins       worklet.PinGesture
 
 	// actor is who the surface resolved the writer FOR, which is the other
 	// half: the record's subject is the person and its author is still
@@ -167,35 +168,35 @@ type personSpy struct {
 }
 
 func (p *personSpy) WritePriorities(_ context.Context, opID, handle string,
-	priorities []string, ifMatch *uint64, authority tracker.PersonAuthority) (
-	tracker.WriteResult, error) {
+	priorities []string, ifMatch *uint64, authority worklet.PersonAuthority) (
+	worklet.WriteResult, error) {
 
 	p.handle, p.opID = handle, opID
 	p.priorities, p.ifMatch, p.authority = priorities, ifMatch, authority
-	return tracker.WriteResult{
+	return worklet.WriteResult{
 		Outcome:  statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 20},
 	}, nil
 }
 
 func (p *personSpy) WritePins(_ context.Context, opID, handle string,
-	gesture tracker.PinGesture, authority tracker.PersonAuthority) (
-	tracker.WriteResult, error) {
+	gesture worklet.PinGesture, authority worklet.PersonAuthority) (
+	worklet.WriteResult, error) {
 
 	p.handle, p.opID, p.pins, p.authority = handle, opID, gesture, authority
-	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+	return worklet.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
 func (p *personSpy) MarkInbox(_ context.Context, opID, handle string,
-	gesture inbox.Gesture[tracker.Reason], authority tracker.PersonAuthority) (
-	tracker.WriteResult, error) {
+	gesture inbox.Gesture[worklet.Reason], authority worklet.PersonAuthority) (
+	worklet.WriteResult, error) {
 
 	p.handle, p.opID, p.inbox, p.authority = handle, opID, gesture, authority
-	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+	return worklet.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
 // TestMarkInboxCarriesThePrimarySplit is the finding on the write side.
-// [tracker.Person.PrimaryReasons] was validated, stored, replicated and
+// [worklet.Person.PrimaryReasons] was validated, stored, replicated and
 // reported — and `mark_inbox` passed nil for it on every call, so the one
 // writer that could have set it CLEARED it instead. A preference nothing can
 // express is storage for a rule nobody wrote.
@@ -204,29 +205,29 @@ func TestMarkInboxCarriesThePrimarySplit(t *testing.T) {
 	person := &personSpy{}
 	reg := personRegistry(t, person)
 
-	got := callWork(t, reg, tracker.MarkInboxTool, map[string]any{
+	got := callWork(t, reg, worklet.MarkInboxTool, map[string]any{
 		"primary_reasons": []any{"mention", "asked"},
 	})
 	if got.Failed {
 		t.Fatalf("mark_inbox failed: %q", got.Output)
 	}
 	if person.inbox.PrimaryReasons == nil || !slices.Equal(*person.inbox.PrimaryReasons,
-		[]tracker.Reason{tracker.ReasonMention, tracker.ReasonAsked}) {
+		[]worklet.Reason{worklet.ReasonMention, worklet.ReasonAsked}) {
 		t.Fatalf("the writer was given %v, want [mention asked] — the split "+
 			"has no other producer", person.inbox.PrimaryReasons)
 	}
 
 	// AND AN UNKNOWN REASON IS REFUSED NAMING THE SET, rather than
 	// written and silently dropped by the validator behind it.
-	bad := callWork(t, reg, tracker.MarkInboxTool, map[string]any{
+	bad := callWork(t, reg, worklet.MarkInboxTool, map[string]any{
 		"primary_reasons": []any{"because-i-said-so"},
 	})
 	if !bad.Failed {
 		t.Fatal("an unknown wake reason was accepted")
 	}
-	if !strings.Contains(bad.Output, "mention") {
-		t.Fatalf("the refusal does not name the reasons that exist: %q",
-			bad.Output)
+	if want := "The reasons are: " + words.And(worklet.Reasons) + "."; !strings.Contains(bad.Output, want) {
+		t.Fatalf("the refusal does not name the reasons that exist as %q: %q",
+			want, bad.Output)
 	}
 }
 
@@ -237,7 +238,7 @@ func TestWorkInboxIsServedAndNarrows(t *testing.T) {
 	t.Parallel()
 	reg := personRegistry(t, &personSpy{})
 
-	got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+	got := callPlain(t, reg, worklet.WorkInboxTool, map[string]any{
 		"handle": "alice",
 	})
 	if got.Failed {
@@ -247,20 +248,20 @@ func TestWorkInboxIsServedAndNarrows(t *testing.T) {
 		t.Fatalf("the answer carries no notice: %q", got.Output)
 	}
 
-	if missing := callPlain(t, reg, tracker.WorkInboxTool,
+	if missing := callPlain(t, reg, worklet.WorkInboxTool,
 		map[string]any{}); !missing.Failed {
 
 		t.Fatal("an inbox read naming nobody was accepted")
 	}
-	bad := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+	bad := callPlain(t, reg, worklet.WorkInboxTool, map[string]any{
 		"handle": "alice", "reasons": []any{"because-i-said-so"},
 	})
 	if !bad.Failed {
 		t.Fatal("an unknown wake reason was accepted")
 	}
-	if !strings.Contains(bad.Output, "assignee") {
-		t.Fatalf("the refusal does not name the reasons that exist: %q",
-			bad.Output)
+	if want := "The reasons are: " + words.And(worklet.Reasons) + "."; !strings.Contains(bad.Output, want) {
+		t.Fatalf("the refusal does not name the reasons that exist as %q: %q",
+			want, bad.Output)
 	}
 }
 
@@ -288,7 +289,7 @@ func personRegistry(t *testing.T, person *personSpy) *tools.Registry {
 	return personSurface(t, newFakeTracker(), person, func(
 		context.Context, *turnctx.Turn) (builtin.Actor, error) {
 
-		return builtin.Actor{Handle: "alice", Kind: tracker.AuthorHuman}, nil
+		return builtin.Actor{Handle: "alice", Kind: worklet.AuthorHuman}, nil
 	})
 }
 
@@ -345,46 +346,46 @@ func TestEveryOperatorToolIsAnnotatedDeliberately(t *testing.T) {
 	t.Parallel()
 	shared := map[string]bool{
 		// The reads. Asking twice costs a round and changes nothing.
-		tracker.ListWorkItemsTool:    false,
-		tracker.GetWorkItemTool:      false,
-		tracker.GetWorkCatalogueTool: false,
-		tracker.ListProjectsTool:     false,
-		tracker.DescribeProjectTool:  false,
-		tracker.TaskActivityTool:     false,
-		tracker.MyWorkTool:           false,
-		tracker.SearchWorkItemsTool:  false,
-		tracker.ListWorkViewsTool:    false,
-		tracker.GetPersonTool:        false,
-		tracker.WorkInboxTool:        false,
+		worklet.ListWorkItemsTool:    false,
+		worklet.GetWorkItemTool:      false,
+		worklet.GetWorkCatalogueTool: false,
+		worklet.ListProjectsTool:     false,
+		worklet.DescribeProjectTool:  false,
+		worklet.TaskActivityTool:     false,
+		worklet.MyWorkTool:           false,
+		worklet.SearchWorkItemsTool:  false,
+		worklet.ListWorkViewsTool:    false,
+		worklet.GetPersonTool:        false,
+		worklet.WorkInboxTool:        false,
 
 		// The writes everybody sees.
-		tracker.CreateWorkItemTool:     true,
-		tracker.UpdateWorkItemTool:     true,
-		tracker.CommentOnWorkTool:      true,
-		tracker.MergeWorkItemTool:      true,
-		tracker.WriteProjectTool:       true,
-		tracker.WriteWorkCatalogueTool: true,
-		tracker.SaveWorkViewTool:       true,
-		tracker.RemoveWorkItemTool:     true,
-		tracker.RestoreWorkItemTool:    true,
-		tracker.MoveWorkItemTool:       true,
+		worklet.CreateWorkItemTool:     true,
+		worklet.UpdateWorkItemTool:     true,
+		worklet.CommentOnWorkTool:      true,
+		worklet.MergeWorkItemTool:      true,
+		worklet.WriteProjectTool:       true,
+		worklet.WriteWorkCatalogueTool: true,
+		worklet.SaveWorkViewTool:       true,
+		worklet.RemoveWorkItemTool:     true,
+		worklet.RestoreWorkItemTool:    true,
+		worklet.MoveWorkItemTool:       true,
 
 		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE. Each is written
 		// only on behalf of the person whose it is, so a second caller
 		// cannot be surprised by one — which is the question the flag
 		// asks, rather than "does this write".
-		tracker.MarkInboxTool: false,
-		tracker.SetPinsTool:   false,
+		worklet.MarkInboxTool: false,
+		worklet.SetPinsTool:   false,
 
 		// EXCEPT the one that reaches across people: a lead may set
 		// somebody else's queue, and that person sees it.
-		tracker.SetPrioritiesTool: true,
+		worklet.SetPrioritiesTool: true,
 	}
 
 	reg := personRegistry(t, &personSpy{})
 	snapshot := reg.Snapshot()
 	seen := 0
-	for _, name := range append(tracker.Tools(), tracker.OperatorOnlyTools()...) {
+	for _, name := range append(worklet.Tools(), worklet.OperatorOnlyTools()...) {
 		entry, held := snapshot.Lookup(name)
 		if !held {
 			continue
@@ -429,7 +430,7 @@ func TestThePersonToolSchemasTakeGestures(t *testing.T) {
 		return entry.Tool.Parameters()["properties"].(map[string]any)
 	}
 
-	marks := props(tracker.MarkInboxTool)
+	marks := props(worklet.MarkInboxTool)
 	var names []string
 	for name := range marks {
 		names = append(names, name)
@@ -439,12 +440,12 @@ func TestThePersonToolSchemasTakeGestures(t *testing.T) {
 		"unread", "unsnooze"}; !slices.Equal(names, want) {
 		t.Errorf("mark_inbox takes %v, want %v", names, want)
 	}
-	entry, _ := snapshot.Lookup(tracker.MarkInboxTool)
+	entry, _ := snapshot.Lookup(worklet.MarkInboxTool)
 	if strings.Contains(entry.Tool.Description(), "REPLACES") {
 		t.Error("mark_inbox still describes itself as replacing the lists")
 	}
 	for _, key := range []string{"views", "favorites"} {
-		change, ok := props(tracker.SetPinsTool)[key].(map[string]any)
+		change, ok := props(worklet.SetPinsTool)[key].(map[string]any)
 		if !ok || change["type"] != "object" {
 			t.Errorf("set_pins' %s is %v, want a change object", key, change)
 			continue
@@ -455,7 +456,7 @@ func TestThePersonToolSchemasTakeGestures(t *testing.T) {
 			}
 		}
 	}
-	if _, held := props(tracker.SetPrioritiesTool)["if_match"]; !held {
+	if _, held := props(worklet.SetPrioritiesTool)["if_match"]; !held {
 		t.Error("set_priorities takes no if_match, so a reorder from a stale " +
 			"screen replaces the newer list")
 	}
@@ -470,7 +471,7 @@ func TestThePersonToolsPassTheGestureThrough(t *testing.T) {
 	person := &personSpy{}
 	reg := personRegistry(t, person)
 
-	got := callWork(t, reg, tracker.MarkInboxTool, map[string]any{
+	got := callWork(t, reg, worklet.MarkInboxTool, map[string]any{
 		"read":         []any{"r-1"},
 		"snooze":       []any{map[string]any{"record_id": "r-2", "until": "2031-05-01T09:00:00Z"}},
 		"read_through": "CREWLET_TRACKER_LOG@1:7",
@@ -491,23 +492,23 @@ func TestThePersonToolsPassTheGestureThrough(t *testing.T) {
 		t.Errorf("an absent primary_reasons became %v, which would clear the "+
 			"person's choice", *g.PrimaryReasons)
 	}
-	if got := callWork(t, reg, tracker.MarkInboxTool, map[string]any{
+	if got := callWork(t, reg, worklet.MarkInboxTool, map[string]any{
 		"primary_reasons": []any{},
 	}); got.Failed || person.inbox.PrimaryReasons == nil {
 		t.Errorf("an empty primary_reasons did not reach the writer as a "+
 			"choice: %q", got.Output)
 	}
-	if got := callWork(t, reg, tracker.MarkInboxTool, map[string]any{}); !got.Failed {
+	if got := callWork(t, reg, worklet.MarkInboxTool, map[string]any{}); !got.Failed {
 		t.Error("a mark_inbox naming nothing was accepted")
 	}
 
 	// A BARE LIST WHERE A CHANGE BELONGS is refused naming the shape,
 	// rather than read as the whole strip — which is the old replace.
-	bare := callWork(t, reg, tracker.SetPinsTool, map[string]any{"views": []any{"v-1"}})
+	bare := callWork(t, reg, worklet.SetPinsTool, map[string]any{"views": []any{"v-1"}})
 	if !bare.Failed || !strings.Contains(bare.Output, "add") {
 		t.Errorf("a bare list of views answered %q", bare.Output)
 	}
-	if got := callWork(t, reg, tracker.SetPinsTool, map[string]any{
+	if got := callWork(t, reg, worklet.SetPinsTool, map[string]any{
 		"views":     map[string]any{"remove": []any{"v-1"}},
 		"favorites": map[string]any{"add": []any{map[string]any{"kind": "project", "id": "ENG"}}},
 	}); got.Failed {
@@ -526,7 +527,7 @@ func TestThePersonToolsPassTheGestureThrough(t *testing.T) {
 		{map[string]any{"items": []any{"ENG-1"}, "if_match": float64(0)}, new(uint64)},
 	} {
 		person.ifMatch = nil
-		if got := callWork(t, reg, tracker.SetPrioritiesTool, c.args); got.Failed {
+		if got := callWork(t, reg, worklet.SetPrioritiesTool, c.args); got.Failed {
 			t.Fatalf("set_priorities failed: %q", got.Output)
 		}
 		if (person.ifMatch == nil) != (c.want == nil) ||
@@ -534,7 +535,7 @@ func TestThePersonToolsPassTheGestureThrough(t *testing.T) {
 			t.Errorf("if_match %v reached the writer as %v", c.args["if_match"], person.ifMatch)
 		}
 	}
-	if got := callWork(t, reg, tracker.SetPrioritiesTool, map[string]any{
+	if got := callWork(t, reg, worklet.SetPrioritiesTool, map[string]any{
 		"items": []any{"ENG-1"}, "if_match": float64(-1),
 	}); !got.Failed {
 		t.Error("a negative if_match was accepted")
@@ -551,10 +552,10 @@ func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
 	reg := personSurface(t, trk, &personSpy{}, func(
 		context.Context, *turnctx.Turn) (builtin.Actor, error) {
 
-		return builtin.Actor{Handle: "alice", Kind: tracker.AuthorHuman}, nil
+		return builtin.Actor{Handle: "alice", Kind: worklet.AuthorHuman}, nil
 	})
 
-	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+	if got := callPlain(t, reg, worklet.WorkInboxTool, map[string]any{
 		"handle": "alice",
 	}); got.Failed {
 		t.Fatalf("work_inbox failed: %q", got.Output)
@@ -563,7 +564,7 @@ func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
 		t.Errorf("no `snoozed` reached the reader as %q, want %q",
 			trk.inboxQuery.Snoozed, inbox.SnoozeExclude)
 	}
-	if got := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+	if got := callPlain(t, reg, worklet.WorkInboxTool, map[string]any{
 		"handle": "alice", "snoozed": "only",
 	}); got.Failed {
 		t.Fatalf("work_inbox failed: %q", got.Output)
@@ -571,7 +572,7 @@ func TestWorkInboxTakesTheSnoozedScope(t *testing.T) {
 	if trk.inboxQuery.Snoozed != inbox.SnoozeOnly {
 		t.Errorf("snoozed=only reached the reader as %q", trk.inboxQuery.Snoozed)
 	}
-	bad := callPlain(t, reg, tracker.WorkInboxTool, map[string]any{
+	bad := callPlain(t, reg, worklet.WorkInboxTool, map[string]any{
 		"handle": "alice", "snoozed": "bogus",
 	})
 	if !bad.Failed || !strings.Contains(bad.Output, "include") {

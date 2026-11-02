@@ -2,6 +2,7 @@ package kv
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -31,23 +32,21 @@ import (
 //     sandbox.PendingStore.RaiseCodeFloor), each operation a higher floor, so
 //     every one writes.
 //
-// THE RUN IS A REALISTIC ONE, mid-job: launched with one repository, its
-// suspended conversation written (64 tool answers of 8 KiB — an eighth of the
-// 64 KiB a builtin's answer may reach — beside a prompt of 32 KiB, so about
-// 0.5 MiB), and the bridge's log full at sandbox.MaxBridgeCalls calls of
-// 256 bytes of arguments and 2 KiB of output each. Reported beside the time
-// are its spread (ms-p50, ms-p99) and the bytes of the run's own record
-// (row-bytes): what each read moves, and what each raise reads and writes
-// back. A request that fails fails the benchmark.
+// THE RUN IS A REALISTIC ONE, mid-job: launched with one repository, its turn
+// parked (its bookkeeping and a 32 KiB frozen context), and the bridge's log
+// full at sandbox.MaxBridgeCalls calls of 256 bytes of arguments and 2 KiB of
+// output each, which the record carries ([sandbox.PendingRun.BridgeCalls]).
+// Reported beside the time are its spread (ms-p50, ms-p99) and the bytes of
+// the run's own record (row-bytes): what each read moves, and what each raise
+// reads and writes back. A request that fails fails the benchmark.
 //
-// Measured on 2026-10-30, thirty operations an arm and one count, on two
-// E-cores of an Intel Core Ultra 7 265U: a read 0.15 ms at the median (0.21
-// at the 99th percentile) and a raise 0.42 ms (0.88), on a record of 2 983
-// bytes — the run's facts, its 2 KiB brief among them. With the conversation
-// and the tool log on the record, as they were before the store kept them
-// beside it (internal/sandbox), the record was 1 046 412 bytes, a read took
-// 8.4 ms (11.4) and a raise 16.4 ms (22.1): every request of a box moved the
-// turn, not the request.
+// Measured on 2026-11-01, thirty operations an arm and one count, on two
+// E-cores of an Intel Core Ultra 7 265U: a read 5.8 ms at the median (7.9 at
+// the 99th percentile) and a raise 11.1 ms (26.0), on a record of 516 173
+// bytes, nearly all of it the bridge's log. Kept beside the record instead,
+// the record was 2 983 bytes, a read took 0.15 ms (0.21) and a raise 0.42 ms
+// (0.88): every request of a box moves the run's whole tool log, not the
+// request.
 func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 	ctx := context.Background()
 	fleet := boxRunFleet(b)
@@ -127,8 +126,8 @@ func boxRunFleet(b *testing.B) *FleetStore {
 		return client
 	}
 	cfg := FleetConfig{
-		BucketPrefix: fmt.Sprintf("f%d", bucketSeq.Add(1)),
-		RateWindow:   time.Minute, MaxClaimTTL: 10 * time.Minute,
+		BucketPrefix:  fmt.Sprintf("f%d", bucketSeq.Add(1)),
+		MaxRateWindow: time.Minute, MaxClaimTTL: 10 * time.Minute,
 		LedgerRetention: 10 * time.Minute, FireRetention: 10 * time.Minute,
 		FollowRetention: 10 * time.Minute, RebaseRetention: 10 * time.Minute,
 		BudgetRetention: time.Hour, StatusFreshness: 10 * time.Minute,
@@ -160,8 +159,8 @@ func boxRunFleet(b *testing.B) *FleetStore {
 	return nil
 }
 
-// seedBoxRun launches the benchmark's run, writes its conversation and fills
-// its bridge log, answering its turn and its launch.
+// seedBoxRun launches the benchmark's run, parks its turn and fills its bridge
+// log, answering its turn and its launch.
 func seedBoxRun(b *testing.B, store *sandbox.CoordStore) (turn, launch string) {
 	b.Helper()
 	ctx := b.Context()
@@ -185,15 +184,19 @@ func seedBoxRun(b *testing.B, store *sandbox.CoordStore) (turn, launch string) {
 	if err != nil {
 		b.Fatalf("BeginLaunch: %v", err)
 	}
-	var conversation strings.Builder
-	conversation.WriteString(`{"messages":[{"role":"system","content":"` + text(r, 32<<10) + `"}`)
-	for i := range 64 {
-		fmt.Fprintf(&conversation, `,{"role":"assistant","tool_calls":[{"id":"call-%d","name":"read_page"}]}`, i)
-		fmt.Fprintf(&conversation, `,{"role":"tool","tool_call_id":"call-%d","content":"%s"}`, i, text(r, 8<<10))
+	// THE PARKED TURN'S STATE, as the executor's launch writes it: the
+	// turn's bookkeeping and the context it froze at its start, 32 KiB of
+	// it. No conversation: the executor is its coding CLI's own run, and
+	// nothing a model said is the engine's to keep.
+	state, err := json.Marshal(map[string]any{
+		"version": 1, "iteration": 1, "task_description": text(r, 2<<10),
+		"frozen_context": map[string]string{"thread_context": text(r, 32<<10)},
+	})
+	if err != nil {
+		b.Fatal(err)
 	}
-	conversation.WriteString(`]}`)
 	if ok, err := store.MarkSuspended(ctx, turn, sandbox.Suspension{
-		State: []byte(conversation.String()), Iteration: 1,
+		State: state, Iteration: 1,
 	}); err != nil || !ok {
 		b.Fatalf("MarkSuspended = (%v, %v)", ok, err)
 	}

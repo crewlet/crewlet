@@ -10,7 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The catalogue tools: what a task may BE, and what it may carry.
@@ -30,24 +31,24 @@ import (
 
 // CatalogueWriter is the tracker write side these tools need.
 type CatalogueWriter interface {
-	WriteTypes(ctx context.Context, opID string, types []tracker.TaskType) (tracker.WriteResult, error)
-	WriteFields(ctx context.Context, opID string, fields []tracker.FieldDef) (tracker.WriteResult, error)
+	WriteTypes(ctx context.Context, opID string, types []worklet.TaskType) (worklet.WriteResult, error)
+	WriteFields(ctx context.Context, opID string, fields []worklet.FieldDef) (worklet.WriteResult, error)
 }
 
 // CatalogueReader is the read side.
 type CatalogueReader interface {
-	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
+	Catalogue(ctx context.Context, q worklet.CatalogueQuery) (worklet.CatalogueAnswer, error)
 }
 
 type getWorkCatalogue struct{ deps WorkDeps }
 
 var _ tools.SeatCallable = (*getWorkCatalogue)(nil)
 
-func (t *getWorkCatalogue) Name() string { return tracker.GetWorkCatalogueTool }
+func (t *getWorkCatalogue) Name() string { return worklet.GetWorkCatalogueTool }
 
 func (t *getWorkCatalogue) Description() string {
 	return "The task types this company declares and the custom fields a task " +
-		"may carry. create_work_item refuses a type that is not here, so read " +
+		"may carry. " + worklet.CreateWorkItemTool + " refuses a type that is not here, so read " +
 		"this before inventing one."
 }
 
@@ -77,17 +78,17 @@ func (t *getWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// The operator surface supplies its own actor, so this succeeds there.
 	if _, err := t.deps.actor(ctx, turn); err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.GetWorkCatalogueTool), nil
+		return notInATurn(worklet.GetWorkCatalogueTool), nil
 	}
 	if t.deps.Reader == nil {
-		return unconfigured(tracker.GetWorkCatalogueTool), nil
+		return unconfigured(worklet.GetWorkCatalogueTool), nil
 	}
-	answer, err := t.deps.Reader.Catalogue(ctx, tracker.CatalogueQuery{
+	answer, err := t.deps.Reader.Catalogue(ctx, worklet.CatalogueQuery{
 		Archived: argBool(args, "archived"),
 		Level:    seatReadLevel,
 	})
 	if err != nil {
-		return readFailure(ctx, tracker.GetWorkCatalogueTool, err), nil
+		return readFailure(ctx, worklet.GetWorkCatalogueTool, err), nil
 	}
 	return jsonResult(answer)
 }
@@ -96,13 +97,13 @@ type writeWorkCatalogue struct{ deps WorkDeps }
 
 var _ tools.Callable = (*writeWorkCatalogue)(nil)
 
-func (t *writeWorkCatalogue) Name() string { return tracker.WriteWorkCatalogueTool }
+func (t *writeWorkCatalogue) Name() string { return worklet.WriteWorkCatalogueTool }
 
 func (t *writeWorkCatalogue) Description() string {
 	return "Declare the company's task types or its custom fields. Each list " +
 		"REPLACES the one it names, and each declaration in it is WHOLE — a " +
 		"key you leave out is cleared, `config` and its options included — so " +
-		"read get_work_catalogue and send back what it gave you with your " +
+		"read " + worklet.GetWorkCatalogueTool + " and send back what it gave you with your " +
 		"change in it, never a field composed from scratch. The two lists are " +
 		"separate writes: sending only `types` leaves the fields alone, and " +
 		"the reverse. The built-in types (task, bug, epic, story, spike, " +
@@ -154,10 +155,10 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.WriteWorkCatalogueTool), nil
+		return notInATurn(worklet.WriteWorkCatalogueTool), nil
 	}
 	if t.deps.CatalogueWriter == nil {
-		return unconfigured(tracker.WriteWorkCatalogueTool), nil
+		return unconfigured(worklet.WriteWorkCatalogueTool), nil
 	}
 	_, hasTypes := args["types"]
 	_, hasFields := args["fields"]
@@ -175,8 +176,8 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 	// used to be found only after `types` had landed, and the call answered
 	// the parse refusal alone — a caller told its call failed, holding a
 	// catalogue whose types had already been replaced.
-	var types []tracker.TaskType
-	var fields []tracker.FieldDef
+	var types []worklet.TaskType
+	var fields []worklet.FieldDef
 	if hasTypes {
 		var refusal string
 		if types, refusal = catalogueTypes(args); refusal != "" {
@@ -191,7 +192,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 	}
 
 	// TWO WRITES, NEVER ONE, because they are two objects on two subjects
-	// — see internal/tracker/catalogue.go. A call sending both does them
+	// (see internal/worklet/catalogue.go). A call sending both does them
 	// in order; a refused second write after a landed first is reported as
 	// exactly that ([partlyWritten]), because the first list IS replaced.
 	if hasTypes {
@@ -201,18 +202,18 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		opID := opIDFor(actor, t.Name(), "types", "workspace", args)
 		result, err := writer.WriteTypes(ctx, opID, types)
 		if err != nil {
-			return writeFailure(ctx, actor, tracker.WriteWorkCatalogueTool, err), nil
+			return writeFailure(ctx, actor, worklet.WriteWorkCatalogueTool, err), nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
 			// THE FIELDS WAIT FOR IT: a call answered with one half's
 			// receipt and the other's doubt is a call the reader has to
 			// take apart, and repeating the whole of it is harmless.
-			next := restateNext("Read the catalogue with get_work_catalogue")
+			next := restateNext("Read the catalogue with " + worklet.GetWorkCatalogueTool)
 			if hasFields {
 				next = "The fields were NOT written: the call stopped here, " +
 					"before them. " + next
 			}
-			return unknownWrite(actor, tracker.WriteWorkCatalogueTool,
+			return unknownWrite(actor, worklet.WriteWorkCatalogueTool,
 				"the types were written", opID, result.Unvouched, next), nil
 		}
 		t.deps.settle(ctx, result.Position)
@@ -226,7 +227,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		opID := opIDFor(actor, t.Name(), "fields", "workspace", args)
 		result, err := writer.WriteFields(ctx, opID, fields)
 		if err != nil {
-			failure := writeFailure(ctx, actor, tracker.WriteWorkCatalogueTool, err)
+			failure := writeFailure(ctx, actor, worklet.WriteWorkCatalogueTool, err)
 			if hasTypes {
 				return partlyWritten(failure, "The types were replaced", "the fields",
 					call), nil
@@ -234,11 +235,11 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 			return failure, nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
-			next := restateNext("Read the catalogue with get_work_catalogue")
+			next := restateNext("Read the catalogue with " + worklet.GetWorkCatalogueTool)
 			if hasTypes {
 				next = "The types WERE written. " + next
 			}
-			return unknownWrite(actor, tracker.WriteWorkCatalogueTool,
+			return unknownWrite(actor, worklet.WriteWorkCatalogueTool,
 				"the fields were written", opID, result.Unvouched, next), nil
 		}
 		t.deps.settle(ctx, result.Position)
@@ -253,18 +254,18 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 }
 
 // catalogueTypes reads the declared types a caller sent.
-func catalogueTypes(args map[string]any) ([]tracker.TaskType, string) {
-	raw, ok := args["types"].([]any)
+func catalogueTypes(args map[string]any) ([]worklet.TaskType, string) {
+	raw, ok := argval.List(args["types"])
 	if !ok {
 		return nil, "`types` is a list of type declarations."
 	}
-	out := make([]tracker.TaskType, 0, len(raw))
+	out := make([]worklet.TaskType, 0, len(raw))
 	for i, entry := range raw {
 		fields, ok := entry.(map[string]any)
 		if !ok {
 			return nil, fmt.Sprintf("Type %d is not an object.", i+1)
 		}
-		out = append(out, tracker.TaskType{
+		out = append(out, worklet.TaskType{
 			Slug:        strings.TrimSpace(argString(fields, "slug")),
 			Name:        strings.TrimSpace(argString(fields, "name")),
 			Plural:      strings.TrimSpace(argString(fields, "plural")),
@@ -285,8 +286,8 @@ func catalogueTypes(args map[string]any) ([]tracker.TaskType, string) {
 //
 // # ONE GRAMMAR WITH THE READ
 //
-// The shape here is the shape [tracker.FieldDef] is SERVED in — `applies_to`,
-// and the settings nested under `config` — because the only honest edit of a
+// The shape here is the shape [worklet.FieldDef] is SERVED in (`applies_to`,
+// and the settings nested under `config`), because the only honest edit of a
 // declaration is the one `get_work_catalogue` just handed back. It was not:
 // the options lived at the TOP level of a tool's field spec while the answer
 // carries them under `config`, so an operator who echoed the read to rename
@@ -296,10 +297,10 @@ func catalogueTypes(args map[string]any) ([]tracker.TaskType, string) {
 //
 // # AND EVERY SETTING, not just the one
 //
-// Seven of [tracker.FieldConfig]'s keys had no reader here at all, so a number
+// Seven of [worklet.FieldConfig]'s keys had no reader here at all, so a number
 // field was integer-precision whatever anybody declared, a date could never
 // hold a time, and a labels field could never take more than one — while
-// [tracker.FieldDef]'s own `applies_to` could not be set either, leaving every
+// [worklet.FieldDef]'s own `applies_to` could not be set either, leaving every
 // field applying to every type. Each is a setting the coercion table reads on
 // every write and nothing could put there: the refusal a caller was handed —
 // "set a value at that precision, or widen the field's own" — named a remedy
@@ -311,23 +312,23 @@ func catalogueTypes(args map[string]any) ([]tracker.TaskType, string) {
 // workspace catalogue and a project's own declarations. A gate repeated here
 // would be the third rule the coercion table's own comment records going out
 // of step with the other two.
-func catalogueFields(args map[string]any) ([]tracker.FieldDef, string) {
-	raw, ok := args["fields"].([]any)
+func catalogueFields(args map[string]any) ([]worklet.FieldDef, string) {
+	raw, ok := argval.List(args["fields"])
 	if !ok {
 		return nil, "`fields` is a list of field declarations."
 	}
-	out := make([]tracker.FieldDef, 0, len(raw))
+	out := make([]worklet.FieldDef, 0, len(raw))
 	for i, entry := range raw {
 		spec, ok := entry.(map[string]any)
 		if !ok {
 			return nil, fmt.Sprintf("Field %d is not an object.", i+1)
 		}
-		field := tracker.FieldDef{
+		field := worklet.FieldDef{
 			ID:                 strings.TrimSpace(argString(spec, "id")),
 			Slug:               strings.TrimSpace(argString(spec, "slug")),
 			Name:               strings.TrimSpace(argString(spec, "name")),
 			Description:        argString(spec, "description"),
-			Type:               tracker.FieldType(strings.TrimSpace(argString(spec, "type"))),
+			Type:               worklet.FieldType(strings.TrimSpace(argString(spec, "type"))),
 			AppliesTo:          argStrings(spec, "applies_to"),
 			Required:           argBool(spec, "required"),
 			RequiredInSubtasks: argBool(spec, "required_in_subtasks"),
@@ -357,22 +358,22 @@ func catalogueFields(args map[string]any) ([]tracker.FieldDef, string) {
 // the post-state — and a reader that KEPT a setting the caller left out would
 // make clearing one impossible, while letting a field composed from scratch
 // silently inherit whatever its predecessor held.
-func fieldConfig(spec map[string]any, slug string) (tracker.FieldConfig, string) {
+func fieldConfig(spec map[string]any, slug string) (worklet.FieldConfig, string) {
 	raw, sent := spec["config"]
 	if !sent || raw == nil {
-		return tracker.FieldConfig{}, ""
+		return worklet.FieldConfig{}, ""
 	}
 	config, ok := raw.(map[string]any)
 	if !ok {
-		return tracker.FieldConfig{}, fmt.Sprintf("`config` on field %s is the "+
-			"settings object get_work_catalogue returns for it, as "+
+		return worklet.FieldConfig{}, fmt.Sprintf("`config` on field %s is the "+
+			"settings object "+worklet.GetWorkCatalogueTool+" returns for it, as "+
 			`{"precision": 1, "unit": "h"}.`, clip(slug))
 	}
 	options, refusal := catalogueOptions(config, slug)
 	if refusal != "" {
-		return tracker.FieldConfig{}, refusal
+		return worklet.FieldConfig{}, refusal
 	}
-	out := tracker.FieldConfig{
+	out := worklet.FieldConfig{
 		Options:  options,
 		Unit:     strings.TrimSpace(argString(config, "unit")),
 		Time:     argBool(config, "time"),
@@ -382,9 +383,9 @@ func fieldConfig(spec map[string]any, slug string) (tracker.FieldConfig, string)
 	if value, held := config["precision"]; held && value != nil {
 		places, readable := argIntValue(value)
 		if !readable {
-			return tracker.FieldConfig{}, fmt.Sprintf("`config.precision` on "+
+			return worklet.FieldConfig{}, fmt.Sprintf("`config.precision` on "+
 				"field %s is a whole number of decimal places, 0 to %d.",
-				clip(slug), tracker.MaxPrecision)
+				clip(slug), worklet.MaxPrecision)
 		}
 		out.Precision = places
 	}
@@ -394,11 +395,11 @@ func fieldConfig(spec map[string]any, slug string) (tracker.FieldConfig, string)
 	// floor of zero under every number field anybody declared.
 	low, refusal := fieldBound(config, slug, "min")
 	if refusal != "" {
-		return tracker.FieldConfig{}, refusal
+		return worklet.FieldConfig{}, refusal
 	}
 	high, refusal := fieldBound(config, slug, "max")
 	if refusal != "" {
-		return tracker.FieldConfig{}, refusal
+		return worklet.FieldConfig{}, refusal
 	}
 	out.Min, out.Max = low, high
 	return out, ""
@@ -425,19 +426,19 @@ func fieldBound(config map[string]any, slug, key string) (*float64, string) {
 
 // catalogueOptions reads `config.options` — the choices of a dropdown, a
 // labels or a relationship field.
-func catalogueOptions(config map[string]any, slug string) ([]tracker.Option, string) {
-	raw, held := config["options"].([]any)
+func catalogueOptions(config map[string]any, slug string) ([]worklet.Option, string) {
+	raw, held := argval.List(config["options"])
 	if !held {
 		return nil, ""
 	}
-	out := make([]tracker.Option, 0, len(raw))
+	out := make([]worklet.Option, 0, len(raw))
 	for i, entry := range raw {
 		fields, ok := entry.(map[string]any)
 		if !ok {
 			return nil, fmt.Sprintf("Option %d of field %s is not an object.",
 				i+1, clip(slug))
 		}
-		option := tracker.Option{
+		option := worklet.Option{
 			ID:       strings.TrimSpace(argString(fields, "id")),
 			Slug:     strings.TrimSpace(argString(fields, "slug")),
 			Name:     strings.TrimSpace(argString(fields, "name")),
@@ -503,7 +504,7 @@ func fieldDeclarationSchema() map[string]any {
 //
 // EVERY KEY A SERVED DECLARATION CAN CARRY, spelled as the read spells it, so
 // the object a caller edits is the object it was handed. The two keys of
-// [tracker.FieldConfig] missing here are the two no stored declaration may
+// [worklet.FieldConfig] missing here are the two no stored declaration may
 // hold either: a `rollup` block and a `tracking` list both say a value keeps
 // itself up to date, and the tracker refuses both because this build computes
 // neither — so a read can never hand one back, and offering them would spend a
@@ -511,7 +512,7 @@ func fieldDeclarationSchema() map[string]any {
 func fieldConfigSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
-		"description": "The field's own settings, exactly as get_work_catalogue " +
+		"description": "The field's own settings, exactly as " + worklet.GetWorkCatalogueTool + " " +
 			"returns them. Each key belongs to particular field TYPES and is " +
 			"refused by name on any other. WHOLE, like the declaration around " +
 			"it: a key left out is cleared.",
@@ -537,7 +538,7 @@ func fieldConfigSchema() map[string]any {
 				"type": "string",
 				"description": fmt.Sprintf("number, progress and rollup only. "+
 					"Rendered inline beside every value on every row, as "+
-					"\"8 h\", so at most %d bytes.", tracker.MaxUnit),
+					"\"8 h\", so at most %d bytes.", worklet.MaxUnit),
 			},
 			"precision": map[string]any{
 				"type": "integer",
@@ -545,7 +546,7 @@ func fieldConfigSchema() map[string]any {
 					"how many decimal places a value may carry, 0 to %d. "+
 					"Default 0, which is whole numbers only. A value carrying "+
 					"more is REFUSED naming the rule, never rounded.",
-					tracker.MaxPrecision),
+					worklet.MaxPrecision),
 			},
 			"min": map[string]any{
 				"type": "number",
@@ -566,7 +567,7 @@ func fieldConfigSchema() map[string]any {
 			},
 			"progress": map[string]any{
 				"type": "string",
-				"enum": toAny(tracker.ProgressModes),
+				"enum": toAny(worklet.ProgressModes),
 				"description": "progress only. `manual` is a number somebody " +
 					"writes; `auto` is refused, because this build computes no " +
 					"automatic progress and the bar would show whatever was " +
@@ -584,8 +585,8 @@ func fieldConfigSchema() map[string]any {
 
 // fieldTypeNames renders the closed set for the tool schema.
 func fieldTypeNames() []string {
-	out := make([]string, 0, len(tracker.FieldTypes))
-	for _, t := range tracker.FieldTypes {
+	out := make([]string, 0, len(worklet.FieldTypes))
+	for _, t := range worklet.FieldTypes {
 		out = append(out, string(t))
 	}
 	return out

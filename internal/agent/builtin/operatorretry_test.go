@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // AN OPERATOR'S CALL IS AN OPERATION THE OPERATOR CAN BRING BACK.
@@ -129,10 +129,10 @@ func TestAnOperatorsCreateBroughtBackIsTheSameCreate(t *testing.T) {
 	}
 }
 
-// A COMMENT AND A NEW VIEW ARE IDENTIFIED BY THE CALL TOO. Each is a row whose
-// id is the subject its create arbitrates on, so an id minted per call made
-// the call brought back a second comment and a second view whatever its
-// operation id said.
+// A COMMENT AND A NEW VIEW ARE IDENTIFIED BY THE CALL TOO. Each is a row
+// keyed by its id — the subject a view's create arbitrates on, and the row a
+// comment's post creates — so an id minted per call made the call brought
+// back a second comment and a second view whatever its operation id said.
 func TestAnOperatorsCommentAndViewBroughtBackAreTheSameObject(t *testing.T) {
 	t.Parallel()
 	t.Run("comment", func(t *testing.T) {
@@ -161,12 +161,12 @@ func TestAnOperatorsCommentAndViewBroughtBackAreTheSameObject(t *testing.T) {
 		views := &viewSpy{}
 		reg := retrySurface(t, newFakeTracker(), views)
 		args := map[string]any{"container": "project:ENG", "name": "Mine", "type": "list"}
-		first := callNoTurn(t, reg, tracker.SaveWorkViewTool, args)
+		first := callNoTurn(t, reg, worklet.SaveWorkViewTool, args)
 		if first.Failed {
 			t.Fatalf("the save failed: %s", first.Output)
 		}
 		op, _ := answerOf(t, first)["op_id"].(string)
-		callNoTurn(t, reg, tracker.SaveWorkViewTool, map[string]any{
+		callNoTurn(t, reg, worklet.SaveWorkViewTool, map[string]any{
 			"container": "project:ENG", "name": "Mine", "type": "list", "op_id": op,
 		})
 		if len(views.saved) != 2 || views.saved[0].ID != views.saved[1].ID {
@@ -198,10 +198,10 @@ func TestOpIDIsOfferedOnlyOnTheOperatorsWrites(t *testing.T) {
 	}, Authorize: builtin.Decide(chartLeads)})
 	writes := []string{
 		builtin.CreateWorkItemTool, builtin.UpdateWorkItemTool, builtin.CommentOnWorkTool,
-		tracker.MergeWorkItemTool, tracker.MoveWorkItemTool,
-		tracker.RemoveWorkItemTool, tracker.RestoreWorkItemTool,
-		tracker.SetPrioritiesTool, tracker.SetPinsTool, tracker.MarkInboxTool,
-		tracker.SaveWorkViewTool,
+		worklet.MergeWorkItemTool, worklet.MoveWorkItemTool,
+		worklet.RemoveWorkItemTool, worklet.RestoreWorkItemTool,
+		worklet.SetPrioritiesTool, worklet.SetPinsTool, worklet.MarkInboxTool,
+		worklet.SaveWorkViewTool,
 	}
 	offered := map[string]bool{}
 	for _, tool := range operator {
@@ -224,7 +224,7 @@ func TestOpIDIsOfferedOnlyOnTheOperatorsWrites(t *testing.T) {
 	seat := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as,
 		Dependencies: trk.depends, Merges: trk.merges, Moves: trk.moves})
 	for _, name := range []string{builtin.CreateWorkItemTool, builtin.UpdateWorkItemTool,
-		builtin.CommentOnWorkTool, tracker.MergeWorkItemTool, tracker.MoveWorkItemTool} {
+		builtin.CommentOnWorkTool, worklet.MergeWorkItemTool, worklet.MoveWorkItemTool} {
 
 		entry, _ := seat.Lookup(name)
 		props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
@@ -294,7 +294,7 @@ func TestABroughtBackOpIDIsCheckedAndATurnIsRefusedOne(t *testing.T) {
 // new operation.
 func TestAStoppedGestureTellsEachCallerHowToFinishIt(t *testing.T) {
 	t.Parallel()
-	stopped := fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved)
+	stopped := fmt.Errorf("stopped: %w", worklet.ErrStepUnresolved)
 
 	trk := newFakeTracker()
 	trk.writeErr = stopped
@@ -340,7 +340,7 @@ func TestACreateWhoseDependenciesStoppedNamesTheItemItFiled(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			trk := newFakeTracker()
-			trk.dependErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved)
+			trk.dependErr = fmt.Errorf("stopped: %w", worklet.ErrStepUnresolved)
 			args := map[string]any{"title": "x", "project": "ENG", "waiting_on": []any{"ENG-2"}}
 			var got tools.Result
 			if operator {
@@ -377,7 +377,7 @@ func TestACreateWhoseDependenciesStoppedNamesTheItemItFiled(t *testing.T) {
 func TestAnOperatorsUnknownCreateNamesTheOperationToBringBack(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	trk.createAnswer = &tracker.WriteResult{
+	trk.createAnswer = &worklet.WriteResult{
 		Key:    "ENG-9",
 		Result: statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: "op.task"},
 	}

@@ -6,7 +6,7 @@
  * called the result "My work"; `work_views` was asked without a viewer, so no
  * pinned or personal view could arrive at all and a shared board was
  * pixel-identical to one somebody had pinned; and the five `preset=` values
- * the tracker's grammar resolves against the caller's own identity were parsed,
+ * Worklet's grammar resolves against the caller's own identity were parsed,
  * tested, documented and never sent.
  *
  * The answer is the PRINCIPAL the engine resolved for this browser — a person
@@ -40,11 +40,24 @@
  * [ViewerState.loading] rather than a value. See [useViewer].
  */
 
-import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
+import {
+  createContext,
+  createElement,
+  useContext,
+  useEffect,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
-import { ADMIN, KNOWLEDGE, TRACKER, holds } from "./access.ts";
+import { ADMIN, CHATLET, DOCLET, WORKLET, holds } from "./access.ts";
 import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
+import type { AssistantModelNotice } from "~/contract/assistant.ts";
+import {
+  assistantModelNotice,
+  assistantUnavailable,
+  type AssistantAccessReason,
+} from "~/protocol/assistantWire.ts";
 
 export interface ViewerState {
   /** The login the engine resolved this browser to, or "". */
@@ -65,13 +78,15 @@ export interface ViewerState {
    */
   admin: boolean;
   /**
-   * Whether this caller holds the TRACKER — every work item, project, view,
-   * inbox and queue question. A surface that reads the tracker asks nothing
-   * without it, and says what would open it rather than drawing a refusal.
+   * Whether this caller holds WORKLET: every work item, project, view, inbox
+   * and queue question. A surface that reads Worklet asks nothing without it,
+   * and says what would open it rather than drawing a refusal.
    */
-  tracker: boolean;
-  /** Whether this caller holds the KNOWLEDGE base — every page question. */
-  knowledge: boolean;
+  worklet: boolean;
+  /** Whether this caller holds DOCLET: every page question. */
+  doclet: boolean;
+  /** Whether this caller holds CHATLET: every room question. */
+  chatlet: boolean;
   /** The seat the directory binds this caller to, or "" — see the note above. */
   handle: string;
   /**
@@ -128,6 +143,39 @@ export interface ViewerState {
   configWriter: boolean;
   /** Who manages the company document, or empty when nothing does. */
   configManagedBy: readonly string[];
+  /**
+   * Why this caller may not ask the Dashboard Assistant, or null when they
+   * may: the engine's own first failing condition, and `disabled` for an
+   * engine whose answer carries no `assistant` member at all.
+   */
+  assistant: AssistantAccessReason | null;
+  /**
+   * What the reader is told of the assistant's model before they ask (it is
+   * signed out, its plan is spent, its CLI cannot start), or null when nothing
+   * is known to be wrong with it: the drawer's notice, never a reason above.
+   */
+  assistantModel: AssistantModelNotice | null;
+  /**
+   * On a company talking on a vendor's chat, which vendor surfaces it
+   * declares, named to a reader holding Chatlet only: empty everywhere else.
+   * WHETHER the company runs Chatlet is every reader's, on the org
+   * projection (`lib/services.ts`); this is the one further fact a place
+   * naming the vendor needs (`chatVendorName`).
+   */
+  chatVendors: readonly string[];
+}
+
+/** The mounted reads of the viewer, asked again by [rereadViewer]. */
+const rereads = new Set<() => void>();
+
+/**
+ * Ask the viewer again now, rather than at the next slow poll: for a surface
+ * that has just learned something the answer carries, the assistant's model
+ * failing or a question refused for it, so its notice is drawn (or cleared)
+ * at once.
+ */
+export function rereadViewer(): void {
+  for (const reread of rereads) reread();
 }
 
 /**
@@ -138,7 +186,13 @@ export interface ViewerState {
  * than a push, and a reconnect re-asks it.
  */
 function useViewerRead(): ViewerState {
-  const { data, loading, error } = useQuery("viewer", undefined, { pollMs: 300_000 });
+  const { data, loading, error, refetch } = useQuery("viewer", undefined, { pollMs: 300_000 });
+  useEffect(() => {
+    rereads.add(refetch);
+    return () => {
+      rereads.delete(refetch);
+    };
+  }, [refetch]);
   const login = data?.login ?? "";
   const handle = data?.handle ?? "";
   const grants = data?.grants ?? [];
@@ -155,8 +209,9 @@ function useViewerRead(): ViewerState {
     login,
     grants,
     admin: holds(grants, ADMIN),
-    tracker: holds(grants, TRACKER),
-    knowledge: holds(grants, KNOWLEDGE),
+    worklet: holds(grants, WORKLET),
+    doclet: holds(grants, DOCLET),
+    chatlet: holds(grants, CHATLET),
     handle,
     owner: data?.owner ?? "",
     name: data?.name ?? "",
@@ -169,6 +224,9 @@ function useViewerRead(): ViewerState {
     asking: loading && data === null && error === null,
     configWriter: data?.config_writer ?? false,
     configManagedBy: data?.config_managed_by ?? [],
+    assistant: assistantUnavailable(data?.assistant),
+    assistantModel: assistantModelNotice(data?.assistant),
+    chatVendors: data?.chat_vendors ?? [],
   };
 }
 

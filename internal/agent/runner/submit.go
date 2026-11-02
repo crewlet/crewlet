@@ -1,6 +1,11 @@
 // Package runner drives a turn's phases (onboarding, the executor and the
 // reviewer) against real models and real tools.
 //
+// The executor is never a phase of the engine's tool loop: it is the seat's
+// coding CLI's own run in a box, launched here with the turn parking behind
+// it, and collected back into the same turn for the reviewer (ADR-0066;
+// agentrun.go).
+//
 // It is the wiring between four things that each know nothing about the
 // others: the prompt builder, the tool registry, the provider chain, and the
 // turn loop's [turn.Phases] contract. Everything here is plumbing plus the one
@@ -22,13 +27,15 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The names of the two structured-output tools. A phase ENDS by calling its
 // own; that is what turns free prose into a decision the engine can act on.
 const (
-	SubmitWorkTool   = "submit_work"
-	SubmitReviewTool = "submit_review"
+	SubmitWorkTool   = toolname.SubmitWork
+	SubmitReviewTool = toolname.SubmitReview
 )
 
 // workPayload is the wire shape of a submitted piece of work.
@@ -109,6 +116,20 @@ func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() tu
 	}
 }
 
+// NotDeliveredOn is the clause both of [citations]' surface-named refusals
+// open with: a turn that claims delivery while nothing reached the surface it
+// was asked on.
+//
+// ONE SPELLING, EXPORTED, because a test that scripts a model has to recognise
+// the refusal to answer it, and a copy of the sentence drifts silently: the
+// end-to-end chat case once matched the surface without the backticks this
+// puts round it, never saw the refusal, and answered submit_work until the
+// rounds ran out.
+func NotDeliveredOn(surface string) string {
+	return fmt.Sprintf("nothing has been delivered on `%s` yet, which is where this was asked",
+		surface)
+}
+
 // citations checks that a delivery claim names calls that actually happened.
 //
 // Only where a TOOL was the way to deliver. A colleague's ask is answered by
@@ -157,17 +178,15 @@ func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Sur
 			// was called" reads as plainly false to a model looking at its
 			// own successful write to another surface, and a refusal a model
 			// does not believe is one it argues with rather than acts on.
-			return fmt.Errorf("nothing has been delivered on `%s` yet, which is where "+
-				"this was asked — a call that reached somewhere else does not answer "+
-				"the person waiting. %s Do that before reporting the work delivered",
-				on, remedy)
+			return fmt.Errorf("%s — a call that reached somewhere else does not "+
+				"answer the person waiting. %s Do that before reporting the work "+
+				"delivered", NotDeliveredOn(on), remedy)
 		case on != "" && s.Reaches(on):
 			// And only when it is TRUE. "A call that reached somewhere else"
 			// said to a turn that reached nowhere sends the model looking for
 			// a write it never made.
-			return fmt.Errorf("nothing has been delivered on `%s` yet, which is where "+
-				"this was asked: no call in this turn has reached anybody. %s Do that "+
-				"before reporting the work delivered", on, remedy)
+			return fmt.Errorf("%s: no call in this turn has reached anybody. %s Do "+
+				"that before reporting the work delivered", NotDeliveredOn(on), remedy)
 		}
 		return fmt.Errorf("nothing has been delivered yet: no tool that acts outside the "+
 			"engine has been called successfully in this turn. %s Do that before "+
@@ -175,7 +194,7 @@ func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Sur
 	}
 	return fmt.Errorf("deliveries names no call that delivered: cite one of %s, "+
 		"or report the outcome honestly if none of them is the delivery",
-		strings.Join(eligible, ", "))
+		words.Or(eligible))
 }
 
 // reviewPayload is the wire shape of a submitted review.

@@ -582,7 +582,7 @@ func TestThePrefetchsAuxiliaryCompletionsAreChargedAndRecorded(t *testing.T) {
 	src.Knowledge = searchableKnowledge{}
 	tally := auxspend.NewTally()
 	prefetch.New(src).Fetch(ctx, prefetch.Request{
-		Seat: seat, Org: c.Org, Task: "ship the release", Ask: "ship the release",
+		Seat: seat, Org: c.Org, Task: "ship the release", Ask: prefetch.PlainAsk("ship the release"),
 		Aux: auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1", Tally: tally},
 	})
 	if provider.calls != 1 {

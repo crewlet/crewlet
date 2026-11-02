@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A PROTECTED TARGET'S TIP WORK, READ FROM THE ROWS (ADR-0068): every landing
+// A PROTECTED TARGET'S TIP WORK, READ FROM THE ROWS (ADR-0091): every landing
 // on a protected target leaves a row (code_landings) and moves its green row
 // (code_green) only where its record proved the target's required checks —
 // a queue's landing, which its candidates' checks proved, and a

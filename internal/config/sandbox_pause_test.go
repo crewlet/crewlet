@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -10,12 +11,12 @@ import (
 
 // Three states, and a plain number has two. A seat that says nothing about the
 // knob must inherit the provider default — reading its zero value as "never
-// pause" would tear the box down the moment a coding agent asked a question,
-// losing the checkout the answer was going to resume.
+// pause" would tear the box down the moment its run asked a question, losing
+// the checkout the answer was going to resume.
 func TestASeatThatSaysNothingAboutPausingInheritsTheDefault(t *testing.T) {
 	c := parseSandboxSeat(t, `
     sandbox:
-      enabled: true
+      env: {GITHUB_TOKEN: "${GITHUB_TOKEN}"}
 `)
 	if c.PauseTTLSeconds != nil {
 		t.Fatalf("pause_ttl_seconds = %v, want unset so the provider default applies", *c.PauseTTLSeconds)
@@ -26,7 +27,6 @@ func TestASeatThatSaysNothingAboutPausingInheritsTheDefault(t *testing.T) {
 func TestAnExplicitZeroPauseIsNotTheSameAsSayingNothing(t *testing.T) {
 	c := parseSandboxSeat(t, `
     sandbox:
-      enabled: true
       pause_ttl_seconds: 0
 `)
 	if c.PauseTTLSeconds == nil {
@@ -46,7 +46,6 @@ name: Acme
 roles:
   - name: SWE
     sandbox:
-      enabled: true
       pause_ttl_seconds: -1
 `))
 	if !errors.Is(err, config.ErrOutOfRange) {
@@ -88,7 +87,7 @@ roles:
 func TestASeatThatSaysNothingAboutRoundsInheritsTheDefault(t *testing.T) {
 	c := parseSandboxSeat(t, `
     sandbox:
-      enabled: true
+      env: {GITHUB_TOKEN: "${GITHUB_TOKEN}"}
 `)
 	if c.MaxTurns != nil {
 		t.Fatalf("max_turns = %v, want unset so the provider default applies", *c.MaxTurns)
@@ -99,7 +98,6 @@ func TestASeatThatSaysNothingAboutRoundsInheritsTheDefault(t *testing.T) {
 func TestAnExplicitZeroRoundCapIsNotTheSameAsSayingNothing(t *testing.T) {
 	c := parseSandboxSeat(t, `
     sandbox:
-      enabled: true
       max_turns: 0
 `)
 	if c.MaxTurns == nil {
@@ -119,7 +117,6 @@ name: Acme
 roles:
   - name: SWE
     sandbox:
-      enabled: true
       max_turns: -2
 `))
 	if err == nil {
@@ -127,5 +124,51 @@ roles:
 	}
 	if !strings.Contains(err.Error(), "max_turns") {
 		t.Fatalf("the error does not name the field: %v", err)
+	}
+}
+
+// THE COMPANY-WIDE ROUND CAP IS ON UNLESS IT IS SAID TO BE OFF, and saying so
+// survives the store.
+//
+// It is the only bound on a runaway executor run, so a company that says
+// nothing runs under the shipped cap rather than under none, and an explicit
+// 0 — uncapped — is a setting rather than an absence: a stored revision is
+// decoded onto the defaults, so a zero the encoder dropped would come back as
+// the cap the company turned off.
+func TestTheCompanyRoundCapIsOnUnlessItIsSaidToBeOff(t *testing.T) {
+	const catalogue = `
+name: Nimbus
+providers:
+  sandbox:
+    fake: true
+`
+	silent, err := config.ParseCompany([]byte(catalogue))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := silent.Providers.Sandbox.MaxTurns(); got != 96 {
+		t.Errorf("a catalogue that says nothing caps a run at %d, want the shipped 96", got)
+	}
+	var none *config.SandboxProvider
+	if got := none.MaxTurns(); got != 96 {
+		t.Errorf("no catalogue at all reads a cap of %d, want the shipped 96", got)
+	}
+
+	off, err := config.ParseCompany([]byte(catalogue + "    default_max_turns: 0\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	stored, err := json.Marshal(off)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := config.DecodeCompany(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]*config.Company{"authored": off, "stored": back} {
+		if got := c.Providers.Sandbox.MaxTurns(); got != 0 {
+			t.Errorf("%s: an explicit 0 caps a run at %d, want uncapped", name, got)
+		}
 	}
 }

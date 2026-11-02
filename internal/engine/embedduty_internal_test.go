@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // embeddingDutyCompany is a company with an embeddings provider, which is what
@@ -20,6 +20,7 @@ import (
 const embeddingDutyCompany = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -327,24 +328,24 @@ func seedTasks(t *testing.T, e *Engine, n int) {
 	writer := e.native.Load().writer
 	at := time.Now().UTC()
 	key := fmt.Sprintf("P%05d", seededProjects.Add(1))
-	mustApply(t, "the project", func() (tracker.WriteResult, error) {
+	mustApply(t, "the project", func() (worklet.WriteResult, error) {
 		return writer.WriteDocument(t.Context(), statelog.NewOpID(at, "project"),
-			tracker.ProjectSubject(key), "", tracker.Project{
-				V: tracker.DocumentVersion, Key: key, Name: "Seeded " + key,
+			worklet.ProjectSubject(key), "", worklet.Project{
+				V: worklet.DocumentVersion, Key: key, Name: "Seeded " + key,
 				CreatedAt: at, UpdatedAt: at,
-			}, tracker.ChangeProjectCreated, nil)
+			}, worklet.ChangeProjectCreated, nil)
 	})
 	for i := range n {
 		id := fmt.Sprintf("%s-t%04d", key, i)
-		mustApply(t, "task "+id, func() (tracker.WriteResult, error) {
-			return writer.CreateTask(t.Context(), statelog.NewOpID(at, "create"), tracker.Task{
-				V: tracker.DocumentVersion, ID: id, Project: key, Type: "task",
-				Title: fmt.Sprintf("seeded task %d about topic %d", i, i%7), Status: tracker.StatusTodo,
-				StatusGroup: tracker.GroupNotStarted, Priority: tracker.PriorityNormal,
+		mustApply(t, "task "+id, func() (worklet.WriteResult, error) {
+			return writer.CreateTask(t.Context(), statelog.NewOpID(at, "create"), worklet.Task{
+				V: worklet.DocumentVersion, ID: id, Project: key, Type: "task",
+				Title: fmt.Sprintf("seeded task %d about topic %d", i, i%7), Status: worklet.StatusTodo,
+				StatusGroup: worklet.GroupNotStarted, Priority: worklet.PriorityNormal,
 				CreatedAt: at, UpdatedAt: at,
 			}, nil)
 		})
 	}
-	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
 	waitApplied(t, running)
 }

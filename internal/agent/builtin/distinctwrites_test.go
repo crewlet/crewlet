@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // TWO DIFFERENT WRITES IN ONE TURN ARE TWO OPERATIONS, and the same write asked
@@ -61,7 +61,7 @@ func TestTwoDifferentWritesInOneTurnAreTwoOperations(t *testing.T) {
 		first, second := commentOf(t, trk.patched[0]), commentOf(t, trk.patched[1])
 		if first.ID == second.ID || trk.opIDs[0] == trk.opIDs[1] {
 			t.Errorf("two different remarks share comment %q / operation %q — "+
-				"the second upserts the first's row, or never lands at all",
+				"the second finds the first's row and never lands",
 				first.ID, trk.opIDs[0])
 		}
 	})
@@ -72,7 +72,7 @@ func TestTwoDifferentWritesInOneTurnAreTwoOperations(t *testing.T) {
 		reg := personSurface(t, newFakeTracker(), person, nil)
 		var ids []string
 		for _, items := range [][]any{{"ENG-1"}, {"ENG-2", "ENG-1"}} {
-			if got := callWork(t, reg, tracker.SetPrioritiesTool, map[string]any{
+			if got := callWork(t, reg, worklet.SetPrioritiesTool, map[string]any{
 				"items": items,
 			}); got.Failed {
 				t.Fatalf("set_priorities %v failed: %s", items, got.Output)
@@ -87,7 +87,7 @@ func TestTwoDifferentWritesInOneTurnAreTwoOperations(t *testing.T) {
 }
 
 // commentOf is the comment a patch carries.
-func commentOf(t *testing.T, patch tracker.TaskPatch) *tracker.Comment {
+func commentOf(t *testing.T, patch worklet.TaskPatch) *worklet.Comment {
 	t.Helper()
 	if patch.Comment == nil {
 		t.Fatal("the patch carries no comment")

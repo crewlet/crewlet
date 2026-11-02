@@ -91,7 +91,7 @@ func TestSearchKnowledgeIsGatedOnConfigAndResolvedPerCall(t *testing.T) {
 	}
 
 	// THE GATE IS THE BACKEND, not the presence of a vendor block. A
-	// company that declares nothing runs the NATIVE knowledge base, and
+	// company that declares nothing runs DOCLET, and
 	// gating on `integrations.confluence` left every one of them without
 	// search_knowledge while the pages it was meant to find sat in the
 	// index.

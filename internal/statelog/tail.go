@@ -30,7 +30,7 @@ import (
 // which a node whose rows are the copy's age goes on making — and a trimmed
 // record, whose whole effect is to remove arbitration anchors, so one these
 // rows never applied leaves only anchors a write treats as a probe anyway
-// (ADR-0050). Neither carries an operation id, so the ledger could never say
+// (ADR-0073). Neither carries an operation id, so the ledger could never say
 // these rows hold one, and a reanchor would refuse over a record that wrote
 // nothing until an operator discarded it.
 //

@@ -50,13 +50,18 @@ func TestTheIdleSweepDoesNotReportACloseSomebodyElseMade(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-
-	closed, err := store.CloseIdle(ctx, at.Add(time.Hour), at.Add(2*time.Hour))
+	rec := &recorder{}
+	sweeper, err := a2a.NewSweeper(store, rec, owedTo{}, func() time.Time { return at.Add(2 * time.Hour) })
 	if err != nil {
-		t.Fatalf("CloseIdle: %v", err)
+		t.Fatalf("NewSweeper: %v", err)
 	}
-	if len(closed) != 0 {
-		t.Errorf("the sweep claimed %d closes it did not make: %+v", len(closed), closed)
+
+	closed, err := sweeper.SweepIdle(ctx, at.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("SweepIdle: %v", err)
+	}
+	if closed != 0 || len(rec.sent) != 0 {
+		t.Errorf("the sweep claimed %d closes it did not make, and published %v", closed, rec.topics())
 	}
 	// And the other party's instant is what survives, because the first
 	// close is when it actually happened.

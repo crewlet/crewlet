@@ -68,16 +68,7 @@ func TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind(t *testing.T) {
 
 	// Which member leads the bucket's stream, and one that does not.
 	leader, behind := -1, -1
-	info, err := func() (*jetstream.StreamInfo, error) {
-		stream, err := client(0).Stream(ctx, "KV_"+bucket)
-		if err != nil {
-			return nil, err
-		}
-		return stream.Info(ctx)
-	}()
-	if err != nil || info.Cluster == nil {
-		t.Fatalf("read the bucket's stream info: (%v, %v)", info, err)
-	}
+	info := streamOf(ctx, t, client(0), "KV_"+bucket)
 	for i, cfg := range c.Configs {
 		switch {
 		case cfg.ServerName == info.Cluster.Leader:
@@ -90,15 +81,9 @@ func TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind(t *testing.T) {
 		t.Fatalf("the stream's leader is %q, which is none of the members", info.Cluster.Leader)
 	}
 
-	onLeader, err := client(leader).KeyValue(ctx, bucket)
-	if err != nil {
-		t.Fatalf("the bucket on the leader: %v", err)
-	}
+	onLeader := bindBucket(ctx, t, client(leader), bucket)
 	cutClient := client(behind)
-	onCut, err := cutClient.KeyValue(ctx, bucket)
-	if err != nil {
-		t.Fatalf("the bucket on the member about to be cut: %v", err)
-	}
+	onCut := bindBucket(ctx, t, cutClient, bucket)
 	read, err := newLeaderReader(cutClient, onCut)
 	if err != nil {
 		t.Fatalf("reader: %v", err)
@@ -232,14 +217,7 @@ func TestATombstoneAReplicaServedIsReadFromTheLeaderOnACluster(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("open a three-replica bucket: %v", err)
 	}
-	stream, err := client(0).Stream(ctx, "KV_"+bucket)
-	if err != nil {
-		t.Fatalf("the bucket's stream: %v", err)
-	}
-	info, err := stream.Info(ctx)
-	if err != nil || info.Cluster == nil {
-		t.Fatalf("read the bucket's stream info: (%v, %v)", info, err)
-	}
+	info := streamOf(ctx, t, client(0), "KV_"+bucket)
 	follower := -1
 	for i, cfg := range c.Configs {
 		if cfg.ServerName != info.Cluster.Leader {
@@ -251,10 +229,7 @@ func TestATombstoneAReplicaServedIsReadFromTheLeaderOnACluster(t *testing.T) {
 		t.Fatalf("every member is the leader %q", info.Cluster.Leader)
 	}
 	viaFollower := client(follower)
-	kv, err := viaFollower.KeyValue(ctx, bucket)
-	if err != nil {
-		t.Fatalf("the bucket through a follower: %v", err)
-	}
+	kv := bindBucket(ctx, t, viaFollower, bucket)
 
 	for _, key := range []string{"kept", "recreated"} {
 		if _, err := kv.Put(ctx, key, []byte("1")); err != nil {

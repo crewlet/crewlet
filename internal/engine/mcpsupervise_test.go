@@ -159,6 +159,7 @@ func TestASharedServerWhoseStartFailedReachesEverySeatWhenItComesUp(t *testing.T
 	doc := fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -255,6 +256,7 @@ func TestAnApplyWhileASharedServerIsDownKeepsItsToolsListed(t *testing.T) {
 	doc := fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

@@ -10,7 +10,8 @@
 import { describe, expect, test } from "vitest";
 
 import { CHANGE_FIELDS } from "~/contract/attribution.ts";
-import { attribution } from "./attribution.ts";
+import { assisted, attribution, authorLabel, authorWords, throughOf } from "./attribution.ts";
+import { changeAuthor } from "~/routes/doclet/parts.tsx";
 import type { WorkChange } from "~/protocol/index.ts";
 
 function change(over: Partial<WorkChange>): WorkChange {
@@ -50,7 +51,7 @@ describe("the latest change to each property", () => {
     // "set by" under a value that is not there — it would claim a record of
     // somebody setting nothing — and a change that took the value AWAY is a
     // record the log genuinely holds, which reads "cleared by" instead.
-    // `tracker.Delta` carries `From` and `To` with no `omitempty`, so an
+    // `worklet.Delta` carries `From` and `To` with no `omitempty`, so an
     // emptied field is `to: ""` rather than an absent key.
     const who = attribution([
       change({
@@ -161,7 +162,7 @@ test("every field name is one the engine writes, spelled its way", () => {
   // The rail labels it "Estimate" and the task row calls the number
   // `estimate_minutes`; the history bag calls it `estimate`. "Watching" is
   // `watchers` and "Routes to" is `routing_unit`. Held against
-  // `tracker.TaskDeltas` by `internal/tracker/attribution_test.go` — this half
+  // `worklet.TaskDeltas` by `internal/worklet/attribution_test.go`; this half
   // only pins the shape so a rename here is visible in the diff.
   expect([...CHANGE_FIELDS]).toEqual([
     "title",
@@ -185,7 +186,7 @@ test("every field name is one the engine writes, spelled its way", () => {
 test("the people and routing rows can be attributed", () => {
   // THE ROWS THE RAIL DRAWS WITHOUT A LINE ARE THE POINT. Reporter,
   // Collaborators, Watching and "Routes to" rendered no provenance at all
-  // until `tracker.TaskDeltas` started comparing those fields — a watcher
+  // until `worklet.TaskDeltas` started comparing those fields: a watcher
   // arrived and the rail could not say who added them, which is the one thing
   // this product can answer that a tracker cannot.
   const who = attribution([
@@ -216,4 +217,51 @@ test("the people and routing rows can be attributed", () => {
     change({ actor: "ada", fields: { watchers: { from: "bo", to: "" } } }),
   ]);
   expect(emptied.get("watchers")?.cleared).toBe(true);
+});
+
+// A WRITE THROUGH THE ASSISTANT IS THE PERSON'S, WITH THE ASSISTANT. The engine
+// records `assist:<grant>` as the credential (server-set, never claimed by a
+// page), and every history surface printed the grant id: "Miles (through
+// assist:...)" in Config and Audit, "Written through assist:..." in the
+// tracker, and "Miles saved it" with nothing at all on a page.
+describe("a write through the assistant", () => {
+  const GRANT = "assist:0b6f5a4e-6a41-4b6e-9d8c-3f1e2d4c5b6a";
+  test("reads as the person's, with the assistant, and never prints the grant", () => {
+    expect(assisted(GRANT)).toBe(true);
+    for (const words of [
+      authorWords("Miles", GRANT),
+      authorLabel("miles.davis", GRANT),
+      throughOf("miles.davis", GRANT),
+      changeAuthor(
+        { actor: "miles", actor_kind: "human", operator_id: GRANT },
+        () =>
+          ({
+            name: "Miles",
+          }) as never,
+      ),
+    ]) {
+      expect(words).toContain("Ask Crewlet");
+      expect(words).not.toContain("assist:");
+      expect(words).not.toContain("0b6f5a4e");
+    }
+    expect(authorWords("Miles", GRANT)).toBe("Miles, with Ask Crewlet");
+  });
+
+  test("a plain session write reads as before", () => {
+    const session = "session:5c1d2e3f-0000-4000-8000-000000000000";
+    expect(assisted(session)).toBe(false);
+    expect(assisted(undefined)).toBe(false);
+    expect(authorWords("Miles", session)).toBe("Miles");
+    expect(authorLabel("miles.davis", session)).toBe(`miles.davis (through ${session})`);
+    expect(throughOf("token:ops", "token:ops")).toBe("");
+    expect(
+      changeAuthor(
+        { actor: "miles", actor_kind: "human", operator_id: session },
+        () =>
+          ({
+            name: "Miles",
+          }) as never,
+      ),
+    ).toBe("Miles");
+  });
 });

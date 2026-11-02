@@ -2,10 +2,14 @@ package engine
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -60,7 +64,7 @@ func TestABridgeSessionsCallsAreFiledUnderItsBoundJobAndCarryItsSpend(t *testing
 	l := &bridgeLedger{store: store, spend: meter}
 	l.bind("launch-1")
 	for range 3 {
-		if err := l.Append(t.Context(), "run-1", tools.Call{Name: "query_episodes"}); err != nil {
+		if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "query_episodes"}}); err != nil {
 			t.Fatalf("Append: %v", err)
 		}
 	}
@@ -93,11 +97,42 @@ func TestAnUnboundBridgeSessionFilesNothing(t *testing.T) {
 	t.Parallel()
 	store := &appendingStore{}
 	l := newBridgeLedger(store, nil)
-	if err := l.Append(t.Context(), "run-1", tools.Call{Name: "read_page"}); err != nil {
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"}}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if len(store.appends) != 0 {
 		t.Fatalf("an unbound session sent %d appends to the store: %+v", len(store.appends), store.appends)
+	}
+}
+
+// A BRIDGED CALL'S ROW SAYS WHEN IT RAN, FOR HOW LONG, IN WHAT ORDER AND WHO
+// ANSWERED — everything the bridge measured, in the row's own shape, so a
+// resumed executor's record can place its calls on a timeline, in the order
+// the run made them, and name the server each came from — read off the row,
+// which is the only place a collection, often another process, can read them.
+//
+// Mutation: drop any of the five from the append, and this goes red.
+func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
+	t.Parallel()
+	store := &appendingStore{}
+	l := newBridgeLedger(store, nil)
+	l.bind("launch-1")
+	started := time.Date(2026, 10, 25, 9, 30, 0, 0, time.UTC)
+	if err := l.Append(t.Context(), "run-1", mcpbridge.Call{
+		Call: tools.Call{Name: "list_issues", Args: map[string]any{"repo": "core"}, Output: "[]"},
+		Seq:  4, StartedAt: started, Duration: 1500 * time.Millisecond,
+		Origin: "mcp", Server: "github",
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if len(store.appends) != 1 {
+		t.Fatalf("%d appends, want 1", len(store.appends))
+	}
+	got := store.appends[0].Call
+	want := sandbox.BridgeCall{Name: "list_issues", Args: `{"repo":"core"}`, Output: "[]",
+		Seq: 4, StartedAt: started, DurationMS: 1500, Origin: "mcp", Server: "github"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the row is %+v, want %+v", got, want)
 	}
 }
 
@@ -110,7 +145,7 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 	l := newBridgeLedger(store, nil)
 	l.bind("launch-0")
 	for range 2 {
-		if err := l.Append(t.Context(), "run-1", tools.Call{Name: "read_page"}); err != nil {
+		if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tools.Call{Name: "read_page"}}); err != nil {
 			t.Fatalf("Append on a job the row no longer holds: %v", err)
 		}
 	}
@@ -118,5 +153,52 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 		if a.Spent != (sandbox.EngineSpend{}) {
 			t.Errorf("append %d carried spend %+v from a session with no meter", i+1, a.Spent)
 		}
+	}
+}
+
+// A RUN'S SUBMISSION, ONCE ON ITS ROW, TELLS THE WAITER THAT DRIVES IT TO LOOK
+// NOW: its CLI is about to exit, and its completion is found within seconds of
+// that rather than up to a poll interval later. Only the submission, only one
+// the gate let through, and only one recorded on the run's own job — a
+// refused submission is no end, and one its job no longer takes names a job
+// that is over.
+//
+// Mutation: nudge on every recorded call, on a refused submission or ask, or
+// on one the row did not take, and this goes red.
+func TestARecordedSubmissionTellsTheRunsWaiterToLookNow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		launch string
+		call   tools.Call
+		nudged bool
+	}{
+		{"a recorded submission", "launch-1", tools.Call{Name: runner.SubmitWorkTool}, true},
+		{"a submission the gate refused", "launch-1", tools.Call{Name: runner.SubmitWorkTool, Failed: true}, false},
+		{"any other call", "launch-1", tools.Call{Name: "read_page"}, false},
+		{"a submission its job no longer takes", "launch-0", tools.Call{Name: runner.SubmitWorkTool}, false},
+		// AN ASK ENDS THE RUN AS A SUBMISSION DOES (ADR-0068), and one the
+		// tool refused (malformed, its store unreachable, or its job moved
+		// on) ends nothing: the run was told so and goes on.
+		{"a recorded ask", "launch-1", tools.Call{Name: builtin.AskAndWaitTool}, true},
+		{"an ask the tool refused", "launch-1", tools.Call{Name: builtin.AskAndWaitTool, Failed: true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var got []sandbox.Nudge
+			l := newBridgeLedger(&appendingStore{}, nil)
+			l.nudge = func(_ context.Context, n sandbox.Nudge) { got = append(got, n) }
+			l.bind(tc.launch)
+			if err := l.Append(t.Context(), "run-1", mcpbridge.Call{Call: tc.call}); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			want := sandbox.Nudge{TurnID: "run-1", LaunchID: "launch-1", Why: sandbox.NudgeSubmitted}
+			switch {
+			case tc.nudged && (len(got) != 1 || got[0] != want):
+				t.Errorf("told %+v; want %+v", got, want)
+			case !tc.nudged && len(got) != 0:
+				t.Errorf("told %+v; want nobody", got)
+			}
+		})
 	}
 }

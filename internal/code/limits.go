@@ -72,7 +72,7 @@ func LimitsOf(c config.Code) Limits {
 // NO PER-SEAT BOUND WITHIN THE OUTSIDE HALF, the product's call too: one
 // outside seat can take that half from the others. Not for want of a count:
 // a ref's row names the seat that set it inside its own namespace
-// (code_refs.seat, replicated 0087, written by [seatOf]), and those are the
+// (code_refs.seat, replicated 0110, written by [seatOf]), and those are the
 // only refs an outside seat can create, so a per-seat count of live refs is
 // one partial index away — over (repo_id, seat), of the rows with a target
 // and a seat — with no counter table. Bytes have no such owner: a pack holds
@@ -440,7 +440,7 @@ const (
 	// maintainer's weekly expunge: history force-pushed away or deleted stays
 	// fetchable by its id for that long after the drop — unless a person
 	// purges the repository's unreachable objects, which keeps no grace
-	// (ADR-0069).
+	// (ADR-0092).
 	//
 	// FOURTEEN DAYS, git's own gc.pruneExpire default (2.weeks.ago): the
 	// grace anybody who runs git expects a repository's unreachable objects
@@ -505,7 +505,7 @@ const (
 	// ([PushHistory], 181 days) and the repository still holds the commit —
 	// which its deletion's code_ref_drops row keeps from the weekly expunge
 	// for PruneGrace, as for every deletion, and from nothing after it nor
-	// from a person's purge, which keeps no grace (ADR-0069). And it is
+	// from a person's purge, which keeps no grace (ADR-0092). And it is
 	// code_refs_near_limit's window
 	// ([NearLimit]): a repository whose live refs and the refs it set within
 	// it together reach MaxRefsPerRepo reaches the bound within it at that
@@ -534,10 +534,10 @@ const (
 	MaxMirrorRefs = config.CodeMaxMirrorRefs
 
 	// MaxChangeBodyBytes is the longest body — a change's description — a
-	// change carries: as long as a task's body in the engine's own tracker,
+	// change carries: as long as a task's body in Worklet,
 	// the text a change most often carries over from the work it is for.
 	// The one value of a change that outgrows a page, so it is a row of its
-	// own (code_change_bodies, replicated 0066) rather than a column of the
+	// own (code_change_bodies, replicated 0089) rather than a column of the
 	// row every head move reads and rewrites, weighed by its change's
 	// body_bytes, and a purge part counts it toward PurgePartBytes.
 	MaxChangeBodyBytes = 32 << 10
@@ -545,13 +545,13 @@ const (
 	// MaxChangeTitleBytes is the longest title a change carries: ONE LINE a
 	// listing shows whole, as long again as a commit subject git's own
 	// tools wrap at, and short enough beside the refs, the oids and the
-	// handles that code_changes stays inside its page (replicated 0066),
+	// handles that code_changes stays inside its page (replicated 0089),
 	// which every head move reads and rewrites.
 	MaxChangeTitleBytes = 256
 
 	// MaxCloseReasonBytes is the longest reason a close of a change gives —
 	// a sentence or two of why, kept on the change's row beside its title,
-	// which replicated 0066 sizes the row by as it does by the title.
+	// which replicated 0089 sizes the row by as it does by the title.
 	MaxCloseReasonBytes = 1 << 10
 
 	// MaxOverrideReasonBytes is the longest reason a person gives to merge a
@@ -560,7 +560,7 @@ const (
 	// row keeps it. 1 KiB, the close reason's bound, because the row holds
 	// one or the other and never both — a merged change was never closed
 	// since it was last opened, a reopen clearing its close reason — so the
-	// row stays the width replicated 0066 sized it to.
+	// row stays the width replicated 0089 sized it to.
 	MaxOverrideReasonBytes = MaxCloseReasonBytes
 
 	// MaxReviewersPerChange is the most reviewers a change asks at once: the
@@ -582,7 +582,7 @@ const (
 
 	// MaxCommentBytes is the longest comment on a change: as long as the
 	// change's own description (MaxChangeBodyBytes) and a comment on a task
-	// in the engine's own tracker, the text a review's discussion most often
+	// in Worklet, the text a review's discussion most often
 	// quotes from. Weighed into its conversation's text_bytes, which a purge
 	// part counts toward PurgePartBytes as it does a change's body.
 	MaxCommentBytes = 32 << 10
@@ -870,9 +870,9 @@ const (
 	RetentionPassBudget = statelog.StallGrace
 
 	// RetireGrace is how long a retired pack's row keeps its object from the
-	// collector (code_packs_retired, ADR-0051) before the code-retention
+	// collector (code_packs_retired, ADR-0074) before the code-retention
 	// duty's retire_sweep records remove it: a retired pack outlives its
-	// longest read (ADR-0060).
+	// longest read (ADR-0083).
 	//
 	// A DAY, because a reader that began on a pack before it was retired — a
 	// cache that has not synced past the retirement, a clone that started on

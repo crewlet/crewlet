@@ -9,14 +9,19 @@ import (
 // MaxQueryBytes bounds the text of a search, in bytes, and a longer one is
 // REFUSED naming the limit, never cut.
 //
-// ONE BOUND FOR BOTH OF THE ENGINE'S RANKED SEARCHES — the knowledge search
-// and the tracker's item search — and for every surface that takes one: a
-// seat's `search_knowledge`, `search_work_items` and `answer_knowledge`, the
-// operator's catalogue, the API's `knowledge` and `work_search` and the
-// dashboard that asks them (`SEARCH_QUERY_MAX`), and the fan-out every native
-// search of either kind passes through. Declared here because this package is
-// already the two searches' shared vocabulary ([Mode], [Outcome]), and a bound
-// spelled once per surface is a bound that drifts until one of them cuts.
+// ONE BOUND FOR EVERY RANKED SEARCH THE ENGINE RUNS — the knowledge search,
+// the tracker's item search and chat's message search — and for every surface
+// that takes one: a seat's `search_knowledge`, `search_work_items`,
+// `search_messages` and `answer_knowledge`, the operator's catalogue, the
+// API's `knowledge`, `work_search` and `chat_search` and the dashboard that
+// asks them (`SEARCH_QUERY_MAX`), the fan-out every Doclet or Worklet
+// search passes through, and the chat index every chat search is ranked by,
+// whichever surface asked. Declared here because this package is already the
+// first two searches' shared vocabulary ([Mode], [Outcome]), and a bound
+// spelled once per surface is a bound that drifts until one of them cuts. Chat
+// shares only the bound: it is a keyword corpus of its own (ADR-0071), but a
+// pasted passage ranks on every incidental word in it there exactly as it
+// does here.
 //
 // FOUR HUNDRED BYTES is a long sentence and several keywords. A query is what
 // somebody is looking for, and past that it is a pasted thread or a document:

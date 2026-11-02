@@ -25,7 +25,7 @@ import (
 )
 
 // THE SWAP: A ROUND THAT TAKES A PACK OUT OF A COPY A READER MAY HOLD BUILDS
-// THE COPY'S NEXT INCARNATION BESIDE IT (ADR-0060). A compaction retires packs — the
+// THE COPY'S NEXT INCARNATION BESIDE IT (ADR-0083). A compaction retires packs — the
 // code domain moves their rows into code_packs_retired, the outputs holding
 // every object of them — and each git node's cache learns it from a round: a
 // delta's retired phase, or the retirements a full answer serves above the
@@ -77,7 +77,10 @@ import (
 // drops no commit, so a retirement keeps the commit-graph (X04): the next
 // incarnation holds the very same inode; a stray drops it, and so does an
 // expunge, whose commits are gone from the repository — the memo with it, its
-// answers perhaps about what was purged.
+// answers perhaps about what was purged. A round that crosses an expunge's
+// begin AND its commit never places the dropping pack, so the begin's inputs
+// are what take the purged commits out of the copy, and they leave as the
+// commit's (sync.go's crossedACommit), never as a retirement.
 //
 // WHAT CARRIES OVER. A linked file is the same inode, its bytes those this
 // process wrote, checked or scrubbed, so the promote carries every per-file

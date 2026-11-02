@@ -12,4 +12,10 @@
 export const OPERATOR_SOURCE = "operator";
 
 /** Every event type the runtime audit writes. */
-export const RUNTIME_AUDIT_TYPES = ["operator_acted", "backup_requested"] as const;
+export const RUNTIME_AUDIT_TYPES = [
+  "operator_acted",
+  "backup_requested",
+  "model_acted",
+  "assistant_conversation_read",
+  "assistant_turn_completed",
+] as const;

@@ -11,15 +11,15 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE REGISTER: every domain this build runs, and everything the engine has to
@@ -55,7 +55,7 @@ import (
 // wrong: every entry states its generation encoder, every identity-claiming
 // entry its gate, and every entry a feed exactly when its domain declares one.
 // A FOURTH is the TRIMMED record the trim removes a log's anchors by
-// ([registration.Trimmed], ADR-0050), which fails the same silent way — a log
+// ([registration.Trimmed], ADR-0073), which fails the same silent way — a log
 // with anchors and no record keeps one for every subject it ever wrote — so
 // every entry states one exactly when its log writes anchors.
 //
@@ -132,11 +132,12 @@ type registration struct {
 
 	// Generation is the domain's own record of a reanchor — what opens a
 	// new generation on its log, in its own record format — or its
-	// declaration that it keeps none, which the vectors make
-	// ([search.GenerationRecord]). Required, for the reason
-	// [statelog.GenerationEncoder] gives: "this domain keeps no record of
-	// it" is a claim the domain makes about itself, and a nil here would be
-	// a log nobody could re-anchor, found by an operator mid-incident.
+	// declaration that it keeps none, which the vectors and the usage log
+	// make ([search.GenerationRecord], [usage.GenerationRecord]). Required,
+	// for the reason [statelog.GenerationEncoder] gives: "this domain keeps
+	// no record of it" is a claim the domain makes about itself, and a nil
+	// here would be a log nobody could re-anchor, found by an operator
+	// mid-incident.
 	Generation statelog.GenerationEncoder
 
 	// NewGate builds the writer the NODE GATE publishes this log's eviction
@@ -199,7 +200,7 @@ type registration struct {
 	// NoBarrier is the explicit form of a nil Barrier. See Barrier.
 	NoBarrier bool
 
-	// Trimmed encodes the trim's TRIMMED record (ADR-0050) as one of this
+	// Trimmed encodes the trim's TRIMMED record (ADR-0073) as one of this
 	// domain's own records: what removes the log's arbitration anchors below
 	// its first surviving record on every node, in the transaction that
 	// applies it ([statelog.SweepAnchors]). Nil for a domain whose log
@@ -212,6 +213,20 @@ type registration struct {
 	// every data node, for the life of the deployment, and a record on a log
 	// with none is one the trim appends each tick to remove nothing.
 	Trimmed func(statelog.Envelope) ([]byte, error)
+
+	// Reads is the domain's READ MODEL: how many linearizable reads a day
+	// each agent seat's reads put on its log ([statelog.ReadModel]), which
+	// is the census `census_drift` holds the log to and a term in the
+	// ceiling its Tier A field is sized from.
+	//
+	// REQUIRED EXACTLY WHEN A BARRIER IS DECLARED, and refused beside
+	// NoBarrier: a domain that grants `linearizable` says how often it is
+	// read that way, and one that grants none has nothing to say. A POINTER
+	// because zero is a declaration — the identity estate's — and absent is
+	// a domain that forgot, which is what one figure charged to every log
+	// with a read index was for every log whose reads it did not describe.
+	// See [checkReadModel].
+	Reads *statelog.ReadModel
 
 	// Ceiling is where Tier A puts this domain's stream ceiling, and what
 	// a refusal to reserve it names. Required: a domain Tier A declares no
@@ -280,15 +295,16 @@ type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
 
 // register is every domain this build runs, in a FIXED order.
 //
-// THE ARTIFACTS DOMAINS ARE APPENDED LAST, artifacts before its datastore, from
-// entries declared beside their wiring (artifactsregister.go and
-// artifactdataregister.go) so each domain's entry is written where the rest of
-// its engine wiring lives. Appending keeps every existing domain's position,
+// THE ARTIFACTS DOMAINS AND THE ASSISTANT'S ARE APPENDED LAST, artifacts before
+// its datastore and the assistant after both, from entries declared beside
+// their wiring (artifactsregister.go, artifactdataregister.go and
+// assistantregister.go) so each domain's entry is written where the rest of its
+// engine wiring lives. Appending keeps every existing domain's position,
 // which is the order every operator surface already reports in.
 func register() []registration {
 	return slices.Concat([]registration{
 		{
-			Domain: tracker.Domain{},
+			Domain: worklet.Domain{},
 			// A PERSON'S WORK: the inbox listener is how a person learns
 			// they have some. The apply is the one thing that sees every
 			// notice on every data node, and each tells its own sockets —
@@ -296,35 +312,39 @@ func register() []registration {
 			// `data`. See internal/inbox's movement.go.
 			Inbox: true,
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
-				return tracker.NewApplier(s.inboxFor(tracker.Domain{})), nil
+				return worklet.NewApplier(s.inboxFor(worklet.Domain{})), nil
 			},
 			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
 
-				rows, err := tracker.NewRows(s.estate().Reader(), spec)
+				rows, err := worklet.NewRows(s.estate().Reader(), spec)
 				if err != nil {
 					return writeSeams{}, err
 				}
-				fence := tracker.NewFence(s.estate().Reader(), s.nodeID)
-				name := tracker.Domain{}.Name()
+				fence := worklet.NewFence(s.estate().Reader(), s.nodeID)
+				name := worklet.Domain{}.Name()
 				fence.Floor = s.floorOf(name)
 				fence.Ends = s.logEndsOf(name, appendTo, runner)
 				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
-					Gates: tracker.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
+					Gates: worklet.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
-			Barrier:    tracker.EncodeBarrier,
-			Trimmed:    tracker.EncodeTrimmed,
-			Generation: tracker.GenerationRecord{},
+			Barrier: worklet.EncodeBarrier,
+			Trimmed: worklet.EncodeTrimmed,
+			// THE REFERENCE COMPANY'S WHOLE RATE: a seat's tracker tools
+			// read at `linearizable` (statelog.ReadLevelDefaults), and the
+			// census does not say how a company's reads split between this
+			// log and the knowledge base's, so each declares all of them.
+			Reads:      &statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay},
+			Generation: worklet.GenerationRecord{},
 			NewGate: func(s *stateLog, running *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
 
-				w, err := tracker.NewWriter(tracker.WriterDeps{
+				w, err := worklet.NewWriter(worklet.WriterDeps{
 					Publisher: publisher, DB: s.estate().Reader(), NodeID: s.nodeID,
-					Drain: running.runner.Drain, Metrics: s.metrics,
 					// THE NODE'S OWN IDENTITY, replaced per gesture with
-					// the operator who ran it — see [tracker.Writer.As].
-					Actor: s.nodeID, ActorKind: tracker.AuthorSystem,
+					// the operator who ran it (see [worklet.Writer.As]).
+					Actor: s.nodeID, ActorKind: worklet.AuthorSystem,
 				})
 				if err != nil {
 					return nil, err
@@ -333,8 +353,8 @@ func register() []registration {
 					readmit bool) (statelog.Result, error) {
 
 					a := iam.ActorFor(by)
-					as := w.As(a.Name, tracker.AuthorKind(a.Kind),
-						tracker.Provenance{OperatorID: a.OperatorID})
+					as := w.As(a.Name, worklet.AuthorKind(a.Kind),
+						worklet.Provenance{OperatorID: a.OperatorID})
 					gate := as.EvictNode
 					if readmit {
 						gate = as.ReadmitNode
@@ -347,7 +367,7 @@ func register() []registration {
 			// a question — derived from the log rather than published by
 			// the writer's goroutine. See domainfeed.go.
 			Feed: func(_ *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
-				return tracker.NewTranslator(), tracker.FeedSource{Log: records}
+				return worklet.NewTranslator(), worklet.FeedSource{Log: records}
 			},
 			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
@@ -397,7 +417,7 @@ func register() []registration {
 			},
 		},
 		{
-			Domain: pages.Domain{},
+			Domain: doclet.Domain{},
 			NewApplier: func(s *stateLog) (statelog.Applier, error) {
 				// THE PARSER AND THE NUDGE COME FROM HERE, because the
 				// apply is what notices a tool-skill page arriving or
@@ -406,30 +426,33 @@ func register() []registration {
 				// knowledge base's native half exists: it is a
 				// non-blocking send that returns when there is nothing
 				// to send to.
-				return pages.NewApplier(s.skills, s.nudgeSkills), nil
+				return doclet.NewApplier(s.skills, s.nudgeSkills), nil
 			},
 			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {
 
-				rows, err := pages.NewRows(s.estate().Reader(), spec)
+				rows, err := doclet.NewRows(s.estate().Reader(), spec)
 				if err != nil {
 					return writeSeams{}, err
 				}
-				fence := pages.NewFence(s.estate().Reader(), s.nodeID)
-				name := pages.Domain{}.Name()
+				fence := doclet.NewFence(s.estate().Reader(), s.nodeID)
+				name := doclet.Domain{}.Name()
 				fence.Floor = s.floorOf(name)
 				fence.Ends = s.logEndsOf(name, appendTo, runner)
 				fence.Committed = runner.Committed
 				return writeSeams{Rows: rows, Fence: fence,
-					Gates: pages.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
+					Gates: doclet.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
-			Barrier:    pages.EncodeBarrier,
-			Trimmed:    pages.EncodeTrimmed,
-			Generation: pages.GenerationRecord{},
+			Barrier: doclet.EncodeBarrier,
+			Trimmed: doclet.EncodeTrimmed,
+			// THE REFERENCE COMPANY'S WHOLE RATE, for the tracker's reason:
+			// a seat's knowledge-base reads are `linearizable` too.
+			Reads:      &statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay},
+			Generation: doclet.GenerationRecord{},
 			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
 
-				kb, err := pages.NewStore(pages.Options{Publisher: publisher,
+				kb, err := doclet.NewStore(doclet.Options{Publisher: publisher,
 					DB: s.estate().Reader()})
 				if err != nil {
 					return nil, err
@@ -454,7 +477,7 @@ func register() []registration {
 			// container LIVE off the epoch: `knowledge.skills_container`
 			// is Tier B, and the feed outlives every revision.
 			Feed: func(e *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
-				return pages.NewTranslator(e.skillsContainer), pages.FeedSource{Log: records}
+				return doclet.NewTranslator(e.skillsContainer), doclet.FeedSource{Log: records}
 			},
 			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
@@ -491,15 +514,29 @@ func register() []registration {
 				return writeSeams{Rows: rows, Fence: fence,
 					Gates: iamdomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
-			Barrier:    iamdomain.EncodeBarrier,
-			Trimmed:    iamdomain.EncodeTrimmed,
+			Barrier: iamdomain.EncodeBarrier,
+			Trimmed: iamdomain.EncodeTrimmed,
+			// NO READ TAKES A BARRIER ON THIS LOG, counted rather than
+			// assumed: the one appender of a barrier is a read at
+			// `linearizable` through the domain's read authority, and the
+			// identity estate has no caller of it — [iamdomain.Reader]
+			// answers every question from this node's rows with their lag
+			// beside them, and a session this node has not applied is
+			// waited for at the position its bearer states, through the
+			// applier's own wait. So zero, which is also what
+			// [config.DefaultIamLogMaxBytes] holds for barriers; a reader
+			// that starts taking one meets `census_drift` on its first.
+			Reads:      &statelog.ReadModel{PerSeatDay: 0},
 			Generation: iamdomain.GenerationRecord{},
 			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
 
+				// THE NODE'S OWN KIND, which no record of this writer
+				// carries: every eviction and readmission is published
+				// as `by`, through [iamdomain.Writer.As] below.
 				w, err := iamdomain.NewWriter(iamdomain.WriterDeps{
 					Publisher: publisher, DB: s.estate().Reader(),
-					Actor: s.nodeID, ActorKind: iam.KindMachine,
+					Actor: s.nodeID, ActorKind: iamdomain.NodeKind,
 				})
 				if err != nil {
 					return nil, err
@@ -580,9 +617,20 @@ func register() []registration {
 					Floor: config.UsageLogMaxBytesFloor}
 			},
 		},
+	}, artifactsRegistrations(), artifactDataRegistrations(), assistantRegistrations(),
+		chatRegistrations(), codeRegistrations())
+}
+
+// codeRegistrations is the code host's entry in the register: the company's
+// git repositories, the TENTH domain, registered last, after chat's. Its
+// declaration, applier, write seams, barrier, read model, trimmed record,
+// generation record, node gate, wake feed and Tier A ceiling
+// (`stream.code_log_max_bytes`).
+func codeRegistrations() []registration {
+	return []registration{
 		{
-			// THE COMPANY'S GIT REPOSITORIES (ADR-0054): the eighth domain
-			// and its sixth strict, identity-claiming one — settings,
+			// THE COMPANY'S GIT REPOSITORIES (ADR-0077): the tenth domain
+			// and its eighth strict, identity-claiming one — settings,
 			// protections, refs, packs and pushes as rows only its applier
 			// writes, a pack's bytes one object a push in the object store.
 			Domain: code.Domain{},
@@ -610,8 +658,13 @@ func register() []registration {
 				return writeSeams{Rows: rows, Fence: fence,
 					Gates: code.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
-			Barrier:    code.EncodeBarrier,
-			Trimmed:    code.EncodeTrimmed,
+			Barrier: code.EncodeBarrier,
+			Trimmed: code.EncodeTrimmed,
+			// THE REFERENCE COMPANY'S WHOLE RATE, for the tracker's reason: a
+			// seat's code tools read at `linearizable` too. The git clients'
+			// reads are not a seat's, and are the term the log's own sizing
+			// declares beside this one ([clientBarriers]).
+			Reads:      &statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay},
 			Generation: code.GenerationRecord{},
 			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
@@ -658,7 +711,7 @@ func register() []registration {
 					Floor: config.CodeLogMaxBytesFloor}
 			},
 		},
-	}, artifactsRegistrations(), artifactDataRegistrations())
+	}
 }
 
 // checkRegister refuses a register whose entries are not complete, BEFORE
@@ -726,8 +779,11 @@ func checkRegister(entries []registration) error {
 			return fmt.Errorf("engine: the state-log register's entry for %q declares "+
 				"a trimmed-record encoder=%v on a log that writes anchors=%v — a log "+
 				"with anchors and no record keeps one for every subject it ever "+
-				"wrote, and a record on a log with none removes nothing (ADR-0050)",
+				"wrote, and a record on a log with none removes nothing (ADR-0073)",
 				name, entry.Trimmed != nil, anchors)
+		}
+		if err := checkReadModel(entry); err != nil {
+			return err
 		}
 	}
 	if len(entries) == 0 {
@@ -777,7 +833,8 @@ func checkLedgerEntry(entry registration) error {
 }
 
 // checkIdentityEntry is what [checkRegister] asks of an entry about the
-// fleet's counted set — which only an identity-claiming log keeps.
+// fleet's counted set — which only an identity-claiming log keeps — and about
+// the generation record that guards it.
 //
 // THREE ANSWERS A DOMAIN THAT CLAIMS IDENTITY MUST GIVE, each about a node the
 // fleet has evicted:
@@ -795,9 +852,20 @@ func checkLedgerEntry(entry registration) error {
 //
 // And a domain that claims none declares no gate writer: nobody is counted on
 // its log, so a gate record there would be a record nothing reads.
+//
+// A GENERATION RECORD EXACTLY WHERE IDENTITY IS CLAIMED, both ways. The record
+// a reanchor appends is what makes two operators re-anchoring one log at once
+// a first-writer-wins race on its subject ([statelog.GenerationEncoder]), and
+// the audit row a log keeps of who opened which generation is applied from it.
+// An identity log whose encoder kept none could be opened at one generation by
+// two nodes with nothing reporting it, and the transition only branches on
+// what the encoder answers, so nothing else would say so; a log that claims no
+// identity and keeps one writes an audit row nobody reads. Asked here rather
+// than when an operator re-anchors, which is mid-incident.
 func checkIdentityEntry(entry registration) error {
 	domain := entry.Domain
 	name := domain.Name()
+	_, keeps := entry.Generation.GenerationSubject(1)
 	if !domain.ClaimsIdentity() {
 		if entry.NewGate != nil {
 			return fmt.Errorf("engine: the state-log register's entry for %q "+
@@ -805,7 +873,20 @@ func checkIdentityEntry(entry registration) error {
 				"the trim counts nobody on its log, so an eviction written there "+
 				"would be a record nothing reads", name)
 		}
+		if keeps {
+			return fmt.Errorf("engine: the state-log register's entry for %q keeps "+
+				"a generation record, and the domain claims no identity — a "+
+				"reanchor of it would write an audit row nobody reads; a domain "+
+				"that keeps none says so through its own encoder, as the vectors do",
+				name)
+		}
 		return nil
+	}
+	if !keeps {
+		return fmt.Errorf("engine: domain %q claims identity and its generation "+
+			"encoder keeps no record, so two operators re-anchoring its log at "+
+			"once could each open the same generation with nothing to say so — "+
+			"the record is the first-writer-wins between them", name)
 	}
 	if _, lists := domain.(evictionLister); !lists {
 		return fmt.Errorf("engine: domain %q claims identity and cannot list the "+
@@ -844,6 +925,45 @@ func checkFeedEntry(entry registration) error {
 		translator, _ = entry.Feed(&Engine{}, domainFeed{})
 	}
 	return checkFeed(entry.Domain, translator)
+}
+
+// checkReadModel is what [checkRegister] asks of an entry's read model: one
+// exactly when the domain declares a barrier, and none beside NoBarrier.
+//
+// BOTH DIRECTIONS, because each is a census nobody stated. A barrier with no
+// read model is a log `census_drift` would hold to a figure nobody chose for
+// it — which is what one rate for every log did to the identity estate's —
+// and a read model beside NoBarrier is a census for a log no read can append
+// to.
+func checkReadModel(entry registration) error {
+	name := entry.Domain.Name()
+	switch {
+	case entry.Barrier != nil && entry.Reads == nil:
+		return fmt.Errorf("engine: the state-log register's entry for %q declares a "+
+			"barrier and no read model, so its log has no census — state how many "+
+			"linearizable reads a day each agent seat puts on it, zero included, "+
+			"since that figure is what `census_drift` holds the log to and a term "+
+			"in its ceiling", name)
+	case entry.Barrier == nil && entry.Reads != nil:
+		return fmt.Errorf("engine: the state-log register's entry for %q declares a "+
+			"read model and no barrier — no read can append to its log, so a "+
+			"census for it is a figure nothing is held to", name)
+	case entry.Reads != nil && entry.Reads.PerSeatDay < 0:
+		return fmt.Errorf("engine: the state-log register's entry for %q declares %d "+
+			"linearizable reads a day per agent seat, and a read rate is never "+
+			"below zero", name, entry.Reads.PerSeatDay)
+	}
+	return nil
+}
+
+// readModel is the read model the register declares for domain, and false for
+// a domain with no barrier — whose log no read appends to.
+func readModel(domain statelog.Domain) (statelog.ReadModel, bool) {
+	entry, _ := registrationFor(domain.Name())
+	if entry.Reads == nil {
+		return statelog.ReadModel{}, false
+	}
+	return *entry.Reads, true
 }
 
 // statedBarrier is what an entry said about its barrier, for the refusal.
@@ -928,6 +1048,19 @@ func registeredNames() []string {
 // because the answer is this build's and no running engine's.
 func Domains() []statelog.Domain { return registeredDomains() }
 
+// LogDomain is the name of the registered domain whose records live on
+// stream, or "" for a stream no registered domain owns: how a write's landing
+// position (`<stream>@<generation>:<seq>`) names the domain a screen's read
+// floor is kept under. Read off the register, so a domain is declared once.
+func LogDomain(stream string) string {
+	for _, d := range registeredDomains() {
+		if d.Stream().Name == stream {
+			return d.Name()
+		}
+	}
+	return ""
+}
+
 // signerFor and verifierFor are one domain's halves of the record signature.
 //
 // PER DOMAIN, because the derivation binds the domain's own name in: a record
@@ -957,7 +1090,7 @@ func (s *stateLog) verifierFor(domain statelog.Domain) (*statelog.Verifier, erro
 // derive the same record key, because both read the same bytes. (This said the
 // references arrived verbatim, which would have split every record's signature
 // across exactly that fleet.) The embedded broker's credentials derive from
-// the same material, by the same rule (ADR-0064).
+// the same material, by the same rule (ADR-0087).
 func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
 	if boot == nil {
 		return statelog.Keyring{}
@@ -976,6 +1109,6 @@ func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
 // verified under — [recordKeyring] over its own Tier A — for the one reader
 // outside the engine that opens a log's frames itself: the backup, which reads
 // the records a restore replays past its store copy for the files they name
-// (internal/backup, ADR-0052). Handed this rather than reading Tier A again,
+// (internal/backup, ADR-0075). Handed this rather than reading Tier A again,
 // so the backup and the appliers can never open a record under two keyrings.
 func (e *Engine) RecordKeyring() statelog.Keyring { return recordKeyring(e.boot) }

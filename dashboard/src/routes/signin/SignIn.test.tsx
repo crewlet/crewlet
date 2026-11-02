@@ -203,7 +203,7 @@ async function refusal(): Promise<string> {
   return alerts()[0]!;
 }
 
-const NEXT = "#/work/ENG-42";
+const NEXT = "#/worklet/ENG-42";
 
 // THE SIGN-IN SCREENS ARE A CHUNK OF THEIR OWN (`app/lazyScreen.ts`), and so is
 // every workspace a finished sign-in lands on. This suite asserts what is drawn
@@ -363,7 +363,7 @@ describe("signing in with a password", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     const alert = await refusal();
-    expect(alert).toContain("Try again in 16 seconds.");
+    expect(alert).toContain("Try again in 16s.");
     // THE WAIT IS COUNTED DOWN ON THE BUTTON, where the person is looking.
     expect(
       (screen.getByRole("button", { name: "Try again in 16s" }) as HTMLButtonElement).disabled,

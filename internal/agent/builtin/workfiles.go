@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The project file tools.
@@ -58,14 +58,14 @@ import (
 
 // FileReader is the tracker's read side for files.
 type FileReader interface {
-	Files(ctx context.Context, q tracker.FileQuery) (tracker.FileListing, error)
-	File(ctx context.Context, project, path string, fresh statelog.Freshness) (tracker.FileDetail, error)
+	Files(ctx context.Context, q worklet.FileQuery) (worklet.FileListing, error)
+	File(ctx context.Context, project, path string, fresh statelog.Freshness) (worklet.FileDetail, error)
 }
 
 // FileWriter is the tracker's write side for files.
 type FileWriter interface {
-	PutFile(ctx context.Context, opID string, put tracker.FilePut) (tracker.WriteResult, error)
-	RemoveFile(ctx context.Context, opID, project, path string, ifMatch uint64) (tracker.WriteResult, error)
+	PutFile(ctx context.Context, opID string, put worklet.FilePut) (worklet.WriteResult, error)
+	RemoveFile(ctx context.Context, opID, project, path string, ifMatch uint64) (worklet.WriteResult, error)
 }
 
 // ObjectStore is the fleet's object store as these tools need it: a write
@@ -97,7 +97,7 @@ func (d WorkDeps) fileArgs(actor *Actor, args map[string]any) (string, string, s
 	if project == "" {
 		return "", "", "name the project the file is in"
 	}
-	return tracker.ProjectKey(project), argString(args, "path"), ""
+	return worklet.ProjectKey(project), argString(args, "path"), ""
 }
 
 func projectParameter() map[string]any {
@@ -120,12 +120,12 @@ type listProjectFiles struct{ deps WorkDeps }
 
 var _ tools.Callable = (*listProjectFiles)(nil)
 
-func (t *listProjectFiles) Name() string { return tracker.ListProjectFilesTool }
+func (t *listProjectFiles) Name() string { return worklet.ListProjectFilesTool }
 
 func (t *listProjectFiles) Description() string {
 	return "List the files kept in a project — reports, specs, notes and " +
 		"anything else its work produced — in path order, a page at a time. " +
-		"Read one with read_project_file."
+		"Read one with " + worklet.ReadProjectFileTool + "."
 }
 
 func (t *listProjectFiles) Parameters() map[string]any {
@@ -143,7 +143,7 @@ func (t *listProjectFiles) Parameters() map[string]any {
 			},
 			"limit": map[string]any{
 				"type":        "integer",
-				"description": fmt.Sprintf("Files per page, at most %d.", tracker.MaxFilePage),
+				"description": fmt.Sprintf("Files per page, at most %d.", worklet.MaxFilePage),
 			},
 		},
 	}
@@ -168,7 +168,7 @@ func (t *listProjectFiles) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(t.Name() + ": " + refusal), nil
 	}
-	listing, err := t.deps.Files.Files(ctx, tracker.FileQuery{
+	listing, err := t.deps.Files.Files(ctx, worklet.FileQuery{
 		Project: project, Folder: argString(args, "folder"),
 		After: argString(args, "after"), Limit: argInt(args, "limit", 0),
 		Freshness: statelog.Freshness{Level: seatReadLevel},
@@ -176,17 +176,30 @@ func (t *listProjectFiles) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return fileReadFailure(ctx, t.Name(), project, "", err), nil
 	}
-	return jsonResult(map[string]any{
+	// A FILE'S PATH is a name its writers chose (ADR-0040): each row names
+	// who created the file and who wrote it last, and a path renamed between
+	// them had a writer neither names.
+	read := newForeignRead(turn, actor.Handle)
+	for _, f := range listing.Files {
+		var named []provenance.Author
+		for _, handle := range []string{f.CreatedBy, f.UpdatedBy} {
+			if handle = strings.TrimSpace(handle); handle != "" {
+				named = append(named, read.writer(handle, ""))
+			}
+		}
+		namesBy(read, named...)
+	}
+	return read.answer(ctx, t.Name(), map[string]any{
 		"project": project, "count": len(listing.Files), "files": listing.Files,
 		"next": listing.Next, "read_level": listing.Level, "complete": listing.Complete,
-	})
+	}, "Ask for fewer with `limit`, or narrow with `folder`.")
 }
 
 type readProjectFile struct{ deps WorkDeps }
 
 var _ tools.Callable = (*readProjectFile)(nil)
 
-func (t *readProjectFile) Name() string { return tracker.ReadProjectFileTool }
+func (t *readProjectFile) Name() string { return worklet.ReadProjectFileTool }
 
 func (t *readProjectFile) Description() string {
 	return fmt.Sprintf("Read a file kept in a project. Text comes back as "+
@@ -243,9 +256,9 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(t.Name() + ": " + refusal), nil
 	}
-	filePath, err = tracker.NormalizeFilePath(filePath)
+	filePath, err = worklet.NormalizeFilePath(filePath)
 	if err != nil {
-		return failed(fmt.Sprintf("%s: %v", t.Name(), err)), nil
+		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
 	}
 	encoding := strings.TrimSpace(argString(args, "encoding"))
 	if encoding != "" && encoding != "text" && encoding != "base64" {
@@ -331,7 +344,7 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // and the latest may have sent back an earlier writer's words unchanged (the
 // reason [fencePage] gives for a page), so its content is labelled as text with
 // writers this read cannot name.
-func fileWriters(read *foreignRead, f tracker.File) ([]provenance.Author, bool) {
+func fileWriters(read *foreignRead, f worklet.File) ([]provenance.Author, bool) {
 	created, updated := strings.TrimSpace(f.CreatedBy), strings.TrimSpace(f.UpdatedBy)
 	var writers []provenance.Author
 	partial := false
@@ -381,13 +394,13 @@ func withNext(answer map[string]any, offset, read, size int64) map[string]any {
 // caller branching on it and a reader asking for the class read one value.
 func fileReadFailure(ctx context.Context, tool, project, filePath string, err error) tools.Result {
 	switch {
-	case errors.Is(err, tracker.ErrNoProject):
+	case errors.Is(err, worklet.ErrNoProject):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: there is no "+
-			"project %s. List them with %s.", tool, project, tracker.ListProjectsTool))
-	case errors.Is(err, tracker.ErrNoFile):
+			"project %s. List them with %s.", tool, project, worklet.ListProjectsTool))
+	case errors.Is(err, worklet.ErrNoFile):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: there is no "+
 			"file %s in %s. List them with %s.", tool, filePath, project,
-			tracker.ListProjectFilesTool))
+			worklet.ListProjectFilesTool))
 	}
 	return readFailure(ctx, tool, err)
 }
@@ -408,13 +421,13 @@ type writeProjectFile struct{ deps WorkDeps }
 
 var _ tools.Callable = (*writeProjectFile)(nil)
 
-func (t *writeProjectFile) Name() string { return tracker.WriteProjectFileTool }
+func (t *writeProjectFile) Name() string { return worklet.WriteProjectFileTool }
 
 func (t *writeProjectFile) Description() string {
 	return "Write a file into a project, creating it or replacing what is " +
 		"there. Use it for what the work produced — the report, the plan, the " +
 		"notes — so everybody on the project finds it in one place. Pass the " +
-		"`version` read_project_file gave you as `if_version` to refuse the " +
+		"`version` " + worklet.ReadProjectFileTool + " gave you as `if_version` to refuse the " +
 		"write if somebody changed the file since."
 }
 
@@ -468,9 +481,9 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(t.Name() + ": " + refusal), nil
 	}
-	filePath, err := tracker.NormalizeFilePath(rawPath)
+	filePath, err := worklet.NormalizeFilePath(rawPath)
 	if err != nil {
-		return failed(fmt.Sprintf("%s: %v", t.Name(), err)), nil
+		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
 	}
 	content := []byte(argString(args, "content"))
 	encoding := strings.TrimSpace(argString(args, "encoding"))
@@ -502,14 +515,14 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}, actor))
 	}
 	// THE BYTES FIRST — see the file's head.
-	object, err := t.deps.Objects.Put(ctx, bytes.NewReader(content), tracker.MaxFileBytes,
+	object, err := t.deps.Objects.Put(ctx, bytes.NewReader(content), worklet.MaxFileBytes,
 		objstore.PutMeta{ContentType: contentType})
 	var full *objstore.Full
 	switch {
 	case errors.Is(err, objstore.ErrTooLarge):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: %s was not "+
 			"written: its content is over the %d bytes a project's file may hold",
-			t.Name(), filePath, int64(tracker.MaxFileBytes))), nil
+			t.Name(), filePath, int64(worklet.MaxFileBytes))), nil
 	case errors.As(err, &full):
 		// NO ROOM, WHICH NO RETRY MAKES — see the file's head.
 		return objectFailure(ctx, t.Name(), tools.RefusalStoreFull, err,
@@ -518,25 +531,36 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"again is refused the same until %s — say so, and say the file "+
 				"was not written.", t.Name(), filePath, full.Remedy)), nil
 	case err != nil:
-		return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
-			fmt.Sprintf("%s: %s was not written, and nothing was recorded: its "+
-				"content could not be stored in the object store right now. Try "+
-				"again shortly.", t.Name(), filePath)), nil
+		// A STORE THAT DID NOT TAKE THE BYTES is a condition, told as one
+		// and invited back ([objstore.ErrUnanswered]); anything else is a
+		// fault of this node, whose words are the log's — the reading
+		// every surface storing a file gives the same failure.
+		if why, ok := Condition(err); ok {
+			return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
+				fmt.Sprintf("%s: %s was not written, and nothing was recorded: its "+
+					"content could not be stored (%s). %s", t.Name(), filePath, why,
+					conditionNext(err, "Try again shortly.", stuckWrite))), nil
+		}
+		return faulted(ctx, t.Name(), err, fmt.Sprintf("%s: %s was not written, and "+
+			"nothing was recorded: %s.", t.Name(), filePath, faultSaid)), nil
 	}
 	// NOTHING IS DELETED ON A REFUSAL BELOW: a retry under one operation can
 	// be refused on one node after another committed it, and the object
 	// would then be that file's content. The collector removes what no row
 	// names.
 	opID := opIDFor(actor, t.Name(), "file", project+"/"+filePath, args)
-	result, err := t.deps.FileWriter(actor).PutFile(ctx, opID, tracker.FilePut{
+	result, err := t.deps.FileWriter(actor).PutFile(ctx, opID, worklet.FilePut{
 		Project: project, Path: filePath, ContentType: contentType, Object: object,
 		IfMatch: ifVersion,
 	})
-	if errors.Is(err, tracker.ErrUploadStale) {
-		// THE ONE WRITE REFUSAL THE SAME CALL FIXES: the call uploads the
-		// content anew, under a fresh key.
-		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s: %s was not "+
-			"written: %v. Make the same call again.", t.Name(), filePath, err)), nil
+	if errors.Is(err, worklet.ErrUploadStale) {
+		// THE UPLOAD'S STATE, which no wait changes — a conflict, as the
+		// artifacts' stale upload and this file route's own 409
+		// `upload_expired` are — and the one the same call fixes, since
+		// it uploads the content anew, under a fresh key.
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %s was not "+
+			"written: %s. Make the same call again.", t.Name(), filePath,
+			worklet.Sentence(err))), nil
 	}
 	if err != nil {
 		return writeFailure(ctx, actor, t.Name(), err), nil
@@ -545,7 +569,7 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return unknownWrite(actor, t.Name(),
 			fmt.Sprintf("%s was written to %s", filePath, project), opID,
 			result.Unvouched, unknownNext(result.Unvouched, sameCall(actor, t.Name()),
-				fmt.Sprintf("Read %s in %s with %s", filePath, project, tracker.ReadProjectFileTool),
+				fmt.Sprintf("Read %s in %s with %s", filePath, project, worklet.ReadProjectFileTool),
 				"it writes the same content again, which changes nothing")), nil
 	}
 	t.deps.settle(ctx, result.Position)
@@ -568,20 +592,20 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // comparison is one digest against the row's.
 // Anything this read cannot settle — no reader, a failed read — is written.
 func (t *writeProjectFile) unchanged(ctx context.Context, project, filePath,
-	contentType string, content []byte, ifVersion uint64) (tracker.File, bool) {
+	contentType string, content []byte, ifVersion uint64) (worklet.File, bool) {
 
 	if t.deps.Files == nil {
-		return tracker.File{}, false
+		return worklet.File{}, false
 	}
 	detail, err := t.deps.Files.File(ctx, project, filePath,
 		statelog.Freshness{Level: seatReadLevel})
 	if err != nil {
-		return tracker.File{}, false
+		return worklet.File{}, false
 	}
 	f := detail.File
 	if _, named := f.Content(); !named || f.Hash != objstore.HashOf(content) ||
 		f.ContentType != contentType || (ifVersion != 0 && ifVersion != f.Version) {
-		return tracker.File{}, false
+		return worklet.File{}, false
 	}
 	return f, true
 }
@@ -608,7 +632,7 @@ type removeProjectFile struct{ deps WorkDeps }
 
 var _ tools.Callable = (*removeProjectFile)(nil)
 
-func (t *removeProjectFile) Name() string { return tracker.RemoveProjectFileTool }
+func (t *removeProjectFile) Name() string { return worklet.RemoveProjectFileTool }
 
 func (t *removeProjectFile) Description() string {
 	return "Remove a file from a project. Its history says who removed it and " +
@@ -654,9 +678,9 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != "" {
 		return failed(t.Name() + ": " + refusal), nil
 	}
-	filePath, err := tracker.NormalizeFilePath(rawPath)
+	filePath, err := worklet.NormalizeFilePath(rawPath)
 	if err != nil {
-		return failed(fmt.Sprintf("%s: %v", t.Name(), err)), nil
+		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
 	}
 	// THE PROJECT IT IS KEPT IN DECIDES, once the call has settled which
 	// that is — see the `inTool` entries in authority.go. A colleague may
@@ -671,7 +695,7 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	result, err := t.deps.FileWriter(actor).RemoveFile(ctx, opID, project, filePath,
 		uint64(max(argInt(args, "if_version", 0), 0)))
 	switch {
-	case errors.Is(err, tracker.ErrNoFile):
+	case errors.Is(err, worklet.ErrNoFile):
 		return fileReadFailure(ctx, t.Name(), project, filePath, err), nil
 	case err != nil:
 		return writeFailure(ctx, actor, t.Name(), err), nil
@@ -680,7 +704,7 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return unknownWrite(actor, t.Name(),
 			fmt.Sprintf("%s was removed from %s", filePath, project), opID,
 			result.Unvouched, unknownNext(result.Unvouched, sameCall(actor, t.Name()),
-				fmt.Sprintf("List %s's files with %s", project, tracker.ListProjectFilesTool),
+				fmt.Sprintf("List %s's files with %s", project, worklet.ListProjectFilesTool),
 				"it is refused, because the file is already gone")), nil
 	}
 	t.deps.settle(ctx, result.Position)

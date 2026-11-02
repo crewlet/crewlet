@@ -8,9 +8,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Moving a work item to another project — `move_work_item`. Never a board
@@ -50,12 +51,13 @@ import (
 // ---- move_work_item ----------------------------------------------------- //
 
 type moveWorkItem struct {
+	itemTarget
 	deps WorkDeps
 }
 
 var _ tools.SeatCallable = (*moveWorkItem)(nil)
 
-func (t *moveWorkItem) Name() string { return tracker.MoveWorkItemTool }
+func (t *moveWorkItem) Name() string { return worklet.MoveWorkItemTool }
 
 func (t *moveWorkItem) Description() string {
 	return "Move a work item to another project, with everything under it. " +
@@ -93,12 +95,12 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	actor, err := t.deps.actor(ctx, turn)
 	if err != nil {
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return notInATurn(tracker.MoveWorkItemTool), nil
+		return notInATurn(worklet.MoveWorkItemTool), nil
 	}
 	if t.deps.Moves == nil || t.deps.Reader == nil {
-		return unconfigured(tracker.MoveWorkItemTool), nil
+		return unconfigured(worklet.MoveWorkItemTool), nil
 	}
-	actor, denied := t.deps.bindOperation(actor, tracker.MoveWorkItemTool, args)
+	actor, denied := t.deps.bindOperation(actor, worklet.MoveWorkItemTool, args)
 	if denied != "" {
 		return failed(denied), nil
 	}
@@ -106,24 +108,24 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	target := strings.ToUpper(strings.TrimSpace(argString(args, "project")))
 	switch {
 	case ref == "":
-		return failed("move_work_item needs an `item` — a key like ENG-42, or an id."), nil
+		return failed(worklet.MoveWorkItemTool + " needs an `item` — a key like ENG-42, or an id."), nil
 	case target == "":
-		return failed("move_work_item needs a `project` — the key of the " +
+		return failed(worklet.MoveWorkItemTool + " needs a `project` — the key of the " +
 			"project the item moves to."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
+	before, err := t.deps.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	switch {
-	case errors.Is(err, tracker.ErrNoTask):
+	case errors.Is(err, worklet.ErrNoTask):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
 			clip(ref))), nil
 	case err != nil:
-		return readFailure(ctx, tracker.MoveWorkItemTool, err), nil
+		return readFailure(ctx, worklet.MoveWorkItemTool, err), nil
 	}
 	// THE GATE IS ON THE OPERATION, NOT ON THE STATE IT PRODUCED. An item
 	// already in the target is either this operation's own move answered
 	// again — the retry an `unknown` or a stopped walk prescribes, whose
 	// first attempt landed — or somebody else's, and which of the two only
-	// the move's ledger can say ([tracker.Writer.MoveTaskToProject] answers
+	// the move's ledger can say ([worklet.Writer.MoveTaskToProject] answers
 	// the first and refuses the second without writing). Gating it on the
 	// lead of the project the item is in NOW asked the lead of the TARGET:
 	// a seat leading ENG and not OPS was told to ask OPS's lead for a move
@@ -131,7 +133,7 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	//
 	// `from` is the KEY it is leaving, which is what `moved_from` reports —
 	// what the item was called, not a reference to it. The prose names the
-	// item as it can be opened NOW ([tracker.TaskDetail.Named]), because a
+	// item as it can be opened NOW ([worklet.TaskDetail.Named]), because a
 	// duplicate of a key named by the key alone is the claimant.
 	from, named := before.Task.Key, before.Named()
 	if before.Task.Project == target {
@@ -149,28 +151,28 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	after.Project = target
 	opID := opIDFor(actor, t.Name(), "move", before.Task.ID, args)
 	got, err := t.deps.Moves(actor).MoveTaskToProject(ctx, opID, before.Task.ID,
-		target, tracker.Wake{
-			Kind: tracker.ChangeMoved, Before: before.Task, After: after,
+		target, worklet.Wake{
+			Kind: worklet.ChangeMoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
-	var stopped *tracker.MoveStopped
+	var stopped *worklet.MoveStopped
 	switch {
 	case errors.As(err, &stopped):
 		// THE ROOT MOVED — whatever stopped the walk, and an unknown step
 		// included, since the root's own move is not the step in doubt.
 		return t.deps.moveStopped(ctx, actor, from, named, got, stopped)
 	case err != nil:
-		return writeFailure(ctx, actor, tracker.MoveWorkItemTool, err), nil
+		return writeFailure(ctx, actor, worklet.MoveWorkItemTool, err), nil
 	}
 	if got.Outcome == statelog.OutcomeUnknown {
 		// NEVER A NEW KEY FOR A MOVE NOBODY CAN SAY LANDED: the one this
 		// attempt minted is a gap if the root never moved. See
 		// [unknownWrite], and [mergeWorkItem] for why the seam's contract
 		// is held here.
-		return unknownWrite(actor, tracker.MoveWorkItemTool,
+		return unknownWrite(actor, worklet.MoveWorkItemTool,
 			fmt.Sprintf("%s moved to %s", named, target), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
-				sameCall(actor, tracker.MoveWorkItemTool),
-				fmt.Sprintf("Read %s with get_work_item — its key and project "+
+				sameCall(actor, worklet.MoveWorkItemTool),
+				fmt.Sprintf("Read %s with "+GetWorkItemTool+" — its key and project "+
 					"say where it is now", before.Address()),
 				"it is refused, because the item is already there")), nil
 	}
@@ -183,7 +185,7 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // moveStopped answers a cross-project move whose ROOT landed in the target and
-// whose walk over the subtree did not finish ([tracker.MoveStopped]).
+// whose walk over the subtree did not finish ([worklet.MoveStopped]).
 //
 // # Why it is not a failure, and not a success either
 //
@@ -200,30 +202,30 @@ func (t *moveWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // A second removal finishes a first because a task already in the trash is
 // nothing to do. A second MOVE under a new operation is refused: the root is
 // in the target and that operation's ledger never put it there, which is
-// exactly how somebody else's move looks ([tracker.Writer.MoveTaskToProject]).
+// exactly how somebody else's move looks ([worklet.Writer.MoveTaskToProject]).
 // So the one call that finishes it here is the same one — and the root stays
-// marked mid-move for as long as anything is left, so the tracker duty
+// marked mid-move for as long as anything is left, so the Worklet duty
 // finishes the walk on its own once nobody holds its claim, which is the
 // remedy where this caller has no repeat that is the same operation, or where
 // this node cannot vouch for the task the walk stopped at.
 func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from, named string,
-	got tracker.WriteResult, stopped *tracker.MoveStopped) (tools.Result, error) {
+	got worklet.WriteResult, stopped *worklet.MoveStopped) (tools.Result, error) {
 
-	const tool = tracker.MoveWorkItemTool
+	const tool = worklet.MoveWorkItemTool
 	as := ""
 	if stopped.Key != "" {
-		as = " as " + tracker.ItemNamed(stopped.Root, stopped.Key, stopped.KeyCollision)
+		as = " as " + worklet.ItemNamed(stopped.Root, stopped.Key, stopped.KeyCollision)
 	}
-	duty := "the tracker duty finishes the walk on its own once nobody is " +
-		"walking it — read the item with get_work_item to see it done"
+	duty := "the Worklet duty finishes the walk on its own once nobody is " +
+		"walking it; read the item with " + GetWorkItemTool + " to see it done"
 	frozen := fmt.Sprintf("%s is in the trash under it and still in its old "+
 		"project, and a task in the trash is frozen, so the move waits for it: "+
-		"it has to be restored (restore_work_item, where you have it) or purged "+
+		"it has to be restored ("+worklet.RestoreWorkItemTool+", where you have it) or purged "+
 		"first", stopped.Waiting)
 	again := sameCall(actor, tool)
 	var next string
 	switch {
-	case errors.Is(stopped.Err, tracker.ErrStepUnvouched):
+	case errors.Is(stopped.Err, worklet.ErrStepUnvouched):
 		next = fmt.Sprintf("This node cannot vouch for the task the walk "+
 			"stopped at under this operation, so the same call here stops there "+
 			"again, and a new one is refused. Leave it: %s.", duty)
@@ -245,24 +247,25 @@ func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from, named stri
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version":          got.Version,
 		"subtree_followed": stopped.Followed, "subtree_total": stopped.Of,
-		"move_stopped": fmt.Sprintf("%s moved to %s%s, but only %d of the %d "+
-			"tasks under it followed before the walk stopped (%s); the rest are "+
-			"still in their old project. Do not report it as done, and do not "+
-			"move it again as a new call. %s", named, stopped.Target, as,
-			stopped.Followed, stopped.Of, writeTold(ctx, actor, tool, stopped.Err), next),
 	}, stopped.Root, stopped.Key, stopped.KeyCollision)
+	said := partial(answer, MoveStoppedKey, caveat.MoveUnfinished(stopped.Followed,
+		stopped.Of, stopped.Waiting != "", fmt.Sprintf("%s moved to %s%s, but only "+
+			"%d of the %d tasks under it followed before the walk stopped (%s); the "+
+			"rest are still in their old project. Do not report it as done, and do "+
+			"not move it again as a new call. %s", named, stopped.Target, as,
+			stopped.Followed, stopped.Of, writeTold(ctx, actor, tool, stopped.Err), next)))
 	if stopped.Waiting != "" {
 		answer["move_waits_for"] = stopped.Waiting
 	}
-	if errors.Is(stopped.Err, tracker.ErrStepUnvouched) {
+	if errors.Is(stopped.Err, worklet.ErrStepUnvouched) {
 		answer["move_unvouched"] = true
 	}
-	return jsonResult(withOperation(answer, actor))
+	return caveated(withOperation(answer, actor), nil, said)
 }
 
 // replacedKey is the key a move into the project an item is already in
 // replaced: the newest of its former keys, since every move appends the key it
-// replaces ([tracker.Writer.MoveTaskToProject]). The item's CURRENT key is the
+// replaces ([worklet.Writer.MoveTaskToProject]). The item's CURRENT key is the
 // one the move minted, so an answer reporting it as `moved_from` names the
 // same key twice.
 //
@@ -270,7 +273,7 @@ func (d WorkDeps) moveStopped(ctx context.Context, actor Actor, from, named stri
 // key, so an item somebody moved out of the target and back since reports the
 // key that later move replaced. An item with no former key was never moved,
 // and the move refuses it rather than answering; its own key is what is left.
-func replacedKey(task tracker.Task) string {
+func replacedKey(task worklet.Task) string {
 	if n := len(task.FormerKeys); n > 0 {
 		return task.FormerKeys[n-1]
 	}

@@ -14,8 +14,8 @@ import (
 // the box's npm and shell. A body that is exactly one `${VAR}` is the one shape
 // read through this node's resolver, and one nothing answers for is not
 // written at all — neither as the reference's own text nor empty, which is no
-// credential either: the run's gap says it is missing, and a run_sandbox launch
-// is refused for it (internal/engine runenv tests). A
+// credential either: the run's gap says it is missing, and the run starts
+// without it (internal/engine runenv tests). A
 // provider-wide file is read by the same rule, after the provider's steps and
 // before the seat's own, and the manager's own steps are never written
 // through.
@@ -34,7 +34,6 @@ roles:
   - name: Builder
     handle: builder
     sandbox:
-      enabled: true
       setup:
         - name: registry
           files:

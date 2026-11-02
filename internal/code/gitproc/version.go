@@ -16,7 +16,7 @@ import (
 // newest feature a client-side recipe uses; GIT_CONFIG_COUNT (2.31), protocol
 // v2 by default (2.26) and partial clone (2.19) are older. A client's git is
 // a person's laptop or a CI image the operator does not choose, so it is held
-// to what the distributions people run still ship (ADR-0057).
+// to what the distributions people run still ship (ADR-0080).
 var ClientMinVersion = Version{2, 40, 0}
 
 // NodeMinVersion is the oldest git a GIT NODE runs — every pool [New] builds:

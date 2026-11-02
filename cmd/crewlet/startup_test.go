@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // A STARTING NODE ANSWERS ITS PROBES BEFORE IT SERVES, and nothing its company
@@ -48,12 +49,16 @@ func TestAStartingNodeAnswersItsProbesBeforeItServes(t *testing.T) {
 	// exits without a word, which ends its start at once as a failed one —
 	// a server that fails only loses its own tools, and the boot goes on.
 	release := filepath.Join(dir, "release-the-tool-server")
+	// THE BROKER SIZED beside its store_dir, for the drain case's reason
+	// ([brokertest.StoreIn]): a limit read off the runner's free disk boots
+	// this node on one machine and refuses it on a fuller one.
 	boot := writeFile(t, dir, "crewlet.yaml", fmt.Sprintf(`node:
   id: startup-probe
 store:
   path: %s
 stream:
   store_dir: %s
+  store_max_bytes: %d
 secrets:
   active_key_id: startup-probe
   keys:
@@ -69,12 +74,13 @@ api:
       - id: founder
         token: %s
         grants: [admin]
-`, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"),
+`, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"), brokertest.StoreMaxBytes,
 		testKeyMaterial(t), port, port, drainProbeToken))
 	// A STARTUP TIMEOUT FAR PAST THIS CASE'S OWN BUDGET, so it is the release
 	// that ends the window and never the engine's bound on the server.
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     held:
       model: claude-startup-probe

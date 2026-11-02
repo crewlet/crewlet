@@ -222,7 +222,7 @@ func running(n *wiredNode) *wiredNode {
 }
 
 // wiredFence is the probe domain's write fence on a wired node, built as a
-// real domain's is (internal/tracker's Fence): its eviction half is ONE
+// real domain's is (internal/worklet's Fence): its eviction half is ONE
 // INDEXED SINGLE-ROW READ of this node's own applied rows, made on every
 // append, and its zero half is the real [statelog.ZeroFence] over that read,
 // the log's live ends and the applier's checkpoint.

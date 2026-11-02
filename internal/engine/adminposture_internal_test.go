@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
 // A NODE PUBLISHES ITS ADMIN POSTURE ONLY WHEN IT SERVES THE API.
@@ -29,7 +30,7 @@ func TestANodeServingNoAPIPublishesNoAdminPosture(t *testing.T) {
 	if quiet.ServesAPI() {
 		t.Fatal("the worker's bootstrap serves the API, so this half certifies nothing")
 	}
-	status := worker.nodeStatus(t.Context())
+	status := statusOf(t.Context(), t, worker)
 	if status.AdminPosture != "" {
 		t.Errorf("a node serving no API published the admin posture %q, want none",
 			status.AdminPosture)
@@ -42,13 +43,13 @@ func TestANodeServingNoAPIPublishesNoAdminPosture(t *testing.T) {
 	serving := testBootstrap(t)
 	serving.Node.Roles = []string{"data", "seats", "workers", "ingress"}
 	serving.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
-	serving.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	brokertest.StoreIn(&serving.Stream, filepath.Join(t.TempDir(), "stream"))
 	serving.API.Port = 8080
 	serving.API.ExternalURL = "https://crewlet.example.com"
 	serving.API.Auth.Admin = iam.AdminRefuse
 	serving.API.Auth.Tokens = []config.APIToken{{
 		ID: "ops", Token: "a-token-value-nobody-reads-here",
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 	}}
 	if !serving.ServesAPI() {
 		t.Fatal("the serving bootstrap serves no API, so this half certifies nothing")
@@ -59,7 +60,7 @@ func TestANodeServingNoAPIPublishesNoAdminPosture(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { ingress.Stop(context.Background()) })
-	status = ingress.nodeStatus(t.Context())
+	status = statusOf(t.Context(), t, ingress)
 	if status.AdminPosture != iam.AdminRefuse {
 		t.Errorf("a node serving the API published the admin posture %q, want %q",
 			status.AdminPosture, iam.AdminRefuse)

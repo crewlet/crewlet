@@ -11,14 +11,14 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// ---- answering what you were asked, without the tracker ----------------- //
+// ---- answering what you were asked, without Worklet ----------------- //
 
 // askedTracker is the tracker's read side with the one fact these cases turn
 // on made real: an OPEN ask on a task is addressed to one seat, and a thread
@@ -31,27 +31,35 @@ type askedTracker struct {
 	// open is each task's open asks, by the seat each is addressed to.
 	open map[string]map[string]string
 
+	// posted is each remark already on a task, by its id, with the ask it
+	// answered: a thread read naming one as its own comment is resolved from
+	// it, as the reader resolves the call made again from the remark's row.
+	posted map[string]string
+
 	// down, when set, is what every thread read fails with — a node that
 	// cannot read the item's asks right now.
 	down error
 }
 
-func (a *askedTracker) Thread(_ context.Context, q tracker.ThreadQuery,
-	_ statelog.Freshness) (tracker.ResolvedThread, error) {
+func (a *askedTracker) Thread(_ context.Context, q worklet.ThreadQuery,
+	_ statelog.Freshness) (worklet.ResolvedThread, error) {
 
 	a.threadQuery = q
 	if a.down != nil {
-		return tracker.ResolvedThread{}, a.down
+		return worklet.ResolvedThread{}, a.down
 	}
-	out := tracker.ResolvedThread{ThreadParties: tracker.ThreadParties{Asked: q.Ask},
+	if answered, ok := a.posted[q.Comment]; ok && q.Comment != "" {
+		return worklet.ResolvedThread{Answers: answered}, nil
+	}
+	out := worklet.ResolvedThread{ThreadParties: worklet.ThreadParties{Asked: q.Ask},
 		Answers: q.Answers}
 	asks := a.open[q.Task]
 	if out.Answers == "" && q.Author != "" {
 		out.Answers = asks[q.Author]
 	}
 	if out.Answers != "" && asks[q.Author] != out.Answers {
-		return tracker.ResolvedThread{}, fmt.Errorf("%w: comment %s asked "+
-			"somebody else", tracker.ErrForbidden, out.Answers)
+		return worklet.ResolvedThread{}, fmt.Errorf("%w: comment %s asked "+
+			"somebody else", worklet.ErrForbidden, out.Answers)
 	}
 	return out, nil
 }
@@ -71,6 +79,14 @@ func askedRigDown(t *testing.T, down error) (map[string]tools.Callable, *fakeTra
 	trk := newFakeTracker()
 	reader := &askedTracker{fakeTracker: trk, down: down,
 		open: map[string]map[string]string{"i1": {"legal": "c-ask"}}}
+	return askedSurface(t, reader), trk
+}
+
+// askedSurface is the operator surface [askedRig] builds, over a tracker a
+// case holds on to.
+func askedSurface(t *testing.T, reader *askedTracker) map[string]tools.Callable {
+	t.Helper()
+	trk := reader.fakeTracker
 	out := map[string]tools.Callable{}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
@@ -80,7 +96,7 @@ func askedRigDown(t *testing.T, down error) (map[string]tools.Callable, *fakeTra
 	}) {
 		out[tool.Name()] = tool
 	}
-	return out, trk
+	return out
 }
 
 // callAs calls one of the rig's tools as a principal, outside any turn.
@@ -101,7 +117,7 @@ func callAs(t *testing.T, tool tools.Callable, p iam.Principal,
 func refusedForTracker(got tools.Result) bool {
 	var refused *builtin.DecisionRefused
 	return got.Failed && errors.As(got.Cause, &refused) &&
-		slices.Equal(refused.Decision.Grants, []iam.Grant{iam.GrantTracker})
+		slices.Equal(refused.Decision.Grants, []iam.Grant{iam.GrantWorklet})
 }
 
 // SOMEBODY WITHOUT THE TRACKER READS THE ITEM THEY WERE ASKED ON, AND ANSWERS.
@@ -113,17 +129,17 @@ func refusedForTracker(got tools.Result) bool {
 // to the read and to the answer; their comment closes the ask it answers, and
 // it does not make them follow a board they do not use. The control is the
 // same person on an item nobody asked them on.
-func TestAnAskedPersonReadsAndAnswersWithoutTracker(t *testing.T) {
+func TestAnAskedPersonReadsAndAnswersWithoutWorklet(t *testing.T) {
 	t.Parallel()
 	surface, trk := askedRig(t)
 	legal := boundTo("legal")
 
-	read := callAs(t, surface[tracker.GetWorkItemTool], legal, map[string]any{"item": "ENG-1"})
+	read := callAs(t, surface[worklet.GetWorkItemTool], legal, map[string]any{"item": "ENG-1"})
 	if read.Failed || !strings.Contains(read.Output, `"ENG-1"`) {
 		t.Fatalf("the person asked on ENG-1 could not read it: %s", read.Output)
 	}
-	answered := callAs(t, surface[tracker.CommentOnWorkTool], legal,
-		map[string]any{"item": "ENG-1", "body": "Yes — the clause stands."})
+	answered := callAs(t, surface[worklet.CommentOnWorkTool], legal,
+		map[string]any{"item": "ENG-1", "body": "Yes, the clause stands."})
 	if answered.Failed {
 		t.Fatalf("the person asked on ENG-1 could not answer: %s", answered.Output)
 	}
@@ -141,7 +157,7 @@ func TestAnAskedPersonReadsAndAnswersWithoutTracker(t *testing.T) {
 	}
 
 	// THE CONTROL: nobody asked them anything on ENG-2.
-	if got := callAs(t, surface[tracker.GetWorkItemTool], legal,
+	if got := callAs(t, surface[worklet.GetWorkItemTool], legal,
 		map[string]any{"item": "ENG-2"}); !refusedForTracker(got) {
 		t.Errorf("the person read ENG-2, which no ask names them on: %+v", got)
 	}
@@ -173,13 +189,13 @@ func TestAnAskedPersonMayOnlyAnswer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			surface, trk := askedRig(t)
-			got := callAs(t, surface[tracker.CommentOnWorkTool], boundTo("legal"), args)
+			got := callAs(t, surface[worklet.CommentOnWorkTool], boundTo("legal"), args)
 			if !got.Failed {
 				t.Fatalf("admitted: %s", got.Output)
 			}
 			if name != "an answer to somebody else's ask" && !refusedForTracker(got) {
 				t.Errorf("refused with %v, want the table's refusal naming the "+
-					"tracker: %s", got.Cause, got.Output)
+					"worklet: %s", got.Cause, got.Output)
 			}
 			if len(trk.patched) != 0 {
 				t.Errorf("a refused comment wrote %d patches", len(trk.patched))
@@ -189,13 +205,79 @@ func TestAnAskedPersonMayOnlyAnswer(t *testing.T) {
 
 	// THE CONTROL: a tracker holder asks a question on the same item.
 	surface, trk := askedRig(t)
-	if got := callAs(t, surface[tracker.CommentOnWorkTool], boundTo("pm", iam.GrantTracker),
+	if got := callAs(t, surface[worklet.CommentOnWorkTool], boundTo("pm", iam.GrantWorklet),
 		map[string]any{"item": "ENG-1", "body": "Who signs off?", "ask": "agent-cto"}); got.Failed {
 		t.Fatalf("a tracker holder was refused a question: %s", got.Output)
 	}
 	if len(trk.patched) != 1 || trk.patched[0].Watch == nil {
 		t.Errorf("a tracker holder's comment did not follow the item as ever: %+v",
 			trk.patched)
+	}
+}
+
+// AN ANSWER MADE AGAIN AFTER IT LANDED IS ADMITTED AS THE ANSWER IT IS.
+//
+// The answer closes the ask that admitted its author, so a probe of the asks
+// open now refused the same call made again — a retry after an unknown, an
+// approval retried — as though nobody had asked them anything: told, after
+// their answer had landed, that it needed the tracker. The probe carries the id
+// the comment will carry, and a remark already posted under it is resolved from
+// its row, so the ask it answered admits it, and the writer answers it from
+// that row. A new remark is not admitted by it, and neither is somebody else
+// bringing the same operation back: the id is derived from the caller's own
+// call.
+//
+// Mutation: probe without the comment's id and the call made again is refused
+// for the tracker.
+func TestAnAnswerMadeAgainAfterItLandedIsAdmitted(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reader := &askedTracker{fakeTracker: trk,
+		open: map[string]map[string]string{"i1": {"legal": "c-ask"}}}
+	surface := askedSurface(t, reader)
+	legal := boundTo("legal")
+	args := map[string]any{"item": "ENG-1", "body": "Yes, the clause stands."}
+
+	first := callAs(t, surface[worklet.CommentOnWorkTool], legal, args)
+	if first.Failed || len(trk.patched) != 1 {
+		t.Fatalf("the person asked could not answer: %s", first.Output)
+	}
+	posted := trk.patched[0].Comment
+	// THE ANSWER LANDED: the ask is closed, and the remark is on the item.
+	reader.open = map[string]map[string]string{}
+	reader.posted = map[string]string{posted.ID: "c-ask"}
+
+	op, _ := answerOf(t, first)["op_id"].(string)
+	again := map[string]any{"item": "ENG-1", "body": "Yes, the clause stands.",
+		"op_id": op}
+	got := callAs(t, surface[worklet.CommentOnWorkTool], legal, again)
+	if got.Failed {
+		t.Fatalf("the answer made again was refused: %s", got.Output)
+	}
+	if answered, _ := answerOf(t, got)["answered"].(string); answered != "c-ask" {
+		t.Errorf("the answer made again says it answered %q, want c-ask", answered)
+	}
+	if n := len(trk.patched); n != 2 || trk.patched[1].Comment.ID != posted.ID {
+		t.Errorf("the answer made again wrote %d patches, the last %+v, want "+
+			"the first remark's id %s, which the writer answers from its row",
+			n, trk.patched[n-1].Comment, posted.ID)
+	}
+
+	// A NEW REMARK IS NOT THE ANSWER, and nobody else's call is legal's.
+	for name, call := range map[string]struct {
+		who  string
+		args map[string]any
+	}{
+		"legal's new remark":                  {"legal", args},
+		"finance bringing the operation back": {"finance", again},
+	} {
+		if got := callAs(t, surface[worklet.CommentOnWorkTool], boundTo(call.who),
+			call.args); !refusedForTracker(got) {
+			t.Errorf("%s was not refused for the tracker: %+v", name, got)
+		}
+	}
+	if len(trk.patched) != 2 {
+		t.Errorf("a refused comment wrote: %d patches", len(trk.patched))
 	}
 }
 
@@ -211,7 +293,7 @@ func TestAMissingItemAndAnItemYouWereNotAskedOnAreOneRefusal(t *testing.T) {
 	surface, trk := askedRig(t)
 	legal := boundTo("legal")
 	for tool, extra := range map[string]map[string]any{
-		tracker.GetWorkItemTool: {}, tracker.CommentOnWorkTool: {"body": "x"},
+		worklet.GetWorkItemTool: {}, worklet.CommentOnWorkTool: {"body": "x"},
 	} {
 		args := func(item string) map[string]any {
 			out := map[string]any{"item": item}
@@ -234,7 +316,7 @@ func TestAMissingItemAndAnItemYouWereNotAskedOnAreOneRefusal(t *testing.T) {
 	if len(trk.patched) != 0 {
 		t.Errorf("a refused caller wrote %d patches", len(trk.patched))
 	}
-	holder := callAs(t, surface[tracker.GetWorkItemTool], boundTo("pm", iam.GrantTracker),
+	holder := callAs(t, surface[worklet.GetWorkItemTool], boundTo("pm", iam.GrantWorklet),
 		map[string]any{"item": "ENG-404"})
 	if !holder.Failed || tools.RefusalOf(holder) != tools.RefusalNotFound {
 		t.Errorf("a tracker holder asking for a missing item = %+v, want not found", holder)
@@ -255,8 +337,8 @@ func TestAProbeThatCannotReadHasFoundNothingEitherWay(t *testing.T) {
 	down := fmt.Errorf("the item's thread could not be read: %w", statelog.ErrUnavailable)
 	surface, trk := askedRigDown(t, down)
 	for tool, args := range map[string]map[string]any{
-		tracker.GetWorkItemTool:   {"item": "ENG-1"},
-		tracker.CommentOnWorkTool: {"item": "ENG-1", "body": "Yes — the clause stands."},
+		worklet.GetWorkItemTool:   {"item": "ENG-1"},
+		worklet.CommentOnWorkTool: {"item": "ENG-1", "body": "Yes, the clause stands."},
 	} {
 		got := callAs(t, surface[tool], boundTo("legal"), args)
 		if !got.Failed || refusedForTracker(got) ||
@@ -270,7 +352,7 @@ func TestAProbeThatCannotReadHasFoundNothingEitherWay(t *testing.T) {
 	if len(trk.patched) != 0 {
 		t.Errorf("a call whose probe could not read wrote %d patches", len(trk.patched))
 	}
-	if got := callAs(t, surface[tracker.GetWorkItemTool], boundTo("pm", iam.GrantTracker),
+	if got := callAs(t, surface[worklet.GetWorkItemTool], boundTo("pm", iam.GrantWorklet),
 		map[string]any{"item": "ENG-1"}); got.Failed {
 		t.Errorf("a tracker holder, who needs no probe, was stopped by one: %s", got.Output)
 	}
@@ -311,8 +393,8 @@ func tidyRig(t *testing.T, chart authz.Chart) (map[string]tools.Callable, *trash
 func TestAReporterRemovesAndRestoresTheirOwnItem(t *testing.T) {
 	t.Parallel()
 	surface, spy := tidyRig(t, chartRefuses)
-	ana := boundTo("ana", iam.GrantTracker)
-	for _, tool := range []string{tracker.RemoveWorkItemTool, tracker.RestoreWorkItemTool} {
+	ana := boundTo("ana", iam.GrantWorklet)
+	for _, tool := range []string{worklet.RemoveWorkItemTool, worklet.RestoreWorkItemTool} {
 		if got := callAs(t, surface[tool], ana, map[string]any{"item": "ENG-1"}); got.Failed {
 			t.Fatalf("the reporter was refused %s: %s", tool, got.Output)
 		}
@@ -327,10 +409,10 @@ func TestAReporterRemovesAndRestoresTheirOwnItem(t *testing.T) {
 	}
 
 	for name, caller := range map[string]iam.Principal{
-		"a colleague who did not file it":  boundTo("sam", iam.GrantTracker),
-		"the reporter without the tracker": boundTo("ana", iam.GrantKnowledge),
+		"a colleague who did not file it": boundTo("sam", iam.GrantWorklet),
+		"the reporter without Worklet":    boundTo("ana", iam.GrantDoclet),
 	} {
-		for _, tool := range []string{tracker.RemoveWorkItemTool, tracker.RestoreWorkItemTool} {
+		for _, tool := range []string{worklet.RemoveWorkItemTool, worklet.RestoreWorkItemTool} {
 			got := callAs(t, surface[tool], caller, map[string]any{"item": "ENG-1"})
 			if !got.Failed || !errors.Is(got.Cause, builtin.ErrRefused) {
 				t.Errorf("%s was admitted to %s: %s", name, tool, got.Output)
@@ -340,7 +422,7 @@ func TestAReporterRemovesAndRestoresTheirOwnItem(t *testing.T) {
 
 	// A LEAD RESTORES THE WHOLE GESTURE, as ever.
 	leads, spy := tidyRig(t, chartLeads)
-	if got := callAs(t, leads[tracker.RestoreWorkItemTool], boundTo("sam", iam.GrantTracker),
+	if got := callAs(t, leads[worklet.RestoreWorkItemTool], boundTo("sam", iam.GrantWorklet),
 		map[string]any{"item": "ENG-1"}); got.Failed || spy.alone {
 		t.Errorf("a project lead's restore = %+v, alone %v — want the whole gesture",
 			got, spy.alone)
@@ -358,8 +440,8 @@ func TestAReporterRemovesAndRestoresTheirOwnItem(t *testing.T) {
 func TestAnAuthorMayNotRemoveASubtree(t *testing.T) {
 	t.Parallel()
 	surface, spy := tidyRig(t, chartRefuses)
-	ana := boundTo("ana", iam.GrantTracker)
-	got := callAs(t, surface[tracker.RemoveWorkItemTool], ana,
+	ana := boundTo("ana", iam.GrantWorklet)
+	got := callAs(t, surface[worklet.RemoveWorkItemTool], ana,
 		map[string]any{"item": "ENG-1", "subtree": true})
 	var refused *builtin.DecisionRefused
 	if !got.Failed || !errors.As(got.Cause, &refused) ||
@@ -376,9 +458,9 @@ func TestAnAuthorMayNotRemoveASubtree(t *testing.T) {
 		t.Errorf("a refused subtree removal removed %v", spy.removed)
 	}
 
-	spy.answers = []error{fmt.Errorf("tracker: 2 other tasks went into the trash "+
-		"with task i1: %w", tracker.ErrRestoresOthers)}
-	got = callAs(t, surface[tracker.RestoreWorkItemTool], ana, map[string]any{"item": "ENG-1"})
+	spy.answers = []error{fmt.Errorf("worklet: 2 other tasks went into the trash "+
+		"with task i1: %w", worklet.ErrRestoresOthers)}
+	got = callAs(t, surface[worklet.RestoreWorkItemTool], ana, map[string]any{"item": "ENG-1"})
 	if !got.Failed || tools.RefusalOf(got) != tools.RefusalForbidden ||
 		!errors.Is(got.Cause, builtin.ErrRefused) ||
 		!strings.Contains(got.Output, "2 other tasks") {
@@ -387,7 +469,7 @@ func TestAnAuthorMayNotRemoveASubtree(t *testing.T) {
 	}
 
 	leads, spy := tidyRig(t, chartLeads)
-	if got := callAs(t, leads[tracker.RemoveWorkItemTool], boundTo("sam", iam.GrantTracker),
+	if got := callAs(t, leads[worklet.RemoveWorkItemTool], boundTo("sam", iam.GrantWorklet),
 		map[string]any{"item": "ENG-1", "subtree": true}); got.Failed || !spy.subtree {
 		t.Errorf("the project's lead could not remove the subtree: %+v", got)
 	}
@@ -402,8 +484,8 @@ func TestAnAuthorMayNotRemoveASubtree(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{tracker.RemoveWorkItemTool, map[string]any{"item": "ENG-1", "subtree": true}},
-		{tracker.RestoreWorkItemTool, map[string]any{"item": "ENG-1"}},
+		{worklet.RemoveWorkItemTool, map[string]any{"item": "ENG-1", "subtree": true}},
+		{worklet.RestoreWorkItemTool, map[string]any{"item": "ENG-1"}},
 	} {
 		got := callAs(t, blind[c.tool], ana, c.args)
 		if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable ||
@@ -449,16 +531,16 @@ func TestAPageCreatorRenamesTrashesAndRestoresIt(t *testing.T) {
 			"renamed it: %s", other.Output)
 	}
 
-	page := pages.Page{ID: "p1", Container: "ENG", Author: "ana"}
+	page := doclet.Page{ID: "p1", Container: "ENG", Author: "ana"}
 	for _, action := range []authz.Action{authz.ActionPageRename, authz.ActionPageTrash,
 		authz.ActionPageRestore} {
 		for name, c := range map[string]struct {
 			caller iam.Principal
 			want   bool
 		}{
-			"the creator":                            {boundTo("ana", iam.GrantKnowledge), true},
-			"somebody else":                          {boundTo("sam", iam.GrantKnowledge), false},
-			"the creator without the knowledge base": {boundTo("ana", iam.GrantTracker), false},
+			"the creator":                {boundTo("ana", iam.GrantDoclet), true},
+			"somebody else":              {boundTo("sam", iam.GrantDoclet), false},
+			"the creator without Doclet": {boundTo("ana", iam.GrantWorklet), false},
 		} {
 			d := authz.Decide(t.Context(), c.caller, action, builtin.PageObject(page),
 				chartRefuses, time.Now())

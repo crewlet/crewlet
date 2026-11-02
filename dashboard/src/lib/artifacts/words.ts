@@ -52,8 +52,8 @@ export const COLUMN_TYPE_WORDS: Readonly<Record<ColumnType, string>> = {
 
 /**
  * What each kind is called, in the eyebrow, the gallery's Type column and its
- * filter. An `html` artifact is "HTML", never "Page": a page is Knowledge's
- * word, and "Page" beside Knowledge's Pages named two things one way.
+ * filter. An `html` artifact is "HTML", never "Page": a page is Doclet's
+ * word, and "Page" beside Doclet's Pages named two things one way.
  */
 export const KIND_WORDS: Readonly<Record<ArtifactKind, string>> = {
   html: "HTML",

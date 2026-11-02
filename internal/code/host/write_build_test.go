@@ -331,7 +331,7 @@ func TestALinkTakesItsTargetAsText(t *testing.T) {
 // hex40 is a whole object id, as a request names one.
 var hex40 = regexp.MustCompile(`[0-9a-f]{40}`)
 
-// AN ENGINE COMMIT READS NO WHOLE TREE (ADR-0062's anchor): a commit_files of
+// AN ENGINE COMMIT READS NO WHOLE TREE (ADR-0085's anchor): a commit_files of
 // three files at depth three, in a repository whose sibling directories hold
 // ten files each and in one whose siblings hold ten thousand, runs the same
 // processes — never read-tree, write-tree, update-index, ls-tree or diff-tree

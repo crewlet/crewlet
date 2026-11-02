@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE NODE'S SEAT GIT-WORK SHARE: how much of a git node's READ LANE the
@@ -169,7 +170,7 @@ var errShareWait = errors.New("code: the seat git-work share's wait ended")
 // granted ones came to it.
 func (s *GitShare) Take(ctx context.Context, work SeatWork) (release func(), err error) {
 	if !work.Valid() {
-		return nil, fmt.Errorf("%w: seat git work %q is not one of %v", ErrInvalid, work, SeatWorks())
+		return nil, fmt.Errorf("%w: seat git work %q is not one of %s", ErrInvalid, work, words.Or(SeatWorks()))
 	}
 	began := time.Now()
 	wait, cancel := context.WithTimeoutCause(ctx, s.wait, errShareWait)

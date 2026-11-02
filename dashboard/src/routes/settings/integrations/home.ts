@@ -6,8 +6,8 @@
  *
  * The heading's sentence says what the page is for and never changes. It was
  * a count of the third-party apps, which read "No apps connected yet." over a
- * page whose cards showed Crewlet Works and Crewlet Knowledge in use: a count
- * of one kind of thing, in the place a reader takes for the whole page.
+ * page whose cards showed Worklet and Doclet in use: a count of one kind of
+ * thing, in the place a reader takes for the whole page.
  *
  * # One count, of everything in use
  *

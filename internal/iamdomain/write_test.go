@@ -21,9 +21,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -109,7 +109,13 @@ func newWriteRigWith(t *testing.T,
 	wrap func(statelog.Appender) statelog.Appender) *writeRig {
 
 	t.Helper()
-	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
+	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
+	// its cap from the runner's free space it takes three quarters of it,
+	// and would refuse even this log's sixty-four mebibytes on a runner with
+	// less than a third more than that free, whatever the case under it
+	// does.
+	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir(),
+		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {
 		t.Fatalf("open a broker: %v", err)
 	}
@@ -123,10 +129,8 @@ func newWriteRigWith(t *testing.T,
 	// floor Tier A holds stream.iam_log_max_bytes to: the smallest log any
 	// node runs, which is the one the gate reserve takes the largest share
 	// of, so every write here is admitted against the tightest ordinary
-	// ceiling a production log has — and a reservation an embedded broker
-	// in a temporary directory can grant, where a default sized for years
-	// of a company's growth may not be. Everything else is the domain's
-	// own declaration, its largest record included.
+	// ceiling a production log has. Everything else is the domain's own
+	// declaration, its largest record included.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: config.IamLogMaxBytesFloor,
 		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,
@@ -237,7 +241,7 @@ func newWriteRigWith(t *testing.T,
 	nodeDeps := iamdomain.WriterDeps{
 		Publisher: publisher, DB: db.Reader(), Blinds: blinder, Sealer: sealer,
 		Seats:  seats,
-		Events: announced, Actor: "node-a", ActorKind: iam.KindMachine,
+		Events: announced, Actor: "node-a", ActorKind: iamdomain.NodeKind,
 		// AS THE ENGINE GIVES IT: admin, and nothing a row could add.
 		Grants: []iam.Grant{iam.GrantAdmin},
 		Now:    func() time.Time { return brokerAt },
@@ -278,6 +282,7 @@ func (r *writeRig) takeMoved() iamdomain.Moved {
 		out.People = append(out.People, m.People...)
 		out.Logins = append(out.Logins, m.Logins...)
 		out.Sessions = append(out.Sessions, m.Sessions...)
+		out.Removed = append(out.Removed, m.Removed...)
 	}
 	r.moved = nil
 	return out
@@ -651,17 +656,10 @@ func (r *writeRig) during(gesture func() error) error {
 // silently would not have.
 func (r *writeRig) reader(t *testing.T) *iamdomain.Reader {
 	t.Helper()
-	// THROUGH THE FRAMEWORK'S OWN TEST CONSTRUCTOR, over a waiter whose
-	// position MOVES as the rig drains — which is what makes a read that
-	// has to wait actually wait, rather than being served the rows from
-	// before the position it was handed.
-	log, err := statelogtest.LocalReaderOver(
-		iamdomain.Domain{}, r.db, r.waiter)
-	if err != nil {
-		t.Fatalf("build the read authority: %v", err)
-	}
+	// OVER A WAITER WHOSE POSITION MOVES as the rig drains, so the position
+	// a read reports is the one the rows it served were derived through.
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: r.db.Reader(), Log: log, Reached: r.waiter.Reached,
+		DB: r.db.Reader(), Reached: r.waiter.Reached,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
@@ -1354,14 +1352,49 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 	rig := newWriteRig(t)
 	admin := rig.writer.As(principalNamed("ana.admin", iam.KindPerson,
 		[]iam.Grant{iam.GrantAdmin}))
-	person := uuid.Must(uuid.NewV7()).String()
-	ctx := rig.t.Context()
-	gestures := map[string]func(w *iamdomain.Writer) error{
+	gestures := administrativeGestures(rig.t.Context(), uuid.Must(uuid.NewV7()).String())
+	for _, through := range []string{
+		iam.MachineTokenName(uuid.Must(uuid.NewV7()).String()),
+		iam.MachineTokenPrefix + "x",
+	} {
+		token := *admin
+		token.OperatorID = through
+		for name, gesture := range gestures {
+			err := gesture(&token)
+			if !errors.Is(err, iamdomain.ErrTokenRefused) ||
+				!errors.Is(err, iamdomain.ErrRefused) {
+				t.Errorf("%s through %s: %v, want %v wrapping %v", name, through,
+					err, iamdomain.ErrTokenRefused, iamdomain.ErrRefused)
+			}
+		}
+	}
+	rig.drain()
+	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
+		t.Errorf("a refused gesture left rows behind: %v", got)
+	}
+	// THE CONTROL: the deployment's own token is its principal, not a
+	// machine token acting as somebody, and it enrols.
+	tierA := *admin
+	tierA.OperatorID = iam.TokenLogin("ops")
+	if err := rig.draining(func() error { return gestures["create"](&tierA) }); err != nil {
+		t.Errorf("a Tier A token's own login was refused as a machine token: %v", err)
+	}
+}
+
+// administrativeGestures is every record [iamdomain.Writer.mayAdminister]
+// guards, each a call a party may try: enrolling, redeeming, inviting,
+// cancelling an invitation, editing, changing a login or a seat, a stage, a
+// removal, and ending everybody's sessions. The ones about an existing person
+// name person, whom a refused gesture never reaches.
+func administrativeGestures(ctx context.Context,
+	person string) map[string]func(w *iamdomain.Writer) error {
+
+	return map[string]func(w *iamdomain.Writer) error{
 		"create": func(w *iamdomain.Writer) error {
 			_, err := w.Create(ctx, iamdomain.Creation{
 				PersonID: uuid.Must(uuid.NewV7()).String(), Kind: iam.KindMachine,
 				Stage: iam.StageActive, Login: "svc:token-made", OpID: operationKey(),
-				Reason: "a hire", Grants: []iam.Grant{iam.GrantTracker},
+				Reason: "a hire", Grants: []iam.Grant{iam.GrantWorklet},
 			})
 			return err
 		},
@@ -1376,7 +1409,7 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 		},
 		"invite": func(w *iamdomain.Writer) error {
 			_, err := w.Invite(ctx, iamdomain.InviteMint{
-				Email: "y@example.com", Grants: []iam.Grant{iam.GrantTracker},
+				Email: "y@example.com", Grants: []iam.Grant{iam.GrantWorklet},
 				Seat: "nowhere", ExpiresAt: brokerAt.Add(time.Hour),
 				OpID: operationKey(), Reason: "onboarding",
 			})
@@ -1416,18 +1449,50 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 			return err
 		},
 	}
-	for _, through := range []string{
-		iam.MachineTokenName(uuid.Must(uuid.NewV7()).String()),
-		iam.MachineTokenPrefix + "x",
+}
+
+// THE ASSISTANT WRITES AN ADMINISTRATIVE RECORD ONLY WHERE NO CEREMONY IS IN IT.
+//
+// A request the Dashboard Assistant makes is its person's own, so an
+// administrator's assistant is composed holding admin, and the one it sends a
+// write through is an exec grant carrying a request the administrator
+// approved (ADR-0051). The record keeps the sign-in ceremonies from it for the
+// machine token's reason, whatever authority reached it: an enrolment (a
+// first password link, or a redemption), an invitation (a link) and ending
+// every session are refused [iamdomain.ErrAssistRefused], wrapping
+// [iamdomain.ErrRefused] and never read as a token, and so is an operator id of
+// the assistant's class this build cannot parse. Every other administrative
+// record (an edit, a login or seat move, a stage, a removal, an invitation
+// withdrawn) is the administrator's own, decided past the lock by its own
+// rules. The refused set is exactly the intended one, so a record that slips
+// on or off it is a red build. Mutation: drop the lock and the ceremonies are
+// admitted; widen it to every record and the edits are refused.
+func TestTheAssistantWritesNoSignInCeremony(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	keyboard := principalNamed("ana.admin", iam.KindPerson, []iam.Grant{iam.GrantAdmin})
+	gestures := administrativeGestures(rig.t.Context(), uuid.Must(uuid.NewV7()).String())
+	ceremonies := []string{"create", "redeem", "invite", "invalidate every session"}
+	composed := keyboard
+	composed.Via = iam.AssistName(uuid.Must(uuid.NewV7()))
+	composed.AssistScope = iam.AssistScopeExec
+	malformed := *rig.writer.As(keyboard)
+	malformed.OperatorID = iam.AssistPrefix + "x"
+	for through, w := range map[string]*iamdomain.Writer{
+		"an assistant grant":             rig.writer.As(composed),
+		"an id of the assistant's class": &malformed,
 	} {
-		token := *admin
-		token.OperatorID = through
 		for name, gesture := range gestures {
-			err := gesture(&token)
-			if !errors.Is(err, iamdomain.ErrTokenRefused) ||
-				!errors.Is(err, iamdomain.ErrRefused) {
+			err := gesture(w)
+			refused := errors.Is(err, iamdomain.ErrAssistRefused)
+			switch ceremony := slices.Contains(ceremonies, name); {
+			case ceremony && (!refused || !errors.Is(err, iamdomain.ErrRefused) ||
+				errors.Is(err, iamdomain.ErrTokenRefused)):
 				t.Errorf("%s through %s: %v, want %v wrapping %v", name, through,
-					err, iamdomain.ErrTokenRefused, iamdomain.ErrRefused)
+					err, iamdomain.ErrAssistRefused, iamdomain.ErrRefused)
+			case !ceremony && refused:
+				t.Errorf("%s through %s was refused as the assistant (%v): an approved "+
+					"edit is the administrator's own", name, through, err)
 			}
 		}
 	}
@@ -1435,12 +1500,10 @@ func TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken(t *testing.T) 
 	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
 		t.Errorf("a refused gesture left rows behind: %v", got)
 	}
-	// THE CONTROL: the deployment's own token is its principal, not a
-	// machine token acting as somebody, and it enrols.
-	tierA := *admin
-	tierA.OperatorID = iam.TokenLogin("ops")
-	if err := rig.draining(func() error { return gestures["create"](&tierA) }); err != nil {
-		t.Errorf("a Tier A token's own login was refused as a machine token: %v", err)
+	if err := rig.draining(func() error {
+		return gestures["create"](rig.writer.As(keyboard))
+	}); err != nil {
+		t.Errorf("the administrator at their keyboard was refused: %v", err)
 	}
 }
 
@@ -1498,14 +1561,14 @@ func TestAnUnknownGrantMayBeRemovedButNotAdded(t *testing.T) {
 		before, after []iam.Grant
 		refused       bool
 	}{
-		{"kept", []iam.Grant{iam.GrantTracker, future},
-			[]iam.Grant{iam.GrantTracker, future, iam.GrantKnowledge}, false},
-		{"removed", []iam.Grant{iam.GrantTracker, future},
-			[]iam.Grant{iam.GrantTracker}, false},
-		{"added", []iam.Grant{iam.GrantTracker},
-			[]iam.Grant{iam.GrantTracker, future}, true},
+		{"kept", []iam.Grant{iam.GrantWorklet, future},
+			[]iam.Grant{iam.GrantWorklet, future, iam.GrantDoclet}, false},
+		{"removed", []iam.Grant{iam.GrantWorklet, future},
+			[]iam.Grant{iam.GrantWorklet}, false},
+		{"added", []iam.Grant{iam.GrantWorklet},
+			[]iam.Grant{iam.GrantWorklet, future}, true},
 		{"an app admin already includes", []iam.Grant{iam.GrantAdmin},
-			[]iam.Grant{iam.GrantAdmin, iam.GrantTracker}, false},
+			[]iam.Grant{iam.GrantAdmin, iam.GrantWorklet}, false},
 	} {
 		err := admin.MayConfer(c.before, c.after)
 		if c.refused != errors.Is(err, iamdomain.ErrRefused) {
@@ -1516,15 +1579,15 @@ func TestAnUnknownGrantMayBeRemovedButNotAdded(t *testing.T) {
 	// AND A PARTY WITHOUT ADMIN keeps what is there and adds only what it
 	// holds — the expansion of the row is no licence of its own.
 	user := rig.writer.As(principalNamed("app.user", iam.KindPerson,
-		[]iam.Grant{iam.GrantTracker}))
+		[]iam.Grant{iam.GrantWorklet}))
 	if err := user.MayConfer([]iam.Grant{iam.GrantAdmin},
-		[]iam.Grant{iam.GrantAdmin, iam.GrantKnowledge}); err != nil {
+		[]iam.Grant{iam.GrantAdmin, iam.GrantDoclet}); err != nil {
 		t.Errorf("spelling out an app the row holds through admin was "+
 			"refused: %v", err)
 	}
-	if err := user.MayConfer(nil, []iam.Grant{iam.GrantKnowledge}); !errors.Is(err,
+	if err := user.MayConfer(nil, []iam.Grant{iam.GrantDoclet}); !errors.Is(err,
 		iamdomain.ErrRefused) {
-		t.Errorf("a tracker user conferred knowledge (%v)", err)
+		t.Errorf("a Worklet user conferred Doclet (%v)", err)
 	}
 
 	person := uuid.Must(uuid.NewV7()).String()
@@ -1532,7 +1595,7 @@ func TestAnUnknownGrantMayBeRemovedButNotAdded(t *testing.T) {
 		PersonID: person, Kind: iam.KindPerson, Stage: iam.StageActive,
 		Name: "Dana Okafor", Email: "dana@example.com", Login: "dana.sre",
 		Seat:   rig.vacantSeat("dana-okafor"),
-		Grants: []iam.Grant{iam.GrantTracker},
+		Grants: []iam.Grant{iam.GrantWorklet},
 		OpID:   operationKey(), Reason: "a hire", LinkExpiresAt: firstLinkExpiry,
 	}); err != nil {
 		t.Fatalf("enrol: %v", err)
@@ -1573,7 +1636,7 @@ func TestTwoInvitationsToOneAddressYieldOneWinner(t *testing.T) {
 	invite := func(op, seat string) error {
 		_, err := rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
 			Email:     "sarah@example.com",
-			Grants:    []iam.Grant{iam.GrantTracker},
+			Grants:    []iam.Grant{iam.GrantWorklet},
 			Seat:      rig.vacantSeat(seat),
 			ExpiresAt: brokerAt.Add(168 * time.Hour),
 			OpID:      op, Reason: "onboarding",
@@ -1617,7 +1680,7 @@ func TestTwoInvitationsToOneSeatYieldOneWinner(t *testing.T) {
 		err := rig.during(func() error {
 			var err error
 			issued, err = rig.writer.Invite(rig.t.Context(), iamdomain.InviteMint{
-				Email: address, Grants: []iam.Grant{iam.GrantTracker},
+				Email: address, Grants: []iam.Grant{iam.GrantWorklet},
 				Seat: seat, ExpiresAt: brokerAt.Add(168 * time.Hour),
 				OpID: operationKey(), Reason: "onboarding",
 			})

@@ -49,10 +49,14 @@ func Resolve(opts ...Option) Options {
 //
 // ONLY WHEN IT IS EMPTY, which is what makes the field an ORIGIN rather than a
 // last hop. A node re-publishing an event it received — a parked delivery
-// handed back, a dead letter — is relaying another node's event, and the row
-// that event wrote, the work it describes and the rest of that turn's record
-// are on the node that first published it. Overwriting the field on the way
-// through would point every reader at a store holding none of it.
+// handed back, a dead letter — is relaying another node's event, and the field
+// says where the work it describes RAN: every stored row keeps it as a column
+// (internal/store's EventRecord.Node), and it is the node a turn's page names
+// and the host whose logs an operator opens. Which store holds the row is a
+// different fact — the publisher's own, or for a node without the `data` role
+// the data node keeping its events in custody (ADR-0025) — so it is not what
+// the field protects. Overwriting it on the way through would name the
+// relaying node as where the work happened.
 //
 // A COPY, NEVER THE CALLER'S EVENT. Publish only reads what it is handed, and
 // one event published to two topics from two goroutines is legitimate — so

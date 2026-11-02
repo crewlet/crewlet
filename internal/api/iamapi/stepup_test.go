@@ -126,7 +126,7 @@ func TestAStaleProofMayNotChangeAnybodysGrants(t *testing.T) {
 	edit := func(p iam.Principal) (answered, []string) {
 		r := newRig(t)
 		got := r.as(p, http.MethodPatch, "/iam/people/"+bob.String(),
-			map[string]any{"grants": []string{string(iam.GrantKnowledge)}})
+			map[string]any{"grants": []string{string(iam.GrantDoclet)}})
 		return got, r.writer.calls
 	}
 	older := administrator()

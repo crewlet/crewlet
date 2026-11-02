@@ -38,7 +38,15 @@ type Scheduling struct {
 	//
 	// The maximum is also the floor for the completion ledger's retention:
 	// deleting a row a tick could still evaluate lets that fire run twice.
-	CatchupMinSeconds int `yaml:"catchup_min_seconds,omitempty" json:"catchup_min_seconds,omitempty" js:"min=0" desc:"Lower clamp on the missed-tick catchup window."`
+	//
+	// THE MINIMUM IS AT LEAST ONE SECOND. The scheduler reads a zero clamp
+	// as unset and puts its own two minutes back (internal/schedule's
+	// DefaultCatchupMin), so a 0 written here never meant "no floor" — and
+	// a stored revision, decoded onto the defaults with every knob written
+	// omitempty, dropped it before the scheduler ever saw it. One second is
+	// what "no floor" can honestly be: the window below it is the
+	// schedule's own half-period.
+	CatchupMinSeconds int `yaml:"catchup_min_seconds,omitempty" json:"catchup_min_seconds,omitempty" js:"min=1" desc:"Lower clamp on the missed-tick catchup window (at least 1)."`
 	CatchupMaxSeconds int `yaml:"catchup_max_seconds,omitempty" json:"catchup_max_seconds,omitempty" js:"min=0" desc:"Upper clamp on the missed-tick catchup window."`
 }
 
@@ -90,7 +98,7 @@ func (s *Scheduling) validate(path Path) error {
 			maxTickSeconds, s.TickSeconds)
 	}
 	p.wrap(nonNegative(path, "jitter_seconds", s.JitterSeconds))
-	p.wrap(nonNegative(path, "catchup_min_seconds", s.CatchupMinSeconds))
+	p.wrap(positive(path, "catchup_min_seconds", s.CatchupMinSeconds))
 	if s.CatchupMaxSeconds < s.CatchupMinSeconds {
 		p.add(at(path, "catchup_max_seconds"), ErrOutOfRange,
 			"must be at least catchup_min_seconds (%d), got %d",

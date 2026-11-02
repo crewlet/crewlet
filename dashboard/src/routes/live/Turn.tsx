@@ -55,7 +55,7 @@ import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
 import { useNow } from "~/lib/clock.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import { roundOf, useSeatBadgeOf } from "~/lib/seats.ts";
+import { failureWords, roundOf, useSeatBadgeOf } from "~/lib/seats.ts";
 import { buildWaterfall, phaseLabel, type Span } from "~/lib/waterfall.ts";
 import { screenScroller } from "~/lib/scroller.ts";
 import { pathOf } from "~/app/frame/objects.ts";
@@ -305,7 +305,7 @@ export function problemCount(wentWrong: readonly EventRecord[], failed: boolean)
  * Everything the page and the rail know about one turn.
  *
  * THE PAGE AND THE PEEK ARE ONE DEFINITION of what a turn shows — the rule
- * `routes/work/WorkItem.tsx` states for a task, and the same drift is
+ * `routes/worklet/WorkItem.tsx` states for a task, and the same drift is
  * available here. Written twice, the rail is the one somebody reads forty
  * times a day, so it would be the one that kept its fields while the page
  * quietly fell behind, and a reader who clicked through from the rail to
@@ -632,7 +632,7 @@ export function useTurnView(turnId: string): TurnView {
   const startedAt =
     tsKey(str(opened, "started_at")) ||
     (seatRow?.turn?.turn_id === turnId ? tsKey(seatRow.turn.started_at) : 0);
-  // No answering node holding the turn's events yet (or the answer not read
+  // No stored event naming where the turn ran yet (or the answer not read
   // yet) leaves the node the live call reports running it.
   const nodes = data?.nodes.length ? data.nodes : liveCall?.node ? [liveCall.node] : [];
 
@@ -1257,14 +1257,14 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * pair is what says whether a heavy prompt is heavy because of what was
  * prefetched or in spite of it.
  *
- * EVERY TERM OF THE APPROXIMATION GETS A COLUMN, so the total is a figure the
- * row can be checked against rather than one to be taken on trust. Tools is
- * usually the largest of them and was the one the engine did not measure at
- * all: a turn reporting ~6,900 tokens here had been billed 205,000. Messages
- * is zero on every phase that opens its own conversation and is what a RESUMED
- * one — a detached coding run collected later — sends instead of a system and
- * user pair, so leaving it out would leave that row's approximation with no
- * visible source.
+ * EVERY TERM OF THE APPROXIMATION GETS A COLUMN — System, User and Tools, the
+ * three `PromptSize` measures — so the total is a figure the row can be
+ * checked against rather than one to be taken on trust. Tools is usually the
+ * largest of them and was the one the engine did not measure at all: a turn
+ * reporting ~6,900 tokens here had been billed 205,000. Every row is a phase
+ * opening a conversation of its own: an executor's is the system prompt and
+ * the brief its run is launched with, and the run's collection, which opens
+ * none, measures nothing.
  *
  * The tool COUNT is the hover rather than a column of its own: forty
  * definitions and four at the same byte count are different problems, but the
@@ -1282,14 +1282,8 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * on the reading that a repeat meant the turn's dispatch had been re-delivered
  * and re-run. It cannot mean that — a re-delivery mints a new run id
  * (`adr/0017`) and lands on a different Turn screen, which is what the attempt
- * banner above is for. What it actually means is a SUSPEND: an executor that
- * parked on a detached coding run publishes its opening frame, and the resume
- * re-enters that same phase at that same iteration and publishes the parked
- * conversation it sends instead. Merged, one real suspend drew `EXECUTE ×2`
- * with System 0 B and User 0 B over a phase whose opening carried 3,166 bytes
- * of system prompt, and offered the two prompts as a token "range" — see
- * [promptWeights], which has the measured pair. They are two prompts, so they
- * are two rows, and the second says it is a re-entry.
+ * banner above is for — so every measurement here is a prompt this turn sent,
+ * and two of them are two rows. See [promptWeights].
  */
 function PromptWeights({ rows }: { rows: PromptWeight[] }) {
   return (
@@ -1305,30 +1299,18 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
             <span className="t-label spacer">Prompt sent</span>
             <span className="t-label num-col">System</span>
             <span className="t-label num-col">User</span>
-            <span className="t-label num-col">Messages</span>
             <span className="t-label num-col">Tools</span>
             <span className="t-label num-col">Approx. tokens</span>
           </div>
           {rows.map((w) => (
-            /* KEYED ON THE EVENT, not on the phase key: a suspended executor
-               publishes two measurements under one `phase|iteration`, so that
-               pair is a duplicate React key that reconciles the re-entry's
-               figures onto the opening's row. */
+            /* KEYED ON THE EVENT, not on the phase key: two measurements
+               under one `phase|iteration` would be a duplicate React key that
+               reconciles one prompt's figures onto the other's row. */
             <div key={w.id} className="row gap-2">
               <PhaseTag phase={w.phase} />
               {w.iteration > 1 && (
                 <span className="t-caption" title="self-iterate round">
                   iter {w.iteration}
-                </span>
-              )}
-              {/* WHICH OF THE TWO THIS IS. Two rows under one phase tag and
-                  one iteration read as a repeating panel unless the second
-                  says why it is there — and it is the row whose System and
-                  User columns are legitimately 0, because a re-entered phase
-                  opens no conversation. */}
-              {w.resumed && (
-                <span className="t-caption" title="Resumed after its coding run">
-                  resumed
                 </span>
               )}
               <span className="spacer" />
@@ -1337,12 +1319,6 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
               </span>
               <span className="mono t-num t-caption num-col" title="bytes in the user message">
                 {fmtBytes(w.userBytes)}
-              </span>
-              <span
-                className="mono t-num t-caption num-col"
-                title="Size of the resumed conversation"
-              >
-                {fmtBytes(w.messageBytes)}
               </span>
               <span
                 className="mono t-num t-caption num-col"
@@ -1578,11 +1554,11 @@ export function turnCrumbLabel(view: TurnView, ordinal: number | null): string {
  * Transcript.
  *
  * A parked turn is the engine's "working" with no phase in flight: its
- * executor launched a detached run and suspended, and the run is the work —
- * often for the whole of an agent-mode executor's turn, and for hours on a
- * long native one. Every watch link lands on this tab, and without this card
- * a parked turn's Transcript held nothing live and no way to the thing that
- * was: the run's output was a Timeline span and a click away. It is the SAME
+ * executor launched its detached run and suspended, and the run is the work —
+ * for most of the turn, and for hours on a long one. Every watch link lands on
+ * this tab, and without this card a parked turn's Transcript held nothing live
+ * and no way to the thing that was: the run's output was a Timeline span and a
+ * click away. It is the SAME
  * poll that span opens (`LiveOutput`, `sandbox_tail`), and the run's own page
  * is one link away for its history.
  */
@@ -1770,7 +1746,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // "Copied" on, so what happened is said in a toast.
   const toast = useToast();
   const [pausing, setPausing] = useState(false);
-  const openTask = useCallback(() => nav.to(["work", taskAddress]), [nav, taskAddress]);
+  const openTask = useCallback(() => nav.to(["worklet", taskAddress]), [nav, taskAddress]);
   const moreItems = useMemo<MenuItem[]>(
     () => [
       ...(attempt?.rows ?? [])
@@ -1875,12 +1851,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           seven controls was a line scrolled half off the screen. */}
       <PageActions>
         <>
-          <SteerTurnButton
-            turnId={turnId}
-            seat={role || "the seat"}
-            running={running}
-            parked={view.parked}
-          />
+          <SteerTurnButton turnId={turnId} seat={role || "the seat"} running={running} />
           {view.handle && (
             <span className="page-action-folds">
               <PauseSeatButton
@@ -1926,259 +1897,264 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </span>
         </>
       </PageActions>
-      <header className="trace-head">
-        <ObjectHeader
-          kind="Turn"
-          icon="layers"
-          identifier={turnId}
-          title={title}
-          status={turnStatus(view, now)}
-          facts={turnFacts(view, now)}
-        />
-        <Tabs
-          overflow="menu"
-          variant="underline"
-          ariaLabel="The turn's sections"
-          className="trace-tabs"
-          value={tab}
-          onValueChange={(next) => setTab(next as TurnTab)}
-          panelId={panelId}
-          items={TURN_TABS.map((value) => ({
-            value,
-            label: TURN_TAB_LABELS[value],
-            ...(value === "tools" && calls > 0 ? { count: calls } : {}),
-          }))}
-        />
-      </header>
-      {/* THE SKELETON STANDS WHERE THE BODY WILL BE, under a header drawn
+      {/* THE TAB BAR AND WHAT IS UNDER IT, one step apart (`.tab-detail`). */}
+      <div className="tab-detail">
+        <header className="trace-head">
+          <ObjectHeader
+            kind="Turn"
+            icon="layers"
+            identifier={turnId}
+            title={title}
+            status={turnStatus(view, now)}
+            facts={turnFacts(view, now)}
+          />
+          <Tabs
+            overflow="menu"
+            variant="underline"
+            ariaLabel="The turn's sections"
+            className="trace-tabs"
+            value={tab}
+            onValueChange={(next) => setTab(next as TurnTab)}
+            panelId={panelId}
+            items={TURN_TABS.map((value) => ({
+              value,
+              label: TURN_TAB_LABELS[value],
+              ...(value === "tools" && calls > 0 ? { count: calls } : {}),
+            }))}
+          />
+        </header>
+        {/* THE SKELETON STANDS WHERE THE BODY WILL BE, under a header drawn
           from the id that needs no answer to exist. */}
-      {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
-      <QueryState
-        error={error}
-        refusal={refusal}
-        loading={loading}
-        // GATED ON WHAT THE PAGE HOLDS, not on the query's answer alone: a
-        // turn deep-linked the moment it started answers with nothing while
-        // phase after phase streams in.
-        empty={
-          events.length || phases.length || running
-            ? undefined
-            : {
-                title: "No events for this turn",
-                hint: "Turns older than 30 days aren’t kept.",
-              }
-        }
-      >
-        {/* WHICH NODES DID NOT ANSWER. The turn is assembled from every
+        {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
+        <QueryState
+          error={error}
+          refusal={refusal}
+          loading={loading}
+          // GATED ON WHAT THE PAGE HOLDS, not on the query's answer alone: a
+          // turn deep-linked the moment it started answers with nothing while
+          // phase after phase streams in.
+          empty={
+            events.length || phases.length || running
+              ? undefined
+              : {
+                  title: "No events for this turn",
+                  hint: "Turns older than 30 days aren’t kept.",
+                }
+          }
+        >
+          <div className="trace-body">
+            {/* WHICH NODES DID NOT ANSWER. The turn is assembled from every
             node's own store, and a silent node may hold the part of it this
             page is missing. */}
-        <CoverageNote coverage={[view.coverage]} what="this turn" />
-        {cut && (
-          <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-            Too long to show in full; the middle phases are missing.
-            {traceId ? " The trace has the same work." : ""}
-          </Callout>
-        )}
+            <CoverageNote coverage={[view.coverage]} what="this turn" />
+            {cut && (
+              <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
+                Too long to show in full; the middle phases are missing.
+                {traceId ? " The trace has the same work." : ""}
+              </Callout>
+            )}
 
-        {/* ABOVE THE TABS, because a turn that fell over is not something a
+            {/* ABOVE THE TABS, because a turn that fell over is not something a
             reader should have to find a tab to discover. Absent entirely on a
             healthy turn. */}
-        {story.wentWrong.length > 0 && (
-          <Card padding="none">
-            <Card.Header
-              icon={<CircleAlertGlyph size="sm" />}
-              count={story.wentWrong.length}
-              subtitle="guard breaches, exhausted chains, refused calls"
-            >
-              <Card.Title>What went wrong</Card.Title>
-            </Card.Header>
-            <EventList events={story.wentWrong} actor={role} />
-          </Card>
-        )}
-
-        <div
-          ref={panelRef}
-          className="tabpanel trace-panel"
-          role="tabpanel"
-          id={panelId}
-          aria-labelledby={tabId(panelId, tab)}
-          tabIndex={0}
-        >
-          {tab === "timeline" && (
-            <Waterfall
-              model={model}
-              phases={phases}
-              marks={marks}
-              agent={role}
-              selected={span}
-              onSelect={setSpan}
-              now={clock || model.to}
-              turnId={turnId}
-            />
-          )}
-
-          {tab === "transcript" && (
-            <div className="col gap-4">
-              {view.parked && running && (
-                <ParkedRun turnId={turnId} run={parkedRun} now={clock || Date.now()} />
-              )}
-              <Card padding="sm">
-                <Card.Header icon={<BrainGlyph size="sm" />} count={own.length}>
-                  <Card.Title>Phases</Card.Title>
+            {story.wentWrong.length > 0 && (
+              <Card padding="none">
+                <Card.Header
+                  icon={<CircleAlertGlyph size="sm" />}
+                  count={story.wentWrong.length}
+                  subtitle="guard breaches, exhausted chains, refused calls"
+                >
+                  <Card.Title>What went wrong</Card.Title>
                 </Card.Header>
-                <div className="col gap-2">
-                  {own.map((p, i) => (
-                    <PhaseCard
-                      key={p.key}
-                      record={p}
-                      nested={nested.get(p.key)}
-                      // THE FIRST PHASE, THE ONE THAT IS RUNNING, AND THE ONE
-                      // A PARKED TURN PARKED IN. A watch link lands here
-                      // (`lib/turns.ts`' `watchLink`) to see what the turn is
-                      // doing now, and with only the first open that was a
-                      // phase that finished minutes ago, the one it is on a
-                      // closed row under it. A phase that goes live while the
-                      // page is open is a new key, so it mounts — and opens —
-                      // then; one that completes keeps its key and its card,
-                      // and the card latches, so finishing never closes it
-                      // under a reader. A parked turn has no live phase: its
-                      // executor's card is opened instead, under the run.
-                      defaultOpen={i === 0 || p.live || p.key === parkedPhase}
-                    />
-                  ))}
-                  {!own.length && <span className="t-caption">No phase completed.</span>}
-                </div>
+                <EventList events={story.wentWrong} actor={role} />
               </Card>
+            )}
 
-              {story.did.length > 0 && (
-                <Card padding="none">
-                  <Card.Header
-                    icon={<ZapGlyph size="sm" />}
-                    count={story.did.length}
-                    // "COLLEAGUES" IS A PROMISE the wire keeps: the A2A records
-                    // carry the publishing turn (internal/a2a/service.go), and
-                    // internal/events/types/turnbands_client_test.go holds it.
-                    subtitle="coding runs, delegations, colleagues, skills"
-                  >
-                    <Card.Title>What else it did</Card.Title>
-                  </Card.Header>
-                  <EventList events={story.did} actor={role} />
-                </Card>
+            <div
+              ref={panelRef}
+              className="tabpanel trace-panel"
+              role="tabpanel"
+              id={panelId}
+              aria-labelledby={tabId(panelId, tab)}
+              tabIndex={0}
+            >
+              {tab === "timeline" && (
+                <Waterfall
+                  model={model}
+                  phases={phases}
+                  marks={marks}
+                  agent={role}
+                  selected={span}
+                  onSelect={setSpan}
+                  now={clock || model.to}
+                  turnId={turnId}
+                />
               )}
 
-              {story.leftBehind.length > 0 && (
-                <Card padding="none">
-                  <Card.Header
-                    icon={<DatabaseGlyph size="sm" />}
-                    count={story.leftBehind.length}
-                    subtitle="the reflection pass, once the phases were done"
-                  >
-                    <Card.Title>What the seat learned</Card.Title>
-                  </Card.Header>
-                  <EventList events={story.leftBehind} actor={role} />
-                </Card>
-              )}
+              {tab === "transcript" && (
+                <div className="col gap-4">
+                  {view.parked && running && (
+                    <ParkedRun turnId={turnId} run={parkedRun} now={clock || Date.now()} />
+                  )}
+                  <Card padding="sm">
+                    <Card.Header icon={<BrainGlyph size="sm" />} count={own.length}>
+                      <Card.Title>Phases</Card.Title>
+                    </Card.Header>
+                    <div className="col gap-2">
+                      {own.map((p, i) => (
+                        <PhaseCard
+                          key={p.key}
+                          record={p}
+                          nested={nested.get(p.key)}
+                          // THE FIRST PHASE, THE ONE THAT IS RUNNING, AND THE ONE
+                          // A PARKED TURN PARKED IN. A watch link lands here
+                          // (`lib/turns.ts`' `watchLink`) to see what the turn is
+                          // doing now, and with only the first open that was a
+                          // phase that finished minutes ago, the one it is on a
+                          // closed row under it. A phase that goes live while the
+                          // page is open is a new key, so it mounts (and opens)
+                          // then; one that completes keeps its key and its card,
+                          // and the card latches, so finishing never closes it
+                          // under a reader. A parked turn has no live phase: its
+                          // executor's card is opened instead, under the run.
+                          defaultOpen={i === 0 || p.live || p.key === parkedPhase}
+                        />
+                      ))}
+                      {!own.length && <span className="t-caption">No phase completed.</span>}
+                    </div>
+                  </Card>
 
-              {story.rest.length > 0 && (
-                <Card padding="none">
-                  <Card.Header
-                    icon={<ChartNoAxesGanttGlyph size="sm" />}
-                    count={story.rest.length}
-                    subtitle="other events"
-                  >
-                    <Card.Title>Also published</Card.Title>
-                  </Card.Header>
-                  <EventList events={story.rest} actor={role} />
-                </Card>
-              )}
+                  {story.did.length > 0 && (
+                    <Card padding="none">
+                      <Card.Header
+                        icon={<ZapGlyph size="sm" />}
+                        count={story.did.length}
+                        // "COLLEAGUES" IS A PROMISE the wire keeps: the A2A records
+                        // carry the publishing turn (internal/a2a/service.go), and
+                        // internal/events/types/turnbands_client_test.go holds it.
+                        subtitle="coding runs, delegations, colleagues, skills"
+                      >
+                        <Card.Title>What else it did</Card.Title>
+                      </Card.Header>
+                      <EventList events={story.did} actor={role} />
+                    </Card>
+                  )}
 
-              <Absorbed groups={absorbed} />
+                  {story.leftBehind.length > 0 && (
+                    <Card padding="none">
+                      <Card.Header
+                        icon={<DatabaseGlyph size="sm" />}
+                        count={story.leftBehind.length}
+                        subtitle="the reflection pass, once the phases were done"
+                      >
+                        <Card.Title>What the seat learned</Card.Title>
+                      </Card.Header>
+                      <EventList events={story.leftBehind} actor={role} />
+                    </Card>
+                  )}
 
-              {(rec.summary || rec.learning) && (
-                <Card padding="sm">
-                  <Card.Header icon={<FileTextGlyph size="sm" />} subtitle="closing events">
-                    <Card.Title>The turn&rsquo;s own record</Card.Title>
-                  </Card.Header>
-                  <div className="col gap-2">
-                    {conversation && (
-                      <PropertiesRail
-                        groups={[
-                          {
-                            properties: [
+                  {story.rest.length > 0 && (
+                    <Card padding="none">
+                      <Card.Header
+                        icon={<ChartNoAxesGanttGlyph size="sm" />}
+                        count={story.rest.length}
+                        subtitle="other events"
+                      >
+                        <Card.Title>Also published</Card.Title>
+                      </Card.Header>
+                      <EventList events={story.rest} actor={role} />
+                    </Card>
+                  )}
+
+                  <Absorbed groups={absorbed} />
+
+                  {(rec.summary || rec.learning) && (
+                    <Card padding="sm">
+                      <Card.Header icon={<FileTextGlyph size="sm" />} subtitle="closing events">
+                        <Card.Title>The turn&rsquo;s own record</Card.Title>
+                      </Card.Header>
+                      <div className="col gap-2">
+                        {conversation && (
+                          <PropertiesRail
+                            groups={[
                               {
-                                // The turn's CONVERSATION IDENTITY,
-                                // "{source}:{local}" — the surface's own
-                                // answer to "which ongoing conversation is
-                                // this", not an address.
-                                label: "Conversation",
-                                value: (
-                                  <span className="row gap-2 baseline">
-                                    <InlineCode>{conversation}</InlineCode>
-                                    <span className="t-caption">
-                                      the external conversation this turn served
-                                    </span>
-                                  </span>
-                                ),
+                                properties: [
+                                  {
+                                    // The turn's CONVERSATION IDENTITY,
+                                    // "{source}:{local}", the surface's own
+                                    // answer to "which ongoing conversation is
+                                    // this", not an address.
+                                    label: "Conversation",
+                                    value: (
+                                      <span className="row gap-2 baseline">
+                                        <InlineCode>{conversation}</InlineCode>
+                                        <span className="t-caption">
+                                          the external conversation this turn served
+                                        </span>
+                                      </span>
+                                    ),
+                                  },
+                                ],
                               },
-                            ],
-                          },
-                        ]}
-                      />
-                    )}
-                    {rec.summary && (
-                      <Disclosure
-                        title="Turn summary event"
-                        actions={<CopyButton text={summaryJSON} title="copy this record" />}
-                      >
-                        <CodeBlock
-                          plain
-                          copyable={false}
-                          selectable
-                          label="agent_turn_completed, as JSON"
-                          code={summaryJSON}
-                        />
-                      </Disclosure>
-                    )}
-                    {rec.learning && (
-                      <Disclosure
-                        title="Learning record"
-                        actions={<CopyButton text={learningJSON} title="copy this record" />}
-                      >
-                        <CodeBlock
-                          plain
-                          copyable={false}
-                          selectable
-                          label="turn_completed, as JSON"
-                          code={learningJSON}
-                        />
-                      </Disclosure>
-                    )}
-                  </div>
-                </Card>
+                            ]}
+                          />
+                        )}
+                        {rec.summary && (
+                          <Disclosure
+                            title="Turn summary event"
+                            actions={<CopyButton text={summaryJSON} title="copy this record" />}
+                          >
+                            <CodeBlock
+                              plain
+                              copyable={false}
+                              selectable
+                              label="agent_turn_completed, as JSON"
+                              code={summaryJSON}
+                            />
+                          </Disclosure>
+                        )}
+                        {rec.learning && (
+                          <Disclosure
+                            title="Learning record"
+                            actions={<CopyButton text={learningJSON} title="copy this record" />}
+                          >
+                            <CodeBlock
+                              plain
+                              copyable={false}
+                              selectable
+                              label="turn_completed, as JSON"
+                              code={learningJSON}
+                            />
+                          </Disclosure>
+                        )}
+                      </div>
+                    </Card>
+                  )}
+                </div>
+              )}
+
+              {tab === "context" && (
+                <div className="col gap-4">
+                  <TurnBrief view={view} omit={title} />
+                  {prefetch.length > 0 || weights.length > 0 ? (
+                    <Given blocks={prefetch} weights={weights} />
+                  ) : (
+                    <p className="t-caption">No prompt breakdown yet.</p>
+                  )}
+                </div>
+              )}
+
+              {tab === "tools" && (
+                <ToolsTab
+                  phases={phases}
+                  model={model}
+                  onOpen={(id) => nav.to(["live", "turns", turnId], id ? { span: id } : {})}
+                />
               )}
             </div>
-          )}
-
-          {tab === "context" && (
-            <div className="col gap-4">
-              <TurnBrief view={view} omit={title} />
-              {prefetch.length > 0 || weights.length > 0 ? (
-                <Given blocks={prefetch} weights={weights} />
-              ) : (
-                <p className="t-caption">No prompt breakdown yet.</p>
-              )}
-            </div>
-          )}
-
-          {tab === "tools" && (
-            <ToolsTab
-              phases={phases}
-              model={model}
-              onOpen={(id) => nav.to(["live", "turns", turnId], id ? { span: id } : {})}
-            />
-          )}
-        </div>
-      </QueryState>
+          </div>
+        </QueryState>
+      </div>
     </>
   );
 }
@@ -2228,7 +2204,7 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
                     running
                   </Tag>
                 )}
-                {p.failed && <Tag variant="danger">{p.errorKind || "failed"}</Tag>}
+                {p.failed && <Tag variant="danger">{failureWords(p.errorKind).tag}</Tag>}
                 <span className="spacer" />
                 <span className="phase-meta" title="tokens this phase spent">
                   {fmtCount(p.totalTokens)}

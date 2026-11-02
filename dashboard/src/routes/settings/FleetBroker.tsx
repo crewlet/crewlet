@@ -59,7 +59,7 @@ import { NetworkGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/g
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { QueryState } from "~/components/common.tsx";
-import { BROKER_REMOVE_TIMEOUT_MS, rest, RestError } from "~/protocol/index.ts";
+import { BROKER_REMOVE_TIMEOUT_MS, pathSegment, rest, RestError } from "~/protocol/index.ts";
 import type {
   BrokerRemoved,
   FleetBrokerAnswer,
@@ -370,8 +370,8 @@ async function remove(node: string, peer: string, force: boolean): Promise<Heard
     // EACH ROUTE WRITTEN OUT, so the dev proxy's gate reads its path.
     const answer = (
       await (node
-        ? rest.request("POST", `/fleet/broker/remove/${encodeURIComponent(node)}`, options)
-        : rest.request("POST", `/fleet/broker/remove-peer/${encodeURIComponent(peer)}`, options))
+        ? rest.request("POST", `/fleet/broker/remove/${pathSegment(node)}`, options)
+        : rest.request("POST", `/fleet/broker/remove-peer/${pathSegment(peer)}`, options))
     ).body as BrokerRemoved | null;
     if (!answer) return { kind: "unanswered", why: "the node answered with no body" };
     return { kind: "removed", answer };

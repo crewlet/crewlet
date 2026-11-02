@@ -107,17 +107,17 @@ func (a *App) boxCodeRoute(kind code.GitReadKind) http.Handler {
 		what := "box_code_" + string(kind)
 		q, err := boxCodeQuery(kind, adm, r.URL.Query())
 		if err != nil {
-			writeQueryError(w, what, err)
+			writeQueryError(w, r, what, err)
 			return
 		}
 		reads, why := a.code.GitReads()
 		if why != nil {
-			codeNotServed(w, what, why)
+			codeNotServed(w, r, what, why)
 			return
 		}
 		page, err := reads.GitRead(r.Context(), q)
 		if err != nil {
-			writeQueryError(w, what, boxCodeRefusal(err))
+			writeQueryError(w, r, what, boxCodeRefusal(err))
 			return
 		}
 		out := boxCodeAnswer{Repo: adm.Repo.Name, Commit: adm.Attempt.OID, Next: page.Next, Tree: page.Tree,

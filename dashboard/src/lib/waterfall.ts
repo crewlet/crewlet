@@ -18,11 +18,17 @@
  *
  *  - the TURN from its opening record to its last span (or now, while it runs);
  *  - its CONTEXT — the prefetch — before the first phase;
- *  - each of its own PHASES, with each ROUND's model call under it and that
- *    round's TOOL CALLS after it. A call the engine did not stamp but did time
- *    is run SERIALLY from the model's answer, in the order the round made them
- *    — which is the order the loop runs them in — and marked `placed`, so a
- *    reader can tell a stamped instant from an arranged one;
+ *  - each of its own PHASES, with each CLI RUN under it from its launch to its
+ *    exit (`invocations[]`), each ROUND's model call under the run that made it
+ *    — filed by the round span the run names, never by instant — and that
+ *    round's TOOL CALLS after it, every call in flight among them. A run
+ *    whose CLI showed no requests is ONE round, which nothing timed on its
+ *    own: its span is the run's. The run in flight on a live phase is not on
+ *    the record until it ends, so it is drawn open from the first instant
+ *    measured under it. A call the engine did not stamp but did time is run
+ *    SERIALLY from the model's answer, in the order the round made them, and
+ *    marked `placed`, so a reader can tell a stamped instant from an arranged
+ *    one;
  *  - a delegate's WORKERS and the round-cap JUDGE under the round whose call
  *    spawned them (`host_round`), or under their phase where the record does
  *    not say which round;
@@ -36,31 +42,34 @@
  *    has not started, while the turn runs.
  *
  * A TURN THAT PARKED ON A CODING RUN IS ONE TURN: its executor publishes one
- * record when it finally finishes, carrying every round from before the park
- * and after it at their own instants, so the phase spans the run it waited on
- * and the run sits beside it.
+ * record when the run is collected, carrying the run as its one round — from
+ * the launch to the collection, with the run's calls at their own instants
+ * inside it — so the phase spans the run it waited on and the run sits beside
+ * it.
  *
  * # What cannot be placed is still shown
  *
- * A call whose arguments did not parse was answered rather than run, and an
- * agent-mode executor's rounds ran inside somebody else's loop; neither kind
- * of call carries instants. Those are UNTIMED rows — listed under the
- * waterfall as "not placed on this clock" — rather than bars drawn at an
- * invented position, or dropped. The list says PLACED rather than
- * timed because a call can be measured and still have nowhere to go: timed
- * but unstamped, in a round with no model call of its own to follow. Whether
- * a call was measured at all is [callMeasured]'s, which every surface asks.
+ * A call whose arguments did not parse was answered rather than run, so it
+ * carries no instants — unlike an executor run's calls, which ran inside its
+ * CLI's own loop and are timed at the bridge they were made over. Such a call
+ * is an UNTIMED row — listed under the waterfall as "not placed on this
+ * clock" — rather than a bar drawn at an invented position, or dropped. The
+ * list says PLACED rather than timed because a call can be measured and
+ * still have nowhere to go: timed but unstamped, in a round with no model call
+ * of its own to follow. Whether a call was measured at all is
+ * [callMeasured]'s, which every surface asks.
  */
 
 import type { EventRecord } from "~/protocol/index.ts";
 import { auxiliaryRecords, purposeLabel } from "./auxiliary.ts";
 import { tsKey } from "./format.ts";
-import { phaseStart, type PhaseRecord, type ToolCall } from "./phases.ts";
+import { phaseStart, type Invocation, type PhaseRecord, type ToolCall } from "./phases.ts";
 
 export type SpanKind =
   | "turn"
   | "context"
   | "phase"
+  | "invocation"
   | "model"
   | "tool"
   | "worker"
@@ -91,6 +100,12 @@ export interface Span {
   round: number;
   /** The call's index in its phase's `tools`, for a tool span; -1 otherwise. */
   toolIndex: number;
+  /** The call's index in its phase's `runningCalls`, for a tool span still in
+   *  flight; -1 otherwise. */
+  runningIndex: number;
+  /** The CLI run's ordinal, for an invocation span — and for a model span, the
+   *  run that made the round, where the record names one; 0 otherwise. */
+  invocation: number;
   /** The coding run's job, for a run span; "" otherwise. */
   launchId: string;
   /** A tool call placed from its duration rather than stamped by the engine. */
@@ -177,6 +192,8 @@ function span(over: Partial<Span> & Pick<Span, "id" | "kind" | "label" | "start"
     phaseKey: "",
     round: 0,
     toolIndex: -1,
+    runningIndex: -1,
+    invocation: 0,
     launchId: "",
     placed: false,
     ...over,
@@ -203,18 +220,31 @@ function phaseNode(
   const byRound = new Map<number, Node>();
   const rounds = [...p.timedRounds];
   for (const r of rounds) {
-    const start = at(r.startedAt);
+    const run = runOf(p.invocations, r.round);
+    let start = at(r.startedAt);
+    let end = start + r.durationMs;
+    let sub = r.model || p.model;
+    // A RUN WHOSE CLI SHOWED NO REQUESTS IS ONE ROUND, and nothing timed that
+    // round on its own: the model worked somewhere inside the run, and the
+    // run's own launch and exit are the instants there are. Drawn over the
+    // run, and said to be — never left untimed while its run is measured.
+    if (start <= 0 && run && !run.requestsObserved && at(run.startedAt) > 0) {
+      start = at(run.startedAt);
+      end = start + run.durationMs;
+      sub = `${sub ? `${sub} · ` : ""}the whole run`;
+    }
     if (start <= 0) continue;
     const node: Node = {
       span: span({
         id: `${p.key}.r${r.round}`,
         kind: "model",
         label: `Round ${r.round}`,
-        sub: r.model || p.model,
+        sub,
         start,
-        end: start + r.durationMs,
+        end,
         phaseKey: p.key,
         round: r.round,
+        invocation: run?.run ?? 0,
       }),
       children: [],
     };
@@ -294,26 +324,31 @@ function phaseNode(
     };
     (host ? host.children : children).push(node);
   });
-  // THE CALL RUNNING NOW, which has no row in `tools` until it returns.
-  if (p.live && p.runningCall) {
-    const start = at(p.runningCall.startedAt);
-    if (start > 0) {
-      const host = byRound.get(p.runningCall.round);
+  // THE CALLS RUNNING NOW, which have no row in `tools` until they return —
+  // every one of them, since a CLI runs a response's calls side by side. Each
+  // is named by its own id where it has one, so a reader who opened one still
+  // has it open while the others come and go.
+  if (p.live) {
+    p.runningCalls.forEach((call, i) => {
+      const start = at(call.startedAt);
+      if (start <= 0) return;
+      const host = byRound.get(call.round);
       const node: Node = {
         span: span({
-          id: `${p.key}.r${p.runningCall.round}.running`,
+          id: `${p.key}.r${call.round}.running.${call.id || i}`,
           kind: "tool",
-          label: p.runningCall.name,
+          label: call.name,
           start,
           end: Math.max(start, now),
           open: true,
           phaseKey: p.key,
-          round: p.runningCall.round,
+          round: call.round,
+          runningIndex: i,
         }),
         children: [],
       };
       (host ? host.children : children).push(node);
-    }
+    });
   }
   // THE WORKERS AND THE JUDGE, under the round that spawned them.
   for (const w of workers) {
@@ -345,6 +380,8 @@ function phaseNode(
     (host ? host.children : children).push(node);
   }
 
+  cliRuns(p, children, now, untimed);
+
   const ownEnd = p.live ? now : p.durationMs > 0 && began > 0 ? began + p.durationMs : 0;
   const bounds = [ownEnd, ...children.flatMap(ends)].filter((t) => t > 0);
   const starts = [began, ...children.flatMap(starts_)].filter((t) => t > 0);
@@ -368,6 +405,97 @@ function phaseNode(
     }),
     children,
   };
+}
+
+/** The run that made a round, by the round span each run names, or undefined. */
+function runOf(runs: readonly Invocation[], round: number): Invocation | undefined {
+  return runs.find((r) => r.firstRound > 0 && r.firstRound <= round && round <= r.lastRound);
+}
+
+/**
+ * A phase's CLI runs, each over the round spans it made: the round nodes in
+ * `children` move under the run that names them, and the run's span is its
+ * own launch and exit.
+ *
+ * FILED BY ROUND, NEVER BY INSTANT: the round number is what the run names,
+ * and a round's start is when the engine saw its model begin, which says
+ * nothing about which process was running. A run nothing timed is listed as
+ * untimed and its rounds stay under the phase.
+ *
+ * THE RUN IN FLIGHT on a live phase is on no record until it ends: it is drawn
+ * open from its launch, which the live frame states (`run_started_at`), over
+ * its rounds past every ended run's — and from the first instant measured
+ * under it on a frame that does not say. A run launched with nothing timed
+ * under it yet is drawn as the empty span it is: the CLI starting, or its
+ * model writing the first request.
+ */
+function cliRuns(p: PhaseRecord, children: Node[], now: number, untimed: Untimed[]) {
+  // A round's model call, and whatever of that round hangs under the phase
+  // for want of one — a call or a worker whose round nothing timed.
+  const ofRound = (n: Node) => n.span.round > 0 && n.span.kind !== "invocation";
+  const claimed = (run: Invocation) => (n: Node) =>
+    ofRound(n) &&
+    run.firstRound > 0 &&
+    n.span.round >= run.firstRound &&
+    n.span.round <= run.lastRound;
+  const take = (match: (n: Node) => boolean): Node[] => {
+    const taken: Node[] = [];
+    for (let i = children.length - 1; i >= 0; i--) {
+      if (match(children[i]!)) taken.unshift(...children.splice(i, 1));
+    }
+    return taken;
+  };
+  const label = (n: number) => `CLI run ${n}`;
+  for (const run of p.invocations) {
+    const id = `${p.key}.i${run.run}`;
+    const start = at(run.startedAt);
+    if (start <= 0) {
+      untimed.push({
+        id,
+        kind: "invocation",
+        label: label(run.run),
+        sub: run.providerKey,
+        phaseKey: p.key,
+      });
+      continue;
+    }
+    children.push({
+      span: span({
+        id,
+        kind: "invocation",
+        label: label(run.run),
+        sub: run.providerKey || run.model,
+        start,
+        end: start + run.durationMs,
+        failed: run.outcome === "failed",
+        phaseKey: p.key,
+        invocation: run.run,
+      }),
+      children: take(claimed(run)),
+    });
+  }
+  if (!p.live) return;
+  const past = p.invocations.reduce((n, r) => Math.max(n, r.lastRound), 0);
+  const inFlight = take((n) => ofRound(n) && n.span.round > past);
+  const launched = at(p.runStartedAt);
+  if (!inFlight.length && launched <= 0) return;
+  const ordinal = p.invocations.length + 1;
+  const start = launched > 0 ? launched : Math.min(...inFlight.flatMap(starts_));
+  for (const n of inFlight) if (n.span.kind === "model") n.span.invocation = ordinal;
+  children.push({
+    span: span({
+      id: `${p.key}.i${ordinal}`,
+      kind: "invocation",
+      label: label(ordinal),
+      sub: p.model,
+      start,
+      end: Math.max(start, now),
+      open: true,
+      phaseKey: p.key,
+      invocation: ordinal,
+    }),
+    children: inFlight,
+  });
 }
 
 function ends(n: Node): number[] {
@@ -399,11 +527,13 @@ function runNodes(
 ): Node[] {
   const out: Node[] = [];
   const seen = new Set<string>();
-  const failures = events
-    .filter((e) => e.type === "sandbox_run_failed")
-    .map((e) => at(e.timestamp))
-    .filter((t) => t > 0)
-    .sort((a, b) => a - b);
+  // HOW A RUN WITH NO RECORD ENDED: lost, or stopped by a person — which ends
+  // its span as surely and is never drawn as a failure.
+  const endings = events
+    .filter((e) => e.type === "sandbox_run_failed" || e.type === "sandbox_run_stopped")
+    .map((e) => ({ at: at(e.timestamp), failed: e.type === "sandbox_run_failed" }))
+    .filter((x) => x.at > 0)
+    .sort((a, b) => a.at - b.at);
   const starts = events
     .filter((e) => e.type === "sandbox_run_started")
     .sort((a, b) => at(a.timestamp) - at(b.timestamp));
@@ -422,11 +552,12 @@ function runNodes(
       return;
     }
     const start = at(str(p.started_at)) || at(ev.timestamp);
-    // A RUN WITH NO RECORD YET is still out, or it failed: a failure is the
-    // first `sandbox_run_failed` after its start and before the next one.
+    // A RUN WITH NO RECORD YET is still out, or it ended without one: its
+    // ending is the first `sandbox_run_failed` or `sandbox_run_stopped` after
+    // its start and before the next one.
     const next = starts[i + 1] ? at(starts[i + 1]!.timestamp) : Infinity;
-    const failedAt = failures.find((t) => t >= start && t < next);
-    if (failedAt !== undefined) {
+    const ended = endings.find((x) => x.at >= start && x.at < next);
+    if (ended !== undefined) {
       out.push({
         span: span({
           id,
@@ -434,8 +565,8 @@ function runNodes(
           label,
           sub,
           start,
-          end: failedAt,
-          failed: true,
+          end: ended.at,
+          failed: ended.failed,
           launchId: launch,
         }),
         children: [],

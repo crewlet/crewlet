@@ -5,7 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // When a task is due and how big it is.
@@ -26,14 +27,14 @@ import (
 // flag was never true, and an estimate could not exist, so every total was
 // zero for a team that had sized all of its work.
 //
-// The write path was complete the whole time — [tracker.TaskPatch] carries all
+// The write path was complete the whole time: [worklet.TaskPatch] carries all
 // four and the applier writes the rows. What was missing was the few lines of
 // tool surface that reach it.
 //
 // # One grammar for a date, shared with the filter that reads it
 //
 // A due date is set with the same tokens `due=` already filters on —
-// [tracker.ResolveDate]: an instant, a calendar date, `+7d`, `today`, `eow`.
+// [period.Resolve]: an instant, a calendar date, `+7d`, `today`, `eow`.
 // A second spelling here would be the copy that stops matching, and it would
 // make a model that can ask for "everything due this week" unable to say "due
 // this week" about one task.
@@ -135,9 +136,10 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 			out.Cleared[key] = true
 			continue
 		}
-		anchor, err := tracker.ResolveDate(token, now, loc)
+		anchor, err := period.Resolve(token, now, loc)
 		if err != nil {
-			return out, fmt.Sprintf("%s could not read `%s`: %v", tool, key, err)
+			return out, fmt.Sprintf("%s could not read `%s`: %s", tool, key,
+				worklet.Sentence(err))
 		}
 		at := anchor.At
 		*target = &at
@@ -191,7 +193,7 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 
 // applyToTask writes what a CREATE was given. A create clears nothing: there
 // is no previous value for a null to take back.
-func (s schedule) applyToTask(task *tracker.Task) {
+func (s schedule) applyToTask(task *worklet.Task) {
 	task.StartAt = s.Start
 	task.DueAt = s.Due
 	if s.DueAllDay != nil {
@@ -210,7 +212,7 @@ func (s schedule) applyToTask(task *tracker.Task) {
 // A CLEARED DATE IS THE ZERO INSTANT rather than a nil pointer, because nil on
 // a patch means "not named" — the whole point of the pointer — so clearing has
 // to be a value the applier can recognise as empty.
-func (s schedule) applyToPatch(patch *tracker.TaskPatch) bool {
+func (s schedule) applyToPatch(patch *worklet.TaskPatch) bool {
 	touched := false
 	if s.Start != nil {
 		patch.StartAt, touched = s.Start, true

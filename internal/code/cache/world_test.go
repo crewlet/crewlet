@@ -158,10 +158,19 @@ func (w *world) open(t testing.TB, mutate ...func(*cache.Options)) *cache.Cache 
 
 // clock is a case's own time: what the cache reads as now — a last use, a
 // rebuild's cooldown, the maintainer's debounce and interval — moved only
-// when the case moves it.
+// when the case moves it; and the timers a knob arms on it (At), each fired
+// by the move that reaches its time.
 type clock struct {
-	mu sync.Mutex
+	mu     sync.Mutex
+	at     time.Time
+	timers []clockTimer
+}
+
+// clockTimer is a timer armed on a clock: the time it fires at, and the
+// channel it fires on.
+type clockTimer struct {
 	at time.Time
+	ch chan time.Time
 }
 
 func newClock() *clock { return &clock{at: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)} }
@@ -173,19 +182,55 @@ func (c *clock) Now() time.Time {
 	return c.at
 }
 
-// Add moves the clock on by d and answers the new time.
+// Add moves the clock on by d, firing every timer it reaches, and answers the
+// new time.
 func (c *clock) Add(d time.Duration) time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.at = c.at.Add(d)
+	c.fire()
 	return c.at
 }
 
-// Set puts the clock at t.
+// Set puts the clock at t, firing every timer it reaches.
 func (c *clock) Set(t time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.at = t
+	c.fire()
+}
+
+// At is a timer on the clock for t: a channel the clock's time is sent on
+// once the clock reads t or later — AT ONCE where it does already, as a timer
+// reset to a wait that is not positive fires at once. A knob standing in for
+// a loop's timer answers one of these, never a channel the case sends on by
+// hand: a loop re-arms its wait from a pass that read the clock before the
+// case moved it (a kick it took while it waited), so the channel the case saw
+// armed may be one nobody waits on any more, and a send on it is lost while
+// the loop waits on the wake it armed after, which nothing sends on.
+func (c *clock) At(t time.Time) <-chan time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ch := make(chan time.Time, 1)
+	c.timers = append(c.timers, clockTimer{at: t, ch: ch})
+	c.fire()
+	return ch
+}
+
+// fire sends on every timer whose time the clock has reached and forgets it:
+// each fires once, into the one place its channel keeps, so moving the clock
+// never waits for whoever armed one. c.mu is held.
+func (c *clock) fire() {
+	kept := c.timers[:0]
+	for _, tm := range c.timers {
+		if tm.at.After(c.at) {
+			kept = append(kept, tm)
+			continue
+		}
+		tm.ch <- c.at
+	}
+	clear(c.timers[len(kept):])
+	c.timers = kept
 }
 
 // on is an Options mutation that runs the cache on the clock.

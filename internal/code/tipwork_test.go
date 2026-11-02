@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// TIP CHECKS RUN ON A PERSON'S DIRECT LANDING (ADR-0068): a person's own push
+// TIP CHECKS RUN ON A PERSON'S DIRECT LANDING (ADR-0091): a person's own push
 // onto a protected branch whose gate requires a check lands with no check
 // having measured it, so it lies above the branch's green row — and the
 // home's `checks_due` listing names the repository and, on its first page,
@@ -121,7 +121,7 @@ func tipsDue(t *testing.T, n *node, repo string) ([]string, []code.TipDue) {
 	return repos.DueRepos, work.DueTips
 }
 
-// A TIP WINDOW KEEPS ITS NEWEST, AND CALLS A GAP ONLY A GAP (ADR-0068): a
+// A TIP WINDOW KEEPS ITS NEWEST, AND CALLS A GAP ONLY A GAP (ADR-0091): a
 // target's tip work reads at most its window's bound of landings above its
 // green — two here, where the shipped bound is MaxTipLandings — and then its
 // newest, the tip a dispatch reaches. Three of ada's pushes onto main are one

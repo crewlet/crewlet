@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE TWO HALVES OF AN EMBEDDED SERVER'S START, and why only one of them is
@@ -1333,9 +1334,9 @@ func (e *embeddedServer) awaitClusterReady(ctx context.Context, js jetstream.Jet
 	// that never started; and one that is both but was never answered is
 	// a group with no leader it can reach.
 	return fmt.Errorf("embedded nats server %q is not ready to serve a "+
-		"%d-replica stream within %s: jetstream current=%t, routed to %v "+
+		"%d-replica stream within %s: jetstream current=%t, routed to %s "+
 		"(want %d peers), metadata leader answered: %v", e.ns.Name(), replicas,
-		r.timeout, e.ns.JetStreamIsCurrent(), e.routePeers(), wantPeers, answered)
+		r.timeout, e.ns.JetStreamIsCurrent(), words.And(e.routePeers()), wantPeers, answered)
 }
 
 // errNotAsked is the metadata question a readiness wait never got as far as

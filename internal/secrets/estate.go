@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE ENGINE'S OWN KEY MATERIAL, and why it shares a store with the operator's
@@ -82,8 +84,8 @@ func Reserved(name string) bool {
 // built around it would be one key every such caller shared.
 func CheckEstateName(name string) error {
 	if !Reserved(name) {
-		return fmt.Errorf("%w: %q is not under one of the engine's own owners %v",
-			ErrInvalidName, name, estateOwners)
+		return fmt.Errorf("%w: %q is not under one of the engine's own owners, %s",
+			ErrInvalidName, name, words.And(estateOwners))
 	}
 	segments := strings.Split(name, "/")
 	if len(segments) < 2 {
@@ -124,11 +126,5 @@ type EngineKeys struct {
 
 // StaleUnder is how many engine rows are sealed under a key other than active.
 func (k EngineKeys) StaleUnder(active string) int {
-	stale := 0
-	for key, n := range k.ByKey {
-		if key != active {
-			stale += n
-		}
-	}
-	return stale
+	return KeyCounts(k.ByKey).Outside(active)
 }

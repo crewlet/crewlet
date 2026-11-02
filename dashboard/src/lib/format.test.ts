@@ -14,6 +14,7 @@ import { describe, expect, test } from "vitest";
 // unnoticed: it goes green on whatever is written, not on what is correct.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  listed,
   fmtSetting,
   asSentence,
   companyMonthLabel,
@@ -23,6 +24,7 @@ import {
   eventHistorySpan,
   nodeCountLabel,
   formatPhaseLLM,
+  fmtBytes,
   fmtCount,
   fmtDate,
   fmtDuration,
@@ -119,7 +121,16 @@ describe("relative time", () => {
 
   test("a future stamp reads forwards rather than as a negative age", () => {
     expect(relTime("2026-01-01T12:30:00Z", now)).toBe("in 30m");
+    expect(relTime("2026-01-01T12:00:05Z", now)).toBe("in 5s");
     expect(inTime("2026-01-01T11:00:00Z", now)).toBe("due");
+  });
+
+  // A STAMP A FEW SECONDS AHEAD HAS JUST HAPPENED: written a moment after the
+  // tab's clock last ticked, or on an engine whose clock runs a little ahead.
+  // Mutation: send every negative age to inTime and these read "in 1s".
+  test("a stamp under five seconds ahead reads just now", () => {
+    expect(relTime("2026-01-01T12:00:01Z", now)).toBe("just now");
+    expect(relTime("2026-01-01T12:00:04Z", now)).toBe("just now");
   });
 
   test("a missing stamp is an em dash, not the epoch", () => {
@@ -176,6 +187,17 @@ describe("relative time", () => {
 });
 
 describe("numbers", () => {
+  // POWERS OF 1024 ARE LABELLED AS SUCH, as the engine labels them: the CLI
+  // and the node's own sentences say "8.0 GiB", and a banner that drew the same
+  // size as "8.0 GB" read as a different number beside it. Mutation: put the
+  // decimal labels back.
+  test("a size is labelled in binary units, as the engine labels it", () => {
+    expect(fmtBytes(512)).toBe("512 B");
+    expect(fmtBytes(3_789)).toBe("3.7 KiB");
+    expect(fmtBytes(8 * 1024 ** 3)).toBe("8.0 GiB");
+    expect(fmtBytes(2 * 1024 ** 4)).toBe("2.0 TiB");
+  });
+
   test("a four-digit count stays exact", () => {
     // A token count in the thousands is something an operator reads exactly;
     // rounding it to "1.2k" throws away the digit they were looking at.
@@ -481,4 +503,15 @@ test("a configured duration reads in the largest unit that divides it", () => {
   expect(fmtSetting(300)).toBe("5 minutes");
   expect(fmtSetting(90)).toBe("1m 30s");
   expect(fmtSetting(0)).toBe("0ms");
+});
+
+test('a list keeps the comma before its last item, so an item carrying its own "and" stays one item', () => {
+  expect(listed([])).toBe("");
+  expect(listed(["coding"])).toBe("coding");
+  expect(listed(["coding", "reviewing and evaluations"])).toBe(
+    "coding and reviewing and evaluations",
+  );
+  expect(listed(["coding", "reviewing and evaluations", "task delegations and routines"])).toBe(
+    "coding, reviewing and evaluations, and task delegations and routines",
+  );
 });

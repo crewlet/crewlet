@@ -23,11 +23,12 @@
  */
 
 import type { ReactNode } from "react";
-import { Button, type ButtonProps } from "@crewlethq/ui";
+import { Button, RefusalStrip, type ButtonProps } from "@crewlethq/ui";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { Act } from "~/lib/useAct.ts";
 import { marked } from "~/ui/Problems.tsx";
-import { youNeedWords } from "~/lib/access.ts";
+import { accessToAsk } from "~/lib/authorityRemedy.ts";
+import { LimitRemedy } from "./LimitRemedy.tsx";
 
 export interface WriteButtonProps<T extends ActionTool> extends Omit<
   ButtonProps,
@@ -112,39 +113,42 @@ export function WriteButton<T extends ActionTool>({
 /**
  * A refusal, drawn where the control that caused it is.
  *
- * THE ENGINE'S SENTENCE NAMES ITS ARGUMENTS IN BACKTICKS ("`labels` …"), which
- * is the one mark a tool's sentence carries for a value — so it is drawn as
- * one, in the refusal's own ink, rather than as punctuation around a word.
+ * THE SENTENCE IS A PERSON'S (ADR-0060): the engine answers a refusal in words
+ * written for whoever pressed, or in its code's own sentence, and neither
+ * carries a backtick. An older node during a rolling upgrade still answers a
+ * tool's sentence, which marks a value in backticks, so a backtick is drawn
+ * as a value in the refusal's own ink rather than as punctuation around a
+ * word.
  *
  * A REFUSAL ON AUTHORITY SAYS WHAT WOULD CHANGE IT: the access the deciding
- * rule would have admitted this person on ("needs Tracker access"), from the
+ * rule would have admitted this person on ("needs Worklet access"), from the
  * answer itself and never written here — a permission named in this file is
  * a second statement of the rule, and the one that goes stale the day the
- * rule moves.
+ * rule moves. Only where that access IS the way past the rule ([accessToAsk]):
+ * a proof gone stale names the access that admitted the person, and an
+ * artifact's role is cleared by its owner's share, so each says its own
+ * sentence.
  */
 export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) {
   const { refusal, busy } = write;
   if (!refusal) return null;
   return (
-    // ABOVE A GRID ROW'S LINK (`data-above-row`), so its sentence can be
-    // selected and its link followed rather than opening the row.
-    <span className="write-refusal" role="alert" data-above-row="">
+    // THE KIT'S ONE DRAWING OF A REFUSAL, inline under the control that
+    // caused it. ABOVE A GRID ROW'S LINK (`data-above-row`), so its sentence
+    // can be selected and its link followed rather than opening the row.
+    <RefusalStrip
+      data-above-row=""
+      hint={refusal.hint || undefined}
+      onRetry={refusal.retryable ? () => void write.retry() : undefined}
+      retrying={busy}
+      onDismiss={write.dismiss}
+    >
       {/* ONE SENTENCE where access would admit: the refusal and its remedy
           said the same thing twice. */}
-      <span>
-        {refusal.grants.length > 0
-          ? `${youNeedWords(refusal.grants)} Ask an admin.`
-          : marked(refusal.sentence, "inherit")}
-      </span>
-      {refusal.hint && <span className="t-caption">{refusal.hint}</span>}
-      {refusal.retryable && (
-        <Button size="small" variant="ghost" loading={busy} onClick={() => void write.retry()}>
-          Try again
-        </Button>
-      )}
-      <Button size="small" variant="ghost" onClick={write.dismiss}>
-        Dismiss
-      </Button>
-    </span>
+      {accessToAsk(refusal) ?? marked(refusal.sentence, "inherit")}
+      {/* WHERE THE LIMIT THAT REFUSED IT IS RAISED, for a refusal a limit
+          caused, behind the gate of the editor it opens. */}
+      <LimitRemedy remedy={refusal.remedy} />
+    </RefusalStrip>
   );
 }

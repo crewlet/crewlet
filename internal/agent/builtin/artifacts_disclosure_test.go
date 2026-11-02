@@ -109,6 +109,10 @@ func TestAnElevatedStalePublishRecordsTheLiveRead(t *testing.T) {
 // and query_artifact_data on a trashed artifact are refused, naming the trash,
 // and read nothing. Mutation: drop the status check from dataTools.admit and
 // the rows are read.
+//
+// THE REFUSAL NAMES THE ARTIFACT AS THE MODEL DID — here by its label — and
+// never by a uuid it did not pass, which is what it said. Mutation: name h.ID
+// in artifactTrashed again and every row goes red.
 func TestATrashedArtifactsContentIsNotRead(t *testing.T) {
 	t.Parallel()
 	r := newDataRig(t, artifactChart{}, requesters{})
@@ -123,14 +127,19 @@ func TestATrashedArtifactsContentIsNotRead(t *testing.T) {
 	turn, _ := readerTurn(t)
 	for _, name := range []string{builtin.GetArtifactTool, builtin.ReadArtifactDataTool,
 		builtin.QueryArtifactDataTool} {
-		args := map[string]any{"artifact": h.ID.String(), "collection": "review"}
+		label := h.ID.Label().String()
+		args := map[string]any{"artifact": label, "collection": "review"}
 		if name == builtin.GetArtifactTool {
-			args = map[string]any{"artifact": h.ID.String()}
+			args = map[string]any{"artifact": label}
 		}
 		got := r.call(t, turn, name, args)
 		if !got.Failed || !errors.Is(got.Cause, artifactsdomain.ErrTrashed) ||
 			strings.Contains(got.Output, "binned-") {
 			t.Errorf("%s on a trashed artifact answered %v %q", name, got.Cause, got.Output)
+		}
+		if !strings.Contains(got.Output, label) || strings.Contains(got.Output, h.ID.String()) {
+			t.Errorf("%s names the trashed artifact as %q, want the label it was "+
+				"passed and never its uuid", name, got.Output)
 		}
 	}
 	if len(r.data.readings) != 0 {
@@ -227,5 +236,61 @@ func TestAConflictingDataWriteHandsBackOnlyWhatTheRequesterCouldRead(t *testing.
 	if got, docs := write(theirs); len(docs) != 1 || docs[0] != "founder-draft" ||
 		strings.Contains(got.Output, "cto-secret") {
 		t.Errorf("a conflict for a viewer handed back %v: %s", docs, got.Output)
+	}
+}
+
+// A MODEL IS TOLD THE ARTIFACT AS IT NAMED IT, on every refusal about one: a
+// base past the head, a base the artifact no longer keeps, an asset on an
+// artifact with no asset store and a path a version does not hold each named
+// the resolved uuid, which a model that passed a label or a link never typed
+// and does not know the artifact by. Each call here names it by its label, and
+// a path the version does not hold names no artifact at all. Mutation: name
+// h.ID in any of the four sentences again and its row goes red.
+func TestARefusalNamesTheArtifactAsTheModelDid(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
+	turn := turnFor(t, "agent-cto")
+	h := r.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "<p>one</p>"})
+	label := h.ID.Label().String()
+	check := func(name string, got tools.Result, says string) {
+		t.Helper()
+		if !got.Failed || !strings.Contains(got.Output, says) {
+			t.Errorf("%s answered %q, want a refusal saying %q", name, got.Output, says)
+			return
+		}
+		if !strings.Contains(got.Output, label) || strings.Contains(got.Output, h.ID.String()) {
+			t.Errorf("%s names the artifact as %q, want the label it was passed and "+
+				"never its uuid", name, got.Output)
+		}
+	}
+	// A PATH THE VERSION DOES NOT HOLD names no artifact at all: the call
+	// that asked is the one reading the answer.
+	got := r.call(t, turn, builtin.GetArtifactTool, map[string]any{
+		"artifact": label, "path": "missing.html"})
+	if !got.Failed || !strings.Contains(got.Output, "has no file") ||
+		strings.Contains(got.Output, h.ID.String()) {
+		t.Errorf("a path the version does not hold answered %q", got.Output)
+	}
+	r.f.mu.Lock()
+	delete(r.f.versions[h.ID], 1)
+	r.f.mu.Unlock()
+	for _, tc := range []struct {
+		name, tool string
+		args       map[string]any
+		says       string
+	}{
+		{"a base past the head", builtin.PublishArtifactTool, map[string]any{
+			"artifact": label, "base_version": 5, "content": "<p>two</p>"}, "is past it"},
+		{"a base no longer kept", builtin.PublishArtifactTool, map[string]any{
+			"artifact": label, "base_version": 1, "content": "<p>two</p>"}, "no longer keeps"},
+		{"an asset with no asset store", builtin.UploadArtifactAssetTool, map[string]any{
+			"artifact": label, "name": "logo.png", "content": "iVBORw0KGgo=",
+			"encoding": "base64"}, "does not declare"},
+		{"a version past the head", builtin.GetArtifactTool, map[string]any{
+			"artifact": label, "version": 5}, "has versions 1.."},
+		{"a version no longer kept", builtin.GetArtifactTool, map[string]any{
+			"artifact": label, "version": 1}, "no longer keeps version 1"},
+	} {
+		check(tc.name, r.call(t, turn, tc.tool, tc.args), tc.says)
 	}
 }

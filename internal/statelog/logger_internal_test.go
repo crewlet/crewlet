@@ -73,7 +73,7 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 		Domains:  map[string]Registered{loggerProbe{}.Name(): {Domain: loggerProbe{}, Spec: loggerProbeSpec()}},
 		LivePath: "replicated.db", NodeID: "node-a", Conn: &nats.Conn{},
 		Need: func(context.Context) (OfferRequest, error) { return OfferRequest{}, nil },
-		Hold: func(context.Context, map[string]uint64) (func(), error) {
+		Hold: func(context.Context, map[string]DomainPosition) (func(), error) {
 			return func() {}, nil
 		},
 		Close:  func(context.Context) error { return nil },

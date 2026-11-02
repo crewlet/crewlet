@@ -43,6 +43,7 @@ func hangingCompany(t *testing.T, startupTimeoutSeconds int) *Company {
 	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

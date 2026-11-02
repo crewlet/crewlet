@@ -31,7 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // THE RIG: the surface over fakes of everything it reads and writes, each
@@ -338,8 +338,8 @@ type workItems struct {
 	log *statelog.Reader
 }
 
-func (t *workItems) Task(ctx context.Context, ref string, _ tracker.DetailWants, fresh statelog.Freshness) (
-	tracker.TaskDetail, error) {
+func (t *workItems) Task(ctx context.Context, ref string, _ worklet.DetailWants, fresh statelog.Freshness) (
+	worklet.TaskDetail, error) {
 	t.mu.Lock()
 	t.asked = append(t.asked, ref)
 	t.fresh = append(t.fresh, fresh)
@@ -349,18 +349,18 @@ func (t *workItems) Task(ctx context.Context, ref string, _ tracker.DetailWants,
 	if log != nil {
 		if _, err := log.Read(ctx, fresh.Query(statelog.ScopeSet{}, false),
 			func(*sql.Tx) error { return nil }); err != nil {
-			return tracker.TaskDetail{}, err
+			return worklet.TaskDetail{}, err
 		}
 	}
 	switch ref {
 	case "ENG-12", "OPS-3", "task-12":
-		return tracker.TaskDetail{Task: tracker.Task{ID: "task-12", Key: "ENG-12",
+		return worklet.TaskDetail{Task: worklet.Task{ID: "task-12", Key: "ENG-12",
 			FormerKeys: []string{"OPS-3"}}}, nil
 	case "ENG-9":
-		return tracker.TaskDetail{Task: tracker.Task{ID: "task-9", Key: "ENG-9",
-			Removed: &tracker.Tombstone{By: "jane", At: time.Unix(1_700_000_000, 0)}}}, nil
+		return worklet.TaskDetail{Task: worklet.Task{ID: "task-9", Key: "ENG-9",
+			Removed: &worklet.Tombstone{By: "jane", At: time.Unix(1_700_000_000, 0)}}}, nil
 	}
-	return tracker.TaskDetail{}, tracker.ErrNoTask
+	return worklet.TaskDetail{}, worklet.ErrNoTask
 }
 
 func (t *workItems) tracker() (artifactsapi.WorkItems, error) {
@@ -392,7 +392,7 @@ func (t *workItems) behind(tb testing.TB, at statelog.Position) *appliedLog {
 	node, db := storetest.OpenEstate(tb, filepath.Join(tb.TempDir(), "node.db"), store.Options{}, 1)
 	tb.Cleanup(func() { _ = node.Close() })
 	applied := &appliedLog{at: at, moved: make(chan struct{}), waiting: make(chan statelog.Position, 8)}
-	log, err := statelogtest.LocalReaderOver(tracker.Domain{}, db, applied)
+	log, err := statelogtest.LocalReaderOver(worklet.Domain{}, db, applied)
 	if err != nil {
 		tb.Fatal(err)
 	}

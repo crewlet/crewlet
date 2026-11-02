@@ -96,7 +96,12 @@ type Options struct {
 	// secret, for the case where the existing one's secret was lost.
 	// Destructive: it invalidates the secret every other deployment of
 	// this company holds.
-	RecreateWebhooks bool
+	//
+	// Spelled as the caller spells its switch ([provision.FreshSwitch]):
+	// `-recreate-webhooks` from `crewlet github provision`,
+	// `recreate_webhooks` from the setup route. A refusal of it names
+	// that spelling, never this package's guess at one.
+	RecreateWebhooks provision.FreshSwitch
 }
 
 // IdentityOutcome is what one run learned about a seat's own code-host
@@ -107,7 +112,7 @@ type Options struct {
 // somebody can fix: every call its tools make is refused, and an operator has
 // a variable to set or a token to reissue. A seat that names NONE has not
 // asked for one — identity on this host is each agent's OWN GitHub App, which
-// [ReconcileSeatApps] is the authority on and which this run cannot see from
+// the access sync is the authority on and which this run cannot see from
 // the org chart it was handed.
 //
 // Reported as one state, they were both "Login is empty, Reason says why",
@@ -312,15 +317,29 @@ type Result struct {
 
 	// Coverage is what this company's agents hear about, when that is
 	// narrower than the organization and is the arrangement rather than a
-	// fault. Empty when nothing needs saying.
+	// fault. The zero finding when nothing needs saying.
 	//
-	// A SENTENCE ON A WORKING INTEGRATION. It is reported as
+	// A NOTE ON A WORKING INTEGRATION. It is reported as
 	// [integration.FindingCoveragePartial], whose verdict is ready, and the
 	// alternatives were both wrong: an ingress_blocked finding reads as
 	// Action required over agents receiving events perfectly well, and a
 	// note is dropped before anything renders it, so a person learns what
 	// their integration does not see only by noticing its absence.
-	Coverage string
+	Coverage integration.Finding
+
+	// Undeliverable says why GitHub can deliver nothing to this deployment
+	// although it HAS an address: the address is one GitHub cannot reach
+	// ([Deliverable]), which is what a local engine's is. The zero finding
+	// otherwise.
+	//
+	// AN ADVISORY, NOT A BLOCK. Such a deployment registers no hook, and its
+	// agents' apps are created with their webhooks off ([BuildManifest]),
+	// but the agents act on GitHub perfectly well through those apps:
+	// pushing, opening pull requests and reviewing are all outbound. So it
+	// is reported as [integration.FindingCoveragePartial] on a ready card,
+	// saying what does not arrive and what makes it arrive, rather than as
+	// Action required over agents that are working.
+	Undeliverable integration.Finding
 }
 
 // Routing reports the seats whose inbound events can reach them.
@@ -389,8 +408,9 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			// and not only from [ensureWebhooks]: a company hooking each
 			// agent's own app has no organization credential by design, so
 			// the pass returns above ever registering anything.
-			Coverage:     coverageFor(opts, nil),
-			NoIngressKey: opts.WebhookBaseKey,
+			Coverage:      coverageFor(opts, nil),
+			Undeliverable: undeliverable(opts),
+			NoIngressKey:  opts.WebhookBaseKey,
 		}, nil
 	}
 	login, err := opts.Client.Me(ctx)
@@ -412,6 +432,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// and missed the other — see the nil-client return above.
 	res.Coverage = coverageFor(opts, res.Hooks)
 	res.NoIngress = noIngressReason(opts)
+	res.Undeliverable = undeliverable(opts)
 	if err == nil {
 		// AND AGAIN AT THE END, because a pass cancelled halfway does not
 		// stop halfway: every read between here and the probe reports its
@@ -537,7 +558,7 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 		}
 		// NAMED NOTHING IS NOT A FAULT — see [IdentityOutcome]. This
 		// seat's identity is its own GitHub App, which this run cannot
-		// see and [ReconcileSeatApps] reports on.
+		// see and the access sync reports on.
 		out[i].Outcome = IdentityUnclaimed
 		out[i].Reason = "no credential under mcp_env." + SeatEnv +
 			", so this seat acts through its own GitHub App rather than a " +
@@ -583,6 +604,45 @@ func noIngressReason(opts Options) string {
 	}
 	return setup.BaseKey(opts.WebhookBaseKey) + " is unset, so nothing at " +
 		"GitHub has an address to deliver to and no event reaches this deployment"
+}
+
+// undeliverable is the advisory for an address GitHub cannot deliver to: what
+// does not arrive, what still works, and what makes it arrive. The zero
+// finding when the deployment has no address ([noIngressReason]'s case) or
+// one GitHub reaches.
+//
+// THE KEY AND THE ADDRESS IN BACKTICKS, so a reader sets them as the literals
+// they are: the address is a URL nobody should follow, and a renderer that
+// links bare URLs would make it one.
+func undeliverable(opts Options) integration.Finding {
+	base := strings.TrimRight(strings.TrimSpace(opts.WebhookBase), "/")
+	if base == "" || Deliverable(base, enterprise(opts)) {
+		return integration.Finding{}
+	}
+	key := setup.BaseKey(opts.WebhookBaseKey)
+	return integration.Finding{
+		Kind:    integration.FindingCoveragePartial,
+		Subject: key,
+		Title:   "GitHub can't reach this engine",
+		Detail: "`" + key + "` is `" + base + "`, so no GitHub events arrive. Agents " +
+			"still push, open pull requests and review through their own apps",
+		Remedy: "Set `" + key + "` to a public address to receive events",
+	}
+}
+
+// enterprise reports a company on Enterprise Server rather than github.com,
+// which decides what [Deliverable] counts as reachable. The address is read
+// through the run's resolver, because it is a `${VAR}` as often as a literal
+// and one that resolves to nothing is github.com.
+func enterprise(opts Options) bool {
+	if opts.Config == nil {
+		return false
+	}
+	url := opts.Config.URL
+	if opts.Value != nil {
+		url = opts.Value(url)
+	}
+	return strings.TrimSpace(url) != ""
 }
 
 // noRegistrarReason says why a run with no organization credential could
@@ -653,15 +713,8 @@ type ingress struct {
 	Notes []string
 }
 
-// coverageNote is the sentence a company hears when its agents' own apps are
-// what carry its events.
-//
-// IT NAMES BOTH HALVES. Saying only what is covered reads as a complete
-// answer and leaves somebody surprised by the first repository nobody hears
-// about; saying only what is not reads as a fault. The remedy is the last
-// clause rather than the first, because nothing is broken.
-// coverageFor is the sentence for a company whose events arrive through its
-// agents' OWN apps, or "" when there is nothing to say.
+// coverageFor is the note for a company whose events arrive through its
+// agents' OWN apps, or the zero finding when there is nothing to say.
 //
 // THE TEST IS WHAT IS DELIVERING, not what the config asked for. Nothing
 // organization-wide is carrying events — no org hook, no repository hook —
@@ -676,13 +729,13 @@ type ingress struct {
 // says so elsewhere, through the roster's own "no app of its own" finding.
 // With a hook working, the organization is covered and there is nothing
 // narrower to report.
-func coverageFor(opts Options, hooks []HookState) string {
+func coverageFor(opts Options, hooks []HookState) integration.Finding {
 	if opts.SeatApps == 0 {
-		return ""
+		return integration.Finding{}
 	}
 	for _, h := range hooks {
 		if h.Hooked() {
-			return ""
+			return integration.Finding{}
 		}
 	}
 	var org string
@@ -692,14 +745,31 @@ func coverageFor(opts Options, hooks []HookState) string {
 	return coverageNote(org)
 }
 
-func coverageNote(org string) string {
+// coverageNote is the note a company reads when its agents' own apps are
+// what carry its events.
+//
+// IT NAMES BOTH HALVES. Saying only what is covered reads as a complete
+// answer and leaves somebody surprised by the first repository nobody hears
+// about; saying only what is not reads as a fault.
+//
+// THE REMEDY IS WORDED AS AN OPTION, because nothing is broken: a company
+// that chose this arrangement must not read a decision it already took as
+// work outstanding. And it is the token, never an install, since no app
+// carries `admin:org_hook` at any permission.
+func coverageNote(org string) integration.Finding {
 	where := "the rest of the organization"
 	if org != "" {
 		where = "the rest of " + org
 	}
-	return "covering the repositories your agents' apps are installed on. " +
-		"Not covering " + where + " — supply integrations.github.token to " +
-		"add one organization-wide hook"
+	return integration.Finding{
+		Kind:    integration.FindingCoveragePartial,
+		Subject: "github coverage",
+		Title:   "Events from your agents' repositories only",
+		Detail: "GitHub sends events for the repositories your agents' apps are " +
+			"installed on, and none for " + where,
+		Remedy: "To cover every repository, set `integrations.github.token` and " +
+			"Crewlet adds one organization-wide hook",
+	}
 }
 
 // ensureWebhooks registers the inbound hooks, or converges the ones already
@@ -720,6 +790,14 @@ func ensureWebhooks(ctx context.Context, opts Options) (ingress, error) {
 				"to register one, or add it by hand — without it GitHub " +
 				"delivers nothing and the integration looks idle rather than " +
 				"unconfigured"}}, nil
+	}
+	if !Deliverable(opts.WebhookBase, enterprise(opts)) {
+		// NO HOOK AT AN ADDRESS GITHUB CANNOT REACH: it would fail every
+		// delivery while reading as registered. [undeliverableReason] is
+		// the finding that says so.
+		return ingress{Notes: []string{
+			"no webhook was registered: " + target + " is not an address " +
+				"GitHub can deliver to"}}, nil
 	}
 	pv := opts.Config.Provisioning
 	if pv == nil {
@@ -834,7 +912,7 @@ func ensureOrgWebhook(
 		if hook.URL != target {
 			continue
 		}
-		if opts.RecreateWebhooks {
+		if opts.RecreateWebhooks.Asked() {
 			if err := opts.Client.DeleteOrgWebhook(ctx, org, hook.ID); err != nil {
 				return state, err
 			}
@@ -926,7 +1004,7 @@ func ensureRepoWebhook(
 		if hook.URL != target {
 			continue
 		}
-		if opts.RecreateWebhooks {
+		if opts.RecreateWebhooks.Asked() {
 			if err := opts.Client.DeleteRepoWebhook(ctx, t.Owner, t.Repo, hook.ID); err != nil {
 				state.Detail = err.Error()
 				return state
@@ -1003,16 +1081,28 @@ func webhookSecret(
 	if opts.Value != nil {
 		resolved = strings.TrimSpace(opts.Value(opts.Config.WebhookSecret))
 	}
-	if resolved != "" && !opts.RecreateWebhooks {
+	if resolved != "" && !opts.RecreateWebhooks.Asked() {
 		return webhookKey{Secret: resolved}, nil
 	}
 	secretVar, ok := provision.SoleVar(opts.Config.WebhookSecret)
+	if !ok && opts.RecreateWebhooks.Asked() {
+		// A VALUE THE DOCUMENT OWNS, which the switch asked to replace:
+		// refused naming the switch as its caller spells it and both
+		// ways on ([provision.RefuseFresh]), never as a slot that
+		// resolved to nothing, which is what the refusal below is about.
+		if err := provision.RefuseFresh("integrations.github.webhook_secret",
+			opts.RecreateWebhooks, opts.Config.WebhookSecret); err != nil {
+			return webhookKey{}, fmt.Errorf("github: %w", err)
+		}
+	}
 	if !ok {
-		// THE VALUE IS NOT QUOTED. It is normally a ${VAR} and quoting it
-		// would be helpful, but the case this refusal exists for is a
-		// slot holding a LITERAL — so the one time the message is
-		// reached, the thing it would print is the credential. The path
-		// is what an operator needs, and the path is what it says.
+		// THE VALUE IS NOT QUOTED, the rule [provision.Shape] states for
+		// every refusal of a slot like this one. What reaches here holds
+		// no value to register, but it can still hold text a credential
+		// sits in — a reference embedded in other text, or a literal a
+		// run handed no resolver could not read — and this error becomes
+		// State.LastError. The path is what an operator needs, and the
+		// path is what it says.
 		return webhookKey{}, fmt.Errorf(
 			"github: integrations.github.webhook_secret holds neither a value "+
 				"this run could resolve nor a whole ${VAR} reference to mint "+
@@ -1025,7 +1115,7 @@ func webhookSecret(
 	// so the only property that matters is that it is unguessable — there
 	// is no shape to satisfy, unlike the self-hosted host's whsec_ form.
 	secret, err := provision.MintSecret(ctx, opts.Sink, secretVar,
-		opts.RecreateWebhooks, func() (string, error) { return rand.Text(), nil })
+		opts.RecreateWebhooks.Asked(), func() (string, error) { return rand.Text(), nil })
 	if err != nil {
 		return webhookKey{}, fmt.Errorf("github: %w", err)
 	}
@@ -1034,7 +1124,7 @@ func webhookSecret(
 		note := fmt.Sprintf(
 			"a fresh webhook secret was minted into %s — %s", secretVar,
 			opts.Sink.NextStep())
-		if opts.RecreateWebhooks {
+		if opts.RecreateWebhooks.Asked() {
 			note += ". The previous secret is now invalid on every other " +
 				"deployment of this company"
 		}

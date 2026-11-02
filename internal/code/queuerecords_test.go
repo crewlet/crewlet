@@ -38,7 +38,7 @@ func training(repo, base, entry, commit string) code.QueueProposal {
 // order given — each merged as its commit onto the candidate before, its tip
 // that commit — under an operation id of its own.
 func trainOf(repo, base string, entries ...code.CandidateEntry) code.QueueProposal {
-	opID := statelog.NewOpID(time.Now(), "code.queue")
+	opID := statelog.NewOpID(time.Now(), "code_queue")
 	train := code.QueueTrainID(opID)
 	c := &code.Candidate{RepoID: repo, TargetRef: mainRef, Train: train, BaseOID: base, Pack: queuedPack(train)}
 	for i, e := range entries {
@@ -52,7 +52,7 @@ func trainOf(repo, base string, entries ...code.CandidateEntry) code.QueuePropos
 // commit it lands as, in the order main moves through them — onto base, a
 // tested prefix of train, under an operation id of its own.
 func landingOf(repo, train, base string, entries ...code.LandEntry) code.QueueProposal {
-	opID := statelog.NewOpID(time.Now(), "code.queue")
+	opID := statelog.NewOpID(time.Now(), "code_queue")
 	return code.QueueProposal{OpID: opID, Land: &code.Land{RepoID: repo, LandID: code.QueueLandID(opID),
 		TargetRef: mainRef, BaseOID: base, TipOID: entries[len(entries)-1].Commit, Train: train,
 		Entries: entries, Node: "git-a", ReceivedAt: harnessAt}}
@@ -60,7 +60,7 @@ func landingOf(repo, train, base string, entries ...code.LandEntry) code.QueuePr
 
 // queueRecord is a record of the queue's own, under an operation id of its own.
 func queueRecord(set func(*code.QueueProposal)) code.QueueProposal {
-	p := code.QueueProposal{OpID: statelog.NewOpID(time.Now(), "code.queue")}
+	p := code.QueueProposal{OpID: statelog.NewOpID(time.Now(), "code_queue")}
 	set(&p)
 	return p
 }
@@ -222,9 +222,9 @@ func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 			AND actor = 'pat:ada' AND actor_seat = 'founder' AND introduced = ?`, push, oidOf("M")); pushes != 1 {
 		t.Fatalf("%d push rows record the landing as ada's push via queue introducing M, want one", pushes)
 	}
-	if got := n.landingsOf(repo, mainRef); len(got) != 1 || got[0].kind != string(code.LandedPreLand) ||
+	if got := n.landingsOf(repo, mainRef); len(got) != 1 || got[0].kind != string(code.LandedQueue) ||
 		got[0].entry != entryID || got[0].base != oidOf("A") || got[0].commit != oidOf("M") || !got[0].green {
-		t.Fatalf("main's landings read %+v, want one green pre_land landing of the entry from A to M", got)
+		t.Fatalf("main's landings read %+v, want one green queue landing of the entry from A to M", got)
 	}
 	if green, _ := n.greenOf(repo, mainRef); green != oidOf("M") {
 		t.Fatalf("main's green row is at %q, want the landing's tip", green)
@@ -605,13 +605,14 @@ func TestAPushLandingOnMoreProtectedBranchesThanARecordHoldsIsRefusedWhole(t *te
 }
 
 // AN EJECTED ENTRY LEAVES ITS QUEUE AND ITS TRAIN: an eject puts a live entry
-// out — ejected, why and the checks that failed kept on its row — abandons the
+// out — ejected, why and the checks that failed kept on its row, weighed by
+// their bytes for the sweep that removes it — abandons the
 // train it was tested in, its candidates gone, and the node whose committer
 // landed the record announces one code_queue_ejected naming the change, the
 // branch and why. An eject of an entry no longer live is refused not_queued.
 //
 // Mutation: keep the train when its entry is ejected — its candidate outlives
-// the ejection, red.
+// the ejection, red; weigh no ejection (write ejected_bytes 0) — red.
 func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -639,6 +640,10 @@ func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	}
 	if left := n.count(`SELECT COUNT(*) FROM code_candidates WHERE repo_id = ?`, repo); left != 0 {
 		t.Fatalf("%d candidates outlive the train their entry was ejected from", left)
+	}
+	if weighed := n.count(`SELECT COUNT(*) FROM code_queue WHERE repo_id = ? AND entry_id = ?
+		AND ejected_bytes = length(CAST(ejected AS BLOB)) AND ejected_bytes > 0`, repo, entryID); weighed != 1 {
+		t.Fatalf("the ejected entry's row is not weighed by its ejection's bytes")
 	}
 	waitAnnouncedOf(t, stream, "code_queue_ejected", 1)
 	ev := stream.of("code_queue_ejected")[0]

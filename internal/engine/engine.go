@@ -13,16 +13,20 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
-	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
 // Company is one immutable configuration epoch.
@@ -72,15 +76,32 @@ type Company struct {
 	// wholesale by every apply. See the seatTools field in run.go.
 	Tools *tools.Registry
 
+	// AskTool is `ask_and_wait`, the tool an executor's run asks a person
+	// through and parks on (ADR-0068): offered on that run's surface alone
+	// ([runner.Config.Ask]) rather than filed in Tools, because no other
+	// phase has a run to park. Built with the builtins ([Engine.equip]);
+	// nil on an epoch built without an engine, whose runs offer none.
+	AskTool runner.RunAsk
+
+	// CheckoutTool is `code_checkout`, the tool an executor's run checks a
+	// repository of the company's own code host out through (ADR-0086):
+	// offered on that run's surface alone ([runner.Config.Checkout]), for
+	// AskTool's reason — it grants to the running job's row, which no other
+	// phase has. Built with the builtins where the epoch's code tools serve
+	// ([Engine.equip]); nil on an epoch whose company hosts no code.
+	CheckoutTool tools.Callable
+
 	// ActivatedAt is the instant the revision this epoch was applied from
 	// was activated — the activation pointer's own ([coord.Activation.At]),
-	// or a boot's reading of the active revision's `activated_at` — in UTC,
-	// stamped ONCE, as the company is built ([stampActivation]).
+	// or a boot's reading of the boot row's `served_at`
+	// ([store.Revision.ServedAt]) — in UTC, stamped ONCE, as the company is
+	// built ([stampActivation]).
 	//
-	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED YET: a Tier B file a node
-	// booted with, which its reconciler publishes and applies with the
-	// pointer's instant before a seat is claimed. A zero instant is a
-	// configuration nothing derived from it may be written from.
+	// ZERO FOR A COMPANY NO ACTIVATION HAS NAMED: one handed to [New] in code
+	// rather than read from a store. `crewlet run` never boots on one — it
+	// starts on the revision its store activated, or on nothing, and a Tier
+	// B file reaches the engine through an activation and its apply. A zero
+	// instant is a configuration nothing derived from it may be written from.
 	//
 	// IT IS WHAT EVERY ROW DERIVED FROM THE CONFIGURATION IS STAMPED WITH
 	// ([configplane.ActivationStamp]) — the tracker's chart-owned project
@@ -109,6 +130,23 @@ type Company struct {
 	// another node is asked — never a seat that stands nowhere. A function
 	// rather than the value, so an epoch copied whole copies no lock.
 	roster func() codeRoster
+	// catalogue is the sandbox catalogue this epoch was built with
+	// ([buildSandbox]): the cells a launch may place a box in, the runners
+	// it may start, the engine-wide setup steps and the default turn cap.
+	// Nil where the company reaches no cell — no providers.sandbox, or no
+	// seat that launches.
+	//
+	// PINNED WITH THE EPOCH, and what every launch of this epoch's turns
+	// places its run by, never the node's live manager: the turn's member,
+	// its run_in and its seat's box settings come from this epoch, and a
+	// launch that read the catalogue of whichever revision was live at the
+	// moment could resolve a pinned entry to a cell its own revision never
+	// configured, or refuse a run_in the live catalogue had just dropped.
+	// The node's coordinator keeps the live manager — the newest catalogue,
+	// carrying every cell a box already out may be in — for polling,
+	// collecting and reclaiming runs that are already out
+	// ([sandbox.Coordinator.SetManager]).
+	catalogue *sandbox.Manager
 }
 
 // NewCompany builds an epoch from a validated config.
@@ -133,10 +171,12 @@ func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 	if env == nil {
 		env = config.EnvOnly()
 	}
-	return newCompany(c, env)
+	return newCompany(c, env, nil)
 }
 
-func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
+// newCompany builds an epoch whose coding-CLI entries keep their sit-outs on
+// plans, the node's registry ([cliagent.Plans]); nil for an epoch nothing runs.
+func newCompany(c *config.Company, env *config.Resolver, plans *cliagent.Plans) (*Company, error) {
 	if c == nil {
 		return nil, fmt.Errorf("engine: no company config")
 	}
@@ -161,7 +201,7 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: organization: %w", err)
 	}
-	models, err := buildProviders(c, env)
+	models, err := buildProviders(c, env, plans)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +309,8 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		// prompt renders leaves out exactly the people its tools do — and
 		// the chain the roster's ${VAR} contact ids resolve through.
 		Seat: prompts.Seat{Org: c.Org, Role: role, Env: c.contacts,
-			Withheld: in.Turn.Context.WithholdsContacts},
+			Withheld: in.Turn.Context.WithholdsContacts,
+			Chatlet:  c.Config.ChatBackendFor() == config.ChatChatlet},
 		Registry: reg,
 		// WHAT THIS SEAT'S SURFACES LEAVE OUT of the epoch's registry: the
 		// builtins the authority table refuses it before any object is
@@ -280,11 +321,17 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		// would be refused ([Company.withheldFrom]).
 		Withheld: c.withheldFrom(ctx, handle, reg),
 		Models:   c.Models,
+		// THE PROCESS'S, threaded per turn like the publisher: the epoch is
+		// configuration and the session directory is not.
+		Sessions: in.Sessions,
+		Metrics:  in.Metrics,
+		// The onboarding pass's extension policy: the executor's rounds
+		// are its CLI's own, capped by the run's max_turns, and the
+		// reviewer's budget is a structural one — so the pass is the only
+		// engine loop a cap is extended in.
 		Caps: runner.Caps{
-			ExecutorRounds:  te.MaxToolRounds,
-			ExecutorCeiling: te.ExecuteMaxToolRoundsCeiling,
-			ExtensionStep:   te.ExtensionRoundStep,
-			ExtensionOn:     te.ExtensionEnabled.Or(true),
+			ExtensionStep: te.ExtensionRoundStep,
+			ExtensionOn:   te.ExtensionEnabled.Or(true),
 		},
 		Budget: in.Budget,
 		Judge:  in.Judge,
@@ -309,7 +356,7 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 				CallTimeout:      seconds(del.CallTimeoutSeconds),
 				MaxParallel:      del.MaxParallel,
 				BudgetFraction:   del.BudgetFraction,
-				MinTokensPerTask: del.MinTokensPerTask,
+				MinTokensPerTask: del.PerTaskFloor(),
 			},
 			// CLONED, because the live config cell is replaced wholesale
 			// by an apply and a turn holding the old map would otherwise
@@ -322,7 +369,7 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		Reply:        in.Reply,
 		Conversation: in.Conversation,
 		Skills:       in.Skills,
-		SkipNames:    MetaToolNames(),
+		SkipNames:    toolname.Discovery(),
 		Publisher:    in.Publisher,
 		Turn:         in.Turn,
 		// The working indicator's phase hook, threaded per turn like the
@@ -331,16 +378,23 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		OnPhase: in.OnPhase,
 		Onboarding: runner.Onboarding{
 			Markers: in.Markers, Latch: in.Latch,
-			Rounds:  te.OnboardingMaxToolRounds,
+			Rounds:  te.OnboardingRounds(),
 			Ceiling: te.OnboardingMaxToolRoundsCeiling,
 		},
 		Resume: in.Resume,
-		// The executor's RUNTIME: nil for the native tool loop, non-nil
-		// for a coding CLI in agent mode. Supplied by the caller rather
-		// than resolved here, because building it needs the engine and
-		// the turn — and there is one helper behind both call sites, so
-		// a turn cannot change runtime by being resumed.
-		AgentRun: in.AgentRun,
+		// The executor's LAUNCHER, which the runner requires. Supplied by
+		// the caller rather than resolved here, because building it needs
+		// the engine and the turn — and there is one helper behind both
+		// call sites ([Engine.agentRunFor]), so a turn launches the same
+		// way whether it is dispatched or resumed.
+		Launcher: in.Launcher,
+		// THE EXECUTOR RUN'S WAY TO PARK ON A PERSON, built with the
+		// epoch's builtins: its evidence is checked against the same
+		// tracker and knowledge base a work item's decision is.
+		Ask: c.AskTool,
+		// AND ITS CHECKOUT of the company's own repositories, on the same
+		// surface for the same reason.
+		Checkout: c.CheckoutTool,
 		// The turn's note box, opened by the caller because the caller is
 		// what files it where a person's note can find it.
 		Steer: in.Steer,
@@ -351,6 +405,13 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 type RunnerInput struct {
 	Task         string
 	Conversation string
+
+	// Metrics is the node's recorder, which every surface of the turn
+	// counts into ([runner.Config.Metrics], where it is copied): its
+	// refusal-loop decisions ([metrics.ToolPolicyRefusalLoops]) and the
+	// calls answered outside their schema ([metrics.ToolArgsOutsideSchema]),
+	// the executor run's bridged calls included. Nil counts nothing.
+	Metrics *metrics.Recorder
 
 	// Compact is the epoch's compactor; the runner binds it to the seat.
 	// Nil rewrites nothing, and every reader of it then carries a payload
@@ -405,18 +466,24 @@ type RunnerInput struct {
 	Publisher queue.Publisher
 	Turn      runner.Turn
 
+	// Sessions is where the turn's phases serve their tools to the CLI that
+	// runs them: the engine's one [toolsession.Host] ([Engine.sessions]).
+	// Both RunnerFor call sites pass it, because a phase that offers tools
+	// reaches its CLI through nothing else — a runner built without it is
+	// refused where it is built ([runner.New]).
+	Sessions *toolsession.Host
+
 	// OnPhase moves the working indicator's wording as the turn changes
 	// phase. Nil is a turn nobody is watching a composer for — see
 	// [Engine.beginWorkingStatus], whose nil session's Phase is a no-op, so
 	// this is wired unconditionally rather than branched on.
 	OnPhase func(phase.Phase)
 
-	// AgentRun runs this turn's executor as a coding CLI's own agentic
-	// run. Nil is the native tool loop. Built by [Engine.agentRunFor],
-	// which BOTH RunnerFor call sites use — a turn whose executor ran as
-	// an agentic loop and came back to a native one would rebuild a
-	// surface for a conversation that never existed.
-	AgentRun runner.AgentLauncher
+	// Launcher runs this turn's executor as its coding CLI's own agentic
+	// run. Built by [Engine.agentRunFor], which BOTH RunnerFor call sites
+	// use; nil is a seat with nothing to launch on, which the runner
+	// refuses to be built for.
+	Launcher runner.AgentLauncher
 
 	// Markers and Latch drive the first-turn onboarding pass. Nil markers
 	// disable it: without somewhere to mark, the pass would run every turn
@@ -426,38 +493,39 @@ type RunnerInput struct {
 	Markers runner.Markers
 	Latch   *runner.Latch
 
-	// Resume makes this runner's turn a RE-ENTRY into a suspended Execute
-	// conversation rather than a fresh turn. Nil is the ordinary case.
+	// Resume makes this runner's turn the COLLECTION of the executor run it
+	// parked on rather than a fresh turn. Nil is the ordinary case.
 	Resume *runner.Resume
 
-	// Steer is the turn's box of notes from a person, opened by
-	// [steerBox] from the SAME launcher as AgentRun above — a turn whose
-	// executor is a coding CLI's own loop answers every note
-	// `unsupported`. Nil is a turn nobody can steer: every test that
-	// drives a runner directly.
-	Steer *steer.Box
+	// Steer is where the turn's notes from a person wait: the first
+	// segment's box, or the record of the run a resumed segment collects
+	// ([Engine.runSteers]). Nil is a turn nobody can steer: every test that
+	// drives a turn directly.
+	Steer runner.SteerSource
 }
 
 // TurnSettings is the loop's pinned configuration for this epoch.
 //
-// wallClock is the cap THIS turn's trigger carried, in seconds, zero for the
-// triggers that carry none. It is a per-turn argument rather than a config
-// field because it comes off the fire, not the epoch.
-func (c *Company) TurnSettings(wallClock int) turn.Settings {
+// deadline is the instant THIS turn's wall-clock cap ends ([wallClockDeadline]
+// on the turn's own start, carried across its parks), zero for the triggers
+// that carry none. It is a per-turn argument rather than a config field
+// because it comes off the fire, not the epoch.
+func (c *Company) TurnSettings(deadline time.Time) turn.Settings {
 	te := c.Config.TurnEngine
 	return turn.Settings{
 		MaxIterations:        te.MaxIterations,
 		DelegationDepthLimit: te.DelegationDepthLimit,
-		SkipNames:            MetaToolNames(),
-		MaxWallClock:         time.Duration(wallClock) * time.Second,
+		SkipNames:            toolname.Discovery(),
+		Deadline:             deadline,
 	}
 }
 
-// MetaToolNames are the tools the ledger filters out.
-//
-// A meta-tool is never a delivery, so in a record whose only job is "what
-// already happened that matters" it is pure noise. Named here rather than in
-// the ledger because the ledger imports nothing from crewlet, deliberately.
-func MetaToolNames() []string {
-	return []string{"activate_tool", "list_mcp_server_tools"}
+// wallClockDeadline is the instant a turn begun at started stops starting
+// rounds, for a fire's wall-clock cap of capSeconds — zero, no deadline, for
+// the zero cap every other trigger carries. See [turn.Settings.Deadline].
+func wallClockDeadline(started time.Time, capSeconds int) time.Time {
+	if capSeconds <= 0 {
+		return time.Time{}
+	}
+	return started.Add(time.Duration(capSeconds) * time.Second).UTC()
 }

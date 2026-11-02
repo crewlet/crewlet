@@ -83,7 +83,7 @@ type DataWrite struct {
 }
 
 // DataVerdict is what the applier decided about one write, identically on
-// every node.
+// every data node.
 type DataVerdict string
 
 // The verdicts a datastore batch can be given.
@@ -93,7 +93,7 @@ const (
 	DataInvalid   DataVerdict = "invalid"   // grammar, schema or type
 	DataForbidden DataVerdict = "forbidden" // a collection or field rule refused the stamped role or kind
 	DataQuota     DataVerdict = "quota"     // a stamped limit or a store cap
-	DataGone      DataVerdict = "gone"      // the store was purged or the artifact trashed
+	DataGone      DataVerdict = "gone"      // the store was purged
 )
 
 // DataVerdicts are every verdict an applier writes.

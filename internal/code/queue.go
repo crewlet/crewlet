@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A PROTECTED BRANCH'S MERGE QUEUE: a branch whose merge gate requires a check
@@ -633,7 +634,7 @@ func (p QueueProposal) validFields() error {
 	case !gitref.ValidOID(e.HeadOID) || e.HeadOID == ZeroOID:
 		return badField("enqueue.head_oid", "%q is not a whole object id", e.HeadOID)
 	case !e.Method.Valid():
-		return badField("enqueue.method", "%q is not one of %v", e.Method, MergeMethods())
+		return badField("enqueue.method", "%q is not one of %s", e.Method, words.Or(MergeMethods()))
 	case e.Principal != (Principal{}):
 		return badField("enqueue.principal", "the committer stamps who enqueued it from the asker, and an asker "+
 			"sends none")
@@ -1133,7 +1134,7 @@ func (c *Committer) queueWrite(repoID string, q *queued) {
 		c.announceEjected(*p.Eject, out.Position)
 	}
 	// A BROKEN LANDING IS ANNOUNCED the same way, once its own record applied
-	// here: the one event a red tip's bisect leaves (ADR-0068).
+	// here: the one event a red tip's bisect leaves (ADR-0091).
 	if p.Broken != nil && answerErr == nil && out.Outcome == statelog.OutcomeApplied && !res.Collapsed {
 		c.announceBroken(*p.Broken, out.Position)
 	}

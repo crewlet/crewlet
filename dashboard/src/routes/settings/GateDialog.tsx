@@ -74,7 +74,7 @@ import { useState } from "react";
 import { Button, Callout, Checkbox, InlineCode, Input, Modal, Tag } from "@crewlethq/ui";
 import { ClockGlyph, ServerGlyph } from "@crewlethq/icons/glyphs";
 import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
-import { keepsOperation, newGateOpID, rest, RestError } from "~/protocol/index.ts";
+import { keepsOperation, newGateOpID, pathSegment, rest, RestError } from "~/protocol/index.ts";
 import type { RetentionGateDomain, RetentionGateResult } from "~/protocol/index.ts";
 
 /**
@@ -195,7 +195,7 @@ export function GateDialog({
       // same gesture only under the same `op_id`, and one without `force` is
       // judged again against the lease the operator overrode.
       const answer = (
-        await rest.request("POST", `/work/retention/${sign}/${encodeURIComponent(node)}`, {
+        await rest.request("POST", `/worklet/retention/${pathSegment(sign)}/${pathSegment(node)}`, {
           body: {},
           query: { confirm: node, op_id: opId, force: force ? "true" : undefined },
           timeoutMs: GATE_REQUEST_TIMEOUT_MS,

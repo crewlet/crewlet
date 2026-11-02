@@ -65,16 +65,22 @@ func TestARestartAfterALiveSwitchSaysNothingAtTheFirstTick(t *testing.T) {
 			}
 			seedEngineStore(t, boot)
 
-			// THE LIVE SWITCH: the store's revision runs the engine's own
-			// tracker, which the file the node was started with did not.
+			// THE LIVE SWITCH: the store's revision runs Worklet, which the
+			// file the node was started with did not.
 			payload, err := json.Marshal(parse(t, companyYAML))
 			if err != nil {
 				t.Fatal(err)
 			}
-			activateStored(t, cfg, string(payload))
+			serveStored(t, cfg, string(payload))
 			stale := parse(t, companyYAML+"tracker:\n  backend: none\n")
 
-			opts, seed, err := bootOptions(t.Context(), cfg, boot, seedOf(stale), quiet())
+			// THE DECISION `crewlet run` boots on ([bootEngine]), and the
+			// options it hands the engine.
+			plan, err := decideOn(t, boot, seedOf(stale), cfg, quiet())
+			if err != nil {
+				t.Fatalf("decide the boot: %v", err)
+			}
+			opts, err := bootOptions(boot, plan)
 			if err != nil {
 				t.Fatalf("bootOptions: %v", err)
 			}
@@ -89,7 +95,7 @@ func TestARestartAfterALiveSwitchSaysNothingAtTheFirstTick(t *testing.T) {
 			t.Cleanup(func() { e.Stop(context.Background()) })
 
 			before := logs.count(t, "native_backend_needs_restart")
-			if _, err := startReconciler(t.Context(), e, boot, seed, fixtureCipher, quiet()); err != nil {
+			if _, err := startReconciler(t.Context(), e, boot, plan, fixtureCipher, quiet()); err != nil {
 				t.Fatalf("startReconciler: %v", err)
 			}
 			if got := logs.count(t, "native_backend_needs_restart") - before; got != tc.want {
