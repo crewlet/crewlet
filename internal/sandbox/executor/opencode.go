@@ -278,16 +278,29 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // password only its script held, may be gone: the same export, into its own
 // staging directory, its digest kept.
 //
-// IT ENDS [packNothing] where the box's OpenCode holds no such session — a run
-// whose harness failed before it made one — and [packFailed] where it holds one
-// and no archive was made, its error stream saying why ([Runner.PackCapture]).
+// IT ENDS [packNothing] ONLY ON OPENCODE'S OWN ANSWER that it holds no such
+// session ([openCodeNotHeld]) — a run whose harness failed before it made one —
+// and [packFailed] wherever else no archive was made, its error stream saying
+// why ([Runner.PackCapture]): a session it holds that the export did not pack,
+// and a probe that could not say — the private server would not start, the
+// database was busy under a job its turn's cap ended and whose server still ran,
+// OpenCode crashed. Read as "no session", such a probe recorded a session the
+// box held as none, and the turn's end named an older capture as its last.
 func (OpenCode) Pack(paths Paths, session string) string {
 	return "sid=" + shellQuote(session) + " packed=\n" +
-		`held=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2> /dev/null) || held=` + "\n" +
-		fmt.Sprintf(`case "$held" in *%s*) ;; *) exit %d;; esac`+"\n", shellQuote(`"id":"`+session+`"`), packNothing) +
+		`if probe=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2>&1); then held=$probe; else held=; fi` + "\n" +
+		fmt.Sprintf(`case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
+			`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
+			shellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed) +
 		openCodePack(paths, paths.SessionPackStaging(), "--standalone") +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
+
+// openCodeNotHeld is the case pattern OpenCode's answer to `session.get` on an
+// id its database does not hold matches: its NotFoundError, which its CLI
+// prints as "Session not found: <id>" — the one answer that says the box holds
+// no such session, rather than that it could not be asked.
+const openCodeNotHeld = `*'Session not found'*|*NotFoundError*`
 
 // layout is an OpenCode archive's: one gzipped JSON document
 // ([openCodeArchiveFormat]).

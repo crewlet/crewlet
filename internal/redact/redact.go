@@ -1772,6 +1772,25 @@ var (
 // key's.
 var pemArmour = regexp.MustCompile(`-----(?:BEGIN|END) [A-Z0-9][A-Z0-9 ]*-----`)
 
+// Unarmoured is line, trimmed, cut at every PEM armour it holds ([pemArmour]):
+// what of it is left, in order and each trimmed, empty pieces dropped — the
+// whole line where it holds no armour.
+//
+// FOR A READER THAT TAKES TEXT OUT BY VALUE (a kept session's scrub of the
+// secrets the engine handed a box): a key's armour is every key's of its kind,
+// no secret of any one, and the lines this package reads a key's block by
+// ([Secrets]). Taken out by value, every other key of that kind in the text
+// lost the armour the redaction looks for, and its body went unredacted.
+func Unarmoured(line string) []string {
+	var out []string
+	for _, piece := range pemArmour.Split(line, -1) {
+		if piece = strings.TrimSpace(piece); piece != "" {
+			out = append(out, piece)
+		}
+	}
+	return out
+}
+
 // pemArmourAt is [pemArmour] held to begin where it is tried.
 var pemArmourAt = regexp.MustCompile(`^` + pemArmour.String())
 

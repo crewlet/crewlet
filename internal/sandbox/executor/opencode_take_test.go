@@ -93,6 +93,49 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 	}
 }
 
+// A SESSION THE BOX'S OPENCODE COULD NOT BE ASKED ABOUT IS A PACK THAT FAILED,
+// never "no session". Only OpenCode's own answer that it holds no such id says
+// the box has nothing to pack; a probe that failed any other way — its private
+// server would not start, its database was busy under a job whose server still
+// ran, it crashed — is a session the box may well hold, and the capture is
+// refused with what OpenCode said, so the turn's end names the capture that was
+// not kept rather than an older one as the turn's last.
+//
+// Mutation: read every failed probe as nothing to pack, or drop what the probe
+// said from the refusal, and a check here goes red.
+func TestAnOpenCodeSessionTheBoxCouldNotBeAskedAboutIsAFailedPack(t *testing.T) {
+	t.Parallel()
+	runner, b := openCodeBox(t, t.TempDir())
+	dir := t.TempDir()
+	const answers = `held "${3#sessionID=}" || { echo "Error: Session not found: ${3#sessionID=}" >&2; exit 1; }`
+	if !strings.Contains(fakeOpenCode, answers) {
+		t.Fatal("the fake OpenCode no longer answers session.get as this case breaks it; follow it here")
+	}
+	broken := strings.Replace(fakeOpenCode, answers, `echo "Error: database is locked" >&2; exit 1`, 1)
+	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
+		strings.Replace(broken, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+	const session = "ses_0123456789abcdef0123456789"
+	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
+		[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sessions", session), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	described, body, err := runner.PackCapture(t.Context(), b)
+	if err == nil || body != nil {
+		t.Fatalf("PackCapture of a session OpenCode could not be asked about = %+v, %v, %v; want a "+
+			"pack that failed", described, body, err)
+	}
+	if !strings.Contains(err.Error(), "database is locked") {
+		t.Errorf("the refusal says %q, want what OpenCode said", err)
+	}
+}
+
 // gunzipped is a gzipped stream's content.
 func gunzipped(t *testing.T, packed []byte) []byte {
 	t.Helper()
