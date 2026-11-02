@@ -22,6 +22,12 @@ import (
 // of one repository answers it on its first page ([ReadAnswer.DueTips]), one
 // [TipDue] a target holding a landing neither green nor broken.
 //
+// A LANDING IS GREEN BY ITS POSITION — at or below its target's green row —
+// never by a flag of its own: a green record moves the one row, so it writes
+// the same few rows however many landings lie beneath it, and a target that
+// gathered any backlog of unproven landings behind a red tip greens again on
+// the first tip that passes (replicated 0135).
+//
 // A TipDue is everything the home decides its next step from, in ONE
 // snapshot: the target's green row, the checks its gate requires, and its
 // landings above the green, oldest first, each with the latest attempt of
@@ -42,14 +48,17 @@ import (
 // reaches the tip; a culprit past the window is the one thing it cannot name
 // until a green tip clears the landings before it (see the home's bisect).
 //
-// LISTED BY ITS OWN INDEX: a repository is due tip work where it holds a
-// landing neither green nor broken (code_landings_unjudged_idx, partial on
-// exactly those rows), so the listing reads the landings its tips owe and
-// never the thirty days of green ones each target keeps behind them. A target
-// whose culprit is named keeps the landings above it listed until a tip
-// passes — a home's pass reads its window and finds nothing owed — which costs
-// a broken target's home a few reads a minute and is what lets a fix's
-// landing be dispatched by the backstop as well as by its nudge.
+// LISTED BY ONE ROW A TARGET: a target holding a landing above its green that
+// no bisect found broken holds a row of tip work (code_tips_due), which the
+// landing's record inserts and the record that moves the green past it, or
+// names the last of them broken, removes. The listings walk those rows — the
+// repositories owing tip work, and one repository's targets — so they cost a
+// row a target, never one a landing above a stuck tip, and never the thirty
+// days of green ones each target keeps behind it. A target whose culprit is
+// named stays listed while landings lie above the culprit, until a tip passes
+// — a home's pass reads its window and finds nothing owed — which costs a
+// broken target's home a few reads a minute and is what lets a fix's landing
+// be dispatched by the backstop as well as by its nudge.
 
 // MaxTipLandings is the most landings above its green one target's tip work
 // reads: 256, so a bisect over a whole window takes eight rounds of checks
@@ -126,8 +135,8 @@ type TipCheck struct {
 }
 
 // dueTips files the tip work of repository repoID's targets into out, within
-// pg — each target holding a landing neither green nor broken, its window
-// read whole or not at all — with required, its gate's checks by target.
+// pg — each target owing it, its window read whole or not at all — with
+// required, its gate's checks by target.
 func (r *Reader) dueTips(ctx context.Context, tx *sql.Tx, repoID string, required *requiredChecks, pg *page,
 	out *ReadAnswer) error {
 
@@ -157,8 +166,8 @@ func (r *Reader) dueTips(ctx context.Context, tx *sql.Tx, repoID string, require
 	return nil
 }
 
-// dueTipTargetsIn is repoID's targets holding a landing neither green nor
-// broken, by name, at most limit.
+// dueTipTargetsIn is repoID's targets owing tip work — each holding a landing
+// above its green that no bisect found broken — by name, at most limit.
 func dueTipTargetsIn(ctx context.Context, tx *sql.Tx, repoID string, limit int) ([]string, error) {
 	rows, err := tx.QueryContext(ctx, dueTipTargetsSQL, repoID, limit)
 	if err != nil {
@@ -313,17 +322,16 @@ func mergeRepoPages(a, b []string, limit int) ([]string, string) {
 }
 
 // The tip work's reads, each registered in plan_test.go: the repositories,
-// and one repository's targets, holding a landing neither green nor broken,
-// by the index partial on exactly those rows; a target's landings above its
+// and one repository's targets, owing tip work, by the key of its rows — one a
+// target, each repository tested by its key; a target's landings above its
 // green by the landings' key, and its newest, the key read backwards.
 const (
-	dueTipReposSQL = `SELECT l.repo_id FROM code_landings AS l INDEXED BY code_landings_unjudged_idx
-		WHERE l.repo_id > ?1 AND l.green = 0 AND l.broken = 0
-			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = l.repo_id AND r.status = 'active')
-		GROUP BY l.repo_id ORDER BY l.repo_id LIMIT ?2`
-	dueTipTargetsSQL = `SELECT target_ref FROM code_landings INDEXED BY code_landings_unjudged_idx
-		WHERE repo_id = ?1 AND green = 0 AND broken = 0 GROUP BY target_ref ORDER BY target_ref LIMIT ?2`
-	tipLandingsSQL = `SELECT position, ordinal, base_oid, commit_oid, broken FROM code_landings
+	dueTipReposSQL = `SELECT d.repo_id FROM code_tips_due AS d
+		WHERE d.repo_id > ?1
+			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = d.repo_id AND r.status = 'active')
+		GROUP BY d.repo_id ORDER BY d.repo_id LIMIT ?2`
+	dueTipTargetsSQL = `SELECT target_ref FROM code_tips_due WHERE repo_id = ?1 ORDER BY target_ref LIMIT ?2`
+	tipLandingsSQL   = `SELECT position, ordinal, base_oid, commit_oid, broken FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position >= ? AND (position > ? OR ordinal > ?)
 		ORDER BY position, ordinal LIMIT ?`
 	newestLandingSQL = `SELECT position, ordinal, base_oid, commit_oid, broken FROM code_landings

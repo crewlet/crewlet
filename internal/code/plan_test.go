@@ -385,7 +385,7 @@ func registeredStatements() map[string]statement {
 		"purge all packs":     {purgeAllPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"remove repo":         {removeRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo name":           {repoNameSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_findings_raiser_idx (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)", mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)", "COVERING INDEX " + checksEndedKey + " (repo_id=?)", checkLogsKey + " (repo_id=?)", "sqlite_autoindex_code_queue_1 (repo_id=?)", "sqlite_autoindex_code_candidates_1 (repo_id=?)", "sqlite_autoindex_code_landings_1 (repo_id=?)", "sqlite_autoindex_code_green_1 (repo_id=?)"}},
+		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_findings_raiser_idx (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)", mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)", "COVERING INDEX " + checksEndedKey + " (repo_id=?)", checkLogsKey + " (repo_id=?)", "sqlite_autoindex_code_queue_1 (repo_id=?)", "sqlite_autoindex_code_candidates_1 (repo_id=?)", "sqlite_autoindex_code_landings_1 (repo_id=?)", "sqlite_autoindex_code_green_1 (repo_id=?)", "sqlite_autoindex_code_tips_due_1 (repo_id=?)"}},
 		"claim":               {claimSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
@@ -870,6 +870,8 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge greens": {purgeGreenSQL, []any{"repo-1", PurgePartRows},
 			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge tip work": {purgeTipsDueSQL, []any{"repo-1", PurgePartRows},
+			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all queue entries": {purgeAllQueueSQL, []any{"repo-1"},
 			[]string{"sqlite_autoindex_code_queue_1 (repo_id=?)"}},
 		"purge all candidates": {purgeAllCandidatesSQL, []any{"repo-1"},
@@ -878,6 +880,8 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=?)"}},
 		"purge all greens": {purgeAllGreenSQL, []any{"repo-1"},
 			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)"}},
+		"purge all tip work": {purgeAllTipsDueSQL, []any{"repo-1"},
+			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id=?)"}},
 		// THE QUEUE'S OWN RECORDS (queuerecords.go, decide_queue.go,
 		// apply_queuerecords.go, queue_sweep.go): a list of entries by their
 		// key, and a list of their changes by theirs, each driven from the
@@ -937,11 +941,14 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
 		"break a landing": {brokenLandingSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
-		"landings a green marks": {landingsGreenedSQL, []any{"repo-1", "refs/heads/main", 1000, 2000, 2001},
-			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>? AND position<=?)"}},
-		"mark landings green": {greenLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 2000},
-			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>? AND position<=?)",
-				"INTEGER PRIMARY KEY (rowid=?)"}},
+		// A TARGET'S ROW OF TIP WORK (apply_merge.go): cleared by its key as a
+		// green moves past every landing, and settled where no unbroken
+		// landing lies above a place — the landings' key's range above it.
+		"tip work paid": {tipPaidSQL, []any{"repo-1", "refs/heads/main"},
+			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id=? AND target_ref=?)"}},
+		"tip work settled": {settleTipSQL, []any{"repo-1", "refs/heads/main", 1000},
+			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id=? AND target_ref=?)",
+				"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>?)"}},
 		"ended entries within": {endedWithinSQL, []any{"repo-1", 1000, QueueSweepRows + 1},
 			[]string{"COVERING INDEX code_queue_ended_idx (repo_id=? AND ended_at<?)"}},
 		"sweep ended entries": {sweepEndedSQL, []any{"repo-1", 1000, 1000, "entry-1"},
@@ -1328,14 +1335,14 @@ func registeredStatements() map[string]statement {
 			[]string{checkTargetsKey + " (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
 				"code_changes_target_idx (repo_id=? AND target_ref=?)"}},
 		// A PROTECTED TARGET'S TIP WORK (tipwork.go): the repositories, and
-		// one repository's targets, holding a landing neither green nor
-		// broken, by the index partial on exactly those rows, each repository
-		// tested by its key; a target's window above its green, a range of
-		// the landings' key, and its newest, the key read backwards.
+		// one repository's targets, owing tip work, by the key of its rows —
+		// one a target — each repository tested by its key; a target's
+		// window above its green, a range of the landings' key, and its
+		// newest, the key read backwards.
 		"due tip repositories": {dueTipReposSQL, []any{"", MaxSnapshotItems},
-			[]string{"code_landings_unjudged_idx (repo_id>?)", repoKey + " (id=?)"}},
+			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id>?)", repoKey + " (id=?)"}},
 		"due tip targets": {dueTipTargetsSQL, []any{"repo-1", MaxSnapshotItems},
-			[]string{"code_landings_unjudged_idx (repo_id=?)"}},
+			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id=?)"}},
 		"tip landings": {tipLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, MaxTipLandings + 1},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>=?)"}},
 		"newest landing": {newestLandingSQL, []any{"repo-1", "refs/heads/main"},

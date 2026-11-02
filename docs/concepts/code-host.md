@@ -6328,7 +6328,7 @@ change as whoever enqueued it.
 | `gate_unmet`, `head_moved`, `change_not_open` | An entry of a landing no longer meets its gate with its enqueuer as the merger, or its change moved or ended: the answer names each such entry. |
 | `not_green` | A landing's tip, or a green's landing, has a required check not passed by its latest attempt checked for the branch. |
 | `not_red`, `no_landing` | A broken names a check that did not fail, or a green or a broken names no landing above the branch's green row. |
-| `record_full` | A landing's rows — its own, its pushes' and the live changes they move — would pass a record's: land fewer at once. A green marking more than 2 000 landings names an earlier one first. |
+| `record_full` | A landing's rows — its own, its pushes' and the live changes they move — would pass a record's: land fewer at once. Never a green: it moves one row whatever lies beneath it, every landing at or below the green row green by its place. |
 | `upload_expired`, `repo_size`, `compaction_behind` | The train's pack, held to a push's rules: a busy queue waits for compaction rather than outrunning it. |
 
 **Every record that moves a protected branch leaves its landing row**: a
@@ -6511,7 +6511,8 @@ and worked by its `checks` worker:
    one round of checks. A fast-forward landing is the very commit its change's
    head checks measured, and its head's attempts count.
 2. **Every required check passed there**: a `green` record moves the branch's
-   green row onto it — and every landing below it green with it. A branch whose
+   green row onto it — and every landing below it is green with it, by its
+   place, in that one record (below). A branch whose
    gate requires no check is green at its newest landing as it stands.
 3. **One failed there**: the failed checks are **bisected over the landing
    rows** — never over git's history, whose merge commits lead into change
@@ -6548,12 +6549,22 @@ still dispatched, and a culprit past those 256 is named once a green tip clears
 the landings before it — or a person reverts to the last green; the home logs
 `code_tip_culprit_past_the_window` meanwhile.
 
-**The home finds the work from the rows.** A repository with a landing
-neither green nor broken is listed by the home's `checks_due` read, over an
-index holding exactly those landings, so its backstop pass finds a branch
-whose nudge was lost within a minute, and never reads the thirty days of green
-landings behind it. A branch whose culprit is named stays listed until a tip
-passes; its home's pass reads its window and finds nothing owed.
+**The home finds the work from the rows.** A branch holding a landing above
+its green row that no bisect found broken holds one row of tip work, which
+the landing's record writes and the record that moves the green past it — or
+names the last of them broken — removes. The home's `checks_due` read lists
+the repositories, and one repository's branches, from those rows, so its
+backstop pass finds a branch whose nudge was lost within a minute at the cost
+of a row a branch: never one a landing waiting above a red tip, and never the
+thirty days of green landings behind it. A branch whose culprit is named stays
+listed while landings lie above the culprit, until a tip passes; its home's
+pass reads its window and finds nothing owed.
+
+**A green is one record whatever lies beneath it.** A landing is green by its
+place — at or below its branch's green row — never by a mark of its own, so a
+`green` record moves that one row however many landings lie beneath it, and a
+branch that gathered any number of unproven landings behind a red tip greens
+again on the first tip that passes.
 
 ### How a candidate is built
 

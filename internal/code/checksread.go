@@ -878,9 +878,10 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 // home reads — and what it owes ([CheckWork], read in the same snapshot), and
 // on its FIRST PAGE its targets due a reading ([ReadAnswer.DueTargets]),
 // walking its targets' rows by their key, and its tip work
-// ([ReadAnswer.DueTips]), walking code_landings_unjudged_idx. The listing of
-// repositories is the union of the two listings, one keyset page of each
-// after the cursor merged into one. Every change is tested by its
+// ([ReadAnswer.DueTips]), walking its targets' rows of tip work
+// (code_tips_due, one a target). The listing of repositories is the union of
+// the two listings, one keyset page of each after the cursor merged into one.
+// Every change is tested by its
 // dispatch's key and its target's, one seek of each, and by
 // code_checks_requeue_idx, which holds only the attempts a requeue reads.
 //

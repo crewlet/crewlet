@@ -57,8 +57,11 @@ func (k LandingKind) Valid() bool { return slices.Contains(LandingKinds(), k) }
 // landing is one code_landings row a record writes: its place among the
 // record's landings on its branch (from 1), what kind of landing it is, what
 // landed — the change and its queue entry, "" for a push that landed none —
-// the branch before and after, who queued it and who merged it, and whether it
-// is green as it lands.
+// the branch before and after, who queued it and who merged it, and whether
+// its record proved it green as it lands — which moves the branch's green row
+// onto it. A row holds no green of its own: a landing is green once it lies
+// at or below its branch's green row, which one record moves whatever lies
+// beneath it.
 type landing struct {
 	target         string
 	ordinal        int
@@ -71,40 +74,77 @@ type landing struct {
 
 // writeLandings writes landings, a record's landings on protected branches,
 // at the record's position and instant — in as few statements as the
-// engine's parameters allow ([store.InsertRows]). A conflict on the key is a
+// engine's parameters allow ([store.InsertRows]) — and the TIP WORK each
+// landing its record did not prove owes its branch (code_tips_due, one row a
+// branch: tipwork.go), answering the rows it wrote. A conflict on the key is a
 // skip, never an abort, which would stall the log on every node: no record
 // this build applies meets one, since every landing a record writes is keyed
 // by its own position.
 func writeLandings(ctx context.Context, tx store.Execer, at applyContext, repoID string,
-	landings []landing) error {
+	landings []landing) (int, error) {
 
 	_, err := store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_landings (repo_id, target_ref, position, ordinal, kind, change_id, entry_id, base_oid,
-			commit_oid, enqueued_by, merged_by, green, broken, at) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+			commit_oid, enqueued_by, merged_by, broken, at) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
 		`ON CONFLICT (repo_id, target_ref, position, ordinal) DO NOTHING`, len(landings), func(i int) []any {
 			l := landings[i]
 			return []any{repoID, l.target, at.packed, l.ordinal, string(l.kind), l.change, l.entry, l.base,
-				l.commit, l.enqueuedBy, l.by, l.green, at.at()}
+				l.commit, l.enqueuedBy, l.by, at.at()}
 		})
 	if err != nil {
-		return fmt.Errorf("code: write %d landings at %s: %w", len(landings), at.position, err)
+		return 0, fmt.Errorf("code: write %d landings at %s: %w", len(landings), at.position, err)
 	}
-	return nil
+	rows := len(landings)
+	owed := map[string]bool{}
+	for _, l := range landings {
+		if l.green || owed[l.target] {
+			continue
+		}
+		owed[l.target] = true
+		if _, err := tx.ExecContext(ctx, oweTipSQL, repoID, l.target); err != nil {
+			return 0, fmt.Errorf("code: owe %s's tip work at %s: %w", l.target, at.position, err)
+		}
+		rows++
+	}
+	return rows, nil
 }
 
 // advanceGreen moves target's green row on repoID to commit, at the record's
 // position and instant: the branch's newest commit whose required checks
 // passed — or that needed none — which mirrors and deploys follow. An upsert
 // by the row's key, so the first green a branch reaches inserts its row: a
-// record's position is past every earlier one's, and the version guard skips
-// one met again, so the row only moves forward.
-func advanceGreen(ctx context.Context, tx store.Execer, at applyContext, repoID, target, commit string) error {
+// record's position is past every earlier one's, so the row only moves
+// forward. Every landing the branch holds then lies at or below its green
+// row — none can lie past the record applying — so the branch owes its home
+// no tip work, and its row of it goes. It answers the rows it wrote.
+func advanceGreen(ctx context.Context, tx store.Execer, at applyContext, repoID, target, commit string) (int,
+	error) {
+
 	if _, err := tx.ExecContext(ctx, advanceGreenSQL, repoID, target, commit, at.packed, at.at()); err != nil {
-		return fmt.Errorf("code: move %s's green row on %s to %s at %s: %w", target, repoID, short(commit),
+		return 0, fmt.Errorf("code: move %s's green row on %s to %s at %s: %w", target, repoID, short(commit),
 			at.position, err)
 	}
-	return nil
+	res, err := tx.ExecContext(ctx, tipPaidSQL, repoID, target)
+	if err != nil {
+		return 0, fmt.Errorf("code: clear %s's tip work at %s: %w", target, at.position, err)
+	}
+	cleared, _ := res.RowsAffected()
+	return 1 + int(cleared), nil
+}
+
+// settleTipWork removes target's row of tip work on repoID once no landing
+// lies above above — its green row's position, or -1 for a branch none of
+// whose tips has passed — that no bisect found broken: what a green row moved
+// onto a landing older than the newest, and a broken landing named, leave. It
+// answers the rows it removed.
+func settleTipWork(ctx context.Context, tx store.Execer, repoID, target string, above int64) (int, error) {
+	res, err := tx.ExecContext(ctx, settleTipSQL, repoID, target, above)
+	if err != nil {
+		return 0, fmt.Errorf("code: settle %s's tip work: %w", target, err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // applyMerge applies a change's merge as one record — see merge.go's head:
@@ -203,18 +243,20 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	// 3 THE LANDING AND THE GREEN ROW, as the decide's snapshot judged the
 	// target.
 	if m.Protected {
-		if err = writeLandings(ctx, tx, at, m.RepoID, []landing{{target: m.TargetRef, ordinal: 1,
+		var landed int
+		if landed, err = writeLandings(ctx, tx, at, m.RepoID, []landing{{target: m.TargetRef, ordinal: 1,
 			kind: LandedDirect, change: m.ChangeID, base: m.BaseOID, commit: m.CommitOID, by: by,
 			green: m.Green}}); err != nil {
 			return 0, err
 		}
-		rows++
+		rows += landed
 	}
 	if m.Green {
-		if err = advanceGreen(ctx, tx, at, m.RepoID, m.TargetRef, m.CommitOID); err != nil {
+		var moved int
+		if moved, err = advanceGreen(ctx, tx, at, m.RepoID, m.TargetRef, m.CommitOID); err != nil {
 			return 0, err
 		}
-		rows++
+		rows += moved
 	}
 
 	// 4 THE PUSH, with what the rows above leave the record's horizons.
@@ -255,8 +297,20 @@ func mergeNotApplied(ctx context.Context, at applyContext, m Merge, why string) 
 }
 
 // advanceGreenSQL is a branch's green row moved by its key — an upsert, which
-// locates the row by the key its VALUES carry and so is registered nowhere.
-const advanceGreenSQL = `INSERT INTO code_green (repo_id, target_ref, commit_oid, position, at)
-	VALUES (?, ?, ?, ?, ?)
-	ON CONFLICT (repo_id, target_ref) DO UPDATE SET commit_oid = excluded.commit_oid,
-		position = excluded.position, at = excluded.at`
+// locates the row by the key its VALUES carry and so is registered nowhere;
+// oweTipSQL a branch's row of tip work, the same way. tipPaidSQL removes it by
+// its key, and settleTipSQL does where no landing above a place on the branch
+// is left unbroken — the key's range above it, read until the first unbroken
+// one — each registered in plan_test.go.
+const (
+	advanceGreenSQL = `INSERT INTO code_green (repo_id, target_ref, commit_oid, position, at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (repo_id, target_ref) DO UPDATE SET commit_oid = excluded.commit_oid,
+			position = excluded.position, at = excluded.at`
+	oweTipSQL = `INSERT INTO code_tips_due (repo_id, target_ref) VALUES (?, ?)
+		ON CONFLICT (repo_id, target_ref) DO NOTHING`
+	tipPaidSQL   = `DELETE FROM code_tips_due WHERE repo_id = ? AND target_ref = ?`
+	settleTipSQL = `DELETE FROM code_tips_due WHERE repo_id = ?1 AND target_ref = ?2
+		AND NOT EXISTS (SELECT 1 FROM code_landings WHERE repo_id = ?1 AND target_ref = ?2 AND position > ?3
+			AND broken = 0)`
+)

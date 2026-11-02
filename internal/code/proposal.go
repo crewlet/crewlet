@@ -726,8 +726,10 @@ func rowBound(p Proposal) int {
 }
 
 // landingRows is the most rows one landing a push makes on a protected branch
-// touches ([PushEntry.Landings]): its landing row, and the branch's green row.
-const landingRows = 2
+// touches ([PushEntry.Landings]): its landing row, the branch's green row and
+// its row of tip work — owed by a landing nothing proved, cleared by a green
+// one ([writeLandings], [advanceGreen]).
+const landingRows = 3
 
 // measuredLandings is the landings an entry of principal's commands can carry
 // at its most, as [entryBound] encodes them: one for every command the

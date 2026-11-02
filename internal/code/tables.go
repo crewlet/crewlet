@@ -63,11 +63,11 @@ var ReproducibleTables = []string{
 	"code_checks", "code_check_logs", "code_check_targets", "code_check_dispatches",
 
 	// A repository's merge queues — each entry a change's enqueue made, the
-	// candidates a queue builds, the landings on its protected
-	// branches and each branch's green row — written by the records on the
-	// repository's own subject, beside its pushes and its changes'
+	// candidates a queue builds, the landings on its protected branches, each
+	// branch's green row and the tip work it is owed — written by the records
+	// on the repository's own subject, beside its pushes and its changes'
 	// lifecycles, and removed with the repository by its purge.
-	"code_queue", "code_candidates", "code_landings", "code_green",
+	"code_queue", "code_candidates", "code_landings", "code_green", "code_tips_due",
 
 	// A repository's published chain and the objects its layers are stored
 	// in — written by the compaction records that carry a layer, each

@@ -209,7 +209,9 @@ func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target
 // LandingRow is one landing on a protected target: the record that landed it
 // and its place in that record, what kind of landing it was, what landed —
 // the change and its entry, "" for a push that landed none — the target before
-// and after, who, and what the target's tip checks found of it.
+// and after, who, and whether a bisect of the target's tip checks found it
+// broken. Every landing it lists lies above the green row and so is not green:
+// a landing is green by its position, at or below that row.
 type LandingRow struct {
 	RepoID     string            `json:"repo_id"`
 	TargetRef  string            `json:"target_ref"`
@@ -222,7 +224,6 @@ type LandingRow struct {
 	CommitOID  string            `json:"commit_oid"`
 	EnqueuedBy string            `json:"enqueued_by,omitempty"`
 	MergedBy   string            `json:"merged_by,omitempty"`
-	Green      bool              `json:"green,omitempty"`
 	Broken     bool              `json:"broken,omitempty"`
 	At         time.Time         `json:"at"`
 }
@@ -573,7 +574,7 @@ func (r *Reader) landings(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Ro
 			packed, t int64
 		)
 		if err := rows.Scan(&packed, &l.Ordinal, &l.Kind, &l.ChangeID, &l.EntryID, &l.BaseOID, &l.CommitOID,
-			&l.EnqueuedBy, &l.MergedBy, &l.Green, &l.Broken, &t); err != nil {
+			&l.EnqueuedBy, &l.MergedBy, &l.Broken, &t); err != nil {
 			return fmt.Errorf("code: read %s's landings on %s: %w", named.ref.Name, q.Target, err)
 		}
 		l.RepoID, l.TargetRef, l.Position, l.At = named.ref.ID, q.Target, unpacked(packed), store.DecodeTime(t)
@@ -765,7 +766,7 @@ const (
 		FROM code_candidates INDEXED BY code_candidates_train_idx WHERE repo_id = ? AND target_ref = ?
 		ORDER BY train, ordinal`
 	landingsSQL = `SELECT position, ordinal, kind, change_id, entry_id, base_oid, commit_oid, enqueued_by,
-			merged_by, green, broken, at
+			merged_by, broken, at
 		FROM code_landings WHERE repo_id = ? AND target_ref = ? AND position >= ?
 			AND (position > ? OR ordinal > ?)
 		ORDER BY position, ordinal LIMIT ?`

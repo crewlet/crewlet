@@ -320,14 +320,16 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 			entry: e.EntryID, base: from, commit: e.Commit, enqueuedBy: by, by: by, green: true}
 		from = e.Commit
 	}
-	if err = writeLandings(ctx, tx, at, l.RepoID, landings); err != nil {
+	landingRowsWritten, err := writeLandings(ctx, tx, at, l.RepoID, landings)
+	if err != nil {
 		return 0, err
 	}
-	rows += len(landings)
-	if err = advanceGreen(ctx, tx, at, l.RepoID, l.TargetRef, l.TipOID); err != nil {
+	rows += landingRowsWritten
+	moved, err := advanceGreen(ctx, tx, at, l.RepoID, l.TargetRef, l.TipOID)
+	if err != nil {
 		return 0, err
 	}
-	rows++
+	rows += moved
 
 	// 4 THE QUEUE'S HISTORY, before the pushes' own horizons.
 	swept, err := sweepQueueHistory(ctx, tx, l.RepoID, store.EncodeTime(at.brokerAt.Add(-QueueHistory)),
@@ -347,7 +349,11 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 
 // applyGreen moves the target's green row onto the landing record at Through —
 // its position the landing's, so a read of the target's landings above its
-// green lists what came after it — and marks every landing up to it green.
+// green lists what came after it, and every landing up to it is green by its
+// position — and settles the target's tip work against what lies above it.
+// THREE ROWS WHATEVER LIES BENEATH: the green row, the target's row of tip
+// work and the repository's version, never one a landing, so no backlog of
+// unproven landings, however long, makes a green past a record.
 func (a *Applier) applyGreen(ctx context.Context, tx *sql.Tx, at applyContext, g Green) (int, error) {
 	green, held, err := greenIn(ctx, tx, g.RepoID, g.TargetRef)
 	if err != nil {
@@ -372,19 +378,19 @@ func (a *Applier) applyGreen(ctx context.Context, tx *sql.Tx, at applyContext, g
 	if err = moveGreen(ctx, tx, at, g.RepoID, g.TargetRef, g.OID, g.Through.Packed()); err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx, greenLandingsSQL, g.RepoID, g.TargetRef, from, g.Through.Packed())
+	settled, err := settleTipWork(ctx, tx, g.RepoID, g.TargetRef, g.Through.Packed())
 	if err != nil {
-		return 0, fmt.Errorf("code: mark %s's landings green up to %s at %s: %w", g.TargetRef, g.Through,
-			at.position, err)
+		return 0, fmt.Errorf("%w (the green at %s)", err, at.position)
 	}
-	marked, _ := res.RowsAffected()
 	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, g.RepoID); err != nil {
 		return 0, fmt.Errorf("code: move %s's version at %s: %w", g.RepoID, at.position, err)
 	}
-	return 2 + int(marked), nil
+	return 2 + settled, nil
 }
 
-// applyBroken marks the landing the record names broken. Its target's green
+// applyBroken marks the landing the record names broken, and settles its
+// target's tip work: a target whose only landings above its green row are
+// broken owes its home nothing until the next one lands. Its target's green
 // row stays where it is: it only ever advances on green.
 func (a *Applier) applyBroken(ctx context.Context, tx *sql.Tx, at applyContext, b Broken) (int, error) {
 	landing, found, err := landingAt(ctx, tx, b.RepoID, b.TargetRef, b.Position.Packed(), b.Ordinal)
@@ -400,10 +406,22 @@ func (a *Applier) applyBroken(ctx context.Context, tx *sql.Tx, at applyContext, 
 		return 0, fmt.Errorf("code: mark %s's landing at %s broken at %s: %w", b.TargetRef, b.Position,
 			at.position, err)
 	}
+	green, held, err := greenIn(ctx, tx, b.RepoID, b.TargetRef)
+	if err != nil {
+		return 0, err
+	}
+	above := int64(-1)
+	if held {
+		above = green.Position.Packed()
+	}
+	settled, err := settleTipWork(ctx, tx, b.RepoID, b.TargetRef, above)
+	if err != nil {
+		return 0, fmt.Errorf("%w (the broken at %s)", err, at.position)
+	}
 	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, b.RepoID); err != nil {
 		return 0, fmt.Errorf("code: move %s's version at %s: %w", b.RepoID, at.position, err)
 	}
-	return 2, nil
+	return 2 + settled, nil
 }
 
 // applyQueueSweep removes the repository's queue history from before Through,
@@ -755,8 +773,8 @@ func writeEntries(ctx context.Context, tx store.Execer, maxVariables int, w entr
 // train abandoned — its testing entries over code_queue_live_idx with its
 // partial predicate spelled as the index declares it, and its candidates over
 // code_candidates_train_idx — and a train's landed candidates; a train's pack
-// and its counters; a landing broken by its key, and the landings a green
-// marks over the key's range; and the queue's history — ended entries over
+// and its counters; a landing broken by its key; and the queue's history —
+// ended entries over
 // code_queue_ended_idx, its predicate spelled as declared, walked oldest first
 // in its key's order and weighed from the index alone, and removed over the
 // same key's range up to the last one walked; and a target's landings below
@@ -783,8 +801,6 @@ const (
 		live_objects = live_objects + ?, version = ? WHERE id = ?`
 	brokenLandingSQL = `UPDATE code_landings SET broken = 1
 		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`
-	greenLandingsSQL = `UPDATE code_landings SET green = 1 WHERE rowid IN (SELECT rowid FROM code_landings
-		WHERE repo_id = ? AND target_ref = ? AND position > ? AND position <= ? AND green = 0)`
 	endedWithinSQL = `SELECT ended_at, entry_id, ejected_bytes FROM code_queue INDEXED BY code_queue_ended_idx
 		WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at < ?
 		ORDER BY ended_at, entry_id LIMIT ?`

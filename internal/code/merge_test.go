@@ -204,7 +204,9 @@ func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 	}
 	if landings := n.count(`SELECT COUNT(*) FROM code_landings WHERE repo_id = ? AND target_ref = ?
 			AND position = ? AND ordinal = 1 AND kind = 'direct' AND change_id = ? AND base_oid = ?
-			AND commit_oid = ? AND merged_by = 'dev' AND green = 1 AND broken = 0`, repo, mainRef, at, change,
+			AND commit_oid = ? AND merged_by = 'dev' AND broken = 0 AND position <= (SELECT g.position
+				FROM code_green AS g WHERE g.repo_id = code_landings.repo_id
+					AND g.target_ref = code_landings.target_ref)`, repo, mainRef, at, change,
 		oidOf("A"), oidOf("M")); landings != 1 {
 		t.Fatalf("%d landing rows record the merge on main, green, want one", landings)
 	}
@@ -354,9 +356,12 @@ func TestAnOverrideIsAPersons(t *testing.T) {
 		reason != string(code.EndMerged) {
 		t.Fatalf("the merged change's entry is %s (%s), want dequeued, merged", state, reason)
 	}
-	if landings := n.count(`SELECT COUNT(*) FROM code_landings WHERE repo_id = ? AND kind = 'direct'
-			AND green = 0`, queued); landings != 1 {
-		t.Fatalf("%d landing rows record the override, not green, want one: its gate requires checks", landings)
+	if landings := n.count(`SELECT COUNT(*) FROM code_landings WHERE repo_id = ? AND kind = 'direct'`,
+		queued); landings != 1 {
+		t.Fatalf("%d landing rows record the override, want one", landings)
+	}
+	if owed := n.count(`SELECT COUNT(*) FROM code_tips_due WHERE repo_id = ?`, queued); owed != 1 {
+		t.Fatalf("%d rows of tip work for the override, want one: its gate requires checks", owed)
 	}
 	if greens := n.count(`SELECT COUNT(*) FROM code_green WHERE repo_id = ?`, queued); greens != 0 {
 		t.Fatalf("an override past required checks moved the green row (%d rows), want none", greens)

@@ -461,7 +461,8 @@ const (
 	MergeRefusalNoLanding MergeRefusal = "no_landing"
 	// MergeRefusalRecordFull is a landing whose rows — its entries' own and
 	// the live changes their pushes move — would take its record past
-	// MaxRecordRows: its home lands fewer entries at once.
+	// MaxRecordRows: its home lands fewer entries at once. Never a green's,
+	// which writes the same few rows whatever lies beneath it.
 	MergeRefusalRecordFull MergeRefusal = "record_full"
 	// MergeRefusalBusy is the committer's queue full, or its round lost to a
 	// repository that kept changing.

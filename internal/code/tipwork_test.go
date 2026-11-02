@@ -184,3 +184,52 @@ func TestATipWindowKeepsItsNewestAndCallsAGapOnlyAGap(t *testing.T) {
 			commits, more)
 	}
 }
+
+// A GREEN MOVES IN ONE RECORD WHATEVER LIES BENEATH IT (ADR-0091): a landing
+// is green by its place — at or below its target's green row — never by a
+// mark of its own, so a green record moves the one row however many unproven
+// landings a red tip left above it. Four of ada's pushes land on main with
+// nothing proving them, the target owes its home its tip work, and once unit
+// passed on the newest a green record naming it is RECORDED — never refused
+// for the landings beneath it — moves main's green row onto that landing,
+// and leaves the target owing nothing and its repository unlisted.
+//
+// Mutation: refuse a green past a cap on the landings beneath it (the
+// record_full a green once met) — red; or leave the target's row of tip work
+// where a green moves past every landing — the repository still listed, red.
+func TestAGreenMovesInOneRecordWhateverLiesBeneathIt(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := mergeStream(t, n)
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].DirectPush, s.Protections[0].Gate = code.DirectPersons, queueGate()
+	repo := n.ensure("web", s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A"))))
+	from := "A"
+	for _, to := range []string{"B", "C", "D", "E"} {
+		got, err := c.Propose(t.Context(), proposal(repo, update(mainRef, oidOf(from), oidOf(to))))
+		if err != nil || len(got.Answer.Commands) != 1 || got.Answer.Commands[0].Result != code.ResultOK {
+			t.Fatalf("ada's push from %s to %s answered %+v (%v), want it landed", from, to, got.Answer, err)
+		}
+		from = to
+	}
+	_, tips := tipsDue(t, n, repo)
+	if len(tips) != 1 || len(tips[0].Landings) != 4 {
+		t.Fatalf("web owes tip work %+v, want main's four landings", tips)
+	}
+	newest := tips[0].Newest()
+	n.checked(repo, newest.OID, mainRef, "unit", 1, code.CheckStatePassed)
+	res, err := c.ProposeQueue(t.Context(), queueRecord(func(p *code.QueueProposal) {
+		p.Green = &code.Green{RepoID: repo, TargetRef: mainRef, OID: newest.OID, Through: newest.Position}
+	}))
+	requireRecorded(t, res, err)
+	if commit, position := n.greenOf(repo, mainRef); commit != oidOf("E") || position != newest.Position.Packed() {
+		t.Fatalf("main's green row is at %s (%d), want E at its landing's %d", commit, position,
+			newest.Position.Packed())
+	}
+	if repos, tips := tipsDue(t, n, repo); len(tips) != 0 || slices.Contains(repos, repo) {
+		t.Fatalf("a target green past every landing owes tip work %+v (listed: %v), want none", tips, repos)
+	}
+}

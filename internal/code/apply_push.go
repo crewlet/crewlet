@@ -880,9 +880,9 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 // revisions, its authors, its conversation, its body and then its row
 // ([purgeChanges]) — then its checks, each with its log ([purgeChecks]), then
 // its home's dispatches and its targets' readings ([purgeDispatches]) — then
-// its merge queues' entries, candidates, landings and green rows
-// ([purgeQueues]) — so every node deletes the same rows. THE PART IS THE
-// GUARD: only the row's purge_parts + 1 deletes anything, so a redelivered or
+// its merge queues' entries, candidates, landings, green rows and rows of
+// tip work ([purgeQueues]) — so every node deletes the same rows. THE PART IS
+// THE GUARD: only the row's purge_parts + 1 deletes anything, so a redelivered or
 // stale part deletes nothing more.
 //
 // BOUNDED BY ROWS AND BY BYTES: at most PurgePartRows rows, and its wide rows
@@ -1090,7 +1090,7 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // mergeability among them — the changes' notices by their counts
 // (code_changes.notices, never fewer than the rows), its checks and their logs, its heads' dispatches
 // and its targets' readings, and its merge queues' entries, candidates,
-// landings and green rows remain AND the
+// landings, green rows and rows of tip work remain AND the
 // pushes, the bodies, the conversations' text and the checks among them
 // weigh at most PurgePartBytes — a part's own bounds — and it holds at most
 // MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their
@@ -1133,7 +1133,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 		purgeAllFindingsSQL, purgeAllCommentsSQL, purgeAllFindingTextsSQL, purgeAllReviewsSQL,
 		purgeAllFactsSQL, purgeAllBodiesSQL, purgeAllMergeabilitySQL, purgeAllConversationsSQL,
 		purgeAllChangesSQL, purgeAllCheckLogsSQL, purgeAllChecksSQL, purgeAllDispatchesSQL, purgeAllCheckTargetsSQL,
-		purgeAllQueueSQL, purgeAllCandidatesSQL, purgeAllLandingsSQL, purgeAllGreenSQL,
+		purgeAllQueueSQL, purgeAllCandidatesSQL, purgeAllLandingsSQL, purgeAllGreenSQL, purgeAllTipsDueSQL,
 		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
 	} {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml

@@ -99,14 +99,17 @@ type landingRow struct {
 	green, broken                         bool
 }
 
-// landingsOf is every landing row of target on repo, in the order they landed.
+// landingsOf is every landing row of target on repo, in the order they landed,
+// each green where it lies at or below the target's green row.
 func (n *node) landingsOf(repo, target string) []landingRow {
 	n.t.Helper()
 	var out []landingRow
 	if err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(n.t.Context(), `SELECT kind, change_id, entry_id, base_oid, commit_oid,
-			merged_by, green, broken FROM code_landings WHERE repo_id = ? AND target_ref = ?
-			ORDER BY position, ordinal`, repo, target)
+		rows, err := tx.QueryContext(n.t.Context(), `SELECT l.kind, l.change_id, l.entry_id, l.base_oid,
+			l.commit_oid, l.merged_by, l.position <= COALESCE((SELECT g.position FROM code_green AS g
+				WHERE g.repo_id = l.repo_id AND g.target_ref = l.target_ref), -1), l.broken
+			FROM code_landings AS l WHERE l.repo_id = ? AND l.target_ref = ?
+			ORDER BY l.position, l.ordinal`, repo, target)
 		if err != nil {
 			return err
 		}

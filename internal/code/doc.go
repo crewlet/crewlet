@@ -372,9 +372,10 @@
 // commit measured, which may have rewritten the file. Every landing a record
 // did not prove lies above its target's green until a tip passes, and the
 // repository's home owes the target its tip work (tipwork.go: a `checks_due`
-// read's [ReadAnswer.DueTips], listed by code_landings_unjudged_idx): the
-// newest landing dispatched, coalesced; the green row moved onto it on pass
-// ([Green]); a red tip's failed checks bisected over the landing rows down to
+// read's [ReadAnswer.DueTips], listed by its row of tip work, code_tips_due):
+// the newest landing dispatched, coalesced; the green row moved onto it on
+// pass ([Green]) — every landing beneath it green by its position, in one
+// record whatever lies there; a red tip's failed checks bisected over the landing rows down to
 // the first landing they failed on, recorded broken ([Broken]) and announced
 // once as code_target_broken.
 //

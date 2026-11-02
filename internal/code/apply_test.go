@@ -1064,7 +1064,8 @@ func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 // purge's own record, redelivered, changes nothing.
 //
 // Mutation: drop the chain's two statements from the purge, and its layer and
-// its part outlive the repository.
+// its part outlive the repository; or drop its branches' rows of tip work from
+// it, and the home is still owed tip work of a repository that is gone.
 func TestAPurgeLeavesOnlyItsMarker(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -1083,12 +1084,15 @@ func TestAPurgeLeavesOnlyItsMarker(t *testing.T) {
 	// whose objects it keeps go too.
 	e.seedRetired("repo-a", 3, applyClock.Add(-time.Hour), 2)
 	e.seedDrops("repo-a", 3, applyClock.Add(-time.Hour), 2)
+	// SO DOES A BRANCH'S ROW OF TIP WORK: nothing is owed a repository that
+	// is gone.
+	e.exec(`INSERT INTO code_tips_due (repo_id, target_ref) VALUES ('repo-a', 'refs/heads/main')`)
 	purge := rec(t, RepoSubject("repo-a"), OpPurge,
 		Scope{NamePath(NameToken("a")), RepoPath("repo-a")},
 		Purge{RepoID: "repo-a", Name: "a", Reason: "past retention"})
 	e.apply(purge)
 	for _, table := range []string{"code_repos", "code_refs", "code_packs", "code_pushes", "code_protections",
-		"code_packs_retired", "code_ref_drops", "code_layers", "code_layer_parts"} {
+		"code_packs_retired", "code_ref_drops", "code_layers", "code_layer_parts", "code_tips_due"} {
 		column := "repo_id"
 		if table == "code_repos" {
 			column = "id"
