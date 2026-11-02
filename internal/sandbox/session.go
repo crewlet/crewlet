@@ -627,7 +627,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
 		SeatBudget: policy.SeatBudget,
 	}
-	took, stampErr := c.reserveCapture(ctx, by, run.TurnID, stamp)
+	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME, never past it: a
+	// reservation answered after the take's deadline reserves a place for a
+	// take that can no longer spool, and leaves the outcome stamp none of the
+	// room it is kept before by ([Coordinator.takeContext]).
+	reserveBy, _ := ctx.Deadline()
+	took, stampErr := c.reserveCapture(ctx, reserveBy, run.TurnID, stamp)
 	if stampErr != nil || !took {
 		// ANOTHER READ OF THE SAME RUN TOOK THIS PLACE FIRST — a stop's and a
 		// collection's, at once — and keeps the session itself; or the row
@@ -1079,9 +1084,9 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, cur
 
 // finishCapture stamps how a capture came out and reports it.
 //
-// UNDER A CONTEXT OF ITS OWN, by by at the latest where a take is still
-// stamping it ([stampContext]; zero off the read), asked again while the store
-// does not answer ([Coordinator.stampSettled]): the capture's budget may be
+// UNDER A CONTEXT OF ITS OWN, asked again while the store does not answer
+// within a record's budget, and never past by where a take is still stamping it
+// ([Coordinator.settleContext]; zero off the read): the capture's budget may be
 // what ended it, and the stamp is what says so.
 func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run PendingRun, stamp SessionCapture,
 	state CaptureState, why string) *SessionKept {
@@ -1104,9 +1109,10 @@ func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run Pendi
 // reserveCapture reserves a capture's place on its run's row — its stamp,
 // begun ([PendingStore.StampCapture]) — asked again while the coordination
 // store does not answer, spaced by a doubling wait, within one record's budget
-// and under a context of its own, never past by, as [Coordinator.stampSettled]
-// asks an outcome: false, with no error, where another read of the same job
-// took the place first.
+// and under a context of its own, never past by — the take's own deadline,
+// where a take reserves it — as [Coordinator.stampSettled] asks an outcome:
+// false, with no error, where another read of the same job took the place
+// first.
 //
 // ASKED AGAIN SO A READ LEAVES A STAMP OF WHAT IT TOOK wherever the store lets
 // it: a turn's newest capture is known only by its stamp, and its end tells the

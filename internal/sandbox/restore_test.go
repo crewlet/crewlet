@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -906,4 +907,69 @@ func TestARoundIsCarriedOnInTheSessionItsJobsBoxRan(t *testing.T) {
 			t.Errorf("%s: an answer carries the round on in %q, want %q", name, asked.SessionID, tc.want)
 		}
 	}
+}
+
+// silentStamps is a run store whose stamps of a capture are never answered, as
+// a coordination store in an outage does: each waits out its caller's context.
+type silentStamps struct {
+	PendingStore
+	asked atomic.Int32
+}
+
+func (s *silentStamps) StampCapture(ctx context.Context, _ string, _ SessionCapture) (bool, error) {
+	s.asked.Add(1)
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+// A CAPTURE'S RECORDS STOP AT THE READ'S TIME, however long the store keeps
+// silent. A take is part of a read that must leave its box's pause and its
+// answer their room ([Coordinator.takeContext]): its place is reserved within
+// the take's own time and its outcome stamped by the read's `by`, each asked
+// again while the store does not answer — and neither past its bound, whatever
+// is left of a record's budget, so the read goes on to pause its box.
+//
+// Mutation: bound a stamp by the record's budget alone, ignoring by, or reserve
+// a take's place by the read's by rather than the take's own deadline, and a
+// record waits out what the read leaves its pause.
+func TestACapturesRecordsStopAtTheReadsTime(t *testing.T) {
+	t.Parallel()
+	t.Run("each record stops at its bound", func(t *testing.T) {
+		t.Parallel()
+		c := &Coordinator{pending: &silentStamps{}, recordBudget: time.Minute, sessionRetry: time.Millisecond}
+		stamp := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureBegun}
+		for name, record := range map[string]func(by time.Time){
+			"a place's reservation": func(by time.Time) { _, _ = c.reserveCapture(t.Context(), by, "t1", stamp) },
+			"an outcome's stamp":    func(by time.Time) { c.stampSettled(t.Context(), by, "t1", stamp) },
+		} {
+			began := time.Now()
+			record(began.Add(300 * time.Millisecond))
+			if took := time.Since(began); took > 10*time.Second {
+				t.Errorf("%s asked a silent store for %s past a bound 300ms off, want it stopped there",
+					name, took)
+			}
+		}
+	})
+	t.Run("a take reserves its place within its own time", func(t *testing.T) {
+		t.Parallel()
+		rig, _, _ := keepingRig(t)
+		run := rig.launchKept(t, "t1")
+		silent := &silentStamps{PendingStore: rig.coordinator.pending}
+		rig.coordinator.pending, rig.coordinator.recordBudget = silent, time.Minute
+		// A READ WITH A DEADLINE, whose take ends two seconds from now and
+		// whose by a pause's grace after that.
+		read, cancel := context.WithTimeout(t.Context(), 2*discardGrace+2*time.Second)
+		defer cancel()
+		began := time.Now()
+		spooled, _ := rig.coordinator.takeCapture(read, run, rig.provider.Box(run.SandboxID), rig.runner,
+			readCapture(BoxReadCollect, Result{}, false))
+		if took := time.Since(began); took > 20*time.Second {
+			t.Errorf("the take asked a silent store to reserve its place for %s, past its own deadline "+
+				"two seconds off", took)
+		}
+		if spooled != nil || silent.asked.Load() == 0 {
+			t.Errorf("the take spooled %+v after %d reservations, want none spooled, the place asked for",
+				spooled, silent.asked.Load())
+		}
+	})
 }
