@@ -1454,6 +1454,9 @@ var swapFields = []swapField{
 	{name: "memoMu", class: own, why: "the memo's lock of next's own"},
 	{name: "memoListed", class: own, why: "false, or inc's as carryMemo moves the memo's tree in whole as next " +
 		"is promoted: the cohorts on next's disk are those inc's record named, listed or not"},
+	{name: "memoUnlisted", class: own, why: "false, or inc's as carryMemo moves the memo's tree in whole beside " +
+		"memoListed: a tree whose last listing failed is the same tree on the same disk in next, so next is " +
+		"listed again at the janitor's tick alone, as inc was"},
 	{name: "memoVersion", class: own, why: "moved by next's own record as carryMemo moves the memo in " +
 		"(setMemo), past what the swap's state records, so the janitor writes next's state at its tick"},
 	{name: "memoStated", class: own, why: "the memo's version the state the swap wrote records"},
