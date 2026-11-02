@@ -8017,7 +8017,8 @@ export type QueryName = keyof QueryMap;
  * THE CODE HOST'S QUESTIONS, asked over REST (`lib/useCodeQuery.ts`) rather
  * than on the socket, so a screen of the Code workspace never holds one of
  * the socket's in-flight slots: its answers are pages of rows a person
- * scrolls, and an answer by object id is immutable and read again by its tag.
+ * scrolls, and an answer by object id is immutable, kept by the tab and never
+ * asked again while it is kept.
  * They are registry questions all the same — the one answer every transport
  * gives, read back at the tab's floor on the code log (`contract/domains.ts`'s
  * `SESSION_QUERIES.code`) — and each answer is the engine's one read answer
@@ -8856,7 +8857,8 @@ export interface CodeBlameAnswer {
  * on a read naming a ref, which is never immutable, each ref it resolved by
  * the parameter that named it, the answering copy's position and the push
  * that introduced each commit the page names. A read by whole object ids is
- * answered with none of those, immutably, and read again by its tag.
+ * answered with none of those, immutably, and kept by the tab
+ * (`lib/useCodeQuery.ts`).
  */
 export interface CodeGitAnswer {
   repo: string;

@@ -4,8 +4,10 @@
  *
  * READ BY OBJECT ID, WHOLE ON BOTH SIDES: a commit's page and a comparison
  * each name the two commits by their whole ids (`code_diff` `base=`, `head=`),
- * so every answer here is immutable and the hook keeps its tag — a file read
- * again is not sent again. `file=` is the file whose patch is drawn and
+ * so every answer here is immutable and the tab keeps it (`lib/useCodeQuery.ts`,
+ * its most recently read 64) — a file read again, a reviewer moving from one
+ * file to another and back, is answered with no request while the tab keeps
+ * it. `file=` is the file whose patch is drawn and
  * `layout=` how, each a filter of the page it is on.
  */
 

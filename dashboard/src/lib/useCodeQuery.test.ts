@@ -1,6 +1,6 @@
 /**
  * The code questions' loader: REST, at this tab's floor on the code log, and
- * an answer by object id held by its tag.
+ * an answer by object id kept by the tab and, let go of, held by its tag.
  *
  * Each case is a rule the hook exists to keep: a code question asked on the
  * socket would hold one of its in-flight slots, a read back that ignored the
@@ -12,7 +12,7 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { codeRest, codeSearch, useCodeQuery } from "./useCodeQuery.ts";
+import { IMMUTABLE_KEPT, codeRest, codeSearch, useCodeQuery } from "./useCodeQuery.ts";
 import { QueryError } from "~/protocol/index.ts";
 import { session } from "~/protocol/session.ts";
 import { engineJson } from "~/test/engineAnswer.ts";
@@ -176,6 +176,75 @@ describe("an answer by object id is held by its tag", () => {
     act(() => result.current.refetch());
     await waitFor(() => expect(sent).toHaveLength(2));
     expect(new Headers(sent[1]!.init.headers).get("If-None-Match")).toBeNull();
+  });
+});
+
+describe("an answer the engine marks immutable is the tab's", () => {
+  /** The engine's marks on an answer read by object id (internal/api/httpjson's Immutable). */
+  const IMMUTABLE = {
+    ETag: '"sha256-def"',
+    "Cache-Control": "private, max-age=31536000, immutable",
+  };
+  const patchOf = (file: string) => ({
+    repo: "web",
+    kind: "diff",
+    diff: { base: "a", head: "b", files: [], total: 1, added: 1, deleted: 1, patch: `+${file}\n` },
+  });
+
+  // KEPT, AND NEVER ASKED AGAIN, whichever hook asks: a reviewer moving from
+  // file A to file B and back to A reads A once. Mutation: keep nothing, or
+  // keep it in the hook that read it alone, and the second hook asks again.
+  test("a question read once is answered again with no request, by another hook", async () => {
+    const params = { name: "kept-by-hooks", base: "a", head: "b", file: "a.go" };
+    const sent = stub(() => json(patchOf("a.go"), 200, IMMUTABLE));
+    const first = renderHook(() => useCodeQuery("code_diff", params));
+    await waitFor(() => expect(first.result.current.data?.diff?.patch).toBe("+a.go\n"));
+    first.unmount();
+
+    const again = renderHook(() => useCodeQuery("code_diff", params));
+    await waitFor(() => expect(again.result.current.data?.diff?.patch).toBe("+a.go\n"));
+    act(() => again.result.current.refetch());
+    await waitFor(() => expect(again.result.current.loading).toBe(false));
+    expect(sent).toHaveLength(1);
+  });
+
+  // A LATER PAGE READS AND FILLS THE SAME STORE: a page of a patch read again
+  // is not sent again, and one a hook read is not asked by a pager. Mutation:
+  // give `codeRest` no part in it, and a second request is sent.
+  test("a later page is kept as a hook's answer is, and read from there", async () => {
+    const params = { name: "kept-by-pages", base: "a", head: "b", file: "a.go", cursor: "p:1" };
+    const sent = stub(() => json(patchOf("page two"), 200, IMMUTABLE));
+    await codeRest.query("code_diff", params);
+    const read = await codeRest.query("code_diff", params);
+    expect(read.diff?.patch).toBe("+page two\n");
+    const hook = renderHook(() => useCodeQuery("code_diff", params));
+    await waitFor(() => expect(hook.result.current.data?.diff?.patch).toBe("+page two\n"));
+    expect(sent).toHaveLength(1);
+  });
+
+  // BOUNDED: the most recently read IMMUTABLE_KEPT, and the one read longest
+  // ago let go — read again, it is one request. Mutation: drop the bound, and
+  // the first answer is never asked again.
+  test("past its bound the answer read longest ago is let go", async () => {
+    const sent = stub(() => json(patchOf("x"), 200, IMMUTABLE));
+    const page = (n: number) => ({ name: "kept-bounded", base: "a", head: "b", cursor: `p:${n}` });
+    for (let n = 0; n <= IMMUTABLE_KEPT; n++) await codeRest.query("code_diff", page(n));
+    expect(sent).toHaveLength(IMMUTABLE_KEPT + 1);
+    await codeRest.query("code_diff", page(IMMUTABLE_KEPT));
+    expect(sent).toHaveLength(IMMUTABLE_KEPT + 1);
+    await codeRest.query("code_diff", page(0));
+    expect(sent).toHaveLength(IMMUTABLE_KEPT + 2);
+  });
+
+  // ONLY WHAT THE ENGINE MARKED: an answer with no `immutable` is asked again
+  // every time, a tag or none. Mutation: keep every answer, and the second
+  // read is never sent.
+  test("an answer not marked immutable is asked again", async () => {
+    const params = { name: "not-kept", base: "a", head: "b" };
+    const sent = stub(() => json(patchOf("y"), 200, { ETag: '"sha256-ghi"' }));
+    await codeRest.query("code_diff", params);
+    await codeRest.query("code_diff", params);
+    expect(sent).toHaveLength(2);
   });
 });
 

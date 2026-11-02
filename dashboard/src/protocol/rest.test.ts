@@ -189,7 +189,27 @@ describe("the whole answer", () => {
   test("status, body and the entity-tag verbatim", async () => {
     stub(() => json({ name: "Acme" }, 200, { ETag: '"01JREV"' }));
     const answer = await rest.request("GET", "/config");
-    expect(answer).toEqual({ status: 200, body: { name: "Acme" }, etag: '"01JREV"', marked: true });
+    expect(answer).toEqual({
+      status: 200,
+      body: { name: "Acme" },
+      etag: '"01JREV"',
+      marked: true,
+      immutable: false,
+    });
+  });
+
+  // AN ANSWER THE ENGINE MARKS AS NEVER CHANGING SAYS SO, by the one
+  // directive that marks it, among whatever else its Cache-Control names —
+  // and nothing short of that directive does. Mutation: read `immutable` off
+  // any Cache-Control, or off the tag, and a case below fails.
+  test.each([
+    ["private, max-age=31536000, immutable", true],
+    ["private, max-age=31536000", false],
+    ["no-store", false],
+  ])("Cache-Control %j is immutable: %s", async (cacheControl, immutable) => {
+    stub(() => json({}, 200, { ETag: '"sha"', "Cache-Control": cacheControl }));
+    const answer = await rest.request("GET", "/query/code_diff");
+    expect(answer.immutable).toBe(immutable);
   });
 
   test("a success status other than 200 is reported, not flattened", async () => {
@@ -206,7 +226,13 @@ describe("the whole answer", () => {
     const answer = await rest.request("GET", "/config", {
       headers: { "If-None-Match": '"01JREV"' },
     });
-    expect(answer).toEqual({ status: 304, body: null, etag: '"01JREV"', marked: false });
+    expect(answer).toEqual({
+      status: 304,
+      body: null,
+      etag: '"01JREV"',
+      marked: false,
+      immutable: false,
+    });
     expect((sent[0]!.init.headers as Record<string, string>)["If-None-Match"]).toBe('"01JREV"');
   });
 
@@ -245,7 +271,13 @@ describe("a text answer", () => {
       query: { format: "yaml" },
       read: "text",
     });
-    expect(answer).toEqual({ status: 200, body: "name: Acme\n", etag: '"01JREV"', marked: false });
+    expect(answer).toEqual({
+      status: 200,
+      body: "name: Acme\n",
+      etag: '"01JREV"',
+      marked: false,
+      immutable: false,
+    });
   });
 
   test("a refusal is still read as the engine's JSON", async () => {

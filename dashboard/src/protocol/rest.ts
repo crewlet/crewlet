@@ -416,6 +416,21 @@ export interface RestResponse {
   etag: string | null;
   /** Whether the answer carried the engine's mark ([markedByEngine]). */
   marked: boolean;
+  /**
+   * Whether the engine marked the answer as never changing (`Cache-Control:
+   * immutable`, internal/api/httpjson's Immutable): an answer whose bytes are
+   * a function of what its request named, which a caller may keep and answer
+   * the same request from without asking again. The transport keeps nothing
+   * itself (see [request]); a caller that keeps answers reads this.
+   */
+  immutable: boolean;
+}
+
+/** Whether a response's `Cache-Control` names `immutable` (RFC 8246). */
+function markedImmutable(headers: Headers): boolean {
+  return (headers.get("Cache-Control") ?? "")
+    .split(",")
+    .some((directive) => directive.trim().toLowerCase() === "immutable");
 }
 
 /** A deadline as a person would say it: seconds under two minutes, minutes
@@ -688,6 +703,7 @@ async function attempt(
       body: text,
       etag: response.headers.get("ETag"),
       marked: markedByEngine(response.headers),
+      immutable: markedImmutable(response.headers),
     };
   }
 
@@ -737,6 +753,7 @@ async function attempt(
     body: parsed,
     etag: response.headers.get("ETag"),
     marked: markedByEngine(response.headers),
+    immutable: markedImmutable(response.headers),
   };
 }
 

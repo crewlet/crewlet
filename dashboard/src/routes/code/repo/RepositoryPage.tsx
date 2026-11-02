@@ -11,8 +11,9 @@
  * a file, a blame, a history — which the repository's home git node answers
  * (`code_tree`, `code_blob`, `code_blame`, `code_log`), every revision a
  * request names by a ref resolved once, at the caller's freshness. A revision
- * named by a whole commit id is answered immutably, and the hook keeps its
- * tag, so a Permalink is read once and never sent twice. Content is not polled:
+ * named by a whole commit id is answered immutably, and the tab keeps the
+ * answer (`lib/useCodeQuery.ts`), so a Permalink left and come back to is
+ * answered with no request while the tab keeps it. Content is not polled:
  * a reader reading a file reads the revision they opened, and the Permalink
  * names it whole.
  *

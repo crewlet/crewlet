@@ -8049,8 +8049,13 @@ what is on screen, and the engine's `Retry-After` is the retry. It keeps
 `useQuery`'s floor: a write this tab makes to the code log raises the floor
 there (`SESSION_QUERIES.code`), every ask of a code question names it, and the
 write asks again. An answer read by object id is immutable, a strong `ETag`
-and `Cache-Control: immutable`, and the hook keeps its tag, so a read again
-names it and a `304` is the answer it already holds. The engine's reader gates
+and `Cache-Control: immutable`, and the TAB keeps it — the 64 most recently
+read (`IMMUTABLE_KEPT`), a page of 56 KiB at most each — so the same question
+asked again by any screen or pager (a diff's file read again, a Permalink
+come back to, a page of a patch) is answered with no request; the transport
+asks with `no-store`, so the browser's own cache answers none of it. An
+answer the tab has let go of while a screen still holds it is asked again
+naming its tag, and a `304` is the answer the screen holds. The engine's reader gates
 read a code question where it is asked, as they read every other:
 `useCodeQuery("…")`, and `codeRest.query("…")` for an older page.
 

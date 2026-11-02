@@ -36,15 +36,30 @@
  * it said, and `refetch` — `useQuery`'s result, so `QueryState` and `usePaged`
  * read a code question as they read any other.
  *
- * # An answer by object id is held by its tag
+ * # An answer by object id is kept, and never asked again
  *
  * The engine marks an answer read by object id immutable: a strong `ETag` of
  * its own bytes and `Cache-Control: immutable`, and `304` to a request naming
  * the tag. The transport asks with `cache: "no-store"` (`protocol/rest.ts`: a
  * guarded read of something that changes is never served from a cache), so the
- * tag is kept here instead: a question read again — a reconnect, the tab coming
- * back — names the tag of the answer it holds, and a `304` is that answer, with
- * no body sent twice. An answer that carries no tag is read whole every time.
+ * browser's cache never answers one, and the tab keeps them itself, in two
+ * places.
+ *
+ * THE TAB'S KEPT ANSWERS ([IMMUTABLE_KEPT] of them, the most recently read): a
+ * question whose answer the engine marked immutable is answered from there with
+ * no request at all, whichever hook or page asks it — a reviewer moving from
+ * file A to B and back to A in a diff, a Permalink left and come back to, a
+ * page of a patch read again — since `immutable` means its bytes cannot
+ * change. Every hook and every later page (`codeRest`) reads and fills the one
+ * store. It is the tab's memory and nothing else's: a tab handed to another
+ * reader is reloaded with nothing of the last one's kept (`lib/session.ts`),
+ * which empties it, and the browser's cache is never asked to keep one.
+ *
+ * AND EACH HOOK'S TAG, for an answer that carries one and is not kept — one the
+ * store let go of while the screen still holds it: read again (a reconnect,
+ * the tab coming back), the question names the tag of the answer the hook
+ * holds, and a `304` is that answer, with no body sent twice. An answer that
+ * carries no tag is read whole every time.
  */
 
 import { useCallback, useEffect, useRef } from "react";
@@ -132,8 +147,48 @@ function sentenceOf(err: RestError | null): string | null {
 }
 
 /**
+ * How many immutable answers the tab keeps: the most recently read 64.
+ *
+ * AN ANSWER IS AT MOST ONE PAGE, `code.MaxGitAnswerBytes` (56 KiB of JSON), so
+ * the store holds at most about 3.5 MiB of answers — a tab's memory, beside a
+ * screen that already draws what it holds. Sixty-four is the files a reviewer
+ * moves between in a large change and the pages of a long patch together, so
+ * going back to one they read is answered here; past it, the one read longest
+ * ago is let go, and reading it again is one request, as before.
+ */
+export const IMMUTABLE_KEPT = 64;
+
+/** The tab's immutable answers by question, the most recently read last. */
+const kept = new Map<string, unknown>();
+
+/** The question's key: its kind and its parameters, never the floor (see the file's doc). */
+const keyOf = (what: CodeQueryName, params: CodeParams = {}): string =>
+  `${what}?${JSON.stringify(params)}`;
+
+/** The immutable answer the tab keeps for a question, read as the most recent. */
+function keptAnswer(key: string): unknown {
+  if (!kept.has(key)) return undefined;
+  const body = kept.get(key);
+  kept.delete(key);
+  kept.set(key, body);
+  return body;
+}
+
+/** Keep an answer the engine marked immutable, letting go of the one read longest ago past the bound. */
+function keep(key: string, body: unknown): void {
+  kept.delete(key);
+  kept.set(key, body);
+  while (kept.size > IMMUTABLE_KEPT) {
+    const oldest = kept.keys().next().value;
+    if (oldest === undefined) break;
+    kept.delete(oldest);
+  }
+}
+
+/**
  * One ask of a code question, for a page a reader asks for once — a listing's
- * older page — at this tab's floor, refused as a [QueryError].
+ * older page — at this tab's floor, refused as a [QueryError]: answered from
+ * the tab's kept answers where the engine marked it immutable before.
  *
  * A `query` METHOD, so the engine's reader gate (`clientsource.Calls`) and the
  * dashboard's own ("every read names its question") read the kind written at
@@ -145,12 +200,16 @@ export const codeRest = {
     params: CodeParams = {},
     signal?: AbortSignal,
   ): Promise<CodeQueryMap[K]> {
+    const key = keyOf(what, params);
+    const held = keptAnswer(key);
+    if (held !== undefined) return held as CodeQueryMap[K];
     try {
       const answer = await rest.request(
         "GET",
         `/query/${pathSegment(what)}?${codeSearch(what, params)}`,
         { signal },
       );
+      if (answer.immutable) keep(key, answer.body);
       return answer.body as CodeQueryMap[K];
     } catch (err) {
       throw questionError(err);
@@ -180,7 +239,7 @@ export function useCodeQuery<K extends CodeQueryName>(
   // THE QUESTION IS THE KEY — its kind and its parameters, never the floor
   // (see the file's doc). The parameters are a fresh literal on every render,
   // so their serialisation is what is compared.
-  const key = enabled ? `${what}?${JSON.stringify(params ?? {})}` : null;
+  const key = enabled ? keyOf(what, params) : null;
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const tagged = useRef<Tagged<CodeQueryMap[K]> | null>(null);
@@ -189,6 +248,10 @@ export function useCodeQuery<K extends CodeQueryName>(
     key,
     async (signal) => {
       const asking = key ?? "";
+      // AN ANSWER THE ENGINE MARKED IMMUTABLE is the tab's, and never asked
+      // again while it is kept (the file's doc).
+      const keptBody = keptAnswer(asking);
+      if (keptBody !== undefined) return keptBody as CodeQueryMap[K];
       const held = tagged.current?.key === asking ? tagged.current : null;
       const answer = await rest.request(
         "GET",
@@ -198,13 +261,17 @@ export function useCodeQuery<K extends CodeQueryName>(
       if (answer.status === 304) {
         // ONLY EVER THE ANSWER THIS READ NAMED: a 304 to a request that named
         // no tag is no answer to anything this hook holds.
-        if (held) return held.body;
+        if (held) {
+          if (answer.immutable) keep(asking, held.body);
+          return held.body;
+        }
         throw new RestError(502, {
           error: "unreadable_body",
           detail: "the engine answered 304 to a read that named no tag",
         });
       }
       const body = answer.body as CodeQueryMap[K];
+      if (answer.immutable) keep(asking, body);
       tagged.current = answer.etag ? { key: asking, etag: answer.etag, body } : null;
       return body;
     },
