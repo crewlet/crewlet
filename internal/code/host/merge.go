@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
@@ -126,12 +127,77 @@ type mergeVerdict struct {
 	ours    bool
 }
 
-// runMerge is a merge_change's steps from its sync on: judged, built, landed —
-// and built again onto a target that moved under it, or from a copy an
-// expunge's begin overtook, at most code.MergeRecomputes times, every round
-// drawing on the merge's ONE budget of git and started only where it fits
-// what is left of that budget and of the write's attempt (roomToRebuild).
+// runMerge is a merge_change's steps from its sync on ([writing.mergeRounds]),
+// and its rebuilds recorded once, as it ended ([writing.recordRecomputes]).
 func (wr *writing) runMerge(ctx context.Context) (code.EngineWriteResult, error) {
+	res, err := wr.mergeRounds(ctx)
+	wr.recordRecomputes(res, err)
+	return res, err
+}
+
+// The outcomes crewlet.code.merge.recomputes records a merge under beside a
+// refusal's own code, which is its outcome where it was refused.
+const (
+	// mergeMerged is a merge whose record applied or is pending — or one
+	// found already landed.
+	mergeMerged = "merged"
+	// mergeQueued is a change its target's queue took rather than merged.
+	mergeQueued = "queued"
+)
+
+// recordRecomputes observes how many times one merge_change was built again
+// onto a target that moved under it (code.MergeAnswer.Recomputes) on
+// crewlet.code.merge.recomputes, by how it ended: merged, queued, a refusal's
+// own code — target_moving where code.MergeRecomputes rebuilds, or the merge's
+// one budget, ran out — unknown, unready (another git node is asked, and
+// records its own), refused (an argument the build found invalid, or an
+// object it named missing) or failed. ONCE A MERGE, from the count its answer
+// carries, so the distribution is merges rather than rounds: a branch moving
+// under its merges is the mean a merge took (the sum over the count, exact
+// where the count boundaries put 0 and 1 in one bucket) climbing towards
+// code.MergeRecomputes, which target_moving at the cap names, where
+// crewlet.code.merge.outcomes' committer counts only target_moved records and
+// cannot tell four rebuilds that landed from four merges that each rebuilt
+// once.
+func (wr *writing) recordRecomputes(res code.EngineWriteResult, err error) {
+	if wr.s.o.Metrics == nil {
+		return
+	}
+	recomputes := 0
+	if res.Merge != nil {
+		recomputes = res.Merge.Recomputes
+	}
+	wr.s.o.Metrics.ObserveValue(metrics.CodeMergeRecomputes, float64(recomputes),
+		metrics.Attrs{"outcome": mergeOutcome(res, err)})
+}
+
+// mergeOutcome is how crewlet.code.merge.recomputes names a merge that ended
+// so.
+func mergeOutcome(res code.EngineWriteResult, err error) string {
+	switch {
+	case err != nil:
+		return writeOutcome(res, err)
+	case res.Merge != nil && res.Merge.Refusal != "":
+		return string(res.Merge.Refusal)
+	case res.Refusal != "":
+		return string(res.Refusal)
+	case res.Merge != nil && res.Merge.Queued:
+		return mergeQueued
+	case res.Outcome == statelog.OutcomeApplied, res.Outcome == statelog.OutcomePending:
+		return mergeMerged
+	case res.Outcome == statelog.OutcomeUnknown:
+		return writeUnknown
+	}
+	return writeRefused
+}
+
+// mergeRounds is a merge_change's steps from its sync on: judged, built,
+// landed — and built again onto a target that moved under it, or from a copy
+// an expunge's begin overtook, at most code.MergeRecomputes times, every
+// round drawing on the merge's ONE budget of git and started only where it
+// fits what is left of that budget and of the write's attempt
+// (roomToRebuild).
+func (wr *writing) mergeRounds(ctx context.Context) (code.EngineWriteResult, error) {
 	s := wr.s
 	fresh := wr.fresh()
 	// ONE BUDGET FOR EVERY ROUND (code.MergeBuildDeadline): charged by each
@@ -643,10 +709,10 @@ func (wr *writing) buildAndLandMerge(ctx context.Context, j mergeJudgement) (res
 
 // buildMergeShared is a merge's build under one unit of the node's seat
 // git-work share and what is left of its budget of git run time
-// (code.MergeBuildDeadline, every round's together: runMerge gives it once):
+// (code.MergeBuildDeadline, every round's together: mergeRounds gives it once):
 // a fast-forward's ancestry, or a merge's or a squash's merge, commit and
 // pack. Past code.GitShareWait the share is unready, about this node; a build
-// that runs out the budget is errBuildSpent, which runMerge answers.
+// that runs out the budget is errBuildSpent, which mergeRounds answers.
 func (wr *writing) buildMergeShared(ctx context.Context, sc *cache.Scratch, j mergeJudgement) (string,
 	code.EngineWriteResult, bool, error) {
 

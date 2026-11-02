@@ -802,6 +802,30 @@ func Catalogue() []Instrument {
 				"`gate_unmet`, askers merging changes before their gate is met.",
 		},
 		{
+			Name: CodeMergeRecomputes, Kind: KindHistogram, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "How many times each merge of a change this git node built " +
+				"was built again onto a target that moved under it, observed " +
+				"once a merge as it ends — from 0, a merge its first build " +
+				"landed, to 4 (`code.MergeRecomputes`), the most it is ever " +
+				"rebuilt — by how it ended, `outcome`: `merged`, its record " +
+				"applied or pending, or found already landed; `queued`, its " +
+				"target's queue took it, built nothing; a refusal's own code " +
+				"— `target_moving` where its rebuilds, or the one budget of git " +
+				"a merge is given, ran out before its target held still, " +
+				"`gate_unmet`, `conflict` and the rest; `unknown`, its record " +
+				"was appended and is not yet known here to have applied; " +
+				"`unready`, this node could not answer and another git node " +
+				"was asked, which records its own; `refused`, an argument the " +
+				"build found invalid or an object it named missing; and " +
+				"`failed`, the node's own failure. Read its sum over its count, " +
+				"the mean rebuilds a merge took: above 0 is a branch moving " +
+				"while its merges are built (the count boundaries put 0 and 1 " +
+				"in one bucket, and 3 and 4 in another, so the buckets alone " +
+				"cannot say it); `target_moving` counted, merges it outran — " +
+				"land them through its queue, or at a quieter moment.",
+		},
+		{
 			Name: CodeChecksQueued, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"purpose"},
 			Shows: "Attempts of checks this node's checks writer queued — each by a " +

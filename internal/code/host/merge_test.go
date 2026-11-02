@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // A CHANGE'S MERGE, BUILT ON ITS REPOSITORY'S GIT NODE (merge.go): a
@@ -617,10 +618,13 @@ func (m *movingMain) Merge(ctx context.Context, p code.MergeProposal) (code.Merg
 // third build, answering its two recomputes, its commit on the tip the last
 // push left; moved under its first build and under every one of
 // code.MergeRecomputes rebuilds after it, it is answered target_moving after
-// five records asked, and the change stays open.
+// five records asked, and the change stays open. Each merge's rebuilds are
+// observed once as it ends, on crewlet.code.merge.recomputes under how it
+// ended: 2 merged, 4 target_moving.
 //
 // Mutation: rebuild only three times → four records asked, red; answer the
-// first target_moved → nothing merges after two moves, red.
+// first target_moved → nothing merges after two moves, red; drop
+// recordRecomputes' observation → no merge observed, red.
 func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -647,6 +651,28 @@ func TestAMergeRecomputesFourTimesThenRefuses(t *testing.T) {
 			w := merge(c.repo, pat(), n, head, code.MergeMethodMerge)
 			w.Override = "chasing a moving main"
 			res, err := c.write(w)
+			// THE REBUILDS ARE OBSERVED ONCE, as the merge ends, on the git
+			// node that built it: the count its answer carries, under how it
+			// ended — never once a round, nor left unrecorded. (A node that
+			// answered unready and handed the walk on records its own, which
+			// is no merge built.)
+			outcome, rebuilt := "merged", tc.moves
+			if !tc.merged {
+				outcome, rebuilt = string(code.MergeRefusalTargetMoving), code.MergeRecomputes
+			}
+			var merges, under uint64
+			var sum float64
+			for _, node := range c.Fleet.Nodes() {
+				n, _ := observed(node.Metrics(), metrics.CodeMergeRecomputes, nil)
+				handed, _ := observed(node.Metrics(), metrics.CodeMergeRecomputes,
+					map[string]string{"outcome": "unready"})
+				u, s := observed(node.Metrics(), metrics.CodeMergeRecomputes, map[string]string{"outcome": outcome})
+				merges, under, sum = merges+n-handed, under+u, sum+s
+			}
+			if merges != 1 || under != 1 || sum != float64(rebuilt) {
+				t.Errorf("crewlet.code.merge.recomputes observed %d merges, %d of them %s summing %v; want one "+
+					"%s merge of %d rebuilds", merges, under, outcome, sum, outcome, rebuilt)
+			}
 			if !tc.merged {
 				if err != nil || res.Merge == nil || res.Merge.Refusal != code.MergeRefusalTargetMoving ||
 					res.Merge.Recomputes != code.MergeRecomputes || m.asked != code.MergeRecomputes+1 {

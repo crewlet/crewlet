@@ -7247,7 +7247,11 @@ person — an override's reason, at most 1 KiB.
    that ends `unready` and sends the next git node to merge it from scratch,
    or a landing refused `busy`. A merge built from a copy taken before an
    expunge of the repository began is refused `expunging` and built again the
-   same way, from a copy synced past it.
+   same way, from a copy synced past it. How many times each merge was built
+   again is observed once, as it ends, on `crewlet.code.merge.recomputes`
+   under how it ended (`merged`, `queued`, `target_moving` and the rest), so
+   a branch moving under its merges shows as that count climbing towards
+   four before any merge is refused.
 
 A router gives a merge **102 seconds** on one git node — an engine write's 82
 with its ten seconds of build replaced by the merge's thirty, which its

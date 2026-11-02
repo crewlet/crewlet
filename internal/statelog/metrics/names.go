@@ -91,6 +91,7 @@ const (
 	CodePublishBytes                 = "crewlet.code.publish.bytes"
 	CodeQueueProposals               = "crewlet.code.queue.proposals"
 	CodeMergeOutcomes                = "crewlet.code.merge.outcomes"
+	CodeMergeRecomputes              = "crewlet.code.merge.recomputes"
 	CodePublishDuration              = "crewlet.code.publish.duration"
 	CodePublishRefusals              = "crewlet.code.publish.refusals"
 	CodePublishRuns                  = "crewlet.code.publish.runs"
