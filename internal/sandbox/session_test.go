@@ -859,8 +859,9 @@ func TestARefusedCaptureStampUploadsAndClaimsNothing(t *testing.T) {
 // nothing.
 //
 // Mutation: let Finish delete a row that owes an end, let a second OweEnd
-// replace the first, or clear whatever the row owes, and an end is lost with
-// its row, recorded twice, or cleared unrecorded.
+// replace the first, clear whatever the row owes, or clear it without marking
+// it recorded, and an end is lost with its row, recorded twice, or cleared
+// unrecorded.
 func TestARowOwingItsTurnsEndIsKeptUntilTheEndIsRecorded(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -886,6 +887,13 @@ func TestARowOwingItsTurnsEndIsKeptUntilTheEndIsRecorded(t *testing.T) {
 	}
 	if cleared, err := rig.pending.ClearEnd(ctx, "t1", first); err != nil || !cleared {
 		t.Fatalf("ClearEnd = %v, %v", cleared, err)
+	}
+	// RECORDED, AND STILL DECIDED ONCE: an end offered after the turn's was
+	// recorded and cleared takes nothing, and the record says it is recorded.
+	if owing, wrote, err := rig.pending.OweEnd(ctx, "t1", second); err != nil || wrote ||
+		len(owing.OwedEnd) != 0 || !owing.EndRecorded {
+		t.Fatalf("an end offered after the turn's was recorded = %s (recorded %v), %v, %v",
+			owing.OwedEnd, owing.EndRecorded, wrote, err)
 	}
 	if _, gone, err := rig.pending.Finish(ctx, "t1", decided.Ending.ID); err != nil || !gone {
 		t.Fatalf("Finish after the end was cleared = %v, %v", gone, err)

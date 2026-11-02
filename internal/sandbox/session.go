@@ -81,19 +81,19 @@ import (
 //
 // How the turn ended — completed or failed, the reviewer's decision, whether
 // its reply reached the party waiting, who stopped it and why, what lost it —
-// is the account a transcript cannot hold, and the next turn on the
-// conversation is told it ([executordomain.Ending]). Whatever ends the turn
-// writes it on the run's row ([PendingStore.OweEnd]): the engine's resumed turn,
-// and this package's endings that no frame of the turn reaches — a loss, a stop
-// ([CoordinatorOptions.TurnLost], [CoordinatorOptions.CloseStopped]). The run's
-// ending records it on the executor log ([Coordinator.EndTurn]) before it
-// deletes the row, which the delete refuses until then ([ErrEndOwed]): after
-// every capture of the turn has settled, so the end's tombstone never refuses
-// the turn's own last session, and with the turn's NEWEST capture where it was
-// not kept ([executordomain.Unkept]), so the next turn never continues an older
-// one believing it the turn's last. The seat's mail waits on it as on every
-// ending kept for its retry. A turn with no capture still ends: its row names
-// no object, and holds the account.
+// is the account a transcript cannot hold ([executordomain.Ending]), recorded
+// on the turn's row of the log beside the session it kept. Whatever ends the
+// turn writes it on the run's row ([PendingStore.OweEnd]): the engine's resumed
+// turn, and this package's endings that no frame of the turn reaches — a loss,
+// a stop ([CoordinatorOptions.TurnLost], [CoordinatorOptions.CloseStopped]).
+// The run's ending records it on the executor log ([Coordinator.publishEnd])
+// before it deletes the row, which the delete refuses until then
+// ([ErrEndOwed]): after every capture of the turn has settled, so the end's
+// tombstone never refuses the turn's own last session, and with the turn's
+// NEWEST capture where it was not kept ([executordomain.Unkept]), so the log's
+// row never goes on naming an older session as the turn's last. The seat's mail
+// waits on it as on every ending kept for its retry. A turn with no capture
+// still ends: its row names no object, and holds the account.
 //
 // # The switch
 //
@@ -1107,26 +1107,34 @@ func turnEndOf(run PendingRun, ending executordomain.Ending) TurnEnd {
 // OweEnd records on the turn's run row how the turn ended
 // ([PendingStore.OweEnd]), for the run's ending to record on the executor log
 // before it deletes the row ([Coordinator.finishEnding]) — the path every end
-// takes whose turn still has a row. Answers whether the row now owes it: false
-// where the turn has no row, which the caller records itself
-// ([Coordinator.EndTurn]).
+// takes whose turn still has a row. Answers whether the row now owes it, or
+// has recorded the turn's end already ([PendingRun.EndRecorded]): false where
+// the turn has no row, which the caller records itself ([Coordinator.EndTurn]).
 //
 // DECIDED ONCE: a turn that owes an end already keeps it, and this one is
 // dropped, which is what lets two paths that end one turn end it once.
+//
+// UNDER A CONTEXT OF ITS OWN ([detached]): a frame that ends a turn is often
+// one a drain is cancelling, and an end that frame could not owe was recorded
+// at once instead — before the turn's captures settled, and without what they
+// came to.
 func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executordomain.Ending) (bool, error) {
 	raw, err := json.Marshal(ending)
 	if err != nil {
 		return false, fmt.Errorf("sandbox: encoding the end of turn %s: %w", turnID, err)
 	}
+	ctx, cancel := detached(ctx)
+	defer cancel()
 	owing, _, err := c.pending.OweEnd(ctx, turnID, raw)
 	if err != nil {
 		return false, fmt.Errorf("sandbox: recording the end turn %s owes: %w", turnID, err)
 	}
-	return len(owing.OwedEnd) > 0, nil
+	return len(owing.OwedEnd) > 0 || owing.EndRecorded, nil
 }
 
 // oweEnd is [Coordinator.OweEnd] for an ending's own step: the row as it stands
-// after the write, owing the end it decided or one decided before it.
+// after the write, owing the end it decided or one decided before it, or
+// having recorded one already.
 func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executordomain.Ending) (PendingRun, error) {
 	raw, err := json.Marshal(ending)
 	if err != nil {
@@ -1136,7 +1144,7 @@ func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executo
 	if err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: recording the end turn %s owes: %w", run.TurnID, err)
 	}
-	if len(owing.OwedEnd) == 0 {
+	if len(owing.OwedEnd) == 0 && !owing.EndRecorded {
 		// GONE under the step: finished by another attempt at the same
 		// ending, which recorded whatever it owed first.
 		return run, nil
@@ -1144,53 +1152,107 @@ func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executo
 	return owing, nil
 }
 
+// endKeys are the keys an [executordomain.Ending] this build writes may hold.
+var endKeys = wireKeys(reflect.TypeFor[executordomain.Ending]())
+
 // publishEnd records the end run's row owes on the executor log
-// ([Coordinator.EndTurn]) — after asking again a capture of the turn still
+// ([Coordinator.recordEnd]) — after asking again a capture of the turn still
 // unresolved, and with the turn's newest capture where it was not kept
-// ([unkeptOf]) — and clears it from the row. Returns the row as it stands
-// after, or why the end is still owed.
+// ([unkeptOf]) — and clears it from the row, marking it recorded. Returns the
+// row as it stands after, or why the end is still owed.
+//
+// # An end a newer build owed is left for a node that reads it
+//
+// A rolling upgrade mixes builds, and the seat can move from the node that
+// owed the end to one running this build. An end holding a key this build
+// does not know, or an outcome it does not know, is DEFERRED rather than
+// published: decoded into this build's [executordomain.Ending] and encoded
+// again, the keys it could not read were dropped from the turn's account; and
+// an outcome it does not know, refused by this build's log as malformed, was
+// taken for an end the log will never take and cleared — the turn's end never
+// recorded. Left owed, the ending is kept, the seat's mail waits on it as on any
+// owed end, and a node of the build that wrote it records it, whichever node
+// holds the seat once the upgrade reaches it. Never re-encoded with less, which
+// is the rule every record of the fleet's builds keeps: what a build cannot read
+// is deferred, never dropped.
 func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRun, error) {
 	var ending executordomain.Ending
-	if err := json.Unmarshal(run.OwedEnd, &ending); err != nil {
+	unknown, err := unmarshalCarrying(run.OwedEnd, &ending, endKeys)
+	switch {
+	case err != nil:
 		// AN END NO BUILD COULD HAVE WRITTEN: not one this build can say
 		// anything true with, and kept, it would hold the row for ever.
 		log.ErrorContext(ctx, "executor_turn_end_unreadable", "turn_id", run.TurnID, "error", err.Error(),
 			"detail", "the end the run's record owes does not decode, so it is dropped; the "+
 				"retention duty ends a turn that captured a session as lost")
-	} else {
+	case len(unknown) > 0 || !ending.Outcome.Valid():
+		why := fmt.Sprintf("its outcome %q is not one this build knows", ending.Outcome)
+		if len(unknown) > 0 {
+			why = fmt.Sprintf("it holds %s, which this build does not know",
+				strings.Join(slices.Sorted(maps.Keys(unknown)), ", "))
+		}
+		log.WarnContext(ctx, "executor_turn_end_deferred", "turn_id", run.TurnID, "agent", run.AgentHandle,
+			"detail", "the end the run's record owes was written by a newer build — "+why+" — so it is "+
+				"left owed for a node of that build to record, and the run's ending is kept until one does")
+		return run, fmt.Errorf("sandbox: the end turn %s owes was written by a newer build: %s", run.TurnID, why)
+	default:
 		if newest := run.Capture; newest != nil && newest.State == CaptureUnresolved {
 			c.settleCapture(ctx, run, *newest)
-			if current, found, err := c.pending.Get(ctx, run.TurnID); err == nil && found {
+			if current, found, getErr := c.pending.Get(ctx, run.TurnID); getErr == nil && found {
 				run = current
 			}
 		}
 		ending.Unkept = unkeptOf(run)
-		if err := c.EndTurn(ctx, turnEndOf(run, ending)); err != nil {
-			return run, err
+		if recordErr := c.recordEnd(ctx, turnEndOf(run, ending)); recordErr != nil {
+			return run, recordErr
 		}
 	}
-	if _, err := c.pending.ClearEnd(ctx, run.TurnID, run.OwedEnd); err != nil {
+	if _, clearErr := c.pending.ClearEnd(ctx, run.TurnID, run.OwedEnd); clearErr != nil {
 		return run, fmt.Errorf("sandbox: clearing the end turn %s owed, which the executor log has: %w",
-			run.TurnID, err)
+			run.TurnID, clearErr)
 	}
-	run.OwedEnd = nil
+	run.OwedEnd, run.EndRecorded = nil, true
 	return run, nil
 }
 
-// EndTurn records on the executor log how a turn ended — the account the next
-// turn on its conversation is told beside the session it continues — under the
-// one operation every path that ends the turn derives
-// ([executordomain.EndOpID]), asked again under it while no answer settles it,
-// within [sessionRecordBudget]. Nil once the log has the turn's end — taken
-// now, by an earlier attempt, or refused as one it will never take, which is
-// logged — and why not otherwise, for the caller to keep it and ask again.
+// EndTurn records how a turn ended for a FRAME that found no run row to owe it
+// on ([Coordinator.OweEnd] answered false, or could not be written): a launch
+// the turn's fence refused once its row existed, whose ending deleted the row,
+// or a row the seat's next holder finished.
+//
+// WHERE THE ROW IS THERE AFTER ALL — an owe that failed on a store that answers
+// again, a row read gone that was not — the end is owed on it, and the run's
+// ending records it once the turn's captures settle and with what they came
+// to ([Coordinator.publishEnd]). Only a row that is gone, which took its
+// capture stamps with it, has its end recorded now, as it stands: best effort,
+// and an end the log has already is the answer.
+//
+// A coordinator with no executor log (a test's) writes nothing.
+func (c *Coordinator) EndTurn(ctx context.Context, end TurnEnd) error {
+	if !c.keepsSessions() {
+		return nil
+	}
+	if _, found, getErr := c.pending.Get(ctx, end.TurnID); getErr == nil && found {
+		if owed, oweErr := c.OweEnd(ctx, end.TurnID, end.Ending); oweErr == nil && owed {
+			return nil
+		}
+	}
+	return c.recordEnd(ctx, end)
+}
+
+// recordEnd records on the executor log how a turn ended — the account the
+// turn's row of the log keeps beside the session it kept — under the one
+// operation every path that ends the turn derives ([executordomain.EndOpID]),
+// asked again under it while no answer settles it, within
+// [sessionRecordBudget]. Nil once the log has the turn's end — taken now, by an
+// earlier attempt, or refused as one it will never take, which is logged — and
+// why not otherwise, for the caller to keep it and ask again.
 //
 // THE RUN'S ENDING CALLS IT for every turn that has a row
 // ([Coordinator.publishEnd]), after the turn's captures settle; a frame whose
-// turn has no row left calls it itself. A coordinator with no executor log (a
-// test's) writes nothing.
-func (c *Coordinator) EndTurn(ctx context.Context, end TurnEnd) error {
-	if c.sessions == nil || c.keep == nil {
+// turn has no row left reaches it through [Coordinator.EndTurn].
+func (c *Coordinator) recordEnd(ctx context.Context, end TurnEnd) error {
+	if !c.keepsSessions() {
 		return nil
 	}
 	end.Ending.Failure = redact.Secrets(end.Ending.Failure)

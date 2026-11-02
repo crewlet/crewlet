@@ -392,7 +392,7 @@ func (s *CoordStore) OweEnd(ctx context.Context, turnID string, ending json.RawM
 	var seen PendingRun
 	written, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		seen = *run
-		if len(run.OwedEnd) > 0 {
+		if len(run.OwedEnd) > 0 || run.EndRecorded {
 			return false
 		}
 		run.OwedEnd = bytes.Clone(ending)
@@ -404,14 +404,14 @@ func (s *CoordStore) OweEnd(ctx context.Context, turnID string, ending json.RawM
 	return seen, false, nil
 }
 
-// ClearEnd removes the end a row owes once the log has taken it. See the
-// contract on [PendingStore].
+// ClearEnd removes the end a row owes once the log has taken it, and marks it
+// recorded in the same write. See the contract on [PendingStore].
 func (s *CoordStore) ClearEnd(ctx context.Context, turnID string, owed json.RawMessage) (bool, error) {
 	_, cleared, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		if len(run.OwedEnd) == 0 || !bytes.Equal(run.OwedEnd, owed) {
 			return false
 		}
-		run.OwedEnd = nil
+		run.OwedEnd, run.EndRecorded = nil, true
 		return true
 	})
 	return cleared, err

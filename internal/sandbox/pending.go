@@ -795,7 +795,7 @@ type PendingRun struct {
 	Handed string `json:"handed,omitempty"`
 
 	// OwedEnd is the turn's END, decided and not yet on the executor log
-	// ([Coordinator.EndTurn]): the [executordomain.Ending] as its JSON,
+	// ([Coordinator.publishEnd]): the [executordomain.Ending] as its JSON,
 	// carried whole by every build. Written by whatever ended the turn — its
 	// resumed frame, or the run's own ending for a loss or a stop
 	// ([PendingStore.OweEnd]) — and published by the run's ending before the
@@ -805,7 +805,21 @@ type PendingRun struct {
 	// dispatched before the end it reads is recorded. DECIDED ONCE: a second
 	// path that ends the turn finds this one and records it, rather than an
 	// account of its own — and answers no colleague a second time.
+	//
+	// AN END THIS BUILD CANNOT READ — a key it does not know, an outcome it
+	// does not know — was written by a newer build, and is left owed for a
+	// node that reads it ([Coordinator.publishEnd]), never re-encoded without
+	// what it could not read.
 	OwedEnd json.RawMessage `json:"owed_end,omitempty"`
+
+	// EndRecorded says the executor log has the turn's end: the run's ending
+	// published the end the row owed and cleared it in the same write that set
+	// this ([PendingStore.ClearEnd]). The DURABLE HALF OF "DECIDED ONCE": an
+	// end cleared from OwedEnd would otherwise read as one never decided, and
+	// an attempt at the ending after a crash between the clear and the delete,
+	// or after a delete the store refused for a reply the row still owed,
+	// decided the turn's end again — its colleague answered a second time.
+	EndRecorded bool `json:"end_recorded,omitempty"`
 
 	// PriorCalls is every tool the turn's EARLIER launches called through
 	// the bridge and that succeeded, by name, each once, and PriorCallsElided
@@ -1562,15 +1576,18 @@ type PendingStore interface {
 	//
 	// DECIDED ONCE: a row that owes an end already keeps it, and answers it,
 	// so a second path that ends the same turn records the first one's
-	// account. ON A ROW IN ANY STATE, its ending decided included: a loss's
-	// or a stop's end is decided by that ending's own steps. A row that is
-	// gone takes nothing and is no error.
+	// account; and a row whose end is recorded already
+	// ([PendingRun.EndRecorded]) takes none. ON A ROW IN ANY STATE, its
+	// ending decided included: a loss's or a stop's end is decided by that
+	// ending's own steps. A row that is gone takes nothing and is no error.
 	OweEnd(ctx context.Context, turnID string, ending json.RawMessage) (PendingRun, bool, error)
 
 	// ClearEnd removes the end a row owes once the executor log has taken it
 	// ([PendingRun.OwedEnd]), only where the row still owes exactly owed, so
-	// a clear can never take an end the log has not seen. A row that is gone
-	// or owes another is no error, and answers false.
+	// a clear can never take an end the log has not seen — and marks the end
+	// recorded in the same write ([PendingRun.EndRecorded]), which no later
+	// OweEnd overwrites. A row that is gone or owes another is no error, and
+	// answers false.
 	ClearEnd(ctx context.Context, turnID string, owed json.RawMessage) (bool, error)
 
 	// ClaimForResume atomically flips a run to resumed, when it holds the

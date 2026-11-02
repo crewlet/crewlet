@@ -101,7 +101,7 @@ var ErrAnswerOwed = errors.New("sandbox: the run still holds a person's reply th
 // ErrEndOwed is a store's refusal to delete a run whose row still owes the
 // executor log its turn's end ([PendingRun.OwedEnd]): the row is the end's only
 // record until the log takes it. The answer is to record it
-// ([Coordinator.EndTurn]), clear it ([PendingStore.ClearEnd]) and ask again.
+// ([Coordinator.publishEnd]), clear it ([PendingStore.ClearEnd]) and ask again.
 var ErrEndOwed = errors.New("sandbox: the run still owes the executor log its turn's end")
 
 // ErrAnswerTaken is a store's refusal to let go of a recorded answer a resumed
@@ -475,7 +475,7 @@ type CoordinatorOptions struct {
 
 	// CloseStopped ends the turn of a run a person stopped
 	// ([Coordinator.StopSeat]) and answers how it ended, for the executor log
-	// ([Coordinator.EndTurn]): stopped, by whom and why, whether its reply had
+	// ([Coordinator.publishEnd]): stopped, by whom and why, whether its reply had
 	// reached anybody as the turn's own calls say, and the engine's answer to
 	// the colleague whose ask the turn took up ([PendingRun.ColleagueAsk]).
 	// A turn that PARKED on the run is also closed on the record: the turn's
@@ -512,7 +512,8 @@ type CoordinatorOptions struct {
 	// outside the run: the colleague whose a2a_ask woke it
 	// ([PendingRun.ColleagueAsk]) is told the turn was lost, and why; and to
 	// answer how the turn ended, which the ending records on the executor log
-	// ([Coordinator.EndTurn]) and the next turn on its conversation is told.
+	// ([Coordinator.publishEnd]), on the turn's row beside the session it
+	// kept.
 	//
 	// THE ONE TERMINAL OF A PARKED TURN THAT NO FRAME OF THE TURN ENDS. A
 	// collected run's turn is ended by its resume, a person's stop by
@@ -870,6 +871,13 @@ type Coordinator struct {
 	// ([Coordinator.LaunchStopped]). Under mu.
 	launchStops map[string]launchStop
 
+	// finishing are the turns an attempt on this node is finishing the
+	// ending of ([Coordinator.finishOnce]), and frames the turns whose
+	// resumed frame is running on this node, counted
+	// ([Coordinator.framing]). Under mu.
+	finishing map[string]bool
+	frames    map[string]int
+
 	hold  SeatHold
 	admit Admission
 	// gate is [CoordinatorOptions.Gate]; see [Coordinator.admitTurn].
@@ -984,6 +992,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		holdGen:       map[string]uint64{},
 		signals:       map[signal]uint64{},
 		launchStops:   map[string]launchStop{},
+		finishing:     map[string]bool{},
+		frames:        map[string]int{},
 		hold:          opts.Hold,
 		admit:         opts.Admit,
 		gate:          opts.Gate,
@@ -2861,8 +2871,15 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// turn never began (a recorded reply goes back to the seat through the
 	// row), and settled without a word where it did, because the turn may
 	// already have acted and a retry must not re-enter it.
+	//
+	// AND THE TURN'S FRAME IS RUNNING until the resumer returns, which an
+	// ending of the run decided meanwhile waits on before it decides the
+	// turn's end ([Coordinator.framing]) — done once, whichever way the
+	// resumer comes back.
+	frameDone := sync.OnceFunc(func() { c.frameEnds(run.TurnID) })
 	defer func(ctx context.Context) {
 		if p := recover(); p != nil {
+			frameDone()
 			var note *failureNote
 			if !began.Load() {
 				note = &failureNote{reason: types.ExecutorFailureResumeBroken, detail: resumeBrokenDetail}
@@ -2908,14 +2925,17 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// without: "this node cannot resume this run" is the resumer's own
 	// answer, wrapping [ErrResumeUnavailable], and it takes the failure
 	// path below like every other failed resume.
-	if err := c.resume.Resume(ctx, ResumeRequest{
+	c.frameBegins(run.TurnID)
+	err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
 		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
 		CacheReadTokens: outcome.CacheReadTokens, CacheWriteTokens: outcome.CacheWriteTokens,
 		Engine: outcome.Engine, Ended: outcome.Ended, Asked: outcome.Asked, Lost: outcome.Lost,
 		Begin: begin,
-	}); err != nil {
+	})
+	frameDone()
+	if err != nil {
 		if errors.Is(err, ErrResumeAbandoned) && !began.Load() {
 			// BROKEN BEFORE ITS TURN BEGAN — a panic re-entering the
 			// conversation, say. It is not retried, for the reason every
@@ -3822,16 +3842,115 @@ func (c *Coordinator) endRun(ctx context.Context, run PendingRun, e ending, mayA
 	c.clearAnswerAttempts(decided.AgentHandle, decided.TurnID)
 	c.noteLaunchStop(decided)
 	ending := *decided.Ending
-	if err := c.finishEnding(ctx, decided, mayAsk); err != nil {
-		if errors.Is(err, errAskAway) {
-			// DECIDED, its session closed, and FINISHED BY THIS NODE'S OWN
-			// RETRY, now: not a failure, and nothing to report as one.
-			c.oweEndingAfter(ctx, decided, e, 0)
-			return &ending, nil
-		}
+	finished, err := c.finishOnce(ctx, decided, mayAsk)
+	switch {
+	case !finished && !mayAsk:
+		// ANOTHER ATTEMPT ON THIS NODE IS FINISHING IT, and keeps it for
+		// this node's retry if it cannot: nothing is left for this frame.
+		return &ending, nil
+	case !finished:
+		return &ending, c.keepEnding(ctx, decided, e, errEndingBusy)
+	case errors.Is(err, errAskAway):
+		// DECIDED, its session closed, and FINISHED BY THIS NODE'S OWN
+		// RETRY, now: not a failure, and nothing to report as one.
+		c.oweEndingAfter(ctx, decided, e, 0)
+		return &ending, nil
+	case errors.Is(err, errAwaitsFrame) && !mayAsk:
+		// THE TURN'S FRAME IS STILL RUNNING HERE — the one this frame is
+		// part of, a relaunch it made being abandoned — and ends the turn:
+		// its settle finishes the ending once it returns, and this node's
+		// retry does if it does not ([Coordinator.framing]).
+		c.oweEndingAfter(ctx, decided, e, answerRetryCeiling)
+		return &ending, nil
+	case err != nil:
 		return &ending, c.keepEnding(ctx, decided, e, err)
 	}
 	return &ending, nil
+}
+
+// errEndingBusy is a decided ending another attempt on this node is finishing
+// ([Coordinator.finishOnce]): left to it, and asked again by this node's retry.
+var errEndingBusy = errors.New("sandbox: another attempt on this node is finishing the run's ending")
+
+// errAwaitsFrame is a decided ending whose turn's end is still its resumed
+// frame's to decide, that frame running on this node ([Coordinator.framing]).
+var errAwaitsFrame = errors.New("sandbox: the run's turn is still running on this node, and decides its own end")
+
+// finishOnce is [Coordinator.finishEnding] made by ONE attempt on this node at a
+// time per turn, answering false — having done nothing — where another attempt
+// here is finishing the same turn's ending.
+//
+// WHY ONE AT A TIME: an ending's steps are made harmless to REPEAT, not to make
+// TWICE AT ONCE. Two attempts that both read the row before either had owed the
+// turn's end both decided it, and each answered the colleague whose ask the
+// turn took up ([CoordinatorOptions.CloseStopped], [CoordinatorOptions.TurnLost]):
+// a stop decided on the pause watch while the job it stopped was still
+// launching was finished there and, at the same moment, by the launch whose
+// attach it refused — and the asker woke to two answers. Both attempts are this
+// node's, and the one that goes on keeps the ending for this node's retry where
+// it cannot finish it, so the other leaves it to it ([Coordinator.endRun]).
+func (c *Coordinator) finishOnce(ctx context.Context, run PendingRun, mayAsk bool) (bool, error) {
+	c.mu.Lock()
+	if c.finishing[run.TurnID] {
+		c.mu.Unlock()
+		return false, nil
+	}
+	if c.finishing == nil {
+		c.finishing = map[string]bool{}
+	}
+	c.finishing[run.TurnID] = true
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.finishing, run.TurnID)
+		c.mu.Unlock()
+	}()
+	return true, c.finishEnding(ctx, run, mayAsk)
+}
+
+// frameBegins and frameEnds bracket a resumed turn's frame on this node
+// ([Coordinator.resumeAndSettle]), and framing reports whether one of turnID's
+// is running here.
+//
+// WHAT IT IS FOR: an ending decided on a run while its turn's resumed frame is
+// still running — the frame's relaunch abandoned under it ([Coordinator.abandon])
+// — leaves the turn's end to that frame, which learns of the ending from the
+// launch's failure and owes its own account of the turn on the row
+// ([Coordinator.OweEnd]), answering its colleague as it does. Decided by the
+// ending instead, the end was either a second account beside the frame's — the
+// colleague answered twice — or none at all: the ending deleted the row and its
+// capture stamps first, and the frame recorded the turn's end at once, before a
+// capture still being kept had landed and naming an older one as the turn's
+// last. In this node's memory, because the frame is: a frame on another node
+// is one the seat moved off, and a frame of a node that stopped is gone.
+func (c *Coordinator) frameBegins(turnID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.frames == nil {
+		c.frames = map[string]int{}
+	}
+	c.frames[turnID]++
+}
+
+func (c *Coordinator) frameEnds(turnID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.frames[turnID] > 1 {
+		c.frames[turnID]--
+		return
+	}
+	delete(c.frames, turnID)
+	// AN ENDING THAT WAITED ON THE FRAME is asked again the moment the frame
+	// returns, rather than on the hand-back's spacing.
+	if r := c.retries[turnID]; r != nil && r.ending != nil {
+		c.scheduleOwedLocked(turnID, 0)
+	}
+}
+
+func (c *Coordinator) framing(turnID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.frames[turnID] > 0
 }
 
 // errAskAway is a decided ending whose next step may not be made on the frame
@@ -3906,6 +4025,19 @@ var errAskAway = errors.New("sandbox: the ending's next step is made off this fr
 // it stands; the steps run again against it. A step that does not land is
 // returned, and the caller keeps the ending.
 func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk bool) error {
+	// THE ROW AS IT STANDS, not as the caller's decision read it: an attempt
+	// before this one may have owed the turn's end, or recorded it, since —
+	// and a step decided off a stale copy is a step made twice. A row that is
+	// gone, or holds another ending, was finished by whoever got there first.
+	switch current, found, err := c.pending.Get(ctx, run.TurnID); {
+	case err != nil:
+		// Read as the caller handed it: every step below is one a repeat
+		// makes harmless, and the delete decides on the row as it stands.
+	case !found || current.Ending == nil || current.Ending.ID != run.Ending.ID:
+		return nil
+	default:
+		run = current
+	}
 	var handed []string
 	reclaimed, announced, expired := false, false, false
 	for range endingRounds {
@@ -3969,10 +4101,18 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			}
 			announced = true
 		}
-		if len(run.OwedEnd) == 0 {
+		if len(run.OwedEnd) == 0 && !run.EndRecorded {
 			// AFTER THE ANNOUNCEMENT, which is the record of the loss or the
 			// stop the end and the colleague's answer tell of — and ONCE:
-			// owed on the row, it is found there by every later attempt.
+			// owed on the row, and recorded there once the log has it
+			// ([PendingRun.EndRecorded]), it is found by every later
+			// attempt.
+			//
+			// AND NOT WHILE THE TURN'S OWN FRAME RUNS HERE, which ends the
+			// turn itself ([Coordinator.framing]).
+			if c.framing(run.TurnID) {
+				return errAwaitsFrame
+			}
 			ending, owes, err := c.endingOfRun(ctx, run)
 			if err != nil {
 				return fmt.Errorf("sandbox: ending run %s, whose stopped turn could not be closed "+
@@ -4784,6 +4924,19 @@ func (c *Coordinator) fenceClaim(ctx context.Context, run PendingRun, owner stri
 // tick; ending the same run twice reclaims a box that is already gone and
 // finds a record that is already deleted.
 //
+// # Finished here, every step of it
+//
+// Each ending is FINISHED BY THIS CALL, under the retirement's own lease and
+// budget ([Coordinator.endRun], mayAsk): the turn's end its loss owes recorded
+// on the executor log once the turn's captures settle, and the record deleted.
+// Handed to the seat host's retry as a frame's ending is, it was finished by
+// nothing: that retry needs the seat's lease, which the host releases with a
+// retired seat, and [Coordinator.ReleaseSeat] below drops it besides — so the
+// row stayed in the store for good, on the executors board and in a person's
+// decisions, its turn's end never recorded. An ending that cannot be finished
+// within the budget is an error, which keeps the mailbox, and the retirement's
+// next tick finishes it.
+//
 // # By the seat's id, with the handle a label
 //
 // The runs are found by seat, the id the retiring mailbox is named by
@@ -4844,13 +4997,13 @@ func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, ow
 		// person's reply the run still holds goes back to the seat's
 		// inbox before the record does, like every ending's, and the
 		// announcement says so where it did.
-		decided, err := c.endRecord(ctx, run, ending{
+		decided, err := c.endRun(ctx, run, ending{
 			fence: fence, whileIn: Active, launch: EveryLaunch,
 			note: &failureNote{reason: types.ExecutorFailureSeatRemoved,
 				detail: "the seat left the company's agent seats — removed from the chart, or " +
 					"made a person's and not an agent's again within the retirement grace — so " +
 					"its run was ended; any work it pushed is on its branch"},
-		})
+		}, true)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("sandbox: finishing run %s of retired seat %s: %w",
 				run.TurnID, label, err))
