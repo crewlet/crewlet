@@ -166,6 +166,8 @@ type MemberMCPToolView struct {
 	OutputSchema map[string]any      `json:"output_schema"`
 	Level        config.MCPToolLevel `json:"level"`
 	Custom       bool                `json:"custom"`
+	Held         bool                `json:"held"`
+	Removed      bool                `json:"removed"`
 }
 
 // MemberMCPServerInfo is what the server said of itself in its handshake.
@@ -259,7 +261,7 @@ func MemberMCPServer(a MCPServerAnswer) MemberMCPServerAnswer {
 			Description: t.Description, Annotations: t.Annotations, Risk: t.Risk, RiskDeclared: t.RiskDeclared,
 			External: t.External, Digest: t.Digest, Definitions: t.Definitions, Instances: t.Instances,
 			Nodes: nonNil(t.Nodes), InputSchema: t.InputSchema, OutputSchema: t.OutputSchema,
-			Level: t.Level, Custom: t.Custom})
+			Level: t.Level, Custom: t.Custom, Held: t.Held, Removed: t.Removed})
 	}
 	if info := a.ServerInfo; info != nil {
 		out.ServerInfo = &MemberMCPServerInfo{Name: info.Name, Title: info.Title, Version: info.Version,

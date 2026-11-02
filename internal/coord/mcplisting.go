@@ -228,8 +228,11 @@ type MCPListedTool struct {
 	Description string `json:"description"`
 
 	// Hints are its behavioural hints with the company's overrides applied,
-	// each [HintYes], [HintNo] or [HintUnknown].
-	Hints MCPToolHints `json:"hints"`
+	// each [HintYes], [HintNo] or [HintUnknown]; Declared the hints as the
+	// server declared them, no override applied, which is the server's own
+	// claim and what a change to the tool is judged by ([MCPAcceptedTool]).
+	Hints    MCPToolHints `json:"hints"`
+	Declared MCPToolHints `json:"declared"`
 
 	// Digest names the server's definition (internal/mcp's digest.go),
 	// and SchemaKept whether its schemas are stored under it
@@ -237,6 +240,11 @@ type MCPListedTool struct {
 	// and for a tool past its listing's [MaxMCPListingSchemaBytes].
 	Digest     string `json:"digest"`
 	SchemaKept bool   `json:"schema_kept"`
+
+	// Parts names each part of the definition apart ([MCPToolParts]), so
+	// a reader comparing it with the definition its level was decided on
+	// can say which part changed.
+	Parts MCPToolParts `json:"parts"`
 
 	// Instances is how many of the node's instances list it: a per-agent
 	// server's children list what each seat's credentials reach.
@@ -259,6 +267,12 @@ type MCPToolHints struct {
 
 func validHint(word string) bool {
 	return word == HintYes || word == HintNo || word == HintUnknown
+}
+
+// validHints reports whether each of the four hints is a hint's word.
+func validHints(h MCPToolHints) bool {
+	return validHint(h.ReadOnly) && validHint(h.Destructive) && validHint(h.Idempotent) &&
+		validHint(h.OpenWorld)
 }
 
 // Bounded is the listing held to its bounds: every text cut, the tools sorted
@@ -317,10 +331,12 @@ func (l MCPListing) Validate() error {
 		case !IsMCPDigest(t.Digest):
 			return fmt.Errorf("coord: %s's listing of %s names %s by %q, which is not a "+
 				"definition digest", l.Node, l.Server, t.Name, t.Digest)
-		case !validHint(t.Hints.ReadOnly) || !validHint(t.Hints.Destructive) ||
-			!validHint(t.Hints.Idempotent) || !validHint(t.Hints.OpenWorld):
+		case !validHints(t.Hints) || !validHints(t.Declared):
 			return fmt.Errorf("coord: %s's listing of %s gives %s a hint that is not "+
 				"yes, no or unknown", l.Node, l.Server, t.Name)
+		case !t.Parts.Valid():
+			return fmt.Errorf("coord: %s's listing of %s does not name each part of %s's "+
+				"definition by %d hex digits", l.Node, l.Server, t.Name, MCPToolPartLength)
 		case t.Instances < 0:
 			return fmt.Errorf("coord: %s's listing of %s counts %s's instances below zero",
 				l.Node, l.Server, t.Name)

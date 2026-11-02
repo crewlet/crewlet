@@ -2,6 +2,7 @@ package types
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -38,11 +39,15 @@ const (
 	// MCPServerApprove answers a call an agent's run made to one of the
 	// server's tools at Needs approval ([MCPServerActed.Answer]).
 	MCPServerApprove MCPServerAction = "approve"
+	// MCPServerReviewChanges decides changes the server made to its tools
+	// since their levels were decided: the tools it accepted
+	// ([MCPServerActed.Accepted]) and kept blocked ([MCPServerActed.Blocked]).
+	MCPServerReviewChanges MCPServerAction = "review_changes"
 )
 
 // MCPServerActions is every action, for a reader's copy.
 var MCPServerActions = []MCPServerAction{MCPServerRestart, MCPServerCheck, MCPServerProbe, MCPServerStoreValue,
-	MCPServerSetTools, MCPServerSignIn, MCPServerSignOut, MCPServerApprove}
+	MCPServerSetTools, MCPServerSignIn, MCPServerSignOut, MCPServerApprove, MCPServerReviewChanges}
 
 // Valid reports whether a is an action this build records.
 func (a MCPServerAction) Valid() bool { return slices.Contains(MCPServerActions, a) }
@@ -91,6 +96,12 @@ type MCPServerActed struct {
 	Approval string `json:"approval,omitempty"`
 	Tool     string `json:"tool,omitempty"`
 	Answer   string `json:"answer,omitempty"`
+
+	// Accepted and Blocked are the tools a review decided, by the server's
+	// own name for each: the changes accepted, and the ones kept blocked.
+	// A tool's name only, never its definition, which is the server's.
+	Accepted []string `json:"accepted,omitempty"`
+	Blocked  []string `json:"blocked,omitempty"`
 	// Outcome is `applied` for a gesture that did what it was asked,
 	// `refused` for one the route turned down for a stated reason (its
 	// code in Refusal), and `failed` for one that broke without one.
@@ -132,6 +143,18 @@ func (e MCPServerActed) SummaryFor(actor string) string {
 		text = "started a sign-in to MCP server " + e.Server
 	case MCPServerSignOut:
 		text = "signed out of MCP server " + e.Server
+	case MCPServerReviewChanges:
+		text = "reviewed changed tools of MCP server " + e.Server
+		var parts []string
+		if len(e.Accepted) > 0 {
+			parts = append(parts, "accepted "+strings.Join(e.Accepted, ", "))
+		}
+		if len(e.Blocked) > 0 {
+			parts = append(parts, "kept "+strings.Join(e.Blocked, ", ")+" blocked")
+		}
+		if len(parts) > 0 {
+			text += " (" + strings.Join(parts, "; ") + ")"
+		}
 	case MCPServerApprove:
 		switch e.Answer {
 		case "once":

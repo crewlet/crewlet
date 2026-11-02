@@ -185,6 +185,16 @@ func (r engineRuntime) MCPApprovals() mcpapi.Approvals {
 		Seal: r.engine.AnswerSeal()}
 }
 
+// MCPAccepted is the fleet's store of accepted definitions; untyped nil
+// without a fleet store, which answers a review unavailable.
+func (r engineRuntime) MCPAccepted() AcceptedStore {
+	backends := r.engine.Backends()
+	if backends == nil || backends.Fleet == nil {
+		return nil
+	}
+	return backends.Fleet
+}
+
 // MCPValues is the fleet's secret store under the engine's keyring; untyped
 // nil without a fleet store, which [mcpapi.New] refuses.
 func (r engineRuntime) MCPValues() mcpapi.ValueStore {

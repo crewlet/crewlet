@@ -51,6 +51,8 @@ func (e *Engine) sharedSupervision() mcp.Supervision {
 		RetryFailedStarts: true,
 		CatalogueChanged:  e.sharedCatalogueChanged,
 		RetryBase:         e.mcpRetryBase,
+		Unreviewed:        e.unreviewedDecider(),
+		RelistBase:        e.mcpRelistBase,
 	}
 }
 
@@ -63,6 +65,8 @@ func (e *Engine) seatSupervision(s *seatChildren) mcp.Supervision {
 		MayStart:         func() bool { return s.held() },
 		CatalogueChanged: func(ctx context.Context) { e.refileSeat(ctx, s) },
 		RetryBase:        e.mcpRetryBase,
+		Unreviewed:       e.unreviewedDecider(),
+		RelistBase:       e.mcpRelistBase,
 	}
 }
 

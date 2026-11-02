@@ -40,6 +40,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -289,4 +290,16 @@ type NodeRuntime interface {
 	// holding the run (`POST /mcp-approvals/{id}`), nil on a node that
 	// holds no fleet store.
 	MCPApprovals() mcpapi.Approvals
+
+	// MCPAccepted is where a decision about an MCP server's changed tool is
+	// written: the fleet's accepted definitions, the store every node
+	// decides a call by (`POST /mcp-servers/{name}/changes`, and an
+	// approval's Always allow); nil on a node that holds no fleet store.
+	MCPAccepted() AcceptedStore
+}
+
+// AcceptedStore writes one tool's accepted definition at a version
+// ([coord.MCPAccepted.PutMCPAccepted]).
+type AcceptedStore interface {
+	PutMCPAccepted(ctx context.Context, a coord.MCPAcceptedTool, version uint64) (coord.MCPAcceptedTool, bool, error)
 }

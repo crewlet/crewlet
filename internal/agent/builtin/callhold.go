@@ -93,12 +93,22 @@ func (h *CallHold) Hold(ctx context.Context, turn *turnctx.Turn, call tools.Held
 	held.Arguments = sealed
 	seat := turn.Handle()
 	question := fmt.Sprintf("May %s call %s on the %s MCP server?", seat, call.Name, held.Server)
+	why := "that asks a person before each call"
+	if call.Changed {
+		// WHY IT ASKS, where the level does not say so: Always allow
+		// accepts the definition the call was made under, which is the
+		// changed one (internal/api/mcpapi).
+		why = "whose definition changed since it was allowed (or which the server added since " +
+			"its first listing), so it asks a person before each call until somebody accepts the " +
+			"change on the server's page; Always allow accepts the definition this call was made " +
+			"under"
+	}
 	ask := sandbox.Ask{
 		Question: question,
-		Context: fmt.Sprintf("%s's run called `%s`, a tool of the MCP server `%s` that asks a "+
-			"person before each call. The call has not been made: it waits for this answer, and "+
-			"the run is parked until then. Its arguments are shown to whoever may approve it.",
-			seat, call.Name, held.Server),
+		Context: fmt.Sprintf("%s's run called `%s`, a tool of the MCP server `%s` %s. The call "+
+			"has not been made: it waits for this answer, and the run is parked until then. Its "+
+			"arguments are shown to whoever may approve it.",
+			seat, call.Name, held.Server, why),
 		Decision: sandbox.HeldDecision(question, heldEvidence(turn)),
 		To:       sandbox.AskToManager,
 		Held:     &held,

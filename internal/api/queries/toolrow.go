@@ -6,6 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/mcpreview"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -158,7 +159,7 @@ func ListedRows(taken []ToolRow, listings []coord.MCPListing,
 				continue
 			}
 			held[t.Name] = struct{}{}
-			ann := annotationsOf(t.Hints)
+			ann := mcpreview.Annotations(t.Hints)
 			ann.Title = t.Title
 			var input map[string]any
 			if schema, ok := schemas[t.Digest]; ok {

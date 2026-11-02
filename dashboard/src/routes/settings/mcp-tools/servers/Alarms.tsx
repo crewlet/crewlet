@@ -111,6 +111,16 @@ function Fix({
           {FIX.approve}
         </ButtonLink>
       );
+    case "review":
+      return (
+        <ButtonLink
+          size="small"
+          variant="secondary"
+          href={href(["settings", "mcp-tools", "servers", server], { tab: "tools" })}
+        >
+          {FIX.review}
+        </ButtonLink>
+      );
   }
 }
 
@@ -161,6 +171,11 @@ function itemFor(
       meta = <>Its integration has not minted the credential{since ? <>, {since}</> : null}</>;
       body =
         "The instance starts once the integration seals the credential it mints for the agent. Its Agents tab says whether the agent is turned on there.";
+      break;
+    case "mcp_tools_changed":
+      meta = <>Each changed tool asks first{since ? <>, {since}</> : null}</>;
+      body =
+        "The server changed tools since their levels were decided, or added some. Each asks a person before every call until somebody reviews the change and accepts it or keeps it blocked.";
       break;
     case "mcp_approval_waiting":
       meta = <>Its run is parked{since ? <>, {since}</> : null}</>;

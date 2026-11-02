@@ -38,8 +38,10 @@ import (
 // ALWAYS ALLOW IS A CONFIGURATION WRITE, decided as one (`config.write` at its
 // recent step-up) and made before the answer is sent: the tool's level is set
 // to allow by the server's own name for it, as `PUT /mcp-servers/{name}/tools`
-// sets it, so an answer whose write is refused answers nothing. Once and deny
-// write neither the company nor a credential.
+// sets it, so an answer whose write is refused answers nothing; and the
+// definition the call was made under is accepted, where the server changed
+// the tool and lists that definition still (ADR-0078). Once and deny write
+// neither the company nor a credential.
 //
 // ONE ANSWER PER CALL: a call no longer waiting (answered, or its run moved on
 // to another question) is refused `409 stale_version`, and the node holding the
@@ -233,5 +235,9 @@ func (s *Service) allowAlways(w http.ResponseWriter, r *http.Request, run sandbo
 		s.tools.RefuseMCPTools(w, r, held.Server, err)
 		return nil, false
 	}
+	// THE DEFINITION THE CALL WAS MADE UNDER IS ACCEPTED WITH IT: the
+	// level was decided on it (ADR-0078), so a tool held only because it
+	// changed does not ask again.
+	s.acceptHeld(ctx, held, by.Name)
 	return maps.Clone(written.Answer), true
 }
