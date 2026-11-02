@@ -171,9 +171,9 @@ func RepoReadsPage(ctx context.Context, estate Estate, q RepoReadsQuery, after G
 		walk := func(yield func(RepoReader, error) bool) {
 			kind, inclusive := resume.key(), true
 			for {
-				next, found, err := nextReaderKind(ctx, tx, q.RepoID, kind, inclusive)
-				if err != nil {
-					yield(RepoReader{}, err)
+				next, found, kindErr := nextReaderKind(ctx, tx, q.RepoID, kind, inclusive)
+				if kindErr != nil {
+					yield(RepoReader{}, kindErr)
 					return
 				}
 				if !found {
