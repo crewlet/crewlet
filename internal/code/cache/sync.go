@@ -142,6 +142,9 @@ type waiter struct {
 	// repair every other caller waits on: a check names damage, and only an
 	// operator's Repair repairs it.
 	checks bool
+	// noUse: the pin the caller is answered with is no use of the copy
+	// (pinAs) — the indexer's look (Cache.indexSync).
+	noUse  bool
 	got    Synced
 	err    error
 	damage *damaged
@@ -178,7 +181,16 @@ func newWaiter(fresh statelog.Freshness) *waiter {
 // answered at once. ctx bounds the caller's own wait and nothing else: the
 // round runs on for everyone else.
 func (c *Cache) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (Synced, error) {
-	s, _, _, err := c.sync(ctx, repoID, fresh, false)
+	s, _, _, err := c.sync(ctx, repoID, fresh, false, true)
+	return s, err
+}
+
+// indexSync is Sync at STALE for the indexer, its pin NO USE of the copy
+// (pinAs): the copy's last use is its readers', which the budget's eviction
+// orders by, and the code index's last search is IndexTip's, which the
+// indexes' trim orders by.
+func (c *Cache) indexSync(ctx context.Context, repoID string) (Synced, error) {
+	s, _, _, err := c.sync(ctx, repoID, statelog.Freshness{Level: statelog.ReadStale}, false, false)
 	return s, err
 }
 
@@ -215,9 +227,10 @@ func (c *Cache) Holds(repoID string) bool {
 // sync is Sync, and for a CHECK of the copy (checks; Verification.Run) also
 // the damage a round's own git met in the incarnation it answers pinned
 // (waiter.checks, damagedRound) — nil when it met none — and what the
-// round's own check found failing and repaired in place (round.found).
-func (c *Cache) sync(ctx context.Context, repoID string, fresh statelog.Freshness, checks bool) (Synced, *damaged,
-	[]string, error) {
+// round's own check found failing and repaired in place (round.found). use
+// says whether the pin it answers is a use of the copy (pinAs).
+func (c *Cache) sync(ctx context.Context, repoID string, fresh statelog.Freshness, checks, use bool) (Synced,
+	*damaged, []string, error) {
 
 	if err := c.checkSync(repoID, fresh); err != nil {
 		return Synced{}, nil, nil, err
@@ -230,12 +243,12 @@ func (c *Cache) sync(ctx context.Context, repoID string, fresh statelog.Freshnes
 			e.mu.Unlock()
 			continue
 		}
-		if s, ok := c.atOnce(e, fresh); ok {
+		if s, ok := c.atOnce(e, fresh, use); ok {
 			e.mu.Unlock()
 			return s, nil, nil, nil
 		}
 		w := newWaiter(fresh)
-		w.checks = checks
+		w.checks, w.noUse = checks, !use
 		c.join(e, w)
 		e.mu.Unlock()
 		s, err := c.await(ctx, e, w)
@@ -278,9 +291,9 @@ func (c *Cache) answer(e *entry, w *waiter, inc *incarnation, kind SyncKind, err
 	case err != nil:
 		w.err = err
 	case w.asIs:
-		w.got = c.pin(e, inc, SyncNone)
+		w.got = c.pinAs(e, inc, SyncNone, !w.noUse)
 	default:
-		w.got = c.pin(e, inc, kind)
+		w.got = c.pinAs(e, inc, kind, !w.noUse)
 	}
 	close(w.done)
 }
@@ -339,7 +352,8 @@ func (c *Cache) entryFor(repoID string) *entry {
 // records, so a stale or session answer from the state would serve a
 // history the log no longer holds. A repository's first caller after a boot
 // pays the full round D3 reads anyway; every one after it is answered here.
-func (c *Cache) atOnce(e *entry, fresh statelog.Freshness) (Synced, bool) {
+// use says whether the pin is a use of the copy (pinAs).
+func (c *Cache) atOnce(e *entry, fresh statelog.Freshness, use bool) (Synced, bool) {
 	inc := e.current
 	if inc == nil || !inc.converged || fresh.Bounded() {
 		return Synced{}, false
@@ -357,7 +371,7 @@ func (c *Cache) atOnce(e *entry, fresh statelog.Freshness) (Synced, bool) {
 	default:
 		return Synced{}, false
 	}
-	return c.pin(e, inc, SyncNone), true
+	return c.pinAs(e, inc, SyncNone, use), true
 }
 
 // reached reports whether at is at or past floor (both on the code log).

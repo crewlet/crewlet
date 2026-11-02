@@ -62,9 +62,11 @@ const codeIndexDir = engineRoot + "/codeindex"
 const IndexPoll = time.Minute
 
 // CodeIndexShare is the share of the cache's budget the node's code indexes
-// may hold — a third, trimmed before any repository is evicted: one dropped
-// is built again from the blobs at the next tip, at 78 seconds of a core a
-// gigabyte of source, where a repository evicted is fetched again whole. A
+// may hold — a third, trimmed before any repository is evicted, the
+// repository searched least recently first: one dropped is built again from
+// the blobs of one tip, at 78 seconds of a core a gigabyte of source, once
+// the share has room or its repository is searched again (indexTaken), where a
+// repository evicted is fetched again whole. A
 // third holds every index a full cache can carry: BenchmarkCodeIndex
 // measured an index at 0.147 bytes a source byte and the source deflated as
 // a pack holds it at 0.327, so an index is at most 0.45 of its copy — of a
@@ -188,7 +190,11 @@ type CodeIndexView struct {
 
 // IndexTip is the tip s's copy keeps an index of, and whether this node is
 // one of the repository's index holders — false for a copy keeping none on a
-// node that holds none, or s not handed out.
+// node that holds none, or s not handed out. It is what every search of one
+// repository asks first, so it is what notes the repository SEARCHED here
+// (entry.searched), whether or not the copy keeps an index: what the trim of
+// the code indexes keeps first, and what lets a build displace an index
+// searched less recently (Cache.mayBuildIndex).
 func (c *Cache) IndexTip(s Synced) (IndexedTip, bool) {
 	if c.handedOut(s, "a read of the code index") != nil {
 		return IndexedTip{}, false
@@ -197,6 +203,7 @@ func (c *Cache) IndexTip(s Synced) (IndexedTip, bool) {
 	t.Holder, t.PassesOn = c.indexHolder(s.Repo.ID)
 	s.entry.mu.Lock()
 	defer s.entry.mu.Unlock()
+	s.entry.searched = c.now()
 	rec := s.inc.codeIndexRecord()
 	switch {
 	case rec == nil:
@@ -642,6 +649,7 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 	if err := c.persist(ctx, e, inc, false); err != nil {
 		return "", err
 	}
+	c.gaveBack(e.id, false, true)
 	return IndexBuilt, nil
 }
 
@@ -1254,6 +1262,139 @@ func (c *Cache) seedCodeIndex(e *entry, replaced, inc *incarnation) {
 // indexer's next look tries again.
 const IndexFailed IndexOutcome = "failed"
 
+const (
+	// IndexOverShare means the copy keeps no index and the node's code
+	// indexes hold their share of the budget (CodeIndexShare), so none is
+	// built for it — nor a copy filled — until there is room or a search of
+	// it is newer than that of an index kept (Cache.mayBuildIndex): its
+	// searches grep meanwhile.
+	IndexOverShare IndexOutcome = "over_share"
+	// IndexNoRoom means the budget evicted the copy this node kept an index
+	// in, and the indexer fills it again only once the budget has room for
+	// what it held (Cache.roomToFill): its searches go to the next node.
+	IndexNoRoom IndexOutcome = "no_room"
+)
+
+// indexTaken is what the budget took of a repository this node keeps a code
+// index of, by the bytes each held: copyBytes, the copy its eviction took,
+// and indexBytes, the index its trim took — zero for what it took nothing
+// of.
+//
+// WHAT THE BUDGET TOOK IS NOT TAKEN STRAIGHT BACK. Built again at the next
+// look, an index the trim dropped put the indexes past their share again,
+// and the trim dropped the next one: while a node's indexes exceeded the
+// share, it rebuilt an index from every blob of its tip every minute, for
+// ever. Filled again at the next look, a copy the budget evicted evicted the
+// next least used, a GET a pack each minute. So the indexer builds a trimmed
+// index again only into room for what it held, or for a repository searched
+// more recently than an index it would displace (mayBuildIndex), and fills
+// an evicted copy only into room for what it held (roomToFill): an
+// over-committed node keeps the indexes searched most recently and greps
+// the rest, rather than churning.
+type indexTaken struct{ copyBytes, indexBytes int64 }
+
+// tookBack notes what the budget took of repoID: an eviction's copy bytes,
+// or a trim's index bytes.
+func (c *Cache) tookBack(repoID string, copyBytes, indexBytes int64) {
+	c.indexMu.Lock()
+	defer c.indexMu.Unlock()
+	if c.indexBack == nil {
+		c.indexBack = map[string]indexTaken{}
+	}
+	hb := c.indexBack[repoID]
+	if copyBytes > 0 {
+		hb.copyBytes = copyBytes
+	}
+	if indexBytes > 0 {
+		hb.indexBytes = indexBytes
+	}
+	c.indexBack[repoID] = hb
+}
+
+// gaveBack forgets what the budget took of repoID's copy (copyBytes) or its
+// index (indexBytes), each it is told: the indexer has it again, or keeps it
+// no more.
+func (c *Cache) gaveBack(repoID string, copyBytes, indexBytes bool) {
+	c.indexMu.Lock()
+	defer c.indexMu.Unlock()
+	hb, ok := c.indexBack[repoID]
+	if !ok {
+		return
+	}
+	if copyBytes {
+		hb.copyBytes = 0
+	}
+	if indexBytes {
+		hb.indexBytes = 0
+	}
+	if hb == (indexTaken{}) {
+		delete(c.indexBack, repoID)
+		return
+	}
+	c.indexBack[repoID] = hb
+}
+
+// indexTakenOf is what the budget took of repoID (indexTaken).
+func (c *Cache) indexTakenOf(repoID string) indexTaken {
+	c.indexMu.Lock()
+	defer c.indexMu.Unlock()
+	return c.indexBack[repoID]
+}
+
+// roomToFill reports whether the indexer may fill a copy of repoID this node
+// does not hold: unless the budget evicted the one it held, at once, and
+// otherwise once the budget has room for the bytes that one held (indexTaken).
+func (c *Cache) roomToFill(repoID string) bool {
+	need := c.indexTakenOf(repoID).copyBytes
+	return need == 0 || -c.overBudget() >= need
+}
+
+// mayBuildIndex reports whether a build may give repoID's copy, which keeps
+// no index, one: while the node's indexes have room within their share — for
+// what this one held when the trim took it (indexTaken), or for anything at
+// all — or, with none, where the repository was SEARCHED here more recently
+// than an index the node keeps, which the trim then drops in its stead
+// (trimCodeIndexes keeps the most recently searched).
+func (c *Cache) mayBuildIndex(repoID string) bool {
+	need := max(c.indexTakenOf(repoID).indexBytes, 1)
+	if c.codeIndexBytes.Load()+need <= c.codeIndexShare() {
+		return true
+	}
+	var searched, oldest time.Time
+	kept := false
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, e := range c.entries {
+		e.mu.Lock()
+		if id == repoID {
+			searched = e.searched
+		} else if inc := e.current; inc != nil && !e.dead && inc.codeIndexRecord() != nil {
+			if !kept || e.searched.Before(oldest) {
+				oldest, kept = e.searched, true
+			}
+		}
+		e.mu.Unlock()
+	}
+	return kept && searched.After(oldest)
+}
+
+// keepsCodeIndex reports whether this node holds a copy of repoID (Holds),
+// and whether that copy keeps a code index.
+func (c *Cache) keepsCodeIndex(repoID string) (held, keeps bool) {
+	c.mu.Lock()
+	e := c.entries[repoID]
+	c.mu.Unlock()
+	if e == nil {
+		return false, false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.dead {
+		return false, false
+	}
+	return e.current != nil || e.running != nil, e.current != nil && e.current.codeIndexRecord() != nil
+}
+
 // THE INDEXER (Start runs it on a cache with a Placement): every IndexPoll it
 // lists the repositories searched by index (code.ReadIndexed, at STALE: a
 // repository a stale page misses is listed at the next look) and, for each one
@@ -1261,7 +1402,9 @@ const IndexFailed IndexOutcome = "failed"
 // again at every look, so a node that joins or leaves moves the index with the
 // order — syncs its copy, FILLING ONE THIS NODE DOES NOT HOLD (M6-D12: the
 // index's holder holds a copy deliberately, where a read fills one only on
-// the home), and brings the index to the default branch's tip. Between looks,
+// the home), and brings the index to the default branch's tip — as NO USE
+// of the copy (indexSync), and never straight back into what the budget
+// just took (indexTaken: a copy it evicted, an index it trimmed). Between looks,
 // a round that moves a repository's refs NUDGES it (nudgeIndex), and only
 // that repository is looked at. A repository this node is no longer a holder
 // of has its index dropped where its copy keeps one: an index nobody's
@@ -1331,6 +1474,7 @@ func (c *Cache) indexPass(ctx context.Context) {
 	c.indexWanted = nil
 	c.indexMu.Unlock()
 	q := code.ReadQuery{Kind: code.ReadIndexed, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+	listed := map[string]bool{}
 	for {
 		page, err := c.fetch.Read(ctx, q)
 		if err != nil {
@@ -1343,13 +1487,19 @@ func (c *Cache) indexPass(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			listed[r.ID] = true
 			c.indexOne(ctx, r.ID)
 		}
 		if page.Next == "" {
-			return
+			break
 		}
 		q.Cursor = page.Next
 	}
+	// A whole listing read: what it no longer names is searched by grep, or
+	// gone, and the indexer keeps nothing of it.
+	c.indexMu.Lock()
+	maps.DeleteFunc(c.indexBack, func(id string, _ indexTaken) bool { return !listed[id] })
+	c.indexMu.Unlock()
 }
 
 // indexWantedPass looks at the repositories nudges named since the last
@@ -1392,13 +1542,25 @@ func (c *Cache) indexHeld(ctx context.Context, repoID string) (IndexOutcome, err
 	}
 	if !slices.Contains(order[:min(len(order), code.IndexHolders)], c.placement.Node) {
 		c.dropIndexOf(ctx, repoID)
+		c.gaveBack(repoID, true, true)
 		return IndexNone, nil
 	}
-	s, err := c.Sync(ctx, repoID, statelog.Freshness{Level: statelog.ReadStale})
+	// Before any sync: a copy filled only for an index the share has no room
+	// for, or into a budget that evicted it, would be evicted or trimmed
+	// again.
+	held, keeps := c.keepsCodeIndex(repoID)
+	if !keeps && !c.mayBuildIndex(repoID) {
+		return IndexOverShare, nil
+	}
+	if !held && !c.roomToFill(repoID) {
+		return IndexNoRoom, nil
+	}
+	s, err := c.indexSync(ctx, repoID)
 	if err != nil {
 		return "", err
 	}
 	defer s.Release()
+	c.gaveBack(repoID, true, false)
 	return c.Index(ctx, s)
 }
 
@@ -1436,18 +1598,24 @@ func (c *Cache) codeIndexExcess() int64 {
 }
 
 // trimCodeIndexes holds the node's code indexes to their share: while they
-// hold more, the index of the copy used least recently is dropped WHOLE — a
-// part of one answers no search — and answers whether it dropped any. A
+// hold more, the index of the repository SEARCHED least recently here
+// (entry.searched; then the copy used least recently, by its readers) is
+// dropped WHOLE — a part of one answers no search — and noted, so it is not
+// built straight back (indexTaken); it answers whether it dropped any. A
 // search already reading a dropped index answers from the view it opened.
+//
+// Never by the copy's last use alone: the indexer looks at every copy it
+// keeps an index of every minute, which once counted as a use, so the trim
+// took whichever index the last look happened to reach first.
 func (c *Cache) trimCodeIndexes(ctx context.Context) bool {
 	if c.codeIndexExcess() <= 0 {
 		return false
 	}
 	type candidate struct {
-		e        *entry
-		inc      *incarnation
-		rec      *codeIndexState
-		lastUsed time.Time
+		e                  *entry
+		inc                *incarnation
+		rec                *codeIndexState
+		searched, lastUsed time.Time
 	}
 	var candidates []candidate
 	c.mu.Lock()
@@ -1455,14 +1623,15 @@ func (c *Cache) trimCodeIndexes(ctx context.Context) bool {
 		e.mu.Lock()
 		if inc := e.current; inc != nil && !e.dead {
 			if rec := inc.codeIndexRecord(); rec != nil {
-				candidates = append(candidates, candidate{e: e, inc: inc, rec: rec, lastUsed: inc.lastUsed})
+				candidates = append(candidates, candidate{e: e, inc: inc, rec: rec, searched: e.searched,
+					lastUsed: inc.lastUsed})
 			}
 		}
 		e.mu.Unlock()
 	}
 	c.mu.Unlock()
 	slices.SortFunc(candidates, func(a, b candidate) int {
-		return cmp.Or(a.lastUsed.Compare(b.lastUsed), strings.Compare(a.e.id, b.e.id))
+		return cmp.Or(a.searched.Compare(b.searched), a.lastUsed.Compare(b.lastUsed), strings.Compare(a.e.id, b.e.id))
 	})
 	dropped := false
 	for _, cand := range candidates {
@@ -1471,6 +1640,7 @@ func (c *Cache) trimCodeIndexes(ctx context.Context) bool {
 		}
 		c.log.Info("code_cache_index_trimmed", "repo", cand.e.id, "bytes", cand.rec.bytes(),
 			"share", c.codeIndexShare())
+		c.tookBack(cand.e.id, 0, cand.rec.bytes())
 		c.dropCodeIndex(ctx, cand.e, cand.inc, cand.rec)
 		dropped = true
 	}

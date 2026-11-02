@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code/cache"
 )
@@ -259,9 +260,10 @@ func TestTheSecondHolderFillsItsCopy(t *testing.T) {
 
 // THE CODE INDEXES ARE TRIMMED BEFORE A REPOSITORY. What the node's indexes
 // hold past their share of the budget (cache.CodeIndexShare) is theirs to
-// give back, whole and least recently used first: one dropped is built again
-// from one tip's blobs, where a repository evicted is a cold sync of every
-// pack.
+// give back, whole and searched least recently first
+// (TestTheTrimKeepsWhatIsSearchedAndTakesNothingStraightBack): one dropped is
+// built again from one tip's blobs, where a repository evicted is a cold sync
+// of every pack.
 //
 // Mutation: trim nothing (codeindex.go's trimCodeIndexes answers at once) —
 // the index stays past its share.
@@ -524,4 +526,143 @@ func TestALookAtUnmovedRefsReadsNoTip(t *testing.T) {
 	w.push(t, repo, "refs/heads/main", map[string]string{"c.go": "package c\n"})
 	indexOf(t, c, w.sync(t, c, repo), cache.IndexBuilt)
 	read(3, "a push to the default branch")
+}
+
+// keeps reports whether repo's copy in c keeps a code index.
+func keeps(c *cache.Cache, repo string) bool {
+	_, _, ok := cache.CodeIndexFiles(c, repo)
+	return ok
+}
+
+// THE TRIM KEEPS WHAT IS SEARCHED, AND TAKES NOTHING STRAIGHT BACK. Past their
+// share, the node's code indexes lose the index of the repository SEARCHED
+// least recently here — whatever its copy's readers did since — and the
+// indexer builds a trimmed index again only into room for what it held, or
+// for a repository searched more recently than an index it would displace:
+// rebuilt at the next look, an index the trim took put the share over again
+// and the trim took the next, every minute, for ever.
+//
+// Mutation: order the trim by the copy's last use alone (codeindex.go's
+// trimCodeIndexes) — the searched index, read longer ago, goes; build a
+// trimmed index again whatever the share (indexHeld's mayBuildIndex check
+// skipped) — the trimmed one is rebuilt at once; or never let a search
+// displace an index (mayBuildIndex answering false with no room) — the
+// searched repository's index is not built back.
+func TestTheTrimKeepsWhatIsSearchedAndTakesNothingStraightBack(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"a.go": "package a\n", "b.go": "package b\n"}
+	probe := newSyncWorld(t, onMemory)
+	one := probe.repo(t, 1)
+	probe.push(t, one, "refs/heads/main", files)
+	sized := probe.open(t)
+	indexOf(t, sized, probe.sync(t, sized, one), cache.IndexBuilt)
+	size := cache.CodeIndexBytes(sized)
+
+	// A share that holds one index and a half: two are past it.
+	w := newSyncWorld(t, onMemory)
+	searchedRepo, quiet := w.repo(t, 1), w.repo(t, 2)
+	w.push(t, searchedRepo, "refs/heads/main", files)
+	w.push(t, quiet, "refs/heads/main", files)
+	clk := newClock()
+	c := w.open(t, clk.on, holding, func(o *cache.Options) { o.MaxBytes = cache.CodeIndexShare * (size + size/2) })
+	s := w.sync(t, c, searchedRepo)
+	indexOf(t, c, s, cache.IndexBuilt)
+	c.IndexTip(s) // a search of it, here
+	clk.Add(time.Minute)
+	indexOf(t, c, w.sync(t, c, quiet), cache.IndexBuilt) // read after the search: its copy is the newer
+	if got := cache.CodeIndexBytes(c); got != 2*size {
+		t.Fatalf("the two indexes hold %d bytes, want %d each: the case needs two of the probe's size", got, size)
+	}
+	if !cache.TrimCodeIndexes(t.Context(), c) {
+		t.Fatal("the trim dropped nothing of two indexes past their share")
+	}
+	if !keeps(c, searchedRepo) || keeps(c, quiet) {
+		t.Fatalf("after the trim the searched repository keeps its index %t and the quiet one %t, want true and "+
+			"false", keeps(c, searchedRepo), keeps(c, quiet))
+	}
+
+	clk.Add(time.Minute)
+	cache.IndexPass(t.Context(), c)
+	if keeps(c, quiet) {
+		t.Error("the indexer built the trimmed index straight back, with no room for it in the share")
+	}
+	clk.Add(time.Minute)
+	c.IndexTip(w.sync(t, c, quiet)) // a search of the trimmed one, newer than the other's
+	cache.IndexPass(t.Context(), c)
+	if !keeps(c, quiet) {
+		t.Fatal("the indexer did not build back the index of a repository searched more recently than the " +
+			"one it would displace")
+	}
+	cache.TrimCodeIndexes(t.Context(), c)
+	if !keeps(c, quiet) || keeps(c, searchedRepo) {
+		t.Errorf("after the second trim the newly searched repository keeps its index %t and the other %t, "+
+			"want true and false", keeps(c, quiet), keeps(c, searchedRepo))
+	}
+}
+
+// AN INDEXER'S LOOK IS NO USE OF THE COPY. The indexer looks at every copy it
+// keeps an index of every minute; counted as a reader's use, that made each
+// such copy look used within the minute to the budget's eviction, which then
+// evicted the repositories people read first. A look leaves the copy's last
+// use where its readers left it.
+//
+// Mutation: pin the indexer's sync as a use (sync.go's indexSync, use true)
+// — the look moves the last use.
+func TestAnIndexersLookIsNoUseOfTheCopy(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", map[string]string{"a.go": "package a\n"})
+	clk := newClock()
+	c := w.open(t, clk.on, holding)
+	cache.IndexPass(t.Context(), c)
+	if !keeps(c, repo) {
+		t.Fatal("the indexer built no index")
+	}
+	before := cache.LastUsed(c, repo)
+	clk.Add(time.Hour)
+	cache.IndexPass(t.Context(), c)
+	if got := cache.LastUsed(c, repo); !got.Equal(before) {
+		t.Errorf("the indexer's look moved the copy's last use from %s to %s, want it where it was", before, got)
+	}
+}
+
+// AN EVICTED COPY IS FILLED BACK ONLY INTO ROOM. A copy the indexer keeps an
+// index in that the budget evicted is filled again only once the budget has
+// room for what it held: filled at the next look, it evicted the next least
+// used copy, a GET a pack every minute while the held copies outgrew the
+// budget.
+//
+// Mutation: fill whatever the budget's room (indexHeld's roomToFill check
+// skipped) — the evicted copy is filled at the next look.
+func TestAnEvictedCopyIsFilledBackOnlyIntoRoom(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"a.go": "package a\n"}
+	probe := newSyncWorld(t, onMemory)
+	probe.push(t, probe.repo(t, 1), "refs/heads/main", files)
+	sized := probe.open(t, holding)
+	cache.IndexPass(t.Context(), sized)
+	index, copyBytes := cache.CodeIndexBytes(sized), cache.Total(sized)
+	// A budget whose share has room for the index, and which the copy alone
+	// is past.
+	budget := cache.CodeIndexShare * (index + 1)
+	if index == 0 || copyBytes <= budget {
+		t.Fatalf("the probe's copy holds %d bytes and its index %d: the case needs a copy past %d", copyBytes,
+			index, budget)
+	}
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", files)
+	c := w.open(t, holding, func(o *cache.Options) { o.MaxBytes = budget })
+	cache.IndexPass(t.Context(), c)
+	if !keeps(c, repo) {
+		t.Fatal("the indexer built no index")
+	}
+	if cache.EvictToBudget(c) != 1 || c.Holds(repo) {
+		t.Fatal("the budget did not evict the copy: the case needs one past it")
+	}
+	cache.IndexPass(t.Context(), c)
+	if c.Holds(repo) {
+		t.Error("the indexer filled the evicted copy again with no room in the budget for it")
+	}
 }

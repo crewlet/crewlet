@@ -144,7 +144,13 @@ code:
   of its own for it, and builds it again within a minute of a push, reading
   only the files the push brought — and an index costs each git node keeping one
   its disk and a build at every new tip, and a `grep` repository costs nothing
-  until somebody asks it. A repository a tool makes starts at `grep`
+  until somebody asks it. A git node's indexes hold at most a third of its
+  cache's budget: past it, the index of the repository searched there least
+  recently is dropped, and is built again only once the node has room for it
+  or that repository is searched there more recently than an index the node
+  keeps, which it then displaces — its searches read it with git grep
+  meanwhile, and `crewlet.code.index.builds` counts the looks as
+  `over_share`. A repository a tool makes starts at `grep`
   ([Repositories made by tools](#repositories-made-by-tools)). Any other value
   refuses the revision.
 - **`default_branch`** — what a clone checks out; any branch name git would

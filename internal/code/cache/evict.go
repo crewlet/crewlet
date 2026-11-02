@@ -284,6 +284,7 @@ func (c *Cache) evict(e *entry) bool {
 	}
 	inc := e.current
 	bytes, idle := inc.diskBytes+inc.metaBytes, c.now().Sub(inc.lastUsed)
+	indexed := inc.codeIndexRecord() != nil
 	e.dead = true
 	if c.entries[e.id] == e {
 		delete(c.entries, e.id)
@@ -291,6 +292,11 @@ func (c *Cache) evict(e *entry) bool {
 	gone := c.retire(e, inc)
 	e.mu.Unlock()
 	c.mu.Unlock()
+	if indexed {
+		// A copy the indexer keeps an index in: filled again only into room
+		// for what it held (indexTaken, codeindex.go).
+		c.tookBack(e.id, bytes, 0)
+	}
 	c.trash(gone)
 	c.churned(churned{evictions: 1})
 	c.log.Info("code_cache_evicted", "repo", e.id, "bytes", bytes, "reason", "budget", "idle_for", idle)

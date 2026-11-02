@@ -1662,10 +1662,18 @@ func Catalogue() []Instrument {
 				"among the first two git nodes of its order, which keep it " +
 				"(an index this node kept then dropped), so on a fleet of more " +
 				"than two git nodes most looks are `none`. " +
+				"`over_share`: the copy keeps no index and the node's indexes " +
+				"hold their share of the budget, so none is built — nor a copy " +
+				"filled for one — until the share has room or the repository " +
+				"is searched here more recently than an index kept, which it " +
+				"then displaces; its searches grep meanwhile. " +
+				"`no_room`: the budget evicted the copy this node kept the " +
+				"index in, and it is filled again only once the budget has room " +
+				"for what it held. " +
 				"`failed`: the copy could not be synced or read, and the next " +
 				"look tries again (`code_cache_index_failed` says why). A " +
-				"steady `built` on a quiet company is an index the share keeps " +
-				"trimming: see `crewlet.code.index.bytes`.",
+				"steady `over_share` or `no_room` is a node keeping more " +
+				"indexes than its budget holds: see `crewlet.code.index.bytes`.",
 		},
 		{
 			Name: CodeIndexBytes, Kind: KindGauge, Unit: UnitBytes,
@@ -1673,10 +1681,12 @@ func Catalogue() []Instrument {
 				"trigram segments and tip maps of the repositories searched by " +
 				"index that it holds — part of `crewlet.code.cache.bytes`. Held " +
 				"to a third of the cache's budget before any repository is " +
-				"evicted, by dropping the index of the copy used least recently " +
-				"whole; the indexer builds a dropped one again at its next look, " +
-				"so a gauge pinned at the third is a node keeping more " +
-				"indexes than its budget holds.",
+				"evicted, by dropping whole the index of the repository " +
+				"searched here least recently; the indexer builds a dropped one " +
+				"again only into room in the share, or for a repository " +
+				"searched more recently than an index it displaces, so a gauge " +
+				"pinned at the third, with `over_share` looks, is a node " +
+				"keeping more indexes than its budget holds.",
 		},
 		{
 			Name: CodeSearchQueries, Kind: KindCounter, Unit: UnitCount,

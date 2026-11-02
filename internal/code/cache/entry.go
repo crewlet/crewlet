@@ -160,6 +160,12 @@ type entry struct {
 	// dead: the repository was purged or evicted and the entry left the
 	// cache; a caller that finds it so looks the repository up again.
 	dead bool
+	// searched is when a search of the repository last asked this node what
+	// its code index answers for (Cache.IndexTip): what the code indexes'
+	// trim orders by, never the copy's last use, which the indexer's own
+	// looks do not move. The repository's, not an incarnation's, so a swap
+	// or a rebuild keeps it; zero since the boot until a search asks.
+	searched time.Time
 	// maint is the maintenance running on an incarnation of the repository,
 	// if any (maintain.go): one at a time a repository.
 	maint *maintRun
@@ -1245,8 +1251,20 @@ func (c *Cache) reader(inc *incarnation) gitproc.Repairer {
 // observer holds the reader's reports under (report.go). The entry's mu is
 // held.
 func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
+	return c.pinAs(e, inc, kind, true)
+}
+
+// pinAs is pin, the pin and its release a USE (used) only where use says
+// so. The indexer's look at a repository it keeps a code index of is no use
+// (Cache.indexSync): it looks at every such repository every IndexPoll, so
+// stamped as a reader's it made every copy it keeps an index of look used
+// within the minute — to the budget's eviction, which then evicted the
+// repositories people read first. The entry's mu is held.
+func (c *Cache) pinAs(e *entry, inc *incarnation, kind SyncKind, use bool) Synced {
 	inc.pins++
-	c.used(e, inc)
+	if use {
+		c.used(e, inc)
+	}
 	by := c.reader(inc)
 	return Synced{
 		Dir:       inc.dir,
@@ -1256,7 +1274,7 @@ func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 		Repairer:  by,
 		Dropping:  droppingView(inc),
 		DropEpoch: inc.dropEpoch,
-		release:   sync.OnceFunc(func() { c.release(e, inc, by) }),
+		release:   sync.OnceFunc(func() { c.releaseAs(e, inc, by, use) }),
 		inc:       inc,
 		entry:     e,
 		owner:     c,
@@ -1272,8 +1290,16 @@ func (c *Cache) pin(e *entry, inc *incarnation, kind SyncKind) Synced {
 // to keep is served while a request holds it, and evicted as soon as none
 // does rather than at the next tick. Safe after Stop.
 func (c *Cache) release(e *entry, inc *incarnation, by gitproc.Repairer) {
+	c.releaseAs(e, inc, by, true)
+}
+
+// releaseAs is release, a use only where use says so: a pin that was no use
+// (pinAs) lets go as none.
+func (c *Cache) releaseAs(e *entry, inc *incarnation, by gitproc.Repairer, use bool) {
 	e.mu.Lock()
-	c.used(e, inc)
+	if use {
+		c.used(e, inc)
+	}
 	c.handOn(e, inc, by)
 	c.releaseRuns(inc, by)
 	gone := c.unpin(e, inc)
