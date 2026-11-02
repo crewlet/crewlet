@@ -1,6 +1,7 @@
 package codesearch_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -73,23 +75,31 @@ func indexed(name string, order ...string) repo {
 	return repo{ref: code.RepoRef{ID: "id-" + name, Name: name, Search: code.SearchIndexed}, order: order}
 }
 
-// estate answers the listing and the walk from the fake company.
+// estate answers the listing and the walk from the fake company; where head
+// is set, its reads of the rows answer at it, at level (linearizable where
+// unset), and the walk records the head each read names.
 type estate struct {
 	mu    sync.Mutex
 	repos []repo
 	reads int
 	// at is every repository the walk was asked to search, as
 	// "<name>@<ref>".
-	at []string
+	at    []string
+	head  statelog.Position
+	level statelog.ReadLevel
+	heads []statelog.Position
 }
 
 func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.reads++
+	var out code.ReadAnswer
+	if !e.head.IsZero() {
+		out.Position, out.Level = e.head, cmp.Or(e.level, statelog.ReadLinearizable)
+	}
 	switch q.Kind {
 	case code.ReadRepos:
-		var out code.ReadAnswer
 		for _, r := range e.repos {
 			out.Repos = append(out.Repos, code.RepoSummary{RepoRef: r.ref})
 		}
@@ -97,7 +107,8 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	case code.ReadRepo:
 		for _, r := range e.repos {
 			if r.ref.Name == q.Repo {
-				return code.ReadAnswer{Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: r.ref}}}, nil
+				out.Repo = &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: r.ref}}
+				return out, nil
 			}
 		}
 		return code.ReadAnswer{}, code.ErrRepoNotFound
@@ -109,6 +120,7 @@ func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, er
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.reads++
+	e.heads = append(e.heads, q.Head)
 	for _, r := range e.repos {
 		if r.ref.ID == q.RepoID {
 			e.at = append(e.at, r.ref.Name+"@"+q.Search.Ref)
@@ -138,8 +150,9 @@ type node struct {
 	asked []string
 	// at is every repository asked, as "<name>@<ref>": the commit or ref
 	// it was searched at.
-	at []string
-	mu sync.Mutex
+	at    []string
+	heads []statelog.Position
+	mu    sync.Mutex
 }
 
 func (n *node) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -150,6 +163,7 @@ func (n *node) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) 
 		n.mu.Lock()
 		n.asked = append(n.asked, r.ref.Name)
 		n.at = append(n.at, r.ref.Name+"@"+q.Search.Ref)
+		n.heads = append(n.heads, q.Head)
 		n.mu.Unlock()
 		if err := n.fault[r.ref.Name]; err != nil {
 			return code.GitAnswer{}, err
@@ -726,6 +740,52 @@ func (r *sharedReads) begun() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.began
+}
+
+// EVERY REPOSITORY LOOKS AT THE HEAD ITS LISTING READ: a search whose
+// listing of the asker's repositories was linearizable hands the position it
+// answered at to every repository's read — the scatter's on every node, and a
+// one-repository search's through the walk — as the head a second look syncs
+// to, so the fleet takes no barrier a repository; a listing at another level
+// found no head, and hands none.
+//
+// Mutations: build the scatter's request without the head, and the nodes'
+// reads name none, red; take a listing's position at any level for a head,
+// and the stale listing's names one, red.
+func TestEveryRepositoryLooksAtTheHeadItsListingRead(t *testing.T) {
+	t.Parallel()
+	head := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 42}
+	e := &estate{repos: []repo{indexed("alpha", "git-a"), indexed("beta", "git-b"), indexed("gamma", "git-a")},
+		head: head}
+	a, b := &node{}, &node{}
+	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": a, "git-b": b}))
+	if _, err := s.Search(context.Background(), query("needle")); err != nil {
+		t.Fatal(err)
+	}
+	got := slices.Concat(a.heads, b.heads)
+	if len(got) != 3 || slices.ContainsFunc(got, func(p statelog.Position) bool { return p != head }) {
+		t.Errorf("the scatter's reads named the heads %v, want %v for each of the three", got, head)
+	}
+	one := query("needle")
+	one.Search.Repos = []string{"beta"}
+	if _, err := s.Search(context.Background(), one); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.heads) != 1 || e.heads[0] != head {
+		t.Errorf("the one repository's walk named the heads %v, want %v", e.heads, head)
+	}
+
+	// A LISTING AT THE STALE LEVEL answered where its node's copy stood,
+	// which is no head of the log.
+	stale := &estate{repos: e.repos, head: head, level: statelog.ReadStale}
+	c := &node{}
+	if _, err := searcher(t, stale, newFleet(t, stale, map[string]*node{"git-a": c, "git-b": c})).Search(
+		context.Background(), query("needle")); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.heads) != 3 || slices.ContainsFunc(c.heads, func(p statelog.Position) bool { return !p.IsZero() }) {
+		t.Errorf("a stale listing's reads named the heads %v, want none", c.heads)
+	}
 }
 
 // A SEAT'S READ FINDS A UNIT WHILE A SEARCH RUNS: a git node answering a

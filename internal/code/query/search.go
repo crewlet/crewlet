@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/codeindex"
 	"github.com/crewlet/crewlet/internal/gitref"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -181,7 +180,7 @@ func (r *read) searchTarget(ctx context.Context) (ref, tip string, err error) {
 		if !r.linear {
 			spent := r.resync()
 			if spent == nil {
-				if err := r.sync(ctx, statelog.Freshness{Level: statelog.ReadLinearizable}); err != nil {
+				if err := r.lookAtHead(ctx); err != nil {
 					return "", "", err
 				}
 				continue

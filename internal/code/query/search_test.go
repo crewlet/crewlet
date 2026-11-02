@@ -362,3 +362,57 @@ func TestASearchRefusalIsJudgedAtTheLogsHead(t *testing.T) {
 		t.Errorf("syncs %v, want the copy as it stood, then one at the log's head", got)
 	}
 }
+
+// A SECOND LOOK SYNCS TO THE HEAD ITS ASKER READ: a person's search naming a
+// commit a git node's copy predates, and one naming a ref nobody pushed, each
+// carrying the head its asker read after the push, look once more at that
+// head — at session, a floor, with no barrier of the node's own — and the
+// first finds its commit's line there while the second is answered not found;
+// the same search with no head looks at a barrier of its own. A company-wide
+// search naming a ref most repositories lack so costs the one barrier its
+// listing took, not one a repository.
+//
+// Mutation: ignore the asker's head (lookAtHead syncing at linearizable
+// whatever it names) — each look takes a barrier of its own, red.
+func TestASecondLookSyncsToTheHeadItsAskerRead(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: 2}}, codetest.Settings())
+	x.commit(map[string]string{"f.txt": "the status line\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	counting := &countingCache{Cache: grepOnly{x.f.Nodes()[1].Cache()}}
+	s := x.server(1, query.Options{Cache: counting})
+	mustRead(t, s, searchQ(repo, code.SearchQuery{Text: "status", Mode: codeindex.ModeLiteral}))
+	second := x.commit(map[string]string{"f.txt": "a later status line\n"}, "two")
+	asked := treeQ(repo, code.TreeQuery{Rev: second})
+	asked.Fresh = codetest.Linearizable
+	head := mustRead(t, x.server(0, query.Options{}), asked).Position
+	counting.take()
+
+	at := searchQ(repo, code.SearchQuery{Text: "later", Mode: codeindex.ModeLiteral, Ref: second})
+	at.Head = head
+	if a := mustRead(t, s, at).Search; a.Tip != second || len(a.Hits) != 1 {
+		t.Errorf("the search of %s = %+v, want its one line at it", second, a)
+	}
+	if got := counting.take(); !slices.Equal(got, []statelog.ReadLevel{statelog.ReadStale,
+		statelog.ReadSession}) {
+		t.Errorf("syncs %v, want the copy as it stood, then one to the asker's head", got)
+	}
+
+	missing := searchQ(repo, code.SearchQuery{Text: "status", Mode: codeindex.ModeLiteral, Ref: "refs/heads/nope"})
+	missing.Head = head
+	if _, err := s.Read(t.Context(), missing); !errors.Is(err, code.ErrObjectNotFound) {
+		t.Fatalf("a search of a ref nobody pushed = %v, want ErrObjectNotFound", err)
+	}
+	if got := counting.take(); !slices.Equal(got, []statelog.ReadLevel{statelog.ReadStale,
+		statelog.ReadSession}) {
+		t.Errorf("syncs %v, want the copy as it stood, then one to the asker's head", got)
+	}
+	missing.Head = statelog.Position{}
+	if _, err := s.Read(t.Context(), missing); !errors.Is(err, code.ErrObjectNotFound) {
+		t.Fatalf("the same search with no head = %v, want ErrObjectNotFound", err)
+	}
+	if got := counting.take(); !slices.Equal(got, []statelog.ReadLevel{statelog.ReadStale,
+		statelog.ReadLinearizable}) {
+		t.Errorf("syncs %v, want the copy as it stood, then one at a barrier of the node's own", got)
+	}
+}

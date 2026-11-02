@@ -71,7 +71,12 @@
 // a copy could be behind about — a repository it calls deleted, a grant its
 // row refuses — as the code host never refuses a person's git on a stale read
 // (TestARefusalIsJudgedAtTheLogsHead): a refused read costs one barrier, and a
-// served one none.
+// served one none. A read whose asker names the head it read
+// (code.GitQuery.Head: a search of many repositories, whose asker's listing
+// was linearizable) takes no barrier for that look: it syncs to that head, so
+// a company-wide search naming a ref most repositories lack costs the one
+// barrier its listing took rather than one a repository
+// (TestASecondLookSyncsToTheHeadItsAskerRead).
 //
 // AN ABBREVIATION IS EXPANDED FROM THE OBJECTS ALONE, by `git rev-parse
 // --disambiguate=<hex>`, NEVER by cat-file's own reading of a short name,

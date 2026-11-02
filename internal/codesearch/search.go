@@ -229,7 +229,7 @@ func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 	if err := q.validate(); err != nil {
 		return Answer{}, err
 	}
-	repos, grepLeft, err := s.repos(ctx, q)
+	repos, grepLeft, head, err := s.repos(ctx, q)
 	if err != nil {
 		return Answer{}, err
 	}
@@ -251,11 +251,11 @@ func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 	}
 	if single && len(repos) == 1 {
 		var read code.SearchVia
-		if out, read, err = s.one(ctx, q, sq, repos[0]); err != nil {
+		if out, read, err = s.one(ctx, q, sq, head, repos[0]); err != nil {
 			return Answer{}, err
 		}
 		via = string(read)
-	} else if out, err = s.scatter(ctx, q, sq, repos); err != nil {
+	} else if out, err = s.scatter(ctx, q, sq, head, repos); err != nil {
 		return Answer{}, err
 	}
 	out.Coverage.GrepNotNamed = setOf(grepLeft)
@@ -308,9 +308,12 @@ func (q Query) validate() error {
 	return nil
 }
 
-// repos is the repositories q searches, by name, and the grep repositories
-// an unfiltered q leaves out.
-func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef, grepLeft []string, err error) {
+// repos is the repositories q searches, by name, the grep repositories an
+// unfiltered q leaves out, and the code log's HEAD as those reads found it
+// where they were linearizable (headOf): what every repository's second
+// look at the log's head syncs to (code.GitQuery.Head).
+func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef, grepLeft []string,
+	head statelog.Position, err error) {
 	if len(q.Search.Repos) > 0 {
 		grep := 0
 		// ONE REPOSITORY NAMED TWICE IS SEARCHED ONCE: codeindex.ParseQuery
@@ -327,29 +330,30 @@ func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef,
 			a, err := s.estate.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Repo: name, Asker: q.Asker,
 				CeilingSeat: q.CeilingSeat, Fresh: q.Rows})
 			if err != nil {
-				return nil, nil, &RepoRefusal{Repo: name, Err: err}
+				return nil, nil, statelog.Position{}, &RepoRefusal{Repo: name, Err: err}
 			}
 			if a.Repo == nil {
-				return nil, nil, &RepoRefusal{Repo: name, Err: code.ErrRepoNotFound}
+				return nil, nil, statelog.Position{}, &RepoRefusal{Repo: name, Err: code.ErrRepoNotFound}
 			}
 			if a.Repo.Search != code.SearchIndexed {
 				grep++
 			}
-			searched = append(searched, a.Repo.RepoRef)
+			searched, head = append(searched, a.Repo.RepoRef), headOf(head, a)
 		}
 		if grep > MaxGrepRepos {
-			return nil, nil, fmt.Errorf("%w: repo: names %d repositories searched with git grep, and a search "+
-				"reads at most %d of them: name fewer, or search the indexed ones without a repo: filter",
-				code.ErrInvalid, grep, MaxGrepRepos)
+			return nil, nil, statelog.Position{}, fmt.Errorf("%w: repo: names %d repositories searched with git "+
+				"grep, and a search reads at most %d of them: name fewer, or search the indexed ones without a "+
+				"repo: filter", code.ErrInvalid, grep, MaxGrepRepos)
 		}
-		return searched, nil, nil
+		return searched, nil, head, nil
 	}
 	rq := code.ReadQuery{Kind: code.ReadRepos, Asker: q.Asker, CeilingSeat: q.CeilingSeat, Fresh: q.Rows,
 		Limit: code.MaxReposPerPage}
 	for {
 		page, err := s.estate.Read(ctx, rq)
 		if err != nil {
-			return nil, nil, fmt.Errorf("codesearch: list the repositories the asker may read: %w", err)
+			return nil, nil, statelog.Position{}, fmt.Errorf("codesearch: list the repositories the asker may "+
+				"read: %w", err)
 		}
 		for _, r := range page.Repos {
 			if r.Search == code.SearchIndexed {
@@ -358,19 +362,40 @@ func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef,
 				grepLeft = append(grepLeft, r.Name)
 			}
 		}
+		head = headOf(head, page)
 		if page.Next == "" {
-			return searched, grepLeft, nil
+			return searched, grepLeft, head, nil
 		}
 		rq.Cursor = page.Next
 	}
 }
 
+// headOf is the later of head and where a read of the rows answered, where
+// that read was LINEARIZABLE: a position every write committed before the
+// search asked is at or before, which each repository's second look can sync
+// to as a floor (code.GitQuery.Head) in place of a barrier of its own — so a
+// company-wide search pays for its listing's barrier once, not for one a
+// repository. A read at any other level found no head, and is not one.
+func headOf(head statelog.Position, a code.ReadAnswer) statelog.Position {
+	if a.Level != statelog.ReadLinearizable || a.Position.IsZero() {
+		return head
+	}
+	if head.IsZero() {
+		return a.Position
+	}
+	if before, err := head.Before(a.Position); err == nil && before {
+		return a.Position
+	}
+	return head
+}
+
 // one searches one repository through the keyed walk.
-func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, repo code.RepoRef) (Answer,
+func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, head statelog.Position,
+	repo code.RepoRef) (Answer,
 	code.SearchVia, error) {
 	q.After.continueIn(repo.Name, &sq)
 	got, err := s.estate.GitRead(ctx, code.GitQuery{Kind: code.GitSearch, RepoID: repo.ID, Asker: q.Asker,
-		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Search: &sq})
+		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Head: head, Search: &sq})
 	if err != nil {
 		return Answer{}, "", &RepoRefusal{Repo: repo.Name, Err: err}
 	}
@@ -411,7 +436,8 @@ type asked struct {
 
 // scatter asks every repository of its order's first node, then its
 // runner-up where that one did not answer it.
-func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, repos []code.RepoRef) (Answer,
+func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, head statelog.Position,
+	repos []code.RepoRef) (Answer,
 	error) {
 	out := Answer{Hits: []Hit{}}
 	if len(repos) == 0 {
@@ -460,7 +486,7 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 		if len(assign) == 0 {
 			break
 		}
-		replies, err := s.round(ctx, q, sq, assign)
+		replies, err := s.round(ctx, q, sq, head, assign)
 		if err != nil {
 			return Answer{}, err
 		}
@@ -656,13 +682,13 @@ func sortCoverage(c *Coverage) {
 // node: a reply is believed only where it verifies, is bound to this round's
 // request and names a node the round asked. The round ends once every node
 // asked has answered, or at RoundBudget.
-func (s *Searcher) round(ctx context.Context, q Query, sq code.SearchQuery,
+func (s *Searcher) round(ctx context.Context, q Query, sq code.SearchQuery, head statelog.Position,
 	assign map[string][]Assigned) (map[string]Reply, error) {
 	rctx, cancel := context.WithTimeout(ctx, RoundBudget)
 	defer cancel()
 	deadline, _ := rctx.Deadline()
 	req := Request{Version: Protocol, ID: signedask.NewID(), Deadline: deadline, Asker: q.Asker,
-		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Search: sq, Assign: assign}
+		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Head: head, Search: sq, Assign: assign}
 	sealed, err := s.wire.SealRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("codesearch: seal the search: %w", err)

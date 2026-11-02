@@ -5144,6 +5144,14 @@ sequenceDiagram
   so a seat's read of a file, a log or a diff always finds a unit a search
   cannot hold. A repository whose read could not start before its answer fell
   due is unanswered for that node's share, and its runner-up is asked.
+- **One look at the log's head for the whole search.** A git node that would
+  answer a repository with no such ref, or refuse it, from a copy that may be
+  behind looks once more at the log's head first, as every read does
+  ([Server-side reads](#server-side-reads)). For a search, that head is the
+  one the asker's listing of its repositories read — linearizable for a seat
+  and a person — carried in the request: each repository's copy is brought to
+  it as a floor, so a company-wide search naming a branch most repositories
+  lack costs the one barrier its listing took, not one a repository.
 - **Exact.** Each node keeps the first lines of its repositories by
   repository name, path and line, at most the search's limit, and the asker
   keeps the first of all of them, so the answer is the same whichever node

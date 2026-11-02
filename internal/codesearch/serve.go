@@ -183,7 +183,7 @@ func (s *Server) one(ctx context.Context, req Request, a Assigned) (RepoResult, 
 	sq := req.Search
 	a.After.continueIn(a.Name, &sq)
 	got, err := s.reads.Read(ctx, code.GitQuery{Kind: code.GitSearch, RepoID: a.RepoID, Asker: req.Asker,
-		CeilingSeat: req.CeilingSeat, Turn: req.Turn, Fresh: req.Fresh, Home: a.Home, Search: &sq})
+		CeilingSeat: req.CeilingSeat, Turn: req.Turn, Fresh: req.Fresh, Head: req.Head, Home: a.Home, Search: &sq})
 	r := RepoResult{RepoID: a.RepoID}
 	var unready *code.ErrGitUnready
 	switch {

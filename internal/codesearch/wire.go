@@ -55,7 +55,13 @@ type Request struct {
 	CeilingSeat string             `json:"ceiling_seat,omitempty"`
 	Turn        string             `json:"turn,omitempty"`
 	Fresh       statelog.Freshness `json:"fresh"`
-	Search      code.SearchQuery   `json:"search"`
+	// Head is the code log's head as the asker's linearizable listing of
+	// the repositories read it (code.GitQuery.Head), zero where it listed
+	// them at another level: each repository's one second look syncs to it
+	// rather than taking a barrier of its own, so a search naming a ref most
+	// repositories lack costs the fleet the one barrier its listing took.
+	Head   statelog.Position `json:"head,omitzero"`
+	Search code.SearchQuery  `json:"search"`
 
 	// Assign is every node asked this round and the repositories it answers
 	// for, each repository named under exactly one node.
