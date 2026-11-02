@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -94,6 +95,19 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 			Reason: authz.ReasonNoGrant, Grants: []iam.Grant{authz.AppFor(authz.KindTask)}})
 	}
 	q.WorkItem = item
+	// THE TURNS ONE OBJECT STARTED, by its identity `<kind>:<id>`: "which
+	// turn did this message start". Refused for an object of an app the
+	// reader does not hold, for the work item's reason above: which turn a
+	// message started is the chat's fact as much as the trail's.
+	origin, err := originParam(p)
+	if err != nil {
+		return nil, err
+	}
+	if kind := originObject(origin); origin != "" && !authz.Shows(principal, kind) {
+		return nil, NewRefusal("turns an object started", authz.Decision{
+			Reason: authz.ReasonNoGrant, Grants: []iam.Grant{authz.AppFor(kind)}})
+	}
+	q.Origin = origin
 	// THE WINDOW AS TWO INSTANTS ON THE TURN'S START, or as whole days back
 	// from now — never both, since one would silently lose. `days` alone
 	// cannot name a window in the past: a bar picked three days ago was
@@ -199,15 +213,55 @@ func (s Sources) trailOf(ctx context.Context, what string, p Params) (string, ia
 // their agents' turns are not a way into it. A COPY wherever it changes
 // anything.
 func turnsFor(turns []store.Turn, p iam.Principal) []store.Turn {
-	if turns == nil || authz.Shows(p, authz.KindTask) {
+	if turns == nil {
 		return turns
 	}
+	tasks := authz.Shows(p, authz.KindTask)
 	out := make([]store.Turn, len(turns))
 	for i, turn := range turns {
-		turn.WorkItem = nil
+		if !tasks {
+			turn.WorkItem = nil
+		}
+		// WHAT STARTED IT, withheld by the same rule from whoever its
+		// object's app does not show: a work item's key is the tracker's,
+		// and which chat message woke a seat is the chat's.
+		if turn.Origin != nil && !authz.Shows(p, originObject(store.OriginRef(
+			turn.Origin.Kind, turn.Origin.ID))) {
+			turn.Origin = nil
+		}
 		out[i] = turn
 	}
 	return out
+}
+
+// originParam reads `origin=<kind>:<id>`, refusing one that names no object
+// rather than matching nothing.
+func originParam(p Params) (string, error) {
+	raw := strings.TrimSpace(p.String("origin"))
+	if raw == "" {
+		return "", nil
+	}
+	kind, id, _ := strings.Cut(raw, ":")
+	if store.OriginRef(kind, id) == "" {
+		return "", fmt.Errorf("%w: origin=%q names no object. Send `<kind>:<id>`, "+
+			"for example `chat_message:<message id>` or `work_item:<key>`",
+			ErrBadParams, raw)
+	}
+	return raw, nil
+}
+
+// originObject is the kind of row an origin names, as the authority table
+// decides who is shown it: a work item is the tracker's task, a chat message
+// is a message, and a schedule or a colleague's ask is the trail's own.
+func originObject(origin string) authz.ObjectKind {
+	kind, _, _ := strings.Cut(origin, ":")
+	switch kind {
+	case types.OriginWorkItem:
+		return authz.KindTask
+	case types.OriginChatMessage:
+		return authz.KindMessage
+	}
+	return ""
 }
 
 // A PAGE OF TURNS RESUMES FROM AN OPAQUE CURSOR: `next` is a token, and `before`

@@ -79,6 +79,15 @@ type TaskAssigned struct {
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 }
 
+// TriggerOrigin is the schedule that fired ([Originated]), or nothing for a
+// task no schedule names.
+func (e TaskAssigned) TriggerOrigin() TriggerOrigin {
+	if e.Schedule == "" {
+		return TriggerOrigin{}
+	}
+	return TriggerOrigin{Kind: OriginSchedule, ID: e.Schedule}
+}
+
 // EventType is the "task_assigned" wire type. It is also an inbox WAKE: this
 // is what the scheduler publishes to start a turn.
 func (TaskAssigned) EventType() string { return "task_assigned" }

@@ -122,6 +122,14 @@ type ExternalNotification struct {
 	// surface: absent decodes as nothing owed, like Addressed.
 	Owes string `json:"owes,omitempty"`
 
+	// Origin is what this notification is about and why it reached its
+	// seat ([TriggerOrigin]): a first-party source states it (a chat
+	// message and its routing reason, a work item and the tracker's
+	// reason), and a vendor's notification leaves it zero. It is what
+	// files the turn the notification wakes under the object a person
+	// holds, so "which turn did my message start" has an answer.
+	Origin TriggerOrigin `json:"origin,omitzero"`
+
 	// Messages are the constituents when this event is a COALESCED trigger.
 	//
 	// Empty — the overwhelmingly common case — means a plain single-webhook
@@ -142,6 +150,9 @@ func (e ExternalNotification) AgentID() string { return e.Agent }
 // Integration is the system the message came from, and the string the dashboard
 // builds its branded badge out of.
 func (e ExternalNotification) Integration() string { return e.NotificationSource }
+
+// TriggerOrigin is what the notification is about ([Originated]).
+func (e ExternalNotification) TriggerOrigin() TriggerOrigin { return e.Origin }
 
 // IntegrationSender is the human the integration identified, when it did.
 func (e ExternalNotification) IntegrationSender() string { return e.Sender }

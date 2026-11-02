@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -373,7 +374,55 @@ func ExtractTags(payload []byte) map[string]string {
 			}.Ref()
 		}
 	}
+	// WHAT STARTED THE TURN, the third nested read: every turn record
+	// carries its trigger, and the trigger names its origin
+	// (types.TriggerOrigin) as `trigger.origin{kind, id, reason}`. The tag is
+	// `<kind>:<id>`, BOTH HALVES OR NOTHING for work_item's reason, and the
+	// reason rides beside it. [EventLog.Append] copies the first into the
+	// trigger_origin column (schema node/0059), which is what makes "the
+	// turns this message started" an index seek.
+	if raw, ok := flat["trigger"]; ok {
+		var trigger struct {
+			Origin struct {
+				Kind   string `json:"kind"`
+				ID     string `json:"id"`
+				Reason string `json:"reason"`
+			} `json:"origin"`
+		}
+		if json.Unmarshal(raw, &trigger) == nil {
+			if origin := OriginRef(trigger.Origin.Kind, trigger.Origin.ID); origin != "" {
+				tags["trigger_origin"] = origin
+				if trigger.Origin.Reason != "" {
+					tags["trigger_reason"] = trigger.Origin.Reason
+				}
+			}
+		}
+	}
 	return tags
+}
+
+// OriginOfTags is the origin a record's tags name ([ExtractTags]), or nil: what
+// the turn detail reads off the earliest of its rows that names one, as the
+// turns list's aggregate does.
+func OriginOfTags(tags map[string]string) *types.TriggerOrigin {
+	kind, id, ok := strings.Cut(tags["trigger_origin"], ":")
+	if !ok || kind == "" || id == "" {
+		return nil
+	}
+	return &types.TriggerOrigin{Kind: kind, ID: id, Reason: tags["trigger_reason"]}
+}
+
+// OriginRef is a turn origin's identity as the log files it, `<kind>:<id>`,
+// or empty when either half is missing: a kind with no id names no object, and
+// an id with no kind could be two objects.
+//
+// ONE SPELLING, read by the tag above and by every reader that asks the log
+// for the turns an object started, so the two can never compose it apart.
+func OriginRef(kind, id string) string {
+	if kind == "" || id == "" {
+		return ""
+	}
+	return kind + ":" + id
 }
 
 // jsonInt reads a number out of a raw JSON field.

@@ -342,7 +342,7 @@ var wireTags = map[string][]string{
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
 	"scheduled_task_fired":          {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
-	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label"},
+	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label"},
 	"turn_trigger_skipped":          {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
 	"notifications_coalesced":       {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":          {"detail", "handle", "notification_source", "reason"},
@@ -922,6 +922,51 @@ func TestNoPayloadPutsAPartitionInTheConversationField(t *testing.T) {
 					"the partition has its own tag so the conversation's keeps "+
 					"one meaning", typ.Name(), wire)
 			}
+		}
+	}
+}
+
+// A TRIGGER NAMES WHAT STARTED THE TURN, and survives the wire: the waking
+// event's origin (a chat message and why it reached the seat, a schedule) is
+// copied into the descriptor and read back from it.
+//
+// Mutation: drop the Originated read in DescribeTrigger, or the origin's
+// decode, and this fails.
+func TestATriggerNamesWhatStartedTheTurn(t *testing.T) {
+	t.Parallel()
+	chat := TriggerOrigin{Kind: OriginChatMessage, ID: "msg-1", Reason: "answerer"}
+	trace := events.TraceContext{}
+	for name, tc := range map[string]struct {
+		event *events.Event
+		want  TriggerOrigin
+	}{
+		"a chat message": {events.New(ExternalNotification{NotificationSource: "chat",
+			Origin: chat}, trace), chat},
+		"a schedule": {events.New(TaskAssigned{Schedule: "daily standup"}, trace),
+			TriggerOrigin{Kind: OriginSchedule, ID: "daily standup"}},
+		"a colleague's ask": {events.New(A2ARequest{ChannelID: "ch-1"}, trace),
+			TriggerOrigin{Kind: OriginColleagueAsk, ID: "ch-1"}},
+		"a vendor's message": {events.New(ExternalNotification{NotificationSource: "mattermost"},
+			trace), TriggerOrigin{}},
+	} {
+		got := DescribeTrigger(tc.event)
+		if got.Origin != tc.want {
+			t.Errorf("%s: origin %+v, want %+v", name, got.Origin, tc.want)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back Trigger
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatal(err)
+		}
+		if back.Origin != tc.want {
+			t.Errorf("%s: read back as %+v from %s", name, back.Origin, raw)
+		}
+		if _, present := got.Map()["origin"]; present == tc.want.IsZero() {
+			t.Errorf("%s: the wire form's origin key is present=%v for %+v", name,
+				present, tc.want)
 		}
 	}
 }

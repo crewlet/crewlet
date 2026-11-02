@@ -297,6 +297,7 @@ type turnsParams struct {
 	Model     string         `json:"model,omitempty"`
 	WorkKey   string         `json:"work_key,omitempty"`
 	WorkItem  string         `json:"work_item,omitempty"`
+	Origin    string         `json:"origin,omitempty"`
 	Failed    *bool          `json:"failed,omitempty"`
 	Before    time.Time      `json:"before,omitzero"`
 	Sort      store.TurnSort `json:"sort,omitempty"`
@@ -319,7 +320,7 @@ func turnsParamsOf(q store.TurnQuery) turnsParams {
 		Since: q.Since, Until: q.Until, At: q.At,
 		SinceDays: q.SinceDays, AgentID: q.AgentID,
 		Model: q.Model, WorkKey: q.WorkKey, WorkItem: q.WorkItem,
-		Failed: q.Failed, Sort: q.Sort, Limit: q.Limit,
+		Origin: q.Origin, Failed: q.Failed, Sort: q.Sort, Limit: q.Limit,
 	}
 	if q.Before != nil {
 		p.Before, p.BeforeID = q.Before.Start, q.Before.TurnID
@@ -334,7 +335,7 @@ func (p turnsParams) query(ids []string) store.TurnQuery {
 		Since: p.Since, Until: p.Until, At: p.At,
 		SinceDays: p.SinceDays, AgentID: p.AgentID,
 		Model: p.Model, WorkKey: p.WorkKey, WorkItem: p.WorkItem,
-		Failed: p.Failed, Sort: p.Sort, Limit: p.Limit,
+		Origin: p.Origin, Failed: p.Failed, Sort: p.Sort, Limit: p.Limit,
 		IDs: ids,
 	}
 	if !p.Before.IsZero() {

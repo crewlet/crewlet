@@ -501,9 +501,9 @@ INSERT INTO crewlet_events (
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, provider_key, work_item,
-	calls, spend_stage, answered_by, node
+	calls, spend_stage, answered_by, node, trigger_origin
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -669,6 +669,9 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 		// a custody keeper writes rows another node published. See
 		// node/0054.
 		rec.Node,
+		// WHAT STARTED THE TURN, off the `trigger_origin` tag, for the
+		// reason work_item is a copy of its own. See node/0059.
+		tags["trigger_origin"],
 	); err != nil {
 		return err
 	}
