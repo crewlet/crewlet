@@ -597,6 +597,12 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		// authors, conversation or mergeability, no readiness judged.
 		brief := repo.summary(row)
 		out.ChangeBrief = &brief
+		if q.DetailOnly {
+			// THE ROW ALONE: its asker reads no revision either
+			// ([ReadQuery.DetailOnly]), so the read is the one seek of
+			// code_changes_number_idx above.
+			return nil
+		}
 		rows, err = tx.QueryContext(ctx, revisionsSQL, row.id, limit)
 	case q.Cursor == "":
 		body, bodyErr := bodyOf(ctx, tx, row.id)

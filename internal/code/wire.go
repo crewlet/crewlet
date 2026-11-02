@@ -1255,8 +1255,13 @@ type ReadQuery struct {
 	// needs a change's state, its revision, its head and its branches — a
 	// seat's read of a revision's files, a patch or the findings, a write of
 	// its conversation — sets it; a read that presents the change, or acts on
-	// its readiness, does not. Refused beside a part, a cursor or DetailOnly,
-	// which read no first page of revisions; refused on every other kind.
+	// its readiness, does not. Beside DetailOnly it answers the change's row
+	// ALONE, no page of its revisions with it — one seek of
+	// code_changes_number_idx — for a read that needs nothing of the change
+	// but its state, its branches, its id and its number: a coding run's
+	// launch on a change, which looks up the branch it works on. Refused
+	// beside a part or a cursor, which read no first page of revisions;
+	// refused on every other kind.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row: a build that predates it decodes and ignores it,
@@ -1391,8 +1396,9 @@ type ReadQuery struct {
 	// first page of them is up to defaultRevisionLimit (200) revisions, each
 	// carrying its facts' touched paths (up to MaxTouchedPaths) — up to
 	// MaxPageBytes of JSON — read, encoded, shipped from a data node and
-	// decoded to be dropped. Refused on every other kind, and beside a part,
-	// a cursor or a limit, which page a list it does not read.
+	// decoded to be dropped. Beside Brief it answers the change's row alone
+	// ([ReadQuery.Brief]). Refused on every other kind, and beside a part, a
+	// cursor or a limit, which page a list it does not read.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.PathOwners]'s:

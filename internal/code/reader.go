@@ -1754,9 +1754,9 @@ func (q ReadQuery) validate() error {
 	case q.Brief && q.Kind != ReadPushes && q.Kind != ReadChange:
 		return fmt.Errorf("%w: brief: only a push history and a change's first page are read in brief",
 			ErrInvalid)
-	case q.Brief && q.Kind == ReadChange && (q.Part != "" || q.Cursor != "" || q.DetailOnly):
-		return fmt.Errorf("%w: brief: only a change's first page of its revisions is read in brief — named "+
-			"by no part, cursor or detail_only", ErrInvalid)
+	case q.Brief && q.Kind == ReadChange && (q.Part != "" || q.Cursor != ""):
+		return fmt.Errorf("%w: brief: only a change's first page of its revisions, or its row alone with "+
+			"detail_only, is read in brief — named by no part or cursor", ErrInvalid)
 	case q.Push != "" && q.Kind != ReadPushes:
 		return fmt.Errorf("%w: push: only a push history is narrowed to one push", ErrInvalid)
 	case q.PathOwners && q.Kind != ReadRepo:
