@@ -1548,15 +1548,16 @@ const (
 	// (+0.2 KiB, 238 bytes), all of it the settings chunk, which the initial
 	// load does not fetch. 5386 KiB.
 	// Settings › MCP & tools' grants, levels, approvals and changed tools
-	// (the Access tab and its grant picker, the Tools tab's levels and
-	// default, the Agent access view, the wizard's Who gets it and Tool
-	// approvals steps, the calls held for approval on a server's page, the
-	// review of a server's changed tools) and a held call answered from the
-	// Inbox's decision row took it from 5385.2 KiB to 5422.0 KiB (+36.9 KiB):
-	// the settings chunk +31.5 KiB and its sheet +1.1 KiB, the writes chunk
-	// +1.5 KiB and the decision row's +1.4 KiB (the held call's answers and
-	// row), and the Access chunk +1.3 KiB of shared settings code Rollup
-	// moved into it. The initial load did not grow. 5423 KiB.
+	// (the Access tab and its grant picker with each agent's team limits, the
+	// Tools tab's levels, default and held-back marks, the Agent access view,
+	// the wizard's Who gets it and Tool approvals steps, the calls held for
+	// approval on a server's page, the review of a server's changed tools)
+	// and a held call answered from the Inbox's decision row took it from
+	// 5385.2 KiB to 5422.9 KiB (+37.7 KiB): the settings chunk +32.0 KiB and
+	// its sheet +1.1 KiB, the Access chunk +1.6 KiB of shared settings code
+	// Rollup moved into it, and the writes chunk +1.5 KiB and the decision
+	// row's +1.4 KiB (the held call's answers and row). The initial load did
+	// not grow. 5423 KiB.
 	treeBudget = 5<<20 + 303<<10
 )
 
