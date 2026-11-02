@@ -17,7 +17,10 @@ import (
 // SIGNING THE COMPANY IN TO A REMOTE MCP SERVER WITH OAUTH, and out again.
 //
 //   - `POST /mcp-servers/{name}/oauth` starts a sign-in to a server whose
-//     entry carries `oauth`: the engine reads the server's sign-in metadata,
+//     entry carries `oauth` with a person's grant (a service identity's,
+//     `grant: client_credentials`, is refused 409: nobody signs in to it,
+//     and its tokens are issued as it is used): the engine reads the
+//     server's sign-in metadata,
 //     registers where its client is a registration, and answers the
 //     authorization address the person's browser is sent to, once. The
 //     vendor sends the browser back to `GET /webhooks/mcp-oauth`
@@ -44,7 +47,7 @@ import (
 // SignIns starts, reads and ends a server's OAuth sign-in, adapted from the
 // engine where the API is wired, with this package's own refusals
 // ([ErrNoSuchServer], [ErrNoOAuth], [ErrNoSignIn], [ErrNotSignedIn],
-// [*SignInRefusal]).
+// [ErrServiceIdentity], [*SignInRefusal]).
 type SignIns interface {
 	StartSignIn(ctx context.Context, server string, by iam.Actor) (SignInAnswer, error)
 	SignIn(ctx context.Context, id uuid.UUID) (SignInAnswer, error)
@@ -62,6 +65,10 @@ var (
 	ErrNoSignIn = errors.New("mcpapi: no such sign-in")
 	// ErrNotSignedIn is a sign-out of a server nobody is signed in to.
 	ErrNotSignedIn = errors.New("mcpapi: nobody is signed in to the MCP server")
+	// ErrServiceIdentity is a sign-in to a server the engine signs in to as
+	// a service identity (oauth.grant: client_credentials), which nobody
+	// signs in to.
+	ErrServiceIdentity = errors.New("mcpapi: the MCP server signs in as a service identity")
 )
 
 // SignInRefusal is a sign-in the server's metadata or its vendor refused,
@@ -168,6 +175,11 @@ func (s *Service) refuseSignIn(w http.ResponseWriter, r *http.Request, name stri
 	case errors.Is(err, ErrNotSignedIn):
 		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNotFound,
 			httpjson.Detail{"detail": "nobody is signed in to MCP server " + quoted(name)})
+	case errors.Is(err, ErrServiceIdentity):
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict,
+			httpjson.Detail{"detail": "MCP server " + quoted(name) + " signs in as a service identity " +
+				"with client credentials (oauth.grant: client_credentials): nobody signs in to it, and " +
+				"the engine is issued its tokens as it is used"})
 	case errors.As(err, &refused):
 		code := httpjson.CodeConflict
 		if refused.Status >= http.StatusInternalServerError {

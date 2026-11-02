@@ -119,11 +119,12 @@ func signInErr(err error) error {
 		return &mcpapi.SignInRefusal{Status: refused.Status, Detail: refused.Reason + ". " + refused.Remedy}
 	}
 	for engineErr, routeErr := range map[error]error{
-		engine.ErrNoMCPServer:       mcpapi.ErrNoSuchServer,
-		engine.ErrMCPNoOAuth:        mcpapi.ErrNoOAuth,
-		engine.ErrNoCallbackAddress: mcpapi.ErrNoCallback,
-		engine.ErrNoMCPSignIn:       mcpapi.ErrNoSignIn,
-		engine.ErrMCPNotSignedIn:    mcpapi.ErrNotSignedIn,
+		engine.ErrNoMCPServer:        mcpapi.ErrNoSuchServer,
+		engine.ErrMCPNoOAuth:         mcpapi.ErrNoOAuth,
+		engine.ErrNoCallbackAddress:  mcpapi.ErrNoCallback,
+		engine.ErrNoMCPSignIn:        mcpapi.ErrNoSignIn,
+		engine.ErrMCPNotSignedIn:     mcpapi.ErrNotSignedIn,
+		engine.ErrMCPServiceIdentity: mcpapi.ErrServiceIdentity,
 	} {
 		if errors.Is(err, engineErr) {
 			return fmt.Errorf("%w: %w", routeErr, err)
