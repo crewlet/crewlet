@@ -145,6 +145,21 @@ type UsageSeat struct {
 	Tokens []UsageTokens
 	Turns  UsageTurns
 	Reads  []UsageRead
+
+	// Tools are the seat's calls to MCP servers' tools in the turns that
+	// ENDED in the window, per (server, tool), in that order.
+	Tools []UsageTool
+}
+
+// UsageTool is one MCP tool's calls by one seat, summed over the turns that
+// ended in the window: each figure is the turns' own tallies
+// ([types.ToolTally]) added up, LastAt the newest of them.
+type UsageTool struct {
+	Server, Tool string
+
+	Calls, Failed, Unavailable, Refused, TotalMS int64
+
+	LastAt time.Time
 }
 
 // UsageTokens is one (phase, worker, model, provider key) cell of a seat's
@@ -236,7 +251,7 @@ type UsageMark struct {
 	Fires, LastFire   int64
 }
 
-// usageEventTypes are the six records a day is derived from, taken from their
+// usageEventTypes are the seven records a day is derived from, taken from their
 // payload types for the reason [phaseCompleted] is: the phase completions, the
 // collected launches and the auxiliary records the spend is summed from, the
 // completions a turn's figures are read off, the turn's SUMMARY record
@@ -251,6 +266,11 @@ type UsageMark struct {
 // is read off its records ([DB.usageLegacyTurns]), whether it failed off the
 // summary, and a summary row that lands in a later custody batch than its
 // turn's end must move the fingerprint — and the settle's mark — when it does.
+// The superseded fire's record is the seventh, for the auxiliary record's
+// reason: it is what turns a fire's outcome from fired into skipped
+// ([DB.usageSchedules]), it lands when the seat's node merges the fires (long
+// after the scheduler wrote its row), and a day whose only change was that
+// record would otherwise never be derived again.
 func usageEventTypes() []any {
 	return []any{
 		phaseCompleted,
@@ -259,6 +279,7 @@ func usageEventTypes() []any {
 		turnCompleted,
 		types.AgentTurnCompleted{}.EventType(),
 		types.KnowledgeRead{}.EventType(),
+		types.ScheduledFireSuperseded{}.EventType(),
 	}
 }
 
@@ -644,6 +665,9 @@ func (d *DB) UsageForDay(ctx context.Context, w UsageWindow) (UsageDay, error) {
 		return UsageDay{}, err
 	}
 	if err := d.usageReads(ctx, w, seat, name); err != nil {
+		return UsageDay{}, err
+	}
+	if err := d.usageTools(ctx, w, seat, name); err != nil {
 		return UsageDay{}, err
 	}
 	schedules, err := d.usageSchedules(ctx, w)
@@ -1093,6 +1117,142 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 		[]any{types.KnowledgeRead{}.EventType(), EncodeTime(w.Start), EncodeTime(w.End)}
 }
 
+// usageTools folds the window's ended turns' calls to MCP servers' tools into
+// one entry per (server, tool) per seat.
+//
+// OFF THE ONE RECORD THAT ENDS EACH TURN, its tally ([types.ToolTally]), for
+// [DB.usageTurns]' reason: the turn counted its own calls as it ran, every
+// segment, delegated worker and executor run included, so nothing here reads
+// its phase records, which a custody group spreads over the data nodes and a
+// resume leaves on another node. So a call counts on the day its turn ended,
+// as the turn itself does, and a turn still parked counts nowhere yet.
+//
+// ONCE PER TURN: an ending recorded twice (a resume re-run after a failure
+// publishes its end again) states the same turn twice, so each (turn, server,
+// tool) takes the largest of every figure across the copies, the rule the
+// turn's other figures follow ([usageEndedTurnsSQL]), and only then are the
+// turns added up. Folded in Go rather than by MAX in SQL because the newest
+// instant is RFC 3339 text, whose order is not time's once the fractions
+// differ in length.
+//
+// A turn whose end states no tally counts no calls here: there is nothing to
+// read them from but the phase records, and no build that ended a turn without
+// stating its calls has shipped.
+func (d *DB) usageTools(ctx context.Context, w UsageWindow,
+	seat func(string) *UsageSeat, name func(*UsageSeat, string, string)) error {
+
+	query, args := usageToolsSQL(w)
+	rows, err := d.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("store: read the usage day's tool calls: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type copyKey struct{ turn, server, tool string }
+	type turnTool struct {
+		agent, handle, role string
+		t                   UsageTool
+	}
+	turns := map[copyKey]*turnTool{}
+	for rows.Next() {
+		var (
+			k                   copyKey
+			agent, handle, role string
+			lastAt              string
+			t                   UsageTool
+		)
+		if err := rows.Scan(&k.turn, &agent, &handle, &role, &k.server, &k.tool,
+			&t.Calls, &t.Failed, &t.Unavailable, &t.Refused, &t.TotalMS, &lastAt); err != nil {
+			return fmt.Errorf("store: scan the usage day's tool calls: %w", err)
+		}
+		if k.server == "" || k.tool == "" {
+			// A TALLY NOTHING CAN ADDRESS is no tool's; skipped rather than
+			// keyed on nothing, the producer's own rule.
+			continue
+		}
+		if lastAt != "" {
+			if at, err := time.Parse(time.RFC3339Nano, lastAt); err == nil {
+				t.LastAt = at.UTC()
+			}
+		}
+		t.Server, t.Tool = k.server, k.tool
+		held, ok := turns[k]
+		if !ok {
+			turns[k] = &turnTool{agent: agent, handle: handle, role: role, t: t}
+			continue
+		}
+		h := &held.t
+		h.Calls, h.Failed = max(h.Calls, t.Calls), max(h.Failed, t.Failed)
+		h.Unavailable, h.Refused = max(h.Unavailable, t.Unavailable), max(h.Refused, t.Refused)
+		h.TotalMS = max(h.TotalMS, t.TotalMS)
+		if t.LastAt.After(h.LastAt) {
+			h.LastAt = t.LastAt
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	type seatTool struct{ agent, server, tool string }
+	summed := map[seatTool]*UsageTool{}
+	for _, tt := range turns {
+		s := seat(tt.agent)
+		name(s, tt.handle, tt.role)
+		k := seatTool{tt.agent, tt.t.Server, tt.t.Tool}
+		sum, ok := summed[k]
+		if !ok {
+			sum = &UsageTool{Server: tt.t.Server, Tool: tt.t.Tool}
+			summed[k] = sum
+		}
+		sum.Calls += tt.t.Calls
+		sum.Failed += tt.t.Failed
+		sum.Unavailable += tt.t.Unavailable
+		sum.Refused += tt.t.Refused
+		sum.TotalMS += tt.t.TotalMS
+		if tt.t.LastAt.After(sum.LastAt) {
+			sum.LastAt = tt.t.LastAt
+		}
+	}
+	keys := slices.SortedFunc(maps.Keys(summed), func(a, b seatTool) int {
+		return strings.Compare(a.agent+"\x00"+a.server+"\x00"+a.tool,
+			b.agent+"\x00"+b.server+"\x00"+b.tool)
+	})
+	for _, k := range keys {
+		s := seat(k.agent)
+		s.Tools = append(s.Tools, *summed[k])
+	}
+	return nil
+}
+
+// usageToolsSQL is [DB.usageTools]' statement and its arguments: one row per
+// (ending record, server, tool), through `json_each` over the tally the record
+// states, off the turn endings in the window that are not a park.
+func usageToolsSQL(w UsageWindow) (string, []any) {
+	return `
+		SELECT e.turn_id, e.agent_id,
+		       COALESCE(json_extract(e.payload, '$.agent_handle'), ''),
+		       e.agent_role,
+		       COALESCE(json_extract(t.value, '$.server'), ''),
+		       COALESCE(json_extract(t.value, '$.tool'), ''),
+		       COALESCE(json_extract(t.value, '$.calls'), 0),
+		       COALESCE(json_extract(t.value, '$.failed'), 0),
+		       COALESCE(json_extract(t.value, '$.unavailable'), 0),
+		       COALESCE(json_extract(t.value, '$.refused'), 0),
+		       COALESCE(json_extract(t.value, '$.total_ms'), 0),
+		       COALESCE(json_extract(t.value, '$.last_at'), '')
+		  FROM crewlet_events AS e, json_each(e.payload, '$.turn.tools') AS t
+		 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+		   AND e.turn_id != '' AND e.agent_id != ''
+		   AND COALESCE(json_extract(e.payload, '$.suspended'), 0) = 0
+		   AND ` + keptRowSQL,
+		[]any{turnCompleted, EncodeTime(w.Start), EncodeTime(w.End)}
+}
+
+// scheduleOutcomeFired is the dispatch ledger's word for a fire it sent
+// (schedule.OutcomeFired). Spelled here because the scheduler's package
+// depends on this one; the ledger's contract suite holds the word.
+const scheduleOutcomeFired = "fired"
+
 // usageSchedules reads the fires this node's scheduler recorded in the window.
 //
 // THE TURN IS FOUND BY THE TRACE, and only where this node ran it: a fire is
@@ -1111,10 +1271,22 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 // day following — a record published in between may carry a label a later one
 // drops. A kept settle never moves it: the rows were already read while in
 // flight.
+//
+// AND A FIRE THE SEAT DID NOT RUN IS FOUND THE SAME WAY, as a label off its
+// own trace: a fire the seat's node superseded with a later one of the same
+// schedule carries a [types.ScheduledFireSuperseded] record under its trace,
+// and reads as [types.ScheduleOutcomeSuperseded] rather than as a dispatch
+// with no turn behind it. Only a FIRED row can be superseded; a skip was
+// never sent.
 func (d *DB) usageSchedules(ctx context.Context, w UsageWindow) ([]UsageSchedule, error) {
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT r.scope_type, r.scope_id, r.schedule_name, r.target_handle,
-		       r.fired_at, r.outcome, r.trace_id,
+		       r.fired_at,
+		       CASE WHEN r.outcome = ? AND r.trace_id != '' AND EXISTS (
+		                SELECT 1 FROM crewlet_events s
+		                 WHERE s.trace_id = r.trace_id AND s.event_type = ?)
+		            THEN ? ELSE r.outcome END,
+		       r.trace_id,
 		       COALESCE((SELECT e.turn_id FROM crewlet_events e
 		                  WHERE r.trace_id != '' AND e.trace_id = r.trace_id
 		                    AND e.turn_id != ''
@@ -1122,7 +1294,8 @@ func (d *DB) usageSchedules(ctx context.Context, w UsageWindow) ([]UsageSchedule
 		  FROM scheduled_runs r
 		 WHERE r.fired_at >= ? AND r.fired_at < ?
 		 ORDER BY r.scope_type, r.scope_id, r.schedule_name, r.fired_at, r.target_handle`,
-		EncodeTime(w.Start), EncodeTime(w.End))
+		scheduleOutcomeFired, types.ScheduledFireSuperseded{}.EventType(),
+		types.ScheduleOutcomeSuperseded, EncodeTime(w.Start), EncodeTime(w.End))
 	if err != nil {
 		return nil, fmt.Errorf("store: read the usage day's schedule fires: %w", err)
 	}

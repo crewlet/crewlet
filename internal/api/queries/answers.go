@@ -215,6 +215,11 @@ type Sources struct {
 	// [Sources.Config], answers the detail unavailable.
 	MCPListings MCPListingReader
 
+	// MCPInstances reads one server's instances from the nodes holding
+	// them, which only the engine can ask: what a server's detail says of
+	// each instance's health. Nil answers the detail with no instances read.
+	MCPInstances MCPInstanceReader
+
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 
@@ -693,12 +698,15 @@ func Register(r *Registry, s Sources) {
 		r.Register("fleet", Requires(iam.GrantAdmin), s.fleet)
 		// WHAT EACH MCP SERVER DID ON EACH NODE, off the same lease
 		// table: every node re-publishes its starts on its presence
-		// heartbeat, so one listing answers for the fleet. Admin's, as
-		// the company document is, because that is what it discloses —
-		// every server's launch command and the first line of each
-		// failure, which `/config` shows the same reader. See
+		// heartbeat, so one listing answers for the fleet. Everybody's,
+		// in two readings, as `llm_entries` is: the configuration's
+		// reader reads every server's launch command and the first line
+		// of each failure, which `/config` shows the same reader, and
+		// anybody else each server's condition with none of that. The
+		// routes beside it (internal/api/mcpapi) are `tools.read`, which
+		// admits exactly whom this posture does. See
 		// [Sources.mcpServersStatus].
-		r.Register("mcp_servers_status", Requires(iam.GrantAdmin), s.mcpServersStatus)
+		r.Register("mcp_servers_status", Everybody(), s.mcpServersStatus)
 		// WHAT EACH MODEL IS DOING, from the same heartbeats: everybody's,
 		// in two readings (see [Sources.llmEntries]), and the runners'
 		// readiness the admin's, as the configuration is.

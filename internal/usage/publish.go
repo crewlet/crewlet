@@ -1160,6 +1160,13 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 				LastWorkKey: r.LastWorkKey, LastQuery: r.LastQuery})
 		}
 		rec.Reads, rec.ReadsElided = capReads(reads)
+		tools := make([]ToolCalls, 0, len(s.Tools))
+		for _, t := range s.Tools {
+			tools = append(tools, ToolCalls{Server: t.Server, Tool: t.Tool, Calls: t.Calls,
+				Failed: t.Failed, Unavailable: t.Unavailable, Refused: t.Refused,
+				TotalMS: t.TotalMS, LastAt: t.LastAt})
+		}
+		rec.Tools, rec.ToolsElided = capTools(tools)
 		out = append(out, rec)
 	}
 	for _, person := range d.People {
@@ -1232,6 +1239,33 @@ func capReads(reads []Read) ([]Read, int) {
 	}
 	slices.SortFunc(reads, compareReadKey)
 	return reads, elided
+}
+
+// capTools keeps the [ToolsPerSeatDay] most-called entries and counts the
+// rest, on [capReads]' terms: the most-called survive, the newest breaking a
+// tie, and the survivors go back in key order. Nil for a seat-day that called
+// none, so a record without calls carries no `tools` key and is stamped at the
+// base version. It takes the slice it is handed as its own.
+func capTools(tools []ToolCalls) ([]ToolCalls, int) {
+	if len(tools) == 0 {
+		return nil, 0
+	}
+	elided := 0
+	if len(tools) > ToolsPerSeatDay {
+		slices.SortStableFunc(tools, func(a, b ToolCalls) int {
+			if c := cmp.Compare(b.Calls, a.Calls); c != 0 {
+				return c
+			}
+			if c := b.LastAt.Compare(a.LastAt); c != 0 {
+				return c
+			}
+			return compareToolKey(a, b)
+		})
+		elided = len(tools) - ToolsPerSeatDay
+		tools = tools[:ToolsPerSeatDay]
+	}
+	slices.SortFunc(tools, compareToolKey)
+	return tools, elided
 }
 
 func compareReadKey(a, b Read) int {

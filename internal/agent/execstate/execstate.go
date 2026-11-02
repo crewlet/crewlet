@@ -313,6 +313,10 @@ type TurnSoFar struct {
 	Reviews    int `json:"reviews,omitempty"`
 	SentBack   int `json:"sent_back,omitempty"`
 	Unaccepted int `json:"unaccepted,omitempty"`
+	// Tools is the earlier segments' calls to MCP servers' tools, per
+	// (server, tool): what the ending record's [types.TurnTally.Tools]
+	// adds this segment's to.
+	Tools []types.ToolTally `json:"tools,omitempty"`
 }
 
 // ErrUnknownVersion reports a state this build cannot read.

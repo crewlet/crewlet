@@ -1522,16 +1522,25 @@ func TestABatchTimeoutKeepsTheAnswersThatAlreadyLanded(t *testing.T) {
 func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 	t.Parallel()
 	// REPEATED, because the property is about a coin flip. The waiting child
-	// is blocked in a select whose two cases — the freed slot and the batch
-	// deadline — become ready at the same instant, since the slot is freed
-	// BY the deadline killing the child ahead of it. A single run passes
-	// about half the time with the post-acquire re-check removed, which
-	// reads as flakiness rather than as the race it is; twelve runs make it
-	// a fact.
+	// is blocked in a select whose two cases (the freed slot and the call's
+	// end) become ready together, since the slot is freed BY the call's end
+	// stopping the child ahead of it. A single run passes about half the
+	// time with the post-acquire re-check removed, which reads as flakiness
+	// rather than as the race it is; twelve runs make it a fact.
+	//
+	// THE CALL IS ENDED BY THE CASE, once the first child is inside its model
+	// call, and not by a wall-clock cap. With a 20 ms cap, a loaded runner
+	// had the first child still dialling its harness session at the deadline:
+	// the dial failed on that same instant and freed the slot a moment before
+	// the context's own timer fired, so the waiting child passed the re-check
+	// and started. Ended here, the call is over strictly before the child
+	// ahead can return, which is the ordering the property is about.
 	const runs = 12
 	for range runs {
 		w := newWorld(t)
+		inside := make(chan struct{}, 2)
 		p := &provider{name: "sub", reply: func(ctx context.Context, _ int, _ modelView) (llmtest.Response, error) {
+			inside <- struct{}{}
 			<-ctx.Done()
 			return llmtest.Response{}, ctx.Err()
 		}}
@@ -1539,12 +1548,18 @@ func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 		cfg.ParentRemaining = 0
 		cfg.Limits.MaxParallel = 1
 		cfg.Limits.TaskTimeout = 10 * time.Second
-		cfg.Limits.CallTimeout = 20 * time.Millisecond
+		cfg.Limits.CallTimeout = 10 * time.Second
 
-		results, err := subagent.Run(context.Background(), cfg, batch([]string{"read_file"}, []subagent.Task{
+		ctx, end := context.WithCancelCause(context.Background())
+		go func() {
+			<-inside
+			end(errors.New("the parent turn ended the call"))
+		}()
+		results, err := subagent.Run(ctx, cfg, batch([]string{"read_file"}, []subagent.Task{
 			{Prompt: "a", SystemPrompt: "s"},
 			{Prompt: "b", SystemPrompt: "s"},
 		}))
+		end(nil)
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}

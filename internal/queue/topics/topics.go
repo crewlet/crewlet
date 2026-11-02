@@ -161,6 +161,11 @@ const (
 	// the `executor_tail` query). Every node serves it and only the
 	// incarnation that owns the run answers.
 	ObserveExecutorTail = ObservePrefix + "executor_tail"
+	// ObserveMCPInstances is where a read of one MCP server's instances is
+	// scattered to the nodes said to hold them (internal/engine,
+	// mcpinstances.go). Every node with an engine serves it, and only a node
+	// the request names answers, from its own bridges.
+	ObserveMCPInstances = ObservePrefix + "mcp_instances"
 
 	// SandboxPrefix prefixes the subjects the code sandbox's nodes reach
 	// each other on about a run's box (internal/sandbox, boxhost.go): a box
