@@ -47,9 +47,6 @@ import (
 // priority lane. See [Prioritize].
 const PriorityField = "priority_lane"
 
-// LaneSuffix is appended to a laned topic to name its priority lane.
-const LaneSuffix = ".priority"
-
 // Prioritize marks ev to travel its topic's priority lane.
 //
 // The mark is on the envelope's bag, which every backend carries verbatim and
@@ -94,7 +91,7 @@ func HasLane(topic string) bool {
 // carries the topic, and it is not itself a topic anything subscribes to:
 // [topics.SeatFromInbox] does not read it as an inbox, so it carries no lane
 // of its own.
-func LaneOf(topic string) string { return topic + LaneSuffix }
+func LaneOf(topic string) string { return topic + topics.AgentInboxLaneSuffix }
 
 // SubjectFor is the subject a publish of ev to topic is written to: the
 // topic's lane for a marked event on a laned topic, and the topic itself for
