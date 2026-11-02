@@ -69,7 +69,7 @@ type CodeRemoteCredentials map[string]CodeRemoteCredential
 // CodeRemoteCredential is one declared variable: the hosts its value may be
 // sent to.
 type CodeRemoteCredential struct {
-	Hosts []string `yaml:"hosts" json:"hosts" js:"required" desc:"The hosts this variable's value may be sent to, each a host name or an IP address with an optional :port — github.com, gitlab.example.com:8443 — matched whole against a mirror's or an import's URL, its port included (443 where none is written): at least one, at most 16, each once."`
+	Hosts []string `yaml:"hosts" json:"hosts" js:"required" desc:"The hosts this variable's value may be sent to, each a host name or an IP address with an optional :port (github.com, gitlab.example.com:8443), matched whole against a mirror's or an import's URL, its port included (443 where none is written): at least one, at most 16, each once."`
 }
 
 // zero is a table that declares nothing.
