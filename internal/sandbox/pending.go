@@ -621,6 +621,15 @@ type BridgeCall struct {
 	Origin string `json:"origin,omitempty"`
 	Server string `json:"server,omitempty"`
 
+	// Source is whose tool the call named, in the origin grammar, whether
+	// or not it answered: set wherever the surface resolved the name, so a
+	// call it refused before any tool ran is still filed under the server
+	// it was for (mcpbridge.Call). Refusal is the class of a failed call
+	// the engine classified (mcp.Refusal), empty on a success and on a
+	// third-party server's own failure.
+	Source  string `json:"source,omitempty"`
+	Refusal string `json:"refusal,omitempty"`
+
 	// Extra is every key of the call this build does not know, kept verbatim
 	// and written back by every write of the record (wirekeys.go). Filled by
 	// the decode, never by a caller.

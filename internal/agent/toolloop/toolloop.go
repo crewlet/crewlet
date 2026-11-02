@@ -271,6 +271,20 @@ type ToolResult struct {
 	// server that never saw the request.
 	Origin string
 	Server string
+
+	// Source is where the tool the call NAMED comes from, in the same
+	// grammar, whether or not it answered: set by the surface on every
+	// call whose name it resolved to a registered tool (the ones it
+	// refused before any tool ran, because the tool was not offered here,
+	// a guard held it or an argument was outside its schema, as much as the
+	// ones a tool answered), and empty on a name nothing registered.
+	//
+	// BESIDE Origin RATHER THAN IN PLACE OF IT, because the two answer
+	// different questions: Origin is who served the call, and Source is
+	// whose tool was asked for, which is what a count of a server's
+	// refused calls is filed under. On a call a tool answered they are one
+	// value.
+	Source string
 }
 
 // Refusal is the call's class, read out of [ToolResult.Cause] by
@@ -323,6 +337,18 @@ type Execution struct {
 	// who answered the call, empty when nobody did.
 	Origin string
 	Server string
+
+	// Source is [ToolResult.Source]: whose tool the call named, answered or
+	// refused, and empty for a name nothing registered.
+	Source string
+
+	// Refusal is the class of a failed call the engine classified
+	// ([ToolResult.Refusal]): the surface's for a call it refused before
+	// any tool ran, the tool's own for one a first-party tool refused, and
+	// [mcp.RefusalUnavailable] for a call to an MCP server that was not
+	// running. Empty on a success and on a third-party server's own
+	// failure, which the engine does not classify.
+	Refusal mcp.Refusal
 }
 
 // Round is one model request of the loop: when it was made, how long the model
