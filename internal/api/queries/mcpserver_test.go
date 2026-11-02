@@ -337,6 +337,7 @@ func TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds(t *testing.T) {
 	want := queries.ToolRow{
 		Name: "gh_get_issue", Description: "Read one issue", Source: "mcp:github",
 		Annotations: queries.ToolHints{ReadOnly: "yes", Destructive: "no", Idempotent: "yes", OpenWorld: "no"},
+		Risk:        mcp.RiskReadOnly, RiskDeclared: true,
 		InputSchema: map[string]any{"type": "object"},
 	}
 	if !reflect.DeepEqual(rows[0], want) {

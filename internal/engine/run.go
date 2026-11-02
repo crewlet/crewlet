@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -887,6 +888,10 @@ type Engine struct {
 	// draining node took into "no evaluation has ever run".
 	alarms atomic.Pointer[statelog.Tracker]
 
+	// waitingWatch stops this node listening on the seats' waiting channel
+	// (queued.go); nil when it is not listening.
+	waitingWatch queue.Unsubscribe
+
 	// budgetReports is the live token-meter loop. Every node runs one —
 	// the counters are shared, so this is a frame rather than a duty.
 	budgetReports *budgetReporter
@@ -991,6 +996,14 @@ type Engine struct {
 	boxReads         *boxReads
 	stopBoxReadServe queue.Unsubscribe
 	stopNudgeListen  queue.Unsubscribe
+
+	// mcpChecks asks the fleet to test an MCP server and answers the tests
+	// of the servers this node runs. Nil on a node with no broker, which is
+	// the whole fleet and tests everything itself. See mcpcheck.go.
+	mcpChecks *mcpChecks
+	// mcpTesting is the tests running on this node, by [mcpTestKey]: one
+	// at a time per entry and seat.
+	mcpTesting sync.Map
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
@@ -1614,6 +1627,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			}
 			return nil, err
 		}
+		// AND A TEST OF AN MCP SERVER WHERE IT RUNS, which the node asked
+		// carries out (it starts a process or dials as the company), so it
+		// is signed too (mcpcheck.go).
+		if e.mcpChecks, err = newMCPChecks(recordKeyring(opts.Bootstrap)); err != nil {
+			if ownsBackends {
+				backends.Close(ctx)
+			}
+			return nil, err
+		}
 	}
 
 	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
@@ -2126,6 +2148,25 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return e, nil
 	}
 
+	// EVERY MAILBOX A WAKE TRAVELS THROUGH, BEFORE ANYTHING BELOW CAN SEND
+	// ONE: each seat's inbox and priority lane, and the inbound edge's own
+	// durable. Both streams drop what is published to a subject no
+	// consumer covers, and the scheduler, the change feeds and the
+	// notification router below all publish the moment they start, so
+	// made after them the first wakes of a boot (a feed replaying a
+	// person's message) were gone. The node's wake queue ([Engine.wakes])
+	// is the backstop for a seat whose create the broker refused here, not
+	// the path a boot takes. The pass is best effort per seat, as it is on
+	// every other caller; the inbound edge's is fatal, for the reason the
+	// router's own subscribe is ([Engine.ensureInboundMailbox]).
+	if e.node != nil {
+		e.node.EnsureMailboxes(ctx)
+	}
+	if e.Company() != nil {
+		if err := e.ensureInboundMailbox(ctx); err != nil {
+			return nil, fmt.Errorf("engine: %w", err)
+		}
+	}
 	// WHICH SEATS A PERSON PAUSED, read before the seat host claims
 	// anything — [Engine.Start] runs it — so the first mail this node is
 	// handed meets a node that already knows. Bounded: past its budget the
@@ -2145,6 +2186,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE RESTARTS PEOPLE ASKED FOR, applied as every node hears them.
 	e.startMCPInstances(ctx)
 	e.startMCPRestarts(ctx)
+	// AND THE TESTS PEOPLE ASK FOR, of the servers this node runs.
+	e.startMCPChecks(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2324,6 +2367,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Observe == nil {
 		d.Observe = e.observe
 	}
+	if d.Settled == nil {
+		d.Settled = e.settleWaiting
+	}
 	if d.Identify == nil {
 		// Read off the LIVE epoch at the moment of the panic, like the
 		// policies above: the dispatcher is built once and an apply can
@@ -2382,6 +2428,10 @@ func (e *Engine) Start(ctx context.Context) error {
 	// company's budget. Detached, like everything else here — see
 	// [Engine.startBudgetReports].
 	e.startBudgetReports(ctx)
+	// A PERSON'S MESSAGE QUEUED BEHIND A BUSY SEAT, shown as queued. See
+	// queued.go. After the host, like the meters, because what it answers
+	// is whether this node runs the seat.
+	e.startWaitingWatch(ctx)
 	// THE AUXILIARY-SPEND LEDGER'S TIMER, detached like the meters beside
 	// it and on their cadence (auxspend.FlushInterval). Calls made before
 	// it — an apply's first passes — wait in their buckets for its first
@@ -2743,6 +2793,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.
 	e.stopSandbox()
+	e.stopWaitingWatch(ctx)
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	// THE NATIVE HALF'S DUTIES BEFORE THE CORE'S, in the order the halves
@@ -2800,6 +2851,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// and its instances no longer answered.
 	e.stopMCPListings(ctx)
 	e.stopMCPInstances(ctx)
+	e.stopMCPChecks(ctx)
 	e.stopMCPRestarts()
 	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
 	// the person starts again on a node that is up.
@@ -3104,6 +3156,32 @@ func (e *Engine) seatFence(handle string) func() error {
 	}
 }
 
+// wakes is the queue every producer of a seat's wake publishes through: the
+// node's ([node.Node.Wakes]), which confirms the seat's mailbox, its inbox and
+// its priority lane, before a wake is sent to it, so a wake published while
+// boot or an apply has not made the mailbox yet is retried rather than
+// discarded by the stream. An engine built with no node (`crewlet validate`)
+// has no mailboxes to confirm and publishes on its queue as it is.
+func (e *Engine) wakes() queue.EventQueue {
+	if e.node == nil {
+		return e.backends.Queue
+	}
+	return e.node.Wakes()
+}
+
+// mailboxConfirmer is what a producer that spends something before it
+// publishes (the scheduler's claim, an agent-to-agent channel) asks first:
+// the node's [node.Node.ConfirmMailbox], so a refusal leaves nothing half
+// done. Nil on an engine with no node, which confirms nothing.
+func (e *Engine) mailboxConfirmer() interface {
+	ConfirmMailbox(context.Context, uuid.UUID) error
+} {
+	if e.node == nil {
+		return nil
+	}
+	return e.node
+}
+
 // park requeues a partition onto the seat's own inbox.
 //
 // Republished one at a time, and a failure part way through is reported: the
@@ -3117,8 +3195,11 @@ func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) e
 		return err
 	}
 	subject := topics.AgentInbox(id)
-	for _, ev := range evs {
-		if err := e.backends.Queue.Publish(ctx, subject, ev); err != nil {
+	// AS ONE UNIT: a partition holding a person's message goes back to the
+	// lane whole, its siblings with it, rather than the marked event alone
+	// to the lane and the rest to the inbox's tail ([queue.Together]).
+	for _, ev := range queue.Together(evs) {
+		if err := e.wakes().Publish(ctx, subject, ev); err != nil {
 			// THE SEAT BY NAME, not only the subject it is addressed by.
 			// A mailbox is named by the seat's id, so a failure reported
 			// as the subject alone hands whoever reads it a uuid and no
@@ -3208,6 +3289,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// saying "is thinking…" every refresh until the seat moved or the node
 	// stopped.
 	status := e.beginWorkingStatus(ctx, req.Handle, req.RunID, req.Ask())
+	// THE MESSAGES THIS TURN PICKED UP NO LONGER WAIT: their queued line has
+	// just become this turn's working one ([notify.StatusDriver.Begin]), and
+	// a wait left behind would bring "queued" back when the turn ends.
+	e.settleWaiting(ctx, req.Handle, wakeIDsOf(req.Events))
 	// ENDED ON EVERY PATH OUT OF THIS FRAME, the runner build failing below
 	// included: that path raised an indicator and never ran a turn, and
 	// nothing else would ever take it down. `working` stays false until a

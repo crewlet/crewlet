@@ -44,6 +44,10 @@ type childProcess struct {
 	// child's stdin, which is what ownExit is judged against.
 	stdinClosed atomic.Bool
 
+	// launched is when the process started, in Unix nanoseconds, zero until
+	// it has: what a test times its launch by ([Test]).
+	launched atomic.Int64
+
 	// ended is told the moment the session over this child can carry no
 	// more calls: the process exited, or a write to its stdin failed; and
 	// over reports whether that moment has come, by any sign the session
@@ -195,6 +199,7 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 	// copy, the pipe never reaches EOF, and the reader would never see a
 	// server that exited.
 	closeFiles(inR, outW)
+	t.child.launched.Store(time.Now().UnixNano())
 	go t.child.reap()
 
 	return (&sdk.IOTransport{

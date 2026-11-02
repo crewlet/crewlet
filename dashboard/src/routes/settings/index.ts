@@ -13,4 +13,5 @@ export { ApiTokens, People, PersonPeek, ServiceAccounts } from "./Access.tsx";
 export { Models } from "./models/Models.tsx";
 export { CredentialPeek, Secrets } from "./Secrets.tsx";
 export { SignInPolicy } from "./SignInPolicy.tsx";
-export { ToolPeek, Tools } from "./Tools.tsx";
+export { McpTools } from "./mcp-tools/McpTools.tsx";
+export { ToolPeek } from "./mcp-tools/builtin/ToolPeek.tsx";

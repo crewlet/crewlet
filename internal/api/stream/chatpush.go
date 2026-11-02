@@ -1439,7 +1439,7 @@ func (h *ChatHub) SetStatus(_ context.Context, post notify.StatusPost) bool {
 	}
 	h.opts.Presence.Touch(room, presence.Agent{Seat: post.Handle, Turn: post.Turn,
 		Activity: presence.Editing, Focus: presence.Focus{Thread: post.Thread},
-		Status: post.Text})
+		Status: post.Text, Queued: post.Queued})
 	return true
 }
 

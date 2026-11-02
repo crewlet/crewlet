@@ -650,8 +650,8 @@ domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_ARTIFACTS_LOG`,
 `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
 `CREWLET_EXECUTOR_LOG`), a stream per extra subject namespace a company
-publishes under, one durable consumer per seat mailbox (an ordinary API
-call, measured at 1.7 ms), the twenty-two `crewlet_*` KV buckets:
+publishes under, two durable consumers per seat mailbox (the inbox and its
+priority lane, each an ordinary API call, measured at 1.7 ms), the twenty-two `crewlet_*` KV buckets:
 three in the lease store, holding the seat and presence leases, the duty
 leases and the fencing epochs, and nineteen in the fleet store holding the
 shared records — the object store's backend record and its collector's report

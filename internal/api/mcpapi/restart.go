@@ -92,9 +92,21 @@ func (s *Service) serveRestart(w http.ResponseWriter, r *http.Request, rec *type
 	rec.Seat = req.Seat
 	name := r.PathValue("name")
 	done, err := s.restarter.RestartServer(r.Context(), name, req.Seat, auth.AttributionOf(r.Context()))
+	if err != nil {
+		s.refuseServerGesture(w, r, name, req.Seat, err, "mcp_server_restart_failed",
+			"this node could not record the restart for the fleet; ask again")
+		return
+	}
+	httpjson.Write(w, http.StatusAccepted, RestartAnswer(done))
+}
+
+// refuseServerGesture answers a gesture on a server the engine refused, with
+// what the person can change, and one it could not make as unavailable,
+// logging event with why.
+func (s *Service) refuseServerGesture(w http.ResponseWriter, r *http.Request, name, seat string, err error,
+	event, unavailable string) {
+
 	switch {
-	case err == nil:
-		httpjson.Write(w, http.StatusAccepted, RestartAnswer(done))
 	case errors.Is(err, ErrNoSuchServer):
 		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNotFound,
 			httpjson.Detail{"detail": "the active configuration declares no MCP server " + quoted(name)})
@@ -105,18 +117,18 @@ func (s *Service) serveRestart(w http.ResponseWriter, r *http.Request, rec *type
 	case errors.Is(err, ErrSeatOnShared):
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			httpjson.Detail{"detail": "MCP server " + quoted(name) + " is shared: it runs one instance " +
-				"for the company, not one per seat, so restart it without naming a seat"})
+				"for the company, not one per seat, so name no seat"})
 	case errors.Is(err, ErrNoSuchSeat):
 		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNoSuchSeat,
-			httpjson.Detail{"detail": "the organization has no agent seat " + quoted(req.Seat)})
+			httpjson.Detail{"detail": "the organization has no agent seat " + quoted(seat)})
 	case errors.Is(err, ErrSeatNotGranted):
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict,
-			httpjson.Detail{"detail": "seat " + quoted(req.Seat) + " is not granted MCP server " +
+			httpjson.Detail{"detail": "seat " + quoted(seat) + " is not granted MCP server " +
 				quoted(name) + ", so it runs no instance of it"})
 	default:
-		log.WarnContext(r.Context(), "mcp_server_restart_failed", "server", name, "error", err.Error())
+		log.WarnContext(r.Context(), event, "server", name, "error", err.Error())
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, detailRetrySeconds,
-			httpjson.Detail{"detail": "this node could not record the restart for the fleet; ask again"})
+			httpjson.Detail{"detail": unavailable})
 	}
 }
 

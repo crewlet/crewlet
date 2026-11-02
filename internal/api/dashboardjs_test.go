@@ -1498,7 +1498,27 @@ const (
 	// under 0.1 KiB, with the debounce moving out of its own chunk into the
 	// shared links chunk. The receipt's own styles were already in the one
 	// sheet with 0.89.0. 5291 KiB.
-	treeBudget = 5<<20 + 171<<10
+	// Settings › MCP & tools rebuilt with page tabs (the Servers tab's alarms,
+	// figures and table, a server's page with four tabs, the restart, disable
+	// and remove flows, the built-in catalogue and its drawer, and the page's
+	// words for every engine value), replacing the shipped Tools screen, took
+	// it from 5290.7 KiB to 5328.2 KiB (+37.5 KiB): the settings chunk
+	// +31.0 KiB, its sheet +2.9 KiB (mcp.css), the Access chunk +3.0 KiB of
+	// shared settings code Rollup moved into it, and +1.0 KiB in the kit's
+	// chunks, less 0.4 KiB of the old table's rules out of the one sheet. The
+	// page is all in the settings chunk, so the initial load only lost that
+	// 0.4 KiB. 5329 KiB.
+	// The Sessions view under an agent's Memory tab (the seat's executor
+	// sessions, the latest begun first, and one session's transcript a page
+	// at a time: its entries, the states a session that cannot be read is
+	// answered in, and the account of how its turn ended) took it from
+	// 5328.4 KiB to 5338.0 KiB (+9.6 KiB), all of it the agents chunk the
+	// view loads in. The initial load is unchanged: keepInView, which
+	// Conversations and Sessions share, is a module of the Memory tab's own
+	// rather than of lib/scroller.ts, which the shell imports, and a
+	// transcript's prose takes the shared .prose rule rather than a rule of
+	// its own in the one sheet. 5339 KiB.
+	treeBudget = 5<<20 + 219<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

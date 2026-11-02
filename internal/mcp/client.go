@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -90,6 +91,17 @@ type client struct {
 // Nothing raises while it hangs, which is what makes every error branch around
 // it dead code without a deadline.
 func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) {
+	c, err := connectWith(ctx, spec, log, dialing{})
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// connectWith is [connect] over d. A start that fails returns the client
+// beside its error, the stdio child's last words and its exit still to be
+// read ([Test]); nil only for a spec that does not validate.
+func connectWith(ctx context.Context, spec Spec, log *slog.Logger, d dialing) (*client, error) {
 	if err := spec.validate(); err != nil {
 		return nil, err
 	}
@@ -106,13 +118,13 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	)
 	switch spec.kind() {
 	case TransportHTTP:
-		transport, ident = newHTTPTransport(spec, log)
+		transport, ident = newHTTPTransport(spec, log, d)
 		c.ident = ident
-		log.InfoContext(ctx, "server_connecting", "server", spec.Name, "url", spec.URL)
+		log.InfoContext(ctx, "server_connecting", "server", spec.Name, "url", redact.URL(spec.URL))
 	default:
 		transport, c.child, err = newStdioTransport(spec, log)
 		if err != nil {
-			return nil, err
+			return c, err
 		}
 		c.child.ended, c.child.over = c.markEnded, c.gone
 		log.InfoContext(ctx, "server_starting", "server", spec.Name,
@@ -138,11 +150,11 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 		c.reportStartFailure(err)
 		class := c.startClass(err)
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			return nil, classify(class, fmt.Errorf(
+			return c, classify(class, fmt.Errorf(
 				"mcp: server %q did not connect within %s: %w. Raise startup_timeout_seconds on the server if it legitimately takes longer to start",
 				spec.Name, spec.startupTimeout(), err))
 		}
-		return nil, classify(class, fmt.Errorf("mcp: server %q failed to connect: %w", spec.Name, err))
+		return c, classify(class, fmt.Errorf("mcp: server %q failed to connect: %w", spec.Name, err))
 	}
 
 	// The parent's copy of the write end goes NOW, not at stop. While this

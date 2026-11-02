@@ -391,22 +391,37 @@ func checkSeat(handle, conversationKey string) error {
 	return checkText("the conversation key", conversationKey, ConversationKeyMaxBytes)
 }
 
-// Session is one turn's row, at the level fresh asks for: what a relaunch of
-// the turn reads to continue its own session. A turn with no row is
-// [ErrNotFound].
+// SessionRead is one turn's row as [Reader.Session] answers it, and where it
+// was read: what a read surface states beside the row, as every answer states
+// the point its rows were derived through.
+type SessionRead struct {
+	Session Session
+
+	// Position is the checkpoint the row was read at, and Complete the
+	// read's own word on whether a record this node could not decode may be
+	// missing from it — which a point read the ladder served never is: such
+	// a record covering the turn refuses the read instead. Carried as the
+	// read reported it rather than stated here, so the two cannot disagree.
+	Position statelog.Position
+	Complete bool
+}
+
+// Session is one turn's row, at the level fresh asks for, and where it was
+// read: what a relaunch of the turn reads to continue its own session, and a
+// person's view of one session. A turn with no row is [ErrNotFound].
 //
 // ITS SCOPE IS READ OFF THE ROW, inside the answer's own transaction, because
 // only the row says which conversation the turn is in; a turn this node holds
 // no row of reads over its whole seat, since a capture this node could not
 // decode is exactly a row it does not hold.
 func (r *Reader) Session(ctx context.Context, handle, turn string,
-	fresh statelog.Freshness) (Session, error) {
+	fresh statelog.Freshness) (SessionRead, error) {
 
 	if err := checkSeat(handle, ""); err != nil {
-		return Session{}, err
+		return SessionRead{}, err
 	}
 	if !canonicalTurn(turn) {
-		return Session{}, invalid("the turn id %q is not a run id in its canonical spelling", turn)
+		return SessionRead{}, invalid("the turn id %q is not a run id in its canonical spelling", turn)
 	}
 	resolve := func(ctx context.Context, tx *sql.Tx) (statelog.ScopeSet, error) {
 		var key string
@@ -420,17 +435,17 @@ func (r *Reader) Session(ctx context.Context, handle, turn string,
 		return ConversationScope(handle, key, turn), nil
 	}
 	var out *Session
-	_, err := r.log.Read(ctx, fresh.Resolved(resolve, false), func(tx *sql.Tx) (readErr error) {
+	answer, err := r.log.Read(ctx, fresh.Resolved(resolve, false), func(tx *sql.Tx) (readErr error) {
 		out, readErr = oneSession(ctx, tx, sessionStatement, handle, turn)
 		return readErr
 	})
 	switch {
 	case err != nil:
-		return Session{}, err
+		return SessionRead{}, err
 	case out == nil:
-		return Session{}, fmt.Errorf("%w: %s's turn %s", ErrNotFound, handle, turn)
+		return SessionRead{}, fmt.Errorf("%w: %s's turn %s", ErrNotFound, handle, turn)
 	}
-	return *out, nil
+	return SessionRead{Session: *out, Position: answer.Position, Complete: answer.Complete}, nil
 }
 
 // Page is one page of a seat's sessions.

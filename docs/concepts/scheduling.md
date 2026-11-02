@@ -297,6 +297,20 @@ its place.
 A person's pause is different: a paused seat's fires are not sent at all
 (below), so nothing waits for the resume.
 
+### Fires that wait for a seat's mailbox
+
+A fire is claimed only once its runner seat's mailbox (its inbox and its
+priority lane) is confirmed, because the claim is spent the moment it is
+written and a seat's inbox drops what is published while no mailbox covers it.
+A fire whose seat's mailbox cannot be confirmed (the broker refused to make it)
+is not claimed, and the tick keeps its window open, the same way a shedding
+tick does: the next tick evaluates the window again, the fires already claimed
+are left alone, and the waiting fire is claimed and sent once the mailbox is
+confirmed. Fires of one schedule that waited this way reach the seat together
+and run once, as above. The window is held for at most `catchup_max_seconds`
+(two hours by default); a fire still waiting past it is recorded `skipped_catchup` under
+its runner, so it is never lost without a row saying so.
+
 ### A paused seat's fires are skipped
 
 A fire that comes due while a person has its runner seat

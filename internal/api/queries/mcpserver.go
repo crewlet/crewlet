@@ -106,6 +106,11 @@ type MCPServerAnswer struct {
 	// records that made them on every data node (turn detail), with which
 	// nodes answered.
 	Calls MCPServerCalls `json:"calls"`
+
+	// LastCheck is the server's latest test, whoever asked for it through
+	// whichever node ([coord.MCPCheck]): null where it was never tested, or
+	// where the apply that removed it removed its test with it.
+	LastCheck *MCPCheckView `json:"last_check"`
 }
 
 // MCPUsageDays is how many company days a server's usage and recent calls
@@ -364,6 +369,16 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	out.ToolCount = max(out.ToolCount, len(out.Tools))
 	if out.Usage, out.Calls, err = s.mcpActivity(ctx, name); err != nil {
 		return MCPServerAnswer{}, err
+	}
+	if s.MCPChecks != nil {
+		check, found, readErr := s.MCPChecks.LatestMCPCheck(ctx, name)
+		if readErr != nil {
+			return MCPServerAnswer{}, readErr
+		}
+		if found {
+			view := MCPCheckOf(check, organization)
+			out.LastCheck = &view
+		}
 	}
 	return out, nil
 }

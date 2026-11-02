@@ -18,9 +18,6 @@ import (
 // shapedKey is a credential only its shape gives away.
 const shapedKey = "ghp_" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7d"
 
-// keyLine is a full line of a key's body, at an encoder's width.
-const keyLine = "MIIEowIBAAKCAQEAu7Jx9f3Lm2Pq8Rt5Vw1Yz4Bc6De9Fg0Hi3Jk5Lm7No9Pq2Rs4"
-
 // THE DIGEST IS POSIX CKSUM'S, byte for byte as the box's `cksum` prints it for
 // its standard input — the digest a box's restore compares a carried archive
 // by, so one the engine computes is one the box recognises. Over nothing, a

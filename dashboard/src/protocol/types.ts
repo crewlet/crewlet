@@ -34,7 +34,7 @@ import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
-import type { McpServersStatusAnswer } from "../contract/mcp.ts";
+import type { McpMemberServersStatusAnswer, McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { ToolRow } from "../contract/tools.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
@@ -51,6 +51,7 @@ import type {
 } from "../contract/integrations.ts";
 import type { AgentEpisode, AgentMemory, MemoryOverview } from "../contract/memory.ts";
 import type { BackupsAnswer } from "../contract/backups.ts";
+import type { ExecutorSessionAnswer, ExecutorSessionsAnswer } from "../contract/sessions.ts";
 import type {
   LinkedFromStatus,
   PageBacklinks,
@@ -3764,10 +3765,11 @@ export interface PageDetail {
 
 /**
  * A point on one of the engine's state logs, as an answer reports it —
- * DECLARED ONCE, in `session.ts`, beside the floor that parses the same point
- * off a write's answer: a position this file declared again would be a second
- * shape for one value, and the floor and a chat cursor would be free to come
- * to mean different things by it.
+ * DECLARED ONCE, in `contract/positions.ts`, which the floor that parses the
+ * same point off a write's answer (`session.ts`) and the answers declared in
+ * the contract import too: a position this file declared again would be a
+ * second shape for one value, and the floor and a chat cursor would be free to
+ * come to mean different things by it.
  *
  * Chatlet needs the shape by name for a reason the other answers do not: a READ
  * CURSOR is the PACKED form of one (`(generation << 40) | seq`), so the client
@@ -4321,6 +4323,11 @@ export interface ChatWorking {
    *  engine's hub declares it renders words, so every frame it sends carries
    *  one. */
   status?: string;
+  /** The seat has not started on the message: it waits behind what the seat
+   *  is already doing, and `status` says what ("is queued behind its current
+   *  task"). Drawn as the kit's queued indicator, still, until the turn that
+   *  picks it up takes the line over in place. */
+  queued?: boolean;
 }
 
 /** Who is in one room right now, as the room's screen draws it — derived from
@@ -7706,6 +7713,10 @@ export interface RoomMember {
   turn?: string;
   /** For an agent at work in a chat room, the line shown beside its name; empty for the bare indicator. */
   status?: string;
+  /** For an agent, that `status` is about a person's message waiting behind
+   *  what the agent is already doing rather than work under way: the room
+   *  draws the indicator still. Never set for a person. */
+  queued?: boolean;
 }
 
 /** Who is in one room (`presence.Roster`). */
@@ -7793,7 +7804,8 @@ export interface QueryMap {
   seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
-  mcp_servers_status: McpServersStatusAnswer;
+  /** The administrator's reading, or a member's: narrow on `reading`. */
+  mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;
   backups: BackupsAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;
@@ -7802,6 +7814,11 @@ export interface QueryMap {
   link_hosts: LinkHostsAnswer;
   executors: { runs: ExecutorRow[] };
   executor_tail: ExecutorTailAnswer;
+  /** A seat's executor sessions, a page at a time — its trail, as the run's
+   *  live output is. */
+  executor_sessions: ExecutorSessionsAnswer;
+  /** One turn's session and a page of its transcript. */
+  executor_session: ExecutorSessionAnswer;
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
   limits: LimitsAnswer;

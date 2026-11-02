@@ -194,9 +194,9 @@ name or the catalogue name with the entry's `tool_prefix` applied (for a
 Slack server with `tool_prefix: slack_`, `conversations_add_message`
 **or** `slack_conversations_add_message`; the raw name wins when both are
 present), so keying by the name you see in the catalogue never silently
-no-ops. A key that is neither — a tool the server does not list, or one
-it lists under another name — overrides nothing. The server's row on
-**Settings › MCP Tools** names every key no started instance lists
+no-ops. A key that is neither (a tool the server does not list, or one
+it lists under another name) overrides nothing. The server's Tools tab on
+**Settings › MCP & tools** names every key no started instance lists
 (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)),
 and each instance's `tools_discovered` log line names the keys its own
 listing does not answer (`annotation_keys_unlisted`). Only the first is a

@@ -64,7 +64,7 @@ func surface(t *testing.T, registry string, search mcpapi.Searcher) *mcpapi.Serv
 		t.Fatal(err)
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: search, Detail: noDetail, Restarter: &fakeRestarter{}, Audit: &recordedAudit{}})
+		Registry: search, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Audit: &recordedAudit{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 		return queries.MCPServerAnswer{}, queries.ErrMCPDetailUnavailable
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: &fakeRegistry{}, Detail: detail, Restarter: &fakeRestarter{}, Audit: &recordedAudit{}})
+		Registry: &fakeRegistry{}, Detail: detail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Audit: &recordedAudit{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	}
 	holdKeys(t, "the detail", body, "reading", "server", "nodes", "listed", "tools", "tool_count",
 		"server_info", "instructions", "dependants", "instances", "instance_nodes", "last_success",
-		"last_failure", "resolved", "usage", "calls")
+		"last_failure", "resolved", "usage", "calls", "last_check")
 	instance := body["instances"].([]any)[0].(map[string]any)
 	holdKeys(t, "an instance", instance, "seat", "node", "state", "since", "restarts", "tools", "failure",
 		"wait", "last_failure", "last_answer")
@@ -390,7 +390,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	}
 	for _, leak := range []string{"launch-sentinel", "npx", "exit status 1", "GITHUB_TOKEN",
 		"the image must provide", `"said"`, `"keys"`, `"box_seats"`, `"warnings"`, `"dependants"`,
-		`"instructions"`, `"reason"`} {
+		`"instructions"`, `"reason"`, `"seats"`, `"calls":{`, `"turn_id"`} {
 		if strings.Contains(w.Body.String(), leak) {
 			t.Errorf("a member's reading of the detail carries %s: %s", leak, w.Body.String())
 		}
@@ -400,7 +400,9 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 		t.Fatal(err)
 	}
 	holdKeys(t, "a member's detail", member, "reading", "server", "nodes", "listed", "tools", "tool_count",
-		"server_info", "instances", "instance_nodes", "last_success", "last_failure", "resolved")
+		"server_info", "instances", "instance_nodes", "last_success", "last_failure", "resolved", "usage")
+	holdKeys(t, "a member's usage", member["usage"].(map[string]any), "since", "until", "days", "tools",
+		"elided")
 	if member["reading"] != "member" {
 		t.Errorf("a member's detail says it is %v", member["reading"])
 	}

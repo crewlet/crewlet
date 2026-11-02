@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
@@ -156,6 +157,22 @@ func (e *Engine) ExecutorWriter() *executordomain.Writer {
 		return c.executorWriter
 	}
 	return nil
+}
+
+// ExecutorSessionReads is the executor log's reads as a person's surface
+// reaches them — a seat's sessions and one turn's row, which the API's
+// sessions questions read — through the estate router on every node, and
+// false on an engine built with no router.
+//
+// THE ROUTER'S ON EVERY NODE, for [OperatorWork]'s reason: a data node whose
+// copy is out of service answers from a peer's, and a node without `data`
+// reaches a data node's. The reads alone: the log's writes are the engine's
+// record of what its own runs did, and no surface holds them.
+func ExecutorSessionReads(e *Engine) (estate.ExecutorReads, bool) {
+	if e.router == nil {
+		return estate.ExecutorReads{}, false
+	}
+	return e.router.ExecutorReads(), true
 }
 
 // ExecutorSessions is the store a session's sealed bytes stream into and out

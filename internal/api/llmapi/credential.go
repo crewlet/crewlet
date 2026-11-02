@@ -153,7 +153,7 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 		}
 		next, err := s.config.CheckEntity(ctx, configapi.EntityLLMProviders, key, req.Entity,
 			active == nil, by)
-		if !refuseDraft(w, err) {
+		if !configapi.RefuseDraft(w, err) {
 			return
 		}
 		company = next
@@ -396,34 +396,6 @@ func checkValues(w http.ResponseWriter, values map[string]string, names []string
 		}
 	}
 	return true
-}
-
-// refuseDraft answers a draft entry the document refused, and reports whether
-// it was admitted.
-func refuseDraft(w http.ResponseWriter, err error) bool {
-	var managed *configapi.ManagedError
-	var invalid *configapi.ValidationError
-	var entity *configapi.EntityError
-	switch {
-	case err == nil:
-		return true
-	case errors.As(err, &managed):
-		configapi.RefuseManaged(w, managed)
-	case errors.As(err, &invalid):
-		fields := configapi.RefusalFields(err)
-		fields["detail"] = invalid.Err.Error()
-		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
-	case errors.As(err, &entity):
-		fields := configapi.RefusalFields(&configapi.DocumentError{Err: entity.Err})
-		fields["detail"] = entity.Err.Error()
-		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
-	case errors.Is(err, configapi.ErrNoActiveRevision):
-		httpjson.Fail(w, http.StatusConflict, httpjson.CodeNoActiveRevision)
-	default:
-		log.Error("llm_draft_check_failed", "error", err)
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
-	}
-	return false
 }
 
 // nameProblems is every value the draft entry does not read, and every value

@@ -361,6 +361,8 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/agents/{id}` | Single agent — its `handle`, `agent_id` and `role` (its name), the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`. A role name is NOT accepted: two seats may share one, and a name-addressed answer read one seat's live call and transcript as the other's. A handle no agent seat answers to is `404` |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the seat's handle, which the rest is keyed by, resolves to the derived agent id the diary is keyed by |
 | `GET` | `/agents/{id}/memory/episodes/{episode}` | One episode **whole** — its ask and its account complete, which the memory listing carries the openings of (see [below](#get-agentsidmemoryepisodesepisode)) |
+| `GET` | `/agents/{id}/sessions` | The seat's **executor sessions**, the latest begun first, a page at a time: each turn whose executor captured its harness's session, how the turn ended, what it was asked, and whether its session is still kept. The seat's trail, `audit.seat.read` (see [below](#get-agentsidsessions)) |
+| `GET` | `/agents/{id}/sessions/{turn_id}` | One turn's session and a page of its **transcript**, read from its sealed object as its harness recorded it, redacted; an object that is gone or does not open is an answer saying so (see [below](#get-agentsidsessionsturn_id)) |
 | `GET` | `/org` | The company's charter and its seat and unit tree, in an explicit public shape that carries no contact identity, email, credential or deployment setting (see [below](#get-org)). Human seats appear with `"kind": "human"` |
 | `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
@@ -384,6 +386,9 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node (serving, failed, tools served and the first failure), read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Everybody's**, in two readings: a member's names no launch line, failure sentence or wait (see [below](#get-mcp-servers)) |
 | `GET` | `/mcp-servers/{name}` | One MCP server whole: its row as `/mcp-servers` answers it, every tool the fleet's live nodes list for it (per-agent servers included) with its hints, risk and arguments, what the server said of itself in its handshake, and what removing it would take with it. **Takes `tools.read`**, everybody's, in two readings (see [below](#get-mcp-serversname)) |
 | `POST` | `/mcp-servers/{name}/retry` | Restart one MCP server now: every instance on every node, or with `seat` one agent's instance on the node holding the seat. **Takes `tools.retry`**, an administrator's at any recency (see [below](#post-mcp-serversnameretry)) |
+| `POST` | `/mcp-servers/{name}/check` | Test one MCP server where it runs, calling no tool: on every node, or with `seat` one agent's instance on the node holding the seat; recorded as the server's latest test. **Takes `tools.check`**, an administrator's at any recency (see [below](#post-mcp-serversnamecheck)) |
+| `POST` | `/mcp-checks` | Test a draft MCP server entry before it is saved, as a write would leave it. **Takes `tools.check`**, and `config.write` and `secrets.write` on top, decided before the body is read (see [below](#post-mcp-checks)) |
+| `POST` | `/mcp-probe` | Check an address before an MCP server is added at it: what answers there, and the sign-in it asks for, read from its OAuth metadata. **Takes `tools.check`**, and `config.write` on top (see [below](#post-mcp-probe)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -863,7 +868,7 @@ told they lead nobody goes looking for an authority they already hold.
 | `doclet` | The reads under `/doclet/pages/*` and `/containers`, the page questions, and writing Doclet's pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
 | `chatlet` | The reads under `/chatlet/*`, every `chat_*` question, the socket's eight `chat_*` pushes, and the chat tools of `/operator/mcp` and `/operator/act` — each made **as a seat**, so a principal acting as itself is refused them `unseated` whatever else it holds, and which room it reaches is the chat domain's own rule rather than a permission (see [Chatlet](#chatlet)). A room's horizon, an erase and a prune are `admin`'s instead, with a recent proof; see [A chat erase, prune or horizon](#a-chat-erase-prune-or-horizon) |
 | `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model (a harness the host runs) and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned harnesses), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, the administrator's reading of `/mcp-servers`, `/mcp-servers/{name}` and `/mcp-catalogue` and a restart (`POST /mcp-servers/{name}/retry`), `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, the artifacts' quota counters (`GET /artifacts/usage`), the three purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`, `/artifacts/{id}/purge`) and chat's three destructions (`/chatlet/channels/{channel_id}/erase`, `/prune` and `/retention`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
-| `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, and an executor's tail (`/executors/{turn_id}/tail`) — decided per seat: **its lead**, or `admin` |
+| `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, an executor's tail (`/executors/{turn_id}/tail`), and the seat's executor sessions with each one's transcript (`/agents/{id}/sessions`, `/agents/{id}/sessions/{turn_id}`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
 route is — one registry, both transports — so there is no way round a
@@ -5527,6 +5532,8 @@ REST route calls, so the two surfaces cannot diverge:
 | `agent_episode` | `{id, episode}` | `GET /agents/{id}/memory/episodes/{episode}`. A seat's trail, so it takes `audit.seat.read`, as `agent_memory` does. ONE EPISODE WHOLE — what the turn was asked and what it did, complete — answered by the seat's holder as `agent_memory` is (`held_by`); `episode: null` for one the seat no longer holds. See [the route](#get-agentsidmemoryepisodesepisode) |
 | `memory_overview` | `{}` | **Decided per seat by `audit.seat.read`**, as `agent_memory` is, and answered for exactly the seats the caller may read — every one for `admin`, a lead's own agents for a lead, none for anybody else; a seat this node cannot decide makes the whole answer `unavailable` rather than a shorter list. Each seat's memory totals — `diary_total`, `episodes_total`, `skills_total`, `last_reflection_at` and the `latest_reflection` itself — each counted by the node holding the seat, gathered in ONE scatter rather than a read per seat, with `held_by` per row (`none` for a seat no node holds, nothing counted), an `unavailable` reason on a row whose holder did not answer, and the fleet `coverage`. The seats the caller may read, handle order, no cap. See [the section](#memory_overview) |
 | `conversations` | `{handle, conversation, limit}` | `GET /agents/{id}/conversations`. The seat's own thread ledger — the engine's only account of what a seat said on a surface it does not own, and what stops it replying twice in one thread. TWO SHAPES IN ONE ANSWER, because a screen asks two questions with one navigation: `conversations` is every thread this seat holds entries in, and naming one in `conversation` adds that thread's turns as `entries`. Each turn's `reply` and `unsent` carry the same artifact and WHICH ONE HOLDS IT is the whole record of whether anybody received it — a turn can end with real work done and no way to say so. The ledger is keyed on the seat's handle. An absent `handle` is the caller's own SEAT — a seat's trail is the seat's, so a caller bound to none names one — and a named one is a seat's TRAIL rather than a person's queue, so it takes `audit.seat.read` — the seat's lead, or `admin`. The listing is a page (default 50, at most 200) with `conversations_total` beside it, ANSWERED BY THE SEAT'S HOLDER, as `agent_memory` is and for its reason: the ledger travels with a seat's memory and only the holder's copy is current (`held_by`) — see [Whose record a personal question answers for](#whose-record-a-personal-question-answers-for) |
+| `executor_sessions` | `{handle, cursor, limit, read_level, …}` | `GET /agents/{id}/sessions`. The seat's EXECUTOR SESSIONS, the latest begun first: a row per turn whose executor captured its harness's session, naming the sealed object in the fleet's object store that holds the session its harness kept when its run ended — the whole record of what the run read, called and wrote — and how the turn ended. A seat's trail, so it takes `audit.seat.read` — the seat, its lead or `admin`, the verb an executor's tail is decided by — and an absent `handle` is the caller's own seat. Read through the estate router, so any node answers, at the caller's freshness (`read_level`; this surface's own when absent). A page of `limit` rows (25 when absent, 100 at most) with `next_cursor`, the cursor of the page after it, absent on the last; `read_level` and `position` say how it was read, and `complete: false` that the answering copy holds a record of the log it could not read. See [the route](#get-agentsidsessions) |
+| `executor_session` | `{handle, turn_id, cursor, read_level, …}` | `GET /agents/{id}/sessions/{turn_id}`. One turn's session and a page of its TRANSCRIPT, its sealed object opened and read as its harness recorded it — entries of `brief`, `note`, `model`, `tool_call`, `tool_result`, `summary` and `unread` — every entry's text redacted at this read. Decided as `executor_sessions` is, and it shows more than the run's live output did: every call's input and each result's text, to an entry's bound. A page holds at most 200 entries and 1 MiB of text, each entry at most 16 KiB, and `cut` says why it ends where it does, `next_cursor` the cursor of the page after it, absent on the last; `read_level`, `position` and `complete` say how the session's row was read. A node decodes at most two transcripts at once, and a question past them waits for a slot, nothing opened, for as long as its caller does. An object the store no longer holds, one that does not open, one that is no archive and one this build does not read are each an answer (`state`) with the engine's sentence (`why`), never a failure. See [the route](#get-agentsidsessionsturn_id) |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload, and `node`, the node that published it (every stored event carries it, not only this answer's) |
 | `events` | `{limit, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only, since, until, before_id, before_time}` | `GET /events`. `feed_only=true` selects the rows the activity feed carries — every stored type but the ones it keeps out (`auxiliary_spend`), a trace's `agent` siblings included — and is what every read merged with the live feed asks; `true`, `false` or absent, any other word a **400**. `failed` is THREE-VALUED the same way — `true`, `false` or absent, any other word a **400** — and selects by the rule every row's own `failed` is stamped by: a stored `failed` tag, or a type that is itself a failure (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `executor_failed`). It is the event log's "Failures only", applied by the engine so the axis and every page are one set. `suspended` is THREE-VALUED — `true`, `false` or absent for every row, any other word a **400** — and selects by whether a completion record PARKED its turn on its executor in its box: a turn that parks and resumes writes two `agent_turn_completed` records, the first marked `suspended`, so `type=agent_turn_completed&suspended=false` is the turns that ENDED, one record each, and is what a turns axis counts over. `trace_id` selects one trace as a FILTER — paged, windowed and combinable with every other filter, where [`GET /events/trace/{trace_id}`](#routes) is the whole trace oldest first. `channel_id` selects one agent-to-agent conversation's events, by the channel id every A2A event carries (an index seek, migration `0034`). `seat` is a seat's **handle** and selects the events that seat published, resolved on the server to the id every node derives for it — so a seat since removed from the chart still names its history, and a role name, which a rename changes, is never the key; anything that is not a handle, or a person's seat's handle, is a **400** — an empty page would read as a seat that never did anything — and before a company configuration is applied it is **503** `unavailable`, since the id is derived from the company's name. `agent` is the broader question — the **related** filter: every event involving one agent seat, named by any handle it answers to and matched on its agent id, plus every event sharing a trace with one (see [Paging the event history](#paging-the-event-history)). `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered; `work_item` selects every event on one work item — each turn's start, its phases and completions, an executor it launched — named by the item's identity across trackers, `<backend>:<id>` (`native:<task id>`, `jira:<issue id>`), never by its key, which a move rewrites. A value that is not that shape (a key such as `ENG-4`, or either half missing) is a **400** rather than an empty page, because an empty answer reads as "nothing happened on this item". The filter reads the `work_item` COLUMN (migration `0033`), filled from the same payload field as the row's `work_item` tag. Every row answers with its own `work_key` read off the `work_key` COLUMN (migration `0029`) rather than out of its `tags` — the column is what the `work_key` filter reads, so a row and the filter that matched it never disagree about its unit of work |
 | `event_series` | `{bucket, since, until, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only}` | `GET /events/series`. Every bar carries `failed` beside `count` — how many of its rows reported a failure — and the answer a `failed` total beside `total` (see [the event log's time axis](#the-event-logs-time-axis)). THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
@@ -5541,7 +5548,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Servers tab of Settings › MCP & tools, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
@@ -5675,12 +5682,13 @@ searched" rather than "nothing matched".
 
 ### Whose record a personal question answers for
 
-Four questions answer about **one person or seat** rather than about the
-company: `work_my_work`, `work_inbox`, `work_person` and `conversations`. Every
-one of them takes a `handle`, and the rule for whose is the same, in one place:
+Six questions answer about **one person or seat** rather than about the
+company: `work_my_work`, `work_inbox`, `work_person`, `conversations`,
+`executor_sessions` and `executor_session`. Every one of them takes a `handle`,
+and the rule for whose is the same, in one place:
 
-1. **No handle** answers for the caller's **own record** — and for
-   `conversations`, their own seat.
+1. **No handle** answers for the caller's **own record** — and for a seat's
+   trail (`conversations` and the two sessions questions), their own seat.
 2. **Your own handle** is the same thing said explicitly — and on the three
    person questions either of your names is: a person's login names the same
    record their seat does.
@@ -5715,9 +5723,10 @@ one of them takes a `handle`, and the rule for whose is the same, in one place:
    holding `admin`, each with `worklet`. A node that cannot read the chart to
    tell answers `503`, never a refusal — a lead told they lead nobody goes
    looking for an authority they already hold. `conversations` is a seat's
-   TRAIL — what it said on a surface the engine does not own — and takes
-   `audit.seat.read`, the rule `/agents/{id}/memory` takes: the seat's lead, or
-   `admin`, with no app.
+   TRAIL — what it said on a surface the engine does not own — and so are
+   `executor_sessions` and `executor_session` — what its harness wrote on each
+   turn — and all three take `audit.seat.read`, the rule `/agents/{id}/memory`
+   and an executor's tail take: the seat's lead, or `admin`, with no app.
 
 A refusal on authority is `403 unauthorized` naming the rule that decided in
 `reason` and, in `grants`, the permissions any one of which would have
@@ -5737,9 +5746,9 @@ person's row names the seat they hold, and a Tier A token or a service account
 acts as a seat when the directory binds its login to one — and what binding
 changes is where the record is kept, not whether there is one.
 
-`conversations` is the exception, because a seat's trail belongs to the seat:
-a caller bound to no seat who names none is refused `bad_params`, not
-`unauthorized`. Nobody was denied anything: there is no seat to answer about,
+A seat's trail is the exception, because it belongs to the seat: a caller
+bound to no seat who names none on `conversations` or a sessions question is
+refused `bad_params`, not `unauthorized`. Nobody was denied anything: there is no seat to answer about,
 and the remedy is a binding in the directory rather than a different
 credential.
 
@@ -9186,11 +9195,229 @@ shared knowledge backend, reachable by all members via query-time search.
 
 ---
 
+## Executor Sessions
+
+Every turn whose [executor](../concepts/code-sandbox.md) captured its harness's
+session keeps it — sealed in the fleet's
+[object store](../concepts/object-store.md), named by the turn's row of the
+`executor` log
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md))
+— and that session, which its harness kept when its run ended, is the whole
+record of what the run read, called and wrote. Two reads show it: a seat's
+sessions, and one session's transcript.
+
+**Both are the seat's trail, decided as an executor's live output is.**
+`audit.seat.read` — the seat itself, whoever leads it, or `admin` — decides
+both, per seat, exactly as it decides
+[`executor_tail`](#queries) and a seat's phases with their prompts and
+responses: a session reaches nobody the run's live output did not. **What it
+shows them is more than the live output did.** The live output names each
+tool call's subject on one line and a failed result's first line, and never a
+successful result's body; a transcript holds every call's whole input and each
+result's text to an entry's bound — the contents of the files the run read and
+what its commands printed — and every subagent's thread. The redaction at the
+read matches the credential shapes the engine knows, not values: a secret of no
+recognisable shape that a run read is in its transcript as it read it.
+
+`{id}` is the seat's **handle**, or a person's **login**, which names the seat
+the identity directory binds them to; an absent `handle` on the socket is the
+caller's own seat. A refusal names `admin`, which would have admitted the
+caller.
+
+**Any node answers.** The rows are read through the estate router — a node
+without `data` asks a data node — at the caller's freshness (`read_level`,
+`max_lag_seconds`, `max_lag_seq`, `min_position`; this surface's own level when
+absent, and a bare `session` is refused), and a session's bytes through the
+fleet's one object store, opened under the node's own keyring. Each answer says
+how its rows were read — `read_level`, `position` and `complete` — as every
+answer of a state-log domain does.
+
+### `GET /agents/{id}/sessions`
+
+The seat's executor sessions, **the latest begun first**, a page at a time:
+`?limit=` rows (25 when absent, 100 at most) after `?cursor=`, the
+`next_cursor` an earlier page handed out. Also served as the
+`executor_sessions` query.
+
+```json
+{
+  "handle": "swe",
+  "sessions": [
+    {
+      "turn_id": "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11",
+      "conversation_key": "slack:C0ENG:1700000000.000100",
+      "work_key": "",
+      "harness": "claude-code",
+      "harness_version": "2.1.310",
+      "captured_at": "2026-10-30T12:04:00Z",
+      "ended_at": "2026-10-30T12:05:00Z",
+      "ending": { "outcome": "completed", "decision": "done", "delivered": true,
+                  "delivered_to": "chatlet", "completed_work": "…" },
+      "ask_excerpt": "…",
+      "kept": true,
+      "object_bytes": 41234
+    }
+  ],
+  "next_cursor": "48121",
+  "read_level": "stale",
+  "position": { "stream": "CREWLET_EXECUTOR_LOG", "generation": 1, "seq": 48207 },
+  "complete": true
+}
+```
+
+- **`ending`** is the engine's account of how the turn ended — what the
+  harness's own transcript cannot know — and `null` while the turn runs (or its
+  end was lost and the engine has yet to record it `lost`, a day after its last
+  capture). `outcome` is `completed`, `failed`, `stopped` or `lost`, and the
+  rest is sent only where the way the turn ended establishes it: the
+  reviewer's `decision`, whether the turn's reply reached anybody
+  (`delivered`, on `delivered_to`), the engine's `answer` to a colleague's ask,
+  the reviewer's `completed_work`, the executor's `blocked_on`, who stopped it
+  (`stopped_by`) and why (`stop_reason`), and the engine's `failure`. The prose
+  among them is a model's or a person's words, and so is `ask_excerpt`, the
+  first kibibyte of what the turn was asked; all are **redacted at this read**.
+- **`kept`** says the row still names a session's object, of `object_bytes`
+  sealed. A row that names none is an ending alone: its turn captured nothing,
+  or the seat's session budget
+  (`turn_engine.conversation_session.max_bytes_per_seat`) released its object to
+  make room for newer ones, keeping how the turn ended.
+- **Paged by where each row began**, which nothing moves, so a page never skips
+  or repeats a row that was captured again or ended between two reads.
+  `next_cursor` is absent on the last page. `complete: false` says the
+  answering copy holds a record of the log it could not read, which may hold
+  rows missing from the page.
+
+A `cursor` that is not a page's position — a positive whole number — is
+`400 bad_params`; any other answers the rows begun before the position it
+names.
+
+### `GET /agents/{id}/sessions/{turn_id}`
+
+One turn's session and a page of its **transcript**, `?cursor=` the
+`next_cursor` an earlier page of it handed out. Also served as the
+`executor_session` query, which takes `{handle, turn_id, cursor}`.
+
+```json
+{
+  "handle": "swe",
+  "session": { "turn_id": "…", "…": "the row as GET /agents/{id}/sessions sends it" },
+  "state": "read",
+  "entries": [
+    { "kind": "brief", "at": "2026-10-30T12:00:00Z", "text": "Fix the flaky test in ENG-7.", "bytes": 28 },
+    { "kind": "tool_call", "at": "…", "tool": "Bash", "text": "{\"command\":\"go test ./cache/...\"}", "bytes": 33 },
+    { "kind": "tool_result", "at": "…", "tool": "Bash", "failed": true, "text": "FAIL cache_test.go:40 …", "bytes": 2201431, "cut": true },
+    { "kind": "note", "at": "…", "text": "## A note from ada, sent while this turn was running\n…", "bytes": 214 },
+    { "kind": "brief", "thread": "agent-a1", "text": "Look for the race.", "bytes": 18 }
+  ],
+  "from": 0,
+  "cut": "entries",
+  "next_cursor": "0193f0c3-0d5e-7a14-8b2f-61c9e2d0a7f3.1.200",
+  "bounds": { "entries": 200, "bytes": 1048576, "entry_bytes": 16384,
+              "line_bytes": 33554432, "read_bytes": 268435456 },
+  "read_level": "stale",
+  "position": { "stream": "CREWLET_EXECUTOR_LOG", "generation": 1, "seq": 48207 },
+  "complete": true
+}
+```
+
+**The archive is read as its harness recorded it**, through the runner's own
+knowledge of the format it packs: Claude Code's transcript and each subagent's
+own (its sidecar, every entry of which names the subagent in `thread`, after
+the run's own), and OpenCode's session export. Each entry is one of:
+
+| `kind` | What it is |
+|---|---|
+| `brief` | What the run was handed: the engine's brief, a later launch's on the same session, or — in a subagent's `thread` — the brief the run's own model wrote it |
+| `note` | A note a person sent the run while it worked, as its harness handed it to the model: the engine's heading naming who sent it, then their words. Read wherever the harness filed it — OpenCode as a person's message, Claude Code as a hook's context in a record of its own — by the heading every note opens with; and the line the run's own hook printed as it handed notes over (the live output's `[steer]` line), saying whose reached the run |
+| `model` | What the model wrote |
+| `tool_call` | A tool the model called, its input as JSON, the tool in `tool` |
+| `tool_result` | What the tool answered, `failed` where the harness recorded an error |
+| `summary` | A compaction summary: the harness's own account of the conversation before it, which the model read in its place |
+| `unread` | A part of the record the read could not read — a line past the bound one may hold, one that is no record, a record or a message of no shape the read knows, a transcript that is no plain file in the archive (a link), a message of an export past the bound — said where it was, so a gap never reads as continuity |
+
+The harness's bookkeeping (a session's title, a snapshot of the files it
+edited, its system notices), the model's thinking and a tool result Claude Code
+spilled to a file are no entry. `at` is when the harness recorded the entry,
+absent where its record says no time, or one outside the years 0 to 9999 —
+all RFC 3339 can spell, and a box's own agent can write any instant into what
+its run packs.
+
+**Redacted at this read, whatever the capture did.** Every entry's text is
+passed through the engine's one redaction pass (`redact.Secrets`) **before it is
+cut**, and is always **an opening of what its whole text redacts to**.
+Everything that can reach the entry's bound, and the longest a credential the
+redaction knows can run past it (a private key's block), is redacted inside as
+much again, so a credential that begins inside the bound is recognised whole —
+a key cut in half by a bound is one the redaction no longer recognises — and
+nothing the read could not settle is handed out, however much the redaction
+shrinks what comes before it (a key's block becomes one short marker): a
+credential that runs across the end of what can reach the bound is not handed
+out at all, and the entry is cut where it begins. The rest of a long text is not
+scanned only to be dropped.
+
+**Bounded, and the cut said.** A page holds at most `bounds.entries` (200)
+entries and `bounds.bytes` (1 MiB) of their text; an entry's text is at most
+`bounds.entry_bytes` (16 KiB), cut on a character and marked, with `bytes` the
+whole text's size as the harness recorded it and `cut: true`. A line of the
+record is read to `bounds.line_bytes` (32 MiB), and one read takes at most
+`bounds.read_bytes` (256 MiB) of the archive as it inflates — and, apart, at
+most as many bytes as a tar's members hand out, which a sparse member can make
+up without the archive holding them. `cut` is why the page ends before the
+transcript does:
+
+| `cut` | Meaning |
+|---|---|
+| absent | The transcript ends on this page; `next_cursor` is absent |
+| `entries`, `bytes` | The page holds all it may; `next_cursor` is the cursor the rest is read from |
+| `read` | The read stopped where no later page can go further — the archive's bytes run past `bounds.read_bytes`, or a part of an export too large to hold left the rest unreadable. The entries shown are all that can be |
+
+Every page is read again from the archive's start, so a page costs what the
+archive does rather than what is behind it. **The cursor names the object it
+was read from, and how this build counts a transcript's entries**: a live
+turn's session moves to a newer object with every capture, and a rolling
+upgrade can answer one page on a build that counts entries otherwise, so a
+cursor of an object the row has since replaced with a newer capture, or of
+another count, is `400 bad_params` — read the transcript again from its start —
+rather than a page continued in another archive, or at an ordinal that names
+another entry. A cursor of a row that names no object any more is answered as
+its first page would be, `state: none` with the engine's sentence: the seat's
+session budget released the object, which it does only to a turn that ended,
+and an ended turn is never captured again.
+
+**Two transcripts at a time on each node.** One read can hold a line at
+`bounds.line_bytes`, as much again while the buffer gathering it grows, and the
+copy decoding it makes — on the order of 100 MiB — so a node decodes at most
+two transcripts at once, about 200 MiB at their worst, whichever socket
+question or REST request asks for them. A request past them waits for a slot,
+its session's object not yet opened, for as long as its caller waits, and a
+slot frees within one bounded read; nothing in the answer says it waited, and a
+caller that gives up first is answered nothing.
+
+**An object that cannot be read is an answer, never a 500.** The row is still
+the turn's account of how it ended, so `state` says why no entries are shown
+and `why` says it in the engine's own words — never in anything the archive
+held:
+
+| `state` | Meaning |
+|---|---|
+| `read` | The entries are the transcript's |
+| `none` | The row names no object: its turn captured nothing, or the seat's budget released it |
+| `missing` | The object store no longer holds the object |
+| `unreadable` | The object does not open: it is sealed under a keyring key this fleet no longer holds, or its bytes are not the ones sealed for this turn |
+| `malformed` | It opened, and is not an archive of its harness's format, and `why` says which of six ways: it is not gzip-compressed, its compressed bytes are corrupt, it ends part way through, it holds no tar of its harness's files, it holds no export document of its harness's, or its bytes are not laid out as its format describes (a box's own agent can rewrite what its run packs before a collection takes it) |
+| `unsupported` | It is of a harness or an archive format this build does not read |
+
+A store that did not answer is `503 unavailable` with a `Retry-After`, and a
+turn the seat keeps no row of is `404 not_found`. Absent on a node with no
+object store, where the rows are still listed.
+
+---
+
 ## Fleet, Executors & Schedules
 
 ### `GET /mcp-servers`
 
-Backs the **Servers** section of **Settings › MCP Tools**: every MCP server,
+Backs the **Servers** tab of **Settings › MCP & tools**: every MCP server,
 what the configuration declares for it and what each live node did with it,
 and the engine's built-in tools beside them.
 **It is everybody's, in two readings**, as [`GET /llm/entries`](#get-llmentries)
@@ -9350,6 +9577,7 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
        {"name": "list_work_items", "description": "…", "source": "builtin",
         "annotations": {"read_only": "yes", "destructive": "unknown",
                         "idempotent": "yes", "open_world": "unknown"},
+        "risk": "read_only", "risk_declared": true, "external": true,
         "delivers": "", "input_schema": {"type": "object", "properties": {"…": {}}},
         "group": "work", "gate": "worklet"}
      ]}
@@ -9538,6 +9766,11 @@ it under, so a node that drained, died or restarted stops counting at once.
   never read as one holding nothing.
 - `last_success` and `last_failure` are the latest answer and the latest
   failure across the instances read, `null` where there is none.
+- `last_check` is the server's latest test ([below](#post-mcp-serversnamecheck)),
+  whoever asked for it through whichever node: `at`, `by`, the `seat` it was
+  made for (`""` for a shared server), `ok`, and `nodes`, each as a test
+  answers it but without its tools. `null` where the server was never tested.
+  An administrator's reading only.
 - `resolved` is what the engine decides about the server from its
   configuration, so a screen never re-derives it, `null` for a server the
   configuration does not declare: `auth` (`integration` for a per-agent server
@@ -9676,9 +9909,13 @@ A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
 - `last_failure` as `{class, at, node, seat}`;
 - `resolved` as `{auth, runs_on, timeouts, binding}`, `binding` as
   `{vendor, by}`, without the `keys` a seat's credential goes in, the
-  `box_seats` or the placement `warnings`.
+  `box_seats` or the placement `warnings`;
+- `usage` as `{since, until, days, tools, elided}`, each tool's row
+  `{tool, calls, failed, unavailable, refused, total_ms, last_at}`, without
+  the `seats` that called it: how often a tool is used tells a member whether
+  it is, and who called it is the trail of that seat's work.
 
-It leaves out `instructions` and `dependants`.
+It leaves out `instructions`, `dependants` and `calls`.
 
 ```json
 {
@@ -9709,7 +9946,10 @@ It leaves out `instructions` and `dependants`.
   "resolved": {"auth": "integration", "runs_on": "engine_host",
                "timeouts": {"startup_seconds": 120, "request_seconds": 300,
                             "startup_default": true, "request_default": true},
-               "binding": {"vendor": "github", "by": "recognised"}}
+               "binding": {"vendor": "github", "by": "recognised"}},
+  "usage": {"since": "2026-10-26", "until": "2026-11-01", "days": 7, "elided": 0,
+            "tools": [{"tool": "get_issue", "calls": 18, "failed": 1, "unavailable": 0,
+                       "refused": 0, "total_ms": 7380, "last_at": "2026-11-01T09:02:11Z"}]}
 }
 ```
 
@@ -9752,6 +9992,183 @@ seat.
 Every call is recorded in the runtime audit as one `mcp_server_acted`, the
 guard's refusals included: who asked, which server, the seat if one, and how it
 ended, never anything the server is started with.
+
+### `POST /mcp-servers/{name}/check`
+
+Tests one MCP server where it runs, for the **Test** action on its page under
+**Settings › MCP & tools**. Each node asked brings up a connection of its own,
+exactly as it starts the server (the same transport, launch, scrubbed
+environment and startup timeout), walks its stages, lists its tools and closes
+the connection. **A test never calls a tool**, and the server the company runs
+keeps serving beside it. It is decided by `tools.check`, **an administrator's at
+any recency** and Ask Crewlet's only on the person's approval: it changes no
+configuration and no credential.
+
+A shared server is tested on every node that holds a presence lease, since each
+reaches it from where it is. A per-agent server runs as one agent, with that
+agent's credentials, so it is tested for one seat on the node holding it: the
+body names the seat, `{"seat": "<handle>"}`, and no other node tests it. The
+body is empty for a shared server.
+
+The answer is `200` with what each node found:
+
+```json
+{
+  "server": "tracker", "seat": "", "draft": false,
+  "at": "2026-11-01T09:05:00Z", "by": "jane.doe", "node": "node-a", "ok": true,
+  "nodes": [
+    {"node": "node-a", "answered": true, "reason": "", "ok": true,
+     "steps": [{"stage": "launch", "state": "passed", "took_ms": 41, "detail": "the process started"},
+               {"stage": "discover", "state": "passed", "took_ms": 182, "detail": "tracker-mcp 1.2.0, protocol 2026-07-28"},
+               {"stage": "list", "state": "passed", "took_ms": 33, "detail": "2 tools"}],
+     "failure": null,
+     "server_info": {"name": "tracker-mcp", "version": "1.2.0", "protocol": "2026-07-28"},
+     "tools": 2, "refused": 0, "took_ms": 270},
+    {"node": "node-b", "answered": false, "reason": "did not answer within 4m15s", "ok": false,
+     "steps": [], "failure": null, "server_info": null, "tools": 0, "refused": 0, "took_ms": 0}
+  ],
+  "server_info": {"name": "tracker-mcp", "version": "1.2.0", "protocol": "2026-07-28"},
+  "tools": [{"name": "tracker_search", "raw": "search", "title": "", "description": "Searches issues.",
+             "annotations": {"read_only": "yes", "destructive": "unknown", "idempotent": "unknown", "open_world": "unknown"},
+             "risk": "read_only", "risk_declared": true, "external": true,
+             "starting_level": "allow", "refused": ""}],
+  "warnings": []
+}
+```
+
+- `steps` are the stages a node walked, in order. A remote server walks
+  `address`, `resolve`, `connect`, `tls`, `discover` and `list`; a local one
+  `launch`, `discover` and `list`. Each `state` is `passed`, `failed`,
+  `skipped` (no name to look up for an address written as one, no TLS for
+  plain http) or `not_reached` (after the stage that failed). `detail` is what
+  the stage found, or the failure's sentence for the stage that failed.
+- `failure` is why the test stopped on a node: its `class`, one of the fourteen
+  failure classes `/mcp-servers` reports, decided at the stage whose facts
+  produced it (a lookup at `resolve`, a dial at `connect`, a certificate at
+  `tls`, what the server answered at `discover`, a command that could not
+  start or a process that exited before it answered at `launch`), and `said`.
+  A server that answers and lists no tool it can be offered under is `ok`,
+  with the class `empty_tools`.
+- `tools` and `server_info` come from the first node that found the server
+  serving: each tool as the engine would offer it (its prefixed name, its hints
+  with the configuration's overrides, `risk` as `/mcp-servers/{name}` reads it),
+  the level it starts at when the server is added (`starting_level`: `allow`
+  for a tool asserted read-only, `approve` for every other), and `refused`,
+  why it would not be offered under its name (`characters`, `too_long` or
+  `builtin`). `warnings` say each refusal in a sentence.
+
+**What an answer never carries.** No header or variable value the server is
+started with (a server or a process that repeats one has it withheld), and no
+address with a credential in it. Every sentence is redacted and bounded to 512
+bytes on the node that wrote it, and the server's instructions are left out.
+
+**The latest test is kept.** The test is recorded as the server's latest in the
+coordination store, one record per server, and [the server's
+detail](#get-mcp-serversname) answers it as `last_check` to every
+administrator, whichever node serves them. A later test replaces it, and the
+record goes when the configuration stops declaring the server.
+
+| Status | `error` | When |
+|---|---|---|
+| `404` | `not_found` | The configuration declares no such server |
+| `409` | `conflict` | The server is turned off, so nothing runs it to test (test its entry as a draft instead); or the seat named is not granted the server |
+| `400` | `invalid_body` | A `seat` named for a shared server, none named for a per-agent one, or a body with a field the route does not read |
+| `404` | `no_such_seat` | The organization has no agent seat by that handle |
+| `503` | `unavailable` | The node could not ask the fleet; ask again |
+
+A node that does not answer within the test's budget (twice the server's startup
+timeout, and fifteen seconds to close what it started) is named in `nodes`
+with why, never read as one that found nothing. One test of a server (and
+seat) runs at a time on a node: a test asked while one is still running there
+is answered at once, on that node, that one is running, and starts nothing
+beside it. Every call is one `mcp_server_acted` with the action `check`, the
+guard's refusals included.
+
+### `POST /mcp-checks`
+
+Tests a **draft** MCP server entry before it is saved, for the test step of the
+add and edit flows. The body is the entry as `PUT /config/mcp-servers/{name}`
+would take it, and the seat for a per-agent one:
+
+```json
+{"entity": {"name": "wiki", "command": "wiki-mcp", "env": {"WIKI_TOKEN": "${WIKI_TOKEN}"}}, "seat": ""}
+```
+
+A draft runs what a write would: a command on the engine host, or an address
+dialled with the values the entry names, each `${VAR}` resolved from the secret
+store. So it is decided as that write, **`config.write` and `secrets.write` on
+top of `tools.check`**, before anything of the body is read: a person who may
+not write the company and its secrets is refused `403` (`step_up_required` for
+a proof older than the step-up window) and nothing is tested. Ask Crewlet never
+runs one, since `secrets.write` is never its.
+
+The entry is held to the configuration's own dry run, in the company it would
+join (a create for a new name, an edit for one the company declares), and an
+entry the dry run refuses is answered `422 validation_error` with the
+problems a write of it would get. An admitted draft is tested as the dry run
+left it, turned on whatever its `enabled` says, on the nodes the saved entry
+would run on, and answered as [`POST /mcp-servers/{name}/check`](#post-mcp-serversnamecheck)
+answers, with `"draft": true`. **A draft's test is never recorded**: the
+server's latest test is of the entry the company runs.
+
+### `POST /mcp-probe`
+
+Checks an address before an MCP server is added at it, for the address step of
+the add flow: what answers there, and how it is signed in to. The body is
+`{"url": "https://..."}`. The address is the caller's, dialled as the server
+would be once added, a private address included, so the check is decided as
+the write that would make the engine dial it: **`config.write` on top of
+`tools.check`**, before the body is read. It resolves no secret and sends no
+credential.
+
+```json
+{
+  "address": "https://mcp.example.com/mcp", "reachable": true,
+  "check": {"node": "", "answered": true, "reason": "", "ok": false,
+            "steps": [{"stage": "address", "state": "passed", "took_ms": 0, "detail": "https://mcp.example.com/mcp"},
+                      {"stage": "discover", "state": "failed", "took_ms": 210, "detail": "..."}],
+            "failure": {"class": "needs_sign_in", "said": "..."}, "server_info": {"name": "", "title": "", "version": "", "protocol": ""},
+            "tools": 0, "refused": 0, "took_ms": 380},
+  "auth": "oauth",
+  "oauth": {"resource_metadata": "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+            "resource": "https://mcp.example.com/mcp",
+            "authorization_servers": ["https://auth.example.com"], "issuer": "https://auth.example.com",
+            "scopes": ["read", "write"], "client": "dcr", "pkce": true, "failure": null},
+  "tools": null, "catalogue": "", "title": "", "vendor": ""
+}
+```
+
+- `check` is the address's walk with nothing configured, as a node's test is
+  answered.
+- `auth` is the sign-in the server asks for: `none` where it lists its tools to
+  no credential (`tools` counts them), `oauth` where it answers `401` with a
+  Bearer challenge and publishes protected-resource metadata, `headers` where
+  it refuses another way or publishes none, and `""` where the check did not
+  reach an answer to tell by. `reachable` is whether an MCP server answered at
+  all: its handshake, or a refusal asking for a credential.
+- `oauth` is what the server's sign-in metadata says: the protected-resource
+  metadata (RFC 9728) at the address its challenge names, or at the well-known
+  address on its own origin, and the metadata of the first authorization
+  server it names (RFC 8414, or OpenID Connect discovery): its `issuer`, the
+  `scopes`, how the engine would register as a client (`cimd` where it reads a
+  client metadata document, `dcr` where it offers dynamic registration, `own`
+  for a client an administrator registers), and whether it offers PKCE `S256`.
+  `failure` is why the discovery stopped short.
+- `catalogue`, `title` and `vendor` name the curated entry the address is, `""`
+  where the curated catalogue does not know it.
+
+**Whose address each request goes to.** The typed address is the operator's.
+Every other address the check reaches is one the server named, in its
+challenge or its metadata, and it is fetched only through the engine's
+public-address guard (ADR-0072) unless it is on the typed address's own
+origin, over https alone, following no redirect, reading at most 64 KiB, and
+within ten seconds. An address the guard refuses ends the discovery with the
+class `blocked_address`: the server's sign-in points somewhere the engine does
+not follow. Metadata naming another issuer than the one asked for is not used.
+An address the configuration's own rule refuses (plain http to a public host, a
+user name or password in it) stops at the `address` stage, dialling nothing.
+Every call is one `mcp_server_acted` with the action `probe`, naming the
+address with its credentials withheld.
 
 ### `GET /fleet`
 
@@ -11136,6 +11553,9 @@ One row per registered tool, in the same shape as each tool on
     "idempotent": "unknown",
     "open_world": "yes"
   },
+  "risk": "additive",
+  "risk_declared": true,
+  "external": true,
   "delivers": "slack",
   "input_schema": { "type": "object", "properties": { "…": {} }, "required": ["…"] },
   "group": "",
@@ -11151,6 +11571,13 @@ One row per registered tool, in the same shape as each tool on
   operator audits them on. The engine's own delivery fence has always read
   them this way (see [`Registry.KnownReads`](../guides/tools-and-mcp.md)): an
   unannotated tool is **not** a known read.
+- `risk`, `risk_declared` and `external` are the engine's one reading of
+  those hints, the same an MCP server's detail answers for each of its tools:
+  `read_only` for a tool asserted read-only, `additive` for one that may write
+  and is asserted not destructive, and `destructive` for every other tool. A
+  tool that asserts nothing is `destructive` with `risk_declared: false`, and
+  `external` is true unless the tool asserts it reaches nothing outside the
+  company. A screen shows this reading rather than reading the hints again.
 - `delivers` names **where** calling this tool puts something in front of
   somebody outside the turn, and is empty for a tool that reaches nobody. It
   is the registry's own predicate, not "was this served by MCP": a proven

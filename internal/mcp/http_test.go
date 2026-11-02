@@ -1,13 +1,16 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -440,8 +443,94 @@ func TestIdentityWrapsTheSharedTransport(t *testing.T) {
 	t.Parallel()
 	_, ident := newHTTPTransport(Spec{
 		Name: "remote", URL: "https://mcp.example.com/",
-	}, slog.New(slog.DiscardHandler))
+	}, slog.New(slog.DiscardHandler), dialing{})
 	if ident.base != httpx.Transport() {
 		t.Errorf("identity base = %T, want the one httpx shares", ident.base)
+	}
+}
+
+// A REDIRECT IS FOLLOWED WITHIN THE SERVER'S ORIGIN ALONE: one to another
+// origin is refused before anything reaches it, classed as an address with no
+// endpoint behind it, and the configured headers go to the configured origin
+// and nowhere else.
+func TestARedirectIsFollowedWithinTheServersOriginAlone(t *testing.T) {
+	t.Parallel()
+	var elsewhere atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		elsewhere.Add(1)
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	t.Cleanup(other.Close)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(front.Close)
+
+	away := httpSpec("away", front.URL+"/mcp")
+	away.Headers = map[string]string{"Authorization": "Bearer sk-redirect-test-token"}
+	c, err := connect(t.Context(), away, discardLogger())
+	if err == nil {
+		_, _ = c.close(context.Background())
+		t.Fatal("a server that redirected to another origin was connected")
+	}
+	if !errors.Is(err, ErrRedirectedAway) || ClassOf(err) != FailNoEndpoint {
+		t.Fatalf("err = %v (class %q), want the redirect refused as no_endpoint", err, ClassOf(err))
+	}
+	if n := elsewhere.Load(); n != 0 {
+		t.Fatalf("the other origin was sent %d requests", n)
+	}
+
+	// WITHIN THE ORIGIN: a moved path is followed, and the headers reach
+	// the server on the hop.
+	h := &httpMCPServer{tools: `[{"name":"search","inputSchema":{"type":"object"}}]`}
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", h)
+	mux.HandleFunc("/old", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/mcp", http.StatusPermanentRedirect)
+	})
+	same := httptest.NewServer(mux)
+	t.Cleanup(same.Close)
+	moved := httpSpec("moved", same.URL+"/old")
+	moved.Headers = map[string]string{"Authorization": "Bearer sk-redirect-test-token"}
+	c, err = connect(t.Context(), moved, discardLogger())
+	if err != nil {
+		t.Fatalf("a redirect within the origin was not followed: %v", err)
+	}
+	_, _ = c.close(context.Background())
+	if len(h.seen()) == 0 {
+		t.Fatal("the server the redirect named was never reached")
+	}
+	for _, r := range h.seen() {
+		if r.Headers.Get("Authorization") != "Bearer sk-redirect-test-token" {
+			t.Fatalf("a request within the origin lost its configured header: %+v", r)
+		}
+	}
+}
+
+// THE CONFIGURED HEADERS GO TO THE CONFIGURED ORIGIN ALONE, whatever reaches
+// the round tripper: a request to another origin carries none of them.
+func TestTheConfiguredHeadersGoToTheConfiguredOriginAlone(t *testing.T) {
+	t.Parallel()
+	var got atomic.Pointer[http.Header]
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := r.Header.Clone()
+		got.Store(&h)
+	}))
+	t.Cleanup(srv.Close)
+	spec := httpSpec("vendor", "https://mcp.example.com/mcp")
+	spec.Headers = map[string]string{"Authorization": "Bearer sk-origin-test-token"}
+	_, ident := newHTTPTransport(spec, discardLogger(), dialing{})
+	ident.base = srv.Client().Transport
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/elsewhere", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := ident.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if h := got.Load(); h == nil || h.Get("Authorization") != "" {
+		t.Fatalf("a request to another origin carried the configured header: %v", h)
 	}
 }

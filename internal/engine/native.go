@@ -540,6 +540,14 @@ func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 	if e.native.Load() != nil || e.remote.Load() != nil || c == nil {
 		return false, nil
 	}
+	// THE INBOUND EDGE'S MAILBOX BEFORE THE FEEDS below publish onto it
+	// ([Engine.ensureInboundMailbox]), and before the halves start, so a
+	// refusal leaves nothing up for the retry to skip past.
+	if e.mode.Publishes() {
+		if err := e.ensureInboundMailbox(ctx); err != nil {
+			return false, err
+		}
+	}
 	if err := e.startNative(ctx, e.boot, c); err != nil {
 		return false, err
 	}
