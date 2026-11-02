@@ -57,7 +57,8 @@ import (
 // and a person's is theirs.
 //
 // THE DEQUEUE: code_dequeue_change takes a change's live entry out of its
-// target's queue — one dequeue record its committer decides (code.Dequeue),
+// target's queue — the entry the call's one read of the change names
+// ([entryOf]) — by one dequeue record its committer decides (code.Dequeue),
 // at the ask of its enqueuer, the change's owner, a maintainer of the
 // repository or a person.
 
@@ -425,7 +426,7 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	g := cv.g
-	entry, refusal := t.entryOf(ctx, cv)
+	entry, refusal := entryOf(cv)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -460,32 +461,24 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return newForeignRead(turn, g.c.asker.Seat).page(ctx, tool, out, "")
 }
 
-// entryOf is the change's LIVE entry in its target's queue, read from the
-// target's queue at the caller's floor a page at a time until the change's
-// entry is met — at most ⌈code.MaxQueueEntries/code.MaxQueueRowsPerPage⌉
-// pages, a dequeue being a rare gesture and a queue rarely deeper than its
-// first page — or the refusal of a change no queue holds.
-func (t *codeDequeueChange) entryOf(ctx context.Context, cv conversing) (string, *tools.Result) {
-	g := cv.g
-	q := code.ReadQuery{Kind: code.ReadQueue, Repo: g.repo.Name, Target: cv.change.TargetRef,
-		Limit: code.MaxQueueRowsPerPage, Fresh: statelog.FloorAt(statelog.ReadSession, cv.at)}
-	for {
-		answer, err := g.deps.read(ctx, g.c, q)
-		if err != nil {
-			r := g.deps.failed(ctx, g.turn, g.tool, g.c.asker, g.repo, err)
-			return "", &r
-		}
-		for _, row := range answer.Queue {
-			if row.ChangeID == cv.change.ID {
-				return row.EntryID, nil
+// entryOf is the change's LIVE entry in its target's queue as the call's one
+// read of the change named it — on its readiness's queue precondition
+// (code.Precondition.Queue), which that read resolves over the change's own
+// index — or the refusal of a change no queue holds. The dequeue reads
+// nothing more: its committer decides it at or past that read
+// (code.QueueProposal.Seen), so an entry the queue landed or ejected since is
+// the committer's to refuse, from its own snapshot.
+func entryOf(cv conversing) (string, *tools.Result) {
+	if r := cv.change.Readiness; r != nil {
+		for _, p := range r.Preconditions {
+			if p.Kind == code.PreconditionQueue && p.Queue != nil {
+				return p.Queue.EntryID, nil
 			}
 		}
-		if answer.Next == "" {
-			r := refusedBy(tools.RefusalConflict, fmt.Errorf("code: %s holds no live queue entry", g.ref()),
-				fmt.Sprintf("%s: %s is in no queue of %s, so nothing was taken out.", g.tool, g.ref(),
-					strings.TrimPrefix(cv.change.TargetRef, branchRoot)))
-			return "", &r
-		}
-		q.Cursor = answer.Next
 	}
+	g := cv.g
+	r := refusedBy(tools.RefusalConflict, fmt.Errorf("code: %s holds no live queue entry", g.ref()),
+		fmt.Sprintf("%s: %s is in no queue of %s, so nothing was taken out.", g.tool, g.ref(),
+			strings.TrimPrefix(cv.change.TargetRef, branchRoot)))
+	return "", &r
 }

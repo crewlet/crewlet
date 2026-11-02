@@ -360,12 +360,12 @@ type GateFacts struct {
 
 // QueuedFacts is a change's live entry in its target's merge queue as the gate
 // reads it: the entry, where it stands, and its place in its target's queue,
-// from 1.
+// from 1 — answered on the queue precondition ([Precondition.Queue]).
 type QueuedFacts struct {
-	EntryID   string
-	TargetRef string
-	State     QueueState
-	Place     int
+	EntryID   string     `json:"entry_id"`
+	TargetRef string     `json:"target_ref"`
+	State     QueueState `json:"state"`
+	Place     int        `json:"place"`
 }
 
 // HeadFacts is what a change's merge gate reads of its head revision's
@@ -803,14 +803,14 @@ func JudgeGate(f GateFacts, r GateRules) Readiness {
 
 // queued is the queue precondition of a change its target's merge queue holds:
 // COMPUTING, waiting on nobody — the queue lands it — its place and its state
-// named.
+// named, and its entry carried whole ([Precondition.Queue]).
 func (g gateJudge) queued() Precondition {
-	q := g.f.Queue
+	q := *g.f.Queue
 	doing := "waits"
 	if q.State == QueueTesting {
 		doing = "is being tested"
 	}
-	return Precondition{Kind: PreconditionQueue, State: PreconditionComputing, Detail: fmt.Sprintf(
+	return Precondition{Kind: PreconditionQueue, State: PreconditionComputing, Queue: &q, Detail: fmt.Sprintf(
 		"%s %s at place %d in %s's queue: the queue lands it once its gate holds on what it is merged with",
 		g.ref, doing, q.Place, q.TargetRef)}
 }

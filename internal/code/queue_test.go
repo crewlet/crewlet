@@ -126,6 +126,35 @@ func (n *node) entryState(repo, entry string) (code.QueueState, string) {
 	return code.QueueState(state), reason
 }
 
+// A QUEUED CHANGE'S READ NAMES ITS ENTRY: the read that judges a queued
+// change's gate names its live entry on the queue precondition — the entry,
+// its target, where it stands and its place — so a dequeue takes the entry
+// from the one read of the change it already made, never by walking the
+// queue for it.
+//
+// Mutation: gateJudge.queued naming no entry → red.
+func TestAQueuedChangesReadNamesItsEntry(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, change)
+	if p := preconditionOf(t, readinessOf(t, n, 1), code.PreconditionMergeable); p.Queue != nil {
+		t.Errorf("the %s precondition names a queue entry %+v: only the queue's does", p.Kind, p.Queue)
+	}
+	enqueue := enqueueing(repo, change, ada, oidOf("B"))
+	res, err := c.ProposeQueue(t.Context(), enqueue)
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+	p := preconditionOf(t, readinessOf(t, n, 1), code.PreconditionQueue)
+	want := code.QueuedFacts{EntryID: enqueue.Enqueue.EntryID, TargetRef: mainRef, State: code.QueueWaiting,
+		Place: 1}
+	if p.Queue == nil || *p.Queue != want {
+		t.Fatalf("the queued change's read names the entry %+v, want %+v", p.Queue, want)
+	}
+}
+
 // AN ENQUEUE IS DECIDED BY THE GATE: a change that meets no term of main's
 // gate yet — no approval, its required check never run — is refused
 // gate_unmet, naming every term it misses and whom each waits on, and nothing

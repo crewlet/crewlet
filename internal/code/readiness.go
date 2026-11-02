@@ -235,6 +235,13 @@ type Precondition struct {
 	// clear it; BlockersOmitted is how many more stand.
 	Blockers        []Blocker `json:"blockers,omitempty"`
 	BlockersOmitted int64     `json:"blockers_omitted,omitempty"`
+	// Queue is a queue precondition's entry: the change's LIVE entry in its
+	// target's merge queue, where it stands and its place, as the read that
+	// judged the gate found it over the change's own index — nil on every
+	// other kind. What a dequeue names the entry by, so the read that showed
+	// the change queued is the one read a dequeue makes, never a walk of the
+	// queue for an id that read already held.
+	Queue *QueuedFacts `json:"queue,omitempty"`
 	// Detail is one sentence of where it stands and, unmet, what clears it.
 	Detail string `json:"detail"`
 }

@@ -206,29 +206,24 @@ func TestCloseTaskIsDecidedAsTheTrackersWrite(t *testing.T) {
 	}
 }
 
-// A DEQUEUE TAKES THE CHANGE'S OWN ENTRY OUT: code_dequeue_change finds the
-// change's live entry in its target's queue, past a first page of others',
-// and asks ONE dequeue of that entry — as its caller, naming no run.
+// A DEQUEUE TAKES THE CHANGE'S OWN ENTRY OUT, FROM ITS ONE READ: the call's
+// read of the change names its live entry on the queue precondition, and
+// code_dequeue_change asks ONE dequeue of that entry — as its caller, naming
+// no run — with no read of the queue and no read of the change but the
+// conversation's one; a change that read names in no queue is refused
+// conflict, nothing asked.
 //
-// Mutation: dequeue the first entry of the page; keep the turn's run on the
-// asker → red.
+// Mutations: page the target's queue for the entry, as the tool once did —
+// the read the fake answers names no entry and the dequeue is refused, and a
+// queue read is counted, red; keep the turn's run on the asker → red.
 func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 	t.Parallel()
-	host := newChangeHost(siteChange())
-	changes := host.changes
-	host.changes = func(q code.ReadQuery) (code.ReadAnswer, error) {
-		if q.Kind != code.ReadQueue {
-			return changes(q)
-		}
-		if q.Target != "refs/heads/main" {
-			return code.ReadAnswer{}, errors.New("a queue read of another target")
-		}
-		if q.Cursor == "" {
-			return code.ReadAnswer{Queue: []code.QueueRow{{EntryID: otherEntryID, ChangeID: "another"}},
-				Next: "p2"}, nil
-		}
-		return code.ReadAnswer{Queue: []code.QueueRow{{EntryID: siteEntryID, ChangeID: siteChangeID}}}, nil
-	}
+	queued := siteChange()
+	queued.detail.Readiness.Preconditions = append(queued.detail.Readiness.Preconditions, code.Precondition{
+		Kind: code.PreconditionQueue, State: code.PreconditionComputing, Detail: "site!7 waits at place 2",
+		Queue: &code.QueuedFacts{EntryID: siteEntryID, TargetRef: "refs/heads/main", State: code.QueueWaiting,
+			Place: 2}})
+	host := newChangeHost(queued)
 	writer := &codeWrites{}
 	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
 		builtin.CodeDequeueChangeTool, map[string]any{"change": "site!7"})
@@ -239,6 +234,19 @@ func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 	if len(asked) != 1 || asked[0].Dequeue == nil || asked[0].Dequeue.EntryID != siteEntryID ||
 		asked[0].Dequeue.RepoID != siteID || asked[0].Asker.Run.TurnID != "" || asked[0].Validate() != nil {
 		t.Errorf("the dequeue asked %+v, want site!7's own entry out as its caller", asked)
+	}
+	reads, _, _ := host.asked()
+	if n, q := readsOf(reads, code.ReadChange), readsOf(reads, code.ReadQueue); n != 1 || q != 0 {
+		t.Errorf("the dequeue read the change %d times and the queue %d, want the change once and the queue "+
+			"never: its one read names the entry", n, q)
+	}
+
+	writer = &codeWrites{}
+	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
+		writerTurn(t), builtin.CodeDequeueChangeTool, map[string]any{"change": "site!7"})
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalConflict || len(writer.queuesAsked()) != 0 {
+		t.Errorf("a change in no queue answered %q (%s) after %d dequeues, want conflict and none asked",
+			got.Output, tools.RefusalOf(got), len(writer.queuesAsked()))
 	}
 }
 
