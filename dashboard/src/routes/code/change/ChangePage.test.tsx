@@ -128,8 +128,19 @@ interface Acted {
 /** Every `code_checks` question the engine was asked, newest last. */
 const checksAsked: URL[] = [];
 
-/** The engine: its reads by part, and each act recorded and answered as `answer` says. */
-function stubEngine(change: Record<string, unknown>, answer: () => Promise<Response> | Response) {
+/** Every `code_change` question the engine was asked, newest last. */
+const changeAsked: URL[] = [];
+
+/**
+ * The engine: its reads by part, and each act recorded and answered as
+ * `answer` says — a file's patch as `patch`'s pages, page n answered from the
+ * cursor `p:<n>`, as the engine cuts one at a line.
+ */
+function stubEngine(
+  change: Record<string, unknown>,
+  answer: () => Promise<Response> | Response,
+  patch: readonly string[] = [PATCH],
+) {
   const acted: Acted[] = [];
   vi.stubGlobal(
     "fetch",
@@ -188,7 +199,9 @@ function stubEngine(change: Record<string, unknown>, answer: () => Promise<Respo
         });
       }
       if (url.pathname !== "/query/code_change") return json({}, 404);
+      changeAsked.push(url);
       const page = { position: POSITION, level: "session" };
+      const patchPage = Number((url.searchParams.get("cursor") ?? "p:0").slice(2));
       switch (url.searchParams.get("part")) {
         case "files":
           return json({
@@ -206,6 +219,7 @@ function stubEngine(change: Record<string, unknown>, answer: () => Promise<Respo
         case "diff":
           return json({
             ...page,
+            ...(patchPage + 1 < patch.length ? { next: `p:${patchPage + 1}` } : {}),
             revision: 2,
             diff: {
               base: HEAD,
@@ -214,7 +228,7 @@ function stubEngine(change: Record<string, unknown>, answer: () => Promise<Respo
               total: 1,
               added: 1,
               deleted: 1,
-              patch: PATCH,
+              patch: patch[patchPage],
             },
           });
         case "findings":
@@ -352,6 +366,30 @@ test("a finding drafted on a line is the tab's until a review, and an outdated o
   }[];
   expect(kept.map((d) => [d.title, d.line_start])).toEqual([["Name it", 2]]);
   expect(acted).toHaveLength(0);
+});
+
+// A CHANGE'S PATCH IS READ WHOLE, A PAGE AT A TIME: a file whose patch runs
+// past one answer is drawn on as the reader asks, each later page the `diff`
+// part's own question from the cursor the page before ended at, at the same
+// revision. Mutation: ask the next page without its cursor, or draw the first
+// page's text alone, and this fails.
+test("a change's patch past one page draws the rest of its hunks when the reader asks", async () => {
+  changeAsked.length = 0;
+  stubEngine(detail(), () => json({ outcome: "applied" }), [
+    `${PATCH}\n`,
+    ["@@ -40,2 +40,2 @@", " still", "-alpha", "+omega"].join("\n"),
+  ]);
+  mount("#/code/repos/web/changes/42?tab=files&file=app.go");
+
+  fireEvent.click(await screen.findByRole("button", { name: "Load more lines" }));
+
+  expect(await screen.findByRole("button", { name: "Line 41: pick it" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Line 2: pick it" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Load more lines" })).toBeNull();
+  const second = changeAsked.find((u) => u.searchParams.get("cursor") === "p:1");
+  expect(second?.searchParams.get("part")).toBe("diff");
+  expect(second?.searchParams.get("file")).toBe("app.go");
+  expect(second?.searchParams.get("revision")).toBe("2");
 });
 
 // A CHANGE'S CHECKS ARE THE ATTEMPTS THAT JUDGE IT: its head's, asked by the

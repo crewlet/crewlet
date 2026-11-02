@@ -33,17 +33,7 @@
  */
 
 import { useMemo, useState, type ReactNode } from "react";
-import {
-  Button,
-  Callout,
-  Disclosure,
-  Input,
-  Select,
-  Skeleton,
-  Stack,
-  Tag,
-  Textarea,
-} from "@crewlethq/ui";
+import { Button, Disclosure, Input, Select, Skeleton, Stack, Tag, Textarea } from "@crewlethq/ui";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useParam } from "~/app/router.tsx";
 import { DiffView, type DiffLine } from "~/components/DiffView.tsx";
@@ -58,10 +48,12 @@ import {
   severityWord,
 } from "~/lib/code.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import { lineSide, parsePatch } from "~/lib/patch.ts";
+import { lineSide } from "~/lib/patch.ts";
+import { usePatchPages } from "~/lib/patchPages.ts";
 import { useReviewDrafts, type DraftFinding, type ReviewDrafts } from "~/lib/reviewDrafts.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
+import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type {
   CodeChangeDetail,
   CodeCommentRow,
@@ -69,8 +61,9 @@ import type {
   CodeFindingPlace,
   CodeFindingRow,
 } from "~/protocol/index.ts";
+import { PatchPager } from "../PatchPager.tsx";
 import { ReplyComposer, Thread } from "./Conversation.tsx";
-import { useChangePart } from "./reads.ts";
+import { CHANGE_POLL_MS, changePartParams, useChangePart } from "./reads.ts";
 
 /** A whole number from 1 off the address, or null. */
 function wholeParam(value: string): number | null {
@@ -255,14 +248,26 @@ function FileDiff({
   drafts: ReviewDrafts | null;
   thread: string;
 }) {
-  const patch = useChangePart(
-    change,
-    "diff",
-    { revision: rev, file: path, ...(since !== null ? { since_revision: since } : {}) },
-    !entry?.binary,
+  const params = useMemo(
+    // THE CHANGE BY ITS NAME: a poll hands in a new detail of the same change,
+    // which is the same question.
+    () =>
+      changePartParams({ repo: change.repo, number: change.number }, "diff", {
+        revision: rev,
+        file: path,
+        ...(since !== null ? { since_revision: since } : {}),
+      }),
+    [change.repo, change.number, rev, path, since],
   );
-  const text = patch.data?.diff?.patch ?? "";
-  const hunks = useMemo(() => parsePatch(text), [text]);
+  const patch = useCodeQuery("code_change", params, {
+    enabled: !entry?.binary,
+    pollMs: CHANGE_POLL_MS,
+  });
+  // EVERY PAGE OF THE PATCH the reader asks for, each its part's own question
+  // from the cursor the page before it ended at (`lib/patchPages.ts`).
+  const { paged, hunks } = usePatchPages(patch, params, (cursor) =>
+    codeRest.query("code_change", { ...params, cursor }),
+  );
   const [pick, setPick] = useState<Pick | null>(null);
   const ofFile: Placed[] = findings
     .filter((f) => f.path === path)
@@ -394,11 +399,7 @@ function FileDiff({
               return n !== null && n >= pick.start && n <= pick.end;
             }}
           />
-          {patch.data?.next && (
-            <Callout variant="neutral">
-              This file's patch runs past one page: its end is not drawn.
-            </Callout>
-          )}
+          <PatchPager paged={paged} />
         </>
       )}
     </section>

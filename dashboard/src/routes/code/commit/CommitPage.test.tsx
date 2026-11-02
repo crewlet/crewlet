@@ -134,10 +134,13 @@ function stubEngine({
   commitAnswer = commit(),
   compare = {},
   act = () => json({ outcome: "applied", position: "CREWLET_CODE_LOG@1:13", receipt: {} }),
+  patch = [PATCH],
 }: {
   commitAnswer?: unknown;
   compare?: Record<string, unknown>;
   act?: () => Promise<Response> | Response;
+  /** A file's patch as its pages: page n is answered from the cursor `p:<n>`, as the engine cuts one at a line. */
+  patch?: readonly string[];
 } = {}) {
   const asked: URL[] = [];
   const acted: Acted[] = [];
@@ -169,10 +172,13 @@ function stubEngine({
           });
         case "/query/code_commit":
           return json(commitAnswer);
-        case "/query/code_diff":
+        case "/query/code_diff": {
+          const page = Number((p.get("cursor") ?? "p:0").slice(2));
+          const paged = p.get("file") !== null && page + 1 < patch.length;
           return json({
             repo: "web",
             kind: "diff",
+            ...(paged ? { next: `p:${page + 1}` } : {}),
             diff: {
               base: p.get("base"),
               head: p.get("head"),
@@ -180,9 +186,10 @@ function stubEngine({
               total: 1,
               added: 1,
               deleted: 1,
-              ...(p.get("file") ? { patch: PATCH } : {}),
+              ...(p.get("file") ? { patch: patch[page] } : {}),
             },
           });
+        }
         case "/query/code_compare":
           return json({
             repo: "web",
@@ -273,6 +280,32 @@ test("a commit's diff is against its first parent, its patch drawn", async () =>
   expect(stat?.searchParams.get("head")).toBe(SHA);
   const patch = reads(asked, "code_diff").find((u) => u.searchParams.get("file") === "app.go");
   expect(patch?.searchParams.get("base")).toBe(PARENT);
+});
+
+// A FILE'S PATCH IS READ WHOLE, A PAGE AT A TIME: the engine cuts a patch
+// past one answer's bound at a line, and the page after it is asked from the
+// cursor the page before ended at, its hunks drawn under the first's — never
+// a first page drawn as the file's whole change. Mutation: ask the next page
+// without its cursor, or draw the first page's text alone, and this fails.
+test("a patch past one page draws the rest of its hunks when the reader asks", async () => {
+  const { asked } = stubEngine({
+    patch: [
+      `${["--- a/app.go", "+++ b/app.go", "@@ -1,2 +1,2 @@", " keep", "-old", "+new"].join("\n")}\n`,
+      ["@@ -40,2 +40,2 @@", " still", "-alpha", "+omega"].join("\n"),
+    ],
+  });
+  mount(<CommitPage repo="web" sha={SHA} />, `#/code/repos/web/commits/${SHA}`);
+
+  expect(await screen.findByText("new")).toBeTruthy();
+  expect(screen.queryByText("omega")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Load more lines" }));
+
+  expect(await screen.findByText("omega")).toBeTruthy();
+  expect(screen.getByText("new")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Load more lines" })).toBeNull();
+  const second = reads(asked, "code_diff").find((u) => u.searchParams.get("cursor") === "p:1");
+  expect(second?.searchParams.get("file")).toBe("app.go");
+  expect(second?.searchParams.get("head")).toBe(SHA);
 });
 
 // A ROOT COMMIT'S CHANGE IS EVERY FILE IT HOLDS, measured from git's empty

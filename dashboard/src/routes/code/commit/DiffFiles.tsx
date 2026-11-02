@@ -10,15 +10,16 @@
  */
 
 import { useMemo } from "react";
-import { Button, Callout, Select, Skeleton, Stack } from "@crewlethq/ui";
+import { Button, Select, Skeleton, Stack } from "@crewlethq/ui";
 import { useParam } from "~/app/router.tsx";
 import { DiffView } from "~/components/DiffView.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
-import { parsePatch } from "~/lib/patch.ts";
+import { usePatchPages } from "~/lib/patchPages.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type { CodeDiffFile, CodeGitAnswer } from "~/protocol/index.ts";
+import { PatchPager } from "../PatchPager.tsx";
 
 /** What git's status letter says of a file. */
 function statusWord(f: CodeDiffFile): string {
@@ -142,7 +143,10 @@ export function DiffFiles({ repo, base, head }: { repo: string; base: string; he
   );
 }
 
-/** One file's patch, as git wrote it, in the one `DiffView`. */
+/**
+ * One file's patch, as git wrote it, in the one `DiffView`: every page of it
+ * the reader has asked for (`lib/patchPages.ts`).
+ */
 function FilePatch({
   repo,
   base,
@@ -156,13 +160,14 @@ function FilePatch({
   entry: CodeDiffFile;
   layout: "unified" | "split";
 }) {
-  const read = useCodeQuery(
-    "code_diff",
-    { name: repo, base, head, file: entry.path },
-    { enabled: !entry.binary },
+  const params = useMemo(
+    () => ({ name: repo, base, head, file: entry.path }),
+    [repo, base, head, entry.path],
   );
-  const text = read.data?.diff?.patch ?? "";
-  const hunks = useMemo(() => parsePatch(text), [text]);
+  const read = useCodeQuery("code_diff", params, { enabled: !entry.binary });
+  const { paged, hunks } = usePatchPages(read, params, (cursor) =>
+    codeRest.query("code_diff", { ...params, cursor }),
+  );
   return (
     <section aria-label={`Changes to ${entry.path}`} className="code-file">
       {entry.binary ? (
@@ -180,14 +185,10 @@ function FilePatch({
             : "No line of it changed."}
         </p>
       ) : (
-        <>
+        <Stack gap={2}>
           <DiffView hunks={hunks} layout={layout} aria-label={`Changes to ${entry.path}`} />
-          {read.data?.next && (
-            <Callout variant="neutral">
-              This file's patch runs past one page: its end is not drawn.
-            </Callout>
-          )}
-        </>
+          <PatchPager paged={paged} />
+        </Stack>
       )}
     </section>
   );

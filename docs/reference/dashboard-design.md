@@ -7790,7 +7790,10 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   reader's own comment below. **Files** is the revision's files (`rev=`, the
   head by default; `since=` reads what changed since an earlier revision, the
   engine's interdiff) and one file's patch (`file=`) as git wrote it, read
-  into the one `DiffView` and drawn `layout=unified` or `split`; every finding
+  into the one `DiffView` and drawn `layout=unified` or `split` — a patch
+  past one answer a page at a time, **Load more lines** asking the page
+  after from the cursor the last one ended at, and the hunks drawn from every
+  page read (`lib/patchPages.ts`); every finding
   the engine placed in that revision (`code.PlaceFindings`, the rule a seat's
   `code_get_change` reads by) is drawn under its last line, every thread on a
   line of it under its line, and what has no line here — a finding whose own
@@ -7920,7 +7923,8 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   made on; a root commit's every file it holds, from git's empty tree), by
   both whole ids, so every page of it is immutable: the files a page at a
   time, and one file's patch (`file=`, the first where none is named) in the
-  one `DiffView`, `layout=unified` or `split`. A change's revisions link
+  one `DiffView`, `layout=unified` or `split`, a page at a time as a
+  change's is (**Load more lines**). A change's revisions link
   their heads here.
 - **A comparison**, `#/code/repos/{name}/compare`, compares `head=` with
   `base=` (none is the default branch), each named as a revision on the
