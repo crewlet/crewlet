@@ -51,15 +51,14 @@ import (
 //
 // The frame is internal/recordseal's, the one every state-log record carries,
 // judged by its three verdicts with their dispositions. A seal under a key
-// this node does not hold is a fact about
-// THIS NODE: the answer is kept, owed, and waits — logged with the keys this
-// node holds — until a node that holds the key takes the seat, or this one is
-// restarted with it ([ConditionAnswerKey]). A seal that does not open under a
-// key it holds, or opens as an answer to some other question, is a fact about
-// the ROW: no node will ever open it, so it is never handed to the run or
-// attributed to anybody — it is logged at error and let go of, with nothing
-// handed back, and the run waits on its question again
-// ([Coordinator.dropUnopened]).
+// this node does not hold is a fact about THIS NODE: the answer is kept, owed,
+// and waits — logged with the keys this node holds — until a node that holds
+// the key takes the seat, or this one is restarted with it
+// ([ConditionAnswerKey]). A seal that does not open under a key it holds, or
+// opens as an answer to some other question, is a fact about the ROW: no node
+// will ever open it, so it is never handed to the run or attributed to anybody
+// — it is logged at error and let go of, with nothing handed back, and the run
+// waits on its question again ([Coordinator.dropUnopened]).
 
 // AnswerSealDomain is the key domain a person's answer to a parked run is
 // sealed in: its own, so that no frame from a state log or another channel
