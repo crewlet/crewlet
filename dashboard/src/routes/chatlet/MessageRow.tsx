@@ -28,6 +28,7 @@ import {
   AddReaction,
   ChatMessage,
   Composer as KitComposer,
+  DeliveryReceipt,
   EmojiPicker,
   Menu,
   MessageAction,
@@ -72,6 +73,7 @@ import { workingLine } from "./live.ts";
 import { MessageUnfurls } from "./MessageLinks.tsx";
 import { useChatNav } from "./nav.tsx";
 import { useChatPeople } from "./people.ts";
+import { reachRecipients, showsReceipt } from "./receipts.ts";
 import { EventRow } from "./RoomIntro.tsx";
 import { useReaderMarks, useRoomScope } from "./scope.tsx";
 
@@ -387,6 +389,14 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           status={answeringLine}
           label={answeringLine}
           queued={answeringQueued}
+        />
+      )}
+      {/* WHOM A PERSON'S MESSAGE REACHED, AND WHO ANSWERED, under its words:
+          the post's own routing as the engine kept it. */}
+      {showsReceipt(message, scope.channel?.kind) && (
+        <DeliveryReceipt
+          recipients={reachRecipients(message.reach, view.answered, people.nameOf)}
+          truncated={message.reach?.truncated}
         />
       )}
     </>

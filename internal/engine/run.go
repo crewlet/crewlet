@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -2110,6 +2111,25 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return e, nil
 	}
 
+	// EVERY MAILBOX A WAKE TRAVELS THROUGH, BEFORE ANYTHING BELOW CAN SEND
+	// ONE: each seat's inbox and priority lane, and the inbound edge's own
+	// durable. Both streams drop what is published to a subject no
+	// consumer covers, and the scheduler, the change feeds and the
+	// notification router below all publish the moment they start, so
+	// made after them the first wakes of a boot (a feed replaying a
+	// person's message) were gone. The node's wake queue ([Engine.wakes])
+	// is the backstop for a seat whose create the broker refused here, not
+	// the path a boot takes. The pass is best effort per seat, as it is on
+	// every other caller; the inbound edge's is fatal, for the reason the
+	// router's own subscribe is ([Engine.ensureInboundMailbox]).
+	if e.node != nil {
+		e.node.EnsureMailboxes(ctx)
+	}
+	if e.Company() != nil {
+		if err := e.ensureInboundMailbox(ctx); err != nil {
+			return nil, fmt.Errorf("engine: %w", err)
+		}
+	}
 	// WHICH SEATS A PERSON PAUSED, read before the seat host claims
 	// anything — [Engine.Start] runs it — so the first mail this node is
 	// handed meets a node that already knows. Bounded: past its budget the
@@ -2174,14 +2194,6 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// The background passes, after the node exists: each is a fleet
 	// singleton claimed under its own incarnation.
 	e.startLearningBackground(ctx)
-	// THE INBOUND EDGE'S MAILBOX FIRST, because the feeds below publish
-	// onto it ahead of the router that consumes it. See
-	// [Engine.ensureInboundMailbox].
-	if e.Company() != nil {
-		if err := e.ensureInboundMailbox(ctx); err != nil {
-			return nil, fmt.Errorf("engine: %w", err)
-		}
-	}
 	// BEFORE notifications, because a feed publishes onto the same inbound
 	// edge the service consumes: started after, the changes committed in
 	// the window between would reach the record and wake nobody.
@@ -3117,6 +3129,19 @@ func (e *Engine) wakes() queue.EventQueue {
 	return e.node.Wakes()
 }
 
+// mailboxConfirmer is what a producer that spends something before it
+// publishes (the scheduler's claim, an agent-to-agent channel) asks first:
+// the node's [node.Node.ConfirmMailbox], so a refusal leaves nothing half
+// done. Nil on an engine with no node, which confirms nothing.
+func (e *Engine) mailboxConfirmer() interface {
+	ConfirmMailbox(context.Context, uuid.UUID) error
+} {
+	if e.node == nil {
+		return nil
+	}
+	return e.node
+}
+
 // park requeues a partition onto the seat's own inbox.
 //
 // Republished one at a time, and a failure part way through is reported: the
@@ -3130,7 +3155,10 @@ func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) e
 		return err
 	}
 	subject := topics.AgentInbox(id)
-	for _, ev := range evs {
+	// AS ONE UNIT: a partition holding a person's message goes back to the
+	// lane whole, its siblings with it, rather than the marked event alone
+	// to the lane and the rest to the inbox's tail ([queue.Together]).
+	for _, ev := range queue.Together(evs) {
 		if err := e.wakes().Publish(ctx, subject, ev); err != nil {
 			// THE SEAT BY NAME, not only the subject it is addressed by.
 			// A mailbox is named by the seat's id, so a failure reported

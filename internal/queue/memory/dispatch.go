@@ -104,9 +104,9 @@ func (b *Broker) drainPass(ctx context.Context, sub *subscription, bypassLinger 
 			continue
 		}
 
-		chunk, folded := takeChunkLocked(sub, m)
+		chunk := takeChunkLocked(sub, m)
 		b.mu.Unlock()
-		b.deliverBatch(ctx, sub, m, chunk, folded)
+		b.deliverBatch(ctx, sub, m, chunk)
 	}
 }
 
@@ -183,25 +183,15 @@ func deliverableLocked(m *consumer) bool {
 // published behind a backlog is the broker's lane message that a drain
 // fetches before the topic, and a hand-back that returns either kind to the
 // front keeps it ahead of its own kind, as the broker's redelivery does.
-//
-// AND A PRIORITY PARTITION IS TAKEN WHOLE ([queue.Fold]): every event still in
-// the mailbox that shares a partition with one of the chunk's priority events
-// is appended to the chunk and reported in folded. A folded event is NOT
-// removed from the mailbox, because the broker does not deliver it either: it
-// reads it where it sits and settles it only when its partition is acked.
-// Leaving it in place is what lets a Nak or a Defer of the partition leave it
-// exactly where it was, uncharged ([Broker.invoke]).
-func takeChunkLocked(sub *subscription, m *consumer) (
-	chunk []*events.Event, folded map[*events.Event]struct{}) {
-
+func takeChunkLocked(sub *subscription, m *consumer) []*events.Event {
 	n := min(m.options.EffectiveMaxBatch(), len(sub.mail))
 	if !queue.HasLane(sub.topic) {
-		chunk = make([]*events.Event, n)
+		chunk := make([]*events.Event, n)
 		copy(chunk, sub.mail[:n])
 		sub.mail = sub.mail[n:]
-		return chunk, nil
+		return chunk
 	}
-	chunk = make([]*events.Event, 0, n)
+	chunk := make([]*events.Event, 0, n)
 	rest := make([]*events.Event, 0, len(sub.mail))
 	for _, ev := range sub.mail {
 		if len(chunk) < n && queue.Prioritized(ev) {
@@ -213,60 +203,7 @@ func takeChunkLocked(sub *subscription, m *consumer) (
 	take := n - len(chunk)
 	chunk = append(chunk, rest[:take]...)
 	sub.mail = rest[take:]
-
-	fold := queue.FoldOf(chunk, m.batchKey)
-	if fold.Empty() {
-		return chunk, nil
-	}
-	for _, ev := range sub.mail {
-		if !fold.Takes(ev) {
-			continue
-		}
-		if folded == nil {
-			folded = map[*events.Event]struct{}{}
-		}
-		folded[ev] = struct{}{}
-		chunk = append(chunk, ev)
-	}
-	return chunk, folded
-}
-
-// taken is the events of a delivery the drain took out of the mailbox: all of
-// them but the ones it folded ([takeChunkLocked]), which never left it. Only
-// these are put back by a hand-back, and only these pay a delivery for it.
-func taken(evs []*events.Event, folded map[*events.Event]struct{}) []*events.Event {
-	if len(folded) == 0 {
-		return evs
-	}
-	out := make([]*events.Event, 0, len(evs))
-	for _, ev := range evs {
-		if _, ok := folded[ev]; !ok {
-			out = append(out, ev)
-		}
-	}
-	return out
-}
-
-// settleFoldedLocked removes from the mailbox the folded events of a delivery
-// that was acked, which is the twin's settling of them: they were read where
-// they sat, and the ack is what retires them.
-func settleFoldedLocked(sub *subscription, evs []*events.Event, folded map[*events.Event]struct{}) {
-	if len(folded) == 0 {
-		return
-	}
-	settled := map[*events.Event]struct{}{}
-	for _, ev := range evs {
-		if _, ok := folded[ev]; ok {
-			settled[ev] = struct{}{}
-		}
-	}
-	if len(settled) == 0 {
-		return
-	}
-	sub.mail = slices.DeleteFunc(sub.mail, func(ev *events.Event) bool {
-		_, ok := settled[ev]
-		return ok
-	})
+	return chunk
 }
 
 // takeOneLocked removes the event a single-event consumer is handed next: the
@@ -285,7 +222,7 @@ func takeOneLocked(sub *subscription) *events.Event {
 }
 
 func (b *Broker) deliverOne(ctx context.Context, sub *subscription, m *consumer, ev *events.Event) {
-	b.invoke(ctx, sub, m, []*events.Event{ev}, nil,
+	b.invoke(ctx, sub, m, []*events.Event{ev},
 		func(hctx context.Context) queue.Result { return m.handler(hctx, ev) },
 		"handler_failed",
 		[]any{"topic", sub.topic, "group", sub.group, "event_type", ev.Type},
@@ -295,14 +232,7 @@ func (b *Broker) deliverOne(ctx context.Context, sub *subscription, m *consumer,
 // deliverBatch partitions a chunk and dispatches one handler call per
 // partition, acking per partition: a failing partition never blocks or
 // replays a different one from the same drain.
-//
-// folded is the chunk's events that were folded into it rather than taken
-// ([takeChunkLocked]): each is handed to its partition's handler like any
-// other, settled by its partition's ack, and otherwise never put back,
-// because it never left the mailbox.
-func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consumer,
-	chunk []*events.Event, folded map[*events.Event]struct{}) {
-
+func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consumer, chunk []*events.Event) {
 	if len(chunk) == 0 {
 		return
 	}
@@ -317,7 +247,7 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 	// run a deferral made, so the undispatched partitions were spliced in
 	// behind a retry the broker serves after them.
 	inChunk := make(map[*events.Event]struct{}, len(chunk))
-	for _, ev := range taken(chunk, folded) {
+	for _, ev := range chunk {
 		inChunk[ev] = struct{}{}
 	}
 
@@ -360,7 +290,7 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 			//
 			// THE REST OF THE DRAIN IS CHARGED FOR THE HAND-BACK, exactly
 			// as the partition that stopped it was: see [Broker.restoreLocked].
-			dead := b.restoreLocked(sub, parts[i:], inChunk, folded, m.client.maxRedeliveries)
+			dead := b.restoreLocked(sub, parts[i:], inChunk, m.client.maxRedeliveries)
 			b.mu.Unlock()
 			b.logDeadLetters(ctx, sub, dead)
 			return
@@ -368,7 +298,7 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 		b.mu.Unlock()
 
 		evs := part.Items
-		outcome := b.invoke(ctx, sub, m, evs, folded,
+		outcome := b.invoke(ctx, sub, m, evs,
 			func(hctx context.Context) queue.Result { return m.batchHandler(hctx, evs) },
 			// The same machine-parsable failure event a real backend
 			// emits for batch partitions: log consumers must not see
@@ -422,15 +352,11 @@ func (b *Broker) restoreLocked(
 	sub *subscription,
 	remaining []queue.Partition[*events.Event],
 	inChunk map[*events.Event]struct{},
-	folded map[*events.Event]struct{},
 	budget int,
 ) []deadLetter {
 	var undispatched []*events.Event
 	for _, part := range remaining {
-		// A FOLDED EVENT IS NOT RESTORED: it never left the mailbox, and
-		// the broker never delivered it, so there is nothing to put back
-		// and no delivery to charge.
-		undispatched = append(undispatched, taken(part.Items, folded)...)
+		undispatched = append(undispatched, part.Items...)
 	}
 	// Charged BEFORE the splice, so what is spliced back is what survived:
 	// an event whose budget the hand-back just spent belongs on the
@@ -493,17 +419,11 @@ func (b *Broker) restoreLocked(
 // every backend still owes is that a healthy event does not die from being
 // handed over, and both answer it the same way now: by sizing the budget so
 // handoffs cannot exhaust it.
-//
-// folded is the delivery's events that were folded into it rather than taken
-// ([takeChunkLocked]), nil for a delivery that folded nothing. An ack settles
-// them; a Nak or a Defer leaves them in the mailbox where they sat and charges
-// them nothing, because the broker never delivered them.
 func (b *Broker) invoke(
 	ctx context.Context,
 	sub *subscription,
 	m *consumer,
 	evs []*events.Event,
-	folded map[*events.Event]struct{},
 	call func(context.Context) queue.Result,
 	failureEvent string,
 	attrs []any,
@@ -524,9 +444,7 @@ func (b *Broker) invoke(
 	// numbers the real broker gives it, in the contract's convention rather
 	// than in this backend's: what is carried is deliveries LEFT, where
 	// this package counts redeliveries already spent.
-	// A FOLDED EVENT IS LEFT OUT, as the broker leaves it out: it was read,
-	// not delivered, so there is no delivery count of it to state.
-	perMessage := headroomLocked(sub, taken(evs, folded), client.maxRedeliveries)
+	perMessage := headroomLocked(sub, evs, client.maxRedeliveries)
 	b.mu.Unlock()
 	// THE HANDLER IS DETACHED FROM THE CONTEXT THAT DROVE THE DRAIN, which
 	// is a PUBLISHER's — inline dispatch is a property of this twin, and the
@@ -554,14 +472,12 @@ func (b *Broker) invoke(
 		// dead-letter that ends it is the contract's too: a message whose
 		// deliveries went on handoffs is dead-lettered with a line rather
 		// than circling a mailbox no budget can ever retire it from.
-		dead = b.handBackLocked(sub, taken(evs, folded), client.maxRedeliveries)
+		dead = b.handBackLocked(sub, evs, client.maxRedeliveries)
 	case queue.OutcomeNak:
-		dead = b.retryLaterLocked(sub, taken(evs, folded), client.maxRedeliveries)
+		dead = b.retryLaterLocked(sub, evs, client.maxRedeliveries)
 	case queue.OutcomeAck:
-		// Acked: the events the drain took left the mailbox before the
-		// call, so there is nothing to put back; the ones it folded are
-		// settled now.
-		settleFoldedLocked(sub, evs, folded)
+		// Acked: the events left the mailbox before the call, so there
+		// is nothing to put back.
 	}
 	b.mu.Unlock()
 

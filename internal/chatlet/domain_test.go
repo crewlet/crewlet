@@ -427,7 +427,7 @@ var theWrittenTables = map[chatlet.ObjectKind][]string{
 	chatlet.KindChannel: {
 		"chat_channels", "chat_members", "chat_messages", "chat_mentions",
 		"chat_reactions", "chat_thread_participants", "chat_follows",
-		"chat_deletions", "chat_autojoin",
+		"chat_deletions", "chat_autojoin", "chat_receipts",
 	},
 	// A post, an edit, a tombstone and a reaction. It touches the channel
 	// row because the per-channel sequence is minted from its counter,
@@ -438,7 +438,7 @@ var theWrittenTables = map[chatlet.ObjectKind][]string{
 	chatlet.KindMessage: {
 		"chat_messages", "chat_channels", "chat_mentions",
 		"chat_thread_participants", "chat_follows", "chat_reactions",
-		"chat_verdicts", "chat_verdicts_lost",
+		"chat_receipts", "chat_verdicts", "chat_verdicts_lost",
 	},
 	chatlet.KindEviction:   {"chat_evictions"},
 	chatlet.KindGeneration: {"chat_log_generations"},

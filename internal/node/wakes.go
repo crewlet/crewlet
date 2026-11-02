@@ -27,14 +27,26 @@ import (
 // first would close that one window and leave the rest: a seat whose create
 // the broker refused on the pass, and a mailbox the pass has not reached yet.
 //
-// So the guarantee is made where a wake is sent. Every producer of a seat's
-// wake (the inbound router, the scheduler, the agent-to-agent asks) publishes
-// through [Node.Wakes], and a publish to a seat this node has not confirmed a
-// complete mailbox for runs the pass first. A mailbox it still cannot confirm
-// refuses the publish with [queue.ErrUnavailable], which each producer already
-// answers by trying again (the inbound router NAKs the delivery, so the broker
-// redelivers it), instead of handing the wake to a broker that would discard
-// it.
+// So the boot makes every mailbox before it starts a producer, and an apply
+// makes a revision's before it can route to them; and the guarantee is held
+// where a wake is sent as well, as the backstop for a create the broker
+// refused. Every producer of a seat's wake (the inbound router, the scheduler,
+// the agent-to-agent asks, a park) publishes through [Node.Wakes], and a
+// publish to a seat this node has not confirmed a complete mailbox for runs
+// the pass first. A mailbox it still cannot confirm refuses the publish with
+// [queue.ErrUnavailable] instead of handing the wake to a broker that would
+// discard it, and each producer retries rather than drops: the inbound router
+// NAKs the delivery, so the broker redelivers it; a park's NAK returns the
+// partition; and the scheduler and the agent-to-agent asks ask
+// [Node.ConfirmMailbox] BEFORE they spend a claim or open a channel, so a
+// refusal leaves nothing half done for the retry to trip over.
+//
+// THE CONFIRMED SET IS THIS NODE'S MEMORY ([mailboxes]): once a seat is in it,
+// a wake costs a map lookup and no broker call. It is keyed on the seat's id,
+// which is what the mailbox is named by, so no revision can give a seat a
+// different mailbox; and it answers for the revision being served, because
+// every pass prunes it to that revision's seats and an apply runs one, so a
+// seat a revision removed and a later one restored is confirmed again.
 
 // Wakes is the node's queue for publishing a seat's wakes: every verb is the
 // queue's own, and Publish to a seat's inbox reaches a complete mailbox or is
@@ -58,15 +70,22 @@ type wakes struct {
 // Publish confirms the seat's mailbox before the wake is sent to it.
 func (w wakes) Publish(ctx context.Context, topic string, ev *events.Event) error {
 	if seat, ok := topics.SeatFromInbox(topic); ok {
-		if err := w.n.awaitMailbox(ctx, seat); err != nil {
+		if err := w.n.ConfirmMailbox(ctx, seat); err != nil {
 			return err
 		}
 	}
 	return w.EventQueue.Publish(ctx, topic, ev)
 }
 
-// awaitMailbox returns once the seat's mailbox is complete, or reports why the
-// node cannot say it is.
+// ConfirmMailbox returns once the seat's mailbox is complete, or reports why
+// the node cannot say it is, with an error that is [queue.ErrUnavailable]. A
+// seat outside the company the node serves is not this node's to make a
+// mailbox for, and answers nil.
+//
+// EXPORTED FOR THE PRODUCERS THAT SPEND SOMETHING BEFORE THEY PUBLISH: the
+// scheduler claims a fire and the agent-to-agent service opens a channel, and
+// a refusal after either would leave a claimed fire no tick retries or a
+// channel nobody is woken for. Asked first, a refusal leaves nothing behind.
 //
 // THE WHOLE PASS, not a create for this seat alone: it is the one place that
 // registers a mailbox before creating it, reads the broker's own listing
@@ -74,7 +93,7 @@ func (w wakes) Publish(ctx context.Context, topic string, ev *events.Event) erro
 // missing ([queue.Subscription.Partial]). Serialised with every other pass, so
 // a wake waits for one already in flight instead of proposing the same create
 // beside it, and a pass with nothing missing makes no broker call.
-func (n *Node) awaitMailbox(ctx context.Context, id uuid.UUID) error {
+func (n *Node) ConfirmMailbox(ctx context.Context, id uuid.UUID) error {
 	if n.mail.has(id) {
 		return nil
 	}

@@ -543,9 +543,9 @@ func (e *Engine) rebuildPartiesLocked(c *Company, standing notify.Standing) {
 // starts ahead of it inside [Engine.startNotifications]. On a broker that has
 // never held the group, whatever either published in that window reached
 // nobody. So each path that starts one of them makes the mailbox first: boot
-// before its feeds, [Engine.startNativeFor] before an apply's, and
-// [Engine.startNotifications] before its transports. A mailbox the broker
-// already holds costs a lookup.
+// before anything that publishes, [Engine.startNativeFor] before an apply's
+// feeds, and [Engine.startNotifications] before its transports. A mailbox the
+// broker already holds costs a lookup.
 //
 // An error is the caller's to refuse on, for the reason a failed router
 // subscribe is: a node that cannot hold its inbound mail routes nothing while

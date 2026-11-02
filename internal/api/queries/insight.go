@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
@@ -103,7 +104,12 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// which is a trigger with nothing to collapse on.
 		"work_key": key,
 		"attempts": siblings,
-		"events":   records,
+		// WHAT STARTED IT: the origin the earliest of its rows names (a
+		// chat message and the reason it reached the seat, a work item, a
+		// schedule), as the turns list files it. Null for a trigger that
+		// names none.
+		"origin": originOfRows(records),
+		"events": records,
 		// SAYS WHAT IS MISSING, exactly as `trace` does, so a client can say
 		// the gap is the middle rather than warning that the page cannot
 		// answer its own headline question.
@@ -119,6 +125,17 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// see" is an empty list rather than a missing key.
 		"nodes": nonNil(detail.Nodes),
 	}, nil
+}
+
+// originOfRows is the origin the earliest record naming one names, or nil. The
+// rows are read forwards, so the first that names one is the earliest.
+func originOfRows(records []store.EventRecord) *types.TriggerOrigin {
+	for _, rec := range records {
+		if origin := store.OriginOfTags(rec.Tags); origin != nil {
+			return origin
+		}
+	}
+	return nil
 }
 
 // attemptsOf reports the unit of work a run was an attempt at, and every run

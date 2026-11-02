@@ -63,6 +63,7 @@ import {
 import {
   Button,
   Composer as KitComposer,
+  DeliveryReceipt,
   EmojiPicker,
   FormField,
   IconButton,
@@ -103,6 +104,8 @@ import { useAssistantControl } from "~/app/assistant/control.ts";
 import { matchesRow } from "~/app/keymap.ts";
 import { MAX_BODY_BYTES } from "~/contract/chat.ts";
 import { textBudget, type TextBudget } from "~/lib/format.ts";
+import { useQuery } from "~/lib/useQuery.ts";
+import { useQuiet } from "~/lib/useQuiet.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 
 import { AttachDialog, previewLinks, recordLink, type AttachKind } from "./Attach.tsx";
@@ -111,6 +114,7 @@ import { draftKey, useChatDrafts } from "./drafts.ts";
 import { useChatFrame, useChatNav } from "./nav.tsx";
 import { matchesPerson, useChatPeople } from "./people.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
+import { quietHint, reachRecipients } from "./receipts.ts";
 import { roomMark } from "./rooms.ts";
 import { useRoomScope } from "./scope.tsx";
 import { SHORTEN } from "./start.ts";
@@ -249,6 +253,18 @@ export function Composer({
   // sends what the button would refuse.
   const hold =
     scope.rules.post || held || (budget.over ? SHORTEN_FIRST : value.trim() ? "" : WRITE_FIRST);
+
+  // WHOM THE POST WILL REACH, before it is sent: the post's own routing run
+  // dry by the engine on what the box says once the typing settles, so the
+  // line names exactly whom the send will wake, and warns when that is no
+  // agent. Asked only of words that could be sent.
+  const settled = useQuiet(budget.over ? "" : value.trim());
+  const reach = useQuery(
+    "chat_reach",
+    { channel_id: channelID, body: settled, ...(threadRoot ? { reply_to: threadRoot } : {}) },
+    { enabled: settled !== "" && !scope.rules.post && !held },
+  );
+  const draftReach = value.trim() && settled ? reach.data?.reach : undefined;
 
   // THE BOX AS A FIELD of the room's one draft for the person's own
   // assistant. A room that takes no messages holds no box.
@@ -597,6 +613,16 @@ export function Composer({
             setAttaching(null);
             insert(`${recordLink(hit)} `);
           }}
+        />
+      )}
+      {draftReach && (
+        <DeliveryReceipt
+          tense="draft"
+          announce
+          className="chat-composer-reach"
+          recipients={reachRecipients(draftReach, undefined, people.nameOf)}
+          truncated={draftReach.truncated}
+          hint={quietHint(reach.data?.quiet)}
         />
       )}
       {/* THE BROWSER'S REASON, beside the Send it holds: the button's own

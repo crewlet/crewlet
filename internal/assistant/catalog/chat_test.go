@@ -357,9 +357,12 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 		return tool.Preview(t.Context(), reader(world), wednesday, args)
 	}
 
+	// WHOM IT WOULD REACH is the post's own decision run dry, read from
+	// the room's reach: pm follows the room whole.
 	p, err := preview("post_chat_message", assistanttest.World(), nil)
 	if err != nil || p.Target != "#launch" || rows(p)["room"].To != "#launch" ||
 		rows(p)["body"].To != "Ship it on Friday." ||
+		rows(p)["reaches"].To != "Product manager (pm) following every message" ||
 		!slices.Equal(p.Audience, []string{"Product manager (pm)", "Ada Lovelace (ada)"}) {
 		t.Errorf("a post previews %+v, %v", p, err)
 	}
@@ -414,8 +417,18 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	}
 
 	if p, err := preview("reply_in_chat_thread", assistanttest.World(), nil); err != nil ||
-		rows(p)["reply_to"].To != "Product manager (pm): The old words." {
+		rows(p)["reply_to"].To != "Product manager (pm): The old words." ||
+		rows(p)["reaches"].To != "Product manager (pm) following every message" {
 		t.Errorf("a reply previews %+v, %v", p, err)
+	}
+	// A DRAFT THAT WOULD REACH NO AGENT SAYS SO, and why, before the person
+	// approves a message nobody will answer.
+	quiet := assistanttest.World()
+	quiet[roomPath+"/reach"] = map[string]any{"channel_id": assistanttest.RecordID,
+		"reach": map[string]any{}, "quiet": "no_agent"}
+	if p, err := preview("post_chat_message", quiet, nil); err != nil ||
+		!strings.HasPrefix(rows(p)["reaches"].To, "No agent.") {
+		t.Errorf("a post that reaches no agent previews %q, %v", rows(p)["reaches"].To, err)
 	}
 	if p, err := preview("send_direct_message", assistanttest.World(), nil); err != nil ||
 		!slices.Equal(rows(p)["to"].Items, []string{"Ada Lovelace (ada)"}) ||
