@@ -16,6 +16,12 @@ import (
 // THE COMPACTION'S FLEET CASES: what only more than one data node can make of
 // a compaction — two maintainers, a committer that dies under one, an answer
 // that comes back late.
+//
+// EACH DRIVES WHOLE PASSES, and judges them by what a member's compactor
+// counted and what the store holds since the case began, because a pass meets
+// the case's own repository alone: RunFleet confines every case's maintenance
+// to the repositories it made (Cluster.ConfineMaintenance), and the cluster
+// holds others due throughout, an earlier case's among them.
 
 // memberNode is the running member called id as a git node.
 func memberNode(t *testing.T, c Cluster, id string) Node {
