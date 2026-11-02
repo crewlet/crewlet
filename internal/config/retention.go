@@ -342,7 +342,7 @@ const (
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
 	//     sized at, worklet.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
-	//   - the code log 22.4–100.1 MB a day: 3 000 pushes at 1 625 bytes,
+	//   - the code log 22.4–100.2 MB a day: 3 000 pushes at 1 625 bytes,
 	//     MEASURED for a seat's coding box's push alone in its record, the
 	//     most a seat's push takes, at which every one of the reference
 	//     company's is priced (internal/code's BenchmarkPushLogBytes, its

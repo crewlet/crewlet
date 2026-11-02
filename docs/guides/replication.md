@@ -1042,7 +1042,7 @@ what a company whose seats work through changes writes to it**. At the
 reference company — 3 000 pushes a day, every one a seat's, priced as its
 coding box's, 1 625 bytes alone in its record, and 300
 [changes](../concepts/code-host.md#changes) a day, ten pushes each — the code
-log takes 22.4–100.1 MB a day against the 12.1 MB its tracker writes and its
+log takes 22.4–100.2 MB a day against the 12.1 MB its tracker writes and its
 seats' reads take: nearly twice to about eight times what its
 tracker writes and its seats' reads take a day. Its pushes are 4.9 MB of that, the
 records that [compact](../concepts/code-host.md#compaction) their packs, publish
