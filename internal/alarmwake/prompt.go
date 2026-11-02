@@ -14,6 +14,14 @@ import (
 // read of every node's firing set, named by its authority row as the tool is.
 const fleetHealthTool = string(authz.ActionFleetHealth)
 
+// firingArg is the argument the prompt has the seat read fleet_health with:
+// only the nodes with an alarm firing, which is the question a wake asks and
+// an answer that stays small however many nodes the fleet has. A string here
+// rather than an import, since internal/agent/builtin sits above this package;
+// its TestAnAlarmWakeAsksFleetHealthOnlyForWhatIsFiring holds the prompt and
+// the tool's schema to one spelling.
+const firingArg = "firing"
+
 // Prompt is what an alarm transition asks of a seat whose role carries the
 // health grant.
 //
@@ -148,10 +156,10 @@ func (Prompt) Build(n notify.Inbound, _ notify.Parties) string {
 	}
 
 	b.WriteString("\nThis is one change on one node, not the fleet's current state. Read `" +
-		fleetHealthTool + "` before you act: it is every node's own account of what is firing " +
-		"now, and another change may already have followed this one. Your role carries the " +
-		"health grant, which is why you were told; whether anything needs doing, and by whom, " +
-		"is yours to judge.\n")
+		fleetHealthTool + "` with `" + firingArg + ": true` before you act: it is every node's " +
+		"own account of what is firing now, whatever the fleet's size, and another change may " +
+		"already have followed this one. Your role carries the health grant, which is why you " +
+		"were told; whether anything needs doing, and by whom, is yours to judge.\n")
 	return b.String()
 }
 

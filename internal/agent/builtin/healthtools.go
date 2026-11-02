@@ -227,6 +227,26 @@ func Withheld(ctx context.Context, authorize Authorizer, snapshot tools.Snapshot
 
 // ---- fleet_health ------------------------------------------------------- //
 
+// The fleet_health pages: nodes by id, a page at a time.
+//
+// A FLEET OUTGROWS ONE ANSWER. A node's row is some three hundred bytes as it
+// is sent — its roles, broker, labels and heartbeat — and a data node's a few
+// dozen more for every alarm it has firing, so a fleet of a couple of hundred
+// nodes, fewer in an alarm storm, would read past ToolAnswerBytes whole; and
+// long before that it is a turn's context spent on nodes nobody asked about,
+// by every turn an alarm's wake starts. So the answer is PAGED, by node id,
+// and NARROWED by what the reader is asking — `node` for one node, `firing`
+// for the nodes whose own table has an alarm firing, the table's verdict and
+// no threshold of this tool's — and every page is cut whole-row at the answer
+// as it is sent ([foreignRead.fit]), so no page passes ToolAnswerBytes.
+// TWENTY-FIVE a page by default, the code tools' listing's page: a screen of
+// nodes, and the whole of most fleets. A HUNDRED at most, near half of one
+// answer.
+const (
+	defaultFleetHealthPage = 25
+	maxFleetHealthPage     = 100
+)
+
 type fleetHealth struct{ deps HealthDeps }
 
 var _ tools.SeatCallable = (*fleetHealth)(nil)
@@ -239,17 +259,90 @@ func (t *fleetHealth) Description() string {
 		"the seats it holds — and every alarm its own table has firing, with when it was raised. " +
 		"What is wrong is the alarms' to say: this reports them as the nodes did and judges nothing " +
 		"else. A node with `alarms_evaluated: false` has no table it has evaluated (a node holding " +
-		"no data, or one still booting), which is not the same as nothing firing."
+		"no data, or one still booting), which is not the same as nothing firing. Nodes by id, a page " +
+		"at a time: pass `next` back as `cursor` until no `next` comes back. `firing` lists only the " +
+		"nodes with an alarm firing — what an alarm's wake asks — and `node` reads one node."
 }
 
 func (t *fleetHealth) Parameters() map[string]any {
-	return map[string]any{"type": "object", "properties": map[string]any{}}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"firing": map[string]any{
+				"type": "boolean",
+				"description": "Only the nodes whose own table has an alarm firing. A node with no table " +
+					"it evaluated cannot say, so it is counted (`unevaluated`) rather than listed.",
+			},
+			"node": map[string]any{
+				"type":        "string",
+				"description": "One node's id, to read that node alone.",
+			},
+			"cursor": map[string]any{
+				"type": "string",
+				"description": "The `next` of the previous page, handed back unchanged; leave it out " +
+					"for the first page.",
+			},
+			"limit": map[string]any{
+				"type": "integer",
+				"description": fmt.Sprintf("How many nodes a page lists, 1 to %d; %d by default. A page "+
+					"that would outgrow one answer holds fewer, and says where the next begins.",
+					maxFleetHealthPage, defaultFleetHealthPage),
+			},
+		},
+	}
 }
 
-// fleetHealthAnswer is fleet_health's answer.
+// fleetHealthAnswer is fleet_health's answer: one page of the live nodes, by
+// id.
 type fleetHealthAnswer struct {
 	ThisNode string       `json:"this_node"`
 	Nodes    []nodeHealth `json:"nodes"`
+	// Next is the id the next page begins after, handed back as `cursor`;
+	// absent on the last page.
+	Next string `json:"next,omitempty"`
+	// Unevaluated is, where the call asked for the nodes with an alarm
+	// firing, how many live nodes have no table they evaluated — a node
+	// holding no data, one still booting, or one whose heartbeat said
+	// nothing — which `firing` cannot judge and so leaves out: counted,
+	// so silence never reads as health. Absent otherwise, where every node
+	// is listed with what it said.
+	Unevaluated *int `json:"unevaluated,omitempty"`
+}
+
+// fleetHealthQuery is what one fleet_health call asks for.
+type fleetHealthQuery struct {
+	node   string
+	firing bool
+	cursor string
+	limit  int
+}
+
+// query is the call's arguments, or the refusal of ones it cannot read —
+// refused before anything is read.
+func (t *fleetHealth) query(args map[string]any) (fleetHealthQuery, *tools.Result) {
+	q := fleetHealthQuery{node: strings.TrimSpace(argString(args, "node")),
+		cursor: strings.TrimSpace(argString(args, "cursor")),
+		limit:  argInt(args, "limit", defaultFleetHealthPage)}
+	if raw, present := args["firing"]; present && raw != nil {
+		firing, ok := raw.(bool)
+		if !ok {
+			// A FILTER READ AS FALSE would list every node to a caller that
+			// asked for the ones firing.
+			r := failed(fmt.Sprintf("%s: `firing` is true or false.", t.Name()))
+			return q, &r
+		}
+		q.firing = firing
+	}
+	switch {
+	case q.limit < 1 || q.limit > maxFleetHealthPage:
+		r := failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), maxFleetHealthPage))
+		return q, &r
+	case q.node != "" && (q.firing || q.cursor != "" || args["limit"] != nil):
+		r := failed(fmt.Sprintf("%s: `node` reads that one node, so it takes no `firing`, `cursor` or "+
+			"`limit`.", t.Name()))
+		return q, &r
+	}
+	return q, nil
 }
 
 // nodeHealth is one live node as its presence lease and heartbeat state it.
@@ -287,14 +380,29 @@ type alarmMark struct {
 	Since time.Time `json:"since,omitzero"`
 }
 
+// evaluated reports whether the node's heartbeat says it evaluated an alarm
+// table: false for a heartbeat that carried no status, as for one that said
+// it had none.
+func (n nodeHealth) evaluated() bool { return n.Status != nil && n.Status.AlarmsEvaluated }
+
+// firing reports whether the node's own table has an alarm firing — the
+// table's verdict, as the node marked it.
+func (n nodeHealth) firing() bool {
+	return n.evaluated() && n.Status.Alarms != nil && len(*n.Status.Alarms) > 0
+}
+
 func (t *fleetHealth) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
 	return t.CallForTurn(ctx, nil, args)
 }
 
 func (t *fleetHealth) CallForTurn(ctx context.Context, turn *turnctx.Turn,
-	_ map[string]any) (tools.Result, error) {
+	args map[string]any) (tools.Result, error) {
 
 	if refusal := t.forRequester(ctx, turn); refusal != nil {
+		return *refusal, nil
+	}
+	q, refusal := t.query(args)
+	if refusal != nil {
 		return *refusal, nil
 	}
 	leases, err := t.deps.Leases.ListLive(ctx, coord.ClassNode)
@@ -307,17 +415,77 @@ func (t *fleetHealth) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if t.deps.Now != nil {
 		now = t.deps.Now()
 	}
-	answer := fleetHealthAnswer{ThisNode: t.deps.Self, Nodes: make([]nodeHealth, 0, len(leases))}
+	nodes := make([]nodeHealth, 0, len(leases))
 	for _, lease := range leases {
 		profile, ok := placement.FromLease(lease)
 		if !ok {
 			continue
 		}
-		answer.Nodes = append(answer.Nodes, nodeHealthOf(profile, lease, now))
+		nodes = append(nodes, nodeHealthOf(profile, lease, now))
 	}
-	slices.SortFunc(answer.Nodes, func(a, b nodeHealth) int { return cmp.Compare(a.ID, b.ID) })
-	return newForeignRead(nil, "").answer(ctx, t.Name(), answer,
-		"The fleet is too large to read whole in one answer.")
+	slices.SortFunc(nodes, func(a, b nodeHealth) int { return cmp.Compare(a.ID, b.ID) })
+	answer := fleetHealthAnswer{ThisNode: t.deps.Self}
+	read := newForeignRead(turn, "")
+	if q.node != "" {
+		i := slices.IndexFunc(nodes, func(n nodeHealth) bool { return n.ID == q.node })
+		if i < 0 {
+			return refused(tools.RefusalNotFound, fmt.Sprintf("%s: no live node is named %q — a node "+
+				"that has stopped renewing its presence is not live. Leave `node` out to list the live "+
+				"nodes.", t.Name(), clip(q.node))), nil
+		}
+		answer.Nodes = nodes[i : i+1]
+		return read.page(ctx, t.Name(), answer, "That node's own row is past one answer.")
+	}
+	if q.firing {
+		unevaluated := 0
+		nodes = slices.DeleteFunc(nodes, func(n nodeHealth) bool {
+			if !n.evaluated() {
+				unevaluated++
+				return true
+			}
+			return !n.firing()
+		})
+		answer.Unevaluated = &unevaluated
+	}
+	// THE PAGE: the nodes after the cursor, at most `limit` of them, cut
+	// whole-row wherever they would outgrow one answer as it is sent. The
+	// listing is keyset by id, so the next page begins after the last row
+	// kept.
+	rest := nodes[sortedAfter(nodes, q.cursor):]
+	page := func(k int) any {
+		a := answer
+		a.Nodes = rest[:k]
+		if k > 0 && k < len(rest) {
+			a.Next = rest[k-1].ID
+		}
+		return a
+	}
+	k, rendered, err := read.fit(min(q.limit, len(rest)), page)
+	switch {
+	case err != nil:
+		return labelFault(ctx, t.Name(), err), nil
+	case k == 0 && len(rest) > 0:
+		return failed(fmt.Sprintf("%s: node %q alone is past one answer — its labels are that long — so "+
+			"no page holds it whole. Pass %q as `cursor` to read the nodes after it.", t.Name(),
+			clip(rest[0].ID), rest[0].ID)), nil
+	}
+	return compactAnswer(rendered, "Ask for fewer with `limit`, for only the nodes with an alarm "+
+		"firing with `firing`, or for one node with `node`.")
+}
+
+// sortedAfter is where in nodes, sorted by id, the first node after cursor
+// stands: 0 for no cursor.
+func sortedAfter(nodes []nodeHealth, cursor string) int {
+	if cursor == "" {
+		return 0
+	}
+	i, found := slices.BinarySearchFunc(nodes, cursor, func(n nodeHealth, id string) int {
+		return cmp.Compare(n.ID, id)
+	})
+	if found {
+		i++
+	}
+	return i
 }
 
 // forRequester is nil where this call may read the deployment's health for

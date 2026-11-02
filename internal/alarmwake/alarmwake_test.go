@@ -180,14 +180,15 @@ func TestAnAlarmTransitionWakesEachGrantedSeatOnce(t *testing.T) {
 //
 // Every copy names the alarm, the node, the log a per-log alarm stands on and
 // the measurement, says what the alarm means in the table's own words, gives
-// the remedy while it stands, and sends the seat to fleet_health before it
-// acts: a fire says when it fired, a clear how long it stood and no remedy, a
-// first look since a start that it may have been firing before. Nobody is
-// waiting on an answer, and the trigger is a pointer. One alarm is one
-// conversation, on every node and log it stands on; another alarm is another.
+// the remedy while it stands, and sends the seat to fleet_health, asking for
+// the nodes with an alarm firing, before it acts: a fire says when it fired, a
+// clear how long it stood and no remedy, a first look since a start that it
+// may have been firing before. Nobody is waiting on an answer, and the trigger
+// is a pointer. One alarm is one conversation, on every node and log it stands
+// on; another alarm is another.
 //
-// Mutation: drop the fleet_health pointer, or the remedy, or key the
-// conversation by node, and a case is red.
+// Mutation: drop the fleet_health pointer or its `firing`, or the remedy, or
+// key the conversation by node, and a case is red.
 func TestAnAlarmWakeSendsItsSeatToTheFleetsCurrentState(t *testing.T) {
 	t.Parallel()
 	clock := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
@@ -223,7 +224,7 @@ func TestAnAlarmWakeSendsItsSeatToTheFleetsCurrentState(t *testing.T) {
 		n := routed[0].Inbound
 		body := prompt.Build(n, nil)
 		for _, part := range append(want, "`trim_blocked`", "`node-b`", "`tracker` log", "held 3h",
-			meaning, "`fleet_health`") {
+			meaning, "`fleet_health` with `firing: true`") {
 			if !strings.Contains(body, part) {
 				t.Errorf("the %s prompt does not say %q:\n%s", change, part, body)
 			}

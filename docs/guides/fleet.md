@@ -903,7 +903,7 @@ Two read-only tools put the same view in front of an assistant or an agent:
 
 | Tool | What it answers |
 |---|---|
-| `fleet_health` | Every live node as its own heartbeat states it — its roles, how its broker takes part, the turns it is running, whether it is draining, the config posture it concluded, the seats it holds — and every alarm its own table has firing, by kind and since, the longest-standing first. A node with no table it evaluated says `alarms_evaluated: false`, never an empty list. |
+| `fleet_health` | Every live node as its own heartbeat states it — its roles, how its broker takes part, the turns it is running, whether it is draining, the config posture it concluded, the seats it holds — and every alarm its own table has firing, by kind and since, the longest-standing first. A node with no table it evaluated says `alarms_evaluated: false`, never an empty list. Nodes by id, a page at a time (`limit` 1 to 100, 25 by default; `next` back as `cursor`), a page cut whole-row wherever it would outgrow one tool answer. With `firing`, only the nodes whose own table has an alarm firing, and a count of the nodes that cannot say (`unevaluated`) in place of their rows; with `node`, that one node. |
 | `code_status` | The git nodes, each as it states itself: its cache's bytes against its budget, the repositories it holds a copy of, the copies it evicted and repaired over the last hour and day, and the fleet's hottest repositories — each node's own count of what it served of one and its copy there, the hottest twenty of the hour and of the day. With `repo`, one repository on every git node instead. Its `coverage` names any git node that did not answer inside the fleet read budget. Offered where the company hosts code. |
 
 **They set no thresholds of their own.** What is wrong is the
@@ -961,8 +961,9 @@ both tools read on the seat's own grant.
 clears on a node — or a node's first evaluation since it started finds one
 firing — every agent seat whose role carries `health_tools` is notified once,
 with the alarm, the node, what was measured and the table's remedy, and is
-sent to `fleet_health` before it acts: the notification is one change on one
-node, and only the nodes' heartbeats say what is firing now. One alarm is one
+sent to `fleet_health` with `firing: true` before it acts: the notification is
+one change on one node, and only the nodes' heartbeats say what is firing now
+— an answer that stays small however many nodes the fleet has. One alarm is one
 conversation wherever it stands, so a flapping alarm, or one fleet-wide
 condition raised by every data node at once, is one thread rather than a turn
 per flap or per node, and nobody is waiting on an answer, so a seat may look

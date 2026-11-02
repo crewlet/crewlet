@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/code"
@@ -28,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -1077,5 +1079,186 @@ func TestAFleetHealthInATurnSomebodyWokeIsReadOnlyForTheCompany(t *testing.T) {
 				t.Errorf("a refused call read the presence leases %d times, want none", n)
 			}
 		})
+	}
+}
+
+// A FLEET PAST ONE ANSWER IS PAGED, NEVER REFUSED.
+//
+// fleet_health's answer grows with the fleet — some three hundred bytes a node
+// as it is sent, more for its labels and its alarms — so three hundred nodes,
+// half of them with long labels and well past where the whole fleet in one
+// answer was refused, are read a page at a time by id: twenty-five by default,
+// up to the hundred `limit` may ask for, fewer where the labels would make a
+// page outgrow one answer, every page compact and within ToolAnswerBytes, and
+// every node exactly once across the pages, in id order. `firing` narrows the
+// fleet to the nodes whose own table has an alarm firing, counting the nodes
+// that cannot say (`unevaluated`) rather than listing them; `node` reads one
+// node, a node that is not live is not found, and arguments that cannot be
+// read are refused.
+//
+// Mutation: render a page indented, ignore `cursor`, cap a page by `limit`
+// alone, or let `firing` keep a node with nothing firing or one that cannot
+// say, and a case is red.
+func TestAFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
+	t.Parallel()
+	const nodes = 300
+	backend := coordmem.New()
+	since := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	wide := map[string]any{} // labels long enough that a hundred rows outgrow one answer
+	for i := range 20 {
+		wide[fmt.Sprintf("label-%02d", i)] = strings.Repeat("v", 60)
+	}
+	var all, firing []string
+	unevaluated := 0
+	for i := range nodes {
+		id := fmt.Sprintf("node-%03d", i)
+		all = append(all, id)
+		meta := map[string]any{"roles": []string{"seats"}}
+		if i%2 == 0 {
+			meta["labels"] = wide
+		}
+		var status *coord.NodeStatus
+		switch i % 10 {
+		case 0: // a data node with an alarm firing
+			status = &coord.NodeStatus{AlarmsEvaluated: true,
+				Alarms: []coord.AlarmMark{{Kind: "backup_age", Since: since}}}
+			firing = append(firing, id)
+		case 1: // a data node that looked and found nothing
+			status = &coord.NodeStatus{AlarmsEvaluated: true}
+		case 2: // a node whose heartbeat carried no status
+			unevaluated++
+		default: // a node with no table to evaluate
+			status = &coord.NodeStatus{InFlight: 1}
+			unevaluated++
+		}
+		node(t, backend, id, meta, status)
+	}
+	_, chart := healthChart(t)
+	tool := healthTools(healthFleet(backend, chart), chart)[builtin.FleetHealthTool]
+
+	type page struct {
+		Nodes []struct {
+			ID string `json:"id"`
+		} `json:"nodes"`
+		Next        string `json:"next"`
+		Unevaluated *int   `json:"unevaluated"`
+	}
+	read := func(args map[string]any) page {
+		t.Helper()
+		got := callTool(asAdmin(), t, tool, args)
+		switch {
+		case got.Failed:
+			t.Fatalf("%v was refused: %s", args, got.Output)
+		case len(got.Output) > builtin.ToolAnswerBytes:
+			t.Fatalf("%v answered %d bytes, past one tool answer's %d", args, len(got.Output),
+				builtin.ToolAnswerBytes)
+		case strings.Contains(got.Output, "\n"):
+			t.Fatalf("%v was answered indented; a page goes out compact, as it was measured", args)
+		}
+		var p page
+		if err := json.Unmarshal([]byte(got.Output), &p); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		return p
+	}
+	ids := func(p page) []string {
+		var out []string
+		for _, n := range p.Nodes {
+			out = append(out, n.ID)
+		}
+		return out
+	}
+	walk := func(args map[string]any, most int) []string {
+		t.Helper()
+		var seen []string
+		for pages := 0; ; pages++ {
+			if pages > nodes {
+				t.Fatalf("paging %v never ended", args)
+			}
+			p := read(args)
+			if len(p.Nodes) > most {
+				t.Errorf("a page of %v listed %d nodes, want at most %d", args, len(p.Nodes), most)
+			}
+			seen = append(seen, ids(p)...)
+			if p.Next == "" {
+				return seen
+			}
+			if len(p.Nodes) == 0 || p.Next != p.Nodes[len(p.Nodes)-1].ID {
+				t.Fatalf("next %q is not the last node of its page %v", p.Next, ids(p))
+			}
+			args = maps.Clone(args)
+			args["cursor"] = p.Next
+		}
+	}
+
+	if first := read(nil); len(first.Nodes) != 25 || first.Next != "node-024" || first.Unevaluated != nil {
+		t.Errorf("the first page lists %d nodes and next %q (unevaluated %v), want the default "+
+			"twenty-five and node-024", len(first.Nodes), first.Next, first.Unevaluated)
+	}
+	if got := walk(map[string]any{}, 25); !slices.Equal(got, all) {
+		t.Errorf("paging by twenty-five read %d nodes, want every one of %d once, in id order", len(got), nodes)
+	}
+	if full := read(map[string]any{"limit": 100}); len(full.Nodes) == 0 || len(full.Nodes) >= 100 {
+		t.Errorf("a hundred rows half with long labels listed %d, want them cut whole-row to fit one "+
+			"answer", len(full.Nodes))
+	}
+	if got := walk(map[string]any{"limit": 100}, 100); !slices.Equal(got, all) {
+		t.Errorf("paging by a hundred read %d nodes, want every one of %d once, in id order", len(got), nodes)
+	}
+
+	f := read(map[string]any{"firing": true, "limit": 100})
+	if !slices.Equal(ids(f), firing) || f.Next != "" {
+		t.Errorf("firing listed %v (next %q), want exactly the nodes with an alarm firing: %v",
+			ids(f), f.Next, firing)
+	}
+	if f.Unevaluated == nil || *f.Unevaluated != unevaluated {
+		t.Errorf("firing counts %v nodes that cannot say, want %d", f.Unevaluated, unevaluated)
+	}
+	if got := walk(map[string]any{"firing": true, "limit": 7}, 7); !slices.Equal(got, firing) {
+		t.Errorf("paging the firing nodes by seven read %v, want %v", got, firing)
+	}
+	if one := read(map[string]any{"node": "node-007"}); !slices.Equal(ids(one), []string{"node-007"}) {
+		t.Errorf("node read %v, want node-007 alone", ids(one))
+	}
+
+	for _, c := range []struct {
+		args    map[string]any
+		refusal tools.Refusal
+	}{
+		{map[string]any{"node": "node-999"}, tools.RefusalNotFound},
+		{map[string]any{"node": "node-007", "firing": true}, tools.RefusalInvalid},
+		{map[string]any{"node": "node-007", "cursor": "node-003"}, tools.RefusalInvalid},
+		{map[string]any{"limit": 0}, tools.RefusalInvalid},
+		{map[string]any{"limit": 101}, tools.RefusalInvalid},
+		{map[string]any{"firing": "yes"}, tools.RefusalInvalid},
+	} {
+		if got := callTool(asAdmin(), t, tool, c.args); tools.RefusalOf(got) != c.refusal {
+			t.Errorf("%v answered (%v) %q, want %v", c.args, tools.RefusalOf(got), got.Output, c.refusal)
+		}
+	}
+}
+
+// AN ALARM'S WAKE ASKS FLEET_HEALTH ONLY FOR WHAT IS FIRING.
+//
+// Every turn an alarm starts reads fleet_health, so the wake sends its seat
+// there narrowed to the nodes whose own table has an alarm firing — an answer
+// that stays small however many nodes the fleet has — in an argument the tool
+// declares, so the wake's advice is never one the tool refuses as an argument
+// it does not read.
+//
+// Mutation: rename the tool's `firing`, or drop it from the prompt → red.
+func TestAnAlarmWakeAsksFleetHealthOnlyForWhatIsFiring(t *testing.T) {
+	t.Parallel()
+	body := alarmwake.Prompt{}.Build(notify.Inbound{Metadata: map[string]string{
+		alarmwake.AlarmField: "backup_age", alarmwake.NodeField: "node-a",
+		alarmwake.ChangeField: string(statelog.TransitionFired)}}, nil)
+	if want := "`" + builtin.FleetHealthTool + "` with `firing: true`"; !strings.Contains(body, want) {
+		t.Errorf("the wake's prompt does not say %q:\n%s", want, body)
+	}
+	_, chart := healthChart(t)
+	tool := healthTools(healthFleet(coordmem.New(), chart), chart)[builtin.FleetHealthTool]
+	props, _ := tool.Parameters()["properties"].(map[string]any)
+	if firing, _ := props["firing"].(map[string]any); firing["type"] != "boolean" {
+		t.Errorf("fleet_health declares no boolean `firing`: %v", props["firing"])
 	}
 }
