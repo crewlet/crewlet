@@ -964,10 +964,15 @@ with the alarm, the node, what was measured and the table's remedy, and is
 sent to `fleet_health` with `firing: true` before it acts: the notification is
 one change on one node, and only the nodes' heartbeats say what is firing now
 — an answer that stays small however many nodes the fleet has. One alarm is one
-conversation wherever it stands, so a flapping alarm, or one fleet-wide
-condition raised by every data node at once, is one thread rather than a turn
-per flap or per node, and nobody is waiting on an answer, so a seat may look
-and do nothing. See [Alarm wakes](../concepts/event-system.md#alarm-wakes) for how
+conversation wherever it stands, so the copies of it pending when a seat's turn
+starts are one turn: with `notification_coalesce_window_seconds` at its default
+`0`, one fleet-wide condition raised by every data node costs each granted seat
+two turns (the first copy's, then one for the copies that arrived during it),
+and a window of ten seconds, the alarm interval, makes that one. Nothing holds
+a transition back, so an alarm that fires and clears more slowly than a turn
+runs wakes every granted seat once per fire and once per clear, for as long as
+it flaps. Nobody is waiting on an answer, so a seat may look and do nothing.
+See [Alarm wakes](../concepts/event-system.md#alarm-wakes) for how
 a transition reaches the seats, and why a node that dies mid-alarm loses at
 most a notification, never the state `fleet_health` reads.
 

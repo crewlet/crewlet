@@ -60,13 +60,22 @@ func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
 func (Prompt) Addressed(notify.Inbound) bool { return false }
 
 // PartitionKey implements [notify.Prompt]: ONE ALARM is the conversation, on
-// every node and every log it stands on. A fire, its clear and its re-fire
-// coalesce into one turn, and so do the copies one condition raises across
-// the fleet — every data node evaluates its own table, so a fleet-wide fact
-// such as a stale backup fires on each of them at once — because the seat's
-// one look at `fleet_health` answers all of them, and a turn per node would
-// spend a round per node on the same read. Two alarms stay two things to
-// judge. Empty, and so never merged, for a copy naming no alarm.
+// every node and every log it stands on, so the copies of it the inbox holds
+// pending together merge into one turn: the copies one condition raises across
+// the fleet (every data node evaluates its own table, so a fleet-wide fact such
+// as a stale backup fires on each of them within one alarm interval), and a
+// fire beside its clear. The seat's one look at `fleet_health` answers all of
+// them, and a turn per copy would spend a round per copy on the same read. Two
+// alarms stay two things to judge. Empty, and so never merged, for a copy
+// naming no alarm.
+//
+// THE KEY MERGES ONLY WHAT IS PENDING AT ONCE, and nothing upstream holds a
+// transition back to make more of it pending: the table has no hysteresis and
+// the outbox publishes every transition. At the inbox's default linger of zero
+// the first copy starts a turn at once and the rest arrive during it, so one
+// fleet-wide condition is two turns for each granted seat, and an alarm that
+// flaps more slowly than a turn runs is a turn per transition
+// (docs/concepts/event-system.md, "Alarm wakes").
 func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 	kind := metadata[AlarmField]
 	if kind == "" {
