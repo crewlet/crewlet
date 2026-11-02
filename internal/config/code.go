@@ -815,8 +815,7 @@ var CodeCheckCells = []Placement{PlacementContainer, PlacementE2B}
 // where a change's code would read what the engine reads — the keyring that
 // signs every run's token among it.
 func CodeCheckCellRefusal(p Placement) string {
-	switch p {
-	case PlacementDirect:
+	if p == PlacementDirect {
 		return "direct runs a box as the engine's own user on the engine host, and a check runs a change's " +
 			"own code, which would read what the engine reads; run it in a container or on e2b"
 	}
