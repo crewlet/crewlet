@@ -36,7 +36,10 @@ type executorRestore struct{ engine *Engine }
 
 var _ sandbox.SessionRestore = executorRestore{}
 
-// Session reads one turn's row through the estate router's reads.
+// Session reads one turn's row through the estate router's reads. Where it was
+// read is the read surface's to state, not a restore's: a point read never
+// answers a row a record it could not decode may be missing from, since such a
+// record covering the turn refuses the read instead.
 func (r executorRestore) Session(ctx context.Context, handle, turn string,
 	fresh statelog.Freshness) (executordomain.Session, error) {
 
@@ -44,7 +47,8 @@ func (r executorRestore) Session(ctx context.Context, handle, turn string,
 		return executordomain.Session{}, errors.New("this node has no estate router to read the " +
 			"executor log through")
 	}
-	return r.engine.router.ExecutorReads().Session(ctx, handle, turn, fresh)
+	read, err := r.engine.router.ExecutorReads().Session(ctx, handle, turn, fresh)
+	return read.Session, err
 }
 
 // Fetch copies the sealed object row names into dst.
