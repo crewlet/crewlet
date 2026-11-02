@@ -6520,9 +6520,27 @@ holds.
   that asked it has its change's work item closed — set `done` in
   Worklet — **as its enqueuer**, decided by the authority table
   as theirs and attributed to them, under an operation id derived from the
-  landing's, so a close asked again is the same write. An item already
-  finished is left as it is; one on a vendor's tracker is closed there, by
-  whoever closes it, and the home logs that it closed nothing.
+  landing's, so a close asked again is the same write. The close is
+  **owed on the entry's row** from the landing's apply until its home
+  settles it: the landing records the close's operation on each entry it
+  lands that asked it (`code_queue.close_op`), and every home's queue work
+  lists the repositories owing one. So a landing answered `pending`, a home
+  that stops or hands the repository on between the landing and the close,
+  and a close the tracker could not answer are each closed by the next
+  turn on whichever home holds the repository, and never lost (an
+  archived repository's wait until it is unarchived, since nothing is
+  recorded on one). A close
+  that ENDED is settled by one `close_settled` record on the repository's
+  subject: `closed` (the item closed, or already finished) or
+  `not_closed`, for a close no asking again changes — the item is on a
+  vendor's tracker, which is closed there by whoever closes it; the
+  enqueuer is bound to no seat, has left the chart or may no longer update
+  it; or Worklet refuses the close for good, the item gone or its content
+  or its state (the trash, say) refusing it done. A `not_closed` settle tells the change's authors and its enqueuer,
+  under `merged`, why the item was left open (`Change … was merged through
+  its queue, and its work item was not closed: …`). A close no home could
+  make for `code.QueueHistory` is given up with its row, which the queue's
+  history removes.
 
 #### How fast a queue lands
 

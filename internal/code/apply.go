@@ -644,6 +644,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case Broken:
 		payloadRepo = p.RepoID
+	case CloseSettled:
+		payloadRepo = p.RepoID
 	case QueueSweep:
 		payloadRepo = p.RepoID
 	default:
@@ -722,6 +724,9 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case Green:
 		return a.applyGreen(ctx, tx, at, p)
+	case CloseSettled:
+		n, err := a.applyCloseSettled(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case Broken:
 		n, err := a.applyBroken(ctx, tx, at, p)
 		return a.noticed(ctx, tx, at, id, payload, n, err)

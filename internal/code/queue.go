@@ -267,20 +267,22 @@ type QueueProposal struct {
 	// estate's wire to whichever data node decides it under the code domain's
 	// stated condition — no build carrying the domain has run without it,
 	// none of the domain being on main — so every node asked it reads it.
-	Ceiling   *WriteCeiling `json:"ceiling,omitempty"`
-	Enqueue   *Enqueue      `json:"enqueue,omitempty"`
-	Dequeue   *Dequeue      `json:"dequeue,omitempty"`
-	Candidate *Candidate    `json:"candidate,omitempty"`
-	Eject     *Eject        `json:"eject,omitempty"`
-	Land      *Land         `json:"land,omitempty"`
-	Green     *Green        `json:"green,omitempty"`
-	Broken    *Broken       `json:"broken,omitempty"`
+	Ceiling      *WriteCeiling `json:"ceiling,omitempty"`
+	Enqueue      *Enqueue      `json:"enqueue,omitempty"`
+	Dequeue      *Dequeue      `json:"dequeue,omitempty"`
+	Candidate    *Candidate    `json:"candidate,omitempty"`
+	Eject        *Eject        `json:"eject,omitempty"`
+	Land         *Land         `json:"land,omitempty"`
+	Green        *Green        `json:"green,omitempty"`
+	Broken       *Broken       `json:"broken,omitempty"`
+	CloseSettled *CloseSettled `json:"close_settled,omitempty"`
 }
 
 // engines reports a proposal of one of the queue's OWN records, which its home
 // asks and which names no asker.
 func (p QueueProposal) engines() bool {
-	return p.Candidate != nil || p.Eject != nil || p.Land != nil || p.Green != nil || p.Broken != nil
+	return p.Candidate != nil || p.Eject != nil || p.Land != nil || p.Green != nil || p.Broken != nil ||
+		p.CloseSettled != nil
 }
 
 // writes is how many of the records a proposal may be p carries: one, or it
@@ -288,7 +290,8 @@ func (p QueueProposal) engines() bool {
 func (p QueueProposal) writes() int {
 	n := 0
 	for _, set := range []bool{p.Enqueue != nil, p.Dequeue != nil, p.Candidate != nil, p.Eject != nil,
-		p.Land != nil, p.Green != nil, p.Broken != nil} {
+		p.Land != nil, p.Green != nil, p.Broken != nil,
+		p.CloseSettled != nil} {
 		if set {
 			n++
 		}
@@ -532,7 +535,7 @@ func (p QueueProposal) measure() (int, error) {
 	// committer stamps; a record of several keeps what fits of what is left
 	// ([keptRoutings]).
 	bytes := len(encoded)
-	if p.Dequeue != nil || p.Broken != nil {
+	if p.Dequeue != nil || p.Broken != nil || p.CloseSettled != nil {
 		bytes += MaxRoutingBytes
 	}
 	if bytes > EntryRoom {
@@ -547,7 +550,7 @@ func (p QueueProposal) measure() (int, error) {
 func (p QueueProposal) validFields() error {
 	if p.writes() != 1 {
 		return fmt.Errorf("%w: a queue proposal is exactly one of an enqueue, a dequeue, a candidate, an "+
-			"eject, a land, a green and a broken", ErrInvalidProposal)
+			"eject, a land, a green, a broken and a close_settled", ErrInvalidProposal)
 	}
 	if err := statelog.CheckCallerOpID(p.OpID); err != nil {
 		return badField("op_id", "%v", err)
@@ -598,6 +601,8 @@ func (p QueueProposal) validFields() error {
 		return p.Green.validate()
 	case p.Broken != nil:
 		return p.Broken.validate()
+	case p.CloseSettled != nil:
+		return p.CloseSettled.validate()
 	}
 	if p.Ceiling != nil {
 		switch {
@@ -661,6 +666,8 @@ func (p QueueProposal) record() (OpKind, any) {
 		return OpGreen, *p.Green
 	case p.Broken != nil:
 		return OpBroken, *p.Broken
+	case p.CloseSettled != nil:
+		return OpCloseSettled, *p.CloseSettled
 	}
 	return "", nil
 }
@@ -700,6 +707,8 @@ func (p QueueProposal) RepoID() string {
 		return p.Green.RepoID
 	case p.Broken != nil:
 		return p.Broken.RepoID
+	case p.CloseSettled != nil:
+		return p.CloseSettled.RepoID
 	}
 	return ""
 }
@@ -757,6 +766,8 @@ func (p QueueProposal) rows() int {
 		return greenDecidedRows
 	case p.Broken != nil:
 		return brokenDecidedRows
+	case p.CloseSettled != nil:
+		return closeSettledDecidedRows
 	}
 	return queueDecidedRows
 }
@@ -898,6 +909,8 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 		return decideGreen(ctx, tx, *p.Green, d)
 	case p.Broken != nil:
 		return decideBroken(ctx, tx, *p.Broken, repo, seats, d)
+	case p.CloseSettled != nil:
+		return decideCloseSettled(ctx, tx, *p.CloseSettled, repo, d)
 	}
 	return decideEnqueue(ctx, tx, p, repo, seats, limits, capacity, d)
 }

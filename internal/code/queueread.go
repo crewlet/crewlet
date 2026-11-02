@@ -476,44 +476,65 @@ func (r *Reader) queueListing(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 // queueDue serves one page of a `queue_due` read: with no repository, the
 // active repositories its home owes queue work, by id, MaxSnapshotItems a
 // page — those holding a live entry, then those holding a given-up train's
-// attempt (queuework.go), two walks of their own indexes, the second's cursor
-// marked [abandonedCursor]; with one, its next target's queue work after the
-// cursor, one target a page. A repository in both walks is listed twice, and
-// its home works it once.
+// attempt (queuework.go), then those owing a landed change's work item its
+// close (code_queue.close_op), three walks of their own indexes, the second's
+// cursor marked [abandonedCursor] and the third's [closeOwedCursor]; with one,
+// its next target's queue work after the cursor, one target a page. A
+// repository in several walks is listed in each, and its home works it once.
 func (r *Reader) queueDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	if q.QueueDue.RepoID != "" {
 		return dueQueue(ctx, tx, q.QueueDue.RepoID, q.Cursor, q.QueueDue.EnqueuedSince, out)
 	}
-	after, abandoned := strings.CutPrefix(q.Cursor, abandonedCursor)
-	if !abandoned {
-		ids, err := dueRepoIDs(ctx, tx, queueDueReposSQL, after, r.pageRows)
+	// THE WALKS IN ORDER, each resumed from its own cursor mark, the page
+	// filled across them. Each walk names its statement at its call, a
+	// constant, so the read-index gate reads which statement it runs.
+	after, owed := strings.CutPrefix(q.Cursor, closeOwedCursor)
+	after, abandoned := strings.CutPrefix(after, abandonedCursor)
+	walk := func(mark, what string, list func(after string, room int) ([]string, error)) (bool, error) {
+		room := r.pageRows - len(out.DueRepos)
+		ids, err := list(after, room)
 		if err != nil {
-			return fmt.Errorf("code: list the repositories holding a queue: %w", err)
+			return false, fmt.Errorf("code: list the repositories %s: %w", what, err)
 		}
-		out.DueRepos = ids
-		if len(ids) == r.pageRows {
-			out.Next = ids[len(ids)-1]
-			return nil
-		}
+		out.DueRepos = append(out.DueRepos, ids...)
 		after = ""
+		if len(ids) == room {
+			out.Next = mark + ids[len(ids)-1]
+			return true, nil
+		}
+		return false, nil
 	}
-	room := r.pageRows - len(out.DueRepos)
-	ids, err := dueRepoIDs(ctx, tx, abandonedReposSQL, after, room)
-	if err != nil {
-		return fmt.Errorf("code: list the repositories holding a given-up train's checks: %w", err)
+	if !owed && !abandoned {
+		if full, err := walk("", "holding a queue", func(after string, room int) ([]string, error) {
+			return dueRepoIDs(ctx, tx, queueDueReposSQL, after, room)
+		}); full || err != nil {
+			return err
+		}
 	}
-	out.DueRepos = append(out.DueRepos, ids...)
-	if len(ids) == room {
-		out.Next = abandonedCursor + ids[len(ids)-1]
+	if !owed {
+		if full, err := walk(abandonedCursor, "holding a given-up train's checks",
+			func(after string, room int) ([]string, error) {
+				return dueRepoIDs(ctx, tx, abandonedReposSQL, after, room)
+			}); full || err != nil {
+			return err
+		}
 	}
-	return nil
+	_, err := walk(closeOwedCursor, "owing a landed change's work item its close",
+		func(after string, room int) ([]string, error) {
+			return dueRepoIDs(ctx, tx, closeOwedReposSQL, after, room)
+		})
+	return err
 }
 
-// abandonedCursor marks a `queue_due` listing's cursor as one of its second
-// walk, the repositories holding a given-up train's attempt: the id after it
-// is that walk's last. No repository's id — a UUID in its canonical spelling
-// — begins with it.
-const abandonedCursor = "abandoned:"
+// abandonedCursor and closeOwedCursor mark a `queue_due` listing's cursor as
+// one of its second walk, the repositories holding a given-up train's
+// attempt, or of its third, those owing a landed change's work item its
+// close: the id after it is that walk's last. No repository's id — a UUID in
+// its canonical spelling — begins with either.
+const (
+	abandonedCursor = "abandoned:"
+	closeOwedCursor = "close:"
+)
 
 // dueRepoIDs is the repository ids stmt lists after cursor, at most limit.
 func dueRepoIDs(ctx context.Context, tx *sql.Tx, stmt, cursor string, limit int) ([]string, error) {

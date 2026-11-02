@@ -2,6 +2,8 @@ package engine
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -53,7 +55,59 @@ func TestAQueuedCloseIsWrittenAsItsEnqueuer(t *testing.T) {
 		As:       code.Principal{Kind: code.PrincipalAgent, Seat: "dev"},
 		WorkItem: types.WorkItem{Backend: types.WorkJira, ID: "10042", Key: "ENG-42"},
 	})
-	if !errors.Is(err, errQueueCloseNotWorklet) {
-		t.Fatalf("closing a Jira issue answered %v, want it refused as not Worklet's", err)
+	var refused *codehome.NotClosed
+	if !errors.Is(err, errQueueCloseNotWorklet) || !errors.As(err, &refused) ||
+		!strings.Contains(refused.Why, "ENG-42") {
+		t.Fatalf("closing a Jira issue answered %v, want it settled not closed, naming ENG-42, as not Worklet's",
+			err)
+	}
+	// A CLOSE NO ASKING AGAIN CHANGES is final; an unbound enqueuer is one.
+	err = queueCloser{}.CloseWorkItem(t.Context(), codehome.TaskClose{
+		As:       code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:founder"},
+		WorkItem: types.WorkItem{Backend: types.WorkWorklet, ID: "task-1", Key: "ENG-1"},
+	})
+	if !errors.As(err, &refused) {
+		t.Fatalf("closing as a credential bound to no seat answered %v, want it settled not closed", err)
+	}
+}
+
+// A CLOSE WORKLET REFUSES FOR GOOD IS NOT ASKED AGAIN (M5-D27): a queued
+// change's close that Worklet answers with a refusal it MARKS as final — the
+// item gone, not the enqueuer's to write, its content or its state refusing
+// the close — is answered NotClosed, in the engine's own sentence naming the
+// item, so the queue settles it and tells the change's people once; a
+// failure of the node's own stays a plain error, which leaves the close owed
+// for the next turn.
+//
+// Mutations: let a gone item through as the node's failure → it is asked
+// again every turn, red; let a refused write through → red; settle the
+// node's own failure → it is never asked again, red.
+func TestACloseWorkletRefusesForGoodIsNotAskedAgain(t *testing.T) {
+	t.Parallel()
+	item := types.WorkItem{Backend: types.WorkWorklet, ID: "task-42", Key: "ENG-42"}
+	for _, c := range []struct {
+		name  string
+		err   error
+		final bool
+	}{
+		{"an item gone", fmt.Errorf("%w: task-42", worklet.ErrNoTask), true},
+		{"a write not the enqueuer's", &worklet.Refusal{Mark: worklet.ErrForbidden,
+			Err: errors.New("not dev's to write")}, true},
+		{"a close its content refuses", &worklet.Refusal{Mark: worklet.ErrInvalid,
+			Err: errors.New("a required field is empty")}, true},
+		{"a close its state refuses", &worklet.Refusal{Mark: worklet.ErrState,
+			Err: errors.New("it is in the trash")}, true},
+		{"the node's own failure", errors.New("the data node did not answer"), false},
+	} {
+		got := closeFailed(item, "dev", "close", c.err)
+		var refused *codehome.NotClosed
+		switch {
+		case !errors.Is(got, c.err):
+			t.Errorf("%s: answered %v, which lost the cause %v", c.name, got, c.err)
+		case c.final && (!errors.As(got, &refused) || !strings.Contains(refused.Why, "ENG-42")):
+			t.Errorf("%s: answered %v, want it settled not closed naming ENG-42", c.name, got)
+		case !c.final && errors.As(got, &refused):
+			t.Errorf("%s: settled not closed (%q), want it left owed and asked again", c.name, refused.Why)
+		}
 	}
 }

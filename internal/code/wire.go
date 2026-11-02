@@ -1732,6 +1732,13 @@ type ReadAnswer struct {
 	// commits no train of their target tests or landed ([AbandonedCheck]):
 	// what its home cancels once its targets have taken their steps.
 	QueueAbandoned []AbandonedCheck `json:"queue_abandoned,omitempty"`
+	// QueueOwedCloses is, on the same first page, the repository's landed
+	// entries still owing their change's work item its close (M5-D27,
+	// code_queue.close_op), at most [MaxOwedCloses]: what its home closes
+	// as each entry's enqueuer and settles (close_settled), whichever home
+	// asked the landing. An answer between nodes, so an older reader drops it
+	// and leaves the closes owed for a newer home.
+	QueueOwedCloses []QueueWorkEntry `json:"queue_owed_closes,omitempty"`
 	// Queue is a page of a `queue` read's live entries, in queue order;
 	// Trains a `queue` read's candidates of the trains testing the targets
 	// its page reaches; Ejected, on a named repository's first page, the

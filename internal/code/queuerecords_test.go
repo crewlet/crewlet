@@ -1027,3 +1027,131 @@ func TestAQueueReadSaysWhatItsQueuesPutOutLately(t *testing.T) {
 		t.Errorf("a read a day after the ejection still answers it: %+v", got)
 	}
 }
+
+// landedOwingClose is a repository named name whose one change, carrying
+// item, ada queued into main asking its work item closed, and its landing
+// applied: the repository, the change, the entry and the land record.
+func landedOwingClose(t *testing.T, n *node, c *code.Committer, w *code.ChangeWriter, name string,
+	item *types.WorkItem) (repo, change, entryID string, land code.QueueProposal) {
+
+	t.Helper()
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].Gate = queueGate()
+	repo = n.ensure(name, s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
+		set(featureRef, code.ZeroOID, oidOf("B"))))
+	open := opening(repo, featureRef, mainRef, dev)
+	open.Open.WorkItem = item
+	opened, err := c.ProposeChange(t.Context(), open)
+	requireChanged(t, opened, err)
+	change = opened.ChangeID
+	ready(t, n, w, repo, change)
+	enqueue := enqueueing(repo, change, ada, oidOf("B"))
+	enqueue.Enqueue.CloseTask = true
+	res, err := c.ProposeQueue(t.Context(), enqueue)
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+	entryID = enqueue.Enqueue.EntryID
+	train := training(repo, oidOf("A"), entryID, oidOf("M"))
+	res, err = c.ProposeQueue(t.Context(), train)
+	requireRecorded(t, res, err)
+	n.passed(repo, oidOf("M"), mainRef, "unit")
+	land = landingOf(repo, train.Candidate.Train, oidOf("A"),
+		code.LandEntry{EntryID: entryID, ChangeID: change, Commit: oidOf("M")})
+	res, err = c.ProposeQueue(t.Context(), land)
+	requireRecorded(t, res, err)
+	return repo, change, entryID, land
+}
+
+// A LANDED ENTRY OWES ITS WORK ITEM'S CLOSE UNTIL IT IS SETTLED (M5-D27): a
+// queued merge asking its change's work item closed lands, and the landing's
+// apply leaves the close OWED on the entry's row under the landing's own
+// step (code.CloseWorkItemOpID) — what every home's queue work answers, the
+// repository listed and its first page naming the entry, its enqueuer and
+// the work item, whichever home asked the landing. A settle of it closed
+// clears it, out of the listing; a second settle, of an entry owing nothing,
+// is refused stale and appends nothing. A not_closed settle tells the
+// change's authors AND its enqueuer, under `merged`, the reason beside.
+//
+// Mutations: leave close_op out of the land's write (entryLanded) — nothing
+// is owed, red; drop the settle's UPDATE — the close stays owed, red; route
+// a not_closed settle to the authors alone — the enqueuer hears nothing, red.
+func TestALandedEntryOwesItsWorkItemsCloseUntilItIsSettled(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	// WITHIN EVERY HORIZON: the broker stamps a record at the wall clock and
+	// the harness applies it at its own instant, years on, past which the
+	// applier writes no notice.
+	storedBefore(n, time.Hour)
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	land := func(name string, item *types.WorkItem) (repo, change, entryID string, land code.QueueProposal) {
+		return landedOwingClose(t, n, c, w, name, item)
+	}
+	owed := func(repo string) []code.QueueWorkEntry {
+		t.Helper()
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadQueueDue, Fresh: stale,
+			QueueDue: &code.QueueDueQuery{RepoID: repo}})
+		if err != nil {
+			t.Fatalf("read %s's queue work: %v", repo, err)
+		}
+		return a.QueueOwedCloses
+	}
+	listed := func(repo string) bool {
+		t.Helper()
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadQueueDue, Fresh: stale,
+			QueueDue: &code.QueueDueQuery{}})
+		if err != nil {
+			t.Fatalf("list the repositories owing queue work: %v", err)
+		}
+		return slices.Contains(a.DueRepos, repo)
+	}
+	settling := func(repo, entryID string, outcome code.CloseOutcome, detail string) code.QueueProposal {
+		return queueRecord(func(p *code.QueueProposal) {
+			p.CloseSettled = &code.CloseSettled{RepoID: repo, EntryID: entryID, Outcome: outcome, Detail: detail}
+		})
+	}
+
+	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7", Project: "ENG"}
+	repo, _, entryID, landed := land("web", item)
+	want := code.CloseWorkItemOpID(landed.OpID, entryID)
+	if got := owed(repo); len(got) != 1 || got[0].EntryID != entryID || got[0].CloseOp != want ||
+		got[0].WorkItem == nil || got[0].WorkItem.ID != item.ID || got[0].EnqueuedBy.Seat != ada.Seat ||
+		!got[0].CloseTask {
+		t.Fatalf("the landed entry's owed closes read %+v, want entry %s owing ENG-7's close as %s under %s",
+			got, entryID, ada.Seat, want)
+	}
+	if !listed(repo) {
+		t.Fatalf("a repository owing a landed entry's close is not listed as owing queue work")
+	}
+
+	res, err := c.ProposeQueue(t.Context(), settling(repo, entryID, code.CloseClosed, ""))
+	requireRecorded(t, res, err)
+	if got := owed(repo); len(got) != 0 {
+		t.Fatalf("a settled close is still owed: %+v", got)
+	}
+	if listed(repo) {
+		t.Fatalf("a repository whose every close is settled is still listed as owing queue work")
+	}
+	before := n.end()
+	res, err = c.ProposeQueue(t.Context(), settling(repo, entryID, code.CloseClosed, ""))
+	requireQueueRefused(t, n, before, res, err, code.MergeRefusalStale, "owes its work item no close")
+
+	// NOT CLOSED: the authors and the enqueuer told, under merged.
+	repo, change, entryID, _ := land("api", item)
+	why := "ENG-7 is a jira work item, which is closed where it lives"
+	res, err = c.ProposeQueue(t.Context(), settling(repo, entryID, code.CloseNotClosed, why))
+	requireRecorded(t, res, err)
+	for _, who := range []string{"dev", ada.Seat} {
+		if told := n.count(`SELECT COUNT(*) FROM code_notifications WHERE change_id = ? AND recipient = ?
+				AND reason = ? AND excerpt = ?`, change, who, string(code.ReasonMerged), why); told != 1 {
+			t.Errorf("%s was told %d times that the merged change's work item was not closed, want once", who,
+				told)
+		}
+	}
+	if got := owed(repo); len(got) != 0 {
+		t.Fatalf("a close settled not_closed is still owed: %+v", got)
+	}
+}
