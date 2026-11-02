@@ -5540,7 +5540,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section, and the built-in tools by group. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
@@ -9246,7 +9246,9 @@ failure somebody has to act on:
 | `unreported` | No live node's latest heartbeat carried the report |
 
 `error` is one failed instance's reason, cut to 512 bytes on the heartbeat,
-and `error_seat` the seat it was launched for (none for a shared server); the
+and `error_seat` the seat it was launched for (none for a shared server): the
+instance down longest on that node, so `error`, `error_seat`, `error_class` and
+`down_since` are one instance's facts (ties go to the lower seat id); the
 whole text is the node's `mcp_server_failed` log line for a start that failed,
 its `mcp_server_credential_missing` line for a server or a seat's instance held
 back, unlaunched, because a value it is started with resolves to nothing and
@@ -9254,9 +9256,10 @@ nothing mints it, or the integration minting it cannot mint until a person
 acts (that one from the node's last pass over the seat; the heartbeat re-judges
 it against the integration's latest report), and its `server_exited` or
 `server_restart_failed` line for an instance that went down after it started.
-`wait` is one waiting instance's sentence — the variables it waits for and the
-integration minting them — bounded the same way, and `wait_seat` its seat; the
-node's `mcp_server_awaiting_credential` line carries it.
+`wait` is one waiting instance's sentence (the variables it waits for and the
+integration minting them), bounded the same way, and `wait_seat` its seat: the
+instance waiting longest on that node; the node's
+`mcp_server_awaiting_credential` line carries it.
 
 `error_class` is why that instance failed, in the classes a person tells apart
 by what fixes them ([Tools and MCP › Why a server failed](../guides/tools-and-mcp.md#why-a-server-failed)),
@@ -9327,6 +9330,17 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
         "error_class": "credential_rejected", "down_since": "2026-11-01T08:52:10Z", "restarts": 4}
      ]}
   ],
+  "alarms": [
+    {"kind": "mcp_server_partial",
+     "detail": "1 of 4 instances of github is not serving, and one has been down for 7m 50s (backend-dev's, on node-2, credential_rejected): 401 Bad credentials",
+     "remedy": "The agents and nodes whose instance serves are not affected. …",
+     "entries": [
+       {"key": "github",
+        "detail": "1 of 4 instances of github is not serving, and one has been down for 7m 50s (backend-dev's, on node-2, credential_rejected): 401 Bad credentials",
+        "since": "2026-11-01T08:52:10Z", "seat": "backend-dev",
+        "fix": {"kind": "restart", "server": "github", "seat": "backend-dev"}}
+     ]}
+  ],
   "builtin": [
     {"key": "work", "label": "Work items",
      "description": "Worklet, the company's tracker: read, file, discuss and move work.",
@@ -9352,6 +9366,26 @@ engine hands the onboarding pass and a worker and no registry holds. A group
 the company offers nothing of is left out: a company on Jira gets no `work`
 group, and one on Slack no `chat` group. A node with no active revision sends
 an empty list.
+
+`alarms`, in an administrator's reading only, are the [MCP alarms](alarms.md)
+standing on the answering node's latest evaluation, in the table's order: the evaluation the node's health
+count, its `crewlet.alarm.active` gauge and its alarm log lines were told, so
+this answer and those can never disagree. Each is the table's `kind`, the
+longest-standing server's `detail`, the `remedy`, and `entries`, one per
+server it stands on in name order: `key` (the server), that server's own
+`detail`, `since` (when the instance down longest went down, or the wait held
+longest began; `null` for a refused name, which carries no instant), `seat`
+(the agent whose instance the detail names, `""` for a shared server's), and
+`fix`, the one gesture that fixes it, decided by the engine:
+
+| `fix.kind` | For | Acts on |
+|---|---|---|
+| `restart` | `mcp_server_failing` and `mcp_server_partial` | [`POST /mcp-servers/{name}/retry`](#post-mcp-serversnameretry) on `fix.server`, with `fix.seat` where it names one agent's instance. A server nothing serves is restarted whole; a partial one only for the agent whose instance is down, so the agents it serves keep their sessions (a shared server's instance restarts on every node) |
+| `integration` | `mcp_server_waiting_long` | The integration that mints `fix.seat`'s credential for `fix.server`, which the server's [detail](#get-mcp-serversname) names in `resolved.binding` |
+| `edit` | `mcp_tools_refused` | The server's configuration: a shorter `tool_prefix`, or one, as each name's `message` in `refused_tools` says |
+
+The list is always present, and empty on a node that runs no state log, which
+evaluates no alarm: ask a data node.
 
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [Per-entity read and write](#per-entity-read-and-write).
@@ -9625,7 +9659,8 @@ A server's row carries `name`, `title`, `catalogue`, `vendor`, `configured`,
 `down_since` and `restarts`. It leaves out `command`, `args` and `url`, each
 cell's `error` and `wait` sentences and the seats they name, and
 `unlisted_annotations`, which is about a configuration only an administrator
-reads. The list's `nodes` and `builtin` are as an administrator reads them.
+reads. The list's `nodes` and `builtin` are as an administrator reads them. It
+carries no `alarms`: each alarm's detail quotes a failure or a wait sentence.
 
 A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
 (every field), `tool_count`, `server_info`, `last_success` and:

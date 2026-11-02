@@ -62,7 +62,8 @@ type Tracker struct {
 
 // instance is what the tracker writes ONE PAIR OF LOG LINES for: a kind, and
 // the log it stands on when it is a per-log condition ([PerLogKinds]), or the
-// model entry when it is a per-entry one ([PerEntryKinds]).
+// configured entry (a model entry or an MCP server) when it is a per-entry one
+// ([PerEntryKinds]).
 //
 // THE KIND ALONE IS NOT THE LOG LINE'S IDENTITY. Seven conditions are
 // evaluated once per log ([Report]), so one alarm can stand on the tracker's
@@ -76,9 +77,9 @@ type Tracker struct {
 // entry per kind, so an instance is a log line's key and nothing more. A
 // node-wide kind lists no log, so it is one instance with none.
 //
-// A PER-ENTRY KIND ([PerEntryKinds]) is the same move over model entries: one
-// instance per entry it stands on, so the second model whose token comes due
-// raises a line of its own.
+// A PER-ENTRY KIND ([PerEntryKinds]) is the same move over configured entries:
+// one instance per entry it stands on, so the second model whose token comes
+// due, or the second MCP server that goes down, raises a line of its own.
 type instance struct {
 	kind   Kind
 	domain string
@@ -92,8 +93,8 @@ type firing struct {
 }
 
 // instancesOf is an alarm's instances, each with the detail its lines carry:
-// one per log or model entry the alarm stands on, carrying that log's or that
-// entry's own measurement, and otherwise one with no log, carrying the
+// one per log or configured entry the alarm stands on, carrying that log's or
+// that entry's own measurement, and otherwise one with no log, carrying the
 // alarm's.
 //
 // THE LOGS AN ALARM LISTS ARE ITS INSTANCES, with no second check of the kind:
@@ -102,7 +103,7 @@ type firing struct {
 // entry that names several logs — one measurement taken identically on each
 // ([AlarmDomain.Domains]) — is an instance per log it names, so carrying a
 // measurement once changes nothing about which log lines are written. The
-// model entries an alarm lists are its instances by the same rule: only a
+// configured entries an alarm lists are its instances by the same rule: only a
 // per-entry kind lists any, since [Evaluate] fills [Alarm.Entries] for the
 // table's per-entry rows and nothing else fills it.
 func instancesOf(a Alarm) ([]instance, []string) {

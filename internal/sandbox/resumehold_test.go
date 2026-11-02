@@ -418,6 +418,7 @@ func TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain(t *testing.T) {
 			}
 			keepalives := box.Keepalives()
 			for range 3 {
+				rig.now = rig.now.Add(reannounceCeilingPolls * DefaultPollInterval)
 				if fired := rig.tick(); fired != 1 {
 					t.Fatalf("the poll announced %d completions, want the job's", fired)
 				}

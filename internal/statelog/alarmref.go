@@ -24,19 +24,15 @@ func AlarmReference() string {
 	fmt.Fprintf(&b, alarmHeader,
 		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace))
 	if perLog := PerLogKinds(); len(perLog) > 0 {
-		named := make([]words.Said, len(perLog))
-		for i, kind := range perLog {
-			named[i] = words.Said("`" + string(kind) + "`")
-		}
-		fmt.Fprintf(&b, perLogNote, words.And(named))
+		fmt.Fprintf(&b, perLogNote, saidKinds(perLog))
 	}
-	if perEntry := PerEntryKinds(); len(perEntry) > 0 {
-		named := make([]words.Said, len(perEntry))
-		for i, kind := range perEntry {
-			named[i] = words.Said("`" + string(kind) + "`")
-		}
-		fmt.Fprintf(&b, perEntryNote, words.And(named),
+	if perModel := PerModelKinds(); len(perModel) > 0 {
+		fmt.Fprintf(&b, perModelNote, saidKinds(perModel),
 			CredentialNoticeDays, CredentialWarningDays, spoken(LimitWaitingGrace))
+	}
+	if perServer := PerServerKinds(); len(perServer) > 0 {
+		fmt.Fprintf(&b, perServerNote, saidKinds(perServer),
+			spoken(MCPOutageGrace), spoken(MCPWaitingGrace))
 	}
 	b.WriteString("\n| Alarm | What it means | What to do |\n")
 	b.WriteString("|---|---|---|\n")
@@ -49,6 +45,15 @@ func AlarmReference() string {
 	}
 	b.WriteString(alarmFooter)
 	return b.String()
+}
+
+// saidKinds is kinds as the reference lists them: each in backticks, joined.
+func saidKinds(kinds []Kind) string {
+	named := make([]words.Said, len(kinds))
+	for i, kind := range kinds {
+		named[i] = words.Said("`" + string(kind) + "`")
+	}
+	return words.And(named)
 }
 
 // alarmMeaning is the condition in an operator's words.
@@ -175,6 +180,20 @@ var alarmMeaning = map[Kind]string{
 	KindLLMLimitWaiting: "A seat has been parked for fifteen minutes or more on a chain " +
 		"naming a model that sits out a limit, with nothing to fall back to. It replaces " +
 		"`llm_limit` for that model.",
+	KindMCPServerFailing: "No instance of an MCP server is serving, and one has been down " +
+		"for longer than the restart schedule's ceiling plus a heartbeat. No agent is " +
+		"offered the server's tools.",
+	KindMCPServerPartial: "Some instances of an MCP server serve, and one that does not has " +
+		"been down for longer than the restart schedule's ceiling plus a heartbeat: one " +
+		"node, one agent's credentials or one child that keeps dying, rather than the server.",
+	KindMCPServerWaitingLong: "An agent's instance of an MCP server has been held back, " +
+		"unstarted, for longer than an integration waits between two passes plus a " +
+		"heartbeat, for a credential that integration mints. A wait is no failure and the " +
+		"server's state does not count it as one, but the agent is offered none of the " +
+		"server's tools meanwhile.",
+	KindMCPToolsRefused: "An MCP server lists a tool that cannot be offered under its name: " +
+		"with the server's `tool_prefix` it is longer than the harnesses take, it holds a " +
+		"character a model's tool name cannot, or a built-in has the name.",
 }
 
 const alarmHeader = `# Alarms
@@ -221,9 +240,9 @@ log it stops standing on its own ` + "`alarm_cleared`" + `, carrying the log as
 one leaving it, are each said.
 `
 
-// perEntryNote says which alarms are about one model entry, rendered from the
-// table's own flag, with the owner's fixed thresholds.
-const perEntryNote = `
+// perModelNote says which alarms are about one model entry, rendered from the
+// table's own rows, with the owner's fixed thresholds.
+const perModelNote = `
 These are about one model entry rather than the node:
 
 %s.
@@ -238,6 +257,29 @@ node's own reading, so a model nothing signs in on one node is said by that
 node. Their thresholds are fixed, with no setting: a credential's expiry
 is said at %d days and again at %d, and a limit turns into
 ` + "`llm_limit_waiting`" + ` once a seat has waited %s on it.
+`
+
+// perServerNote says which alarms are about one MCP server, rendered from the
+// table's own rows, with the thresholds the restart schedule and the
+// provisioning pass set.
+const perServerNote = `
+These are about one MCP server rather than the node:
+
+%s.
+
+Each lists the servers it stands on in ` + "`entries`" + `, carrying the server's
+name as ` + "`key`" + ` and as each log line's ` + "`entry`" + `, and an entry about one
+agent's instance names that agent's seat as ` + "`seat`" + `. Every data node
+evaluates them from every live node's heartbeat, so they read the same on every
+node, and a server the configuration turns off raises none. An instance down for
+%s (the restart schedule's ceiling, past which every further attempt waits that
+long, plus one heartbeat) raises ` + "`mcp_server_failing`" + ` when no instance of
+the server serves and ` + "`mcp_server_partial`" + ` when some do; an agent's
+instance held back %s (the longest an integration waits between two passes it
+still owes, plus one heartbeat) raises ` + "`mcp_server_waiting_long`" + `; and a
+tool no agent can be handed under its name raises ` + "`mcp_tools_refused`" + ` as
+soon as a node lists it. The MCP servers answer (` + "`GET /mcp-servers`" + `)
+carries the four with the gesture that fixes each.
 `
 
 const alarmFooter = `
