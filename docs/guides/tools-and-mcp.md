@@ -872,7 +872,7 @@ units:
     id: platform
     lead: platform-lead
     mcp_limits:
-      search: {off: true}              # not started for, or offered to, anybody beneath Platform
+      search: {enabled: false}         # not started for, or offered to, anybody beneath Platform
       tracker:
         tools:
           close_items: approve         # the server's own name, before tool_prefix
@@ -884,11 +884,12 @@ units:
           tracker: {tools: {merge_projects: blocked}}
 ```
 
-- **`off: true` turns the server off** for the seat, or for every agent seat
-  beneath the unit at any depth: nothing of it starts for them and none of its
-  tools is offered to them. The grant stands, so the seat's `mcp_env` values
-  and its box listing are kept for the day the limit is lifted, as they are for
-  a server turned off on its entry.
+- **`enabled: false` turns the server off** for the seat, or for every agent
+  seat beneath the unit at any depth: nothing of it starts for them and none of
+  its tools is offered to them. The grant stands, so the seat's `mcp_env`
+  values and its box listing are kept for the day the limit is lifted, as they
+  are for a server turned off on its entry. `enabled: true` is refused: only
+  the server's entry turns it on.
 - **`tools` holds a tool at `approve` or `blocked`**, by the server's own name
   for it. `allow` is refused: only the server's entry lets a tool run.
 - **The strictest wins.** A seat is held to its own block, to the block of
@@ -901,11 +902,11 @@ units:
   units they lead as they write any other field of their team
   ([A lead edits their own team](../concepts/identity-and-access.md#a-lead-edits-their-own-team)).
   A write that lifts or loosens a limit any agent seat is held to is an
-  administrator's, however it does it: removing an `off`, moving a tool from
-  `blocked` to `approve`, removing a tool's limit, moving a seat out from under
+  administrator's, however it does it: removing an `enabled: false`, moving a
+  tool from `blocked` to `approve`, removing a tool's limit, moving a seat out from under
   a unit's limits, or removing the unit around it. The refusal is `403
   unauthorized`, naming each seat it would widen (`why: widens`) and the limit
-  as the seat is held to it (`mcp_limits.<server>.off`,
+  as the seat is held to it (`mcp_limits.<server>.enabled`,
   `mcp_limits.<server>.tools.<tool>`). Lifting a limit the entry already holds
   as far widens nothing, and neither does lifting one from a server the seat is
   not granted.

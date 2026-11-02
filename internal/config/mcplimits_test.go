@@ -27,7 +27,7 @@ units:
   - name: Eng
     id: eng
     mcp_limits:
-      search: {off: true}
+      search: {enabled: false}
       tracker: {tools: {close_items: approve, delete_items: approve}}
     roles:
       - {name: Architect, handle: arch}
@@ -44,7 +44,7 @@ units:
 `
 
 // A LIMIT TURNS A SERVER OFF FOR THE SEATS BENEATH IT AND KEEPS ITS GRANT. The
-// division's `off` reaches a seat two units down: Grants says no, so nothing of
+// division's `enabled: false` reaches a seat two units down: Grants says no, so nothing of
 // the server starts for it or is offered to it, while Reach still says the
 // grant stands, so a value stored for the seat and a box listing it are kept
 // for the day the limit is lifted. A seat outside the unit keeps the server.
@@ -74,7 +74,8 @@ func TestALimitTurnsAServerOffForTheSeatsBeneathItAndKeepsItsGrant(t *testing.T)
 }
 
 // A LIMIT SAYS ONLY WHAT A LIMIT CAN, at its field: a block holding nothing
-// back, a tool at allow (the level only the entry sets), a level no limit has,
+// back, a server turned on (only the entry turns one on), a tool at allow (the
+// level only the entry sets), a level no limit has,
 // a key no tool carries, a server nobody declares, and a person's seat holding
 // one are each refused. A stored revision carrying any but the last runs and
 // warns; its limits hold as written.
@@ -96,6 +97,10 @@ mcp_servers:
 roles:
   - {name: Dev, handle: dev, mcp_limits: {tracker: {}}}
 `, "roles[0].mcp_limits.tracker", ErrMissing},
+		{"a server turned on", head + `
+roles:
+  - {name: Dev, handle: dev, mcp_limits: {tracker: {enabled: true}}}
+`, "roles[0].mcp_limits.tracker.enabled", ErrConflict},
 		{"a tool at allow", head + `
 units:
   - name: Eng
@@ -115,12 +120,12 @@ roles:
 units:
   - name: Eng
     id: eng
-    mcp_limits: {trakcer: {off: true}}
+    mcp_limits: {trakcer: {enabled: false}}
     roles: [{name: Dev, handle: dev}]
 `, "units[0].mcp_limits.trakcer", ErrUnknownValue},
 		{"a seat's limit on a server nobody declares", head + `
 roles:
-  - {name: Dev, handle: dev, mcp_limits: {trakcer: {off: true}}}
+  - {name: Dev, handle: dev, mcp_limits: {trakcer: {enabled: false}}}
 `, "roles[0].mcp_limits.trakcer", ErrUnknownValue},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -144,7 +149,7 @@ roles:
 		t.Parallel()
 		rejects(t, head+`
 roles:
-  - {name: Pat, handle: pat, kind: human, mcp_limits: {tracker: {off: true}}}
+  - {name: Pat, handle: pat, kind: human, mcp_limits: {tracker: {enabled: false}}}
 `, "roles[0].mcp_limits")
 	})
 	// A LIMIT ON A SERVER NOT YET GRANTED is a limit all the same, holding
@@ -155,7 +160,7 @@ mcp_servers:
   - {name: tracker, command: tracker-mcp, access: {seats: [ceo]}}
 roles:
   - {name: CEO, handle: ceo}
-  - {name: Dev, handle: dev, mcp_limits: {tracker: {off: true, tools: {close_items: approve}}}}
+  - {name: Dev, handle: dev, mcp_limits: {tracker: {enabled: false, tools: {close_items: approve}}}}
 `)
 }
 
@@ -187,7 +192,7 @@ units:
 	if n := strings.Count(err.Error(), "sandbox.mcp.servers[0]"); n != 1 {
 		t.Errorf("the box entry is refused %d times, want once", n)
 	}
-	mustCompany(t, strings.Replace(doc, "{tools: {close_items: approve}}", "{off: true}", 1))
+	mustCompany(t, strings.Replace(doc, "{tools: {close_items: approve}}", "{enabled: false}", 1))
 }
 
 // A REMOVAL OF A SERVER TAKES EVERY LIMIT NAMING IT, a seat's and a unit's,
@@ -210,7 +215,7 @@ func TestARemovalTakesEveryLimitNamingTheServer(t *testing.T) {
 		t.Fatalf("the document after the removal: %v", err)
 	}
 	eng := &cfg.Units[0]
-	if _, held := eng.MCPLimits["tracker"]; held || !eng.MCPLimits["search"].Off {
+	if _, held := eng.MCPLimits["tracker"]; held || !eng.MCPLimits["search"].TurnsOff() {
 		t.Errorf("eng's limits after the removal are %+v, want search's alone", eng.MCPLimits)
 	}
 	if eng.Children[0].MCPLimits != nil {
@@ -249,7 +254,7 @@ func TestAWriteThatLiftsALimitIsListedApart(t *testing.T) {
 	}{
 		{name: "turning a server back on", change: func(c *Company) {
 			delete(eng(c).MCPLimits, "search")
-		}, want: []string{"arch mcp_limits.search.off", "dev mcp_limits.search.off"}},
+		}, want: []string{"arch mcp_limits.search.enabled", "dev mcp_limits.search.enabled"}},
 		{name: "loosening blocked to approve", change: func(c *Company) {
 			backend(c).MCPLimits["tracker"] = org.MCPLimit{Tools: map[string]org.ToolLimit{"close_items": org.ToolApprove}}
 		}, want: []string{"dev mcp_limits.tracker.tools.close_items"}},
@@ -257,14 +262,14 @@ func TestAWriteThatLiftsALimitIsListedApart(t *testing.T) {
 			dev := backend(c).Roles[0]
 			backend(c).Roles = nil
 			c.Roles = append(c.Roles, dev)
-		}, want: []string{"dev mcp_limits.search.off", "dev mcp_limits.tracker.tools.close_items",
+		}, want: []string{"dev mcp_limits.search.enabled", "dev mcp_limits.tracker.tools.close_items",
 			"dev mcp_limits.tracker.tools.delete_items"}},
 		{name: "removing the unit around a seat", change: func(c *Company) {
 			eng(c).Roles = append(eng(c).Roles, backend(c).Roles...)
 			eng(c).Children = nil
 		}, want: []string{"dev mcp_limits.tracker.tools.close_items"}},
 		{name: "narrowing further", change: func(c *Company) {
-			eng(c).MCPLimits["docs"] = org.MCPLimit{Off: true}
+			eng(c).MCPLimits["docs"] = org.MCPLimit{Enabled: org.Off()}
 			backend(c).MCPLimits["tracker"].Tools["delete_items"] = org.ToolBlocked
 		}},
 		{name: "lifting a limit the entry already holds as far", from: func(c *Company) {
@@ -312,7 +317,7 @@ mcp_servers:
   - {name: docs, command: docs-mcp, enabled: false}
 roles:
   - {name: CEO, handle: ceo}
-  - {name: Dev, handle: dev, mcp_limits: {tracker: {off: true}, docs: {off: true}}}
+  - {name: Dev, handle: dev, mcp_limits: {tracker: {enabled: false}, docs: {enabled: false}}}
 `
 	before, after := mustCompany(t, doc), mustCompany(t, doc)
 	after.Roles[1].MCPLimits = nil
@@ -320,7 +325,7 @@ roles:
 	for _, w := range DiffOrg(before, after).Widened {
 		got = append(got, w.Seat+" "+w.Field())
 	}
-	if want := []string{"dev mcp_limits.docs.off"}; !slices.Equal(got, want) {
+	if want := []string{"dev mcp_limits.docs.enabled"}; !slices.Equal(got, want) {
 		t.Errorf("widened = %v, want %v", got, want)
 	}
 }

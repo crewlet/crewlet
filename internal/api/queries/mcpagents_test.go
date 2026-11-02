@@ -297,7 +297,7 @@ units:
       - name: Dev
         handle: dev
         mcp_limits:
-          docs: {off: true}
+          docs: {enabled: false}
 `
 	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
 	s := agentsSources(t, doc, nil, func(live map[string]int64) []coord.MCPListing {

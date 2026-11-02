@@ -209,7 +209,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"project", "ENG", agentOnlyOnHuman},
 	{"space", "DOCS", agentOnlyOnHuman},
 	{"mcp_env", "{atlassian: {JIRA_USERNAME: sarah}}", agentOnlyOnHuman},
-	{"mcp_limits", "{atlassian: {off: true}}", agentOnlyOnHuman},
+	{"mcp_limits", "{atlassian: {enabled: false}}", agentOnlyOnHuman},
 	{"behavioral_guidelines", "[Reply fast]", agentOnlyOnHuman},
 	{"integrations.github", "{enabled: false}", githubAppOnHuman},
 	{"integrations.datadog", "{enabled: false}", seatAccessOnHumanSeat},

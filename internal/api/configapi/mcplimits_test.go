@@ -47,7 +47,7 @@ units:
             handle: sre
             llm: zulu
             mcp_limits:
-              github: {off: true}
+              github: {enabled: false}
         children:
           - name: Tooling
             id: tooling
@@ -59,7 +59,7 @@ units:
         id: data
         lead: data-lead
         mcp_limits:
-          tracker: {off: true}
+          tracker: {enabled: false}
         roles:
           - {name: Data Lead, handle: data-lead, llm: zulu}
 `
@@ -106,7 +106,7 @@ func TestATeamsLeadNarrowsAServerAndNeverWidensOne(t *testing.T) {
 	}{
 		{"turning a server off for their team", configapi.EntityUnits, "platform",
 			func(_ *testing.T, e map[string]any) {
-				limitsOf(e)["github"] = map[string]any{"off": true}
+				limitsOf(e)["github"] = map[string]any{"enabled": false}
 			}, true, nil},
 		{"holding a tool back for a sub-team", configapi.EntityUnits, "tooling",
 			func(_ *testing.T, e map[string]any) {
@@ -141,7 +141,7 @@ func TestATeamsLeadNarrowsAServerAndNeverWidensOne(t *testing.T) {
 			}, false, []string{"seat/toolsmith///widens/no_grant"}},
 		{"narrowing a team that is not theirs", configapi.EntityUnits, "data",
 			func(_ *testing.T, e map[string]any) {
-				limitsOf(e)["github"] = map[string]any{"off": true}
+				limitsOf(e)["github"] = map[string]any{"enabled": false}
 			}, false, nil},
 		{"lifting a team's limit that is not theirs", configapi.EntityUnits, "data",
 			func(_ *testing.T, e map[string]any) { delete(e, "mcp_limits") }, false, nil},

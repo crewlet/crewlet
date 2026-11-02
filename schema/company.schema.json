@@ -1598,8 +1598,8 @@
     "MCPLimit": {
       "additionalProperties": false,
       "properties": {
-        "off": {
-          "description": "Turn this server off for the seat, or for every agent seat beneath the unit. The grant and its values stay.",
+        "enabled": {
+          "description": "false turns this server off for the seat, or for every agent seat beneath the unit; the grant and its values stay. A limit cannot turn a server on, so true is refused.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",

@@ -51,7 +51,7 @@ units:
         handle: ops
         llm: zulu
         mcp_limits:
-          tracker: {off: true}
+          tracker: {enabled: false}
 `)
 }
 

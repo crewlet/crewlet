@@ -138,7 +138,7 @@ type RefusedChange struct {
 	Why string `json:"why,omitempty"`
 	// Value is the reference, the id, the credential's path, the key's
 	// field, or the limit as the seat is held to it
-	// (`mcp_limits.<server>.off`, `mcp_limits.<server>.tools.<tool>`).
+	// (`mcp_limits.<server>.enabled`, `mcp_limits.<server>.tools.<tool>`).
 	Value string `json:"value,omitempty"`
 	// Reason is the authority table's own reason for refusing it.
 	Reason authz.Reason `json:"reason"`

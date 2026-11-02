@@ -19,7 +19,7 @@ func limitedOrg() *Organization {
 		Units: []*Unit{{
 			Name: "Engineering", ID: "eng",
 			MCPLimits: MCPLimits{
-				"search":  {Off: true},
+				"search":  {Enabled: Off()},
 				"tracker": {Tools: map[string]ToolLimit{"close_items": ToolApprove}},
 			},
 			Roles: []*Role{{Name: "Architect", DeclaredHandle: "arch"}},
@@ -129,7 +129,7 @@ func TestALimitThisBuildCannotReadBlocksTheTool(t *testing.T) {
 // read as a limit and hold nothing.
 func TestAHumanSeatIsRefusedLimits(t *testing.T) {
 	t.Parallel()
-	r := &Role{Name: "Pat", Kind: KindHuman, MCPLimits: MCPLimits{"tracker": {Off: true}}}
+	r := &Role{Name: "Pat", Kind: KindHuman, MCPLimits: MCPLimits{"tracker": {Enabled: Off()}}}
 	err := r.Validate()
 	var seatErr *SeatError
 	if !errors.Is(err, ErrHumanSeatField) || !errors.As(err, &seatErr) ||

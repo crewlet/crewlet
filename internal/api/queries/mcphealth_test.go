@@ -436,7 +436,7 @@ units:
   - name: Ops
     id: ops-team
     mcp_limits:
-      docs: {off: true}
+      docs: {enabled: false}
     roles:
       - {name: Ops, handle: ops, llm: main, sandbox: {mcp: {servers: [docs]}}}
 `

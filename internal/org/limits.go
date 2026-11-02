@@ -9,11 +9,17 @@ import (
 //
 // An administrator grants a server on its `mcp_servers` entry (its `access`)
 // and sets the level each of its tools runs at there (its `tools`). A seat or
-// a unit narrows that with `mcp_limits`, keyed by the server's name: `off`
-// turns the server off for the seat, or for every agent seat beneath the unit
-// at any depth, and `tools` holds one tool at `approve` (each call waits for a
-// person's answer) or at `blocked` (never offered). Nothing written here can
-// widen anything: the block has no word for on, for a grant or for `allow`.
+// a unit narrows that with `mcp_limits`, keyed by the server's name:
+// `enabled: false` turns the server off for the seat, or for every agent seat
+// beneath the unit at any depth, and `tools` holds one tool at `approve` (each
+// call waits for a person's answer) or at `blocked` (never offered). Nothing
+// written here can widen anything: `enabled: true` is refused where a document
+// is written (internal/config), and the block has no word for a grant or for
+// `allow`.
+//
+// `enabled`, THE ENTRY'S OWN WORD, and not `off`: a YAML 1.1 reader (and a
+// company document is read by more than this engine) takes the key `off` for
+// the boolean false, so `off: true` would reach it as `false: true`.
 //
 // THE STRICTEST WINS. A seat is held to its own block and to the block of
 // every unit it sits in, outward to the top, combined: a server any of them
@@ -35,10 +41,12 @@ type MCPLimits map[string]MCPLimit
 
 // MCPLimit is what one block holds one server to.
 type MCPLimit struct {
-	// Off turns the server off for the seat, or for every agent seat beneath
-	// the unit: it is not started for them, and none of its tools is offered.
-	// The grant and every value written for it stay.
-	Off bool `yaml:"off,omitempty" json:"off,omitempty" desc:"Turn this server off for the seat, or for every agent seat beneath the unit. The grant and its values stay."`
+	// Enabled false turns the server off for the seat, or for every agent
+	// seat beneath the unit: it is not started for them, and none of its
+	// tools is offered. The grant and every value written for it stay. A
+	// limit only narrows, so true says nothing a limit can, and is refused
+	// where a document is written.
+	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"false turns this server off for the seat, or for every agent seat beneath the unit; the grant and its values stay. A limit cannot turn a server on, so true is refused."`
 
 	// Tools holds one tool at a level stricter than its own, keyed by the
 	// SERVER'S OWN NAME for it (before tool_prefix), as the entry's levels
@@ -46,8 +54,11 @@ type MCPLimit struct {
 	Tools map[string]ToolLimit `yaml:"tools,omitempty" json:"tools,omitempty" js:"enum=approve|blocked" desc:"One tool held to a stricter level, keyed by the server's own name for it: approve (each call waits for a person's answer) or blocked (never offered)."`
 }
 
+// TurnsOff reports a block that turns its server off.
+func (l MCPLimit) TurnsOff() bool { return !l.Enabled.Or(true) }
+
 // IsZero reports a block that holds nothing back.
-func (l MCPLimit) IsZero() bool { return !l.Off && len(l.Tools) == 0 }
+func (l MCPLimit) IsZero() bool { return !l.TurnsOff() && len(l.Tools) == 0 }
 
 // ToolLimit is the level a limit holds a tool to: never `allow`, which only
 // the server's own entry sets.
@@ -92,7 +103,7 @@ func (m MCPLimits) Clone() MCPLimits {
 	}
 	out := make(MCPLimits, len(m))
 	for server, limit := range m {
-		out[server] = MCPLimit{Off: limit.Off, Tools: maps.Clone(limit.Tools)}
+		out[server] = MCPLimit{Enabled: limit.Enabled, Tools: maps.Clone(limit.Tools)}
 	}
 	return out
 }
@@ -197,7 +208,7 @@ func narrowed(limits map[string]ServerLimit, server, by string, block MCPLimit) 
 		limits = map[string]ServerLimit{}
 	}
 	held := limits[server]
-	if block.Off && !held.Off {
+	if block.TurnsOff() && !held.Off {
 		held.Off, held.OffBy = true, by
 	}
 	for _, tool := range slices.Sorted(maps.Keys(block.Tools)) {

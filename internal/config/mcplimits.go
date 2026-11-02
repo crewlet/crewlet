@@ -15,10 +15,11 @@ import (
 // A TEAM'S LEAD NARROWS A SERVER; ONLY ITS ENTRY GRANTS IT.
 //
 // `mcp_limits` on a seat or a unit holds the MCP servers its agent seats are
-// granted to less than their entries give: a server `off`, a tool at `approve`
-// or `blocked` ([org.MCPLimits]). Each agent seat is held to the strictest of
-// its own block, every enclosing unit's at any depth, and the server's own
-// entry: [MCPServer.Grants] reads `off`, and the engine holds each tool to the
+// granted to less than their entries give: a server turned off
+// (`enabled: false`), a tool at `approve` or `blocked` ([org.MCPLimits]). Each
+// agent seat is held to the strictest of its own block, every enclosing unit's
+// at any depth, and the server's own entry: [MCPServer.Grants] reads a limit
+// that turns its server off, and the engine holds each tool to the
 // stricter of its entry's level and the seat's limit where it cuts the seat's
 // surface (internal/engine, `grantedSurface`).
 //
@@ -38,7 +39,8 @@ import (
 // limits hold back.
 //
 //   - A block holding nothing back is refused: it reads as a limit and is
-//     none.
+//     none. So is `enabled: true`, which a limit cannot say: only the
+//     server's own entry turns it on.
 //   - A tool is held at `approve` or `blocked`, and keyed by a name a server
 //     can list. `allow` is refused: it is the level the server's own entry
 //     sets, and a limit never loosens.
@@ -94,9 +96,13 @@ func validateLimits(p *problems, path Path, limits org.MCPLimits) {
 	for _, server := range slices.Sorted(maps.Keys(limits)) {
 		here := entry(path, server)
 		limit := limits[server]
-		if limit.IsZero() {
-			p.add(here, ErrMissing, "holds nothing back: set off: true to turn %q off, hold "+
-				"one of its tools at approve or blocked, or remove the entry", server)
+		if limit.Enabled.Or(false) {
+			p.add(at(here, "enabled"), ErrConflict, "a limit cannot turn %q on: only its own "+
+				"entry does. Write enabled: false to turn it off for these seats, or leave "+
+				"enabled out", server)
+		} else if limit.IsZero() {
+			p.add(here, ErrMissing, "holds nothing back: set enabled: false to turn %q off, "+
+				"hold one of its tools at approve or blocked, or remove the entry", server)
 			continue
 		}
 		for _, tool := range slices.Sorted(maps.Keys(limit.Tools)) {

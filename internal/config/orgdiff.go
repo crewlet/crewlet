@@ -224,12 +224,12 @@ type OrgWidening struct {
 	Server, Tool string
 }
 
-// Field is where the limit is, as a refusal names it: `mcp_limits.<server>.off`
-// or `mcp_limits.<server>.tools.<tool>`, read as the seat is held, whichever
-// block held it.
+// Field is where the limit is, as a refusal names it:
+// `mcp_limits.<server>.enabled` or `mcp_limits.<server>.tools.<tool>`, read as
+// the seat is held, whichever block held it.
 func (w OrgWidening) Field() string {
 	if w.Tool == "" {
-		return "mcp_limits." + w.Server + ".off"
+		return "mcp_limits." + w.Server + ".enabled"
 	}
 	return "mcp_limits." + w.Server + ".tools." + w.Tool
 }
