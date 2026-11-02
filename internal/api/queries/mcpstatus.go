@@ -121,6 +121,13 @@ type MCPStatusAnswer struct {
 	// ALWAYS A LIST, and the administrator's alone: what a held call would
 	// send is the seat's trail.
 	Approvals []MCPApproval `json:"approvals"`
+	// Agents is every agent seat in the chart's order, each with the
+	// servers its grants reach and how many MCP tools they hand it
+	// ([MCPAgentTools]), and ToolBudget the count past which an agent is
+	// flagged ([MCPToolBudget]). Agents is NULL where this node cannot read
+	// the fleet's listings yet, which is not an agent holding no tools.
+	Agents     []MCPAgentTools `json:"agents"`
+	ToolBudget int             `json:"tool_budget"`
 }
 
 // MCPApproval is one call to a tool at Needs approval that an agent's run
@@ -338,10 +345,11 @@ type MCPServerNode struct {
 //
 // EVERYBODY'S, IN TWO READINGS ([MCPReading]), as each model's condition is: a
 // server's state and its tools are what tell a member why an agent lacks one.
-// The configuration's reader reads the whole answer, the launch commands and
-// the first line of each failure included, which is the configuration and what
-// became of it (`/config` shows the same reader the same commands); anybody
-// else reads [MemberMCPStatusAnswer], which names none of that.
+// The configuration's reader reads the whole answer, the launch commands, the
+// first line of each failure and the servers each agent's grants reach
+// included, which is the configuration and what became of it (`/config` shows
+// the same reader the same commands); anybody else reads
+// [MemberMCPStatusAnswer], which names none of that.
 func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	leases, err := s.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
@@ -366,6 +374,9 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	if status.Approvals, err = s.mcpApprovals(ctx); err != nil {
 		return nil, err
 	}
+	// THE ADMIN'S ALONE, as a seat's tool sources are on the org chart: which
+	// servers an agent holds is read off the configuration's grants.
+	status.Agents = s.mcpAgents(ctx, leases, status)
 	return status, nil
 }
 
@@ -445,12 +456,14 @@ func (s Sources) mcpStatusOf(leases []coord.Lease, grants map[string]*coord.MCPG
 	slices.SortFunc(reports, func(a, b report) int { return cmp.Compare(a.node, b.node) })
 
 	out := MCPStatusAnswer{
-		Reading:   ReadingAdmin,
-		Servers:   []MCPServerRow{},
-		Nodes:     make([]MCPStatusNode, 0, len(reports)),
-		Builtin:   s.builtinGroups(),
-		Alarms:    []MCPAlarm{},
-		Approvals: []MCPApproval{},
+		Reading:    ReadingAdmin,
+		Servers:    []MCPServerRow{},
+		Nodes:      make([]MCPStatusNode, 0, len(reports)),
+		Builtin:    s.builtinGroups(),
+		Alarms:     []MCPAlarm{},
+		Approvals:  []MCPApproval{},
+		Agents:     []MCPAgentTools{},
+		ToolBudget: MCPToolBudget,
 	}
 	if s.MCPGrants != nil {
 		out.CallbackURL, out.ClientMetadataURL = s.MCPGrants.MCPSignInAddresses()
