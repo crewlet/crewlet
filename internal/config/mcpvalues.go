@@ -8,15 +8,18 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
 // A value stored from an MCP server's page is sealed whole under one variable,
-// and its key is pointed at that variable: the server's own map, or one seat's
-// `mcp_env` block for a per-agent server (D5).
+// and its key is pointed at that variable: the server's own map, one seat's
+// `mcp_env` block for a per-agent server, or the server's OAuth client's
+// secret (D5).
 
-// MCPValueAs is where a server is sent a value: an HTTP header of a remote
-// server, or an environment variable of a local one.
+// MCPValueAs is where a value goes: to the server, as an HTTP header of a
+// remote server or an environment variable of a local one, or to the server's
+// authorization server, as its OAuth client's secret.
 type MCPValueAs string
 
 const (
@@ -25,10 +28,19 @@ const (
 	// MCPValueEnv is an environment variable a local (stdio) server is
 	// started with.
 	MCPValueEnv MCPValueAs = "env"
+	// MCPValueOAuth is the secret of the company's own OAuth client a
+	// server signs in with (`oauth.client_secret`): sent to its
+	// authorization server, never to the server.
+	MCPValueOAuth MCPValueAs = "oauth"
 )
 
 // MCPValueAses is every value, for a reader's copy.
-var MCPValueAses = []MCPValueAs{MCPValueHeader, MCPValueEnv}
+var MCPValueAses = []MCPValueAs{MCPValueHeader, MCPValueEnv, MCPValueOAuth}
+
+// MCPValueClientSecret is the key a server's OAuth client's secret is stored
+// under from its page: the field's own path in the entry. No header beside an
+// oauth block may be named it (validateOAuth), so the key names one value.
+const MCPValueClientSecret = "oauth.client_secret"
 
 // Valid reports whether a is a place this build sends a value.
 func (a MCPValueAs) Valid() bool { return slices.Contains(MCPValueAses, a) }
@@ -72,6 +84,10 @@ var (
 	ErrMCPValueBound = errors.New("config: the key carries each agent's credential from an integration")
 	// ErrMCPValueKey is a key that names nothing a server can be sent.
 	ErrMCPValueKey = errors.New("config: not a header or variable name")
+	// ErrMCPValueNoSecret is the client secret of a server whose sign-in
+	// has no secret to store: no oauth block, or a registration (a client
+	// metadata document, a dynamic registration) whose client is public.
+	ErrMCPValueNoSecret = errors.New("config: the MCP server signs in with no client secret")
 )
 
 // MCPValueSharedError is a derived variable another field already reads.
@@ -128,6 +144,9 @@ func (c *Company) MCPValueSlot(server, seat, key string) (MCPValueSlot, error) {
 	}
 	srv := &c.MCPServers[i]
 	key = strings.TrimSpace(key)
+	if key == MCPValueClientSecret {
+		return c.clientSecretSlot(srv, i, seat)
+	}
 	if key == "" || strings.ContainsAny(key, " \t\r\n:=") || strings.ContainsRune(key, 0) {
 		return MCPValueSlot{}, fmt.Errorf("%w: %q", ErrMCPValueKey, key)
 	}
@@ -163,17 +182,37 @@ func (c *Company) MCPValueSlot(server, seat, key string) (MCPValueSlot, error) {
 		}
 	}
 	slot.Path = entry(slot.Path, slot.Key)
+	return c.placed(slot)
+}
 
+// placed is slot with its variable: the one its field reads already where it
+// reads one whole and nothing else does, else [MCPValueVariable], refused when
+// another field reads that.
+func (c *Company) placed(slot MCPValueSlot) (MCPValueSlot, error) {
 	readers := c.readersOf(slot.Path.String())
 	if name, whole := envref.Whole(slot.Current); whole && len(readers[name]) == 0 {
 		slot.Variable = name
 		return slot, nil
 	}
-	slot.Variable, slot.Repoint = MCPValueVariable(server, key, seat), true
+	slot.Variable, slot.Repoint = MCPValueVariable(slot.Server, slot.Key, slot.Seat), true
 	if others := readers[slot.Variable]; len(others) > 0 {
 		return MCPValueSlot{}, &MCPValueSharedError{Variable: slot.Variable, Readers: others}
 	}
 	return slot, nil
+}
+
+// clientSecretSlot places the secret of the OAuth client the server at index i
+// signs in with: a service identity's, or the company's own client's. The
+// server's own, never a seat's: a sign-in is the company's.
+func (c *Company) clientSecretSlot(srv *MCPServer, i int, seat string) (MCPValueSlot, error) {
+	switch o := srv.OAuth; {
+	case o == nil, !o.ServiceIdentity() && o.Client != catalogue.ClientOwn:
+		return MCPValueSlot{}, fmt.Errorf("%w: %q", ErrMCPValueNoSecret, srv.Name)
+	case seat != "":
+		return MCPValueSlot{}, fmt.Errorf("%w: %q", ErrMCPValueSeatOnShared, srv.Name)
+	}
+	return c.placed(MCPValueSlot{Server: srv.Name, Key: MCPValueClientSecret, As: MCPValueOAuth,
+		Path: at(at(idx(field("mcp_servers"), i), "oauth"), "client_secret"), Current: srv.OAuth.ClientSecret})
 }
 
 // readersOf maps each variable the document reads to its fields but except.
@@ -214,6 +253,13 @@ func (c *Company) PointMCPValue(slot MCPValueSlot) error {
 		return fmt.Errorf("%w: %q", ErrNoMCPServerEntry, slot.Server)
 	}
 	srv := &c.MCPServers[i]
+	if slot.As == MCPValueOAuth {
+		if srv.OAuth == nil {
+			return fmt.Errorf("%w: %q", ErrMCPValueNoSecret, slot.Server)
+		}
+		srv.OAuth.ClientSecret = slot.Pointer()
+		return nil
+	}
 	if slot.Seat == "" {
 		values := srv.ownValues()
 		if values == nil {
@@ -306,7 +352,17 @@ func (c *Company) MCPValueKeys(server, seat string) ([]MCPValueKey, bool) {
 			keys[srv.ValueKey(b.Key)] = b.Key
 		}
 	}
-	out := make([]MCPValueKey, 0, len(keys))
+	out := make([]MCPValueKey, 0, len(keys)+1)
+	// THE OAUTH CLIENT'S SECRET, where the server signs in with one: the
+	// server's own value whichever seat asks, since a sign-in is the
+	// company's.
+	if o := srv.OAuth; o != nil && o.ClientSecret != "" {
+		row := MCPValueKey{Key: MCPValueClientSecret, As: MCPValueOAuth, Reads: envref.Names(o.ClientSecret)}
+		if len(row.Reads) == 1 {
+			row.Variable = row.Reads[0]
+		}
+		out = append(out, row)
+	}
 	for _, id := range slices.Sorted(maps.Keys(keys)) {
 		key := keys[id]
 		row := MCPValueKey{Key: key, As: srv.ValueAs(), Optional: srv.OptionalKey(key)}
