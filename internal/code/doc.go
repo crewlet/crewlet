@@ -1433,7 +1433,7 @@
 // own ([ExpungeScan], [OpExpungeScan]), so the verdict is the fleet's rather
 // than one process's and a judged repository leaves every node's listing for
 // [ExpungeInterval] — least recently judged first, one seek of
-// code_repos_expunge_due_idx (replicated 0106) — the engine's own read, its
+// code_repos_expunge_due_idx (replicated 0134) — the engine's own read, its
 // maintainer's weekly schedule — and
 // reads what a cycle keeps beside the refs by the [ReadExpungeTips] read: the
 // objects the repository's ref drops left since an instant, one covering seek

@@ -3220,7 +3220,7 @@ func (r *Reader) publicationDue(ctx context.Context, tx *sql.Tx, q ReadQuery, ou
 //     last JUDGED at or before the instant, or never — an expunge committed
 //     in it or a scan of it found clean ([ExpungeScan]), expunge_scanned_at
 //     — LEAST RECENTLY JUDGED FIRST — ONE SEEK of code_repos_expunge_due_idx
-//     (replicated 0106), its partial predicate repeated verbatim, bounded
+//     (replicated 0134), its partial predicate repeated verbatim, bounded
 //     above by the instant, keyset on (expunge_scanned_at, id) after a
 //     cursor. A repository judged within the interval is in no page, so a
 //     steady fleet's listing holds only the repositories owed a scan, on
