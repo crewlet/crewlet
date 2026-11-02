@@ -37,7 +37,8 @@ import (
 // QueueSweep takes ONE step of sweeping repoID's queue history past
 // [QueueHistory]: a queue_sweep record removing, oldest first, the ended
 // entries and the landings below their green row from before now less the
-// history — at most [QueueSweepRows] — and reports what it did. A caller
+// history — at most [QueueSweepRows], its ejections within [QueueSweepBytes] —
+// and reports what it did. A caller
 // steps a repository while the result says More.
 //
 // now is the DUTY HOLDER'S clock, and the record carries the cutoff it
@@ -74,7 +75,7 @@ func (s *Store) QueueSweep(ctx context.Context, repoID string, now time.Time) (S
 			case err != nil:
 				return statelog.Decision{}, fmt.Errorf("code: read repository %s: %w", repoID, err)
 			}
-			cut, more, err := queueHistoryIn(ctx, tx, repoID, cutoff, QueueSweepRows)
+			cut, more, err := queueHistoryIn(ctx, tx, repoID, cutoff, QueueSweepRows, QueueSweepBytes)
 			if err != nil || cut.rows() == 0 {
 				return statelog.Decision{}, err
 			}

@@ -6201,10 +6201,14 @@ rule itself.
 **A queue's history keeps pace with its records.** Ended entries and the
 landings below each branch's green row are kept 30 days: every candidate,
 eject and land removes its repository's oldest past that, up to 128 rows a
-record — as many as a landing ends and lands. A repository whose queue
-stopped is the [code-retention duty](#retention-and-history)'s: a pass lists every
-repository holding such history past 30 days by a day's grace, and a
-`queue_sweep` record on its subject removes it, back to 30 days.
+record — as many as a landing ends and lands — and its ejections only up to
+a record's own size in bytes, since an ejection keeps the conflicted paths a
+person reads first. A repository whose queue stopped is the
+[code-retention duty](#retention-and-history)'s: a pass lists every
+repository holding such history past 30 days by a day's grace, and
+`queue_sweep` records on its subject remove it, back to 30 days, each at most
+3 999 rows and about 32 MiB of ejections, so one never holds the write lane past
+the third of a transaction's budget a purge part is held to.
 
 Three reads answer a queue to a person or a seat, each held to the asker's
 grant on the repository: `queue`, the live entries of one repository's queues

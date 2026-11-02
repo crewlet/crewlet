@@ -62,11 +62,11 @@ import (
 // a landing below its target's green row — from before the pass's clock less
 // [QueueHistory] less [QueueSweepGrace] is swept ([Store.QueueSweep]) back to
 // the history, one queue_sweep record on its own subject removing up to
-// [QueueSweepRows] rows, the repository stepped again while rows past the
-// history are left. A repository whose queues keep working removes its own
-// history with every candidate, ejection and landing; this is for one whose
-// queues stopped, or whose landings are a person's pushes and its merges'
-// alone. Its listing walks the repositories by their key, a page at a time,
+// [QueueSweepRows] rows and [QueueSweepBytes] of ejections, the repository
+// stepped again while rows past the history are left. A repository whose
+// queues keep working removes its own history with every candidate, ejection
+// and landing; this is for one whose queues stopped, or whose landings are a
+// person's pushes and its merges' alone. Its listing walks the repositories by their key, a page at a time,
 // two seeks each.
 //
 // Then every PURGING repository, whatever the retention: a purge once begun
@@ -240,7 +240,7 @@ type RetentionReport struct {
 	// QueueSweeps counts the queue_sweep records the pass published, across
 	// every repository: each removing up to QueueSweepRows of one
 	// repository's ended queue entries and landings below their green row
-	// past QueueHistory.
+	// past QueueHistory, its ejections within QueueSweepBytes.
 	QueueSweeps int `json:"queue_sweeps"`
 	// QueueSweptRows counts the rows those records remove — each step's
 	// decide's own count of the history before its Through.

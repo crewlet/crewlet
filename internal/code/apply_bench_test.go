@@ -823,6 +823,95 @@ func BenchmarkApplyARetireSweep(b *testing.B) {
 	}
 }
 
+// BenchmarkApplyAQueueSweep is a queue_sweep record APPLIED AND COMMITTED —
+// the time it holds the replicated estate's one write lane, on every data node
+// — over a repository of its own each iteration holding QueueSweepRows ended
+// entries past QueueHistory, seeded outside the timer:
+//
+//   - narrow: landed entries, which weigh nothing, so the step is the
+//     QueueSweepRows its row bound cuts — a retire sweep's shape;
+//   - widest: conflict ejections, each naming MaxEjectedPaths paths within
+//     MaxConflictBytes, the widest row a sweep removes, so the step is the
+//     some 2 000 of them QueueSweepBytes cuts. Bounded by its rows alone, the
+//     step removed all 3 999, about 64 MiB of overflow pages.
+//
+// Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot split
+// a record, and against the third of it PurgePartBytes is sized to; doc.go's
+// measured section records the figures, and QueueSweepBytes reasons from them.
+func BenchmarkApplyAQueueSweep(b *testing.B) {
+	quiet(b)
+	paths := make([]string, MaxEjectedPaths)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("%03d/", i) + strings.Repeat("p", 156)
+	}
+	if cost := ConflictsCost(paths); cost > MaxConflictBytes || cost < MaxConflictBytes-128 {
+		b.Fatalf("the widest ejection's paths are %d bytes of JSON, want just under %d", cost, MaxConflictBytes)
+	}
+	widest, err := ejectedDetail(Ejection{Reason: EjectConflict, Paths: paths})
+	if err != nil {
+		b.Fatal(err)
+	}
+	old := applyClock.Add(-QueueHistory - time.Hour)
+	for _, arm := range []struct {
+		name, ejected string
+		// swept is how many entries the step removes: every one, or as many
+		// as its bytes reach QueueSweepBytes with — the first whatever it
+		// weighs, and at most one past.
+		swept int
+	}{
+		{"narrow", "", QueueSweepRows},
+		{"widest", widest, int((QueueSweepBytes + int64(len(widest)) - 1) / int64(len(widest)))},
+	} {
+		b.Run(arm.name, func(b *testing.B) {
+			e := openApplyEstate(b)
+			a := NewApplier(nil)
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StopTimer()
+			for i := range b.N {
+				repo := fmt.Sprintf("repo-%06d", i)
+				e.apply(create(b, repo, fmt.Sprintf("r%06d", i)))
+				e.seedEndedRows(repo, QueueSweepRows, old, arm.ejected)
+				// THE REPOSITORY'S OWN ROW beside the rows it removes.
+				e.applyTimed(b, a, rec(b, RepoSubject(repo), OpQueueSweep, Scope{RepoPath(repo)},
+					QueueSweep{RepoID: repo, Through: applyClock.Add(-QueueHistory)}), arm.swept+1)
+				if left := e.num(`SELECT COUNT(*) FROM code_queue WHERE repo_id = ?`, repo); left !=
+					int64(QueueSweepRows-arm.swept) {
+					b.Fatalf("the sweep left %d of %s's %d ended entries, want %d", left, repo, QueueSweepRows,
+						QueueSweepRows-arm.swept)
+				}
+			}
+			b.ReportMetric(float64(b.Elapsed().Microseconds())/1000/float64(b.N), "ms/record")
+		})
+	}
+}
+
+// seedEndedRows writes n entries of repo that ended at at, each its
+// ejection's JSON ejected — landed where it is empty — and weighed by it.
+func (e *estate) seedEndedRows(repo string, n int, at time.Time, ejected string) {
+	e.t.Helper()
+	state, reason := "landed", ""
+	if ejected != "" {
+		state, reason = "ejected", string(EjectConflict)
+	}
+	ctx := context.Background()
+	if err := e.db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := store.InsertRows(ctx, tx, e.db.Caps().MaxVariables,
+			`INSERT INTO code_queue (repo_id, entry_id, target_ref, change_id, seq, head_oid, method,
+				delete_source, close_task, enqueued_by, enqueued_kind, enqueued_operator, state,
+				enqueued_at, ended_at, ended_position, end_reason, ejected, ejected_bytes) VALUES `,
+			`(?, ?, 'refs/heads/main', ?, ?, ?, 'merge', 0, 0, 'dev', 'agent', '', ?, ?, ?, 2, ?, ?, ?)`, ``, n,
+			func(i int) []any {
+				id := fmt.Sprintf("%s-e-%06d", repo, i)
+				return []any{repo, id, "change-" + id, i + 1, oid("B"), state, store.EncodeTime(at),
+					store.EncodeTime(at), reason, ejected, len(ejected)}
+			})
+		return err
+	}); err != nil {
+		e.t.Fatalf("seed %s's ended entries: %v", repo, err)
+	}
+}
+
 // widestCheck is the widest queued attempt and the widest ending of it a
 // writer forms, key's: every field at its bound, of text JSON escapes to six
 // bytes a character, as TestTheLargestCheckRecordsFitARecord builds them — so

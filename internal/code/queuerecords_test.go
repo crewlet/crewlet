@@ -605,13 +605,14 @@ func TestAPushLandingOnMoreProtectedBranchesThanARecordHoldsIsRefusedWhole(t *te
 }
 
 // AN EJECTED ENTRY LEAVES ITS QUEUE AND ITS TRAIN: an eject puts a live entry
-// out — ejected, why and the checks that failed kept on its row — abandons the
+// out — ejected, why and the checks that failed kept on its row, weighed by
+// their bytes for the sweep that removes it — abandons the
 // train it was tested in, its candidates gone, and the node whose committer
 // landed the record announces one code_queue_ejected naming the change, the
 // branch and why. An eject of an entry no longer live is refused not_queued.
 //
 // Mutation: keep the train when its entry is ejected — its candidate outlives
-// the ejection, red.
+// the ejection, red; weigh no ejection (write ejected_bytes 0) — red.
 func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -639,6 +640,10 @@ func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	}
 	if left := n.count(`SELECT COUNT(*) FROM code_candidates WHERE repo_id = ?`, repo); left != 0 {
 		t.Fatalf("%d candidates outlive the train their entry was ejected from", left)
+	}
+	if weighed := n.count(`SELECT COUNT(*) FROM code_queue WHERE repo_id = ? AND entry_id = ?
+		AND ejected_bytes = length(CAST(ejected AS BLOB)) AND ejected_bytes > 0`, repo, entryID); weighed != 1 {
+		t.Fatalf("the ejected entry's row is not weighed by its ejection's bytes")
 	}
 	waitAnnouncedOf(t, stream, "code_queue_ejected", 1)
 	ev := stream.of("code_queue_ejected")[0]

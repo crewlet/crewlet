@@ -877,8 +877,9 @@ func registeredStatements() map[string]statement {
 		// counters by the repository's key; a landing record's tip, a landing
 		// by its key, broken by it, and the landings between a green row and
 		// a landing counted and marked over the key's range; and the queue's
-		// history — ended entries counted and removed over
-		// code_queue_ended_idx, a target's landings below its green read and
+		// history — ended entries walked in its key's order and weighed from
+		// code_queue_ended_idx alone, and removed over its key's range up to
+		// the last one walked, a target's landings below its green read and
 		// removed over the key's range — and the sweep's listing, a walk of
 		// the repositories by their key, two seeks each.
 		"entries named": {entriesNamedSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
@@ -890,7 +891,7 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
 		"test an entry": {testEntrySQL, []any{"train-1", "candidate-1", oid("m"), "repo-1", "entry-1"},
 			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
-		"eject an entry": {ejectEntrySQL, []any{1, 1000, "check_failed", "", "repo-1", "entry-1"},
+		"eject an entry": {ejectEntrySQL, []any{1, 1000, "check_failed", "", 0, "repo-1", "entry-1"},
 			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
 		"land an entry": {landEntrySQL, []any{1, 1000, oid("m"), "repo-1", "entry-1"},
 			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
@@ -924,10 +925,10 @@ func registeredStatements() map[string]statement {
 		"mark landings green": {greenLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 2000},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>? AND position<=?)",
 				"INTEGER PRIMARY KEY (rowid=?)"}},
-		"ended entries before": {endedBeforeSQL, []any{"repo-1", 1000, QueueSweepRows + 1},
-			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)"}},
-		"sweep ended entries": {sweepEndedSQL, []any{"repo-1", 1000, QueueSweepRows},
-			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"ended entries within": {endedWithinSQL, []any{"repo-1", 1000, QueueSweepRows + 1},
+			[]string{"COVERING INDEX code_queue_ended_idx (repo_id=? AND ended_at<?)"}},
+		"sweep ended entries": {sweepEndedSQL, []any{"repo-1", 1000, 1000, "entry-1"},
+			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"landings below green": {landingsBelowSQL, []any{"repo-1", "refs/heads/main", 1000, QueueSweepRows + 1},
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position<?)"}},
 		"sweep landings": {sweepLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, 2},

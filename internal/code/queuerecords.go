@@ -114,8 +114,31 @@ const (
 	// QueueSweepRows is the most rows one queue_sweep record removes: every
 	// row a record's apply may touch (MaxRecordRows) but the repository's
 	// own, which it moves the version of, as a retired-pack sweep's
-	// ([RetireSweepRows]).
+	// ([RetireSweepRows]). It bounds a sweep of NARROW rows — a landed or
+	// dequeued entry, a landing — and [QueueSweepBytes] the ejections among
+	// them.
 	QueueSweepRows = MaxRecordRows - 1
+
+	// QueueSweepBytes is how many BYTES of ejections one queue_sweep record
+	// removes beside QueueSweepRows' count: its ended entries are taken
+	// oldest first, each weighed by what its ejection's JSON takes
+	// (code_queue.ejected_bytes), until their bytes reach it — always at
+	// least one, and at most one past it — and a step whose entries it cut
+	// takes no landing, which waits for the next.
+	//
+	// A ROW COUNT BOUNDS A SWEEP'S TIME ONLY FOR NARROW ROWS, as it does a
+	// purge part's ([PurgePartBytes]): an ejection holds its failed checks
+	// and up to [MaxEjectedPaths] conflicted paths within [MaxConflictBytes],
+	// some 16 KiB at its widest, and deleting it frees its overflow pages.
+	// Bounded by QueueSweepRows alone, a step of the widest ejections
+	// removed about 64 MiB; bounded here it removes 2 058 of them, and its
+	// record holds the write lane 64 ms, against 44 ms for QueueSweepRows
+	// narrow entries (BenchmarkApplyAQueueSweep, doc.go's measured section),
+	// both under the third of statelog.ApplyTxTimeBudget the domain's
+	// deletes are sized to. [PurgePartBytes], because it is the bytes of
+	// wide rows a delete takes in that third, measured, and these are the
+	// same deletes of overflow pages.
+	QueueSweepBytes = PurgePartBytes
 
 	// queueHorizonRows is the most rows one candidate, eject or land record
 	// removes of its repository's queue history past [QueueHistory] — ended
@@ -125,6 +148,15 @@ const (
 	// pace with what its records add, and the sweep only reaches an idle
 	// one.
 	queueHorizonRows = 2 * MaxLandEntries
+
+	// queueHorizonBytes is how many bytes of ejections one candidate, eject
+	// or land record removes beside queueHorizonRows' count, weighed as
+	// [QueueSweepBytes] weighs them: [HorizonBytesPerRecord], MaxRecordBytes,
+	// for its reason — an eject's ejections are its record's own, so no
+	// record adds more ejection bytes than that, and the history's removal
+	// keeps pace with its growth in bytes as in rows, inside the hot records
+	// at the cost of one record's bytes of deletes.
+	queueHorizonBytes = HorizonBytesPerRecord
 )
 
 // The ids a queue's records name, each DERIVED from the record's operation id
