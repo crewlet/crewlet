@@ -90,6 +90,12 @@ func (s *stubSessions) Session(_ context.Context, handle, turn string,
 	if s.err != nil {
 		return executordomain.SessionRead{}, s.err
 	}
+	// A TURN ID THAT IS NONE IS REFUSED, as the domain's reader refuses it:
+	// a run id in its canonical spelling or nothing.
+	if id, err := uuid.Parse(turn); err != nil || id.String() != turn {
+		return executordomain.SessionRead{}, fmt.Errorf("%w: the turn id %q is not a run id in its "+
+			"canonical spelling", executordomain.ErrInvalid, turn)
+	}
 	for _, row := range s.rows {
 		if row.Handle == handle && row.Turn == turn {
 			return executordomain.SessionRead{Session: row, Position: stubAt, Complete: true}, nil
@@ -346,11 +352,14 @@ func TestASeatsSessionsAreItsTrail(t *testing.T) {
 // from — and that cursor names the object it was read from and the count of
 // entries it was read under, so one handed out for an object the row no longer
 // names, one a build counting entries otherwise handed out, and one no page
-// handed out are each refused, saying to read again from the start, rather
-// than continued in another archive or at an ordinal naming another entry.
+// handed out — an ordinal before the first entry among them — are each
+// refused, saying to read again from the start, rather than continued in
+// another archive or at an ordinal naming another entry, or answered as a
+// store that did not answer.
 //
-// Mutation: hand an entry's text out unredacted, drop the cursor, or continue
-// a cursor of another object or of another count, and a check goes red.
+// Mutation: hand an entry's text out unredacted, drop the cursor, continue a
+// cursor of another object or of another count, or take an ordinal before the
+// first entry, and a check goes red.
 func TestASessionsTranscriptIsReadThroughItsSealedObject(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionObjectStore(t)
@@ -403,6 +412,13 @@ func TestASessionsTranscriptIsReadThroughItsSealedObject(t *testing.T) {
 			executor.TranscriptVersion+1), "counts a transcript's entries otherwise"},
 		"a cursor that names no count": {key + ".200", "handed out"},
 		"a cursor no page handed out":  {"page two", "handed out"},
+		// AN ORDINAL NO PAGE HANDS OUT: before the first entry, which a read
+		// refuses in words that would answer it as a store that did not
+		// answer, and past what an int holds.
+		"a cursor of an ordinal before 0": {fmt.Sprintf("%s.%d.-1", key,
+			executor.TranscriptVersion), "handed out"},
+		"a cursor of an ordinal past an int": {fmt.Sprintf("%s.%d.99999999999999999999", key,
+			executor.TranscriptVersion), "handed out"},
 	} {
 		_, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": row.Turn,
 			"cursor": c.cursor})
@@ -461,12 +477,14 @@ func TestALaterPageOfASessionTheBudgetReleasedSaysSo(t *testing.T) {
 // AN ARCHIVE THAT IS NOT ITS FORMAT IS SAID IN THE ENGINE'S WORDS, never its
 // own. A box's agent can write what its run packs: an OpenCode session whose
 // document is a token followed by a mebibyte of its own words reads as
-// malformed, and the answer's sentence carries neither the token nor the words
-// — it is the engine's, a sentence long, whatever the archive held.
+// malformed, and the answer's sentence is EXACTLY the engine's — this
+// surface's opening and the reason the runner's reader gives the archive
+// ([executor.MalformedArchiveError]) — carrying neither the token nor the
+// words, whatever the archive held.
 //
-// Mutation: hand the decoder's message on as the reason, and the token — the
-// whole string the decoder met where the export's object belonged — reaches the
-// answer.
+// Mutation: hand the malformed archive's error on as the reason, or the
+// decoder's own failure beneath it, and the answer says it in words other than
+// the engine's sentence — the decoder's quoting what it met.
 func TestAnArchiveThatIsNotItsFormatIsSaidInTheEnginesWords(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionObjectStore(t)
@@ -488,10 +506,93 @@ func TestAnArchiveThatIsNotItsFormatIsSaidInTheEnginesWords(t *testing.T) {
 		if answer.State != queries.TranscriptMalformed {
 			t.Errorf("%s reads %s (%q), want malformed", name, answer.State, answer.Why)
 		}
-		if strings.Contains(answer.Why, "ghp_") || strings.Contains(answer.Why, "what the box wrote") ||
-			len(answer.Why) > 1<<10 {
-			t.Errorf("%s is said in the archive's words, %d bytes of them: %.200q", name,
-				len(answer.Why), answer.Why)
+		_, readErr := executor.ReadTranscript(t.Context(), executor.OpenCodeName,
+			executor.OpenCode{}.ArchiveFormat(), func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(gzipText(t, document))), nil
+			}, 0)
+		var malformed *executor.MalformedArchiveError
+		if !errors.As(readErr, &malformed) {
+			t.Fatalf("%s: the runner's reader answered %v, want a malformed archive", name, readErr)
+		}
+		if want := "this session opened, and is not an archive of its harness's format: " +
+			malformed.Why; answer.Why != want {
+			t.Errorf("%s is said %.200q, want the engine's sentence %q", name, answer.Why, want)
+		}
+		if strings.Contains(answer.Why, "ghp_") || strings.Contains(answer.Why, "what the box wrote") {
+			t.Errorf("%s is said in the archive's words: %.200q", name, answer.Why)
+		}
+	}
+}
+
+// AN ENDING'S PROSE IS REDACTED AT THIS READ. What the reviewer said landed,
+// what blocked a round, the reason a person gave for a stop and the account of
+// a failure are a model's or a person's words, kept as written, and each can
+// quote a token a run met: each reads redacted in both questions — a row of
+// the list, and the session a transcript is read under.
+//
+// Mutation: hand any of the four out as the row holds it, and the token
+// reaches the reader in that field.
+func TestAnEndingsProseIsRedactedAtThisRead(t *testing.T) {
+	t.Parallel()
+	quoted := "the deploy used " + plantedKey
+	turn := uuid.NewString()
+	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	reads := &stubSessions{rows: []executordomain.Session{{Handle: "ana", Turn: turn, CapturedAt: at,
+		EndedAt: at, Ending: &executordomain.Ending{Outcome: executordomain.OutcomeStopped,
+			CompletedWork: quoted, BlockedOn: quoted, StoppedBy: "ana.diaz", StopReason: quoted,
+			Failure: quoted}}}}
+	store, _ := sessionObjectStore(t)
+	s := sessionSources(t, reads, store)
+	listed, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+	if err != nil {
+		t.Fatalf("executor_sessions: %v", err)
+	}
+	read, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": turn})
+	if err != nil {
+		t.Fatalf("executor_session: %v", err)
+	}
+	rows := listed.(queries.SessionsAnswer).Sessions
+	if len(rows) != 1 {
+		t.Fatalf("the list holds %d rows, want the one", len(rows))
+	}
+	for question, row := range map[string]queries.SessionRow{
+		"executor_sessions": rows[0], "executor_session": read.(queries.SessionAnswer).Session,
+	} {
+		if row.Ending == nil {
+			t.Errorf("%s: the row carries no ending", question)
+			continue
+		}
+		for field, said := range map[string]string{
+			"completed_work": row.Ending.CompletedWork, "blocked_on": row.Ending.BlockedOn,
+			"stop_reason": row.Ending.StopReason, "failure": row.Ending.Failure,
+		} {
+			if strings.Contains(said, plantedKey) || !strings.Contains(said, redact.Marker) {
+				t.Errorf("%s: the ending's %s reads %q, want it redacted", question, field, said)
+			}
+		}
+	}
+}
+
+// A TURN ID THAT IS NONE IS THE CALLER'S TO CHANGE, told in the domain's own
+// sentence without its package's name: a work item's key, or a run id spelt
+// in capitals, is no run id in its canonical spelling, which the reader refuses
+// — and this surface answers as bad parameters, never as a query that failed.
+//
+// Mutation: hand the domain's refusal on as it came, and the route answers 500
+// query_failed.
+func TestATurnIdThatIsNoneIsTheCallersToChange(t *testing.T) {
+	t.Parallel()
+	turn := uuid.NewString()
+	reads := &stubSessions{rows: []executordomain.Session{{Handle: "ana", Turn: turn}}}
+	store, _ := sessionObjectStore(t)
+	s := sessionSources(t, reads, store)
+	for _, asked := range []string{"ENG-7", strings.ToUpper(turn)} {
+		_, err := askAsSeat(t, s, "ana", "executor_session", map[string]any{"turn_id": asked})
+		said := queries.RefusalDetail(err)
+		if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(said, "canonical spelling") ||
+			strings.Contains(said, "executordomain") {
+			t.Errorf("the turn id %q answered %v (%q), want bad params in the domain's words", asked,
+				err, said)
 		}
 	}
 }
