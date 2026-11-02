@@ -282,10 +282,11 @@ var coordinatorEntries = map[string][]entryDrive{
 		},
 	}},
 	"EndTurn": {{
-		// IT ENDS NOTHING: it records a turn's end on the executor log — the
-		// end of a turn whose run's record is already gone — and touches no
-		// run's record.
-		name: "the end of a turn whose run's record is gone",
+		// IT ENDS NOTHING: it records a turn's end for a frame that found no
+		// run's record to owe it on — on the executor log where the record
+		// is gone, and owed on the record where it is there after all, for
+		// the run's own ending to record — and deletes nothing.
+		name: "the end of a turn whose frame found no run's record",
 		call: func(t *testing.T, rig *coordRig) {
 			if err := rig.coordinator.EndTurn(t.Context(), TurnEnd{Handle: "swe", TurnID: "t1",
 				Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}}); err != nil {

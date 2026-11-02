@@ -410,6 +410,10 @@ func withReason(base notify.Inbound, rule notify.AddressRule, reason Reason,
 
 	meta := maps.Clone(base.Metadata)
 	meta[notify.FollowReasonField] = string(reason)
+	// WHAT STARTS THE TURN THIS WAKES: the message, under this recipient's
+	// own reason, so the turn is found by the message a person wrote.
+	base.Origin = types.TriggerOrigin{Kind: types.OriginChatMessage,
+		ID: meta[notify.MessageIDField], Reason: string(reason)}
 	if threadRoot != "" && standing(reason) {
 		// WHY THE SEAT IS IN THIS THREAD AT ALL, which is the only
 		// answer a later reply has once the message that named it has

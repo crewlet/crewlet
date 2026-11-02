@@ -1474,7 +1474,51 @@ const (
 	// +8.2 KiB net (its dist chunk +6.8 KiB and shared chunks +4.0 KiB, less
 	// 2.6 KiB out of the entry script), the lazy sheets +0.3 KiB and +0.6 KiB
 	// elsewhere, Chatlet's chunk +0.1 KiB of it. 5281 KiB.
-	treeBudget = 5<<20 + 161<<10
+	// The MCP alarms in an administrator's Inbox (each kind's words, and the
+	// MCP servers question asked of a reader the MCP section opens for, in the
+	// attention queue the entry loads) took it from 5280.7 KiB to 5282.3 KiB
+	// (+1.6 KiB): the entry script +1.4 KiB, the remedy chunk +0.1 KiB and the
+	// Inbox chunk under 0.1 KiB. The initial load went from 380.3 KiB to
+	// 380.8 KiB, inside its budget. 5283 KiB.
+	// uilet 0.89.0 (RoomRow, a List or PersonRow row's own action and note,
+	// a Switch held with a reason or drawn without its label, 0.87.0's
+	// DeliveryReceipt and the queued ThinkingIndicator) and Chatlet's
+	// membership work (each agent member's gets-every-message switch, the
+	// team room choice in New room, the star on a team's room read from
+	// outside it, the composer wherever the engine takes the post, Browse
+	// rows on RoomRow) took it from 5282.3 KiB to 5288.0 KiB (+5.7 KiB):
+	// Chatlet's chunk +3.5 KiB, the one sheet +2.7 KiB, the kit's chunks
+	// +0.6 KiB, the protocol +0.2 KiB and authorityRemedy +0.1 KiB, less
+	// 1.3 KiB of Chatlet's own sheet for the Browse rows the kit now draws.
+	// 5288 KiB.
+	// Chatlet's delivery receipts (DeliveryReceipt under a person's message,
+	// and the composer's line saying whom a draft will reach, read from
+	// chat_reach once the typing settles) took it from 5288.0 KiB to
+	// 5290.7 KiB (+2.7 KiB): Chatlet's chunk +2.7 KiB and Chatlet's sheet
+	// under 0.1 KiB, with the debounce moving out of its own chunk into the
+	// shared links chunk. The receipt's own styles were already in the one
+	// sheet with 0.89.0. 5291 KiB.
+	// Settings › MCP & tools rebuilt with page tabs (the Servers tab's alarms,
+	// figures and table, a server's page with four tabs, the restart, disable
+	// and remove flows, the built-in catalogue and its drawer, and the page's
+	// words for every engine value), replacing the shipped Tools screen, took
+	// it from 5290.7 KiB to 5328.2 KiB (+37.5 KiB): the settings chunk
+	// +31.0 KiB, its sheet +2.9 KiB (mcp.css), the Access chunk +3.0 KiB of
+	// shared settings code Rollup moved into it, and +1.0 KiB in the kit's
+	// chunks, less 0.4 KiB of the old table's rules out of the one sheet. The
+	// page is all in the settings chunk, so the initial load only lost that
+	// 0.4 KiB. 5329 KiB.
+	// The Sessions view under an agent's Memory tab (the seat's executor
+	// sessions, the latest begun first, and one session's transcript a page
+	// at a time: its entries, the states a session that cannot be read is
+	// answered in, and the account of how its turn ended) took it from
+	// 5328.4 KiB to 5338.0 KiB (+9.6 KiB), all of it the agents chunk the
+	// view loads in. The initial load is unchanged: keepInView, which
+	// Conversations and Sessions share, is a module of the Memory tab's own
+	// rather than of lib/scroller.ts, which the shell imports, and a
+	// transcript's prose takes the shared .prose rule rather than a rule of
+	// its own in the one sheet. 5339 KiB.
+	treeBudget = 5<<20 + 219<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -1,6 +1,7 @@
 package redact_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -853,6 +854,29 @@ func TestAKeyNamesAPasswordAsTheRulesReadOne(t *testing.T) {
 	} {
 		if got := redact.NamesPassword(key); got != want {
 			t.Errorf("NamesPassword(%q) = %v, want %v", key, got, want)
+		}
+	}
+}
+
+// A LINE IS CUT AT EVERY ARMOUR IT HOLDS, and what is left is the line's own: a
+// reader that takes a key's lines out by value leaves the armour the redaction
+// reads every key of that kind by, and takes out a one-line key's body all the
+// same.
+//
+// Mutation: hand the armour back as a piece, or drop what sits beside it, and
+// a row below differs.
+func TestALineIsCutAtTheArmourAKeyIsReadBy(t *testing.T) {
+	t.Parallel()
+	for line, want := range map[string][]string{
+		"-----BEGIN OPENSSH PRIVATE KEY-----":                          nil,
+		"  -----END RSA PRIVATE KEY-----  ":                            nil,
+		"b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAE":                         {"b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAE"},
+		"-----BEGIN CERTIFICATE-----MIIBbody-----END CERTIFICATE-----": {"MIIBbody"},
+		"key: -----BEGIN EC PRIVATE KEY----- body":                     {"key:", "body"},
+		"": nil,
+	} {
+		if got := redact.Unarmoured(line); !slices.Equal(got, want) {
+			t.Errorf("Unarmoured(%q) = %q, want %q", line, got, want)
 		}
 	}
 }

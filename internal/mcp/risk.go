@@ -55,3 +55,28 @@ func RiskOf(a Annotations) RiskReading {
 	}
 	return RiskReading{Risk: RiskDestructive, Declared: a.Destructive == Yes, External: external}
 }
+
+// StartLevel is the approval level a tool starts at when a server is added:
+// what a person is offered before deciding any tool's level.
+type StartLevel string
+
+// The starting levels (the series' decision D1).
+const (
+	// StartAllow runs the tool without asking anybody.
+	StartAllow StartLevel = "allow"
+	// StartApprove asks a person before each call.
+	StartApprove StartLevel = "approve"
+)
+
+// StartLevels is every starting level, for the gate holding a reader's copy.
+var StartLevels = []StartLevel{StartAllow, StartApprove}
+
+// StartingLevel is the level a tool of risk r starts at: a tool asserted
+// read-only runs, and every other tool asks a person first, a tool whose hints
+// say nothing included, since its reading is destructive ([RiskOf]).
+func StartingLevel(r RiskReading) StartLevel {
+	if r.Risk == RiskReadOnly {
+		return StartAllow
+	}
+	return StartApprove
+}

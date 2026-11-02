@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -377,6 +378,12 @@ type BridgedCall struct {
 	// tool and the server it came from — and empty where no tool did.
 	Origin string
 	Server string
+
+	// Source is whose tool the call named, answered or refused, and Refusal
+	// the class of a failed call the engine classified (see
+	// [toolloop.Execution]).
+	Source  string
+	Refusal mcp.Refusal
 }
 
 // bridgedLedger is an executor run's calls as the turn's record reads them:

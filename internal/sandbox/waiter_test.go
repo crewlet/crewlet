@@ -334,16 +334,16 @@ func TestARunningJobFiresNoCompletionUntilItFinishes(t *testing.T) {
 	}
 }
 
-// A FINISHED RUN NOBODY CLAIMED IS ANNOUNCED AGAIN ON THE NEXT TICK.
+// A FINISHED RUN NOBODY CLAIMED IS ANNOUNCED AGAIN, ONE POLL INTERVAL LATER.
 //
 // The announcement is a signal, not the work: the run's row is. So a completion
 // whose delivery was acked without a claim (a node that may not start the turn
 // yet, on a condition that clears by waiting) loses nothing, because the run is
-// still running and the next tick fires it again. That is what lets the control
+// still running and a later poll fires it again. That is what lets the control
 // topic hand such a completion back without spending a delivery.
 //
-// Mutation: fire a run's completion once and remember it, and the second tick
-// fires nothing for a run that is still waiting for its claim.
+// Mutation: fire a run's completion once and remember it for good, and the poll
+// an interval later fires nothing for a run that is still waiting for its claim.
 func TestAnUnclaimedCompletionIsAnnouncedAgain(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -354,6 +354,65 @@ func TestAnUnclaimedCompletionIsAnnouncedAgain(t *testing.T) {
 			t.Fatalf("tick %d fired %d completions for a finished run nobody claimed, want 1",
 				tick, fired)
 		}
+		rig.now = rig.now.Add(DefaultPollInterval)
+	}
+}
+
+// A JOB NOBODY RESUMES IS RECORDED AS FINISHED ONCE, AND ANNOUNCED TO ITS SEAT
+// ON A DOUBLING SCHEDULE. Announced on every poll, a finished health check whose
+// review met a model's weekly limit put 6280 completions on the event stream in
+// 27 hours. The event stream's copy is the record that the job finished, and
+// it goes out once per job; the seat's copy is the backstop for a condition
+// that clears with nothing to say so, and it waits twice as long each time, up
+// to the ceiling. A new job of the same turn starts again.
+//
+// Mutation: announce on every poll, or publish the event stream's copy with
+// every announcement, and the counts below are the poll's.
+func TestAJobNobodyResumesIsAnnouncedOnASchedule(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true})
+	public := func() int {
+		n := 0
+		for _, topic := range rig.queue.topics() {
+			if topic == topics.Event(types.ExecutorFinished{}.EventType()) {
+				n++
+			}
+		}
+		return n
+	}
+
+	var fired []time.Duration
+	start := rig.now
+	for elapsed := time.Duration(0); elapsed <= 27*time.Hour; elapsed += DefaultPollInterval {
+		rig.now = start.Add(elapsed)
+		if rig.tick() == 1 {
+			fired = append(fired, elapsed)
+		}
+	}
+	if public() != 1 {
+		t.Fatalf("the event stream recorded the job's completion %d times, want once", public())
+	}
+	want := []time.Duration{0, DefaultPollInterval, 3 * DefaultPollInterval, 7 * DefaultPollInterval}
+	if len(fired) < len(want) || !slices.Equal(fired[:len(want)], want) {
+		t.Fatalf("announced at %v, want the schedule to begin %v", fired, want)
+	}
+	if limit := int(27*time.Hour/(reannounceCeilingPolls*DefaultPollInterval)) + 10; len(fired) > limit {
+		t.Fatalf("announced %d times in 27 hours, want at most %d", len(fired), limit)
+	}
+	for i := 1; i < len(fired); i++ {
+		if gap := fired[i] - fired[i-1]; gap > reannounceCeilingPolls*DefaultPollInterval+DefaultPollInterval {
+			t.Fatalf("announcement %d came %v after the one before, past the ceiling", i, gap)
+		}
+	}
+
+	// A NEW JOB OF THE SAME TURN IS NEWS AGAIN.
+	relaunch := rig.launch("t1")
+	rig.runner.Finish(Result{Success: true})
+	if fired := rig.tick(); fired != 1 || public() != 2 {
+		t.Fatalf("the turn's next job %s fired %d and recorded %d completions in all, want "+
+			"it announced and recorded at once", relaunch.LaunchID, fired, public())
 	}
 }
 

@@ -41,12 +41,11 @@ import (
 //     string by string — every string scrubbed and redacted as the text it
 //     decodes to, which is where a key's lines are lines again; every key of
 //     every object scrubbed and redacted the same way, so a secret a tool's
-//     structured result names a member by goes too; and a string under a
-//     credential's own key taken out whole — and then the rewritten line
-//     redacted as text, which is where a password's key and its value, two
-//     strings apart, meet; that second reading is kept only where it leaves
-//     the line JSON. A line that is not JSON — the last one of a job packed
-//     while it wrote — is redacted as text.
+//     structured result names a member by goes too; and a string or a number
+//     under a credential's own key taken out whole. A line that is not JSON —
+//     the last one of a job packed while it wrote — is scrubbed and redacted
+//     as text, the values in the forms a JSON string escapes them in among
+//     those it takes out.
 //   - A DOCUMENT (`.json`, and OpenCode's whole export): rewritten string by
 //     string as it streams, the same way, a token at a time. A `.json` file
 //     the rewrite cannot read as one JSON value — a task file a pack of a
@@ -56,11 +55,12 @@ import (
 //     redact settles it (redact.Settled, as a live tail is), so a rule that
 //     reads across lines sees them all.
 //
-// AND THE TAR'S OWN WORDS: a member's name is scrubbed by value as the
-// transcript's paths to it are, its header carries nothing but its kind, name,
-// mode, size and time — no owner, link target or extended record of the box's
-// — and a member that is neither a file nor a directory (a link the box's own
-// code made) is left out, since no harness keeps its session in one.
+// AND THE TAR'S OWN WORDS: a member's name is scrubbed by value and by shape
+// as the transcript's paths to it are ([memberName]), its header carries
+// nothing but its kind, name, mode, size and time — no owner, link target or
+// extended record of the box's — and a member that is neither a file nor a
+// directory (a link the box's own code made) is left out, since no harness
+// keeps its session in one.
 //
 // # One piece at a time, and never more than the archive's bound
 //
@@ -100,8 +100,8 @@ const credentialMarker = redact.Marker + "credential]"
 //
 // EIGHT BYTES. A value shorter is as likely to be ordinary text in a transcript
 // — a port, a version, a word — as a secret, and taking every occurrence of it
-// out would corrupt the very transcript the next turn continues; nothing the
-// engine hands a box as a credential is that short, and redact's rules stay the
+// out would corrupt the very transcript that is kept; nothing the engine hands
+// a box from a credential position is that short, and redact's rules stay the
 // backstop for one that is.
 const minScrubBytes = 8
 
@@ -182,9 +182,10 @@ type scrubber struct{ r *strings.Replacer }
 
 // newScrubber is the scrubber for values: each line of each value at least
 // [minScrubBytes] long — a multi-line value (a key file a setup step wrote) is
-// taken out a line at a time, which is how a transcript holds it — in its raw
-// form and as a JSON string escapes it, the longest first, so a value holding
-// another is taken out whole.
+// taken out a line at a time, which is how a transcript holds it, and a PEM
+// armour line left where it is (redact.Unarmoured) — in its raw form and as a
+// JSON string escapes it, the longest first, so a value holding another is
+// taken out whole.
 func newScrubber(values []string) scrubber {
 	seen := map[string]bool{}
 	var olds []string
@@ -196,9 +197,16 @@ func newScrubber(values []string) scrubber {
 	}
 	for _, value := range values {
 		for _, line := range strings.Split(value, "\n") {
-			line = strings.TrimSpace(line)
-			add(line)
-			add(jsonEscaped(line))
+			// A KEY'S ARMOUR IS NO SECRET OF IT: every key of its kind
+			// carries the same BEGIN and END lines, and the shape pass reads
+			// a key's block by them. Taken out by value, every other key of
+			// that kind in the session — one the run printed, a fixture in the
+			// repository — lost the armour the shape pass looks for, and its
+			// body was kept. The rest of the line is taken out as any value is.
+			for _, piece := range redact.Unarmoured(line) {
+				add(piece)
+				add(jsonEscaped(piece))
+			}
 		}
 	}
 	if len(olds) == 0 {
@@ -218,6 +226,15 @@ func (s scrubber) apply(text string) string {
 		return text
 	}
 	return s.r.Replace(text)
+}
+
+// memberName is a tar member's name as the kept archive holds it: scrubbed by
+// value and then by shape, as the transcript's paths to the member are (every
+// string of a transcript passes both), so the restored file is where the
+// transcript says it is — and a credential in a file's name, which a harness
+// writes a tool's output under, does not survive in the archive's own words.
+func memberName(s scrubber, name string) string {
+	return redact.Secrets(s.apply(name))
 }
 
 // jsonEscaped is how a JSON string a harness writes holds s, without its
@@ -346,20 +363,20 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 			return nil
 		}
 		file := h.Typeflag == tar.TypeReg
-		header := tar.Header{Typeflag: h.Typeflag, Name: s.apply(h.Name), Mode: h.Mode & 0o777,
+		header := tar.Header{Typeflag: h.Typeflag, Name: memberName(s, h.Name), Mode: h.Mode & 0o777,
 			ModTime: h.ModTime}
 		if file {
 			header.Size = plan.size
 		}
-		if err := tw.WriteHeader(&header); err != nil {
-			return err
+		if headerErr := tw.WriteHeader(&header); headerErr != nil {
+			return headerErr
 		}
 		if !file {
 			return nil
 		}
 		w := &counted{w: tw}
-		if err := rewriteMember(h.Name, plan.text, w, body, s, b); err != nil {
-			return err
+		if memberErr := rewriteMember(h.Name, plan.text, w, body, s, b); memberErr != nil {
+			return memberErr
 		}
 		if w.n != plan.size {
 			return fmt.Errorf("executor: the session's archive changed its member %s while it was read", h.Name)
@@ -609,19 +626,22 @@ func rewriteLines(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error
 }
 
 // rewriteLine is one line of a transcript as it is kept: its JSON value
-// rewritten string by string, then redacted as a line where that leaves it
-// JSON; or, a line that is not JSON, scrubbed and redacted as text. The line is
-// within the scrub's piece already ([readLine]), and so is every string in it.
+// rewritten string by string; or, a line that is not JSON, scrubbed and
+// redacted as text. The line is within the scrub's piece already ([readLine]),
+// and so is every string in it.
+//
+// NOT REDACTED AGAIN AS A WHOLE LINE once rewritten. Every pair a rule reads a
+// secret by sits in one JSON value — a string's text, or a key and the value
+// under it, which the rewrite takes out by the key ([credentialKey]) — and a
+// rule that read across two of them replaced JSON syntax with its marker,
+// leaving no line JSON: a reading that could only keep what the rewrite had
+// already taken.
 func rewriteLine(line string, s scrubber, b scrubBounds) string {
 	var out bytes.Buffer
 	if err := rewriteDocument(&out, strings.NewReader(line), s, b); err != nil {
 		return redact.Secrets(s.apply(line))
 	}
-	rewritten := out.String()
-	if whole := redact.Secrets(rewritten); whole != rewritten && json.Valid([]byte(whole)) {
-		return whole
-	}
-	return rewritten
+	return out.String()
 }
 
 // rewriteDocument streams one JSON value from src to dst a token at a time,
@@ -803,7 +823,18 @@ func (j *jsonRewrite) token(tok json.Token) error {
 		if err := j.beginValue(); err != nil {
 			return err
 		}
-		_, _ = j.out.WriteString(t.String())
+		if j.credential() {
+			// A NUMBER UNDER A CREDENTIAL'S KEY goes as a string under one
+			// does — a PIN, a numeric password, an account's key — written
+			// as the marker, a string where the number stood: no shape
+			// places a bare number, and kept as it came it survived every
+			// pass.
+			if err := j.writeString(credentialMarker); err != nil {
+				return err
+			}
+		} else {
+			_, _ = j.out.WriteString(t.String())
+		}
 		j.endValue()
 	case bool:
 		if err := j.beginValue(); err != nil {
@@ -825,10 +856,17 @@ func (j *jsonRewrite) token(tok json.Token) error {
 
 // value is a string value as it is kept.
 func (j *jsonRewrite) value(s string) string {
-	if f := j.frame(); f != nil && f.object && s != "" && credentialKey(f.key) {
+	if s != "" && j.credential() {
 		return credentialMarker
 	}
 	return redact.Secrets(j.scrub.apply(s))
+}
+
+// credential reports whether the value being written is a member of an object
+// under a credential's own key ([credentialKey]).
+func (j *jsonRewrite) credential() bool {
+	f := j.frame()
+	return f != nil && f.object && credentialKey(f.key)
 }
 
 // writeString writes s as a JSON string, escaped as JSON.stringify escapes

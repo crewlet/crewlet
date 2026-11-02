@@ -573,7 +573,7 @@ func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 	// coordinator runs in the background reads the store this case swaps.
 	reserving := &flakyStamps{PendingStore: rig.pending, fails: 2}
 	c := &Coordinator{pending: reserving, recordBudget: 200 * time.Millisecond, sessionRetry: time.Millisecond}
-	if took, err := c.reserveCapture(t.Context(), "t1", begun); err != nil || !took {
+	if took, err := c.reserveCapture(t.Context(), time.Time{}, "t1", begun); err != nil || !took {
 		t.Fatalf("the place was reserved %v (%v) through the store's bad moment, want reserved", took, err)
 	}
 	if run := rig.get("t1"); run.Capture == nil || !run.Capture.samePlace(begun) {
@@ -581,7 +581,7 @@ func TestACaptureIsStampedThroughAStoresBadMoment(t *testing.T) {
 	}
 	flaky := &flakyStamps{PendingStore: rig.pending, fails: 2}
 	c.pending = flaky
-	c.finishCapture(t.Context(), rig.get("t1"), begun, CaptureRefused, "the upload failed")
+	c.finishCapture(t.Context(), time.Time{}, rig.get("t1"), begun, CaptureRefused, "the upload failed")
 	if run := rig.get("t1"); run.Capture == nil || !run.Capture.samePlace(begun) ||
 		run.Capture.State != CaptureRefused {
 		t.Fatalf("the row holds %+v after the store's bad moment, want the capture's outcome stamped",

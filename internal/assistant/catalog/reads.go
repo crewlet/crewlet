@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
@@ -510,18 +511,33 @@ func readTools() []Tool {
 			Name: "list_turns", Phrase: "list this seat's turns",
 			Narrow: []string{"handle", "failed", "days"},
 			Description: "One seat's recent turns: outcome, model, tokens and duration, newest " +
-				"first, and for a failed turn why it failed. Rows the person may not read are " +
-				"left out.",
+				"first, for a failed turn why it failed, and what started each (a chat " +
+				"message and why it reached the seat, a work item, a schedule). With " +
+				"message_id, the turns that chat message started in the seat it reached " +
+				"(read_chat_messages says which seats a message reached). Rows the person " +
+				"may not read are left out.",
 			schema: object([]string{"handle"}, map[string]*schema{
-				"handle": text("The seat's handle or name.", nameBytes),
-				"failed": flag("Only the turns that failed."),
-				"days":   positive("The window in days.", 30),
-				"limit":  positive("How many turns, at most.", 50),
+				"handle":     text("The seat's handle or name.", nameBytes),
+				"message_id": text("A chat message's id: only the turns it started.", nameBytes),
+				"failed":     flag("Only the turns that failed."),
+				"days":       positive("The window in days.", 30),
+				"limit":      positive("How many turns, at most.", 50),
 			}),
 			Routes: []string{"GET /turns"}, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /turns", nil, query(a).str("handle", "seat").
-					truth("failed", "failed").num("days", "days", 0).num("limit", "limit", 25).values())
+				args := Args(a)
+				message := args.String("message_id")
+				q := query(args).str("handle", "seat").truth("failed", "failed").
+					num("limit", "limit", 25)
+				if message != "" {
+					// THE TURNS A MESSAGE STARTED, over the whole history a
+					// node keeps unless the call narrows it: a person asks
+					// about a message they can still see.
+					q.fixed("origin", types.OriginChatMessage+":"+message).num("days", "days", 30)
+				} else {
+					q.num("days", "days", 0)
+				}
+				return get("GET /turns", nil, q.values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Turns", Rows: "turns", More: "next",
 				Brief: []string{"started", "task", "tokens", "error"},
@@ -534,6 +550,11 @@ func readTools() []Tool {
 					// fact a question about a failed turn is asking.
 					prose("error", "Why it failed", "error"),
 					col("error_kind", "Failure kind", "error_kind", tLabel),
+					// WHAT STARTED IT (store.Turn.Origin): the object, its id
+					// and why it reached the seat.
+					col("origin", "Started by", "origin.kind", tLabel),
+					col("origin_id", "Started by ID", "origin.id", tText),
+					col("origin_reason", "Why it reached the seat", "origin.reason", tLabel),
 					col("models", "Models", "models", tText),
 					col("task", "Task", "work_item.key", tText),
 					prose("summary", "Summary", "summary"),
@@ -547,7 +568,8 @@ func readTools() []Tool {
 				if a.Bool("failed") {
 					failedOnly = "failed only"
 				}
-				return scopeOf(labelled(a, "handle", "for"), failedOnly, lastDays(a, 0))
+				return scopeOf(labelled(a, "handle", "for"),
+					labelled(a, "message_id", "started by message"), failedOnly, lastDays(a, 0))
 			},
 			Names: map[string]Directory{"handle": DirSeat},
 		},

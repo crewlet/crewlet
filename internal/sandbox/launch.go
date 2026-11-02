@@ -178,6 +178,20 @@ type LaunchRequest struct {
 	Setup      []SetupStep
 	MCPServers map[string]MCPServer
 
+	// Secrets is every value the ENGINE put in the job's environment and
+	// setup out of a credential position, which a capture of the box's
+	// session scrubs out by value ([HandedSecrets]): what each `${...}`
+	// reference resolved to — in the run environment, and a setup file that
+	// is one reference whole — and the value of every variable whose name
+	// says it carries a credential, the entry's sign-in among them. The
+	// ENGINE'S, because only it knows where a value came from: the
+	// environment this package is handed is resolved, a setting and a token
+	// alike. What else is in the environment — the engine's identity facts,
+	// a setting written in the document, a setup step's script — is not a
+	// secret, and scrubbed by value it was lost from every kept transcript
+	// that named it. Nil hands none.
+	Secrets []string
+
 	// Skills are the skills the job's harness is handed as its own — see
 	// [RunRequest.Skills]. Nil hands none. Where the job reports loading one
 	// is its opening's to say ([Opening.SkillLoads]), as the job's endpoint
@@ -638,8 +652,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Placement: string(req.Spec.Placement), Node: c.node,
 		Harness: req.Spec.Harness, SessionID: handle.SessionID,
 		PauseTTLSec: req.Spec.PauseTTLSec,
-		// AND WHAT THE JOB WAS HANDED, sealed, for its session's scrub.
-		Handed: c.sealHanded(ctx, req, env),
+		// AND WHAT THE JOB WAS HANDED, sealed, for its session's scrub —
+		// with what the jobs before it handed this box, where it continues
+		// in it: the box holds them still, and the session it resumes their
+		// lines ([PriorBox.Handed]).
+		Handed: c.sealHanded(ctx, req, env, opened.Prior, reused),
 		// AND WHICH BRIEF IT WAS HANDED, for the record its collection
 		// publishes beside whether its run did continue the session.
 		Brief: continued.kind,

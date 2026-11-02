@@ -27,15 +27,18 @@ import (
 const leakedToken = "ghp_" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7d"
 
 // executorLogSpy is the executor log's writes as a case reads them: every end
-// a turn's ending recorded, and every capture. AN END TOMBSTONES ITS TURN, as
-// the log's does: a capture of an ended turn is refused
-// ([executordomain.ErrTurnEnded]) and counted, so a case sees an end that came
-// before the turn's last capture.
+// a turn's ending recorded, and EVERY ATTEMPT AT ONE, counted — the log refuses
+// a second end of a turn ([executordomain.ErrTurnEnded]), which the engine
+// reads as the end it already has, so a turn ended twice shows only in the
+// count ([awaitEnds]). An end tombstones its turn, as the log's does: a capture
+// of an ended turn is refused. These cases' engines keep no session — they have
+// no object store — so the order of a capture and its turn's end is the
+// sandbox package's cases' to hold, where the keep is the case's.
 type executorLogSpy struct {
-	mu       sync.Mutex
-	ends     []executordomain.NewEnd
-	ended    map[string]bool
-	afterEnd int
+	mu    sync.Mutex
+	ends  []executordomain.NewEnd
+	ended map[string]bool
+	calls map[string]int
 }
 
 func (s *executorLogSpy) Capture(_ context.Context, _ executordomain.Call,
@@ -43,7 +46,6 @@ func (s *executorLogSpy) Capture(_ context.Context, _ executordomain.Call,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ended[n.Turn] {
-		s.afterEnd++
 		return executordomain.CaptureResult{}, fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
 	}
 	return executordomain.CaptureResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}, Recorded: true}, nil
@@ -53,8 +55,9 @@ func (s *executorLogSpy) End(_ context.Context, _ executordomain.Call, n executo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ended == nil {
-		s.ended = map[string]bool{}
+		s.ended, s.calls = map[string]bool{}, map[string]int{}
 	}
+	s.calls[n.Turn]++
 	if s.ended[n.Turn] {
 		return statelog.Result{}, fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
 	}
@@ -63,12 +66,12 @@ func (s *executorLogSpy) End(_ context.Context, _ executordomain.Call, n executo
 	return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 }
 
-// capturesAfterEnd is how many captures the log refused because their turn
-// had ended first.
-func (s *executorLogSpy) capturesAfterEnd() int {
+// endCalls is how many times an end of turnID was asked of the log, the ones
+// it refused as a second included.
+func (s *executorLogSpy) endCalls(turnID string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.afterEnd
+	return s.calls[turnID]
 }
 
 // endsOf is every end recorded for turnID.
@@ -116,7 +119,10 @@ func loggingReviewCase(t *testing.T, model *reviewWatch,
 // awaitEnds is every end recorded for turnID once there are want of them: a
 // turn's end is owed on its run's record and recorded by the run's ending, off
 // the frame that ended the turn, so a case waits for it. It waits a little past
-// the count too, so an end recorded twice shows.
+// the count too, and FAILS the case on an end asked of the log more often than
+// it was recorded: the log's refusal of a second end is taken by the engine for
+// the end it already has, so a turn ended by two paths records one end and
+// shows only in the asking.
 func awaitEnds(t *testing.T, spy *executorLogSpy, turnID string, want int) []executordomain.NewEnd {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -124,7 +130,12 @@ func awaitEnds(t *testing.T, spy *executorLogSpy, turnID string, want int) []exe
 		time.Sleep(5 * time.Millisecond)
 	}
 	time.Sleep(50 * time.Millisecond)
-	return spy.endsOf(turnID)
+	ends := spy.endsOf(turnID)
+	if asked := spy.endCalls(turnID); asked > len(ends) {
+		t.Errorf("the end of %s was asked of the log %d times for %d recorded: two paths ended the turn",
+			turnID, asked, len(ends))
+	}
+	return ends
 }
 
 // A RESUMED TURN THAT ENDS RECORDS ITS END ON THE EXECUTOR LOG, once, with the
@@ -168,8 +179,8 @@ func TestAResumedTurnsEndIsRecordedWithItsOwnDecision(t *testing.T) {
 // run's ending, which no frame of the turn reaches: who stopped it and why,
 // their reason carried as theirs.
 //
-// Mutation: drop the end from the stop's close, and the next turn on the
-// conversation is never told this one was stopped.
+// Mutation: drop the end from the stop's close, and the stopped turn ends
+// nowhere on the executor log.
 func TestAStoppedParkedTurnEndsAsStoppedOnTheExecutorLog(t *testing.T) {
 	t.Parallel()
 	e, spy := loggingEngine(t)
@@ -263,7 +274,7 @@ func TestALostTurnEndsAsLostOnTheExecutorLog(t *testing.T) {
 // not known to have — never "did not reply" off half a record.
 //
 // Mutation: read the current round's calls alone, or answer an elided record
-// with a definite no, and the next turn is told a reply that went out did not.
+// with a definite no, and the turn's end says a reply that went out did not.
 func TestAStopsAccountReadsEveryRoundsCalls(t *testing.T) {
 	t.Parallel()
 	e, _ := loggingEngine(t)
@@ -422,10 +433,10 @@ func TestAResumedTurnStoppedAtItsFirstRoundEndsAsStopped(t *testing.T) {
 	parkOnRun(t, e)
 	var once sync.Once
 	for _, runner := range rig.runners {
-		runner.CollectFunc = func(context.Context) error {
+		runner.CollectFunc = func(ctx context.Context) error {
 			once.Do(func() {
 				pause := janeStops()
-				e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
+				e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
 			})
 			return nil
 		}
@@ -447,7 +458,7 @@ func TestAResumedTurnStoppedAtItsFirstRoundEndsAsStopped(t *testing.T) {
 // otherwise refuse.
 //
 // Mutation: record the end from the resumed segment's refused park again, and
-// the turn's end is recorded twice, or comes before the stop's capture.
+// the turn's end is asked of the log twice.
 func TestARelaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce(t *testing.T) {
 	t.Parallel()
 	var parks *parkStopsFirst
@@ -471,9 +482,6 @@ func TestARelaunchStoppedBeforeItsParkEndsOnTheExecutorLogOnce(t *testing.T) {
 	if len(ends) != 1 || ends[0].Ending.Outcome != executordomain.OutcomeStopped ||
 		ends[0].Ending.StoppedBy != "jane" {
 		t.Fatalf("recorded %+v, want the turn's one end, stopped by Jane", ends)
-	}
-	if refused := spy.capturesAfterEnd(); refused != 0 {
-		t.Errorf("%d captures of the turn came after its end", refused)
 	}
 }
 
@@ -527,5 +535,79 @@ func TestWhatTheEngineAnsweredAColleagueIsWhatItsReplyDid(t *testing.T) {
 	if got := e.answerColleague(t.Context(), company, stranger, open(), res, nil); !got.owed || got.replied ||
 		got.closed || got.sent == "" {
 		t.Errorf("an answer the service refused: %+v, want it owed, sent and not replied", got)
+	}
+}
+
+// A STOP DECIDED ON THE RUN A TURN WAS LAUNCHING IS TOLD FROM ONE THE TURN'S OWN
+// FENCE MET, however the turn's frames wrap it: the run's ending answers the
+// first kind's colleague and records its end, from the run's record, and the
+// frame the second's. Answered by both, the asker woke to two answers.
+//
+// Mutation: leave the run's own stop unmarked at its launch, or read the mark
+// off the outer error alone, and a row below reads otherwise.
+func TestAStopDecidedOnTheRunIsToldFromTheTurnsOwn(t *testing.T) {
+	t.Parallel()
+	ofRun := &stopError{pause: coord.SeatPause{By: "jane"}, handle: "swe", ofRun: true}
+	fenced := &stopError{pause: coord.SeatPause{By: "jane"}, handle: "swe"}
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"the run's own stop":                       {ofRun, true},
+		"the run's own stop, wrapped by its frame": {fmt.Errorf("the executor phase: %w", ofRun), true},
+		"the turn's own fence":                     {fenced, false},
+		"no stop at all":                           {errors.New("the box would not start"), false},
+	} {
+		if got := stoppedByRun(tc.err); got != tc.want {
+			t.Errorf("%s: stoppedByRun = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// A RESUMED TURN THAT PANICS ONCE IT HAS BEGUN ENDS FAILED ON THE EXECUTOR LOG,
+// saying it panicked and with what, redacted. The coordinator settles a begun
+// turn that broke without a word of its own, and the frame that owes the turn's
+// end on every other way out is what panicked: it ended nowhere. A turn that
+// panics before it began owes nothing here — its run's ending announces it
+// lost, and owes the turn's end itself.
+//
+// Mutation: drop the end from the panic's recovery, or owe it for a resume
+// whose turn never began, and a row below differs.
+func TestAResumedTurnThatPanicsOnceBegunEndsFailed(t *testing.T) {
+	t.Parallel()
+	for name, begins := range map[string]bool{"once begun": true, "before it began": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e, spy := loggingEngine(t)
+			rigRuns(t, e, halfwayPlay)
+			req := sandbox.ResumeRequest{
+				Run: sandbox.PendingRun{TurnID: "run-9", AgentHandle: "swe", WorkKey: "wk-9",
+					WorkSince: time.Now().UTC()},
+				Begin: func(context.Context) error { return nil },
+			}
+			err := e.resumeGuarded(t.Context(), req, func(ctx context.Context, guarded sandbox.ResumeRequest) error {
+				if begins {
+					if beginErr := guarded.Begin(ctx); beginErr != nil {
+						return beginErr
+					}
+				}
+				panic("the runner's registry was nil, its token " + leakedToken)
+			})
+			if !errors.Is(err, sandbox.ErrResumeAbandoned) {
+				t.Fatalf("the panicking resume answered %v, want it abandoned", err)
+			}
+			ends := spy.endsOf("run-9")
+			if !begins {
+				if len(ends) != 0 {
+					t.Fatalf("recorded %+v for a turn that never began", ends)
+				}
+				return
+			}
+			if len(ends) != 1 || ends[0].Ending.Outcome != executordomain.OutcomeFailed ||
+				!strings.Contains(ends[0].Ending.Failure, "panicked") ||
+				strings.Contains(ends[0].Ending.Failure, leakedToken) {
+				t.Fatalf("recorded %+v, want the turn failed, saying it panicked, redacted", ends)
+			}
+		})
 	}
 }

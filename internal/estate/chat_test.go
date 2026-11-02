@@ -280,6 +280,13 @@ func (d *chatDesk) Reply(_ context.Context, actor chatlet.Actor, _, replyTo stri
 	return d.wrote("reply:"+replyTo, actor, "")
 }
 
+func (d *chatDesk) Reach(_ context.Context, actor chatlet.Actor, channelID, replyTo string,
+	in chatlet.NewMessage) (chatlet.Draft, error) {
+	return chatlet.Draft{ChannelID: channelID, ThreadRoot: replyTo, Mentions: in.Mentions,
+		Reach: &chatlet.Reach{Recipients: []chatlet.Reached{
+			{Handle: actor.Name() + "-answerer", Reason: chatlet.ReasonAnswerer}}}}, nil
+}
+
 func (d *chatDesk) Edit(_ context.Context, actor chatlet.Actor, _, _ string, _ chatlet.EditMessage) (chatlet.Written, error) {
 	return d.wrote("edit", actor, "")
 }

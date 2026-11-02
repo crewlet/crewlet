@@ -186,6 +186,21 @@ const (
 	// submitted, or its box just left to its host.
 	SandboxNudge = SandboxPrefix + "nudge"
 
+	// MCPCheckPrefix prefixes the subjects a test of an MCP server crosses
+	// (internal/engine, mcpcheck.go): the node a person asked through asks
+	// the nodes that run the server, or the node holding the one seat it is
+	// tested for, to test it where it runs.
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a test is the ephemeral
+	// request and reply of [queue.EventQueue.Ask], worth nothing once the
+	// person who asked has gone. Its result is the server's latest test in
+	// the coordination store, and the request is audited where it arrived.
+	MCPCheckPrefix = "crewlet.mcp_check."
+	// MCPCheck is where one test is scattered. Every node with an engine
+	// serves it, and only a node the request names answers (for a seat's
+	// test, only the node holding the seat).
+	MCPCheck = MCPCheckPrefix + "test"
+
 	// SteerPrefix prefixes the subjects a person's note to a running turn
 	// crosses (internal/agent/steer).
 	//
@@ -260,6 +275,20 @@ func AgentInboxGroup(seat uuid.UUID) string {
 	}
 	return AgentGroupPrefix + seat.String()
 }
+
+// AgentInboxLaneSuffix is appended to a seat's inbox to name its priority
+// lane ([AgentInboxLane]).
+//
+// `.lane` RATHER THAN `.priority`, because the hand-built subject guard reads
+// every constant here as a marker, and `.priority` ends ordinary names
+// elsewhere (a task's priority field) that are nobody's subject.
+const AgentInboxLaneSuffix = ".lane"
+
+// AgentInboxLane names a seat inbox's priority lane: the inbox's second
+// mailbox, where a person's message waits ahead of the seat's background work
+// (queue.LaneOf). It is not itself an inbox, so [SeatFromInbox] does not read
+// it as one.
+func AgentInboxLane(inbox string) string { return inbox + AgentInboxLaneSuffix }
 
 // AgentControl returns the seat's sandbox-control subject.
 //

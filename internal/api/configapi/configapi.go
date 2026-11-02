@@ -1825,6 +1825,36 @@ func RefuseUnreadable(w http.ResponseWriter, err error) bool {
 	return RefuseUnreadableWith(w, err, nil)
 }
 
+// RefuseDraft answers a draft entity [Service.CheckEntity] refused, and
+// reports whether it was admitted: the routes that run a draft entry before it
+// is written (a model's check and credential test, an MCP server's test) answer
+// its refusal as a write of it would be answered.
+func RefuseDraft(w http.ResponseWriter, err error) bool {
+	var managed *ManagedError
+	var invalid *ValidationError
+	var entity *EntityError
+	switch {
+	case err == nil:
+		return true
+	case errors.As(err, &managed):
+		RefuseManaged(w, managed)
+	case errors.As(err, &invalid):
+		fields := RefusalFields(err)
+		fields["detail"] = invalid.Err.Error()
+		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
+	case errors.As(err, &entity):
+		fields := RefusalFields(&DocumentError{Err: entity.Err})
+		fields["detail"] = entity.Err.Error()
+		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
+	case errors.Is(err, ErrNoActiveRevision):
+		httpjson.Fail(w, http.StatusConflict, httpjson.CodeNoActiveRevision)
+	default:
+		log.Error("draft_check_failed", "error", err)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+	}
+	return false
+}
+
 // RefuseUnreadableWith is [RefuseUnreadable] with a surface's own detail beside
 // it, nil for none: what a `/setup` submission sealed before it met the
 // revision (`wrote_secrets`), which it must still be told.

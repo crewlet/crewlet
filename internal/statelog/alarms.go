@@ -20,6 +20,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/objectives"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The thresholds an alarm fires at.
@@ -226,6 +227,33 @@ const (
 	// (harness's limitBackoff), so a park that has outlived the slowest
 	// re-probe is one the engine will not end on its own soon.
 	LimitWaitingGrace = 15 * time.Minute
+
+	// MCPOutageGrace is how long an instance of an MCP server may stay down
+	// before the server's outage is a person's problem: the restart
+	// schedule's ceiling (internal/mcp's RestartCeiling, five minutes) plus
+	// one heartbeat ([coord.ReconcileInterval]), the beat that carries what
+	// the last attempt concluded. Inside it the engine is still bringing the
+	// instance back on its own, at 15 s, 30 s, 1 min, 2 min and 4 min; past
+	// it every further attempt waits the whole ceiling, so a server still
+	// down then is one the schedule is not going to fix soon.
+	//
+	// SPELLED HERE rather than imported, for the reason [LimitWaitingGrace]
+	// is: this table is the state log's, and importing the MCP client for one
+	// number would make every package that reads an alarm depend on it. A
+	// test holds it to the schedule's own constant, so a retune of the one
+	// fails until the other follows.
+	MCPOutageGrace = 5*time.Minute + coord.ReconcileInterval
+
+	// MCPWaitingGrace is how long an agent's instance of an MCP server may
+	// be held back for a credential a provisioning pass mints before the wait
+	// is a person's problem: the longest an integration waits between two
+	// passes while it still owes work of its own or the vendor's
+	// (internal/integration's DefaultSchedule.WaitingMax, five minutes) plus
+	// one heartbeat. A seat still waiting then has seen at least one whole
+	// pass that did not mint its credential. A pass that cannot mint until a
+	// person acts is not a wait at all: the node calls that instance failed,
+	// and [MCPOutageGrace] applies. Held to the schedule by the same test.
+	MCPWaitingGrace = 5*time.Minute + coord.ReconcileInterval
 )
 
 // ReadModel is what one domain DECLARES about the linearizable reads its log
@@ -362,6 +390,12 @@ const (
 	KindLLMSignInRefused         Kind = "llm_sign_in_refused"
 	KindLLMLimit                 Kind = "llm_limit"
 	KindLLMLimitWaiting          Kind = "llm_limit_waiting"
+
+	// The MCP kinds, each about ONE configured MCP server ([PerEntryKinds]).
+	KindMCPServerFailing     Kind = "mcp_server_failing"
+	KindMCPServerPartial     Kind = "mcp_server_partial"
+	KindMCPServerWaitingLong Kind = "mcp_server_waiting_long"
+	KindMCPToolsRefused      Kind = "mcp_tools_refused"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -667,6 +701,19 @@ type Reading struct {
 	// [ModelCondition.NoSignIn] is the gathering node's own reading.
 	Models   []ModelCondition
 	ModelsAt time.Time
+
+	// MCPServers is each MCP server the active configuration runs, its
+	// condition joined across the fleet's live nodes, and MCPServersAt the
+	// instant it was gathered, which the outage and the wait are measured
+	// against. A zero MCPServersAt is a node that gathered none, which
+	// evaluates no MCP alarm.
+	//
+	// FLEET-WIDE, from the same lease listing as [Reading.Models]: an
+	// instance down on one node and a wait on another are both the server's,
+	// and every data node reads every live node's heartbeat alike, so the
+	// alarm reads the same whichever node a person asks.
+	MCPServers   []MCPServerCondition
+	MCPServersAt time.Time
 }
 
 // FeedOutage is one change feed that holds no consumer.
@@ -714,6 +761,55 @@ type ModelCondition struct {
 	// WaitingSince is the earliest instant a seat was parked on a chain
 	// naming it, across live nodes; zero when none waits.
 	WaitingSince time.Time
+}
+
+// MCPServerCondition is one MCP server's condition, joined from every live
+// node's heartbeat row for it ([coord.MCPServerStatus]).
+//
+// ONE PER SERVER THE CONFIGURATION RUNS: a server turned off (`enabled:
+// false`) raises nothing, since nothing is started for it on purpose, and a
+// server only a node on another revision still reports is that node's apply,
+// which the control plane already names.
+type MCPServerCondition struct {
+	// Server is the server's name in `mcp_servers`.
+	Server string
+
+	// Started, Failed and Waiting are its instances summed over every node
+	// that reported: serving, not serving, and held back unstarted for a
+	// credential a provisioning pass mints. THE SUMS THE MCP ANSWER DECIDES A
+	// SERVER'S STATE FROM, so `mcp_server_failing` stands on a server the page
+	// calls failing and `mcp_server_partial` on one it calls partial.
+	Started, Failed, Waiting int
+
+	// DownSince is the earliest instant a failed instance on any node
+	// stopped serving or first failed to start, zero when none has failed,
+	// and Down the instance it dates: the outage is measured from it, so an
+	// instance that keeps failing across retries keeps one clock.
+	DownSince time.Time
+	Down      MCPInstanceNote
+
+	// WaitingSince is the earliest instant an instance on any node was held
+	// back for its credential, zero when none waits, and Wait that instance,
+	// its Said the wait's own sentence (the variables, and the integration
+	// that mints them).
+	WaitingSince time.Time
+	Wait         MCPInstanceNote
+
+	// Refused are the tools an instance lists that are offered under no
+	// name, each by the name it would be filed under, once across the fleet
+	// and sorted (a node names at most [coord.MaxMCPToolNotes]); RefusedCount
+	// is how many there are, as the node counting the most counts them, and
+	// never fewer than Refused lists.
+	Refused      []string
+	RefusedCount int
+}
+
+// MCPInstanceNote is the one instance a server's condition names: the node it
+// is on, its seat's handle ("" for a shared server's), its failure class ("" for
+// a wait, or a failure no class fits) and what was said, as the heartbeat
+// carries it (redacted, and bounded to [coord.MaxMCPErrorBytes]).
+type MCPInstanceNote struct {
+	Node, Seat, Class, Said string
 }
 
 // Alarm is one condition currently true on this node.
@@ -778,26 +874,37 @@ type Alarm struct {
 	// kind folded into one.
 	Domains []AlarmDomain `json:"domains,omitempty"`
 
-	// Entries is every model entry this alarm stands on, for a condition
-	// about one entry ([PerEntryKinds]), the analogue of Domains: one alarm
-	// per kind with its entries in it, leading with the longest-standing
-	// entry's detail, and one pair of log lines per entry. Empty for every
-	// other kind.
+	// Entries is every configured entry this alarm stands on, for a
+	// condition about one model entry or one MCP server ([PerEntryKinds]),
+	// the analogue of Domains: one alarm per kind with its entries in it,
+	// leading with the longest-standing entry's detail, and one pair of log
+	// lines per entry. Empty for every other kind.
 	Entries []AlarmEntry `json:"entries,omitempty"`
 }
 
-// AlarmEntry is one model entry an alarm stands on.
+// AlarmEntry is one configured entry an alarm stands on: a model entry, or an
+// MCP server.
 type AlarmEntry struct {
-	// Key is the entry's key in `providers.llm`.
+	// Key is the entry's key in `providers.llm`, or the server's name in
+	// `mcp_servers`.
 	Key string `json:"key"`
 
 	// Detail is this entry's own measurement.
 	Detail string `json:"detail"`
 
 	// Since is when the condition began for this entry: the report that
-	// opened a sit-out, the first park, the refusal, or the instant an
-	// expiry came within the alarm's threshold.
+	// opened a sit-out, the first park, the refusal, the instant an expiry
+	// came within the alarm's threshold, or the instant an MCP server's
+	// instance went down or was held back. Zero where the condition carries
+	// no instant of its own: nothing signs a model in, or a server's tools
+	// are refused their names.
 	Since time.Time `json:"since,omitzero"`
+
+	// Seat is the agent seat, by its handle, whose instance the measurement
+	// names, where it names one: an agent's instance of an MCP server that is
+	// down or waiting. A shared server's instance, and every model entry,
+	// name none. It is what a remedy aimed at one agent's instance acts on.
+	Seat string `json:"seat,omitempty"`
 }
 
 // AlarmDomain is one measurement an alarm stands on, and the logs it was
@@ -852,14 +959,21 @@ type rule struct {
 	// directions — a flag nothing checked would be the second opinion the
 	// table exists to prevent.
 	perLog bool
-	// perEntry marks a condition about ONE MODEL ENTRY: entry is evaluated
-	// once per [Reading.Models] row at [Reading.ModelsAt], and the entries it
-	// holds for are listed under the kind's one alarm ([Alarm.Entries]),
-	// whose log lines the [Tracker] writes per entry. fires is unused on
-	// such a row.
-	perEntry bool
-	entry    func(m ModelCondition, now time.Time) (detail string, since time.Time, firing bool)
+	// model and server mark a condition about ONE CONFIGURED ENTRY, a model
+	// entry or an MCP server, and evaluate it: model once per
+	// [Reading.Models] row at [Reading.ModelsAt], server once per
+	// [Reading.MCPServers] row at [Reading.MCPServersAt]. The entries it holds
+	// for are listed under the kind's one alarm ([Alarm.Entries]), whose log
+	// lines the [Tracker] writes per entry. A row sets one of the two, and
+	// fires is unused on it. Each answers the entry's measurement with its
+	// key left for [rule.evaluateEntries] to fill.
+	model  func(m ModelCondition, now time.Time) (AlarmEntry, bool)
+	server func(s MCPServerCondition, now time.Time) (AlarmEntry, bool)
 }
+
+// perEntry reports whether the rule is about one configured entry
+// ([PerEntryKinds]).
+func (rule rule) perEntry() bool { return rule.model != nil || rule.server != nil }
 
 // table is every alarm this engine can raise, in the order they are reported.
 //
@@ -1432,11 +1546,10 @@ var table = []rule{
 			"is healthy again.",
 	},
 	{
-		kind:     KindLLMCredentialExpiring,
-		perEntry: true,
-		entry: func(m ModelCondition, now time.Time) (string, time.Time, bool) {
+		kind: KindLLMCredentialExpiring,
+		model: func(m ModelCondition, now time.Time) (AlarmEntry, bool) {
 			left := m.ExpiresAt.Sub(now)
-			return expiryDetail(m, left), m.ExpiresAt.Add(-CredentialNoticeDays * day),
+			return AlarmEntry{Detail: expiryDetail(m, left), Since: m.ExpiresAt.Add(-CredentialNoticeDays * day)},
 				!m.ExpiresAt.IsZero() && left <= CredentialNoticeDays*day && left > CredentialWarningDays*day
 		},
 		remedy: modelRemedy("Rotate the credential before it expires: Settings › Models › the " +
@@ -1444,20 +1557,18 @@ var table = []rule{
 			"models that read it switch to it at once."),
 	},
 	{
-		kind:     KindLLMCredentialExpiresSoon,
-		perEntry: true,
-		entry: func(m ModelCondition, now time.Time) (string, time.Time, bool) {
+		kind: KindLLMCredentialExpiresSoon,
+		model: func(m ModelCondition, now time.Time) (AlarmEntry, bool) {
 			left := m.ExpiresAt.Sub(now)
-			return expiryDetail(m, left), m.ExpiresAt.Add(-CredentialWarningDays * day),
+			return AlarmEntry{Detail: expiryDetail(m, left), Since: m.ExpiresAt.Add(-CredentialWarningDays * day)},
 				!m.ExpiresAt.IsZero() && left <= CredentialWarningDays*day && left > 0
 		},
 		remedy: modelRemedy("Rotate the credential now: Settings › Models › the entry › " +
 			"Rotate. Once it expires every seat on the model is refused."),
 	},
 	{
-		kind:     KindLLMSignInRefused,
-		perEntry: true,
-		entry: func(m ModelCondition, now time.Time) (string, time.Time, bool) {
+		kind: KindLLMSignInRefused,
+		model: func(m ModelCondition, now time.Time) (AlarmEntry, bool) {
 			switch {
 			case !m.RefusedAt.IsZero():
 				detail := fmt.Sprintf("%s's sign-in was refused at %s", m.Key,
@@ -1465,15 +1576,15 @@ var table = []rule{
 				if m.RefusedSaid != "" {
 					detail += ": " + m.RefusedSaid
 				}
-				return detail, m.RefusedAt, true
+				return AlarmEntry{Detail: detail, Since: m.RefusedAt}, true
 			case !m.ExpiresAt.IsZero() && !now.Before(m.ExpiresAt):
-				return fmt.Sprintf("%s's %s expired on %s", m.Key, credentialName(m),
-					m.ExpiresAt.UTC().Format("2 Jan 2006")), m.ExpiresAt, true
+				return AlarmEntry{Detail: fmt.Sprintf("%s's %s expired on %s", m.Key, credentialName(m),
+					m.ExpiresAt.UTC().Format("2 Jan 2006")), Since: m.ExpiresAt}, true
 			case m.NoSignIn:
-				return fmt.Sprintf("nothing signs %s in on this node, and a seat or "+
-					"Ask Crewlet runs on it", m.Key), time.Time{}, true
+				return AlarmEntry{Detail: fmt.Sprintf("nothing signs %s in on this node, and a seat or "+
+					"Ask Crewlet runs on it", m.Key)}, true
 			}
-			return "", time.Time{}, false
+			return AlarmEntry{}, false
 		},
 		remedy: modelRemedy("Give the model a credential that signs in: Settings › Models › " +
 			"the entry › Rotate for a token or a key, or sign the harness in on the node " +
@@ -1482,15 +1593,14 @@ var table = []rule{
 			"they have one."),
 	},
 	{
-		kind:     KindLLMLimit,
-		perEntry: true,
-		entry: func(m ModelCondition, now time.Time) (string, time.Time, bool) {
+		kind: KindLLMLimit,
+		model: func(m ModelCondition, now time.Time) (AlarmEntry, bool) {
 			out := m.SittingOut
 			if out == nil || !now.Before(out.Until) {
-				return "", time.Time{}, false
+				return AlarmEntry{}, false
 			}
 			waiting := !m.WaitingSince.IsZero() && now.Sub(m.WaitingSince) >= LimitWaitingGrace
-			return limitDetail(m.Key, out), out.Since, !waiting
+			return AlarmEntry{Detail: limitDetail(m.Key, out), Since: out.Since}, !waiting
 		},
 		remedy: modelRemedy("Nothing, if the plan's limit is expected: the engine tries the " +
 			"model again on its own and its seats fall back meanwhile. To end it now, " +
@@ -1498,11 +1608,10 @@ var table = []rule{
 			"stops every node sitting it out."),
 	},
 	{
-		kind:     KindLLMLimitWaiting,
-		perEntry: true,
-		entry: func(m ModelCondition, now time.Time) (string, time.Time, bool) {
+		kind: KindLLMLimitWaiting,
+		model: func(m ModelCondition, now time.Time) (AlarmEntry, bool) {
 			if m.WaitingSince.IsZero() {
-				return "", time.Time{}, false
+				return AlarmEntry{}, false
 			}
 			waited := now.Sub(m.WaitingSince)
 			detail := fmt.Sprintf("a seat has waited %s parked on %s's limit, with no "+
@@ -1510,11 +1619,93 @@ var table = []rule{
 			if m.SittingOut != nil {
 				detail += "; " + limitDetail(m.Key, m.SittingOut)
 			}
-			return detail, m.WaitingSince, waited >= LimitWaitingGrace
+			return AlarmEntry{Detail: detail, Since: m.WaitingSince}, waited >= LimitWaitingGrace
 		},
 		remedy: modelRemedy("Seats are not working. Add a fallback entry to their chain " +
 			"(a model on another sign-in), raise the plan, or wait for the reset the " +
 			"vendor named; Settings › Models › the entry › Retry asks the vendor once."),
+	},
+	{
+		// NO INSTANCE SERVING, past the restart schedule's ceiling: the
+		// state the MCP answer calls failing ([MCPServerCondition.Started]),
+		// measured from the instance that has been down longest. That
+		// instant and not the latest failure's, because the node publishes
+		// the earliest of its instances, and because a server whose last
+		// serving instance has just gone down was already in an outage: an
+		// alarm that waited the grace again there would clear
+		// `mcp_server_partial` and say nothing while matters got worse.
+		kind: KindMCPServerFailing,
+		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
+			if s.Started > 0 || s.Failed == 0 || !heldPast(s.DownSince, now, MCPOutageGrace) {
+				return AlarmEntry{}, false
+			}
+			return AlarmEntry{Detail: fmt.Sprintf("no instance of %s is serving, and one has been down "+
+				"for %s%s", s.Server, spoken(now.Sub(s.DownSince)), noted(s.Down)),
+				Since: s.DownSince, Seat: s.Down.Seat}, true
+		},
+		remedy: mcpRemedy("No agent is offered the server's tools until an instance serves. " +
+			"Fix what the failure names (its address, its command, or the credentials it " +
+			"reads); the engine keeps trying every five minutes, and Restart on the " +
+			"server's page (`POST /mcp-servers/<name>/retry`) tries every instance now."),
+	},
+	{
+		// SOME INSTANCES SERVING AND SOME NOT, past the same ceiling: a
+		// node's environment, one agent's credentials or one child that
+		// keeps dying, rather than the server.
+		kind: KindMCPServerPartial,
+		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
+			if s.Started == 0 || s.Failed == 0 || !heldPast(s.DownSince, now, MCPOutageGrace) {
+				return AlarmEntry{}, false
+			}
+			verb := "are"
+			if s.Failed == 1 {
+				verb = "is"
+			}
+			return AlarmEntry{Detail: fmt.Sprintf("%d of %d instances of %s %s not serving, and one has "+
+				"been down for %s%s", s.Failed, s.Started+s.Failed, s.Server, verb,
+				spoken(now.Sub(s.DownSince)), noted(s.Down)), Since: s.DownSince, Seat: s.Down.Seat}, true
+		},
+		remedy: mcpRemedy("The agents and nodes whose instance serves are not affected. Fix " +
+			"what the failure names, usually one node's environment or one agent's " +
+			"credentials; Restart on the alarm (`POST /mcp-servers/<name>/retry`, with " +
+			"`seat` for one agent's instance) tries it now rather than on the five-minute " +
+			"schedule."),
+	},
+	{
+		// AN AGENT'S INSTANCE HELD BACK past a provisioning pass for a
+		// credential that pass mints. Beside the two above rather than
+		// folded into them: a wait is no failure, and the server's state
+		// does not count it as one, but a wait that has outlived a whole
+		// pass is an integration that is not delivering.
+		kind: KindMCPServerWaitingLong,
+		server: func(s MCPServerCondition, now time.Time) (AlarmEntry, bool) {
+			if s.Waiting == 0 || !heldPast(s.WaitingSince, now, MCPWaitingGrace) {
+				return AlarmEntry{}, false
+			}
+			return AlarmEntry{Detail: fmt.Sprintf("an instance of %s has waited %s for a credential a "+
+				"provisioning pass mints%s", s.Server, spoken(now.Sub(s.WaitingSince)), noted(s.Wait)),
+				Since: s.WaitingSince, Seat: s.Wait.Seat}, true
+		},
+		remedy: mcpRemedy("Open the integration that mints the agent's credential (Settings › " +
+			"Integrations): its last pass says what it is waiting for. The instance starts " +
+			"once the credential is sealed and reaches its node; until then that agent is " +
+			"offered none of the server's tools."),
+	},
+	{
+		// A TOOL NO AGENT CAN BE HANDED, raised as soon as a node lists
+		// it: a name is refused by a rule, never by a moment, so no wait
+		// would change it.
+		kind: KindMCPToolsRefused,
+		server: func(s MCPServerCondition, _ time.Time) (AlarmEntry, bool) {
+			if s.RefusedCount == 0 {
+				return AlarmEntry{}, false
+			}
+			return AlarmEntry{Detail: refusedDetail(s)}, true
+		},
+		remedy: mcpRemedy("The server's Tools tab says why each name is refused. A name too " +
+			"long for the harnesses fits with a shorter `tool_prefix`, or none; a name a " +
+			"built-in holds needs a prefix; a name with characters a model cannot read is " +
+			"the server's own to change. No agent is offered those tools until then."),
 	},
 }
 
@@ -1527,6 +1718,64 @@ func feedOutageDetail(f FeedOutage) string {
 	return fmt.Sprintf("the %s change feed has held no consumer for %s, after "+
 		"%d failed attempt(s), the latest: %s", f.Source, spoken(f.For),
 		f.Failures, f.Cause)
+}
+
+// mcpRemedy is an MCP alarm's remedy, ending with where a person reads the
+// server from.
+func mcpRemedy(what string) string {
+	return what + " The server's page under Settings › MCP & tools " +
+		"(`GET /mcp-servers/<name>`) lists each instance with what it last said."
+}
+
+// heldPast reports whether a condition that began at since has held for at
+// least grace by now. A zero since is a condition nobody dated, which no
+// threshold measured in time can judge, so it is never past one.
+func heldPast(since, now time.Time, grace time.Duration) bool {
+	return !since.IsZero() && now.Sub(since) >= grace
+}
+
+// noted is the instance a server's condition names, as the alarm's sentence
+// ends: whose it is, the node it is on, its failure class and what it said,
+// each left out where the heartbeat carried none.
+func noted(n MCPInstanceNote) string {
+	var about []string
+	if n.Seat != "" {
+		about = append(about, n.Seat+"'s")
+	}
+	if n.Node != "" {
+		about = append(about, "on "+n.Node)
+	}
+	if n.Class != "" {
+		about = append(about, n.Class)
+	}
+	out := ""
+	if len(about) > 0 {
+		out = " (" + strings.Join(about, ", ") + ")"
+	}
+	if n.Said != "" {
+		out += ": " + n.Said
+	}
+	return out
+}
+
+// refusedDetail names a server's tools that cannot be offered under their
+// names, and how many more there are than the heartbeat lists.
+func refusedDetail(s MCPServerCondition) string {
+	named := make([]words.Said, 0, len(s.Refused)+1)
+	for _, tool := range s.Refused {
+		named = append(named, words.Said("`"+tool+"`"))
+	}
+	if more := s.RefusedCount - len(s.Refused); more > 0 {
+		named = append(named, words.Said(fmt.Sprintf("%d more", more)))
+	}
+	detail := fmt.Sprintf("%d of %s's tools cannot be offered under their names", s.RefusedCount, s.Server)
+	if s.RefusedCount == 1 {
+		detail = fmt.Sprintf("1 of %s's tools cannot be offered under its name", s.Server)
+	}
+	if len(named) > 0 {
+		detail += ": " + words.And(named)
+	}
+	return detail
 }
 
 // day is the unit the credential thresholds are written in.
@@ -1586,7 +1835,7 @@ func limitDetail(key string, out *coord.ModelSitOut) string {
 func Evaluate(r Reading) []Alarm {
 	var out []Alarm
 	for _, rule := range table {
-		if rule.perEntry {
+		if rule.perEntry() {
 			if a, firing := rule.evaluateEntries(r); firing {
 				out = append(out, a)
 			}
@@ -1599,17 +1848,29 @@ func Evaluate(r Reading) []Alarm {
 	return out
 }
 
-// evaluateEntries is a per-entry rule over every model row: one alarm listing
-// the entries it holds for, ordered by key, leading with the longest-standing
-// entry's detail (the earliest Since, ties to the lower key).
+// evaluateEntries is a per-entry rule over every row it judges, model entries
+// or MCP servers: one alarm listing the entries it holds for, ordered by key,
+// leading with the longest-standing entry's detail (the earliest Since, ties
+// to the lower key). A reading that gathered no rows of the rule's kind
+// (a zero instant) judges none.
 func (rule rule) evaluateEntries(r Reading) (Alarm, bool) {
-	if r.ModelsAt.IsZero() {
-		return Alarm{}, false
-	}
 	var entries []AlarmEntry
-	for _, m := range r.Models {
-		if detail, since, firing := rule.entry(m, r.ModelsAt); firing {
-			entries = append(entries, AlarmEntry{Key: m.Key, Detail: detail, Since: since})
+	keep := func(key string, e AlarmEntry, firing bool) {
+		if firing {
+			e.Key = key
+			entries = append(entries, e)
+		}
+	}
+	switch {
+	case rule.model != nil && !r.ModelsAt.IsZero():
+		for _, m := range r.Models {
+			e, firing := rule.model(m, r.ModelsAt)
+			keep(m.Key, e, firing)
+		}
+	case rule.server != nil && !r.MCPServersAt.IsZero():
+		for _, s := range r.MCPServers {
+			e, firing := rule.server(s, r.MCPServersAt)
+			keep(s.Server, e, firing)
 		}
 	}
 	if len(entries) == 0 {
@@ -1649,11 +1910,30 @@ func PerLogKinds() []Kind {
 	return out
 }
 
-// PerEntryKinds is the kinds evaluated once per model entry, in table order.
+// PerEntryKinds is the kinds evaluated once per configured entry, a model
+// entry or an MCP server, in table order.
 func PerEntryKinds() []Kind {
+	return kindsWhere(rule.perEntry)
+}
+
+// PerModelKinds is the per-entry kinds about one model entry, and
+// PerServerKinds the ones about one MCP server, each in table order: the two
+// halves of [PerEntryKinds], for the surface that reads one of them.
+func PerModelKinds() []Kind {
+	return kindsWhere(func(r rule) bool { return r.model != nil })
+}
+
+// PerServerKinds is the per-entry kinds about one MCP server; see
+// [PerModelKinds].
+func PerServerKinds() []Kind {
+	return kindsWhere(func(r rule) bool { return r.server != nil })
+}
+
+// kindsWhere is the table's kinds whose rule holds, in table order.
+func kindsWhere(holds func(rule) bool) []Kind {
 	var out []Kind
 	for _, rule := range table {
-		if rule.perEntry {
+		if holds(rule) {
 			out = append(out, rule.kind)
 		}
 	}

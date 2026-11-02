@@ -186,6 +186,13 @@ type Release struct {
 	// from the first. Zero for a release that is not a failed collection.
 	CollectFailedAt time.Time
 
+	// ResumeFailedAt, when set, is the instant the resume of this job's
+	// turn failed: the release counts it onto the job's record
+	// ([LaunchRecord.ResumeFailures]), dating the run of failures from the
+	// first. Zero for any other release, a resume held on a condition
+	// included, which is a wait and not a failure.
+	ResumeFailedAt time.Time
+
 	// Hold, where set, holds the run's resume back until the refusal lifts
 	// ([PendingRun.HeldFor]): the claim is handed back because the seat's
 	// conditions refused the resumed turn, not because it failed, and the
@@ -621,6 +628,15 @@ type BridgeCall struct {
 	Origin string `json:"origin,omitempty"`
 	Server string `json:"server,omitempty"`
 
+	// Source is whose tool the call named, in the origin grammar, whether
+	// or not it answered: set wherever the surface resolved the name, so a
+	// call it refused before any tool ran is still filed under the server
+	// it was for (mcpbridge.Call). Refusal is the class of a failed call
+	// the engine classified (mcp.Refusal), empty on a success and on a
+	// third-party server's own failure.
+	Source  string `json:"source,omitempty"`
+	Refusal string `json:"refusal,omitempty"`
+
 	// Extra is every key of the call this build does not know, kept verbatim
 	// and written back by every write of the record (wirekeys.go). Filled by
 	// the decode, never by a caller.
@@ -763,23 +779,27 @@ type PendingRun struct {
 	// records — begun, landed, refused or unresolved — and Kept the newest
 	// that LANDED, the one the executor log's row names; both nil until the
 	// turn's first ([Coordinator.takeCapture]). The TURN'S, kept by every
-	// relaunch: a later launch continues the turn's newest kept capture, and
-	// reads the newest attempt to know whether one after it was refused.
+	// relaunch: the turn's end reads them to say whether its newest attempt
+	// was kept, and names the attempt that was not ([unkeptOf]), so the log's
+	// row never goes on naming an older session as the turn's last.
 	// Each is a section of its own with an Extra (wirekeys.go).
 	Capture *SessionCapture `json:"session_capture,omitempty"`
 	Kept    *SessionCapture `json:"session_kept,omitempty"`
 
-	// Handed is every secret this launch handed its box, SEALED under the
-	// fleet keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a
-	// capture of the box's session takes out by value. Written with the
-	// job's command ([PendingStore.AttachSandbox]) and cleared by the next
-	// launch, since it is the launch's; empty where the launch could not seal
-	// them, which refuses every capture of its job rather than keeping a
-	// session scrubbed of less than its box was given.
+	// Handed is every secret the job's box was handed, SEALED under the fleet
+	// keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a capture of
+	// the box's session takes out by value. Written with the job's command
+	// ([PendingStore.AttachSandbox]) and cleared by the next launch, which
+	// writes its own — carrying this one forward where it continues in the
+	// same box, since the box still holds what the jobs before it were handed
+	// and the session it resumes holds their lines ([PriorBox.Handed]). Empty
+	// where the launch could not seal them, which refuses every capture of its
+	// job rather than keeping a session scrubbed of less than its box was
+	// given.
 	Handed string `json:"handed,omitempty"`
 
 	// OwedEnd is the turn's END, decided and not yet on the executor log
-	// ([Coordinator.EndTurn]): the [executordomain.Ending] as its JSON,
+	// ([Coordinator.publishEnd]): the [executordomain.Ending] as its JSON,
 	// carried whole by every build. Written by whatever ended the turn — its
 	// resumed frame, or the run's own ending for a loss or a stop
 	// ([PendingStore.OweEnd]) — and published by the run's ending before the
@@ -789,7 +809,21 @@ type PendingRun struct {
 	// dispatched before the end it reads is recorded. DECIDED ONCE: a second
 	// path that ends the turn finds this one and records it, rather than an
 	// account of its own — and answers no colleague a second time.
+	//
+	// AN END THIS BUILD CANNOT READ — a key it does not know, an outcome it
+	// does not know — was written by a newer build, and is left owed for a
+	// node that reads it ([Coordinator.publishEnd]), never re-encoded without
+	// what it could not read.
 	OwedEnd json.RawMessage `json:"owed_end,omitempty"`
+
+	// EndRecorded says the executor log has the turn's end: the run's ending
+	// published the end the row owed and cleared it in the same write that set
+	// this ([PendingStore.ClearEnd]). The DURABLE HALF OF "DECIDED ONCE": an
+	// end cleared from OwedEnd would otherwise read as one never decided, and
+	// an attempt at the ending after a crash between the clear and the delete,
+	// or after a delete the store refused for a reply the row still owed,
+	// decided the turn's end again — its colleague answered a second time.
+	EndRecorded bool `json:"end_recorded,omitempty"`
 
 	// PriorCalls is every tool the turn's EARLIER launches called through
 	// the bridge and that succeeded, by name, each once, and PriorCallsElided
@@ -1546,15 +1580,18 @@ type PendingStore interface {
 	//
 	// DECIDED ONCE: a row that owes an end already keeps it, and answers it,
 	// so a second path that ends the same turn records the first one's
-	// account. ON A ROW IN ANY STATE, its ending decided included: a loss's
-	// or a stop's end is decided by that ending's own steps. A row that is
-	// gone takes nothing and is no error.
+	// account; and a row whose end is recorded already
+	// ([PendingRun.EndRecorded]) takes none. ON A ROW IN ANY STATE, its
+	// ending decided included: a loss's or a stop's end is decided by that
+	// ending's own steps. A row that is gone takes nothing and is no error.
 	OweEnd(ctx context.Context, turnID string, ending json.RawMessage) (PendingRun, bool, error)
 
 	// ClearEnd removes the end a row owes once the executor log has taken it
 	// ([PendingRun.OwedEnd]), only where the row still owes exactly owed, so
-	// a clear can never take an end the log has not seen. A row that is gone
-	// or owes another is no error, and answers false.
+	// a clear can never take an end the log has not seen — and marks the end
+	// recorded in the same write ([PendingRun.EndRecorded]), which no later
+	// OweEnd overwrites. A row that is gone or owes another is no error, and
+	// answers false.
 	ClearEnd(ctx context.Context, turnID string, owed json.RawMessage) (bool, error)
 
 	// ClaimForResume atomically flips a run to resumed, when it holds the
@@ -2386,6 +2423,11 @@ type PriorBox struct {
 	// whose host a local box is on ([PendingRun.LaunchNode]), and so the one
 	// node a box in a local cell may be continued in or reclaimed by.
 	LaunchNode string
+	// Handed is what the job that used the box was handed, sealed
+	// ([PendingRun.Handed]): a job that continues in the box carries it
+	// forward, since the box still holds those values and the session it
+	// resumes their lines ([Coordinator.sealHanded]).
+	Handed string
 }
 
 // ContinuesIn reports whether a launch of spec may continue in this box
@@ -2546,6 +2588,21 @@ type LaunchRecord struct {
 	// the one write through which a retry reaches the collection again.
 	CollectFailures     int       `json:"collect_failures,omitempty"`
 	CollectFailingSince time.Time `json:"collect_failing_since,omitzero"`
+
+	// ResumeFailures is how many resumes of this job's turn have failed, and
+	// ResumeFailingSince when the
+	// first of them failed: the run of failures [Coordinator.resumeAndSettle]
+	// bounds before it settles the run ([ResumeGiveUp]). A resume held on a
+	// condition is a wait, and counts nothing.
+	//
+	// ON THE JOB'S RECORD for the reason CollectFailures is: every failure
+	// hands the claim back and the poll announces the job again, here, on
+	// another node or after a restart, so a count held in memory granted
+	// every attempt a fresh allowance and a resume that always failed was
+	// retried on every poll for as long as the engine ran. WRITTEN BY THE
+	// RELEASE ([Release.ResumeFailedAt]).
+	ResumeFailures     int       `json:"resume_failures,omitempty"`
+	ResumeFailingSince time.Time `json:"resume_failing_since,omitzero"`
 
 	// Collected is whether a collection READ THIS JOB'S BOX BACK and handed
 	// what it found to the job's turn, whose resume then gave the claim back

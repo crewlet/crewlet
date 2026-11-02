@@ -96,10 +96,10 @@ type Ending struct {
 	// THE END IS WHERE IT IS SAID, because the run's record that knew it is
 	// deleted with the turn, and the turn's row would otherwise go on naming
 	// an older capture of the turn — one that does not hold what the turn's
-	// later launch did — which the conversation's next turn would continue
-	// believing it the turn's last word. The apply takes that older object
-	// off the row ([applyEnd]), so the next turn starts fresh, and is told
-	// why.
+	// later launch did — as the turn's last word, for whatever continues the
+	// conversation's session to take for it. The apply takes that older
+	// object off the row ([applyEnd]), so the row names no session of the
+	// turn, and the end says why.
 	Unkept *Unkept `json:"unkept,omitempty"`
 }
 

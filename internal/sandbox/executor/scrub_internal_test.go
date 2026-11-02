@@ -18,9 +18,6 @@ import (
 // shapedKey is a credential only its shape gives away.
 const shapedKey = "ghp_" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7d"
 
-// keyLine is a full line of a key's body, at an encoder's width.
-const keyLine = "MIIEowIBAAKCAQEAu7Jx9f3Lm2Pq8Rt5Vw1Yz4Bc6De9Fg0Hi3Jk5Lm7No9Pq2Rs4"
-
 // THE DIGEST IS POSIX CKSUM'S, byte for byte as the box's `cksum` prints it for
 // its standard input — the digest a box's restore compares a carried archive
 // by, so one the engine computes is one the box recognises. Over nothing, a
@@ -51,15 +48,15 @@ func TestTheDigestIsPOSIXCksums(t *testing.T) {
 }
 
 // A TRANSCRIPT LINE STAYS JSON, AND LOSES EVERY SECRET IN IT. A value the engine
-// named, raw and JSON-escaped; a key's lines inside one string, which only the
-// decoded string has as lines; a password's key and its value, two strings
-// apart, which only the whole line has together; and a value under a
-// credential's own key — all gone, the line still one JSON value, and a line
-// that is not JSON redacted as text.
+// named; a key's lines inside one string, which only the decoded string has as
+// lines; and a string or a number under a credential's own key — all gone, the
+// line still one JSON value. A line that is not JSON — a torn last line — is
+// scrubbed and redacted as text, the engine's value taken out in the form a
+// JSON string escapes it in, which is the only form a torn line holds it in.
 //
 // Mutation: redact the raw line alone, the strings alone, write a key as it
-// came, keep a whole-line redaction that broke the JSON, or rewrite a line of
-// two values as one, and a case here goes red.
+// came, keep a number under a credential's key, take out only a value's raw
+// form, or rewrite a line of two values as one, and a case here goes red.
 //
 // AND A KEY IS A STRING LIKE ANY OTHER: a tool's structured result can name a
 // member by anything, a secret included.
@@ -85,6 +82,8 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 			line: `{"toolUseResult":{"opaque-engine-value":1}}`, gone: []string{"opaque-engine-value"}},
 		"a key only its shape gives away": {
 			line: `{"env":{"` + shapedKey + `":"set"}}`, gone: []string{shapedKey}},
+		"a number under a credential's key": {
+			line: `{"input":{"db_password":73519046284}}`, gone: []string{"73519046284"}},
 	} {
 		got := rewriteLine(tc.line, s, testBounds)
 		if !json.Valid([]byte(got)) {
@@ -100,6 +99,12 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 		"opaque-engine-value") {
 		t.Errorf("a line that is not JSON kept its secret: %q", got)
 	}
+	// A TORN LINE HOLDS A VALUE AS ITS STRING ESCAPED IT, and nothing decodes
+	// the string before the scrub reads it: only the escaped form is there.
+	if got := rewriteLine(`{"text":"cut off see with\"quote-value`, s, testBounds); strings.Contains(got,
+		"quote-value") {
+		t.Errorf("a torn line kept the escaped form of a value: %q", got)
+	}
 	// TWO VALUES ON ONE LINE are not the one JSON value a transcript's line
 	// is: the line is redacted as the text it is, rather than split in two.
 	if got := rewriteLine(`{"a":"opaque-engine-value"} {"b":1}`, s, testBounds); strings.Contains(got,
@@ -112,18 +117,59 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 var testBounds = boundsFor(32 << 20)
 
 // A VALUE TOO SHORT TO BE A CREDENTIAL IS NEVER TAKEN OUT BY VALUE, and a long
-// one whose line holds another is taken out whole.
+// one that begins with another is taken out whole.
 //
 // Mutation: drop the floor, and a transcript loses every occurrence of a
-// three-letter word; drop the longest-first order, and a value holding another
-// leaves its tail behind.
+// three-letter word; drop the longest-first order, and a value that begins with
+// another — the one place a replacer's order decides which it takes — leaves
+// its tail behind.
 func TestTheScrubTakesOutCredentialsNotWords(t *testing.T) {
 	t.Parallel()
-	s := newScrubber([]string{"yes", "inner-secret", "outer-inner-secret-value"})
-	got := s.apply("yes: outer-inner-secret-value and inner-secret")
+	s := newScrubber([]string{"yes", "inner-secret", "inner-secret-value-tail"})
+	got := s.apply("yes: inner-secret-value-tail and inner-secret")
 	if want := "yes: " + scrubMarker + " and " + scrubMarker; got != want {
 		t.Errorf("scrubbed to %q, want %q", got, want)
 	}
+}
+
+// A KEY THE ENGINE HANDED A BOX IS TAKEN OUT A LINE AT A TIME, AND ITS ARMOUR
+// STAYS, so every other key of its kind in the session is still one the shape
+// pass reads. A deploy key a setup step wrote from a reference is handed whole;
+// its BEGIN and END lines are every OPENSSH key's, and taken out by value they
+// were taken off a second key the run printed, whose body the shape pass then
+// could not place and kept.
+//
+// Mutation: take the armour lines out by value, and the printed key's body
+// survives below.
+func TestAHandedKeysArmourStaysForTheShapePass(t *testing.T) {
+	t.Parallel()
+	armoured := func(body string) string {
+		return "-----BEGIN OPENSSH PRIVATE KEY-----\n" + strings.Repeat(body+"\n", 6) +
+			"-----END OPENSSH PRIVATE KEY-----"
+	}
+	handed := armoured("b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz")
+	printed := armoured("QyNTUxOQAAACDhRunsOwnPrintedKeyBodyLineOfBase64Chars0123456789ab")
+	s := newScrubber([]string{handed})
+	for name, text := range map[string]string{
+		"the handed key":        handed,
+		"a key the run printed": printed,
+	} {
+		got := rewriteLine(`{"type":"tool_result","content":`+jsonString(t, "cat k\n"+text)+`}`, s, testBounds)
+		if strings.Contains(got, "QyNTUxOQAAACDhRunsOwnPrintedKeyBodyLineOfBase64Chars0123456789ab") ||
+			strings.Contains(got, "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz") {
+			t.Errorf("%s: a line of a key's body survived: %q", name, got)
+		}
+	}
+}
+
+// jsonString is s as a JSON string.
+func jsonString(t *testing.T, s string) string {
+	t.Helper()
+	out, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }
 
 // A TAR IS WRITTEN WITH EVERY MEMBER'S SIZE AS REWRITTEN, read twice: the second

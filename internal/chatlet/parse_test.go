@@ -179,6 +179,14 @@ func TestTheParserWakesExactlyTheSeatsTheWriterRouted(t *testing.T) {
 				"decides whether they owe an answer", r.To.Handle, got,
 				want[i].Reason)
 		}
+		// AND THE TURN IT WAKES IS FILED UNDER THE MESSAGE, under this
+		// seat's own reason, so the message finds the turn it started.
+		origin := types.TriggerOrigin{Kind: types.OriginChatMessage,
+			ID: r.Inbound.Metadata[notify.MessageIDField], Reason: string(want[i].Reason)}
+		if r.Inbound.Origin != origin || origin.ID == "" {
+			t.Errorf("%s's wake names origin %+v, want %+v", r.To.Handle,
+				r.Inbound.Origin, origin)
+		}
 	}
 	for _, r := range routed {
 		if r.To.Handle == "jane" {

@@ -48,6 +48,12 @@ var namedRoutes = []struct {
 	// because it is the same kind of fact — what this seat has said and
 	// remembered — rather than a company-wide listing.
 	{method: "GET", pattern: "/agents/{id}/conversations", what: "conversations", path: map[string]string{"id": "handle"}},
+	// One seat's EXECUTOR SESSIONS, beside its threads for their reason:
+	// what its harness wrote on each turn, kept when the turn's run ended —
+	// and one turn's transcript under the listing that names it.
+	{method: "GET", pattern: "/agents/{id}/sessions", what: "executor_sessions", path: map[string]string{"id": "handle"}},
+	{method: "GET", pattern: "/agents/{id}/sessions/{turn_id}", what: "executor_session",
+		path: map[string]string{"id": "handle", "turn_id": "turn_id"}},
 	{method: "GET", pattern: "/agents/{id}", what: "agent", path: map[string]string{"id": "id"}},
 	// The literal segment beats the wildcard, so /events/trace/{id} is not
 	// read as an event whose id is "trace" — net/http resolves the more
@@ -208,6 +214,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/chatlet/saved", what: "chat_saved"},
 	{method: "GET", pattern: "/chatlet/sent", what: "chat_sent"},
 	{method: "GET", pattern: "/chatlet/channels/{channel_id}/links", what: "chat_links",
+		path: map[string]string{"channel_id": "channel_id"}},
+	// WHOM A DRAFT WOULD REACH, before it is sent: the post's own decision
+	// run dry, with the words in `body` and a reply's thread in `reply_to`.
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/reach", what: "chat_reach",
 		path: map[string]string{"channel_id": "channel_id"}},
 	{method: "GET", pattern: "/chatlet/channels/{channel_id}/messages/{message_id}",
 		what: "chat_message",

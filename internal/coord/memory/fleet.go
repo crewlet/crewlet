@@ -102,6 +102,9 @@ type Fleet struct {
 	// ([coord.MCPRestartEntry]).
 	restarts entryRecords[coord.MCPRestart, coord.MCPRestartUpdate]
 
+	// checks are each MCP server's latest test, by the server's name.
+	checks entryRecords[coord.MCPCheck, coord.MCPCheck]
+
 	// version is the one counter every versioned write draws from, sandbox
 	// runs, mailbox records and chat read records alike. Store-wide rather
 	// than per record, as a KV revision is, so a record deleted and created
@@ -160,6 +163,7 @@ func NewFleet() *Fleet {
 		signIns:      newSignInRecords(),
 		listings:     newListingRecords(),
 		restarts:     newRestartRecords(),
+		checks:       newCheckRecords(),
 	}
 }
 

@@ -278,11 +278,13 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// Each model's condition and uses, in two readings: a member's names no
 		// credential, no account and no vendor sentence, an admin's all of it.
 		"llm_entries": "everybody",
+		// Each MCP server's condition and tools, in two readings: a member's
+		// names no launch line, header, variable, account or call.
+		"mcp_servers_status": "everybody",
 
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
-		"mcp_servers_status": "admin", "backups": "admin",
-		"fleet_broker": "admin",
+		"backups": "admin", "fleet_broker": "admin",
 		"integrations": "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",
 		"config_entities": "admin", "limits": "admin", "sign_in_policy": "admin",
@@ -305,7 +307,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"page_reads": "doclet",
 
 		"chat_channels": "chatlet", "chat_channel": "chatlet", "chat_messages": "chatlet",
-		"chat_thread": "chatlet", "chat_search": "chatlet",
+		"chat_thread": "chatlet", "chat_search": "chatlet", "chat_reach": "chatlet",
 		// The reader's own views, and a message's link previews, each of
 		// whose records is then decided by its own question.
 		"chat_activity": "chatlet", "chat_threads": "chatlet", "chat_saved": "chatlet",
@@ -321,6 +323,10 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"agent_episode":   "decided_by:" + string(authz.ActionSeatTrailRead),
 		"memory_overview": "decided_by:" + string(authz.ActionSeatTrailRead),
 		"conversations":   "decided_by:" + string(authz.ActionSeatTrailRead),
+		// A SEAT'S EXECUTOR SESSIONS AND ONE TRANSCRIPT, the seat's trail as
+		// its run's live output is.
+		"executor_sessions": "decided_by:" + string(authz.ActionSeatTrailRead),
+		"executor_session":  "decided_by:" + string(authz.ActionSeatTrailRead),
 
 		// THE ARTIFACTS: the listing and the folder tree are everybody's and
 		// filtered row by row and folder by folder;

@@ -22,12 +22,16 @@ import (
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -92,6 +96,9 @@ type fakeRuntime struct {
 	// takes a restart, nil until a case sets one.
 	instances queries.MCPInstanceReader
 	restarter mcpapi.Restarter
+	// alarms is the node's latest alarm evaluation, nil for none run.
+	alarms  []statelog.Alarm
+	checker mcpapi.Checker
 
 	// presenceHangs makes Fleet's presence read one that never returns on
 	// its own, the way a wedged broker's key scan does: it answers only
@@ -127,6 +134,42 @@ func (f *fakeRuntime) MCPRestarter() mcpapi.Restarter {
 		return acceptingRestarter{}
 	}
 	return f.restarter
+}
+
+// LatestAlarms is the evaluation a case set, nil (none has run) otherwise.
+func (f *fakeRuntime) LatestAlarms() []statelog.Alarm { return f.alarms }
+
+// MCPChecker is the checker a case set, else one that finds every server
+// serving: what a test does is held by mcpapi's own suite and the engine's.
+func (f *fakeRuntime) MCPChecker() mcpapi.Checker {
+	if f.checker == nil {
+		return passingChecker{}
+	}
+	return f.checker
+}
+
+// MCPChecks reads no server's latest test.
+func (f *fakeRuntime) MCPChecks() queries.MCPCheckReader { return noChecks{} }
+
+// passingChecker finds every server serving on one node, and every address
+// asking for no sign-in.
+type passingChecker struct{}
+
+func (passingChecker) CheckServer(_ context.Context, req mcpapi.CheckRequest) (mcpapi.Check, error) {
+	return mcpapi.Check{Server: req.Server, Seat: req.Seat, Draft: req.Draft != nil, At: time.Now(),
+		By: req.By.Name, Node: "node-1", OK: true,
+		Nodes: []mcpapi.CheckedNode{{Node: "node-1", Answered: true}}}, nil
+}
+
+func (passingChecker) CheckAddress(context.Context, string) mcp.AddressCheck {
+	return mcp.AddressCheck{Auth: catalogue.AuthNone}
+}
+
+// noChecks reads no server's latest test.
+type noChecks struct{}
+
+func (noChecks) LatestMCPCheck(context.Context, string) (coord.MCPCheck, bool, error) {
+	return coord.MCPCheck{}, false, nil
 }
 
 // acceptingRestarter takes every restart it is asked for.

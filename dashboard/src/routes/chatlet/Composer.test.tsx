@@ -275,3 +275,52 @@ describe("writing it", () => {
     );
   });
 });
+
+describe("whom it will reach", () => {
+  // The line under the box, which announces itself politely as it changes.
+  const reachLine = () =>
+    waitFor(() => {
+      const line = document.querySelector<HTMLElement>(".chat-composer-reach");
+      expect(line).not.toBeNull();
+      return line!;
+    });
+
+  // THE ENGINE'S ANSWER, NOT THE BOX'S: whom a draft reaches is the post's
+  // own routing run dry (`chat_reach`), asked once the typing settles, so the
+  // line names exactly whom Send will wake.
+  test("names the agents the post will wake once the typing settles", async () => {
+    answers.chat_reach = {
+      channel_id: "room-1",
+      reach: { recipients: [{ handle: "cto", reason: "answerer" }] },
+    };
+    mount();
+    const field = await box();
+    expect(document.querySelector(".chat-composer-reach")).toBeNull();
+    fireEvent.change(field, { target: { value: "where are we on the release?" } });
+    const line = await reachLine();
+    expect(line.getAttribute("role")).toBe("status");
+    await waitFor(() => expect(line.textContent).toContain("Will reach cto"));
+  });
+
+  test("warns, and says why, when the post will reach no agent", async () => {
+    answers.chat_reach = { channel_id: "room-1", reach: {}, quiet: "no_agent" };
+    mount();
+    const field = await box();
+    fireEvent.change(field, { target: { value: "anyone around?" } });
+    const line = await reachLine();
+    await waitFor(() => expect(line.textContent).toContain("Will reach no agent"));
+    expect(line.textContent).toContain("Mention one with @ to ask it.");
+  });
+
+  test("says nothing over an empty box", async () => {
+    answers.chat_reach = {
+      channel_id: "room-1",
+      reach: { recipients: [{ handle: "cto", reason: "answerer" }] },
+    };
+    mount();
+    const field = await box();
+    fireEvent.change(field, { target: { value: "   " } });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(document.querySelector(".chat-composer-reach")).toBeNull();
+  });
+});

@@ -478,6 +478,7 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	// behind either. See runBroadcast.
 	group("Broadcast", s.runBroadcast)
 	group("Batch", s.runBatch)
+	group("Lane", s.runLane)
 	// Not a feature — the reason the engine carries no re-entrancy
 	// guard. See runReentrancy.
 	group("Reentrancy", s.runReentrancy)

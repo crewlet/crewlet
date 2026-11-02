@@ -301,6 +301,7 @@ func constituents(ordered []constituent) []types.CoalescedMessage {
 			Metadata:             c.event.Metadata,
 			ContextRequiresRecon: c.event.ContextRequiresRecon,
 			Addressed:            c.event.Addressed,
+			Origin:               c.event.Origin,
 		})
 	}
 	return out

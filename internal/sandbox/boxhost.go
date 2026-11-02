@@ -101,23 +101,25 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // the reason the poll is bounded by it: what the host does is the poll's own
 // work (a reconnect, a probe) and the run's own files read back and its box
 // paused, all of it on its own host. And the TAKE of the job's harness session
-// beside it ([SessionTakeBudget]), with the room the take leaves the pause and
-// the answer after it ([discardGrace]), because the read is where the session
-// is taken out of the box, on the host and before the box is paused: the host
-// reads only for its share of the budget ([BoxReadAnswerShare]), so both are
-// counted at that share, and a take at its bound fits a host's read whole
+// beside it ([SessionTakeBudget]), with the room the take leaves after it —
+// once for its own records, the stamp of what came of it and the digest it
+// leaves in the box, and once for the pause and the answer ([discardGrace]
+// each, [Coordinator.takeContext]) — because the read is where the session is
+// taken out of the box, on the host and before the box is paused: the host
+// reads only for its share of the budget ([BoxReadAnswerShare]), so all of it
+// is counted at that share, and a take at its bound fits a host's read whole
 // rather than being cut by the host's own deadline. Only the take: the upload
 // and the record are made after the host has answered, off the read
 // ([Coordinator.keepCapture]), so no asker waits on an upload.
 //
-// What that costs is the wait for a host that has truly stopped — about seven
+// What that costs is the wait for a host that has truly stopped — about eight
 // minutes before the asker hands the claim back, where it was one — which a host
 // that is only slow, packing a session at its bound, must not be taken for.
 // Ordinary reads answer in seconds, a session of a day's work being a mebibyte
 // or two. A read that has not finished in that is a host that is not
 // answering, and is answered as one ([ErrBoxHostSilent]); it announces the
 // completion again from its own next poll.
-var BoxReadBudget = pollBound + time.Duration(float64(SessionTakeBudget+discardGrace)/BoxReadAnswerShare)
+var BoxReadBudget = pollBound + time.Duration(float64(SessionTakeBudget+2*discardGrace)/BoxReadAnswerShare)
 
 // BoxReadAnswerShare is the part of [BoxReadBudget] a host's read may take,
 // leaving the rest for its answer to cross the broker before the asker stops

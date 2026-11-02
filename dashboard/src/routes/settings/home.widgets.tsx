@@ -31,7 +31,7 @@ import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { configStanding, offRevision } from "~/lib/configStanding.ts";
 import { standingCaption } from "./standingWords.ts";
-import { SERVER_STATE_WORDS } from "~/lib/mcpServers.ts";
+import { STATE as SERVER_STATE } from "~/routes/settings/mcp-tools/words.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -288,14 +288,14 @@ function McpServers() {
       >
         <List>
           {servers.slice(0, ROWS).map((s) => {
-            const words = SERVER_STATE_WORDS[s.state] ?? { label: s.state, tone: "neutral" };
+            const words = SERVER_STATE[s.state];
             return (
               <ListItem
                 key={s.name}
                 href={href(["settings", "mcp-tools", "servers", s.name])}
                 trailing={<Tag variant={words.tone}>{words.label}</Tag>}
               >
-                {s.name}
+                {s.title}
               </ListItem>
             );
           })}

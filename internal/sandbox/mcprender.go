@@ -51,6 +51,15 @@ type MCPServer struct {
 	URL     string
 	Headers map[string]string
 
+	// Secrets is what the references in the server's url resolved to: a
+	// secret an operator keeps in a URL's path rather than in a header
+	// (`https://mcp.example.com/s/${TOKEN}/mcp`), which the box's MCP
+	// configuration then holds. Never rendered — the url carries it — and
+	// read by the scrub a capture of the box's session passes through
+	// ([HandedSecrets]), beside the server's env and headers, which are
+	// credential positions whole.
+	Secrets []string
+
 	// AlwaysLoaded asks the harness to offer this server's tools on every
 	// request rather than keep them back until its model looks for one:
 	// Claude Code's `alwaysLoad`, which exempts a server from its tool search,
@@ -167,11 +176,12 @@ func forTransport(server MCPServer) MCPServer {
 	if server.Transport == TransportHTTP {
 		out.Command, out.Args, out.Env = "", nil, nil
 		out.Headers = maps.Clone(server.Headers)
+		out.Secrets = slices.Clone(server.Secrets)
 		return out
 	}
 	// Stdio, which an empty transport also means. An unrecognised one never
 	// reaches here — RenderMCP skips it.
-	out.URL, out.Headers = "", nil
+	out.URL, out.Headers, out.Secrets = "", nil, nil
 	out.Args = slices.Clone(server.Args)
 	out.Env = maps.Clone(server.Env)
 	return out

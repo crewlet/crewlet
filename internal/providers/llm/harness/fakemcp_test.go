@@ -354,7 +354,7 @@ func playFake(script fakeScript, prompt []byte, stdout io.Writer, cs *sdk.Client
 func runFakeServer(script fakeScript) {
 	srv := script.Serve
 	if srv.PidTo != "" {
-		_ = os.WriteFile(srv.PidTo, []byte(strconv.Itoa(os.Getpid())), 0o600)
+		writeWhole(srv.PidTo, []byte(strconv.Itoa(os.Getpid())))
 	}
 	fmt.Fprintln(os.Stderr, "fake server: starting")
 	if srv.ExitBeforeUp {
@@ -391,8 +391,26 @@ func runFakeServer(script fakeScript) {
 	}
 	code := playFake(script, prompt, f, cs)
 	_ = f.Close()
-	_ = os.WriteFile(fakeDoneFile, []byte(strconv.Itoa(code)), 0o600)
+	writeWhole(fakeDoneFile, []byte(strconv.Itoa(code)))
 	park(false)
+}
+
+// writeWhole writes a file whose APPEARANCE a reader acts on, whole or not at
+// all. A file created and then written can be found between the two and read
+// empty: a case stops the server the moment its pid file appears, and then
+// reads no pid, and a client exits 0 on a done file that has no code in it
+// yet. A fake that cannot write it exits 73, as one that cannot create its
+// record does.
+func writeWhole(path string, data []byte) {
+	staged := path + ".tmp"
+	if err := os.WriteFile(staged, data, 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "fake: %v\n", err)
+		os.Exit(73)
+	}
+	if err := os.Rename(staged, path); err != nil {
+		fmt.Fprintf(os.Stderr, "fake: %v\n", err)
+		os.Exit(73)
+	}
 }
 
 // park holds a fake until it is signalled, as the process it stands in for
@@ -456,8 +474,7 @@ func runFakeClient() {
 		os.Exit(75)
 	}
 	prompt, _ := io.ReadAll(os.Stdin)
-	_ = os.WriteFile(fakeGoFile+".tmp", prompt, 0o600)
-	_ = os.Rename(fakeGoFile+".tmp", fakeGoFile)
+	writeWhole(fakeGoFile, prompt)
 	// Signalled, it prints what the server recorded so far and exits, as a
 	// client does: its record is what it relayed, and polling leaves it a
 	// beat behind the server's.

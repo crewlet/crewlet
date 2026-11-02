@@ -267,8 +267,8 @@ func DeliveredTo(calls []ledger.Call, s Surface, reply Reply) bool {
 //     to, which is the whole reason triage is cheap.
 //
 // It exists for the record of how a turn ended — the executor log's end,
-// which the next turn on the conversation is told, and the conversation ledger
-// it replaces — which has to tell "the seat said this" from "the seat concluded
+// kept on the turn's row beside its session, and the conversation ledger it
+// replaces — which has to tell "the seat said this" from "the seat concluded
 // this and nobody heard it": [Result.Delivered] for a turn whose loop ended
 // it, and the engine's own reading of a run's bridged calls for one a loss or a
 // person's stop ended with no frame of it left. Asking the tool record on all

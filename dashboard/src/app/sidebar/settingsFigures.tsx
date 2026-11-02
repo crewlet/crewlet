@@ -39,7 +39,7 @@ import type { EngineHealth } from "~/contract/health.ts";
 import type { FleetAnswer, RetentionReport } from "~/protocol/index.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { offRevision } from "~/lib/configStanding.ts";
-import { sectionOpen, workspaceRow } from "../nav.ts";
+import { settingsSectionOpen } from "../nav.ts";
 
 /** One row's figure, in the column's own three shapes. */
 export interface SectionFigure {
@@ -123,17 +123,6 @@ export function settingsFigures({
 }
 
 /**
- * Whether a reader holding `grants` may open the Settings section `key` — by
- * the one rule the column draws its locks by (`sectionOpen`), so a figure is
- * never asked for beside a section the column locks: each of these answers is
- * Admin's, and a refusal on a timer is a refusal nobody reads.
- */
-function opens(key: string, grants: readonly string[]): boolean {
-  const section = workspaceRow("settings")?.sections.find((s) => s.key === key);
-  return section !== undefined && sectionOpen(section, grants);
-}
-
-/**
  * The column's figures, asking each guarded answer only while `here` (the
  * Settings column is drawn) and only of a reader its section opens for. See
  * the file doc.
@@ -152,8 +141,8 @@ export function useSettingsSidebar({
    *  `usePublishFleet`. While one is published the column asks nothing. */
   published: { answer: FleetAnswer | null } | null;
 }): Record<string, SectionFigure> {
-  const nodes = here && opens("nodes", grants);
-  const backups = here && opens("backups", grants);
+  const nodes = here && settingsSectionOpen("nodes", grants);
+  const backups = here && settingsSectionOpen("backups", grants);
   const fleet = useQuery("fleet", undefined, {
     enabled: nodes && published === null,
     pollMs: SETTINGS_POLL_MS.fleet,
@@ -171,5 +160,7 @@ export function useSettingsSidebar({
   // and Configuration read the health push every reader holds, and drew "1"
   // and "epoch 1" beside their locks while the equally locked Backups row
   // drew nothing. Every locked row is drawn the same way.
-  return Object.fromEntries(Object.entries(figures).filter(([key]) => opens(key, grants)));
+  return Object.fromEntries(
+    Object.entries(figures).filter(([key]) => settingsSectionOpen(key, grants)),
+  );
 }

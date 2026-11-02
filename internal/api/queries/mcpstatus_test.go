@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // mcpCompany declares a shared server, a per-seat template and a server no
@@ -472,14 +473,32 @@ func TestTheServerStatusCarriesNoCredential(t *testing.T) {
 	}
 }
 
-// ADMIN'S: launch commands and each failure's first line are the
-// configuration and what became of it, which `/config` shows the same reader.
-// And an unreadable lease table is an error, not a fleet with no nodes.
-func TestTheServerStatusIsAdminsAndNeverGuesses(t *testing.T) {
+// EVERYBODY'S, AND THE ADMIN'S READING IS THE CONFIGURATION READER'S: launch
+// commands and each failure's first line are the configuration and what
+// became of it, which `/config` shows the same reader, so a caller holding
+// every app but admin is answered, in a member's reading. And an unreadable
+// lease table is an error, not a fleet with no nodes.
+//
+// Mutation: register the question at admin, or answer every caller the
+// admin's reading, and this is red.
+func TestTheServerStatusIsEverybodysAndNeverGuesses(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, mcpSources(t, mcpFleet(t)))
-	requiresExactly(t, r, "mcp_servers_status", iam.GrantAdmin)
+	if posture := r.PostureOf("mcp_servers_status"); !posture.IsEverybody() {
+		t.Errorf("mcp_servers_status is asked as %s, want everybody", posture)
+	}
+	if got, err := r.Answer(everyGrant(t), "mcp_servers_status", nil); err != nil {
+		t.Fatal(err)
+	} else if _, admin := got.(queries.MCPStatusAnswer); !admin {
+		t.Errorf("an administrator was answered %T, want the admin's reading", got)
+	}
+	everyApp := slices.DeleteFunc(slices.Clone(iam.AllGrants), func(g iam.Grant) bool { return g == iam.GrantAdmin })
+	if got, err := r.Answer(asking(t, everyApp...), "mcp_servers_status", nil); err != nil {
+		t.Errorf("a caller holding every app but admin was refused: %v", err)
+	} else if member, ok := got.(queries.MemberMCPStatusAnswer); !ok || member.Reading != queries.ReadingMember {
+		t.Errorf("a caller holding every app but admin was answered %T, want a member's reading", got)
+	}
 
 	broken := queries.NewRegistry()
 	queries.Register(broken, queries.Sources{Coord: unreadableLeases{coordmemory.New()}})
@@ -488,12 +507,14 @@ func TestTheServerStatusIsAdminsAndNeverGuesses(t *testing.T) {
 	}
 }
 
-// THE TOOLS SCREEN READS WHAT THIS ANSWER SENDS, every shape held both ways,
-// and knows exactly the states the engine sends.
+// THE TOOLS SCREEN READS WHAT THIS ANSWER SENDS, in both readings, every
+// shape held both ways, and knows exactly the states the engine sends.
 func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	queries.Register(r, mcpSources(t, mcpFleet(t)))
+	src := mcpSources(t, mcpFleet(t))
+	src.Alarms = mcpEvaluation
+	queries.Register(r, src)
 	raw, err := r.Answer(everyGrant(t), "mcp_servers_status", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -517,6 +538,51 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	}
 	holdShape(t, "McpRefusedTool", refused, false)
 	holdShape(t, "McpShadowedTool", shadowed, false)
+
+	// A MEMBER'S READING, through the same question: its own row and cell
+	// shapes, no launch line and no alarm.
+	memberRaw, err := r.Answer(iam.WithPrincipal(t.Context(), person(iam.StageActive, everyAppButAdmin()...)),
+		"mcp_servers_status", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := asMap(t, memberRaw)
+	holdShape(t, "McpMemberServersStatusAnswer", []map[string]any{member}, false)
+	memberServers := rowsOf(t, member["servers"])
+	holdShape(t, "McpMemberServerStatus", memberServers, false)
+	var memberCells []map[string]any
+	for _, s := range memberServers {
+		memberCells = append(memberCells, rowsOf(t, s["nodes"])...)
+	}
+	holdShape(t, "McpMemberServerNode", memberCells, false)
+
+	alarms := rowsOf(t, body["alarms"])
+	holdShape(t, "McpAlarm", alarms, false)
+	var entries, fixes []map[string]any
+	for _, a := range alarms {
+		entries = append(entries, rowsOf(t, a["entries"])...)
+	}
+	for _, e := range entries {
+		fix, ok := e["fix"].(map[string]any)
+		if !ok {
+			t.Fatalf("an alarm's entry carries no fix: %v", e)
+		}
+		fixes = append(fixes, fix)
+	}
+	holdShape(t, "McpAlarmEntry", entries, false)
+	holdShape(t, "McpFix", fixes, false)
+	for name, want := range map[string][]string{
+		"McpAlarmKind": stringsOf(statelog.PerServerKinds()),
+		"McpFixKind":   stringsOf(queries.MCPFixKinds),
+	} {
+		got, err := clientsource.Union(clientsource.Tree(t), name)
+		if err != nil {
+			t.Fatalf("%v: this gate cannot run without the client's declaration", err)
+		}
+		if !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+			t.Errorf("the dashboard's %s is %v; the engine sends %v", name, got, want)
+		}
+	}
 
 	reasons, err := clientsource.Union(clientsource.Tree(t), "McpToolRefusal")
 	if err != nil {

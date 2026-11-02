@@ -159,6 +159,17 @@ func (r engineRuntime) MCPInstances() queries.MCPInstanceReader { return r.engin
 // onto the route's ([mcpRestarter]).
 func (r engineRuntime) MCPRestarter() mcpapi.Restarter { return mcpRestarter{e: r.engine} }
 
+// LatestAlarms is the engine's latest alarm evaluation
+// ([engine.Engine.LatestAlarms]).
+func (r engineRuntime) LatestAlarms() []statelog.Alarm { return r.engine.LatestAlarms() }
+
+// MCPChecker is the engine's test of an MCP server and check of an address,
+// its refusals mapped onto the routes' ([mcpChecker]).
+func (r engineRuntime) MCPChecker() mcpapi.Checker { return mcpChecker{e: r.engine} }
+
+// MCPChecks is the engine's read of each MCP server's latest test.
+func (r engineRuntime) MCPChecks() queries.MCPCheckReader { return r.engine }
+
 // Builtins is the engine's own tools as this node's seats are offered them:
 // the registry's built-ins, and the discovery pair.
 //

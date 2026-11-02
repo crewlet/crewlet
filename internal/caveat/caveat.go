@@ -58,8 +58,10 @@ import (
 type Code string
 
 const (
-	// CodeUnaddressedComment is a comment that wakes the item's assignee
-	// without asking them anything or naming them, so a reply is not owed.
+	// CodeUnaddressedComment is a comment that neither asks nor names the
+	// item's assignee: it either wakes them without asking for a reply (a
+	// reply in a thread they wrote in) or does not wake them at all
+	// (another agent's remark, which waits in their inbox).
 	CodeUnaddressedComment Code = "unaddressed_comment"
 
 	// CodeDefaultAssigneeGone is a create that named nobody, in a project

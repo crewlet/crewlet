@@ -168,6 +168,12 @@ type Member struct {
 	// indicator. A person's member names none: what a person is doing is
 	// their activity.
 	Status string `json:"status,omitempty"`
+
+	// Queued is, for an agent, that the line is about a person's message
+	// waiting behind what the agent is already doing, not one it is
+	// working on: the room draws it still, and Status says what it waits
+	// behind. Never set for a person.
+	Queued bool `json:"queued,omitempty"`
 }
 
 // Counts are the members of a large room not presented individually.
@@ -193,6 +199,8 @@ type Agent struct {
 	Activity Activity
 	Focus    Focus
 	Status   string
+	// Queued marks the line as a message waiting its turn ([Member.Queued]).
+	Queued bool
 }
 
 // The presence timings, every kind's: how often a node tells the fleet who it

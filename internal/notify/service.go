@@ -564,6 +564,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		SubjectIsLabel:       prompt.SubjectIsLabel(r.Inbound),
 		Addressed:            prompt.Addressed(r.Inbound),
 		Owes:                 r.Owes,
+		Origin:               r.Origin,
 	}
 	// BOTH KEYS ride on the event: the partition key so the inbox coalescer
 	// can group without re-deriving a third-party app's rule, and the
@@ -632,11 +633,25 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		}
 		wake.Payload[TriggerField] = trigger
 	}
+	// A PERSON WAITING GOES FIRST: a wake that owes a person an answer
+	// rides the seat's priority lane, ahead of whatever background work the
+	// seat has queued (see priority.go). The mark is on the event, so a park
+	// or a requeue of this wake keeps it.
+	priority := out.Addressed && WrittenByPerson(reg, r.Inbound)
+	if priority {
+		queue.Prioritize(wake)
+	}
 	// THE PARTY'S ID, never its handle: a seat's mailbox is keyed on the
 	// agent id derived from the handle (ADR-0013). A party with no id never
 	// reaches here — the addressability guard above has already skipped it.
 	if err := s.queue.Publish(ctx, topics.AgentInbox(party.AgentID), wake); err != nil {
 		return fmt.Errorf("notify: wake %s: %w", party.Handle, err)
+	}
+	// AND TELL THE SEAT'S NODE a person is waiting, after the wake is
+	// durable, so the line it may draw is never for a message that is not
+	// there.
+	if priority {
+		s.announceWaiting(ctx, party.AgentID, wake.ID, meta)
 	}
 	log.InfoContext(ctx, "notification_routed", "source", r.Source, "handle", party.Handle,
 		"agent_id", party.AgentID.String())

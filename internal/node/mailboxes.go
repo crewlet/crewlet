@@ -133,8 +133,30 @@ func newMailboxes() *mailboxes {
 // claims anything; the config apply, because a revision that ADDS a role adds
 // a seat whose mail is dropped until something makes it a mailbox; and the
 // convergence loop, which is what makes the other two a floor rather than the
-// only chances this node gets.
+// only chances this node gets. A fourth runs it on demand: a wake published
+// through [Node.Wakes] to a seat whose mailbox this node has not confirmed.
 func (n *Node) EnsureMailboxes(ctx context.Context) {
+	n.ensureMailboxes(ctx, n.cfg.Seats())
+}
+
+// EnsureMailboxesFor converges the mailboxes of the seats given rather than of
+// the company the node is serving: the seats of a revision an apply is about
+// to publish.
+//
+// IT EXISTS FOR THE ORDER AN APPLY RUNS IN. A revision's parties are indexed
+// before it is published, so that a delivery naming a seat it adds resolves
+// from that moment, and a seat that resolves is a seat a wake is published
+// to. Its mailbox has to exist first: the company the
+// node serves does not have that seat yet, so neither [Node.EnsureMailboxes]
+// nor [Node.Wakes] would make it, and the stream drops what is published to a
+// subject with no consumer. The same pass, the same set and the same
+// registration as every other caller; only the seat list differs.
+func (n *Node) EnsureMailboxesFor(ctx context.Context, seats []placement.Seat) {
+	n.ensureMailboxes(ctx, seats)
+}
+
+// ensureMailboxes is the pass both of those run, over one seat list.
+func (n *Node) ensureMailboxes(ctx context.Context, company []placement.Seat) {
 	n.mail.pass.Lock()
 	defer n.mail.pass.Unlock()
 
@@ -158,7 +180,7 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 	// ONE READ of the seat list for the walk and the line that reports it.
 	// Two reads straddled an apply that changed the seats, and the log then
 	// claimed a count the walk never covered.
-	seats := n.addressableSeats()
+	seats := addressable(company)
 
 	missing, stale := n.mail.diff(seats, n.host.TTL(), time.Now())
 	if len(missing) == 0 && !stale {
@@ -249,14 +271,13 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 	n.log.Info("seat_mailboxes_ready", "seats", len(seats), "provisioned", created)
 }
 
-// addressableSeats is the company's seats that can hold a mailbox at all, in
-// the order the org lists them.
+// addressable is the seats of a company that can hold a mailbox at all, in the
+// order the org lists them.
 //
 // A seat that derives no inbox subject is skipped rather than refused: the
 // seat list is whatever the current revision says, and a pass that failed on
 // one unroutable entry would deny every seat after it a mailbox.
-func (n *Node) addressableSeats() []placement.Seat {
-	seats := n.cfg.Seats()
+func addressable(seats []placement.Seat) []placement.Seat {
 	out := make([]placement.Seat, 0, len(seats))
 	for _, s := range seats {
 		if topics.AgentInbox(s.ID) == "" || topics.AgentInboxGroup(s.ID) == "" {
@@ -293,6 +314,13 @@ func (n *Node) listMailboxes(ctx context.Context) (map[uuid.UUID]struct{}, bool)
 	for _, sub := range subs {
 		id, ok := topics.MailboxSeat(sub.Topic, sub.Group)
 		if !ok || sub.Group != topics.AgentInboxGroup(id) {
+			continue
+		}
+		// A MAILBOX WITHOUT ITS PRIORITY LANE IS NOT A MAILBOX YET: a
+		// person's message to the seat is published to the lane and would
+		// reach nobody. Left out, it is ensured on this pass like a missing
+		// one, which completes it (queue.Subscription.Partial).
+		if sub.Partial {
 			continue
 		}
 		out[id] = struct{}{}
@@ -397,6 +425,14 @@ func (m *mailboxes) adopt(seats []placement.Seat, listed map[uuid.UUID]struct{},
 	}
 	m.seededAt = now
 	return missing
+}
+
+// has reports whether the set holds a mailbox for the seat.
+func (m *mailboxes) has(id uuid.UUID) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.ensured[id]
+	return ok
 }
 
 // ensuredNow records a mailbox this node has just been told exists.

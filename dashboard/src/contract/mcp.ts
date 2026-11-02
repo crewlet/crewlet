@@ -1,35 +1,48 @@
 /**
- * `mcp_servers_status`: what each MCP server is doing on each live node, read
- * off every node's presence heartbeat, beside what the configuration declares
- * for it — the launch and never a credential (`env` and `headers` are not
- * here).
+ * Settings › MCP & tools, as the engine answers it: `mcp_servers_status`
+ * (what each MCP server is doing on each live node, read off every node's
+ * presence heartbeat, beside what the configuration declares for it), one
+ * server whole (`GET /mcp-servers/{name}`), its removal
+ * (`DELETE /config/mcp-servers/{name}`) and its restart
+ * (`POST /mcp-servers/{name}/retry`).
  *
- * EXACTLY WHAT `internal/api/queries` SENDS — held there by
- * `TestTheToolsScreenReadsWhatTheServerStatusSends` in both directions, the
- * state union included.
+ * TWO READINGS OF EVERY READ. Whoever `config.read` admits reads the
+ * administrator's (`reading: "admin"`); everybody else reads a member's
+ * (`reading: "member"`), which names no launch line, header, variable,
+ * failure sentence or call. Each member shape is declared on its own, and an
+ * administrator's shape extends it with what only an administrator reads, so
+ * a screen typed by the member's shape draws both.
+ *
+ * EXACTLY WHAT THE ENGINE SENDS, held in both directions by
+ * `TestTheToolsScreenReadsWhatTheServerStatusSends` (the list, the state
+ * union included) and `TestTheServerPageReadsWhatTheDetailSends` (a server
+ * whole) in `internal/api/queries`, `TestTheRemoveDialogReadsWhatTheRemovalSends`
+ * in `internal/api/configapi` and `TestTheRestartReadsWhatTheRouteSends` in
+ * `internal/api/mcpapi`.
  */
 
-import type { ToolRow } from "./tools.ts";
+import type { Coverage } from "./coverage.ts";
+import type { ToolAnnotations, ToolRow } from "./tools.ts";
 
 /**
  * A server's condition across the fleet, decided by the engine. `disabled`:
  * the configuration turns it off (`enabled: false`), so nothing is started for
  * it and no seat is granted it, decided before anything a node reports.
- * `running`: every instance launched is serving: it started, listed its tools and was up
- * at its node's last beat. `partial`: some are serving and some are not — a
- * node, one seat's credentials or one child being restarted rather than the
- * server. `failing`: none that was launched is serving. `waiting`: nothing
- * was launched and nothing failed, and a seat's instance is held back for a
- * credential a provisioning pass mints for it and has not sealed yet — not a
- * failure; it starts once the credential is sealed. `not_started`: every
- * reporting node started nothing for it. `unreported`: no live node's latest
- * heartbeat carried the report.
+ * `running`: every instance launched is serving: it started, listed its tools
+ * and was up at its node's last beat. `partial`: some are serving and some are
+ * not (a node, one seat's credentials or one child being restarted rather
+ * than the server). `failing`: none that was launched is serving. `waiting`:
+ * nothing was launched and nothing failed, and a seat's instance is held back
+ * for a credential a provisioning pass mints for it and has not sealed yet,
+ * which is not a failure: it starts once the credential is sealed.
+ * `not_started`: every reporting node started nothing for it. `unreported`:
+ * no live node's latest heartbeat carried the report.
  */
 export type McpServerState =
   "disabled" | "running" | "partial" | "failing" | "waiting" | "not_started" | "unreported";
 
 /** One live node, and whether its latest heartbeat carried its MCP servers. */
-export interface McpStatusNode {
+interface McpStatusNode {
   id: string;
   /** False: the node's last heartbeat carried no status (its status hook
    *  did not answer within its share of the beat), so its cells are unknown,
@@ -42,7 +55,7 @@ export interface McpStatusNode {
  * fixes them, decided by the engine where the facts are (the HTTP status a
  * server answered, what became of a local server's process, the dial).
  */
-type McpFailureClass =
+export type McpFailureClass =
   | "blocked_address"
   | "dns"
   | "unreachable"
@@ -58,8 +71,8 @@ type McpFailureClass =
   | "command_not_found"
   | "exited";
 
-/** What one node did with one server. */
-export interface McpServerNode {
+/** What one node did with one server, as a member reads it. */
+export interface McpMemberServerNode {
   node: string;
   reported: boolean;
   started: number;
@@ -68,15 +81,6 @@ export interface McpServerNode {
   waiting: number;
   /** Tools one serving instance serves. */
   tools: number;
-  /** One failed instance's reason, cut to 512 bytes, or "". */
-  error: string;
-  /** The seat that instance was launched for, or "" for a shared server. */
-  error_seat: string;
-  /** What one waiting instance waits for — the variables and the integration
-   *  minting them — cut to 512 bytes, or "". */
-  wait: string;
-  /** The seat that waiting instance belongs to, or "". */
-  wait_seat: string;
   /** Why the failed instance `error` names failed, or "" where no class fits. */
   error_class: McpFailureClass | "";
   /** When the longest-failed instance on the node stopped serving, or null. */
@@ -85,8 +89,21 @@ export interface McpServerNode {
   restarts: number;
 }
 
-/** One server. */
-export interface McpServerStatus {
+/** What one node did with one server, as an administrator reads it. */
+export interface McpServerNode extends McpMemberServerNode {
+  /** One failed instance's reason, cut to 512 bytes, or "". */
+  error: string;
+  /** The seat that instance was launched for, or "" for a shared server. */
+  error_seat: string;
+  /** What one waiting instance waits for (the variables and the integration
+   *  minting them), cut to 512 bytes, or "". */
+  wait: string;
+  /** The seat that waiting instance belongs to, or "". */
+  wait_seat: string;
+}
+
+/** One server, as a member reads it: what it is and how it is doing. */
+export interface McpMemberServerStatus {
   name: string;
   /** The curated catalogue entry's title where the engine recognises the
    *  server by its address or its command, else the server's name. */
@@ -107,9 +124,6 @@ export interface McpServerStatus {
   description: string;
   /** `stdio` or `http`; "" on an unconfigured server. */
   transport: string;
-  command: string;
-  args: string[];
-  url: string;
   state: McpServerState;
   /** Summed over the nodes that report. */
   started: number;
@@ -118,13 +132,6 @@ export interface McpServerStatus {
   waiting: number;
   /** The most tools one serving instance serves. */
   tools: number;
-  /**
-   * The entry's `tool_annotations` keys that no instance started on a
-   * reporting node lists a tool for, sorted: each overrides nothing anywhere.
-   * A key only some instances lack is not here — a per-seat child serves what
-   * its seat's credentials reach. Empty where no instance started.
-   */
-  unlisted_annotations: string[];
   /**
    * Tools an instance on a reporting node lists that are not offered for
    * their name, each once across the fleet, sorted by tool: every one any
@@ -140,6 +147,23 @@ export interface McpServerStatus {
   /** How many tools are shadowed, counted as `refused_count` is. */
   shadowed_count: number;
   /** One cell per live node, in `nodes` order. */
+  nodes: McpMemberServerNode[];
+}
+
+/** One server, as an administrator reads it: its launch and every node's sentence. */
+export interface McpServerStatus extends McpMemberServerStatus {
+  command: string;
+  args: string[];
+  /** The address, any credential it carries (a query parameter, a path
+   *  segment, the fragment) withheld by the engine. */
+  url: string;
+  /**
+   * The entry's `tool_annotations` keys that no instance started on a
+   * reporting node lists a tool for, sorted: each overrides nothing anywhere.
+   * A key only some instances lack is not here, since a per-seat child serves
+   * what its seat's credentials reach. Empty where no instance started.
+   */
+  unlisted_annotations: string[];
   nodes: McpServerNode[];
 }
 
@@ -147,7 +171,7 @@ export interface McpServerStatus {
  * One shelf of the built-in catalogue: the engine's own tools as a seat is
  * offered them, filed and worded by the engine.
  */
-interface BuiltinGroup {
+export interface BuiltinGroup {
   key: Exclude<ToolRow["group"], "">;
   label: string;
   /** One line about what the shelf's tools are for. */
@@ -183,8 +207,66 @@ interface McpShadowedTool {
   message: string;
 }
 
-/** The whole answer. */
+/**
+ * The MCP alarms (statelog's per-server kinds). `mcp_server_failing`: no
+ * instance serves, and one has been down past the restart schedule's ceiling
+ * plus a heartbeat. `mcp_server_partial`: some serve, and one that does not has
+ * been down that long. `mcp_server_waiting_long`: an agent's instance has been
+ * held back past a provisioning pass for a credential that pass mints.
+ * `mcp_tools_refused`: a tool cannot be offered under its name.
+ */
+export type McpAlarmKind =
+  "mcp_server_failing" | "mcp_server_partial" | "mcp_server_waiting_long" | "mcp_tools_refused";
+
+/**
+ * The one gesture that fixes a server's alarm. `restart`: restart its
+ * instances now (`POST /mcp-servers/{name}/retry`), only the named agent's
+ * where `seat` names one. `integration`: the integration that mints the named
+ * agent's credential, which the server's binding names. `edit`: the server's
+ * configuration, its `tool_prefix`.
+ */
+export type McpFixKind = "restart" | "integration" | "edit";
+
+/** The gesture that fixes one server's alarm, and what it acts on. */
+interface McpFix {
+  kind: McpFixKind;
+  server: string;
+  /** The one agent's instance it acts on, by handle; "" acts on every instance. */
+  seat: string;
+}
+
+/** One server an MCP alarm stands on. */
+export interface McpAlarmEntry {
+  /** The server's name. */
+  key: string;
+  /** The engine's measurement for this server, shown as written. */
+  detail: string;
+  /** When the condition began for this server, or null where it carries no
+   *  instant (a refused name). */
+  since: string | null;
+  /** The agent whose instance the measurement names, by handle, or "". */
+  seat: string;
+  fix: McpFix;
+}
+
+/**
+ * One MCP alarm of the answering node's latest evaluation: the same one the
+ * health count and the log lines were told.
+ */
+export interface McpAlarm {
+  kind: McpAlarmKind;
+  /** The longest-standing server's measurement. */
+  detail: string;
+  /** What to do about the kind, in the engine's words. */
+  remedy: string;
+  /** The servers it stands on, in name order. */
+  entries: McpAlarmEntry[];
+}
+
+/** `mcp_servers_status` as an administrator reads it. */
 export interface McpServersStatusAnswer {
+  /** Which of the answer's two readings this is. */
+  reading: "admin";
   /** In name order. */
   servers: McpServerStatus[];
   /** The live nodes in id order: the columns every server is drawn against. */
@@ -195,4 +277,446 @@ export interface McpServersStatusAnswer {
    * left out.
    */
   builtin: BuiltinGroup[];
+  /**
+   * The MCP alarms standing on the answering node's latest evaluation, each
+   * server with the gesture that fixes it. Empty where none stands, and on a
+   * node that runs no state log, which evaluates no alarm.
+   */
+  alarms: McpAlarm[];
+}
+
+/**
+ * `mcp_servers_status` as a member reads it: every server's condition and the
+ * built-ins, and no alarm, since an alarm's measurement quotes what a server
+ * said.
+ */
+export interface McpMemberServersStatusAnswer {
+  reading: "member";
+  servers: McpMemberServerStatus[];
+  nodes: McpStatusNode[];
+  builtin: BuiltinGroup[];
+}
+
+/** How much a call to a tool can change, the engine's one reading of its hints. */
+export type McpRisk = "read_only" | "additive" | "destructive";
+
+/** One instance's condition on its node. */
+export type McpInstanceState = "running" | "failed" | "waiting";
+
+/**
+ * How the engine proves who it is to a server. `none`: it sends no
+ * credential. `headers`: values the configuration sets, as HTTP headers to a
+ * remote server and as environment variables to a local one. `integration`:
+ * each agent's own credential from one of the company's integrations.
+ */
+export type McpAuth = "none" | "headers" | "integration";
+
+/**
+ * Why the engine expects a placement to fail. `private_address_in_cloud_box`:
+ * a remote server on a private network given to a box in the `e2b` cell,
+ * which runs outside that network. `command_in_box`: a local server given to
+ * a box that runs its own image, which must provide the command.
+ */
+type McpPlacementWarningKind = "private_address_in_cloud_box" | "command_in_box";
+
+/**
+ * How a call to a server's tool ended. `answered`: it ran and the server
+ * answered. `failed`: the server answered with an error, or the call broke
+ * on the way. `unavailable`: the server was not there to ask. `refused`: the
+ * engine refused it before any tool ran.
+ */
+export type McpCallOutcome = "answered" | "failed" | "unavailable" | "refused";
+
+/** One live node's listing of the server. */
+interface McpServerListing {
+  node: string;
+  /** When the node last changed its listing. */
+  at: string;
+  /** How many instances on the node the listing is the union of. */
+  instances: number;
+  tools: number;
+}
+
+/** One tool the server lists, the same in both readings. */
+export interface McpToolView {
+  /** The name it is offered under, the server's `tool_prefix` applied. */
+  name: string;
+  /** The server's own name for it. */
+  raw: string;
+  title: string;
+  /** The server's words, cut by the engine. */
+  description: string;
+  /** Its hints with the company's overrides applied. */
+  annotations: ToolAnnotations;
+  /** How much a call can change, decided by the engine from the hints. */
+  risk: McpRisk;
+  /** Whether a hint the tool carries decided `risk`; false reads as destructive by default. */
+  risk_declared: boolean;
+  /** Whether a call may reach past the company (its open-world hint is not `no`). */
+  external: boolean;
+  /** Names the definition shown, the one most instances list. */
+  digest: string;
+  /** How many different definitions the fleet lists under the name. */
+  definitions: number;
+  instances: number;
+  nodes: string[];
+  /** Null where no schema is stored. */
+  input_schema: Record<string, unknown> | null;
+  output_schema: Record<string, unknown> | null;
+}
+
+/** What the server said of itself in its handshake. */
+interface McpServerInfo {
+  name: string;
+  title?: string;
+  version?: string;
+  protocol?: string;
+}
+
+/** One failure of an instance, as a member reads it: its class, never its sentence. */
+interface McpMemberFailureView {
+  /** "" where no class fits. */
+  class: McpFailureClass | "";
+  at: string;
+  node: string;
+  /** The agent the instance runs for, by handle; "" for a shared server's. */
+  seat: string;
+}
+
+/** One failure of an instance, with what the server or its process said. */
+interface McpFailureView extends McpMemberFailureView {
+  /** Redacted and bounded by the engine; the server's words, shown as written. */
+  said: string;
+}
+
+/** One instance of the server, as a member reads it. */
+interface McpMemberInstanceView {
+  /** The agent it runs for, by handle; "" for a shared server's one instance. */
+  seat: string;
+  node: string;
+  state: McpInstanceState;
+  /** When it entered its state, or null where the node does not know. */
+  since: string | null;
+  restarts: number;
+  /** Tools it serves while it runs. */
+  tools: number;
+  /** Why it is down now, or null. */
+  failure: McpMemberFailureView | null;
+  /** Its latest failure, kept after it came back, or null. */
+  last_failure: McpMemberFailureView | null;
+  /** When it last answered, or null. */
+  last_answer: string | null;
+}
+
+/** One instance of the server, as an administrator reads it. */
+interface McpInstanceView extends McpMemberInstanceView {
+  failure: McpFailureView | null;
+  last_failure: McpFailureView | null;
+  /** What a waiting instance waits for, or "". */
+  wait: string;
+}
+
+/** One node asked for its instances, as a member reads it. */
+interface McpMemberInstanceNodeView {
+  node: string;
+  answered: boolean;
+  count: number;
+}
+
+/** One node asked for its instances, with why it did not answer. */
+interface McpInstanceNodeView extends McpMemberInstanceNodeView {
+  reason: string;
+}
+
+/** The startup and per-call bounds in force, in seconds, and whether each is the default. */
+interface McpTimeouts {
+  startup_seconds: number;
+  request_seconds: number;
+  startup_default: boolean;
+  request_default: boolean;
+}
+
+/** The integration a per-agent server reads each agent's credential from. */
+interface McpMemberBinding {
+  /** The integration (`atlassian`, `github`, ...). */
+  vendor: string;
+  /** `declared` by the server's `seat_credentials`, or `recognised` from its address or command. */
+  by: string;
+}
+
+/** One credential a per-agent server is started with, and where it goes. */
+interface McpBoundKey {
+  field: string;
+  /** The header or variable it reaches the server under. */
+  key: string;
+}
+
+interface McpBinding extends McpMemberBinding {
+  keys: McpBoundKey[];
+}
+
+/** One seat whose executor box is given the server, and the cell the box runs in. */
+interface McpBoxSeat {
+  seat: string;
+  cell: string;
+}
+
+/** One placement the engine expects to fail. */
+interface McpPlacementWarning {
+  kind: McpPlacementWarningKind;
+  seat: string;
+  cell: string;
+  message: string;
+}
+
+/** What the engine decides about a server from its configuration, as a member reads it. */
+interface McpMemberResolved {
+  auth: McpAuth;
+  /** `engine_host` for a local server, "" for a remote one. */
+  runs_on: string;
+  timeouts: McpTimeouts;
+  binding: McpMemberBinding | null;
+}
+
+/** What the engine decides about a server, with the boxes and warnings an administrator reads. */
+interface McpResolved extends McpMemberResolved {
+  binding: McpBinding | null;
+  box_seats: McpBoxSeat[];
+  warnings: McpPlacementWarning[];
+}
+
+/** One tool's calls over the answer's days, as a member reads them. */
+export interface McpMemberToolUsage {
+  /** The name the calls used, prefix included: a tool's `name`. */
+  tool: string;
+  calls: number;
+  failed: number;
+  unavailable: number;
+  refused: number;
+  /** How long the calls that ran took between them. */
+  total_ms: number;
+  /** The newest call that ran, or null when none did. */
+  last_at: string | null;
+}
+
+/** One tool's calls, with the seats that made them. */
+interface McpToolUsage extends McpMemberToolUsage {
+  seats: string[];
+}
+
+/** A server's calls per tool over a range of company days, as a member reads them. */
+interface McpMemberServerUsage {
+  /** The range's first and last company day, both inclusive. */
+  since: string;
+  until: string;
+  days: number;
+  tools: McpMemberToolUsage[];
+  /** How many entries a per-seat-day cap dropped across the range; 0 says every count is whole. */
+  elided: number;
+}
+
+interface McpServerUsage extends McpMemberServerUsage {
+  tools: McpToolUsage[];
+}
+
+/** One call to one of the server's tools, never its arguments or its result. */
+export interface McpCallRow {
+  at: string;
+  /** The seat that made it, by handle, and the run it was made in. */
+  seat: string;
+  turn_id: string;
+  tool: string;
+  outcome: McpCallOutcome;
+  /** The engine's class of a failure it classified, or "". */
+  refusal: string;
+  /** Null for a call nothing timed. */
+  duration_ms: number | null;
+}
+
+/** A server's newest calls, and which data nodes they were read from. */
+interface McpServerCalls {
+  calls: McpCallRow[];
+  coverage: Coverage;
+}
+
+/** Who holds an `mcp_env` block naming the server. */
+type McpHolderKind = "seat" | "unit";
+
+/** One `mcp_env` block naming the server: the agent's or the team's own values for it. */
+interface McpEnvDependant {
+  kind: McpHolderKind;
+  /** The seat's handle or the unit's key. */
+  key: string;
+  /** The seat's or the unit's name. */
+  name: string;
+  /** Where in the company document. */
+  segments: (string | number)[];
+}
+
+/** One executor box given the server (`sandbox.mcp.servers`). */
+interface McpSandboxDependant {
+  seat: string;
+  name: string;
+  segments: (string | number)[];
+}
+
+/**
+ * What removing the server takes with it: the fields that name it alone,
+ * cleared in the same revision, and the stored values nothing reads once it
+ * is gone, which may be deleted with it.
+ */
+export interface McpDependants {
+  mcp_env: McpEnvDependant[];
+  sandbox: McpSandboxDependant[];
+  /** Names only, never a value. */
+  secrets: string[];
+}
+
+/** `GET /mcp-servers/{name}` as an administrator reads it: one server, whole. */
+export interface McpServerAnswer {
+  reading: "admin";
+  server: McpServerStatus;
+  nodes: McpStatusNode[];
+  listed: McpServerListing[];
+  /** Every tool a live node's instances list, by name. */
+  tools: McpToolView[];
+  /** How many tools the server lists; never fewer than `tools` holds. */
+  tool_count: number;
+  server_info: McpServerInfo | null;
+  /** What the server offers a client for using it, its own words; "" where none. */
+  instructions: string;
+  dependants: McpDependants;
+  instances: McpInstanceView[];
+  instance_nodes: McpInstanceNodeView[];
+  /** When an instance last answered, or null. */
+  last_success: string | null;
+  /** The latest failure of any instance, kept after it came back, or null. */
+  last_failure: McpFailureView | null;
+  /** Null for a server the configuration does not declare. */
+  resolved: McpResolved | null;
+  usage: McpServerUsage;
+  calls: McpServerCalls;
+  /** The server's latest test, whoever asked through whichever node; null where never tested. */
+  last_check: McpCheckView | null;
+}
+
+/** A stage a test of a server walks, in order (`mcp.TestStages`). */
+type McpTestStage = "address" | "resolve" | "connect" | "tls" | "launch" | "discover" | "list";
+
+/** How one stage of a test went. */
+type McpStepState = "passed" | "failed" | "skipped" | "not_reached";
+
+/** A server's latest test, as its detail answers it: never its tools. */
+interface McpCheckView {
+  at: string;
+  by: string;
+  /** The handle of the seat a per-agent server was tested for, "" for a shared server. */
+  seat: string;
+  /** Some node answered, and every node that answered found the server serving. */
+  ok: boolean;
+  nodes: McpCheckNodeView[];
+}
+
+/** What one node's test found. */
+interface McpCheckNodeView {
+  /** "" for a seat's test no node holding the seat answered. */
+  node: string;
+  answered: boolean;
+  /** Why a node that did not answer did not. */
+  reason: string;
+  ok: boolean;
+  steps: McpCheckStepView[];
+  /** Why the test stopped, or `empty_tools` for a server listing nothing it can offer. */
+  failure: McpCheckFailure | null;
+  server_info: McpServerInfo | null;
+  tools: number;
+  refused: number;
+  took_ms: number;
+}
+
+/** One stage of a node's test. */
+interface McpCheckStepView {
+  stage: McpTestStage;
+  state: McpStepState;
+  took_ms: number;
+  /** What the stage found, or the failure's sentence for the stage that failed. */
+  detail: string;
+}
+
+/** Why a node's test stopped: its class ("" where none fits) and its sentence. */
+interface McpCheckFailure {
+  class: McpFailureClass | "";
+  said: string;
+}
+
+/** `GET /mcp-servers/{name}` as a member reads it. */
+export interface McpMemberServerAnswer {
+  reading: "member";
+  server: McpMemberServerStatus;
+  nodes: McpStatusNode[];
+  listed: McpServerListing[];
+  tools: McpToolView[];
+  tool_count: number;
+  server_info: McpServerInfo | null;
+  instances: McpMemberInstanceView[];
+  instance_nodes: McpMemberInstanceNodeView[];
+  last_success: string | null;
+  last_failure: McpMemberFailureView | null;
+  resolved: McpMemberResolved | null;
+  usage: McpMemberServerUsage;
+}
+
+/**
+ * What became of one value a removal was asked to delete. `deleted`: the
+ * store held it and no longer does. `absent`: it held nothing under the name.
+ * `kept`: a revision activated after the removal reads it. `failed`: the
+ * store or the fleet's revision did not answer, so it may still be there.
+ */
+type McpSecretOutcome = "deleted" | "absent" | "kept" | "failed";
+
+/** One value a removal was asked to delete, and what became of it. */
+export interface McpSecretDeletion {
+  name: string;
+  outcome: McpSecretOutcome;
+  /** For a value kept, the paths of the fleet's revision that read it. */
+  read_by?: string[];
+}
+
+/** The fields a written removal cleared with the server. */
+interface McpCleared {
+  mcp_env: McpEnvDependant[];
+  sandbox: McpSandboxDependant[];
+}
+
+/** A dry run of a removal that would land: what it checked and what it takes. */
+export interface McpRemovalCheck {
+  valid: boolean;
+  base_revision_id: string;
+  warnings: unknown[];
+  derived: unknown;
+  dependants: McpDependants;
+}
+
+/** A removal written: the revision, what it cleared, and each value's fate. */
+export interface McpRemovalWritten {
+  revision_id: string;
+  epoch: number;
+  warnings: unknown[];
+  derived: unknown;
+  removed: string;
+  cleared: McpCleared;
+  secrets: McpSecretDeletion[];
+}
+
+/**
+ * A restart as recorded (`202`): every node restarts each instance whose
+ * state began before `at`, or the node holding `seat` that agent's instance.
+ */
+export interface McpRestartAnswer {
+  server: string;
+  /** "" for every instance. */
+  seat: string;
+  at: string;
+  /** The node that recorded the request. */
+  node: string;
 }

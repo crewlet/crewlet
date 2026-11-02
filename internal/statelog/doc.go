@@ -558,5 +558,8 @@
 // ([PerEntryKinds], [Alarm.Entries]): a credential coming due, a refused
 // sign-in or a limit is one entry's, evaluated from fleet-wide inputs every
 // data node gathers alike, at thresholds the owner fixed rather than ones
-// borrowed from another decision.
+// borrowed from another decision. The MCP kinds are the same move over the
+// configured MCP SERVERS: an outage, a wait for a minted credential or a tool
+// refused its name is one server's, read off every live node's heartbeat, at
+// the thresholds the restart schedule and the provisioning pass already keep.
 package statelog

@@ -51,6 +51,24 @@ node. Their thresholds are fixed, with no setting: a credential's expiry
 is said at 30 days and again at 7, and a limit turns into
 `llm_limit_waiting` once a seat has waited 15m on it.
 
+These are about one MCP server rather than the node:
+
+`mcp_server_failing`, `mcp_server_partial`, `mcp_server_waiting_long` and `mcp_tools_refused`.
+
+Each lists the servers it stands on in `entries`, carrying the server's
+name as `key` and as each log line's `entry`, and an entry about one
+agent's instance names that agent's seat as `seat`. Every data node
+evaluates them from every live node's heartbeat, so they read the same on every
+node, and a server the configuration turns off raises none. An instance down for
+5m 15s (the restart schedule's ceiling, past which every further attempt waits that
+long, plus one heartbeat) raises `mcp_server_failing` when no instance of
+the server serves and `mcp_server_partial` when some do; an agent's
+instance held back 5m 15s (the longest an integration waits between two passes it
+still owes, plus one heartbeat) raises `mcp_server_waiting_long`; and a
+tool no agent can be handed under its name raises `mcp_tools_refused` as
+soon as a node lists it. The MCP servers answer (`GET /mcp-servers`)
+carries the four with the gesture that fixes each.
+
 | Alarm | What it means | What to do |
 |---|---|---|
 | `apply_lag` | This node is more than a minute behind the log. Being behind does not take its copy out of service; a position that stops moving does. | Check this node's applier: `crewlet retention status` names the domain and its position. A node that is behind keeps the seats it holds and claims no new ones. Only if its position stops moving for the stall grace, or it holds a record it cannot decode past the deferral grace, is its copy wrong rather than behind: it then stops serving its copy of the estate, and its seats stay and read the estate from the other data nodes until the copy recovers. |
@@ -85,6 +103,10 @@ is said at 30 days and again at 7, and a limit turns into
 | `llm_sign_in_refused` | A model cannot sign in: its latest refusal on any node is newer than its latest answer on any node, its credential's computed expiry has passed, or nothing signs it in while a seat or Ask Crewlet runs on it. | Give the model a credential that signs in: Settings › Models › the entry › Rotate for a token or a key, or sign the harness in on the node (`crewlet llm login <key>`) for a host login. Every call on it is refused until then, and its seats fall back to the next entry in their chain if they have one. Settings › Models names the entry, and `crewlet llm doctor <key>` checks it end to end on a node. |
 | `llm_limit` | A model sits out a plan limit on at least one node, and no seat has waited on it for fifteen minutes. Its seats fall back to the next entry in their chain meanwhile. | Nothing, if the plan's limit is expected: the engine tries the model again on its own and its seats fall back meanwhile. To end it now, Settings › Models › the entry › Retry asks the vendor once, and Clear stops every node sitting it out. Settings › Models names the entry, and `crewlet llm doctor <key>` checks it end to end on a node. |
 | `llm_limit_waiting` | A seat has been parked for fifteen minutes or more on a chain naming a model that sits out a limit, with nothing to fall back to. It replaces `llm_limit` for that model. | Seats are not working. Add a fallback entry to their chain (a model on another sign-in), raise the plan, or wait for the reset the vendor named; Settings › Models › the entry › Retry asks the vendor once. Settings › Models names the entry, and `crewlet llm doctor <key>` checks it end to end on a node. |
+| `mcp_server_failing` | No instance of an MCP server is serving, and one has been down for longer than the restart schedule's ceiling plus a heartbeat. No agent is offered the server's tools. | No agent is offered the server's tools until an instance serves. Fix what the failure names (its address, its command, or the credentials it reads); the engine keeps trying every five minutes, and Restart on the server's page (`POST /mcp-servers/<name>/retry`) tries every instance now. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
+| `mcp_server_partial` | Some instances of an MCP server serve, and one that does not has been down for longer than the restart schedule's ceiling plus a heartbeat: one node, one agent's credentials or one child that keeps dying, rather than the server. | The agents and nodes whose instance serves are not affected. Fix what the failure names, usually one node's environment or one agent's credentials; Restart on the alarm (`POST /mcp-servers/<name>/retry`, with `seat` for one agent's instance) tries it now rather than on the five-minute schedule. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
+| `mcp_server_waiting_long` | An agent's instance of an MCP server has been held back, unstarted, for longer than an integration waits between two passes plus a heartbeat, for a credential that integration mints. A wait is no failure and the server's state does not count it as one, but the agent is offered none of the server's tools meanwhile. | Open the integration that mints the agent's credential (Settings › Integrations): its last pass says what it is waiting for. The instance starts once the credential is sealed and reaches its node; until then that agent is offered none of the server's tools. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
+| `mcp_tools_refused` | An MCP server lists a tool that cannot be offered under its name: with the server's `tool_prefix` it is longer than the harnesses take, it holds a character a model's tool name cannot, or a built-in has the name. | The server's Tools tab says why each name is refused. A name too long for the harnesses fits with a shorter `tool_prefix`, or none; a name a built-in holds needs a prefix; a name with characters a model cannot read is the server's own to change. No agent is offered those tools until then. The server's page under Settings › MCP & tools (`GET /mcp-servers/<name>`) lists each instance with what it last said. |
 
 An alarm that fires on a healthy node is a defect in this table, not a
 threshold for an operator to tune: each one fires at the number that already

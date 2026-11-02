@@ -344,13 +344,13 @@ var wireTags = map[string][]string{
 	"backup_requested":          {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
 	"model_acted": {"action", "actor", "actor_kind", "dry_run", "failed", "names",
 		"operator_id", "outcome", "provider_key", "refusal", "revision_id", "status"},
-	"mcp_server_acted": {"action", "actor", "actor_kind", "failed", "mcp_server", "operator_id",
-		"outcome", "refusal", "seat"},
+	"mcp_server_acted": {"action", "actor", "actor_kind", "address", "draft", "failed", "mcp_server",
+		"operator_id", "outcome", "refusal", "seat"},
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "missed", "role", "schedule", "scheduled_at", "task_id", "timeout_seconds"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
-	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label"},
+	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "source_event_type", "subject", "subject_is_label"},
 	"turn_trigger_skipped":          {"agent_handle", "agent_id", "reason", "trigger_id", "trigger_type"},
 	"notifications_coalesced":       {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":          {"detail", "handle", "notification_source", "reason"},
@@ -594,6 +594,42 @@ func TestDescribeTriggerWithNoTrigger(t *testing.T) {
 	}
 	if string(raw) != "{}" {
 		t.Errorf("the zero trigger marshals to {}, got %s", raw)
+	}
+}
+
+// A TRIGGER THAT NAMES ANYTHING IS NOT ZERO, whichever field names it.
+//
+// Trigger.IsZero lists its fields by hand, since its Origins slice makes the
+// struct incomparable, and a field added later and left off that list would
+// make a trigger that names something read as no trigger at all. This sets
+// each field alone, so the list is held to the struct rather than to memory.
+func TestTriggerIsZeroSeesEveryField(t *testing.T) {
+	t.Parallel()
+	if !(Trigger{}).IsZero() {
+		t.Fatal("the zero Trigger must be zero")
+	}
+	typ := reflect.TypeFor[Trigger]()
+	for i := range typ.NumField() {
+		field := typ.Field(i)
+		var trigger Trigger
+		value := reflect.ValueOf(&trigger).Elem().Field(i)
+		switch {
+		case field.Type == reflect.TypeFor[time.Time]():
+			value.Set(reflect.ValueOf(time.Unix(1, 0).UTC()))
+		case field.Type == reflect.TypeFor[TriggerOrigin]():
+			value.Set(reflect.ValueOf(TriggerOrigin{Kind: OriginChatMessage, ID: "msg-1"}))
+		case field.Type.Kind() == reflect.String:
+			value.SetString("set")
+		case field.Type.Kind() == reflect.Slice:
+			value.Set(reflect.MakeSlice(field.Type, 1, 1))
+		default:
+			t.Fatalf("Trigger.%s is a %s this test cannot set: teach it, and "+
+				"Trigger.IsZero, the new field", field.Name, field.Type)
+		}
+		if trigger.IsZero() {
+			t.Errorf("a trigger naming only its %s reads as zero: Trigger.IsZero "+
+				"does not look at the field", field.Name)
+		}
 	}
 }
 
@@ -930,6 +966,66 @@ func TestNoPayloadPutsAPartitionInTheConversationField(t *testing.T) {
 					"the partition has its own tag so the conversation's keeps "+
 					"one meaning", typ.Name(), wire)
 			}
+		}
+	}
+}
+
+// A TRIGGER NAMES WHAT STARTED THE TURN, and survives the wire: the waking
+// event's origin (a chat message and why it reached the seat, a schedule) is
+// copied into the descriptor and read back from it.
+//
+// Mutation: drop the Originated read in DescribeTrigger, or the origin's
+// decode, and this fails.
+func TestATriggerNamesWhatStartedTheTurn(t *testing.T) {
+	t.Parallel()
+	chat := TriggerOrigin{Kind: OriginChatMessage, ID: "msg-1", Reason: "answerer"}
+	early := TriggerOrigin{Kind: OriginChatMessage, ID: "msg-0", Reason: "answerer"}
+	trace := events.TraceContext{}
+	for name, tc := range map[string]struct {
+		event *events.Event
+		want  TriggerOrigin
+	}{
+		"a chat message": {events.New(ExternalNotification{NotificationSource: "chat",
+			Origin: chat}, trace), chat},
+		"a schedule": {events.New(TaskAssigned{Schedule: "daily standup"}, trace),
+			TriggerOrigin{Kind: OriginSchedule, ID: "daily standup"}},
+		"a colleague's ask": {events.New(A2ARequest{ChannelID: "ch-1"}, trace),
+			TriggerOrigin{Kind: OriginColleagueAsk, ID: "ch-1"}},
+		"a vendor's message": {events.New(ExternalNotification{NotificationSource: "mattermost"},
+			trace), TriggerOrigin{}},
+		"a burst of messages": {events.New(ExternalNotification{NotificationSource: "chat",
+			Origin: chat, Messages: []CoalescedMessage{{Origin: early}, {Origin: chat}}}, trace),
+			chat},
+	} {
+		got := DescribeTrigger(tc.event)
+		if got.Origin != tc.want {
+			t.Errorf("%s: origin %+v, want %+v", name, got.Origin, tc.want)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back Trigger
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatal(err)
+		}
+		if back.Origin != tc.want {
+			t.Errorf("%s: read back as %+v from %s", name, back.Origin, raw)
+		}
+		// A BURST NAMES EVERY MESSAGE IT TOOK IN, oldest first, on the
+		// wire as in hand.
+		if name == "a burst of messages" {
+			want := []TriggerOrigin{early, chat}
+			if !slices.Equal(got.Origins, want) || !slices.Equal(back.Origins, want) {
+				t.Errorf("a burst names %+v and reads back %+v, want %+v", got.Origins,
+					back.Origins, want)
+			}
+		} else if len(got.Origins) != 0 {
+			t.Errorf("%s: names %+v beside its origin, want none", name, got.Origins)
+		}
+		if _, present := got.Map()["origin"]; present == tc.want.IsZero() {
+			t.Errorf("%s: the wire form's origin key is present=%v for %+v", name,
+				present, tc.want)
 		}
 	}
 }

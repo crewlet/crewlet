@@ -117,6 +117,7 @@ func TestTwoNodesListingsOfAServerMergeIntoItsDetail(t *testing.T) {
 	surface, _ := configSurface(t, mcpCompany)
 	s := mcpSources(t, backend)
 	s.Config, s.MCPListings = surface, fakeListings{listings: listings, schemas: schemas}
+	s, _ = withHistory(t, s)
 
 	got, err := s.MCPServer(t.Context(), "github")
 	if err != nil {
@@ -180,6 +181,7 @@ func TestAServersDetailNamesNoCredential(t *testing.T) {
 	surface, _ := configSurface(t, mcpCompany)
 	s := mcpSources(t, backend)
 	s.Config, s.MCPListings = surface, fakeListings{}
+	s, _ = withHistory(t, s)
 	for _, server := range []string{"github", "docs", "linear"} {
 		detail, err := s.MCPServer(t.Context(), server)
 		if err != nil {
@@ -199,13 +201,28 @@ func TestAServersDetailNamesNoCredential(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, key := range []string{"server", "nodes", "listed", "tools", "tool_count",
-			"server_info", "instructions", "dependants"} {
+			"server_info", "instructions", "dependants", "usage", "calls"} {
 			if _, ok := shape[key]; !ok {
 				t.Errorf("%s's detail has no %q", server, key)
 			}
 		}
 		if shape["listed"] == nil || shape["tools"] == nil {
 			t.Errorf("%s's detail sends null for a list: %s", server, raw)
+		}
+		// THE ACTIVITY'S SHAPE, key for key, and its lists never null: a
+		// row naming a call's arguments or its result is a credential or a
+		// customer's words on a configuration reader's screen.
+		usageShape, _ := shape["usage"].(map[string]any)
+		callsShape, _ := shape["calls"].(map[string]any)
+		if got := sortedKeys(usageShape); !slices.Equal(got,
+			[]string{"days", "elided", "since", "tools", "until"}) {
+			t.Errorf("%s's usage carries %v", server, got)
+		}
+		if got := sortedKeys(callsShape); !slices.Equal(got, []string{"calls", "coverage"}) {
+			t.Errorf("%s's calls carry %v", server, got)
+		}
+		if usageShape["tools"] == nil || callsShape["calls"] == nil {
+			t.Errorf("%s's activity sends null for a list: %s", server, raw)
 		}
 	}
 }
@@ -219,6 +236,7 @@ func TestAServersDetailRefusesWhatItCannotAnswer(t *testing.T) {
 	surface, _ := configSurface(t, mcpCompany)
 	s := mcpSources(t, backend)
 	s.Config, s.MCPListings = surface, fakeListings{}
+	s, _ = withHistory(t, s)
 	if _, err := s.MCPServer(t.Context(), "nothing"); !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("an unknown server answered %v, want not found", err)
 	}
@@ -234,6 +252,16 @@ func TestAServersDetailRefusesWhatItCannotAnswer(t *testing.T) {
 	none.MCPListings = nil
 	if _, err := none.MCPServer(t.Context(), "github"); !errors.Is(err, queries.ErrMCPDetailUnavailable) {
 		t.Errorf("a node with no copy answered %v", err)
+	}
+	// AND ONE THAT HOLDS NO HISTORY: its usage and its calls are not a
+	// server nobody called.
+	for name, unheld := range map[string]queries.Sources{
+		"no usage":       func() queries.Sources { u := s; u.Usage = nil; return u }(),
+		"no turn detail": func() queries.Sources { u := s; u.Events = nil; return u }(),
+	} {
+		if _, err := unheld.MCPServer(t.Context(), "github"); !errors.Is(err, queries.ErrMCPDetailUnavailable) {
+			t.Errorf("a node with %s answered %v", name, err)
+		}
 	}
 }
 
@@ -262,8 +290,8 @@ mcp_servers:
 		t.Fatal(err)
 	}
 	surface, _ := configSurface(t, doc)
-	s := queries.Sources{Coord: coordmemory.New(), Company: companySource(t, cfg), Config: surface,
-		MCPListings: fakeListings{}}
+	s, _ := withHistory(t, queries.Sources{Coord: coordmemory.New(), Company: companySource(t, cfg),
+		Config: surface, MCPListings: fakeListings{}})
 	got, err := s.MCPServer(t.Context(), "tracker")
 	if err != nil {
 		t.Fatalf("MCPServer: %v", err)
@@ -309,6 +337,7 @@ func TestAListedToolJoinsTheCatalogueUnderANameNoRowHolds(t *testing.T) {
 	want := queries.ToolRow{
 		Name: "gh_get_issue", Description: "Read one issue", Source: "mcp:github",
 		Annotations: queries.ToolHints{ReadOnly: "yes", Destructive: "no", Idempotent: "yes", OpenWorld: "no"},
+		Risk:        mcp.RiskReadOnly, RiskDeclared: true,
 		InputSchema: map[string]any{"type": "object"},
 	}
 	if !reflect.DeepEqual(rows[0], want) {

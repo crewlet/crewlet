@@ -35,8 +35,9 @@ func TestAJobItsEngineRestartKilledIsRecordedLostAndAnnounced(t *testing.T) {
 		t.Fatalf("the row records %+v on job %s; want the engine's restart at %v on %s",
 			got.Lost, got.LaunchID, rig.now, run.LaunchID)
 	}
+	rig.now = rig.now.Add(DefaultPollInterval)
 	if fired := rig.tick(); fired != 1 {
-		t.Errorf("the next pass announced %d; want the unclaimed loss announced again", fired)
+		t.Errorf("the pass an interval later announced %d; want the unclaimed loss announced again", fired)
 	}
 }
 

@@ -70,38 +70,40 @@ import (
 // Its place — the launch's ordinal ([PendingRun.LaunchSeq]) and its own among
 // that launch's captures — is reserved on the row before a byte is spooled
 // ([PendingStore.StampCapture]), with the bridged call the job had answered
-// through and the note it had read through when it was packed, so a later
-// launch that continues it knows what came after it. How it came out is
-// stamped beside: LANDED, REFUSED with why (no box to read it out of, a pack
-// that failed, a session past its bounds, the seat's budget, an upload the
-// store had no room for, a record the log will never take), or UNRESOLVED —
-// uploaded, and whether its record landed unknown — which the turn's end asks
-// again under the same operation before it ends the turn.
+// through and the note it had read through when it was packed: what a launch
+// that continues the session would need to know of what came after it. How it
+// came out is stamped beside: LANDED, REFUSED with why (no box to read it out
+// of, a pack that failed, a session past its bounds, the seat's budget, an
+// upload the store had no room for, a record the log will never take), or
+// UNRESOLVED — uploaded, and whether its record landed unknown — which the
+// turn's end asks again under the same operation before it ends the turn.
 //
 // # And every turn's end, owed on the row until the log takes it
 //
 // How the turn ended — completed or failed, the reviewer's decision, whether
 // its reply reached the party waiting, who stopped it and why, what lost it —
-// is the account a transcript cannot hold, kept on the turn's row beside its
-// session ([executordomain.Ending]); a later turn on the conversation is not
-// told it yet, and starts a session of its own. Whatever ends the turn
-// writes it on the run's row ([PendingStore.OweEnd]): the engine's resumed turn,
-// and this package's endings that no frame of the turn reaches — a loss, a stop
-// ([CoordinatorOptions.TurnLost], [CoordinatorOptions.CloseStopped]). The run's
-// ending records it on the executor log ([Coordinator.EndTurn]) before it
-// deletes the row, which the delete refuses until then ([ErrEndOwed]): after
-// every capture of the turn has settled, so the end's tombstone never refuses
-// the turn's own last session, and with the turn's NEWEST capture where it was
-// not kept ([executordomain.Unkept]), so no reader of the log takes an older one
-// for the turn's last. The seat's mail waits on it as on every
-// ending kept for its retry. A turn with no capture still ends: its row names
-// no object, and holds the account.
+// is the account a transcript cannot hold ([executordomain.Ending]), recorded
+// on the turn's row of the log beside the session it kept. Whatever ends the
+// turn writes it on the run's row ([PendingStore.OweEnd]): the engine's resumed
+// turn, and this package's endings that no frame of the turn reaches — a loss,
+// a stop ([CoordinatorOptions.TurnLost], [CoordinatorOptions.CloseStopped]).
+// The run's ending records it on the executor log ([Coordinator.publishEnd])
+// before it deletes the row, which the delete refuses until then
+// ([ErrEndOwed]): after every capture of the turn has settled, so the end's
+// tombstone never refuses the turn's own last session, and with the turn's
+// NEWEST capture where it was not kept ([executordomain.Unkept]), so the log's
+// row never goes on naming an older session as the turn's last. The seat's mail
+// waits on it as on every ending kept for its retry. A turn with no capture
+// still ends: its row names no object, and holds the account.
 //
 // # The switch
 //
 // `turn_engine.conversation_session.enabled: false` keeps nothing — no capture
-// is taken or stamped — and still records every end, which is the account and
-// not the session ([SessionPolicy.Keep]).
+// is taken or stamped ([SessionPolicy.Keep], the fleet's word) — and prepares
+// nothing for one: no launch seals what it handed its box, and no loss asks
+// another node's host to read a box, holding the seat's mail for a take that
+// would keep nothing ([Coordinator.capturing], this node's word). It still
+// records every end, which is the account and not the session.
 
 // SessionWrites is the executor log's writes a coordinator records through: the
 // estate router's (internal/estate's ExecutorWrites), so a node without `data`
@@ -120,6 +122,14 @@ type SessionKeep interface {
 	// cannot know — every node applies the budget a capture carries, so no
 	// node's own revision may decide it.
 	Policy(ctx context.Context) (SessionPolicy, error)
+
+	// Keeps is whether the revision THIS NODE runs keeps sessions: a hint,
+	// read without a round trip, for the steps that only prepare a capture —
+	// sealing what a launch handed its box, asking another node's host to
+	// read a lost run's box — so a company that keeps none costs a launch
+	// and a loss nothing for one. Never the word: a take keeps nothing until
+	// Policy says so ([Coordinator.capturing]).
+	Keeps() bool
 
 	// SealHanded seals the secrets a launch handed its box, encoded
 	// ([HandedSecrets]), for the run's row, bound to its turn
@@ -385,10 +395,10 @@ const (
 // SessionScrubWait bounds the scrub of a session as it streams out of its box:
 // two readings of an archive at its bound — a tar is read twice, to learn each
 // file's size as rewritten — each of up to the plaintext the scrub admits
-// (internal/sandbox/executor's scrubPlainMaxBytes, eight times the archive's
-// bound), redacted at the tens of mebibytes a second the redaction runs at,
-// and the archive read out of a box whose agent serves it at a mebibyte a
-// second at the least.
+// (internal/sandbox/executor's scrubExpansion times the archive's bound, which
+// its boundsFor computes: eight times), redacted at the tens of mebibytes a
+// second the redaction runs at, and the archive read out of a box whose agent
+// serves it at a mebibyte a second at the least.
 //
 // TWO MINUTES, and a judgment: what the redaction costs per mebibyte is the
 // redaction's own, which grows with its rules. A session that is still being
@@ -528,8 +538,9 @@ type spooledCapture struct {
 	file  string
 }
 
-// spoolPrefix names this package's spools in the node's temporary directory, so
-// a spool a crash left behind is found again ([Coordinator.sweepSpools]).
+// spoolPrefix names this package's spools in the node's spool directory
+// ([CoordinatorOptions.SpoolDir]), so a spool a crash left behind is found
+// again ([Coordinator.sweepSpools]).
 const spoolPrefix = "crewlet-session-"
 
 // takeCapture takes the session of run's job out of box — see the file comment
@@ -545,7 +556,7 @@ const spoolPrefix = "crewlet-session-"
 func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
 	at capturePoint) (*spooledCapture, *SessionKept) {
 
-	if c.sessions == nil || c.keep == nil {
+	if !c.keepsSessions() {
 		return nil, nil
 	}
 	taker, ok := runner.(SessionTaker)
@@ -553,7 +564,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, nil
 	}
 	c.sweepSpools()
-	ctx, cancel := c.takeContext(ctx)
+	ctx, cancel, by := c.takeContext(ctx)
 	defer cancel()
 	// THE ROW AS IT STANDS, for the ordinals, what the job was handed and
 	// what it had been told: the reader's copy may be the claim's, from
@@ -586,20 +597,20 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}
 	policy, err := c.keep.Policy(ctx)
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, run, current, at, fmt.Sprintf("the company's session policy "+
-			"could not be read off the revision the fleet runs: %v", err))
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, fmt.Sprintf("the company's session "+
+			"policy could not be read off the revision the fleet runs: %v", err))
 	}
 	if !policy.Keep {
 		return nil, nil
 	}
 	scrub, err := c.scrubValues(ctx, current, box)
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, run, current, at, err.Error())
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, err.Error())
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
 		MaxBytes: executordomain.SessionMaxBytes})
 	if err != nil {
-		return nil, c.refuseUnplaced(ctx, run, current, at, takeRefusal(ctx, err))
+		return nil, c.refuseUnplaced(ctx, by, run, current, at, takeRefusal(ctx, err))
 	}
 	if taken.Body == nil {
 		return nil, nil
@@ -616,7 +627,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
 		SeatBudget: policy.SeatBudget,
 	}
-	took, stampErr := c.reserveCapture(ctx, run.TurnID, stamp)
+	took, stampErr := c.reserveCapture(ctx, by, run.TurnID, stamp)
 	if stampErr != nil || !took {
 		// ANOTHER READ OF THE SAME RUN TOOK THIS PLACE FIRST — a stop's and a
 		// collection's, at once — and keeps the session itself; or the row
@@ -629,7 +640,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	}
 	spooled, err := c.spool(ctx, run, stamp, taken)
 	if err != nil {
-		return nil, c.finishCapture(ctx, run, stamp, CaptureRefused, takeRefusal(ctx, err))
+		return nil, c.finishCapture(ctx, by, run, stamp, CaptureRefused, takeRefusal(ctx, err))
 	}
 	// WHAT THE SESSION'S LAST REQUEST CARRIED, read off the archive as it was
 	// spooled, for the floor of the launch that continues it: stamped with the
@@ -637,7 +648,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	if taken.Context != nil {
 		spooled.stamp.ContextTokens = taken.Context()
 	}
-	digestCtx, digestCancel := detached(ctx)
+	digestCtx, digestCancel := stampContext(ctx, by)
 	keepErr := taken.Keep(digestCtx)
 	digestCancel()
 	if keepErr != nil {
@@ -653,17 +664,44 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 	return spooled, &SessionKept{CaptureSeq: stamp.CaptureSeq, Bytes: spooled.spool.Size}
 }
 
-// takeContext is the context a take runs under: its own budget
-// ([SessionTakeBudget]), and never past where the read it is part of must stop
-// to leave its pause and its answer their room ([discardGrace]) — so a take cut
-// short never costs the box its pause, which is what stops a job its turn's cap
-// ended.
-func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+// takeContext is the context a take runs under, and the instant by which its
+// own records must be made: its own budget ([SessionTakeBudget]), and never
+// past where the read it is part of must stop to leave those records their
+// room — the stamp of what came of it ([Coordinator.settleContext]), the
+// digest it leaves in the box ([stampContext]) — and after them its pause and
+// its answer theirs ([discardGrace] each). So nothing a take does, cut short or
+// not, costs the box its pause, which is what stops a job its turn's cap ended.
+// by is zero where the read has no deadline.
+func (c *Coordinator) takeContext(ctx context.Context) (context.Context, context.CancelFunc, time.Time) {
 	deadline := time.Now().Add(SessionTakeBudget)
-	if d, ok := ctx.Deadline(); ok && d.Add(-discardGrace).Before(deadline) {
-		deadline = d.Add(-discardGrace)
+	var by time.Time
+	if d, ok := ctx.Deadline(); ok {
+		by = d.Add(-discardGrace)
+		if last := by.Add(-discardGrace); last.Before(deadline) {
+			deadline = last
+		}
 	}
-	return context.WithDeadline(ctx, deadline)
+	take, cancel := context.WithDeadline(ctx, deadline)
+	return take, cancel, by
+}
+
+// stampContext is the context the one record a take makes only once is made
+// under — the digest of its archive, left in the box: one of its own
+// ([detached]), since the take's budget may be what ended the take, and never
+// past by, where the read the take is part of needs the rest of its time for
+// the box's pause ([Coordinator.takeContext]). by zero bounds it by its own
+// grace alone. A stamp of the capture is asked again, bounded the same way
+// ([Coordinator.settleContext]).
+func stampContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
+	stamp, cancel := detached(ctx)
+	if by.IsZero() {
+		return stamp, cancel
+	}
+	bounded, cancelBounded := context.WithDeadline(stamp, by)
+	return bounded, func() {
+		cancelBounded()
+		cancel()
+	}
 }
 
 // takeRefusal is why a take was refused, in the words its stamp keeps: the
@@ -690,7 +728,7 @@ func takeRefusal(ctx context.Context, err error) string {
 func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCapture,
 	taken TakenSession) (*spooledCapture, error) {
 
-	file, err := os.CreateTemp(os.TempDir(), spoolPrefix+"*")
+	file, err := os.CreateTemp(c.spoolDirectory(), spoolPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: a spool for the session on this node's disk: %w", err)
 	}
@@ -704,23 +742,37 @@ func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCa
 	return &spooledCapture{run: run, stamp: stamp, spool: sealed, file: file.Name()}, nil
 }
 
-// sweepSpools removes, once per coordinator, every spool in the node's temporary
-// directory older than a capture can take: what a crash between a take and its
-// keep left behind. Never a younger one, which may be another coordinator's of
-// this very process, still under way.
+// spoolDirectory is where this coordinator's spools wait:
+// [CoordinatorOptions.SpoolDir], or the node's temporary directory.
+func (c *Coordinator) spoolDirectory() string {
+	if c.spoolDir != "" {
+		return c.spoolDir
+	}
+	return os.TempDir()
+}
+
+// sweepSpools removes every spool in the node's spool directory older than a
+// capture can take — twice [SessionCaptureBudget] — which is what a crash
+// between a take and its keep left behind; never a younger one, which may be a
+// keep of this very process still under way.
+//
+// ON EVERY TAKE, not once a process: a node that restarts soon after a crash
+// finds that crash's spools young at its first take, and swept once, it left
+// them on the node's disk — a few dozen mebibytes each, in a temporary
+// directory that may be memory — until its next restart, weeks away. Swept at
+// every take, they go at the first take after they age past the cutoff. A
+// glob of one directory, beside a take that reads a whole session.
 func (c *Coordinator) sweepSpools() {
-	c.spoolSweep.Do(func() {
-		matches, err := filepath.Glob(filepath.Join(os.TempDir(), spoolPrefix+"*"))
-		if err != nil {
-			return
+	matches, err := filepath.Glob(filepath.Join(c.spoolDirectory(), spoolPrefix+"*"))
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-2 * SessionCaptureBudget)
+	for _, name := range matches {
+		if info, statErr := os.Stat(name); statErr == nil && info.ModTime().Before(cutoff) {
+			_ = os.Remove(name)
 		}
-		cutoff := time.Now().Add(-2 * SessionCaptureBudget)
-		for _, name := range matches {
-			if info, statErr := os.Stat(name); statErr == nil && info.ModTime().Before(cutoff) {
-				_ = os.Remove(name)
-			}
-		}
-	})
+	}
 }
 
 // keepLater keeps a spooled capture off the frame that took it, on the
@@ -748,7 +800,7 @@ func (c *Coordinator) keepLater(spooled *spooledCapture) {
 // removes its spool.
 func (c *Coordinator) dropSpool(spooled *spooledCapture, why string) {
 	defer func() { _ = os.Remove(spooled.file) }()
-	c.finishCapture(c.keepLife, spooled.run, spooled.stamp, CaptureRefused, why)
+	c.finishCapture(c.keepLife, time.Time{}, spooled.run, spooled.stamp, CaptureRefused, why)
 }
 
 // keepCapture uploads a spooled capture into the object it was sealed for,
@@ -762,27 +814,27 @@ func (c *Coordinator) keepCapture(ctx context.Context, spooled *spooledCapture) 
 	run, stamp := spooled.run, spooled.stamp
 	minted, err := c.keep.MintedAt(ctx, run.TurnID, run.WorkKey, run.WorkSince)
 	if err != nil {
-		return c.finishCapture(ctx, run, stamp, CaptureRefused,
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused,
 			fmt.Sprintf("the turn's operations could not be minted: %v", err))
 	}
 	stamp.Minted = minted
 	if why := c.overBudget(ctx, run, spooled.spool.Size, stamp.SeatBudget); why != "" {
-		return c.finishCapture(ctx, run, stamp, CaptureRefused, why)
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, why)
 	}
 	body, err := os.Open(spooled.file)
 	if err != nil {
-		return c.finishCapture(ctx, run, stamp, CaptureRefused,
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused,
 			fmt.Sprintf("the spooled session could not be read back on this node: %v", err))
 	}
 	sealed, err := c.keep.Upload(ctx, spooled.spool, body)
 	_ = body.Close()
 	if err != nil {
-		return c.finishCapture(ctx, run, stamp, CaptureRefused, uploadRefusal(err))
+		return c.finishCapture(ctx, time.Time{}, run, stamp, CaptureRefused, uploadRefusal(err))
 	}
 	stamp.Object, stamp.ObjectHash = sealed.Object.Key.String(), string(sealed.Object.Hash)
 	stamp.ObjectSize, stamp.ContentKey = sealed.Object.Size, sealed.ContentKey
 	outcome, why := c.recordCapture(ctx, run.AgentHandle, run.TurnID, run.ConversationKey, run.WorkKey, stamp)
-	return c.finishCapture(ctx, run, stamp, outcome, why)
+	return c.finishCapture(ctx, time.Time{}, run, stamp, outcome, why)
 }
 
 // overBudget is why a capture of size bytes cannot fit the seat's budget beside
@@ -870,26 +922,40 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 }
 
 // capturesLoss reports whether a lost run's ending reads its box for its
-// session: a coordinator that keeps sessions, a run whose job was in a box, a
-// loss that leaves the box behind ([LossCause.leavesBox] — a box lost with its
-// host, or with a node that left, has nothing left to read), and no take of
-// this job made once it had ended.
+// session: a company that keeps sessions ([Coordinator.capturing]), a run whose
+// job was in a box, a loss that leaves the box behind ([LossCause.leavesBox] — a
+// box lost with its host, or with a node that left, has nothing left to read),
+// and no take of this job made once it had ended.
 func (c *Coordinator) capturesLoss(run PendingRun) bool {
-	if !c.keepsSessions() || run.SandboxID == "" || !run.lost() || keptWhole(run) {
+	if !c.capturing() || run.SandboxID == "" || !run.lost() || keptWhole(run) {
 		return false
 	}
 	return run.Lost == nil || run.Lost.Cause.leavesBox()
 }
 
 // capturesStop reports whether a stopped run's read takes its session: a
-// coordinator that keeps sessions, and a job that started in a box.
+// company that keeps sessions ([Coordinator.capturing]), and a job that started
+// in a box.
 func (c *Coordinator) capturesStop(run PendingRun) bool {
-	return c.keepsSessions() && run.SandboxID != "" && run.CommandID != ""
+	return c.capturing() && run.SandboxID != "" && run.CommandID != ""
 }
 
 // keepsSessions reports whether this coordinator records on an executor log: an
-// engine's, never a test's built without one.
+// engine's, never a test's built without one. It is the WIRING, which every
+// turn's end needs whatever the company says; whether a session is worth
+// preparing to keep is [Coordinator.capturing].
 func (c *Coordinator) keepsSessions() bool { return c.sessions != nil && c.keep != nil }
+
+// capturing reports whether a capture is worth PREPARING: a coordinator that
+// records on an executor log, of a company that keeps sessions as this node's
+// revision says ([SessionKeep.Keeps]). With the switch off, a launch seals
+// nothing for a scrub no capture would make, a loss asks no other node's host
+// to read a box for a take that would keep nothing — holding the seat's mail
+// for the minutes a silent host costs — and a stop reads its run's spend on
+// the frame that decided it, as it did before sessions were kept. The take
+// itself keeps nothing until the fleet's revision says so
+// ([SessionKeep.Policy]).
+func (c *Coordinator) capturing() bool { return c.keepsSessions() && c.keep.Keeps() }
 
 // keptWhole reports whether run's row already holds a capture of its current
 // job taken once the job had ended, whatever came of it: nothing since has
@@ -908,11 +974,28 @@ func nextCaptureSeq(run PendingRun) int64 {
 	return 1
 }
 
+// maxScrubBytes bounds what one capture scrubs out by value, in all: what its
+// launch handed the box ([MaxHandedBytes]) and its seeded logins read again, in
+// the box and on the host ([Coordinator.scrubValues]).
+//
+// FOUR TIMES WHAT A LAUNCH MAY HAND: a launch at its bound, and every login it
+// was seeded with read again twice — a login document is a kibibyte or two —
+// still fits with room to spare, and the scrub, which holds every value whole
+// in one replacer, costs the host a few mebibytes at the most. The bound is
+// what the box's own code cannot move: it can write its login file (its
+// harness refreshes the file there), and a file of millions of short strings,
+// each a value of the scrub, built a replacer of a gibibyte on the engine
+// host before a byte of the session was read. A capture past it is refused.
+const maxScrubBytes = 4 * MaxHandedBytes
+
 // scrubValues is every value a capture of run's box scrubs out by value: what
 // its launch handed the box ([PendingRun.Handed]), and its seeded logins as
 // they are NOW, in the box and on the host, since a refresh mints values the
 // launch never saw. [ErrHandedUnknown] where they cannot be known — see
-// handed.go — which refuses the capture rather than scrub less.
+// handed.go — which refuses the capture rather than scrub less; and refused
+// too past its bounds — a login read again larger than a whole launch may hand
+// ([MaxHandedBytes]), or values past [maxScrubBytes] in all — since the box's
+// code can write its login and the scrub holds every value whole.
 func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandbox) ([]string, error) {
 	if run.Handed == "" {
 		return nil, fmt.Errorf("%w: the run's record keeps none for its job, so its session cannot be "+
@@ -933,6 +1016,12 @@ func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandb
 			return nil, fmt.Errorf("%w: the login the box was seeded with at %s could not be read "+
 				"again in the box: %w", ErrHandedUnknown, rel, err)
 		}
+		if len(inBox) > MaxHandedBytes {
+			return nil, fmt.Errorf("the login the box was seeded with at %s is %d bytes in the box now, "+
+				"past the %d a whole launch may hand its box; a login document is a few kibibytes, so "+
+				"the box's own code wrote it, and the session is not scrubbed of what it holds",
+				rel, len(inBox), MaxHandedBytes)
+		}
 		values = append(values, loginValuesOf(inBox)...)
 		onHost, err := os.ReadFile(handed.Logins[rel]) //nolint:gosec // the entry's own login, at the path its harness keeps it
 		switch {
@@ -944,7 +1033,16 @@ func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandb
 			values = append(values, loginValuesOf(onHost)...)
 		}
 	}
-	return dedupe(values), nil
+	values = dedupe(values)
+	total := 0
+	for _, v := range values {
+		total += len(v)
+	}
+	if total > maxScrubBytes {
+		return nil, fmt.Errorf("the values the session would be scrubbed of are %d bytes in all, past "+
+			"the %d a capture holds for its scrub, so it is not kept", total, maxScrubBytes)
+	}
+	return values, nil
 }
 
 // loginValuesOf is [loginValues] of a login read again, nothing for an empty
@@ -957,13 +1055,15 @@ func loginValuesOf(raw []byte) []string {
 }
 
 // refuseUnplaced stamps a capture refused before it held a place — the session
-// could not be read, or the policy or what the box was handed not known — so a
-// later launch, and the turn's end, know the launch's latest attempt failed
-// rather than reading an older capture as its latest.
+// could not be read, or the policy or what the box was handed not known — so
+// the turn's end, and whatever reads the row's newest capture, know the
+// launch's latest attempt failed rather than reading an older capture as its
+// latest.
 //
-// UNDER A CONTEXT OF ITS OWN ([detached]): the take's budget may be what ended
-// it, and the stamp is what tells a later launch so.
-func (c *Coordinator) refuseUnplaced(ctx context.Context, run, current PendingRun,
+// UNDER A CONTEXT OF ITS OWN, by by at the latest, asked again while the store
+// does not answer ([Coordinator.stampSettled]): the take's budget may be what
+// ended it, and the stamp is what says so.
+func (c *Coordinator) refuseUnplaced(ctx context.Context, by time.Time, run, current PendingRun,
 	at capturePoint, why string) *SessionKept {
 
 	last := current.LastBridgeSeq()
@@ -973,20 +1073,21 @@ func (c *Coordinator) refuseUnplaced(ctx context.Context, run, current PendingRu
 		NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC()}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason)
-	c.stampSettled(ctx, run.TurnID, stamp)
+	c.stampSettled(ctx, by, run.TurnID, stamp)
 	return stamp.kept()
 }
 
 // finishCapture stamps how a capture came out and reports it.
 //
-// UNDER A CONTEXT OF ITS OWN, asked again while the store does not answer
-// ([Coordinator.stampSettled]): the capture's budget may be what ended it, and
-// the stamp is what tells a later launch so.
-func (c *Coordinator) finishCapture(ctx context.Context, run PendingRun, stamp SessionCapture,
+// UNDER A CONTEXT OF ITS OWN, by by at the latest where a take is still
+// stamping it ([stampContext]; zero off the read), asked again while the store
+// does not answer ([Coordinator.stampSettled]): the capture's budget may be
+// what ended it, and the stamp is what says so.
+func (c *Coordinator) finishCapture(ctx context.Context, by time.Time, run PendingRun, stamp SessionCapture,
 	state CaptureState, why string) *SessionKept {
 
 	stamp.State, stamp.Reason = state, redact.Secrets(why)
-	c.stampSettled(ctx, run.TurnID, stamp)
+	c.stampSettled(ctx, by, run.TurnID, stamp)
 	switch state {
 	case CaptureLanded:
 		log.InfoContext(ctx, "executor_session_kept", "turn_id", run.TurnID, "agent", run.AgentHandle,
@@ -1003,16 +1104,18 @@ func (c *Coordinator) finishCapture(ctx context.Context, run PendingRun, stamp S
 // reserveCapture reserves a capture's place on its run's row — its stamp,
 // begun ([PendingStore.StampCapture]) — asked again while the coordination
 // store does not answer, spaced by a doubling wait, within one record's budget
-// and under a context of its own, as [Coordinator.stampSettled] asks an
-// outcome: false, with no error, where another read of the same job took the
-// place first.
+// and under a context of its own, never past by, as [Coordinator.stampSettled]
+// asks an outcome: false, with no error, where another read of the same job
+// took the place first.
 //
 // ASKED AGAIN SO A READ LEAVES A STAMP OF WHAT IT TOOK wherever the store lets
 // it: a turn's newest capture is known only by its stamp, and its end tells the
 // log the turn's newest capture where it was not kept ([unkeptOf]). A place the
 // store would not take at all is a capture never made, which the take abandons.
-func (c *Coordinator) reserveCapture(ctx context.Context, turnID string, stamp SessionCapture) (bool, error) {
-	stampCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.recordBudget)
+func (c *Coordinator) reserveCapture(ctx context.Context, by time.Time, turnID string,
+	stamp SessionCapture) (bool, error) {
+
+	stampCtx, cancel := c.settleContext(ctx, by)
 	defer cancel()
 	for attempt := 1; ; attempt++ {
 		took, err := c.pending.StampCapture(stampCtx, turnID, stamp)
@@ -1032,7 +1135,8 @@ func (c *Coordinator) reserveCapture(ctx context.Context, turnID string, stamp S
 // stampSettled stamps a capture's outcome on its run's row, asked again while
 // the coordination store does not answer, spaced by a doubling wait, within
 // one record's budget ([sessionRecordBudget]) and under a context of its own,
-// which outlives the caller's: the capture's budget may be what ended it.
+// which outlives the caller's: the capture's budget may be what ended it. Never
+// past by, where a take is still stamping it ([Coordinator.settleContext]).
 //
 // ASKED AGAIN BECAUSE A STAMP LEFT BEGUN IS READ AS A KEEP STILL UNDER WAY for
 // as long as a capture can take ([SessionCaptureBudget], twenty minutes and
@@ -1040,8 +1144,8 @@ func (c *Coordinator) reserveCapture(ctx context.Context, turnID string, stamp S
 // that settled as one it cannot continue. Once the record's budget is spent
 // the store's outage is its own alarm's, and the stamp ages out as never
 // finished.
-func (c *Coordinator) stampSettled(ctx context.Context, turnID string, stamp SessionCapture) {
-	stampCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.recordBudget)
+func (c *Coordinator) stampSettled(ctx context.Context, by time.Time, turnID string, stamp SessionCapture) {
+	stampCtx, cancel := c.settleContext(ctx, by)
 	defer cancel()
 	for attempt := 1; ; attempt++ {
 		_, err := c.pending.StampCapture(stampCtx, turnID, stamp)
@@ -1058,6 +1162,23 @@ func (c *Coordinator) stampSettled(ctx context.Context, turnID string, stamp Ses
 			return
 		case <-wait.C:
 		}
+	}
+}
+
+// settleContext is the context a stamp asked again is made under: one of its
+// own, which outlives the caller's, within one record's budget — and never past
+// by, where the read a take is part of needs the rest of its time for the box's
+// pause, as [stampContext] bounds a take's single record. by zero, a stamp made
+// off the read, is bounded by the record's budget alone.
+func (c *Coordinator) settleContext(ctx context.Context, by time.Time) (context.Context, context.CancelFunc) {
+	settle, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.recordBudget)
+	if by.IsZero() {
+		return settle, cancel
+	}
+	bounded, cancelBounded := context.WithDeadline(settle, by)
+	return bounded, func() {
+		cancelBounded()
+		cancel()
 	}
 }
 
@@ -1173,7 +1294,7 @@ func (c *Coordinator) settleCapture(ctx context.Context, run PendingRun, last Se
 		last.State, last.Reason = c.recordCapture(ctx, run.AgentHandle, run.TurnID, run.ConversationKey,
 			run.WorkKey, last)
 	}
-	c.stampSettled(ctx, run.TurnID, last)
+	c.stampSettled(ctx, time.Time{}, run.TurnID, last)
 	return last
 }
 
@@ -1271,26 +1392,34 @@ func turnEndOf(run PendingRun, ending executordomain.Ending) TurnEnd {
 // OweEnd records on the turn's run row how the turn ended
 // ([PendingStore.OweEnd]), for the run's ending to record on the executor log
 // before it deletes the row ([Coordinator.finishEnding]) — the path every end
-// takes whose turn still has a row. Answers whether the row now owes it: false
-// where the turn has no row, which the caller records itself
-// ([Coordinator.EndTurn]).
+// takes whose turn still has a row. Answers whether the row now owes it, or
+// has recorded the turn's end already ([PendingRun.EndRecorded]): false where
+// the turn has no row, which the caller records itself ([Coordinator.EndTurn]).
 //
 // DECIDED ONCE: a turn that owes an end already keeps it, and this one is
 // dropped, which is what lets two paths that end one turn end it once.
+//
+// UNDER A CONTEXT OF ITS OWN ([detached]): a frame that ends a turn is often
+// one a drain is cancelling, and an end that frame could not owe was recorded
+// at once instead — before the turn's captures settled, and without what they
+// came to.
 func (c *Coordinator) OweEnd(ctx context.Context, turnID string, ending executordomain.Ending) (bool, error) {
 	raw, err := json.Marshal(ending)
 	if err != nil {
 		return false, fmt.Errorf("sandbox: encoding the end of turn %s: %w", turnID, err)
 	}
+	ctx, cancel := detached(ctx)
+	defer cancel()
 	owing, _, err := c.pending.OweEnd(ctx, turnID, raw)
 	if err != nil {
 		return false, fmt.Errorf("sandbox: recording the end turn %s owes: %w", turnID, err)
 	}
-	return len(owing.OwedEnd) > 0, nil
+	return len(owing.OwedEnd) > 0 || owing.EndRecorded, nil
 }
 
 // oweEnd is [Coordinator.OweEnd] for an ending's own step: the row as it stands
-// after the write, owing the end it decided or one decided before it.
+// after the write, owing the end it decided or one decided before it, or
+// having recorded one already.
 func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executordomain.Ending) (PendingRun, error) {
 	raw, err := json.Marshal(ending)
 	if err != nil {
@@ -1300,7 +1429,7 @@ func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executo
 	if err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: recording the end turn %s owes: %w", run.TurnID, err)
 	}
-	if len(owing.OwedEnd) == 0 {
+	if len(owing.OwedEnd) == 0 && !owing.EndRecorded {
 		// GONE under the step: finished by another attempt at the same
 		// ending, which recorded whatever it owed first.
 		return run, nil
@@ -1308,53 +1437,107 @@ func (c *Coordinator) oweEnd(ctx context.Context, run PendingRun, ending executo
 	return owing, nil
 }
 
+// endKeys are the keys an [executordomain.Ending] this build writes may hold.
+var endKeys = wireKeys(reflect.TypeFor[executordomain.Ending]())
+
 // publishEnd records the end run's row owes on the executor log
-// ([Coordinator.EndTurn]) — after asking again a capture of the turn still
+// ([Coordinator.recordEnd]) — after asking again a capture of the turn still
 // unresolved, and with the turn's newest capture where it was not kept
-// ([unkeptOf]) — and clears it from the row. Returns the row as it stands
-// after, or why the end is still owed.
+// ([unkeptOf]) — and clears it from the row, marking it recorded. Returns the
+// row as it stands after, or why the end is still owed.
+//
+// # An end a newer build owed is left for a node that reads it
+//
+// A rolling upgrade mixes builds, and the seat can move from the node that
+// owed the end to one running this build. An end holding a key this build
+// does not know, or an outcome it does not know, is DEFERRED rather than
+// published: decoded into this build's [executordomain.Ending] and encoded
+// again, the keys it could not read were dropped from the turn's account; and
+// an outcome it does not know, refused by this build's log as malformed, was
+// taken for an end the log will never take and cleared — the turn's end never
+// recorded. Left owed, the ending is kept, the seat's mail waits on it as on any
+// owed end, and a node of the build that wrote it records it, whichever node
+// holds the seat once the upgrade reaches it. Never re-encoded with less, which
+// is the rule every record of the fleet's builds keeps: what a build cannot read
+// is deferred, never dropped.
 func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRun, error) {
 	var ending executordomain.Ending
-	if err := json.Unmarshal(run.OwedEnd, &ending); err != nil {
+	unknown, err := unmarshalCarrying(run.OwedEnd, &ending, endKeys)
+	switch {
+	case err != nil:
 		// AN END NO BUILD COULD HAVE WRITTEN: not one this build can say
 		// anything true with, and kept, it would hold the row for ever.
 		log.ErrorContext(ctx, "executor_turn_end_unreadable", "turn_id", run.TurnID, "error", err.Error(),
 			"detail", "the end the run's record owes does not decode, so it is dropped; the "+
 				"retention duty ends a turn that captured a session as lost")
-	} else {
+	case len(unknown) > 0 || !ending.Outcome.Valid():
+		why := fmt.Sprintf("its outcome %q is not one this build knows", ending.Outcome)
+		if len(unknown) > 0 {
+			why = fmt.Sprintf("it holds %s, which this build does not know",
+				strings.Join(slices.Sorted(maps.Keys(unknown)), ", "))
+		}
+		log.WarnContext(ctx, "executor_turn_end_deferred", "turn_id", run.TurnID, "agent", run.AgentHandle,
+			"detail", "the end the run's record owes was written by a newer build — "+why+" — so it is "+
+				"left owed for a node of that build to record, and the run's ending is kept until one does")
+		return run, fmt.Errorf("sandbox: the end turn %s owes was written by a newer build: %s", run.TurnID, why)
+	default:
 		if newest := run.Capture; newest != nil && newest.State == CaptureUnresolved {
 			c.settleCapture(ctx, run, *newest)
-			if current, found, err := c.pending.Get(ctx, run.TurnID); err == nil && found {
+			if current, found, getErr := c.pending.Get(ctx, run.TurnID); getErr == nil && found {
 				run = current
 			}
 		}
 		ending.Unkept = unkeptOf(run)
-		if err := c.EndTurn(ctx, turnEndOf(run, ending)); err != nil {
-			return run, err
+		if recordErr := c.recordEnd(ctx, turnEndOf(run, ending)); recordErr != nil {
+			return run, recordErr
 		}
 	}
-	if _, err := c.pending.ClearEnd(ctx, run.TurnID, run.OwedEnd); err != nil {
+	if _, clearErr := c.pending.ClearEnd(ctx, run.TurnID, run.OwedEnd); clearErr != nil {
 		return run, fmt.Errorf("sandbox: clearing the end turn %s owed, which the executor log has: %w",
-			run.TurnID, err)
+			run.TurnID, clearErr)
 	}
-	run.OwedEnd = nil
+	run.OwedEnd, run.EndRecorded = nil, true
 	return run, nil
 }
 
-// EndTurn records on the executor log how a turn ended — the account the next
-// turn on its conversation is told beside the session it continues — under the
-// one operation every path that ends the turn derives
-// ([executordomain.EndOpID]), asked again under it while no answer settles it,
-// within [sessionRecordBudget]. Nil once the log has the turn's end — taken
-// now, by an earlier attempt, or refused as one it will never take, which is
-// logged — and why not otherwise, for the caller to keep it and ask again.
+// EndTurn records how a turn ended for a FRAME that found no run row to owe it
+// on ([Coordinator.OweEnd] answered false, or could not be written): a launch
+// the turn's fence refused once its row existed, whose ending deleted the row,
+// or a row the seat's next holder finished.
+//
+// WHERE THE ROW IS THERE AFTER ALL — an owe that failed on a store that answers
+// again, a row read gone that was not — the end is owed on it, and the run's
+// ending records it once the turn's captures settle and with what they came
+// to ([Coordinator.publishEnd]). Only a row that is gone, which took its
+// capture stamps with it, has its end recorded now, as it stands: best effort,
+// and an end the log has already is the answer.
+//
+// A coordinator with no executor log (a test's) writes nothing.
+func (c *Coordinator) EndTurn(ctx context.Context, end TurnEnd) error {
+	if !c.keepsSessions() {
+		return nil
+	}
+	if _, found, getErr := c.pending.Get(ctx, end.TurnID); getErr == nil && found {
+		if owed, oweErr := c.OweEnd(ctx, end.TurnID, end.Ending); oweErr == nil && owed {
+			return nil
+		}
+	}
+	return c.recordEnd(ctx, end)
+}
+
+// recordEnd records on the executor log how a turn ended — the account the
+// turn's row of the log keeps beside the session it kept — under the one
+// operation every path that ends the turn derives ([executordomain.EndOpID]),
+// asked again under it while no answer settles it, within
+// [sessionRecordBudget]. Nil once the log has the turn's end — taken now, by an
+// earlier attempt, or refused as one it will never take, which is logged — and
+// why not otherwise, for the caller to keep it and ask again.
 //
 // THE RUN'S ENDING CALLS IT for every turn that has a row
 // ([Coordinator.publishEnd]), after the turn's captures settle; a frame whose
-// turn has no row left calls it itself. A coordinator with no executor log (a
-// test's) writes nothing.
-func (c *Coordinator) EndTurn(ctx context.Context, end TurnEnd) error {
-	if c.sessions == nil || c.keep == nil {
+// turn has no row left reaches it through [Coordinator.EndTurn].
+func (c *Coordinator) recordEnd(ctx context.Context, end TurnEnd) error {
+	if !c.keepsSessions() {
 		return nil
 	}
 	end.Ending.Failure = redact.Secrets(end.Ending.Failure)
@@ -1385,7 +1568,7 @@ func (c *Coordinator) EndTurn(ctx context.Context, end TurnEnd) error {
 			ended = true
 			return true, nil
 		}
-		lastErr = fmt.Errorf("outcome %s: %v", res.Outcome, err)
+		lastErr = fmt.Errorf("outcome %s: %w", res.Outcome, err)
 		return false, err
 	})
 	if !ended {

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -280,6 +281,14 @@ type Spend struct {
 	Reviews    int
 	Unaccepted int
 
+	// Tools is this segment's calls to MCP servers' tools, per (server,
+	// tool): every completed phase's and every delegated worker's, an
+	// executor run's as its bridge recorded them. Like Reviews, it is what
+	// the record that ends the turn states ([types.TurnTally.Tools]), this
+	// segment's share of it, counted here for Reviews' reason: off the
+	// executions themselves, as each phase completes.
+	Tools []types.ToolTally
+
 	// Review is the notes of the NEWEST review that sent the work back —
 	// what the reviewer asked for on the pass that followed. The LAST one,
 	// because a turn sent back twice was answered on the second request;
@@ -321,6 +330,10 @@ func (s *Spend) recordWorker(mu *sync.Mutex, res subagent.Result) {
 	s.Workers++
 	s.WorkerInput += res.InputTokens
 	s.WorkerOutput += res.OutputTokens
+	// ITS CALLS ARE THE TURN'S: a worker reaches its seat's MCP servers
+	// with the seat's grant, so a server's count without them would miss
+	// every call a fan-out made.
+	s.Tools = types.SumToolTallies(s.Tools, toolTallies(res.Executions))
 }
 
 // recordJudge folds one extension judgement into the turn's tally.
@@ -377,6 +390,7 @@ func (s *Spend) record(rec phaseRecord) {
 		s.Response = rec.Result.Text
 	}
 	s.ToolExecutions = append(s.ToolExecutions, toolExecutions(rec.Result.Executions)...)
+	s.Tools = types.SumToolTallies(s.Tools, toolTallies(rec.Result.Executions))
 	if rec.Phase == phase.Execute {
 		names := toolNames(rec.Result.Executions)
 		// REPLACED, not appended — see the field's own note.
@@ -386,6 +400,42 @@ func (s *Spend) record(rec phaseRecord) {
 			s.Outcome = rec.Decision
 		}
 	}
+}
+
+// toolTallies counts a phase's calls to MCP servers' tools, per (server,
+// tool), each in exactly one outcome ([types.ToolTally]).
+//
+// BY WHOSE TOOL THE CALL NAMED ([toolloop.Execution.Source]), not by who
+// answered it, so a call the engine refused before any tool ran is counted
+// against the server it was for, in the outcome [mcp.OutcomeOf] files it in.
+// A builtin's call, and a name nothing registered, is no server's and is not
+// counted.
+func toolTallies(execs []toolloop.Execution) []types.ToolTally {
+	var out []types.ToolTally
+	for _, ex := range execs {
+		server, ok := mcp.OriginServer(ex.Source)
+		if !ok {
+			continue
+		}
+		t := types.ToolTally{Server: server, Tool: ex.Name, Calls: 1}
+		switch mcp.OutcomeOf(ex.Origin, ex.Refusal, ex.Failed) {
+		case mcp.CallRefused:
+			t.Refused = 1
+		case mcp.CallUnavailable:
+			t.Unavailable = 1
+		case mcp.CallFailed:
+			t.Failed = 1
+		case mcp.CallAnswered:
+		}
+		// ONLY WHAT WAS MEASURED, for the wire row's reason
+		// ([toolExecutions]): an untimed call adds no time and no instant.
+		if !ex.StartedAt.IsZero() {
+			t.TotalMS = ex.Duration.Milliseconds()
+			t.LastAt = ex.StartedAt.UTC()
+		}
+		out = append(out, t)
+	}
+	return types.SumToolTallies(out)
 }
 
 // toolNames is the called tools in order, including repeats.
@@ -1301,6 +1351,16 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 		}
 		if ex.Server != "" {
 			row["server"] = ex.Server
+		}
+		// WHOSE TOOL IT WAS, answered or refused, and the class the engine
+		// gave a failure it classified: the two facts a server's refused
+		// and unavailable calls are read by (types.ToolExecution). Absent
+		// rather than empty where there is neither.
+		if ex.Source != "" {
+			row["source"] = ex.Source
+		}
+		if ex.Refusal != "" {
+			row["refusal"] = string(ex.Refusal)
 		}
 		if ex.Failed {
 			// Rendered in place of the result when the call failed, so a

@@ -18,7 +18,7 @@
  *     row: the user block IS the reader, and opens it from its name and menu.
  *
  * Settings is what the ENGINE runs, and nothing the company decides: a column
- * of four groups, Runtime (Models, MCP Tools, Secrets, Limits), Spend
+ * of four groups, Runtime (Models, MCP & tools, Secrets, Limits), Spend
  * (the readings, never the ceilings), Access (People, Service accounts, API
  * tokens, Sign-in policy, Audit log) and Engine (Nodes, Configuration,
  * Backups & retention, File storage). It lists only what lives in it: a row
@@ -1009,16 +1009,16 @@ export const WORKSPACES: WorkspaceRow[] = [
       },
       {
         key: "mcp-tools",
-        label: "MCP Tools",
+        label: "MCP & tools",
         icon: "wrench",
         path: ["settings", "mcp-tools"],
         hint: "The MCP servers the engine runs and every tool its agents call",
-        keywords: ["mcp", "tools", "mcp servers", "agent tools"],
+        keywords: ["mcp", "tools", "mcp servers", "agent tools", "built-in tools"],
         group: "Runtime",
-        // ADMIN'S: the page is where MCP servers are added and their
-        // templates read, and the overview's own `tools` push already says
-        // which tools each seat has on its page.
-        grants: ["admin"],
+        // EVERY MEMBER'S: a server's condition and its tools are what tell a
+        // member why an agent lacks a tool. The member's reading names no
+        // launch line, header, failure sentence or call, and every gesture on
+        // the page is an admin's (`mcp_servers_status`' two readings).
       },
       {
         key: "secrets",
@@ -1421,6 +1421,18 @@ export function sectionOpen(
 ): boolean {
   if (section.personal) return true;
   return holdsAny(held, section.grants);
+}
+
+/**
+ * Whether a reader holding `held` may open the Settings section `key`, by
+ * [sectionOpen]: what asks a guarded answer outside its own screen (a figure in
+ * the Settings column, the engine panel's alarm names, the Inbox's MCP alarms)
+ * asks only a reader the section opens for, since every one of those answers is
+ * the section's and a refusal on a timer is a refusal nobody reads.
+ */
+export function settingsSectionOpen(key: string, held: readonly string[]): boolean {
+  const section = workspaceRow("settings")?.sections.find((s) => s.key === key);
+  return section !== undefined && sectionOpen(section, held);
 }
 
 /**

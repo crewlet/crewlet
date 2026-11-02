@@ -302,6 +302,13 @@ type Turn struct {
 	// Trigger is what woke it, from the first phase record.
 	Trigger string `json:"trigger,omitempty"`
 
+	// Origin is WHAT STARTED THE TURN: the object its first trigger named
+	// (a chat message, a work item, a schedule, a colleague's ask) and why
+	// it reached the seat ([types.TriggerOrigin]). The EARLIEST record that
+	// names one decides, so a turn a person's answer resumed later is still
+	// filed under what started it. Absent for a trigger that names none.
+	Origin *types.TriggerOrigin `json:"origin,omitempty"`
+
 	// WorkItem is the one work item the turn is charged to, read off its
 	// completion record, and absent for a turn on nothing — including one
 	// still running, since a sole write names its item only at the end.
@@ -348,6 +355,24 @@ type TurnQuery struct {
 	// and every record it has is folded, so the row is the same row the
 	// unfiltered list shows. See schema/0033 for the column and its index.
 	WorkItem string
+
+	// Origin narrows to the turns an object started or resumed, by its
+	// identity `<kind>:<id>` ([OriginRef]): "which turn did this message
+	// start". Every object a turn's start named counts, each message a
+	// coalesced trigger took in included. ON THE TURN, like WorkItem, read
+	// off crewlet_turn_origins. See node/0059.
+	Origin string
+
+	// Server narrows to the turns that called one MCP server's tools, and
+	// Tool, beside it, to the turns that called that one tool: ON THE TURN,
+	// like Model, off the tally its ending record states
+	// (types.TurnTally.Tools), which counts every call its segments, its
+	// workers and its executor run made, a refused one included. So a turn
+	// is listed under a tool once it has ended; a turn still running or
+	// parked has stated no calls yet. Tool without Server names no tool,
+	// since two servers can offer one name.
+	Server string
+	Tool   string
 
 	// Failed narrows to turns that carried a failure, or to those that did
 	// not. Nil is both, which is not the same as false.
@@ -615,6 +640,33 @@ type TurnPartial struct {
 	Summary  string `json:"summary,omitempty"`
 	WorkItem string `json:"work_item,omitempty"`
 	Trigger  string `json:"trigger,omitempty"`
+
+	// Origin is the EARLIEST record's origin, as the SQL takes it: the
+	// minimum of [originKey]'s text, whose leading instant makes a minimum
+	// the earliest, across logs as within one. [TurnPartial.Turn] decodes it.
+	Origin string `json:"origin,omitempty"`
+}
+
+// originSep separates the parts of an origin's ranked text: the unit
+// separator, which no id, kind or reason this engine mints carries.
+const originSep = "\x1f"
+
+// originKey is the SQL that ranks a row's origin by when it was recorded:
+// the instant, zero-padded so text order is time order, then the origin and
+// its reason, or NULL on a row that names none.
+const originKey = "CASE WHEN COALESCE(json_extract(tags, '$.trigger_origin'), '') <> '' " +
+	"THEN printf('%020d', event_time) || char(31) || json_extract(tags, '$.trigger_origin') " +
+	"|| char(31) || COALESCE(json_extract(tags, '$.trigger_reason'), '') END"
+
+// originOf decodes a partial's ranked origin text, or nil: the tags it was
+// ranked from, read by the one rule a record's tags are ([OriginOfTags]).
+func originOf(ranked string) *types.TriggerOrigin {
+	parts := strings.SplitN(ranked, originSep, 3)
+	if len(parts) != 3 {
+		return nil
+	}
+	return OriginOfTags(map[string]string{"trigger_origin": parts[1],
+		"trigger_reason": parts[2]})
 }
 
 // Turn finishes a partial into the row a listing serves.
@@ -632,6 +684,7 @@ func (p TurnPartial) Turn() Turn {
 		CacheRead:   p.CacheRead, CacheWrite: p.CacheWrite,
 		Models:  strings.Join(p.Models, ","),
 		Summary: p.Summary, Trigger: p.Trigger,
+		Origin: originOf(p.Origin),
 	}
 	t.Complete, t.Parked = segmentState(p.LastEnded, p.LastParked)
 	if p.WorkItem != "" {
@@ -696,6 +749,11 @@ func CombineTurnPartials(parts ...TurnPartial) TurnPartial {
 		out.Summary = max(out.Summary, p.Summary)
 		out.WorkItem = max(out.WorkItem, p.WorkItem)
 		out.Trigger = max(out.Trigger, p.Trigger)
+		// THE EARLIEST, which the ranked text's leading instant makes the
+		// minimum of the ones that name an origin.
+		if p.Origin != "" && (out.Origin == "" || p.Origin < out.Origin) {
+			out.Origin = p.Origin
+		}
 	}
 	return out
 }
@@ -906,6 +964,7 @@ func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, p
 			failed            int
 			models, summary   sql.NullString
 			item, trigger     sql.NullString
+			origin            sql.NullString
 			failure, kind     sql.NullString
 			in, outTok, total sql.NullInt64
 			cacheR, cacheW    sql.NullInt64
@@ -916,7 +975,7 @@ func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, p
 		if err := rows.Scan(&p.TurnID, &workKey, &agentID, &role, &started, &ended,
 			&p.Phases, &p.Iterations, &failed, &in, &outTok, &total,
 			&cacheR, &cacheW, &models,
-			&ended1, &parked1, &duration, &summary, &item, &trigger,
+			&ended1, &parked1, &duration, &summary, &item, &trigger, &origin,
 			&failure, &kind, &stopped); err != nil {
 
 			return nil, fmt.Errorf("store: scan a turn: %w", err)
@@ -935,7 +994,7 @@ func turnPartials(ctx context.Context, db querier, q TurnQuery, read turnRead, p
 		if models.String != "" {
 			p.Models = strings.Split(models.String, ",")
 		}
-		p.Summary, p.Trigger = summary.String, trigger.String
+		p.Summary, p.Trigger, p.Origin = summary.String, trigger.String, origin.String
 		p.WorkItem = item.String
 		p.Error, p.ErrorKind = failure.String, kind.String
 		out = append(out, p)
@@ -1077,6 +1136,7 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, 
 		       MAX(CASE WHEN event_type = ?
 		                THEN json_extract(payload, '$.work_item') END),
 		       MAX(COALESCE(json_extract(tags, '$.trigger'), '')),
+		       MIN(` + originKey + `),
 		       ` + failureText(failedExpr, errorText) + `,
 		       ` + failureText(failedExpr, kindText) + `,
 		       MAX(CASE WHEN event_type = ? AND ` + stoppedExpr + ` = 1 THEN 1 ELSE 0 END)
@@ -1154,6 +1214,31 @@ func (q TurnQuery) turnWhere(floor time.Time, read turnRead) ([]string, []any) {
 			"turn_id IN (SELECT turn_id FROM crewlet_events "+
 				"WHERE model = ? AND "+inTurnCost+" AND event_time >= ? AND turn_id != '')")
 		args = append(args, q.Model, EncodeTime(floor))
+	}
+	if q.Origin != "" && !shares {
+		// ON THE TURN, for WorkItem's reason: the turn is folded whole,
+		// so the row is the one the unfiltered list shows.
+		where = append(where,
+			"turn_id IN (SELECT turn_id FROM crewlet_turn_origins "+
+				"WHERE origin = ? AND event_time >= ?)")
+		args = append(args, q.Origin, EncodeTime(floor))
+	}
+	if q.Server != "" && !shares {
+		// ON THE TURN, off the record that ENDS it, for the reason its
+		// tally is that record's: the turn counted its own calls, wherever
+		// its phase records were kept. The ending's row is sought by the
+		// (type, time) index over the window, and only those rows' tallies
+		// are walked.
+		calls := "json_extract(t.value, '$.server') = ?"
+		args = append(args, turnCompleted, EncodeTime(floor), q.Server)
+		if q.Tool != "" {
+			calls += " AND json_extract(t.value, '$.tool') = ?"
+			args = append(args, q.Tool)
+		}
+		where = append(where,
+			"turn_id IN (SELECT e.turn_id FROM crewlet_events AS e, "+
+				"json_each(e.payload, '$.turn.tools') AS t "+
+				"WHERE e.event_type = ? AND e.event_time >= ? AND e.turn_id != '' AND "+calls+")")
 	}
 	if q.WorkItem != "" && !shares {
 		// ON THE TURN, not on the row, for Model's reason and one more:

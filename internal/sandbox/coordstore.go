@@ -207,7 +207,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		prior = PriorBox{
 			SandboxID: existing.SandboxID, Placement: existing.Placement,
 			Harness: existing.Harness, Status: existing.Status,
-			LaunchNode: existing.LaunchNode,
+			LaunchNode: existing.LaunchNode, Handed: existing.Handed,
 		}
 		// And whether the job it replaces asked, which the reset clears
 		// below and the round's cut is decided by.
@@ -242,7 +242,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		}
 		existing.Lost = nil
 		// AND THE PREVIOUS JOB'S COMMAND AND SESSION ARE NOT THIS JOB'S, nor
-		// what its box was handed.
+		// what its box was handed: the launch writes its own, carrying the
+		// previous job's forward where it continues in the same box
+		// ([PriorBox.Handed]).
 		existing.CommandID, existing.SessionID, existing.Handed = "", "", ""
 		// A hold was on the previous job's resume, which is over.
 		existing.HeldFor, existing.HeldUntil = "", time.Time{}
@@ -392,7 +394,7 @@ func (s *CoordStore) OweEnd(ctx context.Context, turnID string, ending json.RawM
 	var seen PendingRun
 	written, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		seen = *run
-		if len(run.OwedEnd) > 0 {
+		if len(run.OwedEnd) > 0 || run.EndRecorded {
 			return false
 		}
 		run.OwedEnd = bytes.Clone(ending)
@@ -404,14 +406,14 @@ func (s *CoordStore) OweEnd(ctx context.Context, turnID string, ending json.RawM
 	return seen, false, nil
 }
 
-// ClearEnd removes the end a row owes once the log has taken it. See the
-// contract on [PendingStore].
+// ClearEnd removes the end a row owes once the log has taken it, and marks it
+// recorded in the same write. See the contract on [PendingStore].
 func (s *CoordStore) ClearEnd(ctx context.Context, turnID string, owed json.RawMessage) (bool, error) {
 	_, cleared, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		if len(run.OwedEnd) == 0 || !bytes.Equal(run.OwedEnd, owed) {
 			return false
 		}
-		run.OwedEnd = nil
+		run.OwedEnd, run.EndRecorded = nil, true
 		return true
 	})
 	return cleared, err
@@ -513,6 +515,12 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			run.Launch.CollectFailures++
 			if run.Launch.CollectFailingSince.IsZero() {
 				run.Launch.CollectFailingSince = at.UTC()
+			}
+		}
+		if at := release.ResumeFailedAt; !at.IsZero() {
+			run.Launch.ResumeFailures++
+			if run.Launch.ResumeFailingSince.IsZero() {
+				run.Launch.ResumeFailingSince = at.UTC()
 			}
 		}
 		// THE RUN OF FAILURES ENDS AT A COLLECTION THAT READ THE BOX, and

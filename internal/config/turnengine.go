@@ -211,12 +211,14 @@ type ConversationSession struct {
 	// launch's harness session in the object store (internal/executordomain).
 	//
 	// On by default: the block is deterministic, bounded, and is the only
-	// context a thin-trigger turn gets, and a kept session is what a later
-	// launch continues. Turning it off restores the pre-ledger prompt exactly
-	// and keeps no session — none is captured or stamped — which is what
-	// makes it a safe live kill switch. How each turn ended is still recorded
-	// on the executor log either way: that is the account of the turn, not
-	// its session.
+	// context a thin-trigger turn gets, and each launch's session is kept,
+	// named by its turn's row on the executor log, for a launch that
+	// continues the session to restore. Turning it off restores the
+	// pre-ledger prompt exactly and keeps no session — none is captured or
+	// stamped, and no launch seals what it handed its box for a scrub —
+	// which is what makes it a safe live kill switch. How each turn ended is
+	// still recorded on the executor log either way: that is the account of
+	// the turn, not its session.
 	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Record and replay per-conversation history, and keep each executor launch's harness session (default on; off keeps no session, and still records how each turn ended)."`
 
 	// MaxEntries is what is KEPT per conversation, trimmed at write time.
