@@ -514,6 +514,7 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	r := queries.NewRegistry()
 	src := mcpSources(t, mcpFleet(t))
 	src.Alarms = mcpEvaluation
+	src.MCPListings = fakeListings{}
 	queries.Register(r, src)
 	raw, err := r.Answer(everyGrant(t), "mcp_servers_status", nil)
 	if err != nil {
@@ -530,6 +531,13 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	}
 	holdShape(t, "McpServerNode", cells, false)
 	holdShape(t, "BuiltinGroup", rowsOf(t, body["builtin"]), false)
+	agents := rowsOf(t, body["agents"])
+	holdShape(t, "McpAgentTools", agents, false)
+	var agentServers []map[string]any
+	for _, a := range agents {
+		agentServers = append(agentServers, rowsOf(t, a["servers"])...)
+	}
+	holdShape(t, "McpAgentServer", agentServers, false)
 
 	var refused, shadowed []map[string]any
 	for _, s := range servers {

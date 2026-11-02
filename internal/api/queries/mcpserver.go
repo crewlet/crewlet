@@ -428,12 +428,11 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 		out.Listed = append(out.Listed, MCPServerListing{
 			Node: l.Node, At: l.At, Instances: l.Instances, Tools: l.ToolCount,
 		})
-		out.ToolCount = max(out.ToolCount, l.ToolCount)
 	}
 	if latest := latestIdentified(listings); latest != nil {
 		out.ServerInfo, out.Instructions = latest.Info, latest.Instructions
 	}
-	tools, kept := mergeListedTools(listings)
+	tools, counted, kept := serverTools(listings, entry)
 	schemas, err := s.MCPListings.MCPToolSchemas(ctx, kept)
 	if err != nil {
 		return MCPServerAnswer{}, err
@@ -443,13 +442,9 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 			tools[i].InputSchema, tools[i].OutputSchema = schemaObject(schema.Input), schemaObject(schema.Output)
 		}
 	}
-	out.Tools = tools
-	out.ToolCount = max(out.ToolCount, len(out.Tools))
+	out.Tools, out.ToolCount = tools, counted
 	if entry != nil {
 		out.Baseline = entry.Tools.DefaultLevel()
-		for i := range out.Tools {
-			out.Tools[i].Level, out.Tools[i].Custom = entry.Tools.Level(out.Tools[i].Raw)
-		}
 		out.UnlistedLevels = UnlistedLevels(entry.Tools, out)
 	}
 	if out.Usage, out.Calls, err = s.mcpActivity(ctx, name); err != nil {
@@ -564,6 +559,33 @@ func latestIdentified(listings []coord.MCPListing) *coord.MCPListing {
 		}
 	}
 	return latest
+}
+
+// serverTools is every tool one server's live listings name, each once at the
+// level it runs at, and how many tools they count in all, never fewer than are
+// named (a node names at most [coord.MaxMCPListedTools]); kept are the digests
+// whose schemas are stored ([mergeListedTools]).
+//
+// THE ONE READING OF A SERVER'S TOOLS, which its page lists and each agent's
+// count is taken from ([Sources.mcpAgents]), so the two never disagree on which
+// tools a server offers. The entry's own decision is laid over what the nodes
+// did, each tool at the level the entry gives it by the server's own name
+// ([config.MCPToolPolicy.Level]); a server no entry declares (nil) keeps what
+// the nodes did.
+func serverTools(listings []coord.MCPListing, entry *config.MCPServer) (tools []MCPToolView, counted int,
+	kept []string,
+) {
+	tools, kept = mergeListedTools(listings)
+	if entry != nil {
+		for i := range tools {
+			tools[i].Level, tools[i].Custom = entry.Tools.Level(tools[i].Raw)
+		}
+	}
+	counted = len(tools)
+	for _, l := range listings {
+		counted = max(counted, l.ToolCount)
+	}
+	return tools, counted, kept
 }
 
 // mergeListedTools is every tool the listings name, each once by name, sorted:
