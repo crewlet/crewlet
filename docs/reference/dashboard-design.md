@@ -1266,7 +1266,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/artifacts/new` | Not a page: an earlier link, rewritten in place to its kind's page when it carries `kind=`, and to the gallery when it does not | `kind=` (read once, then dropped) |
 | `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back (to the folder it is kept in, named, where the reader can see it), the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say, and the Folder it is kept in, a link where the reader can see it, with Move…), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
 | `#/settings/models` · `#/settings/models/{id}` | **Settings › Models**, the column's landing and the Settings row's address, open to every member: every model with its condition, how it signs in and what it is used for (`llm_entries`), the model alarms and, as the *By job* lens (`?view=jobs`), every seat's model for each category of work; one model's page with its sign-in, sit-out, usage and uses. Every change is an admin's: the wizard (`?flow=add`, or `?flow=edit&step=…` on a model; `&add=` lists the uses it opens with added, each `category:handle` or `assistant`), and the test, retry, device sign-in and removal flows (`?flow=`). `{id}` is the model's key, the name a seat's `llm:` writes | |
-| `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP Tools**, the engine's runtime beside the models, every MCP server with what each node did with it, and every tool a seat can call, by origin *(needs Admin access, like every company setting: it is where MCP servers are added and their templates read; which tools a seat has is on that seat's page, from the overview's `tools` push)*. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
+| `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP & tools**, the engine's runtime beside the models: every MCP server with its condition, its alarms, who it reaches and what last went wrong, a server's own page, and the engine's built-in tools by group *(every member's, in a reading that names no launch line, header, failure sentence or call; every action is an admin's)*. ONE tail segment is a tool, opened where the page shows it, and two are a server's page, discriminated on LENGTH, because a tool name is a third party's string | `view=` · `tab=` · `flow=` (`add`, `restart`, `disable`, `remove`, with `server=` and `seat=`) · `q=` · `cap=` · `group=` · `peek=` |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
 | `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds on a first turn, delegation depth), delegation, notifications and a scheduled turn's timeout, one read-only settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it *(needs Admin access)*. Read-only | |
 | `#/settings/spend` | **Settings › Token spend**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across Settings' sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
@@ -4168,7 +4168,7 @@ fit that shape, so each is a tab under the field:
 
 | Scope | Searches | Sigil |
 |---|---|---|
-| **All** | screens and **Switch project…**, a pasted event / trace / turn id, three projects ranked as the switcher ranks them, three tasks and three pages (two of each under an answer), agents, people and teams, the tools the company connected (never the engine's own agent tools, which Settings › MCP Tools lists), **Find “…” in artifacts**, which carries the term into Artifacts, the three actions, the answer's remaining sources, and **Search all work for “…”**, the full ranked search; when nothing is typed, recents, then **Running now**: a row per seat working as the palette opened, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link | |
+| **All** | screens and **Switch project…**, a pasted event / trace / turn id, three projects ranked as the switcher ranks them, three tasks and three pages (two of each under an answer), agents, people and teams, the tools the company connected (never the engine's own agent tools, which Settings › MCP & tools lists; a connected tool opens on its server's Tools tab), **Find “…” in artifacts**, which carries the term into Artifacts, the three actions, the answer's remaining sources, and **Search all work for “…”**, the full ranked search; when nothing is typed, recents, then **Running now**: a row per seat working as the palette opened, oldest first, its badge, its name and what it is doing ("Executing ENG-412"), each going to the turn's watch link | |
 | **Tasks** | `work_search`, hybrid, eight hits, and a row to the full search screen | `#` |
 | **Pages** | `knowledge`, the company's one knowledge backend | |
 | **Artifacts** | `artifacts` with the term over everything the reader can open, eight hits, each row its kind | |
@@ -8869,55 +8869,87 @@ carrying the managed sentence, and **Connect**, **Finish setup**,
 open: a rotation seals a value the document already names and changes nothing
 in it, which is the break-glass a managed deployment keeps for a person. The
 directory ends at the tools this build serves: every other tool an agent can
-reach is an MCP server, added on Settings › MCP Tools. See [integration
+reach is an MCP server, added on Settings › MCP & tools. See [integration
 reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
 
-**MCP Tools** (`#/settings/mcp-tools`, once Tools & MCP) is admin's, like every engine setting: it is where MCP
-servers are added and their launches read, and which tools a seat has is
-already on that seat's page, from the overview's `tools` push. It is the
-servers first, then the catalogue. **MCP servers** draws
-the engine's `mcp_servers_status`: each server's launch (the command and its
-arguments, or the address — never an `env` value or a header), who it
-**reaches** (every agent seat, *n seats* or *No seat*, from each agent seat's
-`tool_sources` on the pushed org — the engine's own grant), the engine's
-**state** (*Running*, *Partly failing*, *Failing*, *Waiting for credentials*,
-*Not started*, *Not reported*, *Disabled* for a server turned off) and **one chip per live node** with what that
-node started, and under THAT chip the first failure it reported, in secondary
-ink with the seat it was launched for — the chip carries the danger tone and
-names the node, so the reason does not repeat either. A seat's instance held
-back for a credential an integration is still minting is named on the chip
-(*n waiting*) and never toned, since it is no fault, and what it waits for sits
-under the chip as a failure's reason does; the server's page lists it whole
-under *What it waits for*, apart from *Why it failed*. A server with
-`tool_annotations` keys no started instance lists says
-*n tool_annotations keys match no tool* under its
-name, and its page names them whole. The engine puts `tool_sources` on every
-agent seat it pushes, so a shared server reaches every agent seat and a
-per-seat one the seats granted it. The launch
-is one line cut at its end, never broken inside a token. A node whose last
-heartbeat carried no status is named once above the grid and its chips read
-*not reported*, never *none*. The **From MCP servers** tile counts *n of m servers
-running* off the same answer — never the registry's origins, which read *0*
-over a table of failing servers. A server turned off is in neither number:
-nobody expects it to run, and counted it read as one that should. The status names nodes, commands and
-failures, which is one more reason the section is admin's. A row opens the
-**server's page** (`servers/{name}`): its state, transport, instances, reach
-and tool count, the launch whole, the annotation overrides that match no tool,
-and every node's reason as the heartbeat carried it, unclamped — the one place a reason the grid clamps can be read
-without a pointer — above the
-catalogue narrowed to its origin, whose chip is drawn and selected even when
-the server registered nothing. A reader refused the status (or one whose read
-failed) is told the page could not read it — never that no configuration
-carries the server, which only an answer can say. An origin with no tools says so — *docs has
-registered no tools*, with the reason from the engine's state and **Show all
-tools** — rather than *No tool matches “”*, which is kept for a search that
-found nothing. The catalogue's rows are a tool's name, its description and
-what it can do; its origin is a column of words (*Built in*, or the MCP
-server's name) and the filter's chips name it the same way, both drawn only
-where the catalogue holds more than one origin, and the sentence of what its
-hints say, with what nobody advertised, is on the tool's own page.
-**Add an MCP server** is drawn for every reader and
-disabled with the reason for one who cannot change the configuration: a
+**MCP & tools** (`#/settings/mcp-tools`) is every MCP server the company runs
+and the tools the engine runs itself, read from the engine's own answers,
+`mcp_servers_status` and a server's `GET /mcp-servers/{name}`, which every
+member may ask: a member's reading names no launch line, header, failure
+sentence or call, and every action on the page is an admin's. It is kept
+current on a fifteen-second poll while the page is open, when the fleet applies
+a new configuration and when the engine's alarms move. Nothing on the page
+decides a server's state, a tool's risk, a failure's class or an alarm's fix:
+the engine answers each, and the page names it in its words (`words.ts`).
+
+The page names itself in a header (its title, one plain line, and **Add
+server** for an admin, which opens the add form below) and its two views are
+underline tabs under it (`?view=`), drawn as a server's own tabs are:
+**Servers** and **Built-in tools**. **Servers** leads, for an admin, with
+**Needs attention**: one row for each server an MCP alarm stands on (the
+engine's `alarms[].entries[]`), its tone, the server's mark, what is wrong in a
+line and its failure's class or the refused names under it, and the one fix
+the engine names in a quiet button: **Restart** (every instance, or the named
+agent's), **See its sign-in** (the server's Connection tab, where its
+integration's Agents tab is linked) or **See which tools** (its Tools tab).
+The engine's measurement and the remedy open under the row; past three rows
+the rest fold to a summary. A member reads *Read-only. Changes take Admin
+access.* instead. Four figures follow (three for a member): the servers and how
+many are off, how many enabled ones run, the MCP tools and how many are not
+offered, and for an admin how many alarms stand. Then a row per server: its
+mark, title and, for an admin, its host or command (the address whole on hover,
+any credential in it withheld by the engine) or for a member what it is for;
+**Connection** (*Remote* or *Local*, *Company-shared* or *Per agent*);
+**Status** (the engine's state, with *n of m* for a partial one and *n agents*
+for a per-agent one running for several); **Tools** (how many it lists, and how
+many are not offered); **Used by** (the first agent the engine grants it and
+*+n*, from each agent seat's `tool_sources`, every agent on hover); **Last
+error** (the longest-down node's failure in its class's few words, the agent
+and when under it, the engine's sentence on hover for an admin); and, for an
+admin, the server's menu: **Restart**, **Disable** or **Enable**, **Remove**.
+
+A row opens the **server's page** (`servers/{name}`): an object header (its
+mark, title, name, state, connection, tool count and reach) and four tabs
+(`?tab=`). **Overview** says a disabled server is off with **Enable**, the
+server's own alarms, each instance (the agent it runs for or *The company*, its
+node, its state, its tools or what is wrong in a few words, the class's title
+on hover), a line naming any node that did not answer the instance read, when
+it last answered and its last failure, what it reported itself as and its
+protocol, and for an admin the instructions it reports, said not to be the
+agents' (a seat's harness is handed the entry's `description`). **Connection**
+is read only: for an admin the address or the command, then the transport,
+where it runs, its instances, the start and call timeouts with which are the
+default, its tool prefix; how the engine signs in (and an integration's link
+to its Agents tab); and for an admin every header or variable the entry sends,
+by name, with the `${VAR}` it reads or that it is written in the configuration,
+never a value. **Tools** lists the names no agent is offered under them with
+the engine's reason, then every tool the fleet lists with its description, the
+engine's risk (*Read only*, *Writes*, *Destructive*, starred where the server
+declared nothing) and its calls over the week, with a search and the risk's
+chips. **Activity** is the week's calls per tool, every reader's, and for an
+admin the newest calls (when, the agent, the tool, how it ended and how long it
+took, never its arguments or its result) with any data node that did not
+answer. Flows are the address (`?flow=restart`, `disable`, `remove`, with
+`server` and `seat`), so an alarm's fix and a menu item open one dialog.
+**Remove** first asks the engine's dry run what names the server (an agent's
+or a team's `mcp_env`, a box's `sandbox.mcp.servers`) and which stored values
+nothing else reads, holds **Remove server** until the reader clears those in
+the same change, offers each value to delete with it, and states the revision
+of the entry it read; **Disable instead** is beside it.
+
+**Built-in tools** is the engine's own tools as its groups file them: a rail of
+the groups with their counts beside the list (folding into a picker under
+44rem of its own width), a search and the capability chips over it, every
+group a band while none is chosen, and a row per tool with its name, its line,
+what it can do (the engine's risk) and who may call it (its `gate`). The
+filters are the address (`q`, `cap`, `group`). A row opens the tool in the
+drawer (`?peek=tool:<name>`): its description, group, who may call it and its
+arguments. A tool's own address (`{tool}`, ONE tail segment, told from a
+server's page by LENGTH since a tool name is a third party's string) opens a
+built-in in that drawer and a server's tool on its server's Tools tab,
+searched for it.
+
+**Add server** opens the add form for an admin: a
 name (its example is never a name the company already has; a name the
 configuration carries is refused, and one only a node still runs from an
 earlier revision is free and said beside the field, since the engine's
@@ -8928,21 +8960,16 @@ arguments one per line (or the address), and the environment or headers as
 `NAME: value` rows whose value is a secret field (`$` offers the sealed
 entries), each with its own **may be unset** box: ticked, the row's key is
 sent in the server's `optional_keys`, so a value whose secret has no value is
-left out rather than keeping the server from starting — said once above the
+left out rather than keeping the server from starting (said once above the
 rows, and refused before the round trip for a row whose value names no secret,
-since nothing in a literal can be unset. Two header rows spelling one header
+since nothing in a literal can be unset). Two header rows spelling one header
 apart (`Authorization`, `authorization`) are refused the same way, since HTTP
 and the engine read them as one. Add checks the whole company with the
 server in it (the create-only
 `PUT /config/mcp-servers/{name}` with `If-None-Match: *` and `dry_run`), says
-any warning the add introduces — not one the company already carried — and
-places a refusal beside its field; then it stores the revision. A tool's own
-panel names the seats **granted** its server from the same pushed
-`tool_sources`, so opening a tool, or stepping through them with `[`/`]`,
-asks the engine nothing. That list is derived from each seat's configuration
-(the credentials it declares under `mcp_env`), so the engine pushes it only to
-an admin; an absent list on this admin's screen means a node older than the
-field, and the panel says so.
+any warning the add introduces (not one the company already carried) and
+places a refusal beside its field; then it stores the revision and opens the
+new server's page.
 
 **Models** is every model the company runs and every task an operator does on
 one, read from the engine's own reading, `llm_entries`, which every member may
