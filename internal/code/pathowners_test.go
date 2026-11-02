@@ -329,6 +329,7 @@ func everyReadAsked(id string) map[code.ReadKind]code.ReadQuery {
 		code.ReadLandings:      {Asker: asker, Repo: "web", Target: "refs/heads/main"},
 		code.ReadGreen:         {Asker: asker, Repo: "web"},
 		code.ReadInbox:         {Asker: asker, Inbox: &code.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude}},
+		code.ReadNoticeCards:   {Asker: asker, NoticeCards: []string{"0192f4c8-0000-7000-8000-000000000001"}},
 	}
 }
 
@@ -396,10 +397,11 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 
 // A FIELD ONE KIND READS IS REFUSED ON EVERY OTHER, the engine's own reads
 // included: a read of each kind this build reads, as everyReadAsked asks it,
-// that also names a commit or an inbox — fields only a `commit` and an
-// `inbox` read read — is refused naming the field, never answered with it
-// ignored. The engine's own reads validate against lists of their own, and a
-// field added after a list was written passed it unseen.
+// that also names a commit, an inbox or an inbox page's cards — fields only a
+// `commit`, an `inbox` and a `notice_cards` read read — is refused naming the
+// field, never answered with it ignored. The engine's own reads validate
+// against lists of their own, and a field added after a list was written
+// passed it unseen.
 //
 // Mutation: check the kind-owned fields after the engine's own reads'
 // validators instead of before (ReadQuery.validate) — an imports_due read
@@ -417,6 +419,9 @@ func TestAFieldOneKindReadsIsRefusedOnEveryOther(t *testing.T) {
 		{"commit", code.ReadCommit, func(q *code.ReadQuery) { q.Commit = strings.Repeat("6", 40) }},
 		{"inbox", code.ReadInbox, func(q *code.ReadQuery) {
 			q.Inbox = &code.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude}
+		}},
+		{"notice_cards", code.ReadNoticeCards, func(q *code.ReadQuery) {
+			q.NoticeCards = []string{"0192f4c8-0000-7000-8000-000000000001"}
 		}},
 	} {
 		for _, kind := range code.ReadKinds() {

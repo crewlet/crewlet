@@ -3252,10 +3252,15 @@ findings seats raised that stand open, by weight with the heaviest first
 **Open the diff** is one press to the change's page on its Files tab. The
 byline's note says why it reached the reader in the code host's own words
 ("asked for your review", "asked to look again"), never the tracker's. The
-LIST ASKS NOTHING per card: every word above is the notice's own, read with
-the inbox page in one snapshot (`code.NoticeChange`), the readiness judged for
-the reader at that read, so a page of fifty cards is one read and no card
-contradicts the row beside it. **Its gate** is read for the ONE card open,
+LIST ASKS NOTHING per card: every word above came with the list it was
+opened from, which asks the engine for its rows' cards (`inbox{cards: true}`):
+read once the page is composed, for the notices it keeps, no older than the
+page, the readiness judged for the reader there (`code.NoticeChange`) — so a
+page of fifty cards is one question and no card describes its change as it
+stood before the row beside it. Snoozed and Earlier ask for cards once each
+is opened; the badge's count, Home's Updates and the Snoozed link's count
+draw no card and ask for none, so a read behind every screen judges no merge
+gate. **Its gate** is read for the ONE card open,
 and only for a live change: `code_change` (its readiness, judged for the
 reader, and its revisions' facts) and `code_checks` of the change at each
 check's latest attempt (`latest`, every page of it, drawn only once whole) —

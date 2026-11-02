@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -151,6 +152,14 @@ func reasonNames() []string {
 // code log — so the read takes a floor on each ([statelog.Freshness.Floors]),
 // refuses one on any other log, and hands each half the floor on its own.
 //
+// # Cards only where they are drawn
+//
+// `cards` asks for what the cards of the page's notices draw beyond the
+// notices themselves — a code notice's description, open findings and where
+// its change's merge stands — read after the page is composed, for the
+// notices it kept ([inbox.Carded]). A list a person opens a notice from asks
+// it; a count, a badge and a widget's rows do not, and are answered bare.
+//
 // `work_inbox` stays the tracker's own question, and its tool.
 func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 	principal, err := caller(ctx, "inbox")
@@ -162,7 +171,8 @@ func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	q := inbox.Query{Handle: handle, Unread: p.Bool("unread", false), PrimaryOnly: p.Bool("primary_only", false),
-		Limit: p.Int("limit", 0), Cursor: strings.TrimSpace(p.String("cursor")), Snoozed: inbox.SnoozeExclude}
+		Limit: p.Int("limit", 0), Cursor: strings.TrimSpace(p.String("cursor")), Snoozed: inbox.SnoozeExclude,
+		Cards: p.Bool("cards", false)}
 	if raw := strings.TrimSpace(p.String("snoozed")); raw != "" {
 		q.Snoozed = inbox.SnoozeScope(raw)
 		if !q.Snoozed.Valid() {
@@ -290,7 +300,8 @@ func (c codeInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.Sour
 	// A CODE READ IS COMPLETE OR REFUSED: the code reader answers no partial
 	// page, so the level it was served at is the whole of its coverage.
 	page := inbox.SourcePage{Next: answer.Next, SeenThrough: got.SeenThrough, PrimaryReasons: []string{},
-		Notices: make([]inbox.Notice, 0, len(got.Notices)), Level: answer.Level, Complete: true}
+		Notices: make([]inbox.Notice, 0, len(got.Notices)), Level: answer.Level, Complete: true,
+		At: answer.Position}
 	for _, r := range got.PrimaryReasons {
 		page.PrimaryReasons = append(page.PrimaryReasons, string(r))
 	}
@@ -306,4 +317,53 @@ func (c codeInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.Sour
 			Snoozed: n.Snoozed, SnoozedUntil: n.SnoozedUntil, Extra: n})
 	}
 	return page, nil
+}
+
+// Cards is the code host's cards of notices, a composed page's code notices:
+// ONE `notice_cards` read of their changes, asked as the caller and floored
+// at the position the code host's page was read at ([inbox.Carded]), each
+// change's card in place of what its notices carried of it. A change the
+// card read does not answer — gone since the page, or on a repository the
+// caller may no longer read — keeps what its notice carried.
+func (c codeInbox) Cards(ctx context.Context, page inbox.SourcePage, notices []inbox.Notice) ([]inbox.Notice,
+	error) {
+
+	var changes []string
+	saids := make([]code.InboxNotice, len(notices))
+	for i, n := range notices {
+		said, ok := n.Extra.(code.InboxNotice)
+		if !ok {
+			return nil, fmt.Errorf("queries: a code notice carries %T, not the code host's notice", n.Extra)
+		}
+		saids[i] = said
+		if !slices.Contains(changes, said.ChangeID) {
+			changes = append(changes, said.ChangeID)
+		}
+	}
+	if len(changes) == 0 {
+		return notices, nil
+	}
+	// NO OLDER THAN THE PAGE: the ask's level and bounds, its floor raised
+	// to where the page was read — at or past any floor the caller named on
+	// the code log, which the page was read past.
+	fresh := c.fresh
+	if !page.At.IsZero() {
+		fresh.Floors = []statelog.Position{page.At}
+	}
+	answer, err := c.reads.Read(ctx, code.ReadQuery{Kind: code.ReadNoticeCards, Asker: c.asker, Fresh: fresh,
+		NoticeCards: changes})
+	if err != nil {
+		return nil, codeReadRefused{err: err}
+	}
+	out := make([]inbox.Notice, len(notices))
+	for i, n := range notices {
+		said := saids[i]
+		if card, found := answer.NoticeCards[said.ChangeID]; found && card != nil {
+			said.Change = card
+			n.Subject.Title = card.Title
+			n.Extra = said
+		}
+		out[i] = n
+	}
+	return out, nil
 }

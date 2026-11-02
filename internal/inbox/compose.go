@@ -66,6 +66,19 @@ import (
 // the same position with it — a page may run past its limit by them, and by
 // no more, since a record's notices to one person are bounded where the
 // record is written.
+//
+// # Cards are read after the cut, and only where they are drawn
+//
+// A notice carries what a row of a list and a count are drawn from. What its
+// CARD draws beyond that — the code host's judgment of where a change's merge
+// stands, its description, its open findings — costs a source a read of its
+// own, and most reads of an inbox draw no card: a count of what waits, a
+// widget's few rows. So a query asks for cards ([Query.Cards]), the zero
+// value asking none, and a source whose cards draw more than its notices
+// carry is asked for them only AFTER THE MERGE, for the notices of it the
+// page took ([Carded]): each source is asked the page's whole limit, and a
+// card read before the cut would be judged for every notice another source's
+// newer ones then push off the page.
 
 // Source is one native domain's inbox, as the composition reads it.
 type Source interface {
@@ -78,6 +91,19 @@ type Source interface {
 	// ending inside one position, so a page holds every notice at its last
 	// one (this file's head).
 	Notices(ctx context.Context, q SourceQuery) (SourcePage, error)
+}
+
+// Carded is a source whose cards draw more than its notices carry (this
+// file's head).
+type Carded interface {
+	Source
+
+	// Cards is notices — the notices of this source a composed page took,
+	// in the page's order, from page, the source's own page they were read
+	// in — each with what its card draws, in the same order. Read no older
+	// than the page ([SourcePage.At]), so a card never describes what its
+	// notice is about as it stood before the notice was read.
+	Cards(ctx context.Context, page SourcePage, notices []Notice) ([]Notice, error)
 }
 
 // SourceQuery is what a composed read asks of each source: the same narrowing
@@ -113,6 +139,10 @@ type SourcePage struct {
 	// copy could not decode holds none back.
 	Level    statelog.ReadLevel
 	Complete bool
+	// At is the position on the source's log its page was read at, which a
+	// [Carded] source reads its cards no older than; zero from a source that
+	// draws no card of its own.
+	At statelog.Position
 }
 
 // Subject is what a notice is about, as a card names it.
@@ -170,6 +200,11 @@ type Query struct {
 	Snoozed     SnoozeScope
 	Limit       int
 	Cursor      string
+	// Cards asks every [Carded] source for the cards of its notices the page
+	// takes — a read that draws them, as a list a person opens a notice from
+	// does. The zero value asks none: a count, a badge or a row draws a
+	// notice from what it carries (this file's head).
+	Cards bool
 }
 
 // SourceState is what one source said of the person's marks over it, and
@@ -226,13 +261,8 @@ func Compose(ctx context.Context, q Query, sources []Source) (Page, error) {
 	if limit <= 0 || limit > MaxRows {
 		limit = MaxRows
 	}
-	type head struct {
-		name  string
-		page  SourcePage
-		taken int
-	}
 	page := Page{Handle: q.Handle, Notices: []Notice{}, Sources: []SourceState{}, Complete: true}
-	var heads []*head
+	var heads []*sourceHead
 	var levels []statelog.ReadLevel
 	for _, s := range sources {
 		state := SourceState{Name: s.Name(), PrimaryReasons: []string{}}
@@ -257,11 +287,11 @@ func Compose(ctx context.Context, q Query, sources []Source) (Page, error) {
 			state.PrimaryReasons = got.PrimaryReasons
 		}
 		page.Sources = append(page.Sources, state)
-		heads = append(heads, &head{name: s.Name(), page: got})
+		heads = append(heads, &sourceHead{source: s, name: s.Name(), page: got})
 	}
 	page.ReadLevel = statelog.Weakest(levels...)
 	for len(page.Notices) < limit {
-		var next *head
+		var next *sourceHead
 		for _, h := range heads {
 			if h.taken == len(h.page.Notices) {
 				continue
@@ -324,7 +354,54 @@ func Compose(ctx context.Context, q Query, sources []Source) (Page, error) {
 	if more {
 		page.NextCursor = formatCursor(after)
 	}
+	if q.Cards {
+		if err := cardsOf(ctx, &page, heads); err != nil {
+			return Page{}, err
+		}
+	}
 	return page, nil
+}
+
+// sourceHead is one source's page as a composition merges it: how many of its
+// notices the page has taken.
+type sourceHead struct {
+	source Source
+	name   string
+	page   SourcePage
+	taken  int
+}
+
+// cardsOf asks each [Carded] source of heads for the cards of the notices of
+// it the page took, after the merge (this file's head), and puts each in its
+// notice's place. A source's failure is the read's, as its page's is.
+func cardsOf(ctx context.Context, page *Page, heads []*sourceHead) error {
+	for _, h := range heads {
+		carded, ok := h.source.(Carded)
+		if !ok || h.taken == 0 {
+			continue
+		}
+		var at []int
+		var took []Notice
+		for i, n := range page.Notices {
+			if n.Source == h.name {
+				at = append(at, i)
+				took = append(took, n)
+			}
+		}
+		cards, err := carded.Cards(ctx, h.page, took)
+		switch {
+		case err != nil:
+			return fmt.Errorf("inbox: read the cards of the %s notices: %w", h.name, err)
+		case len(cards) != len(took):
+			return fmt.Errorf("inbox: the %s source answered %d cards for %d notices", h.name, len(cards),
+				len(took))
+		}
+		for i, card := range cards {
+			card.Source = h.name
+			page.Notices[at[i]] = card
+		}
+	}
+	return nil
 }
 
 // newer reports whether a comes before b in a composed inbox: the later

@@ -1597,6 +1597,11 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// (inboxread.go).
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.inbox(ctx, tx, q, chart, &out) }
+	case ReadNoticeCards:
+		// A SET READ OF THE DOMAIN, as an `inbox` read is: the changes it
+		// names lie on any repository's subjects (inboxread.go).
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.noticeCards(ctx, tx, q, chart, &out) }
 	case ReadExpungeTips:
 		// A POINT READ OF THE REPOSITORY, as an `introduced` read is: a
 		// record this node deferred on the repository may carry a drop the
@@ -1809,11 +1814,15 @@ func (q ReadQuery) validate() error {
 	switch {
 	case q.Kind == ReadInbox && q.Repo != "":
 		return fmt.Errorf("%w: repo: an inbox is read across every repository the asker may read", ErrInvalid)
+	case q.Kind == ReadNoticeCards && q.Repo != "":
+		return fmt.Errorf("%w: repo: an inbox page's cards are read across every repository its changes are on",
+			ErrInvalid)
 	case q.Kind == ReadReviews && q.Repo != "":
 		return fmt.Errorf("%w: repo: a reviewer's reviews are listed across every repository the asker may "+
 			"read, and a change's own reviews are a change read's part", ErrInvalid)
 	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "", q.Kind == ReadChecks && q.Repo == "",
-		q.Kind == ReadQueue && q.Repo == "", q.Kind == ReadReviews, q.Kind == ReadInbox:
+		q.Kind == ReadQueue && q.Repo == "", q.Kind == ReadReviews, q.Kind == ReadInbox,
+		q.Kind == ReadNoticeCards:
 	case !ValidName(q.Repo):
 		return fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
 	}
@@ -1850,6 +1859,10 @@ func (q ReadQuery) validate() error {
 		if err := q.validateInbox(); err != nil {
 			return err
 		}
+	case ReadNoticeCards:
+		if err := q.validateNoticeCards(); err != nil {
+			return err
+		}
 	case ReadChecks, ReadCheck:
 		if err := q.validateChecks(); err != nil {
 			return err
@@ -1877,14 +1890,17 @@ func (q ReadQuery) validate() error {
 }
 
 // kindOwnedField refuses a field that one kind a principal reads alone reads
-// — a commit, an inbox — on a read of any other kind, the engine's own reads
-// included ([ReadQuery.validate]).
+// — a commit, an inbox, an inbox page's cards — on a read of any other kind,
+// the engine's own reads included ([ReadQuery.validate]).
 func (q ReadQuery) kindOwnedField() error {
 	switch {
 	case q.Commit != "" && q.Kind != ReadCommit:
 		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	case q.Inbox != nil && q.Kind != ReadInbox:
 		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
+	case len(q.NoticeCards) > 0 && q.Kind != ReadNoticeCards:
+		return fmt.Errorf("%w: notice_cards: only a notice_cards read names the changes whose cards it reads",
+			ErrInvalid)
 	}
 	return nil
 }

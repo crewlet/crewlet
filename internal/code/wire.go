@@ -1146,6 +1146,15 @@ const (
 	// and the query's narrowing, each marked and carrying what its change
 	// says — held to the asker's grant on each notice's repository.
 	ReadInbox ReadKind = "inbox"
+	// ReadNoticeCards is WHAT THE CARDS OF AN INBOX PAGE DRAW (inboxread.go):
+	// each change [ReadQuery.NoticeCards] names, as a card of a notice about
+	// it reads it — its row, the opening of its description, the agent
+	// findings standing open on it and, while it is live, where its merge
+	// stands, judged for the asker ([NoticeChange]) — held to the asker's
+	// grant on each change's repository. Asked after an inbox page is
+	// composed, for the changes of the code notices the page kept, and only
+	// by a read that draws them: an `inbox` read carries none of it.
+	ReadNoticeCards ReadKind = "notice_cards"
 )
 
 // ReadKinds is the closed set.
@@ -1164,15 +1173,15 @@ const (
 // [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
 // that read [ReadQuery.Target], `queue_due` the only one that reads
 // [ReadQuery.QueueDue], `commit` the only one that reads
-// [ReadQuery.Commit], and `inbox` the only one that reads
-// [ReadQuery.Inbox].
+// [ReadQuery.Commit], `inbox` the only one that reads [ReadQuery.Inbox],
+// and `notice_cards` the only one that reads [ReadQuery.NoticeCards].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadImportsDue,
 		ReadMirrorsDue, ReadMirrorPush, ReadBranchChanges, ReadChangesDue, ReadIndexed,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
-		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox}
+		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox, ReadNoticeCards}
 }
 
 // Valid reports a kind this build knows.
@@ -1551,6 +1560,13 @@ type ReadQuery struct {
 	// Inbox is an `inbox` read's question: whose inbox, and how it is
 	// narrowed ([InboxQuery]). Only that kind reads it.
 	Inbox *InboxQuery `json:"inbox,omitempty"`
+	// NoticeCards is a `notice_cards` read's question: the ids of the
+	// changes whose cards it answers, each once — at most [MaxNoticeCards],
+	// what one composed page of an inbox can name. REQUIRED for that kind
+	// and refused on every other; an estate request's field and no
+	// record's, so it takes no versionedFields row: a node of a build that
+	// predates the kind refuses the read as a kind it does not know.
+	NoticeCards []string `json:"notice_cards,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -1711,7 +1727,13 @@ type ReadAnswer struct {
 	Commit *CommitChanges `json:"commit,omitempty"`
 	// Inbox is an `inbox` read's page: the person's notices and their marks.
 	Inbox *InboxPage `json:"inbox,omitempty"`
-	Next  string     `json:"next,omitempty"`
+	// NoticeCards is a `notice_cards` read's answer: what each change it
+	// names says, by id ([NoticeChange]) — none for a change no row holds
+	// any more, or on a repository the asker may not read. AN ESTATE
+	// ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
+	// only that kind answers it, which a build that predates it refuses.
+	NoticeCards map[string]*NoticeChange `json:"notice_cards,omitempty"`
+	Next        string                   `json:"next,omitempty"`
 	// TipsNext is a `checks_due` page of one repository's tip work cut at its
 	// bound: the target it ended at, which the next page goes on after
 	// ([ChecksDueQuery.TipsAfter]) before any head — so a repository whose
