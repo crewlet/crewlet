@@ -458,7 +458,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       if (where.server) {
         return [
           root(row, true),
-          { label: tools?.label ?? "MCP Tools", path: tools?.path ?? row.path },
+          { label: tools?.label ?? "MCP & tools", path: tools?.path ?? row.path },
           { label: "Servers" },
           ownName(labels, where.server),
         ];
