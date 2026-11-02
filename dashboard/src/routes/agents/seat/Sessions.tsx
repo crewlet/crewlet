@@ -571,8 +571,29 @@ export function readCutWords(readBytes: number, shown: number): string {
 }
 
 /**
+ * Whether a relaunch of the session's turn would continue it, as a sentence:
+ * the engine's decision (`continuable`), and where it would not, its own reason
+ * (`not_continuable`), or that it cannot be said now where the engine could not
+ * decide.
+ *
+ * AN UNKNOWN IS NEVER DRAWN AS A NO: a session the engine could not decide may
+ * well be continued, and "would not" would send a reader after a fresh start
+ * that need not happen.
+ */
+export function continuableWords(row: ExecutorSessionRow): string {
+  if (row.continuable) return "A relaunch of this turn continues this session.";
+  const why = (row.not_continuable ?? "").replace(/\.\s*$/, "");
+  const lead =
+    row.continuable === null
+      ? "Whether a relaunch continues this session cannot be said now"
+      : "A relaunch would not continue this session";
+  return why ? `${lead}: ${why}.` : `${lead}.`;
+}
+
+/**
  * How the session's turn ended, as the engine recorded it — what its
- * harness's own transcript cannot know — beside what is kept of it.
+ * harness's own transcript cannot know — beside what is kept of it, and
+ * whether a relaunch would continue it (`continuableWords`).
  *
  * EVERY FACT IS DRAWN ONLY WHERE THE ENDING CARRIES IT: an ending says what
  * the way its turn ended established, and a blank "Stopped by" on a turn
@@ -601,6 +622,7 @@ export function SessionAccount({ row }: { row: ExecutorSessionRow }) {
         {row.ended_at ? ` · ended ${fmtDateTime(row.ended_at)}` : ""}
         {row.kept ? ` · ${fmtBytes(row.object_bytes)} kept` : ""}
       </p>
+      <p className="t-caption">{continuableWords(row)}</p>
       {ending?.delivered && (
         <p className="t-caption">
           Its reply was delivered{ending.delivered_to ? ` on ${ending.delivered_to}` : ""}.

@@ -65,6 +65,17 @@ export interface ExecutorSessionRow {
   /** The row still names a session's object, of `object_bytes` sealed. */
   kept: boolean;
   object_bytes: number;
+  /**
+   * Whether a relaunch of the turn would continue this session, as far as the
+   * engine can know before a box is chosen: decided as a relaunch decides it,
+   * and never for an ended turn, whose session no later turn continues yet.
+   * Null where it could not be decided (the turn's run record could not be
+   * read), which `not_continuable` then says: an unknown is never sent as a no.
+   */
+  continuable: boolean | null;
+  /** Why a relaunch would not continue it, or why that cannot be said now: the
+   *  engine's own sentence, redacted. Absent where it would. */
+  not_continuable?: string;
 }
 
 /** A page of a seat's executor sessions, the latest begun first. */

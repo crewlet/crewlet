@@ -18,6 +18,7 @@ import { afterEach, expect, test } from "vitest";
 
 import {
   blockLabel,
+  continuableWords,
   KIND_LABELS,
   readCutWords,
   SessionAccount,
@@ -36,6 +37,11 @@ const NOW = Date.parse("2026-10-30T14:00:00Z");
 
 const TURN = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11";
 
+/** Why an ended turn's session is not continued, in the engine's words. */
+const ENDED_WHY =
+  "the turn has ended, and no later turn continues its session yet, since a session is " +
+  "continued only by a relaunch of the turn that kept it";
+
 /** A completed turn whose session is kept, with `over` laid on top. */
 function session(over: Partial<ExecutorSessionRow> = {}): ExecutorSessionRow {
   return {
@@ -50,6 +56,8 @@ function session(over: Partial<ExecutorSessionRow> = {}): ExecutorSessionRow {
     ask_excerpt: "## Task\n\nFix the **flaky** cache test.",
     kept: true,
     object_bytes: 41234,
+    continuable: false,
+    not_continuable: ENDED_WHY,
     ...over,
   };
 }
@@ -140,7 +148,74 @@ test("a session no longer kept states no size kept", () => {
       <SessionAccount row={session({ kept: false, object_bytes: 0 })} />
     </Router>,
   );
-  expect(screen.queryByText(/kept/)).toBeNull();
+  // A SIZE KEPT, never the word: the sentence saying whether a relaunch
+  // continues the session may name the turn that kept it.
+  expect(screen.queryByText(/B kept/)).toBeNull();
+});
+
+// WHETHER A RELAUNCH CONTINUES THE SESSION IS SAID UNDER ITS ACCOUNT, as the
+// engine decided it: that one does, and where one would not, the engine's own
+// reason. And AN UNKNOWN IS NEVER DRAWN AS A NO: a session the engine could not
+// decide (its turn's run record could not be read) may well be continued, so
+// it says that this cannot be said now, and why.
+test("a session's account says whether a relaunch would continue it", () => {
+  const { unmount } = render(
+    <Router>
+      <SessionAccount
+        row={session({
+          ending: null,
+          ended_at: null,
+          continuable: true,
+          not_continuable: undefined,
+        })}
+      />
+    </Router>,
+  );
+  expect(screen.getByText("A relaunch of this turn continues this session.")).toBeTruthy();
+  unmount();
+
+  const ended = render(
+    <Router>
+      <SessionAccount row={session()} />
+    </Router>,
+  );
+  const refused = `A relaunch would not continue this session: ${ENDED_WHY}.`;
+  expect(screen.getByText(refused)).toBeTruthy();
+  ended.unmount();
+
+  render(
+    <Router>
+      <SessionAccount
+        row={session({
+          ending: null,
+          ended_at: null,
+          continuable: null,
+          not_continuable: "the turn's run record could not be read; ask again shortly",
+        })}
+      />
+    </Router>,
+  );
+  const unknown =
+    "Whether a relaunch continues this session cannot be said now: the turn's run record " +
+    "could not be read; ask again shortly.";
+  expect(screen.getByText(unknown)).toBeTruthy();
+  expect(screen.queryByText(/would not continue/)).toBeNull();
+  expect(screen.queryByText(/continues this session\./)).toBeNull();
+});
+
+// THE ENGINE'S REASON IS ONE SENTENCE OF THE SCREEN'S, closed once: a reason
+// that brings its own full stop is not closed again, and a row the engine sent
+// no reason for still reads as a sentence.
+test("a reason is closed once, and a row with none still reads as a sentence", () => {
+  expect(continuableWords(session({ not_continuable: "the turn is ending." }))).toBe(
+    "A relaunch would not continue this session: the turn is ending.",
+  );
+  expect(continuableWords(session({ not_continuable: undefined }))).toBe(
+    "A relaunch would not continue this session.",
+  );
+  expect(continuableWords(session({ continuable: null, not_continuable: undefined }))).toBe(
+    "Whether a relaunch continues this session cannot be said now.",
+  );
 });
 
 // THE ACCOUNT LEADS TO THE TURN, whose phases, review and cost are its own
