@@ -347,7 +347,7 @@ var wireTags = map[string][]string{
 	"backup_requested":          {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
 	"model_acted": {"action", "actor", "actor_kind", "dry_run", "failed", "names",
 		"operator_id", "outcome", "provider_key", "refusal", "revision_id", "status"},
-	"mcp_server_acted": {"action", "actor", "actor_kind", "address", "draft", "failed", "key", "mcp_server",
+	"mcp_server_acted": {"action", "actor", "actor_kind", "address", "draft", "dry_run", "failed", "key", "mcp_server",
 		"operator_id", "outcome", "refusal", "seat", "variable"},
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "missed", "role", "schedule", "scheduled_at", "scope_id", "scope_type", "task_id", "timeout_seconds"},

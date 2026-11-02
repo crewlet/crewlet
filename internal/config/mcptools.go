@@ -56,12 +56,12 @@ type MCPToolPolicy struct {
 	// Default is the level of every tool Levels names none for. Unset is
 	// [MCPToolAllow]: a server whose entry says nothing offers every tool
 	// it lists.
-	Default MCPToolLevel `yaml:"default,omitempty" json:"default,omitempty" desc:"The level of every tool levels does not name: allow (the default) or blocked."`
+	Default MCPToolLevel `yaml:"default,omitempty" json:"default,omitempty" js:"enum=allow|blocked" desc:"The level of every tool levels does not name: allow (the default) or blocked."`
 
 	// Levels sets one tool's level, keyed by the SERVER'S OWN name for it,
 	// the one its listing gives before tool_prefix: what an operator reads
 	// off the server, and what stays the same when the prefix changes.
-	Levels map[string]MCPToolLevel `yaml:"levels,omitempty" json:"levels,omitempty" desc:"One tool's level, keyed by the server's own name for the tool (before tool_prefix): allow or blocked."`
+	Levels map[string]MCPToolLevel `yaml:"levels,omitempty" json:"levels,omitempty" js:"enum=allow|blocked" desc:"One tool's level, keyed by the server's own name for the tool (before tool_prefix): allow or blocked."`
 }
 
 // IsZero lets an entry that sets no level drop out of a round trip: no

@@ -281,9 +281,7 @@ const secretDefSuffix = ".secret"
 const yaml11BoolPattern = `^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$`
 
 // overrides are the types the walk cannot see through, because their YAML
-// shape is decided by a custom unmarshaler rather than by their fields, and
-// one closed set the walk cannot state where it is written: an MCP tool's
-// level, which a map's values hold, and a map's values carry no field tag.
+// shape is decided by a custom unmarshaler rather than by their fields.
 //
 // Each is a hand-written fragment. Keeping the list SHORT is the point: a
 // fragment is a second description of a decoder, and every entry here is
@@ -293,13 +291,13 @@ const yaml11BoolPattern = `^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF
 // Each is built from the same leaf rules as a plain field, because each of
 // these decoders ends in the ordinary one: a key is decoded as a string and
 // a toggle as a bool, so what those admit, these admit. And each reads a
-// null as unset in its own first lines, so a null is admitted by each.
+// null as unset in its own first lines, so a null is admitted by all four.
 //
-// None of them is a credential's position (a switch, provider NAMES, tool
-// hints and a tool's level), so a fragment here carries no [secretKeyword].
-// A secret tag on a field of one of these types would make redaction mask
-// strings this fragment does not mark, and
-// TestSchemaMarksExactlyWhatRedactionMasks fails on exactly that.
+// None of them is a credential's position — a switch, provider NAMES and
+// tool hints — so a fragment here carries no [secretKeyword]. A secret tag
+// on a field of one of these types would make redaction mask strings this
+// fragment does not mark, and TestSchemaMarksExactlyWhatRedactionMasks
+// fails on exactly that.
 func (g *schemaGen) overrides() map[reflect.Type]map[string]any {
 	text := map[string]any{"type": textTypes}
 	textList := map[string]any{"type": "array", "items": text}
@@ -326,11 +324,6 @@ func (g *schemaGen) overrides() map[reflect.Type]map[string]any {
 		annotations[alias] = toggle
 	}
 
-	levels := make([]string, len(MCPToolLevels))
-	for i, l := range MCPToolLevels {
-		levels[i] = string(l)
-	}
-
 	return map[reflect.Type]map[string]any{
 		reflect.TypeOf(org.Toggle{}): toggle,
 		reflect.TypeOf(org.ProviderKeys(nil)): {
@@ -345,11 +338,6 @@ func (g *schemaGen) overrides() map[reflect.Type]map[string]any {
 			}},
 			"description": "A provider key, a fallback chain, or a per-phase mapping.",
 		},
-		// AN MCP TOOL'S LEVEL is one closed set wherever it is written, a
-		// server's default as much as one tool's level, which a map's values
-		// carry no field tag to state: so it is the type's, read off the
-		// slice the validator holds levels to.
-		reflect.TypeOf(MCPToolLevel("")): {"enum": enumValues(levels)},
 		reflect.TypeOf(ToolAnnotations{}): {
 			"type":                 []any{"object", "null"},
 			"properties":           annotations,
@@ -506,7 +494,12 @@ func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string, se
 	case reflect.Slice, reflect.Array:
 		return map[string]any{"type": []any{"array", "null"}, "items": g.fieldSchema(t.Elem(), nil, secret)}
 	case reflect.Map:
-		return map[string]any{"type": []any{"object", "null"}, "additionalProperties": g.fieldSchema(t.Elem(), nil, secret)}
+		// A MAP FIELD'S DIRECTIVES ARE ITS VALUES' RULE: a key is any text
+		// the decoder reads, while a value can be a closed set (a tool's
+		// level by its name), which the tag on the field is the one place
+		// to state.
+		return map[string]any{"type": []any{"object", "null"},
+			"additionalProperties": g.fieldSchema(t.Elem(), directives, secret)}
 	case reflect.Struct:
 		return g.ref(t, secret)
 	case reflect.Interface:

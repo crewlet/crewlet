@@ -2,6 +2,7 @@ package mcpapi_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -54,7 +55,7 @@ func (f *fakeToolDocuments) SetMCPTools(_ context.Context, w configapi.MCPToolsW
 }
 
 func (f *fakeToolDocuments) RefuseMCPTools(w http.ResponseWriter, _ *http.Request, server string, err error) {
-	if err == configapi.ErrNoSuchEntity {
+	if errors.Is(err, configapi.ErrNoSuchEntity) {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity, map[string]string{"hint": server})
 		return
 	}
