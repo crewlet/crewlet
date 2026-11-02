@@ -34,7 +34,7 @@ import (
 // leaves an object (M6-D2: what an expunge's grace keeps), whatever live
 // change its commands move, and the horizons. Its packs are the record's, kind
 // import or mirror, several to a record where a push carries one, so its push
-// row names no single pack.
+// row names no single pack. A sync that moves nothing lands no push at all.
 //
 // # What the decide holds each to
 //
@@ -85,6 +85,17 @@ import (
 //
 // and then the chunk's push rules, whole.
 //
+// A SYNC THAT MOVES NOTHING — no command and no pack ([MirrorSync.Current]):
+// its home fetched the source and found the mirror level with it — is held to
+// rule 1 alone, since it names no object an expunge could leave dropping and
+// no ref that could have moved, and records only its instant
+// (mirror_synced_at). Without it a quiet source's mirror would keep the
+// instant of its last move for good, and sit at the head of `mirrors_due`,
+// least recently synced first, for ever: the listing's stop at the first
+// mirror synced within MirrorInterval would never bound it, and every git
+// node would page every quiet mirror on every backstop, fetching each from
+// its source again wherever its memory of the last attempt was lost.
+//
 // THE RECORD'S ROWS are counted as a push entry's ([entryRows]) with the
 // record's packs and the changes its commands move ([changeBook]); a record
 // past MaxRecordRows is the builder's bug — MaxImportRefs and MaxImportPacks
@@ -124,8 +135,10 @@ func (p ImportProposal) Validate() error {
 }
 
 // Validate refuses a sync no committer could decide ([ErrInvalidProposal]):
-// a chunk's rules over its repository, id, node, packs and commands, a drop
-// epoch below zero and a zero FetchedAt.
+// a chunk's rules over its repository, id, node, packs and commands — but a
+// sync carrying neither a pack nor a command is one ([MirrorSync.Current]),
+// and one carrying packs and no command is not — a drop epoch below zero and
+// a zero FetchedAt.
 func (p MirrorSyncProposal) Validate() error {
 	_, err := p.write().measure()
 	return err
@@ -207,12 +220,12 @@ func (w remoteWrite) moves() ([]PackRef, []Command) {
 
 // decidedRows is the most rows w's record makes its apply touch before the
 // changes its commands move, which the decide counts from the rows: an end's
-// one, the repository's row; a chunk's or a sync's its push entry's
-// ([entryRows] of every command ok), its packs, the repository's row, and
-// [recordRows]' share of the horizons.
+// and a sync's that moves nothing one, the repository's row; a chunk's or a
+// sync's its push entry's ([entryRows] of every command ok), its packs, the
+// repository's row, and [recordRows]' share of the horizons.
 func (w remoteWrite) decidedRows() int {
 	packs, cmds := w.moves()
-	if w.done != nil {
+	if w.done != nil || w.mirror != nil && w.mirror.Current() {
 		return 1
 	}
 	entry := PushEntry{Commands: slices.Clone(cmds)}
@@ -310,7 +323,7 @@ func (w remoteWrite) validFields() error {
 // by idField: a repository id, the id a bare UUIDv7, a node config admits,
 // packs derived from the id that a bundle check admits, and commands a
 // receiver could send, undecided, in a namespace an import may set — a sync
-// moving a ref at the least, a chunk landing a pack or setting a ref.
+// landing no pack without a ref, a chunk landing a pack or setting a ref.
 func validMoves(what, repoID, idField, id, node string, packs []PackRef, cmds []Command) error {
 	if err := validRepoID(what+".repo_id", repoID); err != nil {
 		return err
@@ -324,9 +337,12 @@ func validMoves(what, repoID, idField, id, node string, packs []PackRef, cmds []
 	case len(packs) > MaxImportPacks:
 		return badField(what+".packs", "%d packs, past the %d one record lands (MaxImportPacks)", len(packs),
 			MaxImportPacks)
-	case len(cmds) == 0 && what == "sync":
-		return badField(what+".commands", "a sync moves a ref at the least: one that moves none is no record")
-	case len(cmds) == 0 && len(packs) == 0:
+	case len(cmds) == 0 && len(packs) > 0 && what == "sync":
+		// A SYNC'S PACKS RIDE WITH THE REFS THAT REACH THEM: one that
+		// moves no ref found its source level, and carries nothing at all
+		// ([MirrorSync.Current]).
+		return badField(what+".packs", "a sync that moves no ref lands no pack")
+	case len(cmds) == 0 && len(packs) == 0 && what == "chunk":
 		// A CHUNK OF PACKS ALONE lands what the refs of a later chunk
 		// need, but one that lands nothing and sets nothing would only
 		// write a push row of nothing: an import with no refs at all is
@@ -467,6 +483,11 @@ func decideRemote(ctx context.Context, tx *sql.Tx, w remoteWrite, retention time
 		return d, nil
 	case !repo.mirrored:
 		return stale("%s follows no source: a settings change took its pull mirror away", repo.name)
+	case m.Current():
+		// LEVEL WITH ITS SOURCE: no object for an epoch to judge and no
+		// ref to be stale — see this file's head.
+		d.payload = m
+		return d, nil
 	case m.DropEpoch != repo.dropEpoch:
 		// M6-D4: CHECKED AGAINST AN EPOCH ITS PACKS NO LONGER MEAN, and
 		// recorded nowhere — its home builds again over a copy at the new
@@ -675,13 +696,14 @@ func (c *Committer) remoteAnswer(ctx context.Context, w remoteWrite, opID string
 // apply writes or — met where the repository was no longer as its decide
 // read it, which no correct log carries — does not: a record that applied and
 // wrote no push row is logged at ERROR and answered unknown, never applied,
-// which would tell its home the refs moved. An END is answered at its
-// record's position: its apply writes the repository's row, which a chunk's
-// may move on from.
+// which would tell its home the refs moved. An END, and a SYNC THAT MOVES
+// NOTHING, are answered at their record's position: each writes the
+// repository's row alone and no push row, and that row a later record may
+// move on from.
 func (c *Committer) appliedRemote(ctx context.Context, w remoteWrite, opID string,
 	at statelog.Position) (SyncResult, error) {
 
-	if w.done != nil {
+	if w.done != nil || w.mirror != nil && w.mirror.Current() {
 		return SyncResult{Outcome: statelog.OutcomeApplied, Position: at}, nil
 	}
 	var landed map[string]bool

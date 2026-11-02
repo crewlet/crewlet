@@ -131,9 +131,13 @@
 // gitproc.PackWorkDeadline, each upload by code.UploadDeadline — and every
 // attempt ends with [Mirrors.Stop]. At most [MaxAttempts] run at once on a
 // node. A pull mirror is synced once every code.MirrorInterval: listed by the
-// `mirrors_due` read until its last sync is within it, and, where its source
-// moved nothing and so no record moved its row, held back by this node's
-// memory of its last attempt.
+// `mirrors_due` read until its last sync is within it — a sync that found its
+// source moved nothing landing a record of nothing (code.MirrorSync.Current),
+// which moves that instant all the same, and a pull mirror's import that
+// landed whole moving it to its end — so the listing stops at the first
+// mirror synced within the interval on every node, this one after a restart
+// included; this node's memory of its last attempts holds a mirror whose
+// last attempt failed back for RetryAfter.
 //
 // ITS IMPORTS: internal/code/query, internal/code/compact, internal/code/host,
 // internal/code/home, internal/code/checkrun and this package never import

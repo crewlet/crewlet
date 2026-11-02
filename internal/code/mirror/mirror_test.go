@@ -458,6 +458,58 @@ func TestARepositoryMadeAPullMirrorIsImportedFirst(t *testing.T) {
 	}
 }
 
+// A QUIET PULL MIRROR IS NOT FETCHED AGAIN BY A FRESH HOME: the rows, never a
+// worker's memory, hold a quiet source's mirror back an interval — its import
+// that landed whole is its last sync, so a worker that knows nothing of it (a
+// restart, or a node newly home to it) does not list it within the interval;
+// and once the interval has passed, a sync that finds the source moved nothing
+// lands a sync of nothing, which moves the mirror's last sync on.
+//
+// Mutation: leave a mirror's import end off its last sync, and the fresh
+// worker lists it at once; land nothing where the source moved nothing, and
+// its last sync stays the import's.
+func TestAQuietPullMirrorIsNotFetchedAgainByAFreshHome(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	h.src.commit(map[string]string{"a": "a\n"}, "first")
+	h.src.push("HEAD:refs/heads/main")
+	s := codetest.Settings()
+	s.Protections = nil
+	s.MirrorFrom = &code.MirrorSource{URL: h.src.url}
+	h.f.Declare(t, code.Declared{Name: "quiet", Settings: s})
+	h.pass(h.mirrors())
+	synced := func() code.MirrorCandidate {
+		t.Helper()
+		a, err := h.est.Read(t.Context(), code.ReadQuery{Kind: code.ReadMirrorsDue, Fresh: codetest.Linearizable})
+		if err != nil || len(a.Mirrors) != 1 {
+			t.Fatalf("mirrors_due answered %+v, %v; want the one pull mirror", a.Mirrors, err)
+		}
+		return a.Mirrors[0]
+	}
+	imported := synced()
+	if rows := h.rows("quiet"); rows.Repo.Status != code.RepoStatusActive || imported.SyncedAt.IsZero() {
+		t.Fatalf("after its import the mirror is %s, last synced %v; want it active, synced at its import's end",
+			rows.Repo.Status, imported.SyncedAt)
+	}
+	if listed := h.pass(h.mirrors()); len(listed) != 0 {
+		t.Fatalf("a fresh worker listed %v within the interval of the mirror's import", listed)
+	}
+
+	h.advance(code.MirrorInterval + time.Minute)
+	if listed := h.pass(h.mirrors()); !slices.Contains(listed, imported.ID) {
+		t.Fatalf("the mirror was not listed %v once its interval had passed", listed)
+	}
+	h.est.mu.Lock()
+	syncs := slices.Clone(h.est.syncs)
+	h.est.mu.Unlock()
+	if len(syncs) != 1 || !syncs[0].Sync.Current() {
+		t.Fatalf("the quiet mirror proposed %+v; want one sync of nothing", syncs)
+	}
+	if got := synced(); !got.SyncedAt.After(imported.SyncedAt) {
+		t.Fatalf("after a sync of nothing the mirror's last sync is %v, want it past its import's %v",
+			got.SyncedAt, imported.SyncedAt)
+	}
+}
+
 // AN IMPORT PAST THE BLOB LIMIT ENDS WITH ITS ERROR: a source holding a blob
 // past code.limits.max_blob_bytes is not landed in part and retried for ever
 // — the attempt that finds the blob ends the import, the repository active

@@ -64,7 +64,11 @@ func (e *errPermanent) Error() string { return e.why }
 // attempt is one import or sync of repoID: synced, fetched into a scratch, cut,
 // checked, stored and landed step by step, the scratch removed however it
 // ends. A nil error is an attempt that landed what it fetched, or found
-// nothing to land. A sync that reached its source is counted
+// nothing to land — a sync then landing a record of nothing, which moves the
+// mirror's last sync (code.MirrorSync.Current), so the listing holds it back
+// an interval on every node, this one after a restart included, rather than
+// only where this worker remembers the attempt. A sync that reached its source
+// is counted
 // (crewlet.code.mirror.runs{dir=pull}) by what it came to.
 func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor statelog.Position) (err error) {
 	what := map[kind]string{kindImport: "import", kindSync: "sync"}[l.kind]
@@ -166,7 +170,13 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 	if err := m.afterBuild(ctx, l.kind); err != nil {
 		return err
 	}
-	for _, st := range steps(outs, cmds) {
+	todo := steps(outs, cmds)
+	if l.kind == kindSync && len(todo) == 0 {
+		// LEVEL WITH ITS SOURCE: one record of nothing, which moves only the
+		// mirror's last sync.
+		todo = []step{{}}
+	}
+	for _, st := range todo {
 		applied, err := m.land(ctx, repoID, l, s, sc, st, l.seq+1)
 		var perm *errPermanent
 		if errors.As(err, &perm) {
@@ -178,7 +188,9 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 			return err
 		}
 		l.seq++
-		landed++
+		if len(st.outs) > 0 || len(st.cmds) > 0 {
+			landed++
+		}
 	}
 	if l.kind == kindImport {
 		return m.end(ctx, repoID, l, s, sc, nil)

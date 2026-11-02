@@ -292,6 +292,81 @@ func TestAMirrorSyncIsStaleAgainstAMovedRef(t *testing.T) {
 	requireStale(t, n, "a sync cut at another drop epoch", before, res, err, code.RefusalExpunging)
 }
 
+// A SYNC OF NOTHING MOVES THE MIRROR OFF THE LISTING'S HEAD: a pull mirror
+// whose home found its source level lands a sync carrying no pack and no
+// command — answered applied at its record, whatever drop epoch its copy held,
+// since it names no object — which writes no push row and moves the mirror's
+// last sync, so `mirrors_due`, least recently synced first, lists the mirror
+// never synced ahead of it. A sync of nothing for a repository that follows no
+// source is stale, and a sync of packs and no ref is no proposal at all.
+//
+// Mutation: refuse a sync of nothing as a sync that moves no ref, and it is
+// refused invalid; drop the decide's way past the epoch rule, and it is refused
+// expunging; let its apply land a push, and a push row of nothing appears;
+// answer it from a push row, and it is answered unknown; leave its apply's
+// instant unwritten, and the mirror stays at the head of the listing.
+func TestASyncOfNothingMovesTheMirrorOffTheListingsHead(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	ctx := t.Context()
+	plain := repoOn(t, n, "plain")
+	s := suiteSettings()
+	s.MirrorFrom = mirrorSource
+	// Every repository made at one activation before any is made a mirror at
+	// a later one: activations only move forward.
+	names := []string{"first", "second"}
+	for _, name := range names {
+		repoOn(t, n, name)
+	}
+	for _, name := range names {
+		n.ensure(name, s, t2)
+	}
+	c, _ := committerOn(t, n, n.pub)
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	pulls := func() []code.MirrorCandidate {
+		t.Helper()
+		a, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadMirrorsDue, Fresh: stale})
+		if err != nil || a.Next != "" {
+			t.Fatalf("mirrors_due answered %+v, %v; want one page", a, err)
+		}
+		return a.Mirrors
+	}
+	listed := pulls()
+	if len(listed) != 2 || !listed[0].SyncedAt.IsZero() || !listed[1].SyncedAt.IsZero() {
+		t.Fatalf("mirrors_due listed %+v; want the two pull mirrors, never synced", listed)
+	}
+	head, other := listed[0].ID, listed[1].ID
+
+	nothing := func(repo string, epoch int64) code.MirrorSync {
+		return code.MirrorSync{RepoID: repo, SyncID: statelog.NewOpID(time.Now(), ""), Node: n.id,
+			DropEpoch: epoch, FetchedAt: harnessAt}
+	}
+	before := n.end()
+	res, err := c.ProposeMirrorSync(ctx, code.MirrorSyncProposal{Sync: nothing(plain, 0)})
+	requireStale(t, n, "a sync of nothing for a repository following no source", before, res, err,
+		code.RefusalStale)
+
+	packsAlone := syncOf(n, head, 0)
+	before = n.end()
+	if _, err := c.ProposeMirrorSync(ctx, code.MirrorSyncProposal{Sync: packsAlone}); !errors.Is(err,
+		code.ErrInvalidProposal) || n.end() != before {
+		t.Fatalf("a sync landing packs and moving no ref answered %v; want it refused invalid, unrecorded", err)
+	}
+
+	level := nothing(head, 7)
+	res, err = c.ProposeMirrorSync(ctx, code.MirrorSyncProposal{Sync: level})
+	requireSynced(t, "a sync of nothing at another drop epoch", res, err)
+	if got := n.count(`SELECT COUNT(*) FROM code_pushes WHERE push_id = ?`, level.SyncID); got != 0 {
+		t.Fatalf("a sync of nothing wrote %d push rows, want none", got)
+	}
+	listed = pulls()
+	if len(listed) != 2 || listed[0].ID != other || !listed[0].SyncedAt.IsZero() || listed[1].ID != head ||
+		listed[1].SyncedAt.IsZero() {
+		t.Fatalf("after a sync of nothing mirrors_due listed %+v; want %s never synced, then %s synced", listed,
+			other, head)
+	}
+}
+
 // THE IMPORT AND MIRROR LISTINGS NAME WHAT THEIR HOMES OWE: `imports_due`
 // lists the repository being imported with its source and its chunks, and
 // `mirrors_due` the push mirrors and then the pull mirrors, each naming its

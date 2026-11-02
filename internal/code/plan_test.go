@@ -1207,8 +1207,8 @@ func registeredStatements() map[string]statement {
 		// AN IMPORT'S AND A MIRROR'S APPLY: the repository's row by its key.
 		"remote state":  {remoteStateSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"import seq":    {importSeqSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
-		"import done":   {importDoneSQL, []any{1, "", "", "", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
-		"mirror synced": {mirrorSyncedSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"import done":   {importDoneSQL, []any{1, "", "", "", "", 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"mirror synced": {mirrorSyncedSQL, []any{1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		// A REPOSITORY'S CHECKS': the join's read of one row by its whole
 		// key, and its log's by the same; the oldest rows past a cutoff —
 		// the horizon's, a sweep's decide's and a purge part's — weighed by

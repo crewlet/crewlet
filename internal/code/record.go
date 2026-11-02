@@ -217,7 +217,8 @@ const (
 
 	// OpMirrorSync moves a pull mirror onto its source as its home fetched
 	// it, as a push row `via mirror` ([MirrorSync]), on the repository's own
-	// subject, decided by its committer alone.
+	// subject, decided by its committer alone — or, carrying no pack and no
+	// command, records only that its home found the source level with it.
 	//
 	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
 	// once a build without it has run, it takes {Name: "RecordEnvelope.Op

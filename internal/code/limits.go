@@ -1581,7 +1581,13 @@ const (
 	// retention's interval, which answers another question. A source asked
 	// four times an hour keeps a mirror a quarter of an hour behind at the
 	// most, for one negotiation that brings nothing where nothing moved;
-	// `mirrors_due` lists a mirror once its last sync is this old.
+	// `mirrors_due` lists a mirror once its last sync is this old. A sync
+	// that finds its source level is a record too ([MirrorSync.Current]),
+	// so the cost of a quiet mirror is one record of under a kilobyte on
+	// the code log, and one write of its repository's row, every interval —
+	// ninety-six a day — which is what lets the listing stop at the first
+	// mirror synced within the interval and keeps a home that lost its
+	// memory of an attempt from fetching every quiet mirror again at once.
 	MirrorInterval = 15 * time.Minute
 )
 

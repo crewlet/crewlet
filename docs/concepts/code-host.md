@@ -228,7 +228,11 @@ own: an import's chunks — packs before the refs that need them, at most 1 000
 refs a chunk — then its end; a pull mirror's syncs, every 15 minutes, each
 moving the repository onto its source as the source is, a force-push and a
 deleted branch included. Each lands as a push `via import` or `via mirror` on
-the engine's own account. An import stopped in the middle resumes from what
+the engine's own account. A sync that finds its source moved nothing still
+lands a record — a small one, with no pack and no push — that moves the
+mirror's last sync, so the home asks a quiet source again 15 minutes later
+rather than at its next minute's pass, whichever node is home by then: one
+such record per quiet mirror every 15 minutes is the cost. An import stopped in the middle resumes from what
 landed, on whichever git node is home by then, fetching only what the landed
 refs do not reach. One that cannot finish — a blob past
 `code.limits.max_blob_bytes`, the repository past one of its limits, a source

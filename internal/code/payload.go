@@ -1865,8 +1865,14 @@ type ImportDone struct {
 // one its home's copy held: its packs were cut against objects an expunge may
 // since have left dropping (M6-D4).
 //
+// A sync whose home found the source level with the mirror carries neither
+// a pack nor a command ([MirrorSync.Current]) and moves mirror_synced_at
+// alone: the instant `mirrors_due` orders the pull mirrors by is when each
+// was last brought level with its source, whether that moved a ref or not.
+//
 // Every field is in the base format, under the condition [OpMirrorSync]
-// states.
+// states: a sync of nothing is the same op with its two lists empty, and
+// takes no versionedFields row of its own.
 type MirrorSync struct {
 	RepoID string `json:"repo_id"`
 	// SyncID is minted afresh for every round — a bare UUIDv7 — and is the
@@ -1886,6 +1892,11 @@ type MirrorSync struct {
 	// FetchedAt is when its home fetched the source, by the home's clock.
 	FetchedAt time.Time `json:"fetched_at"`
 }
+
+// Current reports whether s moves nothing: its home found the mirror level
+// with its source, so it lands no pack and no push row, and records only
+// when it was found so.
+func (s MirrorSync) Current() bool { return len(s.Commands) == 0 && len(s.Packs) == 0 }
 
 // Activated raises the activation fence to a configuration activation.
 //

@@ -1017,7 +1017,9 @@ const (
 	// ReadMirrorsDue is the repositories with a mirror ([MirrorCandidate]):
 	// every push mirror, by id, then the active pull mirrors LEAST RECENTLY
 	// SYNCED FIRST — so a home that syncs every MirrorInterval reads pages
-	// until one is synced within it, and no further — the listing a
+	// until one is synced within it, and no further, every sync moving its
+	// mirror's instant, one that found its source level among them
+	// ([MirrorSync.Current]) — the listing a
 	// repository's home polls for the mirrors it keeps. The engine's own
 	// read, as `compaction_due` is.
 	ReadMirrorsDue ReadKind = "mirrors_due"
@@ -1873,7 +1875,9 @@ type SyncResult struct {
 	// Outcome is applied, pending or unknown for a proposal whose record was
 	// appended, and empty for one refused with none. A chunk's and a sync's
 	// applied is answered only from the rows the record applied — its push
-	// row — never from the decision.
+	// row — never from the decision; a sync that moves nothing
+	// ([MirrorSync.Current]) writes no push row, and is answered at its
+	// record's position, as an end is.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 	// Refusal is why it was refused with no record — stale (a sync of a
 	// repository that follows no source among its causes), repo_deleted,
