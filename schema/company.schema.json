@@ -3053,7 +3053,7 @@
       "additionalProperties": false,
       "properties": {
         "servers": {
-          "description": "MCP server names this seat's executor box is given, beside its tool bridge.",
+          "description": "MCP servers that run in this seat's executor box; its tool bridge serves every other.",
           "items": {
             "type": [
               "string",

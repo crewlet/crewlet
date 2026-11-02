@@ -418,7 +418,7 @@ group, and names the **gate** its authority row decides:
 | Artifacts | `artifacts` | Documents, slides, sheets and dashboards agents make and share, and the data behind them |
 | Colleagues | `colleagues` | Finding a colleague, and asking another agent a question |
 | Memory and skills | `memory` | The agent's own notes, past turns and skills |
-| MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, which the engine hands every executor and onboarding pass so it can reach its MCP servers' tools |
+| MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, which the engine hands the onboarding pass and a worker so it can reach its MCP servers' tools (an executor holds every tool its seat does from its launch, and its harness defers a server's tools itself) |
 
 | `gate` | Who may call it |
 |---|---|
@@ -483,6 +483,53 @@ that [went down after starting](#a-server-that-dies-or-will-not-start)). Clickin
 its state, reach and launch, every node's reason as the node reported it rather
 than clamped to the grid's two lines, and the catalogue narrowed to its tools —
 which, for a server that never started, says it registered none and why.
+
+### What every server lists
+
+A per-agent server (`shared: false`) starts one child per seat, on the node that
+holds the seat, so no single node runs the company's whole catalogue. Every node
+therefore publishes what its own instances list, per server, and every node keeps
+a watched copy of what the others publish. That is what puts a per-agent server's
+tools in the catalogue (`GET /tools` and the dashboard's `tools` push) on every
+node, including one that runs none of its children, and what one server's page
+reads (`GET /mcp-servers/{name}`, `admin`, see the
+[API reference](../reference/api-endpoints.md#get-mcp-serversname)).
+
+- **What a listing holds.** Per server, the union of the node's instances: each
+  tool's name as it is offered and as the server names it, its title and
+  description, its hints with your [overrides](#tool-annotation-overrides)
+  applied, how many instances list it, and a digest of the server's own
+  definition. The server's identity and instructions from its handshake ride
+  beside them. Each tool's input and output schemas are stored once under that
+  digest, however many nodes and seats list the tool.
+- **The digest is the server's definition.** It covers the name the server uses,
+  the title, the description, both schemas and the hints the server declared,
+  and nothing of yours: changing a `tool_prefix` or an override never reads as
+  the server changing a tool.
+- **Risk.** The page shows each tool's risk as the engine reads its hints:
+  `read_only` for a tool that says it changes nothing, `additive` for one that
+  writes and says it is not destructive, and `destructive` for everything else,
+  a tool that declares no hints included. A tool reaches past the company unless
+  it says it does not.
+- **Written when it changes.** A node reads its listing off its servers at every
+  heartbeat and writes it only when it moved, so a quiet company writes nothing.
+- **Live nodes only.** A listing counts while its node holds its presence at the
+  epoch it was written under. A node that drains stops counting the moment it
+  gives up its presence and removes its listings when it shuts down, one that
+  dies stops counting the moment its presence lapses, and the
+  [maintenance sweep](../concepts/coordination.md#what-the-fleet-shares) removes
+  what it left behind, along with a schema no listing has named for two sweeps.
+- **Bounded.** Everything in a listing came from a remote server, so a listing
+  names at most 256 tools (the count travels whole), a description is cut to
+  1,024 bytes, the instructions to 4,096, and a tool's schemas past 64 KiB are
+  listed without being stored. A listing stores at most 1 MiB of schemas in
+  all, kept in tool-name order while they fit; a tool past that is listed
+  without its arguments.
+
+In the catalogue, a listed tool is added under a name nothing on the node
+already holds: one tool per name, as a model is offered, so a name a built-in
+or another server's tool wins shows that tool. A server's page lists every tool
+its server lists, whichever wins the name.
 
 ### Adding a server from the dashboard
 
@@ -556,9 +603,11 @@ and leaves its values to you. The whole request and its answers are in
 ### Saying what a server is for
 
 `description` is one line, at most 200 characters with no line breaks or tabs,
-saying what the server is for. Each agent's prompt names its MCP servers under
-`## Tools to discover` before it shows any of their tools, and prints the
-description beside the name:
+saying what the server is for. A seat's executor is handed it as the server's own
+MCP instructions, which its harness puts in front of its model beside the server's
+tools; the onboarding pass and a worker, which reach their MCP tools by discovery,
+see their MCP servers named under `## Tools to discover` before any of their
+tools, with the description beside each name:
 
 ```text
 - MCP server `handbook`: Searches the engineering handbook and the runbooks
@@ -635,8 +684,8 @@ reads, how a static credential's value is spelled, the sign-ins its vendor
 offers, what an admin has to do at the vendor first, and the day its facts
 were last read from the vendor (`read_at`). It is a table compiled into the
 engine and reviewed in pull requests, so every node answers it the same, with
-or without egress. `GET /mcp-servers/catalogue` serves it (see the
-[API reference](../reference/api-endpoints.md#get-mcp-serverscatalogue)).
+or without egress. `GET /mcp-catalogue` serves it (see the
+[API reference](../reference/api-endpoints.md#get-mcp-catalogue)).
 
 | Entry | Server | Sign-in |
 |---|---|---|
@@ -984,8 +1033,9 @@ changes until a revision does.
 **An apply asks every server it finds down to try again at once**, shared or a
 held seat's own, and starts its schedule again. It does not wait for the
 attempt, and it does not restart the server: the spec has not moved, so there
-is nothing to restart it into. Re-activating the revision is therefore the
-gesture for a vendor you know is back. The down server's tools stay where the
+is nothing to restart it into. Re-activating the revision is therefore one
+gesture for a vendor you know is back; [restarting the server](#restarting-a-server-now)
+is the direct one, and it restarts a server that is serving too. The down server's tools stay where the
 apply files them, in the same order as when it is up, refusing until it is
 back.
 
@@ -1015,12 +1065,95 @@ server that is down counts as failed, with what took it down, until it is back.
 | `server_start_retry_scheduled` | info | A shared server's start failed and will be retried |
 | `server_restarted` | info | The server is back: `attempt`, `down_seconds`, and what took it down in `was` |
 | `server_catalogue_changed` | info | It came back with different tools: `added`, `removed` |
+| `server_restart_requested` | info | A person's [restart](#restarting-a-server-now) ended its session, and a fresh one is starting at once |
+| `mcp_restart_applied` | info | A node restarted, or tried now, what a person's restart asked of it: `restarted` and `retried` instances, `by` |
 
 A server that keeps logging `server_exited` soon after each `server_restarted`
 is crashing on something it is asked to do or on its own environment, and its
 `stderr_tail` usually says which. A run of `server_restart_failed` is a server
 that cannot start at all, which is the same diagnosis as a failed first start
 (`server_stderr_tail` above).
+
+### A server's health
+
+Every node keeps each instance it runs in its own memory (a shared server's
+one child, and each held seat's own), and a server's page asks the nodes
+holding its instances when you open it, rather than every node publishing
+every child on every heartbeat. So
+[`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname)
+lists each **instance**: the seat it runs for, the node running it, whether it
+is running, failed or waiting, since when, how many times it was restarted,
+the tools it serves, why it failed if it did, its last failure even once it is
+back, and when it last answered (a start that listed its tools, or a tool call
+that came back). Each node asked is named with whether it answered within two
+seconds; a node that did not is never read as one holding nothing.
+
+The heartbeat still carries what every reader needs on every beat, bounded:
+per node and server, since when its longest-failed instance has been down
+(the same instant across every retry of one outage), the class of the failure
+it names, and how many times its instances came back. A count that climbs
+while the server stays up is a server that flaps.
+
+The page also carries what the engine decides from the configuration, so no
+screen works it out again: how the engine signs in to the server (an
+integration's per-agent credential, values the configuration sets, or
+nothing), that a local server runs on the engine host, the startup and per-call
+timeouts in force (120 and 300 seconds where none is set), the integration a
+per-agent server reads and the keys it is started with, the seats whose box is
+given the server and the cell each box runs in, and two placements expected to
+fail: a server on a private network given to an `e2b` box, which runs outside
+the company's network, and a local server given to a box that runs its own
+image (`container` or `e2b`), whose image or setup steps must provide the
+command. A server's address is shown with any credential in it withheld: in its
+query, a path segment, its fragment or a user name.
+
+### Why a server failed
+
+A failure the engine records about a server carries a **class** beside its
+sentence, decided where the facts are: the HTTP status a remote server
+answered, what became of a local server's process, the dial. The page words
+each class and its remedy; the sentence is the engine's, with what the server
+or its process said (redacted, and cut to 512 bytes).
+
+| Class | What happened |
+|---|---|
+| `blocked_address` | An address a remote party named is one the engine does not dial: private, loopback or cloud metadata |
+| `dns` | The host did not resolve |
+| `unreachable` | Nothing answered: a refused or timed out connection, a gateway answering 5xx for a server behind it, or a handshake past `startup_timeout_seconds` |
+| `tls` | The server's certificate is expired, self-signed or names another host |
+| `needs_sign_in` | A 401 asking for a Bearer token the engine did not send |
+| `credential_rejected` | Any other 401: the credential was refused or has expired |
+| `missing_permission` | A 403: the credential signs in and may not do what was asked |
+| `no_endpoint` | A 404 or 405: no MCP endpoint at that address (a retired SSE address answers this way) |
+| `not_mcp` | The address answered with a web page (a login page, a proxy, a captive portal), or a 400 that is not about the protocol's version |
+| `old_protocol` | The server speaks none of the protocol versions the engine does |
+| `rate_limited` | A 429: the server asked the engine to slow down |
+| `empty_tools` | The server answered and listed no tool |
+| `command_not_found` | A local server's command is not on the host's `PATH`, or is a path to nothing |
+| `exited` | A local server's process exited, before it answered or after it had been serving |
+
+A failure that fits none of them has no class, and its sentence says what
+happened: the engine never guesses a class, since a wrong remedy sends you to
+fix the wrong thing.
+
+### Restarting a server now
+
+**Restart** on a server's page
+([`POST /mcp-servers/{name}/retry`](../reference/api-endpoints.md#post-mcp-serversnameretry))
+restarts every instance of the server on every node, or one agent's instance
+on the node holding that agent's seat. An administrator may restart a server
+without stepping up, since it changes no configuration and no credential; Ask
+Crewlet prepares one for your approval.
+
+The request is a stamp every node hears: each restarts the instances whose
+state began before it. A serving instance's session ends and a fresh one starts
+at once; an instance that is down is tried now, its schedule started again
+rather than at its next attempt up to six minutes away; and an agent's instance
+whose first start failed gets a pass now. A restart naming a seat is carried out
+only by the node that holds the seat and can prove it. Calls in flight when a
+session ends are refused as possibly having taken effect, as for any server
+that goes down. A restart is never logged as the server failing, and it is
+recorded in the runtime audit as `mcp_server_acted`, refused ones included.
 
 ---
 

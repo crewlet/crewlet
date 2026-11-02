@@ -381,7 +381,6 @@ func TestARunsWorkersNestUnderTheRunsRound(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	play(t, launcher.last(t), run{calls: []llm.ToolCall{
-		activate("read_file"),
 		call(t, "read_file", `{"path":"/a"}`),
 		{ID: "d", Name: subagent.ToolName, Arguments: map[string]any{"tasks": []any{map[string]any{
 			"id": "research", "prompt": "look", "system_prompt": "you research things"}}}},

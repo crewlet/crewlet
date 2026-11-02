@@ -110,7 +110,7 @@ denies such tools.
   allowlist already curates the worker surface.
 
 First-party control tools (`delegate`, `a2a_ask` and the A2A channel tools,
-and the parent's `activate_tool` / `list_mcp_server_tools` pair) are denied
+and any discovery pair but the worker's own, `activate_tool` / `list_mcp_server_tools`) are denied
 separately by name, because they are Crewlet's *own* tools and naming them
 is not a third-party coupling.
 

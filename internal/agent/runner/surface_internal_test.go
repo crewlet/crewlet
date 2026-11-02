@@ -50,7 +50,7 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 	if strings.Contains(universe.Discoverable(nil), toolname.MarkOnboarded) {
 		t.Error("the executor's catalogue lists mark_onboarded")
 	}
-	if slices.Contains(executorActive(universe), toolname.MarkOnboarded) {
+	if slices.Contains(executorActive(universe, nil), toolname.MarkOnboarded) {
 		t.Error("the executor's run is offered mark_onboarded")
 	}
 }
@@ -123,6 +123,13 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 // sent the seat to `list_mcp_server_tools`, and a seat woken on Worklet
 // (whose tools no discovery call lists) went to the only MCP
 // server it held and posted in chat instead. See [turn.Remedy].
+//
+// AND A SURFACE WITH NO WAY TO DISCOVER HAS NOTHING BEHIND DISCOVERY: the
+// executor's, which holds every tool it can reach, and whose refusals once
+// sent it to a pair of tools it does not hold.
+//
+// Mutation: report the universe's MCP tools whatever the surface holds, and the
+// executor's surface says it has tools to discover.
 func TestTheSurfaceHandedToTheTurnSaysWhichToolsSitBehindDiscovery(t *testing.T) {
 	t.Parallel()
 	reg := tools.NewRegistry()
@@ -134,15 +141,28 @@ func TestTheSurfaceHandedToTheTurnSaysWhichToolsSitBehindDiscovery(t *testing.T)
 		tools.Annotations{}); err != nil {
 		t.Fatal(err)
 	}
-	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"comment_on_work_item"})
+	snapshot, err := reg.Snapshot().With(tools.Entry{Tool: stubTool(toolname.Activate),
+		Origin: tools.OriginBuiltin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	surface := tools.NewSurface("onboarding", snapshot,
+		[]string{"comment_on_work_item", toolname.Activate})
 
 	got := describe(surface)
 	if !slices.Contains(got.Discoverable, "mattermost_post_message") {
 		t.Errorf("Discoverable = %v, want the MCP tool in it", got.Discoverable)
 	}
 	if slices.Contains(got.Discoverable, "comment_on_work_item") {
-		t.Error("a first-party tool the executor already holds was reported as one " +
+		t.Error("a first-party tool the phase already holds was reported as one " +
 			"it has to discover")
+	}
+
+	held := tools.NewSurface("execute", reg.Snapshot(),
+		[]string{"comment_on_work_item", "mattermost_post_message"})
+	if got := describe(held).Discoverable; len(got) != 0 {
+		t.Errorf("Discoverable = %v on a surface that holds every tool and no way to discover one",
+			got)
 	}
 }
 
@@ -249,5 +269,53 @@ func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
 	if got, want := r.loadedSkills(), []string{"chat-conventions", "release-notes"}; !slices.Equal(got, want) {
 		t.Errorf("the collected run's guard holds %v, want what the launch recorded and what "+
 			"the run loaded over the bridge, %v", got, want)
+	}
+}
+
+// A REBUILT GUARD NAMES A SKILL AS THE RUN'S HARNESS LISTS IT: the names its
+// launch handed its skills under are on the parked state, and every rebuild
+// of the run's surface — a reopened run's, a carried-on run's, a collection's
+// — hands them to its guard, so a call refused after a restart or a seat move
+// names the skill the run's model can load, not a key it was never told.
+//
+// Mutation: rebuild the guard without the parked names, and the refusal sends
+// the run to load_tool_skill, which its harness is never listed.
+func TestARebuiltGuardNamesASkillAsTheRunsHarnessListsIt(t *testing.T) {
+	t.Parallel()
+	registry := skills.NewRegistry()
+	if _, err := registry.PutPage(skills.Skill{Key: "standups", Title: "Standups",
+		Summary: "how to report", Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+		SourcePageID: "standups-page"}); err != nil {
+		t.Fatalf("PutPage: %v", err)
+	}
+	reg := tools.NewRegistry()
+	for _, name := range []string{"slack_post", toolname.LoadToolSkill} {
+		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register %s: %v", name, err)
+		}
+	}
+	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
+	r, err := New(Config{
+		Registry: reg, Models: &phase.Registry{}, Launcher: stubLauncher{},
+		Sessions: testHost(t), Skills: registry,
+		Seat: prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
+		Resume: &Resume{State: execstate.State{
+			Version: execstate.Version, Round: 1,
+			ActiveTools:  []string{"slack_post", toolname.LoadToolSkill},
+			NativeSkills: map[string]string{"crewlet:standups": "standups"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	r.mu.Lock()
+	guard := r.guard
+	r.mu.Unlock()
+	blocked := guard.Blocking("slack_post", "")
+	if blocked == nil || blocked.Listed != "crewlet:standups" {
+		t.Fatalf("the rebuilt guard refuses as %+v, want the skill named crewlet:standups", blocked)
 	}
 }

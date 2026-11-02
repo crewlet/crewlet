@@ -67,6 +67,7 @@ func newFleet(t *testing.T, n int, holderWait time.Duration) *fleetOf {
 			Material: runtoken.OneKey("k", "test-key"), BaseURL: servers[0].URL,
 		})
 		muxes[i].Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
+		muxes[i].Handle(mcpbridge.ServerPattern, bridge.Handler())
 		node := "node-" + string(rune('a'+i))
 		m := &member{bridge: bridge, server: servers[i], node: node}
 		f.join(t, m, holderWait)
@@ -245,6 +246,34 @@ func TestARunWhoseSeatMovedIsServedByItsNewHolder(t *testing.T) {
 	rows := recovered.rows()
 	if len(rows) != 1 || rows[0].Name != "post_message" || rows[0].Seq != 2 {
 		t.Errorf("the new holder recorded %+v, want the box's call as the run's second", rows)
+	}
+}
+
+// EACH OF A SEAT'S MCP SERVERS IS RELAYED TO THE SEAT'S HOLDER, as the job's
+// own endpoint is: a box dials every server beneath the job's endpoint at the
+// fleet's address, and the node it lands on, which holds no session for the
+// run, hands the call to the one that does — which serves that server.
+//
+// Mutation: leave [mcpbridge.ServerPattern] out of the relay's mux
+// (Bridge.Join), and the holder answers the relayed call Not Found.
+func TestEachOfASeatsServersIsRelayedToItsHolder(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, 2, 10*time.Second)
+	holder := f.members[1]
+	calls := &ledger{}
+	url := f.takeOver(t, holder, &mcpbridge.Session{RunID: "run-1", Launch: "job-1",
+		Handle: "dev", Role: "Engineer", Surface: serversSurface(t), Ledger: calls})
+	if !strings.HasPrefix(url, f.members[0].server.URL) {
+		t.Fatalf("the endpoint %q is not the fleet's address", url)
+	}
+
+	box := dialWith(t, mcpbridge.ServerURL(url, "github"), nil)
+	if res := callTool(t, box, "create_issue", map[string]any{}); res.IsError {
+		t.Fatalf("github's endpoint, relayed, refused the call: %s", text(res))
+	}
+	rows := calls.rows()
+	if len(rows) != 1 || rows[0].Name != "create_issue" {
+		t.Errorf("the holder recorded %+v, want the box's one call on github's endpoint", rows)
 	}
 }
 

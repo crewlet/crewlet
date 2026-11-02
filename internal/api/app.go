@@ -681,10 +681,10 @@ type Options struct {
 	// would then never be ready.
 	Estate EstateFloor
 
-	// Audit is where a backup publishes its runtime audit record — this
-	// node's own queue, whose publish listener writes the event store. The
-	// operator surface is handed the same one by whoever builds it
-	// ([operator.Options.Audit]). REQUIRED: copying every credential the
+	// Audit is where a backup, and an MCP server's restart, publish their
+	// runtime audit record: this node's own queue, whose publish listener
+	// writes the event store. The operator surface is handed the same one by
+	// whoever builds it ([operator.Options.Audit]). REQUIRED: copying every credential the
 	// company holds to a directory somebody named is the one call an audit
 	// is most often opened to find.
 	Audit operator.AuditPublisher
@@ -862,17 +862,27 @@ func New(opts Options) (*App, error) {
 	if sources.Now == nil {
 		sources.Now = now
 	}
+	// Which built-ins a seat is offered: the registry the engine applied,
+	// and the pair its runner adds, which only the engine holds.
+	sources.Builtins = opts.Runtime.Builtins
+	// And what every node's MCP servers list, which only the engine
+	// watches.
+	sources.MCPListings = opts.Runtime.Listings()
+	// And how each server's instances are, which only the engine can ask
+	// the nodes holding them.
+	sources.MCPInstances = opts.Runtime.MCPInstances()
 	// SETTINGS › MCP & TOOLS' OWN ROUTES (internal/api/mcpapi), over the
-	// company this node applied and the community registry it names, which
-	// is all they read: built here rather than handed in, because the app
-	// already holds the one company reader every answer takes it from.
+	// company this node applied, the community registry it names and, for
+	// one server's detail, the sources as they stand here, every field the
+	// detail reads set above: built here rather than handed in, because the
+	// app already holds the one company reader every answer takes it from.
 	mcpSurface, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company {
 		if sources.Company == nil {
 			return nil
 		}
 		company, _ := sources.Company()
 		return company
-	}})
+	}, Detail: sources.MCPServer, Restarter: opts.Runtime.MCPRestarter(), Audit: opts.Audit})
 	if err != nil {
 		return nil, err
 	}
@@ -885,9 +895,6 @@ func New(opts Options) (*App, error) {
 	sources.Verifiable = func(ctx context.Context) []string {
 		return opts.Runtime.Snapshot(ctx).VerifiableSources
 	}
-	// And which built-ins a seat is offered: the registry the engine
-	// applied, and the pair its runner adds, which only the engine holds.
-	sources.Builtins = opts.Runtime.Builtins
 	// WHAT THIS PRINCIPAL MAY DO, from the SAME catalogue the act route
 	// serves and the same authority every one of its tools is decided by:
 	// a list computed anywhere else would be a second opinion about which

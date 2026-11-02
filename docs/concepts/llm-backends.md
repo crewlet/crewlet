@@ -1359,20 +1359,24 @@ harness's own on both runners — Claude Code's `--max-turns`, OpenCode's agent
 The seat's tools cannot be shipped into the box: most are MCP children
 holding the **seat's** credentials, several are engine control, and the
 whole point of a sandbox is that its credentials are not the company's.
-So the box gets one server on the engine, the bridge, named `crewlet`,
-beside whatever servers the seat's `role.sandbox.mcp.servers` scopes into it
-([MCP inside the sandbox](code-sandbox.md#mcp-inside-the-sandbox)) — and the
-seat's own tool surface reaches the run through the bridge, each call coming
-back out through the *same* `tools.Surface` a phase on this host calls. A
+So the box gets the engine, the bridge: its own tools as one server named
+`crewlet`, and each MCP server the seat holds as a server of its own under the
+name the company gives it, beside whatever servers the seat's
+`role.sandbox.mcp.servers` runs in the box itself, which the bridge then does
+not serve ([MCP inside the sandbox](code-sandbox.md#mcp-inside-the-sandbox)) —
+and the seat's whole tool surface reaches the run through the bridge, each call
+coming back out through the *same* `tools.Surface` a phase on this host calls. A
 tool denied there is denied here; the skill guard, the recording and the
 failure shape are the ones already tested. That name is **reserved**: an
 `mcp_servers` entry may not use it, because the bridge is written into every
 executor run's server list under it and would replace the entry there. The
-server behind the route is the one a phase on this host reaches through its
-relay (`internal/toolsession`), kept in step with the seat's *live* tool set:
-a tool the harness activates mid-run with `activate_tool` is listed on
-its next request, the answer to the activation held until the harness has re-read
-the list, up to two seconds.
+server behind each route is the one a phase on this host reaches through its
+relay (`internal/toolsession`), kept in step with the seat's *live* tool set.
+The run holds every tool its seat does from its launch and no discovery pair:
+the harness keeps a large server's tools out of its requests itself — Claude
+Code's tool search, OpenCode's Code Mode — and keeps `crewlet` in front of its
+model, which is why the engine's own tools and the seat's MCP servers are served
+apart ([The tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
 
 What the bridge owes a detached run's calls, each one, is what a phase owes its
 own — less the rounds, the terminator and the per-request budget, which belong
@@ -1441,8 +1445,8 @@ included, the bridge admits it on the token in its path.
 a process, so whichever node takes the seat over — the same node after a
 restart, or a peer — re-opens the run's session as it recovers the seat: the
 surface rebuilt from the run's own row: the tools and skills it launched with,
-those the run activated or loaded over the bridge, its call log and what its
-bridged calls have cost. The box's token, unchanged, reaches it there through
+the skills the run loaded over the bridge, its call log and what its bridged
+calls have cost. The box's token, unchanged, reaches it there through
 the same URL. A relaunch is a new job, and the old box's token stops
 resolving. A session that cannot be re-opened logs `bridge_not_reopened` and
 never fails the recovery.

@@ -37,6 +37,27 @@ export interface McpStatusNode {
   reported: boolean;
 }
 
+/**
+ * Why talking to a server failed, in the classes a person tells apart by what
+ * fixes them, decided by the engine where the facts are (the HTTP status a
+ * server answered, what became of a local server's process, the dial).
+ */
+type McpFailureClass =
+  | "blocked_address"
+  | "dns"
+  | "unreachable"
+  | "tls"
+  | "needs_sign_in"
+  | "credential_rejected"
+  | "missing_permission"
+  | "no_endpoint"
+  | "not_mcp"
+  | "old_protocol"
+  | "rate_limited"
+  | "empty_tools"
+  | "command_not_found"
+  | "exited";
+
 /** What one node did with one server. */
 export interface McpServerNode {
   node: string;
@@ -56,6 +77,12 @@ export interface McpServerNode {
   wait: string;
   /** The seat that waiting instance belongs to, or "". */
   wait_seat: string;
+  /** Why the failed instance `error` names failed, or "" where no class fits. */
+  error_class: McpFailureClass | "";
+  /** When the longest-failed instance on the node stopped serving, or null. */
+  down_since: string | null;
+  /** How many times the node brought the server's instances back, summed. */
+  restarts: number;
 }
 
 /** One server. */

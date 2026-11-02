@@ -178,6 +178,13 @@ type LaunchRequest struct {
 	Setup      []SetupStep
 	MCPServers map[string]MCPServer
 
+	// Skills are the skills the job's harness is handed as its own — see
+	// [RunRequest.Skills]. Nil hands none. Where the job reports loading one
+	// is its opening's to say ([Opening.SkillLoads]), as the job's endpoint
+	// is: a job handed skills and opened with nowhere to report a load is
+	// refused by its runner.
+	Skills []Skill
+
 	// Model is the model the run works under — see [RunRequest.Model].
 	// Empty names none, and the harness chooses its own.
 	Model string
@@ -302,6 +309,11 @@ type Opening struct {
 	// Steer is where the job's harness asks for its turn's notes
 	// ([RunRequest.Steer]); the zero value takes none inside the run.
 	Steer SteerWiring
+
+	// SkillLoads is where the job's harness reports loading one of the
+	// skills it is handed as its own ([RunRequest.SkillLoads]); the zero
+	// value names nowhere, which a job handed none needs.
+	SkillLoads SkillWiring
 }
 
 // Continuation is how a job continues the job before it — see
@@ -486,6 +498,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// below reads: the job's own runner and the standing instructions that
 	// list the servers a box has.
 	var steer SteerWiring
+	var skillLoads SkillWiring
 	if req.Opened != nil {
 		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.LastBridgeSeq()})
 		if openErr != nil {
@@ -499,6 +512,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 			req.MCPServers = servers
 		}
 		steer = named.Steer
+		skillLoads = named.SkillLoads
 	}
 
 	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
@@ -564,6 +578,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// WHERE THE JOB'S HARNESS ASKS FOR ITS TURN'S NOTES, as the job's own
 		// opening answered it — see [Opening.Steer].
 		Steer: steer,
+		// THE SKILLS ITS HARNESS IS HANDED AS ITS OWN, and where it reports
+		// loading one, as the job's own opening answered it — see
+		// [Opening.SkillLoads].
+		Skills:     req.Skills,
+		SkillLoads: skillLoads,
 		// THE CREDIT ON THE JOB'S OWN COMMITS, naming the turn: the run's
 		// page is addressed by it, and every job of the turn is that one
 		// run's ([Manager.CommitAttribution]).

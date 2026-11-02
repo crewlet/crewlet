@@ -548,6 +548,7 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 	for i := range outcomes {
 		outcomes[i].seat = id
 	}
+	stampSince(e.mcpSeats[s.handle], outcomes, e.now())
 	if e.mcpSeats == nil {
 		e.mcpSeats = make(map[string][]mcpOutcome)
 	}

@@ -10,7 +10,10 @@
 // config, where its output lands, and how its stream and result are read —
 // and how a person's notes to its run's turn reach it between its own steps
 // (steer.go: Claude Code's hooks, [ClaudeCode]; OpenCode's plugin,
-// opencode_steer.js, [OpenCode]).
+// opencode_steer.js, [OpenCode]), and how the skills a run is handed as its
+// own reach its harness and its loads reach the run's bridge (skills.go: a
+// plugin of the run's own on Claude Code; a skills directory and a second
+// plugin, opencode_skills.js, on OpenCode).
 //
 // # A run's commits credit Crewlet, through git
 //
@@ -262,6 +265,29 @@ func (p Paths) OpenCodeValues() string { return p.WorkDir() + "/opencode-values"
 // change inside it, so nothing is written there once the run's server starts —
 // the plugin itself writes nothing at all.
 func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-steer" }
+
+// ClaudeSkillsPlugin is the DIRECTORY of the plugin a Claude Code run is handed
+// its own skills in ([sandbox.RunRequest.Skills], [ClaudeCode.WriteConfig]):
+// its manifest, a directory per skill, and the hook that reports each load to
+// the run's bridge — named on the run's command line with `--plugin-dir`, so
+// the skills are the run's alone, under the plugin's name. Under WorkDir, never
+// in the checkout or the box's `.claude/skills/`, where a commit could carry
+// them or the next run in the box would find them; and its own, removed whole
+// before every run ([Runner.ClearArtifacts]).
+func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skills" }
+
+// OpenCodeSkills is the DIRECTORY an OpenCode run's own skills are written into
+// ([sandbox.RunRequest.Skills], [OpenCode.WriteConfig]), a directory per skill,
+// and named in the run's configuration's `skills`. Its own, under WorkDir, for
+// the reasons [Paths.ClaudeSkillsPlugin] gives; and written before the run's
+// server starts, which watches it.
+func (p Paths) OpenCodeSkills() string { return p.WorkDir() + "/opencode-skills" }
+
+// OpenCodeSkillsPlugin is the DIRECTORY of the plugin that reports each skill an
+// OpenCode run's model loads to the run's bridge (opencode_skills.js), written
+// and named as the notes plugin is ([Paths.OpenCodeSteerPlugin]), and for the
+// same reasons a directory of its own.
+func (p Paths) OpenCodeSkillsPlugin() string { return p.WorkDir() + "/opencode-skill-loads" }
 
 // CommitAttribution is the DIRECTORY holding a run's commit attribution
 // (attribution.go): the hook ([Paths.AttributionHook]) and the directory the

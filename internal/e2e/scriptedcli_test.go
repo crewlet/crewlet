@@ -259,6 +259,12 @@ type modelRequest struct {
 	// function — and on a run whose server offered nothing.
 	Tools []string `json:"tools,omitempty"`
 
+	// Skills are the skills of its own the harness lists to its model, each
+	// as `<name> — <description>`, the way Claude Code lists a skill: an
+	// executor's, read off the plugins its run was started with
+	// ([codingSkills]). Empty on every other call.
+	Skills []string `json:"skills,omitempty"`
+
 	// Run is what this harness run did before this request: each response the
 	// model gave and what its calls answered, in order — the conversation a
 	// real harness sends its model, past the transcript it was started with.

@@ -46,6 +46,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/url"
 	"sync"
 	"time"
 
@@ -55,6 +56,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -577,10 +579,14 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		RoleName:    seat.Name,
 		Description: e.Schedule.Task,
 		Schedule:    e.Schedule.Name,
+		ScheduledAt: fireUTC.UTC(),
 
 		TimeoutSeconds: int(e.Schedule.Timeout() / time.Second),
 	}, trace)
 	task.Source = "scheduler"
+	// ONE PARTITION PER SCHEDULE, so fires that wait in the seat's inbox
+	// together reach it together and run once. See [FirePartition].
+	notify.Stamp(task, FirePartition(e), "")
 
 	if err := s.pub.Publish(ctx, topics.AgentInbox(agentID), task); err != nil {
 		// The claim is already spent, and that is the at-most-once side of
@@ -614,6 +620,32 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		log.ErrorContext(ctx, "scheduled_task_fired_publish_failed", "schedule", e.Schedule.Name, "error", err)
 	}
 	return true
+}
+
+// FirePartition is the inbox partition every fire of one schedule shares.
+//
+// # Why fires share one
+//
+// A seat that cannot work (a provider limit, a budget, an executor holding
+// it) leaves its inbox held, and a schedule keeps firing into it. Each fire
+// used to key a partition of its own, so when the seat came back every
+// waiting fire was its own turn: a health check due every five hours ran
+// three times within four minutes after a limit cleared, each run reporting
+// the same thing. Sharing one partition hands the waiting fires to ONE
+// handler call, and the dispatcher runs only the latest of them
+// (internal/engine, mergeScheduledFires) and records the rest as superseded.
+//
+// The runner is not part of the key because the key is read inside one
+// seat's inbox, and a unit schedule fanned out to several seats fires into
+// several inboxes.
+//
+// ESCAPED, each part, for the reason [FireKey] is a struct: a joined key
+// collides the moment a separator appears in a name, and a unit "Q3:Launch"
+// with a schedule "Launch" must not merge with a unit "Q3" and a schedule
+// ":Launch".
+func FirePartition(e Entry) string {
+	return "schedule/" + url.PathEscape(string(e.Scope)) + "/" +
+		url.PathEscape(e.ScopeID) + "/" + url.PathEscape(e.Schedule.Name)
 }
 
 // recordSkip notes, once, that a missed fire was deliberately not backfilled.

@@ -146,10 +146,7 @@ func (t *activateTool) Parameters() map[string]any {
 	}
 }
 
-// activationTarget is the tool an activate_tool call names. ONE READING, for
-// the tool itself and for an executor run taken over while it works, whose
-// surface is rebuilt with every tool its successful activations named
-// ([Runner.ReopenAgentRun]).
+// activationTarget is the tool an activate_tool call names.
 func activationTarget(args map[string]any) string {
 	name, _ := args["name"].(string)
 	return name

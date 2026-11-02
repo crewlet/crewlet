@@ -113,7 +113,6 @@ func TestGoldenATurnThatDeliversCompletes(t *testing.T) {
 			`{"decision":"done","final_artifact":"Posted the weekly summary."}`)},
 	}
 	res, plays := runTurn(t, prov, run{calls: []llm.ToolCall{
-		activate("slack_post"),
 		{ID: "a", Name: "slack_post",
 			Arguments: map[string]any{"channel": "C0ENG", "text": "Weekly: three PRs merged."}},
 		call(t, runner.SubmitWorkTool, `{
@@ -153,13 +152,11 @@ func TestGoldenAFalseDeliveryClaimIsCorrectedInsideTheRound(t *testing.T) {
 	}, run{calls: []llm.ToolCall{
 		// The run read through a tool that is positively annotated
 		// read-only, then claimed the read as the delivery.
-		activate("slack_history"),
 		{ID: "a", Name: "slack_history"},
 		call(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"answered","deliveries":["slack_history"]}`),
 		// Told what is citable, it discovers the real tool, posts, and
 		// submits honestly.
-		activate("slack_post"),
 		{ID: "b", Name: "slack_post"},
 		call(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"posted","deliveries":["slack_post"]}`),
@@ -189,7 +186,6 @@ func TestGoldenAnUndeliveredDoneIsOverturnedAndTheSecondRoundDelivers(t *testing
 		// which passes the pre-review check and reaches a reviewer that
 		// likes the prose.
 		run{calls: []llm.ToolCall{
-			activate("slack_history"),
 			{ID: "a", Name: "slack_history"},
 			call(t, runner.SubmitWorkTool, `{
 				"outcome":"blocked","summary":"drafted the summary",
@@ -197,7 +193,6 @@ func TestGoldenAnUndeliveredDoneIsOverturnedAndTheSecondRoundDelivers(t *testing
 		}},
 		// Round 2, after the correction: discovers the tool and posts.
 		run{calls: []llm.ToolCall{
-			activate("slack_post"),
 			{ID: "b", Name: "slack_post", Arguments: map[string]any{"channel": "C0ENG"}},
 			call(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"posted","deliveries":["slack_post"]}`),
@@ -234,7 +229,6 @@ func TestGoldenAKnownReadDoesNotCountAsDelivery(t *testing.T) {
 	res, _ := runTurn(t, &scriptedProvider{
 		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}, run{calls: []llm.ToolCall{
-		activate("slack_history"),
 		{ID: "a", Name: "slack_history"},
 		call(t, runner.SubmitWorkTool,
 			`{"outcome":"blocked","summary":"read it","evidence":"no write tool"}`),
@@ -275,7 +269,6 @@ func TestGoldenNoActionOnAnAwaitedTurnIsRefusedInsideTheRound(t *testing.T) {
 		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}, run{calls: []llm.ToolCall{
 		call(t, runner.SubmitWorkTool, `{"outcome":"no_action","summary":"not my area"}`),
-		activate("slack_post"),
 		{ID: "a", Name: "slack_post"},
 		call(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"declined in the thread","deliveries":["slack_post"]}`),
@@ -301,7 +294,6 @@ func TestGoldenAStalledTurnFailsRatherThanSpinning(t *testing.T) {
 		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool,
 			`{"decision":"self_iterate","notes":"still not right"}`)},
 	}, run{calls: []llm.ToolCall{
-		activate("slack_post"),
 		{ID: "a", Name: "slack_post"},
 		call(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"the same output every time","deliveries":["slack_post"]}`),
@@ -333,14 +325,12 @@ func TestGoldenTheLedgerCrossesRoundsWithItsBudgetsApplied(t *testing.T) {
 	}}
 	res, plays := runTurn(t, prov,
 		run{calls: []llm.ToolCall{
-			activate("slack_post"),
 			{ID: "a", Name: "slack_post",
 				Arguments: map[string]any{"channel": "C0ENGINEERING", "text": body}},
 			call(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"v1","deliveries":["slack_post"]}`),
 		}, text: "v1"},
 		run{calls: []llm.ToolCall{
-			activate("slack_post"),
 			{ID: "b", Name: "slack_post", Arguments: map[string]any{"channel": "C0ENGINEERING"}},
 			call(t, runner.SubmitWorkTool,
 				`{"outcome":"delivered","summary":"v2","deliveries":["slack_post"]}`),
@@ -390,7 +380,6 @@ func TestGoldenAToolFailureIsOrdinaryAndTheTurnContinues(t *testing.T) {
 		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}, run{calls: []llm.ToolCall{
 		{ID: "a", Name: "ghost_tool"},
-		activate("slack_post"),
 		{ID: "b", Name: "slack_post"},
 		call(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"recovered and posted","deliveries":["slack_post"]}`),
@@ -408,7 +397,6 @@ func TestGoldenAMalformedSubmissionIsRetriedInsideThePhase(t *testing.T) {
 	res, plays := runTurn(t, &scriptedProvider{
 		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}, run{calls: []llm.ToolCall{
-		activate("slack_post"),
 		{ID: "a", Name: "slack_post"},
 		call(t, runner.SubmitWorkTool, `{"outcome":"wat","summary":"s"}`),
 		call(t, runner.SubmitWorkTool,
@@ -426,23 +414,22 @@ func TestGoldenAMalformedSubmissionIsRetriedInsideThePhase(t *testing.T) {
 	}
 }
 
-// The executor never named its tools in advance, so there is nothing to
-// reconcile: it discovers the real name and the check reads that as a genuine
-// delivery, or the turn loops re-posting.
-func TestGoldenADiscoveredToolIsAGenuineDelivery(t *testing.T) {
+// An MCP tool the executor holds is a genuine delivery. The executor never named
+// its tools in advance and never has to discover one — it holds every tool its
+// seat does from its launch — so there is nothing to reconcile: the check
+// reads its call as the delivery it is, or the turn loops re-posting.
+func TestGoldenAnMCPToolIsAGenuineDelivery(t *testing.T) {
 	t.Parallel()
 	res, _ := runTurn(t, &scriptedProvider{
 		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}, run{calls: []llm.ToolCall{
-		{ID: "a", Name: "list_mcp_server_tools", Arguments: map[string]any{"server": "slack"}},
-		{ID: "b", Name: "activate_tool", Arguments: map[string]any{"name": "slack_post"}},
 		{ID: "c", Name: "slack_post"},
 		call(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"found the real tool and posted",
+			`{"outcome":"delivered","summary":"posted with the server's own tool",
 			  "deliveries":["slack_post"]}`),
 	}})
 	if res.Decision != phase.Done {
-		t.Fatalf("decision = %s (breach %+v) — a discovered delivery was not "+
+		t.Fatalf("decision = %s (breach %+v) — a delivery through an MCP tool was not "+
 			"read as one", res.Decision, res.Breach)
 	}
 	if res.Rounds != 1 {

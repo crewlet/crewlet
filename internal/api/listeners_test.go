@@ -137,7 +137,9 @@ var publishedRoutes = []string{
 	"GET /webhooks/github-app",
 	"POST " + auth.OTLPPrefix + "{token}/v1/{signal}",
 	mcpbridge.PathPrefix + "{token}",
+	mcpbridge.ServerPattern,
 	mcpbridge.SteerPattern,
+	mcpbridge.SkillPattern,
 }
 
 // wildcard is one segment of a mux pattern that matches more than itself.

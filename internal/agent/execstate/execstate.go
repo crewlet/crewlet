@@ -95,6 +95,13 @@ type State struct {
 	// LoadedSkills is the skill-guard state, replayed for the same reason.
 	LoadedSkills []string `json:"loaded_skill_keys"`
 
+	// NativeSkills is the key of each Tool Skill the run's harness was
+	// handed as its own, by the name the harness lists it under
+	// (internal/agent/runner, handedskills.go): what every later opening of
+	// the run's bridge reads a load the harness reports by, and what a
+	// rebuilt guard names a refusal by. Empty for a run handed none.
+	NativeSkills map[string]string `json:"native_skills,omitempty"`
+
 	// Round is the turn iteration the run was launched in, so the resumed
 	// turn continues numbering rather than restarting at 1.
 	//

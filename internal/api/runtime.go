@@ -37,6 +37,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -234,4 +235,20 @@ type NodeRuntime interface {
 	// every executor reaches its MCP servers through would be short by
 	// exactly the pair a reader of the MCP page asks about.
 	Builtins() []queries.ToolRow
+
+	// Listings is the fleet's listings of its MCP servers' tools as this
+	// node's watched copy holds them, and the schemas they name: what a
+	// server's detail (`GET /mcp-servers/{name}`) is read from. Nil on a
+	// node that keeps no copy, whose detail then answers unavailable.
+	Listings() queries.MCPListingReader
+
+	// MCPInstances reads one MCP server's instances from the nodes holding
+	// them, which only the engine can ask: what a server's detail says of
+	// each instance's health.
+	MCPInstances() queries.MCPInstanceReader
+
+	// MCPRestarter asks the fleet to restart an MCP server
+	// (`POST /mcp-servers/{name}/retry`), which only the engine can tell
+	// every node.
+	MCPRestarter() mcpapi.Restarter
 }

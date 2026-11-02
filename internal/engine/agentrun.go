@@ -269,6 +269,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// closes nothing: it holds the seat's mailbox, not its running
 		// work.
 		Fence: e.seatFence(handle),
+		// THE SKILLS ITS HARNESS IS HANDED AS ITS OWN, by the name it lists
+		// each under: a load the harness reports is the run's load of the
+		// key (internal/api/mcpbridge, skills.go).
+		Skills: req.Skills.Listed(),
 	}
 
 	settings := seatSandbox(company, handle)
@@ -345,6 +349,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		Spec:        spec,
 		Setup:       runEnv.setup,
 		MCPServers:  servers,
+		Skills:      req.Skills.Box(),
 		Model:       run.model,
 		ProviderKey: member.Key,
 		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
@@ -457,12 +462,18 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 			"job %s; this node's log says why (mcp_bridge_*)", s.RunID, job.LaunchID)
 	}
 	inbox.Bind(ctx, job.LaunchID)
-	opening := sandbox.Opening{Servers: bridgeServer(endpoint)}
+	opening := sandbox.Opening{Servers: bridgeServers(endpoint, s.Surface)}
 	if inbox != nil {
 		// THE SAME NAMES THE BRIDGE SERVES, so the box and the bridge cannot
 		// disagree about where the notes are.
 		opening.Steer = sandbox.SteerWiring{Server: config.ToolServerName,
 			Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)}
+	}
+	if len(s.Skills) > 0 {
+		// AND WHERE ITS HARNESS REPORTS LOADING ONE OF ITS SKILLS, by the
+		// same names.
+		opening.SkillLoads = sandbox.SkillWiring{Server: config.ToolServerName,
+			Tool: mcpbridge.SkillTool, URL: mcpbridge.SkillURL(endpoint)}
 	}
 	return opening, nil
 }
@@ -609,18 +620,32 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor int
 	return nil
 }
 
-// bridgeServer is the engine-side surface as one entry of a box's MCP server
+// bridgeServers is the engine-side surface as entries of a box's MCP server
 // list, which the launch adds beside the seat's own servers in a map of the
 // job's own: an endpoint written into the seat's rendered map, whose values
 // the epoch owns, would follow the seat into its next run, where the token
 // names a job that is over.
-func bridgeServer(endpoint string) map[string]sandbox.MCPServer {
-	// Under the reserved name, which config refuses to any mcp_servers
-	// entry — so this entry can never shadow a server the seat scoped into
-	// its box. See [config.ToolServerName] for why it is not the handle.
-	return map[string]sandbox.MCPServer{config.ToolServerName: {
+//
+// THE ENGINE'S OWN TOOLS under the reserved name, which config refuses to any
+// mcp_servers entry — so it can never shadow a server the seat scoped into its
+// box (see [config.ToolServerName] for why it is not the handle) — and ALWAYS
+// LOADED ([sandbox.MCPServer.AlwaysLoaded]): what the run reports through and
+// asks a person through is on every request. AND EACH OF THE SEAT'S MCP SERVERS
+// the surface offers a tool of, under its own name, at the route the bridge
+// serves it on ([mcpbridge.ServerURL]), left to the harness's own way of
+// keeping a large tool list out of each request. The names are the bridge's own
+// reading of the surface ([mcpbridge.Servers]), so a box is handed exactly the
+// servers its opening serves.
+func bridgeServers(endpoint string, surface mcpbridge.Surface) map[string]sandbox.MCPServer {
+	out := map[string]sandbox.MCPServer{config.ToolServerName: {
 		Name: config.ToolServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
+		AlwaysLoaded: true,
 	}}
+	for _, name := range mcpbridge.Servers(surface) {
+		out[name] = sandbox.MCPServer{Name: name, Transport: sandbox.TransportHTTP,
+			URL: mcpbridge.ServerURL(endpoint, name)}
+	}
+	return out
 }
 
 // agentRunFor is THE construction path for a turn's executor launcher, used by

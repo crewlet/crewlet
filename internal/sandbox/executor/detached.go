@@ -221,6 +221,16 @@ type carrier interface {
 	transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error
 }
 
+// mcpHolder is a harness that can be held to the MCP servers a run hands it,
+// starting none its own configuration, a repository's or a plugin's declares
+// ([sandbox.RunRequest.OnlyMCPServers]).
+//
+// OPTIONAL, as [resumer] is, and only Claude Code's runner implements it: the
+// one run that asks for it, the assistant's deep work, runs on Claude Code
+// alone. A run held that way on any other harness is refused rather than
+// started on every server that harness's configuration adds up to.
+type mcpHolder interface{ HoldsToItsMCPServers() bool }
+
 // sessionTotals is a harness whose result, on a run that continues a session, can
 // state the SESSION's spend rather than the run's own: from the release
 // TotalsRestored names, the harness starts a continued session from the totals
@@ -465,7 +475,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// by `&&`, so a file that will not go never keeps a directory.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
 		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
-			p.SessionStaging()})
+			p.SessionStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()})
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
@@ -505,6 +515,14 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 			"not a session id a harness names", req.Resume)
 	}
 	if err := r.refuseCarried(req); err != nil {
+		return sandbox.RunHandle{}, err
+	}
+	if h, ok := r.harness.(mcpHolder); req.OnlyMCPServers && (!ok || !h.HoldsToItsMCPServers()) {
+		return sandbox.RunHandle{}, fmt.Errorf("executor: %s starts the MCP servers its own "+
+			"configuration declares, and this run asks to be held to the ones it is handed",
+			r.harness.Name())
+	}
+	if err := r.refuseSkills(req); err != nil {
 		return sandbox.RunHandle{}, err
 	}
 	paths := PathsFor(box)
@@ -562,6 +580,11 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// box as well. A copy, since req is this call's own.
 	if req.Steer.Set() {
 		req.Steer.URL = sandbox.EngineAddress(box, req.Steer.URL)
+	}
+	// And its skill route, which OpenCode's plugin posts each load to
+	// ([OpenCode.WriteConfig]), for the same reason.
+	if req.SkillLoads.Set() {
+		req.SkillLoads.URL = sandbox.EngineAddress(box, req.SkillLoads.URL)
 	}
 	configPath, err := r.harness.WriteConfig(ctx, box, req, paths)
 	if err != nil {

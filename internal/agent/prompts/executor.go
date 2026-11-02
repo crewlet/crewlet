@@ -21,8 +21,11 @@ import (
 //     teaches the opposite: there, the final text IS the answer to whoever
 //     asked, and here it reaches nobody — the only way to a person is a tool
 //     of the seat's;
-//   - the discovery sentence — an actor that gave up when the tool it needed
-//     was not already on its surface;
+//   - the search sentence — an actor that gave up when the tool it needed
+//     was not already in front of it. Every tool the seat holds is on the
+//     run's surface from its launch, but its harness shows a large server's
+//     tools only once its model looks for them (its tool search, Code Mode's
+//     `search()`), which is the same failure waiting to happen;
 //   - the full-arc rule — routed comment triggers produced recon only, and
 //     the turn ended with the model writing "I don't have write tools";
 //   - the originating-channel rule — a tracker-create task triggered from
@@ -33,8 +36,8 @@ import (
 // What is NOT here is everything another channel already carries. What an
 // outcome means and that `deliveries` are checked is the submission schema's
 // to say (runner/schema.go), beside the fields it describes, and the decoder
-// enforces both; how discovery works is the two discovery tools' own
-// descriptions; the mission, policies and roster need no sentence saying they
+// enforces both; how a tool is looked for is the harness's own to teach; the
+// mission, policies and roster need no sentence saying they
 // are present, because they are. A second copy of a rule is not emphasis: it
 // is two texts that drift, and the model reads whichever it saw last.
 const ExecutorHeader = "\n## Your turn" +
@@ -47,8 +50,8 @@ const ExecutorHeader = "\n## Your turn" +
 	"\n**Finish the arc in this pass:** read, decide, then call the tool " +
 	"that delivers — the reply, the comment, the status change, the create. " +
 	"A turn that gathers data and stops has delivered nothing. If a tool you " +
-	"need is not among your tools, discover it (`" + toolname.ListMCPServerTools +
-	"`, then `" + toolname.Activate + "`) before reporting that you cannot act." +
+	"need is not among the tools you see, search your tools for it before " +
+	"reporting that you cannot act: every tool your seat holds is yours." +
 	"\n" +
 	"\n**Stay reachable on the channel the trigger arrived on**, even when " +
 	"the work lives on another system: filing the ticket is the work, and " +
@@ -71,27 +74,22 @@ const KeyUntrustedText = "untrusted_text"
 // run and its first, which is what the provider's prefix cache is priced on.
 // Work that accumulates DURING the turn belongs in [BuildPhaseUserMessage].
 //
-// The zero value renders the plain contract with nothing to discover and no
-// prefetch blocks, which is what most tests want.
+// The zero value renders the plain contract with no prefetch blocks, which is
+// what most tests want.
+//
+// NO TOOL IS LISTED, and no server to discover: the executor holds every tool
+// it can reach from its launch, each one's definition reaching its harness
+// over the bridge under the server it comes from, with what that server is
+// for as the server's own MCP instructions (internal/api/mcpbridge,
+// servers.go). Its harness keeps them out of the requests that do not need
+// them by its own deferral.
 type ExecutorInput struct {
-	// Discoverable is what the executor can reach but does not hold yet,
-	// rendered by [github.com/crewlet/crewlet/internal/tools.Snapshot.Discoverable]:
-	// on the executor, which holds every first-party tool from its launch,
-	// that is its MCP servers by name. Empty renders no section.
-	Discoverable string
-
 	// AvailableTools is every name on the surface built for this phase,
-	// the tools the phase adds to it included (`submit_work`, the
-	// discovery pair, `delegate`) — never the registry snapshot it was
-	// built from, which holds none of those. It scopes skill matching,
-	// and gates every section that tells the model to call a tool
+	// the tools the phase adds to it included (`submit_work`, `delegate`)
+	// — never the registry snapshot it was built from, which holds none of
+	// those. It gates every section that tells the model to call a tool
 	// (escalation, workers).
 	AvailableTools []string
-
-	// MCPServers is every MCP server the surface's universe holds a tool
-	// of, sorted: what the skill catalogue's server triggers are matched
-	// against, as the guard matches them (see [Surface]).
-	MCPServers []string
 
 	// Workers is the rendered `## Your workers` block: one line per
 	// delegate template this seat may name, with what it is for and what
@@ -108,7 +106,9 @@ type ExecutorInput struct {
 	CounterpartyProfile string
 
 	// SynthesizedSkills is the block of skills this agent has learned for
-	// itself (distinct from the operator-authored tool skills in Skills).
+	// itself (distinct from the operator-authored tool skills, which are its
+	// harness's own and listed by it — internal/agent/runner,
+	// handedskills.go).
 	SynthesizedSkills string
 
 	// EpisodeRecall is episodic recall, frozen at turn start rather than
@@ -128,10 +128,6 @@ type ExecutorInput struct {
 	// turn start and handed over rather than left for the agent to fetch.
 	// Empty for every trigger that is not a chat thread reply.
 	ThreadContext string
-
-	// Skills is the tool-skill registry. Nil keeps the prompt free of skill
-	// scaffolding entirely.
-	Skills SkillCatalogue
 }
 
 // BuildExecutor renders the executor's system prompt, and its outline.
@@ -230,10 +226,10 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	if in.CounterpartyProfile != "" {
 		b.Heading(KeyCounterparty, "\n## Known counterparty", in.CounterpartyProfile)
 	}
-	// BEFORE the tool sections, because choosing a worker is a decision
-	// about how to do the work rather than about which tool to call, and
-	// the executor reads this prompt top-down: what it is, what it knows,
-	// who it can hand work to, then what it can call itself.
+	// LAST, because choosing a worker is a decision about how to do the
+	// work, and the executor reads this prompt top-down: what it is, what
+	// it knows, who it can hand work to. What it can call itself, and the
+	// tool skills that say how, are its harness's to list.
 	//
 	// THE LIST ALONE: what a worker is, what it may not do and that it
 	// answers inside this turn is `delegate`'s own description, which
@@ -242,15 +238,6 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 		b.Heading("workers", "\n## Your workers", in.Workers)
 	}
 
-	// The tool-skills catalogue lands adjacent to the tools to discover so
-	// the executor reads "here is how to use these tools" immediately before
-	// "here is what else you can reach" — the two are conceptually one
-	// section.
-	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseExecute, Surface{
-		Tools:      in.AvailableTools,
-		MCPServers: in.MCPServers,
-	})...)
-	b.Heading(KeyDiscoverableTools, discoverableSection(in.Discoverable)...)
 	return b.Build()
 }
 

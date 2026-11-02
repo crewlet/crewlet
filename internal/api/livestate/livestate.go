@@ -430,15 +430,33 @@ func (s *LiveState) clock() time.Time {
 // --- read side ---------------------------------------------------------- //
 
 // MergeAgents overlays live state onto each static config row, matched on the
-// row's `agent_id`.
+// row's `agent_id`, the call in flight included: the handshake snapshot, which
+// a tab opens a seat's live view from.
 //
 // EVERY SEAT ROW CARRIES A STATE, a seat the events never mentioned included:
 // its placement, its runs and the company's budget are enough to say whether it
-// is idle or stopped, and a row with none was drawn as offline — which, for a
+// is idle or stopped, and a row with none was drawn as offline, which, for a
 // seat a peer node was serving, was simply false. A row with no `agent_id`
 // names no seat this projection can state, and is returned as-is. Order
 // follows the input.
 func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
+	return s.merge(static, mergeOverlay)
+}
+
+// MergeRoster is [LiveState.MergeAgents] without each seat's call in flight:
+// the roster as `GET /agents`, the agents dataset and the `seats` push read it,
+// whose size is bounded by the number of seats ([mergeStatus] says why). A
+// reader that wants a seat's call asks for it by its own question
+// (`live_call{agent_id}`).
+func (s *LiveState) MergeRoster(static []map[string]any) []map[string]any {
+	return s.merge(static, mergeStatus)
+}
+
+// merge is the walk both reads share: a copy of each static row, with write
+// applied to it under the seat's overlay.
+func (s *LiveState) merge(static []map[string]any,
+	write func(map[string]any, Overlay)) []map[string]any {
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -449,7 +467,7 @@ func (s *LiveState) MergeAgents(static []map[string]any) []map[string]any {
 			merged[k] = v
 		}
 		if id, _ := row["agent_id"].(string); id != "" {
-			mergeOverlay(merged, s.overlayOf(id))
+			write(merged, s.overlayOf(id))
 		}
 		out = append(out, merged)
 	}

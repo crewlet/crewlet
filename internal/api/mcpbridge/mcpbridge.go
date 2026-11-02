@@ -71,7 +71,9 @@
 // engine's phase is suspended while it runs, and those are settled when the run
 // is collected and its turn resumes. A person's notes to the turn it serves
 // from the run's note inbox, at the harness's own boundaries — see steer.go, "A
-// NOTE INBOX" — and decides nothing about them.
+// NOTE INBOX" — and decides nothing about them. A load of one of the run's own
+// skills, which its harness reports, it records as the run's own load of the
+// Tool Skill it stands for — see skills.go.
 //
 // # A run outlives the process that opened its session
 //
@@ -294,6 +296,14 @@ type Session struct {
 	// nothing to steer — the assistant's deep work — has.
 	Steer SteerInbox
 
+	// Skills are the skills the run's harness was handed as its OWN
+	// (internal/sandbox, RunRequest.Skills), by the name it lists each
+	// under to the key of the Tool Skill it is: a load the harness reports
+	// by that name is recorded as the run's own load of the key — see
+	// skills.go. Nil hands none: the skill route answers 404, skill_loaded
+	// records nothing, and load_tool_skill is listed as any other tool.
+	Skills map[string]string
+
 	mu sync.Mutex
 	// live is the session's current opening: what a token minted at its
 	// latest [Bridge.Open] reaches. Nil until it is opened.
@@ -329,11 +339,16 @@ func (s *Session) caller() Caller {
 	if s.Caller != nil {
 		return s.Caller
 	}
-	if seat, ok := s.Surface.(*tools.Surface); ok && seat != nil {
+	if seat := s.seat(); seat != nil {
 		return seatCaller{surface: seat}
 	}
 	return nil
 }
+
+// seat is the session's surface where it is a seat's, or nil: Ask Crewlet's
+// deep work hands the bridge a surface of its own, which acts for a person and
+// holds no MCP server's tools.
+func (s *Session) seat() *tools.Surface { return seatOf(s.Surface) }
 
 // Ledger is the durable record of a bridged run's calls.
 //
@@ -515,7 +530,14 @@ func New(opts Options) (*Bridge, error) {
 		if opened == nil {
 			return nil
 		}
-		return opened.server.MCP()
+		// THE SERVER THE ROUTE NAMES: the engine's own at the job's endpoint,
+		// one of the seat's MCP servers beneath it ([ServerPattern]), and
+		// none for a server the opening does not serve.
+		ep := opened.endpoint(r.PathValue("server"))
+		if ep == nil {
+			return nil
+		}
+		return ep.server.MCP()
 	}, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true})
 	return b, nil
 }
@@ -1207,8 +1229,10 @@ func (s *Session) Connections() int {
 		return 0
 	}
 	n := 0
-	for range opened.server.MCP().Sessions() {
-		n++
+	for _, ep := range opened.order {
+		for range ep.server.MCP().Sessions() {
+			n++
+		}
 	}
 	return n
 }
@@ -1228,7 +1252,13 @@ type binding struct {
 	// held here because the Session value can be opened again for another.
 	id      string
 	session *Session
-	server  *toolsession.Server
+	// servers are the MCP servers the opening serves, by the name a route
+	// names each by: "" for the engine's own tools, and each of the seat's
+	// MCP servers under its own name (servers.go). order is the same, the
+	// engine's own first. Set once as the opening is built, and read-only
+	// after.
+	servers map[string]*endpoint
+	order   []*endpoint
 	// caller is who the opening's every call is decided as, fixed when it
 	// opened ([Session.caller]).
 	caller Caller
@@ -1262,6 +1292,10 @@ type binding struct {
 	// unsubstituted says once, per opening, that the harness's hooks name no
 	// agent the bridge can tell apart — see [binding.takeSteer].
 	unsubstituted sync.Once
+
+	// skillUnsubstituted says once, per opening, that the harness's hook names
+	// no skill it loaded — see [binding.loadSkill].
+	skillUnsubstituted sync.Once
 }
 
 var _ toolsession.Dispatcher = (*binding)(nil)
@@ -1269,10 +1303,33 @@ var _ toolsession.Dispatcher = (*binding)(nil)
 func newBinding(ctx context.Context, s *Session, where route) *binding {
 	opened := &binding{id: s.Launch, session: s, caller: s.caller(), route: where,
 		ctx: context.WithoutCancel(ctx), arrived: s.LastSeq, steer: s.Steer}
-	opened.server = toolsession.NewServer(serverName, s.Role+" ("+s.Handle+")", opened)
+	// EVERY ENDPOINT IS FILED BEFORE ANY SERVER IS BUILT: a server lists its
+	// tools as it is built, and which endpoint lists a tool is read off the
+	// map — a server built before its siblings were filed would list theirs,
+	// and keep listing them until the surface next changed.
+	names := Servers(s.Surface)
+	opened.servers = make(map[string]*endpoint, 1+len(names))
+	for _, name := range append([]string{""}, names...) {
+		ep := &endpoint{opening: opened, name: name}
+		opened.servers[name] = ep
+		opened.order = append(opened.order, ep)
+	}
+	title := s.Role + " (" + s.Handle + ")"
+	for _, ep := range opened.order {
+		instructions := ""
+		if ep.name != "" {
+			instructions = instructionsOf(s.seat(), ep.name)
+		}
+		ep.server = toolsession.NewServer(ep.listedName(), title, instructions, ep)
+	}
+	own := opened.servers[""].server
 	// steer_take, ANSWERED BEFORE THE TOOLS ARE: never listed, never handed
-	// to the run's surface, never recorded — see steer.go.
-	opened.server.MCP().AddReceivingMiddleware(opened.steerMiddleware)
+	// to the run's surface, never recorded — see steer.go. On the engine's
+	// own server, where the run's hooks name it.
+	own.MCP().AddReceivingMiddleware(opened.steerMiddleware)
+	// skill_loaded, ANSWERED THE SAME WAY, for the same reason: a hook's
+	// report, never listed and never a call of the model's — see skills.go.
+	own.MCP().AddReceivingMiddleware(opened.skillMiddleware)
 	// THE ANSWER TO AN ACTIVATION WAITS FOR THE BOX'S RE-LIST
 	// ([toolsession.Server.HoldAnswersForRelist]): the harnesses that run in
 	// a box (Claude Code, OpenCode) re-read their tool list when told it
@@ -1281,7 +1338,7 @@ func newBinding(ctx context.Context, s *Session, where route) *binding {
 	// Unconditional, because the bridge is told nothing of which harness dials
 	// it, and the cost on one that never re-lists is the hold's own short
 	// bound on an activation's answer, never a refusal.
-	opened.server.HoldAnswersForRelist()
+	own.HoldAnswersForRelist()
 	return opened
 }
 
@@ -1325,9 +1382,11 @@ func (o *binding) endKeeping(keep SteerInbox) {
 	if inbox != nil && inbox != keep {
 		inbox.Close()
 	}
-	for ss := range o.server.MCP().Sessions() {
-		if err := ss.Close(); err != nil {
-			log.Debug("mcp_bridge_session_close", "error", err)
+	for _, ep := range o.order {
+		for ss := range ep.server.MCP().Sessions() {
+			if err := ss.Close(); err != nil {
+				log.Debug("mcp_bridge_session_close", "error", err)
+			}
 		}
 	}
 }
@@ -1351,11 +1410,17 @@ func (o *binding) over() bool {
 
 // Offered is what the surface offers now, with the hints the registry holds
 // for each, so a box's client can tell a read from a write.
+//
+// The bridge's own skill loader is left out for a harness that loads its
+// skills itself ([binding.offeredTool]).
 func (o *binding) Offered() []toolsession.Tool {
 	surface := o.session.Surface
 	defs := surface.ToolDefs()
 	out := make([]toolsession.Tool, 0, len(defs))
 	for _, def := range defs {
+		if !o.offeredTool(def.Name) {
+			continue
+		}
 		out = append(out, toolsession.Tool{Def: def, Annotations: surface.AnnotationsOf(def.Name)})
 	}
 	return out

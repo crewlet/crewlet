@@ -296,8 +296,12 @@ type RoleSandbox struct {
 	// "say nothing" would be the same zero.
 	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one of this seat's executor runs. Unset = providers.sandbox.default_max_turns; 0 = uncapped."`
 
-	// MCP scopes which of the seat's MCP servers its box gets, beside the
-	// seat's own tool bridge, which every executor box is given.
+	// MCP names which of the seat's MCP servers run in its box rather than
+	// reach it over the seat's tool bridge, which every executor box is
+	// given and which serves every other MCP server the seat holds, each
+	// under its own name. A server named here is not served over the bridge
+	// too, so a run never holds one server twice: it is the box's, for a
+	// server that has to run where the checkout is.
 	//
 	// Scoping is at the SERVER level only, and that is a platform fact
 	// rather than a simplification: the harnesses offer no per-tool
@@ -334,7 +338,7 @@ type RoleSandbox struct {
 
 // RoleSandboxMCP is the server-level scope for a seat's executor box.
 type RoleSandboxMCP struct {
-	Servers []string `yaml:"servers,omitempty" json:"servers,omitempty" desc:"MCP server names this seat's executor box is given, beside its tool bridge."`
+	Servers []string `yaml:"servers,omitempty" json:"servers,omitempty" desc:"MCP servers that run in this seat's executor box; its tool bridge serves every other."`
 }
 
 // IsZero lets an unset scope drop out of a round trip.

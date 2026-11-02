@@ -527,6 +527,15 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 		t.Errorf("the dashboard's McpToolRefusal is %v; the engine sends %v", reasons, want)
 	}
 
+	classes, err := clientsource.Union(clientsource.Tree(t), "McpFailureClass")
+	if err != nil {
+		t.Fatalf("%v: this gate cannot run without the client's declaration", err)
+	}
+	slices.Sort(classes)
+	if want := slices.Sorted(slices.Values(stringsOf(mcp.FailureClasses))); !slices.Equal(classes, want) {
+		t.Errorf("the dashboard's McpFailureClass is %v; the engine sends %v", classes, want)
+	}
+
 	got, err := clientsource.Union(clientsource.Tree(t), "McpServerState")
 	if err != nil {
 		t.Fatalf("%v — this gate cannot run without the client's declaration", err)

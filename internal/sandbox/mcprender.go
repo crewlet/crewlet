@@ -50,6 +50,21 @@ type MCPServer struct {
 	// The http fields.
 	URL     string
 	Headers map[string]string
+
+	// AlwaysLoaded asks the harness to offer this server's tools on every
+	// request rather than keep them back until its model looks for one:
+	// Claude Code's `alwaysLoad`, which exempts a server from its tool search,
+	// and OpenCode's `codemode: false`, which offers its tools directly rather
+	// than through Code Mode's `execute`.
+	//
+	// THE ENGINE'S OWN TOOLS ALONE are offered so — the bridge's `crewlet`
+	// server, which holds what a run reports through (submit_work) and asks a
+	// person through (ask_and_wait), and the seat's colleagues, work and
+	// knowledge. Every MCP server the seat holds is left to the harness's own
+	// way of keeping a large tool list out of each request, as a person's
+	// harness keeps theirs: a seat with 150 MCP tools sends their definitions
+	// on no request it does not need them for.
+	AlwaysLoaded bool
 }
 
 // Transport is how the in-box agent reaches one server.

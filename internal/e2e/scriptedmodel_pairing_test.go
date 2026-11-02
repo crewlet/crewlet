@@ -57,16 +57,23 @@ func TestEveryModelCallRecordsOneAlignedEntry(t *testing.T) {
 			} else {
 				system = fmt.Sprintf("ordinary round #%d", i)
 			}
-			post(t, srv, system)
+			post(t, srv, system, fmt.Sprintf("skill #%d", i))
 		}()
 	}
 	wg.Wait()
 
-	phases, systems := m.seen(), m.systemPrompts()
-	if len(phases) != calls || len(systems) != calls {
-		t.Fatalf("recorded %d phases and %d prompts for %d calls: a call that "+
-			"appends to one slice and not the other misaligns every index "+
-			"after it", len(phases), len(systems), calls)
+	phases, systems, listed := m.seen(), m.systemPrompts(), m.skillsListed()
+	if len(phases) != calls || len(systems) != calls || len(listed) != calls {
+		t.Fatalf("recorded %d phases, %d prompts and %d skill lists for %d calls: a "+
+			"call that appends to one slice and not the other misaligns every index "+
+			"after it", len(phases), len(systems), len(listed), calls)
+	}
+	for i := range systems {
+		_, number, _ := strings.Cut(systems[i], "#")
+		if len(listed[i]) != 1 || listed[i][0] != "skill #"+number {
+			t.Fatalf("entry %d carries the prompt %q and the skills %q — the prompt "+
+				"and the skills at one index describe different calls", i, systems[i], listed[i])
+		}
 	}
 	for i, phase := range phases {
 		aux := strings.Contains(systems[i], "memory-relevance filter")
@@ -85,9 +92,10 @@ func TestEveryModelCallRecordsOneAlignedEntry(t *testing.T) {
 // and the pool must be this server's own, never the process-global one every
 // httptest cleanup in the binary sweeps — see
 // [github.com/crewlet/crewlet/internal/httpx/httpxtest].
-func post(t *testing.T, srv *httptest.Server, system string) {
+func post(t *testing.T, srv *httptest.Server, system, skill string) {
 	t.Helper()
-	body, err := json.Marshal(modelRequest{System: system, Prompt: "## user\n\nHow did the week go?\n"})
+	body, err := json.Marshal(modelRequest{System: system, Prompt: "## user\n\nHow did the week go?\n",
+		Skills: []string{skill}})
 	if err != nil {
 		t.Errorf("encode the call: %v", err)
 		return

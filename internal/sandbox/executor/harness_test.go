@@ -44,7 +44,7 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 	t.Parallel()
 	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, executor.Paths{}, ""))
-	for _, absent := range []string{"--max-turns", "--max-budget-usd", "--model", "--mcp-config", "--settings"} {
+	for _, absent := range []string{"--max-turns", "--model", "--mcp-config", "--settings"} {
 		if strings.Contains(cmd, absent) {
 			t.Fatalf("%q was added for an unset value:\n%s", absent, cmd)
 		}
@@ -55,15 +55,12 @@ func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 	t.Parallel()
 	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{
 		Brief:  "x",
-		Limits: sandbox.Limits{MaxTurns: 30, MaxBudgetUSD: 2.5},
+		Limits: sandbox.Limits{MaxTurns: 30},
 		Model:  "claude-opus-5",
 	}, executor.Paths{}, "/box/.crewlet/mcp.json"))
 	for _, want := range []string{
-		"--max-turns 30", "--max-budget-usd 2.5", "--model 'claude-opus-5'",
+		"--max-turns 30", "--model 'claude-opus-5'",
 		"--mcp-config '/box/.crewlet/mcp.json'",
-		// Without strict mode the harness ALSO loads whatever config the box's
-		// home carries, which on a reused box is the previous run's.
-		"--strict-mcp-config",
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("the invocation is missing %q:\n%s", want, cmd)
@@ -334,10 +331,14 @@ func TestTheOpenCodeConfigCarriesNoCredential(t *testing.T) {
 	}
 }
 
-// BOTH TRANSPORTS IN OPENCODE 2's SHAPE, every server's tools offered directly
-// rather than through Code Mode — where the transcript would record every call
-// as `execute` — and no remote server starting an OAuth flow a headless run
-// cannot complete.
+// BOTH TRANSPORTS IN OPENCODE 2's SHAPE: a seat's servers left to Code Mode,
+// OpenCode's own way of keeping a large tool list out of each request, the
+// engine's own server offered directly — what a run reports and asks through
+// is a call on every model — and no remote server starting an OAuth flow a
+// headless run cannot complete.
+//
+// Mutation: write `codemode: false` on every server, as the runner used to, or
+// on none, and this goes red.
 func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	t.Parallel()
 	cfg, body, b := writeOpenCodeConfigIn(t, sandbox.RunRequest{
@@ -350,6 +351,10 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 			"linear": {
 				Name: "linear", Transport: sandbox.TransportHTTP,
 				URL: "https://example.com/mcp", Headers: map[string]string{"H": "v"},
+			},
+			"crewlet": {
+				Name: "crewlet", Transport: sandbox.TransportHTTP,
+				URL: "https://engine.example.com/mcp/tok", AlwaysLoaded: true,
 			},
 		},
 	})
@@ -369,8 +374,8 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	if got.Environment["K"] == "" || openCodeValue(t, b, got.Environment["K"]) != "v" {
 		t.Errorf("stdio env = %v, want the seat's credential under `environment`", got.Environment)
 	}
-	if got.Codemode == nil || *got.Codemode {
-		t.Errorf("the stdio server's tools are behind Code Mode:\n%s", body)
+	if got.Codemode != nil {
+		t.Errorf("a seat's stdio server is kept from Code Mode:\n%s", body)
 	}
 	got = cfg.MCP.Servers["linear"]
 	if got.Type != "remote" || openCodeValue(t, b, got.URL) != "https://example.com/mcp" {
@@ -382,13 +387,18 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	if got.OAuth == nil || *got.OAuth {
 		t.Errorf("the remote server may start OAuth, which nobody can complete:\n%s", body)
 	}
-	if got.Codemode == nil || *got.Codemode {
-		t.Errorf("the remote server's tools are behind Code Mode:\n%s", body)
+	if got.Codemode != nil {
+		t.Errorf("a seat's remote server is kept from Code Mode:\n%s", body)
+	}
+	if own := cfg.MCP.Servers["crewlet"]; own.Codemode == nil || *own.Codemode {
+		t.Errorf("the engine's own tools are behind Code Mode:\n%s", body)
 	}
 }
 
 // The other runner's vocabulary, from the same typed input — which is the
 // point of RenderMCP answering in server shape rather than in one harness's keys.
+// The engine's own server is always loaded, and a seat's left to Claude Code's
+// tool search.
 func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	t.Parallel()
 	b := sandbox.NewFakeSandbox("box-1")
@@ -402,6 +412,10 @@ func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 			"linear": {
 				Name: "linear", Transport: sandbox.TransportHTTP,
 				URL: "https://example.com/mcp", Headers: map[string]string{"H": "v"},
+			},
+			"crewlet": {
+				Name: "crewlet", Transport: sandbox.TransportHTTP,
+				URL: "https://engine.example.com/mcp/tok", AlwaysLoaded: true,
 			},
 		},
 	}, executor.PathsFor(b))
@@ -417,6 +431,8 @@ func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 			Env     map[string]string `json:"env"`
 			URL     string            `json:"url"`
 			Headers map[string]string `json:"headers"`
+			// AlwaysLoad is Claude Code's exemption from its tool search.
+			AlwaysLoad *bool `json:"alwaysLoad"`
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(blob, &cfg); err != nil {
@@ -441,6 +457,12 @@ func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	// a transport's own fields only.
 	if got.Command != "" || len(got.Env) > 0 {
 		t.Errorf("the http server carried stdio fields: %+v", got)
+	}
+	// Mutation: always load every server, or none, and this goes red.
+	for name, server := range cfg.Servers {
+		if loaded := server.AlwaysLoad != nil && *server.AlwaysLoad; loaded != (name == "crewlet") {
+			t.Errorf("server %s always loaded = %v, want the engine's own alone", name, loaded)
+		}
 	}
 }
 

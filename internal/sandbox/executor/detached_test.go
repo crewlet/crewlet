@@ -180,10 +180,13 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	// a run with fewer values than the last would keep the last one's beside
 	// its own, and a run wired to no notes a plugin nothing names. So is the
 	// commit attribution: a run that credits nothing leaves no hook behind,
-	// and one naming another run never credits the last one.
+	// and one naming another run never credits the last one. And so are a
+	// run's own skills, on either harness, with what reports their loads: a
+	// run handed fewer skills than the last would list the last one's too,
+	// and report their loads to an endpoint that is over.
 	_, removed, _ := strings.Cut(cleared, "; rm -rf ")
 	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
-		p.SessionStaging()} {
+		p.SessionStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()} {
 		if !strings.Contains(removed, "'"+dir+"'") {
 			t.Fatalf("the directory %q was not removed whole: %s", dir, cleared)
 		}

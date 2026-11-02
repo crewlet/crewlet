@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/api/mcpapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -135,8 +136,28 @@ func (r engineRuntime) Tools() []queries.ToolRow {
 	for _, entry := range entries {
 		out = append(out, queries.CatalogueRow(entry, delivers[entry.Name()]))
 	}
+	// AND WHAT THE FLEET LISTS that no registry here holds: a per-agent
+	// server's tools, whose children run on the nodes holding its seats
+	// and on no other. From the engine's watched copy and the schemas it
+	// has read, never the store, since a push builds this; a copy not yet
+	// answered adds nothing, and the engine re-sends the catalogue when it
+	// is.
+	if live, ok := r.engine.LiveMCPListings(); ok {
+		out = append(out, queries.ListedRows(out, live, r.engine.HeldMCPToolSchemas())...)
+	}
 	return out
 }
+
+// Listings is the engine's watched copy of the fleet's MCP listings.
+func (r engineRuntime) Listings() queries.MCPListingReader { return r.engine }
+
+// MCPInstances is the engine's read of one server's instances across the
+// fleet ([engine.Engine.MCPInstances]).
+func (r engineRuntime) MCPInstances() queries.MCPInstanceReader { return r.engine }
+
+// MCPRestarter is the engine's restart of an MCP server, its refusals mapped
+// onto the route's ([mcpRestarter]).
+func (r engineRuntime) MCPRestarter() mcpapi.Restarter { return mcpRestarter{e: r.engine} }
 
 // Builtins is the engine's own tools as this node's seats are offered them:
 // the registry's built-ins, and the discovery pair.

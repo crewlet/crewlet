@@ -312,6 +312,10 @@ executor_answered       # what an answer to a parked run's question became
                            # (executor_answer_given), which is not stored and
                            # is never a turn
 scheduled_task_fired
+scheduled_fire_superseded  # a fire that waited in its seat's inbox and was
+                           # not run, because a later fire of the same
+                           # schedule ran in its place; under the skipped
+                           # fire's own trace
 
 # a2a: one ask, one answer, then closed. The ask and the answer also travel
 #      as inbox wakes (a2a_request, a2a_message), which are not stored

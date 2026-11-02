@@ -31,7 +31,7 @@ operator credential — move to that listener and are served nowhere else:
 |---|---|---|---|
 | `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A box exporting its executor's telemetry | `api.port` | `api.public` only |
-| `/mcp/{token}` | A seat's executor run, in its box, calling the seat's tools — and, beneath it, polling for its turn's notes (`/mcp/{token}/steer/{notes,read}`) | `api.port` | `api.public` only |
+| `/mcp/{token}` | A seat's executor run, in its box, calling the seat's tools — and, beneath it, calling each of the seat's MCP servers (`/mcp/{token}/server/{server}`), polling for its turn's notes (`/mcp/{token}/steer/{notes,read}`) and reporting each of its own skills it loads (`/mcp/{token}/skill`) | `api.port` | `api.public` only |
 | Everything else: `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/auth/*`, `/iam/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/worklet/*` and `/fleet/*` gestures | People, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
 
 A public route asked of `api.port` answers `404` with the code `no_route` and a
@@ -294,7 +294,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | `GET /health` | `200`, `status: "shutting_down"` | Liveness. An orchestrator that could not reach the node would kill it in the middle of the turns the drain exists to finish. |
 | `GET /ready` | `503`, `reason: "draining"` | Readiness: takes the node out of rotation so traffic moves to a peer. |
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
-| `/mcp/{token}` (its notes route included) and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls, the notes and the spans of executors launched before the drain. An [executor in its box](../concepts/code-sandbox.md) outlives the turn segment that launched it, so the drain never waits on one, and refusing these would shorten no drain and only break an executor mid-flight. A tool call whose executor's seat is held by another node is relayed there, as it is outside a drain. |
+| `/mcp/{token}` (its MCP servers, its notes route and its skill route included) and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls, the notes and the spans of executors launched before the drain. An [executor in its box](../concepts/code-sandbox.md) outlives the turn segment that launched it, so the drain never waits on one, and refusing these would shorten no drain and only break an executor mid-flight. A tool call whose executor's seat is held by another node is relayed there, as it is outside a drain. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/worklet/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. `POST /secrets/reveal` rides with them although it changes nothing — it is a `POST` so the names it reads travel in a body — and the CLI run asking it is told to try another node, as a write is. |
 
@@ -382,8 +382,10 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
 | `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
+| `GET` | `/mcp-catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `admin`** (see [below](#get-mcp-catalogue)) |
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Takes `admin`** (see [below](#get-mcp-servers)) |
-| `GET` | `/mcp-servers/catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `admin`** (see [below](#get-mcp-serverscatalogue)) |
+| `GET` | `/mcp-servers/{name}` | One MCP server whole: its row as `/mcp-servers` answers it, every tool the fleet's live nodes list for it (per-agent servers included) with its hints, risk and arguments, what the server said of itself in its handshake, and what removing it would take with it. **Takes `admin`** (see [below](#get-mcp-serversname)) |
+| `POST` | `/mcp-servers/{name}/retry` | Restart one MCP server now: every instance on every node, or with `seat` one agent's instance on the node holding the seat. **Takes `tools.retry`**, an administrator's at any recency (see [below](#post-mcp-serversnameretry)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -465,8 +467,10 @@ that header must keep `X-Crewlet-Engine` in it.
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path). Mounted where `CREWLET_SANDBOX_OTEL_RECEIVER_URL` is set, or, for a node's own `direct` boxes, where it runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` — on a node without `ingress` to its own host's loopback alone, as the bridge is |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its harness's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. A call is admitted under any `Host`, a proxy's or tunnel's public name on the node's loopback included. `401` for a token that is forged, expired, or names a run that is over, and for a call to an Ask Crewlet deep-work run held to the engine host's loopback that comes from any other address, or names a `Host` that is neither loopback nor a container runtime's name for the engine host (`host.docker.internal`, `host.containers.internal`); `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status. Mounted only on a node that has a bridge: one given `CREWLET_MCP_BRIDGE_URL`, or one that runs seats and binds `api.port`, for its own `direct` boxes. A node without `ingress` mounts it on `api.port` beside its probes and serves it to its own host's loopback alone, answering any other caller `404 no_route` (see [Probes on a node without ingress](#probes-on-a-node-without-ingress)); on any other node the route is absent |
+| `GET` `POST` `DELETE` | `/mcp/{token}/server/{server}` | One of the seat's MCP servers, served apart from the engine's own tools at `/mcp/{token}` so the run's harness can keep its tools out of each request ([the tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)): that server's tools alone, under the name the company gives it, with what the company says the server is for as its MCP instructions. Every call is the run's, decided and recorded as one at `/mcp/{token}` is. The same token, transport, routing and refusals as `/mcp/{token}`, relayed to the seat's holder the same way; `400` for a server the run's session does not serve |
 | `GET` | `/mcp/{token}/steer/notes?after={seq}` | The run's [notes](../concepts/code-sandbox.md#notes-to-a-running-run): the notes waiting for its turn past the cursor, `{"notes": [{seq, id, inbox, message}]}`, held up to ten seconds while none waits and answered at once when one arrives. `503` with a `Retry-After` once the node is stopping (`draining`) or the run's session has ended here (`unavailable`), the held poll included: its notes wait for the session's next opening. The same token, routing and refusals as the bridge; `404` for a run that has nothing to steer |
 | `POST` | `/mcp/{token}/steer/read` | Record the notes the run's harness put in front of its model, `{"ids": [...]}` (one to ten, at most 64 KiB): `204`, or `503` with a `Retry-After` when the record could not be written, and the notes wait |
+| `POST` | `/mcp/{token}/skill` | Record that the run's harness loaded one of the skills it was handed as its own, `{"skill": "<name>"}` (at most 4 KiB), naming the skill as the harness listed it: the run's own load of the Tool Skill it stands for, recorded as a `load_tool_skill` call on the run's record, which unlocks the tools a required skill covers. `204` whether or not the name is one of the run's skills; `404` for a run handed none. The plugin of an OpenCode run posts here; a Claude Code run's hook reports the same load as a call of the bridge's `skill_loaded` tool, which is never listed. The same token, routing and refusals as the bridge |
 | `GET` `POST` `DELETE` | `/operator/mcp` | Worklet, Doclet and Chatlet, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you: it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node has met its first company, and never empty after that. Pausing, resuming and steering a seat and answering a parked run are about the fleet's own records, so every company is served them whatever backends it runs |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to**: the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers `503 no_active_revision` before the first company, as `/operator/mcp` does, and `404 unknown_tool` for a tool the company's catalogue does not serve |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Ask Crewlet proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with `"outcome": "unknown"` and the `op_id` to retry under for a decision nobody can confirm, and `503 unavailable` without `outcome` for a condition of the node, which recorded nothing: its `detail` says what happened in a sentence for you, with a `Retry-After` exactly where waiting clears it. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
@@ -4827,8 +4831,8 @@ this node as on any other.
 
 **A node that runs seats serves its own boxes beside the probes.** A `direct`
 box is a process of the node's host, and dials the node that launched it on
-loopback: the [tool bridge](#routes) under `/mcp/{token}` (its notes route
-included) and, where the node forwards to `OTEL_EXPORTER_OTLP_ENDPOINT`, the
+loopback: the [tool bridge](#routes) under `/mcp/{token}` (its MCP servers, its
+notes route and its skill route included) and, where the node forwards to `OTEL_EXPORTER_OTLP_ENDPOINT`, the
 telemetry receiver under `/otlp/{token}/v1/{signal}`. Both are served here to a
 caller on this host's loopback alone, read from the connection's own address,
 and are the same routes an ingress node serves: a token the fleet did not sign
@@ -6381,7 +6385,7 @@ same tools), and eight of them are given to no seat:
 | `create_channel` | `channel` — the new room's name — and optionally `kind` (`public` or `private`; omitted takes `chat.chatlet.default_channel_private`), `topic`, `purpose`, `members` | Makes a named room, with the caller in it. The name is its address, so two people asking for one contend and one is refused `exists`. A unit's own room is the org chart's: the engine opens one for each unit that declares a `channel`, and a create of kind `unit` is refused `forbidden`. A room keeps what the company keeps; a horizon of its own is an administrator's to set. |
 | `open_dm` | `to` — the other handles | Opens the conversation between the caller and them, or reaches the one already open, without saying anything; `created` says which. Its id is its participants, so opening it twice is one room. |
 | `update_channel` | `channel`, and any of `topic`, `purpose`, `archived`, `auto_join`, and `template` beside a `topic` or `purpose` | Changes only what it names: an empty `topic` clears the topic, an absent one leaves it. A topic and a purpose are any member's, each at most 250 characters, and each change is a line in the room's transcript; `template` names the template they were set from (at most 64 characters), and the transcript records that one line instead. `auto_join` puts every seat the company takes on from then in the room, and is an administrator's, on a public room only (`chat.channel.autojoin`). `archived` closes the room to new messages (or, `false`, opens it again), and that is **not** any member's: it is decided on the stored room (`chat.channel.archive`), for its creator, the lead of the unit a unit's room belongs to or of a unit above it, or an administrator. An archived room is still read and searched. |
-| `set_channel_members` | `channel`, `members` | States the room's WHOLE membership — whoever is left out is taken out, and an empty list empties it. Refused for a unit's room, whose membership is the org chart's, and for a direct conversation, whose id is its participants. |
+| `set_channel_members` | `channel`, `members`, optionally `expected_members` | States the room's WHOLE membership: whoever is left out is taken out, and an empty list empties it. Each member is a handle or `{handle, follow_all}`; `follow_all` makes every message in the room reach them. `expected_members` is the membership the change was built from: when the room holds anybody else, or anybody follows it differently, by the time the write lands, it is refused as a conflict and the caller reads the room again, so a change somebody made meanwhile is never written back over. Refused for a unit's room, whose membership is the org chart's, and for a direct conversation, whose id is its participants. |
 | `add_channel_members` | `channel`, `members` (handles) | Puts the people and agents named in the room and takes nobody out, decided against the room as it stands when the write lands, so two people adding at once both land. `added` answers who it put there; anybody already in the room is left as they are. Refused for a unit's room and a direct conversation as `set_channel_members` is, and for a handle that is no seat of the company. |
 | `edit_message` | `channel`, `message_id`, `body`, and optionally `links` | Rewrites a message. Only its author may. Whoever the new words name for the first time is told; nobody else is woken again. `links` changes only when sent: omitted, the message keeps the links it has, so fixing a typo needs only the new `body`; a list replaces them, and an empty list removes them. Each link is an absolute `http`, `https` or `mailto` address, stored as sent; any other is refused `invalid`, naming every entry that is not one (`links[1]`). |
 | `delete_message` | `channel`, `message_id` | Takes a message back: its words go and its row stays, so a thread hung off it keeps its root. Its author may, and so may an administrator — moderation, decided before the message is read, so it reaches a message in any room, a private room or a direct conversation the administrator is not in included, without showing it to them. |
@@ -9421,7 +9425,7 @@ that are not credentials — `transport`, `command`, `args`, `url`; `env` and
 server at all (`mcp_servers[].enabled`, true on a server it does not carry),
 and `description` what it says the server is for, the line each agent's
 prompt lists beside the server's name (`""` when it says nothing). `title`, `catalogue` and `vendor` are what the
-[curated catalogue](#get-mcp-serverscatalogue) recognises the server as, by
+[curated catalogue](#get-mcp-catalogue) recognises the server as, by
 its address or its command: the entry's title, its key and the vendor mark
 the dashboard draws. A server the catalogue does not know is titled by its
 name, with `catalogue` and `vendor` empty. `started`, `failed` and `waiting` are summed over
@@ -9459,6 +9463,22 @@ it against the integration's latest report), and its `server_exited` or
 `wait` is one waiting instance's sentence — the variables it waits for and the
 integration minting them — bounded the same way, and `wait_seat` its seat; the
 node's `mcp_server_awaiting_credential` line carries it.
+
+`error_class` is why that instance failed, in the classes a person tells apart
+by what fixes them ([Tools and MCP › Why a server failed](../guides/tools-and-mcp.md#why-a-server-failed)),
+or `""` where none fits. `down_since` is when the longest-failed instance on the
+node stopped serving, or first failed to start, and stays the same instant
+across the retries of one outage (`null` when none has failed). `restarts` is
+how many times the node brought the server's instances back since each was
+started from its spec, summed: a count that climbs while the server stays up is
+a server that flaps. The `url` is answered with its credentials withheld: the
+value of any query parameter whose name marks a credential (`key`, `token`,
+`secret`, `sig`, `pass`, `auth`, `session`, `credential` and the like, in any
+case) or whose value has a known credential's shape reads `redacted`, as does a
+path segment of a known credential's shape, a fragment's credential
+(`#access_token=...`), and a user name in the address. The scheme, host and
+port stay readable, and an address with nothing to withhold is answered exactly
+as written.
 
 `unlisted_annotations` are the entry's `tool_annotations` keys that no
 instance started on a reporting node lists a tool for — by the server's own
@@ -9505,9 +9525,11 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
      "refused_count": 1, "shadowed_tools": [], "shadowed_count": 0,
      "nodes": [
        {"node": "node-1", "reported": true, "started": 2, "failed": 0, "waiting": 0, "tools": 26,
-        "error": "", "error_seat": "", "wait": "", "wait_seat": ""},
+        "error": "", "error_seat": "", "wait": "", "wait_seat": "",
+        "error_class": "", "down_since": null, "restarts": 0},
        {"node": "node-2", "reported": true, "started": 1, "failed": 1, "waiting": 0, "tools": 26,
-        "error": "401 Bad credentials", "error_seat": "backend-dev", "wait": "", "wait_seat": ""}
+        "error": "401 Bad credentials", "error_seat": "backend-dev", "wait": "", "wait_seat": "",
+        "error_class": "credential_rejected", "down_since": "2026-11-01T08:52:10Z", "restarts": 4}
      ]}
   ],
   "builtin": [
@@ -9531,7 +9553,7 @@ words are in
 [Groups, and who may call each one](../guides/tools-and-mcp.md#groups-and-who-may-call-each-one)).
 It is the built-ins of the registry this node applied, which every node
 applies alike, plus `list_mcp_server_tools` and `activate_tool`, which the
-engine hands every executor and onboarding pass and no registry holds. A group
+engine hands the onboarding pass and a worker and no registry holds. A group
 the company offers nothing of is left out: a company on Jira gets no `work`
 group, and one on Slack no `chat` group. A node with no active revision sends
 an empty list.
@@ -9539,14 +9561,16 @@ an empty list.
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [Per-entity read and write](#per-entity-read-and-write).
 
-### `GET /mcp-servers/catalogue`
+### `GET /mcp-catalogue`
 
 What a server is added from, for the add flow of **Settings › MCP & tools**.
 It is decided by `config.read`, so **it takes `admin`**, as adding a server
 does: an entry is the draft of a launch line every engine host runs, and the
 answer names the registry the company's configuration does. A plain read
 rather than a question: nothing in it is live, so the socket does not carry
-it.
+it. It sits outside `/mcp-servers/`, whose next segment is always a server's
+name, so a server may be called `catalogue` and still have its own
+[detail](#get-mcp-serversname).
 
 `curated` is the curated catalogue whole, in its order, whatever `q` says: a
 table compiled into the engine and reviewed in pull requests, so it answers
@@ -9610,6 +9634,186 @@ over 200 characters, or holding a control character) is refused, as
   "left_out": 1
 }
 ```
+
+### `GET /mcp-servers/{name}`
+
+One MCP server, whole, for its page under **Settings › MCP & tools**. It is
+decided by `config.read`, so **it takes `admin`**, as `GET /mcp-servers` does
+and for its reason. A plain read rather than a question, until a screen
+watches it: the page reads it on a poll.
+
+**What the fleet lists, not what this node runs.** A per-agent server's
+children run only on the nodes holding its seats, so the node answering may
+run none of them. Every node publishes what its own instances of each server
+list, and this answer is the union of the live nodes' listings
+([Tools and MCP › What every server lists](../guides/tools-and-mcp.md#what-every-server-lists)).
+A node's listing counts only while it holds its presence at the epoch it wrote
+it under, so a node that drained, died or restarted stops counting at once.
+
+- `server` is the server's row exactly as [`GET /mcp-servers`](#get-mcp-servers)
+  answers it, and `nodes` the live nodes its cells are drawn against.
+- `listed` is each live node's listing: when it last changed (`at`), how many
+  instances on the node it is the union of, and how many tools it counts.
+- `tools` is every tool a live node lists, by name, each once: `name` as it is
+  offered (the `tool_prefix` applied) and `raw` as the server names it, its
+  `title` and `description` (the server's words, the description cut to 1,024
+  bytes), its `annotations` with the company's overrides applied, as words
+  (`yes`, `no`, `unknown`), and the engine's one reading of them: `risk`
+  (`read_only`, `additive` or `destructive`; a tool that declares nothing is
+  `destructive` with `risk_declared: false`) and `external` (whether a call may
+  reach past the company; true unless the tool says it does not). `digest`
+  names the definition shown, the one most instances list; `definitions` counts
+  how many different definitions the fleet lists under the name (more than one
+  while a server is mid-upgrade). `instances` and `nodes` are summed across the
+  fleet. `input_schema` and `output_schema` are the definition's schemas, or
+  `null` where none is kept: a tool that publishes no output schema, schemas
+  past 64 KiB, or a tool past its listing's 1 MiB of schemas (kept in name
+  order).
+- `tool_count` is how many tools the server lists, never fewer than `tools`
+  holds: a node's listing names at most 256 of them.
+- `server_info` (`name`, `title`, `version`, `protocol`) and `instructions`
+  are what the server said of itself in its handshake, from the listing that
+  changed last; `null` and `""` where no live node's listing carries them. Both
+  are the server's own words, each bounded.
+- `dependants` is what removing the server takes with it, exactly as a dry run
+  of [`DELETE /config/mcp-servers/{name}`](#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it)
+  answers it: the `mcp_env` blocks and box entries it clears, and the stored
+  values nothing reads once it is gone. Empty lists for a server the
+  configuration does not declare.
+- `instances` is every instance of the server, **read from the nodes holding
+  them when you ask** ([Tools and MCP › A server's health](../guides/tools-and-mcp.md#a-servers-health)):
+  each node whose last heartbeat reports an instance of it, and each node whose
+  heartbeat carried no report, is asked over the broker within two seconds. Each
+  instance names its `seat` (`""` for a shared server's one instance), `node`,
+  `state` (`running`, `failed` or `waiting`), `since` (when that state began:
+  its session's start, when it stopped serving or first failed, or when it was
+  first held back), `restarts`, `tools`, `failure` (why a failed instance is not
+  serving: `{class, said, at, node, seat}`, `null` otherwise), `wait` (what a
+  waiting one waits for) and `last_failure` (its latest failure, kept after it
+  came back), and `last_answer` (when it last answered: a start that listed its
+  tools, or a tool call that came back). Every `said` is the engine's sentence
+  carrying what a server or its process said: redacted, cut to 512 bytes, and
+  somebody else's text. A node answers at most 200 instances of a server.
+- `instance_nodes` names each node asked: whether it `answered`, the `reason`
+  it is named for where it did not, and `count`, how many instances of the
+  server it holds, never fewer than it listed. A node that did not answer is
+  never read as one holding nothing.
+- `last_success` and `last_failure` are the latest answer and the latest
+  failure across the instances read, `null` where there is none.
+- `resolved` is what the engine decides about the server from its
+  configuration, so a screen never re-derives it, `null` for a server the
+  configuration does not declare: `auth` (`integration` for a per-agent server
+  that reads each agent's own credential from one of the company's
+  integrations, `headers` for one the engine sends values the configuration
+  sets, HTTP headers or a local server's environment, and `none`); `runs_on`
+  (`engine_host` for a local server, `""` for a remote one); `timeouts`
+  (`startup_seconds` and `request_seconds` in force, the engine's 120 and 300
+  applied where the configuration sets none, and whether each is the default);
+  `binding` (the integration a per-agent server reads: its `vendor`, `by`
+  `declared` in `seat_credentials` or `recognised` from its address or command,
+  and the `keys` it is started with, `{field, key}` by name; `null` for none);
+  `box_seats` (the seats whose executor box is given the server through
+  `sandbox.mcp.servers`, each with the `cell` its box runs in); and `warnings`
+  (placements expected to fail, `{kind, seat, cell, message}`:
+  `private_address_in_cloud_box` for a server on a private network given to a
+  box in the `e2b` cell, which runs outside that network, and `command_in_box`
+  for a local server given to a box that runs its own image, `container` or
+  `e2b`, which must provide its command).
+
+Never a credential: no `env`, no `headers`, no seat's `mcp_env` value. A server
+no node configures, reports or lists is `404 not_found`. A node that has not yet
+read the fleet's listings, or could not read its store, answers
+`503 unavailable` with `Retry-After: 15`, never a server that lists nothing.
+
+```json
+{
+  "server": {"name": "github", "title": "GitHub", "catalogue": "github", "vendor": "github",
+             "configured": true, "shared": false, "enabled": true, "description": "",
+             "transport": "stdio", "command": "github-mcp-server", "args": ["stdio"], "url": "",
+             "state": "running", "started": 3, "failed": 0, "waiting": 0, "tools": 42,
+             "unlisted_annotations": [], "refused_tools": [], "refused_count": 0,
+             "shadowed_tools": [], "shadowed_count": 0, "nodes": [{"node": "node-a", "reported": true,
+             "started": 2, "failed": 0, "waiting": 0, "tools": 42, "error": "", "error_seat": "",
+             "wait": "", "wait_seat": ""}]},
+  "nodes": [{"id": "node-a", "reported": true}],
+  "listed": [{"node": "node-a", "at": "2026-11-01T09:00:00Z", "instances": 2, "tools": 42}],
+  "tools": [
+    {"name": "get_issue", "raw": "get_issue", "title": "Get issue",
+     "description": "Get details of a specific issue in a GitHub repository.",
+     "annotations": {"read_only": "yes", "destructive": "no", "idempotent": "unknown", "open_world": "yes"},
+     "risk": "read_only", "risk_declared": true, "external": true,
+     "digest": "5f0c9e3b2a8d4f7c1e6b9a2d3c4f5e6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e",
+     "definitions": 1, "instances": 2, "nodes": ["node-a"],
+     "input_schema": {"type": "object", "properties": {"owner": {"type": "string"},
+                      "repo": {"type": "string"}, "issue_number": {"type": "number"}},
+                      "required": ["owner", "repo", "issue_number"]},
+     "output_schema": null}
+  ],
+  "tool_count": 42,
+  "server_info": {"name": "github-mcp-server", "version": "0.31.0", "protocol": "2025-06-18"},
+  "instructions": "",
+  "dependants": {"mcp_env": [], "sandbox": [], "secrets": []},
+  "instances": [
+    {"seat": "backend-dev", "node": "node-a", "state": "running", "since": "2026-11-01T08:40:00Z",
+     "restarts": 1, "tools": 42, "failure": null, "wait": "",
+     "last_failure": {"class": "exited", "said": "its process exited (exit status 1)",
+                      "at": "2026-11-01T08:39:58Z", "node": "node-a", "seat": "backend-dev"},
+     "last_answer": "2026-11-01T09:02:11Z"}
+  ],
+  "instance_nodes": [{"node": "node-a", "answered": true, "reason": "", "count": 1}],
+  "last_success": "2026-11-01T09:02:11Z",
+  "last_failure": {"class": "exited", "said": "its process exited (exit status 1)",
+                   "at": "2026-11-01T08:39:58Z", "node": "node-a", "seat": "backend-dev"},
+  "resolved": {"auth": "integration", "runs_on": "engine_host",
+               "timeouts": {"startup_seconds": 120, "request_seconds": 300,
+                            "startup_default": true, "request_default": true},
+               "binding": {"vendor": "github", "by": "recognised",
+                           "keys": [{"field": "TOKEN", "key": "GITHUB_PERSONAL_ACCESS_TOKEN"}]},
+               "box_seats": [{"seat": "backend-dev", "cell": "container"}],
+               "warnings": [{"kind": "command_in_box", "seat": "backend-dev", "cell": "container",
+                             "message": "seat backend-dev's executor runs in a container box, which starts this server's command from its own image: the image, or a setup step, must provide github-mcp-server"}]}
+}
+```
+
+### `POST /mcp-servers/{name}/retry`
+
+Restarts one MCP server now, for the **Restart** action on its page under
+**Settings › MCP & tools**: every instance of it on every node, or, with a
+`seat`, that agent's instance on the node holding the seat. It is decided by
+`tools.retry`, **an administrator's at any recency** and Ask Crewlet's only on
+the person's approval: it changes runtime state, never the configuration or a
+credential, since each instance starts again from the spec it already runs.
+
+The body is empty to restart every instance, or `{"seat": "<handle>"}` for one
+agent's. The answer is `202 Accepted` with the request as recorded:
+
+```json
+{"server": "tracker", "seat": "", "at": "2026-11-01T09:05:00Z", "node": "node-a"}
+```
+
+**A stamp, not a command.** The request is one record in the coordination
+store, which every node watches; each node restarts every instance it runs
+whose state began **before** `at`: a serving instance's session is ended and a
+fresh one starts at once, an instance that is down is tried now with its
+restart schedule started again, and an agent's instance whose first start
+failed gets a pass now. A request naming a seat is acted on by the node that
+holds the seat alone. So the restart has happened on a node once its instances
+read a `since` after `at` in [the server's detail](#get-mcp-serversname), and
+the same request heard twice, late, or after a node restarts restarts nothing
+more. The record goes when the configuration stops declaring the server or the
+seat.
+
+| Status | `error` | When |
+|---|---|---|
+| `404` | `not_found` | The configuration declares no such server |
+| `409` | `conflict` | The server is turned off (`enabled: false`), so nothing runs it; or the seat named is not granted the server |
+| `400` | `invalid_body` | A `seat` named for a shared server, which runs one instance for the company; or a body with a field the route does not read |
+| `404` | `no_such_seat` | The organization has no agent seat by that handle |
+| `503` | `unavailable` | The node could not record the request; ask again |
+
+Every call is recorded in the runtime audit as one `mcp_server_acted`, the
+guard's refusals included: who asked, which server, the seat if one, and how it
+ended, never anything the server is started with.
 
 ### `GET /fleet`
 

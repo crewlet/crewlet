@@ -73,6 +73,7 @@ type Fleet struct {
 	positions   map[string]coord.NodePositions
 	holds       map[string]coord.TrimHold
 	floors      map[string]coord.TrimFloor
+	feedMarks   map[string]coord.FeedMark
 	backups     map[string]coord.BackupPoint
 	maintenance map[string]coord.MaintenanceOperation
 	admissions  map[string]coord.Admission
@@ -91,6 +92,15 @@ type Fleet struct {
 	// with its own open watches.
 	retries entryRecords[coord.ModelRetry, coord.ModelRetryUpdate]
 	signIns entryRecords[coord.DeviceSignIn, coord.DeviceSignInUpdate]
+
+	// listings are each node's listing of each MCP server, by its key, and
+	// schemas each definition's schemas by its digest.
+	listings entryRecords[coord.MCPListing, coord.MCPListingUpdate]
+	schemas  map[string]coord.MCPToolSchema
+
+	// restarts are the MCP restarts people asked for, by entry
+	// ([coord.MCPRestartEntry]).
+	restarts entryRecords[coord.MCPRestart, coord.MCPRestartUpdate]
 
 	// version is the one counter every versioned write draws from, sandbox
 	// runs, mailbox records and chat read records alike. Store-wide rather
@@ -148,6 +158,8 @@ func NewFleet() *Fleet {
 		uploads:      map[string]versioned{},
 		retries:      newRetryRecords(),
 		signIns:      newSignInRecords(),
+		listings:     newListingRecords(),
+		restarts:     newRestartRecords(),
 	}
 }
 

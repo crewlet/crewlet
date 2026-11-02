@@ -1081,7 +1081,7 @@ A read names the pages it reached (`pages[{id, container, title, rank}]`), the b
 | `search` | The seat ran `search_knowledge`; `pages` are the hits it was shown, ranked, and `query` is what it searched for. | the phase that called it |
 | `prefetch` | The turn-start `## Relevant knowledge` block put these pages in front of the seat; `query` is the auxiliary model's. | none — it runs before the first phase |
 | `skill_loaded` | The seat loaded a [tool skill](tool-skills.md)'s body with `load_tool_skill`; the page is the one the skill was read from. | the phase that loaded it |
-| `skill_injected` | A phase's prompt carried the tool-skill catalogue; `pages` are the pages behind each skill it listed. One read per rendered catalogue — the executor's, the reviewer's, and each delegate worker's. | the phase whose prompt it was |
+| `skill_injected` | A phase was offered tool skills: its prompt carried the catalogue, or its harness was handed them as its own; `pages` are the pages behind each skill offered. One read per rendered catalogue — the reviewer's and each delegate worker's — and per launch of the executor's run. | the phase offered them |
 
 Three rules keep the record honest:
 

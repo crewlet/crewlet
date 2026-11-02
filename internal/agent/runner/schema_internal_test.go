@@ -43,7 +43,7 @@ func TestTheReviewContractNeverAsksWhetherTheAnswerWasDelivered(t *testing.T) {
 // prompts. A fact about a field lives on the field — what `no_action` means,
 // that `deliveries` is checked, what `completed_work` carries — and the
 // tool's own description says only what the call is: the turn's rules (act
-// with tool calls, discover what is missing) are the executor's header, and
+// with tool calls, search for what is missing) are the executor's header, and
 // the reviewer's are its header. Each was written in two or three of these
 // places once, and the copies drifted.
 func TestEachSubmissionRuleLivesOnItsField(t *testing.T) {

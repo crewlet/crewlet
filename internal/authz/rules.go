@@ -286,7 +286,13 @@ const (
 	// credential's write and a device sign-in are `secrets.write`.
 	ActionModelsCheck Action = "models.check"
 	ActionModelsRetry Action = "models.retry"
-	ActionAuditRead   Action = "audit.read"
+	// ActionToolsRetry restarts an MCP server now, on every node or on the
+	// node holding one seat (`POST /mcp-servers/{name}/retry`). Like a
+	// model's retry it changes RUNTIME state the company already reaches,
+	// never config or a credential: the server is restarted from the spec
+	// it runs.
+	ActionToolsRetry Action = "tools.retry"
+	ActionAuditRead  Action = "audit.read"
 
 	// --- one seat's own trail, read by somebody else ----------------- //
 	//
@@ -1199,6 +1205,12 @@ var rules = map[Action]rule{
 	// retry moves every node.
 	ActionModelsCheck: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionModelsRetry: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
+	// AN MCP SERVER'S RESTART is admin's with no step-up, as a model's retry
+	// is and for its reason: it writes neither the company nor a credential,
+	// and the person reaching for it is watching a server fail now. The
+	// assistant proposes it and the person approves it, since it ends every
+	// instance's session on every node it names.
+	ActionToolsRetry: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
 	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.

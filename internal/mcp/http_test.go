@@ -25,6 +25,9 @@ type httpMCPServer struct {
 	tools    string
 	fail     int // when non-zero, answer every POST with this status
 	failBody string
+	// identity, when set, is the handshake's serverInfo object and
+	// instructions member, raw, in place of the plain name and version.
+	identity string
 }
 
 type recordedRequest struct {
@@ -84,9 +87,14 @@ func (h *httpMCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ProtocolVersion string `json:"protocolVersion"`
 		}
 		_ = json.Unmarshal(req.Params, &p)
+		identity := `"serverInfo":{"name":"http-helper","version":"0.0.1"}`
+		h.mu.Lock()
+		if h.identity != "" {
+			identity = h.identity
+		}
+		h.mu.Unlock()
 		result = `{"protocolVersion":"` + p.ProtocolVersion +
-			`","capabilities":{"tools":{"listChanged":false}},` +
-			`"serverInfo":{"name":"http-helper","version":"0.0.1"}}`
+			`","capabilities":{"tools":{"listChanged":false}},` + identity + `}`
 	case "tools/list":
 		result = `{"tools":` + tools + `}`
 	case "tools/call":

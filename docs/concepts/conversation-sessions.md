@@ -261,9 +261,8 @@ telemetry event is where the delta shows up fleet-wide — read its
 that figure also carries the tool-definition array, which is usually larger
 than the ledger and moves for reasons of its own.
 
-Against that: the re-recon it displaces costs a `list_mcp_server_tools` round,
-an `activate_tool` round and the read itself, on every turn of the
-conversation — and recovers only what was *posted*, never the agent's own
+Against that: the re-recon it displaces costs the read itself, on every turn
+of the conversation — and recovers only what was *posted*, never the agent's own
 intent or the results it gathered.
 
 ---
