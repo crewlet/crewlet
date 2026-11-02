@@ -337,6 +337,9 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // through no path at all. `reseed` is the same fact one step worse — the
     // box was reaped past its pause TTL and only the question survives.
     if (run.status !== "awaiting_clarification" && run.status !== "reseed") continue;
+    // NOR ONE WHOSE ENDING IS DECIDED, whatever status it was ended in: it is
+    // over, and no answer reaches it.
+    if (run.ending) continue;
     out.push({
       id: `executor-${run.turn_id}`,
       severity: "caution",

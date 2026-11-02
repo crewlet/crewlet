@@ -879,6 +879,15 @@ export interface ExecutorRow {
   answered_at?: string;
   /** The item the launching turn was charged to; null when it was on none. */
   work_item?: WorkItemRef | null;
+  /**
+   * The run's ending, once it is decided and until its record is gone; null on
+   * a run nobody has ended. Such a run is OVER whatever its `status` still
+   * says: its record waits only for the ending's last steps, which on an engine
+   * that records every turn's end include recording that end once the turn's
+   * captures have settled, and can take minutes. The seat's next work waits
+   * behind it. Absent on a row from an engine that does not say.
+   */
+  ending?: ExecutorEnding | null;
 
   /**
    * What this run called through the MCP bridge, in order.
@@ -903,6 +912,18 @@ export interface ExecutorRow {
   bridge_calls_elided?: number;
   /** The engine withheld this run's body from this reader — see [task_description]. */
   body_withheld?: boolean;
+}
+
+/**
+ * A run's decided ending, as the `executors` board carries it: when it was
+ * decided, the reason it announces (empty for a run whose turn came back,
+ * which announces nothing) and who stopped it, for a person's stop (empty
+ * otherwise).
+ */
+export interface ExecutorEnding {
+  at: string;
+  reason: string;
+  stopped_by: string;
 }
 
 /** One call a bridged run made. */

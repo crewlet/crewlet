@@ -883,3 +883,61 @@ test("a run's page names its model to a reader the entry is withheld from", asyn
   expect(screen.getByText("Launched on")).toBeTruthy();
   expect(screen.getByText("claude-haiku")).toBeTruthy();
 });
+
+// AN EXECUTOR WHOSE ENDING IS DECIDED IS DRAWN AS ENDING, its box as the
+// ending's to reclaim. Its record stays until the ending is finished — on an
+// engine that records every turn's end, minutes, while the turn's captures
+// settle — and the page drew it as the status it was ended in: a finished turn
+// as "Resuming after an answer." beside a live tail of a job that was over.
+//
+// Mutation: draw the status word without the row's `ending`, or the doing line
+// off the status alone, and the page says the executor is still resuming.
+test("an executor whose ending is decided is drawn as ending", async () => {
+  mountPage({
+    executors: {
+      runs: [
+        run({
+          status: "resumed",
+          launch_id: "job-2",
+          box_exists: false,
+          ending: { at: "2026-06-15T12:06:00Z", reason: "", stopped_by: "" },
+        }),
+      ],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.getAllByText("ending").length).toBeGreaterThan(0);
+  expect(screen.queryByText("resumed")).toBeNull();
+  expect(
+    screen.getByText(/Its turn is over; the engine is recording how its turn ended/),
+  ).toBeTruthy();
+  expect(screen.queryByText("Resuming after an answer.")).toBeNull();
+});
+
+// A STOPPED EXECUTOR'S JOB IS OVER, though its status still reads `running`
+// until its ending is finished: the page names who stopped it and asks for no
+// live output of a job its ending is reclaiming.
+//
+// Mutation: open the live output for a `running` row whatever its ending says,
+// and the page polls a job that was stopped.
+test("a stopped executor asks for no live output of its job", async () => {
+  const { asked } = mountPage({
+    executors: {
+      runs: [
+        run({
+          status: "running",
+          launch_id: "job-2",
+          box_exists: false,
+          ending: { at: "2026-06-15T12:06:00Z", reason: "", stopped_by: "jane" },
+        }),
+      ],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(
+    screen.getByText(/Stopped by jane; the engine is recording how its turn ended/),
+  ).toBeTruthy();
+  expect(asked.some((a) => a.what === "executor_tail")).toBe(false);
+});

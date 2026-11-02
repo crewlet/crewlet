@@ -95,6 +95,7 @@ import { indentJSON } from "~/lib/jsontext.ts";
 import type {
   BridgeCall,
   EventRecord,
+  ExecutorEnding,
   ExecutorEntry,
   ExecutorRow,
   ExecutorStatus,
@@ -127,6 +128,18 @@ const STATUS_TONE: Record<ExecutorStatus, "success" | "warning" | "danger" | "in
 
 /** The statuses that mean a person is being waited on — `sandbox.Awaiting`. */
 const AWAITING: ExecutorStatus[] = ["awaiting_clarification", "reseed"];
+
+/**
+ * Whether a person is being waited on by this executor: parked on a question,
+ * and not over.
+ *
+ * A RUN WHOSE ENDING IS DECIDED IS OVER (`ending`), whatever status it was
+ * ended in: its record waits only for the ending's last steps, and an answer
+ * to its question has nowhere to go.
+ */
+function waitsOnAPerson(run: ExecutorRow): boolean {
+  return !run.ending && AWAITING.includes(run.status);
+}
 
 /**
  * A live projection entry as the executor's row it stands for.
@@ -269,7 +282,26 @@ function runFacts(run: ExecutorRow, nameOf: NameOf): Fact[] {
  * and a second spelling of one status is how one screen comes to call a
  * `reseed` unremarkable while this one calls it a caution.
  */
-export function RunStatus({ status }: { status: ExecutorStatus }) {
+export function RunStatus({
+  status,
+  ending,
+}: {
+  status: ExecutorStatus;
+  /**
+   * The run's decided ending. REQUIRED, null where there is none, so no screen
+   * draws an ended run as the status it was ended in by forgetting to say.
+   */
+  ending: ExecutorEnding | null | undefined;
+}) {
+  if (ending) {
+    // OVER, whatever status it was ended in: the engine's own word for it
+    // (the row's `ending`), and nothing to act on.
+    return (
+      <Tag variant="neutral" dot>
+        ending
+      </Tag>
+    );
+  }
   return (
     <Tag variant={STATUS_TONE[status] ?? "neutral"} dot>
       {status.replace(/_/g, " ")}
@@ -363,6 +395,7 @@ export function AwaitingBanner({
 
 /** What the executor is doing, for one nobody is being waited on by. */
 function doingLine(run: ExecutorRow): string {
+  if (run.ending) return endingLine(run.ending);
   switch (run.status) {
     case "launching":
       return "Setting up the box.";
@@ -375,6 +408,20 @@ function doingLine(run: ExecutorRow): string {
     default:
       return "Waiting on a person.";
   }
+}
+
+/**
+ * What an executor whose ending is decided is doing: nothing more of its own.
+ * The engine is finishing the ending (recording how its turn ended, once the
+ * turn's captures have settled) before it deletes the run's record, and the
+ * seat's next work waits for that.
+ */
+function endingLine(ending: ExecutorEnding): string {
+  const after =
+    "the engine is recording how its turn ended, and the seat takes its next work after.";
+  if (ending.stopped_by) return `Stopped by ${ending.stopped_by}; ${after}`;
+  if (ending.reason) return `The executor was lost; ${after}`;
+  return `Its turn is over; ${after}`;
 }
 
 /**
@@ -471,15 +518,15 @@ export function RunPeek({ turnId }: { turnId: string }) {
               icon="square-terminal"
               identifier={run.turn_id.slice(0, 8)}
               title={runTitle(run)}
-              status={<RunStatus status={run.status} />}
+              status={<RunStatus status={run.status} ending={run.ending} />}
               facts={runFacts(run, nameOf)}
             />
             <div className="col gap-3">
               <section className="col gap-2">
                 <div className="t-label">
-                  {AWAITING.includes(run.status) ? "Waiting on a person" : "Doing now"}
+                  {waitsOnAPerson(run) ? "Waiting on a person" : "Doing now"}
                 </div>
-                {AWAITING.includes(run.status) ? (
+                {waitsOnAPerson(run) ? (
                   <AwaitingBanner run={run} now={now} nameOf={nameOf} />
                 ) : (
                   <p className="t-body">{doingLine(run)}</p>
@@ -563,8 +610,8 @@ export function Executors() {
     [openPeek],
   );
 
-  const waiting = rows.filter((r) => AWAITING.includes(r.status)).length;
-  const running = rows.filter((r) => r.status === "running").length;
+  const waiting = rows.filter(waitsOnAPerson).length;
+  const running = rows.filter((r) => r.status === "running" && !r.ending).length;
 
   return (
     <>
@@ -644,7 +691,7 @@ export function Executors() {
                 // vocabulary rather than two lifecycle states, and this is the
                 // pill the Inbox and Live now draw for the same executor — a third
                 // rendering of one status is a third thing to keep in step.
-                cell: (r) => <RunStatus status={r.status} />,
+                cell: (r) => <RunStatus status={r.status} ending={r.ending} />,
               },
               {
                 key: "seat",
@@ -867,7 +914,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
         title={title}
         status={
           run ? (
-            <RunStatus status={run.status} />
+            <RunStatus status={run.status} ending={run.ending} />
           ) : settled ? (
             <Tag variant="neutral" dot>
               collected
@@ -926,12 +973,10 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
             description="The id may be wrong, or the turn is too old."
           />
         )}
-        {run && AWAITING.includes(run.status) && (
-          <AwaitingBanner run={run} now={now} nameOf={nameOf} />
-        )}
+        {run && waitsOnAPerson(run) && <AwaitingBanner run={run} now={now} nameOf={nameOf} />}
         {/* WHAT IT IS DOING, for an executor nobody is being waited on by: a
             parked executor's banner above already says what it is waiting for. */}
-        {run && !AWAITING.includes(run.status) && (
+        {run && !waitsOnAPerson(run) && (
           <Card>
             <Card.Header icon={<SquareTerminalGlyph size="sm" />}>
               <Card.Title>Doing now</Card.Title>
@@ -943,7 +988,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
               <p className="t-body">
                 {doingLine(run)} {WITHHELD_WHY}
               </p>
-            ) : RUNNING.includes(run.status) && run.launch_id ? (
+            ) : !run.ending && RUNNING.includes(run.status) && run.launch_id ? (
               // KEYED BY THE LAUNCH: the row's launch moves to a later one of
               // the same executor, and that launch's view starts empty rather
               // than with the last launch's output above it. A `replaced`
@@ -956,7 +1001,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
                 now={now}
                 onReplaced={board.refetch}
               />
-            ) : RUNNING.includes(run.status) ? (
+            ) : !run.ending && RUNNING.includes(run.status) ? (
               <span className="t-caption">Live output appears once the launch is recorded.</span>
             ) : (
               <p className="t-body">{doingLine(run)}</p>
@@ -1162,7 +1207,7 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
  * while its launch may still be working, and nothing at all once it has stopped.
  */
 function noCallsWords(run: ExecutorRow): string {
-  return run.status === "launching" || run.status === "running"
+  return !run.ending && (run.status === "launching" || run.status === "running")
     ? "No calls through the MCP bridge yet"
     : "Made no calls through the MCP bridge, not even its submission";
 }

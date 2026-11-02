@@ -1948,6 +1948,27 @@ describe("the pane", () => {
       );
     });
 
+    // A RUN WHOSE ENDING IS DECIDED STILL HOLDS THE SEAT, until its turn's end
+    // is recorded, and is executing nothing: said as finishing its turn.
+    //
+    // Mutation: draw a busy run's line off its status alone, and an ended run
+    // reads as still executing.
+    test("says the seat is finishing an ended run's turn while the answer waits for it", async () => {
+      const ending = {
+        ...parked,
+        turn_id: "turn-9",
+        launch_id: "q9",
+        status: "resumed",
+        role: "Senior Backend Engineer",
+        work_item: { backend: "native", id: "t-4", key: "GP-4", project: "GP" },
+        ending: { at: "2026-06-15T12:06:00Z", reason: "", stopped_by: "" },
+      };
+      await answerRun({ status: "answered", answer_ids: ["a1"] }, [ending]);
+      expect(outcome()).toBe(
+        "Answer recorded. The Senior Backend Engineer is finishing its turn on GP-4 and picks this up next.",
+      );
+    });
+
     // WHO ANSWERED IS SAID ONCE: by the refusal's sentence where it names
     // them, and otherwise by the line that says when.
     //
