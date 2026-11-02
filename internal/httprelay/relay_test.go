@@ -16,13 +16,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // --- fixture ---------------------------------------------------------------
 
-var ring = statelog.OneKey("k", "relay-test-key")
+var ring = recordseal.OneKey("k", "relay-test-key")
 
 // node is one process of a two-node fleet: its relay, served on the fleet's
 // broker, and the entry route a client calls it on.
@@ -309,7 +309,7 @@ func TestAnOpenTheFleetDidNotSignRunsNothing(t *testing.T) {
 	t.Parallel()
 	var ran atomic.Bool
 	_, holder := fleet(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { ran.Store(true) }), nil)
-	other, err := signedask.New[openRequest, openReply]("testrelay.open", statelog.OneKey("k", "another-fleet"))
+	other, err := signedask.New[openRequest, openReply]("testrelay.open", recordseal.OneKey("k", "another-fleet"))
 	if err != nil {
 		t.Fatalf("signedask.New: %v", err)
 	}

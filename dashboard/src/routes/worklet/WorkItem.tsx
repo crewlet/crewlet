@@ -270,15 +270,23 @@ export function changeWorkRef(itemId: string): string {
  * only where the company hosts code. The tab is drawn only once the engine
  * has found one — a strip whose second tab always said "nothing" would be a
  * strip on every task of a company that proposes its code changes elsewhere.
+ *
+ * ONE ROW KEPT, NOT READ: the engine's page is the rows it read, and it drops
+ * a change of a repository the reader may not read — one deleted and not yet
+ * purged among them — after it, so the newest change of the item can leave
+ * the first page empty with `next` set while a readable one sits behind it.
+ * So the probe follows `next` (`useCodeQuery`'s fill) until it keeps one, and
+ * a reading that stops at its bound with `next` still set draws the tab as
+ * well: there may be one, and the tab's own listing pages to it.
  */
 function useTaskHasChanges(itemId: string): boolean {
   const ask = useServicesAsk();
   const probe = useCodeQuery(
     "code_changes",
     { work: changeWorkRef(itemId), limit: 1 },
-    { enabled: ask.code && itemId !== "", pollMs: CODE_LIST_POLL_MS },
+    { enabled: ask.code && itemId !== "", pollMs: CODE_LIST_POLL_MS, fill: 1 },
   );
-  return (probe.data?.changes?.length ?? 0) > 0;
+  return (probe.data?.changes?.length ?? 0) > 0 || Boolean(probe.data?.next);
 }
 
 export function WorkItem({ id }: { id: string }) {

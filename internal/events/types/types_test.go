@@ -63,7 +63,7 @@ func catalogue() []events.Payload {
 		KnowledgeRead{},
 		// code.go
 		CodeFetched{}, CodeCheckFinished{}, ChangeMerged{}, ChangeOpened{}, ReviewSubmitted{}, CodeQueueEjected{},
-		CodeTargetBroken{}, CodeMirrorPushed{}, CodeExpunged{},
+		CodeTargetBroken{}, CodeMirrorPushed{}, CodeImported{}, CodeExpunged{},
 		// webhook.go
 		RawWebhook{}, InboundDelivery{},
 		// custody.go
@@ -124,6 +124,7 @@ var wireTypes = []string{
 	"code_queue_ejected",
 	"code_target_broken",
 	"code_mirror_pushed",
+	"code_imported",
 	"code_expunged",
 	"compaction_completed",
 	"compaction_requested",
@@ -394,7 +395,8 @@ var wireTags = map[string][]string{
 	"review_submitted":                {"agent_id", "change_id", "findings", "number", "owner", "owner_agent_id", "owner_kind", "repo_id", "repo_name", "review_id", "reviewer", "reviewer_kind", "revision", "verdict"},
 	"code_queue_ejected":              {"change_id", "checks", "enqueued_by", "enqueued_by_kind", "entry_id", "number", "owner", "owner_agent_id", "owner_kind", "paths", "reason", "repo_id", "repo_name", "target"},
 	"code_target_broken":              {"change_id", "checks", "commit", "kind", "landed_by", "number", "repo_id", "repo_name", "target"},
-	"code_mirror_pushed":              {"as", "deleted", "repo_id", "repo_name", "updated", "url", "waiting"},
+	"code_mirror_pushed":              {"as", "deleted", "deleted_count", "repo_id", "repo_name", "updated", "updated_count", "url", "waiting", "waiting_count"},
+	"code_imported":                   {"bytes", "chunks", "default_branch", "error", "mirrored", "position", "refs", "repo_id", "repo_name", "url"},
 	"code_expunged":                   {"dropped_bytes", "dropped_objects", "expunge", "position", "repo_id", "repo_name", "request", "store_until"},
 	"prefetch_summary":                {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "duration_ms", "episode_recall_bytes", "episode_recall_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "started_at", "synthesized_skills_bytes", "synthesized_skills_hit", "thread_context_bytes", "thread_context_hit", "thread_context_posts", "thread_context_read", "thread_context_stopped_short", "trigger_requires_recon", "turn_embedding", "turn_id", "work_key"},
 	"counterparty_profile_updated":    {"observer_handle", "role", "subject_external_id", "subject_handle", "subject_name", "subject_platform", "traits_patched", "turn_id", "work_key"},

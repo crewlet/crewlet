@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -651,12 +652,12 @@ type Deps struct {
 	// Signer signs every record this authority appends. REQUIRED: the
 	// broker's admission vouches for no record, so an unsigned record on
 	// this log is an instruction anything the broker admits may write. See
-	// [signature.go].
-	Signer *Signer
+	// [recordseal].
+	Signer *recordseal.Signer
 
 	// Records is the same log read by position — in the engine the same
 	// [jetstream.DomainLog] the appends go to, opened through this node's
-	// [Verifier]. REQUIRED, because a write whose append the broker
+	// [recordseal.Verifier]. REQUIRED, because a write whose append the broker
 	// collapsed onto an earlier copy of its operation, or whose outcome it
 	// had to look for, resolves a record this call did not put there — and
 	// whether a gate dropped that record is a question about ITS writer,

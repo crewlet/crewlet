@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -234,10 +235,10 @@ func written(doc string) []artifactdata.Moved {
 }
 
 // relayRing is the fleet keyring every relay node of a case signs under.
-var relayRing = statelog.OneKey("k1", "the live relay cases' fleet key material")
+var relayRing = recordseal.OneKey("k1", "the live relay cases' fleet key material")
 
 // relayWireFor is one node's relay envelopes over ring.
-func relayWireFor(t *testing.T, ring statelog.Keyring) *relayWire {
+func relayWireFor(t *testing.T, ring recordseal.Keyring) *relayWire {
 	t.Helper()
 	wire, err := newRelayWire(ring)
 	if err != nil {
@@ -821,9 +822,9 @@ func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 			return raw
 		},
 		"sealed under a key the fleet does not hold": forgedSeal(
-			statelog.OneKey("k-forger", "material nobody in the fleet holds")),
+			recordseal.OneKey("k-forger", "material nobody in the fleet holds")),
 		"sealed under the fleet's key id with other material": forgedSeal(
-			statelog.OneKey("k1", "material that is not the fleet's")),
+			recordseal.OneKey("k1", "material that is not the fleet's")),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -842,7 +843,7 @@ func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 			if err := forger.Start(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			reader := relayWireFor(t, statelog.OneKey("k-forger", "material nobody in the fleet holds"))
+			reader := relayWireFor(t, recordseal.OneKey("k-forger", "material nobody in the fleet holds"))
 			var forged atomic.Int32
 			stop, err := forger.Serve(t.Context(), liveRelaySubject("a"), queue.ConcurrentAnswers,
 				func(_ context.Context, raw []byte) ([]byte, error) {
@@ -893,7 +894,7 @@ func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 
 // forgedSeal seals an answer the way a party holding ring would — one that is
 // not the fleet's.
-func forgedSeal(ring statelog.Keyring) func(t *testing.T, a relayAnswer) []byte {
+func forgedSeal(ring recordseal.Keyring) func(t *testing.T, a relayAnswer) []byte {
 	return func(t *testing.T, a relayAnswer) []byte {
 		wire, err := newRelayWire(ring)
 		if err != nil {
@@ -944,7 +945,7 @@ func TestARelayServerAnswersOnlyAnAskTheFleetSigned(t *testing.T) {
 		t.Errorf("an ask the fleet did not sign was answered %+v, want unserved, "+
 			"bound to nothing and carrying nothing", got)
 	}
-	unheld, err := relayWireFor(t, statelog.OneKey("k2", "a key this server does not hold")).
+	unheld, err := relayWireFor(t, recordseal.OneKey("k2", "a key this server does not hold")).
 		SealRequest(ask)
 	if err != nil {
 		t.Fatal(err)

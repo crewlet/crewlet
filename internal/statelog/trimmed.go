@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -295,7 +296,7 @@ type SweepDeps struct {
 	// reason [Deps.Signer] is: every applier opens a record's frame before
 	// it reads one, so an unsigned trimmed record is refused on every node
 	// and the anchors it was appended to remove are never removed.
-	Signer *Signer
+	Signer *recordseal.Signer
 
 	// Ends is the log's two ends, read live — what the sweep reads to learn
 	// how far this node's copy must have applied before it is counted

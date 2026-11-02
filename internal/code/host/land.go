@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -778,11 +779,15 @@ type invalidProposal struct{ err error }
 func (e *invalidProposal) Error() string { return e.err.Error() }
 func (e *invalidProposal) Unwrap() error { return e.err }
 
-// A box's credential never outlives the grace a scheduled expunge keeps a
-// deleted seat branch's commits for, which [Server.forged] relies on: were
-// RunTokenTTL ever past code.PruneGrace this constant would overflow, and the
-// build fail.
-const _ = uint64(code.PruneGrace - RunTokenTTL)
+// No box pushes past the grace a scheduled expunge keeps a deleted seat
+// branch's commits for, which [Server.forged] relies on. A box's checkouts are
+// as old as the box, not as any one job in it: a job continues in its turn's
+// kept box only while that box is younger than sandbox.KeptBoxMaxAge, and
+// pushes for RunTokenTTL after its own launch at most, so its last push comes
+// less than the two together after the box's first attach — before which no
+// branch it checked out was deleted. Were that sum ever past code.PruneGrace
+// this constant would overflow, and the build fail.
+const _ = uint64(code.PruneGrace - sandbox.KeptBoxMaxAge - RunTokenTTL)
 
 // forged is land's step 8 for a coding box's push: the sentence its every
 // command still standing is refused forged_committer with, and refused true,
@@ -802,10 +807,18 @@ const _ = uint64(code.PruneGrace - RunTokenTTL)
 // out of every scheduled expunge's drop set until the grace has passed
 // (ADR-0092) — and git sends a commit no ref the box was shown reaches.
 // Refused, the host's own write would be answered as a forgery of it. The
-// grace is enough because a box cannot outlive it: its credential is valid
-// RunTokenTTL (seven days) from its launch, half the fourteen-day grace, and
-// the branch it checked out was deleted after that launch, so no box pushes
-// a seat-branch commit a scheduled expunge has already dropped. A person's
+// grace is enough because no box's checkout outlives it — the box's lifetime,
+// not one credential's, since a reviewer's send-back or a person's answer
+// continues the turn's job in the same box under a credential minted anew: a
+// relaunch continues in a kept box only while that box is younger than
+// sandbox.KeptBoxMaxAge (seven days from the attach that first named it, an
+// older one reclaimed and the job started fresh from the pushed branch), each
+// job's credential is valid RunTokenTTL (seven days) from its launch, and the
+// branch a job in the box checked out was deleted after that first attach.
+// So every push from a box comes less than the fourteen-day grace after the
+// deletion of any branch it checked out, and no box pushes a seat-branch
+// commit a scheduled expunge has already dropped (the guard above holds the
+// three to that sum). A person's
 // purge keeps no drop (its grace is none), so once it commits a box pushing
 // such a commit back is refused forged_committer, as one pushing any commit
 // the repository never held is. So every commit committed as the engine is

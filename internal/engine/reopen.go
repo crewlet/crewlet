@@ -139,7 +139,16 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		refuse("the run's turn could not be rebuilt here", "error", err.Error())
 		return
 	}
-	surface, meter, err := r.ReopenAgentRun(ctx, state, bridgedCalls(run.BridgeCalls),
+	// THE RUN'S CALLS SO FAR, off the log beside its row: what the reopened
+	// surface has executed, and where the session numbers the next call. A
+	// log that cannot be read refuses the opening rather than reopening a
+	// run that seems to have called nothing.
+	calls, err := rt.pending.BridgeLog(ctx, run)
+	if err != nil {
+		refuse("the run's bridged tool log could not be read", "error", err.Error())
+		return
+	}
+	surface, meter, err := r.ReopenAgentRun(ctx, state, bridgedCalls(calls.Calls),
 		bridgedOf(run.Launch.Bridged))
 	if err != nil {
 		refuse("the run's tool surface could not be rebuilt", "error", err.Error())
@@ -148,8 +157,8 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	ledger := newBridgeLedger(rt.pending, meter)
 	ledger.nudge = e.nudgeRun
 	// THE RUN'S CALLS GO ON IN ITS OWN ORDER: the session numbers its calls
-	// after the last one the row records, and a resume reads them by it.
-	job := sandbox.OpenedJob{LaunchID: run.LaunchID, LastSeq: run.LastBridgeSeq()}
+	// after the last one the log records, and a resume reads them by it.
+	job := sandbox.OpenedJob{LaunchID: run.LaunchID, LastSeq: calls.LastSeq()}
 	session := &mcpbridge.Session{
 		RunID: run.TurnID, Handle: handle, Role: seat.Name,
 		Surface: surface, Ledger: ledger,
@@ -180,5 +189,5 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		return
 	}
 	log.InfoContext(ctx, "bridge_reopened", "run_id", run.TurnID, "launch_id", run.LaunchID,
-		"seat", handle, "calls_before", len(run.BridgeCalls))
+		"seat", handle, "calls_before", len(calls.Calls))
 }

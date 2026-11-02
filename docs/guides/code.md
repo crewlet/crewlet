@@ -1344,7 +1344,9 @@ declares for the source's host, or the import is refused `not_permitted`,
 naming the host and the variables declared for it: the node sends the value
 there, so only an administrator decides which token may leave for which forge. A blob past `code.limits.max_blob_bytes` or a history past
 `code.limits.repo_max_bytes` ends the import early: the repository turns
-`active` holding what landed, and the import is not tried again. A **pull mirror**
+`active` holding what landed, and the import is not tried again. Either way
+the event log keeps one `code_imported` for it, naming the source, what
+landed and, where it ended early, why. A **pull mirror**
 (`-mirror`) is imported the same way and then moves only by its home's syncs
 from the source, so every push to it is refused. So is a repository that
 exists already when it is made a pull mirror — its `code.repos` entry's

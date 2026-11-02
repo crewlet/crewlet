@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -167,8 +168,8 @@ type runningLog struct {
 	// the trim's anchor sweep's trimmed records ([retention.sweepDeps]).
 	// Every applier refuses a record that is not a frame this keyring
 	// opens, so an append that skipped it is a record the fleet drops.
-	verifier *statelog.Verifier
-	signer   *statelog.Signer
+	verifier *recordseal.Verifier
+	signer   *recordseal.Signer
 
 	// reader is this domain's READ authority — the four levels, the
 	// refusal ladder, the coverage probe and the barrier wait — and it is
@@ -385,7 +386,7 @@ type stateLog struct {
 	// under and verified against. Read once at construction: only a
 	// restart changes it, which is the same restart that changes every
 	// other Tier A fact.
-	ring statelog.Keyring
+	ring recordseal.Keyring
 
 	// snapshot is what this node's snapshot loop last concluded, carried
 	// from that loop to the position heartbeat.
@@ -849,7 +850,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// every log is signed under it, because the broker's admission vouches
 	// for a connection, never a record, and a record is whatever the next
 	// node applies.
-	if _, err = statelog.NewSigner(registeredDomains()[0].Name(), recordKeyring(boot)); err != nil {
+	if _, err = recordseal.NewSigner(registeredDomains()[0].Name(), recordKeyring(boot)); err != nil {
 		return nil, err
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))

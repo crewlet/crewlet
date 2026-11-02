@@ -310,14 +310,14 @@ type OpenedJob struct {
 	// the run's row holds ([PendingRun.LaunchID]).
 	LaunchID string
 
-	// LastSeq is the place of the last bridged call the row keeps from
-	// before this job ([PendingRun.LastBridgeSeq]): zero for a job whose
-	// round starts its log afresh, and the asking job's last call for a job
-	// that continues one which asked a person ([PendingRun.Continues]).
+	// LastSeq is the place of the last bridged call the run's log keeps from
+	// before this job ([BridgeLog.LastSeq]): zero for a job whose round
+	// starts its log afresh, and the asking job's last call for a job that
+	// continues one which asked a person ([PendingRun.Continues]).
 	//
-	// READ OFF THE WRITE THAT OPENED THE JOB, which is the write that kept
-	// those calls, so the job's own are numbered after exactly what the row
-	// holds. Numbered from one instead, a continuation's calls were sorted
+	// READ OFF THE WRITE THAT OPENED THE JOB'S LOG ([PendingRun.OpenedAfter]),
+	// which is the write that kept those calls, so the job's own are
+	// numbered after exactly what the log holds. Numbered from one instead, a continuation's calls were sorted
 	// in among the asking job's by the collection that closes the round,
 	// which reads the round's calls in that order: its record, the log its
 	// reviewer reads, and its submissions, where the last one made wins.
@@ -533,7 +533,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// list the servers a box has.
 	var steer SteerWiring
 	if req.Opened != nil {
-		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.LastBridgeSeq()})
+		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.OpenedAfter})
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
@@ -710,7 +710,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 // CONTINUING KEEPS THE CHECKOUT, which is the expensive half of a run: a turn
 // its reviewer sent back relaunches its executor on the same work, and a job
 // that continues where the last one stopped need not clone, install and set up
-// again. Only the same CLI in the same cell, once the last job is over
+// again. Only the same CLI in the same cell, once the last job is over, in a
+// box younger than [KeptBoxMaxAge] by this coordinator's clock
 // ([PriorBox.ContinuesIn]).
 //
 // A fresh box is given the operator's setup; a kept box is given nothing,
@@ -748,7 +749,7 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 		prior = PriorBox{}
 	}
 	if prior.SandboxID != "" {
-		if prior.ContinuesIn(req.Spec) {
+		if prior.ContinuesIn(req.Spec, c.now()) {
 			box, runner, err := m.Reconnect(ctx, req.Spec.Placement, prior.SandboxID, req.Spec.CodingAgent)
 			if err == nil {
 				return box, runner, true, nil
@@ -877,9 +878,13 @@ func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRe
 			"placement", prior.Placement, "error", err.Error())
 		return
 	}
+	// WITH THE BOX'S DATE, the one reason the line could not otherwise show:
+	// a box past [KeptBoxMaxAge] is reclaimed in the very cell, and for the
+	// very CLI, the next job runs in.
 	log.InfoContext(ctx, "sandbox_prior_reclaimed",
 		"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID,
 		"placement", prior.Placement, "coding_agent", prior.CodingAgent,
+		"box_since", prior.Since,
 		"next_placement", string(req.Spec.Placement), "next_coding_agent", req.Spec.CodingAgent)
 }
 

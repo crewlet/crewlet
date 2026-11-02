@@ -19,6 +19,8 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -725,8 +727,40 @@ func (m *Mirrors) end(ctx context.Context, repoID string, l listed, s cache.Sync
 		return fmt.Errorf("mirror: end the import of %s: %w", repoID, err)
 	case res.Refusal != "":
 		return fmt.Errorf("mirror: the end of %s's import refused %s: %s", repoID, res.Refusal, res.Detail)
+	case res.Outcome == statelog.OutcomeApplied:
+		m.announceImported(ctx, repoID, l.source, done, res.Position)
 	}
 	return nil
+}
+
+// announceImported publishes the account of an import whose end — done —
+// applied at the code log's position at (code_imported): its source, its
+// chunks and its error, and what the repository holds once it ended — its
+// refs, its live bytes and its default branch — read from this node's copy
+// synced at or past the end's record, never tallied from this attempt's
+// landings, which of an import resumed after a restart, or on another home,
+// are only its last part. Published ONCE an import: the end is the import's last
+// record, so no later attempt reaches it. A copy that cannot be synced there
+// — the repository deleted meanwhile, this node stopping — publishes nothing,
+// logged: the end stands, and the repository's row names how it ended.
+func (m *Mirrors) announceImported(ctx context.Context, repoID string, src code.ImportSource, done code.ImportDone,
+	at statelog.Position) {
+
+	const unpublished = "code_imported_unpublished"
+	const detail = "the event log does not hold this import's end; the repository's row names how it ended"
+	if m.o.Events == nil {
+		return
+	}
+	s, err := m.o.Cache.Sync(ctx, repoID, syncFresh(at, at))
+	if err != nil {
+		m.log.Warn(unpublished, "repo", repoID, "error", err.Error(), "detail", detail)
+		return
+	}
+	defer s.Release()
+	m.announce(ctx, repoID, events.New(types.CodeImported{RepoID: repoID, RepoName: s.Repo.Name, URL: src.URL,
+		Mirrored: s.Repo.Mirrored, Chunks: done.Seq, Refs: s.Repo.Refs, Bytes: s.Repo.LiveBytes,
+		DefaultBranch: s.Repo.DefaultBranch, Error: done.Error, Position: at.String()}, events.TraceContext{}),
+		unpublished, detail)
 }
 
 // sourceHead is the branch the source's HEAD names, by name ("main"), or ""

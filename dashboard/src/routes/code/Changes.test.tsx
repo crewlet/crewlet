@@ -253,6 +253,30 @@ test("the Needs a person band lists the engine's needs=person, and is absent whe
   expect(screen.queryByRole("region", { name: "Needs a person" })).toBeNull();
 });
 
+// THE BAND IS WHAT THE LISTING KEEPS, NOT WHAT ONE PAGE READ: a change of a
+// repository the reader may not read is dropped after the read, so a first
+// page can keep none and carry `next` while a change waiting on a person is
+// on the second. Mutation: read the band's first page alone, and the band is
+// absent over a change that waits.
+test("the Needs a person band follows next past a page that kept nothing", async () => {
+  const asked = stubFetch((url) => {
+    if (url.pathname !== "/query/code_changes") return null;
+    if (url.searchParams.get("needs") !== "person") {
+      return json({ changes: [change("web", 42)], position: POSITION, level: "session" });
+    }
+    return url.searchParams.get("cursor") === "more"
+      ? json({ changes: [change("web", 5)], position: POSITION, level: "session" })
+      : json({ next: "more", position: POSITION, level: "session" });
+  });
+  mount(<Changes />);
+
+  const band = await screen.findByRole("region", { name: "Needs a person" });
+  expect(within(band).getByText("web!5")).toBeTruthy();
+  const followed = asked.filter((u) => u.searchParams.get("cursor") === "more");
+  expect(followed).toHaveLength(1);
+  expect(followed[0]!.searchParams.get("limit")).toBe("5");
+});
+
 // THE PARAMETERS ARE THE ENGINE'S FILTERS, and what cannot be asked says why.
 test("a listing's parameters are the engine's filters, and a name no repository has is said", () => {
   const none = { state: "open", needs: "", repo: "", owner: "", reviewer: "", work: "" };

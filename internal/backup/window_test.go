@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -55,13 +56,13 @@ func trackerLog(t *testing.T, nc *nats.Conn) jetstream.Stream {
 // under, and the one each backup it takes is handed: a log holds signed frames
 // and nothing else (ADR-0031), so a record a case appends is sealed exactly as
 // the framework's own publisher seals one.
-var suiteRing = statelog.OneKey("suite", "backup-suite-material")
+var suiteRing = recordseal.OneKey("suite", "backup-suite-material")
 
 // seal frames body as the tracker's write authority appends it, signed under
 // ring's active key.
-func seal(t *testing.T, ring statelog.Keyring, body []byte) []byte {
+func seal(t *testing.T, ring recordseal.Keyring, body []byte) []byte {
 	t.Helper()
-	signer, err := statelog.NewSigner(worklet.Domain{}.Name(), ring)
+	signer, err := recordseal.NewSigner(worklet.Domain{}.Name(), ring)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +530,7 @@ func TestABackupRefusesARecordItCannotVerify(t *testing.T) {
 	}{
 		"signed under a key this node does not hold": {
 			frame: func(t *testing.T, body []byte) []byte {
-				return seal(t, statelog.OneKey("rotated-in", "material this node lacks"), body)
+				return seal(t, recordseal.OneKey("rotated-in", "material this node lacks"), body)
 			},
 			want: statelog.ErrRecordUnverified,
 		},

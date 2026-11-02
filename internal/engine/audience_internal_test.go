@@ -12,8 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // noAudience resolves every question to nobody: the coordinators built with
@@ -28,7 +28,7 @@ func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 // answers under ([sandbox.CoordinatorOptions.Answers]): one fleet keyring for
 // every such coordinator, as a fleet shares one.
 var testAnswers = sync.OnceValue(func() *sandbox.AnswerSeal {
-	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", "the engine cases' fleet key material"))
+	seal, err := sandbox.NewAnswerSeal(recordseal.OneKey("answers", "the engine cases' fleet key material"))
 	if err != nil {
 		panic(err)
 	}

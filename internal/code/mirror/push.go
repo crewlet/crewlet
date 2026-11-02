@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -380,19 +379,9 @@ func (m *Mirrors) pushBatch(ctx context.Context, s cache.Synced, sc *cache.Scrat
 	return nil
 }
 
-// announcePushed publishes the push's account (code_mirror_pushed) on this
-// node's event stream, bounded by [eventBudget]; a stream that does not take
-// it is logged, and the push stands.
+// announcePushed publishes the push's account (code_mirror_pushed); a stream
+// that does not take it is logged, and the push stands.
 func (m *Mirrors) announcePushed(ctx context.Context, ev types.CodeMirrorPushed) {
-	if m.o.Events == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), eventBudget)
-	defer cancel()
-	e := events.New(ev, events.TraceContext{})
-	e.Source = m.o.NodeID
-	if err := m.o.Events.Publish(ctx, topics.Event(e.Type), e); err != nil {
-		m.log.Warn("code_mirror_pushed_unpublished", "repo", ev.RepoID, "error", err.Error(),
-			"detail", "the event log does not hold this push; the other host holds what it moved")
-	}
+	m.announce(ctx, ev.RepoID, events.New(ev, events.TraceContext{}), "code_mirror_pushed_unpublished",
+		"the event log does not hold this push; the other host holds what it moved")
 }

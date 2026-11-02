@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -35,13 +36,13 @@ func TestTheChangeFeedOpensTheFrameBeforeADomainDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ring := statelog.OneKey("k1", "material-one")
-	signer, err := statelog.NewSigner("tracker", ring)
+	ring := recordseal.OneKey("k1", "material-one")
+	signer, err := recordseal.NewSigner("tracker", ring)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
 	framed := signer.Seal(body)
-	verifier, err := statelog.NewVerifier("tracker", ring)
+	verifier, err := recordseal.NewVerifier("tracker", ring)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -59,8 +60,8 @@ func TestTheChangeFeedOpensTheFrameBeforeADomainDecodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openRecord: %v", err)
 	}
-	if verdict != statelog.Verified {
-		t.Fatalf("verdict = %q, want %q", verdict, statelog.Verified)
+	if verdict != recordseal.Verified {
+		t.Fatalf("verdict = %q, want %q", verdict, recordseal.Verified)
 	}
 	if env.OpID != "op-1" || env.Gen != 3 {
 		t.Errorf("envelope = %+v, want the one that was signed", env)
@@ -79,22 +80,22 @@ func TestTheChangeFeedOpensTheFrameBeforeADomainDecodes(t *testing.T) {
 // unlike the applier it has no reason to hold its body.
 func TestAnUnverifiedRecordReachesNoDomainDecoder(t *testing.T) {
 	t.Parallel()
-	signer, err := statelog.NewSigner("tracker", statelog.OneKey("k2", "material-two"))
+	signer, err := recordseal.NewSigner("tracker", recordseal.OneKey("k2", "material-two"))
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
 	framed := signer.Seal([]byte(`{"v":1,"op_id":"op-1"}`))
-	verifier, err := statelog.NewVerifier("tracker", statelog.OneKey("k1", "material-one"))
+	verifier, err := recordseal.NewVerifier("tracker", recordseal.OneKey("k1", "material-one"))
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 
 	for name, tc := range map[string]struct {
 		payload []byte
-		want    statelog.Verdict
+		want    recordseal.Verdict
 	}{
-		"a key this node does not hold": {framed, statelog.KeyUnknown},
-		"bytes that are not a frame":    {[]byte(`{"v":1,"op_id":"op-1"}`), statelog.Tampered},
+		"a key this node does not hold": {framed, recordseal.KeyUnknown},
+		"bytes that are not a frame":    {[]byte(`{"v":1,"op_id":"op-1"}`), recordseal.Tampered},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -128,12 +129,12 @@ func TestAnUnverifiedRecordReachesNoDomainDecoder(t *testing.T) {
 // would make them one event.
 func TestAnUndecodableEnvelopeIsTheEnvelopesFailureNotTheFrames(t *testing.T) {
 	t.Parallel()
-	ring := statelog.OneKey("k1", "material-one")
-	signer, err := statelog.NewSigner("tracker", ring)
+	ring := recordseal.OneKey("k1", "material-one")
+	signer, err := recordseal.NewSigner("tracker", ring)
 	if err != nil {
 		t.Fatalf("NewSigner: %v", err)
 	}
-	verifier, err := statelog.NewVerifier("tracker", ring)
+	verifier, err := recordseal.NewVerifier("tracker", ring)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -141,10 +142,10 @@ func TestAnUndecodableEnvelopeIsTheEnvelopesFailureNotTheFrames(t *testing.T) {
 	if err == nil {
 		t.Fatal("a record this build cannot decode came back clean")
 	}
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		t.Errorf("verdict = %q, want %q — the frame opened, and a caller that read "+
 			"this as unverified would log a forged record where there is none",
-			verdict, statelog.Verified)
+			verdict, recordseal.Verified)
 	}
 }
 

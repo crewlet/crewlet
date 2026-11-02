@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // THE CODE SEARCH SCATTER, wired (internal/codesearch): every git node answers
@@ -91,7 +91,7 @@ func (e *Engine) askCodeSearch(ctx context.Context, request []byte, each func([]
 
 // newCodeSearchWire builds this node's scatter envelopes over the fleet
 // keyring every state-log record is signed under.
-func newCodeSearchWire(ring statelog.Keyring) (*codesearch.Wire, error) {
+func newCodeSearchWire(ring recordseal.Keyring) (*codesearch.Wire, error) {
 	wire, err := codesearch.NewWire(ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the code search channel's envelopes: %w", err)

@@ -40,6 +40,10 @@ func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
 	return nil, nil
 }
 
+func (memorySandbox) BridgeLog(context.Context, sandbox.PendingRun) (sandbox.BridgeLog, error) {
+	return sandbox.BridgeLog{}, nil
+}
+
 func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
 	return sandbox.PendingRun{}, false, nil
 }

@@ -20,10 +20,10 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -148,7 +148,7 @@ func (noRunRecords) File(context.Context, string, steer.Note) (builtin.RunFiled,
 // seatControlWire is the steer channel [withSeatControls] signs on.
 var seatControlWire = func() *signedask.Channel[steer.Request, steer.Reply] {
 	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
-		statelog.OneKey("k1", "the api cases' seat-control key material"))
+		recordseal.OneKey("k1", "the api cases' seat-control key material"))
 	if err != nil {
 		panic(err)
 	}

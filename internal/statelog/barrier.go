@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -152,7 +153,7 @@ const DefaultBarrierBudget = 5 * time.Second
 // admission is the log's gate reserve ([Reserve]) — required of a domain that
 // keeps one, the one every other ordinary append on this log on this node is
 // admitted through, and refused on a domain that keeps none.
-func NewReadIndex(d Domain, spec StreamSpec, log Appender, members func() int, signer *Signer,
+func NewReadIndex(d Domain, spec StreamSpec, log Appender, members func() int, signer *recordseal.Signer,
 	admission Admission, encode func(Envelope) ([]byte, error), gen func() uint32,
 	rec *metrics.Recorder) (*ReadIndex, error) {
 	if err := spec.Instantiates(d); err != nil {

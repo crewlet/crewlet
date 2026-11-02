@@ -16,9 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // auditLog records every audit record a surface publishes, with the topic it
@@ -72,7 +72,7 @@ func nowhereChart() *org.Organization { return nil }
 // a key no node of any case holds.
 var nowhereWire = func() *signedask.Channel[steer.Request, steer.Reply] {
 	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
-		statelog.OneKey("k1", "the operator cases' empty fleet key material"))
+		recordseal.OneKey("k1", "the operator cases' empty fleet key material"))
 	if err != nil {
 		panic(err)
 	}

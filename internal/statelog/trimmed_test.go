@@ -14,6 +14,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -479,7 +480,7 @@ func sweepDeps(t testing.TB, estate store.ReplicatedHandle, log *sweepLog) state
 	if log.runner == nil {
 		log.runner = &sweepRunner{}
 	}
-	signer, err := statelog.NewSigner(probeDomain{}.Name(), testRing())
+	signer, err := recordseal.NewSigner(probeDomain{}.Name(), testRing())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,9 +576,9 @@ func TestASweepAppendsOneRecordPerBoundAndNoneWhenNothingIsBelow(t *testing.T) {
 				// SIGNED, as every record on the log is: the applier
 				// opens the frame before it reads the envelope.
 				body, verdict := testVerifier(t, probeDomain{}).Open(a.body)
-				if verdict != statelog.Verified {
+				if verdict != recordseal.Verified {
 					t.Fatalf("a trimmed record's frame opens as %s, want %s",
-						verdict, statelog.Verified)
+						verdict, recordseal.Verified)
 				}
 				env, err := probeDomain{}.Envelope(body)
 				if err != nil || env.Subject != statelog.TrimmedSubject(floor) ||

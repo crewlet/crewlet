@@ -14,9 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -101,7 +101,7 @@ type brokerWire = signedask.Channel[brokerRequest, brokerReply]
 // keyring every state-log record is signed under. The keyring is required on
 // every node, so this fails only on a bootstrap [config.Bootstrap.Validate]
 // would already have refused.
-func newBrokerWire(ring statelog.Keyring) (*brokerWire, error) {
+func newBrokerWire(ring recordseal.Keyring) (*brokerWire, error) {
 	wire, err := signedask.New[brokerRequest, brokerReply](fleetBrokerChannel, ring)
 	if err != nil {
 		return nil, fmt.Errorf("engine: the fleet broker's envelopes: %w", err)

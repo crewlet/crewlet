@@ -86,9 +86,9 @@ func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 			t.Errorf("relaunch: %v", err)
 		}
 		relaunched = res
-		if row := rig.getIn(ctx, "t1"); len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != "post_comment" {
+		if row := rig.callsIn(ctx, "t1"); len(row.Calls) != 1 || row.Calls[0].Name != "post_comment" {
 			t.Errorf("the carried-on round's log holds %+v, want the call made before the question",
-				row.BridgeCalls)
+				row.Calls)
 		}
 	})
 	if !relaunched.Reused || relaunched.SandboxID != run.SandboxID {
@@ -230,6 +230,8 @@ func TestAJobContinuedInItsKeptBoxStartsOnRefreshedFiles(t *testing.T) {
 		c, err := NewCoordinator(CoordinatorOptions{
 			Answers: rigAnswers(), Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
 			Resume: &resumeSpy{}, Audience: &audienceSpy{}, Lease: leased(rigLease), Pushes: &pushSpy{},
+			// The rig's clock, which dated the kept box ([KeptBoxMaxAge]).
+			Now: func() time.Time { return rig.now },
 			Refresh: func(_ context.Context, m *Manager, run PendingRun, box Sandbox) {
 				if m != rig.manager {
 					t.Error("the refresh was handed a manager other than the launch's")

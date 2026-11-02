@@ -431,7 +431,7 @@ type ReferenceTable struct {
 
 	// Records reads ONE record of Log — its body, which the caller has
 	// opened from the signed frame the broker stores and verified under
-	// the fleet keyring (statelog's Verifier, ADR-0031), never the frame
+	// the fleet keyring (recordseal's Verifier, ADR-0031), never the frame
 	// itself — and answers every row of THIS table the record writes: the row
 	// ([RecordReference.NamedBy], spelled with [JoinOwner] as
 	// [ReferenceTable.ScanReferences] spells it) and the object it names

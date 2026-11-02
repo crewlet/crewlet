@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -251,7 +252,7 @@ func generationEncoder(domain statelog.Domain) (statelog.GenerationEncoder, erro
 type reanchorStream struct {
 	statelog.VerifiedLog
 	log    *jetstream.DomainLog
-	signer *statelog.Signer
+	signer *recordseal.Signer
 }
 
 // reanchorStreamOf is running's log as a reanchor writes and reads it, under

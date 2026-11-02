@@ -492,7 +492,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// 12. ITS STATUS, answered for the fleet (codestatus.go) from the moment
 	// the host serves, and withdrawn before it stops ([native.stopCodeHost]):
 	// under the host's lifetime rather than this call's, as the host runs.
-	withdraw, err := e.serveCodeStatus(context.WithoutCancel(ctx), h)
+	withdraw, err := e.serveCodeStatus(context.WithoutCancel(ctx), nodeID, h)
 	if err != nil {
 		homeLoop.Stop(context.WithoutCancel(ctx))
 		compactor.Stop(context.WithoutCancel(ctx))

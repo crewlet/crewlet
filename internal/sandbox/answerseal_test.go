@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // rigAnswerKey is the key id every rig's coordinator seals answers under, and
@@ -20,7 +20,7 @@ import (
 // one, so a successor rig opens what its predecessor sealed.
 const rigAnswerKey = "answers-k1"
 
-var rigAnswerRing = statelog.OneKey(rigAnswerKey, "the sandbox rigs' fleet key material")
+var rigAnswerRing = recordseal.OneKey(rigAnswerKey, "the sandbox rigs' fleet key material")
 
 // rigAnswers is the seal every rig's coordinator is built with.
 var rigAnswers = sync.OnceValue(func() *AnswerSeal {
@@ -70,7 +70,7 @@ func TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor(t *testing.T) {
 		t.Fatalf("open = %+v, %v; want the words sealed, by who gave them", got, err)
 	}
 
-	elsewhere, err := NewAnswerSeal(statelog.OneKey(rigAnswerKey, "another fleet's key material"))
+	elsewhere, err := NewAnswerSeal(recordseal.OneKey(rigAnswerKey, "another fleet's key material"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor(t *testing.T) {
 func TestAnAnswerUnderAKeyThisNodeDoesNotHoldIsToldApart(t *testing.T) {
 	t.Parallel()
 	run := PendingRun{TurnID: "t1", LaunchID: "launch-1"}
-	other, err := NewAnswerSeal(statelog.OneKey("answers-k2", "the key a newer node seals under"))
+	other, err := NewAnswerSeal(recordseal.OneKey("answers-k2", "the key a newer node seals under"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn(t *testing.T) {
 		}},
 		{"sealed with other key material", func(t *testing.T, run PendingRun, words AnswerWords,
 			answer RecordedAnswer) RecordedAnswer {
-			elsewhere, err := NewAnswerSeal(statelog.OneKey(rigAnswerKey, "another fleet's key material"))
+			elsewhere, err := NewAnswerSeal(recordseal.OneKey(rigAnswerKey, "another fleet's key material"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -309,7 +309,7 @@ func TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt(t *testing
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	run := rig.get("t1")
-	newer := statelog.Keyring{ActiveID: "answers-k2", Keys: []statelog.Key{
+	newer := recordseal.Keyring{ActiveID: "answers-k2", Keys: []recordseal.Key{
 		rigAnswerRing.Keys[0], {ID: "answers-k2", Material: "the key a newer node seals under"},
 	}}
 	newerSeal, err := NewAnswerSeal(newer)

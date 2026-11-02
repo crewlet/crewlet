@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -129,7 +130,7 @@ func presenceHub(t *testing.T, broker *memory.Broker, node string) *presence.Hub
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	wire, err := signedask.NewOneWay[presence.Frame](presence.Channel,
-		statelog.OneKey("k1", "the chat arm suite's fleet key material"))
+		recordseal.OneKey("k1", "the chat arm suite's fleet key material"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,8 +8,8 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/httprelay"
 	queuemem "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // EVERY CHANNEL A NODE CARRIES OUT A REQUEST ON SIGNS IN DOMAINS OF ITS OWN —
@@ -33,7 +33,7 @@ import (
 // here, where all of them are built.
 func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	t.Parallel()
-	ring := statelog.OneKey("k1", "the channel gate's fleet key material")
+	ring := recordseal.OneKey("k1", "the channel gate's fleet key material")
 	envelopes, err := estate.NewEnvelopes(ring)
 	if err != nil {
 		t.Fatal(err)

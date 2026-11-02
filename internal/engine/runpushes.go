@@ -123,7 +123,7 @@ func (p runPushes) Pushed(ctx context.Context, run sandbox.PendingRun) (sandbox.
 		}
 		switch answer.Next {
 		case "":
-			return sandbox.PushRecord{Refs: pushed.refs, More: pushed.more, At: at}, nil
+			return sandbox.PushRecord{Refs: pushed.refs, More: pushed.more, At: at.String()}, nil
 		case q.Cursor:
 			// A PAGE THAT DID NOT MOVE would be read for ever: every page
 			// the code host serves advances by at least one push.

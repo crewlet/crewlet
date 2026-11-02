@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -143,11 +144,11 @@ func TestANodeWithTheWholeLogAheadOfItDoesNotAsk(t *testing.T) {
 	}
 	// SIGNED UNDER THE FLEET'S KEYRING, as a peer's record is: an unsigned
 	// one is a stranger's, which the applier refuses rather than applies.
-	ring := statelog.Keyring{ActiveID: boot.Secrets.ActiveKeyID}
+	ring := recordseal.Keyring{ActiveID: boot.Secrets.ActiveKeyID}
 	for _, key := range boot.Secrets.Keys {
-		ring.Keys = append(ring.Keys, statelog.Key{ID: key.ID, Material: key.Material})
+		ring.Keys = append(ring.Keys, recordseal.Key{ID: key.ID, Material: key.Material})
 	}
-	signer, err := statelog.NewSigner(worklet.Domain{}.Name(), ring)
+	signer, err := recordseal.NewSigner(worklet.Domain{}.Name(), ring)
 	if err != nil {
 		t.Fatalf("the peer's signer: %v", err)
 	}

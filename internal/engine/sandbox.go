@@ -746,6 +746,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	return r.engine.resumeTurn(ctx, resumeInput{
 		Company:      company,
 		Run:          req.Run,
+		Bridged:      req.Bridged,
 		State:        state,
 		Turn:         resumedTurn(req.Run, seat, company.Org, r.engine.rowHolds(req.Run)),
 		Answer:       req.Answer,
@@ -909,6 +910,10 @@ type resumeInput struct {
 	// may not be in it.
 	Company *Company
 	Run     sandbox.PendingRun
+	// Bridged is the run's bridged tool log as the resume read it
+	// ([sandbox.ResumeRequest.Bridged]); empty on a close that judges no
+	// calls.
+	Bridged sandbox.BridgeLog
 	State   execstate.State
 	Turn    *turnctx.Turn
 	Answer  string
@@ -1426,14 +1431,14 @@ func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
 		// WHICH BOX DID THE WORK, and what it delivered — see
 		// [runRecordOf].
 		Run: runRecordOf(in.Run, in.Account),
-		// THE RUN'S OWN TOOL CALLS, off its durable row. The executor called
+		// THE RUN'S OWN TOOL CALLS, off its durable log. The executor called
 		// them over the bridge, possibly in another process, so this list is
 		// the only record of what the phase did, its submission included.
-		Bridged: bridgedCalls(in.Run.BridgeCalls),
-		// AND WHERE A PERSON'S ANSWER CUT THE ROUND, as the row recorded it
+		Bridged: bridgedCalls(in.Bridged.Calls),
+		// AND WHERE A PERSON'S ANSWER CUT THE ROUND, as the log recorded it
 		// when the job carried on by that answer opened: no submission
 		// made before it is the round's.
-		Answered: in.Run.AnsweredThrough,
+		Answered: in.Bridged.AnsweredThrough,
 		// AND A PERSON'S ANSWER, which carries the run on rather than
 		// reporting it (see [runner.Asked]), or the loss of its job with its
 		// host, which carries its round on ([runner.Lost]).

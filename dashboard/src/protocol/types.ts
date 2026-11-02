@@ -8562,7 +8562,8 @@ export interface CodeDiffAnswer {
 /**
  * `code_change`, a part at a time: the change's detail rides the first page of
  * its revisions (no `part`, or `part=revisions`); each other part answers its
- * own page beside the change — its reviewers, comments, reviews or findings;
+ * own page beside the change — its reviewers, comments, reviews or findings,
+ * or the asker's own standing findings (`standing`, in `findings`);
  * `files` and `diff` a revision's files or one file's patch (`diff`), read by
  * object id on its home git node; and `findings` placed in the revision asked
  * about (`placed`, by the finding's id).

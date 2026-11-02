@@ -374,6 +374,11 @@ var categories = map[string]placement{
 	// on. ENGINE-rated: the home pushes on its own schedule, at most one push
 	// a repository at a time.
 	"code_mirror_pushed": {"system", RateEngine},
+	// An import's end, by the repository's home: PERSISTED, UNFED — the audit
+	// of where a repository's contents came from. ENGINE-rated: the home ends
+	// each import once, on its own, at most one import a repository at a
+	// time; a person's import only asks for one, a create of one repository.
+	"code_imported": {"system", RateEngine},
 	// An expunge's commit, by the repository's maintainer: PERSISTED, UNFED —
 	// the audit of what left a repository. ENGINE-rated: the maintainer
 	// commits at most one expunge a repository at a time, weekly on its own
@@ -543,6 +548,13 @@ var unfed = map[string]string{
 		"settings told it to — nobody acts on one. The event log keeps it " +
 		"for whoever asks what the company published and when; a push that " +
 		"failed is code_mirror_failing's, never an event",
+	"code_imported": "AN AUDIT, NOT ACTIVITY: where a repository's contents " +
+		"came from — the source it was imported from, the chunks, refs and " +
+		"bytes that landed, and why it ended short where it did — whose " +
+		"asking is already in the feed as the person's operator_acted, or is " +
+		"the company document's for a declared import. The repository's row " +
+		"keeps only its latest import, so the event log keeps every one, for " +
+		"whoever asks where a repository came from and when",
 	"code_expunged": "AN AUDIT, NOT ACTIVITY: what an expunge's commit took " +
 		"out of a repository — its objects and bytes, and until when the " +
 		"store still holds them — by the maintainer's weekly housekeeping " +

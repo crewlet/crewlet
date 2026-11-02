@@ -68,6 +68,7 @@ func init() {
 	events.Register[CodeQueueEjected]()
 	events.Register[CodeTargetBroken]()
 	events.Register[CodeMirrorPushed]()
+	events.Register[CodeImported]()
 	events.Register[CodeExpunged]()
 }
 
@@ -748,6 +749,85 @@ func (e CodeMirrorPushed) SummaryFor(actor string) string {
 	}
 	if e.WaitingCount > 0 {
 		what += ", " + strconv.Itoa(e.WaitingCount) + " waiting for green"
+	}
+	return lead(actor, what)
+}
+
+// CodeImported records that a repository's IMPORT ended (internal/code/mirror,
+// M6-D19): its home filled it from another host — a person's import
+// (code_import_repo, `crewlet code import`), a declared `code.repos[].import`,
+// or a pull mirror's first fill — and its end (code.ImportDone) applied,
+// whole or short of its source. Published ONCE an import, by the home git
+// node that proposed the end and heard it applied. The repository's row keeps
+// only its LATEST import state, and the push rows its chunks wrote (`via
+// import`) name neither the source nor the end, so this is the one durable
+// account of where a repository's contents came from, and when.
+//
+// An end whose answer the home did not hear applied — pending or unknown at
+// its committer, or the home gone between the apply and the publish — is no
+// event: the repository is active by then, so no later attempt ends it again,
+// and its row still names how it ended. A pull mirror's syncs are none
+// either: they move it onto the same source every interval, and its push rows
+// `via mirror` record each.
+//
+// # Stored, not fed
+//
+// A person's import is already in the feed as that person's operator_acted,
+// and a declared one is the company document's: the account of what landed is
+// kept for whoever asks where a repository came from, out of the activity
+// feed.
+type CodeImported struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when its import ended.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// URL is the repository at the other host it was filled from — never a
+	// credential: an import's is a ${VAR} reference, resolved at the dial and
+	// sent in a header. Mirrored says the import was a pull mirror's first
+	// fill, which its syncs then keep on that source.
+	URL      string `json:"url"`
+	Mirrored bool   `json:"mirrored,omitempty"`
+
+	// Chunks is how many chunks landed — the repository's import_seq, its
+	// end's Seq — 0 for an import that landed none.
+	Chunks int64 `json:"chunks"`
+
+	// Refs and Bytes are what the repository holds once its import ended, as
+	// its home reads them from its copy synced at or past the end's record:
+	// its refs, and the bytes of its live packs. Nothing but its import moves
+	// a repository's refs or adds its packs while it imports, so they are what
+	// the import landed — beside, for a repository made a pull mirror later,
+	// the packs it already held, and whatever a push landed in the moment
+	// between the end and that read. DefaultBranch is its default branch
+	// then: the one it declares, or the source's HEAD branch where the one it
+	// declares did not arrive.
+	Refs          int64  `json:"refs"`
+	Bytes         int64  `json:"bytes"`
+	DefaultBranch string `json:"default_branch"`
+
+	// Error is why the import ended short of its source — its end's
+	// import_error, one sentence naming why (a blob past
+	// code.limits.max_blob_bytes, the repository past
+	// code.limits.repo_max_bytes, a source that answered over git's dumb HTTP
+	// protocol) — and "" for one that landed whole. The repository keeps what
+	// landed either way.
+	Error string `json:"error,omitempty"`
+
+	// Position is the end's record on the repository's code log.
+	Position string `json:"position"`
+}
+
+// EventType is the "code_imported" wire type.
+func (CodeImported) EventType() string { return "code_imported" }
+
+// SummaryFor names the repository, its source and what landed, and says
+// where the import ended short.
+func (e CodeImported) SummaryFor(actor string) string {
+	what := "imported " + e.RepoName + " from " + e.URL + ": " + strconv.FormatInt(e.Refs, 10) + " ref(s), " +
+		strconv.FormatInt(e.Bytes, 10) + " bytes in " + strconv.FormatInt(e.Chunks, 10) + " chunk(s)"
+	if e.Error != "" {
+		what += ", ended short of its source"
 	}
 	return lead(actor, what)
 }

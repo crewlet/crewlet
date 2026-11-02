@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
@@ -2855,7 +2856,7 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 // verifies with. It panics rather than returning an error: a fixture that
 // cannot sign is a broken test file, not a case.
 func probeSeal(body []byte) []byte {
-	signer, err := statelog.NewSigner(probeDomain{}.Name(), testRing())
+	signer, err := recordseal.NewSigner(probeDomain{}.Name(), testRing())
 	if err != nil {
 		panic(err)
 	}

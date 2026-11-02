@@ -407,6 +407,27 @@ func TestTheDashboardStatesTheCodePolicysDefaults(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD BLAMES NO WIDER A RANGE THAN THE ENGINE ANSWERS, and no
+// narrower.
+//
+// The Files tab asks a blame's lines a range at a time, each range
+// `CODE_MAX_BLAME_LINES` (`contract/code.ts`) wide, and reads a file's earlier
+// lines in steps of the same size: a range wider than [code.MaxBlameLines] is
+// refused by every blame it asks, and a narrower one asks the engine more
+// often than a file's lines need.
+//
+// Mutation: change the bound on either side, and this fails.
+func TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "CODE_MAX_BLAME_LINES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := strconv.Itoa(code.MaxBlameLines); got != want {
+		t.Errorf("the dashboard's CODE_MAX_BLAME_LINES is %s, want the engine's code.MaxBlameLines, %s", got, want)
+	}
+}
+
 // THE DASHBOARD KNOWS EVERY STATE OF A CHECK, and every purpose one checks a
 // commit for, in the engine's order.
 //

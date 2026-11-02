@@ -2109,6 +2109,14 @@ const CODE_ORG = {
 
 /** Answers `/query/code_changes` with `changes`, recording each ask. */
 function serveChanges(changes: unknown[]): URL[] {
+  return serveChangePages(() => ({ changes }));
+}
+
+/**
+ * Answers `/query/code_changes` with the page `page` gives for each ask — its
+ * `changes` and `next` — recording each ask.
+ */
+function serveChangePages(page: (url: URL) => { changes?: unknown[]; next?: string }): URL[] {
   const codeAsks: URL[] = [];
   vi.stubGlobal(
     "fetch",
@@ -2116,7 +2124,7 @@ function serveChanges(changes: unknown[]): URL[] {
       const url = new URL(String(input), "http://localhost");
       if (url.pathname === "/query/code_changes") codeAsks.push(url);
       const position = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 3 };
-      return new Response(JSON.stringify({ changes, position, level: "session" }), {
+      return new Response(JSON.stringify({ ...page(url), position, level: "session" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -2124,6 +2132,35 @@ function serveChanges(changes: unknown[]): URL[] {
   );
   return codeAsks;
 }
+
+// THE PROBE KEEPS A ROW, IT DOES NOT READ ONE: a change of a repository the
+// reader may not read is dropped after the engine reads it, so an empty page
+// with `next` is no answer — and a listing that ENDS empty past it is. Here
+// the second page ends the listing with nothing kept, and the task carries no
+// strip. Mutation: decide on the first page alone, and the strip is drawn
+// over a listing that holds nothing for this reader.
+test("a task whose listing ends empty past a page that kept nothing draws no Changes tab", async () => {
+  const codeAsks = serveChangePages((url) =>
+    url.searchParams.get("cursor") === "past-deleted" ? {} : { next: "past-deleted" },
+  );
+  mount(<WorkItemPage id="ENG-42" />, { org: CODE_ORG });
+  await waitFor(() =>
+    expect(codeAsks.some((u) => u.searchParams.get("cursor") === "past-deleted")).toBe(true),
+  );
+  await settle();
+  expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
+});
+
+// AND ONE STOPPED AT ITS BOUND WITH `next` STILL SET MAY HAVE ONE: the strip
+// is drawn, and the tab's own listing pages to it. Mutation: decide on the
+// rows kept alone, and a task whose newest change sits in a deleted
+// repository loses the tab over its readable older ones.
+test("a task whose probe stops at its bound with next still set has a Changes tab", async () => {
+  let n = 0;
+  serveChangePages(() => ({ next: `c${String(++n)}` }));
+  mount(<WorkItemPage id="ENG-42" />, { org: CODE_ORG });
+  expect(await screen.findByRole("tab", { name: "Changes" })).toBeTruthy();
+});
 
 // A TASK NO CHANGE NAMES CARRIES NO STRIP: the page asks the engine for one
 // change naming the task by `native:<id>`, and draws no tab that would always

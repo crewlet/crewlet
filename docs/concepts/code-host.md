@@ -823,6 +823,21 @@ first 16 in ref order beside the count of all of them, so that a first push of
 a repository of tens of thousands of refs is still one event the stream takes —
 the one durable account of what the company published, and when.
 
+Every import that ends is recorded there too, once, as `code_imported`, by
+the home that ended it: the repository, the source it came from (never the
+credential), whether it was a pull mirror's first fill, how many chunks
+landed, what the repository holds once it ended — its refs, the bytes of its
+live packs and its default branch — the import's error where it ended short
+of its source (a blob past `code.limits.max_blob_bytes`, say), and the end's
+position on the code log. The repository's row keeps only its latest import,
+and the push rows its chunks wrote (`via import`) name no source, so the event
+is where a repository's origin is kept; it stays out of the activity feed,
+where a person's import already is, as that person's `operator_acted`. An end
+its home did not hear applied — its answer pending, or the node gone before
+it published — is no event, and a stream that does not take the event within
+five seconds is logged `code_imported_unpublished`; the import stands either
+way. A pull mirror's syncs are no event: each is a push row `via mirror`.
+
 ---
 
 ## One subject per repository
@@ -1898,8 +1913,9 @@ behind their batches and contend with every push to the repository.
 A change's conversation is read with the change: one change's read names the
 **part** it pages beside it — its revisions, which a read naming no part
 pages and whose first page carries the change's detail, its **reviewers**,
-its **comments**, its **reviews** or its **findings** — every page held to the
-reader's grant on the repository as the change's own rows are ([Reading
+its **comments**, its **reviews**, its **findings** or the reader's own
+**standing** findings — every page held to the reader's grant on the
+repository as the change's own rows are ([Reading
 changes](#reading-changes)).
 
 - **The detail counts the conversation**: its comments, its reviews, its open
@@ -1923,6 +1939,13 @@ changes](#reading-changes)).
   — each with its text and its suggestion, its state and its last answer, 50
   a page and 200 at most, ending at the reply's byte budget first where
   suggestions are long.
+- **Standing findings are the reader's own**, by id, paged as findings are:
+  every finding they raised that still stands — open, resolved, won't fix or
+  disputed — which is exactly what a review of theirs carries or, of a later
+  revision, supersedes, at most 1 024 a reviewer; none for a credential bound
+  to no seat. It is what a review dialog reads to its last page before it
+  sends, where the findings part, oldest first, would have left a reviewer's
+  newest standing findings past its first page.
 
 ### Asking for review
 
@@ -4399,18 +4422,23 @@ and paid from the run's re-syncs (below).
 each lazy fetch of a blob into a blobless clone among them — reads its run's
 record once, from the stream leader of the bucket the fleet keeps runs in,
 and each raise of its floor is one compare-and-set of that record — which
-carries the job's bridged tool log with its facts
+holds the job's facts and never its bridged tool log, kept beside it under a
+key of its own
 ([Code Sandbox](code-sandbox.md#the-runs-record-and-what-it-costs-to-read)).
 Measured on three members with every bucket at three replicas, from a member
 not leading the runs' bucket, for a job parked with a 32 KiB frozen context
-and a full bridge log of 200 calls: the record is 516 173 bytes, nearly all
-of it the log, and a read takes 5.8 ms and a raise 11.1 ms at the median
-(7.9 and 26.0 at the 99th percentile) — and every listing of runs and every
-flip of one moves the same half mebibyte. With the log kept apart from the
-record, the record was 2 983 bytes, its 2 KiB brief among them, and a read
-took 0.15 ms and a raise 0.42 ms (0.21 and 0.88)
+and a full bridge log of 200 calls: the record is 37 931 bytes, the frozen
+context and the 2 KiB brief among them, and a read takes 0.43 ms and a raise
+1.29 ms at the median (0.80 and 2.12 at the 99th percentile). The log beside
+it is 478 378 bytes, and only the calls that use it move it: an append of the
+box's next call takes 13.2 ms (19.6), and 13.8 ms (17.3) for a call that
+moved what the job's bridged calls cost, which also writes the new total to
+the record. With the log on the record, as the
+record kept it before (measured 2026-11-01 on the same machine), the record
+was 516 173 bytes, a read took 5.8 ms and a raise 11.1 ms (7.9 and 26.0), and
+every listing of runs and every flip of one moved the same half mebibyte
 (`BenchmarkABoxRequestOnItsRun`, `internal/coord/kv`, thirty operations each
-on two E-cores of an Intel Core Ultra 7 265U).
+on two E-cores of an Intel Core Ultra 7 265U, measured 2026-11-02).
 
 **Its transfers are its run's.** Every box's git is charged to the `run` class
 of the [fair share](#fair-share), keyed by its launch, and boxes together hold
@@ -4435,7 +4463,12 @@ update reaches would be in the repository all the same. A commit the
 repository already holds is no forgery — a box's old checkout pushing back a
 branch deleted since, the engine's own tool commits on it — so each commit
 committed as the engine is looked up in the node's copy of the repository,
-and only one the copy lacks is refused. One push may bring back up to 1 000
+and only one the copy lacks is refused. The copy keeps a deleted branch's
+commits for two weeks after the deletion, and a box is never that old when it
+pushes: a turn's job continues in its kept box only while the box is younger
+than seven days, and its credential is valid seven days from its launch
+([reuse across launches](code-sandbox.md#how-a-coding-task-runs)). A person's
+purge keeps nothing, so a box pushing a purged commit back is refused. One push may bring back up to 1 000
 of them; a longer history is refused with the remedy of pushing it in parts,
 since a part that landed is reached by a ref and the box's git does not send
 it again. A refused push stores and proposes nothing, and its `code_push` line

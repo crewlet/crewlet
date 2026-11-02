@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -33,7 +34,7 @@ const deletedRetention = 7 * 24 * time.Hour
 // and a fleet's nodes share this ring whoever started them. A fixture: what
 // the suite is about is what the code domain writes, and the signature's own
 // rules are certified in internal/statelog.
-var fleetRing = statelog.OneKey("codetest", "the codetest fleet's key material")
+var fleetRing = recordseal.OneKey("codetest", "the codetest fleet's key material")
 
 // DataOptions configure a data node.
 type DataOptions struct {
@@ -219,11 +220,11 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if p.consumer, err = q.DomainConsumer(ctx, spec.Name, d.o.ID, checkpoint.At.Seq); err != nil {
 		t.Fatalf("codetest: %s: open the consumer: %v", d.o.ID, err)
 	}
-	signer, err := statelog.NewSigner(code.Domain{}.Name(), fleetRing)
+	signer, err := recordseal.NewSigner(code.Domain{}.Name(), fleetRing)
 	if err != nil {
 		t.Fatalf("codetest: %s: build the record signer: %v", d.o.ID, err)
 	}
-	verifier, err := statelog.NewVerifier(code.Domain{}.Name(), fleetRing)
+	verifier, err := recordseal.NewVerifier(code.Domain{}.Name(), fleetRing)
 	if err != nil {
 		t.Fatalf("codetest: %s: build the record verifier: %v", d.o.ID, err)
 	}

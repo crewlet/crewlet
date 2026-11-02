@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -126,6 +127,13 @@ func (r *recording) MirrorSync(ctx context.Context, p code.MirrorSyncProposal) (
 	return r.Estate.MirrorSync(ctx, p)
 }
 
+// mirrorSyncs is how many syncs were proposed so far.
+func (r *recording) mirrorSyncs() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.syncs)
+}
+
 // chunks and dones are the import's proposals so far, each kind apart.
 func (r *recording) chunks() (chunks []code.ImportChunk, dones []code.ImportDone) {
 	r.mu.Lock()
@@ -141,20 +149,36 @@ func (r *recording) chunks() (chunks []code.ImportChunk, dones []code.ImportDone
 	return chunks, dones
 }
 
-// announced is a node's event stream as a push announces itself on it, every
-// push's account kept.
+// announced is a node's event stream as a push and an import's end announce
+// themselves on it, every push's and every import's account kept — each
+// heard on the subject its type names, or the case fails.
 type announced struct {
-	mu     sync.Mutex
-	pushed []types.CodeMirrorPushed
+	t        *testing.T
+	mu       sync.Mutex
+	pushed   []types.CodeMirrorPushed
+	imported []types.CodeImported
 }
 
-func (a *announced) Publish(_ context.Context, _ string, ev *events.Event) error {
-	if p, ok := ev.Data.(*types.CodeMirrorPushed); ok {
-		a.mu.Lock()
+func (a *announced) Publish(_ context.Context, subject string, ev *events.Event) error {
+	if want := topics.Event(ev.Type); subject != want {
+		a.t.Errorf("%s was published on %q, want %q", ev.Type, subject, want)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch p := ev.Data.(type) {
+	case *types.CodeMirrorPushed:
 		a.pushed = append(a.pushed, *p)
-		a.mu.Unlock()
+	case *types.CodeImported:
+		a.imported = append(a.imported, *p)
 	}
 	return nil
+}
+
+// imports is every import's account so far.
+func (a *announced) imports() []types.CodeImported {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.imported)
 }
 
 // all is every push's account so far.
@@ -194,7 +218,7 @@ func newHarness(t *testing.T, limits code.Limits) *harness {
 		full.MaxBlobBytes = limits.MaxBlobBytes
 	}
 	return &harness{t: t, f: f, src: src, est: &recording{Estate: f.Code(t)}, faults: faults, limits: full,
-		now: time.Now()}
+		events: announced{t: t}, now: time.Now()}
 }
 
 // clock is the workers' clock; advance moves it.
@@ -589,6 +613,96 @@ func TestAnImportPastTheBlobLimitEndsWithItsError(t *testing.T) {
 		!strings.Contains(dones[0].Error, "max_blob_bytes") {
 		t.Fatalf("the import ended %+v; want one end at chunk 0 naming blob %s and max_blob_bytes", dones, big)
 	}
+}
+
+// AN IMPORT IS ANNOUNCED ONCE IT ENDS (M6 §2.11): an import whose end
+// applied publishes exactly one code_imported, on its type's subject, naming
+// its source and its chunk count, what the repository holds once it ended —
+// its refs, its live bytes and its default branch, read from its rows — and
+// the end's position on the code log; a pull mirror's first fill is one such
+// import, marked mirrored, and the syncs that keep it on its source after are
+// none; and an import its blob limit ended short names its error, having
+// landed nothing.
+//
+// Mutation: drop announceImported's call from the import's end, and no
+// import is announced; publish the end with no error, and the short import
+// names none; announce every applied record of a pull mirror rather than its
+// import's end, and its sync is announced too.
+func TestAnImportIsAnnouncedOnceItEnds(t *testing.T) {
+	t.Run("a pull mirror's first fill, and its sync after", func(t *testing.T) {
+		h := newHarness(t, code.Limits{})
+		a := h.src.commit(map[string]string{"a": "a\n"}, "first")
+		h.src.push("HEAD:refs/heads/main", a+":refs/tags/v1")
+		s := codetest.Settings()
+		s.Protections = nil
+		s.MirrorFrom = &code.MirrorSource{URL: h.src.url}
+		h.f.Declare(t, code.Declared{Name: "mirrored", Settings: s})
+
+		m := h.mirrors()
+		h.pass(m)
+		rows := h.rows("mirrored")
+		if rows.Repo.Status != code.RepoStatusActive || len(rows.Refs) != 2 || rows.Repo.LiveBytes <= 0 {
+			t.Fatalf("after its import the mirror is %s with %d refs and %d live bytes; want it active with the "+
+				"source's two refs and their bytes", rows.Repo.Status, len(rows.Refs), rows.Repo.LiveBytes)
+		}
+		got := h.events.imports()
+		if len(got) != 1 {
+			t.Fatalf("the import announced %d ends %+v; want one", len(got), got)
+		}
+		at, err := statelog.ParsePosition(got[0].Position)
+		if err != nil || at.IsZero() {
+			t.Fatalf("the import's end names position %q (%v); want the end's record", got[0].Position, err)
+		}
+		if after, err := rows.Position.Before(at); err != nil || after {
+			t.Errorf("the import's end names %s, past the rows read after it at %s (%v)", at, rows.Position, err)
+		}
+		got[0].Position = ""
+		want := types.CodeImported{RepoID: rows.Repo.ID, RepoName: "mirrored", URL: h.src.url, Mirrored: true,
+			Chunks: 1, Refs: 2, Bytes: rows.Repo.LiveBytes, DefaultBranch: "main"}
+		if got[0] != want {
+			t.Errorf("the import announced\n%+v\nwant\n%+v", got[0], want)
+		}
+
+		b := h.src.commit(map[string]string{"b": "b\n"}, "second")
+		h.src.push("HEAD:refs/heads/main")
+		h.advance(code.MirrorInterval + time.Minute)
+		h.pass(m)
+		if got := h.est.mirrorSyncs(); got != 1 {
+			t.Fatalf("the mirror proposed %d syncs once its interval had passed, want one", got)
+		}
+		if main := h.rows("mirrored").Refs["refs/heads/main"]; main != b {
+			t.Fatalf("the sync left main at %s, want the source's %s", main, b)
+		}
+		if got := h.events.imports(); len(got) != 1 {
+			t.Errorf("the import and the sync after it announced %d imports %+v; want the import's one", len(got),
+				got)
+		}
+	})
+
+	t.Run("an import ended short by its blob limit", func(t *testing.T) {
+		h := newHarness(t, code.Limits{MaxBlobBytes: 1 << 10})
+		h.src.commit(map[string]string{"small": "s\n", "big": strings.Repeat("x", 4<<10)}, "too big")
+		h.src.push("HEAD:refs/heads/main")
+		big := strings.TrimSpace(h.src.c.Run(t, h.src.wt, "rev-parse", "HEAD:big"))
+		h.f.Declare(t, code.Declared{Name: "imported", Settings: codetest.Settings(),
+			Import: &code.ImportSource{URL: h.src.url}})
+
+		h.pass(h.mirrors())
+		rows := h.rows("imported")
+		got := h.events.imports()
+		if len(got) != 1 {
+			t.Fatalf("the import announced %d ends %+v; want one", len(got), got)
+		}
+		if !strings.Contains(got[0].Error, big) || !strings.Contains(got[0].Error, "max_blob_bytes") {
+			t.Errorf("the import's end names error %q; want blob %s and max_blob_bytes", got[0].Error, big)
+		}
+		got[0].Error, got[0].Position = "", ""
+		want := types.CodeImported{RepoID: rows.Repo.ID, RepoName: "imported", URL: h.src.url,
+			DefaultBranch: rows.Repo.DefaultBranch}
+		if got[0] != want {
+			t.Errorf("the import announced\n%+v\nwant\n%+v, nothing landed", got[0], want)
+		}
+	})
 }
 
 // AN ATTEMPT LANDS ITS PACKS BEFORE ITS REFS: no record carries a ref before

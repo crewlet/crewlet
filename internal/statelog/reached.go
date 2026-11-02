@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -33,7 +34,7 @@ import (
 // ([Runner.reach]): a barrier's scope meets a retained barrier's, and a record
 // on stale rows is retained too.
 func writesNoRow(rec Record, arbitrated []string) bool {
-	return rec.Kind == BarrierKind && rec.verdict == Verified && rec.V == BarrierVersion &&
+	return rec.Kind == BarrierKind && rec.verdict == recordseal.Verified && rec.V == BarrierVersion &&
 		slices.Equal(rec.Scope.Paths, []string{FrameworkScope}) &&
 		!arbitrates(arbitrated, rec.Subject.Kind)
 }

@@ -70,6 +70,8 @@ import {
   pathSegment,
   RestError,
   rest,
+  type CodeChangeSummary,
+  type CodeChangesAnswer,
   type CodeQueryMap,
   type CodeQueryName,
 } from "~/protocol/index.ts";
@@ -101,6 +103,53 @@ export interface CodeQueryOptions {
    * option of the same name.
    */
   refetchOnReconnect?: boolean | "unreached";
+}
+
+/**
+ * The most pages one filled reading of a listing of changes asks, its first
+ * included ([CodeChangesOptions.fill]): FOUR, so a screen drawing three rows
+ * reads at most the twelve newest rows of its listing's index on each poll —
+ * four requests where one answers in the common case.
+ *
+ * WHAT A PAGE DROPS IS FEW ONCE THE ENGINE SETTLES WHAT ENDED: a change that
+ * closes or merges has its stored readiness cleared by the record that ends
+ * it, and its asks for review settled by its home's next pass (replicated
+ * 0122), so neither `needs=person` nor `needs=review` walks an ended change
+ * past that pass. What is left to drop is a change of a repository the reader
+ * may not read, one that ended since its home last looked, and one whose
+ * readiness, judged at the read, has moved off a person since it was stored:
+ * a few rows, not a history. Four pages carries a screen past three times its
+ * own rows of those; a reading that still keeps too few answers with `next`,
+ * and the screen says where the rest are rather than "none". Every poll of an
+ * open screen pays it again, which is what keeps it small.
+ */
+export const CHANGES_FILL_PAGES = 4;
+
+/** A `code_changes` question's options: a code question's, and the fill. */
+export interface CodeChangesOptions extends CodeQueryOptions {
+  /**
+   * The changes the screen draws: follow `next` until this many are kept or
+   * the listing ends, for at most [CHANGES_FILL_PAGES] pages, rather than
+   * answer the first page alone.
+   *
+   * A PAGE IS THE ROWS THE ENGINE READ, NOT THE ROWS IT KEPT (`code.Reader`'s
+   * listChanges: `limit` bounds the walk of the listing's index, and a row of
+   * a repository the reader may not read, a change no longer live, or — for
+   * `needs=person` — a change whose readiness judged at the read no longer
+   * waits on a person, is dropped after it), so a page can hold fewer changes
+   * than it was asked for, or none, and still carry `next`. A screen that
+   * reads one page and says "none" says it of rows it never read.
+   *
+   * The answer is every change the pages read kept, in the listing's order —
+   * possibly more than it asked for, and never cut, since the answer's
+   * `next` (the last page's) resumes after the last of them. That `next` is
+   * absent only where the listing ENDED, the one answer that says there is
+   * nothing past what it holds. Each page is asked with the same parameters
+   * and the cursor, at this tab's floor, and the whole reading is one
+   * question: a poll, a reconnect or a write from this tab reads it again from
+   * the first page.
+   */
+  fill?: number;
 }
 
 /**
@@ -221,6 +270,40 @@ export const codeRest = {
   },
 };
 
+/**
+ * A `code_changes` listing read page after page until `rows` changes are
+ * kept, the listing ends or [CHANGES_FILL_PAGES] pages are read
+ * ([CodeChangesOptions.fill]): every change kept, the last page's cursor and
+ * position. Refused as the transport refuses (`RestError`), so the hook reads
+ * a refused page as it reads a refused question.
+ */
+async function filledChanges(
+  params: CodeParams,
+  rows: number,
+  signal: AbortSignal,
+): Promise<CodeChangesAnswer> {
+  const changes: CodeChangeSummary[] = [];
+  let cursor = "";
+  let read = 0;
+  let last: CodeChangesAnswer;
+  do {
+    const asked: CodeParams = cursor ? { ...params, cursor } : params;
+    const answer = await rest.request(
+      "GET",
+      `/query/code_changes?${codeSearch("code_changes", asked)}`,
+      { signal },
+    );
+    last = answer.body as CodeChangesAnswer;
+    changes.push(...(last.changes ?? []));
+    cursor = last.next ?? "";
+    read++;
+  } while (cursor !== "" && changes.length < rows && read < CHANGES_FILL_PAGES);
+  const filled: CodeChangesAnswer = { ...last };
+  delete filled.changes;
+  if (changes.length > 0) filled.changes = changes;
+  return filled;
+}
+
 /** The answer held for a key, and the tag a read again of it names. */
 interface Tagged<T> {
   key: string;
@@ -234,16 +317,29 @@ interface Tagged<T> {
  * as well as on `bad_params`, because which repository it found no
  * declaration of is the one fact a reader can act on.
  */
+export function useCodeQuery(
+  what: "code_changes",
+  params?: CodeParams,
+  options?: CodeChangesOptions,
+): QueryResult<CodeChangesAnswer>;
 export function useCodeQuery<K extends CodeQueryName>(
   what: K,
   params?: CodeParams,
-  options: CodeQueryOptions = {},
+  options?: CodeQueryOptions,
+): QueryResult<CodeQueryMap[K]>;
+export function useCodeQuery<K extends CodeQueryName>(
+  what: K,
+  params?: CodeParams,
+  options: CodeChangesOptions = {},
 ): QueryResult<CodeQueryMap[K]> {
-  const { enabled = true, pollMs, refetchOnFocus, refetchOnReconnect } = options;
+  // A FILL IS ONLY EVER A LISTING OF CHANGES': the overloads offer it on
+  // `code_changes` alone, the listing a screen draws a few kept rows of.
+  const { enabled = true, pollMs, refetchOnFocus, refetchOnReconnect, fill } = options;
   // THE QUESTION IS THE KEY — its kind and its parameters, never the floor
   // (see the file's doc). The parameters are a fresh literal on every render,
-  // so their serialisation is what is compared.
-  const key = enabled ? keyOf(what, params) : null;
+  // so their serialisation is what is compared; a fill is part of the
+  // question, since it changes what the answer holds.
+  const key = enabled ? keyOf(what, params) + (fill ? `#fill=${String(fill)}` : "") : null;
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const tagged = useRef<Tagged<CodeQueryMap[K]> | null>(null);
@@ -251,6 +347,11 @@ export function useCodeQuery<K extends CodeQueryName>(
   const result = useRest<CodeQueryMap[K]>(
     key,
     async (signal) => {
+      if (fill) {
+        // `code_changes`'s own answer, which the overloads make K's.
+        const filled: unknown = await filledChanges(paramsRef.current ?? {}, fill, signal);
+        return filled as CodeQueryMap[K];
+      }
       const asking = key ?? "";
       // AN ANSWER THE ENGINE MARKED IMMUTABLE is the tab's, and never asked
       // again while it is kept (the file's doc).

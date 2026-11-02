@@ -20,16 +20,16 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // steerRing is the keyring every node of a steer case's fleet holds.
-var steerRing = statelog.OneKey("k1", "the steer cases' fleet key material")
+var steerRing = recordseal.OneKey("k1", "the steer cases' fleet key material")
 
 // mustSteerDesk is a desk over ring.
-func mustSteerDesk(t *testing.T, ring statelog.Keyring) *steerDesk {
+func mustSteerDesk(t *testing.T, ring recordseal.Keyring) *steerDesk {
 	t.Helper()
 	d, err := newSteerDesk("node-steer", ring)
 	if err != nil {
@@ -286,7 +286,7 @@ func TestOnlyANoteTheFleetSignedReachesATurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, outsider := sealedNote(t, mustSteerDesk(t,
-		statelog.OneKey("k1", "not the fleet's material")).wire, founderNote("run-1"))
+		recordseal.OneKey("k1", "not the fleet's material")).wire, founderNote("run-1"))
 	_, altered := sealedNote(t, d.wire, founderNote("run-1"))
 	altered = bytes.Replace(altered, []byte(`"by":"founder"`), []byte(`"by":"ceo"`), 1)
 	if !bytes.Contains(altered, []byte(`"by":"ceo"`)) {
@@ -329,7 +329,7 @@ func TestAReplayedNoteIsAnsweredByNobody(t *testing.T) {
 // any note not its own.
 func TestANoteUnderAnUnheldKeyIsAnsweredUnverified(t *testing.T) {
 	t.Parallel()
-	rotated := statelog.Keyring{ActiveID: "k2", Keys: []statelog.Key{
+	rotated := recordseal.Keyring{ActiveID: "k2", Keys: []recordseal.Key{
 		steerRing.Keys[0], {ID: "k2", Material: "the key the fleet is rotating to"},
 	}}
 	clients := steerClients(t, 3)

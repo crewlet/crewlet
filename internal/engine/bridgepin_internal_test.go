@@ -157,6 +157,16 @@ func (b bridgedRun) call(t *testing.T, name string) {
 	}
 }
 
+// calls is the bridged tool log of turnID's run, as the row's job reads it.
+func (b bridgedRun) calls(t *testing.T, turnID string) sandbox.BridgeLog {
+	t.Helper()
+	log, err := b.pending.BridgeLog(t.Context(), b.row(t, turnID))
+	if err != nil {
+		t.Fatalf("the run's log: %v", err)
+	}
+	return log
+}
+
 func (b bridgedRun) row(t *testing.T, turnID string) sandbox.PendingRun {
 	t.Helper()
 	row, found, err := b.pending.Get(t.Context(), turnID)
@@ -205,7 +215,7 @@ func TestALaunchedRunsCallsStopWhenAPersonStopsItsSeat(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("a call ran on a seat a person had asked to stop")
 	}
-	calls := run.row(t, "t-fenced").BridgeCalls
+	calls := run.calls(t, "t-fenced").Calls
 	if len(calls) != 2 {
 		t.Fatalf("the run recorded %d calls, want the one made before the stop and the one refused after it", len(calls))
 	}
@@ -232,9 +242,10 @@ func TestALaunchedRunsBridgedCallIsFiledUnderItsJob(t *testing.T) {
 
 	run.call(t, "read_page")
 	row := run.row(t, "t-bound")
-	if row.LaunchID != job || len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != "read_page" {
+	logged := run.calls(t, "t-bound")
+	if row.LaunchID != job || len(logged.Calls) != 1 || logged.Calls[0].Name != "read_page" {
 		t.Fatalf("the job's log after one bridged call: job %q (was %q), calls %+v",
-			row.LaunchID, job, row.BridgeCalls)
+			row.LaunchID, job, logged.Calls)
 	}
 }
 
@@ -260,9 +271,9 @@ func TestACarriedOnRunsCallsAreNumberedAfterTheAskingRuns(t *testing.T) {
 	carried := asking.launch(t, &runner.Continuation{SessionID: "sess-ask", Brief: "use main"})
 	carried.call(t, "read_page")
 
-	row := carried.row(t, "t-carried")
+	logged := carried.calls(t, "t-carried")
 	var seqs []int
-	for _, call := range row.BridgeCalls {
+	for _, call := range logged.Calls {
 		seqs = append(seqs, call.Seq)
 	}
 	if !slices.Equal(seqs, []int{1, 2, 3}) {
@@ -273,7 +284,7 @@ func TestACarriedOnRunsCallsAreNumberedAfterTheAskingRuns(t *testing.T) {
 	// A NEW ROUND'S RUN COUNTS FROM ONE: its row starts the log afresh.
 	next := carried.launch(t, nil)
 	next.call(t, "read_page")
-	if calls := next.row(t, "t-carried").BridgeCalls; len(calls) != 1 || calls[0].Seq != 1 {
+	if calls := next.calls(t, "t-carried").Calls; len(calls) != 1 || calls[0].Seq != 1 {
 		t.Fatalf("the next round's log is %+v, want its one call numbered 1", calls)
 	}
 }
@@ -314,11 +325,12 @@ func TestABridgedSessionsFirstCallOutlivingItsJobIsNotTheNextJobs(t *testing.T) 
 	<-answered
 
 	row := run.row(t, "t-late")
+	logged := run.calls(t, "t-late")
 	if row.LaunchID != next.LaunchID {
 		t.Fatalf("the row holds job %q, want the relaunch's %q", row.LaunchID, next.LaunchID)
 	}
-	if len(row.BridgeCalls) != 0 || row.Launch.Bridged != (sandbox.EngineSpend{}) {
+	if len(logged.Calls) != 0 || row.Launch.Bridged != (sandbox.EngineSpend{}) {
 		t.Fatalf("the next job took the last one's late call: calls %+v, spend %+v",
-			row.BridgeCalls, row.Launch.Bridged)
+			logged.Calls, row.Launch.Bridged)
 	}
 }

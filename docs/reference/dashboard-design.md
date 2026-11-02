@@ -3046,8 +3046,8 @@ company did.** That is Home until its reader arranges it (see
   into its turn. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
 - **Code waiting on a person**, where the company hosts code: the changes an
-  agent cannot move. Two halves, the first three of each of the engine's own
-  listings: *Asking your review* (`code_changes?needs=review`, which names no
+  agent cannot move. Two halves, the first three changes each of two of the
+  engine's own listings keeps: *Asking your review* (`code_changes?needs=review`, which names no
   reviewer and so asks the reader's own seat; a reader bound to no seat is
   told a review is asked of a seat, and asked nothing) and *Waiting on a
   person* (`needs=person`: a change whose first unmet precondition only a
@@ -3056,7 +3056,15 @@ company did.** That is Home until its reader arranges it (see
   the change in the peek. Three rows, as Needs your decision draws, and
   **Open Code** is Code › Changes narrowed to what waits on a person. A
   listing is a page the engine read, never a total, so the card counts
-  nothing.
+  nothing; and a page is the rows it read, not the rows it kept (a change of
+  a repository the reader may not read, one that has ended, one whose
+  readiness no longer waits on a person is dropped after the read), so an
+  empty page can still carry `next`. Each half follows `next` until it holds
+  its three or the listing ends, for at most four pages a poll
+  (`CHANGES_FILL_PAGES`), and says it found none only of a listing that
+  ended: a half that stops at that bound first draws what it found, or, with
+  nothing found, says none was among the newest read and links to the rest
+  in Code.
 - **Tasks completed** per company day over the last fourteen (today in the
   accent), **Tokens by team** over the window (tokens, never money), each
   team's bar split by the seats that spent in it and keyed under the bar (the
@@ -3509,7 +3517,13 @@ in the trash, and a menu with **Open on the board**.
 code, the page asks the engine for one change naming the task as its work
 item (`code_changes?work=native:<id>&limit=1`, every state, since a listing by
 work item needs none), and only once it finds one does the column open with a
-**Task | Changes** strip (`tab=changes`); a task no change names carries no
+**Task | Changes** strip (`tab=changes`). A page is the rows the engine read,
+not the rows it kept: a change of a repository the reader may not read, one
+deleted and not yet purged among them, is dropped after the read, so an empty
+page can still carry `next`. The probe follows `next` until it keeps one
+change, for at most four pages, and a probe that stops there with `next` still
+set opens the strip too, since a change may lie behind it and the tab's own
+listing pages to it. A task no change names carries no
 strip, so a company that proposes its code elsewhere never sees a tab that
 always says nothing, and an address naming the tab before the answer lands on
 the task. Changes lists every change of the task, merged and closed as well as
@@ -7766,10 +7780,13 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   listing carries no instant of a change's last record, so the row's time is
   when it was **Opened**, and no conversation counters, so it counts the
   standing blockers rather than the open findings. **Needs a person** is a band
-  above the grid: the engine's `needs=person` listing, the first five, each
-  with the sentence of what it waits on — a change whose first unmet
-  precondition waits on persons alone, which no agent will be woken to move —
-  and nothing at all where none waits. A row, and a band's reference, opens the
+  above the grid: the first five changes the engine's `needs=person` listing
+  keeps, each with the sentence of what it waits on — a change whose first
+  unmet precondition waits on persons alone, which no agent will be woken to
+  move — and nothing at all where it found none. A page of that listing is the
+  rows the engine read, some of which it drops after (a change of a repository
+  the reader may not read, one whose readiness no longer waits on a person), so
+  the band follows `next` for at most four pages to keep its five. A row, and a band's reference, opens the
   change in the peek (`peek=change:web!42`), which reads the change itself
   (`code_change`): its branches, owner, revisions and work item (the owner's
   other open changes, and every change of the item, one link each), its
@@ -7783,7 +7800,13 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   reference is short for, and the engine's own REST path — reads the change a
   part at a time (`code_change`): its detail rides the first page of its
   revisions, and each tab asks the part it draws, every one a code question at
-  the tab's floor. **Conversation** is the readiness, the description, and the
+  the tab's floor. The detail is the one read on a clock, every minute; a part
+  is asked again only when the detail says what it reads moved — for a
+  revision's files and a file's patch, git reads on the repository's home git
+  node, the change's version and the revision's head and the base its facts
+  record (which a retarget's new facts move after the version), and the
+  change's and its conversation's versions for every other part.
+  **Conversation** is the readiness, the description, and the
   timeline in the order the records landed on the code log — each review with
   its verdict and summary, each thread by its first comment with its replies
   under it, each revision pushed — never by a clock a node read, with the
@@ -7810,7 +7833,12 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   `code_review_change` with the verdict, a summary and the reviewer's own
   standing findings it carries (each checked, since a review of a later
   revision supersedes every standing finding of the reviewer's it leaves out);
-  the drafts are forgotten only once the engine has taken it. An open finding
+  those are the engine's `standing` part, read to its last page, and the press
+  is held, with why, while that read is out or after it was refused, so no
+  review supersedes a finding the dialog never showed; the drafts are
+  forgotten only once the engine has taken it. Findings and comments are each
+  read a page of two hundred at a time, oldest first, and where either runs
+  past one the Files tab says so above the diff. An open finding
   with a suggestion offers **Apply suggestion** (`code_apply_suggestions`,
   against the head on screen), and every finding and thread a reply; a thread
   **Resolve**. **Request review** asks reviewers by handle with a note
@@ -7867,6 +7895,18 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   name can shadow), `path=` the directory or the file, `lens=blame`, and
   `lines=` the lines picked — pressing a line's number picks it, Shift
   extends the run — drawn RULED, never tinted, as a picked line of a diff is.
+  An address whose `lines=` the file's first page does not draw — a Code ›
+  Search hit, a ⌘K hit or a Permalink to a line past the first ~56 KiB —
+  OPENS AT THE LINE: the file is read again from fifty lines before it
+  (`code_blob`'s `start_line`), paged forward from there as before, the line
+  drawn picked and scrolled to the middle of the screen, and **Load earlier
+  lines** reads back towards line 1 five hundred lines a press (`start_line`
+  and `end_line`, each step followed through its pages, so it meets the lines
+  after it). The blame does the same through its own `start_line`, and reads
+  a range of at most `code.MaxBlameLines` (500) lines at a time, range after
+  range, so **Load more lines** reaches a blame's last line. A press picks a
+  line on screen and so reads nothing; a line the file does not have is said
+  so beside its size.
   The revision picker lists the first page of the branches and of the tags
   (`code_refs`), read ONCE by the page while its Files or Commits tab is open
   and handed to every picker it draws — a comparison's two pickers share one
@@ -7906,9 +7946,14 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   person's alone, on a repository they maintain) opens a confirmation that
   names, BEFORE the press, who keeps copies of what it drops — every git
   node's copy until it syncs past the purge, every backup taken before it,
-  and the object store for a day (a versioned S3 bucket for as long as its
-  own rules keep a deleted object) — and only its Purge asks the repository's
-  maintainer; the section says where the last purge stands. A declared
+  the object store for a day (a versioned S3 bucket for as long as its own
+  rules keep a deleted object), and every clone and fetch that already took
+  it (a person's, a coding box's, a CI runner's checkout), which nothing on
+  the server reaches — the repository's push mirror by its URL among them,
+  where it has one, since that host already holds whatever was pushed to it
+  ([Expunge](../concepts/code-host.md#expunge), "What still holds a purged
+  object") — and only its Purge asks the repository's maintainer; the
+  section says where the last purge stands. A declared
   repository's search mode and mirrors are the company document's, settled
   by every activation: they are held with that sentence and the tab leads to
   Settings › Configuration, while its purge, which changes none of its

@@ -39,8 +39,11 @@ type CodeStatus struct {
 	Cache cache.Status `json:"cache"`
 	// Hot is the cache.HotRepos repositories the node served most in the
 	// hour and in the day, in one list, those hottest in the hour first
-	// (cache.Heat.Hot); empty when it served none within the day.
-	Hot []RepoStatus `json:"hot"`
+	// (cache.Heat.Hot); empty when it served none within the day, and nil
+	// where the status was not asked for it ([StatusAsk.Hot]). Either is sent
+	// as no `hot` at all: a reader of the wire has nothing to tell apart,
+	// both being a status naming no hot repository.
+	Hot []RepoStatus `json:"hot,omitempty"`
 	// Repo is the repository the status was asked about: its heat here and
 	// its copy in service, whether or not it is among the hottest; nil when
 	// none was asked about.
@@ -57,18 +60,34 @@ type RepoStatus struct {
 	Copy *cache.Copy `json:"copy,omitempty"`
 }
 
-// Status is this node's code host as it stands now, and the repository whose
-// id is repo beside it where repo is not "". It reads running totals and the
-// heat's windows in memory, and no row and no disk, so it answers at once
-// whatever the node is doing.
-func (s *Server) Status(repo string) CodeStatus {
+// StatusAsk is what a status is asked to carry beside the node's cache.
+type StatusAsk struct {
+	// Repo is the id of a repository to report beside the node — its heat
+	// and its copy in service, whether or not it is among the hottest; ""
+	// asks about none.
+	Repo string
+	// Hot asks for the node's hot list. Left false the status carries none:
+	// the list is up to 2 × cache.HotRepos repositories with their copies,
+	// the bulk of a status, and code_status reads it on the fleet's first
+	// page alone, so every other answer leaves it out rather than send it to
+	// be thrown away.
+	Hot bool
+}
+
+// Status is this node's code host as it stands now, with what ask asks for
+// beside it. It reads running totals and the heat's windows in memory, and no
+// row and no disk, so it answers at once whatever the node is doing.
+func (s *Server) Status(ask StatusAsk) CodeStatus {
 	c := s.o.Cache
-	out := CodeStatus{Node: s.o.NodeID, At: s.now().UTC(), Cache: c.Status(), Hot: []RepoStatus{}}
-	for _, h := range c.Heat().Hot(cache.HotRepos) {
-		out.Hot = append(out.Hot, s.repoStatus(h))
+	out := CodeStatus{Node: s.o.NodeID, At: s.now().UTC(), Cache: c.Status()}
+	if ask.Hot {
+		out.Hot = []RepoStatus{}
+		for _, h := range c.Heat().Hot(cache.HotRepos) {
+			out.Hot = append(out.Hot, s.repoStatus(h))
+		}
 	}
-	if repo != "" {
-		r := s.repoStatus(c.Heat().Of(repo))
+	if ask.Repo != "" {
+		r := s.repoStatus(c.Heat().Of(ask.Repo))
 		out.Repo = &r
 	}
 	return out

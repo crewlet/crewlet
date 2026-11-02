@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -389,7 +390,7 @@ func TestAReplayedTokenAnswerFailsAnotherNonce(t *testing.T) {
 	if got := facts.rowFor(presented, key, other).Verifier; got != "" {
 		t.Errorf("the facts under another nonce confirmed %q", got)
 	}
-	otherKey := newVerifierKeys(statelog.OneKey("k2", "another fleet's key material"))
+	otherKey := newVerifierKeys(recordseal.OneKey("k2", "another fleet's key material"))
 	if alien, _ := otherKey.key("k2"); facts.rowFor(presented, alien, asked).Verifier != "" {
 		t.Error("the facts under another key confirmed a verifier")
 	}

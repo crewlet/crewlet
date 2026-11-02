@@ -2,12 +2,15 @@
 
 /**
  * The code host's values as the Code workspace says them: what a push read in
- * brief left out.
+ * brief left out, and where a file's lines begin for the line an address
+ * picks.
  */
 
 import { describe, expect, test } from "vitest";
 import {
+  PICK_CONTEXT,
   changeRef,
+  lineToOpenAt,
   omittedOf,
   parseChangeRef,
   preconditionWord,
@@ -104,5 +107,32 @@ describe("a change's readiness, as a row says it", () => {
   test("names a precondition this build knows, and one it does not by its kind", () => {
     expect(preconditionWord("approval")).toBe("Approved");
     expect(preconditionWord("rebase_needed")).toBe("rebase needed");
+  });
+});
+
+describe("where a file's lines begin for the line an address picks", () => {
+  const at = (start: number) => ({ start, end: start });
+
+  // A LINE ON SCREEN MOVES NOTHING, and neither does no line or a line the
+  // file does not have (a stale link opens the file where it is). Mutation:
+  // move for a drawn line, and every press would read the file again.
+  test("stay where they are for a line drawn, none, or one the file lacks", () => {
+    expect(lineToOpenAt(null, 1, at(1), 3000)).toBeNull();
+    expect(lineToOpenAt(at(40), 1, { start: 1, end: 1500 }, 3000)).toBeNull();
+    expect(lineToOpenAt(at(1500), 1, { start: 1, end: 1500 }, 3000)).toBeNull();
+    expect(lineToOpenAt(at(3001), 1, { start: 1, end: 1500 }, 3000)).toBeNull();
+  });
+
+  // A LINE OFF SCREEN OPENS PICK_CONTEXT LINES BEFORE IT, and at the line
+  // itself where they begin there already and still do not draw it — never
+  // where they were asked from, which would read the same lines forever.
+  // Mutation: open at the line's page rather than before it, or answer the
+  // place asked from, and this fails.
+  test("begin PICK_CONTEXT lines before a line off screen, never where they began", () => {
+    expect(lineToOpenAt(at(2400), 1, { start: 1, end: 1500 }, 3000)).toBe(2400 - PICK_CONTEXT);
+    expect(lineToOpenAt(at(100), 1800, { start: 1800, end: 3000 }, 3000)).toBe(100 - PICK_CONTEXT);
+    expect(lineToOpenAt(at(30), 1800, { start: 1800, end: 3000 }, 3000)).toBe(1);
+    expect(lineToOpenAt(at(20), 1, { start: 1, end: 5 }, 3000)).toBe(20);
+    expect(lineToOpenAt(at(2400), 2350, { start: 2350, end: 2360 }, 3000)).toBe(2400);
   });
 });

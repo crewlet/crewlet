@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -1066,15 +1067,19 @@ func LogDomain(stream string) string {
 // PER DOMAIN, because the derivation binds the domain's own name in: a record
 // replayed from one log onto another must not verify, and a signer that did
 // not know which log it was writing to could not promise that.
-func (s *stateLog) signerFor(domain statelog.Domain) (*statelog.Signer, error) {
-	return statelog.NewSigner(domain.Name(), s.ring)
+func (s *stateLog) signerFor(domain statelog.Domain) (*recordseal.Signer, error) {
+	return recordseal.NewSigner(domain.Name(), s.ring)
 }
 
-func (s *stateLog) verifierFor(domain statelog.Domain) (*statelog.Verifier, error) {
-	return statelog.NewVerifier(domain.Name(), s.ring)
+func (s *stateLog) verifierFor(domain statelog.Domain) (*recordseal.Verifier, error) {
+	return recordseal.NewVerifier(domain.Name(), s.ring)
 }
 
-// recordKeyring is the Tier A keyring as the state log's signatures read it.
+// recordKeyring is the Tier A keyring as the fleet's record seal reads it
+// ([recordseal.Keyring]): every state-log record and every signed channel —
+// the estate's envelopes, the broker's asks, a steer, presence, the relay, a
+// box read, an answer to a parked run — derives its keys from it, each in a
+// key domain of its own.
 //
 // THE SAME MATERIAL THE PER-RUN TOKENS DERIVE FROM, and deliberately: a
 // deployment has one keyring, and a second one for records would be a second
@@ -1091,16 +1096,16 @@ func (s *stateLog) verifierFor(domain statelog.Domain) (*statelog.Verifier, erro
 // references arrived verbatim, which would have split every record's signature
 // across exactly that fleet.) The embedded broker's credentials derive from
 // the same material, by the same rule (ADR-0087).
-func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
+func recordKeyring(boot *config.Bootstrap) recordseal.Keyring {
 	if boot == nil {
-		return statelog.Keyring{}
+		return recordseal.Keyring{}
 	}
-	ring := statelog.Keyring{
+	ring := recordseal.Keyring{
 		ActiveID: boot.Secrets.ActiveKeyID,
-		Keys:     make([]statelog.Key, 0, len(boot.Secrets.Keys)),
+		Keys:     make([]recordseal.Key, 0, len(boot.Secrets.Keys)),
 	}
 	for _, key := range boot.Secrets.Keys {
-		ring.Keys = append(ring.Keys, statelog.Key{ID: key.ID, Material: key.Material})
+		ring.Keys = append(ring.Keys, recordseal.Key{ID: key.ID, Material: key.Material})
 	}
 	return ring
 }
@@ -1111,4 +1116,4 @@ func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
 // the records a restore replays past its store copy for the files they name
 // (internal/backup, ADR-0075). Handed this rather than reading Tier A again,
 // so the backup and the appliers can never open a record under two keyrings.
-func (e *Engine) RecordKeyring() statelog.Keyring { return recordKeyring(e.boot) }
+func (e *Engine) RecordKeyring() recordseal.Keyring { return recordKeyring(e.boot) }

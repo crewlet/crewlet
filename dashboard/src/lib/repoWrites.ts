@@ -137,20 +137,41 @@ export function importHeld(viewer: Reader): string | undefined {
 /**
  * WHO KEEPS COPIES OF A PURGED OBJECT, in the order they let go of it: what a
  * person is told BEFORE they press, since a purge is asked because something
- * must go and none of these is the purge's to empty (code-host.md, "Expunge").
- * The object store's day is code.RetireGrace.
+ * must go and none of these is the purge's to empty: every keeper code-host.md's
+ * "What still holds a purged object" lists, in its words. The object store's
+ * day is code.RetireGrace. The last keeper never lets go — a clone or a fetch
+ * holds the object for as long as its owner keeps it, and nothing on the
+ * server reaches it — which is why the sentence ends by asking for the secret
+ * to be rotated rather than promising it gone.
  */
 export const PURGE_KEEPERS: readonly string[] = [
   "every git node's copy of the repository, until it syncs past the purge",
   "every backup taken before the purge, for as long as that backup is kept",
   "the object store, for a day after the purge commits (and a versioned S3 bucket for as long as its own rules keep a deleted object)",
+  "every clone and fetch that already took it — a person's clone, a coding box's, a CI runner's checkout — which nothing on the server reaches",
 ];
+
+/**
+ * Who keeps copies of what a purge of this repository drops: [PURGE_KEEPERS],
+ * and, where the repository has a push mirror, the host it pushes to, BY ITS
+ * URL. That host is a clone like any other, but one a person configured on
+ * this very tab and may not think of as one: it already holds whatever was
+ * pushed to it, and no purge here reaches it.
+ */
+export function purgeKeepers(repo: CodeRepoDetail): readonly string[] {
+  const to = repo.remotes?.mirror_to;
+  if (!to) return PURGE_KEEPERS;
+  return [
+    ...PURGE_KEEPERS,
+    `${to.url}, the push mirror's host, which keeps whatever this repository already pushed to it`,
+  ];
+}
 
 /** The purge confirmation's sentence: what goes, and who still keeps a copy. */
 export function purgeMessage(repo: CodeRepoDetail): string {
   return (
     `Every object no branch or tag of ${repo.name} reaches is dropped by its maintainer, with no grace for what a force-push or a deleted branch left. ` +
-    `Copies are still kept by ${PURGE_KEEPERS.join("; by ")}. A secret that reached any of them must be rotated as well.`
+    `Copies are still kept by ${purgeKeepers(repo).join("; by ")}. A secret that reached any of them must be rotated as well.`
   );
 }
 

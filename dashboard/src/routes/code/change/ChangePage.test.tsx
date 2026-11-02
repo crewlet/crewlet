@@ -26,10 +26,12 @@ import { withDerived } from "~/test/org.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { ChangePage } from "./ChangePage.tsx";
+import { CHANGE_POLL_MS } from "./reads.ts";
 
 beforeEach(() => sessionStorage.clear());
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
   sessionStorage.clear();
@@ -127,24 +129,31 @@ interface Acted {
 
 /** Every `code_checks` question the engine was asked, newest last. */
 const checksAsked: URL[] = [];
-
 /** Every `code_change` question the engine was asked, newest last. */
 const changeAsked: URL[] = [];
 
+/** The `standing` part's answer by default: the reader's one standing finding, on one page. */
+const ONE_STANDING = (): Response =>
+  json({ position: POSITION, level: "session", findings: [MINE] });
+
 /**
- * The engine: its reads by part, and each act recorded and answered as
- * `answer` says — a file's patch as `patch`'s pages, page n answered from the
- * cursor `p:<n>`, as the engine cuts one at a line, and a revision's files as
- * `files`' pages, page n answered from the cursor `f:<n>`.
+ * The engine: its reads by part — the detail `change` answers on every ask,
+ * and a part `parts` names as it answers, in place of the default — and each
+ * act recorded and answered as `answer` says; a file's patch as `patch`'s
+ * pages, page n answered from the cursor `p:<n>`, as the engine cuts one at a
+ * line, and a revision's files as `files`' pages, page n answered from the
+ * cursor `f:<n>`.
  */
 function stubEngine(
-  change: Record<string, unknown>,
+  change: Record<string, unknown> | (() => Record<string, unknown>),
   answer: () => Promise<Response> | Response,
+  parts: Readonly<Record<string, (url: URL) => Promise<Response> | Response>> = {},
   patch: readonly string[] = [PATCH],
   files: readonly (readonly Record<string, unknown>[])[] = [
     [{ path: "app.go", status: "M", added: 1, deleted: 1 }],
   ],
 ) {
+  changeAsked.length = 0;
   const acted: Acted[] = [];
   vi.stubGlobal(
     "fetch",
@@ -205,6 +214,8 @@ function stubEngine(
       if (url.pathname !== "/query/code_change") return json({}, 404);
       changeAsked.push(url);
       const page = { position: POSITION, level: "session" };
+      const named = parts[url.searchParams.get("part") ?? ""];
+      if (named) return named(url);
       // THE PAGE A CURSOR NAMES, a patch's (`p:<n>`) or a listing's (`f:<n>`).
       const pageAt = Number((url.searchParams.get("cursor") ?? "p:0").slice(2));
       switch (url.searchParams.get("part")) {
@@ -244,11 +255,17 @@ function stubEngine(
             findings: [MINE],
             placed: { "f-mine": { start: 9, end: 9, outdated: true } },
           });
+        case "standing":
+          return ONE_STANDING();
         case "comments":
         case "reviews":
           return json(page);
         default:
-          return json({ ...page, change, revisions: [] });
+          return json({
+            ...page,
+            change: typeof change === "function" ? change() : change,
+            revisions: [],
+          });
       }
     }),
   );
@@ -339,6 +356,176 @@ test("Approve is one review of the head carrying the drafts and the standing fin
   expect(sessionStorage.getItem(draftsKey("change-1", 2))).toBeNull();
 });
 
+/** A finding the reader raised before MINE, which the standing read's first page holds. */
+const EARLIER = { ...MINE, id: "f-earlier", title: "The backoff never grows" };
+
+// THE REVIEW CARRIES EVERY STANDING FINDING, read to the standing part's last
+// page: a review of a later revision supersedes each it leaves out, so one on
+// a page the dialog never read would be superseded unseen. Mutation: stop the
+// standing read after its first page, and f-mine is not carried.
+test("a review carries a standing finding on the standing read's second page", async () => {
+  const acted = stubEngine(
+    detail(),
+    () => json({ outcome: "applied", position: "CREWLET_CODE_LOG@1:13" }),
+    {
+      standing: (url) =>
+        url.searchParams.get("cursor") === "f-earlier"
+          ? json({ position: POSITION, level: "session", findings: [MINE] })
+          : json({ position: POSITION, level: "session", findings: [EARLIER], next: "f-earlier" }),
+    },
+  );
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Request changes" }));
+  const dialog = await screen.findByRole("dialog");
+  await within(dialog).findByText("The retry never stops");
+  expect(within(dialog).getByText("The backoff never grows")).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Request changes" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args.carries).toEqual(["f-earlier", "f-mine"]);
+  const asked = changeAsked.filter((u) => u.searchParams.get("part") === "standing");
+  expect(asked.map((u) => u.searchParams.get("cursor"))).toEqual([null, "f-earlier"]);
+});
+
+// NO REVIEW LEAVES WHILE THE STANDING READ IS OUT: sent then, it carries
+// none and supersedes every one. The press is held with why, and the
+// dialog's form submitted (Enter) sends nothing either. Mutation: drop the
+// hold while the read is out (the button's and submit's), and the review is
+// sent.
+test("a review is held while the reader's standing findings are being read", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }), {
+    standing: () => new Promise<Response>(() => {}),
+  });
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  const dialog = await screen.findByRole("dialog");
+  const press = within(dialog).getByRole("button", { name: "Approve" });
+  await waitFor(() =>
+    expect(press.getAttribute("title")).toMatch(/Reading your standing findings/),
+  );
+  fireEvent.click(press);
+  fireEvent.submit(within(dialog).getByRole("textbox", { name: "Summary" }).closest("form")!);
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(acted).toHaveLength(0);
+});
+
+// A REFUSED STANDING READ HOLDS THE REVIEW with the reason, until the reader
+// reads them again and the read lands. Mutation: release the hold on a
+// refusal, and the review is sent carrying nothing.
+test("a refused standing read holds the review until it is read again", async () => {
+  let refuse = true;
+  const acted = stubEngine(
+    detail(),
+    () => json({ outcome: "applied", position: "CREWLET_CODE_LOG@1:13" }),
+    {
+      standing: () =>
+        refuse ? json({ error: "query_failed", message: "the read failed" }, 500) : ONE_STANDING(),
+    },
+  );
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  const dialog = await screen.findByRole("dialog");
+  const press = within(dialog).getByRole("button", { name: "Approve" });
+  await waitFor(() => expect(press.getAttribute("title")).toMatch(/were not read/));
+  fireEvent.click(press);
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(acted).toHaveLength(0);
+
+  refuse = false;
+  fireEvent.click(within(dialog).getByRole("button", { name: "Read them again" }));
+  await within(dialog).findByText("The retry never stops");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args.carries).toEqual(["f-mine"]);
+});
+
+// A DIFF IS READ ONCE FOR WHAT IT IS A FUNCTION OF: a revision's files and a
+// file's patch are git reads on the home git node whose answer moves only
+// with the revision's head and the base its facts record, so minutes on the
+// Files tab ask neither again while the detail says neither has moved — and a
+// version the detail moves asks both again, as a base its facts record anew
+// does. Mutation: poll the files or diff part on a clock again, or drop the
+// re-ask on the version or on the facts, and this fails.
+test("the Files tab asks for a diff again only when the change moves", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let version = 5;
+  let base = HEAD;
+  const facts = () => ({
+    n: 2,
+    head: HEAD,
+    pusher: "dev",
+    pusher_kind: "agent",
+    position: POSITION,
+    at: "2026-10-27T10:00:00Z",
+    facts: { target_ref: "refs/heads/main", target_oid: HEAD, base_oid: base, touched: ["app.go"] },
+  });
+  stubEngine(
+    () => detail({ version }),
+    () => json({}),
+    {
+      "": () =>
+        json({
+          position: POSITION,
+          level: "session",
+          change: detail({ version }),
+          revisions: [facts()],
+        }),
+    },
+  );
+  mount("#/code/repos/web/changes/42?tab=files&file=app.go");
+  expect(await screen.findByText("1 outdated on this file")).toBeTruthy();
+  const askedFor = (part: string) =>
+    changeAsked.filter((u) => u.searchParams.get("part") === part).length;
+  const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
+  await waitFor(() => expect(askedFor("diff")).toBe(1));
+  expect(askedFor("files")).toBe(1);
+
+  const before = details();
+  for (let minute = 0; minute < 3; minute++) {
+    await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  }
+  await waitFor(() => expect(details()).toBeGreaterThanOrEqual(before + 3));
+  expect(askedFor("files")).toBe(1);
+  expect(askedFor("diff")).toBe(1);
+
+  version = 6;
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(askedFor("files")).toBe(2));
+  await waitFor(() => expect(askedFor("diff")).toBe(2));
+
+  // A RETARGET'S NEW FACTS land in a record of the home's own, after the one
+  // that moved the version: the base they record moves the diff too.
+  base = "fedcba9876543210fedcba9876543210fedcba98";
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(askedFor("files")).toBe(3));
+  await waitFor(() => expect(askedFor("diff")).toBe(3));
+});
+
+// FINDINGS AND COMMENTS PAST ONE PAGE ARE SAID on the Files tab: the pages
+// run oldest first, so what is left off is the newest, and a reviewer who
+// cannot find what they raised re-raises it. Mutation: drop the notice, and
+// this fails.
+test("the Files tab says when the change's findings run past one page", async () => {
+  stubEngine(detail(), () => json({}), {
+    findings: () =>
+      json({
+        position: POSITION,
+        level: "session",
+        revision: 2,
+        findings: [MINE],
+        placed: { "f-mine": { start: 9, end: 9, outdated: true } },
+        next: "f-mine",
+      }),
+  });
+  mount("#/code/repos/web/changes/42?tab=files&file=app.go");
+  expect(
+    await screen.findByText(/More findings and comments were raised on this change than one page/),
+  ).toBeTruthy();
+});
+
 // A CHANGE NO LONGER LIVE takes no review: each control stays drawn, held with
 // the reason. Mutation: hide them, or let them press, and this fails.
 test("a merged change holds its review controls with the reason", async () => {
@@ -380,8 +567,7 @@ test("a finding drafted on a line is the tab's until a review, and an outdated o
 // revision. Mutation: ask the next page without its cursor, or draw the first
 // page's text alone, and this fails.
 test("a change's patch past one page draws the rest of its hunks when the reader asks", async () => {
-  changeAsked.length = 0;
-  stubEngine(detail(), () => json({ outcome: "applied" }), [
+  stubEngine(detail(), () => json({ outcome: "applied" }), {}, [
     `${PATCH}\n`,
     ["@@ -40,2 +40,2 @@", " still", "-alpha", "+omega"].join("\n"),
   ]);
@@ -404,10 +590,10 @@ test("a change's patch past one page draws the rest of its hunks when the reader
 // draw the first page alone, or ask the next without its cursor, and this
 // fails.
 test("a change's files past one page are listed when the reader asks", async () => {
-  changeAsked.length = 0;
   stubEngine(
     detail(),
     () => json({ outcome: "applied" }),
+    {},
     [PATCH],
     [
       [{ path: "app.go", status: "M", added: 1, deleted: 1 }],

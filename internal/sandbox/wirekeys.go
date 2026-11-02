@@ -26,6 +26,8 @@ import (
 // record's top follows: [RunSteer], [RunNote], [NoteRead] and [BridgeCall]. A
 // section that does not is extended the other way, with a key of its own at
 // the top of the record (as [PendingRun.Stop] is, beside [RecordedEnding]).
+// And the log kept beside the record, [BridgeLog], is a value of its own with
+// an Extra of its own at its top, under the same rule.
 
 // wireKeys is every wire key a struct type declares, read off its own json tags
 // so a field added to the struct is known the moment it exists — a hand-kept
@@ -181,5 +183,24 @@ func (c *BridgeCall) UnmarshalJSON(raw []byte) error {
 	}
 	*c = BridgeCall(p)
 	c.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes the log with the keys a later build added to it.
+func (l BridgeLog) MarshalJSON() ([]byte, error) {
+	type plain BridgeLog
+	return marshalCarrying(plain(l), wireKeys(reflect.TypeFor[BridgeLog]()), l.Extra)
+}
+
+// UnmarshalJSON reads the log and keeps the keys this build does not know.
+func (l *BridgeLog) UnmarshalJSON(raw []byte) error {
+	type plain BridgeLog
+	p := plain(*l)
+	extra, err := unmarshalCarrying(raw, &p, wireKeys(reflect.TypeFor[BridgeLog]()))
+	if err != nil {
+		return err
+	}
+	*l = BridgeLog(p)
+	l.Extra = extra
 	return nil
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
 // THE WAKE PATH, END TO END: a committed record becomes a notification for the
@@ -195,7 +195,7 @@ func (r *roundTrip) recordAt(seq uint64) []byte {
 		r.t.Fatalf("read record %d: %v (present %v)", seq, err, ok)
 	}
 	body, verdict := r.verifier.Open(payload)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		r.t.Fatalf("record %d did not verify: %s", seq, verdict)
 	}
 	return body

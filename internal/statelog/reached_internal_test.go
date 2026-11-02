@@ -1,6 +1,10 @@
 package statelog
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/recordseal"
+)
 
 // THE REACHED POSITION PASSES NOTHING THAT WRITES A ROW, AND NOTHING IT HAS NOT
 // BEEN HANDED IN ORDER.
@@ -23,7 +27,7 @@ func TestTheReachedPositionPassesNothingThatWritesARow(t *testing.T) {
 				Gen: 1, Scope: ScopeSet{Paths: []string{FrameworkScope}},
 			},
 			Position: at(seq),
-			verdict:  Verified,
+			verdict:  recordseal.Verified,
 		}
 	}
 	// as is barrier(seq) with one thing about it changed.
@@ -67,7 +71,7 @@ func TestTheReachedPositionPassesNothingThatWritesARow(t *testing.T) {
 		},
 		{
 			name: "a barrier under a key this node does not hold, which it retains",
-			run:  []Record{as(4, func(r *Record) { r.verdict = KeyUnknown }), barrier(5)},
+			run:  []Record{as(4, func(r *Record) { r.verdict = recordseal.KeyUnknown }), barrier(5)},
 			want: 3,
 		},
 		{

@@ -17,16 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // brokerRing is the keyring every node of a broker case's fleet holds.
-var brokerRing = statelog.OneKey("k1", "the fleet broker cases' fleet key material")
+var brokerRing = recordseal.OneKey("k1", "the fleet broker cases' fleet key material")
 
 // mustBrokerWire is a node's broker envelopes over ring.
-func mustBrokerWire(t *testing.T, ring statelog.Keyring) *brokerWire {
+func mustBrokerWire(t *testing.T, ring recordseal.Keyring) *brokerWire {
 	t.Helper()
 	wire, err := newBrokerWire(ring)
 	if err != nil {
@@ -149,7 +149,7 @@ func (f *brokerFleet) client(t *testing.T) *memory.Queue {
 
 // nodeWith is [brokerFleet.node] for a node holding ring.
 func (f *brokerFleet) nodeWith(t *testing.T, profile placement.NodeProfile, member brokerMembership,
-	ring statelog.Keyring) *Engine {
+	ring recordseal.Keyring) *Engine {
 
 	t.Helper()
 	ctx := t.Context()
@@ -620,7 +620,7 @@ func TestARemovalTheFleetDidNotSignRemovesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outsider, err := mustBrokerWire(t, statelog.OneKey("k1", "not the fleet's material")).
+	outsider, err := mustBrokerWire(t, recordseal.OneKey("k1", "not the fleet's material")).
 		SealRequest(removal)
 	if err != nil {
 		t.Fatal(err)
@@ -696,7 +696,7 @@ func TestASignedRemovalIsCarriedOutOnce(t *testing.T) {
 // counting a refusal about this member's keyring as the group's answer.
 func TestARemovalUnderAnUnheldKeyIsCarriedByAMemberThatHoldsIt(t *testing.T) {
 	t.Parallel()
-	rotated := statelog.Keyring{ActiveID: "k2", Keys: []statelog.Key{
+	rotated := recordseal.Keyring{ActiveID: "k2", Keys: []recordseal.Key{
 		brokerRing.Keys[0], {ID: "k2", Material: "the key the fleet is rotating to"},
 	}}
 	fleet := newBrokerFleet(t)
@@ -726,7 +726,7 @@ func TestABrokerReplyTheAskerCannotBelieveIsNoAnswer(t *testing.T) {
 	t.Parallel()
 	for name, forge := range map[string]func(t *testing.T) []byte{
 		"not signed by the fleet": func(t *testing.T) []byte {
-			out, err := mustBrokerWire(t, statelog.OneKey("k1", "not the fleet's material")).
+			out, err := mustBrokerWire(t, recordseal.OneKey("k1", "not the fleet's material")).
 				SealReply(brokerReply{Node: "node-a", Request: "whatever"})
 			if err != nil {
 				t.Fatal(err)
@@ -807,12 +807,12 @@ func rawBrokerReply(t *testing.T, q queue.EventQueue, member string, sent []byte
 		t.Fatalf("ask %s = (%d replies, %v), want the member to answer", member, len(replies), err)
 	}
 	_, domain := mustBrokerWire(t, brokerRing).Domains()
-	verifier, err := statelog.NewVerifier(domain, brokerRing)
+	verifier, err := recordseal.NewVerifier(domain, brokerRing)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, verdict := verifier.Open(replies[0])
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		t.Fatalf("the member's reply did not verify: %s", verdict)
 	}
 	var reply brokerReply

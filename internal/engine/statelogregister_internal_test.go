@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -711,7 +712,7 @@ func seamsStateLog(t *testing.T) *stateLog {
 		t.Fatalf("open the replicated estate: %v", err)
 	}
 	return &stateLog{nodeID: "boot-check", db: db,
-		ring: statelog.OneKey("k1", "boot-check-material")}
+		ring: recordseal.OneKey("k1", "boot-check-material")}
 }
 
 // seamsSpec is the stream spec [stateLog.start] hands a domain's seams: the

@@ -14,18 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/signedask"
-	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // fleetRing is the keyring every node of a test fleet holds.
-var fleetRing = statelog.OneKey("k1", "the estate suite's fleet key material")
+var fleetRing = recordseal.OneKey("k1", "the estate suite's fleet key material")
 
 // fleetEnvelopes are a test fleet member's envelopes.
 var fleetEnvelopes = mustEnvelopes(fleetRing)
 
-func mustEnvelopes(ring statelog.Keyring) *Envelopes {
+func mustEnvelopes(ring recordseal.Keyring) *Envelopes {
 	env, err := NewEnvelopes(ring)
 	if err != nil {
 		panic(err)
@@ -78,12 +78,12 @@ func askSignedOn(t *testing.T, q *memory.Queue, subject string, req request) rep
 func rawReply(t *testing.T, sealed []byte) reply {
 	t.Helper()
 	_, domain := fleetEnvelopes.channel.Domains()
-	verifier, err := statelog.NewVerifier(domain, fleetRing)
+	verifier, err := recordseal.NewVerifier(domain, fleetRing)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, verdict := verifier.Open(sealed)
-	if verdict != statelog.Verified {
+	if verdict != recordseal.Verified {
 		t.Fatalf("the node's reply did not verify: %s", verdict)
 	}
 	var rep reply
@@ -99,7 +99,7 @@ func rawReply(t *testing.T, sealed []byte) reply {
 func sealUnbound(t *testing.T, req request) []byte {
 	t.Helper()
 	domain, _ := fleetEnvelopes.channel.Domains()
-	signer, err := statelog.NewSigner(domain, fleetRing)
+	signer, err := recordseal.NewSigner(domain, fleetRing)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestARequestTheFleetDidNotSignRunsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, outsider := signed(t, mustEnvelopes(statelog.OneKey("k1", "not the fleet's material")), write)
+	_, outsider := signed(t, mustEnvelopes(recordseal.OneKey("k1", "not the fleet's material")), write)
 	_, altered := signed(t, fleetEnvelopes, write)
 	altered = bytes.Replace(altered, []byte(`"handle":"swe"`), []byte(`"handle":"ceo"`), 1)
 	if !bytes.Contains(altered, []byte(`"handle":"ceo"`)) {
@@ -179,7 +179,7 @@ func TestARequestTheFleetDidNotSignRunsNothing(t *testing.T) {
 // no data node holds it, the estate is unserved saying why.
 func TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere(t *testing.T) {
 	t.Parallel()
-	rotated := statelog.Keyring{ActiveID: "k2", Keys: []statelog.Key{
+	rotated := recordseal.Keyring{ActiveID: "k2", Keys: []recordseal.Key{
 		fleetRing.Keys[0], {ID: "k2", Material: "the key the fleet is rotating to"},
 	}}
 	f := newFleet(t)
@@ -218,9 +218,9 @@ func TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere(t *testing.T) {
 // answered, and what it answered with is not its health.
 func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 	t.Parallel()
-	outsiders := mustEnvelopes(statelog.OneKey("k1", "not the fleet's material"))
+	outsiders := mustEnvelopes(recordseal.OneKey("k1", "not the fleet's material"))
 	_, replyDomain := fleetEnvelopes.channel.Domains()
-	fleetReplies, err := statelog.NewSigner(replyDomain, fleetRing)
+	fleetReplies, err := recordseal.NewSigner(replyDomain, fleetRing)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestEnvelopeDomainsNeverVerifyAsEachOther(t *testing.T) {
 	}
 	sent, req := signed(t, fleetEnvelopes, request{Op: opTasks.spec.name})
 	rep := fleetEnvelopes.sealReply(reply{Node: "data-a", Request: sent.ID})
-	record, err := statelog.NewSigner(trackerDomain, fleetRing)
+	record, err := recordseal.NewSigner(trackerDomain, fleetRing)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,8 +401,8 @@ func TestNothingIsBuiltWithoutEnvelopes(t *testing.T) {
 		Local: &fakeNode{}}); !errors.Is(err, errNoEnvelopes) {
 		t.Errorf("a server with no envelopes = %v, want it refused", err)
 	}
-	if _, err := NewEnvelopes(statelog.Keyring{}); !errors.Is(err, statelog.ErrUnsigned) {
-		t.Errorf("envelopes over an empty keyring = %v, want %v", err, statelog.ErrUnsigned)
+	if _, err := NewEnvelopes(recordseal.Keyring{}); !errors.Is(err, recordseal.ErrUnsigned) {
+		t.Errorf("envelopes over an empty keyring = %v, want %v", err, recordseal.ErrUnsigned)
 	}
 }
 

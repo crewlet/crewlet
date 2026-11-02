@@ -761,9 +761,9 @@ func testNotesRideABridgedCallStorm(t *testing.T, s sandbox.PendingStore) {
 	if want := []string{"n-1", "n-2", "n-3", "n-4", "n-5"}; !slices.Equal(ids, want) {
 		t.Errorf("the takes handed over %v, want every note exactly once", ids)
 	}
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != writers*each+notes {
-		t.Errorf("the record holds %d calls, want %d", len(got.BridgeCalls), writers*each+notes)
+	got := mustLogged(t, s, r.TurnID)
+	if len(got.Log.Calls) != writers*each+notes {
+		t.Errorf("the record holds %d calls, want %d", len(got.Log.Calls), writers*each+notes)
 	}
 	if len(got.Steer.Notes) != notes || got.Steer.Seq != notes || got.Steer.Pulled != launch {
 		t.Errorf("the record holds notes %+v, want %d numbered 1 to %d, pulled by %s",
@@ -907,9 +907,12 @@ func testNotesSurviveEveryWriteThatIsNotTheirs(t *testing.T, s sandbox.PendingSt
 // MAKES. The record is rewritten whole by every node that touches it, so a
 // field a newer build adds to the notes section, to one note, to where a note
 // was read or to a bridged call is gone the moment this build writes the record
-// back — unless every level that can grow keeps what it does not know. Seeded
-// at each of those four levels at once, as a newer build would write them, and
-// read back off the raw record after every kind of write this build makes:
+// back — unless every level that can grow keeps what it does not know. And the
+// log beside the record ([sandbox.BridgeLog]) is rewritten whole by every
+// append, so the same holds at its top and in each of its calls. Seeded at
+// each of those five levels at once, as a newer build would write them, and
+// read back off the raw record and the raw log after every kind of write this
+// build makes:
 // a status write, a lease, a bridged call, a filing, a take, a pull, a claim
 // and its release, a park, and a relaunch's reset that carries the round on.
 //
@@ -939,6 +942,7 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		"a note":            `"high"`,
 		"a note's read":     `"hook"`,
 		"a bridged call":    `{"span":"s-1"}`,
+		"the log":           `{"kept":"all"}`,
 	}
 	if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
 		var row map[string]any
@@ -950,11 +954,21 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		first := section["notes"].([]any)[0].(map[string]any)
 		first["priority"] = json.RawMessage(seeded["a note"])
 		first["read"].(map[string]any)["carrier"] = json.RawMessage(seeded["a note's read"])
-		row["bridge_calls"].([]any)[0].(map[string]any)["trace"] = json.RawMessage(seeded["a bridged call"])
 		raw, err := json.Marshal(row)
 		return coord.SandboxRunChange{Put: raw}, err
 	}); err != nil || !ok {
 		t.Fatalf("seed the newer build's keys: %v %v", ok, err)
+	}
+	if _, ok, err := runs.MutateSandboxRunLog(ctx, turn, func(current coord.Record, found bool) ([]byte, error) {
+		var log map[string]any
+		if err := json.Unmarshal(current.Value, &log); err != nil {
+			return nil, err
+		}
+		log["retention"] = json.RawMessage(seeded["the log"])
+		log["calls"].([]any)[0].(map[string]any)["trace"] = json.RawMessage(seeded["a bridged call"])
+		return json.Marshal(log)
+	}); err != nil || !ok {
+		t.Fatalf("seed the newer build's keys in the log: %v %v", ok, err)
 	}
 
 	check := func(step string) {
@@ -974,12 +988,22 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 					} `json:"read"`
 				} `json:"notes"`
 			} `json:"steer"`
-			Calls []struct {
+		}
+		if derr := json.Unmarshal(record.Value, &row); derr != nil {
+			t.Fatalf("%s: %v", step, derr)
+		}
+		logged, found, err := runs.SandboxRunLog(ctx, turn)
+		if err != nil || !found {
+			t.Fatalf("%s: read the raw log: %v %v", step, found, err)
+		}
+		var log struct {
+			Retention json.RawMessage `json:"retention"`
+			Calls     []struct {
 				Name  string          `json:"name"`
 				Trace json.RawMessage `json:"trace"`
-			} `json:"bridge_calls"`
+			} `json:"calls"`
 		}
-		if err := json.Unmarshal(record.Value, &row); err != nil {
+		if err := json.Unmarshal(logged.Value, &log); err != nil {
 			t.Fatalf("%s: %v", step, err)
 		}
 		got := map[string]string{"the notes section": string(row.Steer.Quorum)}
@@ -992,8 +1016,9 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 				got["a note's read"] = string(n.Read.Carrier)
 			}
 		}
-		if len(row.Calls) > 0 && row.Calls[0].Name == "read_page" {
-			got["a bridged call"] = string(row.Calls[0].Trace)
+		got["the log"] = string(log.Retention)
+		if len(log.Calls) > 0 && log.Calls[0].Name == "read_page" {
+			got["a bridged call"] = string(log.Calls[0].Trace)
 		}
 		for level, want := range seeded {
 			if compact(t, got[level]) != compact(t, want) {

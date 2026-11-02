@@ -575,10 +575,10 @@ var Active = []string{
 // Its own shape rather than [tools.Call], because this crosses the wire into
 // the fleet's coordination store where a node running a different build reads
 // it — so the json tags are a wire format and the type must not carry a
-// dependency the store layer has no business on. Same rule the rest of
-// [PendingRun] follows: add fields, never rename one — and a key this build
+// dependency the store layer has no business on. Same rule [BridgeLog] and
+// [PendingRun] follow: add fields, never rename one — and a key this build
 // does not know is carried in [BridgeCall.Extra], so a field a later build adds
-// to a call survives every write this build makes to the record.
+// to a call survives every write this build makes to the log.
 type BridgeCall struct {
 	Name string `json:"name"`
 	// Args is what the caller passed, as JSON text rather than a decoded
@@ -588,7 +588,7 @@ type BridgeCall struct {
 	Output string `json:"output,omitempty"`
 	Failed bool   `json:"failed,omitempty"`
 
-	// At is when the row recorded the call, on the store's clock — what the
+	// At is when the log recorded the call, on the store's clock — what the
 	// runs board lists a run's calls by. Always set: the store stamps it.
 	// It is the order the calls FINISHED in, and a CLI making several calls
 	// at once finishes them in whatever order their tools take.
@@ -598,8 +598,8 @@ type BridgeCall struct {
 	// calls, from 1 — the order the CLI made them in, which is the order a
 	// resume replays them in. One order for the round: a job opened again
 	// after a recovery, and a job continuing one that asked a person, number
-	// their calls after the ones the row already records
-	// ([PendingRun.LastBridgeSeq]).
+	// their calls after the ones the log already records
+	// ([BridgeLog.LastSeq]).
 	Seq int `json:"seq,omitempty"`
 
 	// StartedAt is when the bridge handed the call to the seat's surface,
@@ -627,8 +627,8 @@ type BridgeCall struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// BridgeAppend is one finished bridged call as the bridge hands it to the row
-// — see [PendingStore.AppendBridgeCall].
+// BridgeAppend is one finished bridged call as the bridge hands it to the
+// run's log — see [PendingStore.AppendBridgeCall].
 type BridgeAppend struct {
 	// Launch is the job the session serves, as [PendingStore.BeginLaunch]
 	// named it — handed to the session through [LaunchRequest.Opened] before
@@ -643,13 +643,15 @@ type BridgeAppend struct {
 	Spent EngineSpend
 }
 
-// MaxBridgeCalls bounds the durable log of a bridged run.
+// MaxBridgeCalls bounds the durable log of a bridged run ([BridgeLog]).
 //
-// The row is ONE VALUE in the coordination store, read and written whole on
-// every mutation, and a coding run can make hundreds of calls — so an
-// unbounded list turns a busy run's every status change into a growing write.
-// Two hundred is well past what a reviewer reads (the ledger elides a long log
-// anyway) and small enough that the row stays a row.
+// The log is ONE VALUE in the coordination store, read and written whole on
+// every append, and a coding run can make hundreds of calls — so an unbounded
+// list turns a busy run's every call into a growing write. Two hundred is well
+// past what a reviewer reads (the ledger elides a long log anyway), and is
+// what a full log measures at: about half a megabyte with the calls' arguments
+// and output, which is why the log is kept beside the run's record rather
+// than on it.
 //
 // The MIDDLE is what gets dropped, never the start: how a run began and how it
 // ended are what explain it, and a log truncated to its last N loses the
@@ -676,9 +678,9 @@ func EndsRun(tool string) bool { return tool == SubmitWorkTool || tool == AskAnd
 // that does, and the engine's TestATurnHoldsWhatItsRowMay holds the two
 // equal. A key is a scratch repository's id (39 bytes on the row, quoted and
 // with its comma) or a seat branch's key (72 — the code host's fixed-width
-// RefHoldKey), so the field is at most about 72 KiB, beside the parked turn's
-// state and the bridged tool log ([MaxBridgeCalls]) the row also carries, and
-// only for a turn that held a thousand repositories and branches.
+// RefHoldKey), so the field is at most about 72 KiB — the largest the row
+// keeps, its bridged tool log being kept beside it ([BridgeLog]) — and only
+// for a turn that held a thousand repositories and branches.
 const MaxCodeHolds = 1024
 
 // ErrCodeHoldsFull refuses a write that would take a row's
@@ -736,6 +738,22 @@ type PendingRun struct {
 
 	SandboxID   string `json:"sandbox_id"`
 	CodingAgent string `json:"coding_agent"`
+
+	// BoxSince is when the box this row names was first attached to it, by
+	// the store's own clock: the age a relaunch reads off the box before it
+	// continues in it ([KeptBoxMaxAge], [PriorBox.ContinuesIn]). Zero where
+	// the row names no box.
+	//
+	// WRITTEN BY THE ATTACH OF A BOX THE ROW DOES NOT ALREADY NAME, and kept
+	// by every other one: a job continued in the turn's kept box attaches the
+	// same box again, and a box re-dated at each of those would never age —
+	// one checkout working for as long as the turn lasts, which is what the
+	// bound exists to stop. Dated in the attach's own write, rather than
+	// handed in by the launch, so no attach can name a box and leave it
+	// undated. The attach comes after the box is made and set up, and before
+	// its first job starts, so every checkout a job makes in it is younger.
+	// Cleared with the box, wherever the row stops naming one.
+	BoxSince time.Time `json:"box_since,omitzero"`
 
 	// Placement is which configured backend holds this run's box.
 	//
@@ -1073,43 +1091,6 @@ type PendingRun struct {
 	// decodeRun.
 	ExecuteState json.RawMessage `json:"execute_state"`
 
-	// BridgeCalls is what a run made through the MCP bridge, in order.
-	//
-	// DURABLE, because this is the one tool log that has nowhere else to
-	// live. Every run's calls are made by its coding CLI, a process outside
-	// the engine, over the bridge — minutes or hours apart, and possibly
-	// across a restart. Without this the reviewer of a resumed run judges a
-	// turn whose entire tool log is gone — and "it called nothing" is
-	// exactly the shape the delivery check reads as a turn that did not act.
-	//
-	// Bounded: see [MaxBridgeCalls]. Empty on a run that has called nothing
-	// yet.
-	BridgeCalls []BridgeCall `json:"bridge_calls,omitempty"`
-
-	// BridgeCallsElided counts the calls dropped from the middle of that
-	// list, so a reader can tell a short run from a long one whose middle
-	// was cut. Reported rather than hidden, because a log that silently
-	// skips is a log that lies about what the run did.
-	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
-
-	// AnsweredThrough is the place ([BridgeCall.Seq]) of the last call the
-	// round made before a person's answer carried it on, and zero for a
-	// round no answer has carried on: every call up to it was made by a job
-	// that asked, or by one before it, before the run knew the answer.
-	// Written by the launch that continues an asking job
-	// ([PendingRun.Continues]), off the same write that keeps those calls;
-	// kept by a relaunch that carries the round on after a loss, and zeroed
-	// by a new round.
-	//
-	// A PLACE, NOT A SEARCH. The collection that closes the round reports
-	// only a submission made after it, because one made before the answer
-	// was made without it. Read instead as "after the round's last
-	// `ask_and_wait`", the cut moved with whatever the log happened to
-	// hold: an ask the cap dropped from the middle ([MaxBridgeCalls]) left
-	// the submission before it standing, and a submission the asking job
-	// made after its own question was read as the carried-on run's.
-	AnsweredThrough int `json:"answered_through,omitempty"`
-
 	// CodeHolds are the hold KEYS of what this run's turn holds
 	// (internal/agent/turnctx's Holds): the seat's scratch repositories it
 	// named, by id, held from the code host's expiry, and the seats' branches
@@ -1310,6 +1291,31 @@ type PendingRun struct {
 	// What bounds how often one round is started again ([MaxRoundLosses]).
 	RoundLosses int `json:"round_losses,omitempty"`
 
+	// Round names the executor round the row's job belongs to: the job that
+	// opened it. Set to the new job by a launch that starts a round — the
+	// create, and every relaunch that does not continue one — and carried by
+	// one that does ([PendingRun.Continues]). The log beside the record keeps
+	// the round's calls under the same name ([BridgeLog.Round]), and a launch
+	// keeps a log of its own round, whichever of the round's jobs the log was
+	// last opened to.
+	//
+	// ON THE RECORD, in the reset's own write, because the log's opening is a
+	// second write that can fail, or never come when the launching node
+	// stops: a relaunch that judged what to keep by the job the row held just
+	// before it found the log still on the job before THAT one, and started a
+	// carried-on round afresh — dropping the calls made before its question,
+	// and with them the submission its delivery check reads.
+	Round string `json:"round,omitempty"`
+
+	// AnsweredJob names the last job of the round whose question a person's
+	// answer carried the round on from: set by a relaunch that continues a
+	// job that asked, carried by one that continues any other, and cleared by
+	// a new round. The log's cut ([BridgeLog.AnsweredThrough]) is taken for it
+	// once, by the first opening that finds the log not yet cut for it
+	// ([BridgeLog.CutFor]) — so an answer whose opening failed is still cut by
+	// the relaunch after it, and a cut already taken is never moved by one.
+	AnsweredJob string `json:"answered_job,omitempty"`
+
 	// HeldFor and HeldUntil hold back the resume of a job whose collection
 	// the turn could not carry on: its seat's conditions refused it — the
 	// token budget its review or its relaunch was refused under, today — and
@@ -1388,6 +1394,12 @@ type PendingRun struct {
 	// still reclaim.
 	Prior PriorBox `json:"-"`
 
+	// OpenedAfter is TRANSIENT as well: on the row [PendingStore.BeginLaunch]
+	// answers, the place of the last bridged call the run's log kept from
+	// before this job ([BridgeLog.LastSeq]) — zero for a job whose round
+	// starts its log afresh — as the write that opened the job's log left it.
+	OpenedAfter int `json:"-"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -1421,20 +1433,101 @@ func (r PendingRun) Paused() bool { return !r.PausedAt.IsZero() }
 // HasBox reports whether a box exists for this run at all.
 func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 
-// LastBridgeSeq is the place of the last bridged call the row records
-// ([BridgeCall.Seq]), and zero for a row that records none: where the next
+// BridgeLog is what a run made through the MCP bridge: its bridged tool log,
+// kept in the coordination store BESIDE the run's record rather than on it
+// ([coord.SandboxRuns]).
+//
+// DURABLE, because this is the one tool log that has nowhere else to live.
+// Every run's calls are made by its coding CLI, a process outside the engine,
+// over the bridge — minutes or hours apart, and possibly across a restart.
+// Without it the reviewer of a resumed run judges a turn whose entire tool log
+// is gone — and "it called nothing" is exactly the shape the delivery check
+// reads as a turn that did not act.
+//
+// BESIDE THE RECORD, because the record is what every reader decides on and
+// the log is what makes a record large: two hundred calls with their
+// arguments and output measure about half a megabyte, and on the record every
+// flip of the run, every listing of runs, every git request of its box and
+// every raise of its code floor moved all of it. The log is read by the few
+// that use the calls — a resume, a bridge reopened by recovery, the runs
+// answer — and written by an append, which reads and writes the log alone.
+//
+// THE LOG HOLDS THE CONDITION ITS APPENDS ARE TAKEN ON ([BridgeLog.Launch]),
+// because the store makes no write across two keys: an append decides on the
+// log it writes, in one compare-and-swap, and the launch that opens a job
+// moves the log onto it ([PendingStore.BeginLaunch]). The run's end removes
+// the log with the record, in the store ([coord.SandboxRuns.MutateSandboxRun]).
+//
+// The json tags are a WIRE FORMAT, as [PendingRun]'s are, and a key this build
+// does not know is carried in [BridgeLog.Extra].
+type BridgeLog struct {
+	// Launch is the job whose calls the log takes: the job the run's row
+	// held when its launch opened the log. An append naming another job is
+	// not recorded ([PendingStore.AppendBridgeCall]), and a reader holding a
+	// row of another job reads no calls of its job here
+	// ([PendingStore.BridgeLog]).
+	Launch string `json:"launch"`
+
+	// Round is the executor round the log holds the calls of
+	// ([PendingRun.Round]): a launch that opens the log to a job of the same
+	// round keeps them, and one of another round starts the log afresh.
+	Round string `json:"round"`
+
+	// CutFor names the job whose answered question the log's cut was taken
+	// for ([PendingRun.AnsweredJob]); empty for a round no answer has cut.
+	CutFor string `json:"cut_for,omitempty"`
+
+	// Calls are the round's calls, in the order they finished. Bounded:
+	// see [MaxBridgeCalls]. Empty on a round that has called nothing yet.
+	Calls []BridgeCall `json:"calls,omitempty"`
+
+	// Elided counts the calls dropped from the middle of that list, so a
+	// reader can tell a short run from a long one whose middle was cut.
+	// Reported rather than hidden, because a log that silently skips is a
+	// log that lies about what the run did.
+	Elided int `json:"elided,omitempty"`
+
+	// AnsweredThrough is the place ([BridgeCall.Seq]) of the last call the
+	// round made before a person's answer carried it on, and zero for a
+	// round no answer has carried on: every call up to it was made by a job
+	// that asked, or by one before it, before the run knew the answer.
+	// Written by the first opening of the log after an answer
+	// ([PendingRun.AnsweredJob], [BridgeLog.CutFor]) — the launch that
+	// continues the asking job, or the one after it where that launch's
+	// opening never landed — off the same write that keeps those calls and
+	// opens the log to the new job, so no call of the asking job can land
+	// after the cut was taken; kept by a relaunch that carries the round on
+	// after a loss, and zeroed by a new round.
+	//
+	// A PLACE, NOT A SEARCH. The collection that closes the round reports
+	// only a submission made after it, because one made before the answer
+	// was made without it. Read instead as "after the round's last
+	// `ask_and_wait`", the cut moved with whatever the log happened to
+	// hold: an ask the cap dropped from the middle ([MaxBridgeCalls]) left
+	// the submission before it standing, and a submission the asking job
+	// made after its own question was read as the carried-on run's.
+	AnsweredThrough int `json:"answered_through,omitempty"`
+
+	// Extra is every key of the log this build does not know, kept verbatim
+	// and written back by every write of it (wirekeys.go). Filled by the
+	// decode, never by a caller.
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// LastSeq is the place of the last bridged call the log records
+// ([BridgeCall.Seq]), and zero for a log that records none: where the next
 // opening of the run's job numbers its calls from — the job's own after a
 // recovery, or a job that continues one which asked a person, whose calls the
-// row keeps ([PendingRun.Continues]).
+// log keeps ([PendingRun.Continues]).
 //
-// THE HIGHEST, not the last in the list: the row holds the calls in the order
+// THE HIGHEST, not the last in the list: the log holds the calls in the order
 // they FINISHED, and a call made first can finish last. A call the cap dropped
 // from the middle ([MaxBridgeCalls]) is not counted, and need not be: the next
-// calls are numbered after every call the row still holds, which is all a
-// reader of the row orders.
-func (r PendingRun) LastBridgeSeq() int {
+// calls are numbered after every call the log still holds, which is all a
+// reader of the log orders.
+func (l BridgeLog) LastSeq() int {
 	last := 0
-	for _, call := range r.BridgeCalls {
+	for _, call := range l.Calls {
 		last = max(last, call.Seq)
 	}
 	return last
@@ -1541,7 +1634,9 @@ type PendingStore interface {
 	// ([Coordinator.RecoverSeat]). A launch told nothing went on to
 	// start a job on a row that never named it, in a box nothing would
 	// reclaim. A row that went between the create and the reset is created
-	// again.
+	// again; one removed after the launch's own create or reset landed is
+	// this launch's ending, decided and finished, and refuses it
+	// [ErrRunEnding] — created again, it would carry no ending.
 	//
 	// THE TURN'S CODE HOLDS ARE UNIONED, NEVER RESET: a create writes the
 	// run's [PendingRun.CodeHolds], and a reset writes the union of what the
@@ -1817,8 +1912,12 @@ type PendingStore interface {
 	MarkSuspended(ctx context.Context, turnID string, s Suspension) (bool, error)
 
 	// AppendBridgeCall records one tool call a bridged run made through the
-	// MCP bridge, so the reviewer of a run that outlived its process still
-	// has the tool log. See [BridgeCall].
+	// MCP bridge onto the run's log ([BridgeLog]), so the reviewer of a run
+	// that outlived its process still has the tool log. See [BridgeCall].
+	//
+	// THE LOG ALONE IS READ AND WRITTEN for the call: the run's record is
+	// written only where the call moved the job's spend (below), and is never
+	// read for the call's own sake.
 	//
 	// NO FENCE, unlike every other mutation here: this is a log append
 	// rather than an ownership decision, and refusing to record a call that
@@ -1828,11 +1927,15 @@ type PendingStore interface {
 	// THE SESSION'S SPEND RIDES THE SAME WRITE: what its bridged calls have
 	// cost the engine so far ([BridgeAppend.Spent]), merged onto the job's
 	// record by [EngineSpend.Newest], so the segment that resumes from the
-	// job can pay it ([LaunchRecord.Bridged]).
+	// job can pay it ([LaunchRecord.Bridged]) — a second write, made only
+	// where the total moved and only while the row holds the job, after the
+	// call is in the log.
 	//
 	// PINNED TO ONE JOB. Every append names the job its session serves
-	// ([BridgeAppend.Launch]), and is recorded only while the row holds that
-	// job. A call still in flight when its job was REPLACED — a worker that
+	// ([BridgeAppend.Launch]), and is recorded only while the run's log is
+	// open for that job ([BridgeLog.Launch]), which the launch that replaces
+	// the job moves on in the same write that decides what the new job keeps
+	// of the round. A call still in flight when its job was REPLACED — a worker that
 	// outlived a killed CLI, finishing after the reviewer relaunched — is not
 	// recorded: it would land its call and its spend on the next job's
 	// record, and that job's resume would pay for it as its own. One that
@@ -1848,6 +1951,20 @@ type PendingStore interface {
 	// late call from a box that is shutting down — and the caller must not
 	// fail the box's call over it.
 	AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error)
+
+	// BridgeLog reads the bridged tool log of run's job: the calls of the
+	// round the job belongs to, as the log beside its record now holds them
+	// ([BridgeLog]). run is the row the caller read, and the log is read
+	// AFTER it, so it holds every call the row's job had recorded by then.
+	//
+	// A LOG THAT IS NOT THE JOB'S READS AS ONE WITH NO CALLS, Launch naming
+	// the job: a run that has none, one whose launch had not opened the log
+	// to the job when the row was read, or one a later launch has moved on —
+	// never another job's calls, which a resume would replay as its own.
+	//
+	// AN ERROR IS THE STORE'S, never "no calls": a resumed turn judged on an
+	// empty log is a turn that did nothing, which the delivery check fails.
+	BridgeLog(ctx context.Context, run PendingRun) (BridgeLog, error)
 
 	// RecordAsk records the question job `launch` asked a person through its
 	// bridge (ADR-0068) onto the fields a parked question is read from
@@ -2447,10 +2564,41 @@ type PriorBox struct {
 	// whose host a local box is on ([PendingRun.LaunchNode]), and so the one
 	// node a box in a local cell may be continued in or reclaimed by.
 	LaunchNode string
+	// Since is when the box was first attached to the run
+	// ([PendingRun.BoxSince]): how old its checkouts can be.
+	Since time.Time
 }
 
-// ContinuesIn reports whether a launch of spec may continue in this box
-// rather than in a fresh one.
+// KeptBoxMaxAge is how old a turn's box may be, dated from the attach that
+// first named it on the run's row ([PendingRun.BoxSince]), for a relaunch to
+// still continue in it ([PriorBox.ContinuesIn]). An older box is reclaimed and
+// the job starts in a fresh one, from the pushed branch, as a job whose box
+// was lost does.
+//
+// A BOX'S CHECKOUTS ARE AS OLD AS THE BOX, and no one job bounds that: every
+// job continued in a kept box is a fresh launch with a fresh credential, and
+// a reviewer's send-backs, and a person's answers to a job parked for as long
+// as the seat's pause_ttl_seconds (which has no ceiling), would otherwise keep
+// one checkout working for as long as the turn lasts. The engine's code host
+// keeps a deleted seat branch's engine commits code.PruneGrace (fourteen
+// days) after the deletion, and refuses a box's push carrying one it no
+// longer holds as a forgery (forged_committer); a job's credential is valid
+// code/host's RunTokenTTL (seven days) from its launch. So SEVEN DAYS — the
+// grace less the credential: a job launched into a box younger than that
+// pushes, at the latest, before fourteen days from the box's first attach,
+// and so from the deletion of any branch a job in it checked out, which came
+// after. code/host holds the three to that sum at compile time.
+//
+// EVERY KEPT BOX IS HELD TO IT, a run given no repository on the code host
+// included: whether a job may push there is its own launch's grant, which a
+// later job in the same box can hold where the one that checked out had none.
+// What a fresh box costs is the provisioning and the clone again, once a week
+// of one turn's work, and a parked job's CLI session, which the fresh job is
+// told the question and the answer in place of ([LaunchRequest.Continue]).
+const KeptBoxMaxAge = 7 * 24 * time.Hour
+
+// ContinuesIn reports whether a launch of spec, at now, may continue in this
+// box rather than in a fresh one.
 //
 // ONLY THE SAME CLI IN THE SAME CELL, and only once the job that used it is
 // over. A box is installed for one CLI and lives in one cell's backend, so a
@@ -2458,9 +2606,13 @@ type PriorBox struct {
 // reach it. And a box whose job may still be running — a row reset from any
 // status but the claim of the resumed turn that relaunches — is reclaimed, not
 // shared: two jobs in one checkout would each overwrite the other's work.
-func (p PriorBox) ContinuesIn(spec Spec) bool {
+//
+// AND ONLY A BOX YOUNGER THAN [KeptBoxMaxAge]. A box the row never dated has
+// no age a launch can hold to the bound, so it is not continued either.
+func (p PriorBox) ContinuesIn(spec Spec, now time.Time) bool {
 	return p.SandboxID != "" && p.Status == StatusResumed &&
-		p.Placement == string(spec.Placement) && p.CodingAgent == spec.CodingAgent
+		p.Placement == string(spec.Placement) && p.CodingAgent == spec.CodingAgent &&
+		!p.Since.IsZero() && now.Sub(p.Since) < KeptBoxMaxAge
 }
 
 // Fence is the ownership token a mutation carries.
