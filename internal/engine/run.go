@@ -351,6 +351,10 @@ type Engine struct {
 	// ([modelRetries]).
 	retries modelRetries
 
+	// restarts is this node's watched copy of the fleet's MCP restarts
+	// ([mcpRestarts]).
+	restarts mcpRestarts
+
 	// listings is this node's published MCP listings and its watched copy
 	// of every node's ([mcpListings]).
 	listings mcpListings
@@ -919,6 +923,9 @@ type Engine struct {
 	// history.go.
 	history          *eventfan.Fleet
 	stopHistoryServe queue.Unsubscribe
+	// stopMCPInstanceServe withdraws this node as an answerer of reads of
+	// its MCP instances ([Engine.startMCPInstances]).
+	stopMCPInstanceServe queue.Unsubscribe
 
 	// steers is this node's running turns' note boxes, and stopSteerServe
 	// withdraws the node as their answerer. See steer.go.
@@ -2117,6 +2124,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// WHAT THIS NODE'S MCP SERVERS LIST, published, and every node's,
 	// watched: the catalogue a per-agent server's tools reach.
 	e.startMCPListings(ctx)
+	// AND HOW EACH OF THEM IS, answered to a server's page on any node; and
+	// THE RESTARTS PEOPLE ASKED FOR, applied as every node hears them.
+	e.startMCPInstances(ctx)
+	e.startMCPRestarts(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2162,6 +2173,14 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// The background passes, after the node exists: each is a fleet
 	// singleton claimed under its own incarnation.
 	e.startLearningBackground(ctx)
+	// THE INBOUND EDGE'S MAILBOX FIRST, because the feeds below publish
+	// onto it ahead of the router that consumes it. See
+	// [Engine.ensureInboundMailbox].
+	if e.Company() != nil {
+		if err := e.ensureInboundMailbox(ctx); err != nil {
+			return nil, fmt.Errorf("engine: %w", err)
+		}
+	}
 	// BEFORE notifications, because a feed publishes onto the same inbound
 	// edge the service consumes: started after, the changes committed in
 	// the window between would reach the record and wake nobody.
@@ -2776,8 +2795,11 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRunnerProbe()
 	e.stopHostLogins()
 	e.stopModelRetries()
-	// AND THIS NODE'S MCP LISTINGS, removed now that its servers are down.
+	// AND THIS NODE'S MCP LISTINGS, removed now that its servers are down,
+	// and its instances no longer answered.
 	e.stopMCPListings(ctx)
+	e.stopMCPInstances(ctx)
+	e.stopMCPRestarts()
 	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
 	// the person starts again on a node that is up.
 	e.stopDeviceSignIns()
@@ -3081,6 +3103,19 @@ func (e *Engine) seatFence(handle string) func() error {
 	}
 }
 
+// wakes is the queue every producer of a seat's wake publishes through: the
+// node's ([node.Node.Wakes]), which confirms the seat's mailbox, its inbox and
+// its priority lane, before a wake is sent to it, so a wake published while
+// boot or an apply has not made the mailbox yet is retried rather than
+// discarded by the stream. An engine built with no node (`crewlet validate`)
+// has no mailboxes to confirm and publishes on its queue as it is.
+func (e *Engine) wakes() queue.EventQueue {
+	if e.node == nil {
+		return e.backends.Queue
+	}
+	return e.node.Wakes()
+}
+
 // park requeues a partition onto the seat's own inbox.
 //
 // Republished one at a time, and a failure part way through is reported: the
@@ -3095,7 +3130,7 @@ func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) e
 	}
 	subject := topics.AgentInbox(id)
 	for _, ev := range evs {
-		if err := e.backends.Queue.Publish(ctx, subject, ev); err != nil {
+		if err := e.wakes().Publish(ctx, subject, ev); err != nil {
 			// THE SEAT BY NAME, not only the subject it is addressed by.
 			// A mailbox is named by the seat's id, so a failure reported
 			// as the subject alone hands whoever reads it a uuid and no

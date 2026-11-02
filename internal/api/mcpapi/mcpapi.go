@@ -1,21 +1,36 @@
 // Package mcpapi is Settings › MCP & tools' own routes, each mounted through
 // [authz.Router] with the verb it is decided by: `GET /mcp-catalogue`, what a
-// server is added from, and `GET /mcp-servers/{name}`, one server whole.
+// server is added from, `GET /mcp-servers/{name}`, one server whole, and
+// `POST /mcp-servers/{name}/retry`, a restart of it now.
 //
 // # Routes, not registry questions
 //
 // The servers' condition is the `mcp_servers_status` question, which the
 // socket and REST both answer because a page watches it. The catalogue is
 // read once, when somebody opens the add flow or searches in it, so it is a
-// plain read on the configuration's own verb, `config.read`: an entry is the
-// draft of a launch line every engine host runs, and the answer names the
-// registry the company's configuration does. Nothing about it is live, and
-// the question registry is for answers a room keeps current.
+// plain read. Nothing about it is live, and the question registry is for
+// answers a room keeps current. One server's detail is a route until a screen
+// watches it: the registry refuses a question no room asks for, and the page
+// that reads it reads it on a poll.
 //
-// One server's detail is a read on the same verb, for the status answer's
-// reason (it names the launch and the first line of each failure). It is a
-// route until a screen watches it: the registry refuses a question no room
-// asks for, and the page that reads it reads it on a poll.
+// # Everybody reads them, in two readings
+//
+// Both reads are `tools.read`, everybody's, as the status question is: a
+// server's condition and its tools are what tell a member why an agent lacks
+// one. What each caller is answered is decided by the configuration's own verb
+// ([queries.MCPReading]): the configuration's reader reads a server whole (its
+// launch, each failure's sentence, the headers and variables a credential goes
+// in, what removing it takes with it) and the catalogue with the community
+// registry the company names searched; anybody else reads a member's reading
+// of each, built from its own types, which names none of that.
+//
+// # A gesture is audited, refusals included
+//
+// A restart changes runtime state and writes no record anywhere else, so every
+// call to it is one `mcp_server_acted`, its outcome and refusal read off the
+// answer the route wrote, and a refusal the guard made before the handler ran
+// is rendered through the same audit ([Service.refusedAudited]), as a model
+// gesture's is (internal/api/llmapi).
 //
 // # A search that fails is an answer
 //
@@ -33,10 +48,12 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
@@ -64,18 +81,29 @@ type Options struct {
 	// only the API's sources reach.
 	Detail func(ctx context.Context, name string) (queries.MCPServerAnswer, error)
 
+	// Restarter asks the fleet to restart a server: required, since only
+	// the engine can tell every node.
+	Restarter Restarter
+
+	// Audit is where each gesture's `mcp_server_acted` is published: this
+	// node's queue, whose publish listener writes the event store.
+	// Required: a restart leaves no record anywhere else.
+	Audit operator.AuditPublisher
+
 	// Guard decides each route's policy. Nil is the request context's
 	// principal with no org chart, which every route here asks for alone:
-	// both routes are the configuration's reader's.
+	// no verb they take asks a relation.
 	Guard authz.Guard
 }
 
 // Service is the surface.
 type Service struct {
-	company  func() *config.Company
-	registry Searcher
-	detail   func(ctx context.Context, name string) (queries.MCPServerAnswer, error)
-	guard    authz.Guard
+	company   func() *config.Company
+	registry  Searcher
+	detail    func(ctx context.Context, name string) (queries.MCPServerAnswer, error)
+	restarter Restarter
+	audit     operator.AuditPublisher
+	guard     authz.Guard
 }
 
 // New builds the surface, refusing a missing dependency by name.
@@ -88,6 +116,13 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("mcpapi: Options.Detail is required: one server's detail is read " +
 			"off the fleet's listings")
 	}
+	if opts.Restarter == nil {
+		return nil, errors.New("mcpapi: Options.Restarter is required: a restart is asked of the " +
+			"fleet through the engine")
+	}
+	if opts.Audit == nil {
+		return nil, errors.New("mcpapi: Options.Audit is required: every server gesture is audited")
+	}
 	registry := opts.Registry
 	if registry == nil {
 		registry = catalogue.NewRegistry(catalogue.RegistryOptions{})
@@ -96,7 +131,8 @@ func New(opts Options) (*Service, error) {
 	if guard == nil {
 		guard = authz.ContextGuard(authz.NoChart{})
 	}
-	return &Service{company: opts.Company, registry: registry, detail: opts.Detail, guard: guard}, nil
+	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
+		restarter: opts.Restarter, audit: opts.Audit, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -106,22 +142,34 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// OUTSIDE /mcp-servers/, whose next segment is a server's name and any
 	// name a company gives one: a literal segment there would win over the
 	// server it spells, and a server named "catalogue" would have no detail.
-	if err := router.Handle("GET /mcp-catalogue", authz.Policy{Action: authz.ActionConfigRead},
+	if err := router.Handle("GET /mcp-catalogue", authz.Policy{Action: authz.ActionToolsRead},
 		http.HandlerFunc(s.serveCatalogue)); err != nil {
 		return err
 	}
-	return router.Handle("GET /mcp-servers/{name}", authz.Policy{Action: authz.ActionConfigRead},
-		http.HandlerFunc(s.serveDetail))
+	if err := router.Handle("GET /mcp-servers/{name}", authz.Policy{Action: authz.ActionToolsRead},
+		http.HandlerFunc(s.serveDetail)); err != nil {
+		return err
+	}
+	// A RESTART ACTS ON THE SERVER ITS PATH NAMES AND KEEPS IT (authz.Effect),
+	// as a model's retry does, on its own verb. A router of its own renders
+	// the guard's refusal through the audit, so a refused call is recorded
+	// too.
+	restarts := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerRestart))
+	return restarts.Handle("POST /mcp-servers/{name}/retry",
+		authz.Policy{Action: authz.ActionToolsRetry}.Rewriting(),
+		s.audited(types.MCPServerRestart, s.serveRestart))
 }
 
-// serveDetail answers one server whole: 404 for a server no node configures,
-// reports or lists, and 503 where this node cannot read the fleet's listings
-// or its store, which a retry answers.
+// serveDetail answers one server whole, in the caller's reading: 404 for a
+// server no node configures, reports or lists, and 503 where this node cannot
+// read the fleet's listings or its store, which a retry answers.
 func (s *Service) serveDetail(w http.ResponseWriter, r *http.Request) {
 	answer, err := s.detail(r.Context(), r.PathValue("name"))
 	switch {
-	case err == nil:
+	case err == nil && queries.MCPReading(r.Context()) == queries.ReadingAdmin:
 		httpjson.Write(w, http.StatusOK, answer)
+	case err == nil:
+		httpjson.Write(w, http.StatusOK, queries.MemberMCPServer(answer))
 	case errors.Is(err, queries.ErrNotFound):
 		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNotFound,
 			httpjson.Detail{"detail": err.Error()})
@@ -144,6 +192,10 @@ var detailRetrySeconds = httpjson.RetrySeconds(coord.ReconcileInterval)
 var log = logging.Get("api.mcpapi")
 
 func (s *Service) serveCatalogue(w http.ResponseWriter, r *http.Request) {
+	if queries.MCPReading(r.Context()) != queries.ReadingAdmin {
+		httpjson.Write(w, http.StatusOK, MemberCatalogue())
+		return
+	}
 	answer, err := s.Catalogue(r.Context(), r.URL.Query().Get("q"))
 	var refused *catalogue.QueryError
 	if errors.As(err, &refused) {
@@ -154,9 +206,13 @@ func (s *Service) serveCatalogue(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, answer)
 }
 
-// CatalogueAnswer is `GET /mcp-catalogue`: the curated catalogue
-// whole, and with `q` the company's community registry searched for it.
+// CatalogueAnswer is `GET /mcp-catalogue`, the admin's reading: the curated
+// catalogue whole, and with `q` the company's community registry searched for
+// it.
 type CatalogueAnswer struct {
+	// Reading is [queries.ReadingAdmin]: which of the answer's two readings
+	// this is.
+	Reading string `json:"reading"`
 	// Curated is every server the curated catalogue offers, in its order,
 	// whatever `q` says: a list a person reads whole, which the page
 	// filters as they type. ALWAYS A LIST.
@@ -178,11 +234,32 @@ type CatalogueAnswer struct {
 	LeftOut int `json:"left_out"`
 }
 
+// MemberCatalogueAnswer is `GET /mcp-catalogue`, a member's reading: the
+// curated catalogue whole, which is compiled into the engine and names nothing
+// of the company's.
+//
+// NO COMMUNITY HALF, whatever `q` says: the registry is the company's
+// configuration (an address an administrator chose, which may be on the
+// company's own network), a search is a request the engine makes to it, and
+// one that fails is answered with a sentence that can name that address.
+// Searching it is part of adding a server, which is the configuration's
+// writer's.
+type MemberCatalogueAnswer struct {
+	Reading string            `json:"reading"`
+	Curated []catalogue.Entry `json:"curated"`
+}
+
+// MemberCatalogue is a member's reading of the catalogue.
+func MemberCatalogue() MemberCatalogueAnswer {
+	return MemberCatalogueAnswer{Reading: queries.ReadingMember, Curated: catalogue.Curated()}
+}
+
 // Catalogue answers the curated catalogue, and with q the company's registry
-// searched for it. The one error is a [*catalogue.QueryError]: search text
-// this build will not send.
+// searched for it: the admin's reading. The one error is a
+// [*catalogue.QueryError]: search text this build will not send.
 func (s *Service) Catalogue(ctx context.Context, q string) (CatalogueAnswer, error) {
-	out := CatalogueAnswer{Curated: catalogue.Curated(), Community: []catalogue.Entry{}}
+	out := CatalogueAnswer{Reading: queries.ReadingAdmin, Curated: catalogue.Curated(),
+		Community: []catalogue.Entry{}}
 	if company := s.company(); company != nil {
 		out.Registry = company.MCPRegistry.URL
 	}

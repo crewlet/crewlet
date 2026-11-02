@@ -778,7 +778,7 @@ func (f *ledgerFake) PatchChannel(_ context.Context, actor chatlet.Actor, _ stri
 }
 
 func (f *ledgerFake) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
-	_ []chatlet.Member) (chatlet.Written, error) {
+	_ []chatlet.Member, _ *[]chatlet.Member) (chatlet.Written, error) {
 	return f.chatWrite("members", actor)
 }
 

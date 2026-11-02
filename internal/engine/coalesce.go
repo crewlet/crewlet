@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -27,6 +28,95 @@ import (
 // pointing at progressively staler state, and five separate asks, which a
 // model answers separately. The doc's headline promise, one notification for
 // the remaining messages, was half true: one TURN, five NOTIFICATIONS in it.
+
+// mergePartition merges a multi-event partition into the ONE event its turn is
+// asked about, reporting false when it cannot.
+//
+// TWO KINDS OF PARTITION MERGE, and each has its own rule. A conversation's
+// notifications become a digest of everything said ([mergeNotifications]); a
+// schedule's waiting fires become its latest fire, standing for the rest
+// ([mergeScheduledFires]). Anything else is a key-scheme bug, answered by the
+// caller's per-event fallback.
+func mergePartition(prompts notify.Prompts, evs []*events.Event) (*events.Event, bool) {
+	if merged, ok := mergeScheduledFires(evs); ok {
+		return merged, true
+	}
+	return mergeNotifications(prompts, evs)
+}
+
+// mergeScheduledFires turns fires of one schedule that reached the seat
+// together into ONE run: the latest fire, told which earlier fires it stands
+// for ([types.TaskAssigned.Missed]).
+//
+// # Why the latest and not a digest
+//
+// A fire carries no conversation to summarise: every fire of a schedule asks
+// for the same work, and the work is done as of now whichever tick asked for
+// it. What a seat needs from the earlier ones is only that they existed, so
+// it does the duty once and does not read a late run as an anomaly.
+//
+// THE LATEST BY THE INSTANT IT CAME DUE, and the envelope's own instant only
+// for a fire that carries none, so a fire republished by a park cannot pass
+// for a later tick than it is.
+//
+// ITS TRACE IS THE LATEST FIRE'S, unlike a digest's, which takes its first
+// constituent's: the run IS the latest fire, so the schedule's history links
+// that fire to the turn and each earlier fire to its own superseded record
+// ([Dispatcher.noteSuperseded]).
+//
+// Reports false for anything that is not two or more fires of one schedule.
+func mergeScheduledFires(evs []*events.Event) (*events.Event, bool) {
+	if len(evs) < 2 {
+		return nil, false
+	}
+	fires := make([]*types.TaskAssigned, len(evs))
+	latest := -1
+	for i, ev := range evs {
+		fire, ok := events.DataAs[*types.TaskAssigned](ev)
+		if !ok || fire == nil || fire.Schedule == "" {
+			return nil, false
+		}
+		if i > 0 && fire.Schedule != fires[0].Schedule {
+			return nil, false
+		}
+		fires[i] = fire
+		if latest < 0 || dueAt(ev, fire).After(dueAt(evs[latest], fires[latest])) {
+			latest = i
+		}
+	}
+	kept := *fires[latest]
+	kept.Missed = nil
+	for i, fire := range fires {
+		if i == latest {
+			continue
+		}
+		kept.Missed = append(kept.Missed, types.MissedFire{
+			TaskID: fire.TaskID, ScheduledAt: dueAt(evs[i], fire),
+		})
+	}
+	slices.SortStableFunc(kept.Missed, func(a, b types.MissedFire) int {
+		return a.ScheduledAt.Compare(b.ScheduledAt)
+	})
+	src := evs[latest]
+	out := events.New(kept, events.TraceContext{
+		TraceID: src.TraceID, SpanID: src.SpanID, ParentSpanID: src.ParentSpanID,
+	})
+	out.Timestamp = src.Timestamp
+	out.Source = src.Source
+	out.ParentTurnID = src.ParentTurnID
+	out.DelegationDepth, out.DelegationChain = delegationOf(evs)
+	notify.Stamp(out, partitionKeyOf(evs), conversationIdentityOf(evs))
+	return out, true
+}
+
+// dueAt is when a fire came due: the instant the scheduler stamped on it, or
+// the envelope's own for a fire that carries none.
+func dueAt(ev *events.Event, fire *types.TaskAssigned) time.Time {
+	if !fire.ScheduledAt.IsZero() {
+		return fire.ScheduledAt.UTC()
+	}
+	return ev.Timestamp.UTC()
+}
 
 // mergeNotifications merges a partition of external notifications into ONE
 // event carrying the digest.

@@ -87,6 +87,7 @@ const org = {
 };
 
 const status: McpServersStatusAnswer = {
+  reading: "admin",
   builtin: [],
   nodes: [
     { id: "node-a", reported: true },
@@ -129,6 +130,9 @@ const status: McpServersStatusAnswer = {
           error_seat: "",
           wait: "",
           wait_seat: "",
+          error_class: "" as const,
+          down_since: null,
+          restarts: 0,
         },
         {
           node: "node-b",
@@ -141,6 +145,9 @@ const status: McpServersStatusAnswer = {
           error_seat: "",
           wait: "",
           wait_seat: "",
+          error_class: "" as const,
+          down_since: null,
+          restarts: 0,
         },
         {
           node: "node-c",
@@ -153,6 +160,9 @@ const status: McpServersStatusAnswer = {
           error_seat: "",
           wait: "",
           wait_seat: "",
+          error_class: "" as const,
+          down_since: null,
+          restarts: 0,
         },
       ],
     },
@@ -191,6 +201,9 @@ const status: McpServersStatusAnswer = {
           error_seat: "",
           wait: "",
           wait_seat: "",
+          error_class: "" as const,
+          down_since: null,
+          restarts: 0,
         },
         {
           node: "node-b",
@@ -203,6 +216,9 @@ const status: McpServersStatusAnswer = {
           error_seat: "backend-dev",
           wait: "",
           wait_seat: "",
+          error_class: "" as const,
+          down_since: null,
+          restarts: 0,
         },
         {
           node: "node-c",
@@ -215,6 +231,9 @@ const status: McpServersStatusAnswer = {
           error_seat: "",
           wait: "",
           wait_seat: "",
+          error_class: "" as const,
+          down_since: null,
+          restarts: 0,
         },
       ],
     },
@@ -256,6 +275,9 @@ const status: McpServersStatusAnswer = {
           error_seat: "",
           wait: "",
           wait_seat: "",
+          error_class: "" as const,
+          down_since: null,
+          restarts: 0,
         },
       ],
     },
@@ -449,6 +471,9 @@ test("a node's cell never reads an unreported node as none", () => {
     error_seat: "",
     wait: "",
     wait_seat: "",
+    error_class: "" as const,
+    down_since: null,
+    restarts: 0,
   };
   expect(nodeCellWords(cell).text).toBe("not reported");
   expect(nodeCellWords({ ...cell, reported: true }).text).toBe("none here");
@@ -471,6 +496,9 @@ test("a node's cell names its waiting instances without reading them as a fault"
     error_seat: "",
     wait: "",
     wait_seat: "",
+    error_class: "" as const,
+    down_since: null,
+    restarts: 0,
   };
   expect(nodeCellWords(cell)).toEqual({ text: "2 waiting", tone: "neutral" });
   expect(nodeCellWords({ ...cell, started: 1, waiting: 1 })).toEqual({
@@ -488,6 +516,7 @@ test("a server waiting for a provisioned credential names what it waits for, not
     "not started: waiting for the atlassian integration to mint ${CEO_ATLASSIAN_TOKEN}; " +
     "it starts once the seal reaches this node";
   const waiting: McpServersStatusAnswer = {
+    reading: "admin",
     builtin: [],
     nodes: [{ id: "node-a", reported: true }],
     servers: [
@@ -526,6 +555,9 @@ test("a server waiting for a provisioned credential names what it waits for, not
             error_seat: "",
             wait,
             wait_seat: "backend-dev",
+            error_class: "" as const,
+            down_since: null,
+            restarts: 0,
           },
         ],
       },

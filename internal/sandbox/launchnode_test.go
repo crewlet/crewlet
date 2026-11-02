@@ -264,9 +264,10 @@ func TestALaunchNodeGoneForTheBoxTimeoutHasItsJobLost(t *testing.T) {
 		t.Fatalf("completions announced for %v; want the gone run's", got)
 	}
 	before := rig.queue.count()
+	rig.now = rig.now.Add(w.interval)
 	tickOnce(t, w)
 	if rig.queue.count() == before {
-		t.Error("the next pass did not announce the unclaimed verdict again")
+		t.Error("the pass an interval later did not announce the unclaimed verdict again")
 	}
 	if killed := rig.local.KilledIDs(); len(killed) != 0 {
 		t.Errorf("the fleet's waiter killed %v: a box on a gone node's host is not its to reach", killed)

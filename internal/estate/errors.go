@@ -102,6 +102,7 @@ var sentinels = []sentinel{
 
 	{"chatlet.ErrArchived", chatlet.ErrArchived},
 	{"chatlet.ErrConflict", chatlet.ErrConflict},
+	{"chatlet.ErrMembersChanged", chatlet.ErrMembersChanged},
 	{"chatlet.ErrForbidden", chatlet.ErrForbidden},
 	{"chatlet.ErrInvalid", chatlet.ErrInvalid},
 	{"chatlet.ErrNameTaken", chatlet.ErrNameTaken},
