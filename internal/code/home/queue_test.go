@@ -620,8 +620,8 @@ func TestARedBatchIsBisected(t *testing.T) {
 // the train abandons it — the next turn builds a new train onto the new tip.
 //
 // Mutation: build whenever the worker holds no train of its own (a memory of
-// the last build) → the new home builds, red; drop trainStands' base check →
-// the train on the old tip is tested on, red.
+// the last build) → the new home builds, red; drop QueueDue.TrainStands' base
+// check → the train on the old tip is tested on, red.
 func TestANewHomeResumesTheQueueFromRows(t *testing.T) {
 	t.Parallel()
 	base := oid("c")

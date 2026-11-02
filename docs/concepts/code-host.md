@@ -6362,10 +6362,10 @@ worker of [the home's loop](#the-homes-change-work), nudged by every record
 of the repository's queue and passing every repository holding a live entry
 on the loop's backstop. Each turn reads one branch's **queue work** in ONE
 snapshot — the branch's tip, the gate its queue lands under, its live entries
-in queue order (as many as a train can take, each with who enqueued it and
-the change its merge is written from) and its live train, each candidate's
-commits with the latest attempt of each required check on each — and takes
-the train's next step from it, as a record the committer decides from its
+in queue order (the first `depth` × `batch`, as many as a train can take,
+each with who enqueued it and its change) and its live train, each
+candidate's commits with the latest attempt of each required check on each —
+and takes the train's next step from it, as a record the committer decides from its
 own snapshot. A step decided from rows the log has moved past is refused
 there and read again on the next turn, so a home that crashes, or hands the
 repository to another git node, leaves nothing behind but rows: **the next
@@ -6377,8 +6377,11 @@ holds.
   the home builds a new one onto the branch's tip: up to `depth` candidates
   of **min(`batch`, ⌈W/`depth`⌉)** of the W waiting entries each, so a queue
   that keeps up tests each change alone and lands it at once, and a queue
-  falling behind takes up to `batch` changes a candidate. The whole train is
-  ONE chain of merges built in one scratch, its objects one pack, recorded by
+  falling behind takes up to `batch` changes a candidate. Only a turn that
+  builds reads the changes' descriptions — the body and the authors each
+  merge's message is written from — so the turns that test, land or bisect,
+  one on every record of the train's checks, read none of them. The whole
+  train is ONE chain of merges built in one scratch, its objects one pack, recorded by
   one `candidate` record that abandons the branch's earlier train. The
   record states the drop epoch of the copy the chain was built from, so a
   train built before an expunge of the repository's unreachable objects

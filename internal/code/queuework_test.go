@@ -94,6 +94,80 @@ func TestTheHomesQueueWorkIsOneSnapshotOfOneTarget(t *testing.T) {
 	}
 }
 
+// THE HOME'S QUEUE WORK READS WHAT ITS STEP NEEDS: a `queue_due` page names
+// as many of its target's live entries as one train under the gate takes —
+// depth × batch, here one of two, and More for the other — and their changes'
+// descriptions, the body and the authors a squash's message is written from,
+// only on a snapshot its home builds a train from (QueueDue.Builds): with no
+// train, the first entry's change with its body and its author; with a train
+// standing on the tip, the same change with neither, since testing, landing
+// and bisecting write no commit message.
+//
+// Mutation: scan MaxCandidateEntries rather than depth × batch → both
+// entries are named, red; read the descriptions on every snapshot → the
+// standing train's page carries the body, red; never read them → the build's
+// page has no body, red; leave the authors unread → the build's page names
+// none, red.
+func TestTheHomesQueueWorkReadsWhatItsStepNeeds(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.Protections[0].Gate = queueGate()
+	s.Protections[0].Gate.Landing.Depth, s.Protections[0].Gate.Landing.Batch = 1, 1
+	repo := n.ensure("web", s, t1).RepoID
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
+		set(featureRef, code.ZeroOID, oidOf("B")), set(releaseRef, code.ZeroOID, oidOf("R"))))
+	var entries []string
+	for _, src := range []struct{ ref, head string }{{featureRef, "B"}, {releaseRef, "R"}} {
+		open := opening(repo, src.ref, mainRef, dev)
+		open.Open.Body = "Retries the upload, from " + src.ref
+		opened, err := c.ProposeChange(t.Context(), open)
+		requireChanged(t, opened, err)
+		converse(t, w, n.revising(repo, opened.ChangeID, 1, oidOf(src.head), mainRef, nil))
+		converse(t, w, reviewing(repo, opened.ChangeID, platLead, 1, code.VerdictApprove, nil))
+		n.passed(repo, oidOf(src.head), mainRef, "unit")
+		enqueue := enqueueing(repo, opened.ChangeID, ada, oidOf(src.head))
+		res, err := c.ProposeQueue(t.Context(), enqueue)
+		requireQueued(t, res, err, code.QueueWaiting, len(entries)+1)
+		entries = append(entries, enqueue.Enqueue.EntryID)
+	}
+	work := func() code.QueueDue {
+		t.Helper()
+		answer, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadQueueDue,
+			QueueDue: &code.QueueDueQuery{RepoID: repo}})
+		if err != nil || answer.DueQueue == nil {
+			t.Fatalf("the home's queue work of web reads %+v (%v), want main's", answer.DueQueue, err)
+		}
+		return *answer.DueQueue
+	}
+
+	d := work()
+	if len(d.Entries) != 1 || !d.More || d.Entries[0].EntryID != entries[0] {
+		t.Fatalf("main's queue work at depth 1 and batch 1 names %+v (more %t), want the first entry alone "+
+			"and more behind it", d.Entries, d.More)
+	}
+	built := d.Entries[0].Change
+	if !d.Builds() || built.Body != "Retries the upload, from "+featureRef || len(built.Authors) == 0 {
+		t.Fatalf("the snapshot a train is built from reads the change %+v (builds %t), want its body and its "+
+			"authors", built, d.Builds())
+	}
+
+	train := training(repo, oidOf("A"), entries[0], oidOf("M"))
+	res, err := c.ProposeQueue(t.Context(), train)
+	requireRecorded(t, res, err)
+	d = work()
+	standing := d.Entries[0].Change
+	if d.Builds() || !d.TrainStands() || standing.ID != built.ID || standing.Number != built.Number ||
+		standing.Body != "" || standing.Authors != nil {
+		t.Fatalf("the snapshot of a standing train reads the change %+v (builds %t), want its row without its "+
+			"description", standing, d.Builds())
+	}
+}
+
 // THE HOME'S QUEUE WORK COUNTS WHAT ITS TARGET WAS ASKED TO LAND (M5-D28):
 // asked to, a `queue_due` read counts the entries enqueued on main at or
 // after an instant — the live ones and the ended ones alike, each by its

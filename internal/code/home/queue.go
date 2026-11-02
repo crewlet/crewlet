@@ -210,12 +210,19 @@ func (w *queue) target(ctx context.Context, repoID string, d code.QueueDue, memo
 		return false, nil
 	case d.Mirrored:
 		return false, w.shed(ctx, repoID, d, at)
-	case len(d.Required) == 0:
-		return false, nil
-	case len(d.Train) > 0 && trainStands(d):
+	case d.Builds():
+		// THE ONE PREDICATE the reader answered the entries' descriptions
+		// by: a build writes their commit messages from them.
+		return w.build(ctx, repoID, d, at)
+	case d.TrainStands():
 		return false, w.test(ctx, repoID, d, memo, at)
+	case len(d.Required) > 0 && d.Tip == code.ZeroOID:
+		// NO TIP TO BUILD ONTO: the branch was deleted under its queue; a
+		// person's push creating it again gives its train a base.
+		w.log.Debug("code_queue_no_target", "repo", repoID, "about", fmt.Sprintf("target %s at %s",
+			d.TargetRef, short(d.Tip)))
 	}
-	return w.build(ctx, repoID, d, at)
+	return false, nil
 }
 
 // shed puts every live entry of d's target out, ejected repo_mirrored: its
@@ -232,24 +239,6 @@ func (w *queue) shed(ctx context.Context, repoID string, d code.QueueDue, at sta
 		ejected[i] = code.Ejection{EntryID: e.EntryID, Reason: code.EjectRepoMirrored}
 	}
 	return w.eject(ctx, repoID, fmt.Sprintf("target %s of a pull mirror", d.TargetRef), ejected, at)
-}
-
-// trainStands reports d's train still the one to test: built onto the
-// target's tip, every entry it tests live in it.
-func trainStands(d code.QueueDue) bool {
-	if d.Train[0].BaseOID != d.Tip {
-		return false
-	}
-	train := d.Train[0].Train
-	for _, c := range d.Train {
-		for _, commit := range c.Commits {
-			i := slices.IndexFunc(d.Entries, func(e code.QueueWorkEntry) bool { return e.EntryID == commit.EntryID })
-			if i < 0 || d.Entries[i].Train != train || d.Entries[i].State != code.QueueTesting {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // BatchOf is how many entries one candidate of a target's train takes, of
@@ -271,15 +260,11 @@ func BatchOf(waiting, depth, batch int) int {
 // the train after this one.
 func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at statelog.Position) (bool, error) {
 	about := fmt.Sprintf("target %s at %s", d.TargetRef, short(d.Tip))
-	if d.Tip == code.ZeroOID {
-		// NO TIP TO BUILD ONTO: the branch was deleted under its queue; a
-		// person's push creating it again gives its train a base.
-		w.log.Debug("code_queue_no_target", "repo", repoID, "about", about)
-		return false, nil
-	}
+	// MORE WAIT THAN THE PAGE NAMES: it names depth × batch, so one more
+	// takes BatchOf to batch, as any number past depth × (batch − 1) does.
 	waiting := len(d.Entries)
 	if d.More {
-		waiting = code.MaxCandidateEntries + 1
+		waiting++
 	}
 	n := BatchOf(waiting, d.Depth, d.Batch)
 	take := d.Entries[:min(len(d.Entries), n*d.Depth)]

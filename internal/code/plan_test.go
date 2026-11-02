@@ -906,6 +906,14 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
 		"changes named": {changesNamedSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", changeKey + " (id=?)"}},
+		// A QUEUE BUILD'S DESCRIPTIONS (queuework.go): its changes' bodies
+		// and authors, each driven from the list by its table's key.
+		"queued changes' bodies": {changeBodiesNamedSQL,
+			[]any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", bodyKey + " (change_id=?)"}},
+		"queued changes' authors": {changeAuthorsNamedSQL,
+			[]any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", authorKey + " (change_id=?)"}},
 		"abandon a train's entries": {resetTrainSQL, []any{"repo-1", "refs/heads/main"},
 			[]string{"code_queue_live_idx (repo_id=? AND target_ref=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"abandon a train's candidates": {dropTrainSQL, []any{"repo-1", "refs/heads/main"},

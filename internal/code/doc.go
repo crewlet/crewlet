@@ -1670,6 +1670,20 @@
 // written back in one upsert and its changes read in one statement, as a push
 // record's changes are ([writeEntries], [changeRowsIn]).
 //
+// A QUEUE TURN'S READ (BenchmarkTheHomesQueueWork, one `queue_due` page over
+// a target of [MaxCandidateEntries] live entries, each change's body at
+// [MaxChangeBodyBytes]; -benchtime 20x and one count on two E-cores of a Core
+// Ultra 7 265U): a page names the gate's depth × batch entries, their changes
+// in ONE statement, and their descriptions — two statements more — only on a
+// snapshot that builds ([QueueDue.Builds]), so about ten statements a page,
+// twelve on a build. At the default gate (4 × 2) a build's page is 2.9 ms and
+// 266 KB encoded, and a test's — the turn every check record of a standing
+// train nudges — 2.7 ms and 6.2 KB; at the widest (8 × 8), 7.1 ms and 2.1 MB
+// to build and 5.6 ms and 42 KB to test. The read it replaced named
+// MaxCandidateEntries entries whatever the gate or the step, three point
+// statements each — some 200 a page — and every body: the widest build's
+// 2.1 MB on every turn, the check records' included (queuework.go).
+//
 // A COMPACTION RECORD (BenchmarkApplyACompaction, the record applied and
 // committed against a repository of [MaxPacksPerRepo] live packs, each arm
 // writing the most outputs its inputs allow, so the most rows its input count
