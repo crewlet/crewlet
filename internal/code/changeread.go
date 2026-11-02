@@ -587,6 +587,8 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		return r.changeReviews(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
 	case PartFindings:
 		return r.changeFindings(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
+	case PartStanding:
+		return r.changeStanding(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
 	}
 	limit := min(limitOr(q.Limit, defaultRevisionLimit), r.pageRows)
 	var rows *sql.Rows

@@ -1383,7 +1383,8 @@ type ReadQuery struct {
 	Needs    Need   `json:"needs,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
-	// reviews or its findings ([ChangeParts]) — refused on every other kind.
+	// reviews, its findings or the asker's own standing findings
+	// ([ChangeParts]) — refused on every other kind.
 	// The change's detail rides a first page of its revisions alone; every
 	// page of another part carries that part's rows, held to the grant again
 	// as every page of a change is. Under the same condition as Reviewer: no

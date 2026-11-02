@@ -572,6 +572,90 @@ func TestAReadNamingFindingsServesThoseAlone(t *testing.T) {
 	}
 }
 
+// THE STANDING PART IS THE ASKER'S OWN STANDING FINDINGS, WHOLE: a change's
+// `standing` part answers the findings its asker keeps standing — open, or
+// answered by an author — by id, a page at a time to the last, and none they
+// dismissed and none another reviewer raised: what a review of theirs
+// carries, never a page of the change's whole history. A cursor that is no
+// finding's id is refused.
+//
+// Mutations: drop the cursor's filter → the second page repeats the first,
+// red; drop the cursor a page past the limit carries → the read stops after
+// its first page, red.
+func TestTheStandingPartIsTheAskersOwnStandingFindingsWhole(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	res, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil,
+		raising(code.SeverityBlocker, 3, "No backoff"), raising(code.SeverityMajor, 7, "Sleep between tries"),
+		raising(code.SeverityNit, 11, "A comment")))
+	own := requireReviewed(t, res, err)
+	res, err = w.Converse(ctx, reviewing(repo, change, cto, 1, code.VerdictComment, nil,
+		raising(code.SeverityNit, 9, "A name")))
+	others := requireReviewed(t, res, err)
+	res, err = w.Converse(ctx, conversing(dev, func(cw *code.ConversationWrite) {
+		cw.FindingResolve = &code.FindingResolve{RepoID: repo, ChangeID: change, Findings: []code.FindingResolution{
+			{FindingID: own[0], Resolution: code.FindingDisputed, Note: "the client backs off"}}}
+	}))
+	requireConversed(t, res, err)
+	res, err = w.Converse(ctx, conversing(platLead, func(cw *code.ConversationWrite) {
+		cw.FindingResolve = &code.FindingResolve{RepoID: repo, ChangeID: change, Findings: []code.FindingResolution{
+			{FindingID: own[1], Resolution: code.FindingDismissed, Note: "it sleeps already"}}}
+	}))
+	requireConversed(t, res, err)
+
+	standing := func(asker code.Principal, limit int) []string {
+		t.Helper()
+		q := code.ReadQuery{Asker: asker, Kind: code.ReadChange, Repo: "web", Change: 1, Part: code.PartStanding,
+			Limit: limit, Fresh: stale}
+		var ids []string
+		for pages := 1; ; pages++ {
+			answer, err := n.reader.Read(ctx, q)
+			if err != nil {
+				t.Fatalf("read web!1's standing findings as %s: %v", asker.Seat, err)
+			}
+			if answer.Change != nil || len(answer.Reviews) > 0 || len(answer.Comments) > 0 {
+				t.Fatalf("a page of standing findings carries more than findings: %+v", answer)
+			}
+			for _, f := range answer.Findings {
+				ids = append(ids, f.ID)
+				if f.ID == own[0] && (f.State != code.FindingDisputed || f.Title != "No backoff") {
+					t.Errorf("the disputed blocker reads %+v", f)
+				}
+			}
+			if answer.Next == "" {
+				return ids
+			}
+			if pages > 4 {
+				t.Fatalf("a few standing findings took more than four pages: %v", ids)
+			}
+			q.Cursor = answer.Next
+		}
+	}
+	want := []string{own[0], own[2]}
+	slices.Sort(want)
+	if got := standing(platLead, 1); !slices.Equal(got, want) {
+		t.Errorf("plat-lead's standing findings a page of one at a time came %v, want %v: the disputed and the "+
+			"open one, by id, and neither the one dismissed nor cto's", got, want)
+	}
+	if got := standing(platLead, 0); !slices.Equal(got, want) {
+		t.Errorf("plat-lead's standing findings in one page came %v, want %v", got, want)
+	}
+	if got := standing(cto, 0); !slices.Equal(got, others) {
+		t.Errorf("cto's standing findings came %v, want %v", got, others)
+	}
+	if got := standing(dev, 0); len(got) != 0 {
+		t.Errorf("dev, who raised none, keeps %v standing", got)
+	}
+	if _, err := n.reader.Read(ctx, code.ReadQuery{Asker: platLead, Kind: code.ReadChange, Repo: "web", Change: 1,
+		Part: code.PartStanding, Cursor: "3000", Fresh: stale}); !errors.Is(err, code.ErrBadCursor) {
+		t.Errorf("a standing page after a review's cursor: Read = %v, want ErrBadCursor", err)
+	}
+}
+
 // WHAT WAITS ON AN OWNER'S FIX IS WHAT THEIR CHANGES' COUNTERS ASK: needs=fix
 // lists an owner's live changes — the asker's own where it names none — whose
 // reviewer's standing verdict asks for changes or whose finding nobody has

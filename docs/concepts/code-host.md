@@ -1898,8 +1898,9 @@ behind their batches and contend with every push to the repository.
 A change's conversation is read with the change: one change's read names the
 **part** it pages beside it — its revisions, which a read naming no part
 pages and whose first page carries the change's detail, its **reviewers**,
-its **comments**, its **reviews** or its **findings** — every page held to the
-reader's grant on the repository as the change's own rows are ([Reading
+its **comments**, its **reviews**, its **findings** or the reader's own
+**standing** findings — every page held to the reader's grant on the
+repository as the change's own rows are ([Reading
 changes](#reading-changes)).
 
 - **The detail counts the conversation**: its comments, its reviews, its open
@@ -1923,6 +1924,13 @@ changes](#reading-changes)).
   — each with its text and its suggestion, its state and its last answer, 50
   a page and 200 at most, ending at the reply's byte budget first where
   suggestions are long.
+- **Standing findings are the reader's own**, by id, paged as findings are:
+  every finding they raised that still stands — open, resolved, won't fix or
+  disputed — which is exactly what a review of theirs carries or, of a later
+  revision, supersedes, at most 1 024 a reviewer; none for a credential bound
+  to no seat. It is what a review dialog reads to its last page before it
+  sends, where the findings part, oldest first, would have left a reviewer's
+  newest standing findings past its first page.
 
 ### Asking for review
 

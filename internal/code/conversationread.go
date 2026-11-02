@@ -90,6 +90,22 @@ import (
 // resumes after the row the cursor names, so a comment said meanwhile in a
 // thread already read is read by reading the change again, at the floor its
 // write answered with.
+//
+// # The asker's standing findings
+//
+// The `standing` part is the findings the ASKER keeps standing on the change
+// — open, or answered by an author and not yet judged — by id: exactly the
+// set a review of theirs CARRIES or, of a later revision, supersedes
+// ([Review.Carries]), so a reviewer about to review is shown every finding
+// that review decides, never the first page of the change's whole history.
+// The findings part pages a change's findings oldest first, superseded and
+// dismissed ones among them, so a reviewer's NEWEST standing findings were the
+// ones past its first page on a change a few reviews long — the ones a review
+// sent from that page superseded unseen. The part reads the set the review's
+// own decide reads (standingFindingsSQL, one seek of code_findings_raiser_idx
+// a standing state), at most [MaxStandingFindings] narrow rows, and a page's
+// texts by their keys ([findingsNamed]); an asker bound to no seat raised
+// none and is answered none.
 
 // Need is what a listing of changes asks its changes to be waiting on
 // ([ReadQuery.Needs]): each a LIVE change's.
@@ -143,11 +159,17 @@ const (
 	PartReviews ChangePart = "reviews"
 	// PartFindings is the change's findings, by id, each with its text.
 	PartFindings ChangePart = "findings"
+	// PartStanding is the ASKER's own standing findings on the change, by
+	// id, each with its text: what a review of theirs carries. A build that
+	// predates it refuses it as a part it does not know, rather than answer
+	// another set under its name; an estate request's word and no record's,
+	// so it takes no versionedFields row.
+	PartStanding ChangePart = "standing"
 )
 
 // ChangeParts is the closed set, in this order.
 func ChangeParts() []ChangePart {
-	return []ChangePart{PartRevisions, PartReviewers, PartComments, PartReviews, PartFindings}
+	return []ChangePart{PartRevisions, PartReviewers, PartComments, PartReviews, PartFindings, PartStanding}
 }
 
 // Valid reports a part this build knows.
@@ -166,7 +188,7 @@ func (p ChangePart) maxPerPage() int {
 		return MaxCommentsPerPage
 	case PartReviews:
 		return MaxReviewsPerPage
-	case PartFindings:
+	case PartFindings, PartStanding:
 		return MaxFindingsPerPage
 	}
 	return MaxRevisionsPerPage
@@ -633,39 +655,102 @@ func (r *Reader) namedFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, nam
 	asked := slices.DeleteFunc(slices.Clone(q.FindingIDs), func(f string) bool {
 		return q.Cursor != "" && f <= q.Cursor
 	})
-	if len(asked) == 0 {
+	read, err := findingsNamed(ctx, tx, named, id, asked)
+	if err != nil {
+		return err
+	}
+	r.pageFindings(read, false, out)
+	return nil
+}
+
+// changeStanding serves a page of the findings the ASKER keeps standing on
+// change id — named, its web!n — by id, after the finding a cursor names
+// ([PartStanding]): every standing finding of theirs read as the decide of
+// their review reads them (standingFindings, at most [MaxStandingFindings]
+// narrow rows), the ones past the cursor sorted by id, and the page's first
+// `limit` of them read whole by their keys ([findingsNamed]). The cursor names
+// the last one a page carries wherever one remains past it: past the limit, or
+// past the page's bytes, which findings whose suggestions reach their bound
+// fill first.
+func (r *Reader) changeStanding(ctx context.Context, tx *sql.Tx, q ReadQuery, named, id string,
+	out *ReadAnswer) error {
+
+	if q.Cursor != "" && bareUUIDv7("cursor", q.Cursor) != nil {
+		return fmt.Errorf("%w: %q is not a finding's id", ErrBadCursor, q.Cursor)
+	}
+	raiser, kind := q.Asker.party()
+	if raiser == "" {
 		return nil
+	}
+	standing, err := standingFindings(ctx, tx, id, raiser, kind)
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(standing))
+	for _, f := range standing {
+		if q.Cursor == "" || f.id > q.Cursor {
+			ids = append(ids, f.id)
+		}
+	}
+	slices.Sort(ids)
+	limit := min(limitOr(q.Limit, defaultFindingLimit), r.pageRows)
+	more := len(ids) > limit
+	read, err := findingsNamed(ctx, tx, named, id, ids[:min(len(ids), limit)])
+	if err != nil {
+		return err
+	}
+	r.pageFindings(read, more, out)
+	return nil
+}
+
+// findingsNamed is the findings of change id — named, its web!n — whose ids
+// asked lists, each with its text, in id order: ONE statement
+// (findingsNamedSQL), each id one seek of the texts' key beside the change
+// and one of the narrow row's key. An id the change does not hold is no row.
+func findingsNamed(ctx context.Context, tx *sql.Tx, named, id string, asked []string) ([]FindingRow, error) {
+	if len(asked) == 0 {
+		return nil, nil
 	}
 	list, err := json.Marshal(asked)
 	if err != nil {
-		return fmt.Errorf("code: name the findings of %s: %w", named, err)
+		return nil, fmt.Errorf("code: name the findings of %s: %w", named, err)
 	}
 	rows, err := tx.QueryContext(ctx, findingsNamedSQL, string(list), id)
 	if err != nil {
-		return fmt.Errorf("code: read the named findings of %s: %w", named, err)
+		return nil, fmt.Errorf("code: read the named findings of %s: %w", named, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var read []FindingRow
 	for rows.Next() {
 		f, err := scanFinding(rows)
 		if err != nil {
-			return fmt.Errorf("code: read the named findings of %s: %w", named, err)
+			return nil, fmt.Errorf("code: read the named findings of %s: %w", named, err)
 		}
 		read = append(read, f)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("code: read the named findings of %s: %w", named, err)
+		return nil, fmt.Errorf("code: read the named findings of %s: %w", named, err)
 	}
 	slices.SortFunc(read, func(a, b FindingRow) int { return strings.Compare(a.ID, b.ID) })
+	return read, nil
+}
+
+// pageFindings puts read — findings in id order — on out's page until the
+// page's bytes are full, the cursor naming the last one it carries where one
+// is left behind it: a finding of read the bytes cut, or, where more says so,
+// one past read itself.
+func (r *Reader) pageFindings(read []FindingRow, more bool, out *ReadAnswer) {
 	pg := page{maxRows: len(read), maxB: r.pageBytes}
 	for i, f := range read {
 		out.Findings = append(out.Findings, f)
 		if pg.add(f.encodedBytes()) && i < len(read)-1 {
 			out.Next = f.Cursor()
-			break
+			return
 		}
 	}
-	return nil
+	if more && len(read) > 0 {
+		out.Next = read[len(read)-1].Cursor()
+	}
 }
 
 // scanFinding is one row of findingsOfSQL, findingsOfAfterSQL or
