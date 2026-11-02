@@ -1273,7 +1273,7 @@ func TestATickWritesACopysStateOnlyWhileItIsDue(t *testing.T) {
 // lock taken, between the listing that names a cohort and the measure that
 // opens it. That cohort is nothing to count and no failure, so nothing is
 // logged — code_cache_memo_unlisted says the copy is listed again at the next
-// pass, of a copy that is gone. A cohort still there that the measure cannot
+// tick, of a copy that is gone. A cohort still there that the measure cannot
 // read is logged: here one replaced by a file, the one such failure a case
 // can make whoever runs it. And a listing the pass's end cuts short — the
 // engine stopping — failed at nothing: it logs nothing and leaves the copy to
@@ -1283,9 +1283,9 @@ func TestATickWritesACopysStateOnlyWhileItIsDue(t *testing.T) {
 // cohort's listing has named it. One gone by its stat — removed by something
 // outside the engine — counts nothing, and the rest of the cohort counts. One
 // still named whose stat fails is logged, and the copy counts what its state
-// recorded until a pass measures the cohort whole: passed over, its bytes
-// would be on the disk and in no count, the budget held to a total short by
-// them. Here the cohort becomes a file under the measure, so the stat answers
+// recorded until a tick's listing measures the cohort whole: passed over, its
+// bytes would be on the disk and in no count, the budget held to a total short
+// by them. Here the cohort becomes a file under the measure, so the stat answers
 // ENOTDIR, the one such failure a case can make whoever runs it.
 //
 // The listing passes over every cohort a record names, which is sound only
@@ -1483,7 +1483,7 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 		if st, _ := cache.MemoOf(c, repo); st.Listed {
 			t.Errorf("the copy's record is %+v after a cohort of it could not be read, want it left to the next "+
-				"pass unlisted", st)
+				"tick unlisted", st)
 		}
 	})
 
@@ -1611,7 +1611,7 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 		}
 		if st, _ := cache.MemoOf(c, repo); st.Listed || st.Bytes != 4*block {
 			t.Errorf("the copy's record is %+v after an entry of a cohort could not be stat'ed, want it left to "+
-				"the next pass unlisted, holding the %d bytes its state recorded", st, 4*block)
+				"the next tick unlisted, holding the %d bytes its state recorded", st, 4*block)
 		}
 		if got := cache.MemoBytes(c); got != 4*block {
 			t.Errorf("the node counts its memo at %d bytes, want the %d the copy's state recorded", got, 4*block)
@@ -1895,6 +1895,83 @@ func TestACohortOpensOnlyOnceItsNumberIsDurable(t *testing.T) {
 	if got := cache.MemoNewest(c); got != first+2 {
 		t.Errorf("the boot after opened cohort %d, want %d: one past the %d its previous process reserved", got,
 			first+2, first+1)
+	}
+}
+
+// A LISTING THAT FAILED IS TRIED AGAIN AT THE TICK, NOT AT EVERY PASS. Passes
+// follow kicks, which on a busy node come back to back, and a listing measures
+// every cohort no record names under the copy's memo lock, which a read's
+// placement waits on: so a copy whose listing failed waits for the janitor's
+// tick, and a kicked pass neither measures it again nor logs; the tick does
+// both, and lists it whole once the disk is fixed. A copy never listed is
+// listed at any pass.
+//
+// Mutations: list a copy whose listing failed at every pass (listMemos
+// ignoring memoUnlisted) — the kicked pass after the failure measures and
+// logs again; never list it again (listMemos passing it over on a tick too) —
+// the tick measures nothing, and the fixed disk's tick lists nothing.
+func TestAFailedListingIsTriedAgainAtTheTick(t *testing.T) {
+	t.Parallel()
+	block := memoEntry(0)
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	dir := s.Dir
+	memoize(t, c, s, memoKeys("listed", 2))
+	cache.JanitorTick(c) // the state records the answers' cohort
+	s.Release()
+	// The cohort the state records renamed to one no state does, as a crash
+	// leaves one: the listing forgets the first and has the second's two
+	// entries to stat.
+	recorded := cache.MemoNewest(c)
+	unrecorded := recorded + 7
+	if err := os.Rename(cache.MemoCohortDir(dir, recorded), cache.MemoCohortDir(dir, unrecorded)); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		stats   atomic.Int64
+		failing atomic.Bool
+	)
+	failing.Store(true)
+	c = w.reopen(t, c, func(o *cache.Options) {
+		cache.BeforeStatingMemo(o, func(string) error {
+			stats.Add(1)
+			if failing.Load() {
+				return syscall.EIO
+			}
+			return nil
+		})
+	})
+	unlisted := func() int { return len(w.logs.lines(t, "code_cache_memo_unlisted")) }
+
+	cache.JanitorPass(c) // the boot's pass: the copy was never listed
+	if stats.Load() == 0 || unlisted() != 1 {
+		t.Fatalf("the first pass stat'ed %d entries and logged code_cache_memo_unlisted %d times, want the "+
+			"listing tried and logged once", stats.Load(), unlisted())
+	}
+	before := stats.Load()
+	cache.JanitorPass(c)
+	if got := stats.Load(); got != before || unlisted() != 1 {
+		t.Errorf("a kicked pass after the failed listing stat'ed %d entries more and logged "+
+			"code_cache_memo_unlisted %d times, want neither measured nor logged again", got-before, unlisted())
+	}
+	cache.JanitorTick(c)
+	if got := stats.Load(); got == before || unlisted() != 2 {
+		t.Errorf("the tick after the failed listing stat'ed %d entries more and logged code_cache_memo_unlisted "+
+			"%d times, want the listing tried again and logged a second time", got-before, unlisted())
+	}
+	failing.Store(false)
+	cache.JanitorPass(c)
+	if st, _ := cache.MemoOf(c, repo); st.Listed {
+		t.Errorf("a kicked pass listed the copy (%+v) whose last listing failed, want it left to the tick", st)
+	}
+	cache.JanitorTick(c)
+	st, _ := cache.MemoOf(c, repo)
+	if !st.Listed || !slices.Equal(st.Cohorts, []uint64{unrecorded}) || !slices.Equal(st.Held, []int64{2 * block}) {
+		t.Errorf("once the disk is fixed the tick's listing recorded %+v, want cohort %d alone, at %d bytes", st,
+			unrecorded, 2*block)
 	}
 }
 

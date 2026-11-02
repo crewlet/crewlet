@@ -25,7 +25,11 @@ import (
 // has already decided to give back is never held for longer than an operator
 // watching it would notice, and a minute of last use is nothing against the
 // hours a budget's eviction order turns on. Nothing is evicted for being
-// idle, so the tick decides no eviction of its own.
+// idle, so the tick decides no eviction of its own. It is also how often a
+// copy's memo listing that failed is tried again (memo.go's listMemos): a
+// listing re-measures under the copy's memo lock, which a read's placement
+// waits on, so a fault the disk keeps costs a measure a minute rather than one
+// a kick.
 const EvictInterval = time.Minute
 
 // NodeFetches is how many pack bundles this node reads from the object store
