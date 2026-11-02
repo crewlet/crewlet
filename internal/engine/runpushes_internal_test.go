@@ -191,7 +191,7 @@ func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 	if !slices.Equal(record.Refs, want) || record.More != 0 {
 		t.Errorf("read %+v and %d more, want %+v", record.Refs, record.More, want)
 	}
-	if record.At != firstPageAt {
+	if record.At != firstPageAt.String() {
 		t.Errorf("the record was read at %s, want its first page's %s — the barrier every later read of the "+
 			"collection is floored at", record.At, firstPageAt)
 	}
@@ -224,7 +224,7 @@ func TestRunPushesReadsTheRunsLaunchInOrder(t *testing.T) {
 	idle.Repos = idle.Repos[1:2]
 	silent := &pagedReader{err: errors.New("asked")}
 	if record, err := readerOf(silent).Pushed(t.Context(), idle); err != nil || record.Refs != nil ||
-		record.More != 0 || !record.At.IsZero() || len(silent.asked) != 0 {
+		record.More != 0 || record.At != "" || len(silent.asked) != 0 {
 		t.Errorf("a run given only a repository to read = %+v, %v after %d reads; want nothing, unread",
 			record, err, len(silent.asked))
 	}

@@ -68,19 +68,26 @@ func (p runPushes) Changes(ctx context.Context, run sandbox.PendingRun, record s
 	if len(branches) == 0 {
 		return pushed, nil, nil
 	}
-	if record.At.IsZero() || record.At.Stream != topics.CodeLogStream {
+	// THE RECORD'S POSITION IS ITS TOKEN, which the sandbox carries from
+	// Pushed to here without reading it ([sandbox.PushRecord.At]).
+	recordAt, err := statelog.ParsePosition(record.At)
+	switch {
+	case err != nil:
+		return pushed, nil, fmt.Errorf("engine: read the changes run %s's branches head: its push record's "+
+			"position %q cannot be read: %w", run.TurnID, record.At, err)
+	case recordAt.IsZero() || recordAt.Stream != topics.CodeLogStream:
 		return pushed, nil, fmt.Errorf("engine: read the changes run %s's branches head: its push record was "+
-			"read at %s, no position of the code log to read them at", run.TurnID, record.At)
+			"read at %s, no position of the code log to read them at", run.TurnID, recordAt)
 	}
 	reader, err := p.code()
 	if err != nil {
 		return pushed, nil, err
 	}
 	heads := map[pushKey]code.BranchChange{}
-	at := record.At
+	at := recordAt
 	for _, q := range branchQueries(repos, branches) {
 		answer, err := reader.Read(ctx, code.ReadQuery{Kind: code.ReadBranchChanges, BranchChanges: &q,
-			Fresh: statelog.FloorAt(statelog.ReadSession, record.At)})
+			Fresh: statelog.FloorAt(statelog.ReadSession, recordAt)})
 		switch {
 		case err != nil:
 			return pushed, nil, fmt.Errorf("engine: read the changes run %s's branches head: %w", run.TurnID, err)

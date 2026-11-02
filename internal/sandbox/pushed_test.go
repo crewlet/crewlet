@@ -12,12 +12,11 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // spyRecordAt is the position on the code log every push record a pushSpy
-// answers was read at.
-var spyRecordAt = statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 41}
+// answers was read at, as the token the package carries.
+var spyRecordAt = topics.CodeLogStream + "@1:41"
 
 // pushSpy is a [RunPushes] answering what a case scripts and recording every
 // run it was asked about.

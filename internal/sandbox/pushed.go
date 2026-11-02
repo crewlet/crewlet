@@ -8,7 +8,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/redact"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // PushedRef is one ref a coding run moved on the engine's own code host, as the
@@ -76,8 +75,12 @@ type PushRecord struct {
 	// here and answers what a second linearizable read would, without
 	// appending a second barrier to the code log for every collected run;
 	// an open still in flight is the operation ledger's to answer either way.
-	// Zero for a run given no repository to push to, which reads nothing.
-	At statelog.Position
+	// Empty for a run given no repository to push to, which reads nothing.
+	//
+	// A statelog.Position's TOKEN (`<stream>@<generation>:<sequence>`), the
+	// way [PendingRun.CodeFloor] is: this package hands it from Pushed to
+	// Changes and never reads it, so it links no state log to carry it.
+	At string
 }
 
 // MaxPushedRefs is the most refs of a run's push record the engine holds while

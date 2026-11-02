@@ -65,7 +65,7 @@ var pushRecordAt = statelog.Position{Stream: topics.CodeLogStream, Generation: 1
 
 // recordOf is pushed as a push record read at pushRecordAt.
 func recordOf(pushed []sandbox.PushedRef) sandbox.PushRecord {
-	return sandbox.PushRecord{Refs: pushed, At: pushRecordAt}
+	return sandbox.PushRecord{Refs: pushed, At: pushRecordAt.String()}
 }
 
 // atTheRecord reports whether q was read at session floored at the push
