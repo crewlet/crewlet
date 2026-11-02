@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -511,9 +512,11 @@ func TestAPlacementPastTheShareWakesTheJanitor(t *testing.T) {
 }
 
 // A PREVIOUS PROCESS'S ANSWERS NOBODY READ SINCE GO FIRST. A boot opens the
-// node's newest cohort past every one a state records, so what a previous
-// process left is older than anything placed or read since: the trim that the
-// memo past its share asks takes the cold copy's answers — the whole cohort
+// node's newest cohort past every one a state records — and every one its
+// previous process reserved (TestABootOpensItsNewestCohortPastEveryOneItsCacheReserved)
+// — so what a previous process left is older than anything placed or read
+// since: the trim that the memo past its share asks takes the cold copy's
+// answers — the whole cohort
 // they share, one rename — before any the warm copy's run placed after the
 // restart, and the cold answer a read moved on after the restart stays.
 //
@@ -1285,6 +1288,14 @@ func TestATickWritesACopysStateOnlyWhileItIsDue(t *testing.T) {
 // them. Here the cohort becomes a file under the measure, so the stat answers
 // ENOTDIR, the one such failure a case can make whoever runs it.
 //
+// The listing passes over every cohort a record names, which is sound only
+// because nothing placed or read after a boot reaches a cohort a previous
+// process made: the boot opens its newest past every one that process
+// reserved, which the crash's own cohort is among. So a run's placement and a
+// read's hit before the first listing leave the crash's cohort for it to count
+// whole; and while the disk refuses to stat it, a placement between two
+// listings that fail does not put it in the record, nor the tick in the state.
+//
 // Mutations: pass over a cohort no state records (listMemo measuring nothing)
 // — the first row's record lacks it; keep a recorded cohort the tree no longer
 // holds — the second row's record keeps it; leave a tree of another layout's
@@ -1296,7 +1307,11 @@ func TestATickWritesACopysStateOnlyWhileItIsDue(t *testing.T) {
 // for the measure's failure (measureCohort without its fs.ErrNotExist case) —
 // the seventh row's record lacks the cohort; pass over an entry whose stat
 // fails (measureCohort counting only what it stats) — the eighth row logs
-// nothing and lists the copy.
+// nothing and lists the copy; open the boot's newest past what the states
+// record alone (openMemo ignoring the reservation) — the ninth row's
+// placement and hit land in the crash's cohort, which the record then counts
+// short of its directory, and the tenth row's placement puts it in the record
+// and the state, and lists the copy at the tick.
 func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 	t.Parallel()
 	block := memoEntry(0)
@@ -1522,18 +1537,19 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 			removed   bool
 		)
 		c, repo, dir, first, w = crashed(t, nil, func(o *cache.Options) {
-			cache.BeforeStatingMemo(o, func(entry string) {
+			cache.BeforeStatingMemo(o, func(entry string) error {
 				// The cohort's listing has named its entries, and something
 				// outside the engine removes the first before the measure
 				// stats it.
 				if removed || filepath.Dir(entry) != cache.MemoCohortDir(dir, first+1) {
-					return
+					return nil
 				}
 				if err := os.Remove(entry); err != nil {
 					t.Error(err)
-					return
+					return nil
 				}
 				removed = true
+				return nil
 			})
 		})
 		cache.JanitorPass(c)
@@ -1562,7 +1578,7 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 			replaced  bool
 		)
 		c, repo, dir, first, w = crashed(t, nil, func(o *cache.Options) {
-			cache.BeforeStatingMemo(o, func(entry string) {
+			cache.BeforeStatingMemo(o, func(entry string) error {
 				// The cohort's listing has named its entries, and the cohort
 				// becomes a file before the measure stats the first, so the
 				// stat answers ENOTDIR: an entry still named that cannot be
@@ -1570,17 +1586,18 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 				// search permission leaves one.
 				cohort := cache.MemoCohortDir(dir, first+1)
 				if replaced || filepath.Dir(entry) != cohort {
-					return
+					return nil
 				}
 				if err := os.RemoveAll(cohort); err != nil {
 					t.Error(err)
-					return
+					return nil
 				}
 				if err := os.WriteFile(cohort, []byte("no cohort"), 0o600); err != nil {
 					t.Error(err)
-					return
+					return nil
 				}
 				replaced = true
+				return nil
 			})
 		})
 		cache.JanitorPass(c)
@@ -1600,6 +1617,309 @@ func TestTheJanitorListsEveryCopysTreeOnce(t *testing.T) {
 			t.Errorf("the node counts its memo at %d bytes, want the %d the copy's state recorded", got, 4*block)
 		}
 	})
+
+	t.Run("a placement and a hit before the listing leave the crash's cohort to it", func(t *testing.T) {
+		t.Parallel()
+		c, repo, dir, first, w := crashed(t, nil)
+		if got := cache.MemoNewest(c); got <= first+2 {
+			t.Fatalf("the boot opened cohort %d, want one past the %d the crashed process had opened", got,
+				first+2)
+		}
+		s := w.sync(t, c, repo)
+		defer s.Release()
+		// A run places its answers, and a read finds one the state recorded
+		// and moves it into the newest, before the janitor's first pass.
+		memoize(t, c, s, memoKeys("after", 2))
+		if _, ok := c.MemoGet(s, memoKeys("crashed", 9)[0]); !ok {
+			t.Fatal("an answer the state recorded was not served after the restart")
+		}
+		cache.JanitorPass(c)
+		st, _ := cache.MemoOf(c, repo)
+		cohorts, held := crashCounted(t, dir, first, block)
+		if !st.Listed || !slices.Equal(st.Cohorts, cohorts) || !slices.Equal(st.Held, held) {
+			t.Errorf("after the listing the record is %+v, want cohorts %v holding %v: the crash's cohort %d "+
+				"counted whole", st, cohorts, held, first+1)
+		}
+	})
+
+	t.Run("a placement between two failed listings leaves the crash's cohort out of every state", func(t *testing.T) {
+		t.Parallel()
+		var (
+			c         *cache.Cache
+			w         *syncWorld
+			repo, dir string
+			first     uint64
+			failing   atomic.Bool
+		)
+		failing.Store(true)
+		c, repo, dir, first, w = crashed(t, nil, func(o *cache.Options) {
+			cache.BeforeStatingMemo(o, func(entry string) error {
+				// The disk fails every stat of the crash's cohort until the
+				// case fixes it.
+				if failing.Load() && filepath.Dir(entry) == cache.MemoCohortDir(dir, first+1) {
+					return syscall.EIO
+				}
+				return nil
+			})
+		})
+		cache.JanitorPass(c)
+		s := w.sync(t, c, repo)
+		defer s.Release()
+		memoize(t, c, s, memoKeys("after", 2))
+		cache.JanitorTick(c) // listed again, and the copy's state written
+		if lines := w.logs.lines(t, "code_cache_memo_unlisted"); len(lines) != 2 {
+			t.Errorf("code_cache_memo_unlisted was logged %d times (%v) over two failed listings, want twice",
+				len(lines), lines)
+		}
+		st, _ := cache.MemoOf(c, repo)
+		if st.Listed || slices.Contains(st.Cohorts, first+1) {
+			t.Errorf("the copy's record is %+v while the crash's cohort %d cannot be measured, want it unlisted "+
+				"and naming no such cohort", st, first+1)
+		}
+		for _, ch := range readStateDoc(t, dir).Derived[string(cache.DerivedMemo)].Cohorts {
+			if ch.N == first+1 {
+				t.Errorf("the tick wrote the crash's cohort %d into the copy's state at %d bytes, which no "+
+					"measure counted", ch.N, ch.Bytes)
+			}
+		}
+		failing.Store(false)
+		cache.JanitorTick(c)
+		st, _ = cache.MemoOf(c, repo)
+		cohorts, held := crashCounted(t, dir, first, block)
+		if !st.Listed || !slices.Equal(st.Cohorts, cohorts) || !slices.Equal(st.Held, held) {
+			t.Errorf("once the disk is fixed the record is %+v, want cohorts %v holding %v: the crash's cohort %d "+
+				"counted whole", st, cohorts, held, first+1)
+		}
+	})
+}
+
+// crashCounted is what the record of the crashed copy at dir (crashed) must
+// say once its tree is listed: every cohort the tree holds, each at what its
+// directory holds, but the first, which the state recorded before the crash
+// and is counted as it said — short by the two answers placed in it after
+// that state, which is what a crash costs the count.
+func crashCounted(t *testing.T, dir string, first uint64, block int64) ([]uint64, []int64) {
+	t.Helper()
+	cohorts, held := cohortsOnDisk(t, dir, block)
+	if len(cohorts) == 0 || cohorts[0] != first {
+		t.Fatalf("the crashed copy's tree holds cohorts %v, want its state's %d the first", cohorts, first)
+	}
+	held[0] -= 2 * block
+	return cohorts, held
+}
+
+// A BOOT OPENS ITS NEWEST COHORT PAST EVERY ONE ITS CACHE RESERVED. A cohort's
+// number is made durable in the cache's root before the node's newest moves
+// to it, so a boot opens past the newest a previous process may have placed
+// in — past every one its states record too — and reserves its own before
+// anything is placed. A root that holds copies and no readable reservation —
+// removed, or damaged — is logged, and the boot opens past what the states
+// record; a cache no process has opened holds none to read and logs nothing;
+// and a root that takes no write opens no cache.
+//
+// Mutations: open past the states alone (openMemo ignoring the reservation) —
+// the first row opens at the state's; reserve nothing at the boot — every
+// row's reservation is still the previous process's; log nothing for a
+// reservation the boot could not read — the second and third rows log
+// nothing; log a fresh cache's absence too — the fresh case logs; open a
+// cache whose reservation could not be written — the last case opens.
+func TestABootOpensItsNewestCohortPastEveryOneItsCacheReserved(t *testing.T) {
+	t.Parallel()
+	block := memoEntry(0)
+	// opened is a stopped cache whose copy's state records cohort first,
+	// while its process went on to open two cohorts past it, each by a run
+	// that filled the one before, with no tick since.
+	opened := func(t *testing.T) (*syncWorld, uint64) {
+		t.Helper()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		w.push(t, repo, "refs/heads/main", nil)
+		c := w.open(t)
+		s := w.sync(t, c, repo)
+		first := cache.MemoNewest(c)
+		keys := memoKeys("opened", 3)
+		memoize(t, c, s, keys[:1])
+		cache.JanitorTick(c) // the state records cohort first
+		// A share whose sixteenth is an answer: each run from here closes
+		// the cohort it was placed in.
+		cache.SetMaxBytes(c, cache.MemoShare*cache.MemoCohortsPerShare*block)
+		memoize(t, c, s, keys[1:2])
+		memoize(t, c, s, keys[2:3])
+		if got := cache.MemoNewest(c); got != first+2 {
+			t.Fatalf("the process's newest cohort is %d after two runs that each filled one, want %d", got, first+2)
+		}
+		s.Release()
+		c.Stop(context.Background())
+		return w, first
+	}
+	for _, tc := range []struct {
+		name   string
+		before func(t *testing.T, file string)
+		// past is how far past first the cohort is that the boot opens one
+		// past.
+		past   uint64
+		logged int
+	}{
+		{"past the newest its previous process reserved", nil, 2, 0},
+		{"past the states where the reservation is gone", func(t *testing.T, file string) {
+			if err := os.Remove(file); err != nil {
+				t.Fatal(err)
+			}
+		}, 0, 1},
+		{"past the states where the reservation is damaged", func(t *testing.T, file string) {
+			write(t, file, "seventeen\n")
+		}, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w, first := opened(t)
+			file := cache.MemoCohortsFile(w.layout.Dir)
+			if tc.before != nil {
+				tc.before(t, file)
+			}
+			c := w.open(t)
+			want := first + tc.past + 1
+			if got := cache.MemoNewest(c); got != want {
+				t.Errorf("the boot opened cohort %d, want %d", got, want)
+			}
+			if lines := w.logs.lines(t, "code_cache_memo_cohorts_unread"); len(lines) != tc.logged {
+				t.Errorf("code_cache_memo_cohorts_unread was logged %d times (%v), want %d", len(lines), lines,
+					tc.logged)
+			}
+			if got := read(t, file); got != cohortLine(want) {
+				t.Errorf("the root reserves %q after the boot, want the cohort it opened, %q", got, cohortLine(want))
+			}
+		})
+	}
+
+	t.Run("a cache no process has opened", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		c := w.open(t)
+		if got := cache.MemoNewest(c); got != 1 {
+			t.Errorf("a fresh cache opened cohort %d, want the first, 1", got)
+		}
+		if lines := w.logs.lines(t, "code_cache_memo_cohorts_unread"); len(lines) != 0 {
+			t.Errorf("code_cache_memo_cohorts_unread was logged %d times (%v) for a fresh cache, want never",
+				len(lines), lines)
+		}
+		if got := read(t, cache.MemoCohortsFile(w.layout.Dir)); got != cohortLine(1) {
+			t.Errorf("a fresh cache's root reserves %q, want %q", got, cohortLine(1))
+		}
+	})
+
+	t.Run("a root that takes no write opens no cache", func(t *testing.T) {
+		t.Parallel()
+		w, _ := opened(t)
+		file := cache.MemoCohortsFile(w.layout.Dir)
+		if err := os.Remove(file); err != nil {
+			t.Fatal(err)
+		}
+		// A directory holding something at the reservation's name: no file
+		// is renamed over it.
+		write(t, filepath.Join(file, "held"), "not a reservation")
+		w.reboot(t)
+		c, err := cache.Open(t.Context(), w.options(t, w.wire))
+		if c != nil {
+			c.Stop(context.Background())
+		}
+		if err == nil || !strings.Contains(err.Error(), file) {
+			t.Errorf("Open over a root whose reservation could not be written answered %v, want an error naming %s",
+				err, file)
+		}
+	})
+}
+
+// A COHORT OPENS ONLY ONCE ITS NUMBER IS DURABLE. The placement that fills the
+// node's newest cohort reserves the next in the cache's root before it opens
+// it, so a crash after it leaves a reservation the boot opens past. A
+// reservation the root refuses opens nothing: it is logged, the newest stays
+// open, and the next is tried once another sixteenth of the share has been
+// placed — not at every placement after — and opens once the root takes it.
+//
+// Mutations: open the next cohort whatever its reservation answered
+// (memoPlaced moving the newest on a refusal) — the refused reservation opens
+// one; open it unreserved (memoPlaced reserving nothing) — the root never
+// names it, and the boot after opens past nothing the process opened; try
+// again at every placement (memoPlaced keeping the fill it failed at) — the
+// short run logs again.
+func TestACohortOpensOnlyOnceItsNumberIsDurable(t *testing.T) {
+	t.Parallel()
+	block := memoEntry(0)
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	first := cache.MemoNewest(c)
+	file := cache.MemoCohortsFile(w.layout.Dir)
+	if got := read(t, file); got != cohortLine(first) {
+		t.Fatalf("the root reserves %q after the boot, want the cohort it opened, %q", got, cohortLine(first))
+	}
+	// A share whose sixteenth is four answers.
+	cache.SetMaxBytes(c, cache.MemoShare*cache.MemoCohortsPerShare*4*block)
+	// The root refuses the next reservation: a directory holds its name.
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(file, "held"), "not a reservation")
+
+	memoize(t, c, s, memoKeys("refused", 4))
+	if got := cache.MemoNewest(c); got != first {
+		t.Errorf("the newest cohort is %d after a run filled cohort %d and the root refused the next, want it "+
+			"still %d", got, first, first)
+	}
+	lines := w.logs.lines(t, "code_cache_memo_unreserved")
+	if len(lines) != 1 || lines[0]["cohort"] != float64(first+1) {
+		t.Errorf("code_cache_memo_unreserved was logged %d times (%v), want once, for cohort %d", len(lines),
+			lines, first+1)
+	}
+	memoize(t, c, s, memoKeys("short", 2))
+	if lines := w.logs.lines(t, "code_cache_memo_unreserved"); len(lines) != 1 {
+		t.Errorf("code_cache_memo_unreserved was logged %d times (%v) after half a sixteenth more, want the "+
+			"first alone: the next is tried a sixteenth after the last", len(lines), lines)
+	}
+
+	if err := os.RemoveAll(file); err != nil {
+		t.Fatal(err)
+	}
+	memoize(t, c, s, memoKeys("taken", 2))
+	if got := cache.MemoNewest(c); got != first+1 {
+		t.Errorf("the newest cohort is %d once the root took the reservation, want %d", got, first+1)
+	}
+	if got := read(t, file); got != cohortLine(first+1) {
+		t.Errorf("the root reserves %q, want the cohort opened, %q", got, cohortLine(first+1))
+	}
+	s.Release()
+	c = w.reopen(t, c)
+	if got := cache.MemoNewest(c); got != first+2 {
+		t.Errorf("the boot after opened cohort %d, want %d: one past the %d its previous process reserved", got,
+			first+2, first+1)
+	}
+}
+
+// cohortLine is the reservation of cohort n as the cache's root holds it.
+func cohortLine(n uint64) string { return strconv.FormatUint(n, 10) + "\n" }
+
+// cohortsOnDisk is what the memo tree of the incarnation at dir holds, its
+// cohorts in order and each one's entries at block bytes apiece, every answer
+// a case places taking one block.
+func cohortsOnDisk(t *testing.T, dir string, block int64) ([]uint64, []int64) {
+	t.Helper()
+	var cohorts []uint64
+	for _, name := range names(t, cache.MemoTree(dir)) {
+		n, err := strconv.ParseUint(name, 10, 64)
+		if err != nil {
+			t.Fatalf("the memo tree of %s holds %q, which no cohort is", dir, name)
+		}
+		cohorts = append(cohorts, n)
+	}
+	slices.Sort(cohorts)
+	held := make([]int64, len(cohorts))
+	for i, n := range cohorts {
+		held[i] = int64(len(names(t, cache.MemoCohortDir(dir, n)))) * block
+	}
+	return cohorts, held
 }
 
 // THE NODE KEEPS AT MOST MaxMemoCohorts COHORTS, whatever they hold. A cohort

@@ -415,7 +415,8 @@ var cacheWriters = []writerRow{
 			"moved the old ones into trash/", nil},
 	{"internal/code/cache/durable.go", kindOS,
 		"stage and place: every file a cache writes but the tag — the state, packed-refs, HEAD, config, " +
-			"the skeleton's files and the hook script — staged in tmp/ and renamed over its destination, " +
+			"the skeleton's files, the hook script and the memo's reservation of cohorts — staged in tmp/ and " +
+			"renamed over its destination, " +
 			"and a staging given up on removed", nil},
 	{"internal/code/cache/entry.go", kindOS,
 		"a new incarnation's directory and its skeleton's subdirectories", nil},

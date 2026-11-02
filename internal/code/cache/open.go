@@ -127,12 +127,16 @@ type Cache struct {
 	// every answer is placed and every entry a read finds in an older one is
 	// moved — read without a lock; memoFill is what has been placed in it
 	// since it was opened, past a sixteenth of the share of which
-	// (memoCohortsPerShare) the next placement opens another; cohortMu guards
-	// memoFill and every move of memoNewest, and is taken after every other
-	// lock.
-	cohortMu   sync.Mutex
-	memoNewest atomic.Uint64
-	memoFill   int64
+	// (memoCohortsPerShare) the next placement opens another; memoReserved is
+	// the newest cohort the cache's root says a process may have placed in
+	// (cohortsName), which memoNewest never passes (reserveCohort). cohortMu
+	// guards memoFill, memoReserved and every move of memoNewest, and is held
+	// across a reservation's write — two syncs — so it is taken after every
+	// other lock and never with an entry's mu, which every memo lookup takes.
+	cohortMu     sync.Mutex
+	memoNewest   atomic.Uint64
+	memoFill     int64
+	memoReserved uint64
 	// scratchBytes is what scratch/ held when the janitor last measured it:
 	// a push's scratch is written by its client's receive-pack, so only the
 	// disk knows.
@@ -263,6 +267,11 @@ const hookProbe = "--crewlet-probe"
 //     newest downloads), a stray, an incarnation whose state is another
 //     build's format — and every kept incarnation is indexed from its state,
 //     or with none when its state was missing or undecodable.
+//  6. The memo's newest cohort is opened past every one a previous process
+//     may have placed an answer in — the newest the cache's root says it
+//     reserved, and every one a state records — and reserved, durably,
+//     before anything is placed in it (memo.go's openMemo): a cache whose
+//     root takes no write opens no cache.
 func Open(ctx context.Context, o Options) (*Cache, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
@@ -348,8 +357,11 @@ func Open(ctx context.Context, o Options) (*Cache, error) {
 	if err = c.writeHook(ctx, o.HookCommand); err != nil {
 		return nil, err
 	}
-	trashed, err := c.index(b)
+	trashed, recorded, err := c.index(b)
 	if err != nil {
+		return nil, err
+	}
+	if err = c.openMemo(recorded); err != nil {
 		return nil, err
 	}
 	c.log.Info("code_cache_opened", "dir", c.dir, "repos", len(c.entries), "bytes", c.heldBytes.Load(),
@@ -435,18 +447,19 @@ func hookScript(argv []string) string {
 func (c *Cache) Hooks() string { return filepath.Join(c.dir, hooksDir) }
 
 // index is Open's step 5: it acts on Prepare's reading and answers how many
-// entries of repos/ it moved into trash/. A move that fails fails the boot:
-// a cache directory the engine cannot rename within is broken, and a node
-// that serves from it half-cleared is worse than one that says so.
-func (c *Cache) index(b *boot) (int, error) {
+// entries of repos/ it moved into trash/, and the newest cohort of the memo
+// any kept state records (0 for none), which step 6 opens the node's newest
+// past. A move that fails fails the boot: a cache directory the engine cannot
+// rename within is broken, and a node that serves from it half-cleared is
+// worse than one that says so.
+func (c *Cache) index(b *boot) (int, uint64, error) {
 	repos := filepath.Join(c.dir, reposDir)
 	trashed := 0
 	var newest uint64
-	defer func() { c.memoNewest.Store(newest + 1) }()
 	for _, a := range b.aside {
 		path := filepath.Join(repos, a.name)
 		if err := toTrash(c.dir, path, bootLabel(a.name)); err != nil {
-			return trashed, fmt.Errorf("cache: moving %s aside (%s): %w", path, a.why, err)
+			return trashed, 0, fmt.Errorf("cache: moving %s aside (%s): %w", path, a.why, err)
 		}
 		trashed++
 		c.log.Warn("code_cache_trashed", "path", path, "why", a.why)
@@ -469,9 +482,8 @@ func (c *Cache) index(b *boot) (int, error) {
 		c.droppingBytes.Add(inc.droppingBytes)
 		// The memo's record as the state holds it — what the janitor writes
 		// again once it moves (Cache.stateMemos) — and its bytes in the
-		// memo's running total; the newest cohort is opened past every one
-		// recorded, so what a previous process left is older than anything
-		// placed or read from here on.
+		// memo's running total; step 6 opens the newest cohort past every
+		// one recorded, and past every one a previous process reserved.
 		memo := inc.derived[DerivedMemo]
 		c.memoBytes.Add(memo.Bytes)
 		c.codeIndexBytes.Add(inc.derived[DerivedCodeIndex].Bytes)
@@ -483,7 +495,7 @@ func (c *Cache) index(b *boot) (int, error) {
 		e.current = inc
 		c.entries[k.id] = e
 	}
-	return trashed, nil
+	return trashed, newest, nil
 }
 
 // enter registers work the cache is about to do in its directory, and

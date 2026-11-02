@@ -101,8 +101,8 @@ func BeforeMeasuring(o *Options, f func(dir string)) {
 
 // BeforeStatingMemo makes a copy's memo listing call f with each entry of a
 // cohort it measures as it is about to stat it, the cohort's listing having
-// named it.
-func BeforeStatingMemo(o *Options, f func(path string)) {
+// named it; an error f answers is that stat's.
+func BeforeStatingMemo(o *Options, f func(path string) error) {
 	if o.knobs == nil {
 		o.knobs = &knobs{}
 	}
@@ -1753,6 +1753,10 @@ func exists(path string) bool {
 
 // MemoNewest is the node's newest cohort: where the next answer is placed.
 func MemoNewest(c *Cache) uint64 { return c.memoNewest.Load() }
+
+// MemoCohortsFile is the reservation of the memo's cohorts in the cache whose
+// root is dir: the newest cohort any of its processes may have placed in.
+func MemoCohortsFile(dir string) string { return filepath.Join(dir, cohortsName) }
 
 // MemoCohortsPerShare is how many cohorts a memo at its share holds.
 const MemoCohortsPerShare = memoCohortsPerShare
