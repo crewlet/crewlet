@@ -393,8 +393,11 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	case !ok:
 		return failed(tool + ": `cursor` is one an answer gave, as `next` or `log.cursor`."), nil
 	case cursor.log && t.deps.Logs == nil:
-		return refused(tools.RefusalUnavailable, tool+": this node reads no check's log; its failures, summary "+
-			"and tail are answered without a cursor."), nil
+		// WAITLESS: a node wired with no object store ([CodeDeps.Logs]) reads
+		// no log however long it is asked, so a wait would only send the
+		// caller back to the same refusal.
+		return refusedBy(tools.RefusalUnavailable, waitless(), tool+": this node reads no check's log; its "+
+			"failures, summary and tail are answered without a cursor."), nil
 	case cursor.pinned() && attempt != 0 && attempt != cursor.key.Attempt:
 		return failed(fmt.Sprintf("%s: `cursor` reads attempt %d, and `attempt` names %d; send the cursor with "+
 			"the attempt it came from, or leave `attempt` out.", tool, cursor.key.Attempt, attempt)), nil
