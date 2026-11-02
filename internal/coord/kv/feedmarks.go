@@ -34,35 +34,35 @@ func (f *FleetStore) RaiseFeedMark(ctx context.Context, m coord.FeedMark) (bool,
 	key := coord.FeedMarkKey(m.Stream, m.Group)
 	raised := false
 	err = f.retryRaces(ctx, "raise a feed mark", key, func() (bool, error) {
-		held, revision, found, err := f.feedMarkAt(ctx, key)
+		held, revision, found, readErr := f.feedMarkAt(ctx, key)
 		switch {
-		case err != nil:
-			return false, err
+		case readErr != nil:
+			return false, readErr
 		case found && !m.Supersedes(held):
 			return false, nil
 		case !found:
-			_, err = f.create(ctx, f.positions, key, body)
+			_, createErr := f.create(ctx, f.positions, key, body)
 			switch {
-			case err == nil:
+			case createErr == nil:
 				raised = true
 				return false, nil
-			case errors.Is(err, jetstream.ErrKeyExists):
+			case errors.Is(createErr, jetstream.ErrKeyExists):
 				return true, nil
-			case errors.Is(err, errCreateUnanswered):
-				return false, writeUnknown("raise a feed mark", err)
+			case errors.Is(createErr, errCreateUnanswered):
+				return false, writeUnknown("raise a feed mark", createErr)
 			default:
-				return false, unavailable("raise a feed mark", err)
+				return false, unavailable("raise a feed mark", createErr)
 			}
 		}
-		_, err = f.positions.Update(ctx, key, body, revision)
+		_, updateErr := f.positions.Update(ctx, key, body, revision)
 		switch {
-		case err == nil:
+		case updateErr == nil:
 			raised = true
 			return false, nil
-		case lostUpdateRace(err):
+		case lostUpdateRace(updateErr):
 			return true, nil
 		default:
-			return false, writeUnknown("raise a feed mark", err)
+			return false, writeUnknown("raise a feed mark", updateErr)
 		}
 	})
 	return raised, err

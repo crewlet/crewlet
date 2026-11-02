@@ -102,7 +102,7 @@ func (p feedPosition) start(ctx context.Context) uint64 {
 	// A MARK PAST THE LOG'S END is from a longer log than this one, a
 	// stream recreated under the same generation, and starting from it
 	// would skip every record this log takes until it got there.
-	if _, last, err := p.log.Bounds(ctx); err == nil && mark.Floor > last {
+	if _, last, boundsErr := p.log.Bounds(ctx); boundsErr == nil && mark.Floor > last {
 		log.WarnContext(ctx, "changefeed_mark_past_log", "stream", p.stream, "group", p.group,
 			"mark", mark.Floor, "last", last,
 			"detail", "the recorded floor is past the log's last record, so it is not this "+
@@ -173,10 +173,10 @@ func (m *feedMarker) mark(ctx context.Context) {
 	case !exists || floor == 0 || floor <= m.last:
 		return
 	}
-	if _, err := at.marks.RaiseFeedMark(ctx, coord.FeedMark{Stream: at.stream, Group: at.group,
-		Generation: gen, Floor: floor}); err != nil {
+	if _, raiseErr := at.marks.RaiseFeedMark(ctx, coord.FeedMark{Stream: at.stream, Group: at.group,
+		Generation: gen, Floor: floor}); raiseErr != nil {
 		log.WarnContext(ctx, "changefeed_mark_failed", "stream", at.stream, "group", at.group,
-			"floor", floor, "error", err.Error(), "detail", "the mark stays where it was and "+
+			"floor", floor, "error", raiseErr.Error(), "detail", "the mark stays where it was and "+
 				"is tried again on the next tick")
 		return
 	}
