@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"math"
 	"math/rand/v2"
 	"runtime"
 	"slices"
@@ -252,6 +253,69 @@ func TestASegmentThisBuildDidNotWriteIsRefused(t *testing.T) {
 	var out bytes.Buffer
 	if err := MergeSegments(&out, []*Segment{bad}, nil); !errors.Is(err, ErrMalformed) {
 		t.Errorf("a merge reads a posting naming no blob: %v", err)
+	}
+}
+
+// EVERY READ OF A POSTING LIST REFUSES WHAT IS NOT THE FORMAT, whichever
+// step meets it. A list is read in two steps (ordinals): delta, inline, for a
+// one-byte delta, and next for every other — so a one-byte delta that does
+// not rise, or that rises past the table, is met by delta's check first, and
+// a longer one, a first ordinal or bytes cut short by next's. Each is refused
+// by every read — a decode, a narrowing (reading.listed) and a list kept
+// decoded as far as a lookup needs (decoded.upTo) — and a read refused goes
+// on answering nothing; a list of the format reads whole, by either step.
+func TestEveryReadOfAPostingListRefusesWhatIsNotTheFormat(t *testing.T) {
+	t.Parallel()
+	const count = 200
+	s := &Segment{count: count}
+	every := make([]uint32, count)
+	for i := range every {
+		every[i] = uint32(i)
+	}
+	for _, c := range []struct {
+		name string
+		list []byte
+		// want is the ordinals the list names, nil where it is refused.
+		want []uint32
+	}{
+		{"one-byte deltas", []byte{0, 1, 1, 0x7f, 2}, []uint32{0, 1, 2, 129, 131}},
+		{"a longer delta", []byte{3, 0x80, 0x01, 1}, []uint32{3, 131, 132}},
+		{"a one-byte delta to the table's last", []byte{100, 99}, []uint32{100, 199}},
+		{"a one-byte delta that does not rise", []byte{0, 1, 0, 1}, nil},
+		{"a one-byte delta past the table", []byte{100, 100}, nil},
+		{"a longer delta past the table", []byte{0, 0xc8, 0x01}, nil},
+		{"a first ordinal past the table", []byte{0xc8, 0x01}, nil},
+		{"a delta cut short", []byte{0, 0x80}, nil},
+	} {
+		check := func(read string, got []uint32, err error) {
+			t.Helper()
+			if c.want == nil {
+				if !errors.Is(err, ErrMalformed) {
+					t.Errorf("%s: %s reads %v, refusing nothing (%v)", c.name, read, got, err)
+				}
+				return
+			}
+			if err != nil || !slices.Equal(got, c.want) {
+				t.Errorf("%s: %s reads %v (%v); the list names %v", c.name, read, got, err, c.want)
+			}
+		}
+		got, err := s.decode(c.list, nil)
+		check("a decode", got, err)
+
+		r := reading{s: s}
+		got, err = r.listed(nil, every, c.list)
+		check("narrowing every blob by it", got, err)
+
+		d := decoded{read: s.ordinals(c.list), bytes: len(c.list)}
+		err = d.upTo(&r, math.MaxUint32)
+		check("keeping it decoded", d.got, err)
+
+		o := s.ordinals(c.list)
+		for o.delta() || o.next() {
+		}
+		if refused := o.err; refused != nil && (o.delta() || o.next() || o.err != refused) {
+			t.Errorf("%s: a read refused (%v) reads on, to %d (%v)", c.name, refused, o.at, o.err)
+		}
 	}
 }
 

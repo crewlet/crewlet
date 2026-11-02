@@ -79,7 +79,7 @@ func testOID(n int) OID {
 }
 
 // segmentOf is the segment of texts, the i-th as testOID(first+i*step).
-func segmentOf(t *testing.T, texts [][]byte, first, step int) *Segment {
+func segmentOf(t testing.TB, texts [][]byte, first, step int) *Segment {
 	t.Helper()
 	var b Builder
 	for i, text := range texts {
