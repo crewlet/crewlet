@@ -978,13 +978,14 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			}
 		}
 	case change != 0:
-		// A CHANGE'S HEAD NOT YET CHECKED: its head and target, read once.
+		// A CHANGE'S HEAD NOT YET CHECKED: its head and target, read once, in
+		// brief.
 		cv := changeRead{deps: t.deps, turn: turn, tool: tool, c: c, repo: repo, number: change}
-		detail, _, at, refusal := cv.head(ctx, seen)
+		brief, _, at, refusal := cv.head(ctx, seen)
 		if refusal != nil {
 			return *refusal, nil
 		}
-		key.OID, key.Target, seen = detail.Head, detail.TargetRef, at
+		key.OID, key.Target, seen = brief.Head, brief.TargetRef, at
 	}
 	report.CheckKey = key
 	op := opIDFor(c.actor, tool, checksVerb, repo.ID, args)

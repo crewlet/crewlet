@@ -140,7 +140,7 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(fmt.Sprintf("%s: `method` %q is not one of %s.", tool, method,
 			words.Or(code.MergeMethods()))), nil
 	}
-	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number)
+	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number, false)
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -386,7 +386,7 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number)
+	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number, true)
 	if refusal != nil {
 		return *refusal, nil
 	}

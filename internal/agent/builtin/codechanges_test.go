@@ -146,7 +146,14 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 		out.Comments, out.Next = pageAfter(f.comments, code.CommentRow.Cursor, q.Cursor, limit)
 	default:
 		after := int64(math.MaxInt64)
-		if q.Cursor == "" {
+		switch {
+		case q.Brief:
+			// IN BRIEF, as the reader answers it: the change's row alone,
+			// no readiness judged (code.ReadQuery.Brief).
+			brief := f.detail.ChangeSummary
+			brief.Readiness = nil
+			out.ChangeBrief = &brief
+		case q.Cursor == "":
 			d := f.detail
 			out.Change = &d
 			if q.DetailOnly {
@@ -154,7 +161,7 @@ func (f *changeFixture) read(q code.ReadQuery) (code.ReadAnswer, error) {
 				// read, so none and no cursor to the next.
 				return out, nil
 			}
-		} else {
+		default:
 			n, err := strconv.ParseInt(q.Cursor, 10, 64)
 			if err != nil {
 				return code.ReadAnswer{}, fmt.Errorf("%w: %q", code.ErrBadCursor, q.Cursor)
@@ -927,4 +934,74 @@ func TestAGetChangePageFitsOneToolAnswer(t *testing.T) {
 			}
 		}
 	})
+}
+
+// ---- what a call reads --------------------------------------------------- //
+
+// detailRead reports a read of a change's DETAIL: a first page of its
+// revisions read in full, or its detail alone — what judges its readiness
+// and reads its description, authors, conversation and mergeability.
+func detailRead(q code.ReadQuery) bool {
+	return q.Kind == code.ReadChange && q.Part == "" && q.Cursor == "" && !q.Brief
+}
+
+// A CHANGE IS READ IN DETAIL ONLY WHERE ITS DETAIL IS READ: a revision's files,
+// a file's patch and the findings read the change IN BRIEF (code.ReadQuery.
+// Brief) — its row and its head revision — and never its detail, which judges
+// its readiness and reads its description, authors, conversation and
+// mergeability for nothing; and so does a write of its conversation. The
+// summary and merge_readiness, which present them, read the detail, and so
+// does a dequeue, which acts on the readiness's queue entry.
+//
+// Mutations: read the head in detail → files, diff, findings and the comment
+// read the detail, red; read merge_readiness or the dequeue in brief → their
+// detail is unread, red (and the dequeue finds no queue entry).
+func TestAChangeIsReadInDetailOnlyWhereItsDetailIsRead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		tool   string
+		args   map[string]any
+		detail bool
+	}{
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "files"}, false},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "files",
+			"since_revision": 2}, false},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "diff", "file": "a.txt"},
+			false},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "findings"}, false},
+		{builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "body": "Hm."}, false},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0}, true},
+		{builtin.CodeGetChangeTool, map[string]any{"repo": "site", "change": 7.0, "part": "merge_readiness"}, true},
+		{builtin.CodeDequeueChangeTool, map[string]any{"change": "site!7"}, true},
+	} {
+		// A DEQUEUE TAKES OUT A QUEUED CHANGE'S ENTRY, which its readiness
+		// names: the change queued, or it is refused before it is decided.
+		f := suggestedChange()
+		if tc.tool == builtin.CodeDequeueChangeTool {
+			f = f.queued()
+		}
+		host, writer := newChangeHost(f), &codeWrites{}
+		reg := codeRegistry(t, writeDeps(host, writer))
+		if got := callWrite(everyGrant(), t, reg, writerTurn(t), tc.tool, tc.args); got.Failed {
+			t.Fatalf("%s %v answered %q", tc.tool, tc.args, got.Output)
+		}
+		reads, _, _ := host.asked()
+		detailed, brief := 0, 0
+		for _, q := range reads {
+			switch {
+			case detailRead(q):
+				detailed++
+			case q.Kind == code.ReadChange && q.Brief:
+				brief++
+			}
+		}
+		switch {
+		case tc.detail && (detailed != 1 || brief != 0):
+			t.Errorf("%s %v read the change in detail %d times and in brief %d, want its detail once",
+				tc.tool, tc.args, detailed, brief)
+		case !tc.detail && (detailed != 0 || brief != 1):
+			t.Errorf("%s %v read the change in detail %d times and in brief %d, want it in brief once, its "+
+				"detail never", tc.tool, tc.args, detailed, brief)
+		}
+	}
 }

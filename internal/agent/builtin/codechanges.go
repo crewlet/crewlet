@@ -45,6 +45,17 @@ import (
 // floored at the first's position: one barrier a call, and every later read
 // at or past what the first saw.
 //
+// A read that needs the change's state, its revision, its head and its
+// branches — a revision's files, a patch, the findings, a write of its
+// conversation — reads it IN BRIEF ([code.ReadQuery.Brief]): its row beside
+// its head revision, and none of what its detail reads besides — its
+// description, kept on rows of its own so a hot read skips it, its authors,
+// its conversation, its mergeability and its readiness judged anew. Only the
+// summary, which presents them, merge_readiness, which presents its
+// readiness, and a dequeue, which acts on it, read the change in detail
+// ([changeRead.detail]): a seat reviews a change a file at a time, and every
+// file's call used to judge a readiness nobody read.
+//
 // # Objects at the revisions' own floors
 //
 // A revision's files, a file's patch, what changed between two revisions and
@@ -634,7 +645,7 @@ func (g changeRead) ref() string { return code.ChangeRef(g.repo.Name, g.number) 
 
 // read is q — a `change` read of this call's change — asked as its caller:
 // at the seat's level, or, where after is set, at session floored at it —
-// a later read of the call, at or past what its first saw. A detail naming
+// a later read of the call, at or past what its first saw. A change naming
 // another repository than the one the turn resolved the name to is refused
 // as a name taken again between the two ([CodeDeps.sameRepo]).
 func (g changeRead) read(ctx context.Context, q code.ReadQuery, after statelog.Position) (code.ReadAnswer,
@@ -649,17 +660,47 @@ func (g changeRead) read(ctx context.Context, q code.ReadQuery, after statelog.P
 		r := g.deps.failed(ctx, g.turn, g.tool, g.c.asker, g.repo, err)
 		return code.ReadAnswer{}, &r
 	}
-	if d := answer.Change; d != nil {
-		if r := g.deps.sameRepo(g.turn, g.tool, g.c.asker, g.repo, code.RepoRef{ID: d.RepoID}); r != nil {
-			return code.ReadAnswer{}, r
-		}
+	answered := ""
+	switch {
+	case answer.Change != nil:
+		answered = answer.Change.RepoID
+	case answer.ChangeBrief != nil:
+		answered = answer.ChangeBrief.RepoID
+	}
+	if r := g.deps.sameRepo(g.turn, g.tool, g.c.asker, g.repo, code.RepoRef{ID: answered}); r != nil {
+		return code.ReadAnswer{}, r
 	}
 	return answer, nil
 }
 
-// head is the change in detail and its head revision — a first page of its
-// revisions, one revision long — and the position it was read at.
-func (g changeRead) head(ctx context.Context, after statelog.Position) (*code.ChangeDetail, code.RevisionRow,
+// head is the change IN BRIEF and its head revision — its row beside a first
+// page of its revisions, one revision long ([code.ReadQuery.Brief]) — and the
+// position it was read at: what every read that acts on the change's state,
+// its revision, its head or its branches asks, none of which reads its
+// description, its authors, its conversation, its mergeability or its
+// readiness.
+func (g changeRead) head(ctx context.Context, after statelog.Position) (*code.ChangeSummary, code.RevisionRow,
+	statelog.Position, *tools.Result) {
+
+	answer, refusal := g.read(ctx, code.ReadQuery{Limit: 1, Brief: true}, after)
+	if refusal != nil {
+		return nil, code.RevisionRow{}, statelog.Position{}, refusal
+	}
+	if answer.ChangeBrief == nil || len(answer.Revisions) != 1 {
+		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host answered %s's first page in brief with %d "+
+			"revisions and row %v", g.ref(), len(answer.Revisions), answer.ChangeBrief != nil),
+			fmt.Sprintf("%s could not read %s: %s.", g.tool, g.ref(), faultSaid))
+		return nil, code.RevisionRow{}, statelog.Position{}, &r
+	}
+	return answer.ChangeBrief, answer.Revisions[0], answer.Position, nil
+}
+
+// detail is the change IN DETAIL and its head revision — its detail beside a
+// first page of its revisions, one revision long — and the position it was
+// read at: what a read that presents the change's readiness, or acts on it,
+// asks, at the price of its description, its authors, its conversation, its
+// mergeability and its readiness judged ([changeRead.head] reads none).
+func (g changeRead) detail(ctx context.Context, after statelog.Position) (*code.ChangeDetail, code.RevisionRow,
 	statelog.Position, *tools.Result) {
 
 	answer, refusal := g.read(ctx, code.ReadQuery{Limit: 1}, after)
@@ -914,7 +955,7 @@ type codeMergeability struct {
 
 // readiness answers whether the change may merge.
 func (g changeRead) readiness(ctx context.Context) (tools.Result, error) {
-	d, _, at, refusal := g.head(ctx, statelog.Position{})
+	d, _, at, refusal := g.detail(ctx, statelog.Position{})
 	if refusal != nil {
 		return *refusal, nil
 	}
@@ -1030,7 +1071,7 @@ func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, er
 // did never has them — or, where based, none of a base to diff its head from:
 // a history that shares no commit with its target, whose change is every file
 // of its head.
-func (g changeRead) recorded(d *code.ChangeDetail, r code.RevisionRow, based bool) *tools.Result {
+func (g changeRead) recorded(d *code.ChangeSummary, r code.RevisionRow, based bool) *tools.Result {
 	switch r.FilesGap(d.State, based) {
 	case code.FilesPending:
 		// A WAIT CLEARS IT ([waits]): the home records the facts on its own,

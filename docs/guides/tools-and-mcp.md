@@ -575,7 +575,11 @@ fenced as `check_log` at trust `external`, naming no writer.
 **A change is read by its revisions.** A change's rows are read at
 linearizable as a repository's are — once a call: a call that reads the change
 twice, its findings beside the revision they are placed in or two revisions
-to compare, makes its later reads at the position the first answered. Its
+to compare, makes its later reads at the position the first answered. A call
+that needs only where the change stands — its files, a patch, its findings, a
+write of its conversation — reads its row and its head revision alone; the
+summary and `merge_readiness` read its description, its authors, its
+conversation and its readiness, which no other part answers. Its
 files, a file's patch, what changed since an earlier revision and where a
 finding's lines are now are reads by commit id of the heads and bases the
 change's revisions recorded, asked of the home git node at the floor of the

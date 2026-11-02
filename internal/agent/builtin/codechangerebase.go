@@ -76,7 +76,7 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(fmt.Sprintf("%s needs `expected_head`: the change's head as %s answered it, a whole commit "+
 			"id — the rebase replays the commits you read, and no later ones.", tool, CodeGetChangeTool)), nil
 	}
-	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number)
+	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number, false)
 	if refusal != nil {
 		return *refusal, nil
 	}

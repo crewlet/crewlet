@@ -117,7 +117,7 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 		return failed(fmt.Sprintf("%s needs `expected_head`: the change's head as %s answered it, a whole commit "+
 			"id — the commit sits on the head you read, and on no later one.", tool, CodeGetChangeTool)), nil
 	}
-	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number)
+	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number, false)
 	if refusal != nil {
 		return *refusal, nil
 	}
