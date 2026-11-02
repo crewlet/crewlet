@@ -174,8 +174,10 @@ func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Positi
 // change is one due change: its head revision's FACTS where it owes them —
 // read against its target's tip as the listing read it, asked at the
 // listing's position, so the git node that answers holds both commits — the
-// change LANDED where its target holds its head, and the facts RECORDED
-// otherwise, the path owners and the human paths its target's gate names
+// change LANDED where its target holds its head, through its merge step
+// ([changes.merge]), whose ancestry over this node's own copy finds it so and
+// whose walk of the target's moves names the push that merged it; and the
+// facts RECORDED otherwise, the path owners and the human paths its target's gate names
 // matched against the touched paths here, on the home (code.MatchOwners,
 // code.MatchTargetHumanPaths), beside the digests of the owners and the rules
 // the listing read;
@@ -196,9 +198,16 @@ func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue,
 	var failed []error
 	revised := false
 	if due.FactsDue {
-		landed, recorded, err := c.facts(ctx, repoID, due, rules, at)
-		if landed {
-			return true, err
+		in, recorded, err := c.facts(ctx, repoID, due, rules, at)
+		if in {
+			// THE MERGE STEP LANDS IT, its ancestry asked again over this
+			// node's own copy: the landing names the push that merged the
+			// change, which only a walk of the target's moves through git can
+			// tell, and the merge step holds the copy and the scratch that
+			// walk runs in. Its ancestry agrees with the git node's, which
+			// read the same two commits; where it did not land the change it
+			// recorded its merge, and this turn does no more of it.
+			return c.merge(ctx, repoID, due, at)
 		}
 		revised = recorded
 		if err != nil {
@@ -222,9 +231,10 @@ func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue,
 	return false, errors.Join(failed...)
 }
 
-// facts is a due change's facts read, then the change landed or its facts
-// recorded ([changes.change]): whether it was landed, and whether its facts
-// were recorded. Facts the git node left short for time are no facts to keep
+// facts is a due change's facts read, then its facts recorded where its head
+// is not in its target ([changes.change]): whether its head is in its target,
+// which its merge step lands, and whether its facts were recorded. Facts the
+// git node left short for time are no facts to keep
 // (code.RevisionFactsAnswer.Final): the turn's failure, the change still due.
 func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, rules against,
 	at statelog.Position) (bool, bool, error) {
@@ -249,7 +259,7 @@ func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, 
 	}
 	f := read.RevisionFacts
 	if f.HeadInTarget {
-		return true, false, c.land(ctx, repoID, due, at)
+		return true, false, nil
 	}
 	if !f.Final() {
 		// FACTS LEFT SHORT FOR TIME are the git node's moment, never the
@@ -279,7 +289,9 @@ const (
 // position at, so it holds both commits, and pinned; a scratch beside it
 // ([MergeScratchID]), removed after; the change's ANCESTRY first — its head
 // inside its target's tip is a change merged, whatever push moved the target
-// there, which is LANDED rather than merged again (D7b) — and otherwise the
+// there, which is LANDED rather than merged again (D7b), naming the push the
+// walk of the target's moves over the same scratch finds merged it
+// ([changes.land]) — and otherwise the
 // merge ([mergeIn]), in the maintenance lane within [MergeabilityDeadline],
 // recorded on the change as its MERGEABILITY. A refusal that the rows moved
 // since is the next pass's to read; one that decided nothing for a reason of
@@ -331,7 +343,7 @@ func (c *changes) merge(ctx context.Context, repoID string, due code.ChangeDue, 
 	}
 	if res.Exit == 0 {
 		observe(mergeLanded)
-		return true, c.land(ctx, repoID, due, at)
+		return true, c.land(ctx, repoID, due, sc, at)
 	}
 	m, err := mergeIn(ctx, c.git, sc, due.Tip, due.Head, gitproc.ClassMaintenance, MergeabilityDeadline)
 	if err != nil {
@@ -380,13 +392,23 @@ func (c *changes) mergeability(ctx context.Context, repoID string, due code.Chan
 
 // land asks the repository's committer to record due's change merged at the
 // tip the home found its head in, decided against the change's head and that
-// tip: an answer that the rows moved since — stale, the change closed — or
-// that it is merged already is the next pass's to read; one that decided
-// nothing for a reason of the log's is this turn's failure.
-func (c *changes) land(ctx context.Context, repoID string, due code.ChangeDue, at statelog.Position) error {
+// tip, naming the push that merged it as the walk of the target's moves over
+// sc finds it ([changes.merger]): an answer that the rows moved since — stale,
+// the change closed — or that it is merged already is the next pass's to
+// read; one that decided nothing for a reason of the log's is this turn's
+// failure, and so is a walk that could not be read.
+func (c *changes) land(ctx context.Context, repoID string, due code.ChangeDue, sc *cache.Scratch,
+	at statelog.Position) error {
+
+	landed := &code.ChangeLanded{RepoID: repoID, ChangeID: due.ID, Revision: due.Revision, HeadOID: due.Head,
+		TargetRef: due.TargetRef, TargetOID: due.Tip, Node: c.node}
+	var err error
+	if landed.PushID, landed.PushPosition, err = c.merger(ctx, repoID, due, sc, at); err != nil {
+		return fmt.Errorf("home: find the push that merged change %d of repository %s: %w", due.Number, repoID,
+			err)
+	}
 	res, err := c.estate.Change(ctx, code.ChangeProposal{OpID: statelog.NewOpID(c.now(), ""), Seen: at,
-		Landed: &code.ChangeLanded{RepoID: repoID, ChangeID: due.ID, Revision: due.Revision, HeadOID: due.Head,
-			TargetRef: due.TargetRef, TargetOID: due.Tip, Node: c.node}})
+		Landed: landed})
 	switch {
 	case err != nil:
 		return fmt.Errorf("home: land change %d of repository %s: %w", due.Number, repoID, err)
@@ -399,8 +421,123 @@ func (c *changes) land(ctx context.Context, repoID string, due code.ChangeDue, a
 		return nil
 	}
 	c.log.Info("code_change_landed", "repo", repoID, "change", due.Number, "revision", due.Revision,
-		"target", due.TargetRef, "tip", due.Tip, "unchanged", res.Unchanged, "position", res.Position.String())
+		"target", due.TargetRef, "tip", due.Tip, "push", landed.PushID, "unchanged", res.Unchanged,
+		"position", res.Position.String())
 	return nil
+}
+
+// The landing walk's bounds ([changes.merger]).
+//
+// landingWalkPage is the most pushes one read of the walk asks for: one
+// group-commit record's worth (code.MaxPushesPerRecord), so the common walk —
+// the merge in the tip's own record or the one before it — is one read.
+//
+// landingWalkPushes is the most pushes the walk reads, newest first from the
+// tip, before it names nobody: FOUR FULL RECORDS. The walk spans the pushes
+// landed between the merge and the tip the home's pass read, and a pass
+// follows a push on the repository's subject within the loop's nudge — a
+// sync, a listing and a git process, seconds — so even a target every seat
+// pushes to has moved a handful of times since the merge, against the 256
+// pushes of four records written back to back at group commit's widest. Each
+// push on the target costs one `merge-base --is-ancestor` in the maintenance
+// lane, so the bound is also the walk's git: at most 256 reads of a few
+// milliseconds over a warm copy, once a change. A walk cut there names nobody,
+// which tells every author the change merged, its merger among them: one
+// wake too many, never a wrong name.
+const (
+	landingWalkPage   = code.MaxPushesPerRecord
+	landingWalkPushes = 4 * code.MaxPushesPerRecord
+)
+
+// merger is the push that MERGED due's change — brought its head into its
+// target: the latest move of the target, at or below the tip the home found
+// the head in, whose OLD commit did not hold the head, so the target held it
+// at every move from that one through the tip — its id and the position of
+// its record; none where no move the walk read is that one.
+//
+// WHY A WALK, AND WHY BACKWARDS: the push that moved the target LAST is not
+// the merger whenever the target moved again before this pass read it —
+// somebody's push on top, in the merge's own group-commit record or a later
+// one — and naming it would tell the merger `merged` of their own merge and
+// tell every other author that somebody else merged it. Whether a commit
+// holds another is git's to say, so the home asks: from the tip down, each
+// move's new commit is known to hold the head (the tip does; each older
+// move's new commit is the old one of the move after it), and the first move
+// whose old commit does not hold it is the merger. A target forced back
+// behind the head and pushed past it again names the move that brought it
+// back, which is the merge that stands. The walk costs the moves since the
+// merge, never the target's history, and stops at [landingWalkPushes].
+//
+// It names nobody where the moves do not chain (a push row between them gone
+// past the history's horizon or purged), where the rows run out with every
+// old commit holding the head (the head was in the target before every move
+// they keep), and past the bound. The committer holds what it names to the
+// rows (internal/code's landingPusher).
+func (c *changes) merger(ctx context.Context, repoID string, due code.ChangeDue, sc *cache.Scratch,
+	at statelog.Position) (string, statelog.Position, error) {
+
+	if due.TipPosition.IsZero() {
+		return "", statelog.Position{}, nil
+	}
+	// BELOW THE NEXT SEQUENCE: the introduced read's descending page is the
+	// pushes strictly below its bound, and the tip's own record is the first
+	// the walk needs.
+	before := due.TipPosition
+	before.Seq++
+	q := code.ReadQuery{Kind: code.ReadIntroduced, Fresh: freshAt(at),
+		Introduced: &code.IntroducedQuery{RepoID: repoID, Before: before, Descending: true}}
+	holds := due.Tip
+	for read := 0; read < landingWalkPushes; {
+		q.Limit = min(landingWalkPage, landingWalkPushes-read)
+		a, err := c.estate.Read(ctx, q)
+		if err != nil {
+			return "", statelog.Position{}, fmt.Errorf("read the pushes of repository %s below %s: %w", repoID,
+				before, err)
+		}
+		for _, row := range a.Introduced {
+			read++
+			i := slices.IndexFunc(row.Moves, func(m code.RefMove) bool { return m.Ref == due.TargetRef })
+			if i < 0 {
+				continue
+			}
+			move := row.Moves[i]
+			if move.New != holds {
+				c.log.Debug("code_change_merger_unchained", "repo", repoID, "change", due.Number,
+					"push", row.PushID, "new", move.New, "want", holds)
+				return "", statelog.Position{}, nil
+			}
+			in, err := c.holdsHead(ctx, sc, move.Old, due.Head)
+			if err != nil {
+				return "", statelog.Position{}, err
+			}
+			if !in {
+				return row.PushID, row.Position, nil
+			}
+			holds = move.Old
+		}
+		if a.Next == "" || len(a.Introduced) == 0 {
+			return "", statelog.Position{}, nil
+		}
+		q.Cursor = a.Next
+	}
+	c.log.Debug("code_change_merger_past_bound", "repo", repoID, "change", due.Number,
+		"pushes", landingWalkPushes)
+	return "", statelog.Position{}, nil
+}
+
+// holdsHead reports whether commit holds head, read over sc: a ref's creation
+// (the zero id, or none) holds nothing.
+func (c *changes) holdsHead(ctx context.Context, sc *cache.Scratch, commit, head string) (bool, error) {
+	if commit == "" || commit == code.ZeroOID {
+		return false, nil
+	}
+	res, err := c.git.Run(ctx, gitproc.Cmd{Dir: sc.Dir, Alternate: sc.Alternate,
+		Args:  []string{"merge-base", "--is-ancestor", head, commit},
+		Class: gitproc.ClassMaintenance, Deadline: gitproc.ReadDeadline, Answers: []int{1}})
+	if err != nil {
+		return false, fmt.Errorf("ask whether %s holds %s: %w", commit, head, err)
+	}
+	return res.Exit == 0, nil
 }
 
 // against is what a due page says a revision's touched paths are matched

@@ -1690,7 +1690,9 @@ moves — and each push of a record sees what the ones before it did.
   one commit holds another is git's to say — so the repository's home finds
   it when it reads the revision's facts and lands the change: `merged`, by
   `push`, at the target's tip it found holding the head, and made by whoever
-  pushed that tip, who is told nothing of it ([The home's change
+  made the push that brought the head into the target — never whoever moved
+  the target last, who may have pushed on top of the merge before the home
+  read it — who is told nothing of it ([The home's change
   work](#the-homes-change-work)).
 - **Deleting the source branch closes the change**: `closed`, its reason
   `source_deleted` — after the same push's merges, so a push that sets the
@@ -4804,9 +4806,11 @@ which ask a path owner to review or a reviewer to look again: a revision is
 somebody's push, the opener's for the first and whoever moved the head for
 every later one, so the facts name that pusher, and a seat asked to review a
 colleague's revision reads for both grants — and a change it found landed:
-the push that moved the target to the tip holding the change's head merged
-it, so the landing names whoever made that push, and the change's other
-authors told it merged read for that pusher's grant too. A
+the push after which the target held the change's head merged it, which the
+home finds by walking the target's moves back from the tip, since a push on
+top of the merge may have moved the target since; the landing names whoever
+made that push, and the change's other authors told it merged read for that
+pusher's grant too. A
 credential acting as no seat holds no seat a ceiling could be decided for, so
 the turn its change wakes reads nothing, as a stranger's does. The seat's own
 voice is never its requester: when the outcome of its own act opens a thread,
@@ -5922,7 +5926,16 @@ tip as the rows hold it, then either
   target past it — as a record on the repository's subject the committer
   decides against the change's head and the tip the home read: a head pushed
   since, a retarget or the target moved again are each refused `stale`,
-  recorded nowhere, for the home's next read; or
+  recorded nowhere, for the home's next read. The landing names the push
+  that merged the change: the home walks the target's moves back from that
+  tip, asking its own git of each whether the commit the move left behind
+  held the head, and the first that did not is the push after which the
+  target held it through to the tip. The walk costs the moves since the
+  merge, a page of one record's pushes at a time and at most 256 pushes;
+  where it finds none — the head was in the target before every move the
+  history keeps, or past that bound — the landing names nobody, and every
+  author is told. The committer holds the push it names to the rows: a move
+  of the target, applied, no older than the change's head revision; or
 - **records its facts**, its touched paths matched against the repository's
   path owners on the home ([Recorded on the change](#recorded-on-the-change));
 
@@ -6774,7 +6787,7 @@ chart holds, in the snapshot, and not the asker's list beside them.
 | `dequeued` | The change's authors, and whoever put it in the queue | A record that put the change's entry out of its target's queue: an ejection, or a dequeue somebody asked |
 | `finding_replied` | The raiser of the finding a comment replies to, or an answer answers | A reply to a finding; an answer to findings |
 | `ready_to_merge` | The change's authors who may merge it into its target; where none may, the effective lead of the repository's owner | The mergeability whose stored answer goes from not ready to ready |
-| `merged` | The change's authors, but whoever merged it: the pusher of the push that set the target to its head, or — on the home's landing — of the push that moved the target to the tip the home found its head in; the merger of a merge record; the enqueuer of an entry the queue landed | The push that sets the target to the change's head; the home's landing; the merge record that merged it; the queue's landing of it |
+| `merged` | The change's authors, but whoever merged it: the pusher of the push that set the target to its head, or — on the home's landing — of the push that brought its head into the target, which the home finds walking the target's moves back from the tip it found the head in (never the push that moved the target last, which may be somebody's push on top); the merger of a merge record; the enqueuer of an entry the queue landed | The push that sets the target to the change's head; the home's landing; the merge record that merged it; the queue's landing of it |
 | `review_submitted` | The change's authors | A review that approves or comments |
 | `re_review` | The reviewers whose standing verdict asks for changes on an earlier revision | A revision's first facts |
 | `thread` | Everybody who said something in the thread | A comment |
@@ -6904,7 +6917,8 @@ stops after its record committed loses no wake.
   decided for both grants ([Reads made for somebody else](#reads-made-for-somebody-else));
   the home's own records — a conflict, a change ready to merge — are nobody's,
   a revision's facts are whoever pushed the revision, and a change it found
-  landed whoever pushed the target's tip it found the change's head in.
+  landed whoever made the push that brought the change's head into its
+  target.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a
