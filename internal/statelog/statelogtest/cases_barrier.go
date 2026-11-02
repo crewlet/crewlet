@@ -99,7 +99,7 @@ func ABarrierWritesNoRow(t *testing.T, new Factory) error {
 	// ROWS TO CHANGE: the candidate's own records first, so a barrier case
 	// that updated rows it found — rather than inserting one — is caught too.
 	appendRecords(t, c, spec, log, signer, suiteRecords(t, new))
-	if err := loop.waitPast(log.last()); err != nil {
+	if err = loop.waitPast(log.last()); err != nil {
 		return fmt.Errorf("%s's applier did not apply its own records: %w", name, err)
 	}
 	before := tableContents(t, db, c.Domain.Tables())

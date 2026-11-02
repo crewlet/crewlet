@@ -2100,7 +2100,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		// been handed over before a fetch failed, and is no retry of the
 		// fetch, so a run of the loop's own failures stands, its back-off
 		// with it, until a success of the loop's own ends it.
-		if failed, taken, committed := beside.outcome(); failed != nil {
+		if taken, committed, failed := beside.outcome(); failed != nil {
 			tail = append(taken, tail...)
 			if stopped := r.faulted(ctx, sideBeside, failed); stopped != nil {
 				return stopped
