@@ -855,3 +855,107 @@ func TestACutWaitsForAMaintenanceSlotAndKeepsItsFetch(t *testing.T) {
 		t.Errorf("the source was read %d times; want once, the fetch the cut waited with", got)
 	}
 }
+
+// EVERY DUE MIRROR IS ATTEMPTED WITHIN ITS INTERVAL: a node home to more due
+// repositories than MaxAttempts at once, a pass a minute, could start in a
+// code.MirrorInterval — here imports from a source that answers at once,
+// refusing — attempts every one of them within that interval: a repository
+// listed while MaxAttempts run waits on the worker and starts as one ends,
+// rather than waiting for a pass that hands every slot to the ones listed
+// first again.
+//
+// Mutation: drop a repository listed while MaxAttempts run, as a full worker
+// did, and the passes of a whole interval attempt MaxAttempts of them.
+func TestEveryDueMirrorIsAttemptedWithinItsInterval(t *testing.T) {
+	const backstop = time.Minute // internal/code/home's Backstop: a pass a minute
+	passes := int(code.MirrorInterval / backstop)
+	n := mirror.MaxAttempts*passes + 1
+	h := newHarness(t, code.Limits{})
+	var (
+		mu     sync.Mutex
+		gate   chan struct{}
+		dialed = map[string]bool{}
+	)
+	// THE GATE holds every attempt that dials while a pass's turns run, so
+	// each turn after the first MaxAttempts finds them running however fast
+	// the source answers; once the turns are done, the source refuses at
+	// once.
+	h.dial = func(ctx context.Context, url, _ string) (gitproc.Remote, error) {
+		mu.Lock()
+		dialed[url] = true
+		g := gate
+		mu.Unlock()
+		select {
+		case <-g:
+		case <-ctx.Done():
+		}
+		return gitproc.Remote{}, errors.New("the source refuses every fetch")
+	}
+	repos := make([]code.Declared, n)
+	for i := range repos {
+		repos[i] = code.Declared{Name: fmt.Sprintf("imported-%02d", i), Settings: codetest.Settings(),
+			Import: &code.ImportSource{URL: fmt.Sprintf("https://source.example.com/r%02d.git", i)}}
+	}
+	h.f.Declare(t, repos...)
+	attempted := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(dialed)
+	}
+
+	m := h.mirrors()
+	for pass := 0; pass < passes && attempted() < n; pass++ {
+		g := make(chan struct{})
+		mu.Lock()
+		gate = g
+		mu.Unlock()
+		h.listAndWork(m)
+		close(g)
+		m.Wait()
+		h.advance(backstop)
+	}
+	if got := attempted(); got != n {
+		t.Fatalf("%d passes, a %v interval's, attempted %d of the %d due repositories; want every one",
+			passes, code.MirrorInterval, got, n)
+	}
+}
+
+// A QUEUED ATTEMPT STARTS LONGEST UNATTEMPTED FIRST: of the attempts waiting
+// for a slot, the one this node never attempted starts first, then the one
+// it attempted longest ago, and of two that ended at one instant the one
+// queued first — never the order the listing named them in, which keeps an
+// idle pull mirror, whose row no sync moves, at its front.
+//
+// Mutation: start them in the order they were queued, and the repository
+// attempted last starts first; break a tie by the later arrival, and d
+// starts ahead of c.
+func TestAQueuedAttemptStartsLongestUnattemptedFirst(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	got := mirror.StartOrder([]string{"a", "b", "c", "d"}, map[string]time.Time{
+		"a": at.Add(2 * time.Minute), "c": at.Add(time.Minute), "d": at.Add(time.Minute)})
+	if want := []string{"b", "c", "d", "a"}; !slices.Equal(got, want) {
+		t.Fatalf("the queued attempts start %v; want %v", got, want)
+	}
+}
+
+// A MIRROR QUEUED PAST ITS PROMISE IS FAILING: a pull mirror that every pass
+// lists and queues behind attempts holding every slot, and that so is never
+// brought level, raises code_mirror_failing once its promise has passed —
+// queued is asked for, and a node home to more mirrors than its attempts
+// bring level is told so rather than taking the mirror for no longer its own.
+//
+// Mutation: record nothing of a mirror a turn queues, and the alarm counts
+// none.
+func TestAMirrorQueuedPastItsPromiseIsFailing(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	var turns []time.Time
+	for d := time.Duration(0); d <= code.MirrorInterval+mirror.AttemptDeadline; d += time.Minute {
+		turns = append(turns, at.Add(d))
+	}
+	if got := mirror.FailingWhileQueued(turns); got != 1 {
+		t.Fatalf("a mirror queued at every pass for %v counts %d failing; want 1", turns[len(turns)-1].Sub(at),
+			got)
+	}
+}
