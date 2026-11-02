@@ -80,10 +80,10 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 		deps.Logs = objects
 	}
 	// AND THE TRACKER'S READ OF ONE TASK, where the company runs the native
-	// tracker: a change write naming a native work item by its key is
-	// resolved to the item's identity through the very read the work tools
-	// resolve a key with, on this node's router — none elsewhere, where a
-	// key names no item this engine keeps.
+	// tracker: a change write, or a listing of changes, naming a native work
+	// item by its key is resolved to the item's identity through the very
+	// read the work tools resolve a key with, on this node's router — none
+	// elsewhere, where a key names no item this engine keeps.
 	//
 	// AND ITS WRITER FOR ONE ACTOR, which a merged change's step two closes
 	// its work item through as whoever merged it: the router's, a person's

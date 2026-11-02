@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +51,24 @@ func (b taskBook) Task(_ context.Context, idOrKey string, _ worklet.DetailWants,
 	}
 	return worklet.TaskDetail{}, fmt.Errorf("%w: %s", worklet.ErrNoTask, idOrKey)
 }
+
+// countedTasks is the engine's tracker as a key is resolved, counting the
+// reads it is asked — for a call that must judge its arguments before it
+// reads anything.
+type countedTasks struct {
+	book taskBook
+	n    atomic.Int32
+}
+
+func (c *countedTasks) Task(ctx context.Context, idOrKey string, want worklet.DetailWants,
+	fresh statelog.Freshness) (worklet.TaskDetail, error) {
+
+	c.n.Add(1)
+	return c.book.Task(ctx, idOrKey, want, fresh)
+}
+
+// reads is how many reads c was asked.
+func (c *countedTasks) reads() int { return int(c.n.Load()) }
 
 // decoded is a tool's answer as a JSON object.
 func decoded(t *testing.T, got tools.Result) map[string]any {

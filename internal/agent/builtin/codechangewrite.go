@@ -230,18 +230,14 @@ func branchArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 // noWorkItem is what `work_item` says to carry none.
 const noWorkItem = "none"
 
-// workItemArg is the `work_item` a call names — a Worklet item's key, resolved
-// by Worklet's own read ([CodeDeps.Tasks]); any tracker's item by its
-// identity, `<backend>:<id>`; or `none` — read before anything of the change
-// is: given false where the call names none, and clear where it names `none`.
-// Every field is FITTED to the bound a change's row holds a label to
-// (code.FitProvenance), as the run a seat's write names is: an item is another
-// system's label, copied as it arrived, and never a reason to refuse a write.
+// workItemArg is the `work_item` a call names — an item as
+// [CodeDeps.workItemOf] resolves one, or `none` — read before anything of the
+// change is: given false where the call names none, and clear where it names
+// `none`.
 func (d CodeDeps) workItemArg(ctx context.Context, tool string, args map[string]any) (item *types.WorkItem,
 	given, clear bool, refusal *tools.Result) {
 
-	raw, present := args["work_item"]
-	if !present || raw == nil {
+	if !workItemAsked(args) {
 		return nil, false, false, nil
 	}
 	named := strings.TrimSpace(argString(args, "work_item"))
@@ -253,14 +249,38 @@ func (d CodeDeps) workItemArg(ctx context.Context, tool string, args map[string]
 	case named == noWorkItem:
 		return nil, true, true, nil
 	}
+	if item, refusal = d.workItemOf(ctx, tool, "work_item", named); refusal != nil {
+		return nil, false, false, refusal
+	}
+	return item, true, false, nil
+}
+
+// workItemAsked is whether a call names a `work_item` at all, read from the
+// argument's presence alone — so a call is judged by what it asks before
+// anything is read to resolve the item it names. A null one is no ask: the
+// entry leaves it out (toolargs.Of).
+func workItemAsked(args map[string]any) bool { return args["work_item"] != nil }
+
+// workItemOf is the work item named names: a Worklet item's key or id,
+// resolved by Worklet's own read ([CodeDeps.Tasks]) — bare, or under
+// Worklet's backend (`native:`) — or any other tracker's item by its
+// identity, `<backend>:<id>`; or the refusal, naming arg, of a name that is
+// none. The change writes resolve `work_item` through it and
+// code_list_changes its `work`, so ONE PART'S TOOLS NAME AN ITEM ONE WAY: the
+// key a seat was woken on lists the changes a write filed under it, where the
+// listing's reader takes the identity alone (`native:<task id>`), which no
+// Worklet answer spells. Every field is FITTED to the bound a change's row
+// holds a label to (code.FitProvenance), as the run a seat's write names is:
+// an item is another system's label, copied as it arrived, and never a reason
+// to refuse a write — and a listing asks for the item as its rows hold it.
+func (d CodeDeps) workItemOf(ctx context.Context, tool, arg, named string) (*types.WorkItem, *tools.Result) {
 	if backend, id, ok := strings.Cut(named, ":"); ok && types.WorkBackend(backend).Valid() {
 		if strings.TrimSpace(id) == "" {
-			r := failed(fmt.Sprintf("%s: `work_item` %q names a tracker and no item in it.", tool, clip(named)))
-			return nil, false, false, &r
+			r := failed(fmt.Sprintf("%s: `%s` %q names a tracker and no item in it.", tool, arg, clip(named)))
+			return nil, &r
 		}
 		if types.WorkBackend(backend) != types.WorkWorklet {
-			return fittedItem(types.WorkItem{Backend: types.WorkBackend(backend), ID: strings.TrimSpace(id)}),
-				true, false, nil
+			return fittedItem(types.WorkItem{Backend: types.WorkBackend(backend), ID: strings.TrimSpace(id)}), nil
 		}
 		named = strings.TrimSpace(id)
 	}
@@ -270,22 +290,21 @@ func (d CodeDeps) workItemArg(ctx context.Context, tool string, args map[string]
 	if d.Tasks == nil {
 		r := failed(fmt.Sprintf("%s: %q is no item this company's tracker can name here — Worklet "+
 			"is not served on this surface. Name an item as `<backend>:<id>`.", tool, clip(named)))
-		return nil, false, false, &r
+		return nil, &r
 	}
 	detail, err := d.Tasks.Task(ctx, named, worklet.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, worklet.ErrNoTask):
-		r := failed(fmt.Sprintf("%s: `work_item` %q names no work item. Check its key with "+worklet.ListWorkItemsTool+" "+
+		r := failed(fmt.Sprintf("%s: `%s` %q names no work item. Check its key with "+worklet.ListWorkItemsTool+" "+
 			"rather than guessing — a change carrying an item that does not exist names nothing it implements.",
-			tool, clip(named)))
-		return nil, false, false, &r
+			tool, arg, clip(named)))
+		return nil, &r
 	case err != nil:
 		r := readFailure(ctx, tool, err)
-		return nil, false, false, &r
+		return nil, &r
 	}
 	t := detail.Task
-	return fittedItem(types.WorkItem{Backend: types.WorkWorklet, ID: t.ID, Key: t.Key, Project: t.Project}), true,
-		false, nil
+	return fittedItem(types.WorkItem{Backend: types.WorkWorklet, ID: t.ID, Key: t.Key, Project: t.Project}), nil
 }
 
 // turnItem is the work item a seat's turn is charged to, fitted as every item

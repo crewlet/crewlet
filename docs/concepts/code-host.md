@@ -1690,7 +1690,9 @@ answer that holds every record the code log had committed when it was asked.
 
 - **A listing of changes**, newest first, a page at a time. It names a
   **repository**, a **work item** — by its identity across trackers,
-  `<backend>:<id>`, such as `native:<task id>` — a **state**, a **reviewer**
+  `<backend>:<id>`, such as `native:<task id>`, which is what a change's row
+  holds; the code tools also take a Worklet item's key or id, as the change
+  writes do, and ask for the identity it resolves to — a **state**, a **reviewer**
   or **what its changes wait on**, and may narrow further by an **owner** (a
   seat by its handle, or a person by the human seat they hold) and by
   whichever of the others it did not name. One that names none of them is
@@ -1795,7 +1797,10 @@ rows, resumes after the last it kept, and reads every row after it once.
 
 **A seat reads changes with its code tools**, and a person's assistant with
 the same ones ([The company's code](../guides/tools-and-mcp.md#the-companys-code)):
-`code_list_changes` is the listing, and `code_get_change` one change a part at
+`code_list_changes` is the listing — its `work` named as `code_open_change`
+names the item a change carries, so a seat woken on `ENG-42` lists that
+item's changes by the key it holds, resolved through Worklet's own read to the
+item's identity before the listing is asked — and `code_get_change` one change a part at
 a time — its summary, its [merge readiness](#merge-readiness), a revision's
 files and a file's patch from the base its facts record or, since an earlier
 revision, what changed between the two ([What changed between two
