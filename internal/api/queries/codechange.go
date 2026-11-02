@@ -356,9 +356,9 @@ func (g changeAsk) findings(ctx context.Context, call changeCall) (any, error) {
 	placed, err := code.Place(rev, page.Findings, func(reanchor *code.ReanchorQuery) (*code.ReanchorAnswer,
 		error) {
 
-		answer, err := g.gitRead(ctx, code.GitQuery{Kind: code.GitReanchor, RepoID: d.RepoID, Asker: g.q.Asker,
-			Fresh: fresh, Reanchor: reanchor})
-		return answer.Reanchor, err
+		answer, readErr := g.gitRead(ctx, code.GitQuery{Kind: code.GitReanchor, RepoID: d.RepoID,
+			Asker: g.q.Asker, Fresh: fresh, Reanchor: reanchor})
+		return answer.Reanchor, readErr
 	})
 	switch {
 	case errors.Is(err, code.ErrMisplaced):
