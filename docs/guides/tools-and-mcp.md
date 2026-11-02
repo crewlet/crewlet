@@ -1853,7 +1853,11 @@ mcp_servers:
 
 `grant: client_credentials` needs `client_id` and `client_secret` (a `${VAR}`),
 and refuses `client`: a service identity is always your own client, so nothing
-is registered. `scopes` are what each token asks for; absent, the vendor issues
+is registered. An entry written through the API (`PUT /config/mcp-servers/{name}`,
+which the dashboard's wizard sends) may leave `client_secret` out: the write
+points it at `${MCP_<SERVER>_OAUTH_CLIENT_SECRET}`, the variable the secret is
+then stored under from the server's page, so the secret itself is never typed
+into the configuration. `scopes` are what each token asks for; absent, the vendor issues
 the client's default. Every rule of a [sign-in](#signing-in-with-oauth) holds
 too: a remote, shared server, no `Authorization` header beside it, and never in
 a seat's `sandbox.mcp.servers`. `grant` left out is `authorization_code`, a

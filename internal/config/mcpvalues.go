@@ -301,6 +301,35 @@ func (c *Company) PointMCPValue(slot MCPValueSlot) error {
 	return fmt.Errorf("%w: %q", ErrMCPValueNoSeat, slot.Seat)
 }
 
+// PointUnwrittenClientSecret points the client secret of the service identity
+// called name at the variable `PUT /mcp-servers/{name}/values/oauth.client_secret`
+// stores it under, where its entry names no secret yet; any other entry is
+// left as it is.
+//
+// A SERVICE IDENTITY CANNOT BE WRITTEN WITHOUT A SECRET ([MCPOAuth]'s rules),
+// and its secret is stored write-only, after the entry, by that route, which
+// chooses the variable ([Company.MCPValueSlot]). An entry written through the
+// API therefore names the variable the route will choose, rather than every
+// writer deriving it: a header the route adds is pointed by the route, and the
+// one value an entry cannot leave out is pointed by the write that adds it.
+// Refused, as the route would refuse it, where another field reads that
+// variable ([*MCPValueSharedError]).
+func (c *Company) PointUnwrittenClientSecret(name string) error {
+	i := slices.IndexFunc(c.MCPServers, func(s MCPServer) bool { return s.Name == name })
+	if i < 0 {
+		return fmt.Errorf("%w: %q", ErrNoMCPServerEntry, name)
+	}
+	srv := &c.MCPServers[i]
+	if o := srv.OAuth; o == nil || !o.ServiceIdentity() || strings.TrimSpace(o.ClientSecret) != "" {
+		return nil
+	}
+	slot, err := c.clientSecretSlot(srv, i, "")
+	if err != nil {
+		return err
+	}
+	return c.PointMCPValue(slot)
+}
+
 // MCPValueKey is one header or variable a server is sent, by name only.
 type MCPValueKey struct {
 	// Key is the document's spelling; As where it goes.
