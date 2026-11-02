@@ -565,14 +565,17 @@ var codeLogNegligible = map[code.OpKind]string{
 	code.OpImportChunk: "an import's chunk, landed by its repository's home polling imports_due: an import " +
 		"is named by a person's or the company's document's create of the repository " +
 		"(code.CreateRepo.Import), or is a pull mirror's first fill, once a repository, in chunks of at " +
-		"most code.MaxImportPacks packs or code.MaxImportRefs refs — at the rate the company makes " +
-		"repositories, of which the reference company's day makes none",
+		"most code.MaxImportPacks packs or code.MaxImportRefs refs, fewer refs where their bytes fill " +
+		"one record first (code.ImportProposal.Fitted) — at the rate the company makes repositories, of " +
+		"which the reference company's day makes none",
 	code.OpImportDone: "an import's end, landed by its repository's home: one record an import, once a " +
 		"repository",
 	code.OpMirrorSync: "a pull mirror's sync, landed by its repository's home polling mirrors_due: one a " +
-		"mirror every code.MirrorInterval (fifteen minutes) in which its source moved — ninety-six a day " +
-		"for a source that never rests — each the source's new packs and moved refs as push rows on the " +
-		"engine's own account, a record for every code.MaxImportPacks packs or code.MaxImportRefs refs. " +
+		"mirror every code.MirrorInterval (fifteen minutes) — ninety-six a day for every mirror, its " +
+		"source moved or not — each the source's new packs and moved refs as push rows on the engine's " +
+		"own account, a record for every code.MaxImportPacks packs or code.MaxImportRefs refs or the " +
+		"fewer refs one record's bytes hold, or, where the source moved nothing, one record of no pack " +
+		"and no ref that moves only the mirror's last sync (code.MirrorSync.Current). " +
 		"Only a person or the company's document makes a repository a mirror " +
 		"(code.RepoSettings.MirrorFrom), and the reference company mirrors none, so its day syncs nothing; " +
 		"a company mirroring busy sources reads their syncs in its code log's " +
