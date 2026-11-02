@@ -836,9 +836,11 @@ type Coordinator struct {
 	mu   sync.Mutex
 	runs map[string]seatRuns
 
-	// moves counts the transitions [Coordinator.adjust] has applied to each
-	// seat, so a recount from the store can tell that one landed while it
-	// was reading — see [Coordinator.syncSeat].
+	// moves counts what this node has done to each seat's runs that a recount
+	// from the store must not be read across — every transition
+	// [Coordinator.adjust] applied, every record an ending of this node's
+	// deleted, and every recount written — so a recount can tell that one
+	// landed while it was reading. See [Coordinator.syncSeat].
 	moves map[string]uint64
 
 	// attempts counts the failed handoffs of one delivery to one parked
@@ -1203,6 +1205,20 @@ func (c *Coordinator) adjust(handle string, holding, awaiting int) {
 	c.seatFreed(handle, was, runs)
 }
 
+// moved says that a seat's runs moved in the store under this node's hand
+// without a count it applied — an ending of this node's deleted a run's record —
+// so that a recount whose listing was read before is read again
+// ([Coordinator.syncSeat]) rather than written after the recount that follows
+// the delete.
+func (c *Coordinator) moved(handle string) {
+	if handle == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.moves[handle]++
+}
+
 // seatFreed signals [SeatCoding] for a seat whose last holding run has just
 // left [Holding], so an answer owed on it is resumed now rather than at its
 // backstop. Called outside c.mu, which [Coordinator.Readmit] takes.
@@ -1287,9 +1303,17 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.ExecutorLaunched) 
 // wrote its row, written back after the launch counted it, would drop the run
 // from the seat's count and lift the hold the launch just took — a seat freed
 // beside a job that is starting. So a recount during which this node moved the
-// seat ([Coordinator.adjust]) is read again, and one that cannot settle within
-// [seatRecountRounds] reads leaves the counts alone, which is the same answer a
-// listing that failed gets.
+// seat is read again: a transition it counted ([Coordinator.adjust]), a record
+// an ending of its deleted ([Coordinator.moved]), or ANOTHER RECOUNT WRITTEN,
+// whose listing may be newer than this one's. Two recounts of one seat run at
+// once — a resumed turn's frame recounts as it returns while the ending it
+// decided is finished, deleted and recounted by this node's retry on a
+// goroutine of its own ([errAskAway]) — and a frame whose listing was read
+// before that delete and written after the retry's recount counted the deleted
+// run as holding again, and held the seat's inbox with nothing left to recount
+// it. Whichever is written second now reads again first. One that cannot
+// settle within [seatRecountRounds] reads leaves the counts alone, which is the
+// same answer a listing that failed gets.
 func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 	for range seatRecountRounds {
 		c.mu.Lock()
@@ -1311,6 +1335,9 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 			c.mu.Unlock()
 			continue
 		}
+		// THIS RECOUNT MOVES THE SEAT TOO, for a recount whose listing is
+		// older than this one's and is still on its way here.
+		c.moves[handle]++
 		was := c.runs[handle]
 		if counts == (seatRuns{}) {
 			delete(c.runs, handle)
@@ -1331,12 +1358,14 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 // seatRecountRounds bounds [Coordinator.syncSeat]'s listings.
 //
 // A recount is read again only when THIS NODE moved the seat while the listing
-// ran, so what it races is the seat's own transitions here, and they come in
-// bursts no longer than an answered question's: the answer recorded, the run
+// ran — a transition it counted, a record its ending deleted, another recount
+// it wrote — so what it races is the seat's own transitions here, and they come
+// in bursts no longer than an answered question's: the answer recorded, the run
 // claimed for its resume, the claim given back to the resuming turn, and that
 // turn's next launch — four moves, each one store write after the last, which
-// is the pace of a listing. Eight rounds is that burst twice over, so a
-// recount that starts at a burst's head still settles after it. Not every
+// is the pace of a listing; or a resumed turn's return beside its ending's
+// retry, whose delete and recount are two. Eight rounds is that burst twice
+// over, so a recount that starts at a burst's head still settles after it. Not every
 // transition triggers a recount of its own (a park and a recorded answer only
 // move the counts), so a recount that gives up leaves counts a later recount
 // may be a while correcting — which is why the bound is a burst twice over
@@ -3882,8 +3911,22 @@ func (c *Coordinator) endRun(ctx context.Context, run PendingRun, e ending, mayA
 	finished, err := c.finishOnce(ctx, decided, mayAsk)
 	switch {
 	case !finished && !mayAsk:
-		// ANOTHER ATTEMPT ON THIS NODE IS FINISHING IT, and keeps it for
-		// this node's retry if it cannot: nothing is left for this frame.
+		// ANOTHER ATTEMPT ON THIS NODE IS FINISHING IT — and this node's
+		// retry keeps it too, holding the seat's mail behind it until it
+		// lands, and asked again the moment that attempt returns
+		// ([Coordinator.finishOnce]): finished, the retry finds the record
+		// gone and settles; kept, it finishes it. Left to that attempt
+		// alone, the ending held nothing whenever the attempt's own series
+		// was gone — a retry under way while the seat was released and
+		// taken again here, waiting on a capture's keep or on the log — and
+		// the seat's mail ran while its run's record still owed the turn's
+		// end. Not a failure of this frame's, and nothing to report as one.
+		// Kept ON THE DECISION'S TERMS, licensed for every status and job:
+		// it is decided, and the retry finishes the decision recorded,
+		// whatever this frame read the run as.
+		kept := e
+		kept.whileIn, kept.launch = Active, EveryLaunch
+		c.oweEndingAfter(ctx, decided, kept, answerRetryCeiling)
 		return &ending, nil
 	case !finished:
 		return &ending, c.keepEnding(ctx, decided, e, errEndingBusy)
@@ -3906,7 +3949,8 @@ func (c *Coordinator) endRun(ctx context.Context, run PendingRun, e ending, mayA
 }
 
 // errEndingBusy is a decided ending another attempt on this node is finishing
-// ([Coordinator.finishOnce]): left to it, and asked again by this node's retry.
+// ([Coordinator.finishOnce]): left to it, and asked again by this node's retry
+// the moment it returns.
 var errEndingBusy = errors.New("sandbox: another attempt on this node is finishing the run's ending")
 
 // errAwaitsFrame is a decided ending whose turn's end is still its resumed
@@ -3925,7 +3969,14 @@ var errAwaitsFrame = errors.New("sandbox: the run's turn is still running on thi
 // launching was finished there and, at the same moment, by the launch whose
 // attach it refused — and the asker woke to two answers. Both attempts are this
 // node's, and the one that goes on keeps the ending for this node's retry where
-// it cannot finish it, so the other leaves it to it ([Coordinator.endRun]).
+// it cannot finish it, so the other leaves the finishing to it — keeping the
+// ending for this node's retry as well ([Coordinator.endRun]).
+//
+// AN ENDING KEPT BEHIND AN ATTEMPT IS ASKED AGAIN THE MOMENT IT RETURNS, rather
+// than on the hand-back's spacing: the attempt finished it, and the retry finds
+// the record gone and lets the seat's mail go at once; or it kept the ending
+// itself, and its own keep arms the retry again on the spacing its failure
+// earns.
 func (c *Coordinator) finishOnce(ctx context.Context, run PendingRun, mayAsk bool) (bool, error) {
 	c.mu.Lock()
 	if c.finishing[run.TurnID] {
@@ -3939,8 +3990,11 @@ func (c *Coordinator) finishOnce(ctx context.Context, run PendingRun, mayAsk boo
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
+		defer c.mu.Unlock()
 		delete(c.finishing, run.TurnID)
-		c.mu.Unlock()
+		if r := c.retries[run.TurnID]; r != nil && r.ending != nil && r.stop != nil {
+			c.scheduleOwedLocked(run.TurnID, 0)
+		}
 	}()
 	return true, c.finishEnding(ctx, run, mayAsk)
 }
@@ -4181,11 +4235,15 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			}
 			run = published
 		}
-		settled, _, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
+		settled, deleted, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
 		switch {
 		case err == nil:
 			// GONE, by this delete or by whoever finished the same ending
-			// first: either way there is nothing left of it to do.
+			// first: either way there is nothing left of it to do. A delete
+			// of this call's moves the seat for a recount already reading.
+			if deleted {
+				c.moved(run.AgentHandle)
+			}
 			return nil
 		case errors.Is(err, ErrHandBackOwed), errors.Is(err, ErrAnswerOwed), errors.Is(err, ErrEndOwed):
 			run = settled
