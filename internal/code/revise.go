@@ -626,7 +626,7 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s's human paths are not the ones the "+
 			"facts were matched against: the home matches the touched paths again", repo.Name))
 	}
-	if err := humanPlacesIn(ctx, tx, repo, r); err != nil {
+	if err = humanPlacesIn(ctx, tx, repo, r); err != nil {
 		return conversationDecision{}, err
 	}
 	owners, err := pathOwnersIn(ctx, tx, repo.ID)
