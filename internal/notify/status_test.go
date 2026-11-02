@@ -24,6 +24,7 @@ type poster struct {
 	mu      sync.Mutex
 	set     []string
 	turns   []string
+	queued  []bool
 	cleared int
 }
 
@@ -49,7 +50,15 @@ func (p *poster) SetStatus(_ context.Context, post notify.StatusPost) bool {
 	defer p.mu.Unlock()
 	p.set = append(p.set, post.Text)
 	p.turns = append(p.turns, post.Turn)
+	p.queued = append(p.queued, post.Queued)
 	return !p.fail
+}
+
+// queuedPosted is whether each post said its line was queued, in order.
+func (p *poster) queuedPosted() []bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]bool(nil), p.queued...)
 }
 
 // turnsPosted is the turn every post named, in order.
