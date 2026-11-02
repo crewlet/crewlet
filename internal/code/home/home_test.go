@@ -625,6 +625,11 @@ func TestOnlyTheHomeWorksARepository(t *testing.T) {
 		counted(recB, metrics.CodeHomeNudges, metrics.Attrs{"outcome": "elsewhere"}); got != 2 {
 		t.Errorf("the nudges for each other's repository counted %d elsewhere, want 2", got)
 	}
+	// A TURN IS COUNTED AS IT ENDS, which is after its due list empties: the
+	// revise takes the change off the list, and the readiness refresh its
+	// recorded facts ask (changes.change) is written after it, so node-a's
+	// count is read once its turn has ended, never once its list is empty.
+	waitTurns(t, recA, 1)
 	if got := counted(recA, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges,
 		"outcome": "worked"}); got != 1 {
 		t.Errorf("node-a counts %d turns worked, want its one repository's", got)
@@ -750,6 +755,9 @@ func TestALostNudgeIsCaughtByTheBackstop(t *testing.T) {
 	if !slices.ContainsFunc(floors, func(f statelog.Freshness) bool { return slices.Contains(f.Floors, through) }) {
 		t.Fatalf("the pass a gap asked read at %+v, none at the gap's position %s", floors, through)
 	}
+	// COUNTED AS THE TURN ENDS, after the write that emptied the deaf home's
+	// list (TestOnlyTheHomeWorksARepository says why).
+	waitTurns(t, rec, 1)
 	if got := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges,
 		"outcome": "worked"}); got == 0 {
 		t.Errorf("the deaf home counts no turn worked")
