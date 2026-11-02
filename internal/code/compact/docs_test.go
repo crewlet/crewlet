@@ -63,14 +63,16 @@ func TestThePagesStateThePublicationsCadence(t *testing.T) {
 	}
 }
 
-// THE PAGES STATE THE EXPUNGE'S BOUNDS: docs/concepts/code-host.md and
-// docs/guides/code.md tell an operator when an expunge is due (its share and
-// its least), how often a repository is asked (its interval), how long what a
-// force-push left is kept (the prune grace), how many packs a begin takes and
-// writes, how long the object store keeps what it dropped (the retire grace)
-// and what its builds are admitted at — in the constants' own figures, held
-// here, so moving one (ExpungeMinBytes is provisional until BenchmarkExpunge
-// decides it) cannot leave a page saying what the code no longer does.
+// THE PAGES STATE THE EXPUNGE'S BOUNDS: docs/concepts/code-host.md,
+// docs/guides/code.md and docs/concepts/object-store.md (what a hosting
+// company's bucket grows by) tell an operator when an expunge is due (its
+// share and its least), how often a repository is asked (its interval), how
+// long what a force-push left is kept (the prune grace), how many packs a
+// begin takes and writes, how long the object store keeps what it dropped
+// (the retire grace) and what its builds are admitted at — in the constants'
+// own figures, held here, so moving one (ExpungeMinBytes is provisional until
+// BenchmarkExpunge decides it) cannot leave a page saying what the code no
+// longer does.
 //
 // Mutation: change code.ExpungeShare, code.ExpungeMinBytes, code.PruneGrace,
 // code.ExpungeInterval, code.MaxExpungeInputs, code.MaxExpungeOutputs,
@@ -116,6 +118,11 @@ func TestThePagesStateTheExpungesBounds(t *testing.T) {
 			fmt.Sprintf("rather than %s on", grace),
 			fmt.Sprintf("within %s of its deletion", grace),
 			fmt.Sprintf("the object store for %s,", retired),
+		},
+		filepath.Join("concepts", "object-store.md"): {
+			fmt.Sprintf("within `code.PruneGrace` (%s)", grace),
+			fmt.Sprintf("once more than a %s of the repository's live bytes and at least %s is unreachable",
+				share, least),
 		},
 	} {
 		path := filepath.Join(sourcetree.Root(t), "docs", page)
