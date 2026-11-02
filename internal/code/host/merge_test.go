@@ -341,6 +341,67 @@ func TestASeatsMergeIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
 	c.requireMerged(n, res, err)
 }
 
+// changeReads counts the reads of each change a git node's estate is asked,
+// by the change's number.
+type changeReads struct {
+	host.Estate
+	mu sync.Mutex
+	n  map[int64]int
+}
+
+func (r *changeReads) wrap(inner host.Estate) host.Estate {
+	r.Estate = inner
+	return r
+}
+
+func (r *changeReads) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	if q.Kind == code.ReadChange {
+		r.mu.Lock()
+		if r.n == nil {
+			r.n = map[int64]int{}
+		}
+		r.n[q.Change]++
+		r.mu.Unlock()
+	}
+	return r.Estate.Read(ctx, q)
+}
+
+// of is how many times change n was read.
+func (r *changeReads) of(n int64) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.n[n]
+}
+
+// A COLLEAGUE-STEERED MERGE READS ITS CHANGE ONCE: a seat's merge made for
+// the colleague whose ask woke its turn is held to the colleague's merge
+// authority by the one rule of that term (code.MergeAuthority), judged on the
+// git node from its own chart, the synced row and the target's gate — so the
+// node reads the change once, as the merger, and never again as the
+// colleague; and the merge the colleague may make lands.
+//
+// Mutation: mergeCeiling reading the change again as the colleague → two
+// reads, red.
+func TestAColleagueSteeredMergeReadsItsChangeOnce(t *testing.T) {
+	t.Parallel()
+	reads := &changeReads{}
+	c := newMergeCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: reads.wrap}},
+		codetest.Settings(), map[string]string{"README.md": "one\n"})
+	n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Merged for the lead")
+	c.meetGate(n, lead())
+	head := c.change(n).Head
+	before := reads.of(n)
+	w := merge(c.repo, alice(), n, head, code.MergeMethodMerge)
+	w.Ceiling = &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: codetest.FixtureLead}
+	res, err := c.write(w)
+	read := reads.of(n) - before
+	c.requireMerged(n, res, err)
+	if read != 1 {
+		t.Errorf("the git node read change %d %d times to merge it for the lead, want once: the lead's merge "+
+			"authority is judged from what the node holds", n, read)
+	}
+}
+
 // movingMain moves main under every merge record it is asked to decide, the
 // first moves times — a person's push landing between the merge's build and
 // its decide — and counts the records asked.

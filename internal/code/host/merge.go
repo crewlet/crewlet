@@ -258,16 +258,21 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 			"into %s, which does not exist", named, w.Ref)}, nil
 	}
 	j := mergeJudgement{change: c, tip: tip}
+	gate := &mergeGate{wr: wr, floor: floor}
 	if w.Ceiling != nil {
-		if v, err := wr.mergeCeiling(ctx, floor, named); err != nil || v.refusal != "" { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		if v, err := wr.mergeCeiling(ctx, gate, named); err != nil || v.refusal != "" { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			return mergeJudgement{}, v, err
 		}
 	}
 	if w.Override != "" {
 		return j, mergeVerdict{}, nil
 	}
-	if j.queue, err = wr.queueTarget(ctx, floor); err != nil || j.queue {
-		return j, mergeVerdict{}, err
+	rules, err := gate.rules(ctx)
+	if err != nil {
+		return mergeJudgement{}, mergeVerdict{}, err
+	}
+	if j.queue = rules.QueueTarget(); j.queue {
+		return j, mergeVerdict{}, nil
 	}
 	if c.Readiness == nil {
 		return mergeJudgement{}, mergeVerdict{}, fmt.Errorf("host: the read of live change %s answered no "+
@@ -300,14 +305,16 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 //     whoever woke the turn, nobody included, as every write's is;
 //   - NOBODY (code.WriteCeilingNobody) steers nothing else;
 //   - a COLLEAGUE SEAT is held to the merge authority the colleague itself
-//     holds into the target — the change's readiness read AS the colleague,
-//     whose merge_authority precondition the reader judges by the target's
-//     gate and the company's floor from its own chart (M5-D2) — so a seat
-//     never merges for a colleague a merge the colleague could not make, and
-//     one the colleague may not read is refused as one it may not merge.
-func (wr *writing) mergeCeiling(ctx context.Context, floor statelog.Freshness, named string) (mergeVerdict,
-	error) {
-
+//     holds into the target (M5-D2) — code.MergeAuthority, the one rule a
+//     readiness's merge_authority term is judged by, judged here for the
+//     colleague from this node's chart, the synced row and the target's gate
+//     this merge reads anyway ([mergeGate]) — so a seat never merges for a
+//     colleague a merge the colleague could not make, and one the colleague
+//     may not read (code.Grant.MayRead) is refused as one it may not merge.
+//     No read of the change is made again as the colleague: the term reads
+//     nothing of the change but its target, which the write names and the
+//     caller's own read already held to the change's.
+func (wr *writing) mergeCeiling(ctx context.Context, gate *mergeGate, named string) (mergeVerdict, error) {
 	s, w, repo := wr.s, wr.w, wr.synced.Repo
 	roster := s.o.Roster()
 	if roster == nil {
@@ -324,42 +331,46 @@ func (wr *writing) mergeCeiling(ctx context.Context, floor statelog.Freshness, n
 			named, w.Ref, code.SeatNamespaceRoot)}, nil
 	}
 	colleague := code.Principal{Kind: code.PrincipalAgent, Seat: w.Ceiling.Seat}
-	ans, err := s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChange, Asker: colleague, Repo: repo.Name,
-		Change: w.Change, Fresh: floor})
-	switch {
-	case errors.Is(err, code.ErrNotPermitted):
+	if !code.GrantOf(colleague, repo, roster).MayRead() {
 		return mergeVerdict{refusal: code.MergeRefusalNotPermitted, detail: fmt.Sprintf("this work is for "+
 			"seat %s, whose ask started its turn and who may not read %s, so may not merge it", w.Ceiling.Seat,
 			named)}, nil
-	case err != nil:
+	}
+	rules, err := gate.rules(ctx)
+	if err != nil {
 		return mergeVerdict{}, err
-	case ans.Change == nil || ans.Change.Readiness == nil:
-		return mergeVerdict{}, fmt.Errorf("host: the read of %s as seat %s answered no readiness", named,
-			w.Ceiling.Seat)
 	}
-	for _, p := range ans.Change.Readiness.Preconditions {
-		switch {
-		case p.Kind != code.PreconditionMergeAuthority:
-		case p.State == code.PreconditionMet:
-			return mergeVerdict{}, nil
-		default:
-			return mergeVerdict{refusal: code.MergeRefusalNotPermitted, detail: fmt.Sprintf("this work is for "+
-				"seat %s, whose ask started its turn, and it may not make this merge itself: %s",
-				w.Ceiling.Seat, p.Detail)}, nil
-		}
+	if p := code.MergeAuthority(colleague, repo, w.Ref, rules, roster); p.State != code.PreconditionMet {
+		return mergeVerdict{refusal: code.MergeRefusalNotPermitted, detail: fmt.Sprintf("this work is for "+
+			"seat %s, whose ask started its turn, and it may not make this merge itself: %s",
+			w.Ceiling.Seat, p.Detail)}, nil
 	}
-	// A READINESS NAMING NO MERGE AUTHORITY judged nothing of the colleague:
-	// never taken for an allow.
-	return mergeVerdict{}, fmt.Errorf("host: the readiness of %s read as seat %s names no merge authority",
-		named, w.Ceiling.Seat)
+	return mergeVerdict{}, nil
 }
 
-// queueTarget reports a target whose merges land through its queue: one some
-// rule protects, whose gates — read from the repository's detail, which its
-// row never carries — require a check. A target no rule protects has no gate,
-// and is never read for one.
-func (wr *writing) queueTarget(ctx context.Context, floor statelog.Freshness) (bool, error) {
+// mergeGate is the gate one judgement of a merge holds its target to — every
+// rule of the repository matching it, with its merge gate, combined with
+// code.merge_by_floor on this node's epoch (code.GateRulesOf) — read at most
+// once a judgement, and only where something asks it: whether the target is a
+// queue's, and the merge authority of the colleague a seat's merge is made
+// for. Read where the judgement's floor holds the synced copy, so each
+// question is asked of the snapshot the merge is judged on.
+type mergeGate struct {
+	wr    *writing
+	floor statelog.Freshness
+	read  *code.GateRules
+}
+
+// rules is the target's gate: the repository's gates — which its row never
+// carries — read from its detail only where a rule protects the target. A
+// target no rule protects has no gate, and is never read for one.
+func (m *mergeGate) rules(ctx context.Context) (code.GateRules, error) {
+	if m.read != nil {
+		return *m.read, nil
+	}
+	wr := m.wr
 	w, repo := wr.w, wr.synced.Repo
+	floor := wr.s.limits().MergeByFloor
 	protected := false
 	for _, rule := range repo.Protections {
 		if pattern, ok := gitref.ParsePattern(rule.Pattern); !ok || pattern.Match(w.Ref) {
@@ -369,26 +380,28 @@ func (wr *writing) queueTarget(ctx context.Context, floor statelog.Freshness) (b
 			break
 		}
 	}
-	if !protected {
-		return false, nil
+	var rules []code.Protection
+	if protected {
+		ans, err := wr.s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Asker: w.Principal,
+			Repo: repo.Name, Gates: true, Fresh: m.floor})
+		if err != nil {
+			return code.GateRules{}, err
+		}
+		if ans.Repo == nil {
+			return code.GateRules{}, fmt.Errorf("host: the read of repository %s's gates answered no repository",
+				repo.Name)
+		}
+		rules = make([]code.Protection, len(ans.Repo.Gates))
+		for i, g := range ans.Repo.Gates {
+			rules[i] = code.Protection{PushRule: code.PushRule{Pattern: g.Pattern}, Gate: &g.Gate}
+		}
 	}
-	ans, err := wr.s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Asker: w.Principal, Repo: repo.Name,
-		Gates: true, Fresh: floor})
+	gate, err := code.GateRulesOf(rules, w.Ref, floor)
 	if err != nil {
-		return false, err
+		return code.GateRules{}, err
 	}
-	if ans.Repo == nil {
-		return false, fmt.Errorf("host: the read of repository %s's gates answered no repository", repo.Name)
-	}
-	rules := make([]code.Protection, len(ans.Repo.Gates))
-	for i, g := range ans.Repo.Gates {
-		rules[i] = code.Protection{PushRule: code.PushRule{Pattern: g.Pattern}, Gate: &g.Gate}
-	}
-	gate, err := code.GateRulesOf(rules, w.Ref, "")
-	if err != nil {
-		return false, err
-	}
-	return gate.QueueTarget(), nil
+	m.read = &gate
+	return gate, nil
 }
 
 // enqueue puts the change in its target's queue, at the head its caller read —

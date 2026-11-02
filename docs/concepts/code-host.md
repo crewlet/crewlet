@@ -4788,8 +4788,10 @@ colleague could push, or the seat's own work. **A change's
 [merge](#a-merge-end-to-end)** — or its enqueue, which a target whose gate
 requires a check takes in its place — is held by the git node that builds it
 to the merge authority the colleague holds itself into the target (its
-gate's `merge_by` and the company's floor, as the change's readiness judges
-it read as the colleague), refused `not_permitted` otherwise; for a
+gate's `merge_by` and the company's floor, by the one rule the change's
+readiness judges that term by, judged for the colleague from the git node's
+own chart and the gate the merge reads anyway, the change read once), and to
+a repository the colleague may read, refused `not_permitted` otherwise; for a
 stranger, or a person who may not act in the company now, a seat merges
 nothing but into a branch of its own namespace or of a repository it owns.
 
