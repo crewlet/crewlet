@@ -27,12 +27,11 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 			// already has them — a schema created from test code would
 			// be one the suite proved and the migration did not.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE. It is empty — every kind this
-			// domain writes, a person's day included, is in the base
-			// format — and the record carrying each field fails on the
-			// first row somebody adds without a case; a kind this build's
-			// successor adds is a row keyed on the kind's value, and brings
-			// its record the same way.
+			// THE VERSIONED-FIELD TABLE: a seat-day's tool calls and what
+			// their cap dropped, at 2. Each row brings a record carrying it
+			// alone ([carryingSuiteField]); a kind this build's successor
+			// adds is a row keyed on the kind's value, and brings its
+			// record the same way.
 			Fields:   usage.VersionedFields(),
 			Carrying: carryingSuiteField,
 			Kinds: []string{string(usage.KindSeat), string(usage.KindSchedule),
@@ -44,15 +43,34 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 }
 
 // carryingSuiteField builds a valid record carrying exactly one versioned
-// field, with its version left for the encoder to stamp.
+// field, with its version left for the encoder to stamp: a seat-day of the
+// suite's own shape, with one tool's calls or with a count its cap dropped.
 //
-// THE TABLE IS EMPTY, so nothing reaches this today. A row added to it without
-// a case here fails the suite rather than passing unexamined: a record that did
-// not carry the field would be stamped at 1 and reported as the path being
-// wrong, which is a fixture fault dressed as a domain one.
+// A row added to the table without a case here fails the suite rather than
+// passing unexamined: a record that did not carry the field would be stamped
+// at 1 and reported as the path being wrong, which is a fixture fault dressed
+// as a domain one.
 func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
-	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it "+
-		"and nothing else versioned", field.Name)
+	body, err := encodeSuiteRecord(string(usage.KindSeat), "carrying", "", 0)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := usage.Decode(body)
+	if err != nil {
+		return nil, err
+	}
+	rec.V = 0
+	switch field.Name {
+	case "Record.Tools":
+		rec.Tools = []usage.ToolCalls{{Server: "github", Tool: "github_get_issue", Calls: 2,
+			Failed: 1, TotalMS: 300, LastAt: time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC)}}
+	case "Record.ToolsElided":
+		rec.ToolsElided = 3
+	default:
+		return nil, fmt.Errorf("no suite record carries %s: add a case that sets it "+
+			"and nothing else versioned", field.Name)
+	}
+	return rec.Encode()
 }
 
 // suiteWrite is one flush of the domain's own [usage.Publisher] — the only

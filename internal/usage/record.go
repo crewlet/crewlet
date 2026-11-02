@@ -38,8 +38,8 @@ import (
 // with the lowest version that reads what it carries ([Record.Encode], over
 // [versionedFields]), so a field a later build adds holds back only the records
 // that carry it. It moves only with the table, and exactly to the table's
-// highest version.
-const RecordVersion = 1
+// highest version: 2, a seat's calls per MCP tool.
+const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format: what a record carrying no
 // versioned field is stamped at.
@@ -47,7 +47,10 @@ const baseRecordVersion = 1
 
 // versionedFields is every field a usage record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it:
-// NONE YET, since every kind this build writes is in the base format.
+// a seat-day's calls per MCP tool and the count its cap dropped, at 2. A
+// build at 1 has no table for them, and applying such a record there would
+// keep the seat-day's other figures and lose its calls for good, so it
+// retains the record instead and applies it once it can.
 //
 // ADDING A FIELD TO A RECORD IS ADDING A ROW HERE, on the tracker's terms: an
 // older build decodes a field it has no home for AROUND — it reads the
@@ -62,7 +65,10 @@ const baseRecordVersion = 1
 // A NEW KIND IS A VALUE of a field every record carries, so its row names the
 // key and the value (`subject.kind` equal to the new kind's name): a row
 // naming only the key would stamp every record the domain writes.
-var versionedFields = statelog.RecordFields{}
+var versionedFields = statelog.RecordFields{
+	{Name: "Record.Tools", Since: 2, Path: []string{"tools"}},
+	{Name: "Record.ToolsElided", Since: 2, Path: []string{"tools_elided"}},
+}
 
 // VersionedFields is the table, for the conformance suite.
 func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFields) }
@@ -359,6 +365,12 @@ type Record struct {
 	Reads       []Read `json:"reads,omitempty"`
 	ReadsElided int    `json:"reads_elided,omitempty"`
 
+	// Tools are a seat's calls to MCP servers' tools, one entry per
+	// (server, tool), capped at [ToolsPerSeatDay]; ToolsElided is how many
+	// entries the cap dropped.
+	Tools       []ToolCalls `json:"tools,omitempty"`
+	ToolsElided int         `json:"tools_elided,omitempty"`
+
 	// Fires are a schedule's dispatches.
 	Fires []Fire `json:"fires,omitempty"`
 
@@ -410,6 +422,31 @@ type Read struct {
 	LastQuery   string    `json:"last_query,omitempty"`
 }
 
+// ToolCalls is one MCP tool's calls by a seat on its node's day, in the turns
+// that ended that day: how many, and in which of the four outcomes a turn
+// counts each call in (types.ToolTally). Never an argument or a result.
+//
+// EACH FIGURE A LOWER BOUND ON ITS OWN, as a spend cell's are: a record the
+// publisher joined with the fleet's ([Join]) takes every figure at the larger
+// of the two, so Calls is not asserted to be the sum of the outcomes.
+type ToolCalls struct {
+	// Server is the bare MCP server name, and Tool the name the calls
+	// used, as the seat was offered it.
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
+
+	Calls       int64 `json:"calls"`
+	Failed      int64 `json:"failed"`
+	Unavailable int64 `json:"unavailable"`
+	Refused     int64 `json:"refused"`
+
+	// TotalMS is how long the calls that ran took between them.
+	TotalMS int64 `json:"total_ms"`
+
+	// LastAt is when the newest call that ran was handed to the tool.
+	LastAt time.Time `json:"last_at,omitzero"`
+}
+
 // Fire is one dispatch a schedule made.
 type Fire struct {
 	At      time.Time `json:"at"`
@@ -424,7 +461,8 @@ type Fire struct {
 // reason: the list is the format's own reserved set.
 var knownKeys = []string{
 	"v", "op_id", "subject", "subject_id", "created_at", "gen", "writer", "scope",
-	"handle", "role", "tokens", "turns", "reads", "reads_elided", "fires",
+	"handle", "role", "tokens", "turns", "reads", "reads_elided", "tools",
+	"tools_elided", "fires",
 }
 
 // DecodeEnvelope is the FIRST pass, and it never fails on version.
@@ -520,18 +558,51 @@ func (r Record) validateBody() error {
 			return fmt.Errorf("usage: the seat record on %s elides %d reads",
 				r.Subject, r.ReadsElided)
 		}
+		return r.validateTools()
 	case KindSchedule:
-		if r.Turns != nil || len(r.Tokens) > 0 || len(r.Reads) > 0 || r.ReadsElided != 0 {
+		if r.Turns != nil || len(r.Tokens) > 0 || len(r.Reads) > 0 || r.ReadsElided != 0 ||
+			len(r.Tools) > 0 || r.ToolsElided != 0 {
 			return fmt.Errorf("usage: the schedule record on %s carries a seat's "+
-				"spend, turns or reads", r.Subject)
+				"spend, turns, reads or tool calls", r.Subject)
 		}
 	case KindPerson:
 		if r.Turns != nil || len(r.Reads) > 0 || r.ReadsElided != 0 || len(r.Fires) > 0 ||
-			r.Handle != "" {
+			len(r.Tools) > 0 || r.ToolsElided != 0 || r.Handle != "" {
 			return fmt.Errorf("usage: the person record on %s carries a seat's turns, "+
-				"reads or handle, or a schedule's fires — a person's day is its spend "+
-				"alone, named by its subject", r.Subject)
+				"reads, tool calls or handle, or a schedule's fires; a person's day is "+
+				"its spend alone, named by its subject", r.Subject)
 		}
+	}
+	return nil
+}
+
+// validateTools refuses a seat-day's tool calls no reader could file: past
+// the cap, an entry naming no server or no tool, one named twice (the key
+// the estate holds them under), or a negative figure.
+func (r Record) validateTools() error {
+	if len(r.Tools) > ToolsPerSeatDay {
+		return fmt.Errorf("usage: the seat record on %s carries %d tools and a "+
+			"seat-day holds at most %d; the writer elides past the cap and counts "+
+			"what it dropped", r.Subject, len(r.Tools), ToolsPerSeatDay)
+	}
+	if r.ToolsElided < 0 {
+		return fmt.Errorf("usage: the seat record on %s elides %d tools", r.Subject, r.ToolsElided)
+	}
+	seen := make(map[toolKey]bool, len(r.Tools))
+	for _, t := range r.Tools {
+		k := keyOfTool(t)
+		switch {
+		case strings.TrimSpace(t.Server) == "" || strings.TrimSpace(t.Tool) == "":
+			return fmt.Errorf("usage: the seat record on %s carries tool calls that "+
+				"name no server or no tool (%q, %q)", r.Subject, t.Server, t.Tool)
+		case seen[k]:
+			return fmt.Errorf("usage: the seat record on %s carries the calls to %s "+
+				"on %s twice", r.Subject, t.Tool, t.Server)
+		case t.Calls < 0 || t.Failed < 0 || t.Unavailable < 0 || t.Refused < 0 || t.TotalMS < 0:
+			return fmt.Errorf("usage: the seat record on %s counts a negative figure "+
+				"for %s on %s", r.Subject, t.Tool, t.Server)
+		}
+		seen[k] = true
 	}
 	return nil
 }

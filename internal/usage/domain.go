@@ -76,6 +76,20 @@ const (
 	// before an append is refused and `stream.usage_log_max_bytes` raises.
 	ReadsPerSeatDay = 256
 
+	// ToolsPerSeatDay is how many (server, tool) entries one seat-day record
+	// carries.
+	//
+	// FIVE HUNDRED AND TWELVE, and like [ReadsPerSeatDay] what it bounds is
+	// ONE RECORD. An entry is two names and six figures: a server name is at
+	// most 32 characters and a tool name at most the 64 a harness accepts,
+	// both tokens JSON never escapes, so an entry is under 300 bytes and a
+	// seat-day at the cap under 150 KiB beside its reads, as
+	// TestAFullSeatDayRecordFitsOneMessage measures. It is four times the
+	// 128 tools OpenAI's API takes in one request, so a seat would have to
+	// call that many distinct tools four times over in one day to reach it. The most-called entries survive, and what was dropped is
+	// counted on the record.
+	ToolsPerSeatDay = 512
+
 	// LogMaxBytes is the ceiling this domain declares for its stream, which
 	// the framework's own suites provision it with; a node sizes it from
 	// Tier A (`stream.usage_log_max_bytes`) instead.
@@ -84,9 +98,11 @@ const (
 	// for [History], so its size is a census rather than a rate. A
 	// three-node fleet of forty seats and twenty schedules, every seat
 	// working every day, is 60 subjects × 3 nodes × 181 days ≈ 32 600
-	// messages; at a busy seat-day's ≈ 6.5 KiB that is about 217 MB, and a
-	// gibibyte is four times it. Crossing it REFUSES an append and raises
-	// the log's headroom alarm rather than dropping the oldest day.
+	// messages; at a busy seat-day's ≈ 9.5 KiB (6.5 KiB of spend, turns and
+	// reads, and about 150 bytes for each of twenty MCP tools it called)
+	// that is about 320 MB, and a gibibyte is three times it. Crossing it
+	// REFUSES an append and raises the log's headroom alarm rather than
+	// dropping the oldest day.
 	LogMaxBytes = 1 << 30
 
 	// LogMaxRecordBytes is the largest record this domain publishes
@@ -183,6 +199,7 @@ func (Domain) Tables() map[string]statelog.TableClass {
 		"usage_reads":         statelog.Divergent,
 		"usage_schedule_runs": statelog.Divergent,
 		"usage_person_tokens": statelog.Divergent,
+		"usage_tool_calls":    statelog.Divergent,
 
 		"usage_log_deferred":       statelog.Local,
 		"usage_log_deferred_scope": statelog.Local,
