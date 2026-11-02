@@ -29,7 +29,7 @@ operator credential — move to that listener and are served nowhere else:
 
 | Prefix | Who calls it | Without `api.public` | With `api.public` |
 |---|---|---|---|
-| `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
+| `/webhooks/*` | Vendors (deliveries, and the MCP sign-in's client metadata document) and a person's browser returning from a vendor's app flow or sign-in (`/webhooks/slack-oauth`, `/webhooks/github-app`, `/webhooks/mcp-oauth`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A box exporting its executor's telemetry | `api.port` | `api.public` only |
 | `/mcp/{token}` | A seat's executor run, in its box, calling the seat's tools — and, beneath it, calling each of the seat's MCP servers (`/mcp/{token}/server/{server}`), polling for its turn's notes (`/mcp/{token}/steer/{notes,read}`) and reporting each of its own skills it loads (`/mcp/{token}/skill`) | `api.port` | `api.public` only |
 | Everything else: `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/auth/*`, `/iam/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/worklet/*` and `/fleet/*` gestures | People, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
@@ -391,6 +391,9 @@ that header must keep `X-Crewlet-Engine` in it.
 | `POST` | `/mcp-probe` | Check an address before an MCP server is added at it: what answers there, and the sign-in it asks for, read from its OAuth metadata. **Takes `tools.check`**, and `config.write` on top (see [below](#post-mcp-probe)) |
 | `PUT` | `/mcp-servers/{name}/values/{key}` | Store one header or variable of an MCP server, tested first by default, sealed write-only and read through a `${VAR}` the key is pointed at. **Takes `secrets.write`**, and `config.write` on top, both at a recent step-up and decided before the body is read; never the assistant (see [below](#put-mcp-serversnamevalueskey)) |
 | `PUT` | `/mcp-servers/{name}/tools` | Set the level each tool of an MCP server runs at (`allow` or `blocked`), as one revision of the company document; `?dry_run=true` checks it. **Takes `config.write`**, at a recent step-up for a write (see [below](#put-mcp-serversnametools)) |
+| `POST` | `/mcp-servers/{name}/oauth` | Start signing the company in to a remote MCP server with OAuth: answers the address the person's browser is sent to, once. **Takes `secrets.write`**: an administrator, a [recent proof](#some-gestures-ask-how-recently-you-proved-who-you-are), never Ask Crewlet (see [below](#post-mcp-serversnameoauth)) |
+| `GET` | `/mcp-sign-ins/{id}` | Where a sign-in is: `pending`, `completing`, `approved` or `failed`, and why. **Takes `config.read`** (see [below](#get-mcp-sign-insid)) |
+| `DELETE` | `/mcp-servers/{name}/oauth` | Sign the company out of an MCP server: the grant is revoked at its vendor where it offers that, forgotten here, and the server stopped on every node. **Takes `secrets.write`**, as the start does (see [below](#delete-mcp-serversnameoauth)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -463,6 +466,8 @@ that header must keep `X-Crewlet-Engine` in it.
 | `POST` | `/webhooks/jira` | Receive Jira Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/slack/{handle}` | Receive Slack Events API deliveries for one seat's app |
 | `GET` | `/webhooks/slack-oauth` | OAuth install landing: finishes an install the Agents tab began |
+| `GET` | `/webhooks/mcp-oauth` | Where a vendor sends the browser back after an MCP server sign-in: finishes the sign-in its signed state names (see [below](#get-webhooksmcp-oauth)) |
+| `GET` | `/webhooks/mcp-oauth/client-metadata.json` | The engine's OAuth client metadata document, the client id a `cimd` sign-in is made as (see [below](#get-webhooksmcp-oauthclient-metadatajson)) |
 | `POST` | `/webhooks/github` | Receive GitHub webhooks — HMAC-SHA256 over the raw body |
 | `POST` | `/webhooks/github/{handle}` | The same route addressed to one seat, which is where that seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) delivers |
 | `GET` | `/webhooks/github-app` | Landing page for the per-agent GitHub App flow: converts the one-time creation code, or reports an install (see [below](#get-webhooksgithub-app)) |
@@ -1003,7 +1008,7 @@ The policy depends on what was served:
 | Response | `Content-Security-Policy` |
 |---|---|
 | The dashboard shell (`/dashboard`), `/favicon.ico` and every `/static/*` asset | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; require-trusted-types-for 'script'; trusted-types 'none'` (Trusted Types enforced with no policy, since the dashboard writes no markup or script sink), then `frame-src` naming the artifact origin on a deployment that serves artifacts |
-| The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app) and [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) | `default-src 'none'; img-src data:` (a page's mark is inlined, since `/static/` is not served on the [public listener](#which-listener-serves-what) these pages move to), then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
+| The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app), [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) and [`/webhooks/mcp-oauth`](#get-webhooksmcp-oauth) | `default-src 'none'; img-src data:` (a page's mark is inlined, since `/static/` is not served on the [public listener](#which-listener-serves-what) these pages move to), then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
 | Everything else: JSON, plain text, the redirect from `/`, a `404` or a `401` | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` |
 
 These matter because a script running on this origin acts with the signed-in
@@ -2509,7 +2514,8 @@ write.
   "sandbox": [
     {"seat": "pm", "name": "PM", "segments": ["roles", 0, "sandbox", "mcp", "servers", 0]}
   ],
-  "secrets": ["LINEAR_ORG", "PM_LINEAR_TOKEN"]
+  "secrets": ["LINEAR_ORG", "PM_LINEAR_TOKEN"],
+  "oauth": true
 }
 ```
 
@@ -2517,7 +2523,17 @@ write.
 and `name` is the display name. `secrets` lists the values the store holds
 that nothing reads once the server is gone, which is what `delete_secrets` may
 name: a variable a node takes from its environment is never listed, since the
-store holds nothing to delete. Every list is names, never a value.
+store holds nothing to delete. Every list is names, never a value. `oauth` is
+whether somebody holds an [OAuth grant](../guides/tools-and-mcp.md#signing-in-with-oauth)
+for the server, which the removal gives up.
+
+**The grant goes after the revision is written, before any value:** it is
+revoked at its vendor where it offers that and forgotten here, as a
+[sign-out](#delete-mcp-serversnameoauth) does, and the company's own OAuth
+client authenticates that revocation with the secret the server's entry names,
+which `delete_secrets` may be about to delete. The answer's `oauth` is
+`{revocation, said}` (`revoked`, `not_offered` or `failed`, and the vendor's
+words where it refused), or `null` where nobody held a grant.
 
 **The values go after the revision is written,** never before, so a removal
 that loses its write deletes nothing. Each is asked again of the fleet's
@@ -2538,7 +2554,7 @@ and who removed it, as `DELETE /secrets/{name}` does.
 
 Answers: a dry run `200 {valid, base_revision_id, warnings, derived,
 dependants}`, a write `201 {revision_id, epoch, warnings, derived, removed,
-cleared, secrets}`, where `removed` is the server's name and `cleared` is
+cleared, secrets, oauth}`, where `removed` is the server's name and `cleared` is
 `{mcp_env, sandbox}` as above. Refusals: `404 no_such_entity`,
 `409 revision_advanced`, `403 config_managed` (a managed document),
 `403 unauthorized` for a caller without `secrets.write` (the Dashboard
@@ -9482,6 +9498,7 @@ failure somebody has to act on:
 | `state` | Means |
 |---|---|
 | `disabled` | The configuration turns the server off (`enabled: false`): nothing is started for it and no seat is granted it. Decided before anything a node reports, so a node still on an earlier revision that runs it shows only in its own cell until it applies this one |
+| `needs_sign_in` | The server is [signed in to with OAuth](../guides/tools-and-mcp.md#signing-in-with-oauth) and nobody holds a grant for it, its vendor refused to renew the grant or let it run out, or nothing serves it and the nodes hold it back for a sign-in (its grant was made for an address the server is no longer configured at): nothing is started for it until somebody signs in. Decided next, before the other counts |
 | `running` | Every instance any node launched is serving: it started, listed its tools and was up at its node's last beat |
 | `partial` | Some are serving and some are not — a node's environment, one seat's credentials, or one child that died and is being restarted, rather than the server |
 | `failing` | Something failed and nothing is serving — instances were launched and none serves (the server, its command or address, or credentials every seat shares), every instance went down and is being restarted, or the server was held back, unlaunched, for a value that resolves to nothing: a shared server's own, or one every seat's instance lacks |
@@ -9628,9 +9645,37 @@ longest began; `null` for a refused name, which carries no instant), `seat`
 | `restart` | `mcp_server_failing` and `mcp_server_partial` | [`POST /mcp-servers/{name}/retry`](#post-mcp-serversnameretry) on `fix.server`, with `fix.seat` where it names one agent's instance. A server nothing serves is restarted whole; a partial one only for the agent whose instance is down, so the agents it serves keep their sessions (a shared server's instance restarts on every node) |
 | `integration` | `mcp_server_waiting_long` | The integration that mints `fix.seat`'s credential for `fix.server`, which the server's [detail](#get-mcp-serversname) names in `resolved.binding` |
 | `edit` | `mcp_tools_refused` | The server's configuration: a shorter `tool_prefix`, or one, as each name's `message` in `refused_tools` says |
+| `sign_in` | `mcp_oauth_needs_sign_in` and `mcp_oauth_expiring` | Signing the company in to `fix.server` again: [`POST /mcp-servers/{name}/oauth`](#post-mcp-serversnameoauth) |
 
 The list is always present, and empty on a node that runs no state log, which
 evaluates no alarm: ask a data node.
+
+`oauth`, on each server row of an administrator's reading, is the server's
+[OAuth sign-in](../guides/tools-and-mcp.md#signing-in-with-oauth), `null` for a
+server not signed in to with OAuth. It is the grant's public half and never a
+token or the client's secret:
+
+```json
+{"status": "connected", "client": "dcr", "client_id": "registered-client-id",
+ "issuer": "https://auth.example.com", "resource": "https://mcp.example.com/mcp",
+ "scopes": ["read", "offline_access"],
+ "connected_by": "jane.doe", "connected_at": "2026-11-01T09:00:00Z",
+ "expires_at": "2027-01-30T09:00:00Z", "failure": null}
+```
+
+`status` is `connected` (the engine renews it as the server is used),
+`needs_sign_in` (nobody has signed in: `client_id` is then the company's own
+client's, or `""`, and the scopes are the ones the configuration asks for),
+`expired` (past the end its vendor stated) or `refresh_failed` (its vendor
+refused to renew it, `failure` carrying `{said, at}` in the vendor's words,
+bounded and redacted). `expires_at` is `null` where the vendor stated no end.
+`resource` is the server address the grant was issued for (RFC 8707), the only
+one its tokens are sent to.
+`callback_url` and `client_metadata_url`, on the answer itself, are the two
+addresses a vendor that allowlists them is given: where it sends a person back
+after a sign-in, and the engine's client metadata document (the client id a
+`cimd` sign-in is made as). Each is `""` on an engine with no public address.
+A member's reading carries neither, and no `oauth`; it carries the state.
 
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [Per-entity read and write](#per-entity-read-and-write).
@@ -10373,6 +10418,68 @@ The engine applies the revision as any other: each node restarts its
 instances of the server, and files only the tools left at `allow`. Every call
 is one `mcp_server_acted` with the action `set_tools`, a check marked
 `dry_run`; the revision names the levels.
+
+### `POST /mcp-servers/{name}/oauth`
+
+Starts signing the company in to a remote MCP server whose entry carries
+[`oauth`](../guides/tools-and-mcp.md#signing-in-with-oauth). The engine reads
+the server's sign-in metadata (as [`POST /mcp-probe`](#post-mcp-probe) does),
+refuses an authorization server that does not offer PKCE `S256` or the
+registration the entry names, registers now where the client is `dcr`, mints a
+PKCE verifier it keeps, and answers `201` with the address the person's browser
+is sent to:
+
+```json
+{"id": "018f3a9c-0000-7000-8000-0000000000aa", "server": "linear", "status": "pending", "detail": "",
+ "started_at": "2026-11-02T09:00:00Z", "expires_at": "2026-11-02T09:15:00Z",
+ "authorize_url": "https://auth.example.com/authorize?response_type=code&client_id=...&code_challenge_method=S256&state=..."}
+```
+
+The address names the client, the callback (`/webhooks/mcp-oauth`), the
+challenge, the scopes, the server as the resource (RFC 8707), and a `state`
+that is the sign-in's id signed under the fleet keyring. It is answered here
+and nowhere else; the verifier never leaves the engine. A second start for one
+server replaces the first. The sign-in is good for 15 minutes.
+
+**Takes `secrets.write`**: an administrator with a [recent
+proof](#some-gestures-ask-how-recently-you-proved-who-you-are), and never Ask
+Crewlet, which never takes the verb. Refusals: `404 not_found` for a server
+the configuration does not declare; `409 conflict` for one with no `oauth`
+block, an engine with no public address (`api.external_url`, or
+`api.public.external_url` where the public listener is on), or a server whose
+metadata or vendor rules the sign-in out (no `S256`, the registration not
+offered, the company's own client's secret not set), each saying what to
+change; `502 vendor_refused` where the server or its authorization server
+could not be read or refused to register the engine. Every call is one
+`mcp_server_acted` with the action `sign_in`.
+
+### `GET /mcp-sign-ins/{id}`
+
+Where a sign-in is, for the page that polls it: `pending` until the vendor
+sends the browser back, `completing` while the code is exchanged, `approved`
+once the grant is kept, `failed` with `detail` saying why (the vendor's own
+words where it refused). The record answers for ten minutes after the sign-in
+expires; an unknown or lapsed id is `404 not_found`. `authorize_url` is always
+`""` here. **Takes `config.read`**.
+
+### `DELETE /mcp-servers/{name}/oauth`
+
+Signs the company out of a server: the refresh token is revoked at the
+authorization server where it publishes a revocation endpoint (RFC 7009), the
+grant is deleted here (its sealed row and its public record), and the revision
+is re-activated so every node stops the server, which then needs a sign-in.
+
+```json
+{"server": "linear", "revocation": "revoked", "said": ""}
+```
+
+`revocation` is `revoked`, `not_offered` where the vendor publishes no
+revocation endpoint (the grant is forgotten here and lapses there), or
+`failed` where the vendor could not be asked or refused, `said` carrying its
+words; the grant is forgotten here whatever it answered. A server nobody is
+signed in to is `404 not_found`. **Takes `secrets.write`**, as the start does,
+and is one `mcp_server_acted` with the action `sign_out`. Removing the server
+(`DELETE /config/mcp-servers/{name}`) gives its grant up the same way.
 
 ### `GET /fleet`
 
@@ -11842,6 +11949,34 @@ Receives Slack Events API payloads for a specific agent (identified by handle). 
 ### `GET /webhooks/slack-oauth`
 
 The OAuth install landing every agent's Slack app redirects to. An install begun with **Install** on the Slack integration's Agents tab carries a `state` the engine signed (the seat, its app, a single-use nonce and a 15-minute expiry): the page verifies and spends it, exchanges the `code` for the bot token, refuses a token that belongs to another agent's app, and seals it under the seat's own name. A link used twice, edited or expired is refused with what to do instead, and neither the code nor the token is ever shown. An install made from the app's own settings page carries no state, and the page says where to copy the bot token. A link from the retired `crewlet slack provision` is answered `410` with where installs are made now. A refusal Slack sends back is said in the page's own words (the install was cancelled, or Slack didn't approve it) and its code is logged as `slack_oauth_refused`, never shown; no answer is cached (`Cache-Control: no-store`). Unauthenticated by design, since a browser redirect carries no engine credential. Every value on the page comes from the query string, so it is served under a policy that allows its one inline style by hash and no script at all (see [Security headers on every response](#security-headers-on-every-response)).
+
+### `GET /webhooks/mcp-oauth`
+
+Where a vendor sends the person's browser back after they consent to an MCP
+server sign-in begun with [`POST /mcp-servers/{name}/oauth`](#post-mcp-serversnameoauth).
+Unauthenticated by design, since a redirect carries no engine credential: what
+it does is decided by the `state` alone, which the engine signed under the
+fleet keyring and spends once on any node (a second arrival with the same
+state, an edited one or one past its 15 minutes is refused with where to start
+again, and no code is exchanged for it). Where the authorization server names
+itself in its answers (RFC 9207) the `iss` must be the one the sign-in was
+started at. The code is exchanged with the verifier the engine kept, a grant
+that carries no refresh token is refused, and the grant is sealed for the
+company and the revision re-activated so every node starts the server under
+it. Every query value is bounded before anything reads it, and the page shows
+none of them: it names the server signed in to, or why the sign-in was not
+finished. It is served with `Cache-Control: no-store`, `Referrer-Policy:
+no-referrer` and a policy that allows its one inline style by hash and no
+script (see [Security headers on every response](#security-headers-on-every-response)).
+
+### `GET /webhooks/mcp-oauth/client-metadata.json`
+
+The engine's OAuth client metadata document: a public client named `Crewlet`
+(no secret, `token_endpoint_auth_method: none`, PKCE its proof) whose one
+redirect is `/webhooks/mcp-oauth`, at the engine's public address. Its own
+address is the `client_id` a `cimd` sign-in is made as, which an authorization
+server that reads such documents fetches. `404 not_found` on an engine with no
+public address. Cached for an hour.
 
 ### `/webhooks/github`
 
