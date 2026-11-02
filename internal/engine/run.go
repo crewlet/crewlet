@@ -880,6 +880,10 @@ type Engine struct {
 	// the counters are shared, so this is a frame rather than a duty.
 	budgetReports *budgetReporter
 
+	// inboxReports is this node's waiting-mail loop over the seats it holds
+	// (inboxreport.go); nil until Start arms it.
+	inboxReports *inboxReporter
+
 	// refusals is how this node's gates tell that loop a window has started
 	// refusing ([refusalLatch]). Built with the engine rather than with the
 	// loop, because the gates charge through it from the first apply and
@@ -2408,6 +2412,10 @@ func (e *Engine) Start(ctx context.Context) error {
 	// company's budget. Detached, like everything else here — see
 	// [Engine.startBudgetReports].
 	e.startBudgetReports(ctx)
+	// AND WHAT WAITS IN THE INBOXES OF THE SEATS THIS NODE HOLDS, after the
+	// host for the same reason: what it reads is the seats the host claimed.
+	// See inboxreport.go.
+	e.startInboxReports(ctx)
 	// A PERSON'S MESSAGE QUEUED BEHIND A BUSY SEAT, shown as queued. See
 	// queued.go. After the host, like the meters, because what it answers
 	// is whether this node runs the seat.
@@ -2817,6 +2825,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRetention()
 	e.stopIdentityDuties()
 	e.stopBudgetReports()
+	e.stopInboxReports()
 	// Before the node's stop detaches the inboxes: an alarm firing into a
 	// client that is closing would log a release it could not make.
 	e.stopBudgetParks()

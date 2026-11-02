@@ -45,6 +45,7 @@ import { staleness, stateLine, turnItemKey, type OrgIndex, type Seat } from "~/l
 import { turnIdOf } from "~/lib/turns.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { lastCallLine, turnSteps } from "~/lib/turnsteps.ts";
+import { InboxWaitingTags } from "~/components/InboxWaitingTags.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 
 /** The words a stale or stalled round carries, with how long it has been quiet. */
@@ -124,6 +125,9 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
               {quiet.text}
             </Tag>
           )}
+          {/* WHAT WAITS BEHIND THIS TURN, as the node holding the seat
+              counts it: the turn's own mail is not in it. */}
+          <InboxWaitingTags waiting={row.waiting} />
           <span className="live-elapsed">
             {Number.isFinite(started) ? fmtElapsed(now - started) : ""}
           </span>

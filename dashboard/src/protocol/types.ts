@@ -699,6 +699,17 @@ export interface Overlay {
   /** The seat's models at their usage limit, or null while they are not.
    *  Always present, so a limit that lifted is shed. */
   provider_limit?: ProviderLimit | null;
+  /** What waits in the seat's inbox that no turn is running on yet, as the
+   *  node holding the seat reports it (`livestate.Waiting`); null while no
+   *  holder has reported it, or once its holder went quiet. */
+  waiting?: InboxWaiting | null;
+}
+
+/** What waits in a seat's inbox, per mailbox: `priority` is people waiting on
+ *  the seat (the priority lane), `background` the rest of its work. */
+export interface InboxWaiting {
+  priority: number;
+  background: number;
 }
 
 /**

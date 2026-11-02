@@ -425,6 +425,11 @@ var excluded = map[string]Exclusion{
 		"kept out below"},
 	"a2a_message": {Cause: CauseAlreadyRecorded, Reason: "the ANSWER is already a row (a2a_message_sent). This " +
 		"event is the wake it puts on the requester's inbox; see a2a_request"},
+	"seat_inbox_waiting": {Cause: CauseSampled, Reason: "a SNAPSHOT of what waits in the inboxes of the seats " +
+		"one node holds, published on a five-second tick when a count moved and " +
+		"every thirty seconds when none did, so a durable row per report would be " +
+		"readings the next report supersedes; the live projection holds the " +
+		"current one"},
 	"budget_meters": {Cause: CauseSampled, Reason: "a SNAPSHOT of the shared token counters, published by " +
 		"every node on a 15-second tick and at once when a budget window first " +
 		"refuses a charge, so a durable row per report is about " +
@@ -515,6 +520,7 @@ var liveOnly = map[string]bool{
 	"agent_spawned":       true,
 	"agent_terminated":    true,
 	"budget_meters":       true,
+	"seat_inbox_waiting":  true,
 }
 
 // Category names an event type's dashboard category and reports whether the

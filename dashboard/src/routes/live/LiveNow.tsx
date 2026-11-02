@@ -87,7 +87,8 @@ import { useNow } from "~/lib/clock.ts";
 import { cutInto, spanOf, useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
-import type { AgentRow, EventSeries, ExecutorRow } from "~/protocol/index.ts";
+import type { AgentRow, EventSeries, ExecutorRow, InboxWaiting } from "~/protocol/index.ts";
+import { waitingWords } from "~/lib/inboxWaiting.ts";
 
 /**
  * WHICH WINDOWS THE STRIP HAS: the short end of the shared vocabulary, since
@@ -432,6 +433,7 @@ export function LiveNow() {
                     key={run.turn_id}
                     run={run}
                     who={seatName(run.agent_handle) || run.role}
+                    waiting={agents.find((a) => a.handle === run.agent_handle)?.waiting}
                     now={now}
                     onOpen={() => openPeek({ kind: "run", id: run.turn_id })}
                   />
@@ -590,11 +592,14 @@ export function stripOf(
 function InBoxRow({
   run,
   who,
+  waiting,
   now,
   onOpen,
 }: {
   run: ExecutorRow;
   who: string;
+  /** What waits in the seat's inbox while its executor holds it. */
+  waiting: InboxWaiting | null | undefined;
   now: number;
   onOpen: () => void;
 }) {
@@ -612,6 +617,7 @@ function InBoxRow({
         <span className="truncate t-caption">
           {who}
           {run.harness ? ` · ${run.harness}` : ""}
+          {waitingWords(waiting).map((word) => ` · ${word.text}`)}
         </span>
       </span>
       <span className="t-caption nowrap">{relTime(run.started_at, now)}</span>

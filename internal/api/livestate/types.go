@@ -381,6 +381,12 @@ type Overlay struct {
 	// present, as null when there is none, so a merged overlay never leaves
 	// a seat wearing a limit that lifted. See provider.go.
 	ProviderLimit *ProviderLimit `json:"provider_limit"`
+
+	// Waiting is what waits in the seat's inbox that no turn is running on
+	// yet, per mailbox, as the node holding the seat reports it; nil when no
+	// holder has reported it. ALWAYS present, as null when there is none,
+	// so a merged row never keeps a count nobody refreshes. See waiting.go.
+	Waiting *Waiting `json:"waiting"`
 }
 
 // Stage is where in a turn a seat is.
