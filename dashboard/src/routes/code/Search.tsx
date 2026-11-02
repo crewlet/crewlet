@@ -20,7 +20,12 @@
  * A search across the company is a scatter over every git node that holds a
  * repository the reader reads: one signed request each, and a second round
  * for what the first left unanswered. So the phrase is asked when it is
- * submitted, as Work's search is, and never as it is typed.
+ * submitted, as Work's search is, and never as it is typed — and a reconnect
+ * asks again only a search that never reached the engine
+ * (`refetchOnReconnect: "unreached"`): an answer names the commit each
+ * repository was searched at, so asking again only repeats the work, and a
+ * rolling restart reconnecting every socket would ask every open tab's at
+ * once.
  *
  * # Over REST, at no floor
  *
@@ -91,7 +96,7 @@ export function Search() {
   const answer = useCodeQuery(
     "code_search",
     { q, mode, repo: repo || undefined, path: path || undefined, ref: ref || undefined },
-    { enabled: asked },
+    { enabled: asked, refetchOnReconnect: "unreached" },
   );
   // THE REPOSITORIES THE READER MAY READ, for the bar's picker: the listing's
   // first page, by name.

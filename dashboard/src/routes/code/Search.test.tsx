@@ -5,10 +5,10 @@
  * mode and filters and at no session floor, and only once a phrase is there;
  * the coverage is drawn above every answer, the lines grouped by repository
  * and file, each line linking to its file at the commit its repository was
- * searched at with the line picked.
+ * searched at with the line picked; and a reconnect asks no second search.
  */
 
-import { cleanup, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { CODE_POSITION, jsonAnswer, mountCode, stubCodeEngine } from "~/test/codeScreens.tsx";
@@ -87,6 +87,25 @@ test("says the coverage where nothing matched, rather than only that nothing did
   mountCode("#/code/search?q=needle", <Search />);
   expect(await screen.findByText("No line matches “needle”")).toBeTruthy();
   expect(screen.getByText(/Not searched: 2 repositories \(web, api\)/)).toBeTruthy();
+});
+
+// A RECONNECT IS NOT A NEW SEARCH: an answer names the commit each repository
+// was searched at, and a rolling restart reconnects every socket at once, so
+// each open tab asking again would be one more scatter to every git node.
+test("a socket that comes back after an answer asks no second search", async () => {
+  const asked = stub({ hits: [], coverage });
+  const store = mountCode("#/code/search?q=needle", <Search />);
+  expect(await screen.findByText("No line matches “needle”")).toBeTruthy();
+  const count = (path: string) => asked.filter((u) => u.pathname === path).length;
+  expect(count("/query/code_search")).toBe(1);
+  const listings = count("/query/code_repos");
+
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
+  // THE RECONNECT WAS HEARD: the picker's listing, which a reconnect does
+  // correct, was asked again — and the search beside it was not.
+  await waitFor(() => expect(count("/query/code_repos")).toBe(listings + 1));
+  expect(count("/query/code_search")).toBe(1);
 });
 
 test("asks nothing until a phrase is there", async () => {

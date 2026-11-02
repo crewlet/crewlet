@@ -95,8 +95,12 @@ export interface CodeQueryOptions {
   pollMs?: number;
   /** Ask again when the tab comes back. See `useQuery`'s option of the same name. */
   refetchOnFocus?: boolean;
-  /** Ask again when the socket reconnects. Default true. */
-  refetchOnReconnect?: boolean;
+  /**
+   * Ask again when the socket reconnects. Default true; `"unreached"` asks
+   * again only a question that never reached the engine. See `useRest`'s
+   * option of the same name.
+   */
+  refetchOnReconnect?: boolean | "unreached";
 }
 
 /**
