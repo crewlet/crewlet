@@ -398,12 +398,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.
 	defer d.leave(handle)
 	// SETTLED ONCE THE OUTCOME IS FINAL, which is why this is deferred
 	// FIRST: deferred calls run last to first, so it runs after the panic
-	// recovery below has decided what a recovered dispatch answers. Only an
-	// acknowledged delivery is finished with; a deferred or failed one comes
-	// back, and its person is still waiting.
+	// recovery below has decided what a recovered dispatch answers. See
+	// [settledBy] for which wakes a dispatch has finished with.
 	defer func() {
-		if result.Outcome == queue.OutcomeAck && d.Settled != nil {
-			d.Settled(ctx, handle, wakeIDsOf(evs))
+		if d.Settled == nil {
+			return
+		}
+		if wakes := settledBy(ctx, result, evs); len(wakes) > 0 {
+			d.Settled(ctx, handle, wakes)
 		}
 	}()
 	held := holding{events: evs}
@@ -438,6 +440,32 @@ func (d *Dispatcher) leave(handle string) {
 	if d.running[handle]--; d.running[handle] <= 0 {
 		delete(d.running, handle)
 	}
+}
+
+// settledBy is the wakes a dispatch has finished with, whose queued lines come
+// down ([Dispatcher.Settled]).
+//
+// EVERY WAKE OF AN ACKNOWLEDGED DELIVERY: a turn ran on it, or it was settled
+// without one. A delivery handed back (a Nak or a Defer) comes back, and its
+// person is still waiting, EXCEPT a wake the hand-back dead-letters: the
+// backend retires a message whose deliveries are spent rather than return it,
+// so nothing would ever pick it up and end its line. Which ones those are is
+// each message's own headroom as the queue states it
+// ([queue.DeliveriesLeftFor]); an unstated one is not taken as spent.
+func settledBy(ctx context.Context, result queue.Result, evs []*events.Event) []string {
+	if result.Outcome == queue.OutcomeAck {
+		return wakeIDsOf(evs)
+	}
+	var out []string
+	for _, ev := range evs {
+		if ev == nil {
+			continue
+		}
+		if left, known := queue.DeliveriesLeftFor(ctx, ev.ID); known && left <= 0 {
+			out = append(out, ev.ID.String())
+		}
+	}
+	return out
 }
 
 // wakeIDsOf is the ids of a delivery's wakes, the names a queued line is
