@@ -2037,10 +2037,10 @@ func (s *Store) post(ctx context.Context, actor Actor, channelID, replyTo string
 		// what it decided before this call answers.
 		Pattern: statelog.PatternSequenced,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			d, err := s.draft(ctx, tx, actor, channelID, replyTo, id, in, mentions)
+			d, draftErr := s.draft(ctx, tx, actor, channelID, replyTo, id, in, mentions)
 			out = d.room
-			if err != nil {
-				return statelog.Decision{}, err
+			if draftErr != nil {
+				return statelog.Decision{}, draftErr
 			}
 			message = d.message
 			return decide(stamp, actor, subject, OpPost, scope, opID, d.payload, d.notify, at)

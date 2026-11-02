@@ -254,7 +254,10 @@ type Reach struct {
 // Reached is one seat a post reached, and why.
 //
 // NOT [Recipient], whose tags are the record's compact wire form: this is
-// what a reader of the message renders, so it spells its fields out.
+// what a reader of the message renders, so it spells its fields out. The two
+// hold the same fields, so a record's recipient converts to one directly, and
+// a field added to either stops that conversion compiling until the other
+// follows.
 type Reached struct {
 	Handle string `json:"handle"`
 	Reason Reason `json:"reason"`
@@ -271,7 +274,7 @@ func reachOf(author AuthorKind, n *Notify) *Reach {
 	}
 	out := &Reach{Truncated: n.WakesTruncated}
 	for _, r := range n.Recipients {
-		out.Recipients = append(out.Recipients, Reached{Handle: r.Handle, Reason: r.Reason})
+		out.Recipients = append(out.Recipients, Reached(r))
 	}
 	return out
 }
@@ -302,7 +305,7 @@ func (r *Reach) widen(n *Notify) []string {
 			break
 		}
 		held[rec.Handle] = true
-		r.Recipients = append(r.Recipients, Reached{Handle: rec.Handle, Reason: rec.Reason})
+		r.Recipients = append(r.Recipients, Reached(rec))
 		added = append(added, rec.Handle)
 	}
 	return added
