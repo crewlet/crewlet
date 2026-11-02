@@ -779,8 +779,9 @@ type PendingRun struct {
 	// records — begun, landed, refused or unresolved — and Kept the newest
 	// that LANDED, the one the executor log's row names; both nil until the
 	// turn's first ([Coordinator.takeCapture]). The TURN'S, kept by every
-	// relaunch: a later launch continues the turn's newest kept capture, and
-	// reads the newest attempt to know whether one after it was refused.
+	// relaunch: the turn's end reads them to say whether its newest attempt
+	// was kept, and names the attempt that was not ([unkeptOf]), so the log's
+	// row never goes on naming an older session as the turn's last.
 	// Each is a section of its own with an Extra (wirekeys.go).
 	Capture *SessionCapture `json:"session_capture,omitempty"`
 	Kept    *SessionCapture `json:"session_kept,omitempty"`

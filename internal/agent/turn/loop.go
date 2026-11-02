@@ -385,9 +385,9 @@ type Result struct {
 	// reached at all" — a fact a later round cannot undo, and one the
 	// prior-work ledger forbids that round to establish a second time.
 	//
-	// It exists for the record of how the turn ENDED, which the seat's NEXT
-	// turn on the conversation is told beside the session it continues: the
-	// executor log's end (internal/executordomain's Ending.Delivered), and
+	// It exists for the record of how the turn ENDED, kept on the turn's row
+	// of the executor log beside the session the turn kept: the log's end
+	// (internal/executordomain's Ending.Delivered), and
 	// the conversation ledger it replaces, which files the turn's artifact
 	// as the seat's own "You replied". Neither can ask the session: a
 	// transcript in which the seat was about to reply does not say whether

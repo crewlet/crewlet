@@ -62,8 +62,9 @@
 //     turn's work key where its captures carried none. And where the turn's
 //     newest capture was NOT KEPT ([Ending.Unkept]: refused, or never
 //     answered) and the row names an older one, the row's object goes: that
-//     session does not hold what the turn did after it, and the next turn
-//     starts fresh, told why, rather than continuing it as the turn's last.
+//     session does not hold what the turn did after it, so the row names no
+//     session of the turn rather than one older than its last, and its end
+//     says why.
 //   - `delete` removes one turn's row and tombstone past the company's
 //     retention (the duty passes the cutoff, and the apply compares the row's
 //     own instant against it), or, on a seat's subject, the record of where a

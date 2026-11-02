@@ -272,9 +272,9 @@ func (e *Engine) answeredBefore(ctx context.Context, channelID string) bool {
 //
 // AND IT ANSWERS HOW THE TURN ENDED — lost, whether its reply reached anybody
 // as the turn's own calls say, and what the engine told the colleague — which
-// the ending owes the executor log on the run's row and records there, so the
-// next turn on its conversation is told how this one ended. No frame of the
-// turn is left to record it.
+// the ending owes the executor log on the run's row and records there, where
+// the turn's row on the log keeps it beside the session it kept. No frame of
+// the turn is left to record it.
 func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun) executordomain.Ending {
 	company := e.Company()
 	var answered colleagueAnswer

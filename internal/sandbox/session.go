@@ -69,13 +69,13 @@ import (
 // Its place — the launch's ordinal ([PendingRun.LaunchSeq]) and its own among
 // that launch's captures — is reserved on the row before a byte is spooled
 // ([PendingStore.StampCapture]), with the bridged call the job had answered
-// through and the note it had read through when it was packed, so a later
-// launch that continues it knows what came after it. How it came out is
-// stamped beside: LANDED, REFUSED with why (no box to read it out of, a pack
-// that failed, a session past its bounds, the seat's budget, an upload the
-// store had no room for, a record the log will never take), or UNRESOLVED —
-// uploaded, and whether its record landed unknown — which the turn's end asks
-// again under the same operation before it ends the turn.
+// through and the note it had read through when it was packed: what a launch
+// that continues the session would need to know of what came after it. How it
+// came out is stamped beside: LANDED, REFUSED with why (no box to read it out
+// of, a pack that failed, a session past its bounds, the seat's budget, an
+// upload the store had no room for, a record the log will never take), or
+// UNRESOLVED — uploaded, and whether its record landed unknown — which the
+// turn's end asks again under the same operation before it ends the turn.
 //
 // # And every turn's end, owed on the row until the log takes it
 //
@@ -252,8 +252,8 @@ type SessionCapture struct {
 
 	// BridgeSeq is the last bridged call ([BridgeCall.Seq]) the row held,
 	// and NoteCursor the last note read ([RunSteer.Reads]), when the archive
-	// was packed: what the session it holds had been answered and told. A
-	// launch that continues it is told what came after.
+	// was packed: what the session it holds had been answered and told, and
+	// so where what came after it begins for a launch that continues it.
 	BridgeSeq  int `json:"bridge_seq,omitempty"`
 	NoteCursor int `json:"note_cursor,omitempty"`
 
@@ -362,10 +362,10 @@ const (
 // SessionScrubWait bounds the scrub of a session as it streams out of its box:
 // two readings of an archive at its bound — a tar is read twice, to learn each
 // file's size as rewritten — each of up to the plaintext the scrub admits
-// (internal/sandbox/executor's scrubPlainMaxBytes, eight times the archive's
-// bound), redacted at the tens of mebibytes a second the redaction runs at,
-// and the archive read out of a box whose agent serves it at a mebibyte a
-// second at the least.
+// (internal/sandbox/executor's scrubExpansion times the archive's bound, which
+// its boundsFor computes: eight times), redacted at the tens of mebibytes a
+// second the redaction runs at, and the archive read out of a box whose agent
+// serves it at a mebibyte a second at the least.
 //
 // TWO MINUTES, and a judgment: what the redaction costs per mebibyte is the
 // redaction's own, which grows with its rules. A session that is still being
