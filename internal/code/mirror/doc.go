@@ -105,10 +105,11 @@
 // from a SCRATCH over the copy's incarnation, never from the copy, which only
 // a sync writes; at most pushBatch refspecs a push. It carries the seat's
 // OWN identity at the other host — the token the mirror's credential names,
-// sent by the one outbound dial (M6-D18) — never a bot's, and a commit's box
-// trailers (Crewlet-Seat, Crewlet-Run, Crewlet-Work-Item) travel with it as
-// they are: the mirror inherits what the box's hook wrote and decides nothing
-// about them (U25 a).
+// sent by the one outbound dial (M6-D18) — never a bot's, and the trailers
+// a commit's box wrote (its seat, run and work item, by the sandbox
+// package's TrailerHook) travel with it as they are: the mirror inherits
+// what the box's hook wrote and decides nothing about them (U25 a). Their
+// keys are not spelled here, since only the hook may spell one.
 //
 // A FAILED PUSH IS THE HOME'S STATE, in memory alone: a push to another host
 // is no record, and the node that pushes is the one that knows whether it
