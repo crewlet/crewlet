@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -242,6 +244,22 @@ func (w remoteWrite) measure() (int, error) {
 	if err := w.validFields(); err != nil {
 		return 0, err
 	}
+	n, err := w.encoded()
+	if err != nil {
+		return 0, err
+	}
+	if n > EntryRoom {
+		op, _, _ := w.record()
+		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one proposal may take of its record",
+			ErrInvalidProposal, op, n, EntryRoom)
+	}
+	return n, nil
+}
+
+// encoded is the bytes of the payload w's record carries, every command
+// decided ok — the one measure [EntryRoom] holds a proposal to, which
+// [remoteWrite.fitted] cuts a record's commands by.
+func (w remoteWrite) encoded() (int, error) {
 	op, _, payload := w.record()
 	switch p := payload.(type) {
 	case ImportChunk:
@@ -255,11 +273,121 @@ func (w remoteWrite) measure() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
 	}
-	if len(encoded) > EntryRoom {
-		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one proposal may take of its record",
-			ErrInvalidProposal, op, len(encoded), EntryRoom)
-	}
 	return len(encoded), nil
+}
+
+// Fitted is p's chunk as ONE record carries it — its packs, and its commands
+// cut to the most of them, from the first, that fit beside the packs —
+// held to every rule of [ImportProposal.Validate], each pack measured and
+// checked AS STORED though it may only be laid out ([LayBundle]), so a home
+// cuts and checks a step before it uploads a byte of it, and the committer's
+// own Validate, after the upload, measures the same record. An end, or a
+// proposal carrying no chunk, is p as Validate judges it.
+func (p ImportProposal) Fitted() (ImportProposal, error) {
+	if p.Chunk == nil || p.Done != nil {
+		return p, p.Validate()
+	}
+	n, err := p.write().fitted()
+	if err != nil {
+		return ImportProposal{}, err
+	}
+	c := *p.Chunk
+	c.Commands = c.Commands[:n]
+	return ImportProposal{Chunk: &c}, nil
+}
+
+// Fitted is p's sync as ONE record carries it, on [ImportProposal.Fitted]'s
+// terms.
+func (p MirrorSyncProposal) Fitted() (MirrorSyncProposal, error) {
+	n, err := p.write().fitted()
+	if err != nil {
+		return MirrorSyncProposal{}, err
+	}
+	p.Sync.Commands = p.Sync.Commands[:n]
+	return p, nil
+}
+
+// fitted is how many of w's commands, from the first, its record carries: at
+// most MaxImportRefs, and the most whose encoding ([remoteWrite.encoded])
+// stays within EntryRoom beside every pack w carries — with w cut to them
+// valid by every rule of [remoteWrite.measure], its packs as stored.
+//
+// THE COUNT ALONE IS NO BOUND ON THE BYTES: JSON spells `&`, `<` and `>` in
+// six bytes each, so some six hundred refs at MaxRefNameBytes pass EntryRoom
+// where MaxImportRefs allows a thousand, and a chunk cut by its count alone
+// would be refused ErrInvalidProposal at every attempt — after its packs were
+// uploaded — for as long as the source held such refs. The encoding grows
+// with every command, so the first count past EntryRoom is found by halving:
+// about ten encodings of a record of at most EntryRoom bytes.
+//
+// A record whose first command will not fit beside no pack is an error, never
+// a record of none: a home cutting by this would otherwise land nothing for
+// ever.
+func (w remoteWrite) fitted() (int, error) {
+	w = w.asStored()
+	packs, cmds := w.moves()
+	hi := min(len(cmds), MaxImportRefs)
+	past := sort.Search(hi+1, func(n int) bool {
+		size, err := w.first(n).encoded()
+		return err != nil || size > EntryRoom
+	})
+	n := max(past-1, 0)
+	if n == 0 && len(cmds) > 0 && len(packs) == 0 {
+		op, _, _ := w.record()
+		return 0, fmt.Errorf("%w: %s: its first command, %q, alone is past the %d bytes one proposal may take "+
+			"of its record", ErrInvalidProposal, op, cmds[0].Ref, EntryRoom)
+	}
+	if _, err := w.first(n).measure(); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// first is w with only its first n commands.
+func (w remoteWrite) first(n int) remoteWrite {
+	switch {
+	case w.chunk != nil:
+		c := *w.chunk
+		c.Commands = c.Commands[:n]
+		w.chunk = &c
+	case w.mirror != nil:
+		m := *w.mirror
+		m.Commands = m.Commands[:n]
+		w.mirror = &m
+	}
+	return w
+}
+
+// storedStandIn is the object a pack not yet stored is measured and checked
+// as: a key and a digest at the widths every stored one has — a version 7
+// key's canonical 36 characters, a SHA-256's 64 hex digits — which are the
+// only fields [StoreBundle] fills in, so a record carrying it encodes to
+// exactly the bytes the record carrying the stored pack will.
+var storedStandIn = objstore.Object{Key: objstore.KeyAt(time.UnixMilli(0)), Hash: objstore.HashOf(nil)}
+
+// asStored is w with every pack that names no object yet given
+// [storedStandIn]'s.
+func (w remoteWrite) asStored() remoteWrite {
+	stored := func(packs []PackRef) []PackRef {
+		out := slices.Clone(packs)
+		for i := range out {
+			if out[i].Object.IsZero() {
+				out[i].Object, out[i].Hash = storedStandIn.Key, storedStandIn.Hash
+			}
+		}
+		return out
+	}
+	switch {
+	case w.chunk != nil:
+		c := *w.chunk
+		c.Packs = stored(c.Packs)
+		w.chunk = &c
+	case w.mirror != nil:
+		m := *w.mirror
+		m.Packs = stored(m.Packs)
+		w.mirror = &m
+	}
+	return w
 }
 
 // decidedOK is cmds each decided ok, as a record that lands carries them.

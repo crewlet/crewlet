@@ -225,7 +225,9 @@ fetches the source's branches and tags (`refs/heads/*` and `refs/tags/*`) over
 smart HTTP, every object checked as a push's objects are, cuts what arrived
 into packs of at most 1 GiB and lands them as records of the repository's
 own: an import's chunks — packs before the refs that need them, at most 1 000
-refs a chunk — then its end; a pull mirror's syncs, every 15 minutes, each
+refs a chunk, fewer where their names are long and spelled long in the code
+log (`&`, `<` and `>` take six bytes each there), so each fits one record —
+then its end; a pull mirror's syncs, every 15 minutes, each
 moving the repository onto its source as the source is, a force-push and a
 deleted branch included. Each lands as a push `via import` or `via mirror` on
 the engine's own account. A sync that finds its source moved nothing still

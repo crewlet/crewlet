@@ -544,12 +544,14 @@ func TestAnImportPastTheBlobLimitEndsWithItsError(t *testing.T) {
 
 // AN ATTEMPT LANDS ITS PACKS BEFORE ITS REFS: no record carries a ref before
 // every pack an attempt cut is in a record before it or beside it, and no
-// record carries more than code.MaxImportPacks packs or code.MaxImportRefs
-// refs — the records a chunk or a sync is held to.
+// record carries more than code.MaxImportPacks packs or the refs its record
+// takes of those offered to it — here code.MaxImportRefs, the records a chunk
+// or a sync is held to — and every ref lands once, in order.
 //
 // Mutation: put the commands in the first record, and a ref rides ahead of
 // the packs it needs; drop the cap on a record's packs, and one record
-// carries them all.
+// carries them all; move past every ref offered rather than those taken, and
+// refs are lost.
 func TestAnAttemptLandsItsPacksBeforeItsRefs(t *testing.T) {
 	t.Parallel()
 	outs := make([]string, 2*code.MaxImportPacks+1)
@@ -560,7 +562,9 @@ func TestAnAttemptLandsItsPacksBeforeItsRefs(t *testing.T) {
 	for i := range cmds {
 		cmds[i] = code.Command{Ref: fmt.Sprintf("refs/tags/v%04d", i), Old: code.ZeroOID, New: outs[0]}
 	}
-	packs, refs := mirror.Steps(outs, cmds)
+	packs, refs := mirror.Steps(outs, cmds, func(_ []string, offered []code.Command) int {
+		return min(len(offered), code.MaxImportRefs)
+	})
 	var gotOuts []string
 	var gotCmds []code.Command
 	for i := range packs {
@@ -574,13 +578,52 @@ func TestAnAttemptLandsItsPacksBeforeItsRefs(t *testing.T) {
 		}
 		gotOuts, gotCmds = append(gotOuts, packs[i]...), append(gotCmds, refs[i]...)
 	}
-	if !slices.Equal(gotOuts, outs) || len(gotCmds) != len(cmds) {
+	if !slices.Equal(gotOuts, outs) || !slices.Equal(gotCmds, cmds) {
 		t.Fatalf("the records carry %d packs and %d refs, want every one of the %d and %d once, in order",
 			len(gotOuts), len(gotCmds), len(outs), len(cmds))
 	}
 	if len(packs) != 4 {
 		t.Errorf("the attempt lands %d records, want 4: two of packs alone, the last packs with the first "+
 			"refs, and the rest of the refs", len(packs))
+	}
+}
+
+// AN IMPORT OF LONG REFS LANDS IN THE CHUNKS ITS RECORDS HOLD: a source of
+// code.MaxImportRefs tags whose names JSON spells long — `&`, six bytes each,
+// at the longest name a ref may have — and its main branch is past what one
+// chunk's record carries by its bytes long before its count, so the attempt
+// cuts each chunk to what its record holds: the import lands in more chunks
+// than the count alone would cut, each one applied, and ends active with
+// every ref of the source.
+//
+// Mutation: cut each chunk by code.MaxImportRefs alone, and its first chunk is
+// refused invalid at every attempt, the repository importing for ever with
+// nothing landed.
+func TestAnImportOfLongRefsLandsInTheChunksItsRecordsHold(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	first := h.src.commit(map[string]string{"a": "a\n"}, "first")
+	h.src.push("HEAD:refs/heads/main")
+	var tags strings.Builder
+	for i := range code.MaxImportRefs {
+		fmt.Fprintf(&tags, "create refs/tags/%s%05d %s\n", strings.Repeat("&", code.MaxRefNameBytes-15), i, first)
+	}
+	if _, stderr, err := h.src.c.Try(t, "", strings.NewReader(tags.String()), "--git-dir="+h.src.bare,
+		"update-ref", "--stdin"); err != nil {
+		t.Fatalf("tagging the source: %v\n%s", err, stderr)
+	}
+	h.f.Declare(t, code.Declared{Name: "imported", Settings: codetest.Settings(),
+		Import: &code.ImportSource{URL: h.src.url}})
+
+	h.pass(h.mirrors())
+	rows := h.rows("imported")
+	if rows.Repo.Status != code.RepoStatusActive || len(rows.Refs) != code.MaxImportRefs+1 {
+		t.Fatalf("after its import the repository is %s with %d refs; want it active with the source's %d",
+			rows.Repo.Status, len(rows.Refs), code.MaxImportRefs+1)
+	}
+	chunks, dones := h.est.chunks()
+	if len(chunks) < 2 || len(dones) != 1 || dones[0].Error != "" || dones[0].Seq != int64(len(chunks)) {
+		t.Fatalf("the import proposed %d chunks and ended %+v; want more than the one its count alone cuts, "+
+			"then one end after the last, with no error", len(chunks), dones)
 	}
 }
 

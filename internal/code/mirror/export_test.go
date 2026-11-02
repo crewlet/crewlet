@@ -14,11 +14,23 @@ import (
 // the rows an attempt left once it has ended.
 func (m *Mirrors) Wait() { m.wg.Wait() }
 
-// Steps is what [steps] lands of outs and cmds: each record's outputs and
-// commands, in its order.
-func Steps(outs []string, cmds []code.Command) (packs [][]string, refs [][]code.Command) {
-	for _, st := range steps(outs, cmds) {
-		packs, refs = append(packs, st.outs), append(refs, st.cmds)
+// Steps is what [steps] lands of outs and cmds where each record takes take of
+// the commands offered to it, as an attempt's land takes what its record
+// carries: each record's outputs and commands, in its order. A record that
+// would take nothing and land no output ends the walk, as land's refusal
+// ends an attempt.
+func Steps(outs []string, cmds []code.Command, take func(outs []string, offered []code.Command) int) (
+	packs [][]string, refs [][]code.Command) {
+
+	s := &steps{outs: outs, cmds: cmds}
+	for !s.done() {
+		o, offered := s.next()
+		n := take(o, offered)
+		if n == 0 && len(o) == 0 {
+			return packs, refs
+		}
+		packs, refs = append(packs, o), append(refs, offered[:n])
+		s.landed(len(o), n)
 	}
 	return packs, refs
 }

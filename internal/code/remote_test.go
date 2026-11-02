@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -458,6 +460,74 @@ func TestTheMirrorsListingPagesBothArmsInItsOrder(t *testing.T) {
 	}
 	if !handedOver {
 		t.Errorf("no page of mirrors_due went on from the push mirrors into the pull mirrors")
+	}
+}
+
+// A RECORD IS CUT TO THE BYTES IT CARRIES: a chunk offered MaxImportRefs refs
+// whose names JSON spells long — `&`, six bytes each, at MaxRefNameBytes — is
+// past what one record carries, and Validate refuses it whole; Fitted cuts it
+// to the most of them, from the first, that fit beside its pack — laid out and
+// not yet stored, measured as stored — which Validate admits once the pack is
+// stored, where one more would not be. Refs of plain names are cut at
+// MaxImportRefs, the rows' bound, and a sync is cut as a chunk is.
+//
+// Mutation: cut by the count alone, and the long refs are not cut; drop the
+// count, and the plain ones are not; measure a pack not yet stored as it
+// is, and no step is cut at all.
+func TestARecordIsCutToTheBytesItCarries(t *testing.T) {
+	t.Parallel()
+	long := make([]code.Command, code.MaxImportRefs)
+	plain := make([]code.Command, code.MaxImportRefs+1)
+	for i := range long {
+		long[i] = update(fmt.Sprintf("refs/tags/%s%05d", strings.Repeat("&", code.MaxRefNameBytes-15), i),
+			code.ZeroOID, oidOf(fmt.Sprint("long", i)))
+	}
+	for i := range plain {
+		plain[i] = update(fmt.Sprintf("refs/tags/v%05d", i), code.ZeroOID, oidOf(fmt.Sprint("plain", i)))
+	}
+	chunk := func(cmds []code.Command, stored bool) code.ImportProposal {
+		id := statelog.NewOpID(time.Now(), "")
+		pack := compactOutput(id, 0, 5, harnessAt)
+		if !stored {
+			pack.Object, pack.Hash = objstore.Key{}, ""
+		}
+		return code.ImportProposal{Chunk: &code.ImportChunk{RepoID: "0193a3b2-5f8e-7c2a-9d4e-1b2c3d4e5f60",
+			ChunkID: id, Node: "node-a", Seq: 1, Packs: []code.PackRef{pack}, Commands: cmds}}
+	}
+	if err := chunk(long, true).Validate(); !errors.Is(err, code.ErrInvalidProposal) {
+		t.Fatalf("a chunk of %d refs of the longest escaped names validated %v; want it past one record",
+			len(long), err)
+	}
+
+	laid := chunk(long, false)
+	cut, err := laid.Fitted()
+	if err != nil {
+		t.Fatalf("cut a chunk of long refs whose pack is not yet stored: %v", err)
+	}
+	n := len(cut.Chunk.Commands)
+	if n == 0 || n >= len(long) || !slices.Equal(cut.Chunk.Commands, long[:n]) {
+		t.Fatalf("a chunk of %d long refs was cut to %d; want some, from the first, and not all", len(long), n)
+	}
+	stored := chunk(long[:n], true)
+	stored.Chunk.ChunkID, stored.Chunk.Packs[0].PackID = laid.Chunk.ChunkID, laid.Chunk.Packs[0].PackID
+	if err := stored.Validate(); err != nil {
+		t.Errorf("the cut chunk, its pack stored, validated %v; want it admitted", err)
+	}
+	stored.Chunk.Commands = long[:n+1]
+	if err := stored.Validate(); !errors.Is(err, code.ErrInvalidProposal) {
+		t.Errorf("the cut chunk and one more ref validated %v; want it past one record: the cut is not the most",
+			err)
+	}
+
+	if cut, err := chunk(plain, false).Fitted(); err != nil || len(cut.Chunk.Commands) != code.MaxImportRefs {
+		t.Errorf("a chunk of %d plain refs was cut to %d, %v; want MaxImportRefs (%d)", len(plain),
+			len(cut.Chunk.Commands), err, code.MaxImportRefs)
+	}
+	sync := code.MirrorSyncProposal{Sync: code.MirrorSync{RepoID: "0193a3b2-5f8e-7c2a-9d4e-1b2c3d4e5f60",
+		SyncID: statelog.NewOpID(time.Now(), ""), Node: "node-a", Commands: long, FetchedAt: harnessAt}}
+	if cut, err := sync.Fitted(); err != nil || len(cut.Sync.Commands) == 0 || len(cut.Sync.Commands) >= len(long) {
+		t.Errorf("a sync of %d long refs was cut to %d, %v; want some and not all", len(long),
+			len(cut.Sync.Commands), err)
 	}
 }
 

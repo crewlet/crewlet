@@ -46,8 +46,13 @@
 //
 // THE RECORDS, PACKS FIRST: an import lands its outputs before any ref that
 // needs them — chunks of packs alone while more than code.MaxImportPacks are
-// left, then the refs, code.MaxImportRefs a chunk, the first of them riding
-// with the last packs — each chunk at the next Seq, so a chunk asked twice or
+// left, then the refs, the first of them riding with the last packs — each
+// chunk taking the most refs its record carries, at most code.MaxImportRefs
+// and within the bytes one record may hold (code.ImportProposal.Fitted, since
+// refs whose names JSON spells long reach those bytes first), cut and checked
+// as its committer will check it before a byte of its packs is uploaded, so a
+// step no committer would take costs no PUT — each chunk at the next Seq, so
+// a chunk asked twice or
 // out of turn is refused stale by its committer; then its end, naming the
 // source's HEAD branch where the branch the repository declares did not
 // arrive (`ls-remote --symref`). A sync lands the same steps as syncs, each
