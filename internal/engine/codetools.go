@@ -68,7 +68,11 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	// and a person's route search on the same terms.
 	deps := builtin.CodeDeps{Code: seam, Writer: seam, Holder: seam, CloneURL: e.cloneURL,
 		Requesters: turnRequesters{engine: e}, Chart: ChartAuthorityOf(e), Searcher: e,
-		Placement: codePlacement{router: e.router, limits: e.codeLimits}}
+		Placement: codePlacement{router: e.router, limits: e.codeLimits},
+		// AND WHOM A CHANGE'S TEXT MENTIONS, against the chart current when
+		// it is written ([LiveMentions]), for the ceiling's reason: a
+		// captured chart would drop a colleague who joined this morning.
+		Mentions: LiveMentions(e)}
 	// AND THE OBJECT STORE A CHECK'S KEPT LOG IS READ FROM, where this node
 	// has one: the log a failed run kept is one object the fleet shares,
 	// read a page at a time by code_get_check_failures.

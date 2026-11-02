@@ -553,6 +553,13 @@ func (t *codeReviewChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
+	said := []string{review.Summary}
+	for _, f := range review.Findings {
+		said = append(said, f.Title, f.Body)
+	}
+	if review.Mentions, refusal = t.deps.mentionsOf(tool, said...); refusal != nil {
+		return *refusal, nil
+	}
 	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number, false)
 	if refusal != nil {
 		return *refusal, nil
@@ -735,6 +742,10 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 		return failed(fmt.Sprintf("%s: `anchor` places a thread's first comment on a line; a reply is about its "+
 			"thread, and carries none.", tool)), nil
 	}
+	mentions, refusal := t.deps.mentionsOf(tool, body)
+	if refusal != nil {
+		return *refusal, nil
+	}
 	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number, false)
 	if refusal != nil {
 		return *refusal, nil
@@ -751,7 +762,7 @@ func (t *codeCommentOnChange) CallForTurn(ctx context.Context, turn *turnctx.Tur
 		return cv.page(ctx, out)
 	}
 	comment := code.Comment{RepoID: cv.g.repo.ID, ChangeID: cv.change.ID, ParentID: thread, FindingID: finding,
-		Body: body}
+		Body: body, Mentions: mentions}
 	if turn != nil && c.asker.Kind == code.PrincipalAgent {
 		comment.TurnID = turn.RunID
 	}

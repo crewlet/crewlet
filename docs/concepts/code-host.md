@@ -6720,7 +6720,10 @@ chart holds, in the snapshot, and not the asker's list beside them.
   answer replies to, each read in its key's order — a change whose audience
   is larger than that is read in its listings rather than woken.
 
-A mention is resolved against the chart where it is written, and held to the
+A mention is resolved against the chart where it is written — a tool's
+call, a seat's or a person's, reads every `@handle` in the text it writes and
+sends the ones the chart holds as the write's mentions, a text naming more
+than 32 refused with nothing written — and held to the
 deciding node's chart again, which also says who is a person: a write that
 mentions anybody is decided only by a node that holds the company's current
 chart, as a seat's write is. Whoever a comment or a review mentions joins the

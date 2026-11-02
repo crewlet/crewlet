@@ -15,7 +15,8 @@ import (
 // wiring: a company whose node's runtime serves its repositories holds the
 // twelve reads and code_search, over the engine's own search, in every seat's
 // registry — equipped at the apply, after the runtime it
-// starts — and the operator's halves read the same deps; a company that hosts
+// starts — and the operator's halves read the same deps, a change write's
+// mentions among them, resolved against the company's chart; a company that hosts
 // no code is given none, whose tools would answer every call that no
 // repository is served. The terms are [OperatorCode]'s, the code host's REST
 // reads' own, and a node with no runtime serves none.
@@ -24,7 +25,9 @@ import (
 // router) → the company hosting none holds the tools, red; equip dropping
 // deps.Code, or CodeToolDeps leaving out who a turn is acting for or the chart
 // that decides them (the requester ceiling) → the company hosting code holds
-// none, red; CodeToolDeps leaving out the search → no code_search, red.
+// none, red; CodeToolDeps leaving out the search → no code_search, red;
+// CodeToolDeps leaving out the mentions' resolver → a change write's mentions
+// resolve to nobody, red.
 func TestTheCodeToolsAreOfferedWhereTheCodeHostIsServed(t *testing.T) {
 	t.Parallel()
 	t.Run("hosting code", func(t *testing.T) {
@@ -39,6 +42,12 @@ func TestTheCodeToolsAreOfferedWhereTheCodeHostIsServed(t *testing.T) {
 			if _, ok := e.Company().Tools.Lookup(name); !ok {
 				t.Errorf("a seat of a company hosting code holds no %s", name)
 			}
+		}
+		// AND WHOM A CHANGE'S TEXT MENTIONS, resolved against the chart: the
+		// seat the company holds, and not a handle it does not.
+		if deps := CodeToolDeps(e); deps.Mentions == nil ||
+			!slices.Equal(deps.Mentions.Mentions("@ceo, and @nobody"), []string{"ceo"}) {
+			t.Error("a change write's mentions resolve to no seat of the company")
 		}
 	})
 	t.Run("hosting none", func(t *testing.T) {

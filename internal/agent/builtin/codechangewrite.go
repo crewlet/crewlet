@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -168,6 +169,33 @@ func (d CodeDeps) openSeen(c codeCaller, repo code.RepoRef) statelog.Position {
 		return repo.Position
 	}
 	return furthestOnLog(d.Code.FloorOf(repo.ID), repo.Position)
+}
+
+// mentionsOf is the handles texts name that are seats of the company
+// ([CodeDeps.Mentions]), each once in the order first named — what a change
+// write's Mentions carries (rule D38: a mention is resolved at the write, by
+// its asker, and held to the deciding node's chart there) — or the refusal of
+// a write naming more than code.MaxMentions of them, made before anything is
+// read: the deciding node refuses that list anyway, and refusing here names
+// the bound rather than letting a mention go unheard.
+func (d CodeDeps) mentionsOf(tool string, texts ...string) ([]string, *tools.Result) {
+	if d.Mentions == nil {
+		return nil, nil
+	}
+	var out []string
+	for _, text := range texts {
+		for _, handle := range d.Mentions.Mentions(text) {
+			if !slices.Contains(out, handle) {
+				out = append(out, handle)
+			}
+		}
+	}
+	if len(out) > code.MaxMentions {
+		r := failed(fmt.Sprintf("%s: the text names %d colleagues, past the %d one write of a change mentions — "+
+			"mention fewer, and say the rest without an @.", tool, len(out), code.MaxMentions))
+		return nil, &r
+	}
+	return out, nil
 }
 
 // expectedVersionArg is a write's `expected_version`, REQUIRED: the version of
@@ -353,6 +381,9 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	open := code.ChangeOpen{SourceRef: source, TargetRef: target, Title: argString(args, "title"),
 		Body: argString(args, "body"), Draft: argBool(args, "draft")}
+	if open.Mentions, refusal = t.deps.mentionsOf(tool, open.Title, open.Body); refusal != nil {
+		return *refusal, nil
+	}
 	item, given, clear, refusal := t.deps.workItemArg(ctx, tool, args)
 	switch {
 	case refusal != nil:
@@ -615,6 +646,17 @@ func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (cod
 			return code.ChangeProposal{}, refusal
 		}
 		return code.ChangeProposal{Retarget: &code.ChangeRetarget{TargetRef: target}}, nil
+	}
+	// WHAT THE EDIT SETS NAMES ITS MENTIONS, and nothing it leaves standing:
+	// whoever the old title or body named was told when it was written.
+	var said []string
+	for _, text := range []*string{edit.Title, edit.Body} {
+		if text != nil {
+			said = append(said, *text)
+		}
+	}
+	if edit.Mentions, refusal = t.deps.mentionsOf(tool, said...); refusal != nil {
+		return code.ChangeProposal{}, refusal
 	}
 	return code.ChangeProposal{Edit: &edit}, nil
 }

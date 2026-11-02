@@ -217,6 +217,16 @@ type CodeDeps struct {
 	// says it was not closed and why.
 	Closer func(actor Actor) WorkWriter
 
+	// Mentions resolves the handles a change's text names — an open's or an
+	// edit's title and body, a review's summary and findings, a comment's
+	// body — to seats, at the write ([CodeDeps.mentionsOf]), so a mention
+	// wakes the colleague its writer meant: THE ASKER'S, as the change and
+	// conversation payloads take them, which the deciding node holds to its
+	// own chart. The same resolver the work tools take, read per call. Nil
+	// resolves nothing: the write still lands, and wakes only those it
+	// concerns by role — its owner, its authors, its reviewers.
+	Mentions MentionResolver
+
 	// Holder records a turn's hold on a scratch repository it names
 	// ([HoldRepo]), set wherever the tools are offered to seats and
 	// independently of Writer, because a seat that only reads still holds
