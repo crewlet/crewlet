@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A TOOL CALL THAT NEEDS APPROVAL PARKS ITS RUN IN THE SHAPE A RUN'S ASK DOES:
@@ -255,7 +256,7 @@ func (h HeldCall) validate(decided *decision.Decision) []error {
 	}
 	if decided == nil || !slices.Equal(decided.OptionIDs(), HeldChoices) {
 		found = append(found, fieldRefusal("decision", "is not the one a held call is asked "+
-			"as: a held call offers "+strings.Join(HeldChoices, ", ")))
+			"as: a held call offers "+words.And(HeldChoices)))
 	}
 	return found
 }
