@@ -31,8 +31,9 @@ import (
 // commit-graph, for a repository whose packs have gathered — so a clone
 // counts objects from the bitmap rather than walking history, and a walk
 // reads commits from the graph rather than parsing each one. One goroutine,
-// owned by Start, woken every MidxDebounce, kicked after a full round and by
-// every run that ends; a pass STARTS a run for every due repository, most
+// owned by Start, woken every MidxDebounce, kicked after a full round, by every
+// run that ends and by the round or adoption that held a pass back from a
+// repository due (oweWake); a pass STARTS a run for every due repository, most
 // packs left uncovered first, each in a slot of its own in the pool's
 // MAINTENANCE lane — half the node's cores, a free slot or none, never
 // waiting — in every slot of it but one, which is kept for a person's
@@ -97,6 +98,14 @@ import (
 // cycle counts (runPlan.duty), so the bitmap a clone counts from is not held
 // back by it. One whose graph step fails waits for the ordinary rules
 // (graphFailed), so a step that keeps failing is not asked again every pass.
+//
+// AT ONCE IS THE NEXT PASS, and what wakes one is: a full round that leaves such
+// a copy, as it lets the repository go (Cache.run); and a round or an adoption
+// that held a pass back from it, as the last of them lets go (oweWake). A copy
+// that held no pack when it was read whole — a repository created empty — takes
+// its first by a delta or an adoption, and neither wakes the maintainer: the next
+// tick takes it up, at most MidxDebounce later, which is all a history's first
+// push waits.
 //
 // INDEX REPAIR. A multi-pack-index a full round dropped as DAMAGED — its
 // check found a file of it failing its trailer, or one the index may have
@@ -519,12 +528,8 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 				charges[stepPublish] = inc.publishRefused
 			}
 			walk.note(&c.mw, e.id, inc, refused, charges)
-			if p.steps() && !c.runnable(e) && e.adopting > 0 {
-				// Held back by an adoption's links alone, milliseconds:
-				// the last adoption to let go wakes the maintainer, so a
-				// run due at once — a graph, an index repair — is not
-				// left to the next tick.
-				e.maintainerOwed = true
+			if p.steps() && !c.runnable(e) {
+				c.oweWake(e)
 			}
 			if p.steps() && c.runnable(e) {
 				uncovered := inc.packs
@@ -830,9 +835,33 @@ func (c *Cache) runnable(e *entry) bool {
 	return c.wantsRun(e) && e.running == nil && e.adopting == 0 && e.maint == nil && e.verifying == 0
 }
 
+// oweWake records that a pass was held back from e, due, if a round or an
+// adoption is what holds it: whichever lets go last wakes the maintainer
+// (owedWake), so a run due at once — a graph, an index repair — is not left to
+// the next tick; e.mu is held. A run in flight owes nothing here (its end
+// kicks), and neither does a check (its release does).
+//
+// THE NEXT TICK IS NO PROMISE OF A GAP. Every linearizable read of a repository
+// is a round, so a repository read steadily is in one for much of its time and
+// a tick lands in one about that often. With nothing owed, each landing cost
+// another MidxDebounce, so a graph a walk of the commits writes in milliseconds
+// waited on the odds. Measured on the code host's suite, which reads a copy every
+// 20 ms while it waits for the copy's graph: with its rounds slowed to 300 ms,
+// four ticks in a row landed in one and the graph came 39 s after the last push;
+// at a second a round no tick of the minute the suite gives it found a gap, and
+// the graph was never written — as a loaded runner's CI once met with no slowing
+// at all. With the wake, the same second-long rounds have it written as the
+// round the first tick met lets go.
+func (c *Cache) oweWake(e *entry) {
+	if e.running != nil || e.adopting > 0 {
+		e.maintainerOwed = true
+	}
+}
+
 // owedWake reports whether the maintainer is owed a wake on e now — a pass
-// was held back from it (maintainerOwed) by a round or an adoption, and
-// neither holds it any more — and takes the debt; e.mu is held.
+// was held back from it (oweWake) by a round or an adoption, or a full round
+// converged it, and neither holds it any more — and takes the debt; e.mu is
+// held.
 func (c *Cache) owedWake(e *entry) bool {
 	if !e.maintainerOwed || e.running != nil || e.adopting > 0 {
 		return false
@@ -1035,6 +1064,9 @@ func (c *Cache) startMaintenance(ctx context.Context, e *entry, most, lane int, 
 	}
 	e.mu.Lock()
 	if !c.runnable(e) {
+		// HELD BACK SINCE THE PASS READ IT RUNNABLE, by a round or an adoption
+		// that began after its walk: the same debt as one the walk finds.
+		c.oweWake(e)
 		e.mu.Unlock()
 		c.leave()
 		return nil, notDue, 0

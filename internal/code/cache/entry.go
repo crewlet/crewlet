@@ -199,9 +199,10 @@ type entry struct {
 	// lastAdded is when a round last added packs: the maintainer's debounce.
 	lastAdded time.Time
 	// maintainerOwed: a full round converged, or a pass found the repository
-	// due while an adoption held it, and the maintainer is to be woken once
-	// no round runs on it (run) and no adoption holds it (releaseWrite),
-	// since a pass starts no run on one either holds (runnable).
+	// due while a round or an adoption held it (oweWake), and the maintainer
+	// is to be woken once no round runs on it (run) and no adoption holds it
+	// (releaseWrite), since a pass starts no run on one either holds
+	// (runnable).
 	maintainerOwed bool
 	// uncoveredSince is when the oldest pack the maintainer's index does not
 	// cover arrived — set by the round that adds packs while none wait, and
