@@ -935,6 +935,7 @@ func TestNoPayloadPutsAPartitionInTheConversationField(t *testing.T) {
 func TestATriggerNamesWhatStartedTheTurn(t *testing.T) {
 	t.Parallel()
 	chat := TriggerOrigin{Kind: OriginChatMessage, ID: "msg-1", Reason: "answerer"}
+	early := TriggerOrigin{Kind: OriginChatMessage, ID: "msg-0", Reason: "answerer"}
 	trace := events.TraceContext{}
 	for name, tc := range map[string]struct {
 		event *events.Event
@@ -948,6 +949,9 @@ func TestATriggerNamesWhatStartedTheTurn(t *testing.T) {
 			TriggerOrigin{Kind: OriginColleagueAsk, ID: "ch-1"}},
 		"a vendor's message": {events.New(ExternalNotification{NotificationSource: "mattermost"},
 			trace), TriggerOrigin{}},
+		"a burst of messages": {events.New(ExternalNotification{NotificationSource: "chat",
+			Origin: chat, Messages: []CoalescedMessage{{Origin: early}, {Origin: chat}}}, trace),
+			chat},
 	} {
 		got := DescribeTrigger(tc.event)
 		if got.Origin != tc.want {
@@ -963,6 +967,17 @@ func TestATriggerNamesWhatStartedTheTurn(t *testing.T) {
 		}
 		if back.Origin != tc.want {
 			t.Errorf("%s: read back as %+v from %s", name, back.Origin, raw)
+		}
+		// A BURST NAMES EVERY MESSAGE IT TOOK IN, oldest first, on the
+		// wire as in hand.
+		if name == "a burst of messages" {
+			want := []TriggerOrigin{early, chat}
+			if !slices.Equal(got.Origins, want) || !slices.Equal(back.Origins, want) {
+				t.Errorf("a burst names %+v and reads back %+v, want %+v", got.Origins,
+					back.Origins, want)
+			}
+		} else if len(got.Origins) != 0 {
+			t.Errorf("%s: names %+v beside its origin, want none", name, got.Origins)
 		}
 		if _, present := got.Map()["origin"]; present == tc.want.IsZero() {
 			t.Errorf("%s: the wire form's origin key is present=%v for %+v", name,

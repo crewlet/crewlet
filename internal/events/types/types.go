@@ -176,8 +176,16 @@ type Trigger struct {
 	// Origin is WHAT the waking event was about and why it reached this
 	// seat: the chat message and the routing reason, the work item and the
 	// tracker's reason, the schedule that fired. Zero, and absent from the
-	// wire form, for a trigger whose event names none.
+	// wire form, for a trigger whose event names none. For a COALESCED
+	// trigger it is the primary one, the latest constituent's, as the
+	// merged event's other flat fields are.
 	Origin TriggerOrigin
+
+	// Origins is every object a COALESCED trigger took in, oldest first,
+	// the primary one included: one turn answered several messages, and
+	// each of them started it. Nil for a trigger of one event, whose
+	// Origin says it all.
+	Origins []TriggerOrigin
 }
 
 // TriggerOrigin is what started a turn, as the waking event names it.
@@ -215,6 +223,12 @@ type Originated interface {
 	TriggerOrigin() TriggerOrigin
 }
 
+// Gathered is a waking event that took in several objects at once, a
+// coalesced notification, and names each of them ([Trigger.Origins]).
+type Gathered interface {
+	TriggerOrigins() []TriggerOrigin
+}
+
 // DescribeTrigger builds the descriptor for the event that woke an agent.
 // A nil event yields the zero Trigger.
 func DescribeTrigger(e *events.Event) Trigger {
@@ -231,6 +245,9 @@ func DescribeTrigger(e *events.Event) Trigger {
 	if origin, ok := e.Data.(Originated); ok {
 		t.Origin = origin.TriggerOrigin()
 	}
+	if gathered, ok := e.Data.(Gathered); ok {
+		t.Origins = gathered.TriggerOrigins()
+	}
 	integrationTrigger, ok := e.Data.(IntegrationTrigger)
 	if !ok {
 		return t
@@ -246,7 +263,11 @@ func DescribeTrigger(e *events.Event) Trigger {
 }
 
 // IsZero reports whether this descriptor names no trigger at all.
-func (t Trigger) IsZero() bool { return t == Trigger{} }
+func (t Trigger) IsZero() bool {
+	return t.ID == "" && t.Type == "" && t.Summary == "" && t.Actor == "" &&
+		t.Timestamp.IsZero() && t.Integration == "" && t.Sender == "" &&
+		t.SourceEventType == "" && t.Origin.IsZero() && len(t.Origins) == 0
+}
 
 // Map renders the descriptor in the loose form the wire and the dashboard use.
 //
@@ -280,13 +301,26 @@ func (t Trigger) Map() map[string]any {
 		}
 	}
 	if !t.Origin.IsZero() {
-		origin := map[string]any{"kind": t.Origin.Kind, "id": t.Origin.ID}
-		if t.Origin.Reason != "" {
-			origin["reason"] = t.Origin.Reason
+		descriptor["origin"] = t.Origin.wire()
+	}
+	if len(t.Origins) > 0 {
+		origins := make([]any, 0, len(t.Origins))
+		for _, o := range t.Origins {
+			origins = append(origins, o.wire())
 		}
-		descriptor["origin"] = origin
+		descriptor["origins"] = origins
 	}
 	return descriptor
+}
+
+// wire is an origin in the descriptor's loose form: its reason only where the
+// source stated one.
+func (o TriggerOrigin) wire() map[string]any {
+	out := map[string]any{"kind": o.Kind, "id": o.ID}
+	if o.Reason != "" {
+		out["reason"] = o.Reason
+	}
+	return out
 }
 
 // MarshalJSON writes the descriptor through Map, so the JSON a node publishes
@@ -296,19 +330,16 @@ func (t Trigger) MarshalJSON() ([]byte, error) { return json.Marshal(t.Map()) }
 // triggerWire mirrors the map form for decoding. Every key is optional: a
 // descriptor written by a node that knew fewer of them is still a descriptor.
 type triggerWire struct {
-	ID              string `json:"id"`
-	Type            string `json:"type"`
-	Summary         string `json:"summary"`
-	Actor           string `json:"actor"`
-	Timestamp       string `json:"timestamp"`
-	Integration     string `json:"integration"`
-	Sender          string `json:"sender"`
-	SourceEventType string `json:"source_event_type"`
-	Origin          struct {
-		Kind   string `json:"kind"`
-		ID     string `json:"id"`
-		Reason string `json:"reason"`
-	} `json:"origin"`
+	ID              string          `json:"id"`
+	Type            string          `json:"type"`
+	Summary         string          `json:"summary"`
+	Actor           string          `json:"actor"`
+	Timestamp       string          `json:"timestamp"`
+	Integration     string          `json:"integration"`
+	Sender          string          `json:"sender"`
+	SourceEventType string          `json:"source_event_type"`
+	Origin          TriggerOrigin   `json:"origin"`
+	Origins         []TriggerOrigin `json:"origins"`
 }
 
 // UnmarshalJSON reads a descriptor back, tolerating a timestamp it cannot
@@ -326,8 +357,7 @@ func (t *Trigger) UnmarshalJSON(data []byte) error {
 		ID: wire.ID, Type: wire.Type, Summary: wire.Summary, Actor: wire.Actor,
 		Integration: wire.Integration, Sender: wire.Sender,
 		SourceEventType: wire.SourceEventType,
-		Origin: TriggerOrigin{Kind: wire.Origin.Kind, ID: wire.Origin.ID,
-			Reason: wire.Origin.Reason},
+		Origin:          wire.Origin, Origins: wire.Origins,
 	}
 	if wire.Timestamp != "" {
 		if parsed, err := time.Parse(time.RFC3339, wire.Timestamp); err == nil {

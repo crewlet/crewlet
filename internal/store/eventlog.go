@@ -501,9 +501,9 @@ INSERT INTO crewlet_events (
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, provider_key, work_item,
-	calls, spend_stage, answered_by, node, trigger_origin
+	calls, spend_stage, answered_by, node
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -540,6 +540,11 @@ type eventRow struct {
 	payload string
 	spend   Spend
 	parties []string
+
+	// origins are the objects the record says started its turn
+	// ([TurnOrigins]): written beside it into crewlet_turn_origins, the
+	// index "which turn did this message start" seeks. See node/0059.
+	origins []string
 }
 
 // prepareEvent readies one record for its insert, or refuses it. seats is what
@@ -634,7 +639,8 @@ func prepareEvent(rec EventRecord, seats SeatResolver) (eventRow, error) {
 	}
 	return eventRow{rec: rec, tags: tags, tagJSON: string(tagJSON),
 		payload: string(payload), spend: spend,
-		parties: partiesOf(tags, seats)}, nil
+		parties: partiesOf(tags, seats),
+		origins: TurnOrigins(rec.Type, payload)}, nil
 }
 
 // insert writes the row and its party rows inside tx.
@@ -669,9 +675,6 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 		// a custody keeper writes rows another node published. See
 		// node/0054.
 		rec.Node,
-		// WHAT STARTED THE TURN, off the `trigger_origin` tag, for the
-		// reason work_item is a copy of its own. See node/0059.
-		tags["trigger_origin"],
 	); err != nil {
 		return err
 	}
@@ -681,8 +684,23 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 			return err
 		}
 	}
+	// WHAT STARTED THE TURN, in the same transaction for the party index's
+	// reason: an index that can miss entries is not one. A record naming no
+	// turn starts nothing a reader could open.
+	if spend.TurnID != "" {
+		for _, origin := range r.origins {
+			if _, err := tx.ExecContext(ctx, originInsertSQL,
+				origin, spend.TurnID, EncodeTime(rec.Time), rec.ID); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
+
+const originInsertSQL = `
+INSERT INTO crewlet_turn_origins (origin, turn_id, event_time, event_id) VALUES (?, ?, ?, ?)
+ON CONFLICT (origin, turn_id, event_time, event_id) DO NOTHING`
 
 // partyInsertSQL records one (party, event) pair. Idempotent for the same
 // reason the event insert is: a publish retry replays the whole append.
@@ -1465,6 +1483,13 @@ func (l *EventLog) Purge(ctx context.Context) (int64, error) {
 		"DELETE FROM crewlet_event_parties WHERE event_time < ?", cutoff,
 	); err != nil {
 		return 0, fmt.Errorf("store: purge event parties: %w", err)
+	}
+	// AND THE ORIGIN INDEX, on the same horizon for the same reason: it
+	// indexes this table's turn-start records. See node/0059.
+	if _, err := l.db.sql.ExecContext(ctx,
+		"DELETE FROM crewlet_turn_origins WHERE event_time < ?", cutoff,
+	); err != nil {
+		return 0, fmt.Errorf("store: purge turn origins: %w", err)
 	}
 	// AND THE CUSTODY BATCHES THIS NODE SETTLED, on the same horizon,
 	// counted from the settle: a record exists to turn away a redelivery

@@ -356,9 +356,11 @@ type TurnQuery struct {
 	// unfiltered list shows. See schema/0033 for the column and its index.
 	WorkItem string
 
-	// Origin narrows to the turns a record of which an object started or
-	// resumed, by its identity `<kind>:<id>` ([OriginRef]): "which turn did
-	// this message start". ON THE TURN, like WorkItem. See node/0059.
+	// Origin narrows to the turns an object started or resumed, by its
+	// identity `<kind>:<id>` ([OriginRef]): "which turn did this message
+	// start". Every object a turn's start named counts, each message a
+	// coalesced trigger took in included. ON THE TURN, like WorkItem, read
+	// off crewlet_turn_origins. See node/0059.
 	Origin string
 
 	// Failed narrows to turns that carried a failure, or to those that did
@@ -1206,8 +1208,8 @@ func (q TurnQuery) turnWhere(floor time.Time, read turnRead) ([]string, []any) {
 		// ON THE TURN, for WorkItem's reason: the turn is folded whole,
 		// so the row is the one the unfiltered list shows.
 		where = append(where,
-			"turn_id IN (SELECT turn_id FROM crewlet_events "+
-				"WHERE trigger_origin = ? AND trigger_origin <> '' AND event_time >= ? AND turn_id != '')")
+			"turn_id IN (SELECT turn_id FROM crewlet_turn_origins "+
+				"WHERE origin = ? AND event_time >= ?)")
 		args = append(args, q.Origin, EncodeTime(floor))
 	}
 	if q.WorkItem != "" && !shares {

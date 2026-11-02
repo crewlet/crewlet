@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -375,19 +376,15 @@ func ExtractTags(payload []byte) map[string]string {
 		}
 	}
 	// WHAT STARTED THE TURN, the third nested read: every turn record
-	// carries its trigger, and the trigger names its origin
+	// carries its trigger, and the trigger names its PRIMARY origin
 	// (types.TriggerOrigin) as `trigger.origin{kind, id, reason}`. The tag is
 	// `<kind>:<id>`, BOTH HALVES OR NOTHING for work_item's reason, and the
-	// reason rides beside it. [EventLog.Append] copies the first into the
-	// trigger_origin column (schema node/0059), which is what makes "the
-	// turns this message started" an index seek.
+	// reason rides beside it: what the turns list's row reads its origin
+	// from. Finding a turn BY an origin, a coalesced trigger's every message
+	// included, is the turn start's own index ([TurnOrigins], node/0059).
 	if raw, ok := flat["trigger"]; ok {
 		var trigger struct {
-			Origin struct {
-				Kind   string `json:"kind"`
-				ID     string `json:"id"`
-				Reason string `json:"reason"`
-			} `json:"origin"`
+			Origin types.TriggerOrigin `json:"origin"`
 		}
 		if json.Unmarshal(raw, &trigger) == nil {
 			if origin := OriginRef(trigger.Origin.Kind, trigger.Origin.ID); origin != "" {
@@ -410,6 +407,39 @@ func OriginOfTags(tags map[string]string) *types.TriggerOrigin {
 		return nil
 	}
 	return &types.TriggerOrigin{Kind: kind, ID: id, Reason: tags["trigger_reason"]}
+}
+
+// turnStarted is the record a turn's origins are indexed from: its own start,
+// one per segment, rather than every phase record, which repeat the trigger.
+var turnStarted = types.AgentTurnStarted{}.EventType()
+
+// TurnOrigins is every object a turn's start record says started it, as
+// `<kind>:<id>`, each once, the primary origin first and then every object a
+// COALESCED trigger took in ([types.Trigger.Origins]); nil for any other
+// record. What [EventLog.Append] writes into crewlet_turn_origins (node/0059).
+//
+// READ OFF THE SERIALIZED TRIGGER, as the tags are, so a newer peer's record
+// is indexed as a known one is.
+func TurnOrigins(eventType string, payload []byte) []string {
+	if eventType != turnStarted {
+		return nil
+	}
+	var body struct {
+		Trigger struct {
+			Origin  types.TriggerOrigin   `json:"origin"`
+			Origins []types.TriggerOrigin `json:"origins"`
+		} `json:"trigger"`
+	}
+	if json.Unmarshal(payload, &body) != nil {
+		return nil
+	}
+	var out []string
+	for _, o := range append([]types.TriggerOrigin{body.Trigger.Origin}, body.Trigger.Origins...) {
+		if ref := OriginRef(o.Kind, o.ID); ref != "" && !slices.Contains(out, ref) {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 // OriginRef is a turn origin's identity as the log files it, `<kind>:<id>`,

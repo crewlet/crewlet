@@ -1,23 +1,31 @@
--- What started a turn becomes a column of the event log: the object the waking
--- event was about, as `<kind>:<id>` (a chat message, a work item, a schedule,
--- a colleague's ask).
+-- What started a turn becomes an index of the event log: every object the
+-- turn's start named, as `<kind>:<id>` (a chat message, a work item, a
+-- schedule, a colleague's ask), beside the turn it started.
 --
--- WHAT A COLUMN BUYS HERE is the question "which turn did this message start".
--- Every record a turn publishes carries its trigger, and since this build the
--- trigger names its origin (types.TriggerOrigin): the chat message a person
--- wrote, under the reason it reached the seat. A filter on it through the
--- payload is a json_extract over every row in the window, which is what
--- schema/0015 exists to stop the reads here doing; the column is a copy of the
--- `trigger_origin` tag store.ExtractTags composes, as work_item is (0033).
+-- WHAT IT BUYS is the question "which turn did this message start". Since this
+-- build a turn's trigger names its origin (types.TriggerOrigin): the chat
+-- message a person wrote, under the reason it reached the seat. A COALESCED
+-- trigger names every message it took in (Trigger.Origins), because one turn
+-- answered all of them, and each of those messages has to find it: the busy
+-- case, a burst merged into one turn, is exactly where a person asks.
 --
--- An empty string, never NULL, for a row whose trigger names no origin, so a
--- reader compares against '' and the partial index below leaves those rows out.
--- No backfill: no record written before this build names an origin.
-ALTER TABLE crewlet_events ADD COLUMN trigger_origin TEXT NOT NULL DEFAULT '';
+-- A TABLE RATHER THAN A COLUMN for that reason: one record names several
+-- objects. It is written with the turn's own start record (agent_turn_started,
+-- one per segment, so a turn resumed by a person's answer is found by that
+-- answer too) in the same transaction as the event, by EventLog.Append, as the
+-- party index (0016) is; not with every phase record, which repeat the same
+-- trigger.
+--
+-- LED BY (origin, turn_id), which is the seek: the turns one object started.
+-- The event's own identity completes the key, so a row belongs to one record
+-- and goes with it: on the retention horizon (EventLog.Purge, on the time
+-- index below) and when custody moves a record away.
+CREATE TABLE crewlet_turn_origins (
+    origin     TEXT    NOT NULL,
+    turn_id    TEXT    NOT NULL,
+    event_time INTEGER NOT NULL,
+    event_id   TEXT    NOT NULL,
+    PRIMARY KEY (origin, turn_id, event_time, event_id)
+);
 
--- THE TURNS AN OBJECT STARTED ARE A RANGE SEEK, in the order the turns list's
--- origin filter reads. PARTIAL over the rows that name one, the shape 0029 and
--- 0033 gave theirs.
-CREATE INDEX IF NOT EXISTS crewlet_events_trigger_origin_idx
-    ON crewlet_events (trigger_origin, event_time, event_id)
-    WHERE trigger_origin <> '';
+CREATE INDEX crewlet_turn_origins_time_idx ON crewlet_turn_origins (event_time);

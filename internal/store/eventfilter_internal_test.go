@@ -73,7 +73,7 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 	}{
 		{"work_key", TurnQuery{WorkKey: "wk-1"}, "crewlet_events_work_key_idx"},
 		{"work_item", TurnQuery{WorkItem: "native:t-1"}, "crewlet_events_work_item_idx"},
-		{"origin", TurnQuery{Origin: "chat_message:m-1"}, "crewlet_events_trigger_origin_idx"},
+		{"origin", TurnQuery{Origin: "chat_message:m-1"}, "SEARCH crewlet_turn_origins"},
 		{"work_key from a cursor", TurnQuery{WorkKey: "wk-1",
 			Before: &TurnCursor{Start: now().Add(-time.Hour), TurnID: "t-1"}}, "crewlet_events_work_key_idx"},
 		{"work_item from a cursor", TurnQuery{WorkItem: "native:t-1",

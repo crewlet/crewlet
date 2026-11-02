@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
@@ -51,6 +52,12 @@ type CoalescedMessage struct {
 	// without this copy a worker reasoning per message could not tell the
 	// one direct mention in a burst from the four broadcasts around it.
 	Addressed bool `json:"addressed,omitempty"`
+
+	// Origin is this constituent's OWN origin ([ExternalNotification.Origin]):
+	// the message it was, under the reason it reached the seat. The merged
+	// event's flat Origin is the latest constituent's, so without this copy
+	// the turn a burst woke could be found from its last message alone.
+	Origin TriggerOrigin `json:"origin,omitzero"`
 }
 
 // ExternalNotification is an inbound notification from an external system, and
@@ -153,6 +160,21 @@ func (e ExternalNotification) Integration() string { return e.NotificationSource
 
 // TriggerOrigin is what the notification is about ([Originated]).
 func (e ExternalNotification) TriggerOrigin() TriggerOrigin { return e.Origin }
+
+// TriggerOrigins is every object a COALESCED notification took in, oldest
+// first and each once ([Gathered]), or nil for a notification of one message.
+func (e ExternalNotification) TriggerOrigins() []TriggerOrigin {
+	if len(e.Messages) == 0 {
+		return nil
+	}
+	var out []TriggerOrigin
+	for _, m := range e.Messages {
+		if !m.Origin.IsZero() && !slices.Contains(out, m.Origin) {
+			out = append(out, m.Origin)
+		}
+	}
+	return out
+}
 
 // IntegrationSender is the human the integration identified, when it did.
 func (e ExternalNotification) IntegrationSender() string { return e.Sender }
