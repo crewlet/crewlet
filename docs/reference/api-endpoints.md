@@ -9325,7 +9325,7 @@ the run's own), and OpenCode's session export. Each entry is one of:
 | `kind` | What it is |
 |---|---|
 | `brief` | What the run was handed: the engine's brief, a later launch's on the same session, or — in a subagent's `thread` — the brief the run's own model wrote it |
-| `note` | A note a person sent the run while it worked, as its harness handed it to the model: the engine's heading naming who sent it, then their words. Read wherever the harness filed it — OpenCode as a person's message, Claude Code as a hook's context in a record of its own — by the heading every note opens with |
+| `note` | A note a person sent the run while it worked, as its harness handed it to the model: the engine's heading naming who sent it, then their words. Read wherever the harness filed it — OpenCode as a person's message, Claude Code as a hook's context in a record of its own — by the heading every note opens with; and the line the run's own hook printed as it handed notes over (the live output's `[steer]` line), saying whose reached the run |
 | `model` | What the model wrote |
 | `tool_call` | A tool the model called, its input as JSON, the tool in `tool` |
 | `tool_result` | What the tool answered, `failed` where the harness recorded an error |

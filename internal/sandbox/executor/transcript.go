@@ -61,7 +61,10 @@ import (
 // hook's additional context, kept in a record of the harness's own whose shape
 // is the harness's and moves between releases — so every record Claude Code
 // writes for itself is searched for that heading, rather than read by a shape
-// this build would have to pin.
+// this build would have to pin. The line the run's own hook prints as it hands
+// notes over, which the live transcript shows as `[steer]`, is a note entry
+// too: a release that keeps the line and not the context leaves it the notes'
+// one trace.
 //
 // # Bounded, and redacted at the read
 //
@@ -101,8 +104,9 @@ const (
 	EntryBrief EntryKind = "brief"
 
 	// EntryNote is a note a person sent the run while it worked, as its
-	// harness handed it to the model: the engine's heading, naming who sent
-	// it, and their words.
+	// harness handed it to the model — the engine's heading, naming who sent
+	// it, and their words — or the line the run's own hook printed as it
+	// handed notes over, saying whose reached the run.
 	EntryNote EntryKind = "note"
 
 	// EntryModel is what the model wrote.
@@ -685,13 +689,17 @@ func (ClaudeCode) transcript(ctx context.Context, b *transcriptBuilder, archive 
 // claudeRecord is the part of one line of Claude Code's transcript a read
 // takes: what kind of record it is, when it was written, whether it is one
 // the harness wrote for itself (`isMeta`) or a compaction summary, and its
-// message, raw — an object whose content is a string or a list of blocks.
+// message, raw — an object whose content is a string or a list of blocks. A
+// system record's subtype and content are its own, read for the one line the
+// run's own hook prints as it hands the model a note ([claudeSteerSaid]).
 type claudeRecord struct {
 	Type             string          `json:"type"`
+	Subtype          string          `json:"subtype"`
 	Timestamp        string          `json:"timestamp"`
 	IsMeta           bool            `json:"isMeta"`
 	IsCompactSummary bool            `json:"isCompactSummary"`
 	Message          json.RawMessage `json:"message"`
+	Content          json.RawMessage `json:"content"`
 }
 
 // claudeArchive reads the session's transcript and each subagent's, a member
@@ -806,6 +814,16 @@ func (b *transcriptBuilder) claudeLine(ctx context.Context, line []byte) error {
 			kind = EntrySummary
 		}
 		return b.claudeMessage(rec.Message, kind, at)
+	case rec.Type == "system":
+		// THE LINE THE RUN'S OWN HOOK PRINTS as it hands the model a note,
+		// which the live transcript shows as `[steer]`: a note in its own
+		// right here, since a release that keeps no hook context leaves it
+		// the note's one trace.
+		if said, ok := claudeSteerSaid(rec.Subtype, rec.Content); ok {
+			if err := b.add(TranscriptEntry{Kind: EntryNote, At: at, Thread: b.thread}, said); err != nil {
+				return err
+			}
+		}
 	}
 	return b.claudeNotes(line, at)
 }

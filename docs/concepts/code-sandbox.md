@@ -1198,13 +1198,14 @@ model wrote, every tool call and what answered it, and the compaction summaries
 the harness wrote in place of what came before them; the model's thinking and
 the harness's bookkeeping are none. A note is known by the heading the engine
 opens every note with, wherever the harness filed it — OpenCode as a person's
-message, Claude Code as a hook's context in a record of its own. It is read a
-page at a time and bounded — 200 entries and 1 MiB of text a page, 16 KiB an
-entry, and 256 MiB a read of the archive as it inflates and, apart, of what a
-tar's members hand out, so an archive a box packed to inflate without end, or
-with a sparse member that declares more than it holds, stops there — and every
-entry's text is **redacted at this read before it is cut**, whatever the
-capture did: all of it that can reach the entry's bound and a private key's
+message, Claude Code as a hook's context in a record of its own — and the line
+the run's own hook prints as it hands notes over is a note entry too. It is
+read a page at a time and bounded — 200 entries and 1 MiB of text a page,
+16 KiB an entry, and 256 MiB a read of the archive as it inflates and, apart,
+of what a tar's members hand out, so an archive a box packed to inflate without
+end, or with a sparse member that declares more than it holds, stops there —
+and every entry's text is **redacted at this read before it is cut**, whatever
+the capture did: all of it that can reach the entry's bound and a private key's
 length past it, so a credential that begins inside the bound is redacted whole.
 An object the store no longer holds, one that does not open under the fleet's
 keyring, an archive that is not one its format describes and one this build

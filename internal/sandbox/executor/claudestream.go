@@ -273,6 +273,19 @@ var claudeSteerPrefix = regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +
 // content raw: `[steer]` and what the run's own hook said, for the line it
 // prints as it hands the model a note, and nothing for any other.
 func claudeSteerLine(subtype string, raw json.RawMessage) (string, bool) {
+	said, ok := claudeSteerSaid(subtype, raw)
+	if !ok {
+		return "", false
+	}
+	return "[steer] " + said, true
+}
+
+// claudeSteerSaid is what the run's own hook said in a system message of
+// subtype, its content raw, as it handed the model a note — its line after the
+// event's opening, bounded as a transcript line is — and false for every other
+// system message. ONE READING of the line, for the live transcript
+// ([claudeSteerLine]) and for a captured session's ([ReadTranscript]).
+func claudeSteerSaid(subtype string, raw json.RawMessage) (string, bool) {
 	if subtype != "informational" {
 		return "", false
 	}
@@ -285,10 +298,7 @@ func claudeSteerLine(subtype string, raw json.RawMessage) (string, bool) {
 		return "", false
 	}
 	said := firstLine(content[loc[1]:], transcriptDetailLimit)
-	if said == "" {
-		return "", false
-	}
-	return "[steer] " + said, true
+	return said, said != ""
 }
 
 // claudeBlocks is a message's content as blocks; a plain-string content (a

@@ -347,16 +347,18 @@ func jsonText(t *testing.T, text string) string {
 // Claude Code hands a note to its model as a hook's additional context, and
 // keeps it in a record of its own: whichever record, under whichever field,
 // a note there reads as a note in its place — framed in a system reminder or
-// not, two of one step's notes as two — while a record that only says a note
-// reached the run is the harness's notice and no entry. OpenCode admits a note
-// as a person's message, and it reads as a note rather than a brief. A brief
-// that carries a note further down, as a launch's brief carries the notes that
-// arrived before it, is still the brief, and a tool's result quoting a note's
-// heading is still the tool's: text a tool produced is never a note.
+// not, two of one step's notes as two — and the line the run's own hook
+// printed as it handed them over, which the live transcript shows as
+// `[steer]`, reads as a note saying whose reached the run. OpenCode admits a
+// note as a person's message, and it reads as a note rather than a brief. A
+// brief that carries a note further down, as a launch's brief carries the
+// notes that arrived before it, is still the brief, and a tool's result
+// quoting a note's heading is still the tool's: text a tool produced is never
+// a note.
 //
 // Mutation: skip the records the harness wrote for itself, read a note by its
-// record's shape alone, take a heading anywhere in a brief for a note, or read
-// OpenCode's note as a brief, and a row goes red.
+// record's shape alone, drop the hook's line, take a heading anywhere in a
+// brief for a note, or read OpenCode's note as a brief, and a row goes red.
 func TestANoteAPersonSentTheRunReadsAsANote(t *testing.T) {
 	t.Parallel()
 	batch := note("ada", "Target the release branch.") + "\n\n" + note("cy", "And keep the old flag.")
@@ -387,11 +389,12 @@ func TestANoteAPersonSentTheRunReadsAsANote(t *testing.T) {
 		{kind: executor.EntryToolResult, tool: "Read", text: quoted},
 		{kind: executor.EntryNote, text: note("ada", "Target the release branch.")},
 		{kind: executor.EntryNote, text: note("cy", "And keep the old flag.")},
+		{kind: executor.EntryNote, text: "2 notes from ada, cy reached the run"},
 		{kind: executor.EntryNote, text: note("bob", "Stop after the fix.")},
 	})
-	if len(got.Entries) == 6 {
-		if want := time.Date(2026, 10, 30, 12, 0, 4, 0, time.UTC); !got.Entries[5].At.Equal(want) {
-			t.Errorf("the note at the finish is dated %s, want its record's %s", got.Entries[5].At, want)
+	if len(got.Entries) == 7 {
+		if want := time.Date(2026, 10, 30, 12, 0, 4, 0, time.UTC); !got.Entries[6].At.Equal(want) {
+			t.Errorf("the note at the finish is dated %s, want its record's %s", got.Entries[6].At, want)
 		}
 	}
 
