@@ -8,9 +8,9 @@
 
 ## The decision
 
-A seat's executor session — the harness's own transcript, captured so a
-later turn on the same conversation, in any box on any node, continues it — is
-stored as **one sealed object per capture in the fleet's object store**
+A seat's executor session — the harness's own transcript, captured so a later
+launch of the same turn, in any box on any node, continues it, and so a later
+turn on the same conversation can, which none does yet — is stored as **one sealed object per capture in the fleet's object store**
 (ADR-0026), under a key the store mints, and is named by **one row per
 (seat handle, turn)** of the `executor` state-log domain on
 `CREWLET_EXECUTOR_LOG`, the tenth domain of the register. Every record about a

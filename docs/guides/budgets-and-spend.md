@@ -67,14 +67,19 @@ Within a turn, a send-back, a person's answer, a lost job or a replaced sign-in
 [continues the turn's harness session](../concepts/code-sandbox.md#a-relaunch-continues-the-turns-session)
 where it can, and a continued run sends the session's whole context again
 before it reads a word of its brief. So its launch needs the larger of the floor
-and that context with its brief: the whole input of the session's last request,
-cache included, recorded when the session was kept, and the brief's estimate —
-a 60 000-token session handed a 2 000-token brief needs 62 000 left in every
-capped window. It is held, parked or turned back on that figure exactly as
-above, and its reason names what the figure is made of. A session whose figure
-is past the smallest ceiling of the seat's or the company's capped windows,
-which no window turning over ever leaves room for, is not continued: the
-relaunch starts a session of its own on the floor.
+and that context with the brief that continues it: the whole input of the
+session's last request, cache included, recorded when the session was captured,
+and the estimate of the brief it is handed — a 60 000-token session handed a
+2 000-token continuation needs 62 000 left in every capped window. That holds
+for a run continued in its own box as much as for one restored into another; a
+session no capture measured (keeping switched off) has no known context, and
+its launch needs the floor alone. A continued launch is always a relaunch — a
+resumed segment's — so below its figure it is held, or for an answer turned
+back, exactly as above, never parked, and its reason names what the figure is
+made of. A session whose figure is past the smallest ceiling of the seat's or
+the company's capped windows, which no window turning over ever leaves room for,
+is not continued: the relaunch starts a session of its own on the floor. A seat
+with no capped window continues a session of any size.
 
 **And it pays for its context on every request.** Every request a harness makes
 sends its whole conversation, and every one is charged its whole input, the
@@ -83,15 +88,23 @@ cache's share included ([Cache share](#cache-share)): a run that continues a
 tokens for that context alone, most of them cache reads, where the same run
 started fresh begins at its
 harness's own prompt, its standing instructions and its brief and grows from
-there. The context a session is carried at is bounded for that reason. Every
-Claude Code run compacts its conversation at 100 000 tokens
-(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, which the engine pins), and a session of
-either harness whose last request carried more starts fresh, so a request of a
-continued run carries at most about 100 000 tokens — four times the default
-floor — and a continued run of *n* requests is charged at most about
-*n* × 100 000 input tokens before its output. A smaller window would compact
-sooner and charge less per request; a larger one would keep more of the session
-verbatim; the engine's is the least Claude Code accepts.
+there. A session's context is bounded by its harness's compaction for that
+reason. Every Claude Code run compacts its conversation at 100 000 tokens
+(`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, which the engine pins, with the variables
+that would switch compaction off unset), so a request of a continued Claude Code
+run carries about 100 000 tokens at most — four times the default floor — and a
+continued run of *n* requests is charged about *n* × 100 000 input tokens at
+most before its output. A smaller window would compact sooner and charge less
+per request; a larger one would keep more of the session verbatim; the engine's
+is the least Claude Code accepts. OpenCode compacts near its model's own window
+— once the conversation reaches the window less 15% of it, at least 16 000
+tokens, on 2.2, and less 10% on 2.0 — which the engine does not move, since
+OpenCode's setting is a share or a count of a window the engine does not know:
+a continued OpenCode run of *n* requests on a 200 000-token model is charged up
+to about *n* × 170 000. So is a Claude Code run whose repository's own settings
+switch its compaction off, up to its model's window. A session past 100 000
+tokens is continued wherever the seat's budget can carry it, by the floor
+above.
 
 A round's size is known only from its reply, so by the time it is judged the
 vendor has billed it, and **a refused round is counted like any other**. The

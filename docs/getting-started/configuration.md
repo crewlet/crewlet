@@ -303,8 +303,9 @@ as YAML. A ceiling below `turn_engine.executor_min_budget_tokens` (25000 by
 default) is refused too, on a seat that runs an executor and on the company,
 since no launch could ever fit under it; and a seat whose window leaves less
 than that floor waits [parked](../concepts/agent-runtime.md#the-budget-park)
-until it turns over — or, for a relaunch that continues its turn's session, less
-than [that session's own floor](../concepts/code-sandbox.md#what-a-continued-launch-costs).
+until it turns over. A relaunch that continues its turn's session needs [that
+session's own floor](../concepts/code-sandbox.md#what-a-continued-launch-costs),
+and below it its resumed segment is held on the window, never parked.
 
 [`crewlet validate`](../reference/cli.md) **warns** — it never refuses — about a ceiling that
 can never refuse a turn, because another ceiling is always reached first:

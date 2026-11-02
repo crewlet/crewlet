@@ -1275,7 +1275,8 @@ on another node, days later; see
 here runs with session persistence off, and its seat's volatile paths are
 deleted between generations ([Isolation](#isolation-the-part-that-actually-matters)).
 An executor's run keeps its harness's own session in its box — the conversation
-every relaunch of its turn continues, in that box or restored into another
+a relaunch of its turn continues where it can, in that box or restored into
+another
 ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)),
 and which the engine keeps out of the box once the run is collected — so the
 runner pins where it is kept rather than

@@ -22,7 +22,8 @@ and it deliberately follows the same doctrine one scope wider.
 harness session where it stopped (Claude Code's `--resume`, OpenCode's
 `--session`) — a person's answer to a run parked on a question, a reviewer's
 send-back, a lost job, a replaced sign-in — from the copy its box holds or from
-the capture the turn kept, restored into whichever box the launch gets
+the kept capture of the job it follows, restored into whichever box the launch
+gets
 ([Code Sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)); where it
 cannot, a fresh run is told what it needs instead. That is right for one turn's
 work, carried on. It is wrong here: a conversation's next turn
