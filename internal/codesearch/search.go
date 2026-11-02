@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/codeindex"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -46,6 +47,10 @@ type Query struct {
 	// Limit is the most hits answered, 1 to code.MaxSearchHits; 0 is
 	// code.MaxSearchHits.
 	Limit int
+	// After, where set, is the place in the search's order the answer
+	// continues from ([Key]): the lines after it, Limit of them. A page of
+	// a long search is asked after the last line of the page before.
+	After *Key
 	// Asker is who searches, REQUIRED; CeilingSeat and Turn are a seat's
 	// read's as code.GitQuery's are. Every node judges each repository's
 	// grant for them.
@@ -73,7 +78,9 @@ type Answer struct {
 // Coverage is what a search covered. Every repository the search names — the
 // repositories its repo: filters name, or, unfiltered, every `search:
 // indexed` repository the asker may read — is in exactly ONE of Searched,
-// Building, NotAnswering, NotPermitted, Stale and NoRef; GrepNotNamed is the
+// Building, NotAnswering, NotPermitted, Stale and NoRef, but in a search
+// continued after a [Key], which names those from the key's on: the ones
+// before it were asked for the pages before, and are in none; GrepNotNamed is the
 // repositories an unfiltered search leaves out, and NotIndexed names those
 // of Searched that were read with git grep.
 type Coverage struct {
@@ -111,8 +118,12 @@ type Coverage struct {
 	// SkippedFiles is the files the searched repositories passed over for
 	// their size or as binaries (code.SearchAnswer.SkippedFiles).
 	SkippedFiles int `json:"skipped_files"`
-	// Truncated says lines may be missing: a repository's search stopped at
-	// its limit or its budget, or the merge cut the lines past Limit.
+	// Truncated says lines may follow the last hit, or be missing: a
+	// repository's search stopped at its limit, its answer's bound or its
+	// budget, or the merge cut the lines past Limit or past such a stop.
+	// Every line before the last hit is answered; the lines after it are
+	// what a search continued after it answers, but for a repository whose
+	// budget ran out before its first line, which no page reaches.
 	Truncated bool `json:"truncated"`
 }
 
@@ -217,8 +228,18 @@ func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 	var (
 		out Answer
 		via = "scatter"
+		// ONE REPOSITORY OR A SCATTER BY WHAT THE SEARCH NAMES, decided
+		// before a page's place leaves any out: a page of a search of
+		// several is a scatter as its first page was, its refusals in the
+		// coverage, never the one repository's refusal of the search.
+		single = len(repos) == 1
 	)
-	if len(repos) == 1 {
+	if q.After != nil {
+		// A REPOSITORY BEFORE THE PLACE IS ASKED NOTHING: every line of it
+		// sorts before the place, and an earlier page answered them.
+		repos = slices.DeleteFunc(repos, func(r code.RepoRef) bool { return r.Name < q.After.Repo })
+	}
+	if single && len(repos) == 1 {
 		var read code.SearchVia
 		if out, read, err = s.one(ctx, q, sq, repos[0]); err != nil {
 			return Answer{}, err
@@ -262,6 +283,17 @@ func (q Query) validate() error {
 	}
 	if err := q.Asker.Validate(); err != nil {
 		return fmt.Errorf("asker: %w", err)
+	}
+	if q.After != nil {
+		if !code.ValidName(q.After.Repo) {
+			return fmt.Errorf("%w: after.repo: %q is not a repository's name", code.ErrInvalid, q.After.Repo)
+		}
+		if !gitref.ValidOID(q.After.Tip) {
+			return fmt.Errorf("%w: after.tip: %q is not a commit's whole id", code.ErrInvalid, q.After.Tip)
+		}
+		if _, err := q.After.Raw(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -326,6 +358,7 @@ func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef,
 // one searches one repository through the keyed walk.
 func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, repo code.RepoRef) (Answer,
 	code.SearchVia, error) {
+	q.After.continueIn(repo.Name, &sq)
 	got, err := s.estate.GitRead(ctx, code.GitQuery{Kind: code.GitSearch, RepoID: repo.ID, Asker: q.Asker,
 		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Search: &sq})
 	if err != nil {
@@ -386,8 +419,11 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 	for i, r := range repos {
 		all[i] = &asked{repo: r, order: orders[r.ID]}
 	}
-	var hits []Hit
-	cut := false
+	var (
+		hits []Hit
+		ends prefixEnd
+		cut  = false
+	)
 	for round := range 2 {
 		assign := map[string][]Assigned{}
 		byNode := map[string][]*asked{}
@@ -401,7 +437,8 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 			home := round == 0 || a.silent || (a.result.Outcome == OutcomeUnready && a.result.Unready.PassesFill()) ||
 				a.result.Outcome == OutcomeFailed
 			node := a.order[a.at]
-			assign[node] = append(assign[node], Assigned{RepoID: a.repo.ID, Name: a.repo.Name, Home: home})
+			assign[node] = append(assign[node], Assigned{RepoID: a.repo.ID, Name: a.repo.Name, Home: home,
+				After: q.After.of(a.repo.Name)})
 			byNode[node] = append(byNode[node], a)
 		}
 		if len(assign) == 0 {
@@ -420,6 +457,20 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 				}
 				hits = append(hits, rep.Hits...)
 				cut = cut || rep.Cut
+				// A NODE THAT CUT its lines answered the first of them up to
+				// its last; a repository that stopped early, its own first
+				// lines up to ITS last (code.SearchAnswer) — and no line
+				// after either is known to follow every line before it.
+				if rep.Cut && len(rep.Hits) > 0 {
+					ends.at(rep.Hits[len(rep.Hits)-1])
+				}
+				stopped := map[string]bool{}
+				for _, a := range list {
+					if r, ok := results[a.repo.ID]; ok && r.Truncated {
+						stopped[a.repo.Name] = true
+					}
+				}
+				ends.stopped(rep.Hits, stopped)
 			}
 			for _, a := range list {
 				r, ok := results[a.repo.ID]
@@ -448,6 +499,9 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 	}
 	slices.SortFunc(hits, CompareHits)
 	hits = slices.CompactFunc(hits, func(x, y Hit) bool { return CompareHits(x, y) == 0 })
+	var past bool
+	hits, past = ends.keep(hits)
+	cut = cut || past
 	limit := sq.Hits()
 	if len(hits) > limit {
 		hits, cut = hits[:limit], true

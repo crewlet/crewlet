@@ -88,6 +88,43 @@ type SearchQuery struct {
 	// Limit is the most hits answered, 1 to MaxSearchHits; 0 is
 	// MaxSearchHits.
 	Limit int `json:"limit,omitempty"`
+	// After, where set, is the place in the search's order the answer
+	// continues from: only lines AFTER it are answered, so Limit counts the
+	// lines past it alone ([SearchAfter]). A field a node of an older build
+	// would read past, so — as the rest of this request — under the STATED
+	// CONDITION above.
+	After *SearchAfter `json:"after,omitempty"`
+}
+
+// SearchAfter is a place in one repository's search order — its paths'
+// bytes, then their numbers — named as the hit sent last names it: the path
+// as itself or, where it is not UTF-8, by PathB64 alone ([GitPath]'s pair),
+// and the line. A search continued after it reads no file whose path sorts
+// before the path, and answers no line of the path itself at or before the
+// line, so a page of a long search costs the lines from its place on and
+// never again the lines an earlier page answered ([SearchAfterOf]).
+type SearchAfter struct {
+	Path    string `json:"path,omitempty"`
+	PathB64 string `json:"path_b64,omitempty"`
+	Line    int    `json:"line"`
+}
+
+// SearchAfterOf is the place of h: what a search continued after h names.
+func SearchAfterOf(h SearchHit) SearchAfter {
+	if h.PathB64 != "" {
+		return SearchAfter{PathB64: h.PathB64, Line: h.Line}
+	}
+	return SearchAfter{Path: h.Path, Line: h.Line}
+}
+
+// Raw is a's path as its exact bytes, or [ErrInvalid] naming what is wrong
+// with the place: a path no tree entry can be named by, or a line before a
+// file's first.
+func (a SearchAfter) Raw() (string, error) {
+	if a.Line < 1 {
+		return "", fmt.Errorf("%w: search.after.line: %d is before a file's first line, 1", ErrInvalid, a.Line)
+	}
+	return GitPath("search.after.path", a.Path, a.PathB64, false)
 }
 
 // Query is q as codeindex reads it.
@@ -104,8 +141,8 @@ func (q SearchQuery) Hits() int {
 }
 
 // validate refuses a search the git node would refuse: codeindex's grammar
-// and plan (Query.Validate, which names what to change), and a limit past
-// MaxSearchHits.
+// and plan (Query.Validate, which names what to change), a limit past
+// MaxSearchHits, and a place to continue after that names no line.
 func (q SearchQuery) validate() error {
 	if q.Limit < 0 || q.Limit > MaxSearchHits {
 		return fmt.Errorf("%w: search.limit: %d is not 1 to %d (0 is %d)", ErrInvalid, q.Limit, MaxSearchHits,
@@ -114,12 +151,20 @@ func (q SearchQuery) validate() error {
 	if err := q.Query().Validate(); err != nil {
 		return fmt.Errorf("%w: search: %w", ErrInvalid, err)
 	}
+	if q.After != nil {
+		if _, err := q.After.Raw(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // SearchAnswer is a search's lines: every line of the commit searched the
-// expression matches, in the order of their paths' bytes and then their
-// numbers, as many as the query's limit.
+// expression matches — after the query's After, where it names one — in the
+// order of their paths' bytes and then their numbers, as many as the query's
+// limit. A search that stops early stops in that order, so its hits are
+// always the FIRST lines of what it searched: every line before its last is
+// among them.
 type SearchAnswer struct {
 	Hits []SearchHit `json:"hits"`
 	// Tip is the commit searched, whole; Ref the whole ref the query's Ref

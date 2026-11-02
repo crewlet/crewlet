@@ -44,7 +44,24 @@
 // the asker the first limit of every node's. No line one node left out can
 // come before a line another kept, so the answer is the first limit lines of
 // the whole search — the same whichever node answers first, since a round
-// assigns each repository to exactly one node and the merge is a sort.
+// assigns each repository to exactly one node and the merge is a sort. A
+// repository that stopped before its limit — at its answer's bound or its
+// budget — answered its first lines up to its last, and the lines after that
+// are unread, so the asker keeps no line of any repository past that last
+// (prefixEnd, from the outcome each node answers for each repository): every
+// line of the search before the answer's last is in the answer.
+//
+// # A page continues after its key
+//
+// A search asked AFTER a [Key] — the repository, commit and line a page of it
+// was cut at — answers the lines after it and counts its limit among those
+// alone: no repository before the key's is asked, and the key's own is read
+// at the key's commit, its node asking git for no file before the key's path
+// and dropping every line at or before the key's before its limit counts it.
+// So a page of a long search costs the lines from its place on, never a whole
+// search again, and continues the file the page before was cut in at the
+// commit it was read at. The rest of its order is read as it stands then: a
+// repository after the key has had no line answered yet.
 //
 // # What was not searched is said
 //

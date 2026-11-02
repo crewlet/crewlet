@@ -38,6 +38,35 @@ type repo struct {
 	ref   code.RepoRef
 	order []string
 	lines []code.SearchHit
+	// stops, where set, is a search of the repository that stops early —
+	// at its answer's bound or its budget — after stopAt of its lines.
+	stops  bool
+	stopAt int
+}
+
+// answerOf is r's search as a git node answers sq: its lines after sq's
+// place, the first sq.Hits() of them, Truncated where it left lines out.
+func answerOf(r repo, sq *code.SearchQuery) *code.SearchAnswer {
+	var lines []code.SearchHit
+	for _, h := range r.lines {
+		if sq.After != nil {
+			raw, _ := sq.After.Raw()
+			if h.Path < raw || h.Path == raw && h.Line <= sq.After.Line {
+				continue
+			}
+		}
+		lines = append(lines, h)
+	}
+	a := &code.SearchAnswer{Tip: tip(r), Via: code.SearchViaIndex}
+	limit := sq.Hits()
+	if r.stops && r.stopAt < limit {
+		limit = r.stopAt
+	}
+	if len(lines) > limit {
+		lines, a.Truncated = lines[:limit], true
+	}
+	a.Hits = lines
+	return a
 }
 
 func indexed(name string, order ...string) repo {
@@ -49,6 +78,9 @@ type estate struct {
 	mu    sync.Mutex
 	repos []repo
 	reads int
+	// at is every repository the walk was asked to search, as
+	// "<name>@<ref>".
+	at []string
 }
 
 func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
@@ -79,8 +111,8 @@ func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, er
 	e.reads++
 	for _, r := range e.repos {
 		if r.ref.ID == q.RepoID {
-			return code.GitAnswer{Kind: code.GitSearch, Search: &code.SearchAnswer{Hits: r.lines, Tip: tip(r),
-				Via: code.SearchViaIndex}}, nil
+			e.at = append(e.at, r.ref.Name+"@"+q.Search.Ref)
+			return code.GitAnswer{Kind: code.GitSearch, Search: answerOf(r, q.Search)}, nil
 		}
 	}
 	return code.GitAnswer{}, code.ErrRepoNotFound
@@ -104,7 +136,10 @@ type node struct {
 	e     *estate
 	fault map[string]error // by repository name
 	asked []string
-	mu    sync.Mutex
+	// at is every repository asked, as "<name>@<ref>": the commit or ref
+	// it was searched at.
+	at []string
+	mu sync.Mutex
 }
 
 func (n *node) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -114,16 +149,12 @@ func (n *node) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) 
 		}
 		n.mu.Lock()
 		n.asked = append(n.asked, r.ref.Name)
+		n.at = append(n.at, r.ref.Name+"@"+q.Search.Ref)
 		n.mu.Unlock()
 		if err := n.fault[r.ref.Name]; err != nil {
 			return code.GitAnswer{}, err
 		}
-		hits := r.lines
-		if len(hits) > q.Search.Hits() {
-			hits = hits[:q.Search.Hits()]
-		}
-		return code.GitAnswer{Kind: code.GitSearch, Search: &code.SearchAnswer{Hits: hits, Tip: tip(r),
-			Via: code.SearchViaIndex}}, nil
+		return code.GitAnswer{Kind: code.GitSearch, Search: answerOf(r, q.Search)}, nil
 	}
 	return code.GitAnswer{}, code.ErrRepoNotFound
 }
@@ -449,5 +480,164 @@ func TestARefusalNamesItsRepository(t *testing.T) {
 	refused = nil
 	if !errors.As(err, &refused) || refused.Repo != "alpha" || !errors.Is(err, code.ErrNotPermitted) {
 		t.Fatalf("a one-repository search its walk refused = %v, want a RepoRefusal of alpha, not permitted", err)
+	}
+}
+
+// walk is s's search q read a page of limit lines at a time, each page asked
+// after the last line of the page before, until a page says nothing follows:
+// every line every page answered, in order, and how many pages.
+func walk(t *testing.T, s *codesearch.Searcher, q codesearch.Query, limit int) ([]codesearch.Hit, int) {
+	t.Helper()
+	q.Limit = limit
+	var all []codesearch.Hit
+	for page := 1; page <= 20; page++ {
+		a, err := s.Search(context.Background(), q)
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		all = append(all, a.Hits...)
+		if len(a.Hits) == 0 || !a.Coverage.Truncated {
+			return all, page
+		}
+		last := a.Hits[len(a.Hits)-1]
+		key := codesearch.KeyOf(last, a.Tips[last.Repo])
+		q.After = &key
+	}
+	t.Fatalf("twenty pages of %v did not end", q.Search)
+	return nil, 0
+}
+
+// lines is r with six lines, three of each of two files.
+func lines(r repo) repo {
+	for _, p := range []string{"a.go", "b.go"} {
+		for n := range 3 {
+			r.lines = append(r.lines, line(p, n+1))
+		}
+	}
+	return r
+}
+
+// hitsOf is every line of rs, in the search's order.
+func hitsOf(rs ...repo) []codesearch.Hit {
+	var out []codesearch.Hit
+	for _, r := range rs {
+		for _, h := range r.lines {
+			out = append(out, codesearch.Hit{Repo: r.ref.Name, SearchHit: h})
+		}
+	}
+	return out
+}
+
+// A PAGE CONTINUES AFTER ITS KEY (codesearch.Key): a search read two lines a
+// page answers every line once and in order — a scatter of three
+// repositories over two nodes, and the walk of the one repository a search
+// names — and each page asks only what follows its key: no repository before
+// the key's is asked again, the key's own is read at the key's commit and
+// every one after it at its ref. A page of a search of several repositories
+// is a scatter, whichever repository its key leaves; and a key naming no
+// commit is refused before anything is asked.
+//
+// Mutations: ask every repository on every page (no cut by the key's
+// repository) — amber is asked on every page, red; read the key's repository
+// at the search's ref (continueIn's Ref) — amber is asked at its branch,
+// red; drop the key's place (continueIn's After) — a page repeats lines and
+// the walk never ends, red; decide one repository or a scatter after the
+// key's cut — the two-repository search's last page is read by the walk,
+// red; drop the tip's check — a key naming a branch is searched, red.
+func TestAPageContinuesAfterItsKey(t *testing.T) {
+	t.Parallel()
+	amber, basalt, cobalt := lines(indexed("amber", "git-a")), lines(indexed("basalt", "git-b")),
+		lines(indexed("cobalt", "git-a"))
+	e := &estate{repos: []repo{amber, basalt, cobalt}}
+	a := &node{}
+	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": a, "git-b": {}}))
+
+	got, pages := walk(t, s, query("needle"), 2)
+	if want := hitsOf(amber, basalt, cobalt); !reflect.DeepEqual(got, want) || pages != 9 {
+		t.Fatalf("two lines a page answered %d pages of %v, want 9 of %v", pages, got, want)
+	}
+	// amber's six lines are three pages, and the fourth, keyed by amber's
+	// last line, asks it once more — at the commit those lines were read at.
+	pinned := "amber@" + tip(amber)
+	wantAmber := []string{"amber@", pinned, pinned, pinned}
+	var askedAmber, askedCobalt []string
+	for _, at := range a.at {
+		switch {
+		case strings.HasPrefix(at, "amber@"):
+			askedAmber = append(askedAmber, at)
+		case strings.HasPrefix(at, "cobalt@"):
+			askedCobalt = append(askedCobalt, at)
+		}
+	}
+	if !reflect.DeepEqual(askedAmber, wantAmber) {
+		t.Errorf("amber was asked %v, want %v: never again once a page's key left it", askedAmber, wantAmber)
+	}
+	if len(askedCobalt) == 0 || askedCobalt[0] != "cobalt@" {
+		t.Errorf("cobalt was asked %v, want its ref first: no line of it was answered before", askedCobalt)
+	}
+
+	one := query("needle")
+	one.Search.Repos = []string{"basalt"}
+	if got, _ := walk(t, s, one, 2); !reflect.DeepEqual(got, hitsOf(basalt)) {
+		t.Errorf("the walk of basalt two lines a page answered %v, want %v", got, hitsOf(basalt))
+	}
+	walked := len(e.at)
+	two := query("needle")
+	two.Search.Repos = []string{"amber", "basalt"}
+	if got, _ := walk(t, s, two, 4); !reflect.DeepEqual(got, hitsOf(amber, basalt)) {
+		t.Errorf("amber and basalt four lines a page answered %v, want %v", got, hitsOf(amber, basalt))
+	}
+	if len(e.at) != walked {
+		t.Errorf("a search of two repositories was read by the walk on a later page: %v", e.at[walked:])
+	}
+
+	bad := query("needle")
+	bad.After = &codesearch.Key{Repo: "amber", Tip: "main", SearchAfter: code.SearchAfter{Path: "a.go", Line: 1}}
+	if _, err := s.Search(context.Background(), bad); !errors.Is(err, code.ErrInvalid) {
+		t.Errorf("a key naming a branch for its commit = %v, want ErrInvalid", err)
+	}
+}
+
+// A REPOSITORY THAT STOPPED EARLY ENDS THE MERGE: amber's search stops after
+// one line on every page (its answer's bound, or its budget), and basalt, on
+// another node, answers its every line; a page keeps no line of basalt past
+// amber's last, so the next page, asked after that line, reads amber on —
+// and paging answers every line of both, once and in order. A repository
+// whose budget ran out before its first line ends nothing: the merge goes on
+// past it, saying lines may be missing.
+//
+// Mutation: drop the stopped repositories' ends from the merge (scatter's
+// ends.stopped) — the first page answers basalt's lines after amber's first,
+// the next page is asked after basalt's last, and amber's other lines are
+// answered on no page, red.
+func TestARepositoryThatStoppedEarlyEndsTheMerge(t *testing.T) {
+	t.Parallel()
+	amber, basalt := lines(indexed("amber", "git-a")), lines(indexed("basalt", "git-b"))
+	amber.stops, amber.stopAt = true, 1
+	e := &estate{repos: []repo{amber, basalt}}
+	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": {}, "git-b": {}}))
+	first, err := s.Search(context.Background(), query("needle"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := hitsOf(amber)[:1]; !reflect.DeepEqual(first.Hits, want) || !first.Coverage.Truncated {
+		t.Errorf("the first page answered %v (truncated %t), want amber's first line alone, truncated",
+			first.Hits, first.Coverage.Truncated)
+	}
+	if got, _ := walk(t, s, query("needle"), 0); !reflect.DeepEqual(got, hitsOf(amber, basalt)) {
+		t.Errorf("paging answered %v, want %v", got, hitsOf(amber, basalt))
+	}
+
+	cobalt, dune := lines(indexed("cobalt", "git-a")), lines(indexed("dune", "git-b"))
+	amber.stopAt = 0
+	e = &estate{repos: []repo{amber, cobalt, dune}}
+	s = searcher(t, e, newFleet(t, e, map[string]*node{"git-a": {}, "git-b": {}}))
+	got, err := s.Search(context.Background(), query("needle"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := hitsOf(cobalt, dune); !reflect.DeepEqual(got.Hits, want) || !got.Coverage.Truncated {
+		t.Errorf("past a repository with no line read answered %v (truncated %t), want %v, truncated",
+			got.Hits, got.Coverage.Truncated, want)
 	}
 }

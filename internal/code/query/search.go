@@ -50,6 +50,12 @@ import (
 // Truncated, and memoizes nothing — its page is no function of its
 // arguments. One that stops at its limit of hits, or at the answer's bound,
 // is, and is memoized under the commit it read.
+//
+// A SEARCH CONTINUED AFTER A PLACE (code.SearchQuery.After) drops every line
+// at or before the place before its limit counts it, so a later page of a
+// long search answers the lines past it alone; the index path asks cat-file
+// for no file whose path sorts before the place's, and git grep, which reads
+// the commit whole, has those files' lines dropped as they stream.
 
 // searchTipKey and searchRefKey are a search's places in the map a memo key
 // reads whole ids from (read.memoKey): the commit searched and the whole ref
@@ -73,6 +79,14 @@ func (r *read) searchRead(ctx context.Context) (code.GitAnswer, error) {
 	filter, err := codeindex.NewPathFilter(sq.Paths)
 	if err != nil {
 		return code.GitAnswer{}, fmt.Errorf("%w: search: %w", code.ErrInvalid, err)
+	}
+	var after *searchPlace
+	if sq.After != nil {
+		raw, err := sq.After.Raw()
+		if err != nil {
+			return code.GitAnswer{}, err
+		}
+		after = &searchPlace{path: raw, line: sq.After.Line}
 	}
 	ref, tip, err := r.searchTarget(ctx)
 	if err != nil {
@@ -110,7 +124,7 @@ func (r *read) searchRead(ctx context.Context) (code.GitAnswer, error) {
 	// answer, Truncated; what ends ctx is the asker's.
 	sctx, cancel := context.WithTimeout(ctx, r.s.searchBudget)
 	defer cancel()
-	s := &searching{r: r, plan: plan, filter: filter, limit: sq.Hits(),
+	s := &searching{r: r, plan: plan, filter: filter, after: after, limit: sq.Hits(),
 		room: r.s.pageBytes - r.stampCost() - jsonLen(code.GitAnswer{Kind: code.GitSearch,
 			Search: &code.SearchAnswer{Tip: tip, Ref: ref, Via: code.SearchViaGrep, SkippedFiles: 1 << 30,
 				Truncated: true}}),
@@ -232,7 +246,10 @@ type searching struct {
 	r      *read
 	plan   *codeindex.Plan
 	filter codeindex.PathFilter
-	limit  int
+	// after is the place the search continues from (code.SearchQuery.After),
+	// nil from the start.
+	after *searchPlace
+	limit int
 	// room is what the hits may encode to: the answer's bound less its
 	// envelope's stamps and its own fields at their widest.
 	room   int
@@ -243,14 +260,36 @@ type searching struct {
 	longIn string
 }
 
+// searchPlace is a [code.SearchAfter] as a search compares by it: the path's
+// exact bytes and the line.
+type searchPlace struct {
+	path string
+	line int
+}
+
+// before reports a file the search continued after p never reads: one whose
+// path sorts before p's, by its bytes, as the search's order sorts it.
+func (p *searchPlace) before(path string) bool { return p != nil && path < p.path }
+
+// answered reports a line at or before p, which a page before this one
+// answered: in a file before p's, or in p's at or before its line.
+func (p *searchPlace) answered(path string, line int) bool {
+	return p != nil && (path < p.path || path == p.path && line <= p.line)
+}
+
 // add confirms one file's lines — a whole blob, or (grep) one line of it
-// numbered line — and keeps every hit, answering errSearchFull once the
-// search has all it answers.
+// numbered line — and keeps every hit past the place the search continues
+// from, answering errSearchFull once the search has all it answers.
 func (s *searching) add(ctx context.Context, path, blob string, text []byte, line int) error {
 	long, err := s.plan.Confirm(ctx, text, func(h codeindex.Hit) bool {
 		n := h.Line
 		if line > 0 {
 			n = line
+		}
+		if s.after.answered(path, n) {
+			// AN EARLIER PAGE'S LINE, left out before it is counted: the
+			// limit is of the lines past the place alone.
+			return true
 		}
 		p, b64 := code.WirePath(path)
 		hit := code.SearchHit{Path: p, PathB64: b64, Line: n, Blob: blob,
@@ -299,7 +338,9 @@ func (s *searching) viaIndex(ctx context.Context, view *cache.CodeIndexView) err
 	var files []indexedFile
 	for i := range view.Map.Len() {
 		path := string(view.Map.Path(i))
-		if !s.filter.Match(path) {
+		// A FILE BEFORE THE PLACE IS NEVER READ: no cat-file of it, and no
+		// line of it confirmed — an earlier page's.
+		if s.after.before(path) || !s.filter.Match(path) {
 			continue
 		}
 		if view.Map.Skipped(i) {
@@ -361,7 +402,7 @@ func (s *searching) viaGrep(ctx context.Context, tip string) error {
 		}
 		blobs[string(path)] = f[2]
 		if size, err := strconv.ParseInt(f[3], 10, 64); err == nil && size > code.MaxIndexedFileBytes &&
-			s.filter.Match(string(path)) {
+			!s.after.before(string(path)) && s.filter.Match(string(path)) {
 			large[string(path)] = true
 			s.answer.SkippedFiles++
 		}
@@ -379,7 +420,9 @@ func (s *searching) viaGrep(ctx context.Context, tip string) error {
 	}
 	tail = append(tail, "--end-of-options", tip)
 	out := &grepStream{prefix: tip + ":", each: func(path string, line int, text []byte) error {
-		if large[path] || !s.filter.Match(path) {
+		// git grep reads the commit whole; a line before the place is
+		// dropped here, before it is confirmed or counted.
+		if large[path] || s.after.answered(path, line) || !s.filter.Match(path) {
 			return nil
 		}
 		return s.add(ctx, path, blobs[path], text, line)

@@ -5141,7 +5141,19 @@ sequenceDiagram
 - **Exact.** Each node keeps the first lines of its repositories by
   repository name, path and line, at most the search's limit, and the asker
   keeps the first of all of them, so the answer is the same whichever node
-  answers first, and a limit cuts the first lines of the whole search.
+  answers first, and a limit cuts the first lines of the whole search. A
+  repository whose search stopped early — its answer full, or its five
+  seconds spent — answered its first lines up to its last, so the asker keeps
+  no line of any repository past that last: every line of the search before
+  the answer's last is in the answer.
+- **A page continues after its key.** A search can be asked again after the
+  last line it answered — its repository, the commit it was read at, its path
+  and line. Then no repository before that one is asked; that one is read at
+  that commit, from the next line on, its node reading no file before the
+  path; and the limit counts those lines alone. So a page of a long search
+  costs the lines from its place on, never the whole search again, and a push
+  between two pages neither repeats nor skips a line of the file the first was
+  cut in. The `code_search` tool pages this way.
 
 Every answer carries its **coverage**, so a search that could not reach part
 of the company never reads as one that found nothing there. Each repository
@@ -5166,7 +5178,9 @@ and `not_indexed`, the indexed repositories among those searched that were
 read with git grep, no index answering for their tip yet. Each lists its
 first hundred names, in order, beside its whole count; `skipped_files` and
 `truncated` add up those of every repository searched, and `truncated` is set
-too where the merge cut lines past the limit.
+too where the merge cut lines past the limit or past a repository that
+stopped early. A search asked after a line names only the repositories from
+that line's on: the ones before it were the pages before's.
 
 ### The memo
 

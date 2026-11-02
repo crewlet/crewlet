@@ -77,6 +77,49 @@ type Assigned struct {
 	// where that node passed the fill on ([code.UnreadyReason.PassesFill]) or
 	// did not answer at all.
 	Home bool `json:"home,omitempty"`
+	// After is the place the search continues from ([Key]), set on the one
+	// repository it falls in: the node reads it at the key's commit, past
+	// the key's line. Additive, under the STATED CONDITION above.
+	After *Key `json:"after,omitempty"`
+}
+
+// Key is a place in a search's order, the one its pages are cut at: a
+// repository, the commit it was searched at, and a line of it — the last
+// line a page answered ([KeyOf]). A search continued after it ([Query.After])
+// asks no repository whose name sorts before the key's, and reads the key's
+// own repository AT THE KEY'S COMMIT, past the key's line: the lines a page
+// answers continue the very file the page before was cut in, whatever was
+// pushed between the two, so no line of it is answered twice or skipped
+// because a push moved it; every repository after it is read at the commit
+// it is searched at now, none of its lines answered yet.
+type Key struct {
+	Repo string `json:"repo"`
+	Tip  string `json:"tip"`
+	code.SearchAfter
+}
+
+// KeyOf is h's place, h read at tip.
+func KeyOf(h Hit, tip string) Key {
+	return Key{Repo: h.Repo, Tip: tip, SearchAfter: code.SearchAfterOf(h.SearchHit)}
+}
+
+// of is k where repo is k's repository, and nil otherwise or where k is.
+func (k *Key) of(repo string) *Key {
+	if k == nil || k.Repo != repo {
+		return nil
+	}
+	return k
+}
+
+// continueIn makes sq, a search of repo, the search continued after k where
+// repo is k's repository — at k's commit, past k's line — and leaves it as it
+// is otherwise.
+func (k *Key) continueIn(repo string, sq *code.SearchQuery) {
+	if k = k.of(repo); k == nil {
+		return
+	}
+	after := k.SearchAfter
+	sq.Ref, sq.After = k.Tip, &after
 }
 
 // Reply is one node's answer for the repositories a request assigned it.

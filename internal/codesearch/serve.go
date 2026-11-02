@@ -97,7 +97,9 @@ func (s *Server) Answer(ctx context.Context, sealed []byte) ([]byte, error) {
 }
 
 // search reads every repository asked, at most ServeReads at once, and keeps
-// the first Limit hits of them all.
+// the first Limit hits of them all. A line past the last of a repository that
+// stopped early is the asker's to leave out ([prefixEnd]), which it does from
+// the outcomes this reply carries; the node cuts by its limit alone.
 func (s *Server) search(ctx context.Context, req Request, asked []Assigned) Reply {
 	results := make([]RepoResult, len(asked))
 	hits := make([][]Hit, len(asked))
@@ -125,6 +127,7 @@ func (s *Server) search(ctx context.Context, req Request, asked []Assigned) Repl
 // one reads one repository as the request's asker.
 func (s *Server) one(ctx context.Context, req Request, a Assigned) (RepoResult, []Hit) {
 	sq := req.Search
+	a.After.continueIn(a.Name, &sq)
 	got, err := s.reads.Read(ctx, code.GitQuery{Kind: code.GitSearch, RepoID: a.RepoID, Asker: req.Asker,
 		CeilingSeat: req.CeilingSeat, Turn: req.Turn, Fresh: req.Fresh, Home: a.Home, Search: &sq})
 	r := RepoResult{RepoID: a.RepoID}
@@ -177,4 +180,54 @@ func rawPath(h Hit) string {
 		return h.Path
 	}
 	return string(raw)
+}
+
+// prefixEnd is where the lines a merge holds stop being the FIRST lines of
+// the search: the earliest last line of a repository that stopped early — at
+// its limit, its answer's bound or its budget — and of a node that cut its
+// lines at the limit. Each answered its first lines in the search's order up
+// to its last (code.SearchAnswer), so a line of another repository after that
+// last may follow lines it never read; the asker's merge keeps none, and the
+// answer is every line of the search up to its own last. That is what lets a page of a
+// long search be asked after the last line of the page before ([Key]): a line
+// the merge kept past a repository's stop would carry the next page's place
+// past that repository's unread lines, and they would be answered on no page.
+//
+// A repository that stopped with no line marks no end: a page continued from
+// before it would read what this one read and stop as early, so an end there
+// would never move; its lines are missing, which Truncated says, and the
+// merge goes on past it.
+type prefixEnd struct{ end *Hit }
+
+// at lowers the end to h.
+func (p *prefixEnd) at(h Hit) {
+	if p.end == nil || CompareHits(h, *p.end) < 0 {
+		p.end = &h
+	}
+}
+
+// stopped lowers the end to the last of hits of each repository repos names:
+// the repositories of one reply that stopped early.
+func (p *prefixEnd) stopped(hits []Hit, repos map[string]bool) {
+	last := map[string]Hit{}
+	for _, h := range hits {
+		if l, ok := last[h.Repo]; repos[h.Repo] && (!ok || CompareHits(h, l) > 0) {
+			last[h.Repo] = h
+		}
+	}
+	for _, h := range last {
+		p.at(h)
+	}
+}
+
+// keep is sorted hits up to the end, and whether it left any out.
+func (p *prefixEnd) keep(hits []Hit) ([]Hit, bool) {
+	if p.end == nil {
+		return hits, false
+	}
+	n := 0
+	for n < len(hits) && CompareHits(hits[n], *p.end) <= 0 {
+		n++
+	}
+	return hits[:n], n < len(hits)
 }
