@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,6 +131,43 @@ func TestAParkRepublishesOntoTheSeatsOwnInbox(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("requeued %v, want %v", got, want)
+	}
+}
+
+// A PARK RETURNS A PERSON'S PARTITION TO THE LANE WHOLE. Requeued event by event
+// as delivered, the person's message went back to the lane and the follow-up
+// the drain took with it to the inbox's tail, behind whatever had arrived
+// since, so the two ran as two turns. Every copy comes back marked, and the
+// events the delivery still holds are left as they were.
+func TestAParkReturnsAPersonsPartitionToTheLaneWhole(t *testing.T) {
+	t.Parallel()
+	e, q := engineOn(t)
+	var (
+		mu     sync.Mutex
+		marked = map[uuid.UUID]bool{}
+	)
+	if err := q.Subscribe(t.Context(), seatInbox(e, "ceo"), "probe",
+		func(_ context.Context, evt *events.Event) queue.Result {
+			mu.Lock()
+			defer mu.Unlock()
+			marked[evt.ID] = queue.Prioritized(evt)
+			return queue.Ack()
+		}); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	person := &events.Event{ID: uuid.New(), Type: "external_notification"}
+	queue.Prioritize(person)
+	follow := &events.Event{ID: uuid.New(), Type: "external_notification"}
+	if err := e.park(t.Context(), "ceo", []*events.Event{person, follow}); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(marked) != 2 || !marked[person.ID] || !marked[follow.ID] {
+		t.Fatalf("requeued %v (id: on the lane), want both events back on the lane", marked)
+	}
+	if queue.Prioritized(follow) {
+		t.Fatal("the park marked the delivery's own event; it must requeue a copy")
 	}
 }
 
