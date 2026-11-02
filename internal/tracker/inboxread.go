@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -54,8 +56,9 @@ import (
 // An unread COUNT over the whole table. The rows a person has read are named
 // by their own [Person] record as entries, so "unread" is a set difference
 // this reader computes over the page it returns and cannot compute over rows
-// it did not read. A caller that wants "how many since I last looked" asks
-// with `since` at their own seen-through position, which is one index range.
+// it did not read. An `unread` page starts its index range at the person's
+// seen-through position on its own ([inboxStatements]), so "what have I not
+// read" never walks what they have.
 
 // InboxNotice is one thing the company told somebody.
 type InboxNotice struct {
@@ -425,6 +428,19 @@ func inboxFilterOf(q InboxQuery, marks inbox.Classifier, now time.Time) inboxFil
 	return f
 }
 
+// floor is an inbox page's exclusive lower bound on the packed position:
+// after — the caller's `since`, 0 for none — raised under `unread` to the
+// seen-through position, which covers a notice ONLY ON ITS OWN STREAM
+// ([inbox.Classifier.Classify]): the tracker's log, every notice's.
+func (f inboxFilter) floor(after int64) int64 {
+	if f.unread && f.seen.Seq != 0 && f.seen.Stream == topics.TrackerLogStream {
+		if seen := int64(f.seen.Packed()); seen > after {
+			return seen
+		}
+	}
+	return after
+}
+
 // clauses is the filter as WHERE terms over `tracker_notifications n`, and
 // false when it can select nothing at all.
 func (f inboxFilter) clauses() ([]string, []any, bool) {
@@ -486,88 +502,28 @@ func (f inboxFilter) clauses() ([]string, []any, bool) {
 func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 	filter inboxFilter, limit int) ([]InboxNotice, string, error) {
 
-	where := []string{"n.recipient = ?"}
-	args := []any{handle}
-
-	// THE KEYSET IS THE COMPOSED POSITION, for the reason the activity
-	// feed gives: `log_seq` already carries `(generation << 40) | seq`, so
-	// the generation is IN the ordering rather than beside it — which is
-	// what lets a cursor span a reanchor with no gap and no repeat.
-	if cursor := strings.TrimSpace(q.Cursor); cursor != "" {
-		at, err := statelog.ParsePosition(cursor)
+	statements, selects, err := inboxStatements(handle, q, filter, limit)
+	if err != nil || !selects {
+		return []InboxNotice{}, "", err
+	}
+	out := make([]InboxNotice, 0, limit+1)
+	for _, st := range statements {
+		got, err := scanInboxRows(ctx, tx, handle, st)
 		if err != nil {
 			return nil, "", err
 		}
-		// STRICTLY BEFORE: the inbox is newest-first, so the cursor
-		// names the last row of the previous page.
-		where = append(where, "n.log_seq < ?")
-		args = append(args, at.Packed())
+		out = append(out, got...)
 	}
-	if !q.Since.IsZero() {
-		where = append(where, "n.log_seq > ?")
-		args = append(args, q.Since.Packed())
+	if len(statements) > 1 {
+		slices.SortStableFunc(out, func(a, b InboxNotice) int {
+			return cmp.Or(cmp.Compare(b.LogGeneration, a.LogGeneration), cmp.Compare(b.LogSeq, a.LogSeq))
+		})
 	}
-	narrowed, narrowedArgs, selects := filter.clauses()
-	if !selects {
-		return []InboxNotice{}, "", nil
-	}
-	where = append(where, narrowed...)
-	args = append(args, narrowedArgs...)
-	args = append(args, limit+1)
-
-	rows, err := tx.QueryContext(ctx, `
-		SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation,
-		       n.created_at, n.reason, n.addressed, n.fallback_only,
-		       n.kind, n.subject_id, n.subject_key, n.task_id,
-		       `+keyOpensAnother("n.subject_key", "n.task_id")+`,
-		       n.excerpt, COALESCE(h.actor, ''), COALESCE(h.actor_kind, ''),
-		       COALESCE(h.comment_id, ''), COALESCE(h.turn_id, '')
-		  FROM tracker_notifications n
-		  LEFT JOIN tracker_history h ON h.id = n.record_id
-		 WHERE `+strings.Join(where, " AND ")+`
-		 ORDER BY n.log_seq DESC
-		 LIMIT ?`, args...)
-	if err != nil {
-		return nil, "", fmt.Errorf("tracker: read %s's inbox: %w", handle, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]InboxNotice, 0, limit)
-	more := false
-	for rows.Next() {
-		if len(out) == limit {
-			// THE EXTRA ROW IS THE CURSOR'S EVIDENCE and never an
-			// answer, which is the activity feed's own rule: a page
-			// that returned it would overrun the caller's limit.
-			more = true
-			break
-		}
-		var notice InboxNotice
-		var packed int64
-		var at int64
-		var reason, kind, actorKind string
-		var addressed, fallback int
-		if err := rows.Scan(&notice.RecordID, &packed, &notice.LogStream,
-			&notice.LogGeneration, &at, &reason, &addressed, &fallback,
-			&kind, &notice.SubjectID, &notice.SubjectKey, &notice.Task,
-			&notice.SubjectKeyCollision, &notice.Excerpt,
-			&notice.Actor, &actorKind, &notice.CommentID,
-			&notice.TurnID); err != nil {
-
-			return nil, "", fmt.Errorf("tracker: scan %s's inbox: %w", handle, err)
-		}
-		notice.LogSeq = uint64(packed) % statelog.GenerationStride
-		notice.At = store.DecodeTime(at)
-		notice.Reason = Reason(reason)
-		notice.Kind = ChangeKind(kind)
-		notice.ActorKind = AuthorKind(actorKind)
-		notice.Addressed = addressed != 0
-		notice.Fallback = fallback != 0
-		out = append(out, notice)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("tracker: read %s's inbox: %w", handle, err)
-	}
+	// THE EXTRA ROW IS THE CURSOR'S EVIDENCE and never an answer, which is
+	// the activity feed's own rule: a page that returned it would overrun
+	// the caller's limit.
+	more := len(out) > limit
+	out = out[:min(len(out), limit)]
 
 	// THE ASK EACH NOTICE IS ABOUT, in one read over the page's comments
 	// — see [readAskViews].
@@ -594,6 +550,141 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 		}.String()
 	}
 	return out, next, nil
+}
+
+// inboxStatement is one statement of an inbox page, with its arguments.
+type inboxStatement struct {
+	sql  string
+	args []any
+}
+
+// inboxSelect is what an inbox page reads of each notice, from
+// `tracker_notifications n` and its history row `h`.
+var inboxSelect = `SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation,
+	       n.created_at, n.reason, n.addressed, n.fallback_only,
+	       n.kind, n.subject_id, n.subject_key, n.task_id,
+	       ` + keyOpensAnother("n.subject_key", "n.task_id") + `,
+	       n.excerpt, COALESCE(h.actor, ''), COALESCE(h.actor_kind, ''),
+	       COALESCE(h.comment_id, ''), COALESCE(h.turn_id, '')`
+
+// inboxStatements is the statements one page of handle's inbox runs, each
+// reading up to limit+1 notices newest first, and false where the filter
+// selects nothing at all.
+//
+// # `unread` reads nothing the person has read through
+//
+// Under `unread`, a notice at or below the seen-through position is read
+// unless an unread mark names it ([markInbox]), so the rows such a page can
+// hold are those above the position and the ones the unread list names. The
+// first statement's range of tracker_notifications_inbox_idx starts at the
+// position ([inboxFilter.floor]); where that raised it, a second seeks the
+// notices the unread list names below it by the table's key — at most
+// [inbox.MaxEntries] — and the page merges the two. Bounded only by the
+// filter's predicate on each row, a person who had marked everything read
+// walked every notice they hold, the whole of `inbox.retention_days`, to
+// answer nothing — on every badge poll.
+func inboxStatements(handle string, q InboxQuery, filter inboxFilter, limit int) ([]inboxStatement, bool,
+	error) {
+
+	// THE KEYSET IS THE COMPOSED POSITION, for the reason the activity
+	// feed gives: `log_seq` already carries `(generation << 40) | seq`, so
+	// the generation is IN the ordering rather than beside it — which is
+	// what lets a cursor span a reanchor with no gap and no repeat.
+	var bounds []string
+	var boundArgs []any
+	if cursor := strings.TrimSpace(q.Cursor); cursor != "" {
+		at, err := statelog.ParsePosition(cursor)
+		if err != nil {
+			return nil, false, err
+		}
+		// STRICTLY BEFORE: the inbox is newest-first, so the cursor
+		// names the last row of the previous page.
+		bounds = append(bounds, "n.log_seq < ?")
+		boundArgs = append(boundArgs, at.Packed())
+	}
+	var after int64
+	if !q.Since.IsZero() {
+		after = q.Since.Packed()
+	}
+	narrowed, narrowedArgs, selects := filter.clauses()
+	if !selects {
+		return nil, false, nil
+	}
+	floor := filter.floor(after)
+	where := append([]string{"n.recipient = ?"}, bounds...)
+	args := append([]any{handle}, boundArgs...)
+	if floor != 0 {
+		where = append(where, "n.log_seq > ?")
+		args = append(args, floor)
+	}
+	where = append(where, narrowed...)
+	args = append(args, narrowedArgs...)
+	out := []inboxStatement{{sql: inboxSelect + `
+		  FROM tracker_notifications n
+		  LEFT JOIN tracker_history h ON h.id = n.record_id
+		 WHERE ` + strings.Join(where, " AND ") + `
+		 ORDER BY n.log_seq DESC
+		 LIMIT ?`, args: append(args, limit+1)}}
+	if floor == after || len(filter.marked) == 0 {
+		return out, true, nil
+	}
+	// BELOW THE POSITION, ONLY WHAT AN UNREAD MARK NAMES — which is unread
+	// whatever else holds, so the filter's own `unread` term is left out.
+	below := filter
+	below.unread = false
+	narrowed, narrowedArgs, _ = below.clauses()
+	where = append([]string{"n.record_id = CAST(j.value AS TEXT)", "n.recipient = ?", "n.log_seq <= ?"},
+		bounds...)
+	args = append([]any{idList(filter.marked), handle, floor}, boundArgs...)
+	if after != 0 {
+		where = append(where, "n.log_seq > ?")
+		args = append(args, after)
+	}
+	where = append(where, narrowed...)
+	args = append(args, narrowedArgs...)
+	return append(out, inboxStatement{sql: inboxSelect + `
+		  FROM json_each(?) AS j
+		 CROSS JOIN tracker_notifications n INDEXED BY sqlite_autoindex_tracker_notifications_1
+		  LEFT JOIN tracker_history h ON h.id = n.record_id
+		 WHERE ` + strings.Join(where, " AND "), args: args}), true, nil
+}
+
+// scanInboxRows runs one of [inboxStatements] and reads its notices.
+func scanInboxRows(ctx context.Context, tx *sql.Tx, handle string, st inboxStatement) ([]InboxNotice, error) {
+	rows, err := tx.QueryContext(ctx, st.sql, st.args...)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read %s's inbox: %w", handle, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []InboxNotice
+	for rows.Next() {
+		var notice InboxNotice
+		var packed int64
+		var at int64
+		var reason, kind, actorKind string
+		var addressed, fallback int
+		if err := rows.Scan(&notice.RecordID, &packed, &notice.LogStream,
+			&notice.LogGeneration, &at, &reason, &addressed, &fallback,
+			&kind, &notice.SubjectID, &notice.SubjectKey, &notice.Task,
+			&notice.SubjectKeyCollision, &notice.Excerpt,
+			&notice.Actor, &actorKind, &notice.CommentID,
+			&notice.TurnID); err != nil {
+
+			return nil, fmt.Errorf("tracker: scan %s's inbox: %w", handle, err)
+		}
+		notice.LogSeq = uint64(packed) % statelog.GenerationStride
+		notice.At = store.DecodeTime(at)
+		notice.Reason = Reason(reason)
+		notice.Kind = ChangeKind(kind)
+		notice.ActorKind = AuthorKind(actorKind)
+		notice.Addressed = addressed != 0
+		notice.Fallback = fallback != 0
+		out = append(out, notice)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("tracker: read %s's inbox: %w", handle, err)
+	}
+	return out, nil
 }
 
 // markInbox classifies and marks the page against this person's own record —
