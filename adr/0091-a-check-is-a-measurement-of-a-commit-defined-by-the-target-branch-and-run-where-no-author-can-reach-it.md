@@ -23,7 +23,11 @@ BASE of the first landing above the branch's green row — the green itself, or
 before any tip passed, the commit the first landing moved the branch from. The
 attempt records the blob it was defined from (`defs_oid`) and carries its
 definition whole, so a runner runs what was decided, whatever the file says by
-then. A file that does not run, or that defines no check the gate requires,
+then. That definition is the check's whole entry, its `checkout:` cone
+included: the directories its box checks out come from the same version of
+the file as the command it runs — the head's target tip, the train's base, or
+the base of the first landing above the green — and never from the commit it
+measures or a tip a landing has since moved. A file that does not run, or that defines no check the gate requires,
 errors that check at its dispatch saying so, and nobody runs it.
 
 A check runs in a box on a git node, or in a remote cell, created for the
@@ -51,6 +55,15 @@ a head. For a tip it does not: a tip already holds every landing's edits, so a
 landing that rewrote the file would define its own tip's measurement. That is
 the BASE correction: the file at the base of the first unproven landing is the
 last version every landing above it was judged against.
+
+The same holds for what a check SEES. A `checkout:` cone read at the commit
+being measured, or at a tip a landing already moved, would let a change narrow
+the directories its own check's box checks out — leave `internal/` out of the
+cone `unit` runs over — and so choose what the check tests while the command
+it runs stays the target's. Reading the cone anywhere but beside the command
+splits one definition across two versions of the file, one of them the
+author's; read beside it, a change narrows a cone only by landing a file that
+later changes are then judged by, as it may edit the command.
 
 The obvious bisect walks git's history between the green and the red tip. It
 walks into a merge's second parent — a change's own commits, which never were
