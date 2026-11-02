@@ -145,8 +145,13 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if !cv.change.State.Live() {
-		return refusedBy(tools.RefusalConflict, fmt.Errorf("code: %s is %s", cv.g.ref(), cv.change.State),
-			fmt.Sprintf("%s: %s is %s, and only a live change merges.", tool, cv.g.ref(), cv.change.State)), nil
+		// THE COMMITTER'S OWN WORD, refused before a merge is built: a
+		// change the call's read found closed or merged is the
+		// change_not_open its committer would answer, in the class and
+		// under the word every other merge refusal takes.
+		return mergeRefused(tool, cv.g.ref(), strings.TrimPrefix(cv.change.TargetRef, branchRoot),
+			code.MergeRefusalChangeNotOpen, fmt.Sprintf("%s is %s, and only a live change merges", cv.g.ref(),
+				cv.change.State), nil), nil
 	}
 	repo := cv.g.repo
 	op := opIDFor(cv.g.c.actor, tool, mergeVerb, repo.ID, args)
@@ -324,11 +329,43 @@ func mergeRefused(tool, change, target string, refusal code.MergeRefusal, detail
 	return refusedBy(tools.RefusalNotReady, cause, b.String())
 }
 
-// mergeRefusalClass is the class a merge refusal is answered in, by what its
-// caller does next: read again (a head, a target or a change that moved),
-// wait (a committer busy, a target still moving), ask somebody else (a seat
-// asking a person's override, an asker the repository does not let), or
-// change the call.
+// mergeRefusalClass is the class a merge refusal is answered in, by what
+// CLEARS it — the class tells its reader what to do next (M5.md §2.10's
+// mapping, read against mcp's definition of each class):
+//
+//   - NOT_READY: a gate the change does not meet yet, which its people
+//     clear and a ready_to_merge wake reports;
+//   - STALE_VERSION: a head, a target or a change that moved since its
+//     caller read it — read again;
+//   - CONFLICT: only what clears ON ITS OWN, so the same call shortly after
+//     lands — a target moving faster than a merge is built onto it, a
+//     committer busy, a repository its compaction has not caught up with, a
+//     queue full until it lands what it holds;
+//   - UNAVAILABLE: what waiting on the node clears, as a push's is
+//     ([pushClass]) — an import finishing, an expunge that began, a pack
+//     uploaded too long ago (its builder builds it again), a log that
+//     refused or a record applied nowhere;
+//   - FORBIDDEN: a rule refusing the caller — a seat asking a person's
+//     override, an asker the repository or the change does not let, an
+//     archived repository, a pull mirror, a repository at its size, as a
+//     push's are;
+//   - NOT_FOUND: a repository, a change or a queue entry that is not there —
+//     a dequeue of a change no queue holds live among them, which a re-read
+//     or a retry never brings back;
+//   - EXISTS: a change its target's queue already holds;
+//   - INVALID: what only another call clears — a change closed or merged,
+//     which never reopens by itself; a draft, which waits on its owner or a
+//     person; a queue target asked directly, a target with no queue asked to
+//     queue, a source branch the merger may not delete — and the queue's own
+//     records' refusals (not_green, not_red, no_landing, record_full), which
+//     its home git node answers and no tool's call is ever refused.
+//
+// Never conflict for what does not clear on its own: a seat told to try
+// again shortly asks to merge a closed change, or dequeue a landed one, for
+// ever. Every value is listed, so a refusal the domain adds is examined here
+// (TestEveryMergeRefusalIsClassedByWhatClearsIt walks code.MergeRefusals());
+// one off the wire this build does not know is invalid, the class that says
+// nothing more specific.
 func mergeRefusalClass(r code.MergeRefusal) tools.Refusal {
 	switch r {
 	case code.MergeRefusalGateUnmet:
@@ -336,17 +373,22 @@ func mergeRefusalClass(r code.MergeRefusal) tools.Refusal {
 	case code.MergeRefusalStale, code.MergeRefusalHeadMoved, code.MergeRefusalTargetMoved:
 		return tools.RefusalStaleVersion
 	case code.MergeRefusalTargetMoving, code.MergeRefusalBusy, code.MergeRefusalCompactionBehind,
-		code.MergeRefusalChangeNotOpen, code.MergeRefusalChangeDraft, code.MergeRefusalQueueFull,
-		code.MergeRefusalNotQueued:
+		code.MergeRefusalQueueFull:
 		return tools.RefusalConflict
+	case code.MergeRefusalRepoImporting, code.MergeRefusalExpunging, code.MergeRefusalUploadExpired,
+		code.MergeRefusalUnavailable, code.MergeRefusalNotApplied:
+		return tools.RefusalUnavailable
+	case code.MergeRefusalNotPerson, code.MergeRefusalNotPermitted, code.MergeRefusalRepoArchived,
+		code.MergeRefusalRepoMirrored, code.MergeRefusalRepoSize:
+		return tools.RefusalForbidden
+	case code.MergeRefusalRepoDeleted, code.MergeRefusalChangeNotFound, code.MergeRefusalNotQueued:
+		return tools.RefusalNotFound
 	case code.MergeRefusalAlreadyQueued:
 		return tools.RefusalExists
-	case code.MergeRefusalNotPerson, code.MergeRefusalNotPermitted:
-		return tools.RefusalForbidden
-	case code.MergeRefusalRepoDeleted, code.MergeRefusalChangeNotFound:
-		return tools.RefusalNotFound
-	case code.MergeRefusalUnavailable, code.MergeRefusalNotApplied:
-		return tools.RefusalUnavailable
+	case code.MergeRefusalChangeNotOpen, code.MergeRefusalChangeDraft, code.MergeRefusalQueueTarget,
+		code.MergeRefusalNoQueue, code.MergeRefusalSourceRefused, code.MergeRefusalNotGreen,
+		code.MergeRefusalNotRed, code.MergeRefusalNoLanding, code.MergeRefusalRecordFull:
+		return tools.RefusalInvalid
 	}
 	return tools.RefusalInvalid
 }
@@ -432,7 +474,10 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // index — or the refusal of a change no queue holds. The dequeue reads
 // nothing more: its committer decides it at or past that read
 // (code.QueueProposal.Seen), so an entry the queue landed or ejected since is
-// the committer's to refuse, from its own snapshot.
+// the committer's to refuse, from its own snapshot. A change no queue holds
+// is the committer's not_queued, refused before anything is asked: not
+// found, since an entry that is not live — never queued, landed or ejected —
+// never becomes live again by itself.
 func entryOf(cv conversing) (string, *tools.Result) {
 	if r := cv.change.Readiness; r != nil {
 		for _, p := range r.Preconditions {
@@ -442,8 +487,8 @@ func entryOf(cv conversing) (string, *tools.Result) {
 		}
 	}
 	g := cv.g
-	r := refusedBy(tools.RefusalConflict, fmt.Errorf("code: %s holds no live queue entry", g.ref()),
-		fmt.Sprintf("%s: %s is in no queue of %s, so nothing was taken out.", g.tool, g.ref(),
-			strings.TrimPrefix(cv.change.TargetRef, branchRoot)))
+	target := strings.TrimPrefix(cv.change.TargetRef, branchRoot)
+	r := mergeRefused(g.tool, g.ref(), target, code.MergeRefusalNotQueued,
+		fmt.Sprintf("%s is in no queue of %s, so nothing was taken out", g.ref(), target), nil)
 	return "", &r
 }

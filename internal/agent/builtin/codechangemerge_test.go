@@ -298,9 +298,38 @@ func TestADequeueTakesTheChangesOwnEntryOut(t *testing.T) {
 	writer = &codeWrites{}
 	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(siteChange()), writer)),
 		writerTurn(t), builtin.CodeDequeueChangeTool, map[string]any{"change": "site!7"})
-	if !got.Failed || tools.RefusalOf(got) != tools.RefusalConflict || len(writer.queuesAsked()) != 0 {
-		t.Errorf("a change in no queue answered %q (%s) after %d dequeues, want conflict and none asked",
-			got.Output, tools.RefusalOf(got), len(writer.queuesAsked()))
+	// NOT FOUND, NEVER CONFLICT: an entry that is not live never becomes
+	// live again by itself, so a caller told to retry would ask for ever; and
+	// it carries the committer's own word, not_queued, as its refusal would.
+	var word *builtin.HostRefusal
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalNotFound || len(writer.queuesAsked()) != 0 ||
+		!errors.As(got.Cause, &word) || word.Refusal != string(code.MergeRefusalNotQueued) {
+		t.Errorf("a change in no queue answered %q (%s, %v) after %d dequeues, want not_found under "+
+			"not_queued and none asked", got.Output, tools.RefusalOf(got), got.Cause, len(writer.queuesAsked()))
+	}
+}
+
+// A MERGE OF AN ENDED CHANGE IS INVALID, never conflict: a closed or merged
+// change never reopens by itself, so a caller told to retry shortly would ask
+// to merge it for ever. It is refused before anything is built, under the
+// committer's own word, change_not_open (M5.md §2.10).
+//
+// Mutation: refuse it as conflict again → red.
+func TestAMergeOfAnEndedChangeIsInvalid(t *testing.T) {
+	t.Parallel()
+	for _, state := range []code.ChangeState{code.ChangeStateClosed, code.ChangeStateMerged} {
+		ended := siteChange()
+		ended.detail.State = state
+		writer := &codeWrites{}
+		got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(ended), writer)),
+			writerTurn(t), builtin.CodeMergeChangeTool, mergeArgs())
+		writes, _ := writer.asked()
+		var host *builtin.HostRefusal
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || len(writes) != 0 ||
+			!errors.As(got.Cause, &host) || host.Refusal != string(code.MergeRefusalChangeNotOpen) {
+			t.Errorf("a merge of a %s change answered %q (%s, %v) after %d writes, want invalid under "+
+				"change_not_open and none sent", state, got.Output, tools.RefusalOf(got), got.Cause, len(writes))
+		}
 	}
 }
 
