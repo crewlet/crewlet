@@ -585,8 +585,11 @@ type checksDecision struct {
 // [ChecksPath] of its repository — every arm's decide reads the repository's
 // row — and the [ChangePath] of each change it queues at, a dispatch's and an
 // attempt queued for a change's head, whose head, target and liveness the
-// home read to queue it; past [MaxScopePaths], the whole domain, which covers
-// them all (the queue's land rule, queue.go). See the file's doc.
+// home read to queue it. EVERY ONE BY NAME, never the whole domain: a
+// dispatch names at most [MaxDispatchRows] changes, each head and each
+// attempt a row of it ([CheckDispatched.Validate], which a request passes
+// before its scope is formed), and [MaxScopePaths] is sized for them. See
+// the file's doc.
 func checksScope(r ChecksRequest) []string {
 	repoID := r.RepoID()
 	scope := []string{RepoPath(repoID), ChecksPath(repoID)}
@@ -605,9 +608,6 @@ func checksScope(r ChecksRequest) []string {
 	changes = slices.DeleteFunc(changes, func(id string) bool { return id == "" })
 	slices.Sort(changes)
 	changes = slices.Compact(changes)
-	if len(scope)+len(changes) > MaxScopePaths {
-		return []string{DomainPath()}
-	}
 	for _, id := range changes {
 		scope = append(scope, ChangePath(id))
 	}
@@ -615,19 +615,15 @@ func checksScope(r ChecksRequest) []string {
 }
 
 // scope is the scope d's record names: the request's, and every change d's
-// decide found and read — the whole domain past [MaxScopePaths].
+// decide found and read. A decide that finds a change — a rerun's, an
+// ending's or a report's, one change each — is asked under its repository's
+// two paths alone, so its record names three, far inside [MaxScopePaths].
 func (d checksDecision) scope(requested []string) []string {
-	if len(d.reads) == 0 {
-		return requested
-	}
 	scope := slices.Clone(requested)
 	for _, p := range d.reads {
 		if !slices.Contains(scope, p) {
 			scope = append(scope, p)
 		}
-	}
-	if len(scope) > MaxScopePaths || slices.Contains(requested, DomainPath()) {
-		return []string{DomainPath()}
 	}
 	return scope
 }

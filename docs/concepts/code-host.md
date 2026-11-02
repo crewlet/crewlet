@@ -2404,8 +2404,9 @@ repository's own row on every write (whether it is archived or deleted, and
 the owner and visibility a seat's rerun is judged by), each change a head
 dispatch queues at, and the change a seat's rerun reads its authors from or a
 failed head's ending routes to. So the record's scope names the repository
-and its checks, and each of those changes — the whole code domain for a
-dispatch of more changes than a record's scope holds. A node holding a
+and its checks, and each of those changes by name, however many a dispatch
+queues at — never the whole code domain, which would meet a record about
+every other repository too. A node holding a
 record it cannot decode — a newer build's, mid-upgrade — that covers any of
 them answers the write unavailable (`deferred`) and publishes nothing, and
 the asker asks the next node, whose rows are current: a rerun is never

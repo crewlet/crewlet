@@ -96,12 +96,34 @@ func ActivationPath() string { return pathDomain + "/" + pathActivation }
 // what an unreadable scope reads as.
 func DomainPath() string { return pathDomain }
 
-// MaxScopePaths caps a record's declared scope. The widest records name a
-// repository, its checks and the path of each change their decide reads (a
-// land's entries, a checks dispatch's heads), fourteen at most beside the
-// two; a writer whose set would be wider names DomainPath() instead, which
-// covers everything.
-const MaxScopePaths = 16
+// MaxScopePaths caps a record's declared scope at what the widest record this
+// domain forms names: a checks dispatch names its repository and its checks
+// beside the path of each change it queues at — up to [MaxDispatchRows] of
+// them, since each head and each attempt is a row of it — and a landing names
+// up to [MaxLandEntries] changes beside the same two. So it is two more than
+// the wider of those, 502, and NO WRITER WIDENS A SET TO [DomainPath()] TO FIT
+// IT: one whose set is wider is a bug [validScope] refuses.
+//
+// It was sixteen, a writer past it naming the domain, and that was an outage
+// of the whole code domain on every node holding ANY record it cannot decode,
+// as every older node of a rolling upgrade does: a routine edit of a checks
+// file, or its first adoption, makes every live change into its target due
+// again, so a target with fifteen open changes dispatched under the domain.
+// That record met the deferred one, of whatever repository, and was retained
+// beside it; its domain scope then met every later record of every repository,
+// each retained in turn, and every write and every scoped read there was
+// answered `deferred`. Named change by change, a record meets only a deferred
+// record about something its decide read.
+//
+// The width is the code domain's own choice and costs what the framework
+// carries: a change's path is 40 bytes, 43 as JSON, so the widest scope adds
+// about 22 KB to a record whose payload is held to [MaxDispatchBytes], half of
+// [MaxRecordBytes]; the framework's deferral probe reads the roots as one
+// row-set CTE rather than a chain of ORs (statelog's tables.go, probed clean
+// there at a thousand), which every widest dispatch's decide runs
+// (TestTheWidestDispatchNamesEachChangeItQueuesAt), and a retained record's
+// index rows insert in chunks.
+const MaxScopePaths = 2 + max(MaxDispatchRows, MaxLandEntries)
 
 // Scope is a record's scope on the wire.
 //
@@ -166,8 +188,10 @@ func validScope(paths []string) error {
 			"say it makes no read stale")
 	}
 	if len(paths) > MaxScopePaths {
-		return fmt.Errorf("code: a record's scope names %d paths and the cap is "+
-			"%d — a writer whose affected set is wider names the domain", len(paths),
+		return fmt.Errorf("code: a record's scope names %d paths, past the %d the "+
+			"widest record this domain forms names (code.MaxScopePaths): a writer "+
+			"naming more is a bug, and naming the whole domain instead would make "+
+			"the record meet every deferred record of every repository", len(paths),
 			MaxScopePaths)
 	}
 	for _, p := range paths {

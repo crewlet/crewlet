@@ -350,39 +350,42 @@ func TestGreenAdvancesOnlyOnGreen(t *testing.T) {
 	requireQueueRefused(t, n, before, res, err, code.MergeRefusalNoLanding, "at or past")
 }
 
-// A WIDE LANDING NAMES THE WHOLE DOMAIN (M5-D33): a landing's decide proves
-// every entry's gate, which reads each change's conversation, so its record
-// names each change's path beside the repository's and its checks' — while
-// they fit MaxScopePaths, fourteen entries; past it the domain, which covers
-// them all and which a node holding a deferred record of any of them never
-// decides on. Narrower records name what they read: a green and a broken the
-// repository's checks beside it, a train and an ejection the repository alone.
+// THE WIDEST LANDING NAMES EACH ENTRY'S CHANGE, NEVER THE DOMAIN (M5-D33): a
+// landing's decide proves every entry's gate, which reads each change's
+// conversation, so its record names each change's path beside the
+// repository's and its checks' — all MaxLandEntries of them, a scope the
+// writer's own check passes — because a landing named under the whole domain
+// meets every record a node holds deferred, of any repository, and once
+// retained beside one is met by every later record of every repository
+// (MaxScopePaths' doc). Narrower records name what they read: a green and a
+// broken the repository's checks beside it, a train and an ejection the
+// repository alone.
 //
-// Mutation: name every entry's change whatever their number — fifteen entries
-// name seventeen paths, past MaxScopePaths, red.
-func TestAWideLandingNamesTheWholeDomain(t *testing.T) {
+// Mutations: name the domain past sixteen paths (the rule this replaced) —
+// the landing of sixty-four names the domain, red; cap a scope at sixteen
+// paths (MaxScopePaths = 16) — the landing's scope is refused, red.
+func TestTheWidestLandingNamesEachEntrysChange(t *testing.T) {
 	t.Parallel()
 	repo := uuid.Must(uuid.NewV7()).String()
-	entries := make([]code.LandEntry, code.MaxScopePaths-1)
+	entries := make([]code.LandEntry, code.MaxLandEntries)
 	for i := range entries {
 		entries[i] = code.LandEntry{EntryID: uuid.Must(uuid.NewV7()).String(),
 			ChangeID: uuid.Must(uuid.NewV7()).String(), Commit: oidOf(strings.Repeat("c", i+1))}
 	}
 	train := uuid.Must(uuid.NewV7()).String()
-	fits := landingOf(repo, train, oidOf("A"), entries[:code.MaxScopePaths-2]...)
-	scope := code.QueueScope(fits)
-	if len(scope) != code.MaxScopePaths || scope[0] != code.RepoPath(repo) || scope[1] != code.ChecksPath(repo) {
+	widest := landingOf(repo, train, oidOf("A"), entries...)
+	scope := code.QueueScope(widest)
+	if len(scope) != code.MaxLandEntries+2 || scope[0] != code.RepoPath(repo) || scope[1] != code.ChecksPath(repo) {
 		t.Fatalf("a landing of %d entries names %v, want the repository, its checks and each change",
-			len(fits.Land.Entries), scope)
+			len(widest.Land.Entries), scope)
 	}
-	for i, e := range fits.Land.Entries {
+	for i, e := range widest.Land.Entries {
 		if scope[i+2] != code.ChangePath(e.ChangeID) {
 			t.Fatalf("a landing's scope names %q in place of entry %d's change", scope[i+2], i)
 		}
 	}
-	wide := landingOf(repo, train, oidOf("A"), entries...)
-	if scope := code.QueueScope(wide); !slices.Equal(scope, []string{code.DomainPath()}) {
-		t.Fatalf("a landing of %d entries names %v, want the whole domain", len(entries), scope)
+	if err := code.ValidScope(scope); err != nil {
+		t.Fatalf("the widest landing's scope of %d paths is refused: %v", len(scope), err)
 	}
 	for name, tc := range map[string]struct {
 		p    code.QueueProposal

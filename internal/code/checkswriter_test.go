@@ -1699,6 +1699,103 @@ func TestTheBacklogCountsEachCheckAtItsOwnTimeout(t *testing.T) {
 	}
 }
 
+// THE WIDEST DISPATCH NAMES EACH CHANGE IT QUEUES AT, NEVER THE DOMAIN: a home
+// packs a target's heads into a record up to MaxDispatchRows, and every live
+// change into a target is due again when its checks file changes, so a
+// routine edit of a busy target dispatches hundreds of heads at once. Its
+// record names the repository, its checks and each head's change — all
+// MaxDispatchRows of them — and applies; so a record this node holds and
+// cannot decode about ANOTHER repository refuses none of it, while one about
+// one of its changes refuses the dispatch naming that change, and appends
+// nothing. Named under the whole domain, the dispatch met every deferred
+// record of every repository, and once retained beside one was met by every
+// later record of the log (MaxScopePaths' doc).
+//
+// Mutations: name the domain past sixteen paths (the rule this replaced) —
+// the dispatch is scoped [c] and refused beside the other repository's
+// record, red; cap a scope at sixteen paths (MaxScopePaths = 16) — the
+// widest dispatch's record is refused, red; name no change (checksScope
+// keeping the repository and its checks alone) — the scope names two paths,
+// and the dispatch beside its change's record is decided, red.
+func TestTheWidestDispatchNamesEachChangeItQueuesAt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	n := newNode(t)
+	repo, change := discussed(t, n, "web")
+	w, counter, _, _ := checksWriterOn(t, n)
+	tipOID, tipAt := n.tip(repo, mainRef)
+	defs := oidOf("checks-file")
+	// widest is a dispatch of MaxDispatchRows heads, each a change of its
+	// own — change first — every head under a commit of the round's.
+	widest := func(round string) (code.ChecksRequest, []string) {
+		heads := make([]code.DispatchedHead, code.MaxDispatchRows)
+		changes := make([]string, len(heads))
+		for i := range heads {
+			changes[i] = uuid.Must(uuid.NewV7()).String()
+			if i == 0 {
+				changes[i] = change
+			}
+			heads[i] = code.DispatchedHead{OID: oidOf(fmt.Sprintf("%s-head-%d", round, i)), ChangeID: changes[i],
+				Revision: 1}
+		}
+		return dispatching(repo, tipOID, tipAt, defs, heads...), changes
+	}
+	scopeOf := func(changes []string) []string {
+		sorted := slices.Sorted(slices.Values(changes))
+		want := []string{code.RepoPath(repo), code.ChecksPath(repo)}
+		for _, id := range sorted {
+			want = append(want, code.ChangePath(id))
+		}
+		return want
+	}
+
+	applied := func(what string, res code.ChecksResult, err error) {
+		t.Helper()
+		if err != nil || res.Outcome != statelog.OutcomeApplied || res.Unchanged || res.Position.IsZero() {
+			t.Fatalf("%s answered (%+v, %v), want applied at a position of its own", what, res, err)
+		}
+	}
+	req, changes := widest("first")
+	res, err := w.Publish(ctx, req)
+	applied("the widest dispatch", res, err)
+	if got, want := []string(n.recordAt(res.Position).Scope), scopeOf(changes); !slices.Equal(got, want) {
+		t.Fatalf("a dispatch of %d heads is scoped %d paths, starting %v, want the repository, its checks and "+
+			"each of the %d changes", len(changes), len(got), got[:min(len(got), 3)], len(changes))
+	}
+
+	other := uuid.Must(uuid.NewV7()).String()
+	n.exec(`INSERT INTO code_log_deferred (position, subject, subject_kind, subject_id,
+		version, payload, stored_at) VALUES (999998, ?, 'repo', ?, 9, x'7b7d', 0)`,
+		"crewlet.code.log.repo."+other, other)
+	n.exec(`INSERT INTO code_log_deferred_scope (position, path) VALUES (999998, ?)`, code.RepoPath(other))
+	req, changes = widest("second")
+	res, err = w.Publish(ctx, req)
+	applied("the widest dispatch beside another repository's deferred record", res, err)
+	if got, want := []string(n.recordAt(res.Position).Scope), scopeOf(changes); !slices.Equal(got, want) {
+		t.Fatalf("a dispatch beside another repository's deferred record is scoped %d paths, starting %v, "+
+			"want each of its %d changes", len(got), got[:min(len(got), 3)], len(changes))
+	}
+
+	req, changes = widest("third")
+	named := changes[len(changes)/2]
+	n.exec(`INSERT INTO code_log_deferred (position, subject, subject_kind, subject_id,
+		version, payload, stored_at) VALUES (999999, ?, 'change', ?, 9, x'7b7d', 0)`,
+		"crewlet.code.log.change."+named, named)
+	n.exec(`INSERT INTO code_log_deferred_scope (position, path) VALUES (999999, ?)`, code.ChangePath(named))
+	appended, end := counter.appended.Load(), n.end()
+	res, err = w.Publish(ctx, req)
+	var refusal *statelog.Unavailable
+	if !errors.Is(err, code.ErrNotServing) || !errors.As(err, &refusal) ||
+		refusal.Reason != statelog.ReasonDeferred || refusal.Position.IsZero() {
+		t.Fatalf("a dispatch naming a change a deferred record covers answered (%+v, %v), want ErrNotServing "+
+			"wrapping the log's deferred refusal", res, err)
+	}
+	if got, at := counter.appended.Load(), n.end(); got != appended || at != end {
+		t.Fatalf("the refused dispatch appended %d records and moved the log from %d to %d, want none",
+			got-appended, end, at)
+	}
+}
+
 // A CHECK'S WRITE IS DECIDED ONLY FROM ROWS ITS NODE HOLDS CURRENT: a check's
 // record writes only its repository's checks, and its decide reads the
 // repository's row on every arm and the change a head's write is about, so a
