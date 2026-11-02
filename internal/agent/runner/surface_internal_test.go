@@ -238,6 +238,35 @@ func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
 // its launch chose where continued — and holds its rebuilt guard to want.
 func collectedGuard(t *testing.T, continued bool, want []string) {
 	t.Helper()
+	r := guardedSkillsRunner(t, &Resume{
+		Continued: continued,
+		State: execstate.State{
+			Version: execstate.Version, Round: 1,
+			ActiveTools:  []string{"slack_post", toolname.LoadToolSkill},
+			LoadedSkills: []string{"release-notes"},
+		},
+		Bridged: []BridgedCall{
+			{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
+				Result: "Always thread your reply."}, Seq: 1},
+			{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "standups"},
+				Result: "no such skill", Failed: true}, Seq: 2},
+			{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1"},
+				Result: "posted"}, Seq: 3},
+		},
+	})
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got := r.loadedSkills(); !slices.Equal(got, want) {
+		t.Errorf("the collected run's guard holds %v, want %v", got, want)
+	}
+}
+
+// guardedSkillsRunner is a CTO seat's runner whose slack_post three required
+// skills guard — chat-conventions, release-notes and standups — over the real
+// loader's name, resuming resume where it is not nil.
+func guardedSkillsRunner(t *testing.T, resume *Resume) *Runner {
+	t.Helper()
 	registry := skills.NewRegistry()
 	for _, s := range []skills.Skill{
 		{Key: "chat-conventions", Title: "Chat conventions", Summary: "how to post",
@@ -268,31 +297,57 @@ func collectedGuard(t *testing.T, continued bool, want []string) {
 		Sessions: testHost(t),
 		Skills:   registry,
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
-		Resume: &Resume{
-			Continued: continued,
-			State: execstate.State{
-				Version: execstate.Version, Round: 1,
-				ActiveTools:  []string{"slack_post", toolname.LoadToolSkill},
-				LoadedSkills: []string{"release-notes"},
-			},
-			Bridged: []BridgedCall{
-				{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
-					Result: "Always thread your reply."}, Seq: 1},
-				{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "standups"},
-					Result: "no such skill", Failed: true}, Seq: 2},
-				{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1"},
-					Result: "posted"}, Seq: 3},
-			},
-		},
+		Resume:   resume,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, _, err := r.Resume(context.Background(), nil); err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	if got := r.loadedSkills(); !slices.Equal(got, want) {
-		t.Errorf("the collected run's guard holds %v, want %v", got, want)
+	return r
+}
+
+// A RUN TAKEN OVER IS HELD TO THE SESSION ITS BOX SAYS IT STARTED THERE. A node
+// that takes a run over while it works rebuilds its guard as the job's record
+// says — the launch's recorded skills only where the box had said it took up the
+// session its launch chose; here it had said nothing — and the box, saying it
+// on its first request to the reopened bridge, holds the run to that session
+// before any call: the launch's skills and the job's own loads where it
+// continued the session its launch chose, the job's own loads alone where it
+// started one of its own in that one's place, whose model read nothing else.
+//
+// Mutation: arm the launch's skills whatever the box says, or leave the job's
+// own loads out of what the box's word arms, and a case goes red.
+func TestARunTakenOverIsHeldToTheSessionItsBoxSaysItStarted(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		continued bool
+		want      []string
+	}{
+		"its box took the session up":          {continued: true, want: []string{"chat-conventions", "release-notes"}},
+		"its box started a session of its own": {want: []string{"chat-conventions"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := guardedSkillsRunner(t, nil)
+			reopened, err := r.ReopenAgentRun(context.Background(), execstate.State{
+				Version: execstate.Version, Round: 1,
+				ActiveTools:  []string{"slack_post", toolname.LoadToolSkill},
+				LoadedSkills: []string{"release-notes"},
+			}, []BridgedCall{
+				{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
+					Result: "Always thread your reply."}, Seq: 1},
+			}, Bridged{}, false)
+			if err != nil {
+				t.Fatalf("ReopenAgentRun: %v", err)
+			}
+			if got := r.loadedSkills(); !slices.Equal(got, []string{"chat-conventions"}) {
+				t.Fatalf("before its box says, the taken-over run's guard holds %v, want the job's own "+
+					"load alone: its record says nothing of the session it started", got)
+			}
+			reopened.Started(tc.continued)
+			if got := r.loadedSkills(); !slices.Equal(got, tc.want) {
+				t.Errorf("once its box says, the taken-over run's guard holds %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
