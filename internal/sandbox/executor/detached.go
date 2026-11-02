@@ -1065,6 +1065,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	}
 	code := strings.TrimSpace(codeText)
 	crashed := code != "" && code != "0"
+	// AND WHETHER ITS HARNESS EXITED CLEANLY, for the session its script
+	// packed after it whatever its status: one killed while the wrapper lived
+	// on — a signal, its memory limit — may end mid-record, and so may one
+	// whose status the box never recorded ([sandbox.Result.HarnessCutOff]).
+	result.HarnessCutOff = code != "0"
 
 	// THE FINDINGS FILE IS THE RESULT CARRIER OF RECORD. The system text asks
 	// the agent to write its report there before stopping, and it survives both

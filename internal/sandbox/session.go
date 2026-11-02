@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -81,8 +82,9 @@ import (
 //
 // How the turn ended — completed or failed, the reviewer's decision, whether
 // its reply reached the party waiting, who stopped it and why, what lost it —
-// is the account a transcript cannot hold, and the next turn on the
-// conversation is told it ([executordomain.Ending]). Whatever ends the turn
+// is the account a transcript cannot hold, kept on the turn's row beside its
+// session ([executordomain.Ending]); a later turn on the conversation is not
+// told it yet, and starts a session of its own. Whatever ends the turn
 // writes it on the run's row ([PendingStore.OweEnd]): the engine's resumed turn,
 // and this package's endings that no frame of the turn reaches — a loss, a stop
 // ([CoordinatorOptions.TurnLost], [CoordinatorOptions.CloseStopped]). The run's
@@ -90,8 +92,8 @@ import (
 // deletes the row, which the delete refuses until then ([ErrEndOwed]): after
 // every capture of the turn has settled, so the end's tombstone never refuses
 // the turn's own last session, and with the turn's NEWEST capture where it was
-// not kept ([executordomain.Unkept]), so the next turn never continues an older
-// one believing it the turn's last. The seat's mail waits on it as on every
+// not kept ([executordomain.Unkept]), so no reader of the log takes an older one
+// for the turn's last. The seat's mail waits on it as on every
 // ending kept for its retry. A turn with no capture still ends: its row names
 // no object, and holds the account.
 //
@@ -239,20 +241,35 @@ type SessionCapture struct {
 	// is not final.
 	Final bool `json:"final,omitempty"`
 
-	// BridgeSeq is the last bridged call ([BridgeCall.Seq]) the row held,
-	// and NoteCursor the last note read ([RunSteer.Reads]), when the archive
-	// was packed: what the session it holds had been answered and told. A
-	// launch that continues it is told what came after.
-	BridgeSeq  int `json:"bridge_seq,omitempty"`
+	// BridgeSeq is the highest place of a bridged call ([BridgeCall.Seq]) the
+	// row held when the archive was packed, and BridgeOpen the places at or
+	// below it the row held NO call at then ([openPlaces]): a call the
+	// bridge numbers as it arrives is recorded only once its tool answers, so
+	// a place below the highest can still be a call in flight — one whose
+	// outcome the session may never have been handed. Together they say
+	// which of the round's calls the session had been answered: a launch
+	// that continues it is told every call past BridgeSeq or at a place
+	// BridgeOpen names, with its outcome.
+	BridgeSeq  int   `json:"bridge_seq,omitempty"`
+	BridgeOpen []int `json:"bridge_open,omitempty"`
+
+	// NoteCursor is the last note read ([RunSteer.Reads]) the session holds
+	// ([notesHeld]): every note read when the archive was packed, but for a
+	// session its harness was cut off in, none its job took at its last take
+	// of them, which may never have reached it. A launch that continues the
+	// session hands it every note read after.
 	NoteCursor int `json:"note_cursor,omitempty"`
 
-	// Interrupted says the archive was packed by the engine rather than by
-	// the run's script at its harness's clean exit ([SessionTake.Pack]): a
-	// job still working, cut off at its turn's cap, lost with its engine, or
-	// one that died before its script could pack — so its transcript may end
-	// mid-record, its last tool call with no result. A launch that continues
-	// it restores the archive over the copy in its box ([CarriedSession.Replace])
-	// and tells the run its transcript may end mid-call.
+	// Interrupted says the session's harness was CUT OFF rather than exiting
+	// cleanly: the archive was packed by the engine ([SessionTake.Pack]) — a
+	// job still working, one cut off at its turn's cap, one lost with its
+	// engine, one that died before its script could pack — or by the run's
+	// script after a harness that exited otherwise than cleanly, killed by a
+	// signal or its memory limit ([Result.HarnessCutOff]). Its transcript may
+	// end mid-record, its last tool call with no result. A launch that
+	// continues it restores the archive over the copy in its box
+	// ([CarriedSession.Replace]) and tells the run its transcript may end
+	// mid-call.
 	Interrupted bool `json:"interrupted,omitempty"`
 
 	// ContextTokens is the whole input of the last request the session's
@@ -405,8 +422,9 @@ var SessionCaptureBudget = SessionTakeBudget + SessionKeepBudget
 // saying so, and the turn's next launch starts fresh.
 const sessionKeepDrain = discardGrace
 
-// captureWaitTick spaces the reads of a run's row an ending makes while a
-// capture of its turn is still being kept ([Coordinator.awaitCapture]).
+// captureWaitTick spaces the reads of a run's row an ending, or a relaunch,
+// makes while a capture of its turn is still being kept
+// ([Coordinator.awaitCapture]).
 const captureWaitTick = 2 * time.Second
 
 // capturePoint is where in a run's life a capture is taken.
@@ -418,20 +436,88 @@ type capturePoint struct {
 	pack bool
 	// final says the job had ended ([SessionCapture.Final]).
 	final bool
+	// cutOff says the session's harness did not exit cleanly
+	// ([SessionCapture.Interrupted]).
+	cutOff bool
 }
 
 // readCapture is the capture a box read takes: the archive the run's script
 // packed where its job ended and packed one, and one packed now otherwise — a
 // job still working (one its turn's cap ended, one a person stopped), which is
 // not final, or one that ended without packing (a crash, a loss with its box
-// left), which is.
+// left), which is. CUT OFF wherever the engine packs it, and where the script
+// packed it after a harness that did not exit cleanly ([Result.HarnessCutOff]):
+// a harness killed while its wrapper lived on is packed by the script all the
+// same, its transcript ending wherever the kill found it.
 func readCapture(read BoxRead, result Result, running bool) capturePoint {
-	return capturePoint{name: string(read), pack: running || result.Captured == nil, final: !running}
+	pack := running || result.Captured == nil
+	return capturePoint{name: string(read), pack: pack, final: !running, cutOff: pack || result.HarnessCutOff}
 }
 
 // lossCapture is a lost run's box, read before its ending reclaims it: its job
-// went with its host, so what its box holds is final.
-var lossCapture = capturePoint{name: "loss", pack: true, final: true}
+// went with its host, so what its box holds is final, and its harness was cut
+// off.
+var lossCapture = capturePoint{name: "loss", pack: true, final: true, cutOff: true}
+
+// maxOpenPlaces bounds [SessionCapture.BridgeOpen]: the most places below a
+// capture's highest call it names, the highest of them.
+//
+// SIXTY-FOUR, from what can be open at once: a call is in flight from its
+// arrival to its tool's answer, and a harness has at most its model's parallel
+// calls and its subagents' in flight together — a handful, a few dozen at the
+// most. The rest of what a row lacks is older: places the row's bound dropped
+// from the middle of a long round ([MaxBridgeCalls]), whose calls were answered
+// long before, and calls refused before they ran, which no record holds. A
+// place among those named costs the stamp a number and the continuation
+// nothing, since no call is recorded at it.
+const maxOpenPlaces = 64
+
+// openPlaces is the places at or below last that run's row holds no call at —
+// calls in flight when its job's session was packed, and places that never
+// held one — the highest [maxOpenPlaces] of them, ascending
+// ([SessionCapture.BridgeOpen]).
+func openPlaces(run PendingRun, last int) []int {
+	held := make(map[int]bool, len(run.BridgeCalls))
+	for _, call := range run.BridgeCalls {
+		held[call.Seq] = true
+	}
+	var open []int
+	for seq := last; seq > 0 && len(open) < maxOpenPlaces; seq-- {
+		if !held[seq] {
+			open = append(open, seq)
+		}
+	}
+	slices.Reverse(open)
+	return open
+}
+
+// notesHeld is the last note read ([RunSteer.Reads]) a session packed from
+// run's job — launch — holds ([SessionCapture.NoteCursor]): every one read,
+// where its harness exited cleanly; and where it was cut off, every one read
+// before the job's LAST TAKE of its notes, whose notes may never have reached
+// it. A take is recorded read in the write that answers the harness's ask,
+// before the answer is handed back (internal/engine's note hooks), so a
+// harness cut off between the two never had them; a take before the last was
+// answered, since the harness went on to ask again. The notes the job's brief
+// read are the brief's, which the session holds from its first message.
+func notesHeld(run PendingRun, launch string, cutOff bool) int {
+	held := run.Steer.Reads
+	if !cutOff {
+		return held
+	}
+	last := 0
+	for _, note := range run.Steer.Notes {
+		read := note.Read
+		if read != nil && read.Launch == launch && read.Boundary != string(types.SteerBoundaryBrief) &&
+			read.Order > last {
+			last = read.Order
+		}
+	}
+	if last > 0 {
+		held = min(held, last-1)
+	}
+	return held
+}
 
 // spooledCapture is a capture taken out of its box and spooled, sealed, on this
 // node's disk: its upload and its record are what is left ([Coordinator.keepCapture]).
@@ -519,10 +605,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, nil
 	}
 	defer func() { _ = taken.Body.Close() }()
+	last := current.LastBridgeSeq()
 	stamp := SessionCapture{
 		LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current), Launch: run.LaunchID,
-		State: CaptureBegun, Final: at.final, Interrupted: at.pack,
-		BridgeSeq: current.LastBridgeSeq(), NoteCursor: current.Steer.Reads, At: c.now().UTC(),
+		State: CaptureBegun, Final: at.final, Interrupted: at.cutOff,
+		BridgeSeq: last, BridgeOpen: openPlaces(current, last),
+		NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC(),
 		Harness: taken.Archive.Harness, HarnessVersion: taken.Archive.Version,
 		SessionID: taken.Archive.SessionID, ArchiveFormat: taken.Archive.Format,
 		Home: box.Home(), Workspace: path.Join(box.Home(), WorkspaceSubdir),
@@ -879,33 +967,27 @@ func loginValuesOf(raw []byte) []string {
 func (c *Coordinator) refuseUnplaced(ctx context.Context, run, current PendingRun,
 	at capturePoint, why string) *SessionKept {
 
+	last := current.LastBridgeSeq()
 	stamp := SessionCapture{LaunchSeq: current.LaunchSeq, CaptureSeq: nextCaptureSeq(current),
 		Launch: run.LaunchID, State: CaptureRefused, Reason: redact.Secrets(why), Final: at.final,
-		BridgeSeq: current.LastBridgeSeq(), NoteCursor: current.Steer.Reads, At: c.now().UTC()}
+		Interrupted: at.cutOff, BridgeSeq: last, BridgeOpen: openPlaces(current, last),
+		NoteCursor: notesHeld(current, run.LaunchID, at.cutOff), At: c.now().UTC()}
 	log.WarnContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name,
 		"capture_seq", stamp.CaptureSeq, "detail", stamp.Reason)
-	stampCtx, cancel := detached(ctx)
-	defer cancel()
-	if _, err := c.pending.StampCapture(stampCtx, run.TurnID, stamp); err != nil {
-		log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", run.TurnID, "error", err.Error())
-	}
+	c.stampSettled(ctx, run.TurnID, stamp)
 	return stamp.kept()
 }
 
 // finishCapture stamps how a capture came out and reports it.
 //
-// UNDER A CONTEXT OF ITS OWN: the capture's budget may be what ended it, and
+// UNDER A CONTEXT OF ITS OWN, asked again while the store does not answer
+// ([Coordinator.stampSettled]): the capture's budget may be what ended it, and
 // the stamp is what tells a later launch so.
 func (c *Coordinator) finishCapture(ctx context.Context, run PendingRun, stamp SessionCapture,
 	state CaptureState, why string) *SessionKept {
 
 	stamp.State, stamp.Reason = state, redact.Secrets(why)
-	stampCtx, cancel := detached(ctx)
-	defer cancel()
-	if _, err := c.pending.StampCapture(stampCtx, run.TurnID, stamp); err != nil {
-		log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", run.TurnID,
-			"capture_seq", stamp.CaptureSeq, "state", string(state), "error", err.Error())
-	}
+	c.stampSettled(ctx, run.TurnID, stamp)
 	switch state {
 	case CaptureLanded:
 		log.InfoContext(ctx, "executor_session_kept", "turn_id", run.TurnID, "agent", run.AgentHandle,
@@ -917,6 +999,38 @@ func (c *Coordinator) finishCapture(ctx context.Context, run PendingRun, stamp S
 			"detail", stamp.Reason)
 	}
 	return stamp.kept()
+}
+
+// stampSettled stamps a capture's outcome on its run's row, asked again while
+// the coordination store does not answer, spaced by a doubling wait, within
+// one record's budget ([sessionRecordBudget]) and under a context of its own,
+// which outlives the caller's: the capture's budget may be what ended it.
+//
+// ASKED AGAIN BECAUSE A STAMP LEFT BEGUN IS READ AS A KEEP STILL UNDER WAY for
+// as long as a capture can take ([SessionCaptureBudget], twenty minutes and
+// more): the turn's end waits that long on it, and a relaunch reads a capture
+// that settled as one it cannot continue. Once the record's budget is spent
+// the store's outage is its own alarm's, and the stamp ages out as never
+// finished.
+func (c *Coordinator) stampSettled(ctx context.Context, turnID string, stamp SessionCapture) {
+	stampCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.recordBudget)
+	defer cancel()
+	for attempt := 1; ; attempt++ {
+		_, err := c.pending.StampCapture(stampCtx, turnID, stamp)
+		if err == nil {
+			return
+		}
+		wait := time.NewTimer(backoff.Doubling(attempt, c.sessionRetry, sessionRetryCeiling))
+		select {
+		case <-stampCtx.Done():
+			wait.Stop()
+			log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", turnID,
+				"capture_seq", stamp.CaptureSeq, "state", string(stamp.State), "attempts", attempt,
+				"error", err.Error())
+			return
+		case <-wait.C:
+		}
+	}
 }
 
 // uploadRefusal is why an upload of a session was refused, in the words its
@@ -1031,12 +1145,7 @@ func (c *Coordinator) settleCapture(ctx context.Context, run PendingRun, last Se
 		last.State, last.Reason = c.recordCapture(ctx, run.AgentHandle, run.TurnID, run.ConversationKey,
 			run.WorkKey, last)
 	}
-	stampCtx, cancel := detached(ctx)
-	defer cancel()
-	if _, err := c.pending.StampCapture(stampCtx, run.TurnID, last); err != nil {
-		log.WarnContext(ctx, "executor_session_stamp_failed", "turn_id", run.TurnID,
-			"capture_seq", last.CaptureSeq, "error", err.Error())
-	}
+	c.stampSettled(ctx, run.TurnID, last)
 	return last
 }
 
@@ -1050,18 +1159,22 @@ func captureInFlight(run PendingRun, now time.Time) bool {
 }
 
 // awaitCapture is run's row once no capture of its turn is in flight
-// ([captureInFlight]) — read again every [captureWaitTick], for as long as the
-// capture's budget allows — or as it stands when ctx ends first.
+// ([captureInFlight]) — read again every [captureWaitTick], for at most within
+// — or as it stands when ctx ends first.
 //
-// WHY AN END WAITS: the end tombstones its turn, and a capture whose record
-// lands after it is refused, so ended first, the turn's last session would be
-// lost to the next turn. A keep is made off the read that took it, on the node
-// whose host the box is on, which may be another node; the row is what both
-// read.
-func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun) PendingRun {
-	// NEVER LONGER THAN A CAPTURE CAN TAKE, whatever the stamp's clock says: a
-	// stamp whose node's clock runs ahead is waited out on this one's.
-	ctx, cancel := context.WithTimeout(ctx, SessionCaptureBudget)
+// WHY AN END WAITS, for as long as a capture can take ([SessionCaptureBudget]):
+// the end tombstones its turn, and a capture whose record lands after it is
+// refused, so ended first, the turn's last session would be lost to the next
+// turn. A keep is made off the read that took it, on the node whose host the
+// box is on, which may be another node; the row is what both read. An end
+// waits off every frame somebody waits on (its ending's own retry).
+//
+// A RELAUNCH WAITS FAR LESS ([relaunchCaptureWait]), on the frame that
+// relaunches: see restore.go.
+func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun, within time.Duration) PendingRun {
+	// NEVER LONGER THAN within, whatever the stamp's clock says: a stamp
+	// whose node's clock runs ahead is waited out on this one's.
+	ctx, cancel := context.WithTimeout(ctx, within)
 	defer cancel()
 	for captureInFlight(run, c.now()) {
 		wait := time.NewTimer(c.captureTick)

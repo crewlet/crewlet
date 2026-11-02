@@ -189,6 +189,15 @@ func launchRig(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, *sa
 // about WHICH runner a launch starts its job on has to see the one it did not.
 func launchRigRunners(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, map[string]*sandbox.FakeRunner) {
 	t.Helper()
+	return launchRigRestoring(t, c, bridge, nil)
+}
+
+// launchRigRestoring is [launchRigRunners] whose coordinator continues a turn's
+// kept session from restore, as a node's does from its executor log; nil
+// restores none.
+func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
+	restore sandbox.SessionRestore) (*Engine, map[string]*sandbox.FakeRunner) {
+	t.Helper()
 	runners := map[string]*sandbox.FakeRunner{
 		"claude-code": sandbox.NewFakeRunner("claude-code"),
 		"opencode":    sandbox.NewFakeRunner("opencode"),
@@ -231,6 +240,7 @@ func launchRigRunners(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engi
 		Answers:  testAnswers(),
 		Audience: noAudience{},
 		Queue:    q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
+		Restore: restore,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)

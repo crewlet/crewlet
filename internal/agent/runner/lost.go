@@ -20,14 +20,16 @@ import (
 // reason the run never had. So the resumed turn relaunches its executor for the
 // same round, as it does for a run a person's answer carries on ([Asked]): in
 // the lost job's box where the launch may continue in it, its working tree as
-// the job left it, and in a fresh one otherwise. In the turn's kept session,
-// where its launcher says the session can be continued (continued.go): the
-// capture packed once the loss was found, which holds what the harness had
-// settled — never the box's own copy as it stands, which the harness was cut
-// off in — and told it was cut off, what it called after the capture and that
-// it may end mid-call ([Lost.Continuation]). In a session of its own otherwise,
-// and after a second loss in the round, told what happened and where to look for
-// what the job left ([Lost.Reseed]).
+// the job left it, and in a fresh one otherwise. In the lost job's own session,
+// where its launcher says it can be continued (continued.go): the capture
+// packed once the loss was found, where its engine's restart left its box
+// behind — never the box's own copy as it stands, which the harness was cut off
+// in — told it was cut off, what it called after the capture and that it may
+// end mid-call ([Lost.Continuation]). A job whose box went with its host left
+// no capture, and an earlier job's holds none of what this one was told, so its
+// round goes on in a session of its own, as it does after a second loss in the
+// round: told what happened and where to look for what the job left
+// ([Lost.Reseed]).
 //
 // UNLESS THE ROUND WAS ALREADY SUBMITTED: a job whose `submit_work` is on the
 // round's calls had finished its work and was lost on its way out, and the
@@ -114,8 +116,8 @@ func (l Lost) Continuation() string {
 // [Runner.continueAgentRun] relaunches each the same way.
 type carried interface {
 	// session is the run's own harness session, which the relaunch continues
-	// where it runs in that run's box and the turn keeps no capture of its
-	// session; "" continues none there.
+	// where it runs in that run's box and takes up no kept capture of it;
+	// "" continues none there.
 	session() string
 	// continuation is the prompt the continued session is given, and
 	// reseed what a fresh run carrying the round on is told beside its
@@ -142,13 +144,13 @@ func (a *Asked) refusal() error                            { return nil }
 func (a *Asked) what() string                              { return "carrying on the run with its answer" }
 
 // A lost job's session is never continued IN PLACE: what its box holds is
-// what its harness was cut off in, and the turn's kept capture of it — whose
-// archive leaves out what its harness never finished, and whose continuation
-// says what came after it — is what a relaunch continues (continued.go). Not a
-// second time in one round, though: a round lost again is a run that may take
-// its host down from the state it holds, so its relaunch starts a session of
-// its own rather than replay that state toward the round's limit. What a fresh
-// run is told of it is the engine's own words, which no fence token touches.
+// what its harness was cut off in, and the kept capture of it — whose archive
+// leaves out what its harness never finished, and whose continuation says what
+// came after it — is what a relaunch continues (continued.go). Not a second
+// time in one round, though: a round lost again is a run that may take its host
+// down from the state it holds, so its relaunch starts a session of its own
+// rather than replay that state toward the round's limit. What a fresh run is
+// told of it is the engine's own words, which no fence token touches.
 func (l *Lost) session() string                         { return "" }
 func (l *Lost) continuation(provenance.Boundary) string { return l.Continuation() }
 func (l *Lost) reseed(provenance.Boundary) string       { return l.Reseed() }

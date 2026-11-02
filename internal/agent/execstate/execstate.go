@@ -92,8 +92,19 @@ type State struct {
 	// activation the turn made.
 	ActiveTools []string `json:"active_tool_names"`
 
-	// LoadedSkills is the skill-guard state, replayed for the same reason.
+	// LoadedSkills is the skill-guard state, replayed for the same reason:
+	// the skills the session the launch's run took up held when it started
+	// — none for a session of the run's own.
 	LoadedSkills []string `json:"loaded_skill_keys"`
+
+	// BridgeFrom is the last bridged call the run's record held when the
+	// job's session over the bridge opened: the round's calls before the job,
+	// which it numbers its own after. Every rebuild of the run's guard
+	// replays on LoadedSkills the loads of the calls past it alone — this
+	// job's, never an earlier job's of the round, whose session the run's
+	// may not be. Zero for a job that opened its round, and on a state a
+	// build before it wrote, which replays every call of the round.
+	BridgeFrom int `json:"bridge_from,omitempty"`
 
 	// NativeSkills is the key of each Tool Skill the run's harness was
 	// handed as its own, by the name the harness lists it under

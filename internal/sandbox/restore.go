@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -17,31 +18,51 @@ import (
 // Every launch of a turn keeps its harness's session in the object store
 // (session.go), named by the turn's row on the executor log. So a relaunch of
 // the turn — a reviewer's send-back, a person's answer to a run that parked, a
-// job lost with its host, a sign-in replaced while it ran — continues the turn's
-// own NEWEST kept capture, in whatever box and cell it gets: the box the
+// job lost with its engine whose box was left behind, a sign-in replaced while
+// it ran — continues the session of THE JOB BEFORE IT, as that job's kept
+// capture holds it, in whatever box and cell the relaunch gets: the box the
 // session was last worked in, its own copy kept, or any other, the archive
 // restored there before its harness takes the session up ([RunRequest.Carried]).
 //
-// # Which session, and who decides
+// # Which session: the job before's own, or none
 //
-// ONE DECISION, [ContinuityOf]: a row that names a kept session, of a turn
-// still live, in a format and by a release this build's runner for its harness
-// restores. The launch's caller asks it before it builds the run's surface and
-// briefs ([Coordinator.ContinuedCapture]), so what the run is offered and told
-// is the session's; the launch asks it again against the box it got, and asks
-// that box's harness whether it can take the session up
-// ([SessionRestorer.CheckCarry]); and the run's own script restores it or
-// starts a new session, handed both briefs ([RunRequest.FreshBrief]). Every
-// reader that says whether a session continues — a seat's sessions, read —
-// asks [ContinuityOf] too, so no second copy of the rule can disagree with the
-// launch.
+// A relaunch follows one job — the one its reviewer collected, the one whose
+// question was answered, the one lost or refused — and only that job's session
+// holds everything the turn's jobs were told: the round's task or the review
+// that sent the round back, a person's answer, and the job's own work. A
+// capture an EARLIER job took holds none of what the jobs after it were told,
+// and the calls a continuation lists after it would be numbered in another
+// round's order where a send-back began one. So a relaunch whose job before
+// left no kept capture — its box went with its host, its take or its keep was
+// refused, its record was never answered — continues none: it starts a
+// session of its own, told what the jobs before it did. And only that job's
+// NEWEST capture: a later one that was not kept is a session that went further
+// than the kept one, and a run continued from the older would believe it knew
+// everything it did.
 //
-// ONLY THE NEWEST. A turn whose newest capture was refused, or never answered,
-// continues none: the session that capture would have held went further than
-// any kept one, and a run continued from an older one would believe it knew
-// everything it did. A relaunch that carries its round on continues only a
-// capture its round took ([roundsOwn]). And only within its turn: an ended
-// turn's session is continued by nothing yet.
+// ONE DECISION, [ContinuityOf]: the turn live, the job before's newest capture
+// kept and named by the turn's row on the executor log, in a format and by a
+// release the runner for its harness restores. The launch's caller asks it
+// before it builds the run's surface and briefs ([Coordinator.ContinuedCapture]),
+// the launch asks it again of the record as it opened the job, and a reader
+// that says whether a turn's session can be continued asks it of the same two
+// records. What only a launch can know is the launch's alone, and no reader
+// states it: whether the box it got runs a harness that takes the session up
+// ([SessionRestorer.CheckCarry]), and whether the seat's budget can carry the
+// session's context beside the brief it hands the run (internal/engine's
+// launch floor).
+//
+// # The job before's capture, still being kept
+//
+// The job's capture is taken by the read that collected it, and its upload and
+// record — the keep — are made off that read ([Coordinator.keepCapture]), while
+// a relaunch can follow at once: a lost job's round is carried on by the very
+// frame that read its box. So the relaunch waits for the keep, but only for
+// as long as an ordinary keep takes ([relaunchCaptureWait]): the frame that
+// waits holds the seat and a slot of the node's admission, and a keep that has
+// not landed by then is one a slow store or a stopped node is holding, which a
+// relaunch does not wait out on that frame. It starts a session of its own,
+// saying so.
 //
 // # Never a failed launch
 //
@@ -72,51 +93,71 @@ type SessionRestore interface {
 	OpenSpooled(row executordomain.Session, sealed io.Reader) (io.Reader, error)
 }
 
-// ExecutorContextWindow is the most context, in tokens, an executor run's
-// session is carried at: every Claude Code run compacts its conversation at it
-// (CLAUDE_CODE_AUTO_COMPACT_WINDOW, internal/sandbox/executor), and a session
-// whose last request carried more — an OpenCode session, whose compaction
-// threshold is its model's own window less a share, never a figure the engine
-// can set, or a harness release that ignores the variable — is not continued:
-// its next launch starts a session of its own.
+// ExecutorContextWindow is the context, in tokens, at which every Claude Code
+// executor run compacts its conversation (CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+// pinned by internal/sandbox/executor over any value an image, a repository or
+// a seat sets): what one request of the run — and of every run that continues
+// its session, which sends the session's whole context again first — carries
+// at most, where the model's own window, a million tokens on some, would let a
+// session grow ten times past it, every token of every request charged to the
+// seat's budget.
+//
+// NOT A SIZE A SESSION IS REFUSED AT. A session past it — an OpenCode one,
+// whose harness compacts near its model's own window rather than at a figure
+// the engine can set, or one a harness release that ignores the variable kept
+// — is continued wherever the seat's budget can carry it: the launch's floor
+// decides that, from the session's context and the brief beside it
+// (internal/engine), and a seat with no capped window carries any.
 //
 // ONE HUNDRED THOUSAND, and a judgment that trades a session's detail for what
-// every request of a continued run costs. A continued run sends its session's
-// whole context again on every request, and a seat's budget counts each one's
-// whole input, its cached share included; so the window bounds what one
-// request of a continued run can charge — four times the launch floor
-// (turn_engine.executor_min_budget_tokens) — where a model's own window, a
-// million tokens on some, would let a session carry ten times that. It is the
-// least Claude Code accepts (100,000 to 1,000,000), and a coding run's durable
-// state is its checkout and its turn's records rather than its transcript, so a
-// session compacted at it keeps the work in hand and the summary of the rest.
-// A larger window keeps more verbatim detail and charges more per request.
+// every request of a continued run costs: four times the launch floor
+// (turn_engine.executor_min_budget_tokens), the least Claude Code accepts
+// (100,000 to 1,000,000), and enough for the work in hand, since a coding
+// run's durable state is its checkout and its turn's records rather than its
+// transcript, so a session compacted at it keeps the recent work verbatim and
+// a summary of the rest. A larger window keeps more verbatim detail and
+// charges more per request.
 const ExecutorContextWindow = 100_000
 
-// SessionContinuity is whether a launch may continue a turn's kept session, and
-// where it may not, why — [ContinuityOf]'s answer.
+// SessionContinuity is whether a relaunch may continue a turn's kept session,
+// and where it may not, why — [ContinuityOf]'s answer.
 type SessionContinuity struct {
 	Continues bool
 	Why       string
 }
 
-// ContinuityOf is THE decision whether a turn's kept session can be continued:
-// the turn's row on the executor log names a kept session; the turn is LIVE —
-// its run still running, its end not recorded — since a session is continued
-// only by a later launch of the turn that kept it; and the runner a launch
-// would take it up with restores it ([SessionRestorer.Restores]: its harness,
-// its archive's format, a release whose sessions another box continues).
-// restorer is that runner, nil where none of this build restores the row's
-// harness's sessions. What only the box can say — whether its harness's own
-// release takes the session up — is the launch's to ask of the box
-// ([SessionRestorer.CheckCarry]).
-func ContinuityOf(row executordomain.Session, live bool, restorer SessionRestorer) SessionContinuity {
+// ContinuityOf is THE decision whether a relaunch that follows the job at
+// launch follows ([PendingRun.LaunchSeq]) can continue the turn's kept
+// session — see the file comment: the turn live, the newest capture of that
+// job kept, the turn's row on the executor log naming it, and the runner the
+// launch would take it up with restoring it ([SessionRestorer.Restores]: its
+// harness, its archive's format, a release whose sessions another box
+// continues). row is the turn's row on the executor log; run the turn's run
+// record as the caller read it, nil where the turn has none — its run is over;
+// restorer nil where no runner of this build restores the row's harness's
+// sessions.
+//
+// What the box a launch gets says of its harness's own release, and what the
+// seat's budget says of the session's context, are the launch's to ask, and
+// this decides neither.
+func ContinuityOf(row executordomain.Session, run *PendingRun, follows int64,
+	restorer SessionRestorer) SessionContinuity {
+
+	if run == nil || row.Ended() {
+		return SessionContinuity{Why: "the turn has ended, and a session is continued only by a later " +
+			"launch of the turn that kept it"}
+	}
+	kept, why := followedCapture(*run, follows)
+	if why != "" {
+		return SessionContinuity{Why: why}
+	}
 	switch {
 	case !row.HasObject():
 		return SessionContinuity{Why: "the turn's row on the executor log names no kept session"}
-	case !live || row.Ended():
-		return SessionContinuity{Why: "the turn has ended, and a session is continued only by a later " +
-			"launch of the turn that kept it"}
+	case row.LaunchSeq != kept.LaunchSeq || row.CaptureSeq != kept.CaptureSeq:
+		return SessionContinuity{Why: fmt.Sprintf("the executor log names the turn's capture (launch %d, "+
+			"capture %d), and its run's record keeps (launch %d, capture %d)", row.LaunchSeq, row.CaptureSeq,
+			kept.LaunchSeq, kept.CaptureSeq)}
 	case restorer == nil:
 		return SessionContinuity{Why: fmt.Sprintf("no runner of this build restores a session %s wrote",
 			row.Harness)}
@@ -125,6 +166,26 @@ func ContinuityOf(row executordomain.Session, live bool, restorer SessionRestore
 		return SessionContinuity{Why: why}
 	}
 	return SessionContinuity{Continues: true}
+}
+
+// followedCapture is the capture a relaunch that follows the job at launch
+// follows continues — that job's newest capture, kept — or why there is none,
+// in words for the log: the half of [ContinuityOf] the run's record answers
+// alone, asked before the executor log is read.
+func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
+	kept, newest := run.Kept, run.Capture
+	switch {
+	case newest == nil:
+		return SessionCapture{}, "the turn has kept no capture of its session"
+	case newest.LaunchSeq != follows:
+		return SessionCapture{}, fmt.Sprintf("the job the relaunch follows (launch %d) left no capture of "+
+			"its session, and an earlier job's (launch %d) holds none of what the jobs after it were told",
+			follows, newest.LaunchSeq)
+	case kept == nil || newest.newerThan(*kept):
+		return SessionCapture{}, fmt.Sprintf("the newest capture of the job the relaunch follows (launch %d, "+
+			"capture %d) was not kept: %s", newest.LaunchSeq, newest.CaptureSeq, unkeptWhy(*newest))
+	}
+	return *kept, ""
 }
 
 // archiveOf is the archive a turn's row names, as a restorer and a run take it.
@@ -140,6 +201,14 @@ func archiveOf(row executordomain.Session) SessionArchive {
 type ContinuedSession struct {
 	Capture SessionCapture
 	Row     executordomain.Session
+
+	// Context is what the last request of the session of the job the
+	// relaunch follows carried, as that job's newest capture measured it,
+	// KEPT OR NOT: what a launch that continues that session sends again
+	// before its brief, restored from the capture or as the job's own box
+	// holds it ([LaunchRequest.Continue]). Set whether or not the capture is
+	// continued; zero where no capture of the job measured any.
+	Context int64
 }
 
 // readThrough is the level a relaunch reads its turn's row at: the capture it
@@ -147,24 +216,35 @@ type ContinuedSession struct {
 // copy may not have applied yet.
 var readThrough = statelog.Freshness{Level: statelog.ReadLinearizable}
 
+// relaunchCaptureWait bounds how long a relaunch waits for the capture of the
+// job it follows to be kept, on the frame that relaunches: see the file
+// comment.
+//
+// FIFTEEN SECONDS, from what an ordinary keep is: the turn's operations minted
+// and the seat's live sessions listed (reads of the coordination store), an
+// upload of an ordinary session — a mebibyte or two — and its record, which a
+// log answers in milliseconds and a publish its serving node has not yet
+// applied within the publisher's five-second wait
+// (statelog.DefaultResolveBudget). Three times that is room for a store having
+// a slow moment; a keep past it is one a slow upload of a large session, an
+// outage or a stopped node is holding, whose own budget runs to minutes
+// ([SessionCaptureBudget]) — which the frame does not wait out.
+const relaunchCaptureWait = 15 * time.Second
+
 // ContinuedCapture is the kept capture a relaunch of turnID continues — the
-// turn's NEWEST kept capture, read once no capture of the turn is still being
-// taken or kept ([Coordinator.awaitCapture]), where it is also the newest the
-// turn attempted, its row on the executor log names it and [ContinuityOf]
-// passes it for restorer — or why there is none, in words for the log.
+// session of the job the relaunch follows, as [ContinuityOf] decides for
+// restorer, read once that job's capture is no longer being kept, for at most
+// [relaunchCaptureWait] — or why there is none, in words for the log; and
+// either way what that job's session's last request carried
+// ([ContinuedSession.Context]).
 //
 // ASKED BY THE LAUNCH'S CALLER before it builds the run's surface and briefs,
 // so what the run is offered and told is the session's; the launch takes up
 // exactly the capture this answered ([SessionContinuation]), or none. Never an
 // error: every reason a session cannot be continued is a launch that starts
 // one of its own.
-//
-// carries says the relaunch CARRIES ITS ROUND ON ([LaunchRequest.Continue]: a
-// person's answer, a loss, a replaced sign-in), which continues only a capture
-// its round took ([roundsOwn]). A reviewer's send-back begins a round, and
-// continues the session the round before it ended in.
-func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string, restorer SessionRestorer,
-	carries bool) (ContinuedSession, string) {
+func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
+	restorer SessionRestorer) (ContinuedSession, string) {
 
 	if c.restore == nil {
 		return ContinuedSession{}, "this node continues no kept session: it was built with nothing to restore one from"
@@ -176,60 +256,35 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string, resto
 	case !found:
 		return ContinuedSession{}, "the turn has no run record"
 	}
-	// A CAPTURE STILL BEING KEPT is waited for, bounded by its own budget:
-	// the job before this launch was collected moments ago, and its session
-	// is the one this launch continues once its keep lands.
-	run = c.awaitCapture(ctx, run)
-	kept, newest := run.Kept, run.Capture
-	switch {
-	case kept == nil && newest == nil:
-		return ContinuedSession{}, "the turn has kept no capture of its session"
-	case kept == nil:
-		return ContinuedSession{}, fmt.Sprintf("the turn's only capture of its session (launch %d, "+
-			"capture %d) was not kept: %s", newest.LaunchSeq, newest.CaptureSeq, unkeptWhy(*newest))
-	case newest != nil && newest.newerThan(*kept):
-		return ContinuedSession{}, fmt.Sprintf("the turn's newest capture of its session (launch %d, "+
-			"capture %d) was not kept: %s; the kept one before it is older than the session it "+
-			"would continue", newest.LaunchSeq, newest.CaptureSeq, unkeptWhy(*newest))
+	run = c.awaitCapture(ctx, run, c.relaunchWait)
+	answer := ContinuedSession{Context: followedContext(run)}
+	if captureInFlight(run, c.now()) {
+		return answer, fmt.Sprintf("the capture of the job the relaunch follows (launch %d, capture %d) "+
+			"was still being kept %s after the relaunch asked for it, which the relaunch does not wait out",
+			run.Capture.LaunchSeq, run.Capture.CaptureSeq, c.relaunchWait)
 	}
-	if carries {
-		if why := roundsOwn(*kept, run); why != "" {
-			return ContinuedSession{}, why
-		}
+	if _, why := followedCapture(run, run.LaunchSeq); why != "" {
+		return answer, why
 	}
 	row, err := c.restore.Session(ctx, run.AgentHandle, turnID, readThrough)
 	if err != nil {
-		return ContinuedSession{}, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
+		return answer, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
 	}
-	if row.LaunchSeq != kept.LaunchSeq || row.CaptureSeq != kept.CaptureSeq {
-		return ContinuedSession{}, fmt.Sprintf("the executor log names the turn's capture (launch %d, "+
-			"capture %d), and its run's record keeps (launch %d, capture %d)", row.LaunchSeq, row.CaptureSeq,
-			kept.LaunchSeq, kept.CaptureSeq)
+	if continuity := ContinuityOf(row, &run, run.LaunchSeq, restorer); !continuity.Continues {
+		return answer, continuity.Why
 	}
-	if continuity := ContinuityOf(row, true, restorer); !continuity.Continues {
-		return ContinuedSession{}, continuity.Why
-	}
-	return ContinuedSession{Capture: *kept, Row: row}, ""
+	answer.Capture, answer.Row = *run.Kept, row
+	return answer, ""
 }
 
-// roundsOwn is why kept, the turn's newest kept capture, cannot be continued by
-// a relaunch that carries run's round on, "" where it can: it was taken in an
-// earlier round than the one the relaunch carries on ([PendingRun.RoundLaunch]).
-//
-// A ROUND'S OWN SESSION OR NONE. A session an earlier round left holds neither
-// the brief this round began with — a reviewer's send-back, what it asked of
-// the round — nor this round's work, and the calls that continuation lists
-// after it are numbered in this round's own order, which says nothing of where
-// that session stopped. The newest capture can be an earlier round's only where
-// this round's jobs left none, its box gone with its host before anything could
-// be read off it.
-func roundsOwn(kept SessionCapture, run PendingRun) string {
-	if kept.LaunchSeq >= run.RoundLaunch {
-		return ""
+// followedContext is what the last request of the session of run's current
+// job carried, as that job's newest capture measured it, kept or not; zero
+// where it left none, or none that measured any.
+func followedContext(run PendingRun) int64 {
+	if newest := run.Capture; newest != nil && newest.LaunchSeq == run.LaunchSeq {
+		return newest.ContextTokens
 	}
-	return fmt.Sprintf("the turn's newest kept session was saved by launch %d, before its round began at "+
-		"launch %d, so it holds neither the brief the round began with nor the round's work", kept.LaunchSeq,
-		run.RoundLaunch)
+	return 0
 }
 
 // unkeptWhy is why a capture is not the kept one, as its stamp says.
@@ -240,7 +295,7 @@ func unkeptWhy(c SessionCapture) string {
 	case CaptureUnresolved:
 		return "its record was never answered"
 	case CaptureBegun:
-		return "it was begun and never finished"
+		return "it was still being kept, or was begun and never finished"
 	}
 	return string(c.State)
 }
@@ -251,7 +306,7 @@ func unkeptWhy(c SessionCapture) string {
 type SessionContinuation struct {
 	// LaunchSeq and CaptureSeq are the capture's place: the launch takes up
 	// exactly that capture, which the run's record must still keep as the
-	// turn's newest, or none.
+	// newest of the job this launch follows, or none.
 	LaunchSeq, CaptureSeq int64
 
 	// Brief is the run's prompt where the box is the one the session was
@@ -291,6 +346,18 @@ func (k BriefKind) Valid() bool {
 	return false
 }
 
+// LaunchDecision is how a launch decided its run takes up a session, told to
+// its caller before the run starts ([LaunchRequest.Decided]).
+type LaunchDecision struct {
+	// Brief is which of the three briefs the launch hands the run.
+	Brief BriefKind
+
+	// Kept says the session the run continues is the turn's kept capture
+	// ([LaunchRequest.Session]); false where it is the job before's own copy
+	// in its box ([LaunchRequest.Continue]), or none.
+	Kept bool
+}
+
 // continuedLaunch is how one launch continues the turn's session, if it does:
 // the brief its run is started with and the one it falls back to, the session
 // it takes up and the archive carried into its box, and which brief it is.
@@ -298,9 +365,17 @@ type continuedLaunch struct {
 	brief, fresh, session string
 	carried               *CarriedSession
 	kind                  BriefKind
+	// kept says the session is the turn's kept capture rather than the job
+	// before's own copy in its box ([LaunchDecision.Kept]).
+	kept bool
 	// release removes what the launch spooled to carry the session in, once
 	// the run has started (or failed to).
 	release func()
+}
+
+// decision is how the launch decided, for its caller ([LaunchRequest.Decided]).
+func (l continuedLaunch) decision() LaunchDecision {
+	return LaunchDecision{Brief: l.kind, Kept: l.kept}
 }
 
 // freshLaunch is a launch that continues no session.
@@ -310,12 +385,12 @@ func freshLaunch(req LaunchRequest) continuedLaunch {
 
 // continueSession is how the launch req continues its turn's session in box —
 // see the file comment — given the run's record as the launch opened it and
-// whether box is the one the turn's previous job used (reused).
+// whether box is the one the job before used (reused).
 //
 // IN THIS ORDER: the turn's kept capture its caller chose ([LaunchRequest.Session]),
-// in any box; else, where the box is the asking or refused job's own and the
-// turn kept no capture to continue, that job's session as the box holds it
-// ([Continuation.SessionID]), as a run always could; else a session of its own.
+// in any box; else, where the box is the job before's own, that job's session
+// as the box holds it ([Continuation.SessionID]), as a run always could; else
+// a session of its own.
 func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused bool) continuedLaunch {
 
@@ -335,6 +410,11 @@ func (c *Coordinator) continueSession(ctx context.Context, req LaunchRequest, op
 
 // continueKept continues the turn's kept capture want in box, or says why it
 // cannot.
+//
+// THE BOX THE CAPTURE WAS TAKEN IN IS THE REUSED ONE: the capture is the job
+// before's, by [ContinuityOf], and a reused box is that job's
+// ([PriorBox.ContinuesIn]) — so the same-box brief is handed exactly where the
+// session was last worked in this box, and the new-box brief everywhere else.
 func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opened PendingRun,
 	box Sandbox, runner Runner, reused bool, want SessionContinuation) (continuedLaunch, string) {
 
@@ -345,30 +425,16 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	if kept == nil || kept.LaunchSeq != want.LaunchSeq || kept.CaptureSeq != want.CaptureSeq {
 		return continuedLaunch{}, "the turn's kept session is not the one its launch was asked to continue"
 	}
-	// A ROUND CARRIED ON continues only a session of its round, as its caller
-	// was told: the record as this launch opened it keeps the launch the round
-	// began at.
-	if req.Continue != nil {
-		if why := roundsOwn(*kept, opened); why != "" {
-			return continuedLaunch{}, why
-		}
-	}
-	// AND STILL THE NEWEST, as the record opened this launch: a capture past
-	// it that was not kept is a session that went further than the kept one.
-	if newest := opened.Capture; newest != nil && newest.newerThan(*kept) {
-		return continuedLaunch{}, fmt.Sprintf("the turn's newest capture of its session (launch %d, "+
-			"capture %d) was not kept: %s", newest.LaunchSeq, newest.CaptureSeq, unkeptWhy(*newest))
-	}
 	restorer, _ := runner.(SessionRestorer)
 	row, err := c.restore.Session(ctx, req.Turn.AgentHandle, req.Turn.TurnID, readThrough)
-	switch {
-	case err != nil:
+	if err != nil {
 		return continuedLaunch{}, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
-	case row.LaunchSeq != want.LaunchSeq || row.CaptureSeq != want.CaptureSeq:
-		return continuedLaunch{}, "the executor log names another capture of the turn than the one the " +
-			"launch was asked to continue"
 	}
-	if continuity := ContinuityOf(row, true, restorer); !continuity.Continues {
+	// ASKED AGAIN of the record as this launch opened it, which numbers this
+	// job one past the job it follows: a capture of that job that began or
+	// landed since its caller asked is one the chosen capture no longer is
+	// the newest beside.
+	if continuity := ContinuityOf(row, &opened, opened.LaunchSeq-1, restorer); !continuity.Continues {
 		return continuedLaunch{}, continuity.Why
 	}
 	brief, kind := want.Brief, BriefContinued
@@ -378,12 +444,12 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	if brief == "" {
 		return continuedLaunch{}, "the launch was given no brief that continues the session in this box"
 	}
-	// THE BOX'S OWN COPY, where the job before ran in this very box and its
-	// session was taken whole at its harness's exit: the box holds the
-	// archive, so nothing is fetched to be kept over a copy it would not touch.
-	if reused && kept.LaunchSeq == opened.LaunchSeq-1 && !kept.Interrupted {
+	// THE BOX'S OWN COPY, where its harness exited cleanly in this very box
+	// and its session was taken whole there: the box holds the archive, so
+	// nothing is fetched to be kept over a copy it would not touch.
+	if reused && !kept.Interrupted {
 		return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-			release: func() {}}, ""
+			kept: true, release: func() {}}, ""
 	}
 	archive := archiveOf(row)
 	check, err := restorer.CheckCarry(ctx, box, archive)
@@ -403,21 +469,18 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 		fetched.remove()
 		return continuedLaunch{}, fmt.Sprintf("the session's spool could not be opened: %v", err)
 	}
+	// THE RESTORE CARRIER, chosen here and nowhere else: the turn's own kept
+	// session, of the seat whose run this is — read off the turn's own row,
+	// the capture of the job this launch follows, and opened against that
+	// row's associated data, so no other seat's or turn's session opens into
+	// the run — which replaces the box's copy where its harness was cut off.
+	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
-		carried: carriedSession(archive, body, *kept),
+		kept: true, carried: carried,
 		release: func() {
 			_ = body.Close()
 			fetched.remove()
 		}}, ""
-}
-
-// carriedSession is the archive a launch hands its run to restore: the turn's
-// own kept session, of the seat whose run this is — read off the turn's own row
-// and opened against that row's associated data, so no other seat's or turn's
-// session opens here — which replaces the box's copy where its harness was cut
-// off ([CarriedSession.Replace]).
-func carriedSession(archive SessionArchive, body io.Reader, kept SessionCapture) *CarriedSession {
-	return &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 }
 
 // notContinued logs why a launch that was asked to continue its turn's session

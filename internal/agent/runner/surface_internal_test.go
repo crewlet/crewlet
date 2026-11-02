@@ -272,6 +272,69 @@ func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
 	}
 }
 
+// A REBUILT GUARD REPLAYS ITS OWN JOB'S LOADS, NEVER AN EARLIER JOB'S. A round
+// can be carried on in a session of its own — its job before lost a second time,
+// or its kept session refused — so the job a rebuild re-enters may not be the
+// session an earlier job of the round loaded a skill in: its parked state says
+// where its own calls begin, and only a load past that is replayed beside the
+// skills its launch was armed with.
+//
+// Mutation: replay every load of the round's calls, and the guard holds a skill
+// the run's model never read.
+func TestARebuiltGuardReplaysItsOwnJobsLoadsNeverAnEarlierJobs(t *testing.T) {
+	t.Parallel()
+	registry := skills.NewRegistry()
+	for _, s := range []skills.Skill{
+		{Key: "chat-conventions", Title: "Chat conventions", Summary: "how to post",
+			Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+			SourcePageID: "chat-conventions-page"},
+		{Key: "release-notes", Title: "Release notes", Summary: "how to announce",
+			Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+			SourcePageID: "release-notes-page"},
+	} {
+		if _, err := registry.PutPage(s); err != nil {
+			t.Fatalf("PutPage %s: %v", s.Key, err)
+		}
+	}
+	reg := tools.NewRegistry()
+	for _, name := range []string{"slack_post", toolname.LoadToolSkill} {
+		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register %s: %v", name, err)
+		}
+	}
+	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
+	r, err := New(Config{
+		Registry: reg,
+		Models:   &phase.Registry{},
+		Launcher: stubLauncher{},
+		Sessions: testHost(t),
+		Skills:   registry,
+		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
+		Resume: &Resume{
+			// THE JOB OPENED ONCE THE ROUND HELD ONE CALL: an earlier job's.
+			State: execstate.State{
+				Version: execstate.Version, Round: 1, BridgeFrom: 1,
+				ActiveTools: []string{"slack_post", toolname.LoadToolSkill},
+			},
+			Bridged: []BridgedCall{
+				{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
+					Result: "Always thread your reply."}, Seq: 1},
+				{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "release-notes"},
+					Result: "Announce on the channel."}, Seq: 2},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got, want := r.loadedSkills(), []string{"release-notes"}; !slices.Equal(got, want) {
+		t.Errorf("the rebuilt guard holds %v, want its own job's load alone, %v", got, want)
+	}
+}
+
 // A REBUILT GUARD NAMES A SKILL AS THE RUN'S HARNESS LISTS IT: the names its
 // launch handed its skills under are on the parked state, and every rebuild
 // of the run's surface — a reopened run's, a carried-on run's, a collection's

@@ -597,8 +597,8 @@ func (r *Runner) executorSystem(built *tools.Surface) prompts.Prompt {
 }
 
 // executorBrief is the turn's own ask as a run that starts a session of its own
-// reads it — see [Runner.executorPrompt]. It reads no surface, so a relaunch
-// can weigh it before its surface is built ([Runner.sessionBasis]).
+// reads it — see [Runner.executorPrompt]. It reads no surface, so a launch
+// writes it before its surface is built.
 func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledger.Iteration,
 	fresh []steer.Note) prompts.Prompt {
 	return prompts.BuildPhaseUserMessage(prompts.UserMessage{

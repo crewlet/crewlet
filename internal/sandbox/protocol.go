@@ -330,6 +330,15 @@ type Result struct {
 	// error stream says.
 	Captured *SessionArchive
 
+	// HarnessCutOff says the run's harness did not exit cleanly: its exit
+	// status was other than 0 — a signal's, its memory limit's, a crash's —
+	// or its box recorded none. The run's script packs the session after the
+	// harness exits whatever its status (Captured), so a session it packed
+	// after a harness that was killed may end mid-record, its last call with
+	// no result, as one the engine packs of a job still working does
+	// ([SessionCapture.Interrupted]).
+	HarnessCutOff bool
+
 	// Kept is what the read that collected this result kept of the job's
 	// session ([Coordinator.takeCapture]), made on the node whose host the
 	// box is on and carried back with the result to whichever node collects,
@@ -537,10 +546,14 @@ type Sandbox interface {
 
 	// Pause snapshots the box for a later resume, holding a run blocked on
 	// a clarification with its working tree as it left it, uncommitted work
-	// included. Its harness's conversation is not what a pause keeps: the
-	// turn's relaunch continues the session the turn kept, in this box or any
-	// other (restore.go). A provider without snapshots no-ops, and the
-	// relaunch re-seeds its working tree from the pushed branch instead.
+	// included, and its harness's own copy of the conversation. Where the
+	// turn kept the asking job's session (session.go), the relaunch continues
+	// that in this box or any other (restore.go), so the pause holds only
+	// the working tree; where it kept none — keeping switched off, the
+	// capture refused — the paused box is the one copy of the conversation,
+	// and a relaunch after it is reclaimed starts a session of its own. A
+	// provider without snapshots no-ops, and the relaunch re-seeds its
+	// working tree from the pushed branch instead.
 	Pause(ctx context.Context) error
 
 	Close(ctx context.Context) error

@@ -26,18 +26,23 @@ import (
 type probingLauncher struct {
 	playLauncher
 	basis runner.SessionBasis
-	// probed is the brief size each probe was asked with, and carried
-	// whether it was asked for a relaunch that carries its round on.
-	probed  []int
-	carried []bool
+	// probes counts the times it was asked.
+	probes int
 }
 
-func (l *probingLauncher) ProbeSession(_ context.Context, briefTokens int, carries bool) runner.SessionBasis {
+func (l *probingLauncher) ProbeSession(context.Context) runner.SessionBasis {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.probed = append(l.probed, briefTokens)
-	l.carried = append(l.carried, carries)
+	l.probes++
 	return l.basis
+}
+
+// asked is how many times the launcher was asked which session a relaunch
+// continues.
+func (l *probingLauncher) asked() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.probes
 }
 
 // keptBasis is a turn's kept session as a launcher answers it: captured once
@@ -59,14 +64,16 @@ func ledgerOf(bridged []runner.BridgedCall) []ledger.Call {
 // the task restated — a compacted session holds only its own summary of it —
 // the rules its earlier rounds' calls are read by, without their list, which
 // the session holds; what the review asked of the next round; and every note
-// the turn has read that the session has not — the one the reviewer read
-// after the session was saved — then the one this brief is the first to read,
-// never one the session read itself. In a box that replaced the session's, it
-// is told that too: a fresh checkout, and the old box's paths. The fresh brief
-// beside it still carries every note.
+// the turn has read that the session has not — the one read after the session
+// was saved, and the one the reviewer read in this very segment, which reaches
+// the brief before the record has numbered it — then the one this brief is the
+// first to read, never one the session read itself. In a box that replaced the
+// session's, it is told that too: a fresh checkout, and the old box's paths. The
+// fresh brief beside it still carries every note.
 //
 // Mutation: carry only the notes this brief is the first to read, or every
-// note the turn read, or drop the task or the rules, and this goes red.
+// note the turn read, drop a note this segment read, or drop the task or the
+// rules, and this goes red.
 func TestASentBackSessionIsToldWhatItLacks(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -76,6 +83,7 @@ func TestASentBackSessionIsToldWhatItLacks(t *testing.T) {
 
 	read := steer.Note{ID: "read", Text: "use the staging database", By: "founder"}
 	reviewed := steer.Note{ID: "reviewed", Text: "and keep the old flag", By: "founder"}
+	reviewedNow := steer.Note{ID: "reviewed-now", Text: "and mind the migration", By: "founder"}
 	fresh := steer.Note{ID: "fresh", Text: "and tag the release", By: "founder"}
 	box := steer.New()
 	box.Offer(fresh)
@@ -88,6 +96,11 @@ func TestASentBackSessionIsToldWhatItLacks(t *testing.T) {
 					Boundary: types.SteerBoundaryToolBatch, Launch: "job-1", Order: 1}},
 				{Note: reviewed, Reading: steer.Reading{Phase: types.PhaseReview, Iteration: 1, Round: 1,
 					Boundary: types.SteerBoundaryRound, Order: 2}},
+				// READ BY THIS SEGMENT'S REVIEW, which no record has
+				// numbered yet: a review drains its notes before the
+				// send-back it decides on.
+				{Note: reviewedNow, Reading: steer.Reading{Phase: types.PhaseReview, Iteration: 1, Round: 1,
+					Boundary: types.SteerBoundaryRound}},
 			}},
 	})
 	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
@@ -104,7 +117,7 @@ func TestASentBackSessionIsToldWhatItLacks(t *testing.T) {
 	brief := again.Session.Brief
 	for _, want := range []string{"## Your work was reviewed and sent back", "post the weekly summary",
 		"ALREADY RAN", "the test still fails on CI", prompts.SteerMessage(reviewed.By, reviewed.Text),
-		prompts.SteerMessage(fresh.By, fresh.Text)} {
+		prompts.SteerMessage(reviewedNow.By, reviewedNow.Text), prompts.SteerMessage(fresh.By, fresh.Text)} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("the continued session is not told %q:\n%s", want, brief)
 		}
@@ -121,27 +134,29 @@ func TestASentBackSessionIsToldWhatItLacks(t *testing.T) {
 		t.Errorf("the new-box continuation does not say what a replaced box changes:\n%s",
 			again.Session.Replaced)
 	}
-	for _, note := range []steer.Note{read, reviewed, fresh} {
+	for _, note := range []steer.Note{read, reviewed, reviewedNow, fresh} {
 		if !strings.Contains(again.Brief, prompts.SteerMessage(note.By, note.Text)) {
 			t.Errorf("the fresh brief does not carry note %q", note.ID)
 		}
 	}
-	if len(relauncher.probed) != 1 || relauncher.probed[0] <= 0 || relauncher.carried[0] {
-		t.Errorf("the launcher was asked %v (carrying a round on: %v), want once, with the fresh brief's "+
-			"size, for a send-back that begins a round", relauncher.probed, relauncher.carried)
+	if relauncher.asked() != 1 {
+		t.Errorf("the launcher was asked %d times which session the send-back continues, want once",
+			relauncher.asked())
 	}
 }
 
 // A CARRIED-ON SESSION IS TOLD WHAT CAME AFTER IT WAS SAVED. A lost job's round
-// continues the turn's kept session, saved before the job was cut off: so it is
+// continues the job's kept session, saved before the job was cut off: so it is
 // told it was cut off, that its transcript may end mid-call, and every call the
-// run made through the seat's tools after the point the session ends, with the
-// call's outcome — never one the session holds. A round lost a second time
+// run made through the seat's tools that the session had not been answered —
+// after the point it ends, and one still in flight when it was saved — with
+// the call's outcome, never one the session holds. A round lost a second time
 // starts a session of its own, rather than replay the state it was lost in
 // toward the round's limit.
 //
-// Mutation: list every call of the round, drop the interrupted note, or
-// continue the session after a second loss, and a row goes red.
+// Mutation: list every call of the round, leave out a call in flight at the
+// save, drop the interrupted note, or continue the session after a second
+// loss, and a case goes red.
 func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -149,13 +164,12 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	bridged := play(t, req, run{calls: []llm.ToolCall{
 		call(t, "slack_post", `{"text":"starting on it"}`),
 		call(t, "jira_create", `{"summary":"after the save"}`),
+		call(t, "github_comment", `{"body":"in flight at the save"}`),
 	}})
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
-	basis := keptBasis
-	basis.Interrupted = true
 
-	carriedOn := func(losses int) runner.AgentRunRequest {
+	carriedOn := func(basis runner.SessionBasis, losses int) runner.AgentRunRequest {
 		t.Helper()
 		relauncher := &probingLauncher{basis: basis}
 		lost := runner.Lost{Why: "the engine it ran under restarted, which killed it", BoxKept: true,
@@ -165,20 +179,23 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 		if _, _, err := collector.Resume(t.Context(), nil); err != nil {
 			t.Fatalf("Resume: %v", err)
 		}
-		if losses <= 1 && (len(relauncher.carried) != 1 || !relauncher.carried[0]) {
-			t.Errorf("the launcher was asked %v, want once, for a relaunch that carries its round on",
-				relauncher.carried)
+		if losses <= 1 && relauncher.asked() != 1 {
+			t.Errorf("the launcher was asked %d times, want once", relauncher.asked())
 		}
 		return relauncher.last(t)
 	}
 
-	first := carriedOn(1)
+	// SAVED ONCE ITS FIRST CALL WAS ANSWERED: the two after it are not in
+	// the session.
+	basis := keptBasis
+	basis.Interrupted, basis.BridgeSeq, basis.BridgeOpen = true, 1, nil
+	first := carriedOn(basis, 1)
 	if first.Session == nil {
 		t.Fatal("a lost job's round continues no kept session")
 	}
 	brief := first.Session.Brief
 	for _, want := range []string{"## Your previous segment was cut off", prompts.InterruptedSession,
-		"## Calls made after the session above was saved", "jira_create"} {
+		"## Calls made after the session above was saved", "jira_create", "github_comment"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("the carried-on session is not told %q:\n%s", want, brief)
 		}
@@ -187,16 +204,144 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 		t.Errorf("the carried-on session is handed a call it holds:\n%s", brief)
 	}
 
-	if second := carriedOn(2); second.Session != nil {
+	// SAVED ONCE ITS SECOND CALL WAS ANSWERED, while its first — a slow one,
+	// numbered before it — was still in flight: the first's outcome is not in
+	// the session either.
+	inFlight := keptBasis
+	inFlight.Interrupted, inFlight.BridgeSeq, inFlight.BridgeOpen = true, 2, []int{1}
+	if brief := carriedOn(inFlight, 1).Session.Brief; !strings.Contains(brief, "slack_post") ||
+		!strings.Contains(brief, "github_comment") || strings.Contains(brief, "jira_create") {
+		t.Errorf("saved with its first call in flight, the session is told:\n%s\nwant the call in flight "+
+			"and the one after the save, never the one it holds", brief)
+	}
+
+	if second := carriedOn(basis, 2); second.Session != nil {
 		t.Errorf("a round lost a second time continues %+v, want a session of its own", second.Session)
 	}
 }
 
-// guardedRelaunch is a seat whose surface carries one required skill covering
-// slack_post, relaunching its executor in round 2 of a turn whose round 1
-// loaded that skill, with basis as what its launcher says the relaunch
-// continues.
-func guardedRelaunch(t *testing.T, basis runner.SessionBasis) runner.AgentRunRequest {
+// AN ANSWERED OR A REFUSED RUN'S SESSION IS CONTINUED, TOLD WHAT CARRIES IT ON.
+// A person's answer carries the asking run on in the session that asked, and a
+// replaced sign-in the refused run's: the job each follows left its session
+// kept, so the relaunch continues it in whatever box it gets — told the
+// answer, or why its last segment ended, and in a box that replaced its own,
+// the branch its work is on — asked once of the launcher, as a relaunch that
+// carries its round on.
+//
+// Mutation: carry either round on in a fresh session where its job's session
+// was kept, or tell it the wrong thing, and its case goes red.
+func TestAnAnsweredOrARefusedRunsSessionIsContinuedToldWhatCarriesItOn(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	before := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"looking into it"}`)}})
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	for name, tc := range map[string]struct {
+		resume func(*runner.Resume)
+		want   []string
+		branch string
+	}{
+		"answered": {
+			resume: func(r *runner.Resume) {
+				r.Asked = &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+					Branch: "wip/t1", SessionID: "s-1", BoxKept: true}
+			},
+			want:   []string{"## Your question was answered", "use main"},
+			branch: "wip/t1",
+		},
+		"refused on a replaced sign-in": {
+			resume: func(r *runner.Resume) {
+				r.Rotated = &runner.Rotated{SessionID: "s-1", BoxKept: true}
+				r.Answer = "The executor's run did NOT fully succeed.\n\nError: Failed to authenticate"
+			},
+			want: []string{runner.RotatedContinuation},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			relauncher := &probingLauncher{basis: keptBasis}
+			resume := &runner.Resume{State: parked.State, Bridged: before}
+			tc.resume(resume)
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				resume: resume})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			again := relauncher.last(t)
+			if again.Session == nil || again.Session.Basis.SessionID != "s-1" || relauncher.asked() != 1 {
+				t.Fatalf("the relaunch continues %+v (asked %d times), want the kept session of the job "+
+					"it follows, asked once", again.Session, relauncher.asked())
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(again.Session.Brief, want) {
+					t.Errorf("the continued session is not told %q:\n%s", want, again.Session.Brief)
+				}
+			}
+			replaced := again.Session.Replaced
+			if !strings.Contains(replaced, "## This run is in a new box") ||
+				(tc.branch != "" && !strings.Contains(replaced, "`"+tc.branch+"`")) {
+				t.Errorf("the new-box continuation does not say what a replaced box changes:\n%s", replaced)
+			}
+		})
+	}
+}
+
+// A RELAUNCH HANDS ITS LAUNCH WHAT ITS SESSION SENDS FIRST, kept or not. A
+// person's answer carries the asking run on in the session its box holds where
+// the launch takes up no kept capture of it — whose newest capture was
+// refused, say — and that session's whole context is what the run sends before
+// the answer: the launch is handed it, as the newest capture measured it, to
+// hold the launch to the floor of what it sends ([runner.Continuation]), where
+// whether the seat's budget can carry it at all is the launch's to decide.
+//
+// Mutation: hand the launch the context only of a kept capture it continues, or
+// withhold the box's own session for its size here, and this goes red.
+func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
+	t.Parallel()
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+	before := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"looking into it"}`)}})
+	parked, _ := launched.Suspended()
+	parked.State.ActiveTools = req.Surface.Active()
+	relauncher := &probingLauncher{basis: runner.SessionBasis{
+		Why: "the newest capture of the job was not kept: refused", ContextTokens: 150000}}
+	asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+		Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
+	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+		resume: &runner.Resume{State: parked.State, Asked: asked, Bridged: before}})
+	if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	again := relauncher.last(t)
+	if again.Session != nil || again.Continue == nil || again.Continue.SessionID != "sess-ask" ||
+		again.Continue.ContextTokens != 150000 {
+		t.Fatalf("the relaunch continues kept %+v and in place %+v, want the asking run's own session "+
+			"in place, carrying the 150000 tokens it sends first", again.Session, again.Continue)
+	}
+}
+
+// guarded is a seat whose surface carries one required skill covering
+// slack_post, relaunching its executor in round 2 of its turn — with what its
+// launcher says the relaunch continues, the job before's parked state and
+// calls, the turn's closed rounds, and how the launch decides.
+type guarded struct {
+	basis   runner.SessionBasis
+	state   execstate.State
+	bridged []runner.BridgedCall
+	history []ledger.Iteration
+	decides func(runner.AgentRunRequest) runner.SessionDecision
+}
+
+// loadSkill is a call that loaded the seat's one required skill.
+func loadSkill(seq int) runner.BridgedCall {
+	return runner.BridgedCall{Call: ledger.Call{Name: builtin.LoadToolSkillTool,
+		Args: map[string]any{"key": "chat-conventions"}, Result: "Always thread your reply."}, Seq: seq}
+}
+
+// relaunch builds g's seat and relaunches its executor, returning what the
+// launch was handed.
+func (g guarded) relaunch(t *testing.T) runner.AgentRunRequest {
 	t.Helper()
 	registry := skills.NewRegistry()
 	if _, err := registry.PutPage(skills.Skill{
@@ -220,12 +365,15 @@ func guardedRelaunch(t *testing.T, basis runner.SessionBasis) runner.AgentRunReq
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
-	launcher := &probingLauncher{basis: basis}
+	launcher := &probingLauncher{basis: g.basis}
+	launcher.decides = g.decides
+	state := g.state
+	state.Version, state.Round = execstate.Version, 1
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: organization, Role: role},
 		Registry: reg, Models: models, Skills: registry,
 		Launcher: launcher, Task: "post the summary",
-		Resume: &runner.Resume{State: execstate.State{Version: execstate.Version, Round: 1}},
+		Resume: &runner.Resume{State: state, Bridged: g.bridged},
 		Turn: runner.Turn{RunID: "t-guard", WorkKey: "wk-t-guard", AgentID: "agent-1",
 			Context: &turnctx.Turn{RunID: "t-guard", WorkKey: "wk-t-guard", Seat: role, Org: organization}},
 		Sessions: sessions,
@@ -233,85 +381,107 @@ func guardedRelaunch(t *testing.T, basis runner.SessionBasis) runner.AgentRunReq
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
 	}
-	history := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{
-		{Name: builtin.LoadToolSkillTool, Args: map[string]any{"key": "chat-conventions"}, Result: "loaded"},
-	}}}
-	if _, _, err := r.Execute(t.Context(), 2, "thread the reply", history); err != nil {
+	if _, _, err := r.Execute(t.Context(), 2, "thread the reply", g.history); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	return launcher.last(t)
 }
 
-// A RELAUNCH THAT CONTINUES THE SESSION KEEPS WHAT IT LOADED; ONE THAT STARTS
-// FRESH DOES NOT. The continued model has the skill body its earlier round
-// loaded in front of it, so its guard holds that load and the covered tool
-// runs; a fresh session read no skill, so its guard is empty and the tool is
-// refused until it loads one. Within the turn: a later turn's first launch
-// continues nothing yet.
+// A RELAUNCH'S GUARD HOLDS WHAT THE SESSION ITS RUN TAKES UP LOADED, AND NOTHING
+// ELSE. The continued model has in front of it the skill bodies its own session
+// loaded — those its launch was armed with, and those its job loaded up to the
+// point its capture was saved — so its guard holds those and the covered tool
+// runs. Not a load another session made: an earlier round's, in a session this
+// one never was, or one the job made after the capture, which the restored
+// session never saw. And a session of the run's own read no skill, whether the
+// relaunch meant to start one or its launch found it could not continue the
+// session after all: its guard is empty, and the tool is refused until it loads
+// one. Armed as the launch decides, before the run makes a call.
 //
-// Mutation: rebuild a fresh relaunch's guard from the turn's loads, or a
-// continued one's empty, and a row goes red.
-func TestAContinuedRelaunchKeepsWhatItsSessionLoaded(t *testing.T) {
+// Mutation: rebuild a continued relaunch's guard from the turn's loads, arm it
+// before the launch decides, or keep a fresh one's from the session it meant
+// to continue, and a row goes red.
+func TestARelaunchsGuardHoldsWhatItsSessionLoaded(t *testing.T) {
 	t.Parallel()
+	earlierRound := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{loadSkill(1).Call}}}
+	goesFresh := func(runner.AgentRunRequest) runner.SessionDecision { return runner.SessionDecision{} }
 	for name, tc := range map[string]struct {
-		basis   runner.SessionBasis
+		g       guarded
 		refused bool
 	}{
-		"continued": {basis: keptBasis},
-		"fresh":     {basis: runner.SessionBasis{Why: "the turn has kept no capture of its session"}, refused: true},
+		"its launch armed it with the load": {g: guarded{basis: keptBasis,
+			state: execstate.State{LoadedSkills: []string{"chat-conventions"}}}},
+		"its own job loaded it before the save": {g: guarded{basis: keptBasis,
+			bridged: []runner.BridgedCall{loadSkill(1)}}},
+		"an earlier round's session loaded it": {g: guarded{basis: keptBasis, history: earlierRound},
+			refused: true},
+		"its job loaded it after the save": {g: guarded{basis: keptBasis,
+			bridged: []runner.BridgedCall{loadSkill(2)}}, refused: true},
+		"an earlier job of the round loaded it": {g: guarded{basis: keptBasis,
+			state: execstate.State{BridgeFrom: 1}, bridged: []runner.BridgedCall{loadSkill(1)}}, refused: true},
+		"a fresh session": {g: guarded{basis: runner.SessionBasis{Why: "the turn has kept no capture"},
+			state: execstate.State{LoadedSkills: []string{"chat-conventions"}}}, refused: true},
+		"a launch that went fresh after all": {g: guarded{basis: keptBasis,
+			state: execstate.State{LoadedSkills: []string{"chat-conventions"}}, decides: goesFresh}, refused: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			req := guardedRelaunch(t, tc.basis)
+			req := tc.g.relaunch(t)
 			bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
 			if bridged[0].Failed != tc.refused {
 				t.Fatalf("slack_post failed %v (%q), want refused %v", bridged[0].Failed, bridged[0].Result,
 					tc.refused)
 			}
-			if (req.Session != nil) != !tc.refused {
-				t.Errorf("the relaunch continues %+v", req.Session)
-			}
 		})
 	}
 }
 
-// A SESSION TOO LARGE TO CARRY IS NOT CONTINUED IN ITS BOX EITHER. A person's
-// answer carries a parked run on in the session its box holds where the turn
-// kept no session it can continue — but where the turn kept one whose context
-// is past what a relaunch carries, the box's copy is that same session, as
-// large or larger, so the run starts a session of its own instead. A session
-// the turn did not keep is no reason to give up the box's own.
+// A LAUNCH PUBLISHES THE PROMPT ITS RUN WAS HANDED. The executor's started record
+// carries the fresh brief, published before the launch knows its box; a
+// relaunch that continues its session is handed a continuation instead — the
+// one for a box that replaced the session's, where it got one — and that is
+// what the phase's opening frame then states, before the run starts. A launch
+// that hands the fresh brief publishes nothing more.
 //
-// Mutation: hand the launch the asking run's session whatever its launcher said
-// of the kept one's size, or withhold it whenever no kept session continues, and
-// a row goes red.
-func TestASessionTooLargeToCarryIsNotContinuedInItsBoxEither(t *testing.T) {
+// Mutation: publish the fresh brief alone, or the same-box continuation to a
+// run in a new box, and this goes red.
+func TestALaunchPublishesThePromptItsRunWasHanded(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
 	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
-	before := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"looking into it"}`)}})
+	bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"first pass"}`)}})
 	parked, _ := launched.Suspended()
-	parked.State.ActiveTools = req.Surface.Active()
-	for _, tc := range []struct {
-		name    string
-		basis   runner.SessionBasis
-		inPlace string
-	}{
-		{name: "too large to carry", basis: runner.SessionBasis{Why: "past the window", Oversized: true}},
-		{name: "none kept", basis: runner.SessionBasis{Why: "the turn has kept no capture"}, inPlace: "sess-ask"},
+	for name, basis := range map[string]runner.SessionBasis{
+		"continued in a new box": keptBasis,
+		"fresh":                  {Why: "the turn has kept no capture"},
 	} {
-		relauncher := &probingLauncher{basis: tc.basis}
-		asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
-			Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
-		collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
-			resume: &runner.Resume{State: parked.State, Asked: asked, Bridged: before}})
-		if _, _, err := collector.Resume(t.Context(), nil); err != nil {
-			t.Fatalf("%s: Resume: %v", tc.name, err)
-		}
-		again := relauncher.last(t)
-		if again.Session != nil || again.Continue == nil || again.Continue.SessionID != tc.inPlace {
-			t.Errorf("%s: the relaunch continues kept %+v and in place %+v, want in place %q",
-				tc.name, again.Session, again.Continue, tc.inPlace)
-		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pub := newCapture()
+			relauncher := &probingLauncher{basis: basis}
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				pub: pub, resume: &runner.Resume{State: parked.State, Bridged: bridged, Answer: "first pass done"}})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			history := []ledger.Iteration{{Iteration: 1, Calls: ledgerOf(bridged)}}
+			if _, _, err := collector.Execute(t.Context(), 2, "the test still fails on CI", history); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			again := relauncher.last(t)
+			published := pub.promptsFor("execute")
+			if again.Session == nil {
+				if len(published) != 1 || !strings.Contains(published[0], again.Brief) {
+					t.Fatalf("a fresh relaunch published %d prompts, want its started record's fresh brief alone",
+						len(published))
+				}
+				return
+			}
+			if len(published) != 2 || !strings.Contains(published[0], again.Brief) ||
+				!strings.Contains(published[1], again.Session.Replaced) {
+				t.Fatalf("a continued relaunch published %d prompts, want the fresh brief and then the "+
+					"new-box continuation its run was handed", len(published))
+			}
+		})
 	}
 }

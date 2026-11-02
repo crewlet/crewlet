@@ -442,6 +442,23 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 		WorkItem:  e.workItem(),
 	}, e.traceFor(ctx)))
 
+	e.prompted(ctx, ph, iteration, system, user, caps)
+	e.promptSize(ctx, ph, iteration, system.Text, user.Text, surface)
+}
+
+// prompted publishes a phase's opening progress round — the prompt its model
+// is sent ([emitter.started]) — on its own: what an executor launch publishes
+// once it has decided how its run takes up a session, where the run is handed
+// a prompt other than the one its started record carries — a continuation of
+// the session the relaunch follows, or a relaunch's own brief — so the live
+// view states what the run was sent. The opening round of the same phase
+// again, which the live view reads as that phase's prompt.
+func (e emitter) prompted(ctx context.Context, ph phase.Phase, iteration int,
+	system, user prompts.Prompt, caps roundCaps,
+) {
+	if !e.on() {
+		return
+	}
 	e.publish(ctx, events.New(types.AgentTurnProgress{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
@@ -465,8 +482,6 @@ func (e emitter) started(ctx context.Context, ph phase.Phase, iteration int,
 		RoundCeiling: caps.ceiling,
 		WorkItem:     e.workItem(),
 	}, e.traceFor(ctx)))
-
-	e.promptSize(ctx, ph, iteration, system.Text, user.Text, surface)
 }
 
 // skillsInjected records what a prompt's tool-skill catalogue offered: one

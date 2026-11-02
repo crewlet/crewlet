@@ -512,7 +512,7 @@ type CoordinatorOptions struct {
 	// outside the run: the colleague whose a2a_ask woke it
 	// ([PendingRun.ColleagueAsk]) is told the turn was lost, and why; and to
 	// answer how the turn ended, which the ending records on the executor log
-	// ([Coordinator.EndTurn]) and the next turn on its conversation is told.
+	// ([Coordinator.EndTurn]) beside the turn's session.
 	//
 	// THE ONE TERMINAL OF A PARKED TURN THAT NO FRAME OF THE TURN ENDS. A
 	// collected run's turn is ended by its resume, a person's stop by
@@ -811,9 +811,12 @@ type Coordinator struct {
 	sessionRetry time.Duration
 	recordBudget time.Duration
 	captureTick  time.Duration
-	// restore is [CoordinatorOptions.Restore].
-	restore SessionRestore
-	now     func() time.Time
+	// restore is [CoordinatorOptions.Restore], and relaunchWait how long a
+	// relaunch waits for the capture of the job it follows to be kept
+	// ([relaunchCaptureWait]) — a test's shorter.
+	restore      SessionRestore
+	relaunchWait time.Duration
+	now          func() time.Time
 
 	// keepLife is the lifetime every keep runs under, off the read that took
 	// its capture ([Coordinator.keepLater]), and keeping counts them:
@@ -978,6 +981,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		sessions:      opts.Sessions,
 		keep:          opts.Keep,
 		restore:       opts.Restore,
+		relaunchWait:  relaunchCaptureWait,
 		sessionRetry:  sessionRetryBase,
 		recordBudget:  sessionRecordBudget,
 		captureTick:   captureWaitTick,
@@ -3957,7 +3961,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			if !mayAsk && c.keepsSessions() {
 				return errAskAway
 			}
-			published, err := c.publishEnd(ctx, c.awaitCapture(ctx, run))
+			published, err := c.publishEnd(ctx, c.awaitCapture(ctx, run, SessionCaptureBudget))
 			if err != nil {
 				return fmt.Errorf("sandbox: ending run %s, whose turn's end the executor log has not "+
 					"taken yet: %w", run.TurnID, err)

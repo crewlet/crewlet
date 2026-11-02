@@ -759,18 +759,6 @@ type PendingRun struct {
 	// nothing could order it.
 	LaunchSeq int64 `json:"launch_seq,omitempty"`
 
-	// RoundLaunch is the LaunchSeq of the job that began the round the row's
-	// job is in: minted by the write that opens a launch beginning a round —
-	// the turn's first, a reviewer's send-back — and kept by one that carries
-	// the round on ([PendingRun.Continues]: a person's answer, a loss, a
-	// replaced sign-in). It tells a capture the round took from one an
-	// earlier round took: a relaunch that carries a round on continues only a
-	// session of that round, which holds the brief the round began with and
-	// whose calls are numbered in the round's own order
-	// ([Coordinator.ContinuedCapture]). A row an older build wrote reads 0,
-	// which no capture's launch is below.
-	RoundLaunch int64 `json:"round_launch,omitempty"`
-
 	// Capture is the newest capture of the turn's harness session the row
 	// records — begun, landed, refused or unresolved — and Kept the newest
 	// that LANDED, the one the executor log's row names; both nil until the

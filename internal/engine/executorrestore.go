@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
@@ -24,10 +23,12 @@ import (
 // launches.
 //
 // WHICH SESSION A RELAUNCH CONTINUES is asked before its runner builds the run's
-// surface and briefs ([agentLauncher.ProbeSession]): the turn's newest kept
-// capture, where the runner of the member the launch would pick restores it and
-// the seat's budget can ever carry it; and the launch's floor is made of what it
-// continues ([launchFloor]).
+// surface and briefs ([agentLauncher.ProbeSession]): the kept capture of the job
+// the relaunch follows, where the runner of the member the launch would pick
+// restores it. WHETHER THE SEAT'S BUDGET CAN CARRY IT is the launch's to decide,
+// once the briefs that continue it exist ([agentLauncher.launch], [launchFloor]):
+// the context the session sends first is known here, and the brief beside it
+// only once the runner has written it.
 
 // executorRestore is the engine's part of continuing a turn's kept session
 // ([sandbox.SessionRestore]).
@@ -65,20 +66,18 @@ func (r executorRestore) OpenSpooled(row executordomain.Session, sealed io.Reade
 }
 
 // ProbeSession answers which kept session of the turn a relaunch continues
-// ([runner.SessionProber]): the turn's newest kept capture, and for a relaunch
-// that carries its round on one its round took
-// ([sandbox.Coordinator.ContinuedCapture]), held to what this launch can take
-// up — the runner of the member it would pick restores it, its context is
-// within the window a session is carried at ([sandbox.ExecutorContextWindow]),
-// and its floor fits a window the seat's budget can ever leave ([launchFloor.fits])
-// — or why it continues none, which is logged.
+// ([runner.SessionProber]): the kept capture of the job the relaunch follows,
+// as [sandbox.Coordinator.ContinuedCapture] decides for the runner of the
+// member the launch would pick — or why it continues none, which is logged —
+// and either way what that job's session's last request carried, which the
+// launch's floor is made of.
 //
 // THE MEMBER IS THE ONE THE LAUNCH WOULD PICK, without the hand-offs the pick
 // announces: the first of the chain's runner members not sitting out. A member
 // that starts sitting out between this and the launch is the launch's to pass
 // over, and a session its runner cannot restore is started fresh by the launch.
-func (l *agentLauncher) ProbeSession(ctx context.Context, briefTokens int, carries bool) runner.SessionBasis {
-	basis := l.probeSession(ctx, briefTokens, carries)
+func (l *agentLauncher) ProbeSession(ctx context.Context) runner.SessionBasis {
+	basis := l.probeSession(ctx)
 	if !basis.Continues() {
 		log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
 			"turn_id", l.turn.RunID, "detail", basis.Why,
@@ -88,10 +87,9 @@ func (l *agentLauncher) ProbeSession(ctx context.Context, briefTokens int, carri
 }
 
 // probeSession is [agentLauncher.ProbeSession] before it logs.
-func (l *agentLauncher) probeSession(ctx context.Context, briefTokens int, carries bool) runner.SessionBasis {
-	e, company, handle := l.engine, l.company, l.seat.Handle()
-	rt := e.sandbox.Load()
-	manager := company.catalogue
+func (l *agentLauncher) probeSession(ctx context.Context) runner.SessionBasis {
+	rt := l.engine.sandbox.Load()
+	manager := l.company.catalogue
 	if rt == nil || rt.coordinator == nil || manager == nil {
 		return runner.SessionBasis{Why: "this node has no sandbox runtime for this company"}
 	}
@@ -99,25 +97,15 @@ func (l *agentLauncher) probeSession(ctx context.Context, briefTokens int, carri
 	if why != "" {
 		return runner.SessionBasis{Why: why}
 	}
-	continued, why := rt.coordinator.ContinuedCapture(ctx, l.turn.RunID, restorer, carries)
+	continued, why := rt.coordinator.ContinuedCapture(ctx, l.turn.RunID, restorer)
 	if why != "" {
-		return runner.SessionBasis{Why: why}
+		return runner.SessionBasis{Why: why, ContextTokens: continued.Context}
 	}
 	captured := continued.Capture
-	if captured.ContextTokens > sandbox.ExecutorContextWindow {
-		return runner.SessionBasis{Oversized: true, Why: fmt.Sprintf("the session's last request carried "+
-			"%d tokens, past the %d a session is carried at", captured.ContextTokens, sandbox.ExecutorContextWindow)}
-	}
-	floor := staticFloor(company).continuing(captured.ContextTokens, briefTokens)
-	if m := e.meterFor(company, handle); m != nil {
-		if why := floor.fits(m.basis); why != "" {
-			return runner.SessionBasis{Oversized: true, Why: why}
-		}
-	}
 	return runner.SessionBasis{
 		LaunchSeq: captured.LaunchSeq, CaptureSeq: captured.CaptureSeq, SessionID: continued.Row.SessionID,
-		BridgeSeq: captured.BridgeSeq, NoteCursor: captured.NoteCursor, Interrupted: captured.Interrupted,
-		Home: captured.Home, ContextTokens: captured.ContextTokens,
+		BridgeSeq: captured.BridgeSeq, BridgeOpen: captured.BridgeOpen, NoteCursor: captured.NoteCursor,
+		Interrupted: captured.Interrupted, Home: captured.Home, ContextTokens: continued.Context,
 	}
 }
 
@@ -148,11 +136,19 @@ func (l *agentLauncher) restorer(manager *sandbox.Manager) (sandbox.SessionResto
 }
 
 // sandboxSession is a relaunch's kept session in the sandbox layer's terms, nil
-// where it continues none.
+// where it continues none: the brief for the box the session was last worked
+// in, and the one for any other, each where the sandbox layer hands it.
 func sandboxSession(s *runner.SessionContinuation) *sandbox.SessionContinuation {
 	if s == nil || !s.Basis.Continues() {
 		return nil
 	}
 	return &sandbox.SessionContinuation{LaunchSeq: s.Basis.LaunchSeq, CaptureSeq: s.Basis.CaptureSeq,
 		Brief: s.Brief, Replaced: s.Replaced}
+}
+
+// sessionDecision is how the launch decided its run takes up a session, in the
+// runner's terms ([runner.SessionDecision]).
+func sessionDecision(d sandbox.LaunchDecision) runner.SessionDecision {
+	return runner.SessionDecision{Continues: d.Brief == sandbox.BriefContinued ||
+		d.Brief == sandbox.BriefContinuedNewBox, Kept: d.Kept, NewBox: d.Brief == sandbox.BriefContinuedNewBox}
 }

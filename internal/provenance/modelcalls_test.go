@@ -184,17 +184,24 @@ var modelCalls = map[string]modelCall{
 	"internal/agent/runner/continued.go:keptSession": {tests: []string{
 		"internal/agent/runner.TestASentBackSessionIsToldWhatItLacks",
 		"internal/agent/runner.TestACarriedOnSessionIsToldWhatCameAfterItWasSaved",
+		"internal/agent/runner.TestAnAnsweredOrARefusedRunsSessionIsContinuedToldWhatCarriesItOn",
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 	}},
+	// AND ITS TRANSPORT to the sandbox layer: the two briefs the runner
+	// composed, each where the box it was written for gets it.
 	"internal/engine/executorrestore.go:sandboxSession": {tests: []string{
+		"internal/engine.TestARelaunchContinuesItsSessionInTheBoxItGetsWithTheBriefForIt",
 		"internal/agent/runner.TestASentBackSessionIsToldWhatItLacks",
 	}},
-	// THE RESTORE CARRIER: which session object a run is handed to remember.
-	// The turn's own, of the seat whose run it is — read off the turn's own
-	// row and opened against that row's associated data, so no other seat's
-	// or turn's session opens into the run.
-	"internal/sandbox/restore.go:carriedSession": {tests: []string{
+	// THE RESTORE CARRIER, built by the one function that chooses it: which
+	// session object a run is handed to remember. The turn's own — the kept
+	// capture of the job the relaunch follows, of the seat whose run it is —
+	// read off the turn's own row and opened against that row's associated
+	// data, so no other seat's, turn's or job's session opens into the run.
+	"internal/sandbox/restore.go:continueKept": {tests: []string{
 		"internal/sandbox.TestARestoredSessionIsTheSeatsAndTheTurnsOwn",
+		"internal/sandbox.TestARelaunchContinuesOnlyTheSessionOfTheJobItFollows",
+		"internal/sandbox.TestTheBriefMatchesWhatTheRunHas",
 		"internal/executordomain.TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor",
 	}},
 	"internal/sandbox/launch.go:Launch": {tests: []string{

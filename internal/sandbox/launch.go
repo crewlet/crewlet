@@ -208,24 +208,37 @@ type LaunchRequest struct {
 	// bridged calls: the ones made before the question, or the loss, are this
 	// round's too ([PendingRun.Continues]).
 	//
-	// Where the turn kept no capture of its session to continue (Session),
-	// the job continues the job before's own harness session where it runs
-	// in that job's box — the session lives there — with Continue.Brief as
-	// its next prompt ([RunRequest.Resume]); anywhere else it starts fresh
-	// with Brief, which then carries the question and the answer, or how the
-	// job before it was cut off, and where its work is.
+	// Where the launch takes up no kept capture of the job before's session
+	// (Session), the job continues that job's own harness session where it
+	// runs in that job's box — the session lives there — with
+	// Continue.Brief as its next prompt ([RunRequest.Resume]); anywhere else
+	// it starts fresh with Brief, which then carries the question and the
+	// answer, or how the job before it was cut off, and where its work is.
 	Continue *Continuation
 
 	// Session is the turn's kept session this job continues, in whatever box
-	// it gets — the turn's newest kept capture, as the launch's caller chose
-	// it before it built the run's surface and briefs
+	// it gets — the kept capture of the job before's session, as the
+	// launch's caller chose it before it built the run's surface and briefs
 	// ([Coordinator.ContinuedCapture]) — with the briefs that continue it in
-	// the box it was last worked in and in any other. Set on every relaunch of
-	// a turn whose session can be continued: a reviewer's send-back as much as
-	// a round carried on. Nil starts a session of its own, or continues one
-	// in place (Continue). The launch takes it up, or says why not and starts
-	// fresh with Brief: see restore.go.
+	// the box it was last worked in and in any other. Set on every relaunch
+	// whose job before left a kept capture that can be continued: a
+	// reviewer's send-back as much as a round carried on. Nil starts a
+	// session of its own, or continues one in place (Continue). The launch
+	// takes it up, or says why not and starts fresh with Brief: see
+	// restore.go.
 	Session *SessionContinuation
+
+	// Decided is told how the launch decided its run takes up a session —
+	// which of the three briefs it hands the run, and whether the session
+	// is the turn's kept capture — once the launch knows the box and before
+	// the run starts there, so what the caller arms for the run (the skills
+	// its session has loaded) and states of it (the prompt it was sent) are
+	// the session's it will run in. Called once per launch that reaches its
+	// run's start; nil tells nobody. The run's own script may still start a
+	// session of its own where its box cannot restore the session after all
+	// ([RunRequest.FreshBrief]), which its collection says
+	// ([Result.Continued]).
+	Decided func(LaunchDecision)
 
 	// Fence is the launching turn's own seat fence — its seat still held
 	// under the grant the turn was admitted on, and no person's pause asking
@@ -578,6 +591,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// does, for its script to hand over the one its restore's outcome chose.
 	continued := c.continueSession(ctx, req, opened, box, runner, reused)
 	defer continued.release()
+	if req.Decided != nil {
+		req.Decided(continued.decision())
+	}
 	// THE ENVIRONMENT THE JOB IS STARTED WITH, read once: it is what the job
 	// is handed, and what its session's capture scrubs out ([HandedSecrets]).
 	env := withTelemetry(m, req, box)

@@ -401,3 +401,34 @@ func TestAContinuedOpenCodeRunIsConfiguredWithItsOwnInstructions(t *testing.T) {
 		t.Errorf("the continued run's instruction file holds %q, want its own instructions", got)
 	}
 }
+
+// A HARNESS KILLED AFTER IT WROTE ITS SESSION IS SAID TO HAVE BEEN CUT OFF. The
+// run's script packs the session after its harness exits whatever the exit, so
+// a harness killed while its wrapper lived on — the signal a memory limit
+// sends — leaves an archive all the same, whose transcript ends wherever the
+// kill found it: the result says the harness did not exit cleanly, beside the
+// archive, for the capture to be kept as one cut off; and one that exited
+// cleanly says nothing of the kind.
+//
+// Mutation: read the archive as whole whatever the harness's exit status, and
+// the killed row goes red.
+func TestAHarnessKilledAfterItWroteItsSessionIsSaidToHaveBeenCutOff(t *testing.T) {
+	t.Parallel()
+	for name, killed := range map[string]bool{"killed": true, "exited cleanly": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner, box := realBox(t)
+			harness := sessionHarness("2.1.310")
+			if killed {
+				harness = strings.Replace(harness, `printf '{"type":"result"`,
+					"kill -KILL $$\n"+`printf '{"type":"result"`, 1)
+			}
+			writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude", harness)
+			_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "begin"})
+			if res.Captured == nil || res.HarnessCutOff != killed {
+				t.Fatalf("the run packed %+v and says its harness was cut off %v; want its session packed, "+
+					"and cut off %v", res.Captured, res.HarnessCutOff, killed)
+			}
+		})
+	}
+}

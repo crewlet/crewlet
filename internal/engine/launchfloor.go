@@ -13,13 +13,17 @@ import (
 // A launch is held to a floor (ADR-0066): below it the seat's windows cannot
 // carry the run's first request, so the launch is refused as a budget refusal
 // and waits — its delivery parked, or its resume held — for the window to
-// turn over ([executorHeadroom]). A launch that CONTINUES its turn's session
-// sends that session's whole context before it reads a word of its brief, so
-// its floor is the larger of the static floor and the session's context with
-// the brief beside it, never the static floor alone. The static floor
+// turn over ([executorHeadroom]). A launch that may CONTINUE a session sends
+// that session's whole context before it reads a word of its brief, so its
+// floor is the larger of the static floor and the session's context with the
+// brief that continues it beside it, never the static floor alone — the
+// session the turn kept, or the job before's own copy in its box, whichever
+// the launch may take up ([agentLauncher.continuedFloor]). The static floor
 // (turn_engine.executor_min_budget_tokens) already counts the harness's own
 // prompt, its tools and the seat's system prompt, which the context's last
-// request counted too, so the two are compared, never added.
+// request counted too, so the two are compared, never added. A session no
+// capture measured has no known context, and its launch is held to the static
+// floor.
 //
 // AND THE FLOOR A SEAT IS HELD TO IS THE FLOOR ITS LAUNCH WAS REFUSED BELOW.
 // The launch's refusal carries it ([floorRefusal]) to the hold that waits on it
@@ -27,14 +31,19 @@ import (
 // window that leaves less than it ([meter.starved]) and says so in those words
 // ([starvedReason]). Read anywhere as the static floor, a resume refused below
 // its own found no window starved, was not held, and was retried into the same
-// refusal.
+// refusal. A continued launch is only ever a resumed segment's — a relaunch —
+// so its floor is HELD there, never parked: the dispatcher's park holds a
+// seat's mail for its turns' first launches, which continue no session
+// ([Engine.budgetPark]).
 //
 // AND A FLOOR NO WINDOW CAN EVER LEAVE ROOM FOR IS NO FLOOR TO WAIT ON: a
-// continued session whose context with its brief is past the smallest ceiling
-// a seat's or its company's capped windows hold is not continued, and its launch
-// starts a session of its own on the static floor ([launchFloor.fits]), which
-// config already holds every ceiling above (validateExecutorFloor). Waited
-// for, it would hold the turn for ever.
+// session whose context with its brief is past the smallest ceiling a seat's or
+// its company's capped windows hold is not continued, and its launch starts a
+// session of its own on the static floor ([launchFloor.fits]), which config
+// already holds every ceiling above (validateExecutorFloor). Waited for, it
+// would hold the turn for ever. Decided by the launch, where the brief that
+// continues the session exists — never by the size of the session alone: a
+// seat with no capped window carries any.
 
 // launchFloor is the room one executor launch needs.
 type launchFloor struct {
@@ -70,6 +79,15 @@ func (f launchFloor) tokens() int {
 		return f.static
 	}
 	return max(f.static, int(f.context)+f.brief)
+}
+
+// atLeast is the larger of f and g: the floor of a launch that may take either
+// path, which it learns only once it has its box.
+func (f launchFloor) atLeast(g launchFloor) launchFloor {
+	if g.tokens() > f.tokens() {
+		return g
+	}
+	return f
 }
 
 // fits is why no window under b can ever leave room for f, "" where one can: a

@@ -74,19 +74,18 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	// A PERSON'S ANSWER CARRIES THE RUN ON; it is never the run's report.
 	// See [Asked]. And so does a job lost with its host, unless the round it
 	// was lost in was already submitted. See [Lost].
-	logged := bridgedLedger(bridged)
 	if asked := r.cfg.Resume.Asked; asked != nil {
-		return r.continueAgentRun(ctx, history, state, asked, logged)
+		return r.continueAgentRun(ctx, history, state, asked, bridged)
 	}
 	if lost := r.cfg.Resume.Lost; lost != nil &&
 		!submitted(bridgedLedger(sinceAnswer(bridged, r.cfg.Resume.Answered))) {
-		return r.continueAgentRun(ctx, history, state, lost, logged)
+		return r.continueAgentRun(ctx, history, state, lost, bridged)
 	}
 	// AND SO DOES A JOB REFUSED ON A SIGN-IN REPLACED WHILE IT RAN, on the
 	// same condition. See [Rotated].
 	if rotated := r.cfg.Resume.Rotated; rotated != nil &&
 		!submitted(bridgedLedger(sinceAnswer(bridged, r.cfg.Resume.Answered))) {
-		return r.continueAgentRun(ctx, history, state, rotated, logged)
+		return r.continueAgentRun(ctx, history, state, rotated, bridged)
 	}
 	return r.resumeAgentRun(ctx, history, state, r.cfg.Resume.Answer, bridged)
 }

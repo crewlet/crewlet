@@ -212,12 +212,12 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 			"fault in the runner, not a setting")
 	}
 	// THE FLOOR OF WHAT THIS LAUNCH SENDS FIRST ([launchFloor]): a launch that
-	// continues its turn's session sends the session's context before its
-	// brief, so its floor is the two together, never the static one alone.
-	floor := staticFloor(company)
-	if session := req.Session; session != nil && session.Basis.Continues() {
-		floor = floor.continuing(session.Basis.ContextTokens, harness.EstimateTokens(req.Brief))
-	}
+	// may continue a session sends its context before its brief, so its floor
+	// is the session's context with the brief that continues it, never the
+	// static one alone — and one no window of the seat's budget can ever
+	// carry continues nothing, its run starting a session of its own on the
+	// static floor ([agentLauncher.continuedFloor]).
+	req, floor := l.continuedFloor(ctx, req)
 	if err := executorHeadroom(ctx, e.remainingFor(company, handle), floor); err != nil {
 		return runner.Launched{}, err
 	}
@@ -348,6 +348,9 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	var (
 		opened   bool
 		recorded string
+		// bridgeFrom is the last call the row held as the job's session
+		// opened, which the job's calls are numbered after.
+		bridgeFrom int
 	)
 	result, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:        ref,
@@ -395,8 +398,16 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		},
 		Opened: func(job sandbox.OpenedJob) (sandbox.Opening, error) {
 			opening, openErr := e.openBridge(ctx, session, ledger, inbox, job)
-			opened = openErr == nil
+			opened, bridgeFrom = openErr == nil, job.LastSeq
 			return opening, openErr
+		},
+		// HOW THE RUN TAKES UP A SESSION, told to the runner once the launch
+		// knows its box and before the run starts there, so the run's guard
+		// and its prompt's record are the session's it runs in.
+		Decided: func(d sandbox.LaunchDecision) {
+			if req.Decided != nil {
+				req.Decided(sessionDecision(d))
+			}
 		},
 		// THE SAME FENCE, asked again once the run's row exists — see
 		// [sandbox.LaunchRequest.Fence]: a stop that lands while this
@@ -447,7 +458,50 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		}
 		return failed, err
 	}
-	return runner.Launched{LaunchID: result.LaunchID}, nil
+	return runner.Launched{LaunchID: result.LaunchID, BridgeFrom: bridgeFrom}, nil
+}
+
+// continuedFloor is req as the seat's budget lets it be launched, and the floor
+// it is held to ([launchFloor]): the larger of the static floor and, for each
+// session the launch may continue, that session's context with the brief that
+// continues it — the turn's kept capture, in the longer of its two briefs,
+// since which box the launch gets is the launch's to learn, and the job
+// before's own copy in its box with the brief that carries it on. A context no
+// capture measured is unknown, and holds the launch to the static floor.
+//
+// A FLOOR NO WINDOW CAN EVER LEAVE ROOM FOR ([launchFloor.fits]) is not waited
+// for: req goes without the sessions it would continue, its run starts a
+// session of its own on the static floor, which config already holds every
+// ceiling above, and the line says why. A seat with no capped window carries
+// any session.
+func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunRequest) (runner.AgentRunRequest, launchFloor) {
+	static := staticFloor(l.company)
+	floor := static
+	if s := req.Session; s != nil && s.Basis.Continues() {
+		floor = floor.atLeast(static.continuing(s.Basis.ContextTokens,
+			max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))))
+	}
+	if c := req.Continue; c != nil && c.SessionID != "" {
+		floor = floor.atLeast(static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief)))
+	}
+	m := l.engine.meterFor(l.company, l.seat.Handle())
+	if m == nil {
+		return req, floor
+	}
+	why := floor.fits(m.basis)
+	if why == "" {
+		return req, floor
+	}
+	log.InfoContext(ctx, "executor_session_not_continued", "seat", l.seat.Handle(),
+		"turn_id", l.turn.RunID, "detail", why,
+		"outcome", "the run starts a session of its own, on the static floor")
+	req.Session = nil
+	if c := req.Continue; c != nil {
+		fresh := *c
+		fresh.SessionID = ""
+		req.Continue = &fresh
+	}
+	return req, static
 }
 
 // openBridge opens a job's bridge session under the job's own name, with its
