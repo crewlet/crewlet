@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -37,16 +38,34 @@ import (
 //
 // # What a chain answers
 //
-// One [ChainCommit] an entry, in order: the commit the entry became — a
-// fast-forward's is its own head, which the copy already holds — or the
-// refusal that skipped it, the chain building on without it: a conflict with
-// its paths, a fast-forward the target's history refuses, a head the chain
-// already holds, or a merge past its build's budget. A skipped entry leaves
+// One [ChainCommit] an entry it reached, in order: the commit the entry
+// became — a fast-forward's is its own head, which the copy already holds —
+// or the refusal that skipped it, the chain building on without it: a
+// conflict with its paths, a fast-forward the target's history refuses, a
+// head the chain already holds, a merge past a merge_change's own budget, or
+// whose objects pack past a merge_change's own bound or hold more than
+// [MaxChainObjectBytes] uncompressed (too_large), or an object git's own
+// check refuses (rejected_object). A skipped entry leaves
 // nothing behind it in the scratch. Then the chain's one pack, stored as one
 // bundle — nil where no entry made an object — and its tip. The pack enters
 // the building node's cache only once the record naming it has applied
 // ([ChainResult.Settle]): a pack linked in before it would be objects no row
 // names.
+//
+// # Never refused whole
+//
+// Every refusal names the ONE entry it is about, so a chain always decides
+// at least its first entry and its caller always has an entry to eject or a
+// prefix to land: a chain refused whole would be built again, entry for
+// entry, by the next turn, and refused again, wedging its target's queue.
+// What could sink a chain whole is bounded per entry instead: each entry's
+// objects to a merge_change's own [MaxWritePackBytes] packed and to
+// [MaxChainObjectBytes] uncompressed, the chain's objects together to
+// [MaxChainObjectBytes] (so its pack is made within [ChainPackDeadline]), an
+// object git's check refuses to the entry that wrote it, and the chain's time
+// to [ChainBuildDeadline]. The entries a chain did not reach within its
+// bytes or its time are left out of its answer — a prefix of the entries,
+// neither built nor skipped — for the next chain.
 //
 // # In process, never a record
 //
@@ -64,14 +83,64 @@ import (
 // same sixty-four.
 const MaxChainEntries = MaxPushesPerRecord
 
-// MaxChainPackBytes bounds the one pack a chain stores: [MaxChainEntries] ×
-// [MaxWritePackBytes], 256 MiB. Each entry is a merge a merge_change could
-// build and pack alone under [MaxWritePackBytes] — its new objects a commit,
-// the trees above the paths both sides changed and the blobs merge-tree
-// merged — so a chain of them packs under their sum, smaller in practice as
-// one pack deltas what neighbouring entries rewrite alike. A chain past it is
-// refused too_large whole, its caller's to build in smaller parts.
-const MaxChainPackBytes = MaxChainEntries * MaxWritePackBytes
+// MaxChainObjectBytes is the most bytes, UNCOMPRESSED, the objects one chain
+// writes may hold — every entry's merge commit, the trees above the paths
+// both sides changed and the blobs merge-tree merged — and so the most its
+// one pack deflates, deltas and checks: SIXTEEN MIB, four
+// [MaxWritePackBytes]. What a pack costs follows the bytes it is made of,
+// not the bytes it stores, and it was MEASURED (internal/code/host's
+// BenchmarkBuildChain, its doc.go's WHAT A CHAIN COSTS): 314 MiB of
+// sixty-four merged files of random text took 51 s to pack and check, 6.2
+// MiB a second, while sixty-four merges whose objects hold just under
+// sixteen took 2.1 s, inside [ChainPackDeadline] 4.8 times over. An entry
+// whose merge holds more
+// alone is skipped too_large; one that would take the chain past it is left
+// for the next chain, as an entry its time cannot hold is
+// (internal/code/host's chain.go). So the bound shortens the trains of
+// merges that rewrite large files and leaves the common train — sixty-four
+// merges of a few kilobytes each — whole.
+const MaxChainObjectBytes = 4 * MaxWritePackBytes
+
+// ChainPackPerObjectByte is how many bytes of pack a chain may store for
+// each byte its objects hold uncompressed: TWO, BY CONSTRUCTION — a pack
+// holds each object deflated, or as a delta no larger, and adds to it a
+// header and deflate's framing of some twenty bytes, against at least the
+// twenty-eight of the tree entry that names it in the merge that wrote it (a
+// commit, the one object no tree names, holds more than a hundred). The
+// builder checks its pack against it all the same, and answers a pack past
+// it as an error of its own, never a refusal of the chain.
+const ChainPackPerObjectByte = 2
+
+// MaxChainPackBytes bounds the one pack a chain stores:
+// [ChainPackPerObjectByte] × [MaxChainObjectBytes], 32 MiB.
+const MaxChainPackBytes = ChainPackPerObjectByte * MaxChainObjectBytes
+
+// ChainPackDeadline is the git run time a chain's one pack is given — its
+// `pack-objects` and its `index-pack --strict` together, and the pack made
+// again after an entry whose object git's check refused is dropped: TEN
+// SECONDS. MEASURED (internal/code/host's BenchmarkBuildChain, its doc.go's
+// WHAT A CHAIN COSTS): the largest pack a chain makes, of sixty-four merges
+// whose objects hold just under [MaxChainObjectBytes], took 2.1 s, so ten
+// hold it 4.8 times over — the margin for a node whose two cores are shared
+// and for a second pack after an entry git's check refused. A pack past it
+// is the node failing (unready), never a chain too large. PROVISIONAL as
+// every build deadline is: what moves it is a production pack whose p99
+// nears it.
+const ChainPackDeadline = 10 * time.Second
+
+// ChainBuildDeadline is a chain's whole git: its merges, given ONE merge's
+// [MergeBuildDeadline] together — the first entry it reaches all of it, as a
+// merge_change of it alone is given, so every chain decides at least one
+// entry; each later one what is left of it, in run time and in time since
+// the merges began, whichever is less, so a chain whose git waits for its
+// slots stops as surely as one whose git runs slowly — and its pack
+// [ChainPackDeadline]: FORTY SECONDS. A chain is built in its home's turn,
+// one internal/code/home Backstop (a minute; its TestATurnHoldsAWholeChain
+// holds the two together), and the twenty seconds the turn has past the
+// chain are its reads before it, the bundle's store and the candidate record
+// after it. An entry the merges' share cannot hold is left for the next
+// chain, never a reason to refuse this one.
+const ChainBuildDeadline = MergeBuildDeadline + ChainPackDeadline
 
 // ChainBuild is one chain a repository's home asks its git node to build:
 // Entries merged in order onto Base, the tip of TargetRef the caller read at
@@ -146,18 +215,21 @@ type ChainCommit struct {
 	ConflictsOmitted int
 }
 
-// ChainResult is a built chain: one [ChainCommit] an entry, in order; Tip the
-// commit the last entry that was not skipped became — Base where every entry
-// was — and Pack the one stored bundle of every object the chain made, nil
-// where it made none (every entry a fast-forward, or skipped). Or Refusal,
-// with nothing stored: the chain whole refused — too_large past
-// [MaxChainPackBytes], rejected_object where git's own check refuses an
-// object it made. Or Status, nothing built and nothing stored: the
-// repository's row, as the copy the chain was to be built over holds it,
-// refuses every merge — repo_deleted, repo_archived, repo_importing or
-// repo_mirrored, in the domain's one sentence for the state (Detail) — which
-// the candidate's decide would refuse from the same row once its scratch, its
-// share unit and its pack were spent.
+// ChainResult is a built chain: one [ChainCommit] an entry it reached, in
+// order — a PREFIX of its entries, at least the first: an entry its
+// [ChainBuildDeadline] or its [MaxChainObjectBytes] could not hold and every
+// entry after it, and every entry after one whose object git's check
+// refused, are left out, neither built nor skipped, for its
+// caller to leave queued; Tip the commit the last entry that was not skipped
+// became — Base where every entry was — and Pack the one stored bundle of
+// every object the chain made, nil where it made none (every entry a
+// fast-forward, or skipped). A chain is never refused whole for what it
+// built. Or Status, nothing built and nothing stored: the repository's row,
+// as the copy the chain was to be built over holds it, refuses every merge —
+// repo_deleted, repo_archived, repo_importing or repo_mirrored, in the
+// domain's one sentence for the state (Detail) — which the candidate's decide
+// would refuse from the same row once its scratch, its share unit and its
+// pack were spent.
 //
 // Settle ends the chain's hold on its scratch, once: applied — the record
 // naming the pack has applied, as its caller read it — adopts the pack into
@@ -175,7 +247,6 @@ type ChainResult struct {
 	Pack      *PackRef
 	Tip       string
 	DropEpoch int64
-	Refusal   WriteRefusal
 	Status    MergeRefusal
 	Detail    string
 	Settle    func(ctx context.Context, applied bool) error

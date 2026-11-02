@@ -70,7 +70,8 @@ func TestAnAlarmWakesExactlyTheSeatsTheHealthToolsAdmit(t *testing.T) {
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, builtin.Deps{
 		Authorize: builtin.Decide(orgchart.Of(c.Org)),
-		Health:    builtin.HealthDeps{Leases: coordmem.New()},
+		Health: builtin.HealthDeps{Leases: coordmem.New(), Requesters: turnRequesters{engine: &Engine{}},
+			Chart: orgchart.Of(c.Org)},
 	}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}

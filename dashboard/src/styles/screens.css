@@ -11129,6 +11129,13 @@ a.live-row:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* A result's path, linking to its file: chrome, the heading its lines hang
+   under, drawn in the link ink with no underline. A link inside a sentence
+   takes .prose-link instead. */
+.code-search-file__link {
+  color: var(--color-brand-accent-ink);
+}
+
 .code-search-lines {
   margin: 0;
   padding: 0;
@@ -11145,9 +11152,11 @@ a.live-row:focus-visible {
   padding-inline: var(--spacing-2);
 }
 
+/* A line's number is read (and is the link to the line), so it takes the
+   tertiary rung: the faint one is about 3:1, a mark's floor, not a word's. */
 .code-search-line__number {
   text-align: end;
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
 }
 
 .code-search-line__text {

@@ -4554,11 +4554,13 @@ repository by, the first row that holds:
 
 So a `full_access` seat in the owning unit writes — creates and fast-forwards
 branches, creates tags — and only the unit's lead, at `full_access`, also
-forces and deletes. A `review` seat reads whatever its relation. Below
-`full_access` a seat changes no repository at all, so it is not offered the
-[code write tools](../guides/tools-and-mcp.md#the-companys-code) either: a
-`read_only` or `review` seat reads with the code tools, and is told nothing
-about writing with them.
+forces and deletes. A `review` seat reads whatever its relation, and reviews
+where its relation reaches review. Below `full_access` a seat changes no
+repository at all, so it is not offered the [code write
+tools](../guides/tools-and-mcp.md#the-companys-code) that change one either,
+and is told nothing about writing with them: a `read_only` seat reads with the
+code tools and comments on a change, and a `review` seat also asks for
+reviews, reviews and dismisses the findings it raised.
 
 **A seat's own branches.** A `full_access` seat owns
 `refs/heads/seats/<its handle>/` on every repository it may read, and may do
@@ -4754,7 +4756,11 @@ The same holds for the repositories a seat with the
 tools read them, so in a colleague's turn the hot list leaves out what the
 colleague may not read as well, and a stranger's turn is answered nothing. Who
 woke the turn is asked only what a code read asks of them — the deployment's
-view beside the repositories is the seat's own grant.
+view beside the repositories is the seat's own grant, read for anybody of the
+company who may act. So is `fleet_health`'s, which reads no repository: the
+last two rows of the table above are answered nothing by either tool, and
+every other row the seat's whole view
+([The health tools](../guides/fleet.md#the-health-tools)).
 
 And for a [coding run](#coding-boxes) the seat launches in such a turn: its
 repositories are resolved for whoever woke it, so a stranger's turn is given
@@ -6523,24 +6529,52 @@ answered (a)): a merge commit by **who enqueued it**, a squash by **the
 change's owner** with a `Co-authored-by:` trailer for each other author. A
 chain is at most **64 entries**, the most one record lands.
 
-- **Each entry gets a merge's budget.** Every entry's merge is given the
-  thirty seconds of git a merge is given, and its commit's author date is
-  **its entry's own instant**, when it was enqueued, never the build's — its
-  committer date that or its later parent's. So a chain built again from the
-  same entries, on any git node, after any crash or as a bisect builds a
-  prefix twice, is the same commits byte for byte.
-- **A conflicting entry is skipped, and leaves nothing.** An entry that
-  conflicts with what the chain made so far is skipped, naming its paths as a
-  merge's conflict does, and the next entry is merged onto the same tip. So
-  is a `fast_forward` the branch's history refuses, a head the chain already
-  holds, and a merge that runs out its thirty seconds. Whatever the skipped
+- **Each entry is held to a merge's bounds.** An entry's merge is held to
+  what a merge of its change on its own is: its git to the thirty seconds a
+  merge is given, and the objects it writes to the 4 MiB pack a merge may
+  store. So the queue lands nothing a merge would refuse. Its commit's author
+  date is **its entry's own instant**, when it was enqueued, never the
+  build's — its committer date that or its later parent's. So a chain built
+  again from the same entries, on any git node, after any crash or as a
+  bisect builds a prefix twice, is the same commits byte for byte.
+- **An entry that cannot be merged is skipped, and leaves nothing.** An entry
+  that conflicts with what the chain made so far is skipped, naming its paths
+  as a merge's conflict does, and the next entry is merged onto the same tip.
+  So is a `fast_forward` the branch's history refuses, a head the chain
+  already holds, a merge that runs out its thirty seconds, and one whose
+  objects pack past 4 MiB (`too_large`, in a merge's own words). So, too, is
+  one whose objects hold more than 16 MiB uncompressed (`too_large`), which
+  no chain could pack in its time: merging the target into its branch, so
+  the queue's merge writes no file of its own, lands it. Whatever the skipped
   merge wrote into the scratch is removed before the next entry, so the
-  chain's pack holds exactly the commits it made.
-- **One pack, stored once.** Every object the chain made is packed in one
-  pack, checked by `git index-pack --strict` as every engine write's is,
-  within the time a merge is given and at most 256 MiB, 4 MiB an entry. It
-  is stored as one bundle. A chain past either bound, or one holding an
-  object git's own check refuses, is refused whole with nothing stored.
+  chain's pack holds exactly the commits it made. The queue ejects every
+  entry a chain skipped but one whose change has landed already.
+- **A chain has one budget, and lands what fits in it.** A chain is built in
+  its home's turn, one minute, so its git has forty seconds at most: its
+  merges share thirty — the first entry all of them, as a merge of it alone
+  would have, so every chain decides at least one entry — and its pack gets
+  ten. Each later entry gets what the merges before it left, counted both by
+  the git they ran and by the time that has passed, so a node whose git waits
+  for a free slot stops as surely as one whose git runs slowly. Its objects
+  hold at most **16 MiB** uncompressed together, so its pack is made well
+  inside its ten seconds. The entries the budget or the 16 MiB cannot hold
+  are **not reached**: the chain answers the entries it built, and the rest
+  stay queued for the next train. A train of small merges is never shortened
+  by the bytes: sixty-four of them, over twenty thousand commits of history,
+  were built in about half a second and packed in under fifty milliseconds,
+  and sixty-four whose objects hold just under 16 MiB in 3.4 s, their pack
+  in 2.1 s.
+- **One pack, stored once, never refused whole.** Every object the chain
+  made is packed in one pack, checked by `git index-pack --strict` as every
+  engine write's is, and stored as one bundle, at most 32 MiB. An object
+  git's check refuses skips the one entry that wrote it (`rejected_object`,
+  in git's own words): it and the entries after it, which were merged onto
+  it, are removed, and the pack is made again from the entries before it,
+  the rest left queued. A pack that does
+  not finish in its ten seconds is the node failing, not the chain too
+  large, and the next turn builds it again. A chain is never refused as a
+  whole, because the next turn would build the same chain and be refused the
+  same way, and the queue would never move.
 - **Nothing enters the cache before its record applies.** The chain's
   commits are a candidate's: the record that names them and their pack is
   the queue's, proposed after the build. The pack is taken
@@ -6552,7 +6586,8 @@ chain is at most **64 entries**, the most one record lands.
 
 A chain holds one unit of the home's seat git-work share for its whole build,
 the one unit each of its merges would have held alone, and is logged
-`code_chain_built` with its entries, how many it skipped and its pack's size.
+`code_chain_built` with its entries, how many it skipped, how many it did not
+reach and its pack's size.
 
 ### Where lines are in another revision
 
@@ -6718,7 +6753,10 @@ chart holds, in the snapshot, and not the asker's list beside them.
   answer replies to, each read in its key's order — a change whose audience
   is larger than that is read in its listings rather than woken.
 
-A mention is resolved against the chart where it is written, and held to the
+A mention is resolved against the chart where it is written — a tool's
+call, a seat's or a person's, reads every `@handle` in the text it writes and
+sends the ones the chart holds as the write's mentions, a text naming more
+than 32 refused with nothing written — and held to the
 deciding node's chart again, which also says who is a person: a write that
 mentions anybody is decided only by a node that holds the company's current
 chart, as a seat's write is. Whoever a comment or a review mentions joins the
@@ -7513,6 +7551,11 @@ and `code_apply_suggestions` applies the suggestions of the findings it names,
 on the change's source branch, at the head its caller read, as one engine
 write ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
 
+- **The findings it names are read by their ids**, one read of the change
+  that seeks each of them, never a walk of the change's findings: those are
+  kept in the order they were raised, so the newest review's — the ones an
+  apply names — would be the last a walk reaches, and an apply would cost
+  what the change's whole review history does.
 - **Each suggestion goes where its finding was shown.** Its lines are placed in
   the head's file by the rule a finding is shown on a later revision by — the
   diff between the blob its lines were read in and the head's, every hunk above

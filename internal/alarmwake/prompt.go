@@ -14,6 +14,14 @@ import (
 // read of every node's firing set, named by its authority row as the tool is.
 const fleetHealthTool = string(authz.ActionFleetHealth)
 
+// firingArg is the argument the prompt has the seat read fleet_health with:
+// only the nodes with an alarm firing, which is the question a wake asks and
+// an answer that stays small however many nodes the fleet has. A string here
+// rather than an import, since internal/agent/builtin sits above this package;
+// its TestAnAlarmWakeAsksFleetHealthOnlyForWhatIsFiring holds the prompt and
+// the tool's schema to one spelling.
+const firingArg = "firing"
+
 // Prompt is what an alarm transition asks of a seat whose role carries the
 // health grant.
 //
@@ -52,13 +60,22 @@ func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
 func (Prompt) Addressed(notify.Inbound) bool { return false }
 
 // PartitionKey implements [notify.Prompt]: ONE ALARM is the conversation, on
-// every node and every log it stands on. A fire, its clear and its re-fire
-// coalesce into one turn, and so do the copies one condition raises across
-// the fleet — every data node evaluates its own table, so a fleet-wide fact
-// such as a stale backup fires on each of them at once — because the seat's
-// one look at `fleet_health` answers all of them, and a turn per node would
-// spend a round per node on the same read. Two alarms stay two things to
-// judge. Empty, and so never merged, for a copy naming no alarm.
+// every node and every log it stands on, so the copies of it the inbox holds
+// pending together merge into one turn: the copies one condition raises across
+// the fleet (every data node evaluates its own table, so a fleet-wide fact such
+// as a stale backup fires on each of them within one alarm interval), and a
+// fire beside its clear. The seat's one look at `fleet_health` answers all of
+// them, and a turn per copy would spend a round per copy on the same read. Two
+// alarms stay two things to judge. Empty, and so never merged, for a copy
+// naming no alarm.
+//
+// THE KEY MERGES ONLY WHAT IS PENDING AT ONCE, and nothing upstream holds a
+// transition back to make more of it pending: the table has no hysteresis and
+// the outbox publishes every transition. At the inbox's default linger of zero
+// the first copy starts a turn at once and the rest arrive during it, so one
+// fleet-wide condition is two turns for each granted seat, and an alarm that
+// flaps more slowly than a turn runs is a turn per transition
+// (docs/concepts/event-system.md, "Alarm wakes").
 func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 	kind := metadata[AlarmField]
 	if kind == "" {
@@ -148,10 +165,10 @@ func (Prompt) Build(n notify.Inbound, _ notify.Parties) string {
 	}
 
 	b.WriteString("\nThis is one change on one node, not the fleet's current state. Read `" +
-		fleetHealthTool + "` before you act: it is every node's own account of what is firing " +
-		"now, and another change may already have followed this one. Your role carries the " +
-		"health grant, which is why you were told; whether anything needs doing, and by whom, " +
-		"is yours to judge.\n")
+		fleetHealthTool + "` with `" + firingArg + ": true` before you act: it is every node's " +
+		"own account of what is firing now, whatever the fleet's size, and another change may " +
+		"already have followed this one. Your role carries the health grant, which is why you " +
+		"were told; whether anything needs doing, and by whom, is yours to judge.\n")
 	return b.String()
 }
 

@@ -9,11 +9,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/alarmwake"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/code"
@@ -26,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -132,21 +136,35 @@ func healthChart(t *testing.T) (*org.Organization, authz.Chart) {
 	return o, orgchart.Of(o)
 }
 
+// healthRequesters is who a health tool's turn may be acting for, composed as
+// the engine composes them: dev, a colleague seat; the founder, a person of
+// the company who holds every app and not admin; and "departed", a person
+// whose seat's holder was removed, who acts as nobody now. Any other handle is
+// a requester this node cannot compose.
+func healthRequesters() requesters {
+	return requesters{
+		"dev":     {Kind: iam.KindSeat, Seat: "dev", Stage: iam.StageActive, Grants: iam.Apps},
+		"founder": founderPrincipal(iam.Apps...),
+		"departed": {Kind: iam.KindPerson, Login: "departed@example.com", Seat: "departed",
+			Stage: iam.StageRetired, Grants: iam.Apps},
+	}
+}
+
+// healthFleet is fleet_health's deps over leases, wired as every surface wires
+// them: who a turn may be acting for with the chart that decides them (the
+// requester ceiling), without which no fleet_health is served.
+func healthFleet(leases builtin.LeaseLister, chart authz.Chart) builtin.HealthDeps {
+	return builtin.HealthDeps{Leases: leases, Self: "node-a", Requesters: healthRequesters(), Chart: chart}
+}
+
 // healthCode is the code tools' deps code_status reads through, wired as every
 // surface wires them: the code host, the caller named by the request's
 // principal, and who a turn may be acting for with the chart that decides them
 // (the requester ceiling), without which no code read — and no code_status —
-// is served. The requesters: dev, a colleague seat; the founder, a person of
-// the company who holds every app and not admin; and "departed", a person
-// whose seat's holder was removed, who acts as nobody now.
+// is served.
 func healthCode(host builtin.CodeReader, chart authz.Chart) builtin.CodeDeps {
 	return builtin.CodeDeps{Code: host, Actor: builtin.PrincipalActor, Chart: chart,
-		Requesters: requesters{
-			"dev":     {Kind: iam.KindSeat, Seat: "dev", Stage: iam.StageActive, Grants: iam.Apps},
-			"founder": founderPrincipal(iam.Apps...),
-			"departed": {Kind: iam.KindPerson, Login: "departed@example.com", Seat: "departed",
-				Stage: iam.StageRetired, Grants: iam.Apps},
-		}}
+		Requesters: healthRequesters()}
 }
 
 // asSeat is a context carrying the seat handle as a turn's principal: every
@@ -260,7 +278,7 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 	node(t, backend, "node-c", map[string]any{"roles": []string{"seats"}}, &coord.NodeStatus{InFlight: 2})
 	node(t, backend, "node-d", nil, nil)
 	_, chart := healthChart(t)
-	catalogue := healthTools(builtin.HealthDeps{Leases: backend, Self: "node-a"}, chart)
+	catalogue := healthTools(healthFleet(backend, chart), chart)
 
 	answer := healthAnswer(t, callTool(asAdmin(), t, catalogue[builtin.FleetHealthTool], nil))
 	if got := keysOf(t, answer); !slices.Equal(got, []string{"nodes", "this_node"}) {
@@ -394,8 +412,8 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 	node(t, backend, "node-a", nil, &coord.NodeStatus{AlarmsEvaluated: true})
 	deps := fullDeps(t)
 	deps.Authorize = builtin.Decide(chart)
-	deps.Health = builtin.HealthDeps{Leases: backend, Self: "node-a", Status: &statusAsker{},
-		Code: deps.Code}
+	deps.Health = healthFleet(backend, chart)
+	deps.Health.Status, deps.Health.Code = &statusAsker{}, deps.Code
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, deps); err != nil {
 		t.Fatalf("register: %v", err)
@@ -538,19 +556,209 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 	}
 }
 
+// manyHotRepos is a report of nodes git nodes naming per repositories each,
+// every repository on one node alone, as repository homes spread them: the
+// fleet's r-th is "repo-<r>" with the r-th smallest id, the hour's use falling
+// with r and the day's rising — so the hottest of the hour is the first and
+// the hottest of the day the last — and the git nodes take them in turn. And
+// every repository it names, by name, for a code host that resolves them all.
+func manyHotRepos(nodes, per int) (builtin.CodeStatusReport, map[string]code.RepoRef) {
+	report := builtin.CodeStatusReport{Statuses: make([]host.CodeStatus, nodes)}
+	repos := map[string]code.RepoRef{}
+	total := nodes * per
+	for r := range total {
+		ref := code.RepoRef{ID: fmt.Sprintf("0192f6c1-0000-7000-8000-%012d", r), Name: fmt.Sprintf("repo-%03d", r)}
+		repos[ref.Name] = ref
+		s := &report.Statuses[r%nodes]
+		s.Node = fmt.Sprintf("git-%d", r%nodes)
+		s.Hot = append(s.Hot, host.RepoStatus{RepoHeat: cache.RepoHeat{ID: ref.ID, Name: ref.Name,
+			Hour: cache.Use{Fetches: int64(total - r)}, Day: cache.Use{Fetches: int64(r + 1)}}})
+	}
+	return report, repos
+}
+
+// stalledGrants is a code host whose read of one repository fails at once and
+// whose every other read holds until its context ends — the code log out of
+// quorum, where a linearizable read fails only once its barrier's budget is
+// spent — counting every read it is asked.
+type stalledGrants struct {
+	failing string // the name whose read fails at once
+	reads   atomic.Int64
+}
+
+var _ builtin.CodeReader = (*stalledGrants)(nil)
+
+func (h *stalledGrants) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	h.reads.Add(1)
+	if q.Repo == h.failing {
+		return code.ReadAnswer{}, fmt.Errorf("%w: the chart this node judges by is behind", code.ErrNotServing)
+	}
+	<-ctx.Done()
+	return code.ReadAnswer{}, ctx.Err()
+}
+
+func (*stalledGrants) ResolveRef(context.Context, code.RefQuery) (code.RefAnswer, error) {
+	return code.RefAnswer{}, errors.New("stalledGrants resolves no ref")
+}
+
+func (*stalledGrants) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
+	return code.GitAnswer{}, errors.New("stalledGrants reads no git")
+}
+
+func (*stalledGrants) FloorOf(string) statelog.Position { return statelog.Position{} }
+
+// A CODE STATUS JUDGEMENT ENDS AT ITS FIRST FAILED READ.
+//
+// A failure answers the whole call unavailable, so nothing read after it can
+// change the answer: with three git nodes naming forty repositories each, the
+// hottest one's grant read failing at once and every other read holding until
+// its context ends — the code log out of quorum, whose reads fail only once
+// their barrier's budget is spent — the call answers unavailable as soon as
+// that one read has failed, having made at most codeStatusJudges reads, and
+// names no repository: the one it could not judge may be one the seat may not
+// read. Run in a bubble, so "as soon as" is every goroutine the call started
+// being done or blocked, never a clock.
+//
+// Mutation: judge in a group whose first failure cancels nothing, and the
+// reads in flight hold the call; start the reads still waiting once one has
+// failed, and the call makes every one of them.
+func TestACodeStatusJudgementEndsAtItsFirstFailedRead(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		report, _ := manyHotRepos(3, 2*cache.HotRepos)
+		stalled := &stalledGrants{failing: "repo-000"}
+		_, chart := healthChart(t)
+		tool, ok := healthTools(builtin.HealthDeps{Status: &statusAsker{report: report},
+			Code: healthCode(stalled, chart)}, chart)[builtin.CodeStatusTool].(tools.SeatCallable)
+		if !ok {
+			t.Fatal("code_status is not seat-callable")
+		}
+		ctx, cancel := context.WithCancel(asSeat("sre"))
+		defer cancel()
+		type outcome struct {
+			got tools.Result
+			err error
+		}
+		done := make(chan outcome, 1)
+		go func() {
+			got, err := tool.CallForTurn(ctx, nil, nil)
+			done <- outcome{got, err}
+		}()
+		synctest.Wait()
+		var out outcome
+		select {
+		case out = <-done:
+		default:
+			held := stalled.reads.Load()
+			cancel()
+			<-done
+			t.Fatalf("code_status had not answered once its read of the hottest repository failed: "+
+				"the %d reads it had made held it", held)
+		}
+		if out.err != nil {
+			t.Fatalf("code_status: %v", out.err)
+		}
+		if tools.RefusalOf(out.got) != tools.RefusalUnavailable || !errors.Is(out.got.Cause, code.ErrNotServing) {
+			t.Errorf("answered %s %q (cause %v), want unavailable over the failed read",
+				tools.RefusalOf(out.got), out.got.Output, out.got.Cause)
+		}
+		if strings.Contains(out.got.Output, "repo-") {
+			t.Errorf("the refusal names a repository the seat may not read: %q", out.got.Output)
+		}
+		if got := stalled.reads.Load(); got > builtin.CodeStatusJudges {
+			t.Errorf("the call made %d grant reads, want at most %d — none after the first failed",
+				got, builtin.CodeStatusJudges)
+		}
+	})
+}
+
+// A CODE STATUS ANSWER COSTS THE READS IT ANSWERS, NOT THE FLEET'S.
+//
+// A seat's hot list keeps at most cache.HotRepos of each window, and judging
+// every repository the git nodes name made a grant read apiece — a barrier on
+// the code log a wave — that grew with the git nodes and not with the list. So
+// ten git nodes naming forty repositories each, four hundred in all, are
+// judged hottest first and only to the list's cut: the seat is answered
+// exactly the list a judgement of every repository answers — the twenty
+// hottest of the hour and of the day that it may read — having read only the
+// repositories that list keeps and the ones above its cut it may not read, and
+// is told how many of those it left out: never one below the cut, which is not
+// in the list whoever reads it.
+//
+// Mutation: judge every repository the nodes name, and the reads count the
+// fleet and the cut's withheld count takes in repo-200; stop judging after the
+// first wave, and a repository the seat may not read is listed on a guess.
+func TestACodeStatusAnswerCostsTheReadsItAnswers(t *testing.T) {
+	t.Parallel()
+	report, repos := manyHotRepos(10, 2*cache.HotRepos)
+	refused := map[string]bool{}
+	for _, name := range []string{"repo-000", "repo-001", "repo-002", "repo-003", "repo-004",
+		"repo-010", "repo-390", "repo-200"} {
+		refused[name] = true
+	}
+	// EVERY ONE BUT repo-200 is above the cut in one window or the other:
+	// repo-200 trails nearly two hundred repositories the seat reads in each.
+	const above = 7
+	grants := &grantHost{repos: repos, refused: refused}
+	_, chart := healthChart(t)
+	tool := healthTools(builtin.HealthDeps{Status: &statusAsker{report: report},
+		Code: healthCode(grants, chart)}, chart)[builtin.CodeStatusTool]
+	answer := healthAnswer(t, callTool(asSeat("sre"), t, tool, nil))
+
+	// WHAT A JUDGEMENT OF EVERY REPOSITORY ANSWERS: the one rule's cut of
+	// every entry the seat may read.
+	var readable []cache.RepoHeat
+	var nodeOf []string
+	for _, s := range report.Statuses {
+		for _, r := range s.Hot {
+			if !refused[r.Name] {
+				readable = append(readable, r.RepoHeat)
+				nodeOf = append(nodeOf, s.Node)
+			}
+		}
+	}
+	var want []string
+	for _, i := range cache.Hottest(readable, cache.HotRepos) {
+		want = append(want, nodeOf[i]+"/"+readable[i].Name)
+	}
+	var got []string
+	for _, h := range answer["hot"].([]any) {
+		row := h.(map[string]any)
+		got = append(got, row["node"].(string)+"/"+row["name"].(string))
+	}
+	if len(want) != 2*cache.HotRepos {
+		t.Fatalf("the premise: the list of what the seat reads keeps %d, want both windows' %d",
+			len(want), 2*cache.HotRepos)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the seat's hot list = %v, want what judging every repository answers: %v", got, want)
+	}
+	if got := answer["withheld"]; got != float64(above) {
+		t.Errorf("the answer withheld %v, want %d — the repositories above the cut the seat may not read",
+			got, above)
+	}
+	if grants.reads > len(want)+above {
+		t.Errorf("the call made %d grant reads for a list of %d, want at most %d: the list's own and the "+
+			"%d above its cut — never the %d repositories the fleet names", grants.reads, len(want),
+			len(want)+above, above, len(repos))
+	}
+}
+
 // THE HEALTH TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
 // built over the same deps, hold the same two tools with byte-identical
 // descriptions and schemas, each a proven read; deps that reach no lease
-// table and no code host serve neither; and code_status is served on the code
-// reads' own terms — never over a code host wired without the requester
-// ceiling's halves, whose reads would be made for nobody whoever woke a turn.
+// table and no code host serve neither; and each is served only with the
+// requester ceiling's halves beside it — fleet_health never over the leases
+// alone, and code_status on the code reads' own terms, never over a code host
+// wired without them — since either would read for whoever woke a turn.
 //
 // Mutation: OperatorTools omitting healthCandidates, a health tool annotated
-// as a write, or code_status served over the code host alone → red.
+// as a write, fleet_health served over the leases alone or code_status over
+// the code host alone → red.
 func TestTheHealthToolsAreOneList(t *testing.T) {
 	t.Parallel()
-	deps := builtin.HealthDeps{Leases: coordmem.New(), Status: &statusAsker{},
-		Code: codeDeps(&grantHost{})}
+	deps := builtin.HealthDeps{Leases: coordmem.New(), Requesters: codeRequesters(), Chart: chartLeads,
+		Status: &statusAsker{}, Code: codeDeps(&grantHost{})}
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, gated(builtin.Deps{Health: deps})); err != nil {
 		t.Fatalf("register: %v", err)
@@ -580,6 +788,27 @@ func TestTheHealthToolsAreOneList(t *testing.T) {
 	}
 	if got := builtin.HealthTools(builtin.HealthDeps{}); len(got) != 0 {
 		t.Errorf("deps reaching nothing serve %d health tools, want none", len(got))
+	}
+	fleetServed := func(deps builtin.HealthDeps) bool {
+		for _, tool := range builtin.HealthTools(deps) {
+			if tool.Name() == builtin.FleetHealthTool {
+				return true
+			}
+		}
+		return false
+	}
+	if !fleetServed(builtin.HealthDeps{Leases: deps.Leases, Requesters: deps.Requesters, Chart: deps.Chart}) {
+		t.Fatalf("fleet_health is not served over the leases and the ceiling's halves, so this case proves nothing")
+	}
+	for name, half := range map[string]builtin.HealthDeps{
+		"the leases alone":              {Leases: deps.Leases},
+		"the leases without Chart":      {Leases: deps.Leases, Requesters: deps.Requesters},
+		"the leases without Requesters": {Leases: deps.Leases, Chart: deps.Chart},
+	} {
+		if fleetServed(half) {
+			t.Errorf("fleet_health is served over %s, which would read the deployment for whoever woke "+
+				"a turn", name)
+		}
 	}
 	served := func(code builtin.CodeDeps) bool {
 		for _, tool := range builtin.HealthTools(builtin.HealthDeps{Status: &statusAsker{}, Code: code}) {
@@ -758,5 +987,278 @@ func TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo(t *testing.T) {
 					s.repos.reads, s.asker.asked)
 			}
 		})
+	}
+}
+
+// countingLeases is a lease table that counts the listings it is asked.
+type countingLeases struct {
+	builtin.LeaseLister
+	lists atomic.Int64
+}
+
+func (l *countingLeases) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	l.lists.Add(1)
+	return l.LeaseLister.ListLive(ctx, class)
+}
+
+// A FLEET HEALTH ANSWER IN A TURN SOMEBODY WOKE IS READ ONLY FOR THE COMPANY.
+//
+// The seat's grant opens an administrator's view of the deployment, and a seat
+// that read it out for whoever messaged it would hand that view to anybody on
+// a chat surface it listens on: in a turn a stranger woke, or a person who may
+// not act in the company now, fleet_health answers nothing — refused with the
+// ceiling's reason, before the presence leases are read — and a requester this
+// node cannot compose is undecidable, never a turn nobody woke. A turn nobody
+// woke, a colleague seat's and that of a person of the company who holds no
+// admin are answered the seat's whole view: whoever woke the turn is decided
+// on fleet.health.read, which everybody of the company who may act holds, never
+// on the health row, which no requester holds.
+//
+// Mutation: drop the ceiling, and the stranger's turn is answered; decide the
+// requester on fleet_health's own row, and the colleague's and the person's
+// turns are refused.
+func TestAFleetHealthInATurnSomebodyWokeIsReadOnlyForTheCompany(t *testing.T) {
+	t.Parallel()
+	o, chart := healthChart(t)
+	backend := coordmem.New()
+	node(t, backend, "node-a", nil, &coord.NodeStatus{AlarmsEvaluated: true})
+	unknown := []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
+	speaker := func(handle string) []types.CanonicalIdentity {
+		return []types.CanonicalIdentity{{Handle: handle}}
+	}
+	for _, c := range []struct {
+		name      string
+		requester string
+		senders   []types.CanonicalIdentity
+		refusal   tools.Refusal // none where the turn is answered
+		says      string
+	}{
+		{name: "a turn nobody woke"},
+		{name: "a turn a colleague seat woke", requester: "dev", senders: speaker("dev")},
+		{name: "a turn a person woke who holds no admin", requester: "founder", senders: speaker("founder")},
+		{name: "a turn a stranger woke", senders: unknown, refusal: tools.RefusalForbidden,
+			says: "woken by somebody the company does not know"},
+		{name: "a turn a departed person woke", requester: "departed", senders: speaker("departed"),
+			refusal: tools.RefusalForbidden, says: "may not act in the company now"},
+		{name: "a turn whose requester this node cannot compose", requester: "ghost",
+			senders: speaker("ghost"), refusal: tools.RefusalUnavailable,
+			says: "could not establish who this turn's work is for"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			leases := &countingLeases{LeaseLister: backend}
+			tool, ok := healthTools(healthFleet(leases, chart), chart)[builtin.FleetHealthTool].(tools.SeatCallable)
+			if !ok {
+				t.Fatal("fleet_health is not seat-callable, so no turn's requester reaches it")
+			}
+			turn := &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: o.AgentSeatByHandle("sre"), Org: o,
+				Lookups: turnctx.NewLookups(), Requester: c.requester, Senders: c.senders}
+			got, err := tool.CallForTurn(asSeat("sre"), turn, nil)
+			if err != nil {
+				t.Fatalf("fleet_health: %v", err)
+			}
+			if c.refusal == "" {
+				if nodes, _ := healthAnswer(t, got)["nodes"].([]any); len(nodes) != 1 {
+					t.Errorf("answered %d nodes, want the one live node", len(nodes))
+				}
+				return
+			}
+			if tools.RefusalOf(got) != c.refusal || !strings.Contains(got.Output, c.says) {
+				t.Errorf("answered (%v) %q, want %v saying %q", tools.RefusalOf(got), got.Output,
+					c.refusal, c.says)
+			}
+			var refused *builtin.DecisionRefused
+			if c.refusal == tools.RefusalForbidden &&
+				(!errors.As(got.Cause, &refused) || refused.Decision.Reason != authz.ReasonCeiling) {
+				t.Errorf("the refusal's cause %v carries no ceiling reason", got.Cause)
+			}
+			if c.refusal == tools.RefusalUnavailable && !errors.Is(got.Cause, builtin.ErrUndecidable) {
+				t.Errorf("the refusal's cause %v is not undecidable", got.Cause)
+			}
+			if n := leases.lists.Load(); n != 0 {
+				t.Errorf("a refused call read the presence leases %d times, want none", n)
+			}
+		})
+	}
+}
+
+// A FLEET PAST ONE ANSWER IS PAGED, NEVER REFUSED.
+//
+// fleet_health's answer grows with the fleet — some three hundred bytes a node
+// as it is sent, more for its labels and its alarms — so three hundred nodes,
+// half of them with long labels and well past where the whole fleet in one
+// answer was refused, are read a page at a time by id: twenty-five by default,
+// up to the hundred `limit` may ask for, fewer where the labels would make a
+// page outgrow one answer, every page compact and within ToolAnswerBytes, and
+// every node exactly once across the pages, in id order. `firing` narrows the
+// fleet to the nodes whose own table has an alarm firing, counting the nodes
+// that cannot say (`unevaluated`) rather than listing them; `node` reads one
+// node, a node that is not live is not found, and arguments that cannot be
+// read are refused.
+//
+// Mutation: render a page indented, ignore `cursor`, cap a page by `limit`
+// alone, or let `firing` keep a node with nothing firing or one that cannot
+// say, and a case is red.
+func TestAFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
+	t.Parallel()
+	const nodes = 300
+	backend := coordmem.New()
+	since := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	wide := map[string]any{} // labels long enough that a hundred rows outgrow one answer
+	for i := range 20 {
+		wide[fmt.Sprintf("label-%02d", i)] = strings.Repeat("v", 60)
+	}
+	var all, firing []string
+	unevaluated := 0
+	for i := range nodes {
+		id := fmt.Sprintf("node-%03d", i)
+		all = append(all, id)
+		meta := map[string]any{"roles": []string{"seats"}}
+		if i%2 == 0 {
+			meta["labels"] = wide
+		}
+		var status *coord.NodeStatus
+		switch i % 10 {
+		case 0: // a data node with an alarm firing
+			status = &coord.NodeStatus{AlarmsEvaluated: true,
+				Alarms: []coord.AlarmMark{{Kind: "backup_age", Since: since}}}
+			firing = append(firing, id)
+		case 1: // a data node that looked and found nothing
+			status = &coord.NodeStatus{AlarmsEvaluated: true}
+		case 2: // a node whose heartbeat carried no status
+			unevaluated++
+		default: // a node with no table to evaluate
+			status = &coord.NodeStatus{InFlight: 1}
+			unevaluated++
+		}
+		node(t, backend, id, meta, status)
+	}
+	_, chart := healthChart(t)
+	tool := healthTools(healthFleet(backend, chart), chart)[builtin.FleetHealthTool]
+
+	type page struct {
+		Nodes []struct {
+			ID string `json:"id"`
+		} `json:"nodes"`
+		Next        string `json:"next"`
+		Unevaluated *int   `json:"unevaluated"`
+	}
+	read := func(args map[string]any) page {
+		t.Helper()
+		got := callTool(asAdmin(), t, tool, args)
+		switch {
+		case got.Failed:
+			t.Fatalf("%v was refused: %s", args, got.Output)
+		case len(got.Output) > builtin.ToolAnswerBytes:
+			t.Fatalf("%v answered %d bytes, past one tool answer's %d", args, len(got.Output),
+				builtin.ToolAnswerBytes)
+		case strings.Contains(got.Output, "\n"):
+			t.Fatalf("%v was answered indented; a page goes out compact, as it was measured", args)
+		}
+		var p page
+		if err := json.Unmarshal([]byte(got.Output), &p); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		return p
+	}
+	ids := func(p page) []string {
+		var out []string
+		for _, n := range p.Nodes {
+			out = append(out, n.ID)
+		}
+		return out
+	}
+	walk := func(args map[string]any, most int) []string {
+		t.Helper()
+		var seen []string
+		for pages := 0; ; pages++ {
+			if pages > nodes {
+				t.Fatalf("paging %v never ended", args)
+			}
+			p := read(args)
+			if len(p.Nodes) > most {
+				t.Errorf("a page of %v listed %d nodes, want at most %d", args, len(p.Nodes), most)
+			}
+			seen = append(seen, ids(p)...)
+			if p.Next == "" {
+				return seen
+			}
+			if len(p.Nodes) == 0 || p.Next != p.Nodes[len(p.Nodes)-1].ID {
+				t.Fatalf("next %q is not the last node of its page %v", p.Next, ids(p))
+			}
+			args = maps.Clone(args)
+			args["cursor"] = p.Next
+		}
+	}
+
+	if first := read(nil); len(first.Nodes) != 25 || first.Next != "node-024" || first.Unevaluated != nil {
+		t.Errorf("the first page lists %d nodes and next %q (unevaluated %v), want the default "+
+			"twenty-five and node-024", len(first.Nodes), first.Next, first.Unevaluated)
+	}
+	if got := walk(map[string]any{}, 25); !slices.Equal(got, all) {
+		t.Errorf("paging by twenty-five read %d nodes, want every one of %d once, in id order", len(got), nodes)
+	}
+	if full := read(map[string]any{"limit": 100}); len(full.Nodes) == 0 || len(full.Nodes) >= 100 {
+		t.Errorf("a hundred rows half with long labels listed %d, want them cut whole-row to fit one "+
+			"answer", len(full.Nodes))
+	}
+	if got := walk(map[string]any{"limit": 100}, 100); !slices.Equal(got, all) {
+		t.Errorf("paging by a hundred read %d nodes, want every one of %d once, in id order", len(got), nodes)
+	}
+
+	f := read(map[string]any{"firing": true, "limit": 100})
+	if !slices.Equal(ids(f), firing) || f.Next != "" {
+		t.Errorf("firing listed %v (next %q), want exactly the nodes with an alarm firing: %v",
+			ids(f), f.Next, firing)
+	}
+	if f.Unevaluated == nil || *f.Unevaluated != unevaluated {
+		t.Errorf("firing counts %v nodes that cannot say, want %d", f.Unevaluated, unevaluated)
+	}
+	if got := walk(map[string]any{"firing": true, "limit": 7}, 7); !slices.Equal(got, firing) {
+		t.Errorf("paging the firing nodes by seven read %v, want %v", got, firing)
+	}
+	if one := read(map[string]any{"node": "node-007"}); !slices.Equal(ids(one), []string{"node-007"}) {
+		t.Errorf("node read %v, want node-007 alone", ids(one))
+	}
+
+	for _, c := range []struct {
+		args    map[string]any
+		refusal tools.Refusal
+	}{
+		{map[string]any{"node": "node-999"}, tools.RefusalNotFound},
+		{map[string]any{"node": "node-007", "firing": true}, tools.RefusalInvalid},
+		{map[string]any{"node": "node-007", "cursor": "node-003"}, tools.RefusalInvalid},
+		{map[string]any{"limit": 0}, tools.RefusalInvalid},
+		{map[string]any{"limit": 101}, tools.RefusalInvalid},
+		{map[string]any{"firing": "yes"}, tools.RefusalInvalid},
+	} {
+		if got := callTool(asAdmin(), t, tool, c.args); tools.RefusalOf(got) != c.refusal {
+			t.Errorf("%v answered (%v) %q, want %v", c.args, tools.RefusalOf(got), got.Output, c.refusal)
+		}
+	}
+}
+
+// AN ALARM'S WAKE ASKS FLEET_HEALTH ONLY FOR WHAT IS FIRING.
+//
+// Every turn an alarm starts reads fleet_health, so the wake sends its seat
+// there narrowed to the nodes whose own table has an alarm firing — an answer
+// that stays small however many nodes the fleet has — in an argument the tool
+// declares, so the wake's advice is never one the tool refuses as an argument
+// it does not read.
+//
+// Mutation: rename the tool's `firing`, or drop it from the prompt → red.
+func TestAnAlarmWakeAsksFleetHealthOnlyForWhatIsFiring(t *testing.T) {
+	t.Parallel()
+	body := alarmwake.Prompt{}.Build(notify.Inbound{Metadata: map[string]string{
+		alarmwake.AlarmField: "backup_age", alarmwake.NodeField: "node-a",
+		alarmwake.ChangeField: string(statelog.TransitionFired)}}, nil)
+	if want := "`" + builtin.FleetHealthTool + "` with `firing: true`"; !strings.Contains(body, want) {
+		t.Errorf("the wake's prompt does not say %q:\n%s", want, body)
+	}
+	_, chart := healthChart(t)
+	tool := healthTools(healthFleet(coordmem.New(), chart), chart)[builtin.FleetHealthTool]
+	props, _ := tool.Parameters()["properties"].(map[string]any)
+	if firing, _ := props["firing"].(map[string]any); firing["type"] != "boolean" {
+		t.Errorf("fleet_health declares no boolean `firing`: %v", props["firing"])
 	}
 }

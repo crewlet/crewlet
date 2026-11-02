@@ -385,19 +385,26 @@ func (r tierRoster) Leads(unit string) []string {
 
 func (tierRoster) Within(unit, ancestor string) bool { return unit == ancestor && unit != "" }
 
-// THE CODE WRITES ARE WITHHELD EXACTLY WHERE NO GRANT ADMITS ONE: a seat is
-// left the eighteen at every tier that caps it below write and offered them at
-// full_access — held to code.GrantOf both ways at the highest relation the
-// chart can give a seat, on a project its unit owns and leads and on its own
-// scratch repository. A tier they are withheld at pushes to neither and
-// maintains neither (every lifecycle request a tool sends needs maintain, a
-// scratch repository's create full_access), so its every call of one would be
-// refused; a tier they are offered at does both. The reads are never
-// withheld.
+// THE CODE WRITES ARE WITHHELD EXACTLY WHERE NO GRANT ADMITS ONE: at every
+// tier, a write is offered where the grant the seat holds at the highest
+// relation the chart can give it — on a project its unit owns and leads, and
+// on its own scratch repository — admits it on one of them, and withheld
+// where it admits it on neither, held to code.GrantOf both ways. A write that
+// moves a ref or makes a repository, and a change's lifecycle, needs a grant
+// that pushes and maintains (every lifecycle request a tool sends needs
+// maintain, a scratch repository's create full_access, and a change's owner
+// opened it with a push); a change's conversation needs, of a seat that wrote
+// none of the change, the access rule D21 names — a comment read, an ask for
+// review and a review review, and a dismissal of the findings it raised the
+// review that raised them. So a read_only seat is offered the comment alone,
+// a review seat the conversation's four, and a full_access seat every write.
+// The reads are never withheld.
 //
 // Mutations: withhold nothing → read_only's grant pushes nothing and is
 // offered the writes, red; withhold at every tier → full_access's maintains
-// and is left none, red.
+// and is left none, red; withhold every write below write → the review seat
+// is left code_review_change and read_only the comment, red; offer the ask for
+// review at read → read_only is offered it, red.
 func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 	t.Parallel()
 	agent := code.Principal{Kind: code.PrincipalAgent, Seat: "s"}
@@ -408,24 +415,59 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 			Kind:  code.RepoScratch,
 			Owner: code.Owner{Kind: code.OwnerSeat, Ref: "s"}, Visibility: code.VisibilityCompany},
 	}
+	// RULE D21's access for a change's conversation, of a principal that
+	// wrote none of the change.
+	converse := map[string]code.Access{
+		builtin.CodeCommentOnChangeTool: code.AccessRead,
+		builtin.CodeRequestReviewTool:   code.AccessReview,
+		builtin.CodeReviewChangeTool:    code.AccessReview,
+		builtin.CodeResolveFindingTool:  code.AccessReview,
+	}
+	admits := func(g code.Grant, name string) bool {
+		if need, ok := converse[name]; ok {
+			return g.Access >= need
+		}
+		return g.MayPush() && g.Access >= code.AccessMaintain
+	}
 	// EVERY TIER A ROLE CAN CARRY, an unset one and one no build writes among
 	// them.
 	for _, tier := range append(code.Tiers(), "", "admin") {
 		withheld := builtin.CodeWritesWithheld(tier)
-		if len(withheld) != 0 && !slices.Equal(withheld, builtin.CodeWrites()) {
-			t.Errorf("tier %q withholds %v, want every code write or none", tier, withheld)
-		}
-		for _, repo := range repos {
-			g := code.GrantOf(agent, repo, tierRoster{tier: tier})
-			admits := g.MayPush() && g.Access >= code.AccessMaintain
-			if admits == (len(withheld) != 0) {
-				t.Errorf("tier %q on %s: its grant pushes %v and holds %s, and the writes are withheld: %v",
-					tier, repo.Name, g.MayPush(), g.Access, len(withheld) != 0)
+		for _, name := range withheld {
+			if !slices.Contains(builtin.CodeWrites(), name) {
+				t.Errorf("tier %q withholds %s, which is no code write", tier, name)
 			}
 		}
-		if len(withheld) == 0 && tier != code.TierFullAccess {
-			t.Errorf("tier %q is offered the writes, and only full_access creates a scratch repository", tier)
+		for _, name := range builtin.CodeWrites() {
+			offered := !slices.Contains(withheld, name)
+			admitted := false
+			for _, repo := range repos {
+				admitted = admitted || admits(code.GrantOf(agent, repo, tierRoster{tier: tier}), name)
+			}
+			if offered != admitted {
+				t.Errorf("tier %q is offered %s: %v, and a grant at it admits it: %v", tier, name, offered, admitted)
+			}
 		}
+	}
+	// AND BY NAME, the tiers the conversation's writes are for.
+	for _, c := range []struct {
+		tier    code.Tier
+		offered []string
+	}{
+		{code.TierReadOnly, []string{builtin.CodeCommentOnChangeTool}},
+		{code.TierReview, []string{builtin.CodeRequestReviewTool, builtin.CodeReviewChangeTool,
+			builtin.CodeCommentOnChangeTool, builtin.CodeResolveFindingTool}},
+	} {
+		withheld := builtin.CodeWritesWithheld(c.tier)
+		for _, name := range builtin.CodeWrites() {
+			if slices.Contains(withheld, name) == slices.Contains(c.offered, name) {
+				t.Errorf("a %s seat is offered %s: %v, want %v", c.tier, name, !slices.Contains(withheld, name),
+					slices.Contains(c.offered, name))
+			}
+		}
+	}
+	if withheld := builtin.CodeWritesWithheld(code.TierFullAccess); len(withheld) != 0 {
+		t.Errorf("a full_access seat is left %v, want every code write offered", withheld)
 	}
 }
 
@@ -1555,10 +1597,15 @@ func TestAHoldIsRecordedWhereALedgerCanVouchForIt(t *testing.T) {
 // one resolution of a tool's `repo`, which takes the turn's hold first — and a
 // read of a repository by name is built only there or in a function that has
 // no turn to resolve it for (an administrator's audit read). A second
-// resolution would be a way to a repository the expiry is not told of.
+// resolution would be a way to a repository the expiry is not told of. A FACT
+// a later call builds on — how far the refs a turn read had moved, a search's
+// ref as one repository resolved it — is kept with LoadOrStore, the shape
+// turnctx.Lookups gives a fact, and decides nothing, so it is no Store this
+// walk counts.
 //
-// Mutation: code_status's hot list keeping what it reads in the turn's
-// lookups again → red.
+// Mutations: code_status's hot list keeping what it reads in the turn's
+// lookups again → red; searchHolds keeping its search's ref with a Store
+// again → red.
 func TestOnlyTheSeamResolvesARepositoryForATurn(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(sourcetree.Root(t), "internal", "agent", "builtin")

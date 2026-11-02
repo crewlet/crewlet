@@ -1789,6 +1789,12 @@ func (q ReadQuery) validate() error {
 	case q.DetailOnly && (q.Part != "" || q.Cursor != "" || q.Limit != 0):
 		return fmt.Errorf("%w: detail_only: a change's detail alone pages no part — named by no part, cursor "+
 			"or limit", ErrInvalid)
+	case len(q.FindingIDs) > 0 && (q.Kind != ReadChange || q.Part != PartFindings):
+		return fmt.Errorf("%w: finding_ids: only a change read's findings part is narrowed to the findings it "+
+			"names", ErrInvalid)
+	case len(q.FindingIDs) > 0 && q.Limit != 0:
+		return fmt.Errorf("%w: finding_ids: the findings named are the read's rows, which no limit cuts",
+			ErrInvalid)
 	case q.Commit != "" && q.Kind != ReadCommit:
 		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	}
@@ -1820,6 +1826,9 @@ func (q ReadQuery) validate() error {
 		if q.Change < 1 {
 			return fmt.Errorf("%w: change: %d is no change's number: a repository numbers its changes "+
 				"from 1", ErrInvalid, q.Change)
+		}
+		if err := validateFindingIDs(q.FindingIDs); err != nil {
+			return err
 		}
 	case ReadReviews:
 		if err := q.validateReviews(); err != nil {
@@ -1889,6 +1898,8 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("gates", "only a read answering one repository's detail answers its rules' merge gates")
 	case q.DetailOnly:
 		return refused("detail_only", "only a change read answers a change's detail")
+	case len(q.FindingIDs) > 0:
+		return refused("finding_ids", "only a change read's findings part is narrowed to the findings it names")
 	case q.MinPacks != 0:
 		return refused("min_packs", "only a compaction_due read names a floor of live packs")
 	case q.Change != 0:
@@ -2007,6 +2018,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
+		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
@@ -2058,6 +2070,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
+		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
@@ -2100,6 +2113,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
+		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
@@ -2152,6 +2166,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
+		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
@@ -2211,6 +2226,7 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
+		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 		{"checks_queued", q.ChecksQueued != nil},
@@ -2254,6 +2270,7 @@ func (q ReadQuery) validateMirrorPush() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
+		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"checks_queued", q.ChecksQueued != nil},
 		{"branch_changes", q.BranchChanges != nil},
@@ -2336,6 +2353,7 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
+		{"finding_ids", len(q.FindingIDs) > 0},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"checks_queued", q.ChecksQueued != nil},
 		{"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},

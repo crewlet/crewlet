@@ -1,7 +1,9 @@
 package host_test
 
 import (
+	"encoding/base64"
 	"errors"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -55,13 +58,13 @@ func (c *chainCase) entry(name, head string, method code.MergeMethod, at time.Ti
 }
 
 // build asks the git node to build entries onto main's seed, as one chain read
-// at the log's position now, and fails the case on an error or a refusal.
+// at the log's position now, and fails the case on an error.
 func (c *chainCase) build(entries ...code.ChainEntry) (code.ChainResult, string) {
 	c.T.Helper()
 	b := code.ChainBuild{RepoID: c.repo, ChainID: opNow(), TargetRef: "refs/heads/main", Base: c.head,
 		Seen: c.Rows().Position, Entries: entries}
 	res, err := c.server().BuildChain(c.Ctx, b)
-	if err != nil || res.Refusal != "" || res.Settle == nil {
+	if err != nil || res.Settle == nil {
 		c.T.Fatalf("build the chain: %+v %v", res, err)
 	}
 	c.T.Cleanup(func() { _ = res.Settle(c.Ctx, false) })
@@ -176,6 +179,232 @@ func TestARebuiltChainIsByteIdentical(t *testing.T) {
 	}
 }
 
+// bigLines is lines of random base64, seeded, and line changed (none where it
+// is -1) reading "changed": about 77 bytes a line, which deflate keeps some
+// three quarters of.
+func bigLines(lines, changed int) string {
+	rnd := rand.New(rand.NewPCG(1, 2))
+	raw := make([]byte, 57)
+	var b strings.Builder
+	for i := range lines {
+		for j := range raw {
+			raw[j] = byte(rnd.Uint32())
+		}
+		if i == changed {
+			b.WriteString("changed\n")
+			continue
+		}
+		b.WriteString(base64.StdEncoding.EncodeToString(raw))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// AN ENTRY IS HELD TO A MERGE'S PACK BOUND: main's seed holds a file of 6 MiB
+// of random text; one entry changes its first line and another its last, so
+// the second's merge onto the first's commit writes a new 6 MiB blob, which
+// packs past code.MaxWritePackBytes as a merge_change of it would. That entry
+// alone is skipped too_large, in a merge_change's own words; the entry after
+// it is built onto the first's commit, and the chain's pack holds none of the
+// skipped merge's blob.
+//
+// Mutation: drop the entry's bound (accept every entry under any loose size)
+// → the second entry is built, red; prune nothing of it → the pack carries
+// its blob, red.
+func TestAChainEntryIsHeldToAMergesPackBound(t *testing.T) {
+	t.Parallel()
+	const lines = 6 << 20 / 77
+	c := &chainCase{writeCase: newWriteCase(t, codetest.SoloOptions{},
+		map[string]string{"README.md": "one\n", "big.txt": bigLines(lines, -1)})}
+	top := c.branch("top", map[string]string{"big.txt": bigLines(lines, 0)})
+	bottom := c.branch("bottom", map[string]string{"big.txt": bigLines(lines, lines-1)})
+	small := c.branch("small", map[string]string{"small.md": "small\n"})
+	at := time.Now().Add(-time.Hour)
+	res, _ := c.build(c.entry("top", top, code.MergeMethodMerge, at),
+		c.entry("bottom", bottom, code.MergeMethodMerge, at.Add(time.Minute)),
+		c.entry("small", small, code.MergeMethodMerge, at.Add(2*time.Minute)))
+	if len(res.Commits) != 3 {
+		t.Fatalf("the chain answered %d entries, want 3: %+v", len(res.Commits), res.Commits)
+	}
+	one, two, three := res.Commits[0], res.Commits[1], res.Commits[2]
+	if one.Commit == "" || three.Commit == "" || res.Tip != three.Commit {
+		t.Fatalf("the first and third entries were not built onto each other: %+v %+v, tip %s", one, three,
+			res.Tip)
+	}
+	if two.Skipped != code.WriteTooLarge || two.Commit != "" ||
+		!strings.Contains(two.Detail, "code.MaxWritePackBytes") {
+		t.Fatalf("the entry whose merge writes 6 MiB is %+v, want skipped too_large in a merge_change's words",
+			two)
+	}
+	if res.Pack == nil || res.Pack.Size > 1<<20 {
+		t.Errorf("the chain's pack is %+v, want its two merge commits and their trees, none of the skipped "+
+			"merge's blob", res.Pack)
+	}
+}
+
+// A CHAIN HOLDS ITS OBJECTS' BYTES, AN ENTRY PAST THEM ALONE IS SKIPPED:
+// main's seed holds a file of 256 KiB of random text; three entries change
+// its first, its last and its middle line, so the second's merge and the
+// third's each write a new blob of the file's size, and the first's none.
+// With the chain's objects held to one and a half files, the third would
+// take the chain past them: it is NOT REACHED, and the chain answers the two
+// before it with the very pack those two alone make. Held to half a file,
+// the second and the third each write more than the chain may hold alone:
+// each is skipped too_large, naming the bound, and the first is built.
+//
+// Mutation: drop the chain's running total → the third is built in the
+// first case, red; drop the bound an entry is held to alone → the second is
+// left unreached rather than skipped in the second case, red.
+func TestAChainHoldsItsObjectsBytes(t *testing.T) {
+	t.Parallel()
+	const lines = 256 << 10 / 77
+	const file = lines * 77
+	for _, tc := range []struct {
+		name  string
+		bound int64
+	}{
+		{"the third would take it past them", file * 3 / 2},
+		{"the second and third are past them alone", file / 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := &chainCase{writeCase: newWriteCase(t, codetest.SoloOptions{},
+				map[string]string{"README.md": "one\n", "big.txt": bigLines(lines, -1)})}
+			at := time.Now().Add(-time.Hour)
+			entries := []code.ChainEntry{
+				c.entry("first", c.branch("first", map[string]string{"big.txt": bigLines(lines, 0)}),
+					code.MergeMethodMerge, at),
+				c.entry("last", c.branch("last", map[string]string{"big.txt": bigLines(lines, lines-1)}),
+					code.MergeMethodMerge, at.Add(time.Minute)),
+				c.entry("middle", c.branch("middle", map[string]string{"big.txt": bigLines(lines, lines/2)}),
+					code.MergeMethodMerge, at.Add(2*time.Minute)),
+			}
+			host.SetChainObjects(c.server(), tc.bound)
+			res, _ := c.build(entries...)
+			if tc.bound > file {
+				two, _ := c.build(entries[:2]...)
+				if len(res.Commits) != 2 || res.Commits[0].Commit == "" || res.Commits[1].Commit == "" ||
+					res.Tip != two.Tip || res.Pack == nil || two.Pack == nil ||
+					res.Pack.GitChecksum != two.Pack.GitChecksum {
+					t.Fatalf("the chain answered %+v tip %s pack %+v, want the two entries before the one past "+
+						"its bytes built, as the two alone are: tip %s pack %+v", res.Commits, res.Tip, res.Pack,
+						two.Tip, two.Pack)
+				}
+				return
+			}
+			if len(res.Commits) != 3 || res.Commits[0].Commit == "" || res.Tip != res.Commits[0].Commit {
+				t.Fatalf("the chain answered %+v tip %s, want its first entry built and the others answered",
+					res.Commits, res.Tip)
+			}
+			for _, skipped := range res.Commits[1:] {
+				if skipped.Skipped != code.WriteTooLarge || skipped.Commit != "" ||
+					!strings.Contains(skipped.Detail, "code.MaxChainObjectBytes") {
+					t.Errorf("an entry whose merge writes a whole file is %+v, want skipped too_large naming "+
+						"code.MaxChainObjectBytes", skipped)
+				}
+			}
+		})
+	}
+}
+
+// A CHAIN OUT OF TIME ANSWERS ITS BUILT PREFIX: the chain's merges share one
+// merge's budget after its first entry, which has a merge's whole budget of
+// its own. Its git charged 20 s a merge-tree, the first entry is built, the
+// second is cut by what the first left — short of a merge's whole budget, so
+// NOT REACHED rather than too_large — and the third is never started: the
+// chain answers the first alone, with the very pack the first alone makes, so
+// the cut merge left nothing. And the share is spent by the time since the
+// merges began as much as by the git charged for them: a chain whose first
+// merge-tree waited three seconds, charged nothing for it, stops there too.
+//
+// Mutation: answer an error where the chain's time runs out → no prefix, red;
+// skip the cut entry too_large → a second entry answered, red; charge the
+// share only its git's run time → the waited chain builds all three, red;
+// prune nothing of the cut entry → its tree is packed, the packs differ, red.
+func TestAChainOutOfTimeAnswersItsBuiltPrefix(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		slow func(t *testing.T, s *host.Server)
+	}{
+		{"its git ran", func(_ *testing.T, s *host.Server) { host.SlowGit(s, 20*time.Second, "merge-tree") }},
+		{"its git waited", func(t *testing.T, s *host.Server) {
+			host.SetChainMerges(s, 2*time.Second)
+			reached, release := host.HoldGit(s, "merge-tree")
+			t.Cleanup(release)
+			go func() {
+				<-reached
+				time.Sleep(3 * time.Second)
+				release()
+			}()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := newChainCase(t)
+			heads := []string{c.branch("a", map[string]string{"a.md": "a\n"}),
+				c.branch("b", map[string]string{"b.md": "b\n"}), c.branch("c", map[string]string{"c.md": "c\n"})}
+			at := time.Now().Add(-time.Hour)
+			var entries []code.ChainEntry
+			for i, name := range []string{"a", "b", "c"} {
+				entries = append(entries, c.entry(name, heads[i], code.MergeMethodMerge,
+					at.Add(time.Duration(i)*time.Minute)))
+			}
+			alone, _ := c.build(entries[0])
+			tc.slow(t, c.server())
+			res, _ := c.build(entries...)
+			if len(res.Commits) != 1 || res.Commits[0].Commit == "" || res.Commits[0].EntryID != entries[0].EntryID {
+				t.Fatalf("the chain answered %+v, want its first entry built and the rest not reached",
+					res.Commits)
+			}
+			if res.Tip != alone.Tip || res.Pack == nil || alone.Pack == nil ||
+				res.Pack.GitChecksum != alone.Pack.GitChecksum {
+				t.Errorf("the chain's prefix is tip %s pack %+v, want the first entry's alone: tip %s pack %+v",
+					res.Tip, res.Pack, alone.Tip, alone.Pack)
+			}
+		})
+	}
+}
+
+// AN OBJECT GIT'S CHECK REFUSES SKIPS ITS ENTRY ALONE: a chain of three whose
+// pack `index-pack --strict` refuses for an object the second entry's merge
+// wrote skips that entry rejected_object, in git's own words, leaves the
+// third — merged onto the second's commit — not reached, and packs again: the
+// chain answers the first entry built and the second skipped, with the very
+// pack the first alone makes.
+//
+// Mutation: refuse the chain whole on the check's refusal → an error, red;
+// keep the entries after the refused one → three answered, red; prune nothing
+// → the second's and third's objects are packed, the packs differ, red.
+func TestAChainSkipsTheEntryWhoseObjectGitsCheckRefuses(t *testing.T) {
+	t.Parallel()
+	c := newChainCase(t)
+	heads := []string{c.branch("a", map[string]string{"a.md": "a\n"}),
+		c.branch("b", map[string]string{"b.md": "b\n"}), c.branch("c", map[string]string{"c.md": "c\n"})}
+	at := time.Now().Add(-time.Hour)
+	var entries []code.ChainEntry
+	for i, name := range []string{"a", "b", "c"} {
+		entries = append(entries, c.entry(name, heads[i], code.MergeMethodMerge, at.Add(time.Duration(i)*time.Minute)))
+	}
+	whole, _ := c.build(entries...)
+	alone, _ := c.build(entries[0])
+	if len(whole.Commits) != 3 || whole.Commits[1].Commit == "" {
+		t.Fatalf("the chain built %+v, want three commits", whole.Commits)
+	}
+	host.RefuseObjectOnce(c.server(), whole.Commits[1].Commit)
+	res, _ := c.build(entries...)
+	if len(res.Commits) != 2 || res.Commits[0].Commit != alone.Tip ||
+		res.Commits[1].Skipped != code.WriteRejectedObject || res.Commits[1].Commit != "" ||
+		!strings.Contains(res.Commits[1].Detail, whole.Commits[1].Commit) {
+		t.Fatalf("the chain answered %+v, want the first entry built and the second skipped rejected_object "+
+			"naming %s, the third not reached", res.Commits, whole.Commits[1].Commit)
+	}
+	if res.Tip != alone.Tip || res.Pack == nil || alone.Pack == nil || res.Pack.GitChecksum != alone.Pack.GitChecksum {
+		t.Errorf("the chain is tip %s pack %+v, want the first entry's alone: tip %s pack %+v", res.Tip, res.Pack,
+			alone.Tip, alone.Pack)
+	}
+}
+
 // A CHAIN WRITES NO CACHE: what a chain builds is in its scratch alone — its
 // tip in no incarnation of the repository the cache holds — and its pack is
 // stored as one bundle; settled unapplied, its scratch is gone and the cache
@@ -266,7 +495,7 @@ func TestNoChainIsBuiltForAPullMirror(t *testing.T) {
 		b := code.ChainBuild{RepoID: c.repo, ChainID: opNow(), TargetRef: "refs/heads/main", Base: c.head,
 			Seen: c.Rows().Position, Entries: []code.ChainEntry{work}}
 		res, err := c.server().BuildChain(c.Ctx, b)
-		if err != nil || res.Status != want || res.Detail != words || res.Refusal != "" || res.Pack != nil ||
+		if err != nil || res.Status != want || res.Detail != words || res.Pack != nil ||
 			len(res.Commits) != 0 || res.Settle == nil {
 			t.Fatalf("a chain on a repository %s answered %+v %v, want refused %s saying %q, nothing built",
 				state, res, err, want, words)

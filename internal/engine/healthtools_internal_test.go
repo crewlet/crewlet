@@ -71,7 +71,8 @@ func TestASeatsModelIsShownTheHealthToolsOnlyWhereItsRoleIsGranted(t *testing.T)
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, builtin.Deps{
 		Authorize: builtin.Decide(orgchart.Of(c.Org)),
-		Health: builtin.HealthDeps{Leases: coordmem.New(), Self: "node-a", Status: idleGitNodes{},
+		Health: builtin.HealthDeps{Leases: coordmem.New(), Self: "node-a", Requesters: turnRequesters{engine: e},
+			Chart: orgchart.Of(c.Org), Status: idleGitNodes{},
 			Code: builtin.CodeDeps{Code: unreadCode{}, Requesters: turnRequesters{engine: e},
 				Chart: orgchart.Of(c.Org)}},
 	}); err != nil {
@@ -336,15 +337,16 @@ func TestACodeStatusAskWaitsForEveryGitNodeTheRosterNames(t *testing.T) {
 
 // THE HEALTH TOOLS ARE OFFERED WHERE THEIR READS ARE: fleet_health wherever
 // the node reads the fleet's presence leases, which every node of a running
-// fleet does, and code_status on the code tools' own terms — a node serving
-// the code host holds it and one of a company hosting no code does not, whose
-// fleet has no git node to ask. Through the running wiring: the seat's
-// registry is equipped at the apply, and the operator's halves read the same
-// deps. No engine, or one that runs nothing, offers neither.
+// fleet does, with the requester ceiling's halves beside them, and code_status
+// on the code tools' own terms — a node serving the code host holds it and one
+// of a company hosting no code does not, whose fleet has no git node to ask.
+// Through the running wiring: the seat's registry is equipped at the apply,
+// and the operator's halves read the same deps. No engine, or one that runs
+// nothing, offers neither.
 //
 // Mutation: HealthToolDeps handing Status where the code tools are not
-// offered, or a code half without the requester ceiling's halves, or equip
-// dropping deps.Health, and a case goes red.
+// offered, the leases or a code half without the requester ceiling's halves,
+// or equip dropping deps.Health, and a case goes red.
 func TestTheHealthToolsAreOfferedWhereTheirReadsAre(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -360,6 +362,13 @@ func TestTheHealthToolsAreOfferedWhereTheirReadsAre(t *testing.T) {
 			deps := HealthToolDeps(e)
 			if deps.Leases == nil || deps.Self != e.id {
 				t.Fatalf("a running node's health deps read no presence leases: %+v", deps)
+			}
+			// fleet_health READS FOR WHOEVER WOKE A TURN only where they may
+			// act in the company: the requester ceiling's halves ride beside
+			// the leases wherever it is offered.
+			if deps.Requesters == nil || deps.Chart == nil {
+				t.Errorf("fleet_health's deps wire no requester ceiling: Requesters %v, Chart %v",
+					deps.Requesters, deps.Chart)
 			}
 			if got := deps.Status != nil && deps.Code.Code != nil; got != c.codeStatus {
 				t.Errorf("code_status's deps present = %v, want %v", got, c.codeStatus)

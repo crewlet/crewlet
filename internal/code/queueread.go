@@ -311,6 +311,7 @@ func (q ReadQuery) validateQueueDue() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"check_box", q.CheckBox != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates}, {"detail_only", q.DetailOnly},
+		{"finding_ids", len(q.FindingIDs) > 0},
 		{"expunge_tips", q.ExpungeTips != nil},
 		{"scanned_before", !q.ScannedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},

@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // THE CHECK TOOLS: what a check of a commit said, and a check run again or
@@ -309,6 +310,12 @@ func (c checkCursor) String() string {
 // call's absent one.
 func (c checkCursor) pinned() bool { return c.key.Attempt > 0 }
 
+// parseCheckCursor is the cursor a call sent back as [checkCursor.String]
+// wrote it, and false for one no answer gave; an empty one is a first call's.
+// Its attempt and its offset are read BY THE ONE INTEGER RULE (argval.Whole),
+// the rule the number in `change`'s web!42 is read by: the cursor is an
+// argument a model sends back, and a number in it read by a parse of this
+// file's own would be one value read two ways in one package (ADR-0059).
 func parseCheckCursor(s string) (checkCursor, bool) {
 	if s == "" {
 		return checkCursor{}, true
@@ -317,15 +324,15 @@ func parseCheckCursor(s string) (checkCursor, bool) {
 	if len(parts) != 5 || (parts[0] != "log" && parts[0] != "failures") {
 		return checkCursor{}, false
 	}
-	attempt, aerr := strconv.Atoi(parts[1])
-	offset, oerr := strconv.ParseInt(parts[2], 10, 64)
+	attempt, attemptOK := argval.Whole(parts[1])
+	offset, offsetOK := argval.Whole(parts[2])
 	oid, target := parts[3], parts[4]
-	if aerr != nil || attempt < 1 || attempt > code.MaxCheckAttempts || oerr != nil || offset < 0 ||
+	if !attemptOK || attempt < 1 || attempt > code.MaxCheckAttempts || !offsetOK || offset < 0 ||
 		!gitref.ValidOID(oid) || oid == code.ZeroOID || !code.ValidRef(target) ||
 		!strings.HasPrefix(target, branchRoot) {
 		return checkCursor{}, false
 	}
-	return checkCursor{log: parts[0] == "log", offset: offset,
+	return checkCursor{log: parts[0] == "log", offset: int64(offset),
 		key: code.CheckKey{OID: oid, Target: target, Attempt: attempt}}, true
 }
 
@@ -386,8 +393,11 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	case !ok:
 		return failed(tool + ": `cursor` is one an answer gave, as `next` or `log.cursor`."), nil
 	case cursor.log && t.deps.Logs == nil:
-		return refused(tools.RefusalUnavailable, tool+": this node reads no check's log; its failures, summary "+
-			"and tail are answered without a cursor."), nil
+		// WAITLESS: a node wired with no object store ([CodeDeps.Logs]) reads
+		// no log however long it is asked, so a wait would only send the
+		// caller back to the same refusal.
+		return refusedBy(tools.RefusalUnavailable, waitless(), tool+": this node reads no check's log; its "+
+			"failures, summary and tail are answered without a cursor."), nil
 	case cursor.pinned() && attempt != 0 && attempt != cursor.key.Attempt:
 		return failed(fmt.Sprintf("%s: `cursor` reads attempt %d, and `attempt` names %d; send the cursor with "+
 			"the attempt it came from, or leave `attempt` out.", tool, cursor.key.Attempt, attempt)), nil
@@ -683,7 +693,7 @@ type rerunAsk struct {
 
 func rerunAsks(tool string, args map[string]any) ([]rerunAsk, bool, *tools.Result) {
 	all := argBool(args, "all_failed")
-	raw, _ := args["checks"].([]any)
+	raw, _ := argval.List(args["checks"])
 	refuse := func(why string) ([]rerunAsk, bool, *tools.Result) {
 		r := failed(tool + ": " + why)
 		return nil, false, &r
@@ -947,7 +957,7 @@ func (t *codeReportCheck) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Summary: argString(args, "summary"), Tail: argString(args, "tail"),
 		FailuresOmitted: argInt(args, "failures_omitted", 0), DurationMs: int64(argInt(args, "duration_ms", 0)),
 		URL: strings.TrimSpace(argString(args, "url"))}
-	raw, _ := args["failures"].([]any)
+	raw, _ := argval.List(args["failures"])
 	for _, item := range raw {
 		m, _ := item.(map[string]any)
 		report.Failures = append(report.Failures, code.CheckFailure{Path: argString(m, "path"),

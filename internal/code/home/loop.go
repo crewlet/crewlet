@@ -32,6 +32,11 @@ import (
 // git node lists every repository each Backstop — G × 215 ms of its data
 // nodes' reads a minute for a fleet of G git nodes, about 1 % of one core for
 // three.
+//
+// A TURN HOLDS A WHOLE CHAIN: the queue builds its train in one turn, and a
+// chain's git is given code.ChainBuildDeadline at the most, which leaves a
+// third of a turn for its reads, the bundle's store and the record
+// (TestATurnHoldsAWholeChain holds the two together).
 const Backstop = time.Minute
 
 // Concurrency is how many repositories one home works at once: TWO. A turn

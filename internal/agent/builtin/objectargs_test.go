@@ -77,6 +77,10 @@ func TestEveryWriteNamesTheObjectItWrites(t *testing.T) {
 		builtin.CodeCreateRepoTool: "makes a new repository, named by the `name` it " +
 			"will be listed under — on the other domains' tools a name is text, not " +
 			"an object, so it is not declared",
+		builtin.CodeImportRepoTool: "makes a new repository filled from another " +
+			"host's, a create as code_create_repo's is, named by the `name` it will " +
+			"be listed under — its `url` and `credential` are the source's, no " +
+			"object of the company's records",
 	}
 	catalogue := operatorArguments(t)
 	objects := builtin.ObjectArgs()

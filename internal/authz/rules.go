@@ -446,6 +446,16 @@ const (
 	// ([SeatGrantHealth], `role.health_tools`); see [rule.seatGrant].
 	ActionFleetHealth Action = "fleet_health"
 	ActionCodeStatus  Action = "code_status"
+	// ActionFleetHealthRead is the deployment's health read FOR whoever woke a
+	// granted seat's turn: the requester ceiling's question of `fleet_health`
+	// ([DecideWithin]), which the tool asks of that somebody before it reads
+	// anything, and never a route or a tool of its own — DOTTED, because no
+	// tool is named for it. Not [ActionFleetHealth] again: a requester holds
+	// no admin (a person is composed as a colleague, never an administrator)
+	// and a colleague seat no grant of the asker's, so the tool's own row
+	// would refuse every turn anybody woke. What the seat reads is its grant's;
+	// this decides only for whom it may read it.
+	ActionFleetHealthRead Action = "fleet.health.read"
 
 	// --- one seat's own trail, read by somebody else ----------------- //
 	//
@@ -1547,6 +1557,12 @@ var rules = map[Action]rule{
 		assist: AssistRead},
 	ActionCodeStatus: {class: ClassAdmin, seatGrant: SeatGrantHealth, recency: iam.RecencyAny,
 		assist: AssistRead},
+	// AND READ FOR ANYBODY OF THE COMPANY WHO MAY ACT: a granted seat tells a
+	// colleague or a person what the deployment's health is, and tells nobody
+	// the company does not know, nor anybody who may not act in it now
+	// ([ActionFleetHealthRead]). Everybody's, as the overview is: the seat's
+	// grant decides what is read, and this row only whom it is read for.
+	ActionFleetHealthRead: {class: ClassEverybody, recency: iam.RecencyAny, assist: AssistRead},
 	// A MODEL'S CHECKS AND ITS RETRY are admin's with no step-up: neither
 	// writes the company or a credential, and the person reaching for them
 	// is the one watching a model refuse right now. The assistant proposes

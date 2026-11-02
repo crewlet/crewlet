@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -39,6 +40,66 @@ func suggestedChange() *changeFixture {
 		finding(dismissedOne, "a.txt", aNew, code.SideNew, 5, 5, code.FindingDismissed, &retry),
 	}
 	return f
+}
+
+// AN APPLY READS ONLY THE FINDINGS IT NAMES: whatever the change's review
+// history holds, the findings an apply names are ONE read of the change's
+// findings narrowed to them — never a walk of the part, on whose last page a
+// time-ordered history puts the newest review's findings, the ones an apply
+// names — each id asked once, and one no finding could carry asked not at all
+// and refused as one the change does not hold.
+//
+// Mutations: page the findings from no cursor, unnarrowed → three reads, red;
+// ask a malformed id → the read names it, red; ask an id named twice twice →
+// red.
+func TestAnApplyReadsOnlyTheFindingsItNames(t *testing.T) {
+	t.Parallel()
+	f := suggestedChange()
+	// A HISTORY OF EARLIER REVIEWS, two pages' worth before the findings named.
+	var history []code.FindingRow
+	for i := range 2 * code.MaxFindingsPerPage {
+		history = append(history, code.FindingRow{ID: fmt.Sprintf("0192f6c1-6a7e-7c1b-9d4e-%012x", i),
+			ReviewID: reviewedID, Raiser: "agent-ceo", RaiserKind: code.PartyAgent, Revision: 1, Path: "a.txt",
+			Side: code.SideNew, LineStart: 1, LineEnd: 1, Title: "t", State: code.FindingSuperseded})
+	}
+	f.findings = append(history, f.findings...)
+	host := newChangeHost(f)
+	writer := &codeWrites{}
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(host, writer)), writerTurn(t),
+		builtin.CodeApplySuggestionsTool, applyArgs(suggestedA, suggestedB))
+	if writes, _ := writer.asked(); got.Failed || len(writes) != 1 || len(writes[0].Suggestions) != 2 {
+		t.Fatalf("the apply answered %q, sending %d writes", got.Output, len(writes))
+	}
+	findingReads := func(host *codeHost) []code.ReadQuery {
+		reads, _, _ := host.asked()
+		return slices.DeleteFunc(reads, func(q code.ReadQuery) bool { return q.Part != code.PartFindings })
+	}
+	if parts := findingReads(host); len(parts) != 1 ||
+		!slices.Equal(parts[0].FindingIDs, []string{suggestedA, suggestedB}) || parts[0].Limit != 0 ||
+		parts[0].Cursor != "" {
+		t.Errorf("the apply read the findings %+v, want ONE read of the two it names", parts)
+	}
+	twice := newChangeHost(suggestedChange())
+	callWrite(everyGrant(), t, codeRegistry(t, writeDeps(twice, &codeWrites{})), writerTurn(t),
+		builtin.CodeApplySuggestionsTool, applyArgs(suggestedA, suggestedA))
+	if parts := findingReads(twice); len(parts) != 1 || !slices.Equal(parts[0].FindingIDs, []string{suggestedA}) {
+		t.Errorf("an apply naming a finding twice read %+v, want it asked once", parts)
+	}
+
+	malformed := &codeWrites{}
+	quiet := newChangeHost(suggestedChange())
+	got = callWrite(everyGrant(), t, codeRegistry(t, writeDeps(quiet, malformed)), writerTurn(t),
+		builtin.CodeApplySuggestionsTool, applyArgs(suggestedA, "finding-1"))
+	for _, q := range findingReads(quiet) {
+		if slices.Contains(q.FindingIDs, "finding-1") {
+			t.Errorf("the apply asked the read for %q, which no finding is", "finding-1")
+		}
+	}
+	if writes, _ := malformed.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalNotFound ||
+		len(writes) != 0 {
+		t.Errorf("an apply naming no finding's id answered %q as %s, sending %d writes; want not_found and none",
+			got.Output, tools.RefusalOf(got), len(writes))
+	}
 }
 
 // applyArgs is an apply of findings to site!7 at its head.

@@ -388,7 +388,7 @@ func (t *markInbox) Description() string {
 		"the newest tracker-log position you read (a notice's own `position`), " +
 		"so the mark waits for the notices you were shown rather than being " +
 		"refused by a node not yet at them. Your code notices are marked with " +
-		"code_mark_inbox: each domain keeps its own marks."
+		CodeMarkInboxTool + ": each domain keeps its own marks."
 }
 
 func (t *markInbox) Parameters() map[string]any {

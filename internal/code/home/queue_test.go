@@ -282,10 +282,14 @@ func (r *queueRows) Change(context.Context, code.ChangeProposal) (code.ChangeRes
 
 // queueChains is a git node's chain builds: each entry's merge a commit
 // derived from the commit before it, an entry in conflicts skipped as a
-// conflict on the path it names, and every build and every settle counted.
+// conflict on the path it names, one in rejected skipped rejected_object, the
+// chain answering its first reach entries alone where reach is set — the
+// rest not reached — and every build and every settle counted.
 type queueChains struct {
 	mu        sync.Mutex
 	conflicts map[string]string
+	rejected  map[string]bool
+	reach     int
 	builds    []code.ChainBuild
 	settled   []bool
 	// epoch is the drop epoch of the copy every chain is built from.
@@ -300,7 +304,15 @@ func (c *queueChains) BuildChain(_ context.Context, b code.ChainBuild) (code.Cha
 	defer c.mu.Unlock()
 	c.builds = append(c.builds, b)
 	res := code.ChainResult{Tip: b.Base, DropEpoch: c.epoch}
-	for _, e := range b.Entries {
+	for i, e := range b.Entries {
+		if c.reach > 0 && i == c.reach {
+			break
+		}
+		if c.rejected[e.EntryID] {
+			res.Commits = append(res.Commits, code.ChainCommit{EntryID: e.EntryID,
+				Skipped: code.WriteRejectedObject, Detail: "an object this change makes is one git's check refuses"})
+			continue
+		}
 		if path, ok := c.conflicts[e.EntryID]; ok {
 			res.Commits = append(res.Commits, code.ChainCommit{EntryID: e.EntryID, Skipped: code.WriteConflict,
 				Conflicts: []code.Conflict{{Path: path}}})
@@ -655,6 +667,40 @@ func TestTheQueueStatesTheDropEpochItBuiltAndReadAt(t *testing.T) {
 	if land.Land == nil || land.DropEpoch != 2 || rows.tip != train[0].TipOID {
 		t.Fatalf("the landing recorded %+v with main at %s, want the train landed at the epoch its "+
 			"snapshot read, 2, and main on its tip", land, rows.tip)
+	}
+}
+
+// A CHAIN'S UNBUILDABLE ENTRY IS EJECTED, ITS UNREACHED ONES WAIT: three
+// changes at depth 3 and batch 1, built by a chain that reached only two of
+// them — the second skipped rejected_object — eject the second `conflict`,
+// with no paths, as an entry no train can build; record a train of the first
+// alone; and leave the third waiting in no train, neither ejected nor tested,
+// for the train after this one.
+//
+// Mutation: leave a rejected_object entry unejected → no eject, red; eject
+// the entries a chain did not reach → the third is gone, red.
+func TestTheQueueEjectsAnUnbuildableEntryAndKeepsTheUnreached(t *testing.T) {
+	t.Parallel()
+	rows := newQueueRows(oid("9"), 3, 1)
+	entries := rows.enqueue(t, 3)
+	chains := &queueChains{rejected: map[string]bool{entries[1].EntryID: true}, reach: 2}
+	l := queueLoop(t, rows, chains, &queueTasks{})
+
+	turn(t, l, rows)
+	records, _ := rows.asked()
+	if len(records) != 2 || records[0].Eject == nil || len(records[0].Eject.Entries) != 1 ||
+		records[0].Eject.Entries[0].EntryID != entries[1].EntryID ||
+		records[0].Eject.Entries[0].Reason != code.EjectConflict || len(records[0].Eject.Entries[0].Paths) != 0 ||
+		records[1].Candidate == nil {
+		t.Fatalf("the build recorded %+v, want the second entry ejected conflict, then its train", records)
+	}
+	train, live := rows.snapshot()
+	if len(train) != 1 || len(train[0].Commits) != 1 || train[0].Commits[0].EntryID != entries[0].EntryID {
+		t.Fatalf("the train is %+v, want the first entry alone", train)
+	}
+	third := slices.IndexFunc(live, func(e code.QueueWorkEntry) bool { return e.EntryID == entries[2].EntryID })
+	if third < 0 || live[third].State != code.QueueWaiting || live[third].Train != "" {
+		t.Fatalf("the entries are %+v, want the third the chain did not reach still waiting in no train", live)
 	}
 }
 

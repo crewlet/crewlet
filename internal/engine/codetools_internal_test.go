@@ -15,7 +15,8 @@ import (
 // wiring: a company whose node's runtime serves its repositories holds the
 // twelve reads and code_search, over the engine's own search, in every seat's
 // registry — equipped at the apply, after the runtime it
-// starts — and the operator's halves read the same deps; a company that hosts
+// starts — and the operator's halves read the same deps, a change write's
+// mentions among them, resolved against the company's chart; a company that hosts
 // no code is given none, whose tools would answer every call that no
 // repository is served. The terms are [OperatorCode]'s, the code host's REST
 // reads' own, and a node with no runtime serves none.
@@ -24,7 +25,9 @@ import (
 // router) → the company hosting none holds the tools, red; equip dropping
 // deps.Code, or CodeToolDeps leaving out who a turn is acting for or the chart
 // that decides them (the requester ceiling) → the company hosting code holds
-// none, red; CodeToolDeps leaving out the search → no code_search, red.
+// none, red; CodeToolDeps leaving out the search → no code_search, red;
+// CodeToolDeps leaving out the mentions' resolver → a change write's mentions
+// resolve to nobody, red.
 func TestTheCodeToolsAreOfferedWhereTheCodeHostIsServed(t *testing.T) {
 	t.Parallel()
 	t.Run("hosting code", func(t *testing.T) {
@@ -39,6 +42,12 @@ func TestTheCodeToolsAreOfferedWhereTheCodeHostIsServed(t *testing.T) {
 			if _, ok := e.Company().Tools.Lookup(name); !ok {
 				t.Errorf("a seat of a company hosting code holds no %s", name)
 			}
+		}
+		// AND WHOM A CHANGE'S TEXT MENTIONS, resolved against the chart: the
+		// seat the company holds, and not a handle it does not.
+		if deps := CodeToolDeps(e); deps.Mentions == nil ||
+			!slices.Equal(deps.Mentions.Mentions("@ceo, and @nobody"), []string{"ceo"}) {
+			t.Error("a change write's mentions resolve to no seat of the company")
 		}
 	})
 	t.Run("hosting none", func(t *testing.T) {
@@ -103,23 +112,27 @@ roles:
 // writes needs one, and a hold's recorder with it.
 type unwrittenCode struct{ builtin.CodeWriter }
 
-// A SEAT'S MODEL IS SHOWN THE CODE WRITES ONLY WHERE ITS TIER WRITES. Every
-// seat's registry holds every code write, as it holds every builtin; the
-// runner the epoch builds for a turn leaves them off a seat whose code tier
-// caps it below write — no repository's grant would let one of its calls
-// through — and so does the executor's guidance on changing code, which is
-// gated on holding them; and a human-only write (code_report_check, a person's
-// own CI's report, code_purge_unreachable, a person's purge, and
-// code_import_repo, a person's import) is shown to
-// no seat at any tier, since the authority table refuses every seat it. Every seat is shown the reads. Read off what the executor sends its
-// model, because the decision is the epoch's and the leaving out is the
-// runner's, and either half alone could drop it.
+// A SEAT'S MODEL IS SHOWN THE CODE WRITES ONLY WHERE ITS TIER REACHES THEM.
+// Every seat's registry holds every code write, as it holds every builtin;
+// the runner the epoch builds for a turn leaves off a seat whose code tier
+// caps it below write every write no repository's grant would let one of its
+// calls through — all but a change's conversation: a read_only seat comments,
+// and a review seat also asks for reviews, reviews and dismisses its own
+// findings — and so does the executor's guidance on changing code, which is
+// gated on holding the commit and the repository writes; and a human-only
+// write (code_report_check, a person's own CI's report,
+// code_purge_unreachable, a person's purge, and code_import_repo, a person's
+// import) is shown to no seat at any tier, since the authority table refuses
+// every seat it. Every seat is shown the reads. Read off what the executor
+// sends its model, because the decision is the epoch's and the leaving out is
+// the runner's, and either half alone could drop it.
 //
 // Mutation: withheldFrom leaving the code writes to the authority table alone
 // → the read_only and review seats are shown every write and told how to
 // commit, red; withholding them at every tier → the full_access seat is shown
-// none, red.
-func TestASeatsModelIsShownTheCodeWritesOnlyWhereItsTierWrites(t *testing.T) {
+// none, red; withholding every write below write → the review seat is shown no
+// review, red.
+func TestASeatsModelIsShownTheCodeWritesOnlyWhereItsTierReachesThem(t *testing.T) {
 	t.Parallel()
 	c, err := NewCompany(parseCompany(t, codeTiersCompany))
 	if err != nil {
@@ -141,10 +154,15 @@ func TestASeatsModelIsShownTheCodeWritesOnlyWhereItsTierWrites(t *testing.T) {
 		}
 	}
 	const guidance = "## Changing the company's code"
+	// WHAT EACH TIER BELOW WRITE IS SHOWN of a change's conversation.
+	reads := []string{builtin.CodeCommentOnChangeTool}
+	reviews := []string{builtin.CodeRequestReviewTool, builtin.CodeReviewChangeTool,
+		builtin.CodeCommentOnChangeTool, builtin.CodeResolveFindingTool}
 	for _, seat := range []struct {
-		handle string
-		writes bool
-	}{{"reader", false}, {"reviewer", false}, {"builder", true}} {
+		handle   string
+		writes   bool
+		converse []string
+	}{{"reader", false, reads}, {"reviewer", false, reviews}, {"builder", true, nil}} {
 		shown, prompt := shownExecutor(t, c, seat.handle, reg)
 		for _, name := range builtin.CodeToolNames() {
 			if !slices.Contains(shown, name) {
@@ -152,7 +170,7 @@ func TestASeatsModelIsShownTheCodeWritesOnlyWhereItsTierWrites(t *testing.T) {
 			}
 		}
 		for _, name := range builtin.CodeWrites() {
-			want := seat.writes
+			want := seat.writes || slices.Contains(seat.converse, name)
 			if human, _ := authz.HumanOnlyOf(authz.Action(name)); human {
 				want = false
 			}

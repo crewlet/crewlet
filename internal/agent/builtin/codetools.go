@@ -217,6 +217,16 @@ type CodeDeps struct {
 	// says it was not closed and why.
 	Closer func(actor Actor) WorkWriter
 
+	// Mentions resolves the handles a change's text names — an open's or an
+	// edit's title and body, a review's summary and findings, a comment's
+	// body — to seats, at the write ([CodeDeps.mentionsOf]), so a mention
+	// wakes the colleague its writer meant: THE ASKER'S, as the change and
+	// conversation payloads take them, which the deciding node holds to its
+	// own chart. The same resolver the work tools take, read per call. Nil
+	// resolves nothing: the write still lands, and wakes only those it
+	// concerns by role — its owner, its authors, its reviewers.
+	Mentions MentionResolver
+
 	// Holder records a turn's hold on a scratch repository it names
 	// ([HoldRepo]), set wherever the tools are offered to seats and
 	// independently of Writer, because a seat that only reads still holds
@@ -454,9 +464,10 @@ func (d CodeDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string) (
 // repository such a call reads is read for its requester as a code tool's is;
 // what the tool reads beyond the repositories is its own row's, which the
 // call's gate has already decided for the seat, and deciding that row again
-// for the requester would make a ceiling of the tool's family that the family
-// does not keep (fleet_health, its sibling, reads no repository and keeps
-// none).
+// for the requester would refuse every turn anybody woke: a requester holds no
+// admin and a colleague seat no grant of the asker's. Its sibling fleet_health
+// reads no repository and decides the requester likewise on a row everybody
+// of the company who may act holds ([fleetHealth.forRequester]).
 func (d CodeDeps) callerOn(ctx context.Context, turn *turnctx.Turn, tool string,
 	action authz.Action) (codeCaller, *tools.Result) {
 

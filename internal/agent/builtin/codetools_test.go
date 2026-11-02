@@ -1821,10 +1821,11 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // codeCatalogueBudget is the most bytes the thirty-nine code tools'
 // definitions may add to the tool list a run's session serves its CLI
 // ([listedBytes]): what a seat at full_access carries, the one tier offered
-// the writes (CodeWritesWithheld), but for code_report_check,
+// every write (CodeWritesWithheld), but for code_report_check,
 // code_purge_unreachable and code_import_repo, each a person's alone, and
-// what the operator catalogue serves; every other seat carries the reads alone
-// ([codeReadsCatalogueBudget]).
+// what the operator catalogue serves; every other seat carries the reads and
+// what its tier reaches of a change's conversation
+// ([codeReviewCatalogueBudget], [codeReadsCatalogueBudget]).
 //
 // THE FIGURES BELOW WERE MEASURED ON THE CATALOGUE A CLI'S PROMPT ONCE CARRIED
 // (indented, HTML-escaped, in the user text), which is larger than the compact
@@ -1910,8 +1911,8 @@ const codeCatalogueBudget = 57_500
 // codeReadsCatalogueBudget is the most bytes the thirteen code reads'
 // definitions may add to the tool list a run's session serves its CLI: what
 // every seat of a company hosting code carries on every round, whatever its
-// tier, since a seat below full_access is offered the reads alone
-// (CodeWritesWithheld).
+// tier — a seat below full_access beside the few writes of a change's
+// conversation its tier reaches ([codeReviewCatalogueBudget]).
 //
 // 18 600: measured at 17 575 (~4 394 tokens) when the code writes were first
 // withheld below full_access, so ~6% headroom, the rule [codeCatalogueBudget]
@@ -1919,7 +1920,7 @@ const codeCatalogueBudget = 57_500
 // measured cost, as it raises that. The ten writes were the 12 053 bytes
 // (~3 013 tokens) between the two budgets' figures then, and a change's three
 // lifecycle writes, four conversation writes and the apply of its suggestions
-// beside them make the eighteen 23 105 (~5 776 tokens), carried by a
+// beside them make the eighteen 23 105 (~5 776 tokens), carried whole by a
 // full_access seat alone. And 18 600 → 20 300 when code_get_check_failures
 // joined, deliberately, with its measured cost: 17 649 → 19 082 (~4 771
 // tokens), 1 433 bytes (~358 tokens), the check named as its siblings name a
@@ -1930,15 +1931,30 @@ const codeCatalogueBudget = 57_500
 // and its answer's shape once in its own; ~6% headroom again.
 const codeReadsCatalogueBudget = 22_100
 
+// codeReviewCatalogueBudget is the most bytes a review seat's code tools may
+// add to the tool list a run's session serves its CLI: the thirteen reads and
+// the four writes of a change's conversation its tier reaches — an ask for
+// review, a review, a comment and an answer to the findings it raised
+// (CodeWritesWithheld) — the most any tier below full_access carries, since a
+// read_only seat carries the comment alone of the four.
+//
+// 22 500: measured at 21 232 (~5 308 tokens) when the review tier was first
+// offered the conversation's writes — the four 4 278 bytes (~1 070 tokens)
+// above the thirteen reads' 16 954 as the session serves them now — so ~6%
+// headroom, the rule [codeCatalogueBudget] states.
+const codeReviewCatalogueBudget = 22_500
+
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
-// code is offered the thirteen reads on every run of every turn, and a seat at
+// code is offered the thirteen reads on every run of every turn, a review seat
+// the four writes of a change's conversation beside them, and a seat at
 // full_access twenty-three writes beside them: the CLI lists them from the
 // run's tool session (internal/toolsession) and carries every listed tool's
 // name, description, schema and hints into its model's context, each byte
 // paid again on every request it makes. Measured as that list reaches a
 // client — the SDK's own serialisation, through a real MCP session, since what
 // a CLI is handed is what arrives rather than what was registered — the reads
-// alone and all thirty-nine, each held to a budget, so a later description edit is
+// alone, a review seat's and all thirty-nine, each held to a budget, so a
+// later description edit is
 // a decision rather than drift, as the executor prompt's budgets make a
 // sentence one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1950,6 +1966,9 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		{"the thirteen code reads (every seat's)",
 			listedBytes(t, builtin.CodeTools(withSearch(codeDeps(newCodeHost()), &codeSearches{}))),
 			codeReadsCatalogueBudget},
+		{"a review seat's thirteen reads and four conversation writes",
+			listedBytes(t, offeredAt(code.TierReview, builtin.CodeTools(withSearch(writeDeps(newCodeHost(),
+				&codeWrites{}), &codeSearches{})))), codeReviewCatalogueBudget},
 		{"all thirty-nine code tools (a full_access seat's and the operator's)",
 			listedBytes(t, builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{}))), codeCatalogueBudget},
 	} {
@@ -1962,6 +1981,15 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		t.Logf("%s add %d bytes (~%d tokens) to every run's tool list (budget %d, headroom %d)", c.what, c.got,
 			tokens, c.budget, c.budget-c.got)
 	}
+}
+
+// offeredAt is the tools of every that a seat at tier is offered: every one
+// but the code writes its tier withholds (CodeWritesWithheld).
+func offeredAt(tier code.Tier, every []tools.Callable) []tools.Callable {
+	withheld := builtin.CodeWritesWithheld(tier)
+	return slices.DeleteFunc(every, func(tool tools.Callable) bool {
+		return slices.Contains(withheld, tool.Name())
+	})
 }
 
 // listedBytes is what offered costs in the tools/list answer a run's tool

@@ -1,6 +1,7 @@
 package builtin_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -294,6 +296,104 @@ func TestACommentSetsItsThreadAsASecondWrite(t *testing.T) {
 		*sent[0].Comment.Anchor != (code.CommentAnchor{Revision: 3, Path: "a.txt", Side: code.SideNew, Line: 7,
 			BlobOID: aNew}) {
 		t.Errorf("an anchored comment sent %+v, want line 7 of a.txt's new side at revision 3", sent)
+	}
+}
+
+// seatsNamed resolves a text's @-mentions as the engine's resolver does: the
+// handles notify.Mentions reads in it that are seats of the company, here the
+// ones listed.
+type seatsNamed []string
+
+func (s seatsNamed) Mentions(text string) []string {
+	var out []string
+	for _, name := range notify.Mentions(text) {
+		if slices.Contains(s, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// A MENTION IS RESOLVED AT WRITE (rule D38): the handles a change's text names
+// that are seats of the company — an open's title and body, an edit's, a
+// review's summary and its findings, a comment's body — go to the change's
+// writer as the write's Mentions, each once in the order first named, and a
+// handle no seat holds goes nowhere; a text naming more seats than one write
+// of a change mentions is refused naming the bound, before anything is read
+// or written.
+//
+// Mutations: a comment's, a review's, an open's or an edit's Mentions left
+// unset → red; the bound not held → red.
+func TestAMentionIsResolvedAtWrite(t *testing.T) {
+	t.Parallel()
+	seats := seatsNamed{"agent-cto", "agent-ceo", "agent-cfo"}
+	with := func(deps builtin.CodeDeps) builtin.CodeDeps {
+		deps.Mentions = seats
+		return deps
+	}
+
+	writer := &codeWrites{}
+	reg := codeRegistry(t, with(writeDeps(reviewHost(), writer)))
+	if got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeCommentOnChangeTool,
+		map[string]any{"change": "site!7", "body": "@agent-cto can you look? @nobody too, and @agent-cto again"}); got.Failed {
+		t.Fatalf("the comment answered %q", got.Output)
+	}
+	review := reviewArgsOf()
+	review["summary"] = "@agent-cto please weigh in."
+	review["findings"].([]any)[0].(map[string]any)["body"] = "Ask @agent-cfo what the budget allows."
+	if got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeReviewChangeTool, review); got.Failed {
+		t.Fatalf("the review answered %q", got.Output)
+	}
+	_, converses := writer.changesAsked()
+	if len(converses) != 2 || converses[0].Comment == nil || converses[1].Review == nil {
+		t.Fatalf("sent %+v, want a comment and a review", converses)
+	}
+	if got := converses[0].Comment.Mentions; !slices.Equal(got, []string{"agent-cto"}) {
+		t.Errorf("the comment mentions %v, want [agent-cto]: the seat it names, once", got)
+	}
+	if got := converses[1].Review.Mentions; !slices.Equal(got, []string{"agent-cto", "agent-cfo"}) {
+		t.Errorf("the review mentions %v, want [agent-cto agent-cfo]: its summary's and its finding's", got)
+	}
+
+	opened := &codeWrites{}
+	open := openArgs()
+	open["body"] = "For @agent-ceo's launch."
+	if got := callWrite(everyGrant(), t, codeRegistry(t, with(writeDeps(newCodeHost(), opened))), writerTurn(t),
+		builtin.CodeOpenChangeTool, open); got.Failed {
+		t.Fatalf("the open answered %q", got.Output)
+	}
+	if changes, _ := opened.changesAsked(); len(changes) != 1 || changes[0].Open == nil ||
+		!slices.Equal(changes[0].Open.Mentions, []string{"agent-ceo"}) {
+		t.Errorf("the open sent %+v, want it to mention agent-ceo, whom its body names", changes)
+	}
+
+	edited := &codeWrites{}
+	if got := callWrite(everyGrant(), t, codeRegistry(t, with(writeDeps(newChangeHost(siteChange()), edited))),
+		writerTurn(t), builtin.CodeUpdateChangeTool,
+		map[string]any{"change": "site!7", "expected_version": 4, "title": "Retry twice, as @agent-cfo asked"}); got.Failed {
+		t.Fatalf("the edit answered %q", got.Output)
+	}
+	if changes, _ := edited.changesAsked(); len(changes) != 1 || changes[0].Edit == nil ||
+		!slices.Equal(changes[0].Edit.Mentions, []string{"agent-cfo"}) {
+		t.Errorf("the edit sent %+v, want it to mention agent-cfo, whom the title it sets names", changes)
+	}
+
+	// PAST THE BOUND, nothing is written.
+	var many []string
+	for i := range code.MaxMentions + 1 {
+		many = append(many, fmt.Sprintf("agent-%d", i))
+	}
+	crowd, crowded := &codeWrites{}, reviewHost()
+	deps := writeDeps(crowded, crowd)
+	deps.Mentions = seatsNamed(many)
+	got := callWrite(everyGrant(), t, codeRegistry(t, deps), writerTurn(t), builtin.CodeCommentOnChangeTool,
+		map[string]any{"change": "site!7", "body": "@" + strings.Join(many, " @")})
+	reads, _, _ := crowded.asked()
+	if _, sent := crowd.changesAsked(); !got.Failed || len(sent) != 0 || len(reads) != 0 ||
+		!strings.Contains(got.Output, fmt.Sprint(code.MaxMentions)) {
+		t.Errorf("a comment naming %d seats answered %q, reading %d and sending %d writes, want it refused "+
+			"naming the bound of %d before anything is read", len(many), got.Output, len(reads), len(sent),
+			code.MaxMentions)
 	}
 }
 

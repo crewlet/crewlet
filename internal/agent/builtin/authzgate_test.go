@@ -297,10 +297,11 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		// this walk would never see.
 		Readers: builtin.ReadersDeps{Readers: &readersFake{}},
 		// THE HEALTH TOOLS, over the seams the seat's registry is built with —
-		// code_status's code half the code reads' own, the requester
-		// ceiling's halves included — read as the request's principal as the
-		// surface reads them.
-		Health: builtin.HealthDeps{Leases: full.Health.Leases, Status: full.Health.Status,
+		// fleet_health's requester ceiling and code_status's code half the
+		// code reads' own, the requester ceiling's halves included — read as
+		// the request's principal as the surface reads them.
+		Health: builtin.HealthDeps{Leases: full.Health.Leases, Requesters: full.Health.Requesters,
+			Chart: full.Health.Chart, Status: full.Health.Status,
 			Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters,
 				Chart: full.Code.Chart, Actor: builtin.PrincipalActor}},
 		// THE CHAT, its read-state store included, which only this surface

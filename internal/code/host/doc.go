@@ -865,4 +865,31 @@
 // left for commits whose changes are wide and for a node at its share;
 // PROVISIONAL, as the arms over 100 000 files (CREWLET_GIT_LARGE=1) and a
 // production p99 are what move it.
+//
+// WHAT A CHAIN COSTS (BenchmarkBuildChain; git 2.56.0 on two E-cores of a
+// Core Ultra 7 265U, the machine shared with other sessions, -benchtime 1x
+// and one count — ONE chain an arm, so each figure is one sample, never a
+// percentile; 2026-11-02), each chain code.MaxChainEntries merges:
+//
+//   - merges=small, each adding a file onto a main that moved by one commit,
+//     over 20 000 commits of history and a tree of 1 000 files — the queue's
+//     common train — builds in 0.53–0.58 s (two runs), some 9 ms a merge for
+//     its ancestry check, its merge-tree and its commit-tree, and packs and
+//     checks its 30 KB in 30–46 ms;
+//   - pack=at-bound, each merge writing a 254 KB blob of random text no other
+//     entry's deltas against, their objects just under
+//     code.MaxChainObjectBytes, builds in 3.4 s, and its pack of 11.8 MiB
+//     takes 2.1 s — pack-objects 1.9 s, single-threaded and searching every
+//     object for a delta it does not find, and `index-pack --strict` 0.22 s
+//     — so code.ChainPackDeadline's ten seconds hold the largest pack a chain
+//     makes 4.8 times over;
+//   - pack=past-bound, each merge writing a 4.9 MiB blob, its loose objects
+//     just under code.MaxWritePackBytes, every chain bound lifted: 314 MiB of
+//     objects pack to 238.5 MiB in 50.9 s (pack-objects 46.6 s,
+//     `index-pack --strict` 4.3 s, two runs within a tenth of a second of
+//     each other), 6.2 MiB of objects a second, and the whole chain takes
+//     67 s — past the minute of its home's turn before any read or store. So
+//     sixty-four merges a merge_change would each build alone cannot be one
+//     chain, and code.MaxChainObjectBytes, a twentieth of them, is the bound
+//     a pack is made within its time at.
 package host

@@ -120,21 +120,36 @@ func CodeWrites() []string {
 }
 
 // CodeWritesWithheld is the code writes a seat whose role.code.access reads
-// tier is never offered: every one where the tier caps the seat below write
-// ([code.Tier.Cap]) — read_only, which is also an unset tier, review, and a
-// value no build writes, which caps at nothing — and none at full_access.
+// tier is never offered: none at full_access, and, at every tier that caps the
+// seat below write ([code.Tier.Cap]) — read_only, which is also an unset tier,
+// review, and a value no build writes, which caps at nothing — every one but
+// the change's conversation writes its cap reaches ([belowWriteNeeds]): a
+// read_only seat comments on a change, and a review seat also asks for
+// reviews, reviews and dismisses the findings it raised.
 //
-// NO REPOSITORY'S GRANT COULD ADMIT ONE, whatever the chart relates the seat
-// to it by. A seat holds the least of its tier and its relation
-// ([code.GrantOf]), so below write it moves no ref anywhere — a push needs
-// write, or the full_access tier for the seat's own namespace
-// ([code.Grant.MayPush]) — and every lifecycle request a tool sends needs
-// maintain, a scratch repository's create full_access itself. Offered, each is
-// a tool such a seat reaches for and is refused `not_permitted` on every
-// repository, round after round; and each is paid for on every round besides,
-// its definition in a catalogue nothing caches ([codeCatalogueBudget] in the
-// tests) and the executor's guidance on changing code gated on holding them —
-// by most of a company's seats, read_only being the default.
+// NO REPOSITORY'S GRANT COULD ADMIT ONE IT WITHHOLDS, whatever the chart
+// relates the seat to it by. A seat holds the least of its tier and its
+// relation ([code.GrantOf]), so below write it moves no ref anywhere — a push
+// needs write, or the full_access tier for the seat's own namespace
+// ([code.Grant.MayPush]) — every lifecycle request a tool sends needs
+// maintain, a scratch repository's create full_access itself, and a change's
+// lifecycle is steered by its owner, who opened it with a push, or by a
+// principal that maintains the repository. Offered, each is a tool such a
+// seat reaches for and is refused `not_permitted` on every repository, round
+// after round; and each is paid for on every round besides, its definition
+// in a catalogue nothing caches ([codeCatalogueBudget] in the tests) and the
+// executor's guidance on changing code gated on holding them — by most of a
+// company's seats, read_only being the default.
+//
+// AND NONE IT OFFERS IS REFUSED BY THE TIER: the conversation of a change is
+// judged by access and by what its principal wrote of the change (rule D21),
+// and the access each of them needs of a principal that wrote none of it is
+// the one [belowWriteNeeds] names — the use ADR-0081 left the review tier
+// for. A seat whose tier was lowered keeps its authorship of what it pushed
+// before, which would let it ask for reviews of that change or answer its
+// findings at read too; those two stay withheld at read_only anyway, since
+// every read_only seat would pay for them on every round for what only a
+// lowered one could do.
 //
 // THE TIER, NOT THE CHART, because only the tier caps a seat on every
 // repository at once: a relation is one repository's, and a seat that writes
@@ -145,10 +160,42 @@ func CodeWrites() []string {
 // table: a role grant there is one only an administrator sets
 // (authz.SeatGrant), while a unit's lead sets its seats' tier.
 func CodeWritesWithheld(tier code.Tier) []string {
-	if tier.Cap() >= code.AccessWrite {
+	limit := tier.Cap()
+	if limit >= code.AccessWrite {
 		return nil
 	}
-	return CodeWrites()
+	var withheld []string
+	for _, name := range CodeWrites() {
+		if need, ok := belowWriteNeeds[name]; ok && limit >= need {
+			continue
+		}
+		withheld = append(withheld, name)
+	}
+	return withheld
+}
+
+// belowWriteNeeds is the least access at which a change's decide admits each
+// of the writes a seat below write may make, from a principal that wrote none
+// of the change — neither its owner nor an author, which only a push makes
+// (rule D21): a comment needs read; an ask for review, review — an author
+// asks whatever its access, and a seat below write authors nothing; a
+// review, review; and an answer to findings, review — an author resolves
+// them, and a seat below write may only dismiss the findings it raised,
+// which only a review raises. Every other code write needs write or more,
+// which no tier below it reaches ([CodeWritesWithheld]).
+//
+// Each is at or above the change tool's row in [changeToolNeeds], which is
+// the access a deciding node holds a COLLEAGUE to — the relation beyond it
+// the seat's own — so the two part where an author's relation admits a
+// write below the access alone: an ask for review and an answer to findings.
+// TestEveryChangeToolNamesTheAccessItNeeds holds the two tables to each
+// other, and TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne this one
+// to rule D21 and code.GrantOf.
+var belowWriteNeeds = map[string]code.Access{
+	CodeCommentOnChangeTool: code.AccessRead,
+	CodeRequestReviewTool:   code.AccessReview,
+	CodeReviewChangeTool:    code.AccessReview,
+	CodeResolveFindingTool:  code.AccessReview,
 }
 
 // CodeWriter is the code host's writes as these tools ask them —

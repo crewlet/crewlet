@@ -1120,6 +1120,12 @@ func registeredStatements() map[string]statement {
 			[]string{findingTextKey + " (change_id=?)", findingKey + " (id=?)"}},
 		"findings of a change after": {findingsOfAfterSQL, []any{"repo-1-change-000001", "finding-1", 50},
 			[]string{findingTextKey + " (change_id=? AND finding_id>?)", findingKey + " (id=?)"}},
+		// THE FINDINGS A WRITE NAMES, an apply's: each id one seek of the
+		// texts' whole key and one of the row's, whatever the change holds.
+		"findings a read names": {findingsNamedSQL,
+			[]any{`["finding-1","finding-2"]`, "repo-1-change-000001"},
+			[]string{"SCAN json_each AS j", findingTextKey + " (change_id=? AND finding_id=?)",
+				findingKey + " (id=?)"}},
 		"reviewers of a change": {reviewersOfSQL, []any{"repo-1-change-000001", 200},
 			[]string{reviewerKey + " (change_id=?)"}},
 		"reviewers of a change after": {reviewersOfAfterSQL, []any{"repo-1-change-000001", "seat-0", 200},

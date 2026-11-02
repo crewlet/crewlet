@@ -11,16 +11,21 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/argval"
 )
 
 // THE HEALTH TOOLS: fleet_health, every live node as its own heartbeat states
@@ -59,22 +64,33 @@ import (
 // one-repository form resolves the name as the code tools do, refused
 // `not_permitted` where the seat may not read it, and the hottest repositories
 // a git node names are held to the same grant — a seat's answer leaves out
-// every repository its grant does not read and says how many it left out
-// (`withheld`). A person reads every repository, so a person's answer leaves
-// nothing out.
+// every repository its grant does not read and says how many of those it left
+// out above the list's cut (`withheld`), judging them hottest first and only
+// as far as the cut, so what it reads is bounded by the answer and not by the
+// fleet ([codeStatus.hottest]). A person reads every repository, so a person's
+// answer leaves nothing out.
 //
-// # And, in a turn somebody woke, theirs too
+// # And, in a turn somebody woke, read only for the company
 //
-// Those repository reads are code reads, which the requester ceiling holds
-// (ADR-0081, [CodeDeps.callerOn]): in a turn a colleague seat woke, each is
-// read for that seat as well, so the hot list leaves out what the colleague
-// may not read and counts it withheld, and the one-repository form is refused
-// as the code tools refuse a read above the ceiling; a turn a stranger woke,
-// or a person who may not act in the company now, is answered nothing, as
-// every code read is. Whoever woke the turn is decided on the code host's read
-// verb, never on the health row: the requester ceiling holds a repository
-// read, and the rest of the answer is the health grant's, as fleet_health's
-// whole answer is.
+// A granted seat reads the deployment's view FOR whoever woke its turn, and
+// the requester ceiling ([ceilingOf], ceiling.go) holds both tools to it. A
+// turn a stranger woke — a chat sender the company does not know — or a
+// person who may not act in the company now is answered nothing by either: the
+// view is an administrator's, and the grant lets a seat watch the deployment,
+// not relay it to whoever can message the seat. fleet_health decides that
+// somebody on [authz.ActionFleetHealthRead] ([fleetHealth.forRequester]) and
+// code_status on the code host's read verb, both rows everybody of the company
+// who may act holds, never on the health row: a requester holds no admin and a
+// colleague seat no grant of the asker's, so the health row would refuse every
+// turn anybody woke. A colleague or a person of the company is answered the
+// seat's whole view.
+//
+// code_status's repository reads are code reads besides, which the requester
+// ceiling holds further (ADR-0081, [CodeDeps.callerOn]): in a turn a colleague
+// seat woke, each is read for that seat as well, so the hot list leaves out
+// what the colleague may not read and counts it withheld, and the
+// one-repository form is refused as the code tools refuse a read above the
+// ceiling.
 
 // The health tools' names: each is its authority row's action.
 const (
@@ -113,6 +129,16 @@ type HealthDeps struct {
 	// Leases is the fleet's live leases. Nil omits fleet_health.
 	Leases LeaseLister
 
+	// Requesters composes who a seat's turn is acting for, and Chart is the
+	// chart the authority table decides them by: fleet_health in a turn
+	// somebody woke reads only for somebody of the company who may act
+	// ([fleetHealth.forRequester]). REQUIRED beside Leases — nil omits
+	// fleet_health — so a surface that left the ceiling out serves no view of
+	// the deployment rather than one to whoever messages a granted seat.
+	// code_status takes its own from Code, as the code reads do.
+	Requesters Requesters
+	Chart      authz.Chart
+
 	// Self is this node's id, which fleet_health's answer marks.
 	Self string
 
@@ -135,13 +161,14 @@ type HealthDeps struct {
 // HealthTools are the health tools a seat and an operator share: ONE list, so
 // a schema and a refusal's words are written once. Every one reads.
 //
-// code_status ON THE CODE TOOLS' TERMS ([CodeDeps.serves]): its repository
-// reads are theirs, made for whoever woke the turn, so deps wired without the
-// requester ceiling's halves serve it no more than they serve a code read —
-// never one that reads for whoever messaged a seat whatever the seat may.
+// EACH ONLY WITH THE REQUESTER CEILING'S HALVES BESIDE IT: fleet_health over
+// the leases with Requesters and Chart, and code_status ON THE CODE TOOLS'
+// TERMS ([CodeDeps.serves]), its repository reads being theirs. Deps wired
+// without them serve neither — never a tool that reads the deployment for
+// whoever messaged a seat whatever the seat may.
 func HealthTools(deps HealthDeps) []tools.Callable {
 	var out []tools.Callable
-	if deps.Leases != nil {
+	if deps.Leases != nil && deps.Requesters != nil && deps.Chart != nil {
 		out = append(out, &fleetHealth{deps: deps})
 	}
 	if deps.Status != nil && deps.Code.serves() {
@@ -201,9 +228,29 @@ func Withheld(ctx context.Context, authorize Authorizer, snapshot tools.Snapshot
 
 // ---- fleet_health ------------------------------------------------------- //
 
+// The fleet_health pages: nodes by id, a page at a time.
+//
+// A FLEET OUTGROWS ONE ANSWER. A node's row is some three hundred bytes as it
+// is sent — its roles, broker, labels and heartbeat — and a data node's a few
+// dozen more for every alarm it has firing, so a fleet of a couple of hundred
+// nodes, fewer in an alarm storm, would read past ToolAnswerBytes whole; and
+// long before that it is a turn's context spent on nodes nobody asked about,
+// by every turn an alarm's wake starts. So the answer is PAGED, by node id,
+// and NARROWED by what the reader is asking — `node` for one node, `firing`
+// for the nodes whose own table has an alarm firing, the table's verdict and
+// no threshold of this tool's — and every page is cut whole-row at the answer
+// as it is sent ([foreignRead.fit]), so no page passes ToolAnswerBytes.
+// TWENTY-FIVE a page by default, the code tools' listing's page: a screen of
+// nodes, and the whole of most fleets. A HUNDRED at most, near half of one
+// answer.
+const (
+	defaultFleetHealthPage = 25
+	maxFleetHealthPage     = 100
+)
+
 type fleetHealth struct{ deps HealthDeps }
 
-var _ tools.Callable = (*fleetHealth)(nil)
+var _ tools.SeatCallable = (*fleetHealth)(nil)
 
 func (t *fleetHealth) Name() string { return FleetHealthTool }
 
@@ -213,17 +260,92 @@ func (t *fleetHealth) Description() string {
 		"the seats it holds — and every alarm its own table has firing, with when it was raised. " +
 		"What is wrong is the alarms' to say: this reports them as the nodes did and judges nothing " +
 		"else. A node with `alarms_evaluated: false` has no table it has evaluated (a node holding " +
-		"no data, or one still booting), which is not the same as nothing firing."
+		"no data, or one still booting), which is not the same as nothing firing. Nodes by id, a page " +
+		"at a time: pass `next` back as `cursor` until no `next` comes back. `firing` lists only the " +
+		"nodes with an alarm firing — what an alarm's wake asks — and `node` reads one node."
 }
 
 func (t *fleetHealth) Parameters() map[string]any {
-	return map[string]any{"type": "object", "properties": map[string]any{}}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"firing": map[string]any{
+				"type": "boolean",
+				"description": "Only the nodes whose own table has an alarm firing. A node with no table " +
+					"it evaluated cannot say, so it is counted (`unevaluated`) rather than listed.",
+			},
+			"node": map[string]any{
+				"type":        "string",
+				"description": "One node's id, to read that node alone.",
+			},
+			"cursor": map[string]any{
+				"type": "string",
+				"description": "The `next` of the previous page, handed back unchanged; leave it out " +
+					"for the first page.",
+			},
+			"limit": map[string]any{
+				"type": "integer",
+				"description": fmt.Sprintf("How many nodes a page lists, 1 to %d; %d by default. A page "+
+					"that would outgrow one answer holds fewer, and says where the next begins.",
+					maxFleetHealthPage, defaultFleetHealthPage),
+			},
+		},
+	}
 }
 
-// fleetHealthAnswer is fleet_health's answer.
+// fleetHealthAnswer is fleet_health's answer: one page of the live nodes, by
+// id.
 type fleetHealthAnswer struct {
 	ThisNode string       `json:"this_node"`
 	Nodes    []nodeHealth `json:"nodes"`
+	// Next is the id the next page begins after, handed back as `cursor`;
+	// absent on the last page.
+	Next string `json:"next,omitempty"`
+	// Unevaluated is, where the call asked for the nodes with an alarm
+	// firing, how many live nodes have no table they evaluated — a node
+	// holding no data, one still booting, or one whose heartbeat said
+	// nothing — which `firing` cannot judge and so leaves out: counted,
+	// so silence never reads as health. Absent otherwise, where every node
+	// is listed with what it said.
+	Unevaluated *int `json:"unevaluated,omitempty"`
+}
+
+// fleetHealthQuery is what one fleet_health call asks for.
+type fleetHealthQuery struct {
+	node   string
+	firing bool
+	cursor string
+	limit  int
+}
+
+// query is the call's arguments, or the refusal of ones it cannot read —
+// refused before anything is read.
+func (t *fleetHealth) query(args map[string]any) (fleetHealthQuery, *tools.Result) {
+	q := fleetHealthQuery{node: strings.TrimSpace(argString(args, "node")),
+		cursor: strings.TrimSpace(argString(args, "cursor")),
+		limit:  argInt(args, "limit", defaultFleetHealthPage)}
+	if raw, present := args["firing"]; present && raw != nil {
+		// BY THE CHECK'S OWN READER ([argval.Bool]): true or false and
+		// nothing else, the rule the check at the surface holds it to.
+		firing, ok := argval.Bool(raw)
+		if !ok {
+			// A FILTER READ AS FALSE would list every node to a caller that
+			// asked for the ones firing.
+			r := failed(fmt.Sprintf("%s: `firing` is true or false.", t.Name()))
+			return q, &r
+		}
+		q.firing = firing
+	}
+	switch {
+	case q.limit < 1 || q.limit > maxFleetHealthPage:
+		r := failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), maxFleetHealthPage))
+		return q, &r
+	case q.node != "" && (q.firing || q.cursor != "" || args["limit"] != nil):
+		r := failed(fmt.Sprintf("%s: `node` reads that one node, so it takes no `firing`, `cursor` or "+
+			"`limit`.", t.Name()))
+		return q, &r
+	}
+	return q, nil
 }
 
 // nodeHealth is one live node as its presence lease and heartbeat state it.
@@ -261,7 +383,31 @@ type alarmMark struct {
 	Since time.Time `json:"since,omitzero"`
 }
 
-func (t *fleetHealth) Call(ctx context.Context, _ map[string]any) (tools.Result, error) {
+// evaluated reports whether the node's heartbeat says it evaluated an alarm
+// table: false for a heartbeat that carried no status, as for one that said
+// it had none.
+func (n nodeHealth) evaluated() bool { return n.Status != nil && n.Status.AlarmsEvaluated }
+
+// firing reports whether the node's own table has an alarm firing — the
+// table's verdict, as the node marked it.
+func (n nodeHealth) firing() bool {
+	return n.evaluated() && n.Status.Alarms != nil && len(*n.Status.Alarms) > 0
+}
+
+func (t *fleetHealth) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *fleetHealth) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	if refusal := t.forRequester(ctx, turn); refusal != nil {
+		return *refusal, nil
+	}
+	q, refusal := t.query(args)
+	if refusal != nil {
+		return *refusal, nil
+	}
 	leases, err := t.deps.Leases.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return refusedBy(tools.RefusalUnavailable, err, FleetHealthTool+" could not read the fleet's "+
@@ -272,17 +418,145 @@ func (t *fleetHealth) Call(ctx context.Context, _ map[string]any) (tools.Result,
 	if t.deps.Now != nil {
 		now = t.deps.Now()
 	}
-	answer := fleetHealthAnswer{ThisNode: t.deps.Self, Nodes: make([]nodeHealth, 0, len(leases))}
+	nodes := make([]nodeHealth, 0, len(leases))
 	for _, lease := range leases {
 		profile, ok := placement.FromLease(lease)
 		if !ok {
 			continue
 		}
-		answer.Nodes = append(answer.Nodes, nodeHealthOf(profile, lease, now))
+		nodes = append(nodes, nodeHealthOf(profile, lease, now))
 	}
-	slices.SortFunc(answer.Nodes, func(a, b nodeHealth) int { return cmp.Compare(a.ID, b.ID) })
-	return newForeignRead(nil, "").answer(ctx, t.Name(), answer,
-		"The fleet is too large to read whole in one answer.")
+	slices.SortFunc(nodes, func(a, b nodeHealth) int { return cmp.Compare(a.ID, b.ID) })
+	answer := fleetHealthAnswer{ThisNode: t.deps.Self}
+	read := newForeignRead(turn, "")
+	if q.node != "" {
+		i := slices.IndexFunc(nodes, func(n nodeHealth) bool { return n.ID == q.node })
+		if i < 0 {
+			return refused(tools.RefusalNotFound, fmt.Sprintf("%s: no live node is named %q — a node "+
+				"that has stopped renewing its presence is not live. Leave `node` out to list the live "+
+				"nodes.", t.Name(), clip(q.node))), nil
+		}
+		answer.Nodes = nodes[i : i+1]
+		return read.page(ctx, t.Name(), answer, "That node's own row is past one answer.")
+	}
+	if q.firing {
+		unevaluated := 0
+		nodes = slices.DeleteFunc(nodes, func(n nodeHealth) bool {
+			if !n.evaluated() {
+				unevaluated++
+				return true
+			}
+			return !n.firing()
+		})
+		answer.Unevaluated = &unevaluated
+	}
+	// THE PAGE: the nodes after the cursor, at most `limit` of them, cut
+	// whole-row wherever they would outgrow one answer as it is sent. The
+	// listing is keyset by id, so the next page begins after the last row
+	// kept.
+	rest := nodes[sortedAfter(nodes, q.cursor):]
+	page := func(k int) any {
+		a := answer
+		a.Nodes = rest[:k]
+		if k > 0 && k < len(rest) {
+			a.Next = rest[k-1].ID
+		}
+		return a
+	}
+	k, rendered, err := read.fit(min(q.limit, len(rest)), page)
+	switch {
+	case err != nil:
+		return labelFault(ctx, t.Name(), err), nil
+	case k == 0 && len(rest) > 0:
+		return failed(fmt.Sprintf("%s: node %q alone is past one answer — its labels are that long — so "+
+			"no page holds it whole. Pass %q as `cursor` to read the nodes after it.", t.Name(),
+			clip(rest[0].ID), rest[0].ID)), nil
+	}
+	return compactAnswer(rendered, "Ask for fewer with `limit`, for only the nodes with an alarm "+
+		"firing with `firing`, or for one node with `node`.")
+}
+
+// sortedAfter is where in nodes, sorted by id, the first node after cursor
+// stands: 0 for no cursor.
+func sortedAfter(nodes []nodeHealth, cursor string) int {
+	if cursor == "" {
+		return 0
+	}
+	i, found := slices.BinarySearchFunc(nodes, cursor, func(n nodeHealth, id string) int {
+		return cmp.Compare(n.ID, id)
+	})
+	if found {
+		i++
+	}
+	return i
+}
+
+// forRequester is nil where this call may read the deployment's health for
+// whoever its turn is acting for, and otherwise the refusal it is answered
+// with, before anything is read.
+//
+// A SEAT'S CALL IN A TURN SOMEBODY WOKE IS THEIR ERRAND: the seat's grant opens
+// an administrator's view of the deployment — every node, its roles, labels and
+// config posture, every alarm firing and since when — and a seat that read it
+// out for whoever could message it would hand that view to anybody on a chat
+// surface the seat listens on. So whoever the turn is acting for ([ceilingOf],
+// the one composition every family's ceiling reads) is decided AGAIN, by the
+// authority table ([authz.DecideWithin]), on [authz.ActionFleetHealthRead]: a
+// stranger is answered nothing, and so is a person who may not act in the
+// company now; a colleague seat or a person of the company is answered the
+// seat's whole view, which the row admits them to — the product's decision,
+// recorded on the row. A requester this node could not compose or decide is
+// undecidable, never a turn nobody woke. A person's or a token's own call is
+// no deputy, and a turn nobody woke — a schedule, an alarm's wake — reads for
+// nobody but the seat.
+func (t *fleetHealth) forRequester(ctx context.Context, turn *turnctx.Turn) *tools.Result {
+	// WHO CALLS, as the gate decided them: the context's answer, or the
+	// turn's seat where nothing has answered (turnctx.WithPrincipal).
+	p, _ := iam.From(turnctx.WithPrincipal(ctx, turn))
+	if p.Kind != iam.KindSeat {
+		return nil
+	}
+	ceiling, err := ceilingOf(ctx, turn, p.Seat, t.deps.Requesters)
+	if err != nil {
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
+			fmt.Sprintf("%s could not establish who this turn's work is for, and the deployment's health "+
+				"is read only for somebody of the company who may act. Nothing was read. Try again shortly.",
+				t.Name()))
+		return &r
+	}
+	if ceiling.Kind == authz.CeilingNone {
+		return nil
+	}
+	dec := authz.DecideWithin(ctx, p, ceiling, authz.ActionFleetHealthRead, authz.Object{}, t.deps.Chart,
+		time.Now().UTC())
+	switch {
+	case dec.Unknown():
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, dec.Err),
+			fmt.Sprintf("%s could not decide right now whether whoever this turn is working for may act in "+
+				"the company. Nothing was read. Try again shortly.", t.Name()))
+		return &r
+	case !dec.Allowed && dec.Reason == authz.ReasonCeiling:
+		r := authorityRefusal(t.Name(), DecisionError(authz.ActionFleetHealthRead, dec))
+		r.Output = healthCeilingRefused(t.Name(), ceiling.Kind)
+		return &r
+	case !dec.Allowed:
+		r := authorityRefusal(t.Name(), DecisionError(authz.ActionFleetHealthRead, dec))
+		return &r
+	}
+	return nil
+}
+
+// healthCeilingRefused is what a health tool refused for whoever its turn is
+// acting for is answered with, by who that is: a stranger, or a requester who
+// may not act in the company.
+func healthCeilingRefused(tool string, kind authz.CeilingKind) string {
+	if kind == authz.CeilingStranger {
+		return fmt.Sprintf("%s didn't run: this turn was woken by somebody the company does not know, and "+
+			"the deployment's health is read for nobody outside the company. A person or a seat of the "+
+			"company has to ask for it.", tool)
+	}
+	return fmt.Sprintf("%s didn't run: whoever this turn is working for may not act in the company now, "+
+		"and the deployment's health is read only for somebody who may.", tool)
 }
 
 // nodeHealthOf is one presence lease as fleet_health reports it.
@@ -319,12 +593,14 @@ func nodeHealthOf(profile placement.NodeProfile, lease coord.Lease, now time.Tim
 // ---- code_status -------------------------------------------------------- //
 
 // codeStatusJudges is how many of a seat's judgements of the repositories a
-// code_status answer names run at once: each is the code tools' one read of a
-// repository at the seat's level, and the code log's barrier is single-flighted
-// per node (internal/statelog), so a batch in flight shares one round. EIGHT,
-// so a fleet of three git nodes, forty repositories named on each, is judged in
-// some fifteen of those rounds, while more in flight would only queue behind
-// the estate answerer's slots every other caller shares.
+// code_status answer names run — and exist — at once: each is the code tools'
+// one read of a repository at the seat's level, and the code log's barrier is
+// single-flighted per node (internal/statelog), so a batch in flight shares one
+// round, and the judgement goes a wave of them at a time ([codeStatus.hottest]).
+// EIGHT, so the forty repositories at most a hot list keeps — twenty of each
+// window — are judged in five waves where the seat reads them all, a wave more
+// for every eight it may not read above the cut, while more in flight would
+// only queue behind the estate answerer's slots every other caller shares.
 const codeStatusJudges = 8
 
 type codeStatus struct{ deps HealthDeps }
@@ -364,8 +640,10 @@ func (t *codeStatus) Call(ctx context.Context, args map[string]any) (tools.Resul
 type codeStatusFleet struct {
 	Nodes []gitNodeStatus `json:"nodes"`
 	Hot   []hotOnNode     `json:"hot"`
-	// Withheld is how many repositories the answer leaves out because the
-	// caller's grant does not read them — a seat's only.
+	// Withheld is how many repositories hotter than the list's cut the answer
+	// leaves out because the caller's grant does not read them — a seat's
+	// only, and never one below the cut, which is not in the list whoever
+	// reads it ([codeStatus.hottest]).
 	Withheld int               `json:"withheld,omitempty"`
 	Coverage eventfan.Coverage `json:"coverage"`
 }
@@ -430,22 +708,14 @@ func (t *codeStatus) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	slices.SortFunc(answer.Nodes, func(a, b gitNodeStatus) int { return cmp.Compare(a.Node, b.Node) })
-	readable, withheld, failure := t.judge(ctx, turn, c, entries)
+	hot, withheld, failure := t.hottest(ctx, turn, c, entries)
 	if failure != nil {
 		return *failure, nil
 	}
 	answer.Withheld = withheld
-	var kept []cache.RepoHeat
-	var keptPairs []hotOnNode
-	for i, e := range entries {
-		if readable[e.ID] {
-			kept = append(kept, e)
-			keptPairs = append(keptPairs, pairs[i])
-		}
-	}
-	answer.Hot = make([]hotOnNode, 0, len(kept))
-	for _, i := range cache.Hottest(kept, cache.HotRepos) {
-		answer.Hot = append(answer.Hot, keptPairs[i])
+	answer.Hot = make([]hotOnNode, 0, len(hot))
+	for _, i := range hot {
+		answer.Hot = append(answer.Hot, pairs[i])
 	}
 	return newForeignRead(turn, c.asker.Seat).page(ctx, t.Name(), answer,
 		"Name one repository with `repo` to read it alone.")
@@ -482,29 +752,48 @@ func (t *codeStatus) oneRepo(ctx context.Context, turn *turnctx.Turn, c codeCall
 		"Ask again: one repository's state on every git node does not outgrow an answer.")
 }
 
-// judge is which of the repositories entries name the caller may read, and how
-// many it may not.
+// hottest is the fleet's hot list as the caller is answered it — which of
+// entries [cache.Hottest] keeps once every repository the caller may not read
+// is left out, as indices into entries in the list's order — and how many
+// repositories ranked above the list's cut it left out for that.
 //
 // AN OPERATOR READS EVERY REPOSITORY (ADR-0081: a person maintains every one,
-// and a token reads every one), so a person's answer is judged without a read
-// — and a person's call is no deputy, so it reads for nobody else either.
-// A SEAT is held to its own grant, through the code tools' one resolution of a
-// name ([CodeDeps.repo]'s read, at the seat's level, judged by the node that
+// and a token reads every one), so a person's list is cut without a read — and
+// a person's call is no deputy, so it reads for nobody else either. A SEAT is
+// held to its own grant, through the code tools' one resolution of a name
+// ([CodeDeps.repo]'s read, at the seat's level, judged by the node that
 // answers) — and, in a turn a colleague seat woke, to that seat's too, judged
 // by the same node on the same read: a repository either may not read, one the
 // name no longer names, or one the name names under another id — renamed since
 // the git node counted it — is left out, never shown on a guess. A read that
 // could not be made fails the call, unavailable, rather than leaving out what
-// it could not judge.
-func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, c codeCaller,
-	entries []cache.RepoHeat) (map[string]bool, int, *tools.Result) {
+// it could not judge ([unjudged]).
+//
+// # Hottest first, and only to the cut
+//
+// The list keeps at most cache.HotRepos of each window however large the
+// fleet, and repository homes are spread over the git nodes by rendezvous, so
+// the nodes' own lists are mostly disjoint and the fleet names some 2 ×
+// HotRepos repositories for every git node. Judging each of them was a
+// linearizable read apiece — a barrier on the code log for every wave of reads
+// — growing with the git nodes rather than with the answer: a hundred and
+// twenty reads on three of them, four hundred on ten, for a list of forty. So
+// the list is cut as though every repository nobody has judged yet were
+// readable; the repositories it keeps that nobody has judged are judged in a
+// wave ([codeStatus.judgeWave]), hottest first; and it is cut again without
+// those found unreadable, until every repository it keeps has been judged
+// readable. What it keeps then is exactly what judging every repository would
+// have kept: a repository the cut passes over trails at least HotRepos
+// readable ones in each window, so no verdict on it could bring it in. The
+// reads are bounded by the answer — its own repositories, and those ranked
+// above them that the caller may not read — and so is `withheld`, which counts
+// those: a repository below the cut is not in the list whether or not the
+// caller may read it.
+func (t *codeStatus) hottest(ctx context.Context, turn *turnctx.Turn, c codeCaller,
+	entries []cache.RepoHeat) ([]int, int, *tools.Result) {
 
-	readable := make(map[string]bool, len(entries))
 	if c.asker.Kind != code.PrincipalAgent {
-		for _, e := range entries {
-			readable[e.ID] = true
-		}
-		return readable, 0, nil
+		return cache.Hottest(entries, cache.HotRepos), 0, nil
 	}
 	names := map[string]string{} // id -> the name a node counted it by
 	for _, e := range entries {
@@ -512,44 +801,138 @@ func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, c codeCaller
 			names[e.ID] = e.Name
 		}
 	}
-	ids := slices.Sorted(maps.Keys(names))
-	var (
-		mu      sync.Mutex
-		failure error
-		wg      sync.WaitGroup
-		slots   = make(chan struct{}, codeStatusJudges)
-	)
-	for _, id := range ids {
-		name := names[id]
-		if name == "" || !code.ValidName(name) {
-			continue
-		}
-		wg.Go(func() {
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			ok, err := t.readable(ctx, c, lookedUpRepo(turn, c.asker, name), id, name)
-			mu.Lock()
-			defer mu.Unlock()
-			switch {
-			case err != nil && failure == nil:
-				failure = err
-			case ok:
-				readable[id] = true
+	readable := map[string]bool{} // id -> the verdict, for every repository judged
+	for {
+		var open []int // the entries not yet found unreadable
+		for i, e := range entries {
+			if ok, judged := readable[e.ID]; ok || !judged {
+				open = append(open, i)
 			}
+		}
+		candidates := make([]cache.RepoHeat, len(open))
+		for k, i := range open {
+			candidates[k] = entries[i]
+		}
+		kept := cache.Hottest(candidates, cache.HotRepos)
+		var wave []string
+		leftOut := false // a repository was left out unread this pass
+		for _, k := range kept {
+			id := candidates[k].ID
+			if _, judged := readable[id]; judged || slices.Contains(wave, id) {
+				continue
+			}
+			if name := names[id]; name == "" || !code.ValidName(name) {
+				// NO NODE NAMED IT BY A NAME THE CODE HOST RESOLVES, so
+				// nothing could judge it readable: left out unread.
+				readable[id], leftOut = false, true
+				continue
+			}
+			if len(wave) < codeStatusJudges {
+				wave = append(wave, id)
+			}
+		}
+		switch {
+		case len(wave) > 0:
+			verdicts, failure := t.judgeWave(ctx, turn, c, wave, names)
+			if failure != nil {
+				return nil, 0, failure
+			}
+			maps.Copy(readable, verdicts)
+		case !leftOut:
+			// EVERY REPOSITORY THE LIST KEEPS IS JUDGED READABLE: it is the
+			// answer.
+			out := make([]int, len(kept))
+			for j, k := range kept {
+				out[j] = open[k]
+			}
+			withheld := 0
+			for _, ok := range readable {
+				if !ok {
+					withheld++
+				}
+			}
+			return out, withheld, nil
+		}
+	}
+}
+
+// judgeWave is whether c may read each repository of wave, by the name a git
+// node counted it by ([codeStatus.readable]): every read of the wave at once,
+// the wave being at most codeStatusJudges long.
+//
+// THE FIRST READ THAT FAILS ENDS THE JUDGEMENT. A failure answers the whole
+// call, so a read still in flight or not yet started could change nothing but
+// how long the caller waits for that answer: the reads run in one group whose
+// first error cancels every read in flight (errgroup.WithContext), no read
+// starts once it has, and at most codeStatusJudges of them run — and exist —
+// at once. Left to run on, they were the incident's cost: with the code log
+// out of quorum a linearizable read fails only once its barrier's budget is
+// spent (statelog.DefaultBarrierBudget, five seconds), so each wave of reads
+// still started held the caller for another such budget and appended another
+// barrier to the log that was failing them, at the moment an alarm's wake
+// sends every granted seat to look.
+func (t *codeStatus) judgeWave(ctx context.Context, turn *turnctx.Turn, c codeCaller, wave []string,
+	names map[string]string) (map[string]bool, *tools.Result) {
+
+	verdicts := make(map[string]bool, len(wave))
+	var mu sync.Mutex
+	group, judging := errgroup.WithContext(ctx)
+	group.SetLimit(codeStatusJudges)
+	for _, id := range wave {
+		if judging.Err() != nil {
+			// A READ FAILED, or the call was abandoned: nothing read now
+			// changes the answer.
+			break
+		}
+		group.Go(func() error {
+			// A SLOT FREED BY THE READ THAT FAILED starts nothing either.
+			if err := judging.Err(); err != nil {
+				return err
+			}
+			ok, err := t.readable(judging, c, lookedUpRepo(turn, c.asker, names[id]), id, names[id])
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			verdicts[id] = ok
+			mu.Unlock()
+			return nil
 		})
 	}
-	wg.Wait()
-	if failure != nil {
-		r := codeFailure(ctx, t.Name(), "", failure)
-		return nil, 0, &r
+	if err := group.Wait(); err != nil {
+		r := unjudged(ctx, t.Name(), err)
+		return nil, &r
 	}
-	withheld := 0
-	for _, id := range ids {
-		if !readable[id] {
-			withheld++
-		}
+	return verdicts, nil
+}
+
+// unjudged is code_status's answer when a grant read its hot list needed could
+// not be made: unavailable where the code host could not answer now — the
+// conditions [codeFailure] answers so — and a fault of this node otherwise.
+//
+// IT NAMES NO REPOSITORY. The read that failed was about one a git node named,
+// which the caller may well not read, and a failure that named it would tell a
+// seat the very name the answer exists to withhold.
+func unjudged(ctx context.Context, tool string, err error) tools.Result {
+	var (
+		unready  *code.ErrGitUnready
+		unserved *estate.ErrUnserved
+	)
+	why, transient := Condition(err)
+	switch {
+	case errors.As(err, &unready), errors.Is(err, code.ErrNotServing):
+		why, transient = "no node holding the code host's rows could answer in time", true
+	case errors.As(err, &unserved) && unserved.Git:
+		why, transient = "none of the git nodes could answer in time", true
 	}
-	return readable, withheld, nil
+	if transient {
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not check which of the "+
+			"repositories the git nodes named you may read (%s), so it answers nothing rather than name "+
+			"one you may not. This is NOT an answer about the fleet: try again shortly.", tool, why))
+	}
+	return faulted(ctx, tool, err, fmt.Sprintf("%s could not check which of the repositories the git "+
+		"nodes named you may read: %s. This is NOT an answer about the fleet: say you could not read it.",
+		tool, faultSaid))
 }
 
 // readable reports whether c may read the repository a git node counted as id

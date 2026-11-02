@@ -439,14 +439,17 @@ worker is ever handed one, since it
 would write with its parent's grant; and every call to one on the operator
 catalogue is recorded as any write is. A seat is offered twenty-three of them —
 every write but `code_report_check`, `code_purge_unreachable` and
-`code_import_repo`, each a person's alone — only where
-its `role.code.access` is `full_access`: below it, no repository's grant lets
+`code_import_repo`, each a person's alone — where
+its `role.code.access` is `full_access`. Below it, no repository's grant lets
 the seat change anything ([Who may read and
-push](../concepts/code-host.md#who-may-read-and-push)), so a `read_only` or
-`review` seat — `read_only` is what a seat that sets none runs at — is offered
-the thirteen reads alone, and its prompt says nothing about changing code,
-rather than carrying twenty-three tools it would be refused on every repository on
-every round.
+push](../concepts/code-host.md#who-may-read-and-push)), so it is offered only
+what its tier reaches of a change's conversation beside the thirteen reads,
+and its prompt says nothing about changing code, rather than carrying tools it
+would be refused on every repository on every round: a `read_only` seat —
+what a seat that sets none runs at — comments on a change
+(`code_comment_on_change`), and a `review` seat also asks for reviews
+(`code_request_review`), reviews (`code_review_change`) and dismisses the
+findings it raised (`code_resolve_finding`).
 
 | Tool | Description |
 |------|-------------|
@@ -473,7 +476,7 @@ every round.
 | `code_delete_repo` | A repository deleted, restorable until its purge |
 | `code_restore_repo` | A deleted repository brought back as it was, before its purge |
 | `code_protect_branch` | The protection of one `pattern` (`refs/heads/<glob>`, `refs/tags/<glob>`) changed — `direct_push` (`persons` or `none`), `allow_force` and `allow_delete`, each named replacing that control and each left out kept as the rule has it (`persons`, off, off on a new rule) — or taken away (`remove`); and a branch's [merge gate](../concepts/code-host.md#merge-gates) changed a field at a time — `merge_by`, `approvals`, `landing`, `owners_approve`, `delete_source`, `agents_edit_checks` each replacing that field, `checks` and `approvals_unless` an item at a time (`{"add": [...], "remove": [...]}`), `human_paths` a glob at a time (`{"put": [{"glob", "unless"}], "remove": [glob]}`), the rest kept — or taken away (`remove_gate`). It answers the rule as it now stands. A seat tightens a protection and only a person loosens one ([Who may change a protection](../concepts/code-host.md#who-may-change-a-protection)) |
-| `code_open_change` | A [change](../concepts/code-host.md#changes) opened: a `branch` proposed into a `target` (the repository's default branch when left out), with a `title`, a `body`, as a `draft` or not, carrying a work item — the turn's own unless `work_item` names another, by a Worklet item's key (`ENG-42`), any tracker's identity (`<backend>:<id>`) or `none` — and, once it is open, asking the `reviewers` it names in a second write; an ask that did not finish leaves the change open and says why (`reviewers_not_asked`). It answers the change's reference (`web!42`) and its `version` |
+| `code_open_change` | A [change](../concepts/code-host.md#changes) opened: a `branch` proposed into a `target` (the repository's default branch when left out), with a `title`, a `body`, as a `draft` or not, carrying a work item — the turn's own unless `work_item` names another, by a Worklet item's key (`ENG-42`), any tracker's identity (`<backend>:<id>`) or `none` — and, once it is open, asking the `reviewers` it names in a second write; an ask that did not finish leaves the change open and says why (`reviewers_not_asked`). It answers the change's reference (`web!42`) and its `version`. Every `@handle` the title and body name that is a seat of the company is told ([Who a change wakes](../concepts/code-host.md#who-a-change-wakes)) — at most 32 a write, more refused naming the bound — as it is by the `title` or `body` an update sets, a review's summary and findings, and a comment's body |
 | `code_update_change` | One thing about a change a call, held to the `version` the caller read (`expected_version`): what it says — any of `title`, `body` and `work_item` together — or `draft` (a draft, or ready for review), or its `target` |
 | `code_close_change` | A change closed without merging it (`reason`), or with `reopen` a closed one opened again at its branch's head — held to `expected_version` as an update is |
 | `code_request_review` | Reviewers asked of a change (`reviewers`, at most 32), or an ask withdrawn (`withdraw`), with a `note`. A seat asked must review the repository and not have written the change; a person may always be asked ([Asking for review](../concepts/code-host.md#asking-for-review)) |
@@ -701,9 +704,17 @@ on both surfaces, like the code tools: a person's assistant holds them on the
 carries the grant (`health_tools: true`) — every other seat's registry holds
 them too, and its surfaces leave them out because the authority table refuses
 it them. Neither sets a threshold of its own; what is wrong is the alarm
-table's to say. The repositories `code_status` names are read as the code
-tools read them — held to the seat's grant, and in a turn somebody woke to
-theirs too ([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)).
+table's to say. `fleet_health` answers a page of nodes at a time by id
+(`limit` 1 to 100, 25 by default; `next` back as `cursor`), so a fleet of any
+size is read rather than refused; `firing` narrows it to the nodes whose own
+table has an alarm firing — what an alarm's wake asks it — counting the nodes
+that cannot say as `unevaluated`, and `node` reads one node. In a turn
+somebody woke, a seat reads them only for somebody
+of the company who may act: a turn a stranger woke, or a person who may not
+act in the company now, is answered nothing by either. The repositories
+`code_status` names are read as the code tools read them — held to the seat's
+grant, and in a turn somebody woke to theirs too
+([Reads made for somebody else](../concepts/code-host.md#reads-made-for-somebody-else)).
 See [The health tools](fleet.md#the-health-tools).
 
 ### Per-Role MCP Servers (GitHub)

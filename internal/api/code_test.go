@@ -230,13 +230,16 @@ func (f fakeGitRoutes) AwaitVerification(ctx context.Context, name string, id uu
 	return f.Verification(name, id)
 }
 
-// fakeCodeReads records every query it is asked and answers what answer does
-// — an empty answer at the level asked where it is nil.
+// fakeCodeReads records every query it is asked — a read of the rows by its
+// kind in asked, a resolve of refs in resolved, each a read of the rows a
+// question can make first — and answers what answer does: an empty answer at
+// the level asked where it is nil.
 type fakeCodeReads struct {
 	answer func(code.ReadQuery) (code.ReadAnswer, error)
 
-	mu    sync.Mutex
-	asked []code.ReadQuery
+	mu       sync.Mutex
+	asked    []code.ReadQuery
+	resolved []code.RefQuery
 }
 
 func (f *fakeCodeReads) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
@@ -249,9 +252,13 @@ func (f *fakeCodeReads) Read(_ context.Context, q code.ReadQuery) (code.ReadAnsw
 	return f.answer(q)
 }
 
-// ResolveRef answers every name a branch at the commit fakeCommit: what the
-// content questions this suite asks by their paths read at.
+// ResolveRef records q and answers every name a branch at the commit
+// fakeCommit: what the content questions this suite asks by their paths read
+// at.
 func (f *fakeCodeReads) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+	f.mu.Lock()
+	f.resolved = append(f.resolved, q)
+	f.mu.Unlock()
 	a := code.RefAnswer{Repo: code.RepoRef{ID: fakeRepoID, Name: q.Repo, DefaultBranch: "main"}}
 	for _, name := range q.Refs {
 		a.Refs = append(a.Refs, code.ResolvedRef{Name: name, Ref: "refs/heads/" + name, OID: fakeCommit})
@@ -296,6 +303,13 @@ func (f *fakeCodeReads) queries() []code.ReadQuery {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.asked)
+}
+
+// resolves is every resolve of refs asked so far.
+func (f *fakeCodeReads) resolves() []code.RefQuery {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.resolved)
 }
 
 // codeApp is an authenticated node of roles (nil: undeclared, every role)
@@ -537,18 +551,28 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 				for _, at := range []string{path + "?base=HEAD&head=HEAD&path=go.mod&target=refs/heads/main",
 					"/query/" + q.what + "?name=web&change=1&sha=" + fakeCommit + "&base=HEAD&head=HEAD&path=go.mod" +
 						"&oid=" + fakeCommit + "&check=unit&attempt=1&target=refs/heads/main"} {
-					before := len(reads.queries())
+					// EVERY READ OF THE ROWS COUNTED, a resolve of refs as
+					// much as a read of a kind: a question that read its
+					// repository and then resolved would be two.
+					readsBefore, resolvesBefore := len(reads.queries()), len(reads.resolves())
 					if rec := ask(t, a, http.MethodGet, at, true); rec.Code != http.StatusOK {
 						t.Errorf("GET %s answered %d %q", at, rec.Code, rec.Body.String())
 						continue
 					}
-					asked := reads.queries()
-					if len(asked) != before+1 {
-						t.Errorf("GET %s asked the reader %d times, want once", at, len(asked)-before)
+					asked, resolved := reads.queries()[readsBefore:], reads.resolves()[resolvesBefore:]
+					if len(asked)+len(resolved) != 1 {
+						t.Errorf("GET %s asked the reader %d times (%+v, resolving %+v), want once", at,
+							len(asked)+len(resolved), asked, resolved)
 						continue
 					}
-					if got := asked[len(asked)-1]; got.Kind != q.kind || got.Repo != q.repo {
-						t.Errorf("GET %s asked a %s read of %q, want a %s read of %q", at, got.Kind, got.Repo,
+					switch {
+					case q.resolves != nil:
+						if len(resolved) != 1 || resolved[0].Repo != q.repo || !slices.Equal(resolved[0].Refs, q.resolves) {
+							t.Errorf("GET %s asked %+v and resolved %+v, want one resolve of %v in %q", at, asked,
+								resolved, q.resolves, q.repo)
+						}
+					case len(asked) != 1 || asked[0].Kind != q.kind || asked[0].Repo != q.repo:
+						t.Errorf("GET %s asked %+v and resolved %+v, want a %s read of %q", at, asked, resolved,
 							q.kind, q.repo)
 					}
 				}
@@ -560,11 +584,14 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 // codeQuestion is one of the code host's questions: its name, its route, the
 // kind of read it asks, and the repository a request naming "web" — and change
 // 1 — on its path reads: none for a listing, whose route names none, whatever
-// the generic form names beside it.
+// the generic form names beside it. A question whose one read of the rows
+// resolves refs (code.resolve_ref) rather than reading a kind names the refs
+// it resolves instead, in resolves, and no kind.
 type codeQuestion struct {
 	what, route string
 	kind        code.ReadKind
 	repo        string
+	resolves    []string
 }
 
 // codeQuestions are every code question: the three rows, who read a unit's
@@ -573,32 +600,35 @@ type codeQuestion struct {
 // asked of no part), whom its records reached and one reviewer's reviews — a
 // repository's content, and its merge queues and its checks.
 var codeQuestions = []codeQuestion{
-	{"code_repos", "GET /code/repos", code.ReadRepos, ""},
-	{"code_repo", "GET /code/repos/{name}", code.ReadRepo, "web"},
-	{"code_pushes", "GET /code/repos/{name}/pushes", code.ReadPushes, "web"},
-	{"code_repo_readers", "GET /code/repos/{name}/readers", code.ReadRepo, "web"},
-	{"code_changes", "GET /code/changes", code.ReadChanges, ""},
-	{"code_change", "GET /code/repos/{name}/changes/{n}", code.ReadChange, "web"},
-	{"code_change_routing", "GET /code/repos/{name}/changes/{n}/routing", code.ReadChangeRouting, "web"},
-	{"code_reviews", "GET /code/reviews", code.ReadReviews, ""},
-	// AND A REPOSITORY'S CONTENT: its refs, and each read by object id at its
-	// default branch — the repository read first, for it — or, a commit, its
-	// changes read first, for the repository.
-	{"code_refs", "GET /code/repos/{name}/refs", code.ReadRefs, "web"},
-	{"code_tree", "GET /code/repos/{name}/tree", code.ReadRepo, "web"},
-	{"code_blob", "GET /code/repos/{name}/blob", code.ReadRepo, "web"},
-	{"code_log", "GET /code/repos/{name}/log", code.ReadRepo, "web"},
-	{"code_blame", "GET /code/repos/{name}/blame", code.ReadRepo, "web"},
-	{"code_diff", "GET /code/repos/{name}/diff", code.ReadRepo, "web"},
-	{"code_compare", "GET /code/repos/{name}/compare", code.ReadRepo, "web"},
-	{"code_commit", "GET /code/repos/{name}/commits/{sha}", code.ReadCommit, "web"},
+	{"code_repos", "GET /code/repos", code.ReadRepos, "", nil},
+	{"code_repo", "GET /code/repos/{name}", code.ReadRepo, "web", nil},
+	{"code_pushes", "GET /code/repos/{name}/pushes", code.ReadPushes, "web", nil},
+	{"code_repo_readers", "GET /code/repos/{name}/readers", code.ReadRepo, "web", nil},
+	{"code_changes", "GET /code/changes", code.ReadChanges, "", nil},
+	{"code_change", "GET /code/repos/{name}/changes/{n}", code.ReadChange, "web", nil},
+	{"code_change_routing", "GET /code/repos/{name}/changes/{n}/routing", code.ReadChangeRouting, "web", nil},
+	{"code_reviews", "GET /code/reviews", code.ReadReviews, "", nil},
+	// AND A REPOSITORY'S CONTENT: its refs; each read by object id at its
+	// default branch — what `ref` defaults to, and what a request's `base` and
+	// `head` name here — ONE resolve of HEAD, which the reader answers from
+	// the repository's row in the same read (code.HeadRef), with no read of
+	// the repository ahead of it; and a commit, its changes read first, for
+	// the repository.
+	{"code_refs", "GET /code/repos/{name}/refs", code.ReadRefs, "web", nil},
+	{"code_tree", "GET /code/repos/{name}/tree", "", "web", []string{code.HeadRef}},
+	{"code_blob", "GET /code/repos/{name}/blob", "", "web", []string{code.HeadRef}},
+	{"code_log", "GET /code/repos/{name}/log", "", "web", []string{code.HeadRef}},
+	{"code_blame", "GET /code/repos/{name}/blame", "", "web", []string{code.HeadRef}},
+	{"code_diff", "GET /code/repos/{name}/diff", "", "web", []string{code.HeadRef}},
+	{"code_compare", "GET /code/repos/{name}/compare", "", "web", []string{code.HeadRef}},
+	{"code_commit", "GET /code/repos/{name}/commits/{sha}", code.ReadCommit, "web", nil},
 	// AND ITS MERGE QUEUES AND ITS CHECKS: the queues and the attempts listed
 	// across repositories where the route names none, one attempt whole, and
 	// a page of its log, read after the attempt that names it.
-	{"code_queue", "GET /code/queue", code.ReadQueue, ""},
-	{"code_checks", "GET /code/checks", code.ReadChecks, ""},
-	{"code_check", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}", code.ReadCheck, "web"},
-	{"code_check_log", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}/log", code.ReadCheck, "web"},
+	{"code_queue", "GET /code/queue", code.ReadQueue, "", nil},
+	{"code_checks", "GET /code/checks", code.ReadChecks, "", nil},
+	{"code_check", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}", code.ReadCheck, "web", nil},
+	{"code_check_log", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}/log", code.ReadCheck, "web", nil},
 }
 
 // codeSearchQuestion is the code search: a question of its own beside
@@ -1454,6 +1484,12 @@ func TestACodeReadForNobodyIsRefused(t *testing.T) {
 	}
 	if asked := reads.queries(); len(asked) != 0 {
 		t.Errorf("the reader was asked %d reads for nobody: %+v", len(asked), asked)
+	}
+	// A CONTENT QUESTION'S ONE READ OF THE ROWS IS A RESOLVE of the refs it
+	// names, HEAD by default, so a resolve asked for nobody is the same
+	// defect through the other door.
+	if resolved := reads.resolves(); len(resolved) != 0 {
+		t.Errorf("the reader was asked %d resolves for nobody: %+v", len(resolved), resolved)
 	}
 	if asked := readers.asks(); len(asked) != 0 {
 		t.Errorf("the readers were asked %d pages for nobody: %+v", len(asked), asked)
