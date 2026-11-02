@@ -31,12 +31,21 @@ func queuedPack(id string) *code.PackRef {
 // training is a train of one candidate on main, built onto base: entry merged
 // as commit — the queue's candidate of it, under an operation id of its own.
 func training(repo, base, entry, commit string) code.QueueProposal {
+	return trainOf(repo, base, code.CandidateEntry{EntryID: entry, Commit: commit})
+}
+
+// trainOf is a train on main built onto base, a candidate an entry in the
+// order given — each merged as its commit onto the candidate before, its tip
+// that commit — under an operation id of its own.
+func trainOf(repo, base string, entries ...code.CandidateEntry) code.QueueProposal {
 	opID := statelog.NewOpID(time.Now(), "code.queue")
 	train := code.QueueTrainID(opID)
-	return code.QueueProposal{OpID: opID, Candidate: &code.Candidate{RepoID: repo, TargetRef: mainRef,
-		Train: train, BaseOID: base, Pack: queuedPack(train), Candidates: []code.TrainCandidate{{
-			CandidateID: code.QueueCandidateID(train, 1), Ordinal: 1, TipOID: commit,
-			Entries: []code.CandidateEntry{{EntryID: entry, Commit: commit}}}}}}
+	c := &code.Candidate{RepoID: repo, TargetRef: mainRef, Train: train, BaseOID: base, Pack: queuedPack(train)}
+	for i, e := range entries {
+		c.Candidates = append(c.Candidates, code.TrainCandidate{CandidateID: code.QueueCandidateID(train, i+1),
+			Ordinal: i + 1, TipOID: e.Commit, Entries: []code.CandidateEntry{e}})
+	}
+	return code.QueueProposal{OpID: opID, Candidate: c}
 }
 
 // landingOf is a landing on main of entries — each change's entry and the
@@ -819,6 +828,60 @@ func TestAPurgesTipsReadEveryRevisionOfAChangeOpenedBetweenItsPages(t *testing.T
 	}
 	if !slices.Equal(rest, []string{oidOf("C"), oidOf("D")}) {
 		t.Fatalf("the pages after the first name %v; want the second change's revisions C and D", rest)
+	}
+}
+
+// A PURGE'S TIPS RESUME INSIDE EVERY PHASE (M6-D2: the tip set is exact): read
+// a row a page, a page ends INSIDE each phase that holds two rows — between
+// two live changes on two branches, two live entries on one target and two
+// candidates of one train — and the next page resumes after the row its
+// cursor names, in the same change's batch, target's queue and train, so
+// every object is named in its phases' order and none is skipped: the head B
+// and R of each change's revision, of each entry, then the tips M1 and M2 of
+// the train's candidates, the second of which a landing of the whole train
+// moves main onto.
+//
+// Mutations: resume the live changes after a batch's last with none — the
+// release change's revision R is skipped; resume a target's queue after its
+// target alone, never after an entry's seq — the second entry's R is skipped;
+// resume a train after it alone, never after a candidate's ordinal — the
+// second candidate's tip M2 is skipped.
+func TestAPurgesTipsResumeInsideEveryPhase(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, first := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, first)
+	opened, err := c.ProposeChange(t.Context(), opening(repo, releaseRef, mainRef, dev))
+	requireChanged(t, opened, err)
+	second := opened.ChangeID
+	converse(t, w, n.revising(repo, second, 1, oidOf("R"), mainRef, nil))
+	converse(t, w, reviewing(repo, second, platLead, 1, code.VerdictApprove, nil))
+	n.passed(repo, oidOf("R"), mainRef, "unit")
+	entries := make([]string, 0, 2)
+	for i, q := range []code.QueueProposal{enqueueing(repo, first, ada, oidOf("B")),
+		enqueueing(repo, second, ada, oidOf("R"))} {
+		res, err := c.ProposeQueue(t.Context(), q)
+		requireQueued(t, res, err, code.QueueWaiting, i+1)
+		entries = append(entries, q.Enqueue.EntryID)
+	}
+	res, err := c.ProposeQueue(t.Context(), trainOf(repo, oidOf("A"),
+		code.CandidateEntry{EntryID: entries[0], Commit: oidOf("M1")},
+		code.CandidateEntry{EntryID: entries[1], Commit: oidOf("M2")}))
+	requireRecorded(t, res, err)
+
+	now := time.Now()
+	if got, want := n.purgeTips(repo, now, code.MaxSnapshotItems),
+		[]string{oidOf("B"), oidOf("R"), oidOf("M1"), oidOf("M2")}; !slices.Equal(got, want) {
+		t.Fatalf("a purge's tips in one page are %v; want %v — each object once, in its first phase's order",
+			got, want)
+	}
+	if got, want := n.purgeTips(repo, now, 1),
+		[]string{oidOf("B"), oidOf("R"), oidOf("B"), oidOf("R"), oidOf("M1"), oidOf("M2")}; !slices.Equal(got, want) {
+		t.Fatalf("a purge's tips a row a page are %v; want %v — feature's and release's revisions, the "+
+			"two entries, then the train's two candidates", got, want)
 	}
 }
 
