@@ -327,7 +327,12 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 		// once the hold lifts, by a later pass.
 		return
 	}
-	if err := w.publishCompletion(ctx, run); err != nil {
+	first, due := w.announcing(run)
+	if !due {
+		return
+	}
+	if err := w.publishCompletion(ctx, run, first); err != nil {
+		w.unannounce(run.TurnID)
 		log.WarnContext(ctx, "sandbox_completion_publish_failed", "turn_id", run.TurnID,
 			"error", err.Error())
 	}

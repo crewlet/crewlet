@@ -177,11 +177,12 @@ type refusedCompletion struct {
 //
 // # Why it is kept, when the waiter announces it again anyway
 //
-// The waiter that drives the run's box — the fleet's, or the box host's own
-// (boxhost.go) — re-announces a finished run on every poll for as long as its
-// row is running, and that is what makes acknowledging a refused completion
-// safe: nothing is lost with the delivery. But the next poll is up to one
-// [DefaultPollInterval] away, and the end of a condition is an event the
+// The waiter that drives the run's box (the fleet's, or the box host's own,
+// boxhost.go) re-announces a finished run for as long as its row is
+// running, on its schedule (reannounce.go), and that is what makes
+// acknowledging a refused completion safe: nothing is lost with the delivery.
+// But the next announcement is up to [reannounceCeilingPolls] poll intervals
+// away, and the end of a condition is an event the
 // engine already observes (a seat's turn ending, a renew proving ownership
 // again, a provider's limit lifting). So the clearing re-fires the completion
 // itself, and the poll is the backstop for a clearing nothing signals. Both
@@ -218,7 +219,7 @@ type refusedCompletion struct {
 // benched for. Held here, it goes with the node: its restart forgets it, and
 // so does its letting go of the seat ([Coordinator.ReleaseSeat]), so the job's
 // next announcement asks whoever holds the seat then. The waiter announces the
-// job on every poll meanwhile, as it does for any refused completion; each
+// job on its schedule meanwhile, as it does for any refused completion; each
 // announcement costs this node a lookup, not a collection and a review, and
 // the job's box, which the collection paused, is left asleep, since the job was
 // read back already ([Waiter.reach]). A seat's budget, which every node reads
