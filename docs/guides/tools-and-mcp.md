@@ -439,14 +439,17 @@ worker is ever handed one, since it
 would write with its parent's grant; and every call to one on the operator
 catalogue is recorded as any write is. A seat is offered twenty-three of them —
 every write but `code_report_check`, `code_purge_unreachable` and
-`code_import_repo`, each a person's alone — only where
-its `role.code.access` is `full_access`: below it, no repository's grant lets
+`code_import_repo`, each a person's alone — where
+its `role.code.access` is `full_access`. Below it, no repository's grant lets
 the seat change anything ([Who may read and
-push](../concepts/code-host.md#who-may-read-and-push)), so a `read_only` or
-`review` seat — `read_only` is what a seat that sets none runs at — is offered
-the thirteen reads alone, and its prompt says nothing about changing code,
-rather than carrying twenty-three tools it would be refused on every repository on
-every round.
+push](../concepts/code-host.md#who-may-read-and-push)), so it is offered only
+what its tier reaches of a change's conversation beside the thirteen reads,
+and its prompt says nothing about changing code, rather than carrying tools it
+would be refused on every repository on every round: a `read_only` seat —
+what a seat that sets none runs at — comments on a change
+(`code_comment_on_change`), and a `review` seat also asks for reviews
+(`code_request_review`), reviews (`code_review_change`) and dismisses the
+findings it raised (`code_resolve_finding`).
 
 | Tool | Description |
 |------|-------------|

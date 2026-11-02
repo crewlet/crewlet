@@ -979,9 +979,10 @@ repositories through thirty-six of the [code
 tools](tools-and-mcp.md#the-companys-code), on the server and in their own
 names — every one but `code_report_check`, `code_purge_unreachable` and
 `code_import_repo`, each a person's. A seat holds no git credential and needs
-none. Every seat reads with thirteen of the tools; a seat whose
-`role.code.access` is `full_access` also changes the repositories with the
-other twenty-three; and a seat's coding run checks a repository out into its
+none. Every seat reads with thirteen of the tools and comments on a change; a
+`review` seat also asks for reviews, reviews and dismisses the findings it
+raised; a seat whose `role.code.access` is `full_access` changes the
+repositories with all twenty-three others; and a seat's coding run checks a repository out into its
 box with `code_checkout` and works in that clone besides. What each may do is its grant, derived from
 the chart ([Who may read and push](../concepts/code-host.md#who-may-read-and-push)).
 
@@ -1017,9 +1018,11 @@ tools, one change a call: a commit of up to 1 000 file operations to a branch
 `code_delete_branch`), a repository created, changed, renamed, archived,
 deleted, restored or protected ([below](#scratch-repositories)), and a change
 opened, edited, closed, reviewed and discussed ([Or with a
-tool](#open-a-change-from-a-push)). A `read_only` or `review` seat — and
-`read_only` is what a seat that sets none runs at — is offered the thirteen
-reads alone, none of the twenty-three. Your assistant has the same twenty-three
+tool](#open-a-change-from-a-push)). A `read_only` seat — what a seat that
+sets none runs at — is offered one of the twenty-three, `code_comment_on_change`,
+and a `review` seat also `code_request_review`, `code_review_change` and
+`code_resolve_finding`, to dismiss the findings it raised: neither changes a
+repository, so neither is offered a write that would. Your assistant has the same twenty-three
 and `code_report_check`, `code_purge_unreachable` and `code_import_repo`
 besides, each a person's alone, as you.
 

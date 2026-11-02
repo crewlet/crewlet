@@ -46,9 +46,9 @@ func HealthToolDeps(e *Engine) builtin.HealthDeps {
 // seat's role does not carry — decided over THIS EPOCH's chart, the one the
 // turn is pinned to and builds its prompt from, as the seat the turn acts as
 // (turnctx.SeatPrincipal), so what the turn is offered and what each of its
-// calls is decided as are one principal; and the code writes, where the
-// seat's code tier writes no repository at all (builtin.CodeWritesWithheld) —
-// a refusal every repository's grant makes, which the table, admitting
+// calls is decided as are one principal; and the code writes no grant at
+// the seat's code tier admits (builtin.CodeWritesWithheld) — a refusal every
+// repository's grant makes, which the table, admitting
 // everybody to a code write so each repository's grant decides it, cannot
 // make ahead of the calls. The tier is read off the same epoch's role, as the
 // code host's roster reads it (codeRoster).

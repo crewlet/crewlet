@@ -25,10 +25,14 @@ import (
 // the one ref it moves, the seat's own work spared): a rule of the push and
 // no access its decide reads, so its row is read, the least that admits it.
 //
+// And what a seat whose tier caps it below write is offered of the writes
+// (belowWriteNeeds, CodeWritesWithheld) needs at least what the write's decide
+// holds a colleague to, and less than write.
+//
 // Mutations: a change tool's row dropped — a read's or a write's; a row naming
 // a tool that is not one; a read's row raised to review; the review's row, or
 // the decide's need for a review, lowered to read; the rebase's row raised to
-// review → red.
+// review; the review offered below write at read → red.
 func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 	t.Parallel()
 	every := slices.Concat(ChangeToolNames(), ChangeWrites())
@@ -96,6 +100,22 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 		case write.CeilingNeeds() != changeToolNeeds[name]:
 			t.Errorf("%s needs %s by changeToolNeeds, and its decide holds a colleague at %s", name,
 				changeToolNeeds[name], write.CeilingNeeds())
+		}
+	}
+	// AND WHAT A SEAT BELOW WRITE IS OFFERED of them (belowWriteNeeds): a
+	// change write, needing of the seat no less than its decide holds a
+	// colleague to — the relation beyond the access being the seat's own,
+	// which below write authors nothing — and less than write, the one tier
+	// that is offered every write whatever this table says.
+	for name, need := range belowWriteNeeds {
+		switch {
+		case !slices.Contains(ChangeWrites(), name):
+			t.Errorf("belowWriteNeeds names %s, which is no change write", name)
+		case need < changeToolNeeds[name]:
+			t.Errorf("a seat below write is offered %s at %s, below the %s changeToolNeeds holds a colleague to",
+				name, need, changeToolNeeds[name])
+		case need >= code.AccessWrite:
+			t.Errorf("belowWriteNeeds names %s at %s, which no tier below write reaches", name, need)
 		}
 	}
 }
