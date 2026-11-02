@@ -74,6 +74,38 @@ func TestExtractTagsStampsFailure(t *testing.T) {
 	}
 }
 
+// A RECORD IS TAGGED WITH THE MCP SERVERS ITS CALLS NAMED, each once, sorted
+// and delimited at both ends, so a server's recent calls are found by the tag
+// rather than by reading every phase record whole: a refused call's server
+// included, since it was that server's tool that was asked for, and a builtin's
+// or an unknown name's never. A record that named none carries no tag.
+//
+// Mutation: tag by `origin` instead of `source`, and linear (refused, so
+// unanswered) drops out; drop the delimiters, or the sort, and the value moves.
+func TestExtractTagsNamesTheMCPServersARecordsCallsWereFor(t *testing.T) {
+	t.Parallel()
+	tags := store.ExtractTags(serialize(t, `{
+		"type": "agent_phase_completed",
+		"tool_executions": [
+			{"name": "github_get_issue", "source": "mcp:github", "origin": "mcp:github"},
+			{"name": "remember", "source": "builtin", "origin": "builtin"},
+			{"name": "linear_list", "source": "mcp:linear", "refusal": "forbidden"},
+			{"name": "github_search", "source": "mcp:github", "origin": "mcp:github"},
+			{"name": "ghost", "refusal": "not_found"}
+		]
+	}`))
+	if got := tags["mcp_servers"]; got != ",github,linear," {
+		t.Errorf("mcp_servers = %q, want \",github,linear,\"", got)
+	}
+	none := store.ExtractTags(serialize(t, `{
+		"type": "agent_phase_completed",
+		"tool_executions": [{"name": "remember", "source": "builtin"}]
+	}`))
+	if _, present := none["mcp_servers"]; present {
+		t.Errorf("a record that called no MCP server is tagged %q", none["mcp_servers"])
+	}
+}
+
 // TestExtractTagsReadsUnknownTypes is why these dimensions are read off the
 // envelope rather than off a decoded payload: a reader that needs the concrete
 // type sees nothing at all on a type it does not know. A rolling upgrade

@@ -407,10 +407,9 @@ func (s *Spend) record(rec phaseRecord) {
 //
 // BY WHOSE TOOL THE CALL NAMED ([toolloop.Execution.Source]), not by who
 // answered it, so a call the engine refused before any tool ran is counted
-// against the server it was for. A call NOTHING ANSWERED is a refusal, one
-// whose server was not running is unavailable, and one the server answered
-// with a failure is failed; a builtin's call, and a name nothing registered,
-// is no server's and is not counted.
+// against the server it was for, in the outcome [mcp.OutcomeOf] files it in.
+// A builtin's call, and a name nothing registered, is no server's and is not
+// counted.
 func toolTallies(execs []toolloop.Execution) []types.ToolTally {
 	var out []types.ToolTally
 	for _, ex := range execs {
@@ -419,13 +418,14 @@ func toolTallies(execs []toolloop.Execution) []types.ToolTally {
 			continue
 		}
 		t := types.ToolTally{Server: server, Tool: ex.Name, Calls: 1}
-		switch {
-		case ex.Origin == "":
+		switch mcp.OutcomeOf(ex.Origin, ex.Refusal, ex.Failed) {
+		case mcp.CallRefused:
 			t.Refused = 1
-		case ex.Refusal == mcp.RefusalUnavailable:
+		case mcp.CallUnavailable:
 			t.Unavailable = 1
-		case ex.Failed:
+		case mcp.CallFailed:
 			t.Failed = 1
+		case mcp.CallAnswered:
 		}
 		// ONLY WHAT WAS MEASURED, for the wire row's reason
 		// ([toolExecutions]): an untimed call adds no time and no instant.
