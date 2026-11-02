@@ -392,7 +392,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	}
 	// ITS OWN LIFETIME from here: the relay and the cache's background work
 	// run until the host is stopped, however long this call's caller lives.
-	if err := h.Start(ctx); err != nil {
+	if err = h.Start(ctx); err != nil {
 		h.Stop(context.WithoutCancel(ctx))
 		return codeHostParts{}, fmt.Errorf("engine: start the code host: %w", err)
 	}
