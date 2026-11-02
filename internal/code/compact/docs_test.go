@@ -94,9 +94,9 @@ func TestThePagesStateTheExpungesBounds(t *testing.T) {
 				share, least),
 			fmt.Sprintf("The %s is provisional", least),
 			fmt.Sprintf("due past a %s and %s", share, least),
-			fmt.Sprintf("last expunged %s ago or never", interval),
-			fmt.Sprintf("not scanned again on that node for %s, so a clean repository's history is walked at most once %s",
-				interval, interval),
+			fmt.Sprintf("last expunged or found clean %s ago or never", interval),
+			fmt.Sprintf("takes it off every git node's list for %s", interval),
+			fmt.Sprintf("so a clean repository's history is walked at most once %s", interval),
 			fmt.Sprintf("for **%s**, git's own `gc.pruneExpire` default: every object", graceDays),
 			fmt.Sprintf("stays fetchable by its id for %s, and no push in flight", grace),
 			fmt.Sprintf("kept **%s**, git's own `gc.pruneExpire` default, because the weekly", graceDays),
@@ -110,7 +110,7 @@ func TestThePagesStateTheExpungesBounds(t *testing.T) {
 			fmt.Sprintf("the schedule waits for a %s of the repository to be unreachable", share),
 			fmt.Sprintf("%d bytes an object of the whole repository", gitproc.TransferBytesPerObject),
 			fmt.Sprintf("%s times `code.limits.max_blob_bytes` (%s by default)", numberWord(t, int(windowBlobs)), window),
-			fmt.Sprintf("a build adds %d bytes an object of the packs it sorts", cache.CompactBytesPerObject),
+			fmt.Sprintf("and %d bytes an object of the packs it sorts", cache.CompactBytesPerObject),
 		},
 		filepath.Join("guides", "code.md"): {
 			fmt.Sprintf("every %s once a %s of the repository, and at least %s, is unreachable, keeping what a "+
