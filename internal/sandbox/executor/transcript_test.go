@@ -342,6 +342,51 @@ func TestAnOpenCodeSessionReadsAsTheTranscriptItsExportHolds(t *testing.T) {
 	}
 }
 
+// AN INSTANT AN ANSWER CANNOT CARRY IS NO TIME. An answer writes an entry's
+// instant in RFC 3339, years 0 to 9999, and a box's own agent can write any
+// instant into what its run packs: Claude Code's year 0000 an hour east of
+// UTC, which is the year before it in UTC, or 9999's last second an hour west,
+// which is 10000, and an export's milliseconds of the year 10000. Each entry
+// reads with no time, beside an instant in range that reads as recorded — and
+// the page encodes, which with any of them it did not.
+//
+// Mutation: take any instant the parser does, and the page fails to encode.
+func TestAnInstantAnAnswerCannotCarryIsNoTime(t *testing.T) {
+	t.Parallel()
+	recorded := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	_, claude := claudeCaptureOf(t, []string{
+		`{"type":"user","message":{"role":"user","content":"before the year 0"},"timestamp":"0000-01-01T00:00:00+01:00"}`,
+		`{"type":"user","message":{"role":"user","content":"past the year 9999"},"timestamp":"9999-12-31T23:59:59-01:00"}`,
+		`{"type":"user","message":{"role":"user","content":"in range"},"timestamp":"2026-10-30T12:00:00.000Z"}`,
+	}, nil)
+	export := `{"info":{},"messages":[` +
+		`{"info":{"role":"user","time":{"created":253402300800000}},"parts":[{"type":"text","text":"past the year 9999"}]},` +
+		`{"info":{"role":"user","time":{"created":` + strconv.FormatInt(recorded.UnixMilli(), 10) + `}},` +
+		`"parts":[{"type":"text","text":"in range"}]}]}`
+	for name, got := range map[string]executor.Transcript{
+		"claude-code": readClaude(t, claude, executor.TranscriptReadBounds()),
+		"opencode":    readOpenCode(t, openCodeCaptureOf(t, export), executor.TranscriptReadBounds()),
+	} {
+		if len(got.Entries) == 0 {
+			t.Errorf("%s read no entries", name)
+			continue
+		}
+		last := len(got.Entries) - 1
+		for _, e := range got.Entries[:last] {
+			if !e.At.IsZero() {
+				t.Errorf("%s: %q is dated %s, which no answer can carry", name, e.Text, e.At)
+			}
+		}
+		if e := got.Entries[last]; e.Text != "in range" || !e.At.Equal(recorded) {
+			t.Errorf("%s: the last entry reads %q dated %s, want %q at %s", name, e.Text, e.At,
+				"in range", recorded)
+		}
+		if _, err := json.Marshal(got.Entries); err != nil {
+			t.Errorf("%s: the page does not encode: %v", name, err)
+		}
+	}
+}
+
 // note is a note as the engine renders one for a running turn: its heading,
 // naming who sent it, its framing line, and the words.
 func note(who, words string) string {

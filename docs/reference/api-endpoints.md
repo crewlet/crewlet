@@ -9331,7 +9331,9 @@ the run's own), and OpenCode's session export. Each entry is one of:
 The harness's bookkeeping (a session's title, a snapshot of the files it
 edited, its system notices), the model's thinking and a tool result Claude Code
 spilled to a file are no entry. `at` is when the harness recorded the entry,
-absent where its record says no time.
+absent where its record says no time, or one outside the years 0 to 9999 —
+all RFC 3339 can spell, and a box's own agent can write any instant into what
+its run packs.
 
 **Redacted at this read, whatever the capture did.** Every entry's text is
 passed through the engine's one redaction pass (`redact.Secrets`) **before it is

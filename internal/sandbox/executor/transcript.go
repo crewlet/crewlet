@@ -168,7 +168,7 @@ type TranscriptEntry struct {
 	Kind EntryKind `json:"kind"`
 
 	// At is when the harness recorded the entry, zero where its record
-	// carries no time.
+	// carries no time — or one no answer can carry ([carriedInstant]).
 	At time.Time `json:"at,omitzero"`
 
 	// Thread is the subagent whose transcript holds the entry — its sidecar
@@ -1056,13 +1056,30 @@ func (b *transcriptBuilder) claudeContent(ctx context.Context, raw json.RawMessa
 }
 
 // claudeTime is a record's `timestamp`, an RFC 3339 instant, or zero where it
-// carries none this read can parse.
+// carries none this read can parse, or none an answer can carry
+// ([carriedInstant]): the parser takes the year 0000 at any offset, which is a
+// year before it in UTC.
 func claudeTime(raw string) time.Time {
 	at, err := time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
 		return time.Time{}
 	}
-	return at.UTC()
+	return carriedInstant(at.UTC())
+}
+
+// carriedInstant is at where an answer can carry it — in the years 0 to 9999,
+// all RFC 3339 spells, which is how an answer's JSON writes an instant — and
+// zero otherwise, so the entry is sent with no time.
+//
+// AN INSTANT AN ANSWER CANNOT CARRY FAILS THE PAGE THAT HOLDS IT: encoding the
+// answer fails on it, which REST answers with a 500 and the socket with no
+// answer at all, and every page after it is reached only through that one's
+// cursor. And a box's own agent can write any instant into what its run packs.
+func carriedInstant(at time.Time) time.Time {
+	if year := at.Year(); year < 0 || year > 9999 {
+		return time.Time{}
+	}
+	return at
 }
 
 // compactJSON is a call's input as one line of JSON, or as it came where it is
@@ -1333,12 +1350,13 @@ func (b *transcriptBuilder) openCodeMessage(ctx context.Context, m openCodeMessa
 	return nil
 }
 
-// unixMillis is an export's instant, or zero where it carries none.
+// unixMillis is an export's instant, or zero where it carries none, or none an
+// answer can carry ([carriedInstant]).
 func unixMillis(ms int64) time.Time {
 	if ms <= 0 {
 		return time.Time{}
 	}
-	return time.UnixMilli(ms).UTC()
+	return carriedInstant(time.UnixMilli(ms).UTC())
 }
 
 // firstInstant is at, or otherwise where it is zero.
