@@ -215,6 +215,7 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 	case code.ReadChanges:
 		q.Repo, q.State, q.Owner = p.String("repo"), code.ChangeState(p.String("state")), p.String("owner")
 		q.Work, q.Reviewer, q.Needs = p.String("work"), p.String("reviewer"), code.Need(p.String("needs"))
+		q.Window = code.ChangeWindow(p.String("window"))
 	case code.ReadReviews:
 		q.Reviewer = p.String("reviewer")
 	case code.ReadQueue:

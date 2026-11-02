@@ -1080,6 +1080,22 @@ func registeredStatements() map[string]statement {
 			[]string{revisionKey + " (change_id=?)", factsKey + " (change_id=? AND n=?)"}},
 		"revisions after": {revisionsAfterSQL, []any{"repo-1-change-000001", 2, 200},
 			[]string{revisionKey + " (change_id=? AND n<?)", factsKey + " (change_id=? AND n=?)"}},
+		// A WINDOW'S WALK (changewindow.go): the changes whose lifecycle
+		// moved within it and those somebody spoke of within it, each a
+		// first page and a page after a cursor, newest first, the
+		// conversation's partial index walked and each change sought by its
+		// key; and the conversations of a page's changes, driven from their
+		// list.
+		"changes moved": {changesMovedSQL, []any{1000, 50}, []string{changesMovedKey + " (updated_at>=?)"}},
+		"changes moved after": {changesMovedAfterSQL, []any{1000, 2030, 2030, "repo-1-change-000031", 50},
+			[]string{changesMovedKey + " (updated_at<=? AND updated_at>=?)"}},
+		"changes spoken of": {conversationsMovedSQL, []any{1000, 50},
+			[]string{conversationsMovedKey + " (updated_at>=?)", changeKey + " (id=?)"}},
+		"changes spoken of after": {conversationsMovedAfterSQL,
+			[]any{1000, 2030, 2030, "repo-1-change-000031", 50},
+			[]string{conversationsMovedKey + " (updated_at<=? AND updated_at>=?)", changeKey + " (id=?)"}},
+		"conversations of changes": {conversationsOfSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)"}},
 		"listed repos": {listedReposSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		// THE READS OF A CHANGE'S CONVERSATION (conversationread.go): a
 		// reviewer's standing asks newest first, a first page and a page

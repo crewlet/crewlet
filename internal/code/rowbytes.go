@@ -773,7 +773,8 @@ func (s ChangeSummary) encodedBytes() int {
 	if s.Readiness != nil {
 		n += field("readiness", s.Readiness.encodedBytes(), false)
 	}
-	return n
+	return n + field("open_findings", intBytes(s.OpenFindings), false) +
+		field("updated_at", timeBytes(s.UpdatedAt), false)
 }
 
 // encodedBytes is the length of the readiness's JSON encoding: its list null

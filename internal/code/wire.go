@@ -1376,8 +1376,9 @@ type ReadQuery struct {
 	// across trackers, `<backend>:<id>` ([types.WorkItem.Ref]). Repo, where
 	// set, narrows the listing to one repository.
 	//
-	// A LISTING NAMES A REPOSITORY, A WORK ITEM OR A STATE — what the indexes
-	// it walks lead with — and is refused naming none: there is no index of
+	// A LISTING NAMES A REPOSITORY, A WORK ITEM, A STATE OR A WINDOW — what
+	// the indexes it walks lead with, beside the reviewer and the need below —
+	// and is refused naming none: there is no index of
 	// every change the company holds, and an owner's changes are kept by
 	// state. It walks the ONE index its filters lead (changeread.go): a work
 	// item's changes; an owner's in a state; a repository's in a state; a
@@ -1410,6 +1411,14 @@ type ReadQuery struct {
 	// refuses the kind whole.
 	Reviewer string `json:"reviewer,omitempty"`
 	Needs    Need   `json:"needs,omitempty"`
+	// Window narrows a `changes` listing to the changes that moved within
+	// it ([ChangeWindow], [ChangeSummary.UpdatedAt]), refused on every other
+	// kind. A listing that names nothing else an index leads by — no
+	// repository, work item, reviewer or need — walks the two indexes of
+	// when its changes last moved (changewindow.go), newest move first, and
+	// tests a state and an owner on the rows it read; one that names any of
+	// those walks that one's index and tests the window on each row.
+	Window ChangeWindow `json:"window,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
 	// revisions, which "" names too, its reviewers, its comments, its
 	// reviews, its findings or the asker's own standing findings
@@ -2723,6 +2732,25 @@ type ChangeSummary struct {
 	// that is no longer live, which merges nothing. A change read in brief
 	// judges none ([ReadAnswer.ChangeBrief]), and its row carries none.
 	Readiness *Readiness `json:"readiness,omitempty"`
+	// OpenFindings is how many of the change's findings stand open — none of
+	// its authors has answered them (code_conversations.open_findings) — 0 for
+	// a change nobody has reviewed.
+	OpenFindings int64 `json:"open_findings"`
+	// UpdatedAt is when the change last moved: the later of the last record
+	// on its repository's subject that changed its row — its open, an edit, a
+	// close, a merge, a push that moved its head — and the last one somebody
+	// wrote about it on its own subject — an ask for review, a comment, a
+	// review, an answer to a finding — never the home's facts (replicated
+	// 0140). What a listing narrowed to a window ([ReadQuery.Window]) keeps.
+	// A change read in brief ([ReadAnswer.ChangeBrief]) reads no
+	// conversation, and carries its lifecycle's last move alone, and no
+	// count of its findings.
+	//
+	// UNDER THE CODE DOMAIN'S STATED CONDITION (M3-O84 §2 item 5) these two
+	// are an answer's fields, never a record's, and take no versionedFields
+	// row: a build that predates them answers a listing without them, which
+	// no build serving the dashboard is, since none of the domain is on main.
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ChangeDetail is one change in detail: its summary, its description and its

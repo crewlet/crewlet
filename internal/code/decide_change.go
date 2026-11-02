@@ -1299,8 +1299,15 @@ type changeRow struct {
 	mergedOperator string
 	overrideReason string
 	version        int64
-	// position is the packed position of the last record that wrote it.
-	position int64
+	// position is the packed position of the last record that wrote it, and
+	// updatedAt its broker instant (store.EncodeTime): when the change last
+	// moved on its repository's subject (replicated 0140).
+	position, updatedAt int64
+	// moved and openFindings are what a READ of changes adds from the
+	// change's conversation ([withConversations]): when it last moved on
+	// either of its subjects, and how many of its findings stand open — both
+	// 0 where nothing read them, as a decide and an apply never do.
+	moved, openFindings int64
 }
 
 // scanChange reads one row [changeColumns] spells.
@@ -1310,7 +1317,7 @@ func scanChange(scan func(...any) error) (changeRow, error) {
 	err := scan(&r.id, &r.repoID, &r.number, &r.title, &r.bodyBytes, &state, &r.source, &r.target, &r.head,
 		&r.revision, &r.owner, &ownerKind, &r.operator, &backend, &r.work.ID, &r.work.Key, &r.work.Project,
 		&r.turn, &r.run, &r.openedAt, &r.opened, &r.closedAt, &r.closeReason, &r.mergedAt, &via, &r.mergeOID,
-		&r.mergedBy, &mergedByKind, &r.mergedOperator, &r.overrideReason, &r.version, &r.position)
+		&r.mergedBy, &mergedByKind, &r.mergedOperator, &r.overrideReason, &r.version, &r.position, &r.updatedAt)
 	r.state, r.ownerKind, r.work.Backend, r.mergedVia = ChangeState(state), PartyKind(ownerKind),
 		types.WorkBackend(backend), MergedVia(via)
 	r.mergedByKind = PartyKind(mergedByKind)
@@ -1399,7 +1406,7 @@ const (
 	changeColumns = `id, repo_id, number, title, body_bytes, state, source_ref, target_ref, head_oid, revision,
 		owner, owner_kind, owner_operator_id, work_backend, work_id, work_key, work_project, created_turn,
 		created_run, opened_at, opened_position, closed_at, close_reason, merged_at, merged_via, merge_oid,
-		merged_by, merged_by_kind, merged_operator_id, override_reason, version, position`
+		merged_by, merged_by_kind, merged_operator_id, override_reason, version, position, updated_at`
 	changeRowSQL = `SELECT ` + changeColumns + ` FROM code_changes WHERE id = ?`
 	// changesNamedSQL is the changes a list names, each by its key, driven
 	// from the list ([changeRowsIn]).

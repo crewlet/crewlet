@@ -61,11 +61,14 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 		open   = "code_changes_open_idx"
 		target = "code_changes_target_idx"
 		merge  = "code_changes_merge_idx"
+		// moved is code_changes_updated_idx, keyed by when the change last
+		// moved, which every write that moves its version rewrites.
+		moved = "code_changes_updated_idx"
 	)
 	// EVERY INDEX THE STATE IS IN, by its key or by its predicate — the open
 	// and target indexes partial on the live states, and the three listings
 	// keyed by it.
-	stated := []string{open, target, changesStateKey, changesOwnerKey, changesRepoStateKey}
+	stated := []string{open, target, changesStateKey, changesOwnerKey, changesRepoStateKey, moved}
 	merged := append(slices.Clone(stated), merge)
 
 	// push plans what a push record of entries writes about the changes its
@@ -130,8 +133,8 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 			{"the whole row", `UPDATE code_changes SET title = ?, body_bytes = ?, state = ?, target_ref = ?,
 				head_oid = ?, revision = ?, work_backend = ?, work_id = ?, work_key = ?, work_project = ?,
 				closed_at = ?, close_reason = ?, merged_at = ?, merged_via = ?, merge_oid = ?, version = ?,
-				position = ? WHERE id = ?`, []any{"t", 0, "open", "refs/heads/main", oid("h"), 2, "", "", "", "",
-				nil, "", nil, "", "", 2, 7, change(0)},
+				position = ?, updated_at = ? WHERE id = ?`, []any{"t", 0, "open", "refs/heads/main", oid("h"), 2, "",
+				"", "", "", nil, "", nil, "", "", 2, 7, 9, change(0)},
 				append(slices.Clone(merged), changesWorkKey)},
 			{"the title", `UPDATE code_changes SET title = ? WHERE id = ?`, []any{"t", change(0)}, nil},
 		} {
@@ -151,27 +154,28 @@ func TestAChangeWriteRewritesOnlyTheIndexesItMoves(t *testing.T) {
 			rewrites []string
 		}{
 			// A PUSH: the heads it moves, the hottest write a change meets —
-			// the head is in one index's key — and what it merges and closes,
+			// the head is in one index's key, and its instant in another — and what it merges and closes,
 			// each moving the state; and the change it opens, an insert.
 			{"a push moving changes' heads", push(pushEntry("heads",
 				move(liveSource(0), liveHead(0), oid("next-0")),
-				move(liveSource(1), liveHead(1), oid("next-1")))), []string{target}},
+				move(liveSource(1), liveHead(1), oid("next-1")))), []string{target, moved}},
 			{"a push merging a change", push(pushEntry("merging",
 				move("refs/heads/main", ZeroOID, liveHead(2)))), merged},
 			{"a push closing a change", push(pushEntry("closing",
 				move(liveSource(3), liveHead(3), ZeroOID))), stated},
 			{"a push opening a change", push(opening), nil},
 			// A CHANGE'S LIFECYCLE.
-			{"an edit of the title", lifecycle(ChangeEdit{RepoID: repo, ChangeID: change(0), Title: &title}), nil},
+			{"an edit of the title", lifecycle(ChangeEdit{RepoID: repo, ChangeID: change(0), Title: &title}),
+				[]string{moved}},
 			{"an edit of the description", lifecycle(ChangeEdit{RepoID: repo, ChangeID: change(0), Body: &body}),
-				nil},
+				[]string{moved}},
 			{"an edit setting the work item", lifecycle(ChangeEdit{RepoID: repo, ChangeID: change(0),
-				WorkItem: &item}), []string{changesWorkKey}},
+				WorkItem: &item}), []string{changesWorkKey, moved}},
 			{"an edit clearing the work item", lifecycle(ChangeEdit{RepoID: repo, ChangeID: change(0),
-				ClearWorkItem: true}), []string{changesWorkKey}},
+				ClearWorkItem: true}), []string{changesWorkKey, moved}},
 			{"a draft's state", lifecycle(ChangeDraft{RepoID: repo, ChangeID: change(0), Draft: true}), stated},
 			{"a retarget", lifecycle(ChangeRetarget{RepoID: repo, ChangeID: change(0),
-				TargetRef: "refs/heads/release"}), []string{target}},
+				TargetRef: "refs/heads/release"}), []string{target, moved}},
 			{"a close", lifecycle(ChangeClose{RepoID: repo, ChangeID: change(0), Reason: "not needed"}), stated},
 			{"a reopen", lifecycle(ChangeReopen{RepoID: repo, ChangeID: change(0), Head: oid("back")}), stated},
 			{"a landing", lifecycle(ChangeLanded{RepoID: repo, ChangeID: change(0), Revision: 1,

@@ -279,7 +279,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		if entry.EnqueuedBy.Kind == PartyPerson {
 			next.mergedOperator = entry.EnqueuedOperator
 		}
-		next.version, next.position = row.version+1, at.packed
+		next.version, next.position, next.updatedAt = row.version+1, at.packed, at.at()
 		merged[i] = &next
 	}
 	if err = writeChanges(ctx, tx, at.maxVariables, changeMerged, merged); err != nil {
