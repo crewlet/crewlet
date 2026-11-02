@@ -590,14 +590,16 @@ func within(change func(*executor.TranscriptBounds)) executor.TranscriptBounds {
 	return bounds
 }
 
-// pageAll reads raw a page at a time under bounds, from the first entry until
-// a page says nothing follows, and answers every page.
-func pageAll(t *testing.T, raw []byte, bounds executor.TranscriptBounds) []executor.Transcript {
+// pageAll reads raw, an archive harness packed in format, a page at a time
+// under bounds, from the first entry until a page says nothing follows, and
+// answers every page.
+func pageAll(t *testing.T, harness string, format int, raw []byte,
+	bounds executor.TranscriptBounds) []executor.Transcript {
 	t.Helper()
 	var pages []executor.Transcript
 	for from := 0; ; {
-		page, err := executor.ReadTranscriptWithin(t.Context(), executor.OpenCodeName,
-			executor.OpenCodeArchiveFormat, opener(bytes.NewReader(raw)), from, bounds)
+		page, err := executor.ReadTranscriptWithin(t.Context(), harness, format,
+			opener(bytes.NewReader(raw)), from, bounds)
 		if err != nil {
 			t.Fatalf("reading from %d: %v", from, err)
 		}
@@ -641,7 +643,7 @@ func TestATranscriptIsReadAPageAtATimeWithNothingLostBetweenPages(t *testing.T) 
 			executor.CutBytes, []int{2, 2, 2, 1}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			pages := pageAll(t, raw, c.bounds)
+			pages := pageAll(t, executor.OpenCodeName, executor.OpenCodeArchiveFormat, raw, c.bounds)
 			var read []string
 			var sizes []int
 			for i, page := range pages {
@@ -661,6 +663,38 @@ func TestATranscriptIsReadAPageAtATimeWithNothingLostBetweenPages(t *testing.T) 
 				t.Errorf("the pages held %v entries, want %v", sizes, c.sizes)
 			}
 		})
+	}
+}
+
+// A CLAUDE CODE TRANSCRIPT READ A PAGE AT A TIME IS THE WHOLE READ, its tools
+// and its threads included. Read at every bound from one entry a page to five,
+// the pages of a session whose calls and their results fall on two pages, and
+// whose subagent's transcript follows the run's own, joined are the whole
+// read entry for entry: a result read on a page after its call's names the
+// call's tool, and every entry of the subagent its thread. A page is read
+// from the archive's start, and a call before the page is remembered for a
+// result on it.
+//
+// Mutation: remember a call only where its entry lands on the page, or forget
+// the calls a page holds when it starts, and a result on a later page than its
+// call names no tool.
+func TestAClaudeCodeTranscriptReadAPageAtATimeIsTheWholeRead(t *testing.T) {
+	t.Parallel()
+	_, raw := claudeCaptureOf(t, claudeSessionRecord, claudeSidecar)
+	whole := readClaude(t, raw, executor.TranscriptReadBounds())
+	if len(whole.Entries) < 6 {
+		t.Fatalf("the whole read holds %d entries, too few to page", len(whole.Entries))
+	}
+	for n := 1; n <= 5; n++ {
+		var read []executor.TranscriptEntry
+		for _, page := range pageAll(t, executor.ClaudeCodeName, executor.ClaudeArchiveFormat, raw,
+			within(func(b *executor.TranscriptBounds) { b.Entries = n })) {
+			read = append(read, page.Entries...)
+		}
+		if got, want := shownOf(read), shownOf(whole.Entries); !slices.Equal(got, want) {
+			t.Errorf("read %d entries a page, the pages join as\n%+v\nwant the whole read's\n%+v", n,
+				got, want)
+		}
 	}
 }
 
