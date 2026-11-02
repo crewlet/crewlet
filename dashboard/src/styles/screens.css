@@ -2734,17 +2734,6 @@ a.prof-row:hover {
   outline-offset: -2px;
 }
 
-/* A SESSION'S PROSE — a brief, the model's words, a compaction summary — keeps
-   its line breaks, which are the content's own (a brief is a markdown
-   document, a summary a list), and breaks a token too long for the column
-   rather than pushing the transcript wider than the screen. A call's input and
-   a tool's output are blocks instead (`CodeBlock`), whose whitespace the block
-   keeps. */
-.session-prose {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 /* ---- Ranked search ------------------------------------------------------ */
 
 /* A hit's PLACE in the answer. A number rather than a bar, because that is

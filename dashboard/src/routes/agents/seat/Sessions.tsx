@@ -63,11 +63,12 @@ import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { conversationLabel, fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdownText.ts";
-import { keepInView, reveal } from "~/lib/scroller.ts";
+import { reveal } from "~/lib/scroller.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor, type QueryResult } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
+import { keepInView } from "./keepInView.ts";
 import type {
   ExecutorSessionAnswer,
   ExecutorSessionRow,
@@ -668,7 +669,7 @@ export function TranscriptEntryView({ entry }: { entry: TranscriptEntry }) {
       {block ? (
         <CodeBlock plain focusWhenScrollable label={blockLabel(entry)} code={entry.text} />
       ) : (
-        <p className="t-body session-prose">{entry.text}</p>
+        <p className="prose">{entry.text}</p>
       )}
       {entry.cut && (
         <p className="t-caption">The opening alone: the whole entry is {fmtBytes(entry.bytes)}.</p>

@@ -37,8 +37,8 @@ import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 // where a list scrolled to is nothing a case can read, and the call is. The
 // real one still runs.
 const keptInView = vi.hoisted(() => [] as HTMLElement[]);
-vi.mock("~/lib/scroller.ts", async (importOriginal) => {
-  const real = await importOriginal<typeof import("~/lib/scroller.ts")>();
+vi.mock("~/routes/agents/seat/keepInView.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("~/routes/agents/seat/keepInView.ts")>();
   return {
     ...real,
     keepInView: (box: HTMLElement, row: HTMLElement) => {
