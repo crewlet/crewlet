@@ -946,7 +946,10 @@ agent's MCP tools (`agents`) and flags every agent holding more than
   since the agent is offered it and each call waits. A blocked tool and a tool
   refused its name ([A tool's name](#a-tools-name)) do not, since no agent is
   offered either, and a server turned off counts nothing, since it is granted
-  to nobody. The engine's own tools are not counted (`builtin_tools` says how
+  to nobody. The agent's own limits count as they hold it
+  ([Narrowing a server for a team](#narrowing-a-server-for-a-team)): a tool a
+  limit blocks for it does not count, and a server a limit turns off for it
+  counts nothing. The engine's own tools are not counted (`builtin_tools` says how
   many every agent holds).
 - **Each name counts once.** Two of an agent's servers listing a tool under
   the same name hand it one tool, so its total (`mcp_tools`) can be less than
@@ -960,8 +963,9 @@ agent's MCP tools (`agents`) and flags every agent holding more than
 - **Past the budget is a warning, never a refusal.** A seat's harness keeps an
   MCP server's tools out of the requests that do not need them, so nothing
   breaks; the model's choice is what suffers. To bring an agent back under it,
-  [block](#setting-each-tools-level) the tools it does not need, or narrow who
-  the busiest servers reach.
+  [block](#setting-each-tools-level) the tools it does not need, narrow who
+  the busiest servers reach, or have its team's lead
+  [limit](#narrowing-a-server-for-a-team) them for the team.
 
 The budget is 100: Windsurf loads at most 100 tools across all of a person's
 MCP servers, under the 128 VS Code is widely reported to stop at. It is the

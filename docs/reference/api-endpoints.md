@@ -9730,9 +9730,11 @@ configuration declares whose grant reaches the seat, on or off, in name order:
 `reason` is why, as the server's [`reaches`](#get-mcp-serversname) says it
 (`every_agent`, `unit`, `seat` or `integration`); `tools` is how many tools it
 offers the agent, every tool the live nodes' listings name at a level other
-than `blocked` (a tool refused its name is never listed), the whole listing
-for each agent a per-agent server reaches, and `0` for a server turned off,
-which is granted to nobody; and `state` is the server's own, its row's.
+than `blocked` (a tool refused its name is never listed) but a tool the
+agent's own [limits](../guides/tools-and-mcp.md#narrowing-a-server-for-a-team)
+block for it, the whole listing for each agent a per-agent server reaches, and
+`0` for a server turned off, which is granted to nobody, or one a limit turns
+off for the agent; and `state` is the server's own, its row's.
 `mcp_tools` counts each tool name once, so a name two of the agent's servers
 list counts once; `builtin_tools` is how many of the engine's own tools every
 agent holds, which the budget does not count; and `over_budget` is `mcp_tools`
