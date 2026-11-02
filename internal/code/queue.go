@@ -1123,8 +1123,9 @@ func (c *Committer) queueWrite(repoID string, q *queued) {
 	out, answerErr := c.queueAnswer(ctx, p, last, decided, res, err)
 	q.answer <- answered{queue: out, err: answerErr}
 	// AN EJECTION IS ANNOUNCED once its own record applied here, never for a
-	// retry the ledger collapsed onto it — once its answer is handed back, so
-	// its asker waits on none of it.
+	// retry the ledger collapsed onto it — handed to the announcer once its
+	// answer is handed back, so neither its asker nor the repository's next
+	// write waits on any of it (announce.go).
 	if p.Eject != nil && answerErr == nil && out.Outcome == statelog.OutcomeApplied && !res.Collapsed {
 		c.announceEjected(*p.Eject, out.Position)
 	}

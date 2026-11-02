@@ -1514,6 +1514,9 @@ var swapFields = []swapField{
 	{name: "droppingPacks", class: carried, why: "the packs the live set carried places in the dropping view, " +
 		"which next holds there: what its readers are handed the view by (droppingView)",
 		carry: func(s *swapping) { s.next.droppingPacks = s.inc.droppingPacks }},
+	{name: "droppingObjects", class: carried, why: "the objects of those packs, which next holds there: what its " +
+		"connectivity check is charged for beside its objects (verifyCharge)",
+		carry: func(s *swapping) { s.next.droppingObjects = s.inc.droppingObjects }},
 	{name: "leaving", class: recomputed, why: "empty: the swap took out every file that was leaving"},
 	{name: "leavingSince", class: recomputed, why: "zero: nothing is leaving next"},
 	{name: "successor", class: notCarried, why: "inc's: the promote points it at next"},

@@ -183,20 +183,24 @@ type ChecksWriterOptions struct {
 }
 
 // EventPublisher is a node's event stream as the checks writer announces an
-// applied ending on it, the committer an applied merge and an opened change,
-// and the change writer a review: queue.Queue satisfies it.
+// applied ending on it, the committer's announcer an applied merge, an opened
+// change and a queue's ejections and broken landings, and the change writer a
+// review: queue.Queue satisfies it.
 type EventPublisher interface {
 	Publish(ctx context.Context, subject string, ev *events.Event) error
 }
 
-// checkEventBudget bounds the announcement of one applied record's event — a
-// check's ending, a change's merge, a change's opening or a review (the last
-// two the read of the rows they name and their publishes together):
-// FIVE SECONDS, the JetStream client's own request timeout — what nats.go
-// gives a publish whose context carries no deadline. Published after the
-// write's answer is handed back, so no asker waits on it; a stream that has
-// not acknowledged in that long costs the node's day the one check's,
-// opening's or review's count, or the feed the one merge, which the rows on
+// checkEventBudget bounds the announcement of one applied record's events — a
+// check's ending, a change's merge, a record's openings, a queue's ejections
+// or broken landing, or a review (all but the first two the read of the rows
+// they name and their publishes together): FIVE SECONDS, the JetStream
+// client's own request timeout — what nats.go gives a publish whose context
+// carries no deadline. Published after the write's answer is handed back, so
+// no asker waits on it, and never in front of the writer's next write: the
+// checks and change writers release the turn first, and the committer hands
+// its records' to its announcer (announce.go). A stream that has not
+// acknowledged in that long costs the node's day the one check's, opening's,
+// ejection's or review's count, or the feed the one merge, which the rows on
 // the code log still hold.
 const checkEventBudget = 5 * time.Second
 

@@ -10,9 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -846,15 +844,15 @@ func queueRecordHeld(ctx context.Context, tx *sql.Tx, p QueueProposal, at statel
 	return false, fmt.Errorf("code: queue operation %s is none of the queue's own records", p.OpID)
 }
 
-// announceEjected publishes a code_queue_ejected event for each entry the
-// eject at at put out ([Committer.announceEjections]).
+// announceEjected hands the announcer a code_queue_ejected event for each
+// entry the eject at at put out ([Committer.announceEjections]).
 func (c *Committer) announceEjected(e Eject, at statelog.Position) {
-	c.announceEjections(e.RepoID, at, func(context.Context, *sql.Tx) ([]Ejection, error) {
+	c.announceEjectionsLater(e.RepoID, at, func(context.Context, *sql.Tx) ([]Ejection, error) {
 		return e.Entries, nil
 	})
 }
 
-// announcePushEjections publishes a code_queue_ejected event for each live
+// announcePushEjections hands the announcer a code_queue_ejected event for each live
 // queue entry of the changes the push record at at moved the heads of
 // (ejected, [batchMoves]) — ended head_moved by the record's own apply, which
 // no queue record names, so without this a seat's day counted none of the
@@ -863,7 +861,7 @@ func (c *Committer) announceEjected(e Eject, at statelog.Position) {
 // ejected head_moved, read from this node's rows: one statement over the
 // changes, a seek of code_queue_change_idx each ([pushEjectedSQL]).
 func (c *Committer) announcePushEjections(repoID string, ejected []string, at statelog.Position) {
-	c.announceEjections(repoID, at, func(ctx context.Context, tx *sql.Tx) ([]Ejection, error) {
+	c.announceEjectionsLater(repoID, at, func(ctx context.Context, tx *sql.Tx) ([]Ejection, error) {
 		list, err := jsonList(ejected)
 		if err != nil {
 			return nil, err
@@ -886,22 +884,27 @@ func (c *Committer) announcePushEjections(repoID string, ejected []string, at st
 	})
 }
 
-// announceEjections publishes a code_queue_ejected event for each entry read
-// puts out of repoID's queues at at, on this node's event stream, bounded by
-// [checkEventBudget] under the committer's own lifetime, as a merge's event is
-// ([Committer.announce]): each names the entry's change by its repository and
-// number, read from this node's rows, and a stream that does not take one is
-// logged — the entry's row still says it was ejected. read is asked inside
-// the one read, so the entries it names and the rows that describe them are
-// one snapshot.
-func (c *Committer) announceEjections(repoID string, at statelog.Position,
+// announceEjectionsLater hands the announcer the ejections read names
+// ([Committer.announceEjections]), so the repository's next write waits on
+// none of their read or publish (announce.go).
+func (c *Committer) announceEjectionsLater(repoID string, at statelog.Position,
 	read func(context.Context, *sql.Tx) ([]Ejection, error)) {
 
-	if c.events == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.life, checkEventBudget)
-	defer cancel()
+	c.announceLater(announcement{kind: "code_queue_ejected", repoID: repoID, id: at.String(),
+		publish: func(ctx context.Context, when time.Time) { c.announceEjections(ctx, when, repoID, at, read) }})
+}
+
+// announceEjections publishes a code_queue_ejected event for each entry read
+// puts out of repoID's queues at at, on this node's event stream, stamped
+// when, under ctx — the announcer's one [checkEventBudget], as a merge's event
+// is ([Committer.announceMerged]): each names the entry's change by its
+// repository and number, read from this node's rows, and a stream that does
+// not take one is logged — the entry's row still says it was ejected. read is
+// asked inside the one read, so the entries it names and the rows that
+// describe them are one snapshot.
+func (c *Committer) announceEjections(ctx context.Context, when time.Time, repoID string, at statelog.Position,
+	read func(context.Context, *sql.Tx) ([]Ejection, error)) {
+
 	var out []types.CodeQueueEjected
 	if err := c.db.Read(ctx, func(tx *sql.Tx) error {
 		ejections, err := read(ctx, tx)
@@ -964,9 +967,7 @@ func (c *Committer) announceEjections(repoID string, at statelog.Position,
 		return
 	}
 	for _, x := range out {
-		ev := events.New(x, events.TraceContext{})
-		ev.Source = c.nodeID
-		if err := c.events.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		if err := announceOn(ctx, c.events, c.nodeID, when, x); err != nil {
 			c.log.WarnContext(ctx, "code_queue_ejected_unpublished", "repo", repoID, "entry", x.EntryID,
 				"error", err.Error(), "detail", "the activity feed and the event log do not hold this ejection; "+
 					"the entry's row on the code log still does")
@@ -974,18 +975,21 @@ func (c *Committer) announceEjections(repoID string, at statelog.Position,
 	}
 }
 
-// announceBroken publishes ONE code_target_broken event for the landing the
-// broken at at named (ADR-0068), on this node's event stream, bounded by
-// [checkEventBudget] under the committer's own lifetime, as an ejection's is:
-// the landing's kind, its change by its repository and number and who landed
-// it, read from this node's rows, and a stream that does not take it logged —
-// the landing's row still says it is broken.
+// announceBroken hands the announcer the code_target_broken event of the
+// broken at at ([Committer.publishBroken]), so the repository's next write
+// waits on none of its read or publish (announce.go).
 func (c *Committer) announceBroken(b Broken, at statelog.Position) {
-	if c.events == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.life, checkEventBudget)
-	defer cancel()
+	c.announceLater(announcement{kind: "code_target_broken", repoID: b.RepoID, id: at.String(),
+		publish: func(ctx context.Context, when time.Time) { c.publishBroken(ctx, when, b, at) }})
+}
+
+// publishBroken publishes ONE code_target_broken event for the landing the
+// broken at at named (ADR-0068), on this node's event stream, stamped when,
+// under ctx — the announcer's one [checkEventBudget], as an ejection's is: the
+// landing's kind, its change by its repository and number and who landed it,
+// read from this node's rows, and a stream that does not take it logged — the
+// landing's row still says it is broken.
+func (c *Committer) publishBroken(ctx context.Context, when time.Time, b Broken, at statelog.Position) {
 	ev := types.CodeTargetBroken{RepoID: b.RepoID, RepoName: b.RepoID, Target: b.TargetRef, Commit: b.OID,
 		Checks: b.Checks}
 	if err := c.db.Read(ctx, func(tx *sql.Tx) error {
@@ -1011,9 +1015,7 @@ func (c *Committer) announceBroken(b Broken, at statelog.Position) {
 				"landing; its row on the code log still does")
 		return
 	}
-	e := events.New(ev, events.TraceContext{})
-	e.Source = c.nodeID
-	if err := c.events.Publish(ctx, topics.Event(e.Type), e); err != nil {
+	if err := announceOn(ctx, c.events, c.nodeID, when, ev); err != nil {
 		c.log.WarnContext(ctx, "code_target_broken_unpublished", "repo", b.RepoID, "position", at.String(),
 			"error", err.Error(), "detail", "the activity feed and the event log do not hold this broken "+
 				"landing; its row on the code log still does")

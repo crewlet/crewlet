@@ -90,6 +90,14 @@ type Cluster interface {
 	// arbitrates (ADR-0059), so each compacts and publishes the repository as
 	// its maintainer.
 	SplitMaintainers(t testing.TB, repoID string, nodes ...string)
+	// ConfineMaintenance has every member's compactor maintain, until the
+	// case that called it ends, NONE of the repositories that exist when it
+	// is called — whatever a case split their maintainer between — so the
+	// case's passes, its compactions, publications and expunges alike, meet
+	// the repositories it made and no other. RunFleet calls it as each case
+	// begins (the cases share one cluster, and a pass maintains EVERY due
+	// repository its member maintains).
+	ConfineMaintenance(t testing.TB)
 	// Advertise has member node say its git cache gives its background work
 	// budget bytes (GitNode.Advertise) until the case ends — git nodes of
 	// different sizes, which a repository's maintainer is placed by
@@ -121,6 +129,18 @@ type Cluster interface {
 // are not run on it, and RunFleet says so rather than fail each of them for
 // the first one's fault.
 //
+// A CASE'S MAINTENANCE IS ITS OWN REPOSITORIES' ALONE, from the moment it
+// begins (Cluster.ConfineMaintenance): a pass maintains every due repository
+// its member maintains, and the repositories earlier cases made stay on the
+// shared cluster, so unconfined, the compaction cases' passes compacted F19's
+// repository — left at forty-nine packs, due — whenever their members
+// maintained it, and counted what they did to it as their own repository's:
+// F28's held compaction was F19's, F29's compactor applied two. And a
+// repository due for every maintenance loop, which every member takes itself
+// for the maintainer of, stands beside every case ([dueThroughout]), so a case
+// whose maintenance leaks fails on it whichever cases run before it — alone,
+// too.
+//
 // A cluster of fewer than three members is refused: two members have no
 // quorum without each other.
 func RunFleet(t *testing.T, newCluster func(t *testing.T) Cluster) {
@@ -129,9 +149,11 @@ func RunFleet(t *testing.T, newCluster func(t *testing.T) Cluster) {
 	if err := quorum(c); err != nil {
 		t.Fatal(err)
 	}
+	dueThroughout(t, c)
 	for _, fc := range fleetCases() {
 		broken := false
 		t.Run(fc.name, func(t *testing.T) {
+			c.ConfineMaintenance(t)
 			// AFTER THE CASE'S OWN DEFERS, which bring back what it
 			// stopped, whether it passed or not — and before its context
 			// ends, which its cleanups would run after.
@@ -158,6 +180,24 @@ func quorum(c Cluster) error {
 			"would leave a code log nobody can write", n)
 	}
 	return nil
+}
+
+// dueThroughout declares, for the whole run, the repository an earlier case
+// leaves due, made deterministic: due for every maintenance loop —
+// CompactMinMerge+1 live packs, one more than any case's own compaction
+// pushes, so a pass lists it first (MOST LIVE PACKS FIRST), and none of them
+// published — and maintained, should a pass meet it, by EVERY member
+// (SplitMaintainers), so a case whose maintenance leaked past its own
+// repositories (Cluster.ConfineMaintenance) fails on it whichever members it
+// runs its passes on: F28's held compaction is this one's, F29's compactor
+// applies two. Declared before any case, it is no case's own.
+func dueThroughout(t *testing.T, c Cluster) {
+	t.Helper()
+	rc := newRepoCase(t, c, "fleet-due")
+	c.SplitMaintainers(t, rc.id, c.Members()...)
+	p := NewPerson(t, c, "ceo")
+	work := p.Init()
+	rc.pushN(p, work, c.DataNodes()[0], code.CompactMinMerge+1)
 }
 
 // settled is the state RunFleet holds the fleet to between cases: every member

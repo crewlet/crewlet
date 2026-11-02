@@ -382,7 +382,12 @@ func GraphCharge(c *Cache, repoID string) int64 {
 }
 
 // FsckCharge is Verify's connectivity check's charge (BitmapCharge).
-func FsckCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, FsckBytesPerObject, 0) }
+func FsckCharge(c *Cache, repoID string) int64 {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return verifyCharge(e.current)
+}
 
 func chargeOf(c *Cache, repoID string, perObject, base int64) int64 {
 	e := lookup(c, repoID)

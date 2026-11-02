@@ -145,6 +145,10 @@ type cluster struct {
 	// view of (SplitMaintainers): the members that each take themselves for
 	// its maintainer.
 	split map[string][]string
+	// confined is every repository that existed when the running case
+	// began (ConfineMaintenance), which no member maintains until it ends;
+	// nil while no case confines its maintenance.
+	confined map[string]bool
 	// proposed is the last compaction any member's compactor proposed of
 	// each repository, by its id: what ProposeCompactionAgain asks again.
 	proposed map[string]code.CompactionProposal
@@ -415,20 +419,23 @@ func (m *member) expunge(ctx context.Context, p code.ExpungeProposal) (code.Expu
 // compactor asks once a pass: its own router — the incarnation's, read again
 // at every question — but for a repository whose maintainer a case split the
 // fleet's view of (SplitMaintainers), of which every member it named takes
-// itself for the maintainer.
+// itself for the maintainer; and none, whatever a split says, of the
+// repositories that existed when the running case began (ConfineMaintenance).
 type memberMaintainers struct{ m *member }
 
 func (h memberMaintainers) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
 	out := map[string]bool{}
 	rest := map[string]int64{}
 	for id, charge := range charges {
-		if split, ok := h.m.c.splitOf(id); ok {
-			if slices.Contains(split, h.m.id) {
-				out[id] = true
-			}
-			continue
+		split, ok := h.m.c.splitOf(id)
+		switch {
+		case h.m.c.confinedOut(id):
+			out[id] = false
+		case ok:
+			out[id] = slices.Contains(split, h.m.id)
+		default:
+			rest[id] = charge
 		}
-		rest[id] = charge
 	}
 	maintained, err := h.m.router.Load().MaintainerOf(rest)
 	if err != nil {
@@ -962,6 +969,40 @@ func (c *cluster) splitOf(repoID string) ([]string, bool) {
 	defer c.mu.Unlock()
 	nodes, ok := c.split[repoID]
 	return nodes, ok
+}
+
+// ConfineMaintenance has no member maintain, until the case ends, any
+// repository that exists now — read through the first running member, every
+// status (codetest.Cluster). A member's compactor asks who maintains a
+// repository at every pass, of its compactions, publications and expunges
+// alike (memberMaintainers), so the case's passes meet the repositories it
+// makes and none an earlier case left on the cluster.
+func (c *cluster) ConfineMaintenance(t testing.TB) {
+	t.Helper()
+	m, err := c.first()
+	if err != nil {
+		t.Fatalf("codecluster: confine the case's maintenance: %v", err)
+	}
+	earlier, err := codetest.RepoIDsOf(t.Context(), m.read)
+	if err != nil {
+		t.Fatalf("codecluster: the repositories the case's maintenance leaves out: %v", err)
+	}
+	c.mu.Lock()
+	c.confined = earlier
+	c.mu.Unlock()
+	t.Cleanup(func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.confined = nil
+	})
+}
+
+// confinedOut reports whether repoID existed when the running case began, and
+// so is maintained by no member until it ends (ConfineMaintenance).
+func (c *cluster) confinedOut(repoID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.confined[repoID]
 }
 
 func (c *cluster) Token(_ testing.TB, person string) string { return c.creds.Token(person) }

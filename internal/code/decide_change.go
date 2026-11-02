@@ -1080,13 +1080,13 @@ func (c *Committer) change(repoID string, q *queued) {
 	})
 	out, answerErr := c.changeAnswer(ctx, p, last, decided, res, err)
 	q.answer <- answered{change: out, err: answerErr}
-	// AN OPEN THIS CALL LANDED is announced once its answer is handed back
-	// (announce.go): never one answered unchanged, from no record, nor a
-	// retry the ledger collapsed onto an earlier landing, whose call
-	// announced it.
+	// AN OPEN THIS CALL LANDED is handed to the announcer once its answer is
+	// handed back (announce.go): never one answered unchanged, from no
+	// record, nor a retry the ledger collapsed onto an earlier landing, whose
+	// call announced it.
 	if p.Open != nil && answerErr == nil && out.Outcome == statelog.OutcomeApplied && !out.Unchanged &&
 		!res.Collapsed {
-		c.announceOpened(repoID, []opening{{changeID: out.ChangeID}})
+		c.announceOpenings(repoID, []opening{{changeID: out.ChangeID}})
 	}
 }
 

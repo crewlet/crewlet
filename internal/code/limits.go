@@ -206,7 +206,7 @@ const (
 	// bytes a push (internal/code/compact's steady arm at the floor),
 	// 0.5 MB, the publications of their layers, 0.18–3.51 MB, its git
 	// clients' barriers at BarrierRecordBytes, 2.4–5.0 MB, and its changes'
-	// records, 14.2–90.6 MB (each MEASURED as its writer forms it,
+	// records, 14.2–85.9 MB (each MEASURED as its writer forms it,
 	// TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt), against
 	// the tracker's measured 9.9 MB of records and 2.2 MB of barriers, every
 	// record in its signed frame. Two thirds is below that day: a company
@@ -1050,6 +1050,23 @@ const (
 	// one repository's past its queue — what the lane's own bound did before,
 	// with the refusal said rather than the wait left unseen.
 	CommitterNodeProposals = CommitterInbox + MaxPushesPerRecord
+
+	// CommitterAnnouncements is the most landed records' announcements one
+	// node's committer holds unpublished — handed to its announcer and not
+	// yet read and published (announce.go): CommitterNodeProposals, 1 088.
+	// Every record the committer lands answers at least one proposal it
+	// held, so the announcer drops one only once it has fallen a whole
+	// node's held work behind the stream — a push batch hands over at most
+	// two (its openings and the queue entries its moved heads ejected), any
+	// other record at most one. A stream acknowledging in milliseconds
+	// drains it in seconds; one that acknowledges nothing spends
+	// checkEventBudget on each, and past this many the rest are dropped and
+	// logged rather than held — the cost an announcement the stream refused
+	// already had: its day one count short, its rows on the code log whole,
+	// and never a wait in front of the repository's next push. Each
+	// holds what its record named — change and entry ids, a merge's event —
+	// never the rows it reads.
+	CommitterAnnouncements = CommitterNodeProposals
 
 	// MaxChangeWritesWaiting is the most writes of ONE change's conversation
 	// one node's change writer holds at once — the one publishing and those

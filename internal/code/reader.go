@@ -30,14 +30,21 @@ import (
 // probe over what the read is ABOUT, then the freshness target — and only then
 // the rows, in ONE transaction.
 //
-// AND THE POSITION IS READ IN THAT TRANSACTION. The framework's answer names
-// the checkpoint it waited for, read before the transaction opened; the
-// applier can commit in between, so rows can be NEWER than that position. A
-// snapshot's delta floor, its full-or-delta decision and its stream identity
-// are claims about the rows, so each read here reads the code log's checkpoint
-// row beside its rows and reports THAT ([statelog.CheckpointOf] over the read's
-// own transaction) — read separately, one of them ends up describing another
-// checkpoint.
+// AND THE POSITION IS THE ROWS' OWN. A snapshot's delta floor, its
+// full-or-delta decision and its stream identity, a later page's floor, a
+// resolved ref's position are claims about the rows, so every read here is
+// stamped with the checkpoint the framework hands its transaction
+// ([statelog.Reader.ReadThrough]): the code log's checkpoint row as that
+// transaction reads it, carried over the barriers this node had reached when
+// the read was released. Neither half alone describes the rows. The release
+// position is read before the transaction opens and the applier can commit in
+// between, so rows can be NEWER than it. And the checkpoint row LAGS every
+// barrier this node has decoded and not yet committed, so a node that has
+// committed them stamps the same rows higher: stamped with the row alone, a
+// linearizable read was answered below one another node had answered before
+// it — a cache took that for its log gone back, and a snapshot's next page,
+// read on another node at the floor its last page set, issued a cursor read
+// below where it began.
 type Reader struct {
 	log    *statelog.Reader
 	limits func() Limits
@@ -145,8 +152,12 @@ type inTx struct{ tx *sql.Tx }
 
 func (t inTx) Read(_ context.Context, fn func(*sql.Tx) error) error { return fn(t.tx) }
 
-// checkpointIn is the code log's checkpoint in tx: the position the rows read
-// in tx were applied through, and the stream they are keyed to.
+// checkpointIn is the code log's checkpoint row in tx: the position the rows
+// read in tx were committed through, and the stream they are keyed to — what
+// a WRITE's decision and a node's read-back of its own rows stamp, neither of
+// which the read authority serves. A read through the authority is handed its
+// stamp instead ([statelog.Reader.ReadThrough]), because this row lags the
+// barriers the read was released past ([Reader]).
 func checkpointIn(ctx context.Context, tx *sql.Tx) (statelog.Checkpoint, error) {
 	cp, _, err := statelog.CheckpointOf(ctx, inTx{tx}, topics.CodeLogStream)
 	return cp, err
@@ -332,11 +343,8 @@ func (r *Reader) Resolve(ctx context.Context, q ResolveQuery) (RepoRef, error) {
 		return RepoRef{}, fmt.Errorf("%w: name: %q is not a repository name", ErrInvalid, q.Name)
 	}
 	var out RepoRef
-	_, err := r.log.Read(ctx, q.Fresh.Resolved(resolver(q.Name), false), func(tx *sql.Tx) error {
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
+	query := q.Fresh.Resolved(resolver(q.Name), false)
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
 		v, found, err := namedIn(ctx, tx, q.Name, cp.At)
 		if err != nil {
 			return err
@@ -468,12 +476,8 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 		query = statelog.FloorAt(statelog.ReadSession, q.Cursor.Seen).Query(scope, false)
 	}
 	var out RepoSnapshot
-	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
 		out = RepoSnapshot{}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
 		v, found, err := repoViewIn(ctx, tx, q.RepoID, cp.At)
 		if err != nil {
 			return err
@@ -1169,13 +1173,8 @@ func (r *Reader) PushOutcome(ctx context.Context, q OutcomeQuery) (PushOutcome, 
 	query := statelog.FloorAt(statelog.ReadSession, q.At).Query(
 		statelog.ScopeSet{Paths: []string{RepoPath(q.RepoID)}}, false)
 	var out PushOutcome
-	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
-		out = PushOutcome{}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
-		out.Position = cp.At
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
+		out = PushOutcome{Position: cp.At}
 		row, found, err := pushIn(ctx, tx, q.PushID)
 		if err != nil || !found {
 			return err
@@ -1610,13 +1609,8 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.BranchChanges.RepoID)}}, false)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.branchChanges(ctx, tx, q, &out) }
 	}
-	answer, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
-		out = ReadAnswer{}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
-		out.Position = cp.At
+	answer, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
+		out = ReadAnswer{Position: cp.At}
 		return serve(tx, cp.At)
 	})
 	if err != nil {
@@ -3915,12 +3909,9 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 		return RefAnswer{}, chartErr
 	}
 	var out RefAnswer
-	_, err := r.log.Read(ctx, q.Fresh.Resolved(resolver(q.Repo), false), func(tx *sql.Tx) error {
+	query := q.Fresh.Resolved(resolver(q.Repo), false)
+	_, err := r.log.ReadThrough(ctx, query, func(tx *sql.Tx, cp statelog.Checkpoint) error {
 		out = RefAnswer{}
-		cp, err := checkpointIn(ctx, tx)
-		if err != nil {
-			return err
-		}
 		id, found, err := claimIn(ctx, tx, q.Repo)
 		if err != nil {
 			return err

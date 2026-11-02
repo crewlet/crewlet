@@ -1454,16 +1454,25 @@ func TestTheChecksListingIsHeldToTheGrant(t *testing.T) {
 // does when a page of wide summaries is past one tool answer; and a page's own
 // cursor is the one its last row names.
 //
-// Mutation: ChecksCursor spelled by another walk than the reader's (a
-// change's attempts by the commit's walk) → red.
+// EACH SHAPE IS FIRST HELD TO THE ATTEMPTS IT DECLARES ([checksOfEveryShape]),
+// so the case resumes between every two attempts each lists — and after a
+// one-attempt shape's only row (a window past or before an ending, a commit's
+// for the other target, the backport's) lists nothing. Never held to a name
+// list of the shapes that may list one: every shape added since that lists
+// one by design failed it, though it lists exactly what it declares.
+//
+// Mutations: ChecksCursor spelled by another walk than the reader's (a
+// change's attempts by the commit's walk) → red; the window seeking with no
+// end (checksWindowSQL's `finished_at < ?2` dropped) → the window ending
+// before the second ending lists unit too, red.
 func TestAChecksPageResumesAfterAnyRowItServed(t *testing.T) {
 	t.Parallel()
 	n, _, shapes := checksOfEveryShape(t)
 	for name, tc := range shapes {
 		served := servedChecks(t, n, tc.q)
-		if len(served) < 2 && name != "the window past the first ending" &&
-			name != "the backport's, at the same head" {
-			t.Fatalf("%s lists %v; the case needs two attempts to resume between", name, checkNames(served))
+		if got := checkNames(served); !slices.Equal(got, tc.want) {
+			t.Fatalf("%s lists %v, want %v: the case resumes between the attempts a shape declares", name, got,
+				tc.want)
 		}
 		for i, row := range served {
 			resumed := tc.q

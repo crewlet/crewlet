@@ -725,6 +725,32 @@ func ReposOf(ctx context.Context,
 	}
 }
 
+// RepoIDsOf is the id of EVERY repository the rows hold, whatever its status —
+// read through read, at linearizable, every page: what a case's confinement
+// of its maintenance leaves out (Cluster.ConfineMaintenance), which must name
+// a repository that is deleted or purging as well as one in use, since a
+// maintainer's listings name archived and importing ones and a purge's.
+func RepoIDsOf(ctx context.Context,
+	read func(context.Context, code.ReadQuery) (code.ReadAnswer, error)) (map[string]bool, error) {
+
+	ids := map[string]bool{}
+	q := code.ReadQuery{Asker: Reader, Kind: code.ReadRepos, Status: code.RepoStatuses(), Limit: 500,
+		Fresh: Linearizable}
+	for {
+		a, err := read(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range a.Repos {
+			ids[r.ID] = true
+		}
+		if a.Next == "" {
+			return ids, nil
+		}
+		q.Cursor = a.Next
+	}
+}
+
 // Rows is one repository's whole state as the data node's rows hold it at
 // fresh (Fleet).
 func (f *SoloFleet) Rows(ctx context.Context, name string, fresh statelog.Freshness) (Rows, error) {

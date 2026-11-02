@@ -1903,6 +1903,19 @@ agent ids, and a seat's day of usage counts the changes it opened, the reviews
 it gave, and the findings reviews raised on the changes it owns — see
 [Budgets and spend § A seat's changes and reviews](../guides/budgets-and-spend.md#a-seats-changes-and-reviews).
 
+No write of a repository waits on these announcements. A committer hands what
+its records announce — the changes they opened, a merge, a merge queue's
+ejections and broken landings — to one announcer of its own, which publishes
+them in the order they landed, each stamped when its record landed and given
+five seconds. The repository's next push goes on meanwhile. An announcement the
+stream does not take in time, or one that would put more than 1 088 waiting
+behind the announcer, is logged (`change_opened_unpublished`,
+`change_merged_unpublished`, `code_queue_ejected_unpublished`,
+`code_target_broken_unpublished`): the day it counts on is one short and the
+feed misses one line, while the rows on the code log keep all of it. A
+stopping node publishes what it landed before it exits, for as long as its
+drain allows.
+
 ### Findings
 
 A **finding** points at lines of one revision — a file, a side of the
@@ -3358,7 +3371,12 @@ size, 67 for the commit-graph and 100 MiB beside it whatever the
 repository's size, 192 for `crewlet code verify`'s
 connectivity check, and a clone about 240 more than the 224 MiB its git
 transfer slot keeps for it — the clone of a repository with no bitmap walks
-its whole history. The commit-graph's 100 MiB are its changed-path filters':
+its whole history. While an [expunge](#expunge) is open the connectivity
+check also walks the packs it keeps in the copy's dropping view, every object
+of which git marks as it marks a live one, so the check is charged its figure
+for each of their objects as well — a person's purge may leave far more there
+than the repository's live objects — and room beside it for a clone of the
+live objects alone, the only ones a clone sends. The commit-graph's 100 MiB are its changed-path filters':
 each filter is a diff of a commit against its parent, whose trees git keeps
 in its delta base cache up to that cache's 96 MiB cap — 112.8 MiB in all
 over a 100 MB history whose every commit rewrites a directory of a thousand

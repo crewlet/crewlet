@@ -565,6 +565,13 @@ type incarnation struct {
 	// view (placeOf): kept in step by placeMoved, so a reader is handed the
 	// view (droppingView) exactly while the copy holds a pack in it.
 	droppingPacks int
+	// droppingObjects is how many objects those packs hold — each pack's once,
+	// as droppingPacks counts it — kept in step beside it by placeMoved: what
+	// Verify's connectivity check walks besides objects, which counts
+	// objects/pack's alone (verifyCharge). git marks every object of every
+	// object directory it is handed, the view's included, while a clone sends
+	// none of them.
+	droppingObjects int64
 	// leaving is the pack files the incarnation holds that it is to hold no
 	// longer where they are, by where they are (their place) and the checksum
 	// they are named by — or, for a file of a pack directory named like a
@@ -894,7 +901,8 @@ func setLive(inc *incarnation, id string, p livePack) {
 // counts a pack's files once, whichever rows name them, and only those in
 // objects/pack — a dropping pack holds no commit the node's tip covers,
 // written as it is without the dropping view; and droppingPacks counts the
-// packs placed in the view (droppingView). e.mu is held.
+// packs placed in the view (droppingView), droppingObjects their objects.
+// e.mu is held.
 func placeMoved(inc *incarnation, p livePack, was, now packPlace) {
 	switch {
 	case was != placeLive && now == placeLive:
@@ -905,8 +913,10 @@ func placeMoved(inc *incarnation, p livePack, was, now packPlace) {
 	switch {
 	case was != placeDropping && now == placeDropping:
 		inc.droppingPacks++
+		inc.droppingObjects += p.objects
 	case was == placeDropping && now != placeDropping:
 		inc.droppingPacks--
+		inc.droppingObjects -= p.objects
 	}
 }
 
@@ -972,7 +982,7 @@ func deleteLive(inc *incarnation, id string) (cs string, was, now packPlace) {
 func liveWhole(inc *incarnation, packs map[packKey]code.PackRow) {
 	inc.live = make(map[string]livePack, len(packs))
 	inc.byChecksum = make(map[string]checksumRows, len(packs))
-	inc.tail, inc.droppingPacks = tailCount{}, 0
+	inc.tail, inc.droppingPacks, inc.droppingObjects = tailCount{}, 0, 0
 	for _, p := range packs {
 		setLive(inc, p.PackID, liveRow(p))
 	}
