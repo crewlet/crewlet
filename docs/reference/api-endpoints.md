@@ -9330,9 +9330,12 @@ The seat's executor sessions, **the latest begun first**, a page at a time:
   person's answer would carry the turn's parked run on in the box it parked in,
   which still holds that box and names its session, on a member of that box's
   harness in its cell — continued there and nowhere else, for as long as the
-  box is held. **`not_continuable`**, in the engine's own words, redacted, is
-  why a relaunch would not continue it, why that cannot be said now, or, for
-  `parked_box`, why no other box would. As far as the engine can know before a
+  box is held; a company that keeps no session
+  (`turn_engine.conversation_session.enabled: false`) continues no kept
+  capture, so only `parked_box` is said there. **`not_continuable`**, in the
+  engine's own words, redacted, is why a relaunch would not continue it, why
+  that cannot be said now, or, for `parked_box`, why no other box would. As
+  far as the engine can know before a
   box is chosen: whether the box a relaunch gets can take the session up, and
   whether the seat's budget can carry it, are the launch's to find out. An
   ended turn's session is always `false`: no later turn continues a session
