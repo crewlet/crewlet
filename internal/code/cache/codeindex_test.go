@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"path/filepath"
@@ -468,6 +469,9 @@ func holding(o *cache.Options) {
 type indexHashes struct {
 	mu   sync.Mutex
 	seen map[string]int
+	// held, when set, is closed by the next hash, which then waits for
+	// release.
+	held, release chan struct{}
 }
 
 // on is an Options mutation that counts every code index file a check of
@@ -478,11 +482,17 @@ func (h *indexHashes) on(o *cache.Options) {
 			return
 		}
 		h.mu.Lock()
-		defer h.mu.Unlock()
 		if h.seen == nil {
 			h.seen = map[string]int{}
 		}
 		h.seen[path]++
+		held, release := h.held, h.release
+		h.held = nil
+		h.mu.Unlock()
+		if held != nil {
+			close(held)
+			<-release
+		}
 	})
 }
 
@@ -496,12 +506,15 @@ func (h *indexHashes) counts() map[string]int {
 // has held an index's files to their trailers, and holding them is a cold
 // read of every byte of the index: a search that finds it so reads the tip
 // with git grep — however many search at once — and the indexer's next look
-// verifies it, each file once, off every request's path; the searches after
-// it read the index and hash nothing.
+// verifies it, each file once, off every request's path, while a search that
+// asks meanwhile greps rather than wait for it; the searches after it read
+// the index and hash nothing.
 //
 // Mutation: let a search verify (codeindex.go's CodeIndex asks codeIndex with
-// verify) — the searches hash the files; or verify nothing in the indexer
-// (Index's codeIndexVouched check skipped) — the index stays unopened.
+// verify) — the searches hash the files; verify nothing in the indexer
+// (Index's codeIndexVouched check skipped) — the index stays unopened; or let
+// a search wait for the indexer's verifying opening (codeIndex's verifying
+// answer skipped) — it waits out its context.
 func TestASearchNeverHashesACodeIndex(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -534,7 +547,33 @@ func TestASearchNeverHashesACodeIndex(t *testing.T) {
 	if got := h.counts(); len(got) != 0 {
 		t.Errorf("the searches hashed the index's files %v, want none", got)
 	}
-	cache.IndexPass(t.Context(), c)
+	// The indexer's look, held in its first hash while a search asks: the
+	// search greps at once rather than wait for the verification.
+	held, release := make(chan struct{}), make(chan struct{})
+	h.mu.Lock()
+	h.held, h.release = held, release
+	h.mu.Unlock()
+	looked := make(chan struct{})
+	go func() {
+		defer close(looked)
+		cache.IndexPass(t.Context(), c)
+	}()
+	select {
+	case <-held:
+	case <-looked:
+		t.Fatalf("the indexer's look held no file of the index to its trailer (the searches hashed %v): "+
+			"nothing verified it there", h.counts())
+	}
+	waiting, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	_, read := c.CodeIndex(waiting, s)
+	waited := waiting.Err() != nil
+	cancel()
+	close(release)
+	<-looked
+	if read || waited {
+		t.Errorf("a search during the indexer's verification read the index (%t) or waited for it (%t), want "+
+			"it to grep at once", read, waited)
+	}
 	want := map[string]int{}
 	for _, p := range paths {
 		want[p] = 1

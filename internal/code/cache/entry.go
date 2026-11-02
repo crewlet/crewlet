@@ -435,11 +435,11 @@ type incarnation struct {
 	// codeIndex is the code index its record names, opened by the first
 	// reader (Cache.CodeIndex) and kept for the next while the record is
 	// inc's; nil until then, and set nil by every change of the record.
-	// codeIndexOpening is the opening of it a reader is making now, closed
-	// once it is installed or has failed: every other reader waits on it
-	// rather than map the same files again (Cache.codeIndex).
+	// codeIndexOpening is the opening of it a reader is making now, nil for
+	// none: every other reader waits for it rather than map the same files
+	// again — a search for no verifying one (Cache.codeIndex).
 	codeIndex        *openedCodeIndex
-	codeIndexOpening chan struct{}
+	codeIndexOpening *indexOpening
 	// codeIndexRefs is the refs the record's tip was last read under
 	// (Cache.Index): an indexer's look that finds them still the copy's
 	// reads no tip.

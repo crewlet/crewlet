@@ -269,9 +269,18 @@ func (c *Cache) indexHolder(repoID string) (holder, passesOn bool) {
 // look verifies it (Index), one look at a time, off every request's path;
 // and an opening in progress is waited on by every other reader of the
 // incarnation (incarnation.codeIndexOpening), so the mappings it reserves are
-// made once.
+// made once — but for the indexer's verifying one, which no search waits
+// for.
 func (c *Cache) CodeIndex(ctx context.Context, s Synced) (*CodeIndexView, bool) {
 	return c.codeIndex(ctx, s, false)
+}
+
+// indexOpening is an opening of an incarnation's code index in progress:
+// done closes once it is installed or has failed, and verifying says it is
+// the indexer's, holding files to their trailers.
+type indexOpening struct {
+	done      chan struct{}
+	verifying bool
 }
 
 // errUnverified is an opening of a code index a file of which this process
@@ -303,22 +312,27 @@ func (c *Cache) codeIndex(ctx context.Context, s Synced, verify bool) (*CodeInde
 			c.forgetCodeIndex(inc)
 		}
 		if opening := inc.codeIndexOpening; opening != nil {
-			// Another reader is opening it: this one takes that opening.
 			e.mu.Unlock()
+			if opening.verifying && !verify {
+				// The indexer is holding the files to their trailers: a
+				// search waits for none of that, and greps.
+				return nil, false
+			}
+			// Another reader is mapping it: this one takes that opening.
 			select {
-			case <-opening:
+			case <-opening.done:
 				continue
 			case <-ctx.Done():
 				return nil, false
 			}
 		}
-		opening := make(chan struct{})
+		opening := &indexOpening{done: make(chan struct{}), verifying: verify}
 		inc.codeIndexOpening = opening
 		e.mu.Unlock()
 		o, err := c.openCodeIndex(e, inc, rec, verify)
 		e.mu.Lock()
 		inc.codeIndexOpening = nil
-		close(opening)
+		close(opening.done)
 		switch {
 		case errors.Is(err, errUnverified):
 			e.mu.Unlock()
