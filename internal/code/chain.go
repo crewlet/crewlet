@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A CHAIN OF MERGES, BUILT IN ONE SCRATCH ON A REPOSITORY'S HOME (M5-D12,
@@ -223,7 +224,7 @@ func (e ChainEntry) validate() error {
 	case !gitref.ValidOID(e.Head) || e.Head == ZeroOID:
 		return fmt.Errorf("head: %q is not a whole commit id", e.Head)
 	case !e.Method.Valid():
-		return fmt.Errorf("method: %q is not one of %v", e.Method, MergeMethods())
+		return fmt.Errorf("method: %q is not one of %s", e.Method, words.Or(MergeMethods()))
 	case e.Method == MergeMethodSquash && e.Change.Owner == "":
 		return fmt.Errorf("change.owner: a squash is authored by its change's owner, and this one names none")
 	}

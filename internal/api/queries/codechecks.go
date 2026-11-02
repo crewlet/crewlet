@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A REPOSITORY'S MERGE QUEUES AND ITS CHECKS, AS QUESTIONS — what the
@@ -133,7 +134,8 @@ func checksListing(p Params) (*code.CheckQuery, error) {
 	if state := strings.TrimSpace(p.String("state")); state != "" {
 		c.State = code.CheckState(state)
 		if !c.State.Valid() {
-			return nil, fmt.Errorf("%w: the state %q is not one of %v", ErrBadParams, state, code.CheckStates())
+			return nil, fmt.Errorf("%w: the state %q is not one of %s", ErrBadParams, state,
+				words.Or(code.CheckStates()))
 		}
 	}
 	if since := strings.TrimSpace(p.String("since")); since != "" {
