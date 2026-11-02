@@ -3332,13 +3332,27 @@ var _ tools.SeatCallable = (*commentOnWorkItem)(nil)
 func (t *commentOnWorkItem) Name() string { return CommentOnWorkTool }
 
 func (t *commentOnWorkItem) Description() string {
-	return "Post a comment on a work item. Everyone following the item is " +
-		"told, and anyone you @-mention by handle is woken specifically. " +
-		"Post ONE substantive comment when you have something to say — " +
-		"running commentary is noise on a surface other people read. " +
-		"`ask` puts a question to somebody, and `decision` structures it " +
-		"when they have to choose; `answers` with `choice` answers one."
+	return commentToolDescription
 }
+
+// commentToolDescription is the comment tool's contract as a model reads it,
+// and the WAKE RULE IS PART OF IT: another agent's comment starts a
+// colleague's turn only when it names them ([worklet.CandidateFor] answers it
+// for one handle), so an agent that relied on the item's assignee or reporter
+// hearing an unaddressed note would hand work to nobody without knowing it. A
+// constant so a test can hold the words.
+const commentToolDescription = "Post a comment on a work item. Everyone " +
+	"following the item finds it in their inbox, but your comment wakes a " +
+	"colleague to act on it only when you @-mention them by handle, put a " +
+	"question to them with `ask`, or reply (`reply_to`) in a thread they wrote " +
+	"in. A comment that does none of these wakes nobody, not even the item's " +
+	"assignee or its reporter: it waits until they next open the item. So " +
+	"name whoever you need to act, and say what you need from them. Post ONE " +
+	"substantive comment when you have something to say: running commentary " +
+	"is noise on a surface other people read, and an acknowledgement that " +
+	"asks nothing needs no comment at all. `ask` puts a question to somebody, " +
+	"and `decision` structures it when they have to choose; `answers` with " +
+	"`choice` answers one."
 
 func (t *commentOnWorkItem) Parameters() map[string]any {
 	return t.deps.operationParam(map[string]any{
@@ -3351,7 +3365,7 @@ func (t *commentOnWorkItem) Parameters() map[string]any {
 			"body": map[string]any{
 				"type": "string",
 				"description": "The comment, in markdown. @-mention a " +
-					"colleague by handle to reach them specifically.",
+					"colleague by handle to wake them to act on it.",
 			},
 			"ask": map[string]any{
 				"type": "string",
@@ -3579,26 +3593,26 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	opID := opIDFor(actor, t.Name(), "comment", comment.ID, args)
+	notify := worklet.Wake{
+		Kind:   worklet.ChangeComment,
+		Before: before.Task,
+		// THROUGH THE SAME SIMULATION EVERY OTHER WRITE USES, so the
+		// gesture is applied once rather than here and again in
+		// [patched]: a second copy is how the two stop agreeing,
+		// and this one had already drifted: it appended the
+		// commenter to the watcher set unconditionally, which is
+		// wrong at the cap now that an automatic watch is skipped
+		// there rather than refused.
+		After:   patched(before.Task, patch),
+		Comment: comment, Mentions: comment.Mentions,
+		Thread:          thread.ThreadParties,
+		AnswersDecision: thread.AnswersDecision,
+	}.Notify(t.deps.Leads)
 	got, err := writer.UpdateTask(ctx, opID, before.Task.ID, before.Task.Project,
 		// A COMMENT NEVER CONDITIONS ON A VERSION: it adds to the thread
 		// rather than replacing anybody's value, so there is nothing a
 		// concurrent edit could make it clobber.
-		worklet.NoIfMatch, patch, worklet.ChangeComment,
-		worklet.Wake{
-			Kind:   worklet.ChangeComment,
-			Before: before.Task,
-			// THROUGH THE SAME SIMULATION EVERY OTHER WRITE USES, so the
-			// gesture is applied once rather than here and again in
-			// [patched]: a second copy is how the two stop agreeing,
-			// and this one had already drifted — it appended the
-			// commenter to the watcher set unconditionally, which is
-			// wrong at the cap now that an automatic watch is skipped
-			// there rather than refused.
-			After:   patched(before.Task, patch),
-			Comment: comment, Mentions: comment.Mentions,
-			Thread:          thread.ThreadParties,
-			AnswersDecision: thread.AnswersDecision,
-		}.Notify(t.deps.Leads))
+		worklet.NoIfMatch, patch, worklet.ChangeComment, notify)
 	if err != nil {
 		return writeFailure(ctx, actor, CommentOnWorkTool, err), nil
 	}
@@ -3650,12 +3664,13 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		answer["decision"] = comment.Decision
 	}
 	// THE WARNING THE CALLER CANNOT SEE FOR THEMSELVES. A comment from
-	// somebody who is not the assignee, naming nobody, still WAKES the
-	// assignee — unaddressed, which a turn is entitled to absorb without
-	// replying. A commenter expecting an answer therefore gets silence,
+	// somebody who is not the assignee, naming nobody, either reaches the
+	// assignee's inbox and starts no turn (another agent's), or wakes them
+	// without asking them anything, which a turn may absorb without
+	// replying. A commenter expecting an answer gets silence either way,
 	// and nothing about the call says so.
 	var caveats []caveat.Caveat
-	if unaddressed := unaddressedCaveat(before.Task, actor, comment); !unaddressed.IsZero() {
+	if unaddressed := unaddressedCaveat(before.Task, actor, comment, notify); !unaddressed.IsZero() {
 		caveats = append(caveats, unaddressed)
 	}
 	return ownReceipt(ctx, turn, actor, CommentOnWorkTool, answer, caveats)
@@ -3687,9 +3702,12 @@ func ownReceipt(ctx context.Context, turn *turnctx.Turn, actor Actor, tool strin
 	}, answer, cs, partials...)
 }
 
-// unaddressedCaveat says when a comment will wake somebody who is not being
-// asked anything.
-func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment) caveat.Caveat {
+// unaddressedCaveat says when a comment leaves the item's assignee unasked:
+// not woken at all, or woken without being asked anything. notify is the
+// record the comment publishes, so what it says is the routing's own answer.
+func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment,
+	notify *worklet.Notify) caveat.Caveat {
+
 	switch {
 	// AGAINST THE AUTHOR, which is a bound person's seat: an assignee is
 	// a seat, and a person commenting on their own task is not waking
@@ -3706,7 +3724,16 @@ func unaddressedCaveat(task worklet.Task, actor Actor, comment *worklet.Comment)
 	case comment.Answers != nil:
 		return caveat.Caveat{}
 	}
-	return caveat.UnaddressedComment(task.Assignee)
+	// WHETHER IT WAKES THEM, AND ASKS THEM, is the routing's answer for this
+	// record: a person's comment on the task is the ask and needs no
+	// warning; another agent's reaches the assignee's inbox and starts no
+	// turn, unless it is a reply in a thread they wrote in, which wakes them
+	// without asking them anything.
+	heard, ok := worklet.CandidateFor(notify, task.Assignee)
+	if !ok || heard.Addressed {
+		return caveat.Caveat{}
+	}
+	return caveat.UnaddressedComment(task.Assignee, heard.Wakes)
 }
 
 // commentID is the comment's own id, derived so a re-run turn posts once.

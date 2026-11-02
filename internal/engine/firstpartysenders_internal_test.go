@@ -172,7 +172,8 @@ func (r oneThread) ReadThread(context.Context, string, notify.Thread) (notify.Tr
 // tracker's change feed hands it to the inbound edge.
 func trackerCommentWake(t *testing.T, author string) *events.Event {
 	t.Helper()
-	comment := worklet.Comment{ID: "c-1", Body: "can you check the numbers?", Author: author}
+	comment := worklet.Comment{ID: "c-1", Body: "can you check the numbers?", Author: author,
+		AuthorKind: worklet.AuthorHuman}
 	n := worklet.Wake{
 		Kind: worklet.ChangeComment, Comment: &comment,
 		After: worklet.Task{ID: "t-1", Key: "ENG-1", Project: "ENG", Assignee: "swe"},
