@@ -780,3 +780,84 @@ func TestACutOffSessionIsHandedAgainTheNotesItsJobTookLast(t *testing.T) {
 		t.Errorf("a cut-off session whose job took no notes holds through %d, want its brief's, 1", got)
 	}
 }
+
+// WHAT A READER IS TOLD OF A RELAUNCH IS THE RELAUNCH'S OWN DECISION, and the
+// half a person's answer takes beside it. A live turn's kept capture the target's
+// runner restores continues in any box; one it does not — or one not kept — is
+// continued only in the box the run parked in, where the run holds that box and
+// names its session and the relaunch's member is of the box's harness in its
+// cell, the launch's own test of a box it continues in; anywhere else, not at
+// all. And it is undecided, never a no, wherever a relaunch would not decide
+// now either: a job still working or being collected, a capture still being
+// kept, and every member of the seat's chain sitting out.
+//
+// Mutation: drop the parked box's half, read any undecided state as a no, or
+// let a box of another harness or cell count as the parked one, and a case goes
+// red.
+func TestWhatAReaderIsToldOfARelaunchIsTheRelaunchsOwnDecision(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	key := objstore.KeyAt(now)
+	kept := SessionCapture{LaunchSeq: 2, CaptureSeq: 1, State: CaptureLanded, Object: key.String(), At: now}
+	row := executordomain.Session{Handle: "swe", Turn: "t1", Harness: "claude-code", SessionID: "s-1",
+		ArchiveFormat: FakeArchiveFormat, Object: objstore.Object{Key: key, Size: 1}, LaunchSeq: 2, CaptureSeq: 1}
+	parked := func() PendingRun {
+		return PendingRun{TurnID: "t1", Status: StatusAwaiting, SandboxID: "box-1", Placement: string(Direct),
+			Harness: "claude-code", SessionID: "s-1", LaunchSeq: 2, Capture: &kept, Kept: &kept}
+	}
+	target := RelaunchTarget{Harness: "claude-code", Placement: Direct, Restorer: fakeRestorer{}}
+	older := target
+	older.Restorer = fakeRestorer{why: "older than 2.1.300"}
+	for name, tc := range map[string]struct {
+		run      func(*PendingRun)
+		target   RelaunchTarget
+		decided  bool
+		in       ContinuesIn
+		whyHolds string
+	}{
+		"its kept capture":  {target: target, decided: true, in: ContinuesInAnyBox},
+		"in its parked box": {target: older, decided: true, in: ContinuesInParkedBox, whyHolds: "older than"},
+		"its box reclaimed": {target: older, decided: true, whyHolds: "older than",
+			run: func(r *PendingRun) { r.SandboxID = "" }},
+		"a member elsewhere": {decided: true, whyHolds: "older than",
+			target: RelaunchTarget{Harness: "claude-code", Placement: Container, Restorer: older.Restorer}},
+		"a member of another harness": {decided: true, whyHolds: "older than",
+			target: RelaunchTarget{Harness: "opencode", Placement: Direct, Restorer: older.Restorer}},
+		"a job still running": {target: target, whyHolds: "still working",
+			run: func(r *PendingRun) { r.Status, r.LaunchSeq = StatusRunning, 3 }},
+		"a claim under way": {target: target, whyHolds: "being collected",
+			run: func(r *PendingRun) { r.Status = StatusResumed }},
+		"a collected job held": {target: target, decided: true, in: ContinuesInAnyBox,
+			run: func(r *PendingRun) { r.Status, r.Launch.Collected = StatusRunning, true }},
+		"a capture being kept": {target: target, whyHolds: "still being kept", run: func(r *PendingRun) {
+			begun := kept
+			begun.CaptureSeq, begun.State, begun.At = 2, CaptureBegun, now.Add(-time.Second)
+			r.Capture = &begun
+		}},
+		"every member sitting out": {whyHolds: "sitting out",
+			target: RelaunchTarget{Waiting: true, Why: "every member is sitting out its plan"}},
+		"no member at all": {decided: true, whyHolds: "no runner member",
+			target: RelaunchTarget{Why: "the seat's chain has no runner member"}},
+		"a decided ending": {target: target, decided: true, whyHolds: "is ending",
+			run: func(r *PendingRun) { r.Ending = &RecordedEnding{ID: "ending-1"} }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			run := parked()
+			if tc.run != nil {
+				tc.run(&run)
+			}
+			got := ReadContinuityOf(row, &run, tc.target, now)
+			switch {
+			case got.Decided != tc.decided:
+				t.Fatalf("ReadContinuityOf = %+v, want decided %v", got, tc.decided)
+			case got.Continues != (tc.in != "") || got.In != tc.in:
+				t.Fatalf("ReadContinuityOf = %+v, want continued in %q", got, tc.in)
+			case !strings.Contains(got.Why, tc.whyHolds):
+				t.Fatalf("ReadContinuityOf = %+v, want it saying %q", got, tc.whyHolds)
+			case tc.in == ContinuesInAnyBox && got.Why != "":
+				t.Fatalf("ReadContinuityOf = %+v, want no reason beside a session continued in any box", got)
+			}
+		})
+	}
+}

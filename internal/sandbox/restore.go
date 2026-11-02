@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executordomain"
@@ -42,16 +43,20 @@ import (
 //
 // ONE DECISION, [ContinuityOf]: the turn live and not ending, the job before's
 // newest capture kept and named by the turn's row on the executor log, in a
-// format and by a release the runner for its harness restores. The launch's
-// caller asks it before it builds the run's surface and briefs
+// format and by a release the runner of the member the relaunch is launched on
+// restores ([RelaunchTarget], the engine's one pick of it). The launch's caller
+// asks it before it builds the run's surface and briefs
 // ([Coordinator.ContinuedCapture]), the launch asks it again of the record as
 // it opened the job, and the read surface asks it of each row of a seat's
-// sessions (internal/api/queries' `continuable`), of the same two records. What
-// only a launch can know is the launch's alone, and no reader states it:
-// whether the box it got runs a harness that takes the session up
-// ([SessionRestorer.CheckCarry]), and whether the seat's budget can carry the
-// session's context beside the brief it hands the run (internal/engine's
-// launch floor).
+// sessions (internal/api/queries' `continuable`) through [ReadContinuityOf],
+// of the same two records read as a relaunch reads them — with the half a
+// person's answer takes beside it, carrying a parked run on in the box it
+// parked in where the kept capture is not continued, by the launch's own test
+// of a box it continues in ([PriorBox.ContinuesIn]). What only a launch can
+// know is the launch's alone, and no reader states it: whether the box it got
+// runs a harness that takes the session up ([SessionRestorer.CheckCarry]), and
+// whether the seat's budget can carry the session's context beside the brief
+// it hands the run (internal/engine's launch floor).
 //
 // # The job before's capture, still being kept
 //
@@ -210,6 +215,179 @@ func archiveOf(row executordomain.Session) SessionArchive {
 		Version: row.HarnessVersion}
 }
 
+// ContinuesIn is where a relaunch of a turn would continue the turn's session,
+// as a reader of the session is told it ([ReadContinuityOf]).
+type ContinuesIn string
+
+const (
+	// ContinuesInAnyBox is the turn's kept capture, continued in whichever box
+	// the relaunch gets: restored into another, or as its own copy in the box
+	// it was last worked in ([ContinuityOf] says it continues).
+	ContinuesInAnyBox ContinuesIn = "any_box"
+
+	// ContinuesInParkedBox is the session the box the turn's job parked in
+	// holds, continued IN THAT BOX AND NOWHERE ELSE: what a person's answer
+	// carries a parked run on in where the turn's kept capture is not
+	// continued — the job's capture not kept, or of a release no other box
+	// continues — for as long as the run's box is held. A pause past its
+	// time-to-live reclaims the box, and the answer's relaunch then starts a
+	// session of its own.
+	ContinuesInParkedBox ContinuesIn = "parked_box"
+)
+
+// ContinuesIns are every place a reader is told a relaunch continues a session.
+var ContinuesIns = []ContinuesIn{ContinuesInAnyBox, ContinuesInParkedBox}
+
+// Valid reports whether w is one of [ContinuesIns]. An answer a newer build
+// sent may name another, which is read as the value it is.
+func (w ContinuesIn) Valid() bool { return slices.Contains(ContinuesIns, w) }
+
+// RelaunchTarget is what a relaunch of a seat's turn would be launched on, as
+// the engine picks it before any launch (internal/engine): the harness of the
+// first member of the seat's executor chain not sitting out its plan, the cell
+// that member's runs land in, and its runner, as it takes up a session carried
+// between boxes. ONE PICK for the relaunch's own probe of the session it
+// continues and for every reader of whether one would, so the two never ask
+// different runners.
+type RelaunchTarget struct {
+	// Harness and Placement are the member's harness and the cell its run
+	// lands in, which decide whether a relaunch continues in the box the run
+	// parked in ([PriorBox.ContinuesIn]); empty where there is no member.
+	Harness   string
+	Placement Placement
+
+	// Restorer is the member's runner, taking up a session carried between
+	// boxes; nil where it takes none up, or where there is no member — which
+	// Why then says.
+	Restorer SessionRestorer
+	Why      string
+
+	// Waiting says no member can be picked now and one may be later: every
+	// member of the seat's chain is sitting out its plan, and which of them
+	// takes the relaunch decides what it continues. A relaunch now is held
+	// until one is back, and asks again then.
+	Waiting bool
+}
+
+// restorer is the target's runner as [ContinuityOf] asks it: its own, or one
+// that restores nothing and says why there is none.
+func (t RelaunchTarget) restorer() SessionRestorer {
+	if t.Restorer != nil || t.Why == "" {
+		return t.Restorer
+	}
+	return refusedRestore(t.Why)
+}
+
+// refusedRestore is a restorer that takes no session up, for the reason it is:
+// a relaunch target with no runner of its own to ask.
+type refusedRestore string
+
+func (r refusedRestore) Restores(SessionArchive) (bool, string) { return false, string(r) }
+
+func (r refusedRestore) CheckCarry(context.Context, Sandbox, SessionArchive) (CarryCheck, error) {
+	return CarryCheck{Why: string(r)}, nil
+}
+
+// ReadContinuity is whether a relaunch of a turn would continue the turn's
+// session, as a reader of the session is told it ([ReadContinuityOf]).
+type ReadContinuity struct {
+	// Decided is false where it cannot be said now, which Why then says: a
+	// relaunch now would not decide it either.
+	Decided bool
+
+	// Continues says a relaunch would continue the session, and In where.
+	Continues bool
+	In        ContinuesIn
+
+	// Why is why a relaunch would not continue the session, why that cannot
+	// be said now, or — where it continues only in the box the run parked in
+	// — why the turn's kept capture is continued in no other.
+	Why string
+}
+
+// ReadContinuityOf is whether a relaunch of the turn whose row on the executor
+// log row is would continue its session, as a reader is told it — THE DECISION
+// A RELAUNCH TAKES, asked of what a relaunch reads: [ContinuityOf], of row,
+// the turn's run record as it stands (run, nil where its run is over), the job
+// that record names as the one a relaunch would follow and target's runner;
+// and, where that says no, the half a person's answer takes beside it, carrying
+// a parked run on in the box it parked in — the launch's own test of a box it
+// continues in ([PriorBox.ContinuesIn]), asked of the box the record names. row
+// is read at the level a relaunch reads it ([RelaunchRead]): a copy of the log
+// behind the run's record reads a capture the relaunch would continue as one
+// the log no longer names.
+//
+// UNDECIDED WHERE A RELAUNCH WOULD NOT DECIDE NOW EITHER, never a no: the job a
+// relaunch would follow still working, or being collected — whose session is
+// taken by the read that collects it, and kept off that read; the capture of
+// that job still being kept, which a relaunch waits for ([relaunchCaptureWait]);
+// and every member of the seat's chain sitting out its plan, where which of
+// them takes the relaunch decides it. now is the reader's clock, against which
+// a begun capture is in flight ([captureInFlight]).
+//
+// As far as the engine can know before a box is chosen: whether the box a
+// relaunch gets runs a harness release that takes the session up, and whether
+// the seat's budget can carry it, are the launch's to find out.
+func ReadContinuityOf(row executordomain.Session, run *PendingRun, target RelaunchTarget,
+	now time.Time) ReadContinuity {
+
+	if run == nil || row.Ended() || run.endDecided() {
+		return ReadContinuity{Decided: true, Why: ContinuityOf(row, run, 0, nil).Why}
+	}
+	switch {
+	case jobWorking(*run):
+		return ReadContinuity{Why: fmt.Sprintf("the job a relaunch would follow (launch %d) is still "+
+			"working or being collected, and its session is taken and kept by the read that collects it",
+			run.LaunchSeq)}
+	case captureInFlight(*run, now):
+		return ReadContinuity{Why: fmt.Sprintf("the capture of the job a relaunch would follow (launch %d, "+
+			"capture %d) is still being kept", run.Capture.LaunchSeq, run.Capture.CaptureSeq)}
+	case target.Waiting:
+		return ReadContinuity{Why: target.Why}
+	}
+	kept := ContinuityOf(row, run, run.LaunchSeq, target.restorer())
+	switch {
+	case kept.Continues:
+		return ReadContinuity{Decided: true, Continues: true, In: ContinuesInAnyBox}
+	case parkedBoxContinues(*run, target):
+		return ReadContinuity{Decided: true, Continues: true, In: ContinuesInParkedBox, Why: kept.Why}
+	}
+	return ReadContinuity{Decided: true, Why: kept.Why}
+}
+
+// jobWorking reports whether run's job is still working or being collected: a
+// launch not yet suspended, a job running whose box no collection has read
+// back ([LaunchRecord.Collected]), or a claim whose read or resume is under
+// way. Its session is taken by the read that collects it, so no reader can say
+// yet what a relaunch following it continues.
+func jobWorking(run PendingRun) bool {
+	switch run.Status {
+	case StatusLaunching, StatusResumed:
+		return true
+	case StatusRunning:
+		return !run.Launch.Collected
+	}
+	return false
+}
+
+// parkedBoxContinues reports whether a person's answer to run's parked job would
+// carry it on in the box it parked in, continuing the session that box holds:
+// the run parked on its question, still holding its box and naming the session
+// its harness ran there, and that box one the relaunch's member continues in —
+// [PriorBox.ContinuesIn], the launch's own test, asked of the box the record
+// names as the relaunch would find it, its job over by then.
+func parkedBoxContinues(run PendingRun, target RelaunchTarget) bool {
+	if run.Status != StatusAwaiting && run.Status != StatusAnswered {
+		return false
+	}
+	if !run.HasBox() || run.SessionID == "" || target.Harness == "" {
+		return false
+	}
+	parked := PriorBox{SandboxID: run.SandboxID, Placement: run.Placement, Harness: run.Harness,
+		Status: StatusResumed}
+	return parked.ContinuesIn(Spec{Placement: target.Placement, Harness: target.Harness})
+}
+
 // ContinuedSession is the kept session a relaunch of a turn continues: the
 // run's record's stamp of the capture — what it accounts for, where it was
 // worked, what its last request carried — and the turn's row on the executor
@@ -227,10 +405,12 @@ type ContinuedSession struct {
 	Context int64
 }
 
-// readThrough is the level a relaunch reads its turn's row at: the capture it
-// continues may have been recorded by another node's keep, which this node's
-// copy may not have applied yet.
-var readThrough = statelog.Freshness{Level: statelog.ReadLinearizable}
+// RelaunchRead is the level a relaunch reads its turn's row at, and so the
+// level every reader of whether a relaunch would continue the turn's session
+// decides on ([ReadContinuityOf]): the capture it continues may have been
+// recorded by another node's keep, which this node's copy may not have applied
+// yet.
+func RelaunchRead() statelog.Freshness { return statelog.Freshness{Level: statelog.ReadLinearizable} }
 
 // relaunchCaptureWait bounds how long a relaunch waits for the capture of the
 // job it follows to be kept, on the frame that relaunches: see the file
@@ -282,7 +462,7 @@ func (c *Coordinator) ContinuedCapture(ctx context.Context, turnID string,
 	if _, why := followedCapture(run, run.LaunchSeq); why != "" {
 		return answer, why
 	}
-	row, err := c.restore.Session(ctx, run.AgentHandle, turnID, readThrough)
+	row, err := c.restore.Session(ctx, run.AgentHandle, turnID, RelaunchRead())
 	if err != nil {
 		return answer, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
 	}
@@ -448,7 +628,7 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 		return continuedLaunch{}, "the turn's kept session is not the one its launch was asked to continue"
 	}
 	restorer, _ := runner.(SessionRestorer)
-	row, err := c.restore.Session(ctx, req.Turn.AgentHandle, req.Turn.TurnID, readThrough)
+	row, err := c.restore.Session(ctx, req.Turn.AgentHandle, req.Turn.TurnID, RelaunchRead())
 	if err != nil {
 		return continuedLaunch{}, fmt.Sprintf("the turn's row on the executor log could not be read: %v", err)
 	}
