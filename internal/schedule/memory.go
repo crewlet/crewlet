@@ -40,6 +40,19 @@ func (m *MemoryLedger) Claim(_ context.Context, run Run) (bool, error) {
 	return true, nil
 }
 
+// MinuteClaimed reports whether any identity of the minute is claimed, for
+// any runner or for none.
+func (m *MemoryLedger) MinuteClaimed(_ context.Context, minute FireMinute) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key := range m.claim {
+		if key.FireMinute == minute {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Purge drops rows fired strictly before the cutoff, and their claim keys
 // with them.
 func (m *MemoryLedger) Purge(_ context.Context, before time.Time) (int, error) {

@@ -44,7 +44,7 @@ type Fleet struct {
 	channels     map[string]coord.Channel
 	follows      map[string]followEntry
 	chatReads    map[string]coord.ChatReadState
-	fires        map[string]time.Time
+	fires        map[string]map[string]time.Time
 	custody      map[string]string
 	rebases      map[string]rebaseEntry
 	runs         map[string]coord.Record
@@ -149,7 +149,7 @@ func NewFleet() *Fleet {
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
 		chatReads:    map[string]coord.ChatReadState{},
-		fires:        map[string]time.Time{},
+		fires:        map[string]map[string]time.Time{},
 		custody:      map[string]string{},
 		rebases:      map[string]rebaseEntry{},
 		runs:         map[string]coord.Record{},
@@ -715,18 +715,38 @@ func normalizeChannel(ch coord.Channel) coord.Channel {
 
 // ---- the scheduled-fire claims ----------------------------------------- //
 
-// ClaimFire records one fire identity, reporting whether this call wrote it.
-func (f *Fleet) ClaimFire(_ context.Context, key string, at time.Time) (bool, error) {
-	if key == "" {
-		return false, errors.New("coord/memory: a fire claim needs a key")
+// ClaimFire records one runner's claim on a minute, reporting whether this
+// call wrote it.
+//
+// KEPT BY MINUTE, each minute's runners together, which is the shape the KV
+// backend's keys have and what lets [Fleet.FireMinuteClaimed] answer without
+// reading every claim.
+func (f *Fleet) ClaimFire(_ context.Context, minute, runner string, at time.Time) (bool, error) {
+	if minute == "" {
+		return false, errors.New("coord/memory: a fire claim needs a minute")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, taken := f.fires[key]; taken {
+	runners := f.fires[minute]
+	if _, taken := runners[runner]; taken {
 		return false, nil
 	}
-	f.fires[key] = at.UTC()
+	if runners == nil {
+		runners = map[string]time.Time{}
+		f.fires[minute] = runners
+	}
+	runners[runner] = at.UTC()
 	return true, nil
+}
+
+// FireMinuteClaimed reports whether any runner, or none, holds the minute.
+func (f *Fleet) FireMinuteClaimed(_ context.Context, minute string) (bool, error) {
+	if minute == "" {
+		return false, errors.New("coord/memory: a fire minute read needs a minute")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.fires[minute]) > 0, nil
 }
 
 // ---- the custody claims ----------------------------------------------- //

@@ -37,17 +37,16 @@ const (
 	OutcomeSkippedPaused Outcome = "skipped_paused"
 )
 
-// FireKey is the identity of one dispatch, and the whole of the at-most-once
-// guarantee.
+// FireMinute is one schedule's fire at one local minute, whoever it was
+// addressed to: a [FireKey] without its runner.
 //
-// It is a STRUCT rather than a joined string, and that is load-bearing in both
-// backends: SQL keys the row on the column tuple, and Go's comparable structs
-// let the memory twin use this value directly as a map key. A delimiter-joined
-// identity collides the moment a delimiter appears in a name — a unit called
-// "Q3:Launch" and a schedule called "Launch" would produce the same joined key
-// as a unit "Q3" and a schedule ":Launch", and one of the two fires would then
-// be silently suppressed by the other.
-type FireKey struct {
+// It is what the first tick after a restart asks about before it records a
+// missed fire ([Claimer.MinuteClaimed]), because a minute is missed only when
+// NOBODY holds it. One a runner was fired for, or recorded paused, or that an
+// earlier catchup pass already recorded, was not missed, and a skip written
+// for it puts the same tick in the schedule's history twice: once as what
+// happened and once as a miss that did not.
+type FireMinute struct {
 	// Scope is whether a role or a unit owns the schedule.
 	Scope types.ScheduleScope
 	// ScopeID is the owning scope's IDENTITY — see [Entry.ScopeID]. It is
@@ -66,6 +65,20 @@ type FireKey struct {
 	// local cron minute maps to two UTC instants, and both share a label,
 	// so the run fires once rather than twice. See [FireLabel].
 	FireLabel string
+}
+
+// FireKey is the identity of one dispatch, and the whole of the at-most-once
+// guarantee: a [FireMinute] and the runner it was addressed to.
+//
+// It is a STRUCT rather than a joined string, and that is load-bearing in both
+// backends: SQL keys the row on the column tuple, and Go's comparable structs
+// let the memory twin use this value directly as a map key. A delimiter-joined
+// identity collides the moment a delimiter appears in a name: a unit called
+// "Q3:Launch" and a schedule called "Launch" would produce the same joined key
+// as a unit "Q3" and a schedule ":Launch", and one of the two fires would then
+// be silently suppressed by the other.
+type FireKey struct {
+	FireMinute
 	// TargetHandle is the runner this fire was addressed to, and empty for
 	// a skipped catchup, which resolved no runner. An `each` fan-out mints
 	// one identity per member, so a slow or failing member cannot suppress
@@ -101,12 +114,13 @@ type Run struct {
 	TraceID string
 }
 
-// Claimer is the ledger surface the [Scheduler] itself needs: one call, made
-// before every publish.
+// Claimer is the ledger surface the [Scheduler] itself needs: the claim made
+// before every publish, and the one read the first tick after a restart makes
+// before it records a missed fire.
 //
 // Declared separately from [Ledger] because that is all the scheduler uses,
-// and a dispatcher that could also read history and delete rows is a
-// dispatcher whose blast radius nobody can see from its type.
+// and a dispatcher that could also delete rows is a dispatcher whose blast
+// radius nobody can see from its type.
 type Claimer interface {
 	// Claim atomically records a fire, reporting whether THIS call wrote
 	// the row.
@@ -122,14 +136,29 @@ type Claimer interface {
 	// its safe answer is to re-run; this one asks "may I start", so its
 	// safe answer is to wait for the next tick.
 	Claim(ctx context.Context, run Run) (bool, error)
+
+	// MinuteClaimed reports whether ANY identity of this minute is claimed:
+	// a fire or a paused record for any runner, or a catchup skip.
+	//
+	// The skip's own identity names no runner, so that it never collides
+	// with a runner's fire for the same minute ([Scheduler.recordSkip]).
+	// That is exactly why claiming the skip cannot also answer whether the
+	// minute ran: a claim on it succeeds beside a fire row, so only a read
+	// across every runner tells a missed minute from one that was handled.
+	//
+	// An error is UNKNOWN, and the caller records nothing: a skip row
+	// missing for a minute that really was missed is a gap in the history,
+	// while one written on a guess is a miss that never happened.
+	MinuteClaimed(ctx context.Context, minute FireMinute) (bool, error)
 }
 
 // Ledger is the full contract a scheduled-run store must satisfy, and the one
 // certified by internal/schedule/scheduletest.
 //
 // It is wider than [Claimer] by one call, for the one other caller: the
-// retention sweep calls Purge. Nothing READS a ledger through this contract.
-// The schedules' history is the usage domain's fires (internal/usage), every
+// retention sweep calls Purge. Nothing reads a schedule's HISTORY through this
+// contract: [Claimer.MinuteClaimed] answers one yes or no for the catchup
+// pass, and the history is the usage domain's fires (internal/usage), every
 // data node's, derived from this node's `scheduled_runs` rows by the store and
 // joined there with what became of each fire, which this ledger cannot know:
 // it records `fired` when the scheduler sends a fire, and the seat's node
@@ -152,6 +181,8 @@ type Ledger interface {
 	// Dropping a row MUST drop its claim key with it. A purge that kept the
 	// key would go on refusing a fire the store has no evidence of, which
 	// is worse than never sweeping at all because the refusal is silent.
+	// The same holds for [Claimer.MinuteClaimed]: a minute whose every row
+	// went reads unclaimed.
 	Purge(ctx context.Context, before time.Time) (int, error)
 }
 

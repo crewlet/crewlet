@@ -996,28 +996,47 @@ type Channels interface {
 
 // Fires is the fleet's at-most-once guard for scheduled work.
 //
-// One key per DISPATCH IDENTITY — scope, owner, schedule name, the local
-// wall-clock minute and the runner it was addressed to — so the guarantee the
-// scheduler docs make ("a restart, a slow tick, or a re-evaluated minute can
-// never fire the same run twice") holds across the fleet rather than within
-// one process. It was the node's own table, so the `scheduler` singleton duty
-// moving to a peer handed the new node an empty ledger and its catchup pass
-// re-fired what the previous holder had already claimed: every company got two
-// standups.
+// One claim per DISPATCH IDENTITY, a minute and the runner it was addressed
+// to, so the guarantee the scheduler docs make ("a restart, a slow tick, or a
+// re-evaluated minute can never fire the same run twice") holds across the
+// fleet rather than within one process. It was the node's own table, so the
+// `scheduler` singleton duty moving to a peer handed the new node an empty
+// ledger and its catchup pass re-fired what the previous holder had already
+// claimed: every company got two standups.
+//
+// The MINUTE is the schedule's own opaque key: scope, owner, schedule name and
+// the local wall-clock minute, joined injectively by the scheduler. A store
+// keeps a minute's claims together, because the catchup pass asks one question
+// about a minute as a whole ([Fires.FireMinuteClaimed]).
 //
 // The node's own scheduled_runs table STAYS, as this node's audit record of
-// what it dispatched — the same split migration 0011 made for the token
-// counter. What the fleet has to agree on is "may I start", and nothing more.
+// what it dispatched: the same split migration 0011 made for the token
+// counter. What the fleet has to agree on is "may I start", and whether
+// anybody started a given minute.
 type Fires interface {
-	// ClaimFire records one fire identity and reports whether THIS caller
-	// wrote it.
+	// ClaimFire records one runner's claim on a minute and reports whether
+	// THIS caller wrote it. The runner may be empty, which is the claim a
+	// catchup skip makes: it resolved no runner, and an empty runner is a
+	// claim of its own beside every named one.
 	//
 	// FAILS CLOSED, which is the opposite polarity to [Ledger] and
 	// deliberately so. That one asks "has this work been done", whose safe
 	// answer is to re-run; this one asks "may I start", whose safe answer
 	// is to wait for the next tick. An error yields (false, err) and the
-	// caller must NOT dispatch.
-	ClaimFire(ctx context.Context, key string, at time.Time) (bool, error)
+	// caller must NOT dispatch. An empty minute is an error.
+	ClaimFire(ctx context.Context, minute, runner string, at time.Time) (bool, error)
+
+	// FireMinuteClaimed reports whether any claim on the minute is held,
+	// for any runner or for none.
+	//
+	// The scheduler's first tick after a restart asks it before recording
+	// the most recent fire as missed: a minute any runner was claimed for
+	// ran, or was deliberately held back, and was not missed. An error is
+	// UNKNOWN and never a false: a store that could not be read and a
+	// minute nobody claimed are different answers, and the second one
+	// writes a skip into the schedule's history. An empty minute is an
+	// error, because it names no minute at all.
+	FireMinuteClaimed(ctx context.Context, minute string) (bool, error)
 }
 
 // Custody decides which data node keeps each batch of a stateless node's event

@@ -42,18 +42,22 @@
 //   - Purge twice in succession, the second finding nothing;
 //   - Claim of an identity a Purge has just dropped, which must be granted:
 //     the case that catches a sweep that drops the record and keeps the key;
+//   - MinuteClaimed of an empty ledger, of a minute held by a fire, a paused
+//     record or a skip alone, of a minute whose neighbours are held, and of
+//     a minute a Purge has just emptied;
 //   - the rows after a Purge, which must not include what was swept;
 //   - concurrent Claims of ONE identity, and concurrent Claims of DISTINCT
 //     identities, both under -race.
 //
 // # What the suite reads
 //
-// The contract has no read: nothing in the engine lists a ledger, and the
-// usage domain derives the schedules' history from the SQL backend's table
-// directly. So each backend's test hands the suite a [Backend] whose Rows
-// reads what the ledger holds, and every case asserts on that rather than on
-// Claim's boolean alone, which cannot show a refused claim that overwrote the
-// first row's trace, or a fire stamped in year 1.
+// The contract's one read is a yes or no about a minute
+// ([schedule.Claimer.MinuteClaimed]); nothing in the engine lists a ledger,
+// and the usage domain derives the schedules' history from the SQL backend's
+// table directly. So each backend's test hands the suite a [Backend] whose
+// Rows reads what the ledger holds, and every case asserts on that rather
+// than on Claim's boolean alone, which cannot show a refused claim that
+// overwrote the first row's trace, or a fire stamped in year 1.
 //
 // # What the suite does NOT require
 //
@@ -110,8 +114,8 @@ type Backend struct {
 	Ledger schedule.Ledger
 
 	// Rows reads every row Ledger holds, in any order. Supplied by the
-	// backend's own test, since the contract has no read (see the package
-	// doc).
+	// backend's own test, since the contract has no listing (see the
+	// package doc).
 	Rows func(ctx context.Context) ([]schedule.Run, error)
 }
 
@@ -131,6 +135,7 @@ func Run(t *testing.T, open func(t *testing.T) Backend) {
 		{"claim", claimCases},
 		{"record", recordCases},
 		{"purge", purgeCases},
+		{"minute", minuteCases},
 		{"values", valueCases},
 		{"concurrency", concurrencyCases},
 	}
@@ -263,6 +268,17 @@ func (h *harness) rows() []schedule.Run {
 		return strings.Compare(keyString(a.FireKey), keyString(b.FireKey))
 	})
 	return rows
+}
+
+// minuteClaimed asks the ledger about a minute, failing the case on an error:
+// every backend here is reachable, so an error is a defect.
+func (h *harness) minuteClaimed(minute schedule.FireMinute) bool {
+	h.t.Helper()
+	held, err := h.l.MinuteClaimed(h.ctx, minute)
+	if err != nil {
+		h.t.Fatalf("MinuteClaimed(%v): unexpected error: %v", minute, err)
+	}
+	return held
 }
 
 func (h *harness) purge(before time.Time) int {
@@ -507,6 +523,109 @@ var recordCases = []testCase{
 					"left it zero would put the row in year 1, below every retention cutoff "+
 					"and at the wrong end of every listing", row.FiredAt)
 			}
+		}
+	}},
+}
+
+// --- minute ---------------------------------------------------------------
+
+// What the catchup pass asks before it records the most recent fire as
+// missed: does anybody hold this minute? A minute held by any runner, for any
+// outcome, or by an earlier skip, was not missed, and a backend that answered
+// false there writes the same tick into the schedule's history twice.
+var minuteCases = []testCase{
+	{"a_minute_nobody_claimed_reads_unclaimed", func(h *harness) {
+		if h.minuteClaimed(aKey().FireMinute) {
+			h.t.Fatal("an empty ledger reads the minute claimed")
+		}
+	}},
+
+	{"a_minute_any_runner_holds_reads_claimed_whatever_the_outcome", func(h *harness) {
+		// One minute per outcome, each held by a runner that is not the
+		// fixture's, so a backend that matched on the handle as well
+		// answers false.
+		for _, outcome := range []schedule.Outcome{
+			schedule.OutcomeFired, schedule.OutcomeSkippedPaused, schedule.OutcomeSkippedCatchup,
+		} {
+			key := aKey()
+			key.FireLabel = "outcome-" + string(outcome)
+			key.TargetHandle = "qa-dev"
+			run := aRun(key)
+			run.Outcome = outcome
+			h.claimed(run)
+			if !h.minuteClaimed(key.FireMinute) {
+				h.t.Fatalf("a minute held by a %s row reads unclaimed, so the catchup pass "+
+					"records it as missed", outcome)
+			}
+		}
+	}},
+
+	{"a_minute_a_skip_alone_holds_reads_claimed", func(h *harness) {
+		// The second restart after a missed tick. The first one recorded
+		// the skip, under no runner, and the minute must read held or every
+		// restart records the miss again.
+		skip := aRun(aKey())
+		skip.TargetHandle = ""
+		skip.Outcome = schedule.OutcomeSkippedCatchup
+		h.claimed(skip)
+		if !h.minuteClaimed(skip.FireMinute) {
+			h.t.Fatal("a minute held only by a skip reads unclaimed")
+		}
+	}},
+
+	{"every_field_of_the_minute_is_part_of_it", func(h *harness) {
+		// Each neighbour varies one field of the minute and is claimed,
+		// for a runner and for none; the fixture's own minute stays
+		// unclaimed. A backend that dropped a field from the read answers
+		// true for the minute nobody holds.
+		base := aKey()
+		for _, tc := range []struct {
+			field string
+			key   schedule.FireKey
+		}{
+			{"scope", func() schedule.FireKey { k := base; k.Scope = types.ScheduleScopeUnit; return k }()},
+			{"scope id", func() schedule.FireKey {
+				k := base
+				k.ScopeID = "6d6f2d51-4c3d-5a2a-9d01-2f0e7ab1c934"
+				return k
+			}()},
+			{"schedule name", func() schedule.FireKey { k := base; k.ScheduleName = "other"; return k }()},
+			{"fire label", func() schedule.FireKey { k := base; k.FireLabel = "20260608T1000"; return k }()},
+		} {
+			h.claimed(aRun(tc.key))
+			skip := aRun(tc.key)
+			skip.TargetHandle = ""
+			h.claimed(skip)
+			if h.minuteClaimed(base.FireMinute) {
+				h.t.Fatalf("a claim varying the %s answers for the fixture's minute, which "+
+					"nobody holds", tc.field)
+			}
+		}
+	}},
+
+	{"a_delimiter_in_a_name_cannot_alias_two_minutes", func(h *harness) {
+		// The read is over the column tuple as the claim is, never over a
+		// joined string or a prefix of one.
+		a := aKey()
+		a.Scope, a.ScopeID, a.ScheduleName = types.ScheduleScopeUnit, "q3:launch", "review"
+		b := a
+		b.ScopeID, b.ScheduleName = "q3", "launch:review"
+		h.claimed(aRun(a))
+		if h.minuteClaimed(b.FireMinute) {
+			h.t.Fatal("a minute reads claimed because a minute spelling the same characters " +
+				"across two fields is")
+		}
+	}},
+
+	{"a_minute_a_purge_emptied_reads_unclaimed", func(h *harness) {
+		// Dropping the rows drops what the read sees, as it drops the
+		// claim: the ledger has no evidence of the minute any more.
+		h.claimed(aRun(aKey()))
+		if n := h.purge(time.Now().Add(time.Hour)); n != 1 {
+			h.t.Fatalf("Purge dropped %d rows, want 1", n)
+		}
+		if h.minuteClaimed(aKey().FireMinute) {
+			h.t.Fatal("a minute reads claimed after a purge dropped its only row")
 		}
 	}},
 }

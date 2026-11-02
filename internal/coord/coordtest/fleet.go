@@ -1582,29 +1582,38 @@ var channelCases = []fleetCase{{
 
 // ---- the scheduled-fire claims ----------------------------------------- //
 
-func (h *fleetHarness) claimFire(key string, at time.Time) bool {
+func (h *fleetHarness) claimFire(minute, runner string, at time.Time) bool {
 	h.t.Helper()
-	won, err := h.f.ClaimFire(h.ctx, key, at)
+	won, err := h.f.ClaimFire(h.ctx, minute, runner, at)
 	if err != nil {
-		h.t.Fatalf("ClaimFire(%s): %v", key, err)
+		h.t.Fatalf("ClaimFire(%s, %q): %v", minute, runner, err)
 	}
 	return won
 }
 
+func (h *fleetHarness) fireMinuteClaimed(minute string) bool {
+	h.t.Helper()
+	held, err := h.f.FireMinuteClaimed(h.ctx, minute)
+	if err != nil {
+		h.t.Fatalf("FireMinuteClaimed(%s): %v", minute, err)
+	}
+	return held
+}
+
 var fireCases = []fleetCase{{
 	// The reason this moved off the node's own database. The scheduler is a
-	// singleton DUTY, so it MOVES — a lease lapse, a drain, a rolling
+	// singleton DUTY, so it MOVES: a lease lapse, a drain, a rolling
 	// upgrade. The new holder read an empty ledger and its catchup pass
 	// re-fired everything the previous holder had already claimed.
 	name: "a fire one node claimed is refused to the next holder of the duty",
 	fn: func(h *fleetHarness) {
-		key := "role|cto|standup|20260314T0900|cto"
-		if !h.claimFire(key, h.now()) {
+		minute := "role|cto|standup|20260314T0900"
+		if !h.claimFire(minute, "cto", h.now()) {
 			h.t.Fatal("the first claim lost")
 		}
 		// A different node, a different tick, the same identity.
-		if h.claimFire(key, h.now().Add(time.Minute)) {
-			h.t.Error("the same fire was claimed twice — every company gets two standups")
+		if h.claimFire(minute, "cto", h.now().Add(time.Minute)) {
+			h.t.Error("the same fire was claimed twice, so every company gets two standups")
 		}
 	},
 }, {
@@ -1615,31 +1624,106 @@ var fireCases = []fleetCase{{
 		// fan-out mints one per member precisely so a slow member cannot
 		// suppress its siblings, and the minute stamp is what lets the
 		// next tick of the same schedule run at all.
-		for _, key := range []string{
-			"role|cto|standup|20260314T0900|cto",
-			"role|cto|standup|20260314T0900|cto-2",
-			"role|cto|standup|20260314T0901|cto",
-			"role|cto|retro|20260314T0900|cto",
-			"unit|platform|standup|20260314T0900|cto",
+		for _, c := range []struct{ minute, runner string }{
+			{"role|cto|standup|20260314T0900", "cto"},
+			{"role|cto|standup|20260314T0900", "cto-2"},
+			{"role|cto|standup|20260314T0901", "cto"},
+			{"role|cto|retro|20260314T0900", "cto"},
+			{"unit|platform|standup|20260314T0900", "cto"},
 		} {
-			if !h.claimFire(key, at) {
-				h.t.Errorf("ClaimFire(%s) was refused — a distinct fire was suppressed", key)
+			if !h.claimFire(c.minute, c.runner, at) {
+				h.t.Errorf("ClaimFire(%s, %q) was refused, so a distinct fire was suppressed",
+					c.minute, c.runner)
 			}
 		}
 	},
 }, {
-	// FAILS CLOSED is the caller's polarity, and it only works if a lost
-	// race and an unreachable store are distinguishable. An empty key is
-	// the one argument fault this can catch locally.
-	name: "an unnamed fire is an error, not a lost race",
+	// A catchup skip resolved no runner and claims the minute under an
+	// EMPTY one. That has to be a claim of its own: refused a second time,
+	// and colliding with no named runner in either order, or recording the
+	// skip would spend the claim a corrected later tick needs.
+	name: "an empty runner is a claim of its own beside every named one",
 	fn: func(h *fleetHarness) {
-		won, err := h.f.ClaimFire(h.ctx, "", h.now())
+		minute := "role|cto|standup|20260314T0900"
+		if !h.claimFire(minute, "", h.now()) {
+			h.t.Fatal("the skip's claim lost on an empty minute")
+		}
+		if h.claimFire(minute, "", h.now()) {
+			h.t.Error("the skip's claim was granted twice")
+		}
+		if !h.claimFire(minute, "cto", h.now()) {
+			h.t.Error("a runner's claim lost to the skip's, so the skip suppressed a fire")
+		}
+		other := "role|cto|standup|20260314T1000"
+		if !h.claimFire(other, "cto", h.now()) || !h.claimFire(other, "", h.now()) {
+			h.t.Error("a skip's claim lost to a runner's claim on the same minute")
+		}
+	},
+}, {
+	// The question the catchup pass asks after a restart. A minute any
+	// runner was claimed for ran, or was held back on purpose, and must
+	// not read as missed: a skip written for it puts the same tick in the
+	// schedule's history twice.
+	name: "a minute reads claimed once any runner of it is, and only then",
+	fn: func(h *fleetHarness) {
+		minute := "unit|platform|standup|20260314T0900"
+		if h.fireMinuteClaimed(minute) {
+			h.t.Fatal("a minute nobody claimed reads claimed")
+		}
+		h.claimFire(minute, "eng-2", h.now())
+		if !h.fireMinuteClaimed(minute) {
+			h.t.Error("a minute a runner was claimed for reads unclaimed, so the catchup " +
+				"pass records the fire it sent as missed")
+		}
+
+		skipped := "unit|platform|standup|20260315T0900"
+		h.claimFire(skipped, "", h.now())
+		if !h.fireMinuteClaimed(skipped) {
+			h.t.Error("a minute a skip was recorded for reads unclaimed, so every restart " +
+				"records it again")
+		}
+	},
+}, {
+	// Each minute's read is its own. The neighbours vary one part of the
+	// minute at a time, and one of them EXTENDS the minute's text, which is
+	// the shape a prefix match on a joined key gets wrong.
+	name: "a claim on another minute does not answer for this one",
+	fn: func(h *fleetHarness) {
+		minute := "role|cto|standup|20260314T0900"
+		for _, neighbour := range []string{
+			"role|cto|standup|20260314T0901",
+			"role|cto|standups|20260314T0900",
+			"role|cto|standup|20260314T0900|cto",
+			"role|cto|standup|20260314T0900.cto",
+			"role|ct|standup|20260314T0900",
+		} {
+			h.claimFire(neighbour, "cto", h.now())
+			h.claimFire(neighbour, "", h.now())
+		}
+		if h.fireMinuteClaimed(minute) {
+			h.t.Error("a minute nobody claimed reads claimed because a neighbouring minute was")
+		}
+	},
+}, {
+	// FAILS CLOSED is the caller's polarity, and it only works if a lost
+	// race and an unreachable store are distinguishable. An empty minute is
+	// the one argument fault this can catch locally, and on the read it
+	// matters as much: answered "unclaimed", it writes a skip.
+	name: "an unnamed minute is an error, not a lost race or an empty answer",
+	fn: func(h *fleetHarness) {
+		won, err := h.f.ClaimFire(h.ctx, "", "cto", h.now())
 		if err == nil {
-			t := h.t
-			t.Error("ClaimFire accepted an empty identity")
+			h.t.Error("ClaimFire accepted an empty minute")
 		}
 		if won {
-			h.t.Error("ClaimFire granted an empty identity")
+			h.t.Error("ClaimFire granted an empty minute")
+		}
+		held, err := h.f.FireMinuteClaimed(h.ctx, "")
+		if err == nil {
+			h.t.Error("FireMinuteClaimed answered for an empty minute")
+		}
+		if held {
+			h.t.Error("FireMinuteClaimed reported an empty minute claimed")
 		}
 	},
 }}
