@@ -556,7 +556,7 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page names: %w", err)
 	}
 	_ = rows.Close()
-	rows, err = tx.QueryContext(ctx, noticeFindingsSQL, list, string(FindingOpen), string(PartyAgent))
+	rows, err = tx.QueryContext(ctx, noticeFindingsSQL, list)
 	if err != nil {
 		return nil, fmt.Errorf("code: count the findings of the changes an inbox page names: %w", err)
 	}
@@ -601,10 +601,12 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[st
 //
 // noticeBodiesSQL reads each change's description by its key: the change's
 // row is changesByIDSQL's, which the readiness judges too, so a page reads
-// code_changes once; noticeFindingsSQL reads each change's open agent findings' severities
-// from the raiser index's range of the change, counted here rather than
-// grouped by the statement — a GROUP BY on a column the index does not lead
-// with sorts what it found, and the rows are a page's changes' findings.
+// code_changes once; noticeFindingsSQL reads each change's open agent
+// findings' severities by one covering seek of code_findings_open_agent_idx,
+// which holds those alone (replicated 0106) — never the change's every
+// finding of every revision, superseded and dismissed ones included — counted
+// here rather than grouped by the statement, the rows being a page's changes'
+// open agent findings.
 const (
 	inboxScanSQL = `SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation, n.created_at, n.reason,
 			n.addressed, n.fallback_only, n.repo_id, n.change_id, n.change_ref, n.excerpt
@@ -630,6 +632,18 @@ const (
 		FROM json_each(?) AS j CROSS JOIN code_change_bodies AS b INDEXED BY sqlite_autoindex_code_change_bodies_1
 		WHERE b.change_id = CAST(j.value AS TEXT)`
 	noticeFindingsSQL = `SELECT f.change_id, f.severity
-		FROM json_each(?) AS j CROSS JOIN code_findings AS f INDEXED BY code_findings_raiser_idx
-		WHERE f.change_id = CAST(j.value AS TEXT) AND f.state = ? AND f.raiser_kind = ?`
+		FROM json_each(?) AS j CROSS JOIN code_findings AS f INDEXED BY ` + openAgentFindingsKey + `
+		WHERE f.change_id = CAST(j.value AS TEXT) AND ` + openAgentFindings
 )
+
+// openAgentFindingsKey is code_findings_open_agent_idx, (change_id, severity,
+// state, raiser_kind) WHERE [openAgentFindings] (replicated 0106): a change's
+// open agent findings alone, every column the read names carried, so its
+// seek is covering.
+const openAgentFindingsKey = "code_findings_open_agent_idx"
+
+// openAgentFindings is the predicate code_findings_open_agent_idx is partial
+// on, spelled as the index declares it — the pinned planner takes a partial
+// index only for a statement that implies its predicate in its own words — of
+// [FindingOpen] and [PartyAgent], which a test holds the two to.
+const openAgentFindings = `state = 'open' AND raiser_kind = 'agent'`

@@ -1092,7 +1092,8 @@ func registeredStatements() map[string]statement {
 		// brings back below it, one seek of the notice's key a pair; each
 		// change the page names is changesByIDSQL's row (its readiness the
 		// listing's statements), its description by the body's key; each one's open
-		// agent findings, a range of the raiser index; the person's marks by
+		// agent findings, a covering seek of the index partial on them alone
+		// (replicated 0106); the person's marks by
 		// their key; and where the notices of theirs a mark names sit, one
 		// seek of the notice's key a pair of the gesture's list.
 		"an inbox page": {inboxScanSQL, []any{"founder", int64(1) << 62, 0, 0, "[]", 0, "[]", "[]", "", 0,
@@ -1105,8 +1106,8 @@ func registeredStatements() map[string]statement {
 				"sqlite_autoindex_code_notifications_1 (record_id=? AND change_id=? AND recipient=?)"}},
 		"the descriptions an inbox page names": {noticeBodiesSQL, []any{`["repo-1-change-000001"]`},
 			[]string{"SCAN json_each AS j", bodyKey + " (change_id=?)"}},
-		"the agent findings an inbox page names": {noticeFindingsSQL, []any{`["repo-1-change-000001"]`, "open",
-			"agent"}, []string{"SCAN json_each AS j", "code_findings_raiser_idx (change_id=?)"}},
+		"the agent findings an inbox page names": {noticeFindingsSQL, []any{`["repo-1-change-000001"]`},
+			[]string{"SCAN json_each AS j", "COVERING INDEX " + openAgentFindingsKey + " (change_id=?)"}},
 		"a person's code marks": {personMarksSQL, []any{"founder"},
 			[]string{"sqlite_autoindex_code_person_marks_1 (handle=?)"}},
 		"where the notices a mark names sit": {noticePositionsSQL,
