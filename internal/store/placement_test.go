@@ -214,6 +214,11 @@ var nodeEstatePlacements = []placement{
 		Why:   "The party index over the rows above, and it goes where they go.",
 	},
 	{
+		Table: "crewlet_turn_origins",
+		Why: "What started each turn, an index over the event log's turn-start " +
+			"rows, and it goes where they go.",
+	},
+	{
 		Table: "conversation_sessions",
 		Why: "What a seat already said in one thread, recorded by the node " +
 			"that ran the turn. Read back only by that seat's next turn on " +

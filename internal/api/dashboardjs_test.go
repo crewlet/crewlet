@@ -1491,7 +1491,14 @@ const (
 	// +0.6 KiB, the protocol +0.2 KiB and authorityRemedy +0.1 KiB, less
 	// 1.3 KiB of Chatlet's own sheet for the Browse rows the kit now draws.
 	// 5288 KiB.
-	treeBudget = 5<<20 + 168<<10
+	// Chatlet's delivery receipts (DeliveryReceipt under a person's message,
+	// and the composer's line saying whom a draft will reach, read from
+	// chat_reach once the typing settles) took it from 5288.0 KiB to
+	// 5290.7 KiB (+2.7 KiB): Chatlet's chunk +2.7 KiB and Chatlet's sheet
+	// under 0.1 KiB, with the debounce moving out of its own chunk into the
+	// shared links chunk. The receipt's own styles were already in the one
+	// sheet with 0.89.0. 5291 KiB.
+	treeBudget = 5<<20 + 171<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

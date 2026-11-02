@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
@@ -88,6 +89,11 @@ type NativeReads struct {
 	ChatSearch queries.ChatSearcher
 	ChatReads  queries.ChatReads
 
+	// ChatDraft and ChatMentions answer `chat_reach`: a post's dry run, and
+	// the post tool's reading of its words.
+	ChatDraft    queries.ChatDrafter
+	ChatMentions builtin.MentionResolver
+
 	// PullRequests reads a pull request for a chat link's preview through
 	// the company's GitHub wiring.
 	PullRequests queries.PullRequestReader
@@ -104,6 +110,10 @@ func NativeSources(e *engine.Engine) NativeReads {
 		Backlinks: liveBacklinks{engine: e}, WorkSearch: liveWorkSearch{engine: e},
 		Files: liveFiles{engine: e},
 		Chat:  liveChat{engine: e}, ChatSearch: liveChatSearch{engine: e},
+		// THE POST'S DRY RUN AND ITS READING OF THE WORDS, the same two
+		// halves the post tool is handed, so a composer is told what the
+		// send will do.
+		ChatDraft: liveChat{engine: e}, ChatMentions: engine.LiveMentions(e),
 		// THE FLEET'S OWN RECORD, which every node reaches whatever its
 		// company runs, and which a chat question reads only after it has
 		// read rooms — a company with no Chatlet never asks it.
@@ -122,6 +132,7 @@ func (n NativeReads) Into(s *queries.Sources) {
 	s.Work, s.Pages, s.Backlinks, s.WorkSearch, s.Files =
 		n.Work, n.Pages, n.Backlinks, n.WorkSearch, n.Files
 	s.Chat, s.ChatSearch, s.ChatReads = n.Chat, n.ChatSearch, n.ChatReads
+	s.ChatDraft, s.ChatMentions = n.ChatDraft, n.ChatMentions
 	s.PullRequests = n.PullRequests
 }
 
@@ -462,6 +473,17 @@ func (l liveChat) reader() (estate.Chat, error) {
 		return r, nil
 	}
 	return estate.Chat{}, nativeAbsent(started, "Chatlet")
+}
+
+// Reach is a post's dry run ([queries.ChatDrafter]), through the same router
+// the post itself is sent through.
+func (l liveChat) Reach(ctx context.Context, actor chatlet.Actor, channelID, replyTo string,
+	in chatlet.NewMessage) (chatlet.Draft, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.Draft{}, err
+	}
+	return r.Reach(ctx, actor, channelID, replyTo, in)
 }
 
 func (l liveChat) Channels(ctx context.Context, viewer string, q chatlet.ChannelsQuery,
