@@ -180,13 +180,14 @@ func (l *logbook) Head(_ context.Context, handle, conversationKey string,
 }
 
 func (l *logbook) Session(_ context.Context, handle, turn string,
-	fresh statelog.Freshness) (executordomain.Session, error) {
+	fresh statelog.Freshness) (executordomain.SessionRead, error) {
 	l.asked("session", fresh)
 	if turn == endedTurn {
-		return executordomain.Session{}, fmt.Errorf("%w: %s's turn %s", executordomain.ErrNotFound,
+		return executordomain.SessionRead{}, fmt.Errorf("%w: %s's turn %s", executordomain.ErrNotFound,
 			handle, turn)
 	}
-	return sessionOf(handle, turn, conversation), nil
+	return executordomain.SessionRead{Session: sessionOf(handle, turn, conversation), Position: atLog(7),
+		Complete: true}, nil
 }
 
 func (l *logbook) Sessions(_ context.Context, handle, cursor string, limit int,
@@ -313,10 +314,11 @@ func TestEveryExecutorOperationCrossesWhole(t *testing.T) {
 
 	sessionLevel := statelog.Freshness{Level: statelog.ReadSession}
 	row, err := reads.Session(ctx, "swe", liveTurn, sessionLevel)
-	if err != nil || row.Turn != liveTurn || row.Handle != "swe" {
+	if err != nil || row.Session.Turn != liveTurn || row.Session.Handle != "swe" || row.Position != atLog(7) {
 		t.Errorf("session = (%+v, %v)", row, err)
 	}
-	whole(t, "a session", row)
+	whole(t, "a session's read", row)
+	whole(t, "a session", row.Session)
 	hereRow, err := here.Session(ctx, "swe", liveTurn, sessionLevel)
 	sameHere(t, "session", row, hereRow, err)
 	if _, err := reads.Session(ctx, "swe", endedTurn, sessionLevel); !errors.Is(err,

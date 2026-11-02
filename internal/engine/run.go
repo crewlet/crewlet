@@ -872,9 +872,17 @@ type Engine struct {
 	// draining node took into "no evaluation has ever run".
 	alarms atomic.Pointer[statelog.Tracker]
 
+	// waitingWatch stops this node listening on the seats' waiting channel
+	// (queued.go); nil when it is not listening.
+	waitingWatch queue.Unsubscribe
+
 	// budgetReports is the live token-meter loop. Every node runs one —
 	// the counters are shared, so this is a frame rather than a duty.
 	budgetReports *budgetReporter
+
+	// inboxReports is this node's waiting-mail loop over the seats it holds
+	// (inboxreport.go); nil until Start arms it.
+	inboxReports *inboxReporter
 
 	// refusals is how this node's gates tell that loop a window has started
 	// refusing ([refusalLatch]). Built with the engine rather than with the
@@ -976,6 +984,14 @@ type Engine struct {
 	boxReads         *boxReads
 	stopBoxReadServe queue.Unsubscribe
 	stopNudgeListen  queue.Unsubscribe
+
+	// mcpChecks asks the fleet to test an MCP server and answers the tests
+	// of the servers this node runs. Nil on a node with no broker, which is
+	// the whole fleet and tests everything itself. See mcpcheck.go.
+	mcpChecks *mcpChecks
+	// mcpTesting is the tests running on this node, by [mcpTestKey]: one
+	// at a time per entry and seat.
+	mcpTesting sync.Map
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
@@ -1595,6 +1611,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			}
 			return nil, err
 		}
+		// AND A TEST OF AN MCP SERVER WHERE IT RUNS, which the node asked
+		// carries out (it starts a process or dials as the company), so it
+		// is signed too (mcpcheck.go).
+		if e.mcpChecks, err = newMCPChecks(recordKeyring(opts.Bootstrap)); err != nil {
+			if ownsBackends {
+				backends.Close(ctx)
+			}
+			return nil, err
+		}
 	}
 
 	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
@@ -2145,6 +2170,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE RESTARTS PEOPLE ASKED FOR, applied as every node hears them.
 	e.startMCPInstances(ctx)
 	e.startMCPRestarts(ctx)
+	// AND THE TESTS PEOPLE ASK FOR, of the servers this node runs.
+	e.startMCPChecks(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2324,6 +2351,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Observe == nil {
 		d.Observe = e.observe
 	}
+	if d.Settled == nil {
+		d.Settled = e.settleWaiting
+	}
 	if d.Identify == nil {
 		// Read off the LIVE epoch at the moment of the panic, like the
 		// policies above: the dispatcher is built once and an apply can
@@ -2382,6 +2412,14 @@ func (e *Engine) Start(ctx context.Context) error {
 	// company's budget. Detached, like everything else here — see
 	// [Engine.startBudgetReports].
 	e.startBudgetReports(ctx)
+	// AND WHAT WAITS IN THE INBOXES OF THE SEATS THIS NODE HOLDS, after the
+	// host for the same reason: what it reads is the seats the host claimed.
+	// See inboxreport.go.
+	e.startInboxReports(ctx)
+	// A PERSON'S MESSAGE QUEUED BEHIND A BUSY SEAT, shown as queued. See
+	// queued.go. After the host, like the meters, because what it answers
+	// is whether this node runs the seat.
+	e.startWaitingWatch(ctx)
 	// THE AUXILIARY-SPEND LEDGER'S TIMER, detached like the meters beside
 	// it and on their cadence (auxspend.FlushInterval). Calls made before
 	// it — an apply's first passes — wait in their buckets for its first
@@ -2743,6 +2781,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.
 	e.stopSandbox()
+	e.stopWaitingWatch(ctx)
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	// THE NATIVE HALF'S DUTIES BEFORE THE CORE'S, in the order the halves
@@ -2786,6 +2825,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRetention()
 	e.stopIdentityDuties()
 	e.stopBudgetReports()
+	e.stopInboxReports()
 	// Before the node's stop detaches the inboxes: an alarm firing into a
 	// client that is closing would log a release it could not make.
 	e.stopBudgetParks()
@@ -2800,6 +2840,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// and its instances no longer answered.
 	e.stopMCPListings(ctx)
 	e.stopMCPInstances(ctx)
+	e.stopMCPChecks(ctx)
 	e.stopMCPRestarts()
 	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
 	// the person starts again on a node that is up.
@@ -3237,6 +3278,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// saying "is thinking…" every refresh until the seat moved or the node
 	// stopped.
 	status := e.beginWorkingStatus(ctx, req.Handle, req.RunID, req.Ask())
+	// THE MESSAGES THIS TURN PICKED UP NO LONGER WAIT: their queued line has
+	// just become this turn's working one ([notify.StatusDriver.Begin]), and
+	// a wait left behind would bring "queued" back when the turn ends.
+	e.settleWaiting(ctx, req.Handle, wakeIDsOf(req.Events))
 	// ENDED ON EVERY PATH OUT OF THIS FRAME, the runner build failing below
 	// included: that path raised an indicator and never ran a turn, and
 	// nothing else would ever take it down. `working` stays false until a

@@ -834,6 +834,10 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 				// five seconds too (seat.SweepInterval), so a faster
 				// read would find nothing newer.
 				s.RefreshPlacement()
+				// AND THE INBOX COUNTS OF A NODE THAT WENT AWAY, which
+				// publishes nothing that could clear them
+				// ([livestate.LiveState.ExpireWaiting]).
+				s.pushAgents(s.state.ExpireWaiting(), s.now())
 			}
 		}
 	}()

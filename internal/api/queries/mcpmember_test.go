@@ -183,6 +183,13 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 			Nodes: []coord.MCPInstanceNode{{Node: "node-a", Answered: true, Count: 2},
 				{Node: "node-b", Reason: "reason-sentinel: no answer within 2s"}},
 		}},
+		// AND ITS LATEST TEST, whose stages and failure quote what the
+		// server said and where it was dialled.
+		MCPChecks: fakeChecks{"github": {Server: "github", Seat: swe, At: down, By: "jane.doe",
+			ByKind: iam.ActorHuman, Nodes: []coord.MCPCheckNode{{Node: "node-a", Answered: true,
+				Steps: []coord.MCPCheckStep{{Stage: string(mcp.StageLaunch), State: string(mcp.StepFailed),
+					Detail: "check-sentinel: exited"}},
+				Failure: &coord.MCPInstanceFailure{Class: string(mcp.FailExited), Said: "check-sentinel: exited"}}}}},
 	}
 	// AND THE MCP ALARMS STANDING ON THE NODE, whose details quote the
 	// failure and the wait a member's reading leaves out.
@@ -235,9 +242,9 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 			`"wait_seat":`, `"unlisted_annotations":`, `"alarms":`, "docs-mcp", "--read-only", "github-mcp-server",
 			"10.0.0.5", "launch-sentinel", "Bearer rejected", "GITHUB_TOKEN", "alarm-sentinel"},
 		"github's detail": {`"command":`, `"args":`, `"url":`, `"error":`, `"wait":`, `"said":`, `"reason":`,
-			`"instructions":`, `"dependants":`, `"keys":`, "github-mcp-server", "launch-sentinel",
+			`"instructions":`, `"dependants":`, `"keys":`, `"last_check":`, "github-mcp-server", "launch-sentinel",
 			"GITHUB_TOKEN", "said-sentinel", "wait-sentinel", "reason-sentinel", "instructions-sentinel",
-			github.Resolved.Binding.Keys[0].Key},
+			"check-sentinel", github.Resolved.Binding.Keys[0].Key},
 		"docs's detail": {`"command":`, `"args":`, `"box_seats":`, `"warnings":`, `"dependants":`, "docs-mcp",
 			"--read-only", "said-sentinel", "reason-sentinel"},
 	}

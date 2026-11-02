@@ -80,6 +80,25 @@ func TestARuntimeAuditRecordIsItsAuthors(t *testing.T) {
 		actor:   "token:ops",
 		summary: "token:ops restarted MCP server tracker for seat cto: refused (conflict)",
 	}, {
+		name: "an MCP server tested for one seat",
+		payload: NewMCPServerActed(MCPServerActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: MCPServerCheck, Server: "tracker", Seat: "cto", Outcome: AuditApplied}),
+		actor:   "jane-founder",
+		summary: "jane-founder tested MCP server tracker for seat cto",
+	}, {
+		name: "a draft of an MCP server tested, refused",
+		payload: NewMCPServerActed(MCPServerActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: MCPServerCheck, Server: "wiki", Draft: true, Outcome: AuditRefused,
+			Refusal: "step_up_required"}),
+		actor:   "jane-founder",
+		summary: "jane-founder tested a draft of MCP server wiki: refused (step_up_required)",
+	}, {
+		name: "an MCP server address checked",
+		payload: NewMCPServerActed(MCPServerActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: MCPServerProbe, Address: "https://mcp.example.com/mcp", Outcome: AuditApplied}),
+		actor:   "jane-founder",
+		summary: "jane-founder checked the MCP server address https://mcp.example.com/mcp",
+	}, {
 		name: "a device sign-in cancelled, said apart from its start",
 		payload: NewModelActed(ModelActed{ActorName: "jane-founder", ActorKind: "human",
 			Action: ModelDeviceSignInCancel, ProviderKey: "codex", Outcome: AuditApplied}),

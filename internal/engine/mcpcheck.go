@@ -1,0 +1,721 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/tools"
+)
+
+// "TEST NOW" ON AN MCP SERVER'S PAGE, AND IN THE ADD FLOW BEFORE IT IS SAVED.
+//
+// A test brings up a connection of its own to a server where the server runs,
+// walks its stages and lists its tools, and never calls one ([mcp.Test]).
+//
+// # Where it runs
+//
+// A SHARED server runs on every node, and each node reaches it from where it
+// is: its own resolver, its own network, its own PATH. So it is tested on
+// every node that holds a presence lease, each answering what it found. A
+// PER-AGENT server runs as one seat, on the node holding that seat, with the
+// seat's own credentials, which only that node resolves (a GitHub token is
+// issued for the seat on the node that holds it, and no other node may act
+// as the seat): so it is tested for one seat, on its holder alone, which is
+// the node that proves it holds the seat when the request arrives, as a
+// restart is ([Engine.applyMCPRestart]).
+//
+// # The request is an instruction, so it is signed
+//
+// A node asked to test a server starts a process or dials an address as the
+// company, with the credentials the server is started with. So the request
+// crosses a channel the fleet signs ([mcpCheckChannel], internal/signedask),
+// bound to an id and a deadline, and a node answers only a request that
+// verifies, names it (or names the seat it holds) and is in this build's
+// wire version. Who may ask is decided where the request arrived
+// (internal/api/mcpapi); a draft travels in the request, its ${VAR}s resolved
+// by each answering node from its own snapshot, so no value crosses the
+// broker that a saved entry would not.
+//
+// # A draft is tested as a write would leave it
+//
+// An entry not written yet is tested in the company it would join: its own
+// launch and values, the seats' credentials for it, and turned on whatever
+// its `enabled` says, since a test of how it runs is what was asked. It is
+// never recorded: the server's latest test is of the entry the company runs.
+//
+// # The latest test is kept, bounded
+//
+// A test of a saved server is recorded as the server's latest
+// ([coord.MCPCheck]), every sentence redacted and bounded, at most
+// [coord.MaxMCPCheckNodes] nodes, and the apply that removes the server
+// removes it ([Engine.clearRemovedMCPChecks]). Its tools are the answer to the
+// person who asked, never stored.
+
+// The refusals of a test, beside the restart's ([ErrNoMCPServer],
+// [ErrMCPServerOff], [ErrMCPSeatOnShared], [ErrNoAgentSeat] and
+// [ErrMCPSeatNotGranted]), each naming what the person can change.
+var (
+	// ErrMCPSeatRequired is a per-agent server tested without naming the
+	// seat to test it for: it runs as one seat, with that seat's
+	// credentials, and as nobody without one.
+	ErrMCPSeatRequired = errors.New("engine: a per-agent MCP server runs as one seat: name the seat to test it for")
+	// ErrNoMCPCheckFabric is a node with no broker or coordination store to
+	// ask the fleet through.
+	ErrNoMCPCheckFabric = errors.New("engine: this node has no broker to ask the fleet to test the server")
+)
+
+// MCPCheckRequest is a test somebody asked for.
+type MCPCheckRequest struct {
+	// Server is the configured server's name, or the draft's.
+	Server string
+	// Draft is the entry as a write would leave it; nil tests the entry
+	// the company runs.
+	Draft *config.MCPServer
+	// Seat is the handle of the seat a per-agent server is tested for.
+	Seat string
+	// By is who asked.
+	By iam.Actor
+}
+
+// MCPCheckResult is what a test found, every sentence redacted and bounded.
+type MCPCheckResult struct {
+	Server string
+	// Seat is the handle the test was made for, "" for a shared server.
+	Seat  string
+	Draft bool
+	At    time.Time
+	By    string
+	// Node is the node the test was asked through.
+	Node string
+	// OK is whether some node answered and every node that answered found
+	// the server serving.
+	OK bool
+	// Nodes are the nodes asked, in order, each with what it found or why
+	// it did not answer.
+	Nodes []MCPCheckedNode
+}
+
+// MCPCheckedNode is one node's test.
+type MCPCheckedNode struct {
+	Node     string
+	Answered bool
+	// Reason says why a node that did not answer did not.
+	Reason string
+	Report mcp.TestReport
+}
+
+// mcpCheckChannel names the signed channel a test request crosses.
+const mcpCheckChannel = "mcp.check"
+
+// mcpCheckWire is the request and reply version this build speaks; a node
+// answers only a request in its own version, and an asker reads only a
+// reply in it.
+const mcpCheckWire = 1
+
+// mcpCheckAsk asks nodes to test a server.
+type mcpCheckAsk struct {
+	Version  int       `json:"v"`
+	ID       string    `json:"id"`
+	Deadline time.Time `json:"deadline"`
+	// Asker is the node that asked, which tests on its own account rather
+	// than over the broker.
+	Asker string `json:"asker"`
+	// Nodes are the nodes that test a shared server; empty for a seat's
+	// test, which only the seat's holder answers.
+	Nodes  []string  `json:"nodes,omitempty"`
+	Server string    `json:"server"`
+	Seat   uuid.UUID `json:"seat"`
+	// Draft is the entry as a write would leave it, nil for the saved one.
+	Draft *config.MCPServer `json:"draft,omitempty"`
+}
+
+func (a mcpCheckAsk) Binding() (string, time.Time) { return a.ID, a.Deadline }
+
+// mcpCheckReply is one node's test.
+type mcpCheckReply struct {
+	Version int            `json:"v"`
+	Request string         `json:"request"`
+	Node    string         `json:"node"`
+	Report  mcp.TestReport `json:"report"`
+}
+
+func (r mcpCheckReply) Answers() string { return r.Request }
+
+// mcpCheckWireT is the channel's envelopes.
+type mcpCheckWireT = signedask.Channel[mcpCheckAsk, mcpCheckReply]
+
+// mcpChecks is this node's half of the channel.
+type mcpChecks struct {
+	wire *mcpCheckWireT
+	// taken is the ids of the requests this node has answered.
+	taken *signedask.Guard
+	stop  queue.Unsubscribe
+}
+
+// newMCPChecks builds this node's half of the test channel over the fleet
+// keyring every state-log record is signed under.
+func newMCPChecks(ring statelog.Keyring) (*mcpChecks, error) {
+	wire, err := signedask.New[mcpCheckAsk, mcpCheckReply](mcpCheckChannel, ring)
+	if err != nil {
+		return nil, fmt.Errorf("engine: the MCP test channel's envelopes: %w", err)
+	}
+	return &mcpChecks{wire: wire, taken: signedask.NewGuard()}, nil
+}
+
+// The bounds of a test.
+const (
+	// mcpCheckSlack is what a test's budget allows past its stages: the
+	// close of what it started ([mcp.Test]'s stop, ten seconds at most) and
+	// the broker's round trips, with time to spare.
+	mcpCheckSlack = 15 * time.Second
+	// mcpCheckReplyMargin is how long before the asker's deadline an
+	// answering node's test ends, so its reply arrives in time: a broker
+	// round trip, many times over.
+	mcpCheckReplyMargin = 2 * time.Second
+	// maxMCPCheckTools bounds the tools one node's reply carries: a
+	// listing's own bound ([coord.MaxMCPListedTools]).
+	maxMCPCheckTools = coord.MaxMCPListedTools
+)
+
+// mcpCheckBudget is how long a test of server may take on a node: its
+// handshake and its listing, each within the server's startup budget, and
+// the close.
+func mcpCheckBudget(server *config.MCPServer) time.Duration {
+	startup := mcpTimeout(server.StartupTimeoutSeconds)
+	if startup == 0 {
+		startup = mcp.DefaultStartupTimeout
+	}
+	return 2*startup + mcpCheckSlack
+}
+
+// CheckMCPServer tests a server where it runs: see the file's comment. The
+// refusals are the restart's ([ErrNoMCPServer], [ErrMCPServerOff],
+// [ErrMCPSeatOnShared], [ErrNoAgentSeat], [ErrMCPSeatNotGranted]) and
+// [ErrMCPSeatRequired]; any other error is a request this node could not make.
+func (e *Engine) CheckMCPServer(ctx context.Context, req MCPCheckRequest) (MCPCheckResult, error) {
+	c := e.Company()
+	if c == nil || c.Config == nil {
+		return MCPCheckResult{}, fmt.Errorf("%w: %q", ErrNoMCPServer, req.Server)
+	}
+	server, err := checkedEntry(c, req)
+	if err != nil {
+		return MCPCheckResult{}, err
+	}
+	ask := mcpCheckAsk{Version: mcpCheckWire, ID: signedask.NewID(), Asker: e.selfNode(), Server: server.Name,
+		Draft: req.Draft}
+	if ask.Draft != nil {
+		draft := *req.Draft
+		draft.Enabled = config.Toggle{}
+		ask.Draft = &draft
+	}
+	seat := strings.TrimSpace(req.Seat)
+	switch {
+	case server.IsShared() && seat != "":
+		return MCPCheckResult{}, fmt.Errorf("%w: %q", ErrMCPSeatOnShared, server.Name)
+	case !server.IsShared() && seat == "":
+		return MCPCheckResult{}, fmt.Errorf("%w: %q", ErrMCPSeatRequired, server.Name)
+	case !server.IsShared():
+		role := c.Org.AgentSeatByHandle(seat)
+		if role == nil {
+			return MCPCheckResult{}, fmt.Errorf("%w: %q", ErrNoAgentSeat, seat)
+		}
+		if !granted(server, role) {
+			return MCPCheckResult{}, fmt.Errorf("%w: %q is not granted %q", ErrMCPSeatNotGranted, seat, server.Name)
+		}
+		id, ok := c.Org.AgentIDFor(role)
+		if !ok {
+			return MCPCheckResult{}, fmt.Errorf("%w: %q", ErrNoAgentSeat, seat)
+		}
+		ask.Seat = id
+	}
+	at := e.now()
+	out := MCPCheckResult{Server: server.Name, Seat: seat, Draft: req.Draft != nil, At: at, By: req.By.Name,
+		Node: e.selfNode()}
+	budget := mcpCheckBudget(server)
+	ask.Deadline = at.Add(budget)
+	if ask.Seat == uuid.Nil {
+		nodes, readErr := e.liveNodes(ctx)
+		if readErr != nil {
+			return MCPCheckResult{}, fmt.Errorf("engine: read the nodes to test the server on: %w", readErr)
+		}
+		if !slices.Contains(nodes, e.selfNode()) {
+			nodes = append(nodes, e.selfNode())
+		}
+		ask.Nodes = slices.Compact(slices.Sorted(slices.Values(nodes)))
+	}
+	out.Nodes, err = e.askMCPCheck(ctx, ask, budget)
+	if err != nil {
+		return MCPCheckResult{}, err
+	}
+	answered := 0
+	out.OK = true
+	for _, n := range out.Nodes {
+		if n.Answered {
+			answered++
+			out.OK = out.OK && n.Report.Serving()
+		}
+	}
+	out.OK = out.OK && answered > 0
+	if req.Draft == nil {
+		e.recordMCPCheck(ctx, out, ask.Seat, req.By)
+	}
+	return out, nil
+}
+
+// checkedEntry is the entry req tests: the saved one by its name, or the
+// draft.
+func checkedEntry(c *Company, req MCPCheckRequest) (*config.MCPServer, error) {
+	if req.Draft != nil {
+		return req.Draft, nil
+	}
+	i := slices.IndexFunc(c.Config.MCPServers, func(s config.MCPServer) bool { return s.Name == req.Server })
+	if i < 0 {
+		return nil, fmt.Errorf("%w: %q", ErrNoMCPServer, req.Server)
+	}
+	server := &c.Config.MCPServers[i]
+	if !server.IsEnabled() {
+		return nil, fmt.Errorf("%w: %q", ErrMCPServerOff, req.Server)
+	}
+	return server, nil
+}
+
+// granted is [config.MCPServer.Grants] for a test: a draft is tested turned
+// on, so whether it is turned off decides nothing.
+func granted(server *config.MCPServer, seat *org.Role) bool {
+	on := *server
+	on.Enabled = config.Toggle{}
+	return on.Grants(seat)
+}
+
+// askMCPCheck asks the nodes ask names (or, for a seat's test, the seat's
+// holder) to test the server, this node directly where it is one of them, and
+// answers each node asked with what it found or why it did not answer.
+func (e *Engine) askMCPCheck(ctx context.Context, ask mcpCheckAsk, budget time.Duration) ([]MCPCheckedNode, error) {
+	self := e.selfNode()
+	if ask.Seat != uuid.Nil {
+		// THE HOLDER ALONE ANSWERS: this node, where it holds the seat, and
+		// otherwise the one peer that does.
+		if here := e.testHere(ctx, ask); here != nil {
+			return []MCPCheckedNode{{Node: self, Answered: true, Report: *here}}, nil
+		}
+		replies, reason, err := e.askPeersMCPCheck(ctx, ask, nil, budget)
+		if err != nil {
+			return nil, err
+		}
+		for node, reply := range replies {
+			return []MCPCheckedNode{{Node: node, Answered: true, Report: reply.Report}}, nil
+		}
+		return []MCPCheckedNode{{Reason: "no node holding the seat answered: " + reason}}, nil
+	}
+	var peers []string
+	for _, n := range ask.Nodes {
+		if n != self {
+			peers = append(peers, n)
+		}
+	}
+	local := make(chan *mcp.TestReport, 1)
+	go func() { local <- e.testHere(ctx, ask) }()
+	replies := map[string]mcpCheckReply{}
+	reason := ""
+	if len(peers) > 0 {
+		var err error
+		replies, reason, err = e.askPeersMCPCheck(ctx, ask, peers, budget)
+		if err != nil {
+			<-local
+			return nil, err
+		}
+	}
+	here := <-local
+	out := make([]MCPCheckedNode, 0, len(ask.Nodes))
+	for _, node := range ask.Nodes {
+		switch reply, ok := replies[node]; {
+		case node == self && here != nil:
+			out = append(out, MCPCheckedNode{Node: node, Answered: true, Report: *here})
+		case ok:
+			out = append(out, MCPCheckedNode{Node: node, Answered: true, Report: reply.Report})
+		default:
+			out = append(out, MCPCheckedNode{Node: node, Reason: reason})
+		}
+	}
+	return out, nil
+}
+
+// askPeersMCPCheck asks peers (or every node, for a seat's test) over the
+// signed channel, and answers each reply that verified, by node, with the
+// reason the rest are named for.
+func (e *Engine) askPeersMCPCheck(ctx context.Context, ask mcpCheckAsk, peers []string, budget time.Duration,
+) (map[string]mcpCheckReply, string, error) {
+	if e.backends == nil || e.backends.Queue == nil || e.mcpChecks == nil {
+		return map[string]mcpCheckReply{}, "this node has no broker to ask its peers over", nil
+	}
+	sealed, err := e.mcpChecks.wire.SealRequest(ask)
+	if err != nil {
+		return nil, "", fmt.Errorf("engine: seal an MCP test request: %w", err)
+	}
+	askCtx, cancel := context.WithDeadline(ctx, ask.Deadline)
+	defer cancel()
+	asked := make(map[string]bool, len(peers))
+	for _, p := range peers {
+		asked[p] = true
+	}
+	self := e.selfNode()
+	seatTest := ask.Seat != uuid.Nil
+	out := map[string]mcpCheckReply{}
+	err = e.backends.Queue.AskEach(askCtx, topics.MCPCheck, sealed, func(body []byte) bool {
+		reply, why, openErr := e.mcpChecks.wire.OpenReply(body, ask.ID)
+		switch {
+		case openErr != nil || why != "":
+			log.WarnContext(ctx, "mcp_check_reply_refused", "server", ask.Server,
+				"detail", "a reply to an MCP test that did not verify was not read")
+			return true
+		case reply.Version != mcpCheckWire || reply.Node == self:
+			return true
+		case !seatTest && !asked[reply.Node]:
+			return true
+		}
+		if _, dup := out[reply.Node]; !dup {
+			out[reply.Node] = reply
+		}
+		// A SEAT'S TEST HAS ONE ANSWER, its holder's.
+		return !seatTest && len(out) < len(peers)
+	})
+	if err != nil {
+		if errors.Is(err, queue.ErrUnavailable) {
+			return out, "this node could not reach the broker to ask", nil
+		}
+		return nil, "", fmt.Errorf("engine: ask the nodes to test the MCP server: %w", err)
+	}
+	return out, "did not answer within " + budget.String(), nil
+}
+
+// errMCPCheckNotHere is a test this node does not answer: addressed to other
+// nodes, or for a seat it does not hold.
+var errMCPCheckNotHere = errors.New("engine: the MCP test is for other nodes")
+
+// answerMCPCheck is the serve handler: one test request, answered only where
+// the fleet signed it and it names this node (or a seat this node holds).
+func (e *Engine) answerMCPCheck(ctx context.Context, raw []byte) ([]byte, error) {
+	admitted := e.mcpChecks.wire.Admit(raw, e.mcpChecks.taken, time.Now())
+	switch admitted.Disposition {
+	case signedask.Admitted:
+	case signedask.Tampered:
+		log.ErrorContext(ctx, "mcp_check_refused", "disposition", string(admitted.Disposition),
+			"detail", admitted.Why+"; nothing was tested")
+		return nil, errors.New("engine: an MCP test the fleet did not sign")
+	default:
+		return nil, fmt.Errorf("engine: an MCP test not to be taken: %s", admitted.Why)
+	}
+	ask := admitted.Request
+	self := e.selfNode()
+	if ask.Version != mcpCheckWire || ask.Asker == self ||
+		(ask.Seat == uuid.Nil && !slices.Contains(ask.Nodes, self)) {
+		return nil, errMCPCheckNotHere
+	}
+	// ITS ANSWER HAS TO REACH THE ASKER BEFORE THE DEADLINE, so the test
+	// ends a reply's round trip before it.
+	testCtx, cancel := context.WithDeadline(ctx, ask.Deadline.Add(-mcpCheckReplyMargin))
+	defer cancel()
+	report := e.testHere(testCtx, ask)
+	if report == nil {
+		return nil, errMCPCheckNotHere
+	}
+	return e.mcpChecks.wire.SealReply(mcpCheckReply{Version: mcpCheckWire, Request: ask.ID,
+		Node: e.selfNode(), Report: *report})
+}
+
+// testHere tests the server ask names on this node, nil where this node does
+// not answer it: a seat's test on a node that cannot prove it holds the seat.
+// The report is bounded and redacted, as every node's is before it leaves.
+//
+// ONE TEST OF AN ENTRY AT A TIME ON A NODE ([mcpTestKey]): a test holds a
+// process or a connection for up to its budget, so a second asked while the
+// first runs is answered at once that one is running, rather than starting
+// another beside it. A person asking again gets the first one's answer by
+// asking once it has come.
+func (e *Engine) testHere(ctx context.Context, ask mcpCheckAsk) *mcp.TestReport {
+	c := e.Company()
+	if ask.Seat != uuid.Nil {
+		if s := e.seatChildrenOf(ask.Seat); s == nil || !s.held() {
+			// THE SEAT'S HOLDER ALONE: no other node may act as the seat.
+			return nil
+		}
+	}
+	key := mcpTestKey(ask)
+	if _, running := e.mcpTesting.LoadOrStore(key, struct{}{}); running {
+		report := boundedReport(mcp.Unstarted(mcp.Spec{Name: ask.Server},
+			"a test of this server is already running on this node: ask again once it has answered"), nil)
+		return &report
+	}
+	defer e.mcpTesting.Delete(key)
+	var report mcp.TestReport
+	switch server := testedEntry(c, ask); {
+	case server == nil:
+		report = mcp.Unstarted(mcp.Spec{Name: ask.Server},
+			"this node runs no company that declares the server; it may not have applied the latest revision yet")
+	case ask.Seat == uuid.Nil:
+		report = e.testServer(ctx, server, nil, nil, nil)
+	default:
+		role := c.Org.AgentSeatByID(ask.Seat)
+		if role == nil {
+			return nil
+		}
+		env, token := e.seatResolver(ctx, c, role, github.ToolTokenLife)
+		report = e.testServer(ctx, server, role, env, &seatMint{kinds: e.mintedFor(c, role.Handle()), token: token})
+	}
+	report = boundedReport(report, e.epochTools())
+	return &report
+}
+
+// mcpTestKey names what a test tests on a node: the entry (a draft apart
+// from the saved one of its name) and the seat.
+func mcpTestKey(ask mcpCheckAsk) string {
+	kind := "saved"
+	if ask.Draft != nil {
+		kind = "draft"
+	}
+	return kind + "/" + ask.Server + "/" + ask.Seat.String()
+}
+
+// testedEntry is the entry ask tests as this node's company holds it, nil
+// where it holds none.
+func testedEntry(c *Company, ask mcpCheckAsk) *config.MCPServer {
+	if ask.Draft != nil {
+		return ask.Draft
+	}
+	if c == nil || c.Config == nil {
+		return nil
+	}
+	i := slices.IndexFunc(c.Config.MCPServers, func(s config.MCPServer) bool { return s.Name == ask.Server })
+	if i < 0 {
+		return nil
+	}
+	return &c.Config.MCPServers[i]
+}
+
+// testServer tests server on this node, as a seat when seat is set, with the
+// values a start of it would be given: the same resolution
+// ([resolveServer]), the same spec ([serverSpec]) and so the same address rule
+// and the same launch ([mcp.Test]).
+func (e *Engine) testServer(ctx context.Context, server *config.MCPServer, seat *org.Role,
+	env *config.Resolver, mint *seatMint) mcp.TestReport {
+
+	instance, handle := server.Name, ""
+	var block map[string]string
+	if seat != nil {
+		instance, handle, block = mcp.InstanceName(server.Name, seat.Name), seat.Handle(), seat.MCPEnv[server.Name]
+	}
+	if env == nil {
+		env = e.resolver()
+	}
+	unstarted := mcp.Spec{Name: instance, Transport: mcp.TransportKind(server.Transport),
+		Command: server.Command, URL: server.URL}
+	values, missing := resolveServer(server, handle, instance, block, env, mint)
+	if missing != nil {
+		return mcp.Unstarted(unstarted, missing.Error())
+	}
+	spec, err := serverSpec(server, instance, values)
+	if err != nil {
+		return mcp.Unstarted(unstarted, err.Error())
+	}
+	ctx, cancel := context.WithTimeout(ctx, mcpCheckBudget(server))
+	defer cancel()
+	return mcp.Test(ctx, spec, nil)
+}
+
+// boundedReport is report as it leaves this node: every sentence passed
+// through the redaction pass and cut to [coord.MaxMCPErrorBytes], the
+// server's identity cut to [coord.MaxMCPServerInfoBytes] with its
+// instructions left out, at most [maxMCPCheckTools] tools with their titles and
+// descriptions cut, and each tool whose name a built-in of surface holds
+// refused for it, since built-ins are filed first.
+//
+// NO INSTRUCTIONS: they are the server's words for a model, and a test's
+// answer is read by people and, on approval, by the assistant; the server's
+// detail carries them to the configuration's reader.
+func boundedReport(report mcp.TestReport, surface *tools.Registry) mcp.TestReport {
+	out := report
+	out.Steps = make([]mcp.TestStep, len(report.Steps))
+	for i, step := range report.Steps {
+		step.Detail = boundedSaid(step.Detail)
+		out.Steps[i] = step
+	}
+	if report.Failure != nil {
+		failure := *report.Failure
+		failure.Said = boundedSaid(failure.Said)
+		out.Failure = &failure
+	}
+	out.Identity = mcp.Identity{Name: infoField(report.Identity.Name), Title: infoField(report.Identity.Title),
+		Version: infoField(report.Identity.Version), Protocol: infoField(report.Identity.Protocol)}
+	out.Tools = make([]mcp.TestedTool, 0, min(len(report.Tools), maxMCPCheckTools))
+	for _, t := range report.Tools[:min(len(report.Tools), maxMCPCheckTools)] {
+		t.Title = textcut.Bytes(t.Title, coord.MaxMCPToolTitleBytes)
+		t.Description = textcut.Bytes(t.Description, coord.MaxMCPToolDescriptionBytes)
+		if t.Refused == "" && surface != nil {
+			if entry, filed := surface.Lookup(t.Name); filed {
+				if _, fromMCP := entry.FromMCP(); !fromMCP {
+					t.Refused = mcp.NameBuiltin
+				}
+			}
+		}
+		out.Tools = append(out.Tools, t)
+	}
+	return out
+}
+
+// infoField is one field of a server's identity as a reader on another node
+// is handed it.
+func infoField(s string) string { return textcut.Bytes(s, coord.MaxMCPServerInfoBytes) }
+
+// recordMCPCheck keeps a saved server's test as its latest ([coord.MCPCheck]),
+// bounded to [coord.MaxMCPCheckNodes] nodes. A test the store could not
+// record is still the answer to the person who asked; the page shows the
+// previous one until the next test.
+func (e *Engine) recordMCPCheck(ctx context.Context, result MCPCheckResult, seat uuid.UUID, by iam.Actor) {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return
+	}
+	record := coord.MCPCheck{Server: result.Server, Seat: seat, At: result.At, By: by.Name, ByKind: by.Kind,
+		OperatorID: by.OperatorID, OK: result.OK}
+	for _, n := range result.Nodes[:min(len(result.Nodes), coord.MaxMCPCheckNodes)] {
+		record.Nodes = append(record.Nodes, checkedNodeRecord(n))
+	}
+	if _, err := e.backends.Fleet.PutMCPCheck(ctx, record); err != nil {
+		log.WarnContext(ctx, "mcp_check_not_recorded", "server", result.Server, "error", err,
+			"detail", "the test was answered; the server's page shows its previous test until the next one")
+	}
+}
+
+// checkedNodeRecord is one node's test as the coordination store keeps it:
+// its stages, its failure and its counts, never its tools.
+func checkedNodeRecord(n MCPCheckedNode) coord.MCPCheckNode {
+	node := n.Node
+	if node == "" {
+		node = "unanswered"
+	}
+	out := coord.MCPCheckNode{Node: node, Answered: n.Answered, Reason: boundedSaid(n.Reason)}
+	if !n.Answered {
+		return out
+	}
+	r := n.Report
+	for _, step := range r.Steps {
+		out.Steps = append(out.Steps, coord.MCPCheckStep{Stage: string(step.Stage), State: string(step.State),
+			Took: step.Took, Detail: boundedSaid(step.Detail)})
+	}
+	if r.Failure != nil {
+		out.Failure = &coord.MCPInstanceFailure{Class: string(r.Failure.Class), Said: boundedSaid(r.Failure.Said),
+			At: r.Failure.At}
+	}
+	out.Server = coord.MCPServerInfo{Name: infoField(r.Identity.Name), Title: infoField(r.Identity.Title),
+		Version: infoField(r.Identity.Version), Protocol: infoField(r.Identity.Protocol)}
+	for _, t := range r.Tools {
+		if t.Refused == "" {
+			out.Tools++
+		} else {
+			out.Refused++
+		}
+	}
+	out.Took = r.Took
+	return out
+}
+
+// LatestMCPCheck reads a server's latest test, false where it has none.
+func (e *Engine) LatestMCPCheck(ctx context.Context, server string) (coord.MCPCheck, bool, error) {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return coord.MCPCheck{}, false, nil
+	}
+	return e.backends.Fleet.MCPCheck(ctx, server)
+}
+
+// clearRemovedMCPChecks deletes the latest test of every server the next
+// revision removed: a test goes with what it tested, as a restart does
+// ([Engine.clearRemovedMCPRestarts]).
+func (e *Engine) clearRemovedMCPChecks(ctx context.Context, next *Company) {
+	if next == nil || next.Config == nil || e.backends == nil || e.backends.Fleet == nil {
+		return
+	}
+	if _, err := e.fleetCompany(ctx, next); err != nil {
+		log.DebugContext(ctx, "mcp_checks_not_swept", "reason", err.Error(),
+			"detail", "a removed server's test is cleared by the company the fleet is pointed "+
+				"at; this one is not it yet")
+		return
+	}
+	checks, err := e.backends.Fleet.ListMCPChecks(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "mcp_checks_not_swept", "error", err,
+			"detail", "a removed server's latest test stays until the next apply clears it")
+		return
+	}
+	for _, check := range checks {
+		if slices.ContainsFunc(next.Config.MCPServers, func(s config.MCPServer) bool { return s.Name == check.Server }) {
+			continue
+		}
+		if _, err := e.backends.Fleet.DeleteMCPCheck(ctx, check.Server, check.Version); err != nil {
+			log.WarnContext(ctx, "mcp_check_not_cleared", "server", check.Server, "error", err)
+		}
+	}
+}
+
+// startMCPChecks makes this node an answerer of tests of the servers it runs,
+// until stopMCPChecks. EVERY NODE WITH AN ENGINE SERVES, data or not, as the
+// instance reads do: every node runs the shared servers and the seats it holds.
+func (e *Engine) startMCPChecks(ctx context.Context) {
+	if e.mcpChecks == nil || e.backends == nil || e.backends.Queue == nil {
+		return
+	}
+	stop, err := e.backends.Queue.Serve(ctx, topics.MCPCheck, e.answerMCPCheck)
+	if err != nil {
+		log.WarnContext(ctx, "mcp_check_answerer_not_registered", "error", err,
+			"detail", "a test asked through another node reads this node as not answering until "+
+				"the node restarts; everything else works")
+		return
+	}
+	e.mcpChecks.stop = stop
+}
+
+// stopMCPChecks withdraws this node as an answerer, before its servers stop.
+func (e *Engine) stopMCPChecks(ctx context.Context) {
+	if e.mcpChecks == nil || e.mcpChecks.stop == nil {
+		return
+	}
+	if err := e.mcpChecks.stop(context.WithoutCancel(ctx)); err != nil {
+		log.WarnContext(ctx, "mcp_check_answerer_not_withdrawn", "error", err)
+	}
+	e.mcpChecks.stop = nil
+}
+
+// CheckMCPAddress checks the address raw before a server is added at it, on
+// this node ([mcp.CheckAddress]): an address the configuration's rule refuses
+// is refused there, before anything is dialled, as a write would refuse it.
+func (e *Engine) CheckMCPAddress(ctx context.Context, raw string) mcp.AddressCheck {
+	if problem := config.MCPAddressProblem(raw); problem != "" {
+		return mcp.AddressCheck{Test: boundedReport(mcp.Unstarted(
+			mcp.Spec{Name: "address-check", Transport: mcp.TransportHTTP, URL: raw},
+			"the address "+redact.URL(raw)+" "+problem), nil)}
+	}
+	check := mcp.CheckAddress(ctx, raw, nil)
+	check.Test = boundedReport(check.Test, e.epochTools())
+	if check.OAuth != nil && check.OAuth.Failure != nil {
+		failure := *check.OAuth.Failure
+		failure.Said = boundedSaid(failure.Said)
+		check.OAuth.Failure = &failure
+	}
+	return check
+}

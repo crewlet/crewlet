@@ -205,6 +205,7 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		}
 
 		a.q.beginHandler()
+		done := a.runningOn(evs...)
 		// EACH MESSAGE'S OWN HEADROOM, and the partition's folded from
 		// them by the contract. Both, because they answer different
 		// questions: one outcome covers the whole partition, so a
@@ -218,6 +219,10 @@ func (a *attachment) dispatchBatch(ctx context.Context, batch []delivery, h queu
 		a.q.endHandler()
 
 		a.applyPartition(ctx, part.Key, part.Items, evs, res)
+		// AFTER THE OUTCOME IS APPLIED: an acked message leaves the
+		// consumer's unfinished count only then, and released before it
+		// would read as waiting for that moment.
+		done()
 	}
 }
 

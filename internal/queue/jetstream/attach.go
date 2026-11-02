@@ -144,6 +144,12 @@ type attachment struct {
 	// quiesce, pause and detach of the topic stops both.
 	lane jetstream.Consumer
 
+	// running is the mail a handler of this attachment is running on right
+	// now, per mailbox: what [Queue.Waiting] takes off the consumers'
+	// unfinished counts, because a message a turn is working on is not
+	// waiting for one.
+	running struct{ priority, background atomic.Int64 }
+
 	log    *slog.Logger
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -676,9 +682,32 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 	}
 	a.q.beginHandler()
 	held := delivery{msg: msg, ev: ev}
+	done := a.runningOn(ev)
 	res := runHandler(a.withProgress(a.withHeadroom(ctx, held), held), a.log, ev, h)
 	a.q.endHandler()
 	a.apply(ctx, msg, ev, res)
+	done()
+}
+
+// runningOn counts evs as mail a handler of this attachment is running on, per
+// mailbox, until the returned func is called. The lane holds exactly the
+// marked events of a laned topic ([queue.SubjectFor]), so the mark says which
+// mailbox each came from.
+func (a *attachment) runningOn(evs ...*events.Event) func() {
+	var priority, background int64
+	for _, ev := range evs {
+		if a.lane != nil && queue.Prioritized(ev) {
+			priority++
+		} else {
+			background++
+		}
+	}
+	a.running.priority.Add(priority)
+	a.running.background.Add(background)
+	return func() {
+		a.running.priority.Add(-priority)
+		a.running.background.Add(-background)
+	}
 }
 
 // withHeadroom states EACH message's remaining headroom on the handler's

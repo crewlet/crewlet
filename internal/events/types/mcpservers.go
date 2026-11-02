@@ -20,10 +20,15 @@ const (
 	// MCPServerRestart asks every node, or the node holding one seat, to
 	// restart a server now.
 	MCPServerRestart MCPServerAction = "restart"
+	// MCPServerCheck tests a server where it runs: the entry the company
+	// runs, or with [MCPServerActed.Draft] an entry not written yet.
+	MCPServerCheck MCPServerAction = "check"
+	// MCPServerProbe checks an address before a server is added at it.
+	MCPServerProbe MCPServerAction = "probe"
 )
 
 // MCPServerActions is every action, for a reader's copy.
-var MCPServerActions = []MCPServerAction{MCPServerRestart}
+var MCPServerActions = []MCPServerAction{MCPServerRestart, MCPServerCheck, MCPServerProbe}
 
 // Valid reports whether a is an action this build records.
 func (a MCPServerAction) Valid() bool { return slices.Contains(MCPServerActions, a) }
@@ -52,6 +57,13 @@ type MCPServerActed struct {
 	// seat whose instance the gesture named, "" for every instance.
 	Server string `json:"mcp_server"`
 	Seat   string `json:"seat,omitempty"`
+	// Draft is whether a check tested an entry not written yet, under the
+	// name the draft gives it.
+	Draft bool `json:"draft,omitempty"`
+	// Address is the address an address check dialled, its credentials
+	// withheld (redact.URL): a dial the engine made at a person's word is
+	// one the trail names.
+	Address string `json:"address,omitempty"`
 	// Outcome is `applied` for a gesture that did what it was asked,
 	// `refused` for one the route turned down for a stated reason (its
 	// code in Refusal), and `failed` for one that broke without one.
@@ -68,11 +80,20 @@ func (e MCPServerActed) Actor() string { return e.ActorName }
 
 // SummaryFor says what was done to which server and how it ended.
 func (e MCPServerActed) SummaryFor(actor string) string {
-	what := string(e.Action)
-	if e.Action == MCPServerRestart {
-		what = "restarted"
+	var text string
+	switch e.Action {
+	case MCPServerRestart:
+		text = "restarted MCP server " + e.Server
+	case MCPServerCheck:
+		text = "tested MCP server " + e.Server
+		if e.Draft {
+			text = "tested a draft of MCP server " + e.Server
+		}
+	case MCPServerProbe:
+		text = "checked the MCP server address " + e.Address
+	default:
+		text = string(e.Action) + " MCP server " + e.Server
 	}
-	text := what + " MCP server " + e.Server
 	if e.Seat != "" {
 		text += " for seat " + e.Seat
 	}

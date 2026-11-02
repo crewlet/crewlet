@@ -42,6 +42,10 @@ package textcut
 
 import "unicode/utf8"
 
+// marker is what every cut here that says so is marked with, spelled once
+// ([Ellipsis] says why it is this spelling).
+const marker = "…"
+
 // Ellipsis is the common case: at most max bytes of CONTENT, cut on a rune
 // boundary, with a marker where it was cut.
 //
@@ -60,7 +64,7 @@ func Ellipsis(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return Bytes(s, max) + "…"
+	return Bytes(s, max) + marker
 }
 
 // Within is at most max bytes INCLUDING the marker, cut on a rune boundary.
@@ -89,7 +93,20 @@ func Within(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	const marker = "…"
+	return Bytes(s, max-len(marker)) + marker
+}
+
+// Opening is s — the opening of a text it was already kept short of — at most
+// max bytes INCLUDING the marker, cut on a rune boundary, and marked whether or
+// not it had to be cut further to fit.
+//
+// [Within] marks only what it cuts itself, which is right for a value it is
+// handed whole. It is wrong for an opening a caller kept short for a reason
+// of its own — the part of a text a redaction could settle, say — which can be
+// well inside max and is still not the whole: unmarked, a reader takes it for
+// all there was. The same two rules hold as for Within: the marker is inside
+// the budget, and a max too small to hold it yields the marker alone.
+func Opening(s string, max int) string {
 	return Bytes(s, max-len(marker)) + marker
 }
 
@@ -138,7 +155,7 @@ func Tail(s string, max int) string {
 		return s
 	}
 	if max <= 0 {
-		return "…"
+		return marker
 	}
 	// Walk FORWARD to the start of the rune that straddles the cut. At most
 	// three steps, for the reason [Bytes] gives.
@@ -146,5 +163,5 @@ func Tail(s string, max int) string {
 	for start < len(s) && !utf8.RuneStart(s[start]) {
 		start++
 	}
-	return "…" + s[start:]
+	return marker + s[start:]
 }

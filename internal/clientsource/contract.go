@@ -184,6 +184,12 @@ var contract = []Entry{
 	{"McpServerUsage", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpCallRow", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpServerCalls", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
+	{"McpCheckView", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
+	{"McpCheckNodeView", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
+	{"McpCheckStepView", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
+	{"McpCheckFailure", ReadInterface, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
+	{"McpTestStage", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
+	{"McpStepState", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpRisk", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpInstanceState", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
 	{"McpAuth", ReadUnion, "internal/api/queries.TestTheServerPageReadsWhatTheDetailSends"},
@@ -283,6 +289,7 @@ var contract = []Entry{
 	// positions.ts
 	{"GENERATION_STRIDE", ReadScalar,
 		"internal/api.TestTheDashboardUnpacksAPositionWithTheEnginesStride"},
+	{"LogPosition", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 
 	// closecodes.ts
 	{"CLOSE_UNAUTHENTICATED", ReadScalar,
@@ -324,6 +331,20 @@ var contract = []Entry{
 	{"CounterpartySubject", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"MemoryOverview", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"MemoryOverviewSeat", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+
+	// sessions.ts
+	{"ExecutorSessionsAnswer", ReadInterface,
+		"internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"ExecutorSessionRow", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"SessionEnding", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"ExecutorSessionAnswer", ReadInterface,
+		"internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"TranscriptEntry", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"TranscriptBounds", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"TranscriptState", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"TranscriptEntryKind", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"TranscriptCut", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"SessionOutcome", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
 
 	// identity.ts
 	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},

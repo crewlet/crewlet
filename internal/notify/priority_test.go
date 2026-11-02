@@ -1,11 +1,15 @@
 package notify_test
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // A WAKE THAT OWES A PERSON AN ANSWER RIDES THE SEAT'S PRIORITY LANE, AND
@@ -78,5 +82,88 @@ func TestOnlyAWakeOwedToAPersonRidesThePriorityLane(t *testing.T) {
 				t.Fatalf("the wake rides the priority lane = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// A PERSON'S MESSAGE ON THE PRIORITY LANE IS ANNOUNCED ON ITS SEAT'S WAITING
+// CHANNEL, with the wake that carries it and the conversation's keys and
+// nothing else; a background wake is not announced at all.
+//
+// The announcement is how the node running the seat learns a person is
+// waiting, so it can show them their message is queued behind what the seat
+// is doing. It names no person and carries no words: the message itself
+// travels on the seat's durable inbox.
+func TestAPersonsWaitingMessageIsAnnouncedToItsSeat(t *testing.T) {
+	t.Parallel()
+	h := newService(t, func(o *notify.Options, _ *harness) {
+		o.Prompts = o.Prompts.With(notify.ChatPrompt{
+			Backend: "chat", Label: "Chat",
+			Address: notify.AddressRule{DirectKinds: []string{"D"}, Follows: notify.AddressingFollows()},
+		})
+	})
+	var (
+		mu    sync.Mutex
+		heard []notify.WaitingNotice
+	)
+	stop, err := h.q.Listen(t.Context(), topics.SeatWaitingAll, func(subject string, payload []byte) {
+		id, _ := org.DeriveAgentID(company().Name, "engineering-lead")
+		if subject != topics.SeatWaiting(id) {
+			t.Errorf("announced on %q, want the seat's own waiting channel", subject)
+		}
+		n, err := notify.DecodeWaitingNotice(payload)
+		if err != nil {
+			t.Errorf("decode the notice: %v", err)
+		}
+		mu.Lock()
+		heard = append(heard, n)
+		mu.Unlock()
+	})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = stop(t.Context()) })
+
+	send := func(kind iam.ActorKind, ts string) {
+		r := to(notify.Recipient{Handle: "engineering-lead"}, "can you look at this?")
+		r.Inbound.Source, r.Inbound.EventType, r.Inbound.Sender = "chat", "message", "dana-founder"
+		r.Inbound.Metadata = map[string]string{
+			"channel": "D1", "channel_type": "D", "ts": ts, "transport": "chat",
+			notify.BodyAuthorKindField: string(kind),
+		}
+		h.parser.out = []notify.Routed{r}
+		if got := h.svc.Handle(t.Context(), delivery("tracker")); got.Outcome != queue.OutcomeAck {
+			t.Fatalf("Handle = %+v, want an ack", got)
+		}
+	}
+	send(iam.ActorHuman, "p1")
+	send(iam.ActorAgent, "p2")
+
+	woken := h.settledN(t, inbox("engineering-lead"), 2)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(heard)
+		mu.Unlock()
+		if n >= 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(heard) != 1 {
+		t.Fatalf("%d notices, want the person's message alone", len(heard))
+	}
+	if heard[0].Wake != woken[0].ID.String() {
+		t.Errorf("the notice names wake %s, want the person's %s", heard[0].Wake, woken[0].ID)
+	}
+	want := map[string]string{"channel": "D1", "channel_type": "D", "ts": "p1", "transport": "chat"}
+	if len(heard[0].Metadata) != len(want) {
+		t.Errorf("the notice carries %v, want the conversation's keys alone", heard[0].Metadata)
+	}
+	for k, v := range want {
+		if heard[0].Metadata[k] != v {
+			t.Errorf("the notice's %s is %q, want %q", k, heard[0].Metadata[k], v)
+		}
 	}
 }

@@ -39,6 +39,8 @@ func catalogue() []events.Payload {
 		A2AChannelOpened{}, A2AMessageSent{}, A2AChannelClosed{},
 		// budget.go
 		BudgetExhausted{}, BudgetMeters{},
+		// waiting.go
+		SeatInboxWaiting{},
 		// auxiliary.go
 		AuxiliarySpend{},
 		// provider.go
@@ -166,6 +168,7 @@ var wireTypes = []string{
 	"scheduled_fire_superseded",
 	"scheduled_task_fired",
 	"seat_access_drift_restored",
+	"seat_inbox_waiting",
 	"seat_paused",
 	"seat_provider_parked",
 	"seat_provider_released",
@@ -344,8 +347,8 @@ var wireTags = map[string][]string{
 	"backup_requested":          {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
 	"model_acted": {"action", "actor", "actor_kind", "dry_run", "failed", "names",
 		"operator_id", "outcome", "provider_key", "refusal", "revision_id", "status"},
-	"mcp_server_acted": {"action", "actor", "actor_kind", "failed", "mcp_server", "operator_id",
-		"outcome", "refusal", "seat"},
+	"mcp_server_acted": {"action", "actor", "actor_kind", "address", "draft", "failed", "mcp_server",
+		"operator_id", "outcome", "refusal", "seat"},
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "missed", "role", "schedule", "scheduled_at", "scope_id", "scope_type", "task_id", "timeout_seconds"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
@@ -361,6 +364,7 @@ var wireTags = map[string][]string{
 	"a2a_channel_closed":            {"channel_id", "closed_by", "duration_ms", "message_count", "participants", "turn_id", "work_key"},
 	"budget_exhausted":              {"agent_id", "budget_type", "max_tokens", "period", "resets_at", "role", "turn_id", "used_tokens", "window", "work_key"},
 	"budget_meters":                 {"meter_id", "org", "seats", "seq", "timezone"},
+	"seat_inbox_waiting":            {"reporter_id", "seats", "seq"},
 	"assistant_conversation_read":   {"actor", "actor_kind", "conversation_id", "file_id", "operator_id", "owner_id", "reason"},
 	"assistant_turn_completed":      {"actor", "actor_kind", "assistant_turn_id", "conversation_id", "duration_ms", "error_code", "failed", "model", "operator_id", "prompt_version", "provider_key", "state", "steps"},
 	"auxiliary_spend":               {"actor_role", "actor_seat", "agent_handle", "agent_id", "cache_read_tokens", "cache_write_tokens", "calls", "day", "duration_ms", "ended_at", "failed_calls", "input_tokens", "model", "output_tokens", "provider_key", "purpose", "role", "stage", "started_at", "total_tokens", "turn_id", "work_key"},

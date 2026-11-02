@@ -178,11 +178,21 @@ A few things worth knowing when deploying Crewlet:
   the tools list. That is deliberate: a company is a shared place, and a
   colleague handed no app still sees what it is doing. What it never carries is
   a *body* — a prompt, a response, a tool's arguments, an executor's task or
-  question — which goes only to an administrator, to the seat's lead, and for an
-  executor's question to the person it is put to; nor a credential, a login
-  of anybody else's, an external contact id or the company-wide trail, which
-  are `admin`'s. If the existence of a seat, an agent's current status or the
-  company's spend must not reach somebody, do not give them a credential
+  question, its live output, or the transcript a seat's executor session keeps
+  of every file the run read and every command's output — which goes only to an
+  administrator and to the seat's lead (`audit.seat.read`, one verb for all of
+  a seat's trail), and for an executor's question to the person it is put to.
+  A session's transcript reaches nobody its live output did not, but it holds
+  more than that output showed: every tool call's whole input and each result's
+  text, where the live output names a call's subject and a failure's first
+  line. So a seat's lead reads the contents of the files their agent's runs
+  read. The transcript is passed through the engine's redaction again as it is
+  read, but that matches known credential shapes, not values: a secret of no
+  recognisable shape that a run read or printed is in it as it was. Nor does
+  the overview carry a credential, a login of anybody else's, an external
+  contact id or the company-wide trail, which are `admin`'s. If the existence of
+  a seat, an agent's current status or the company's spend must not reach
+  somebody, do not give them a credential
   (`docs/concepts/identity-and-access.md#everybodys-overview`).
 - **Carrying a credential is not the same as being allowed to use it.** Every
   route and every socket question declares who may ask it (everybody, one of

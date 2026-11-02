@@ -292,6 +292,16 @@ const (
 	// never config or a credential: the server is restarted from the spec
 	// it runs.
 	ActionToolsRetry Action = "tools.retry"
+	// ActionToolsCheck tests an MCP server where it runs, never calling a
+	// tool (`POST /mcp-servers/{name}/check`), or checks an address before a
+	// server is added at it (`POST /mcp-probe`). Like a restart it changes no
+	// config and no credential: a test brings up a connection of its own
+	// and closes it. A test of a DRAFT (`POST /mcp-checks`) runs what a write
+	// would, so it is decided as the write it stands for, `config.write` and
+	// `secrets.write` on top, and an address check as the write that would
+	// make the engine dial the address, `config.write` on top
+	// (internal/api/mcpapi).
+	ActionToolsCheck Action = "tools.check"
 	// ActionToolsRead is reading Settings › MCP & tools over its routes: one
 	// server whole (`GET /mcp-servers/{name}`) and the curated catalogue
 	// servers are added from (`GET /mcp-catalogue`). EVERYBODY'S, IN TWO
@@ -1229,6 +1239,11 @@ var rules = map[Action]rule{
 	// assistant proposes it and the person approves it, since it ends every
 	// instance's session on every node it names.
 	ActionToolsRetry: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
+	// AN MCP SERVER'S TEST is admin's with no step-up, for the restart's
+	// reason: it writes neither the company nor a credential. The assistant
+	// proposes it and the person approves it, since it starts a process or
+	// dials an address on every node it names.
+	ActionToolsCheck: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
 	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.
