@@ -152,6 +152,8 @@ function ValueRows({
   return (
     <KeyValueRows<ValueRow>
       label={http ? "Request headers" : "Environment"}
+      // The column heads name the list; its legend is read, not drawn twice.
+      hideLabel
       keyLabel={word}
       value={rowsOf(draft)}
       onChange={(rows) => set(http ? { headers: rows } : { env: rows })}
