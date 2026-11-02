@@ -4340,11 +4340,13 @@ key of its own
 ([Code Sandbox](code-sandbox.md#the-runs-record-and-what-it-costs-to-read)).
 Measured on three members with every bucket at three replicas, from a member
 not leading the runs' bucket, for a job parked with a 32 KiB frozen context
-and a full bridge log of 200 calls: the record is 37 884 bytes, the frozen
-context and the 2 KiB brief among them, and a read takes 0.39 ms and a raise
-1.06 ms at the median (0.65 and 2.04 at the 99th percentile). The log beside
-it is 478 337 bytes, and only the calls that use it move it: an append of the
-box's next call takes 12.9 ms (25.0). With the log on the record, as the
+and a full bridge log of 200 calls: the record is 37 931 bytes, the frozen
+context and the 2 KiB brief among them, and a read takes 0.43 ms and a raise
+1.29 ms at the median (0.80 and 2.12 at the 99th percentile). The log beside
+it is 478 378 bytes, and only the calls that use it move it: an append of the
+box's next call takes 13.2 ms (19.6), and 13.8 ms (17.3) for a call that
+moved what the job's bridged calls cost, which also writes the new total to
+the record. With the log on the record, as the
 record kept it before (measured 2026-11-01 on the same machine), the record
 was 516 173 bytes, a read took 5.8 ms and a raise 11.1 ms (7.9 and 26.0), and
 every listing of runs and every flip of one moved the same half mebibyte
