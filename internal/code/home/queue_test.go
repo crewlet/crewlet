@@ -58,6 +58,8 @@ type queueRows struct {
 	// read asks, and since every instant a read asked from.
 	enqueued int
 	since    []time.Time
+	// mirrored is the repository a pull mirror, as the read answers it.
+	mirrored bool
 }
 
 func newQueueRows(tip string, depth, batch int) *queueRows {
@@ -144,7 +146,7 @@ func (r *queueRows) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, 
 	}
 	d := &code.QueueDue{TargetRef: queueMain, Repo: "web", Tip: r.tip, Depth: r.depth,
 		Batch: r.batch, Required: slices.Clone(r.required), Entries: slices.Clone(r.entries),
-		DropEpoch: r.epoch}
+		DropEpoch: r.epoch, Mirrored: r.mirrored}
 	if since := q.QueueDue.EnqueuedSince; !since.IsZero() {
 		r.since = append(r.since, since)
 		d.Enqueued = r.enqueued
@@ -670,6 +672,78 @@ func TestTheQueueStatesTheDropEpochItBuiltAndReadAt(t *testing.T) {
 // Mutation: leave a conflicting merge unejected → no eject, red; eject
 // nothing a landing refuses head_moved → red; answer an undefined required
 // check without the eject → red.
+// A PULL MIRROR'S QUEUE IS SHED, NEVER BUILT: a repository that became a pull
+// mirror with entries queued — nothing merges into it, so its candidates and
+// its landings are refused repo_mirrored — has every live entry ejected
+// repo_mirrored in one eject record, and no chain is built for it: not for a
+// queue that never had a train, and not for a standing train whose candidates
+// all passed, which would otherwise land.
+//
+// Mutation: drop the lane's mirrored arm (target) — the first turn builds a
+// chain and records a candidate, the second lands the green train, red; eject
+// with another reason — the record names it, red.
+func TestAPullMirrorsQueueIsShedNeverBuilt(t *testing.T) {
+	t.Parallel()
+	shed := func(t *testing.T, rows *queueRows, chains *queueChains, live []code.QueueWorkEntry, builds int) {
+		t.Helper()
+		records, _ := rows.asked()
+		eject := records[len(records)-1].Eject
+		if eject == nil || len(eject.Entries) != len(live) || slices.ContainsFunc(eject.Entries,
+			func(x code.Ejection) bool { return x.Reason != code.EjectRepoMirrored }) {
+			t.Fatalf("the pull mirror's turn recorded %+v, want its %d live entries ejected repo_mirrored",
+				records[len(records)-1], len(live))
+		}
+		for i, e := range live {
+			if eject.Entries[i].EntryID != e.EntryID {
+				t.Errorf("the eject names %s at %d, want %s", eject.Entries[i].EntryID, i, e.EntryID)
+			}
+		}
+		if got := chains.built(); got != builds {
+			t.Errorf("%d chains were built, want %d: a pull mirror's queue is never built", got, builds)
+		}
+		if _, entries := rows.snapshot(); len(entries) != 0 {
+			t.Errorf("%d entries are still live after the shed", len(entries))
+		}
+	}
+
+	t.Run("waiting", func(t *testing.T) {
+		t.Parallel()
+		rows := newQueueRows(oid("c"), 2, 2)
+		live := rows.enqueue(t, 3)
+		rows.mirrored = true
+		chains := &queueChains{}
+		turn(t, queueLoop(t, rows, chains, &queueTasks{}), rows)
+		shed(t, rows, chains, live, 0)
+	})
+
+	t.Run("a green train", func(t *testing.T) {
+		t.Parallel()
+		rows := newQueueRows(oid("d"), 2, 1)
+		live := rows.enqueue(t, 2)
+		chains := &queueChains{}
+		l := queueLoop(t, rows, chains, &queueTasks{})
+		turn(t, l, rows)
+		train, _ := rows.snapshot()
+		if len(train) != 2 {
+			t.Fatalf("the train is %+v, want two candidates", train)
+		}
+		for _, c := range train {
+			rows.ended(c.TipOID, "unit", code.CheckStatePassed)
+		}
+		rows.mu.Lock()
+		rows.mirrored = true
+		rows.mu.Unlock()
+		tip := rows.tip
+		turn(t, l, rows)
+		shed(t, rows, chains, live, 1)
+		if records, _ := rows.asked(); slices.ContainsFunc(records, func(p code.QueueProposal) bool {
+			return p.Land != nil
+		}) || rows.tip != tip {
+			t.Errorf("the pull mirror's green train was landed: main at %s, want %s", rows.tip, tip)
+		}
+	})
+}
+
 func TestTheQueueEjectsWhatItCannotLand(t *testing.T) {
 	t.Parallel()
 	rows := newQueueRows(oid("e"), 3, 1)

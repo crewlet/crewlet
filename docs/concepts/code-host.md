@@ -6201,7 +6201,7 @@ hands it to the repository's next committer.
 
 | Refusal | Why |
 |---|---|
-| `repo_importing`, `repo_mirrored` | The repository is being imported from another host, or is a pull mirror, which nothing merges into: a dequeue of a pull mirror's entry still lands, so a repository that became a mirror sheds its queue. |
+| `repo_importing`, `repo_mirrored` | The repository is being imported from another host, or is a pull mirror, which nothing merges into: a dequeue of a pull mirror's entry still lands, and its home ejects every entry its queues still hold `repo_mirrored`, building no train for them, so a repository that became a mirror sheds its queue. |
 | `gate_unmet` | The change does not meet its target's gate: the answer names every precondition not met and whom each waits on. |
 | `change_not_open`, `change_draft` | The change is closed or merged, or a draft, which merges nowhere. |
 | `stale`, `head_moved` | The change targets another branch, or its head moved, since its asker read it: read it again. |
@@ -6241,7 +6241,10 @@ change as whoever enqueued it.
   whose candidates are removed and whose entries wait again.
 - An **eject** puts live entries of one branch out — `check_failed` (naming
   the checks), `conflict` (naming up to 100 paths), `gate_unmet`,
-  `head_moved` or `not_fast_forward` — and abandons the train they were in.
+  `head_moved`, `not_fast_forward` or `repo_mirrored` (the repository is a
+  [pull mirror](#mirrors-and-imports), which nothing merges into: its home
+  ejects every live entry rather than build a train) — and abandons the train
+  they were in.
   The node whose committer landed it announces a `code_queue_ejected` event
   for each, fed to the activity feed. A push that moves a queued change's
   head ejects its entry `head_moved` in the push's own record, and the node
@@ -6274,11 +6277,11 @@ change as whoever enqueued it.
 
 | Refusal | Why |
 |---|---|
-| `repo_importing`, `repo_mirrored` | The repository is being imported from another host, which takes none of these records, or is a pull mirror, which takes no candidate and no landing: an eject, a green and a broken still land on a mirror, moving no ref, so a repository that became one sheds its queue. |
+| `repo_importing`, `repo_mirrored` | The repository is being imported from another host, which takes none of these records, or is a pull mirror, which takes no candidate and no landing: an eject, a green and a broken still land on a mirror, moving no ref, and its home ejects every live entry `repo_mirrored` rather than build a train, so a repository that became one — once its import is done — sheds its queue. |
 | `expunging` | The train was built from a copy of the repository taken before an expunge of its unreachable objects began, or the landing decided from a read taken before one: the home builds the train again, or reads it again to land it. |
 | `target_moved` | The branch is no longer at the tip the train or the landing was built onto: the home builds it again. |
 | `not_queued` | An entry is not live in the branch's queue — ended since, or another branch's. |
-| `stale` | What the record names is not what the rows hold: a commit its entry's method does not make, a pack it does not need or lacks, a landing that is no prefix of the branch's train. |
+| `stale` | What the record names is not what the rows hold: a commit its entry's method does not make, a pack it does not need or lacks, a landing that is no prefix of the branch's train, an eject `repo_mirrored` of a repository that follows no source. |
 | `gate_unmet`, `head_moved`, `change_not_open` | An entry of a landing no longer meets its gate with its enqueuer as the merger, or its change moved or ended: the answer names each such entry. |
 | `not_green` | A landing's tip, or a green's landing, has a required check not passed by its latest attempt checked for the branch. |
 | `not_red`, `no_landing` | A broken names a check that did not fail, or a green or a broken names no landing above the branch's green row. |

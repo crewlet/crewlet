@@ -77,6 +77,14 @@ import (
 // read again on every pass for ever. A change whose target branch is gone is
 // nobody's either, until a push makes the branch again or the change is
 // retargeted: there is no tip to read its facts against or merge it into.
+// A PULL MIRROR'S live changes STAY its home's work, though nothing merges
+// into one (repo_mirrored): its source merges them, and the home's merge is
+// what finds that — the change's head inside the target a sync moved, LANDED
+// ([ChangeLanded]), which a pull mirror takes. Its facts and its merges are
+// conversation records a pull mirror takes too, so each lands and takes the
+// change off the list until a sync moves its target again, at the home's
+// recheck pace: the work of any repository's open change, over a set no open
+// adds to on a mirror.
 //
 // TWO SHAPES, one per caller: with no repository it pages the repositories
 // holding such a change, by id — what a home's backstop asks its placement

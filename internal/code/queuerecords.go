@@ -29,8 +29,9 @@ import (
 //     candidates removed and its entries waiting again.
 //   - an EJECT ([Eject]) puts live entries out of their queue — a required
 //     check failed on what they were tested in, their merge conflicted, their
-//     gate no longer holds, their head moved, a fast-forward that is not one —
-//     naming the checks or the paths, and abandons the train each was in.
+//     gate no longer holds, their head moved, a fast-forward that is not one,
+//     their repository a pull mirror — naming the checks or the paths, and
+//     abandons the train each was in.
 //   - a LAND ([Land]) lands entries on their target in ONE record: a train's
 //     tested PREFIX — its candidates from the first, up to one whose tip
 //     every required check passed on. ITS DECIDE PROVES EVERY ENTRY'S GATE
@@ -212,11 +213,26 @@ const (
 	// EjectNotFastForward is a fast_forward entry whose head does not hold
 	// what was before it.
 	EjectNotFastForward QueueEndReason = "not_fast_forward"
+	// EjectRepoMirrored is the entry's repository a PULL MIRROR
+	// ([RepoRef.Mirrored]), which nothing merges into: it moves only by its
+	// syncs, so a candidate and a landing on it are refused repo_mirrored,
+	// and its home puts every live entry out rather than build, on every
+	// turn, a train no landing could land — its enqueuer and its change's
+	// authors told why. Its decide holds the reason to the rows: refused
+	// stale on a repository that is not a pull mirror ([decideEject]).
+	//
+	// BASE FORMAT, under the condition this file's head states; once a build
+	// without it has run it takes {Name: "Ejection.Reason repo_mirrored",
+	// Since: 2, Op: "eject", Path: []string{"mutation", "entries",
+	// "reason"}, Equals: "repo_mirrored"}, since an older build's eject
+	// validation refuses a reason it does not know.
+	EjectRepoMirrored QueueEndReason = "repo_mirrored"
 )
 
 // EjectReasons is the closed set an eject record may name, in this order.
 func EjectReasons() []QueueEndReason {
-	return []QueueEndReason{EjectCheckFailed, EjectConflict, EjectGateUnmet, EjectHeadMoved, EjectNotFastForward}
+	return []QueueEndReason{EjectCheckFailed, EjectConflict, EjectGateUnmet, EjectHeadMoved, EjectNotFastForward,
+		EjectRepoMirrored}
 }
 
 // MergedViaQueue is how a change a land record merged reached its target

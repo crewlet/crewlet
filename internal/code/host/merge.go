@@ -271,6 +271,29 @@ func (wr *writing) judgeMerge(ctx context.Context, fresh statelog.Freshness) (me
 	}
 }
 
+// mergeStatusRefusal is the refusal a repository's row gives a merge and each
+// of a queue's steps toward one — the push refusal its status reads
+// ([Server.statusRefusal]) as the merge's code: repo_deleted, repo_archived,
+// repo_importing or repo_mirrored, in the domain's one sentence for the state
+// — or "" for a repository that takes one. THE ONE MAPPING the merge's verdict
+// and a queue's chain ([Server.BuildChain]) both read BEFORE they build: the
+// decide refuses each from the same row, but only once a scratch, a share unit
+// of the seat git-work and a stored pack were spent on a merge it could never
+// take.
+func (s *Server) mergeStatusRefusal(repo code.RepoRef) (code.MergeRefusal, string) {
+	switch reason, words := s.statusRefusal(repo); reason {
+	case code.RefusalRepoDeleted:
+		return code.MergeRefusalRepoDeleted, words
+	case code.RefusalRepoArchived:
+		return code.MergeRefusalRepoArchived, words
+	case code.RefusalRepoImporting:
+		return code.MergeRefusalRepoImporting, words
+	case code.RefusalRepoMirrored:
+		return code.MergeRefusalRepoMirrored, words
+	}
+	return "", ""
+}
+
 // mergeVerdict judges the merge on the synced copy, in the order its record's
 // decide reads its rules: the repository's status, the change as the caller
 // read it, a seat's override, the target's tip, and — for a merge its gate
@@ -286,15 +309,8 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoDeleted,
 			detail: code.RepoGone{ID: w.RepoID, Retention: s.o.DeletedRetention()}.Detail()}, nil
 	}
-	switch reason, words := s.statusRefusal(repo); reason {
-	case code.RefusalRepoDeleted:
-		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoDeleted, detail: words}, nil
-	case code.RefusalRepoArchived:
-		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoArchived, detail: words}, nil
-	case code.RefusalRepoImporting:
-		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoImporting, detail: words}, nil
-	case code.RefusalRepoMirrored:
-		return mergeJudgement{}, mergeVerdict{refusal: code.MergeRefusalRepoMirrored, detail: words}, nil
+	if refusal, words := s.mergeStatusRefusal(repo); refusal != "" {
+		return mergeJudgement{}, mergeVerdict{refusal: refusal, detail: words}, nil
 	}
 	floor := statelog.FloorAt(statelog.ReadSession, wr.synced.Position)
 	ans, err := s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChange, Asker: w.Principal, Repo: repo.Name,

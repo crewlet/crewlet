@@ -72,7 +72,10 @@ type TaskClose struct {
 //     before any) and the first known red, the failed checks queued there
 //     (purpose bisect) — down to the culprit, EJECTED check_failed naming the
 //     checks; the eject abandons the train, and the next turn builds again
-//     without it.
+//     without it;
+//   - a PULL MIRROR's target (code.QueueDue.Mirrored), whose candidates and
+//     landings are refused repo_mirrored: every live entry EJECTED
+//     repo_mirrored, and no train built for it ([queue.shed]).
 //
 // Each target's MERGE RATE is measured as its queue work is read — its
 // enqueues within code.MergeRateWindow against what its depth and batch land
@@ -168,12 +171,32 @@ func (w *queue) target(ctx context.Context, repoID string, d code.QueueDue, memo
 
 	w.rate.measure(repoID, d, w.now())
 	switch {
-	case len(d.Required) == 0 || len(d.Entries) == 0:
+	case len(d.Entries) == 0:
+		return nil
+	case d.Mirrored:
+		return w.shed(ctx, repoID, d, at)
+	case len(d.Required) == 0:
 		return nil
 	case len(d.Train) > 0 && trainStands(d):
 		return w.test(ctx, repoID, d, memo, at)
 	}
 	return w.build(ctx, repoID, d, at)
+}
+
+// shed puts every live entry of d's target out, ejected repo_mirrored: its
+// repository is a PULL MIRROR, which nothing merges into — a candidate and a
+// landing on one are refused repo_mirrored — so a train built of them could
+// never land, and a queue left standing would be built again on every turn, a
+// scratch, a share unit and a stored pack each time, for nothing. Each
+// entry's enqueuer and its change's authors are told why by the eject's
+// announcement, and the record nudges the repository again, so a target
+// holding more entries than one page names is shed on the next turn.
+func (w *queue) shed(ctx context.Context, repoID string, d code.QueueDue, at statelog.Position) error {
+	ejected := make([]code.Ejection, len(d.Entries))
+	for i, e := range d.Entries {
+		ejected[i] = code.Ejection{EntryID: e.EntryID, Reason: code.EjectRepoMirrored}
+	}
+	return w.eject(ctx, repoID, fmt.Sprintf("target %s of a pull mirror", d.TargetRef), ejected, at)
 }
 
 // trainStands reports d's train still the one to test: built onto the
@@ -232,6 +255,13 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 	switch {
 	case err != nil:
 		return fmt.Errorf("home: build the train of %s: %w", about, err)
+	case built.Status != "":
+		// THE REPOSITORY'S ROW REFUSES EVERY MERGE, as the copy the chain was
+		// to be built over holds it — past this snapshot: nothing was built,
+		// and the next turn reads the queue again (a pull mirror's, to shed).
+		w.log.Debug("code_queue_chain_refused", "repo", repoID, "about", about, "refusal", built.Status,
+			"detail", built.Detail)
+		return nil
 	case built.Refusal != "":
 		return fmt.Errorf("home: build the train of %s: %s: %s", about, built.Refusal, built.Detail)
 	}
