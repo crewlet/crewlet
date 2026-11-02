@@ -2,7 +2,6 @@ package jetstream
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -12,19 +11,10 @@ import (
 )
 
 // delivery pairs a decoded event with the message it must be acked through.
-//
-// A FOLDED delivery has no message: it was read where it sits on the topic
-// rather than fetched ([attachment.fold]), so the consumer holds no delivery
-// of it to ack, Nak or extend, and it is settled by its stream sequence
-// instead ([attachment.settleFolded]).
 type delivery struct {
 	msg jetstream.Msg
 	ev  *events.Event
-	seq uint64
 }
-
-// folded reports a delivery the drain folded rather than fetched.
-func (d delivery) folded() bool { return d.msg == nil }
 
 func eventOf(d delivery) *events.Event { return d.ev }
 
@@ -64,8 +54,6 @@ func (q *Queue) SubscribeBatch(
 			if len(batch) == 0 {
 				continue
 			}
-			// A PRIORITY PARTITION IS DELIVERED WHOLE ([queue.Fold]).
-			batch = a.fold(ctx, batch, key)
 			// A stop or a hold that landed DURING the linger window must
 			// not be flushed past: the whole point of pausing a seat's
 			// inbox is that no turn starts, and a batch collected a
@@ -179,84 +167,6 @@ func (a *attachment) drain(ctx context.Context, opts *queue.BatchOptions) []deli
 	return batch
 }
 
-// fold takes into a drain every event still pending on the topic that shares a
-// partition with one of the drain's priority events ([queue.Fold]): the
-// conversation a person is waiting on is delivered whole, never split between
-// the turn the lane brought forward and a second one behind the backlog.
-//
-// READ, NOT FETCHED. The consumer serves its mail in stream order and the
-// events a fold needs are anywhere behind the drain's head, so they are read
-// where they sit ([Queue.pendingOf]) and settled with their partition's
-// outcome: an Ack removes them from the stream ([attachment.settleFolded]),
-// and a Nak or a Defer leaves them exactly where they were, never delivered
-// and so never charged a delivery. Fetching to them instead would deliver,
-// and then hand back, every event in front of them on every person's
-// message, which spends their delivery budgets on nothing.
-//
-// The events this drain already holds are skipped by sequence, so nothing is
-// in a delivery twice. Only a drain that took lane mail folds, so the read is
-// paid on a person's message and on no other drain. A read that fails is
-// reported and the drain goes ahead with what it took: the events it could
-// not fold are still on the topic, and reach the seat in their turn.
-func (a *attachment) fold(ctx context.Context, batch []delivery, key queue.BatchKeyFunc) []delivery {
-	if a.lane == nil {
-		return batch
-	}
-	evs := make([]*events.Event, len(batch))
-	held := make(map[uint64]struct{}, len(batch))
-	for i, d := range batch {
-		evs[i] = d.ev
-		if md, err := d.msg.Metadata(); err == nil {
-			held[md.Sequence.Stream] = struct{}{}
-		}
-	}
-	fold := queue.FoldOf(evs, key)
-	if fold.Empty() {
-		return batch
-	}
-	err := a.q.pendingOf(ctx, a.cons.CachedInfo().Stream, a.key.topic,
-		consumerName(a.key.topic, a.key.group),
-		func(seq uint64, ev *events.Event) {
-			if _, ok := held[seq]; ok || !fold.Takes(ev) {
-				return
-			}
-			batch = append(batch, delivery{ev: ev, seq: seq})
-		})
-	if err != nil && ctx.Err() == nil && !errors.Is(err, context.Canceled) {
-		a.log.Warn("lane_fold_failed", "error", err.Error(),
-			"detail", "the topic could not be read for the rest of a priority partition; "+
-				"the partition runs with what the drain took, and what it could not fold "+
-				"reaches the seat in its turn")
-	}
-	return batch
-}
-
-// settleFolded retires a folded event once its partition was acked. It was
-// read where it sat rather than fetched, so the consumer holds no delivery of
-// it to ack, and deleting it from the stream is how it is settled: the
-// consumer passes over a sequence the stream no longer holds.
-//
-// A delete the broker reports UNSUCCESSFUL is a message already gone, settled
-// by an earlier fold, which is the end state this asks for: the agent stream
-// refuses no delete ([streamSpec.denyDelete] is a log's), so a missing
-// message is the only refusal it gives. Any other failure leaves the event on
-// the topic, where it reaches the seat again in its turn, and says so.
-func (a *attachment) settleFolded(ctx context.Context, seq uint64) {
-	stream, err := a.q.js.Stream(ctx, a.cons.CachedInfo().Stream)
-	if err == nil {
-		err = stream.DeleteMsg(ctx, seq)
-	}
-	switch {
-	case err == nil:
-	case errors.Is(err, jetstream.ErrMsgNotFound), errors.Is(err, jetstream.ErrMsgDeleteUnsuccessful):
-		a.log.Debug("folded_already_settled", "seq", seq)
-	default:
-		a.log.Warn("fold_settle_failed", "seq", seq, "error", a.q.brokerFailed(ctx, err).Error(),
-			"detail", "an event folded into an acked partition could not be removed from the "+
-				"topic, so it reaches the seat again when the topic does")
-	}
-}
-
 func (a *attachment) toDelivery(msg jetstream.Msg) (delivery, bool) {
 	ev, ok := a.decode(msg)
 	if !ok {
@@ -322,10 +232,6 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 	switch res.Outcome {
 	case queue.OutcomeAck:
 		for _, d := range items {
-			if d.folded() {
-				a.settleFolded(ctx, d.seq)
-				continue
-			}
 			// FORGOTTEN FIRST, for the reason [attachment.apply]
 			// gives on the single-message path: a partition that
 			// succeeded after failing must not carry those failures
@@ -346,10 +252,6 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 		a.setQuiesced(true)
 	case queue.OutcomeNak:
 		for _, d := range items {
-			// A FOLDED EVENT STAYS WHERE IT WAS ([attachment.fold]).
-			if d.folded() {
-				continue
-			}
 			a.nakOrDeadLetter(ctx, d.msg)
 		}
 	}
@@ -366,14 +268,8 @@ func (a *attachment) applyPartition(ctx context.Context, batchKey string, items 
 // `dead_lettered` line, no advisory consumer anywhere in this package to
 // notice. A healthy inbox event, silently gone. The boundary is the same one
 // the failure path already honours; what differs is only how it got there.
-//
-// A FOLDED EVENT IS NOT HANDED BACK: it was never fetched, so it is still where
-// it was on the topic and no delivery of it was spent ([attachment.fold]).
 func (a *attachment) nakAll(ctx context.Context, items []delivery) {
 	for _, d := range items {
-		if d.folded() {
-			continue
-		}
 		a.handBack(ctx, d.msg)
 	}
 }

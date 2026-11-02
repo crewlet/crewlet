@@ -2,7 +2,6 @@ package queuetest
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"strconv"
 	"sync"
@@ -73,43 +72,54 @@ func (s *suite) runLane(t *testing.T) {
 		})
 	})
 
-	t.Run("a_priority_partition_folds_its_mail_from_behind_the_backlog", func(t *testing.T) {
+	t.Run("a_partition_wake_deeper_than_the_drain_runs_once_in_its_own_turn", func(t *testing.T) {
 		t.Parallel()
-		// THE FOLD. The person's conversation also has mail on the topic,
-		// behind a backlog deeper than the drain: with a cap of two the
-		// follow-up is in no drain the lane brings forward. Delivered
-		// whole, the person's partition carries it, and it is never run a
-		// second time when the topic's head reaches where it was.
+		// THE DRAIN WINDOW IS THE BOUND of what one turn is handed. The
+		// person's conversation also has mail on the topic, behind a
+		// backlog deeper than the drain: with a cap of two the follow-up
+		// is in no drain the lane brings forward. It is not reached for:
+		// the person's turn runs on what the drain took, and the follow-up
+		// runs once, as a partition of its own, when the topic's head
+		// reaches it. Nothing lost, nothing run twice.
 		q := s.start(ctx, t)
 		topic := inbox()
 		queueBacklog(ctx, t, q, topic, "g", append(backlog(5), followUp(), person())...)
 		batches := newBatchJournal()
 		subscribeBatch(ctx, t, q, topic, "g", recordingBatchHandler(batches),
 			queue.NewBatchOptions(0, 2))
-		batches.await(t, "the person's partition first, whole", func(got [][]string) bool {
-			return len(got) > 0 && sameSet(got[0], []string{"followup", "person"})
-		})
 		batches.await(t, "every event settled exactly once", func(got [][]string) bool {
 			return equalStrings(settled(got), everyLabel(5))
 		})
-		if backlogOf := s.optionalBacklog(t); backlogOf != nil {
-			if left := backlogOf(q, topic, "g"); len(left) != 0 {
-				t.Fatalf("after every partition was acked the subscription retains %v: a "+
-					"folded event was handed to an acked partition and never settled", labelsOf(left))
+		got := batches.all()
+		if !equalStrings(got[0], []string{"person"}) {
+			t.Fatalf("the first delivery was %v, want the person's message alone: the "+
+				"follow-up was deeper than the drain", got[0])
+		}
+		for _, batch := range got {
+			if slices.Contains(batch, "followup") && len(batch) != 1 {
+				t.Fatalf("the follow-up ran as %v, want a partition of its own", batch)
 			}
+		}
+		// POLLED: the journal records a batch inside its handler, before
+		// the backend applies the Ack, so the last batch's settlement may
+		// still be in flight the moment every label has been seen.
+		if backlogOf := s.optionalBacklog(t); backlogOf != nil {
+			awaitState(t, "every partition settled, the subscription retaining nothing",
+				func() bool { return len(backlogOf(q, topic, "g")) == 0 })
 		}
 	})
 
-	t.Run("a_requeued_priority_partition_is_folded_whole_again", func(t *testing.T) {
+	t.Run("a_requeued_priority_partition_returns_whole", func(t *testing.T) {
 		t.Parallel()
-		// A PARK splits what it requeues: each event is republished as it
-		// is, so the person's message returns to the lane and the
-		// follow-up to the topic's TAIL, behind whatever arrived since.
-		// The next drain that takes the person's message folds the
-		// follow-up back in, so the requeued partition runs once, whole.
+		// A PARK REQUEUES WHAT IT WAS HANDED AS ONE UNIT (queue.Together):
+		// the person's message and the follow-up the drain took with it
+		// both return to the lane and are delivered together again, ahead
+		// of the backlog, rather than the marked one alone to the lane and
+		// the follow-up to the topic's tail.
 		q := s.start(ctx, t)
 		topic := inbox()
-		queueBacklog(ctx, t, q, topic, "g", append(backlog(5), followUp(), person())...)
+		queueBacklog(ctx, t, q, topic, "g", append(append([]*events.Event{followUp()},
+			backlog(5)...), person())...)
 		batches := newBatchJournal()
 		var once sync.Once
 		handler := func(ctx context.Context, evs []*events.Event) queue.Result {
@@ -117,105 +127,30 @@ func (s *suite) runLane(t *testing.T) {
 			if slices.Contains(labelsOf(evs), "person") {
 				once.Do(func() { requeue = true })
 			}
-			if requeue {
-				for _, ev := range evs {
-					if err := q.Publish(ctx, topic, ev); err != nil {
-						t.Errorf("requeue %s: %v", ev.Type, err)
-						return queue.Nak(err)
-					}
-				}
+			if !requeue {
+				batches.record(evs)
 				return queue.Ack()
 			}
-			batches.record(evs)
+			if !sameSet(labelsOf(evs), []string{"followup", "person"}) {
+				t.Errorf("the person's first delivery was %v, want the follow-up the drain "+
+					"took with it", labelsOf(evs))
+			}
+			for _, ev := range queue.Together(evs) {
+				if err := q.Publish(ctx, topic, ev); err != nil {
+					t.Errorf("requeue %s: %v", ev.Type, err)
+					return queue.Nak(err)
+				}
+			}
 			return queue.Ack()
 		}
 		subscribeBatch(ctx, t, q, topic, "g", handler, queue.NewBatchOptions(0, 2))
 		batches.await(t, "every event settled exactly once", func(got [][]string) bool {
 			return equalStrings(settled(got), everyLabel(5))
 		})
-		for _, batch := range batches.all() {
-			if slices.Contains(batch, "followup") && !slices.Contains(batch, "person") {
-				t.Fatalf("the requeued follow-up ran as %v, apart from the person's message "+
-					"it was requeued with", batch)
-			}
-		}
-	})
-
-	t.Run("a_held_priority_partition_is_folded_whole_when_the_hold_lifts", func(t *testing.T) {
-		t.Parallel()
-		// A seat held (paused, parked, or busy with its executor) keeps
-		// both mailboxes; when the hold lifts, the person's message comes
-		// first and brings its conversation's topic mail with it.
-		q := s.start(ctx, t)
-		topic := inbox()
-		if _, err := q.EnsureSubscription(ctx, topic, "g"); err != nil {
-			t.Fatalf("EnsureSubscription: %v", err)
-		}
-		if err := q.PauseTopic(ctx, topic, "g", holdReason); err != nil {
-			t.Fatalf("PauseTopic: %v", err)
-		}
-		batches := newBatchJournal()
-		subscribeBatch(ctx, t, q, topic, "g", recordingBatchHandler(batches),
-			queue.NewBatchOptions(0, 2))
-		for _, ev := range append(backlog(5), followUp(), person()) {
-			publish(ctx, t, q, topic, ev)
-		}
-		batches.staysAt(t, 0, "a delivery past the topic's hold")
-		if err := q.ResumeTopic(ctx, topic, "g", holdReason); err != nil {
-			t.Fatalf("ResumeTopic: %v", err)
-		}
-		batches.await(t, "the person's partition first, whole", func(got [][]string) bool {
-			return len(got) > 0 && sameSet(got[0], []string{"followup", "person"})
-		})
-		batches.await(t, "every event settled exactly once", func(got [][]string) bool {
-			return equalStrings(settled(got), everyLabel(5))
-		})
-	})
-
-	t.Run("a_nak_leaves_folded_mail_where_it_was_and_settles_it_once", func(t *testing.T) {
-		t.Parallel()
-		// A failed priority partition hands back only what the drain took.
-		// The follow-up it folded was read, not delivered: the handler is
-		// told no headroom for it, nothing returns it, and it is settled
-		// exactly once, by whichever delivery is acked with it.
-		q := s.start(ctx, t)
-		topic := inbox()
-		follow := followUp()
-		queueBacklog(ctx, t, q, topic, "g", append(backlog(5), follow, person())...)
-		batches := newBatchJournal()
-		var (
-			mu     sync.Mutex
-			failed bool
-		)
-		handler := func(ctx context.Context, evs []*events.Event) queue.Result {
-			mu.Lock()
-			first := !failed && slices.Contains(labelsOf(evs), "person")
-			if first {
-				failed = true
-			}
-			mu.Unlock()
-			if first {
-				if !slices.Contains(labelsOf(evs), "followup") {
-					t.Errorf("the person's first delivery was %v, want the follow-up folded "+
-						"into it", labelsOf(evs))
-				}
-				if left, stated := queue.DeliveriesLeftFor(ctx, follow.ID); stated {
-					t.Errorf("the folded follow-up was stated %d deliveries of headroom; it "+
-						"was read, not delivered, so none is spent and none is stated", left)
-				}
-				return queue.Nak(errFoldFailed)
-			}
-			batches.record(evs)
-			return queue.Ack()
-		}
-		subscribeBatch(ctx, t, q, topic, "g", handler, queue.NewBatchOptions(0, 2))
-		batches.await(t, "every event settled exactly once", func(got [][]string) bool {
-			return equalStrings(settled(got), everyLabel(5))
-		})
-		if backlogOf := s.optionalBacklog(t); backlogOf != nil {
-			if left := backlogOf(q, topic, "g"); len(left) != 0 {
-				t.Fatalf("after every partition was acked the subscription retains %v", labelsOf(left))
-			}
+		got := batches.all()
+		if !sameSet(got[0], []string{"followup", "person"}) {
+			t.Fatalf("after the requeue the first delivery was %v, want the person's "+
+				"partition whole, ahead of the backlog", got[0])
 		}
 	})
 
@@ -305,9 +240,6 @@ func (s *suite) runLane(t *testing.T) {
 		}
 	})
 }
-
-// errFoldFailed is the failure a fold case's handler reports on purpose.
-var errFoldFailed = errors.New("queuetest: the priority partition failed on purpose")
 
 // settled is every label the acked batches carried, sorted: a label twice is an
 // event settled twice, and a label missing is one never settled.
