@@ -1491,7 +1491,11 @@ const (
 	// +0.6 KiB, the protocol +0.2 KiB and authorityRemedy +0.1 KiB, less
 	// 1.3 KiB of Chatlet's own sheet for the Browse rows the kit now draws.
 	// 5288 KiB.
-	treeBudget = 5<<20 + 168<<10
+	// A person's message queued behind a busy seat, drawn still with the
+	// kit's queued state in the room's footer, a message's thread summary
+	// and the thread pane, took it from 5288.0 KiB to 5288.2 KiB (+0.2 KiB,
+	// all of it Chatlet's chunk). 5289 KiB.
+	treeBudget = 5<<20 + 169<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
