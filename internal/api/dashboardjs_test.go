@@ -1480,7 +1480,18 @@ const (
 	// (+1.6 KiB): the entry script +1.4 KiB, the remedy chunk +0.1 KiB and the
 	// Inbox chunk under 0.1 KiB. The initial load went from 380.3 KiB to
 	// 380.8 KiB, inside its budget. 5283 KiB.
-	treeBudget = 5<<20 + 163<<10
+	// uilet 0.89.0 (RoomRow, a List or PersonRow row's own action and note,
+	// a Switch held with a reason or drawn without its label, 0.87.0's
+	// DeliveryReceipt and the queued ThinkingIndicator) and Chatlet's
+	// membership work (each agent member's gets-every-message switch, the
+	// team room choice in New room, the star on a team's room read from
+	// outside it, the composer wherever the engine takes the post, Browse
+	// rows on RoomRow) took it from 5282.3 KiB to 5288.0 KiB (+5.7 KiB):
+	// Chatlet's chunk +3.5 KiB, the one sheet +2.7 KiB, the kit's chunks
+	// +0.6 KiB, the protocol +0.2 KiB and authorityRemedy +0.1 KiB, less
+	// 1.3 KiB of Chatlet's own sheet for the Browse rows the kit now draws.
+	// 5288 KiB.
+	treeBudget = 5<<20 + 168<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
