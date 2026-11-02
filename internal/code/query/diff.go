@@ -377,7 +377,7 @@ func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, r
 			// Where the stat names no paths, the one process wrote both halves.
 			err = p.end(!p.keep)
 		}
-		if err := r.failed(ctx, "diff", res, err, narrow); err != nil {
+		if err = r.failed(ctx, "diff", res, err, narrow); err != nil {
 			return statPage{}, err
 		}
 	}
@@ -973,7 +973,7 @@ func (r *read) findFile(ctx context.Context, base, head, file string, renames bo
 	}
 	narrow := fmt.Errorf("%w: the diff of %s and %s did not finish in the read's %s of git: diff commits "+
 		"closer together", code.ErrSliceTooLarge, base, head, r.s.gitBudget)
-	if err := r.failed(ctx, "diff", res, err, narrow); err != nil {
+	if err = r.failed(ctx, "diff", res, err, narrow); err != nil {
 		return rawEntry{}, false, err
 	}
 	return rawEntry{}, false, nil

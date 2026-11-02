@@ -83,7 +83,7 @@ import (
 // stamped cut of the same read is another page.
 
 // memoFormat names what an entry of this build holds — a memoPage as
-// appendPage writes it and its tail as appendTail does — and is the first part
+// encodePage writes it and its tail as appendTail does — and is the first part
 // of every key, so an entry of another shape is never read as one of this:
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
@@ -215,6 +215,7 @@ func memoizable(q code.GitQuery) bool {
 // the memo is asked after it.
 func (r *read) recallWhole(ctx context.Context, at cursor) (code.GitAnswer, bool, error) {
 	if !memoizable(r.q) || r.grant() != nil {
+		//nolint:nilerr // a grant this copy refuses is objects' to judge at the log's head: the memo only declines.
 		return code.GitAnswer{}, false, nil
 	}
 	whole := map[string]string{}
@@ -339,7 +340,7 @@ func (m *memoRun) put(at cursor, a code.GitAnswer, left int) int {
 	if m == nil {
 		return -1
 	}
-	body := appendPage(nil, memoPage{answer: a, commits: m.r.named, budget: left + m.r.stampCost()})
+	body := encodePage(memoPage{answer: a, commits: m.r.named, budget: left + m.r.stampCost()})
 	return m.batch.Put(m.r.memoKey(m.whole, at), body)
 }
 
@@ -409,9 +410,10 @@ func (w *pageWriter) flag(v bool) {
 	}
 }
 
-// appendPage is buf with p's encoding appended.
-func appendPage(buf []byte, p memoPage) []byte {
-	w := pageWriter(buf)
+// encodePage is p's encoding: a memo body's first part, which its tail and
+// counts are appended to (appendTail, appendCounts).
+func encodePage(p memoPage) []byte {
+	var w pageWriter
 	w.int(p.budget)
 	w.int(len(p.commits))
 	for _, c := range p.commits {
@@ -600,7 +602,7 @@ func appendCounts(buf []byte, files []fileCounts) []byte {
 	return w
 }
 
-// pageReader reads an entry's bytes as appendPage and appendTail wrote them.
+// pageReader reads an entry's bytes as encodePage and appendTail wrote them.
 // It reads a string as a slice of the one copy of the entry it holds, so a
 // page of four hundred entries costs one allocation for its strings, not two
 // thousand.
@@ -694,7 +696,7 @@ func (r *pageReader) flag() bool {
 const maxInt = int(^uint(0) >> 1)
 
 // decodePage is the page an entry holds, its tail applied: every field
-// appendPage and appendTail wrote, and nothing left over — or errMemoPage.
+// encodePage and appendTail wrote, and nothing left over — or errMemoPage.
 func decodePage(body []byte) (memoPage, error) {
 	r := &pageReader{s: string(body)}
 	var p memoPage
@@ -803,7 +805,7 @@ func decodePage(body []byte) (memoPage, error) {
 	return p, nil
 }
 
-// readLogCommit reads one commit of a history as appendPage wrote it.
+// readLogCommit reads one commit of a history as encodePage wrote it.
 func readLogCommit(r *pageReader) code.LogCommit {
 	c := code.LogCommit{OID: r.str()}
 	if n := r.count(); r.err == nil && n > 0 {

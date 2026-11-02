@@ -230,7 +230,7 @@ func historyRigOf(b *testing.B, name string, bytes int64, tree historyTree) *his
 	if r := historyRigs.m[key]; r != nil {
 		return r
 	}
-	root, err := os.MkdirTemp("", "crewlet-history-"+key+"-")
+	root, err := os.MkdirTemp("", "crewlet-history-"+key+"-") //nolint:usetesting // every benchmark's that asks, removed by TestMain (removeHistoryRigs): b.TempDir() would go with the first
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -432,16 +432,16 @@ func (s *Server) serve(ctx context.Context, q code.GitQuery) (code.GitAnswer, er
 		return code.GitAnswer{}, err
 	}
 	r := &read{s: s, q: q}
-	if err := r.judgeable(); err != nil {
+	if err = r.judgeable(); err != nil {
 		return code.GitAnswer{}, err
 	}
-	if err := r.held(); err != nil {
+	if err = r.held(); err != nil {
 		return code.GitAnswer{}, err
 	}
 	// THE PIN IS THE READ'S, released whatever it answers: every Synced a
 	// sync or a re-sync handed out goes back through r.synced.
 	defer func() { r.synced.Release() }()
-	if err := r.sync(ctx, r.fresh()); err != nil {
+	if err = r.sync(ctx, r.fresh()); err != nil {
 		return code.GitAnswer{}, err
 	}
 	// A read that leads a page's flight lets those waiting on it go once it
@@ -513,7 +513,7 @@ func (r *read) compute(ctx context.Context, at cursor) (code.GitAnswer, error) {
 		if a, ok := r.recall(whole, at); ok {
 			return a, nil
 		}
-		if a, ok, err := r.await(ctx, whole, at); err != nil || ok {
+		if a, ok, err := r.await(ctx, whole, at); err != nil || ok { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			return a, err
 		}
 	}
@@ -711,7 +711,7 @@ func (r *read) sync(ctx context.Context, fresh statelog.Freshness) error {
 	case errors.Is(err, cache.ErrInvalid):
 		// The request's own mistake — a floor on another log — which no
 		// other node would take either.
-		return fmt.Errorf("%w: fresh: %v", code.ErrInvalid, err)
+		return fmt.Errorf("%w: fresh: %w", code.ErrInvalid, err)
 	case code.AnswerDue(ctx):
 		return r.unready(code.UnreadySyncing, fmt.Sprintf("%s is syncing repository %s, which did not reach "+
 			"the read's need before its answer fell due; the sync goes on, and another git node answers "+
@@ -794,7 +794,7 @@ func (r *read) objects(ctx context.Context) (found, error) {
 		if !r.linear {
 			spent := r.resync()
 			if spent == nil {
-				if err := r.sync(ctx, statelog.Freshness{Level: statelog.ReadLinearizable}); err != nil {
+				if err = r.sync(ctx, statelog.Freshness{Level: statelog.ReadLinearizable}); err != nil {
 					return found{}, err
 				}
 				continue

@@ -157,10 +157,10 @@ func (l *landing) search() (int, string, error) {
 	}
 	// last is the oldest move known to keep the commit, as every move after
 	// it does: the landing is it or one before it.
-	k, hi, last := len(bounds)-1, n, n-1
+	k, last := len(bounds)-1, n-1
 	for {
 		lo := bounds[k]
-		// The first move of [lo, hi) that reaches the commit, given hi-1 does.
+		// The first move of [lo, last] that reaches the commit, given last does.
 		first := lo
 		for first < last {
 			mid := int(uint(first+last) >> 1)
@@ -203,8 +203,7 @@ func (l *landing) search() (int, string, error) {
 		// It did: the landing lies in the segment below, whose newest move —
 		// the one before this forced move, read whole beside it — reaches
 		// the commit, being where this move's old value came from.
-		k, hi = k-1, lo
-		last = hi - 1
+		k, last = k-1, lo-1
 	}
 }
 
@@ -346,7 +345,7 @@ func (l *landing) ancestor(tip string) (bool, error) {
 	})
 	tooLong := fmt.Errorf("%w: whether %s is in %s's history did not finish in the read's %s of git",
 		code.ErrSliceTooLarge, l.commit, tip, l.r.s.gitBudget)
-	if err := l.r.failed(l.ctx, "ancestry check", res, err, tooLong); err != nil {
+	if err = l.r.failed(l.ctx, "ancestry check", res, err, tooLong); err != nil {
 		return false, err
 	}
 	return res.Exit == 0, nil

@@ -168,6 +168,7 @@ func (r *read) find(ctx context.Context) (objs found, absent string, err error) 
 		}
 	}
 	if len(abbrevs) > 0 {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		expanded, missing, err := r.expand(ctx, abbrevs)
 		if err != nil || missing != "" {
 			return found{}, missing, err
@@ -259,7 +260,7 @@ func (r *read) expand(ctx context.Context, abbrevs []string) (map[string]string,
 	if err == nil {
 		err = lines.Close()
 	}
-	if err := r.failed(ctx, "expansion of an abbreviated id", res, err, nil); err != nil {
+	if err = r.failed(ctx, "expansion of an abbreviated id", res, err, nil); err != nil {
 		return nil, "", err
 	}
 	out := make(map[string]string, len(abbrevs))
@@ -320,7 +321,7 @@ func (r *read) check(ctx context.Context, in []string) ([]object, error) {
 	if err == nil {
 		err = recs.close()
 	}
-	if err := r.failed(ctx, "check of the objects the read names", res, err, nil); err != nil {
+	if err = r.failed(ctx, "check of the objects the read names", res, err, nil); err != nil {
 		return nil, err
 	}
 	if len(out) != len(in) {

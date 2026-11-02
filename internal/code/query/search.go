@@ -92,7 +92,7 @@ func (r *read) searchRead(ctx context.Context) (code.GitAnswer, error) {
 	if a, ok := r.recall(whole, cursor{}); ok {
 		return a, nil
 	}
-	if a, ok, err := r.await(ctx, whole, cursor{}); err != nil || ok {
+	if a, ok, err := r.await(ctx, whole, cursor{}); err != nil || ok { //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		return a, err
 	}
 	release, err := r.s.o.Share.Take(ctx, r.q.SeatWork())
@@ -157,8 +157,8 @@ func (r *read) searchRead(ctx context.Context) (code.GitAnswer, error) {
 func (r *read) searchTarget(ctx context.Context) (ref, tip string, err error) {
 	for {
 		refused := r.grant()
-		absent := false
 		if refused == nil {
+			var absent bool
 			if ref, tip, absent, err = r.searchTip(ctx); err != nil || !absent {
 				return ref, tip, err
 			}
