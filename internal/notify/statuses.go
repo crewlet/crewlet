@@ -94,6 +94,32 @@ func (s *Statuses) Release(ctx context.Context, handle, turnID string) {
 	s.Rejoin(handle, turnID).End(ctx, false)
 }
 
+// Queue raises a queued indicator for a person's message waiting behind the
+// seat's current work, on whichever backend the message came from
+// ([StatusDriver.Queue]); it reports whether any did.
+func (s *Statuses) Queue(ctx context.Context, handle, wake string, metadata map[string]string) bool {
+	if s == nil {
+		return false
+	}
+	for _, d := range s.drivers {
+		if d.Queue(ctx, handle, wake, metadata) {
+			return true
+		}
+	}
+	return false
+}
+
+// Dequeue takes the waits of these wakes away on every backend
+// ([StatusDriver.Dequeue]): a driver that queued none of them does nothing.
+func (s *Statuses) Dequeue(ctx context.Context, handle string, wakes []string) {
+	if s == nil {
+		return
+	}
+	for _, d := range s.drivers {
+		d.Dequeue(ctx, handle, wakes)
+	}
+}
+
 // ClearFor takes down every indicator either backend holds for one seat.
 //
 // Both, unconditionally: a seat can be configured on two chat surfaces at

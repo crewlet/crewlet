@@ -636,7 +636,8 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// rides the seat's priority lane, ahead of whatever background work the
 	// seat has queued (see priority.go). The mark is on the event, so a park
 	// or a requeue of this wake keeps it.
-	if out.Addressed && WrittenByPerson(reg, r.Inbound) {
+	priority := out.Addressed && WrittenByPerson(reg, r.Inbound)
+	if priority {
 		queue.Prioritize(wake)
 	}
 	// THE PARTY'S ID, never its handle: a seat's mailbox is keyed on the
@@ -644,6 +645,12 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 	// reaches here — the addressability guard above has already skipped it.
 	if err := s.queue.Publish(ctx, topics.AgentInbox(party.AgentID), wake); err != nil {
 		return fmt.Errorf("notify: wake %s: %w", party.Handle, err)
+	}
+	// AND TELL THE SEAT'S NODE a person is waiting, after the wake is
+	// durable, so the line it may draw is never for a message that is not
+	// there.
+	if priority {
+		s.announceWaiting(ctx, party.AgentID, wake.ID, meta)
 	}
 	log.InfoContext(ctx, "notification_routed", "source", r.Source, "handle", party.Handle,
 		"agent_id", party.AgentID.String())
