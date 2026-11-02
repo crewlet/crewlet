@@ -164,7 +164,7 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	bridged := play(t, req, run{calls: []llm.ToolCall{
 		call(t, "slack_post", `{"text":"starting on it"}`),
 		call(t, "jira_create", `{"summary":"after the save"}`),
-		call(t, "github_comment", `{"body":"in flight at the save"}`),
+		call(t, "slack_history", `{"channel":"C1"}`),
 	}})
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
@@ -195,7 +195,7 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	}
 	brief := first.Session.Brief
 	for _, want := range []string{"## Your previous segment was cut off", prompts.InterruptedSession,
-		"## Calls made after the session above was saved", "jira_create", "github_comment"} {
+		"## Calls made after the session above was saved", "jira_create", "slack_history"} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("the carried-on session is not told %q:\n%s", want, brief)
 		}
@@ -210,7 +210,7 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	inFlight := keptBasis
 	inFlight.Interrupted, inFlight.BridgeSeq, inFlight.BridgeOpen = true, 2, []int{1}
 	if brief := carriedOn(inFlight, 1).Session.Brief; !strings.Contains(brief, "slack_post") ||
-		!strings.Contains(brief, "github_comment") || strings.Contains(brief, "jira_create") {
+		!strings.Contains(brief, "slack_history") || strings.Contains(brief, "jira_create") {
 		t.Errorf("saved with its first call in flight, the session is told:\n%s\nwant the call in flight "+
 			"and the one after the save, never the one it holds", brief)
 	}
