@@ -399,7 +399,7 @@ func boxClone(ctx context.Context, p *gitproc.Pool, h *history, s gitproc.Share,
 		head + pkt("filter blob:none\n") + pkt("want "+h.tip+"\n") + pkt("done\n") + "0000",
 		lazy.String(),
 	} {
-		var out io.Writer = io.Discard
+		out := io.Discard
 		if slow {
 			out = &paced{ctx: ctx, at: time.Now()}
 		}
