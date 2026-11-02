@@ -433,10 +433,10 @@ func TestAResumedTurnStoppedAtItsFirstRoundEndsAsStopped(t *testing.T) {
 	parkOnRun(t, e)
 	var once sync.Once
 	for _, runner := range rig.runners {
-		runner.CollectFunc = func(context.Context) error {
+		runner.CollectFunc = func(ctx context.Context) error {
 			once.Do(func() {
 				pause := janeStops()
-				e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
+				e.applySeatPause(ctx, coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
 			})
 			return nil
 		}
