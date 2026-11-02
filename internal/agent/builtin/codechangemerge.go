@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -137,7 +138,7 @@ func (t *codeMergeChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if !method.Valid() {
 		return failed(fmt.Sprintf("%s: `method` %q is not one of %s.", tool, method,
-			strings.Join(spelled(code.MergeMethods()), ", "))), nil
+			words.Or(code.MergeMethods()))), nil
 	}
 	cv, refusal := t.deps.conversation(ctx, turn, tool, c, args, name, number)
 	if refusal != nil {
