@@ -1,6 +1,7 @@
 package configapi_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -23,7 +24,7 @@ mcp_servers:
     command: tracker-mcp
     description: Projects and items.
     tools: {levels: {delete_project: blocked, merge_projects: blocked}}
-  - {name: notes, command: notes-mcp}
+  - {name: notes, command: notes-mcp, tools: {default: allow}}
 roles:
   - {name: Dev, handle: dev, sandbox: {mcp: {servers: [notes]}}}
 `
@@ -100,15 +101,23 @@ func TestAWriteOfToolLevelsChangesWhatItNamesAsOneRevision(t *testing.T) {
 			Levels: map[string]*config.MCPToolLevel{"delete_project": nil, "list_projects": nil}}}); err != nil {
 		t.Fatalf("clear the levels: %v", err)
 	}
-	if document := s.activeDocument(t); strings.Contains(document, `"tools"`) {
-		t.Errorf("an entry with no level left still writes tools: %s", document)
+	var stored struct {
+		MCPServers []map[string]json.RawMessage `json:"mcp_servers"`
+	}
+	if err := json.Unmarshal([]byte(s.activeDocument(t)), &stored); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range stored.MCPServers {
+		if string(entry["name"]) == `"tracker"` && entry["tools"] != nil {
+			t.Errorf("an entry with no level left still writes tools: %s", entry["tools"])
+		}
 	}
 }
 
 // A WRITE OF TOOL LEVELS IS HELD TO THE WHOLE DOCUMENT'S RULES: a level that
 // holds a tool back on a server an executor box lists is refused at the box's
-// entry, a level outside allow and blocked at its own field, and a server the
-// document does not declare is no entity to write.
+// entry, a level outside allow, approve and blocked at its own field, and a
+// server the document does not declare is no entity to write.
 //
 // Mutation: drop validateBoxToolLevels, or build on a server that is absent,
 // and this is red.
@@ -125,7 +134,7 @@ func TestAWriteOfToolLevelsIsHeldToTheWholeDocument(t *testing.T) {
 			Levels: map[string]*config.MCPToolLevel{"erase_note": level(config.MCPToolBlocked)}}},
 			"roles[0].sandbox.mcp.servers[0]"},
 		{"a level outside the set", configapi.MCPToolsWrite{Server: "tracker", Change: configapi.MCPToolsChange{
-			Levels: map[string]*config.MCPToolLevel{"delete_project": level("approve")}}},
+			Levels: map[string]*config.MCPToolLevel{"delete_project": level("ask")}}},
 			"mcp_servers[0].tools.levels.delete_project"},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -68,7 +68,9 @@ func TestAServiceIdentityIsHeldToTheRulesOfEverySignIn(t *testing.T) {
 	if !errors.Is(err, ErrConflict) {
 		t.Errorf("an Authorization header beside a service identity: %v", err)
 	}
-	err = rejects(t, oauthDoc(block)+`
+	// The server runs every tool at allow, as any server a box lists must, so
+	// the service identity is the one thing the listing is refused for.
+	err = rejects(t, oauthDoc("    tools: {default: allow}\n"+block)+`
 roles:
   - name: Engineer
     handle: eng

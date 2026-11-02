@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // listenForBridge binds the listener a node's API — and with it the seat's
@@ -308,6 +309,12 @@ func wireAPI(
 			// THE FLEET'S TOKEN COUNTERS, which the `budgets` question
 			// and every seat's live meter read.
 			Budget: backends.Fleet,
+			// THE FLEET'S RUNS, whose held calls the MCP answer lists, and
+			// what those calls would send, opened under this node's
+			// keyring, as cmd/crewlet hands both.
+			Sandbox:    sandbox.NewCoordStore(backends.Fleet),
+			RunAnswers: e.AnswerSeal(),
+			HeldCalls:  sandbox.NewCallSeal(e.Cipher()),
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,

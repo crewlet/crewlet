@@ -1530,15 +1530,15 @@ const (
 	// Settings › MCP & tools' add and edit wizard (its source, name,
 	// connection, sign-in, test and review steps, the Test and Replace value
 	// dialogs), net of the Add dialog and its form helpers it replaces, took
-	// it from 5340.1 KiB to 5383.4 KiB (+43.3 KiB). Measured before the MCP
+	// it from 5341.0 KiB to 5384.2 KiB (+43.2 KiB). Measured before the MCP
 	// sign-in, from 5338.8 KiB to 5381.5 KiB, that was the settings chunk
 	// +40.2 KiB and its sheet +2.2 KiB, the kit's chunks +5.9 KiB net (the
 	// setup wizard, key and value rows, source editor and file drop the
 	// wizard is the first settings screen to draw), and 5.6 KiB less of
 	// shared code Rollup moved between chunks and of the Add dialog's rules
 	// out of the one sheet. The page is all in the settings chunk, so the
-	// initial load did not grow. 5384 KiB.
-	treeBudget = 5<<20 + 264<<10
+	// initial load did not grow. 5385 KiB.
+	treeBudget = 5<<20 + 265<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

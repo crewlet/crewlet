@@ -104,11 +104,13 @@ mcp_servers:
   - name: docs
     command: docs-mcp
     args: ["--read-only"]
+    tools: {default: allow}
     env:
       DOCS_TOKEN: "${DOCS_TOKEN}"
   - name: intranet
     transport: http
     url: http://10.0.0.5:8080/mcp
+    tools: {default: allow}
     headers:
       X-Intranet-Key: "${INTRANET_KEY}"
   - name: github
@@ -239,7 +241,7 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 	}
 	leaks := map[string][]string{
 		"the list": {`"command":`, `"args":`, `"url":`, `"error":`, `"error_seat":`, `"wait":`,
-			`"wait_seat":`, `"unlisted_annotations":`, `"alarms":`, "docs-mcp", "--read-only", "github-mcp-server",
+			`"wait_seat":`, `"unlisted_annotations":`, `"alarms":`, `"approvals":`, "docs-mcp", "--read-only", "github-mcp-server",
 			"10.0.0.5", "launch-sentinel", "Bearer rejected", "GITHUB_TOKEN", "alarm-sentinel"},
 		"github's detail": {`"command":`, `"args":`, `"url":`, `"error":`, `"wait":`, `"said":`, `"reason":`,
 			`"instructions":`, `"dependants":`, `"keys":`, `"last_check":`, `"values":`, `"bound_by":`,
@@ -345,7 +347,7 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 	}{
 		{"mcp_servers_status", status, queries.MemberMCPStatus(status), statusKeys,
 			[]string{"servers[].command", "servers[].nodes[].error", "servers[].nodes[].wait", "alarms",
-				"alarms[].entries[].detail"}},
+				"alarms[].entries[].detail", "approvals"}},
 		{"a server's detail", detail, queries.MemberMCPServer(detail), detailKeys,
 			[]string{"dependants", "instructions", "resolved.box_seats", "resolved.binding.keys",
 				"instances[].failure.said", "instance_nodes[].reason", "usage.tools[].seats", "calls",

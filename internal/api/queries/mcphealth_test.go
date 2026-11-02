@@ -236,11 +236,13 @@ mcp_servers:
   - name: docs
     command: docs-mcp
     startup_timeout_seconds: 30
+    tools: {default: allow}
     env:
       DOCS_TOKEN: "${DOCS_TOKEN}"
   - name: intranet
     transport: http
     url: http://10.0.0.5:8080/mcp
+    tools: {default: allow}
   - name: github
     shared: false
     command: github-mcp-server
@@ -346,7 +348,7 @@ providers:
     main: {model: sonnet, run_in: direct}
 mcp_servers:
   - {name: search, command: search-mcp}
-  - {name: docs, command: docs-mcp, access: {units: [eng], seats: [ceo], except: [intern]}}
+  - {name: docs, command: docs-mcp, access: {units: [eng], seats: [ceo], except: [intern]}, tools: {default: allow}}
   - name: chat
     command: chat-mcp
     shared: false

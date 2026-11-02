@@ -155,6 +155,10 @@ func (f *fakeRuntime) MCPChecker() mcpapi.Checker {
 // MCPChecks reads no server's latest test.
 func (f *fakeRuntime) MCPChecks() queries.MCPCheckReader { return noChecks{} }
 
+// MCPApprovals holds no run: what an approval does is held by mcpapi's own
+// suite.
+func (f *fakeRuntime) MCPApprovals() mcpapi.Approvals { return nil }
+
 // MCPValues is a secret store over a memory fleet of its own: what a stored
 // value does is held by mcpapi's own suite.
 func (f *fakeRuntime) MCPValues() mcpapi.ValueStore {

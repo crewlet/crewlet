@@ -78,10 +78,18 @@ func TestSameProcessAndSameCatalogue(t *testing.T) {
 
 	same := base
 	same.Headers = map[string]string{"Authorization": "Bearer a"}
-	same.Levels = Levels{Default: LevelAllow, Tools: map[string]Level{"noisy": LevelBlocked}}
+	same.Levels = Levels{Tools: map[string]Level{"noisy": LevelBlocked}}
 	same.AnnotationOverrides = map[string]Annotations{"gh_create_pr": {ReadOnly: No}}
 	if !base.SameProcess(same) || !base.SameCatalogue(same) {
 		t.Fatal("an identically-valued copy compared as different")
+	}
+	// AN UNSET DEFAULT IS NOT ALLOW: it leaves each tool at the level its
+	// hints start it at, most at approve, so writing allow changes the
+	// catalogue.
+	allowing := same
+	allowing.Levels = Levels{Default: LevelAllow, Tools: map[string]Level{"noisy": LevelBlocked}}
+	if base.SameCatalogue(allowing) {
+		t.Fatal("a default of allow compared as the same catalogue as no default")
 	}
 
 	// The HTTP incident: a diff that compares only the stdio fields matches

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -49,6 +50,9 @@ type entryInputs struct {
 	stored map[string]time.Time
 	// grants are the MCP servers' OAuth grants, by server.
 	grants map[string]coord.MCPGrant
+	// runs is the fleet's active runs, read for the calls they hold for a
+	// person's approval ([heldConditions]).
+	runs []sandbox.PendingRun
 }
 
 // entriesReading fills the per-entry half of an alarm reading: each model
@@ -83,8 +87,30 @@ func (e *Engine) entriesReading(ctx context.Context, now time.Time, out *statelo
 	}
 	if len(c.Config.MCPServers) > 0 {
 		out.MCPServers = mcpConditions(c, statuses, e.grantsReading(ctx, c))
+		heldConditions(out.MCPServers, e.heldRuns(ctx))
 		out.MCPServersAt = now
 	}
+}
+
+// heldRuns is the fleet's active runs, for the calls they hold for a person's
+// approval: the last good read where this one fails, as the heartbeats are,
+// so a blip neither clears a standing `mcp_approval_waiting` nor raises it
+// again on the next tick.
+func (e *Engine) heldRuns(ctx context.Context) []sandbox.PendingRun {
+	in := &e.entryInputs
+	if e.backends == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	runs, err := sandbox.NewCoordStore(e.backends.Fleet).ListActive(ctx)
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if err != nil {
+		log.WarnContext(ctx, "entry_alarms_runs_unread", "error", err,
+			"detail", "the calls waiting for approval are judged on the runs this node last read")
+		return in.runs
+	}
+	in.runs = runs
+	return runs
 }
 
 // modelsReading fills the model half of an alarm reading from the heartbeats

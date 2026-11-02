@@ -273,6 +273,8 @@ interface McpShadowedTool {
  * `mcp_oauth_needs_sign_in`: nobody is signed in to a server signed in to
  * with OAuth, or its vendor refused to renew the sign-in (in its words).
  * `mcp_oauth_expiring`: a sign-in runs out within seven days.
+ * `mcp_approval_waiting`: an agent's run has waited past the grace for a
+ * person to approve a call to one of the server's tools.
  */
 export type McpAlarmKind =
   | "mcp_server_failing"
@@ -280,7 +282,8 @@ export type McpAlarmKind =
   | "mcp_server_waiting_long"
   | "mcp_tools_refused"
   | "mcp_oauth_needs_sign_in"
-  | "mcp_oauth_expiring";
+  | "mcp_oauth_expiring"
+  | "mcp_approval_waiting";
 
 /**
  * The one gesture that fixes a server's alarm. `restart`: restart its
@@ -288,9 +291,10 @@ export type McpAlarmKind =
  * where `seat` names one. `integration`: the integration that mints the named
  * agent's credential, which the server's binding names. `edit`: the server's
  * configuration, its `tool_prefix`. `sign_in`: sign the company in to the
- * server again (`POST /mcp-servers/{name}/oauth`).
+ * server again (`POST /mcp-servers/{name}/oauth`). `approve`: the calls the
+ * named agent's run holds for approval on the server, each in `approvals`.
  */
-export type McpFixKind = "restart" | "integration" | "edit" | "sign_in";
+export type McpFixKind = "restart" | "integration" | "edit" | "sign_in" | "approve";
 
 /** The gesture that fixes one server's alarm, and what it acts on. */
 interface McpFix {
@@ -354,6 +358,42 @@ export interface McpServersStatusAnswer {
   /** The engine's client metadata document, the client id a `cimd` sign-in
    *  is made as; "" where the engine has no public address. */
   client_metadata_url: string;
+  /**
+   * The calls agents' runs hold for a person's approval, the longest waiting
+   * first: each while its run waits, and once answered until the run carries
+   * on. The administrator's reading alone.
+   */
+  approvals: McpApproval[];
+}
+
+/** Where a held call's answer stands. */
+type McpApprovalStatus = "waiting" | "answered";
+
+/** One call to a tool at Needs approval, held for a person's answer (`POST /mcp-approvals/{id}`). */
+interface McpApproval {
+  /** What the approval is answered by. */
+  id: string;
+  /** When the call was held. */
+  at: string;
+  server: string;
+  /** The tool as the run called it, its prefix applied. */
+  tool: string;
+  /** The server's own name for it, which Always allow sets the level of. */
+  raw: string;
+  digest: string;
+  /** The agent whose run made the call, by handle. */
+  seat: string;
+  turn_id: string;
+  launch_id: string;
+  /** The key of the work item the run was on, or null. */
+  item: string | null;
+  /** What the call would send; null where its seal does not open on this node. */
+  args: Record<string, unknown> | null;
+  status: McpApprovalStatus;
+  /** `once`, `always` or `deny` once answered; "" while waiting or where the answer's seal does not open. */
+  answer: string;
+  answered_by: string;
+  answered_at: string | null;
 }
 
 /**
@@ -442,8 +482,11 @@ export interface McpToolView {
   custom: boolean;
 }
 
-/** The level a tool of an MCP server runs at: `allow` offers it, `blocked` never does. */
-type McpToolLevel = "allow" | "blocked";
+/**
+ * The level a tool of an MCP server runs at: `allow` offers it, `approve`
+ * offers it and holds each call for a person's answer, `blocked` never offers it.
+ */
+type McpToolLevel = "allow" | "approve" | "blocked";
 
 /** What the server said of itself in its handshake. */
 interface McpServerInfo {
@@ -664,8 +707,12 @@ export interface McpServerAnswer {
   tools: McpToolView[];
   /** How many tools the server lists; never fewer than `tools` holds. */
   tool_count: number;
-  /** The level of every tool `tools.levels` does not name. */
-  baseline: McpToolLevel;
+  /**
+   * The level of every tool `tools.levels` does not name, or null where the
+   * entry sets no default, which leaves each such tool at the level its hints
+   * start it at (allow for a read-only tool, approve for every other).
+   */
+  baseline: McpToolLevel | null;
   /** Tools `tools.levels` names that no live listing names; empty where the listings cannot say. */
   unlisted_levels: string[];
   server_info: McpServerInfo | null;
@@ -966,9 +1013,6 @@ export interface McpCatalogueAnswer {
   left_out: number;
 }
 
-/** The level a tool starts at when its server is added, decided by the engine from its hints. */
-type McpStartLevel = "allow" | "approve";
-
 /** One tool a test listed, as the engine would offer it. */
 interface McpCheckedTool {
   /** The name it would be offered under, prefix included. */
@@ -981,7 +1025,8 @@ interface McpCheckedTool {
   risk: McpRisk;
   risk_declared: boolean;
   external: boolean;
-  starting_level: McpStartLevel;
+  /** The level it starts at when its server is added, decided by the engine from its hints. */
+  starting_level: McpToolLevel;
   /** Why it would not be offered under its name, or "". */
   refused: McpToolRefusal | "";
 }

@@ -35,11 +35,14 @@ const (
 	// offers that).
 	MCPServerSignIn  MCPServerAction = "sign_in"
 	MCPServerSignOut MCPServerAction = "sign_out"
+	// MCPServerApprove answers a call an agent's run made to one of the
+	// server's tools at Needs approval ([MCPServerActed.Answer]).
+	MCPServerApprove MCPServerAction = "approve"
 )
 
 // MCPServerActions is every action, for a reader's copy.
 var MCPServerActions = []MCPServerAction{MCPServerRestart, MCPServerCheck, MCPServerProbe, MCPServerStoreValue,
-	MCPServerSetTools, MCPServerSignIn, MCPServerSignOut}
+	MCPServerSetTools, MCPServerSignIn, MCPServerSignOut, MCPServerApprove}
 
 // Valid reports whether a is an action this build records.
 func (a MCPServerAction) Valid() bool { return slices.Contains(MCPServerActions, a) }
@@ -81,6 +84,13 @@ type MCPServerActed struct {
 	// DryRun is a change to the server's tool levels checked and not
 	// written; the revision a written one stored names its levels.
 	DryRun bool `json:"dry_run,omitempty"`
+	// Approval names the held call an approval answered, by its id, Tool
+	// the tool it called, and Answer what the person answered: `once`,
+	// `always` or `deny`. NEVER ITS ARGUMENTS, which stay sealed on the
+	// run's row.
+	Approval string `json:"approval,omitempty"`
+	Tool     string `json:"tool,omitempty"`
+	Answer   string `json:"answer,omitempty"`
 	// Outcome is `applied` for a gesture that did what it was asked,
 	// `refused` for one the route turned down for a stated reason (its
 	// code in Refusal), and `failed` for one that broke without one.
@@ -122,6 +132,17 @@ func (e MCPServerActed) SummaryFor(actor string) string {
 		text = "started a sign-in to MCP server " + e.Server
 	case MCPServerSignOut:
 		text = "signed out of MCP server " + e.Server
+	case MCPServerApprove:
+		switch e.Answer {
+		case "once":
+			text = "allowed a call to " + e.Tool + " of MCP server " + e.Server + " once"
+		case "always":
+			text = "allowed a call to " + e.Tool + " of MCP server " + e.Server + ", and every call after it"
+		case "deny":
+			text = "denied a call to " + e.Tool + " of MCP server " + e.Server
+		default:
+			text = "answered a held call of MCP server " + e.Server
+		}
 	default:
 		text = string(e.Action) + " MCP server " + e.Server
 	}

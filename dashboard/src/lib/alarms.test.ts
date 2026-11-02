@@ -50,6 +50,7 @@ describe("an alarm kind is read as words", () => {
     ["mcp_server_partial", "MCP server partial"],
     ["mcp_server_waiting_long", "MCP server waiting long"],
     ["mcp_tools_refused", "MCP tools refused"],
+    ["mcp_approval_waiting", "MCP approval waiting"],
   ])("%s is %s", (kind, title) => {
     expect(alarmKindTitle(kind)).toBe(title);
   });

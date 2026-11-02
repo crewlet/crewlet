@@ -502,7 +502,7 @@ reads (`GET /mcp-servers/{name}`, everybody's in
   definition. The server's identity and instructions from its handshake ride
   beside them. Each tool's input and output schemas are stored once under that
   digest, however many nodes and seats list the tool. A tool the server's entry
-  [blocks](#blocking-a-servers-tools) is listed too, marked blocked, so its page
+  [blocks](#setting-each-tools-level) is listed too, marked blocked, so its page
   shows it, and it stays out of the catalogue: no agent is offered it.
 - **The digest is the server's definition.** It covers the name the server uses,
   the title, the description, both schemas and the hints the server declared,
@@ -766,10 +766,11 @@ server's page answers who it reaches and why on its detail
 ([`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname),
 `reaches`, for an administrator).
 
-### Blocking a server's tools
+### Setting each tool's level
 
 Each tool a server lists runs at a level, set by `tools` on its `mcp_servers`
-entry:
+entry: `allow` runs it, `approve` asks a person before each call, `blocked`
+never offers it.
 
 ```yaml
 mcp_servers:
@@ -781,43 +782,64 @@ mcp_servers:
     tools:
       levels:
         delete_project: blocked      # the server's own name, before tool_prefix
-        merge_projects: blocked
+        merge_projects: approve
+        list_projects: allow
   - name: billing
     command: billing-mcp
     tools:
       default: blocked               # every tool levels does not name
       levels:
         list_invoices: allow
-        get_invoice: allow
+        refund: approve
 ```
 
-- **`allow` offers the tool; `blocked` never does.** A blocked tool is never
-  filed: it is in no seat's surface, so no agent is offered it, lists it or can
-  call it, whether the call comes from a phase on the engine host (through
+- **A tool nothing sets starts at the level its hints give it.** With no
+  level of its own and no `default`, a tool its server marks read-only
+  (`readOnlyHint: true`) runs at `allow`, and every other tool asks first, at
+  `approve`, one whose hints say nothing included: a tool that declares
+  nothing is read as destructive. The hints read are the ones your
+  `tool_annotations` leave, so an override that marks a tool read-only lets it
+  run. The server's detail shows each tool's level and the `risk` it is read
+  at, and the test of a draft answers each tool's `starting_level`, so a new
+  server's levels can be decided before it is added.
+- **`allow` offers the tool and runs it.**
+- **`approve` offers the tool and holds each call for a person.** The tool is
+  filed, listed and offered like any other, and a call to it is never made
+  until somebody answers it: see [Asking a person before a tool
+  runs](#asking-a-person-before-a-tool-runs).
+- **`blocked` never offers the tool.** A blocked tool is never filed: it is in
+  no seat's surface, so no agent is offered it, lists it or can call it,
+  whether the call comes from a phase on the engine host (through
   `crewlet mcp-relay` and the tool loop) or from an executor's box (through the
   bridge), on a shared server and on every seat's child of a per-agent one.
   The discovery tools do not list it either.
 - **`levels` names a tool by the server's own name for it**, the one its
   listing gives before `tool_prefix`: `delete_project`, not
-  `tr_delete_project`. A name the server does not list blocks nothing; the
+  `tr_delete_project`. A name the server does not list sets nothing; the
   server's detail names every such level (`unlisted_levels`), and so does the
   answer to a write of the levels (`unlisted`).
 - **`default` is the level of every tool `levels` does not name**, including a
-  tool the server adds later. Unset, it is `allow`, so a server with no `tools`
-  offers every tool it lists.
-- **A blocked tool is still shown to an administrator.** The server's detail
+  tool the server adds later. Unset, each such tool starts at the level its
+  hints give it, as above; `default: allow` runs every tool `levels` does not
+  hold back.
+- **Every tool is still shown to an administrator.** The server's detail
   ([`GET /mcp-servers/{name}`](../reference/api-endpoints.md#get-mcp-serversname))
   lists every tool with the `level` it runs at and whether `tools.levels` names
-  it (`custom`), and `baseline` is the default, so a tool blocked from the page
-  can be let through again from it. The `tools` push every reader shares lists
-  only the tools an agent can be offered.
+  it (`custom`), and `baseline` is the default (null where the entry sets
+  none), so a tool blocked from the page can be let through again from it. The
+  `tools` push every reader shares lists only the tools an agent can be
+  offered.
 - **An executor box reaches a server whole.** A server a role's
   `sandbox.mcp.servers` lists is dialled by the harness inside the box itself,
-  past the engine, so a level could not hold there. So a box listing is
-  refused for a server with any tool at a level other than `allow`, and a level
-  written on a server a box lists is refused at that box's entry; the seat still
-  reaches the server's allowed tools over the bridge. A stored revision that
-  breaks the rule runs, its boxes given no such server, and warns.
+  past the engine, so a level could not hold there, and a tool at `approve`
+  would run without anybody asked. So a box listing is refused for a server
+  whose every tool is not certain to run at `allow`: one whose entry says
+  `default: allow` and holds no tool back. A server whose entry sets no `tools`
+  is not one, since each tool it does not mark read-only starts at `approve`:
+  every server a box lists says `default: allow`. A level written on a server
+  a box lists is refused at that box's entry. The seat still reaches the server's
+  tools over the bridge, each at its level. A stored revision that breaks the
+  rule runs, its boxes given no such server, and warns.
 - **A change of level restarts the server's instances**, as a change to its
   `tool_prefix` or `tool_annotations` does: a server's tools are filed when the
   engine starts it.
@@ -826,6 +848,56 @@ The server's Tools tab writes the levels with
 [`PUT /mcp-servers/{name}/tools`](../reference/api-endpoints.md#put-mcp-serversnametools),
 a change of the named tools only, at an administrator's recent step-up, as one
 revision of the company document.
+
+### Asking a person before a tool runs
+
+A call an agent makes to a tool at `approve` is never made until a person
+answers it ([ADR-0077](../../adr/0077-a-tool-call-that-needs-approval-parks-its-run-in-the-shape-a-runs-ask-does.md)).
+
+- **From an executor's run, the call parks the run.** The bridge records the
+  call on the run's own record as the question it waits on, in the shape a
+  run's own question has ([Mid-run clarification](../concepts/code-sandbox.md#mid-run-clarification-ask_and_wait)):
+  who called which tool on which server, the three answers, and the work item
+  the run is on. The harness is told the call was not made and to commit,
+  push and end its turn, and the run parks with its seat free for other work.
+  The question is put to the seat's lead, and shows in their Inbox.
+- **From any other phase, the call is refused.** The reviewer, delegated
+  workers, the onboarding pass and the side passes run inside one turn on the
+  engine host and have no run to park, so the call is refused as `forbidden`
+  and the model is told that the seat's own run, its executor, may ask.
+- **What the call would send stays sealed.** The arguments ride the run's
+  record encrypted under the fleet keyring, never in the question, the run's
+  call log or the turn's ledger, and are shown only to who may approve the
+  call: an administrator (the MCP answer's `approvals`) and the seat's lead
+  (the run on the executors board).
+- **An administrator or the seat's lead answers it**, with
+  [`POST /mcp-approvals/{id}`](../reference/api-endpoints.md#post-mcp-approvalsid),
+  a person and never Ask Crewlet:
+  - **Allow once** makes the call, and the run carries on with what it
+    returned.
+  - **Always allow** also sets the tool to `allow` on the server's entry, by
+    the server's own name for it, as a configuration write at a recent
+    step-up, before the call is made.
+  - **Deny** makes no call; the run carries on told the call was refused.
+
+  A chat reply in the conversation the run was started from never answers a
+  held call, and `answer_executor` refuses one.
+- **The call is made at most once.** The node holding the seat records the
+  first answer it takes, refuses a second (`409 stale_version` at the route),
+  marks the call on the run's record before it makes it, and records what it
+  returned. A later attempt at the same answer, after a node restart, hands
+  the run that result, or says the call may or may not have taken effect; it
+  never makes it again. A tool blocked or changed since the call was held is
+  not called, and the run is told why.
+- **The run carries on where it stopped**, in its own session in the box it
+  left where the box was kept, told the answer and the call's result (the
+  first 16 KiB of it); otherwise a fresh run starts and is told the call, the
+  answer and the result.
+- **A call that waits raises an alarm.** One that has waited ten minutes, a
+  third of the default pause TTL a parked run's box is kept for, raises
+  `mcp_approval_waiting` on its server ([A server's alarms](#a-servers-alarms)),
+  and every answer is audited as an `mcp_server_acted` with the tool and the
+  answer, never the arguments.
 
 ### Turning a server off
 
@@ -1441,7 +1513,8 @@ recorded in the runtime audit as `mcp_server_acted`, refused ones included.
 ### A server's alarms
 
 A server that stays down, an agent whose instance waits too long for its
-credential, and a tool no agent can be handed each raise an
+credential, a tool no agent can be handed, and a call waiting too long for a
+person's approval each raise an
 [alarm](../reference/alarms.md), one per kind listing every server it stands
 on. Every data node judges them from every live node's heartbeat, so they read
 the same whichever node you ask, and a server turned off raises none.
@@ -1452,6 +1525,7 @@ the same whichever node you ask, and a server turned off raises none.
 | `mcp_server_partial` | Some instances serve, and one that does not has been down that long: one node, one agent's credentials or one child that keeps dying, rather than the server |
 | `mcp_server_waiting_long` | An agent's instance has been held back, unstarted, for longer than an integration waits between two passes plus a heartbeat (5m 15s), for a credential that integration mints |
 | `mcp_tools_refused` | A tool the server lists cannot be offered under its name ([A tool's name](#a-tools-name)): raised as soon as a node lists it, since no wait changes a name |
+| `mcp_approval_waiting` | An agent's run has waited ten minutes for a person to approve a call to one of the server's tools ([Asking a person before a tool runs](#asking-a-person-before-a-tool-runs)), a third of the default pause TTL, so an answer still carries the run on in the box it left; read off the runs' own records, its entry naming the seat whose run waits |
 
 The outage is measured from the instance that went down first, kept across
 every retry of it, so a server whose last serving instance goes down moves from
@@ -1466,7 +1540,8 @@ named as `entry`), and the health count. [`GET /mcp-servers`](../reference/api-e
 carries the standing ones in `alarms`, each server with the one gesture that
 fixes it: a restart (of the whole server where nothing serves, of the one
 agent's instance where the rest serve), the integration minting the agent's
-credential, or the server's `tool_prefix`. An administrator's Inbox lists each
+credential, the server's `tool_prefix`, or the answer to the calls waiting
+(`approve`, each call in `approvals`). An administrator's Inbox lists each
 one under **Needs you**, linked to the server's page.
 
 ### Testing a server
@@ -2145,7 +2220,7 @@ mcp_servers:
       tavily_research: { read_only: true, open_world: true }
 ```
 
-Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); overrides win over whatever the server advertised. A key naming no tool the server lists overrides nothing: the server's row on **Settings › MCP & tools** names every key no started instance lists, on the server's Tools tab (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer, which a key can do rightly, since a per-role child lists only the tools its seat's credentials reach. Because every tool server is now an `mcp_servers` entry, including `atlassian`, `slack`, and `github`, `tool_annotations` is declared there for all of them. This and a server's `tools` levels ([Blocking a server's tools](#blocking-a-servers-tools)) are the *only* places tool names appear in config for behaviour purposes, the engine itself never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md) for the full mechanism.
+Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); overrides win over whatever the server advertised. A key naming no tool the server lists overrides nothing: the server's row on **Settings › MCP & tools** names every key no started instance lists, on the server's Tools tab (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer, which a key can do rightly, since a per-role child lists only the tools its seat's credentials reach. Because every tool server is now an `mcp_servers` entry, including `atlassian`, `slack`, and `github`, `tool_annotations` is declared there for all of them. This and a server's `tools` levels ([Setting each tool's level](#setting-each-tools-level)) are the *only* places tool names appear in config for behaviour purposes, the engine itself never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md) for the full mechanism.
 
 ---
 

@@ -289,12 +289,12 @@ func TestOnlyAReadOnlyToolStartsAllowed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		hints Annotations
-		want  StartLevel
+		want  Level
 	}{
-		{Annotations{ReadOnly: Yes}, StartAllow},
-		{Annotations{ReadOnly: No, Destructive: No}, StartApprove},
-		{Annotations{Destructive: Yes}, StartApprove},
-		{Annotations{}, StartApprove},
+		{Annotations{ReadOnly: Yes}, LevelAllow},
+		{Annotations{ReadOnly: No, Destructive: No}, LevelApprove},
+		{Annotations{Destructive: Yes}, LevelApprove},
+		{Annotations{}, LevelApprove},
 	} {
 		if got := StartingLevel(RiskOf(tc.hints)); got != tc.want {
 			t.Errorf("StartingLevel(RiskOf(%+v)) = %q, want %q", tc.hints, got, tc.want)

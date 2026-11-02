@@ -23,9 +23,9 @@ providers:
     zulu:
       model: claude-sonnet-5
 mcp_servers:
-  - {name: search, command: search-server, access: {seats: [ceo]}}
-  - {name: tracker, command: tracker-server, shared: false, access: {units: [eng]}}
-  - {name: notes, command: notes-server}
+  - {name: search, command: search-server, access: {seats: [ceo]}, tools: {default: allow}}
+  - {name: tracker, command: tracker-server, shared: false, access: {units: [eng]}, tools: {default: allow}}
+  - {name: notes, command: notes-server, tools: {default: allow}}
 roles:
   - {name: CEO, handle: ceo, llm: zulu}
 units:

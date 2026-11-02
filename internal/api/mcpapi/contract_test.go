@@ -175,7 +175,9 @@ func TestTheTestReadsWhatTheCheckSends(t *testing.T) {
 		tools = append(tools, objects(t, c["tools"])...)
 	}
 	holdDeclared(t, "McpCheckedTool", tools, false)
-	holdUnion(t, "McpStartLevel", mcp.StartLevels)
+	// A TOOL'S STARTING LEVEL is a level like any other ([mcp.Level]), read
+	// in the one union the server's page reads its tools' levels in.
+	holdUnion(t, "McpToolLevel", mcp.AllLevels)
 
 	code, probe := send(t, svc, fresh, "/mcp-probe", `{"url":"https://mcp.example.com/mcp"}`)
 	if code != http.StatusOK {

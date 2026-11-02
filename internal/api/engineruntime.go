@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -171,6 +172,18 @@ func (r engineRuntime) MCPChecker() mcpapi.Checker { return mcpChecker{e: r.engi
 
 // MCPChecks is the engine's read of each MCP server's latest test.
 func (r engineRuntime) MCPChecks() queries.MCPCheckReader { return r.engine }
+
+// MCPApprovals is the answer desk over the fleet's runs and this node's
+// queue, the one `answer_executor` answers a run through; untyped nil without
+// a fleet store or a queue, which answers an approval unavailable.
+func (r engineRuntime) MCPApprovals() mcpapi.Approvals {
+	backends := r.engine.Backends()
+	if backends == nil || backends.Fleet == nil || backends.Queue == nil {
+		return nil
+	}
+	return sandbox.AnswerDesk{Pending: sandbox.NewCoordStore(backends.Fleet), Queue: backends.Queue,
+		Seal: r.engine.AnswerSeal()}
+}
 
 // MCPValues is the fleet's secret store under the engine's keyring; untyped
 // nil without a fleet store, which [mcpapi.New] refuses.
