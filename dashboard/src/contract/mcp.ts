@@ -17,8 +17,9 @@
  * `TestTheToolsScreenReadsWhatTheServerStatusSends` (the list, the state
  * union included) and `TestTheServerPageReadsWhatTheDetailSends` (a server
  * whole) in `internal/api/queries`, `TestTheRemoveDialogReadsWhatTheRemovalSends`
- * in `internal/api/configapi` and `TestTheRestartReadsWhatTheRouteSends` in
- * `internal/api/mcpapi`.
+ * in `internal/api/configapi`, and in `internal/api/mcpapi`
+ * `TestTheRestartReadsWhatTheRouteSends`, `TestTheWizardReadsWhatTheCatalogueSends`,
+ * `TestTheTestReadsWhatTheCheckSends` and `TestTheReplaceValueReadsWhatTheRouteSends`.
  */
 
 import type { Coverage } from "./coverage.ts";
@@ -638,7 +639,7 @@ type McpValueAs = "header" | "env";
  * whether the store holds it. Never the value (values stored from the page are
  * write-only).
  */
-interface McpValueState {
+export interface McpValueState {
   key: string;
   as: McpValueAs;
   /** The one variable it reads, "" for a literal, several, or a per-agent binding. */
@@ -653,10 +654,11 @@ interface McpValueState {
 }
 
 /** A stage a test of a server walks, in order (`mcp.TestStages`). */
-type McpTestStage = "address" | "resolve" | "connect" | "tls" | "launch" | "discover" | "list";
+export type McpTestStage =
+  "address" | "resolve" | "connect" | "tls" | "launch" | "discover" | "list";
 
 /** How one stage of a test went. */
-type McpStepState = "passed" | "failed" | "skipped" | "not_reached";
+export type McpStepState = "passed" | "failed" | "skipped" | "not_reached";
 
 /** A server's latest test, as its detail answers it: never its tools. */
 interface McpCheckView {
@@ -670,7 +672,7 @@ interface McpCheckView {
 }
 
 /** What one node's test found. */
-interface McpCheckNodeView {
+export interface McpCheckNodeView {
   /** "" for a seat's test no node holding the seat answered. */
   node: string;
   answered: boolean;
@@ -771,4 +773,220 @@ export interface McpRestartAnswer {
   at: string;
   /** The node that recorded the request. */
   node: string;
+}
+
+/**
+ * How a server is signed in to, as the add flow offers it. `integration`: the
+ * company's integration for the vendor hands each agent its own credential.
+ * `oauth`: the company signs in once at the vendor. `headers`: a static
+ * credential in a request header. `none`: no sign-in.
+ */
+export type McpAuthMethod = "integration" | "oauth" | "headers" | "none";
+
+/**
+ * How the engine registers as an OAuth client at a vendor. `cimd`: it
+ * publishes its own client metadata, which the vendor reads. `dcr`: it
+ * registers a client on first use. `own`: an administrator registered one.
+ */
+type McpOAuthClient = "cimd" | "dcr" | "own";
+
+/** One header or variable a catalogue entry reads, and how to fill it. */
+interface McpCatalogueInput {
+  name: string;
+  description: string;
+  /** Whether the server works without it. */
+  required: boolean;
+  /** Whether the value is a credential, entered write-only. */
+  secret: boolean;
+  /** A fixed value the entry sets (never a secret), or "" for one the operator gives. */
+  value: string;
+  /** How a value is spelled ("Bearer <API key>"), or "". */
+  format: string;
+  /** Whether the entry's integration hands each agent its own value under it. */
+  from_integration: boolean;
+}
+
+/** A tool's hints as an entry corrects them; an absent hint is left as the server says it. */
+interface McpCatalogueHints {
+  read_only?: boolean;
+  destructive?: boolean;
+  idempotent?: boolean;
+  open_world?: boolean;
+}
+
+/**
+ * One server the catalogue offers: a curated entry, or a community listing
+ * from the company's registry, which nobody here reviewed (`community`).
+ */
+export interface McpCatalogueEntry {
+  /** The entry's key: the curated table's, or the registry's listing name. */
+  id: string;
+  /** The server name the add flow suggests. */
+  name: string;
+  title: string;
+  /** The vetted vendor mark to draw, or "". Never anything a listing supplied. */
+  vendor: string;
+  description: string;
+  transport: "http" | "stdio";
+  /** A remote server's address, "" for a local one. */
+  url: string;
+  /** A local server's launch, passed as written, never through a shell. */
+  command: string;
+  args: string[];
+  /** What a remote server reads. */
+  headers: McpCatalogueInput[];
+  /** What a local server reads. */
+  env: McpCatalogueInput[];
+  tool_prefix: string;
+  /** Corrections to the hints of tools the server leaves undeclared, by the tool's own name. */
+  tool_annotations: Record<string, McpCatalogueHints>;
+  /** The sign-ins the vendor offers, the add flow's first first; empty where a listing declares none. */
+  auth: McpAuthMethod[];
+  oauth_client: McpOAuthClient | "";
+  /** The company integration that hands each agent its own credential, or "". */
+  integration: string;
+  /** What an administrator must do at the vendor before the server works, or "". */
+  prerequisite: string;
+  /** The vendor's page for the server, always https, or "". */
+  docs: string;
+  /** The day a curated entry's facts were last read (YYYY-MM-DD), "" for a listing. */
+  read_at: string;
+  package: string;
+  release: string;
+  community: boolean;
+  /** The namespace the registry verified the listing's publisher for, "" for a curated entry. */
+  publisher: string;
+  version: string;
+  /** When the registry last saw the listing change, or null. */
+  updated_at: string | null;
+}
+
+/** `GET /mcp-catalogue`, the administrator's reading: what a server is added from. */
+export interface McpCatalogueAnswer {
+  reading: "admin";
+  /** Every curated server, in the catalogue's order, whatever `q` says. */
+  curated: McpCatalogueEntry[];
+  /** What the registry answered for `q`; empty without one. */
+  community: McpCatalogueEntry[];
+  /** The registry the company names (`mcp_registry.url`), "" for none. */
+  registry: string;
+  /** Why a search found nothing to offer, in the engine's words; "" otherwise. */
+  reason: string;
+  /** How many listings the registry answered that this build could not offer. */
+  left_out: number;
+}
+
+/** The level a tool starts at when its server is added, decided by the engine from its hints. */
+type McpStartLevel = "allow" | "approve";
+
+/** One tool a test listed, as the engine would offer it. */
+interface McpCheckedTool {
+  /** The name it would be offered under, prefix included. */
+  name: string;
+  /** The server's own name for it. */
+  raw: string;
+  title: string;
+  description: string;
+  annotations: ToolAnnotations;
+  risk: McpRisk;
+  risk_declared: boolean;
+  external: boolean;
+  starting_level: McpStartLevel;
+  /** Why it would not be offered under its name, or "". */
+  refused: McpToolRefusal | "";
+}
+
+/**
+ * A test of a server, saved (`POST /mcp-servers/{name}/check`) or a draft
+ * (`POST /mcp-checks`): what each node found, and from the first that found
+ * it serving, who it said it is and the tools it would offer.
+ */
+export interface McpCheckAnswer {
+  server: string;
+  /** The seat a per-agent server was tested for, "" for a shared one. */
+  seat: string;
+  draft: boolean;
+  at: string;
+  by: string;
+  /** The node the test was asked through. */
+  node: string;
+  /** Some node answered, and every node that answered found the server serving. */
+  ok: boolean;
+  nodes: McpCheckNodeView[];
+  server_info: McpServerInfo | null;
+  tools: McpCheckedTool[];
+  /** What a reader of the tools should act on, in the engine's words. */
+  warnings: string[];
+}
+
+/** What a server's OAuth metadata says, each address with its credentials withheld. */
+interface McpProbeOAuth {
+  resource_metadata: string;
+  resource: string;
+  authorization_servers: string[];
+  issuer: string;
+  scopes: string[];
+  client: McpOAuthClient | "";
+  pkce: boolean;
+  /** Why the discovery stopped short, or null. */
+  failure: McpCheckFailure | null;
+}
+
+/** `POST /mcp-probe`: an address checked before a server is added at it, with no credential sent. */
+export interface McpProbeAnswer {
+  /** The address checked, its credentials withheld. */
+  address: string;
+  /** Whether the server answered: its handshake, or a refusal asking for a credential. */
+  reachable: boolean;
+  check: McpCheckNodeView;
+  /** The sign-in it asks for, "" where the check did not reach an answer. */
+  auth: McpAuthMethod | "";
+  oauth: McpProbeOAuth | null;
+  /** The tools it lists to no credential, null where it asks for a sign-in first. */
+  tools: number | null;
+  /** The curated entry the address is, "" where the catalogue does not know it. */
+  catalogue: string;
+  title: string;
+  vendor: string;
+}
+
+/** The revision a stored value was activated in, or why it was not. */
+interface McpValueReload {
+  revision_id?: string;
+  epoch?: number;
+  error?: string;
+  detail?: string;
+  /** Sealed and not active yet: a later re-activation makes it so. */
+  deferred?: boolean;
+}
+
+/** `PUT /mcp-servers/{name}/values/{key}`: a value stored, write-only, and what it was tested as. */
+export interface McpValueAnswer {
+  server: string;
+  key: string;
+  /** "" for the server's own value. */
+  seat: string;
+  /** The variable it is sealed under. */
+  variable: string;
+  tested: boolean;
+  /** The test it passed, null for a value stored untested. */
+  check: McpCheckAnswer | null;
+  /** Whether the configuration was written to read the variable. */
+  pointed: boolean;
+  /** The revision that resolves it: the pointer's write or a re-activation. */
+  reload: McpValueReload | null;
+  /** The server's values now, by name. */
+  values: McpValueState[];
+}
+
+/**
+ * A value the server did not work with (`422 value_test_failed`): where the
+ * test stopped, and the test whole. Nothing was stored.
+ */
+export interface McpValueRefusal {
+  detail: string;
+  stage: McpTestStage | "";
+  class: McpFailureClass | "";
+  node: string;
+  check: McpCheckAnswer;
 }
