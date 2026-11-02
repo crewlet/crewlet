@@ -623,9 +623,13 @@ type indexBuild struct {
 	stored  bool
 }
 
+// builtSegment is one segment a record names, opened: m is the mapping of a
+// segment THIS BUILD wrote, nil for one of the prior index, which the view
+// the build read holds.
 type builtSegment struct {
 	part codeIndexPart
 	seg  *codeindex.Segment
+	m    *mappedRun
 }
 
 // alloc is the number of the next file this build writes.
@@ -641,33 +645,99 @@ func (b *indexBuild) alloc() uint64 {
 	return n
 }
 
-// place writes a file of the index through write, staged in tmp/ and
-// renamed in at rel, and answers its bytes.
-func (b *indexBuild) place(rel string, write func(io.Writer) error) (int64, []byte, error) {
-	var buf bytes.Buffer
-	if err := write(&buf); err != nil {
-		return 0, nil, err
-	}
-	data := buf.Bytes()
+// place writes a file of the index through write STREAMED INTO ITS STAGED
+// FILE in tmp/ — never into a buffer: a segment is up to the index's whole
+// size once merged, and every format's writer buffers and hashes as it goes
+// (codeindex.WriteSegment, MergeSegments, WriteTipMap) — renamed in at rel,
+// and answers its size.
+func (b *indexBuild) place(rel string, write func(io.Writer) error) (int64, error) {
+	var size int64
 	staged, err := b.c.stage(hostbox.FileMode, func(f *os.File) error {
-		_, werr := f.Write(data)
-		return werr
+		if err := write(f); err != nil {
+			return err
+		}
+		info, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		size = info.Size()
+		return nil
 	})
 	if err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	dir := filepath.Join(b.inc.dir, filepath.FromSlash(codeIndexDir))
 	if err := os.MkdirAll(dir, hostbox.DirMode); err != nil {
-		return 0, nil, removeStaged(staged, err)
+		return 0, removeStaged(staged, err)
 	}
 	if err := b.c.place(staged, filepath.Join(b.inc.dir, rel)); err != nil {
-		return 0, nil, err
+		return 0, err
 	}
 	b.wrote = append(b.wrote, rel)
 	if err := syncDir(dir); err != nil {
-		return 0, nil, err
+		return 0, err
 	}
-	return int64(len(data)), data, nil
+	return size, nil
+}
+
+// placeSegment places a segment through write at a number of its own and
+// opens it again by MAPPING the file it placed (openBuilt), never from the
+// bytes it wrote: a build reads back every segment it writes — its blobs to
+// know what the next tip brings, both inputs of every merge — and a first
+// build of a large repository writes many, so held in the heap as written
+// they made the build's peak the repository's whole index, twice over in its
+// last merge, where the declaration's charge is one segment's postings.
+func (b *indexBuild) placeSegment(write func(io.Writer) error) (builtSegment, error) {
+	n := b.alloc()
+	rel := codeIndexSegRel(n)
+	size, err := b.place(rel, write)
+	if err != nil {
+		return builtSegment{}, err
+	}
+	return b.openBuilt(rel, codeIndexPart{N: n, Bytes: size})
+}
+
+// openBuilt maps the segment this build placed at rel, counted against the
+// node's bound on mappings as a reader's is (runmaps.go) — errMapsFull, where
+// readers hold the bound whole, fails the build, which the indexer's next look
+// asks again — and opens it. Its trailer is not checked: this build wrote it.
+func (b *indexBuild) openBuilt(rel string, part codeIndexPart) (builtSegment, error) {
+	path := filepath.Join(b.inc.dir, rel)
+	f, err := os.Open(path)
+	if err != nil {
+		return builtSegment{}, err
+	}
+	// Read-only, and mapped by the time it closes: a close's error has
+	// nothing left to lose.
+	defer func() { _ = f.Close() }()
+	if err := b.c.maps.reserve(); err != nil {
+		return builtSegment{}, err
+	}
+	data, err := unix.Mmap(int(f.Fd()), 0, int(part.Bytes), unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		b.c.maps.unreserve()
+		return builtSegment{}, fmt.Errorf("mapping %s: %w", rel, err)
+	}
+	m := &mappedRun{data: data}
+	if k := b.c.knobs; k != nil && k.indexMapped != nil {
+		k.indexMapped(path, data)
+	}
+	seg, err := codeindex.OpenSegment(data)
+	if err != nil {
+		b.c.maps.drop(m)
+		return builtSegment{}, err
+	}
+	return builtSegment{part: part, seg: seg, m: m}, nil
+}
+
+// unmapBuilt unmaps the segments of gs this build mapped (openBuilt); a prior
+// index's are its view's.
+func (b *indexBuild) unmapBuilt(gs ...builtSegment) {
+	for _, g := range gs {
+		if g.m != nil {
+			b.c.maps.drop(g.m)
+		}
+	}
 }
 
 // segments indexes every blob of files no segment of the prior index holds:
@@ -734,18 +804,13 @@ func (b *indexBuild) segments(ctx context.Context, s Synced, files []treeFile) e
 		if builder.Len() == 0 {
 			return nil
 		}
-		n := b.alloc()
-		size, data, err := b.place(codeIndexSegRel(n), func(w io.Writer) error {
+		g, err := b.placeSegment(func(w io.Writer) error {
 			return codeindex.WriteSegment(w, builder)
 		})
 		if err != nil {
 			return err
 		}
-		seg, err := codeindex.OpenSegment(data)
-		if err != nil {
-			return err
-		}
-		b.segs = append(b.segs, builtSegment{part: codeIndexPart{N: n, Bytes: size}, seg: seg})
+		b.segs = append(b.segs, g)
 		builder = &codeindex.Builder{}
 		return b.merge()
 	}
@@ -860,19 +925,18 @@ func (b *indexBuild) merge() error {
 			return nil
 		}
 		older, newer := b.segs[n-2], b.segs[n-1]
-		num := b.alloc()
-		size, data, err := b.place(codeIndexSegRel(num), func(w io.Writer) error {
+		g, err := b.placeSegment(func(w io.Writer) error {
 			return codeindex.MergeSegments(w, []*codeindex.Segment{older.seg, newer.seg},
 				func(oid codeindex.OID) bool { return b.tip[oid] })
 		})
 		if err != nil {
 			return err
 		}
-		seg, err := codeindex.OpenSegment(data)
-		if err != nil {
-			return err
-		}
-		b.segs = append(b.segs[:n-2], builtSegment{part: codeIndexPart{N: num, Bytes: size}, seg: seg})
+		b.segs = append(b.segs[:n-2], g)
+		// The inputs this build wrote are read no more: their mappings go
+		// now, not at the build's end, so what a build maps at once is the
+		// few segments a geometric index keeps.
+		b.unmapBuilt(older, newer)
 	}
 	return nil
 }
@@ -888,7 +952,7 @@ func (b *indexBuild) tipMap(tip string, files []treeFile) error {
 		entries[i] = codeindex.TipEntry{Path: f.path, Blob: f.blob, Skipped: b.skipped[f.blob]}
 	}
 	n := b.alloc()
-	size, _, err := b.place(codeIndexMapRel(n), func(w io.Writer) error {
+	size, err := b.place(codeIndexMapRel(n), func(w io.Writer) error {
 		return codeindex.WriteTipMap(w, commit, entries)
 	})
 	if err != nil {
@@ -919,11 +983,13 @@ func (b *indexBuild) commit(tip string) bool {
 	return true
 }
 
-// abandon moves every file the build wrote into trash/ where no record
-// names it: a build that failed, or whose commit found the index moved.
-// Files the stored record does not name — a segment a later merge of the
-// same build replaced — go too.
+// abandon unmaps every segment the build mapped and still held, and moves
+// every file the build wrote into trash/ where no record names it: a build
+// that failed, or whose commit found the index moved. Files the stored record
+// does not name — a segment a later merge of the same build replaced — go
+// too.
 func (b *indexBuild) abandon() {
+	b.unmapBuilt(b.segs...)
 	var named []string
 	if b.stored {
 		b.e.mu.Lock()

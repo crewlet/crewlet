@@ -110,10 +110,13 @@ var ErrMalformed = errors.New("codeindex: a file this build does not write; drop
 // the segment is written then, so what an index build holds is one segment's
 // postings — a byte or two for each distinct trigram of each blob, in lists
 // grown by doubling, and a table entry and a list header for each distinct
-// trigram of the segment — the segment written beside it, and the blob being
-// read: at most 256 MiB at its peak (M6's sizing). BenchmarkCodeIndex
-// measured that peak at 120 MiB for 256 MiB of source (37 MiB for 64 MiB:
-// the table of distinct trigrams grows slower than the source), so 256 MiB
+// trigram of the segment — and the blob being read: at most 256 MiB at its
+// peak (M6's sizing). The segment itself is streamed to its file
+// (WriteSegment's writer buffers 64 KiB), and the cache reads every segment
+// back through a mapping. BenchmarkCodeIndex measured that peak at 120 MiB
+// for 256 MiB of source (37 MiB for 64 MiB: the table of distinct trigrams
+// grows slower than the source) with the written segment held in memory
+// beside it, a bound above what the streamed write holds, so 256 MiB
 // is the largest power of two measured within the bound; 512 MiB would be
 // 240 MiB by the rate at 256, with nothing left for the blob and the merge
 // beside it. Re-derived from the PROVISIONAL 64 MiB (M3-O6) by that run: a

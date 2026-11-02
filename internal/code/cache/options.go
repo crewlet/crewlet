@@ -170,6 +170,10 @@ type knobs struct {
 	// index writes a segment at, in place of codeindex.SegmentSourceBytes:
 	// a case builds an index of many segments from a few small files.
 	indexSegmentBytes int64
+	// indexMapped is told the path of each segment a build of a code index
+	// writes and the bytes it reads it back through, as it opens it: a case
+	// holds them to a mapping of that file.
+	indexMapped func(path string, data []byte)
 	// installWake, when set, is what the installer waits on for the earliest
 	// of its repositories' waits to end — told when, on Options.Now's clock —
 	// in place of a timer, and firing as one: once that clock reaches the
