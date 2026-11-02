@@ -7774,10 +7774,13 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   listing carries no instant of a change's last record, so the row's time is
   when it was **Opened**, and no conversation counters, so it counts the
   standing blockers rather than the open findings. **Needs a person** is a band
-  above the grid: the engine's `needs=person` listing, the first five, each
-  with the sentence of what it waits on — a change whose first unmet
-  precondition waits on persons alone, which no agent will be woken to move —
-  and nothing at all where none waits. A row, and a band's reference, opens the
+  above the grid: the first five changes the engine's `needs=person` listing
+  keeps, each with the sentence of what it waits on — a change whose first
+  unmet precondition waits on persons alone, which no agent will be woken to
+  move — and nothing at all where it found none. A page of that listing is the
+  rows the engine read, some of which it drops after (a change of a repository
+  the reader may not read, one whose readiness no longer waits on a person), so
+  the band follows `next` for at most four pages to keep its five. A row, and a band's reference, opens the
   change in the peek (`peek=change:web!42`), which reads the change itself
   (`code_change`): its branches, owner, revisions and work item (the owner's
   other open changes, and every change of the item, one link each), its

@@ -101,8 +101,12 @@ const CHANGES_POLL_MS = 60_000;
 /**
  * How many changes the "Needs a person" band lists: FIVE, what a reader
  * takes in at a glance above the grid without pushing the grid off a laptop's
- * screen. Asked as the page's limit, so the band reads no more than it draws;
- * its Show all is the grid narrowed to the same need.
+ * screen. Asked as each page's limit, and kept: a page is the rows the engine
+ * read, some of which it then drops (a change of a repository the reader may
+ * not read, one whose readiness no longer waits on a person), so the band
+ * follows `next` for at most `CHANGES_FILL_PAGES` pages to keep five
+ * ([CodeChangesOptions.fill]); its Show all is the grid narrowed to the same
+ * need.
  */
 export const PERSON_BAND_ROWS = 5;
 
@@ -448,9 +452,11 @@ export function ReadinessMeter({
 
 /**
  * The changes that wait on a person, above the grid: the engine's
- * `needs=person` listing, its first few, each opening in the peek — and
- * nothing at all where none does, since a band saying "nothing" every visit is
- * a band nobody reads.
+ * `needs=person` listing, the first few it keeps, each opening in the peek —
+ * and nothing at all where it found none, since a band saying "nothing" every
+ * visit is a band nobody reads. A band it draws no rows of claims nothing, so
+ * one that stopped at its bound with `next` left is drawn as none: the grid
+ * below is the listing.
  */
 function PersonBand({ repo, showAll }: { repo: string; showAll: () => void }) {
   const { open } = usePeekControls();
@@ -461,8 +467,9 @@ function PersonBand({ repo, showAll }: { repo: string; showAll: () => void }) {
   const band = useCodeQuery("code_changes", params, {
     enabled: repo === "" || isRepoName(repo),
     pollMs: CHANGES_POLL_MS,
+    fill: PERSON_BAND_ROWS,
   });
-  const changes = band.data?.changes ?? [];
+  const changes = (band.data?.changes ?? []).slice(0, PERSON_BAND_ROWS);
   if (changes.length === 0) return null;
   return (
     <section className="code-person-band" aria-label="Needs a person">
