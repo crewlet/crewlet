@@ -248,21 +248,6 @@ func exportMessageInput(dec *json.Decoder) (int64, error) {
 	return max(tokens.Input, 0) + max(tokens.Cache.Read, 0) + max(tokens.Cache.Write, 0), nil
 }
 
-// errNotTheShape is an export whose structure is not the one read.
-var errNotTheShape = errors.New("executor: the export is not the shape it is measured in")
-
-// expectDelim reads the next token, which must be want.
-func expectDelim(dec *json.Decoder, want json.Delim) error {
-	t, err := dec.Token()
-	if err != nil {
-		return err
-	}
-	if d, ok := t.(json.Delim); !ok || d != want {
-		return errNotTheShape
-	}
-	return nil
-}
-
 // skipValue passes over the next value whole, a token at a time.
 func skipValue(dec *json.Decoder) error {
 	depth := 0
