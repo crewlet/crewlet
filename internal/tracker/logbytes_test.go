@@ -1066,9 +1066,6 @@ var codeLogFields = map[code.OpKind]struct {
 		payload: reflect.TypeFor[code.CheckStarted](),
 		carried: []string{"repo_id", "oid", "target", "name", "attempt", "runner", "placement", "box",
 			"started_at"},
-		absent: map[string]string{
-			"borrowed": "a check run on a borrowed cache (D-BORROW), a flag",
-		},
 	},
 	code.OpCheckFinished: {
 		payload: reflect.TypeFor[code.CheckFinished](),

@@ -48,7 +48,6 @@ import (
 //     lower (StartedAt, Runner): two claims of one attempt converge on one
 //     runner wherever each landed. The box is that claim's, set once by its
 //     holder's later record, which repeats the claim's StartedAt and Runner;
-//     whether it borrowed a cache only ever turns on;
 //   - its ENDING is the measurement over infrastructure's — passed and failed
 //     over errored, cancelled and skipped, since a run that measured the
 //     commit says more of it than one that did not run — then the earlier
@@ -674,6 +673,16 @@ func (q CheckQueued) Validate() error {
 // record repeating its claim's StartedAt and Runner, names the box it made —
 // on the repository's checks subject ([OpCheckStarted]). Every field is in
 // the base format, under the condition the subject states.
+//
+// NO `borrowed` FLAG: it named a box given its node's cache to read from, a
+// borrow no engine path launches (crewlet/crewlet#496 would measure one
+// against the fetch before any box takes it), so nothing ever set it and
+// every row held it false. Its removal takes no versionedFields row, under
+// the same condition: no build carrying the code domain has run, so no
+// record of this build meets one that wrote it. Were that otherwise, the
+// removal would still read both ways: a record carrying the key decodes here
+// with the key ignored, and a build that declared it reads a record without
+// it as the false every record carried.
 type CheckStarted struct {
 	CheckKey
 	// Runner is the claiming node's id; empty for an attempt a person's CI
@@ -683,8 +692,6 @@ type CheckStarted struct {
 	// Box is the box's handle: empty on the claim, named by the holder's
 	// later record once it made one.
 	Box string `json:"box,omitempty"`
-	// Borrowed reports a box given its node's cache to read from.
-	Borrowed bool `json:"borrowed,omitempty"`
 	// StartedAt is the claiming node's instant: the claim's key, with
 	// Runner, so two claims of one attempt converge on the lower.
 	StartedAt time.Time `json:"started_at"`
@@ -702,7 +709,7 @@ func (s CheckStarted) Validate() error {
 		return checkField("runner", "a runner of the engine names itself, and a person's CI is no runner")
 	case len(s.Runner) > MaxProvenanceBytes || len(s.Box) > MaxProvenanceBytes:
 		return checkField("box", "a runner's id and a box's handle are at most %d bytes", MaxProvenanceBytes)
-	case s.Placement == PlacementExternal && (s.Box != "" || s.Borrowed):
+	case s.Placement == PlacementExternal && s.Box != "":
 		return checkField("box", "a person's CI runs no box of the engine's")
 	case s.StartedAt.IsZero():
 		return checkField("started_at", "a claim names the instant it was made")

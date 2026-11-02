@@ -19,11 +19,11 @@ func (n *node) seedEndedLogged(repoID string, at time.Time, count int) {
 	n.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
 		INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
 			revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds,
-			reason, runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
+			reason, runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
 			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
 			url, summary, def, failures, tail)
 		SELECT ?, printf('%040d', i), 'refs/heads/main', 'unit', 1, 'failed', 'tip', '', 0, '', '', '', '', 0,
-			'', 600, 'exit', 'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 1, 0, 1, 2, 6, ?, '', 'failed', '',
+			'', 600, 'exit', 'node-a', 'container', '', '', ?, ?, ?, 1000, 1, 0, 1, 2, 6, ?, '', 'failed', '',
 			'', '' FROM k`,
 		count, repoID, ended, ended, ended, overdue)
 	n.exec(`INSERT INTO code_check_logs (repo_id, commit_oid, target_ref, name, attempt, object, hash, size)

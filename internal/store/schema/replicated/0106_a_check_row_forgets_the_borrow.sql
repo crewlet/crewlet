@@ -1,0 +1,24 @@
+-- A check row forgets the borrow.
+--
+-- code_checks.borrowed (0075, declared again by 0085) recorded a check run in
+-- a box given its node's cache to read from. No engine path launches such a
+-- box: a check's box fetches its commit by id in every cell, the borrowed
+-- checkout is deleted as dead, and crewlet/crewlet#496 would measure a
+-- borrow against that fetch before any box takes one. Nothing set the
+-- column, so every row held 0, and the applier wrote and every reader and
+-- the dashboard read a flag describing a feature that does not exist.
+-- code.CheckStarted's `borrowed` field goes with it, under the code domain's
+-- stated condition (code.CheckStarted's doc).
+--
+-- DROPPED IN PLACE, as 0013 drops the sprint columns: Turso takes
+-- `ALTER TABLE … DROP COLUMN` for a column no index, view or trigger names,
+-- and none names this one — every code_checks index (0085, 0088, 0103) keys
+-- other columns, and the replicated estate holds no trigger. 0075 AND 0085
+-- ARE NOT EDITED: `schema_migrations` keys on the filename, so a store that
+-- applied them would never see the change.
+--
+-- Class: code_checks stays REPRODUCIBLE (0085): written only by the applier,
+-- from the records on a repository's checks subject, and removed only by
+-- those records' horizon, by the code-retention duty's checks_sweep records on
+-- the same subject, and by the repository's purge.
+ALTER TABLE code_checks DROP COLUMN borrowed;

@@ -2111,12 +2111,11 @@ type CheckRow struct {
 	TimeoutSeconds int       `json:"timeout_seconds,omitempty"`
 	// Reason is why its ending ended it, "" before one.
 	Reason CheckReason `json:"reason,omitempty"`
-	// Runner, Placement, Box and Borrowed are its claim's; Reporter is the
-	// human seat of the person whose CI reported its ending.
+	// Runner, Placement and Box are its claim's; Reporter is the human seat of
+	// the person whose CI reported its ending.
 	Runner    string         `json:"runner,omitempty"`
 	Placement CheckPlacement `json:"placement,omitempty"`
 	Box       string         `json:"box,omitempty"`
-	Borrowed  bool           `json:"borrowed,omitempty"`
 	Reporter  string         `json:"reporter,omitempty"`
 	// QueuedAt, StartedAt and FinishedAt are its queue's, its claim's and
 	// its ending's instants, each zero before it.

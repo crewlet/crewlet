@@ -60,11 +60,11 @@ func (n *node) passed(repoID, oid, target, name string) {
 	at := store.EncodeTime(harnessAt)
 	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
 		revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
-		runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
+		runner_node, placement, box_handle, reporter, queued_at, started_at, finished_at,
 		duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
 		url, summary, def, failures, tail)
 		VALUES (?, ?, ?, ?, 1, 'passed', 'head', '', 0, '', '', '', '', 1, '', 600, 'exit',
-			'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', 'ok', '', '', '')`,
+			'node-a', 'container', '', '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', 'ok', '', '', '')`,
 		repoID, oid, target, name, at, at, at, store.EncodeTime(harnessAt.Add(600*time.Second)))
 }
 

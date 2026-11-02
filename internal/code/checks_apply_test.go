@@ -493,7 +493,7 @@ func TestEveryOrderOfACheckRecordsJoinsToOne(t *testing.T) {
 		{queue: &checkQueue{purpose: "head", defsOID: oid("defs-1"), def: `{"name":"unit"}`, position: 10}},
 		{queue: &checkQueue{purpose: "head", defsOID: oid("defs-2"), def: `{"name":"unit"}`, position: 11}},
 		{run: &checkRun{runner: "node-b", placement: "container", startedAt: 5}},
-		{run: &checkRun{runner: "node-b", placement: "container", box: "box-b", borrowed: true, startedAt: 5}},
+		{run: &checkRun{runner: "node-b", placement: "container", box: "box-b", startedAt: 5}},
 		{run: &checkRun{runner: "node-a", placement: "e2b", startedAt: 6}},
 		{ending: &checkEnding{state: "errored", reason: "runner_lost", finishedAt: 7, position: 14}},
 		{ending: &checkEnding{state: "failed", reason: "exit", finishedAt: 9, position: 15}},
@@ -520,7 +520,7 @@ func TestEveryOrderOfACheckRecordsJoinsToOne(t *testing.T) {
 		identity[i] = i
 	}
 	want := join(identity)
-	if want.queue.position != 10 || want.run.box != "box-b" || !want.run.borrowed || want.run.runner != "node-b" ||
+	if want.queue.position != 10 || want.run.box != "box-b" || want.run.runner != "node-b" ||
 		want.ending.state != "passed" {
 		t.Fatalf("the join kept %+v; want the first queue, node-b's claim with its box, and the earlier "+
 			"measurement", want)

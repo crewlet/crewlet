@@ -66,7 +66,7 @@ import (
 // summary, declared last of the rest, are each a line.
 const checkColumns = `repo_id, commit_oid, name, attempt, state, purpose, change_id, revision, candidate_id,
 	entry_id, target_ref, base_oid, defs_oid, required, run_in, timeout_seconds, reason, runner_node, placement,
-	box_handle, borrowed, reporter, queued_at, started_at, finished_at, duration_ms, exit_code,
+	box_handle, reporter, queued_at, started_at, finished_at, duration_ms, exit_code,
 	failures_omitted, queued_position, finished_position, url, summary`
 
 // scanCheck reads one row of [checkColumns] — followed, where more is given,
@@ -81,7 +81,7 @@ func scanCheck(scan func(...any) error, more ...any) (CheckRow, error) {
 	)
 	dest := []any{&r.RepoID, &r.OID, &r.Name, &r.Attempt, &state, &purpose, &r.ChangeID, &r.Revision,
 		&r.CandidateID, &r.EntryID, &r.Target, &r.Base, &r.DefsOID, &r.Required, &runIn, &r.TimeoutSeconds,
-		&reason, &r.Runner, &placement, &r.Box, &r.Borrowed, &r.Reporter, &queuedAt, &startedAt,
+		&reason, &r.Runner, &placement, &r.Box, &r.Reporter, &queuedAt, &startedAt,
 		&finishedAt, &r.DurationMs, &exitCode, &r.FailuresOmitted, &queuedPosition, &finishedPosition, &r.URL,
 		&r.Summary}
 	if err := scan(append(dest, more...)...); err != nil {
