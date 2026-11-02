@@ -331,7 +331,7 @@ type Result struct {
 	Captured *SessionArchive
 
 	// Kept is what the read that collected this result kept of the job's
-	// session ([Coordinator.keepSession]), made on the node whose host the
+	// session ([Coordinator.takeCapture]), made on the node whose host the
 	// box is on and carried back with the result to whichever node collects,
 	// for the launch's own record; nil where nothing was taken. Set by the
 	// coordinator, never by a runner.

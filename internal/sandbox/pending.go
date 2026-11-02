@@ -762,12 +762,46 @@ type PendingRun struct {
 	// Capture is the newest capture of the turn's harness session the row
 	// records — begun, landed, refused or unresolved — and Kept the newest
 	// that LANDED, the one the executor log's row names; both nil until the
-	// turn's first ([Coordinator.keepSession]). The TURN'S, kept by every
+	// turn's first ([Coordinator.takeCapture]). The TURN'S, kept by every
 	// relaunch: a later launch continues the turn's newest kept capture, and
 	// reads the newest attempt to know whether one after it was refused.
 	// Each is a section of its own with an Extra (wirekeys.go).
 	Capture *SessionCapture `json:"session_capture,omitempty"`
 	Kept    *SessionCapture `json:"session_kept,omitempty"`
+
+	// Handed is every secret this launch handed its box, SEALED under the
+	// fleet keyring ([HandedSecrets], [SessionKeep.SealHanded]): what a
+	// capture of the box's session takes out by value. Written with the
+	// job's command ([PendingStore.AttachSandbox]) and cleared by the next
+	// launch, since it is the launch's; empty where the launch could not seal
+	// them, which refuses every capture of its job rather than keeping a
+	// session scrubbed of less than its box was given.
+	Handed string `json:"handed,omitempty"`
+
+	// OwedEnd is the turn's END, decided and not yet on the executor log
+	// ([Coordinator.EndTurn]): the [executordomain.Ending] as its JSON,
+	// carried whole by every build. Written by whatever ended the turn — its
+	// resumed frame, or the run's own ending for a loss or a stop
+	// ([PendingStore.OweEnd]) — and published by the run's ending before the
+	// row is deleted, which the delete refuses until it is
+	// ([ErrEndOwed]); so the seat's mail waits on it as it waits on every
+	// ending kept for its retry, and the conversation's next turn is never
+	// dispatched before the end it reads is recorded. DECIDED ONCE: a second
+	// path that ends the turn finds this one and records it, rather than an
+	// account of its own — and answers no colleague a second time.
+	OwedEnd json.RawMessage `json:"owed_end,omitempty"`
+
+	// PriorCalls is every tool the turn's EARLIER launches called through
+	// the bridge and that succeeded, by name, each once, and PriorCallsElided
+	// that some of their calls were elided from the row before they were
+	// folded in ([BridgeCall], [PendingRun.BridgeCallsElided]) — what a
+	// launch that starts a new round takes off the row, so the run's own
+	// ending, for a loss or a stop no frame of the turn reaches, still knows
+	// whether an earlier round delivered the turn's reply ([turn.Answered]
+	// reads names and outcomes alone). Folded in by
+	// [PendingStore.BeginLaunch]; the turn's, kept by every launch after.
+	PriorCalls       []string `json:"prior_calls,omitempty"`
+	PriorCallsElided bool     `json:"prior_calls_elided,omitempty"`
 
 	// Launch is what the launch's own record needs about the job named by
 	// LaunchID — see [LaunchRecord]. Written with LaunchID, whole, on every
@@ -1506,6 +1540,23 @@ type PendingStore interface {
 	// that is gone takes nothing and is no error.
 	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
 
+	// OweEnd records on the row the end its turn owes the executor log
+	// ([PendingRun.OwedEnd]), answering the row as it stands after the write
+	// and whether this call wrote it.
+	//
+	// DECIDED ONCE: a row that owes an end already keeps it, and answers it,
+	// so a second path that ends the same turn records the first one's
+	// account. ON A ROW IN ANY STATE, its ending decided included: a loss's
+	// or a stop's end is decided by that ending's own steps. A row that is
+	// gone takes nothing and is no error.
+	OweEnd(ctx context.Context, turnID string, ending json.RawMessage) (PendingRun, bool, error)
+
+	// ClearEnd removes the end a row owes once the executor log has taken it
+	// ([PendingRun.OwedEnd]), only where the row still owes exactly owed, so
+	// a clear can never take an end the log has not seen. A row that is gone
+	// or owes another is no error, and answers false.
+	ClearEnd(ctx context.Context, turnID string, owed json.RawMessage) (bool, error)
+
 	// ClaimForResume atomically flips a run to resumed, when it holds the
 	// tail's launch in one of the tail's statuses.
 	//
@@ -1655,7 +1706,10 @@ type PendingStore interface {
 	// the reply's delivery was spent when it was recorded, so the row is the
 	// only thing still carrying it. The caller lets it go
 	// ([PendingStore.OweHandBack]), hands it back and finishes again. A reply
-	// a turn took has been used, and goes with the run.
+	// a turn took has been used, and goes with the run. NOR, LAST, IS A ROW
+	// THAT OWES THE EXECUTOR LOG ITS TURN'S END ([ErrEndOwed], with the row
+	// as it stands): the row is the end's only record until the log takes it
+	// ([PendingStore.ClearEnd]).
 	Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error)
 
 	// ExpirePause flips a run parked on a clarification to reseed AND
@@ -2307,6 +2361,11 @@ type BoxRef struct {
 	Harness     string
 	SessionID   string
 	PauseTTLSec float64
+
+	// Handed is the secrets the launch handed the job's box, sealed
+	// ([PendingRun.Handed]): written by the attach that names the job's
+	// command, the one write that says the job exists.
+	Handed string
 }
 
 // PriorBox is the box a relaunch found on its run's row — see

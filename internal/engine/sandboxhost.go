@@ -75,9 +75,18 @@ var _ sandbox.BoxReader = (*boxReads)(nil)
 func (b *boxReads) ReadBox(ctx context.Context, run sandbox.PendingRun,
 	read sandbox.BoxRead) (sandbox.Result, bool, error) {
 
+	// THE ASKER'S OWN DEADLINE, where it is sooner than the budget: the host
+	// reads for its share of the time to the request's deadline, and a host
+	// that took the budget for an asker that gives up sooner would go on
+	// reading — taking a session out of the box — for an answer nobody reads,
+	// beside the asker's next attempt at the same read.
+	deadline := time.Now().Add(b.budget)
+	if asked, ok := ctx.Deadline(); ok && asked.Before(deadline) {
+		deadline = asked
+	}
 	req := sandbox.BoxReadRequest{
 		Version: sandbox.BoxReadWireVersion, ID: signedask.NewID(),
-		Deadline: time.Now().Add(b.budget),
+		Deadline: deadline,
 		Node:     run.LaunchNode, TurnID: run.TurnID, LaunchID: run.LaunchID,
 		SandboxID: run.SandboxID, Read: read,
 	}

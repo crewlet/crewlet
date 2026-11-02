@@ -422,6 +422,13 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		decided, stopped := coordinator.LaunchStopped(l.turn.RunID)
 		switch {
 		case turn.Stopped(err):
+			// THE TURN'S OWN FENCE REFUSED IT once the record was written:
+			// the launch abandoned the record under it
+			// ([sandbox.Coordinator.Launch]), so no ending of the run owes the
+			// turn's end, and the frame that ends the turn records it.
+			if recorded != "" && !stopped {
+				e.abandonedLaunches.Store(l.turn.RunID, struct{}{})
+			}
 			return failed, err
 		case stopped:
 			log.InfoContext(ctx, "executor_launch_stopped", "seat", handle, "turn_id", l.turn.RunID,

@@ -837,3 +837,22 @@ func TestAPasswordsValueIsReadNoFurtherThanAValueIs(t *testing.T) {
 		}
 	}
 }
+
+// A KEY NAMES A PASSWORD AS THE RULES READ ONE, whatever its case or what
+// surrounds the word: a reader that takes a document apart asks the same list
+// the text's rules match, so a word added there is a key both take a value
+// under — and a key that only shares letters with one names none.
+//
+// Mutation: compare the key whole, or in its own case, and a key below a
+// document spells differently is read as naming nothing.
+func TestAKeyNamesAPasswordAsTheRulesReadOne(t *testing.T) {
+	t.Parallel()
+	for key, want := range map[string]bool{
+		"password": true, "DB_PASSWORD": true, "passwd": true, "smtpPwd": true, "Password2": true,
+		"passport": false, "token": false, "compass": false, "": false,
+	} {
+		if got := redact.NamesPassword(key); got != want {
+			t.Errorf("NamesPassword(%q) = %v, want %v", key, got, want)
+		}
+	}
+}

@@ -277,8 +277,16 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // its own (`--standalone`), since the run's server, with the address and the
 // password only its script held, may be gone: the same export, into its own
 // staging directory, its digest kept.
+//
+// IT ENDS [packNothing] where the box's OpenCode holds no such session — a run
+// whose harness failed before it made one — and [packFailed] where it holds one
+// and no archive was made, its error stream saying why ([Runner.PackCapture]).
 func (OpenCode) Pack(paths Paths, session string) string {
-	return "sid=" + shellQuote(session) + "\n" + openCodePack(paths, paths.SessionPackStaging(), "--standalone")
+	return "sid=" + shellQuote(session) + " packed=\n" +
+		`held=$(opencode api --standalone session.get --param sessionID="$sid" < /dev/null 2> /dev/null) || held=` + "\n" +
+		fmt.Sprintf(`case "$held" in *%s*) ;; *) exit %d;; esac`+"\n", shellQuote(`"id":"`+session+`"`), packNothing) +
+		openCodePack(paths, paths.SessionPackStaging(), "--standalone") +
+		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
 
 // layout is an OpenCode archive's: one gzipped JSON document
@@ -610,7 +618,7 @@ func openCodePack(paths Paths, staged, server string) string {
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellQuote
 	line(`if command -v gzip > /dev/null 2>&1; then`)
-	line(`  rm -rf %s; if mkdir -p %s && xs=$( { { opencode session export %s "$sid" < /dev/null 2> %s; echo $? >&4; } | gzip -c > %s; } 4>&1 ) && [ "$xs" = 0 ] && mv -f %s %s; then d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$sid" "$d" >> %s; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+	line(`  rm -rf %s; if mkdir -p %s && xs=$( { { opencode session export %s "$sid" < /dev/null 2> %s; echo $? >&4; } | gzip -c > %s; } 4>&1 ) && [ "$xs" = 0 ] && mv -f %s %s; then packed=1; d=$(cksum < %s 2> /dev/null) && printf '%%s %%s\n' "$sid" "$d" >> %s; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
 		q(staged), q(staged), server, q(staged+"/error"), q(staged+"/capture"), q(staged+"/capture"),
 		q(paths.SessionCapture()), q(paths.SessionCapture()), q(paths.SessionDigests()), q(staged+"/error"))
 	line(`  rm -rf %s`, q(staged))

@@ -406,6 +406,21 @@ const passwordMarker = Marker + "password]"
 // to drift from it.
 var passwordKeys = []string{"password", "passwd", "pwd"}
 
+// NamesPassword reports whether name — the key a structured document names a
+// value by, a JSON object's member — names a password: it holds one of
+// [passwordKeys], whatever its case. What a reader that takes a document apart
+// asks of a key, where the rules read the key in the text itself: one list, so
+// a word added there is a key both readings take a value under.
+func NamesPassword(name string) bool {
+	lower := strings.ToLower(name)
+	for _, key := range passwordKeys {
+		if strings.Contains(lower, key) {
+			return true
+		}
+	}
+	return false
+}
+
 // passwordClose is what closes a password's key before its separator, and
 // passwordSeparator the separator: the quote or the markup a key is written
 // in, and the operator a language assigns or compares it with.

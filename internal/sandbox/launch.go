@@ -562,11 +562,14 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if continued := req.Continue; continued != nil && reused && continued.SessionID != "" {
 		brief, session = continued.Brief, continued.SessionID
 	}
+	// THE ENVIRONMENT THE JOB IS STARTED WITH, read once: it is what the job
+	// is handed, and what its session's capture scrubs out ([HandedSecrets]).
+	env := withTelemetry(m, req, box)
 	handle, err := runner.Start(ctx, box, RunRequest{
 		System: buildSystem(req),
 		Brief:  brief,
 		Resume: session,
-		Env:    withTelemetry(m, req, box),
+		Env:    env,
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -601,6 +604,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Placement: string(req.Spec.Placement), Node: c.node,
 		Harness: req.Spec.Harness, SessionID: handle.SessionID,
 		PauseTTLSec: req.Spec.PauseTTLSec,
+		// AND WHAT THE JOB WAS HANDED, sealed, for its session's scrub.
+		Handed: c.sealHanded(ctx, req, env),
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)

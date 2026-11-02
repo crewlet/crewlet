@@ -621,6 +621,14 @@ type Engine struct {
 	// is built over one answer.
 	executorLog sandbox.SessionWrites
 
+	// abandonedLaunches are the turns whose executor launch the turn's own
+	// fence refused AFTER the launch wrote its run's record, by run id: the
+	// launch abandoned that record, so no ending of the run owes the turn's
+	// end, and the frame that ends the turn records it ([Engine.runTurn],
+	// [Engine.resumeTurn] — each takes its own turn's off). Set by the
+	// launcher ([agentLauncher.launch]).
+	abandonedLaunches sync.Map
+
 	// envelopes sign every estate request this node sends and every reply
 	// it answers a peer with, and verify both directions — one value for
 	// the router and the server alike; see [estateEnvelopes].
@@ -3439,13 +3447,23 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// frame that ends it, off its run's record. After the completion event
 	// because the reply wakes another seat and the record of this turn
 	// should exist first.
-	answered := e.answerColleague(ctx, company, answeringOf(req), ask, res, err)
+	//
+	// NOT FOR A TURN STOPPED BETWEEN ITS LAUNCH AND ITS PARK: that stop's own
+	// ending answers the colleague and records the turn's end on the
+	// executor log, from the run's record, once its read has kept the job's
+	// session ([sandbox.CoordinatorOptions.CloseStopped]) — answered here as
+	// well, the colleague would find the channel the first answer closed.
 	if stoppedAtPark {
-		// A TURN THAT LAUNCHED ITS EXECUTOR AND WAS STOPPED BEFORE IT PARKED
-		// ends here, and nowhere else: the run's own ending closed no turn,
-		// since none had parked on it. So this frame records the end on the
-		// executor log, after the colleague's answer, which it carries.
-		e.endExecutorTurn(ctx, telTurnEnd(tel, stoppedEnding(res, reply, err, answered)))
+		e.abandonedLaunches.Delete(req.RunID)
+		return res, err
+	}
+	answered := e.answerColleague(ctx, company, answeringOf(req), ask, res, err)
+	if _, abandoned := e.abandonedLaunches.LoadAndDelete(req.RunID); abandoned && turn.Stopped(err) {
+		// A LAUNCH THE TURN'S FENCE REFUSED once its run's record was
+		// written: the launch abandoned the record under it, so no ending of
+		// the run owes the turn's end, and this frame records it — stopped,
+		// with nothing captured, since no job ran.
+		e.endTurnNow(ctx, telTurnEnd(tel, stoppedEnding(res, reply, err, answered)))
 	}
 	return res, err
 }

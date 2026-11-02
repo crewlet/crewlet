@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
@@ -15,11 +14,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/executordomain"
-	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/executor"
-	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -39,12 +35,14 @@ import (
 // # What the engine adds
 //
 // The company's word on keeping sessions, off the revision the FLEET runs
-// ([executorKeep.Policy]); the secrets a capture scrubs by value
-// ([executorKeep.Secrets]); the instant a turn's operations are minted at, the
-// rule every operation id of a turn follows ([executorKeep.MintedAt]); the
-// sealed upload ([executorKeep.Put]); and, at every way a turn ends, the
-// account of how it ended ([Engine.endExecutorTurn]) — the turn's decision,
-// whether its reply reached the party waiting, who stopped it, what lost it.
+// ([executorKeep.Policy]); the keyring the secrets a launch handed its box are
+// sealed under on its run's row, for its capture's scrub
+// ([executorKeep.SealHanded]); the instant a turn's operations are minted at,
+// the rule every operation id of a turn follows ([executorKeep.MintedAt]); the
+// sealed spool and upload ([executorKeep.Seal], [executorKeep.Upload]); and, at
+// every way a turn ends, the account of how it ended ([Engine.oweExecutorEnd])
+// — the turn's decision, whether its reply reached the party waiting, who
+// stopped it, what lost it.
 
 // executorKeep is the engine's part of keeping a run's harness session
 // ([sandbox.SessionKeep]).
@@ -83,10 +81,35 @@ func (e *Engine) executorPolicy(ctx context.Context) (sandbox.SessionPolicy, err
 	return sandbox.SessionPolicy{Keep: session.KeepsSessions(), SeatBudget: session.SessionBudget()}, nil
 }
 
-// Secrets is every value the engine put by value in run's box that is a secret
-// ([Engine.runSecrets]).
-func (k executorKeep) Secrets(_ context.Context, run sandbox.PendingRun) []string {
-	return k.engine.runSecrets(k.engine.Company(), run)
+// handedAAD is what the secrets a launch handed its box are sealed bound to:
+// the turn whose row keeps them, so a seal copied onto another run's row does
+// not open there, and its values scrub nothing but the session they were
+// handed with.
+func handedAAD(turnID string) string { return "sandbox/handed/" + turnID }
+
+// SealHanded seals the secrets a launch handed its box for its run's row
+// ([sandbox.PendingRun.Handed]) under the node's keyring — the coordination
+// store is not encrypted — bound to the turn ([handedAAD]).
+func (k executorKeep) SealHanded(turnID string, handed []byte) (string, error) {
+	cipher := k.engine.Cipher()
+	if cipher == nil {
+		return "", errors.New("this node has no keyring to seal them under")
+	}
+	return cipher.Encrypt(string(handed), handedAAD(turnID))
+}
+
+// OpenHanded opens what [executorKeep.SealHanded] sealed, on whichever node
+// captures the run's box.
+func (k executorKeep) OpenHanded(turnID, sealed string) ([]byte, error) {
+	cipher := k.engine.Cipher()
+	if cipher == nil {
+		return nil, errors.New("this node has no keyring to open them with")
+	}
+	plain, err := cipher.Decrypt(sealed, handedAAD(turnID))
+	if err != nil {
+		return nil, err
+	}
+	return []byte(plain), nil
 }
 
 // MintedAt is the instant a turn's derived operations are minted at: its
@@ -103,118 +126,92 @@ func (k executorKeep) MintedAt(ctx context.Context, turnID, workKey string, work
 	return identity.OperationSince(), nil
 }
 
-// Put seals archive under the fleet keyring as it streams and uploads it into
-// an object the store mints ([Engine.ExecutorSessions]). It closes archive on
-// every path, as the session store does.
-func (k executorKeep) Put(ctx context.Context, handle, turn string,
-	archive io.ReadCloser) (executordomain.SealedObject, error) {
+// Seal streams archive sealed under the fleet keyring into dst, under an
+// object key minted now ([Engine.ExecutorSessions]).
+func (k executorKeep) Seal(handle, turn string, archive io.Reader, dst io.Writer) (executordomain.SealedSpool, error) {
+	store, err := k.sessionStore()
+	if err != nil {
+		return executordomain.SealedSpool{}, err
+	}
+	return store.Seal(handle, turn, archive, dst)
+}
 
+// Upload puts what [executorKeep.Seal] sealed into the object it was sealed for.
+func (k executorKeep) Upload(ctx context.Context, spool executordomain.SealedSpool,
+	sealed io.Reader) (executordomain.SealedObject, error) {
+
+	store, err := k.sessionStore()
+	if err != nil {
+		return executordomain.SealedObject{}, err
+	}
+	return store.Upload(ctx, spool, sealed)
+}
+
+// sessionStore is the store a session's sealed bytes stream into, or why this
+// node has none.
+func (k executorKeep) sessionStore() (*executordomain.SessionStore, error) {
 	store, err := k.engine.ExecutorSessions()
 	if err == nil && store == nil {
 		err = errors.New("this node has no object store to keep a session in")
 	}
-	if err != nil {
-		_ = archive.Close()
-		return executordomain.SealedObject{}, err
-	}
-	return store.Put(ctx, handle, turn, archive)
+	return store, err
 }
 
-// runSecrets is every value the engine put by value in run's box that is a
-// secret, for the scrub its session is kept through: every value of the seat's
-// run environment and setup files that a reference resolved (an operator's
-// declared token — a value written in the document is the document's, and no
-// secret), the sign-in in the environment of the entry the run launched on,
-// and every string its login's files hold. Read off the company this node runs
-// now, as the run's environment was off the one it launched under.
+// oweExecutorEnd records how a turn that launched an executor ended: OWED on
+// the turn's run row ([sandbox.Coordinator.OweEnd]), which the run's ending
+// records on the executor log once every capture of the turn has settled and
+// before it deletes the row — so the seat's mail waits on it, and the next turn
+// on the conversation reads it. A turn whose row is gone — its launch abandoned
+// under it — has nothing to owe it on, and its end is recorded now
+// ([sandbox.Coordinator.EndTurn]), best effort and said where the log does not
+// take it.
 //
-// NOT THE ISSUED TOKENS: a seat's GitHub App token is minted per launch and
-// renewed as the run works, and reading it again would mint another, never the
-// one the box holds. Those, and the run's bridge token, are caught by their
-// shapes, which redact knows — the scrub's second pass, over every file.
-func (e *Engine) runSecrets(c *Company, run sandbox.PendingRun) []string {
-	if c == nil {
-		return nil
-	}
-	resolver := e.resolver()
-	var out []string
-	fromReference := func(raw string) {
-		if len(resolver.Missing(raw)) > 0 {
-			return
-		}
-		if value := resolver.Value(raw); value != raw {
-			out = append(out, value)
-		}
-	}
-	var defaults []sandbox.SetupStep
-	if c.catalogue != nil {
-		defaults = c.catalogue.DefaultSetup()
-	}
-	settings := seatSandbox(c, run.AgentHandle)
-	for _, step := range boxSetup(defaults, settings) {
-		for _, raw := range step.Env {
-			fromReference(raw)
-		}
-		for _, body := range step.Files {
-			if content, unresolved := secrets.ReadContent(body, resolver.LookupOK); unresolved == "" && content != body {
-				out = append(out, content)
-			}
-		}
-	}
-	if settings != nil {
-		for _, raw := range settings.Env {
-			fromReference(raw)
-		}
-	}
-	agent := runHarness(c, run.Launch.ProviderKey)
-	if agent == nil {
-		return out
-	}
-	for name, value := range agent.SandboxEnv() {
-		if entrySignInName(agent, name) {
-			out = append(out, value)
-		}
-	}
-	logins := make([]string, 0, 2)
-	for _, path := range agent.SandboxCredentials() {
-		logins = append(logins, path)
-	}
-	if doc := agent.SandboxCredentialDocument(); doc != "" {
-		logins = append(logins, doc)
-	}
-	for _, path := range logins {
-		raw, err := os.ReadFile(path) //nolint:gosec // the entry's own login, at the path its harness keeps it
-		if err != nil {
-			continue
-		}
-		out = append(out, executor.LoginValues(raw)...)
-	}
-	return out
-}
-
-// runHarness is the harness entry a run launched on, nil where the company no
-// longer configures it as one.
-func runHarness(c *Company, providerKey string) *harness.Provider {
-	if c == nil || c.Models == nil || providerKey == "" {
-		return nil
-	}
-	provider, ok := c.Models.Provider(providerKey)
-	if !ok {
-		return nil
-	}
-	agent, _ := provider.(*harness.Provider)
-	return agent
-}
-
-// endExecutorTurn records on the executor log how a turn that launched an
-// executor ended ([sandbox.Coordinator.EndTurn]), on a node whose sandbox
-// runtime is up; nothing on one whose is not, which launched nothing.
-func (e *Engine) endExecutorTurn(ctx context.Context, end sandbox.TurnEnd) {
+// DECIDED ONCE: a turn whose row owes an end already keeps that one.
+func (e *Engine) oweExecutorEnd(ctx context.Context, run sandbox.PendingRun, ending executordomain.Ending) {
 	rt := e.sandbox.Load()
 	if rt == nil {
 		return
 	}
-	rt.coordinator.EndTurn(ctx, end)
+	ending.Failure = redact.Secrets(ending.Failure)
+	owed, err := rt.coordinator.OweEnd(ctx, run.TurnID, ending)
+	if err == nil && owed {
+		return
+	}
+	if err != nil {
+		log.WarnContext(ctx, "executor_turn_end_unowed", "turn_id", run.TurnID, "agent", run.AgentHandle,
+			"error", err.Error(), "detail", "the turn's end could not be written on its run's record, so it is "+
+				"recorded on the executor log now")
+	}
+	e.endTurnNow(ctx, runTurnEnd(run, ending))
+}
+
+// endTurnNow records a turn's end on the executor log at once
+// ([sandbox.Coordinator.EndTurn]), for a turn with no run record left to owe it
+// on — best effort, and said where the log does not take it.
+func (e *Engine) endTurnNow(ctx context.Context, end sandbox.TurnEnd) {
+	rt := e.sandbox.Load()
+	if rt == nil {
+		return
+	}
+	end.Ending.Failure = redact.Secrets(end.Ending.Failure)
+	if err := rt.coordinator.EndTurn(context.WithoutCancel(ctx), end); err != nil {
+		log.WarnContext(ctx, "executor_turn_end_left", "turn_id", end.TurnID, "agent", end.Handle,
+			"outcome", string(end.Ending.Outcome), "error", err.Error(),
+			"detail", "the turn has no run record left to owe its end on, and the executor log did not "+
+				"take it; the retention duty ends a turn that captured a session as lost")
+	}
+}
+
+// runRecordGone reports whether a turn's run record is gone, read through this
+// node's sandbox runtime; false where it cannot be read, which says nothing
+// about the record, so the turn is retried as it would have been.
+func (e *Engine) runRecordGone(ctx context.Context, turnID string) bool {
+	rt := e.sandbox.Load()
+	if rt == nil || rt.pending == nil {
+		return false
+	}
+	_, found, err := rt.pending.Get(ctx, turnID)
+	return err == nil && !found
 }
 
 // runTurnEnd is the end of the turn run's row belongs to, ending as ending.
@@ -224,9 +221,9 @@ func runTurnEnd(run sandbox.PendingRun, ending executordomain.Ending) sandbox.Tu
 		Ask: run.TaskDescription, Ending: ending}
 }
 
-// telTurnEnd is the end of the turn tel describes, ending as ending: for the
-// frame that launched the turn's executor, which ends a turn whose run was
-// stopped before the turn parked on it.
+// telTurnEnd is the end of the turn tel describes, ending as ending: for a
+// dispatched turn whose executor's launch opened a run row that the launch
+// then abandoned, so no row is left to owe it on.
 func telTurnEnd(tel turnTelemetry, ending executordomain.Ending) sandbox.TurnEnd {
 	return sandbox.TurnEnd{Handle: tel.handle, TurnID: tel.runID, ConversationKey: tel.convKey,
 		WorkKey: tel.workKey, WorkSince: tel.workSince, Ask: tel.title, Ending: ending}
@@ -258,13 +255,27 @@ func endingOf(res turn.Result, reply turn.Reply, answered colleagueAnswer) execu
 	return ending
 }
 
-// breachAccount is the end's account of the guard that ended a turn.
+// abandonedEnding is how a resumed turn that broke and was abandoned ended
+// (turn.Abandon): failed, saying why — the turn's error redacted, since it can
+// quote what a tool or a box said.
+func abandonedEnding(res turn.Result, reply turn.Reply, answered colleagueAnswer, reason string,
+	err error) executordomain.Ending {
+
+	ending := endingOf(res, reply, answered)
+	ending.Outcome = executordomain.OutcomeFailed
+	ending.Failure = redact.Secrets(fmt.Sprintf("the resumed turn broke and was abandoned (%s): %v", reason, err))
+	return ending
+}
+
+// breachAccount is the end's account of the guard that ended a turn, redacted:
+// a guard's detail can be an error's or a panic's text, which quotes what
+// tripped it.
 func breachAccount(b *turn.Breach) string {
 	account := "the turn stopped on the engine's " + string(b.Kind) + " guard"
 	if detail := strings.TrimSpace(b.Detail); detail != "" {
 		account += ": " + detail
 	}
-	return account
+	return redact.Secrets(account)
 }
 
 // replySurface is where the party waiting on a turn waits, as its end names it:
@@ -297,19 +308,28 @@ func stoppedEnding(res turn.Result, reply turn.Reply, stop error, answered colle
 }
 
 // runDelivered is whether the party waiting on run's turn has its answer, as
-// the run's own record of its bridged calls says — [turn.Answered], the rule a
-// turn's loop answers it by, over the calls of the round the run was in — for
-// an ending no frame of the turn reaches: a loss, a stop.
-func (e *Engine) runDelivered(c *Company, run sandbox.PendingRun) (turn.Reply, bool) {
-	reply := turn.ParseReply(run.Reply)
+// the run's own record of the turn's bridged calls says — [turn.Answered], the
+// rule a turn's loop answers it by, over every round's calls: the earlier
+// launches' ([sandbox.PendingRun.PriorCalls]) and the current one's — for an
+// ending no frame of the turn reaches: a loss, a stop. KNOWN is false where the
+// record is incomplete — calls were elided from it — and what it kept shows no
+// delivery: a definite "did not reply" read off half a record is the false
+// account the end exists to prevent.
+func (e *Engine) runDelivered(c *Company, run sandbox.PendingRun) (reply turn.Reply, delivered, known bool) {
+	reply = turn.ParseReply(run.Reply)
 	if !reply.Valid() {
-		return reply, false
+		return reply, false, true
 	}
-	calls := make([]ledger.Call, 0, len(run.BridgeCalls))
+	calls := make([]ledger.Call, 0, len(run.PriorCalls)+len(run.BridgeCalls))
+	for _, name := range run.PriorCalls {
+		calls = append(calls, ledger.Call{Name: name})
+	}
 	for _, call := range run.BridgeCalls {
 		calls = append(calls, ledger.Call{Name: call.Name, Failed: call.Failed})
 	}
-	return reply, turn.Answered(calls, seatSurface(e.seatRegistry(c, run.AgentHandle)), reply)
+	delivered = turn.Answered(calls, seatSurface(e.seatRegistry(c, run.AgentHandle)), reply)
+	elided := run.PriorCallsElided || run.BridgeCallsElided > 0
+	return reply, delivered, delivered || !elided
 }
 
 // seatSurface is the delivery surface a seat's calls are judged against, as its
@@ -325,11 +345,12 @@ func seatSurface(reg *tools.Registry) turn.Surface {
 
 // runEnding is how a run's turn ended where the coordinator's ending, not the
 // turn's loop, ended it: lost, or stopped by a person — whether its reply
-// reached anybody read off the run's own calls, and the engine's answer to a
+// reached anybody read off the turn's own calls, and the engine's answer to a
 // colleague's ask beside it.
 func (e *Engine) runEnding(c *Company, run sandbox.PendingRun, answered colleagueAnswer) executordomain.Ending {
-	reply, delivered := e.runDelivered(c, run)
-	ending := executordomain.Ending{Delivered: delivered, DeliveredTo: replySurface(reply)}
+	reply, delivered, known := e.runDelivered(c, run)
+	ending := executordomain.Ending{Delivered: delivered, DeliveredTo: replySurface(reply),
+		DeliveryUnknown: !known}
 	switch {
 	case run.Stop != nil:
 		ending.Outcome = executordomain.OutcomeStopped

@@ -12,7 +12,14 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
+
+// shapedKey is a credential only its shape gives away.
+const shapedKey = "ghp_" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4zAb7d"
+
+// keyLine is a full line of a key's body, at an encoder's width.
+const keyLine = "MIIEowIBAAKCAQEAu7Jx9f3Lm2Pq8Rt5Vw1Yz4Bc6De9Fg0Hi3Jk5Lm7No9Pq2Rs4"
 
 // THE DIGEST IS POSIX CKSUM'S, byte for byte as the box's `cksum` prints it for
 // its standard input — the digest a box's restore compares a carried archive
@@ -50,8 +57,12 @@ func TestTheDigestIsPOSIXCksums(t *testing.T) {
 // credential's own key — all gone, the line still one JSON value, and a line
 // that is not JSON redacted as text.
 //
-// Mutation: redact the raw line alone, the strings alone, or keep a whole-line
-// redaction that broke the JSON, and a case here goes red.
+// Mutation: redact the raw line alone, the strings alone, write a key as it
+// came, keep a whole-line redaction that broke the JSON, or rewrite a line of
+// two values as one, and a case here goes red.
+//
+// AND A KEY IS A STRING LIKE ANY OTHER: a tool's structured result can name a
+// member by anything, a secret included.
 func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 	t.Parallel()
 	pem := "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat("MIIEowIBAAKCAQEAu7Jx9f3Lm2Pq8Rt5Vw1Yz4Bc6De9Fg0Hi3Jk5Lm7No9Pq2Rs4\n", 6) +
@@ -70,8 +81,12 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 			line: `{"content":` + string(encodedPEM) + `}`, gone: []string{"MIIEowIBAAKCAQEAu7Jx9f3Lm2"}},
 		"a value under a credential's key": {
 			line: `{"input":{"api_key":"looks-like-nothing-at-all"}}`, gone: []string{"looks-like-nothing-at-all"}},
+		"a key the engine named": {
+			line: `{"toolUseResult":{"opaque-engine-value":1}}`, gone: []string{"opaque-engine-value"}},
+		"a key only its shape gives away": {
+			line: `{"env":{"` + shapedKey + `":"set"}}`, gone: []string{shapedKey}},
 	} {
-		got := rewriteLine(tc.line, s)
+		got := rewriteLine(tc.line, s, testBounds)
 		if !json.Valid([]byte(got)) {
 			t.Errorf("%s: the line is no longer JSON: %q", name, got)
 		}
@@ -81,11 +96,20 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 			}
 		}
 	}
-	if got := rewriteLine(`{"text":"cut off mid opaque-engine-value`, s); strings.Contains(got,
+	if got := rewriteLine(`{"text":"cut off mid opaque-engine-value`, s, testBounds); strings.Contains(got,
 		"opaque-engine-value") {
 		t.Errorf("a line that is not JSON kept its secret: %q", got)
 	}
+	// TWO VALUES ON ONE LINE are not the one JSON value a transcript's line
+	// is: the line is redacted as the text it is, rather than split in two.
+	if got := rewriteLine(`{"a":"opaque-engine-value"} {"b":1}`, s, testBounds); strings.Contains(got,
+		"opaque-engine-value") || strings.Contains(got, "\n") || !strings.HasSuffix(got, `} {"b":1}`) {
+		t.Errorf("a line of two values was kept as %q", got)
+	}
 }
+
+// testBounds is the scrub of an archive at a session's bound.
+var testBounds = boundsFor(32 << 20)
 
 // A VALUE TOO SHORT TO BE A CREDENTIAL IS NEVER TAKEN OUT BY VALUE, and a long
 // one whose line holds another is taken out whole.
@@ -117,9 +141,7 @@ func TestATarIsWrittenWithEachMembersSizeAsRewritten(t *testing.T) {
 	})
 	s := newScrubber([]string{"opaque-engine-value"})
 	var out bytes.Buffer
-	err := scrubTar(bytes.NewReader(archive), func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(archive)), nil
-	}, &out, s)
+	err := scrubTar(bytes.NewReader(archive), reopenOf(archive), &out, s, testBounds)
 	if err != nil {
 		t.Fatalf("scrubTar: %v", err)
 	}
@@ -145,9 +167,7 @@ func TestATarIsWrittenWithEachMembersSizeAsRewritten(t *testing.T) {
 		"projects/p/s.jsonl":        `{"text":"a different and longer transcript"}` + "\n",
 		"projects/p/s/tool/out.txt": "out opaque-engine-value\n",
 	})
-	err = scrubTar(bytes.NewReader(archive), func() (io.ReadCloser, error) {
-		return io.NopCloser(bytes.NewReader(changed)), nil
-	}, io.Discard, s)
+	err = scrubTar(bytes.NewReader(archive), reopenOf(changed), io.Discard, s, testBounds)
 	if err == nil {
 		t.Error("an archive that changed between its two readings was written")
 	}
@@ -176,4 +196,218 @@ func tarOf(t *testing.T, files map[string]string) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// tarMember is one member of a tar a case writes, header and all.
+type tarMember struct {
+	h    tar.Header
+	body string
+}
+
+// tarOfMembers is a gzipped tar of members, in order, each header as given and
+// its size its body's.
+func tarOfMembers(t *testing.T, members []tarMember) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	for _, m := range members {
+		h := m.h
+		h.Size = int64(len(m.body))
+		if err := tw.WriteHeader(&h); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(m.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// gzipOf is text gzipped.
+func gzipOf(t *testing.T, text string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(text)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// reopenOf opens archive again from its start, as a box's file is reopened.
+func reopenOf(archive []byte) func() (io.ReadCloser, error) {
+	return func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(archive)), nil }
+}
+
+// THE SCRUB HOLDS NOTHING PAST ITS BOUNDS, whatever the box's own code wrote: a
+// gzip that expands past the plaintext one reading admits — a tar's or an
+// export's — a line, a string or a run of blanks the decoder would hold past
+// the piece, a stretch a redaction holds unsettled past it (a key with no END),
+// and a value nested past the rewrite's depth are each refused; the same
+// archive within its bounds, and a value at the depth, are not.
+//
+// Mutation: drop the plaintext's bound, the line's, the token's, the blanks',
+// the held stretch's or the depth's, and something below is read to its end.
+func TestTheScrubHoldsNothingPastItsBounds(t *testing.T) {
+	t.Parallel()
+	s := newScrubber(nil)
+	small := scrubBounds{plain: 1 << 20, piece: 64 << 10}
+	bomb := tarOf(t, map[string]string{
+		"projects/p/s.jsonl": strings.Repeat(`{"text":"ordinary"}`+"\n", (2<<20)/20),
+	})
+	if err := scrubTar(bytes.NewReader(bomb), reopenOf(bomb), io.Discard, s, small); !errors.Is(err, errScrubBound) {
+		t.Errorf("a tar expanding past its plaintext's bound: %v, want errScrubBound", err)
+	}
+	if err := scrubTar(bytes.NewReader(bomb), reopenOf(bomb), io.Discard, s, testBounds); err != nil {
+		t.Errorf("the same tar within its bounds: %v", err)
+	}
+	export := gzipOf(t, `{"messages":[`+strings.Repeat(`"ordinary",`, (2<<20)/11)+`"end"]}`)
+	if err := scrubDocument(bytes.NewReader(export), io.Discard, s, small); !errors.Is(err, errScrubBound) {
+		t.Errorf("an export expanding past its plaintext's bound: %v, want errScrubBound", err)
+	}
+	long := strings.Repeat("a", 128<<10)
+	for name, files := range map[string]map[string]string{
+		"a transcript line past the piece":   {"projects/p/s.jsonl": `{"text":"` + long + `"}` + "\n"},
+		"a document's string past the piece": {"tasks/s/1.json": `{"text":"` + long + `"}`},
+		"a key with no END held past the piece": {"projects/p/s/tool-results/out.txt": "-----BEGIN RSA PRIVATE KEY-----\n" +
+			strings.Repeat(keyLine+"\n", (128<<10)/len(keyLine))},
+	} {
+		archive := tarOf(t, files)
+		if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard, s,
+			small); !errors.Is(err, errScrubBound) {
+			t.Errorf("%s: %v, want errScrubBound", name, err)
+		}
+	}
+	// BLANKS ARE HELD AS A TOKEN IS: the decoder skips them only once it
+	// sees the token after them.
+	blanks := `{"text":` + strings.Repeat(" \n", 64<<10) + `"a"}`
+	if err := rewriteDocument(io.Discard, strings.NewReader(blanks), s, small); !errors.Is(err, errScrubBound) {
+		t.Errorf("a run of blanks past the piece: %v, want errScrubBound", err)
+	}
+	deep := func(n int) string { return strings.Repeat("[", n) + `"x"` + strings.Repeat("]", n) }
+	if err := rewriteDocument(io.Discard, strings.NewReader(deep(scrubDepthMax+1)), s,
+		testBounds); !errors.Is(err, errTooDeep) {
+		t.Errorf("a value nested past the depth: %v, want errTooDeep", err)
+	}
+	if err := rewriteDocument(io.Discard, strings.NewReader(deep(scrubDepthMax)), s, testBounds); err != nil {
+		t.Errorf("a value nested at the depth: %v", err)
+	}
+}
+
+// A TAR LEAVES THE BOX WITH NOTHING OF THE BOX'S BUT ITS SESSION'S FILES: a
+// member's name scrubbed as the transcript's paths to it are; a header carrying
+// only its kind, name, mode, size and time — no owner, no extended record; a
+// link the box's own code made left out; and a `.json` file that is not one
+// JSON value kept as the text it is, scrubbed, rather than costing the session.
+//
+// Mutation: copy the box's header through, keep a link, write a member's name
+// as it came, or refuse the session over a torn task file, and a check here
+// goes red.
+func TestATarLeavesTheBoxWithOnlyItsSessionsFiles(t *testing.T) {
+	t.Parallel()
+	at := time.Unix(1_700_000_000, 0)
+	archive := tarOfMembers(t, []tarMember{
+		{h: tar.Header{Name: "projects/p/s.jsonl", Typeflag: tar.TypeReg, Mode: 0o644, ModTime: at,
+			Uname: "box-user", Gname: "box-group", Uid: 4242, Gid: 4242, Format: tar.FormatPAX,
+			PAXRecords: map[string]string{"SCHILY.xattr.user.note": "opaque-engine-value"}},
+			body: `{"type":"user"}` + "\n"},
+		{h: tar.Header{Name: "projects/p/s/tool-results/opaque-engine-value.txt", Typeflag: tar.TypeReg,
+			Mode: 0o600, ModTime: at}, body: "spilled\n"},
+		{h: tar.Header{Name: "projects/p/s/escape", Typeflag: tar.TypeSymlink, ModTime: at,
+			Linkname: "/etc/opaque-engine-value"}},
+		{h: tar.Header{Name: "tasks/s/1.json", Typeflag: tar.TypeReg, Mode: 0o600, ModTime: at},
+			body: `{"subject":"opaque-engine-value","status":"in_prog`},
+	})
+	var out bytes.Buffer
+	if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), &out,
+		newScrubber([]string{"opaque-engine-value"}), testBounds); err != nil {
+		t.Fatalf("scrubTar: %v", err)
+	}
+	zr, err := gzip.NewReader(&out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(zr)
+	kept := map[string]string{}
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("the scrubbed tar does not read: %v", err)
+		}
+		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeDir {
+			t.Errorf("kept a member of kind %q: %s", h.Typeflag, h.Name)
+		}
+		if h.Uname != "" || h.Gname != "" || h.Uid != 0 || h.Gid != 0 || len(h.PAXRecords) != 0 ||
+			h.Linkname != "" {
+			t.Errorf("%s keeps the box's header: %+v", h.Name, h)
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept[h.Name] = string(body)
+	}
+	for name, body := range kept {
+		if strings.Contains(name, "opaque-engine-value") || strings.Contains(body, "opaque-engine-value") {
+			t.Errorf("%s still holds the engine's value: %q", name, body)
+		}
+	}
+	if _, ok := kept["projects/p/s/escape"]; ok || len(kept) != 3 {
+		t.Errorf("kept %v, want the transcript, the tool result and the task, and no link", slices.Sorted(maps.Keys(kept)))
+	}
+	if task, ok := kept["tasks/s/1.json"]; !ok || !strings.HasPrefix(task, `{"subject":"`) {
+		t.Errorf("the torn task file was kept as %q, want its text", task)
+	}
+}
+
+// AN EXPORT IS ONE DOCUMENT, KEPT AS ONE AND SCRUBBED: every string and every
+// key rewritten as a transcript's are, a value under a credential's key taken
+// out whole, the document still JSON — and an export holding a second document
+// after the first is refused, never kept as something its harness would not
+// import.
+//
+// Mutation: skip the document's rewrite, write its keys as they came, or let a
+// second value through, and a check here goes red.
+func TestAnExportIsOneDocumentKeptScrubbed(t *testing.T) {
+	t.Parallel()
+	s := newScrubber([]string{"opaque-engine-value"})
+	doc := `{"info":{"id":"ses_1"},"messages":[{"text":"the token opaque-engine-value and ` + shapedKey +
+		`"},{"opaque-engine-value":"named","input":{"password":"opaque-but-keyed"}}]}`
+	var out bytes.Buffer
+	if err := scrubDocument(bytes.NewReader(gzipOf(t, doc)), &out, s, testBounds); err != nil {
+		t.Fatalf("scrubDocument: %v", err)
+	}
+	zr, err := gzip.NewReader(&out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(kept) || !strings.Contains(string(kept), `"id":"ses_1"`) {
+		t.Fatalf("the export was kept as %q, want the same document", kept)
+	}
+	for _, secret := range []string{"opaque-engine-value", shapedKey, "opaque-but-keyed"} {
+		if strings.Contains(string(kept), secret) {
+			t.Errorf("the export kept %q: %s", secret, kept)
+		}
+	}
+	if err := scrubDocument(bytes.NewReader(gzipOf(t, doc+"\n"+doc)), io.Discard, s,
+		testBounds); !errors.Is(err, errNotOneValue) {
+		t.Errorf("an export of two documents: %v, want errNotOneValue", err)
+	}
 }

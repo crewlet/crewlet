@@ -29,7 +29,6 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
@@ -1106,17 +1105,22 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	}
 	// stopped settles the resumed turn as a person's stop ended it: said
 	// (agent_turn_stopped, under the pause that stopped it), its colleague
-	// answered, its end recorded on the executor log, and the run settled
-	// rather than reverted (below).
+	// answered, its end owed on the run's record for the run's ending to
+	// record on the executor log, and the run settled rather than reverted
+	// (below).
 	stopped := func(stop error, why string) error {
 		pause, _ := stopOf(stop)
 		role, agentID := seatIdentity(company, in.Turn.Handle())
 		e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
 			in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
 		answered := answer(res, stop)
-		e.endExecutorTurn(ctx, runTurnEnd(in.Run, stoppedEnding(res, resumedReply, stop, answered)))
+		e.oweExecutorEnd(ctx, in.Run, stoppedEnding(res, resumedReply, stop, answered))
 		return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, why, stop)
 	}
+	// A LAUNCH THIS SEGMENT'S FENCE REFUSED once its record was written is
+	// this segment's to end, which the ways out below do: no other frame
+	// takes it off ([Engine.abandonedLaunches]).
+	defer e.abandonedLaunches.Delete(in.Run.TurnID)
 	if err != nil {
 		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
 		// stop after the run's completion was claimed, or while its
@@ -1184,11 +1188,21 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// the box reclaimed and the record deleted, so nothing is
 			// coming back for this turn — and the colleague is told it
 			// could not be answered, and the executor log how it ended.
-			ending := endingOf(res, resumedReply, answer(res, err))
-			ending.Outcome = executordomain.OutcomeFailed
-			ending.Failure = fmt.Sprintf("the resumed turn broke and was abandoned (%s): %v", reason, err)
-			e.endExecutorTurn(ctx, runTurnEnd(in.Run, ending))
+			e.oweExecutorEnd(ctx, in.Run, abandonedEnding(res, resumedReply, answer(res, err), reason, err))
 			return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, reason, err)
+		}
+		// A RETRY NEEDS THE RUN'S RECORD, and a relaunch that failed in its
+		// launch — no box, no attach, no start — abandoned the record under
+		// it ([sandbox.Coordinator.Launch]): reverted, the claim would find
+		// nothing to hand back, the completion nothing to claim again, and
+		// the turn would end in silence, its colleague unanswered and its end
+		// nowhere. So a segment that broke and left no record ends the turn
+		// here, as one abandoned, and settles rather than reverts.
+		if e.runRecordGone(ctx, in.Run.TurnID) {
+			e.oweExecutorEnd(ctx, in.Run, abandonedEnding(res, resumedReply, answer(res, err),
+				"its relaunch failed, and its run's record went with it", err))
+			return fmt.Errorf("%w (the resumed turn's relaunch failed and took its run's record with it): %w",
+				sandbox.ErrResumeAbandoned, err)
 		}
 		// Reverted, so the turn is not over — and BOTH KINDS OF RESUME COME
 		// BACK rather than wait for a further signal.
@@ -1245,10 +1259,13 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
 				in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
 			// Not parked after all: the run it relaunched is ended, and so
-			// is the turn — on the executor log too.
+			// is the turn. Its colleague's answer and its end are that
+			// stop's own ending's, which records them from the run's record
+			// once its read has kept the relaunched job's session
+			// ([sandbox.CoordinatorOptions.CloseStopped]); answered here
+			// as well, the colleague would find the channel the first answer
+			// closed.
 			res.Suspended = false
-			answered := answer(res, parkErr)
-			e.endExecutorTurn(ctx, runTurnEnd(in.Run, stoppedEnding(res, resumedReply, parkErr, answered)))
 			return fmt.Errorf("%w (a person stopped the run the resumed turn relaunched): %w",
 				sandbox.ErrResumeAbandoned, parkErr)
 		}
@@ -1494,16 +1511,18 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 // so there is no reply to file. The completion that eventually lands comes
 // back through this same frame and records then.
 //
-// AND ON THE EXECUTOR LOG, the turn's END: how it ended — its decision and
-// breach (never the reviewer's last word, which reads `done` after the loop
-// overrode it), whether its reply reached the party waiting and on what, what
-// the reviewer said landed, what stopped a blocked round, and answered, the
-// engine's own answer to a colleague's ask — which the next turn on the
-// conversation is told beside the session it continues ([endingOf]).
+// AND THE TURN'S END, owed on its run's record for the run's ending to record
+// on the executor log once the turn's captures settle ([Engine.oweExecutorEnd]):
+// how it ended — its decision and breach (never the reviewer's last word, which
+// reads `done` after the loop overrode it), whether its reply reached the party
+// waiting and on what, what the reviewer said landed, what stopped a blocked
+// round, and answered, the engine's own answer to a colleague's ask — which the
+// next turn on the conversation is told beside the session it continues
+// ([endingOf]).
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {
-		e.endExecutorTurn(ctx, runTurnEnd(in.Run, endingOf(res, reply, answered)))
+		e.oweExecutorEnd(ctx, in.Run, endingOf(res, reply, answered))
 	}
 	// THE RUN THE ROW NAMES, and the work key it rode in on: a resume
 	// re-enters the run that suspended, so the entry names that one rather

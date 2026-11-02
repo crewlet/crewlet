@@ -34,15 +34,22 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 
 // TakeSession streams the session the box's last run worked in, as a capture
 // keeps it ([sandbox.SessionTaker]): packed now where take says so, scrubbed of
-// take's values and redacted, a piece at a time. The zero value where the box
-// holds no session: a harness this runner carries none for, a run whose record
-// names none, or one whose harness wrote nothing to pack.
+// take's values and redacted, a piece at a time, within the bounds take's
+// archive bound sets ([scrubBounds]). The zero value where the box holds no
+// session: a harness this runner carries none for, a run whose record names
+// none, or one whose harness wrote nothing to pack. An error where it holds one
+// that cannot be taken: a pack that failed, or an archive the box describes as
+// past take's bound, refused before a byte of it is read.
 func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	take sandbox.SessionTake) (sandbox.TakenSession, error) {
 
 	carries, ok := r.harness.(carrier)
 	if !ok {
 		return sandbox.TakenSession{}, nil
+	}
+	if take.MaxBytes <= 0 {
+		return sandbox.TakenSession{}, errors.New("executor: a take names no bound on the archive it keeps, " +
+			"and a session is never read out of a box unbounded")
 	}
 	open := r.OpenCapture
 	if take.Pack {
@@ -52,6 +59,12 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	if err != nil || body == nil {
 		return sandbox.TakenSession{}, err
 	}
+	if archive.Size > take.MaxBytes {
+		_ = body.Close()
+		return sandbox.TakenSession{}, fmt.Errorf("executor: the session's archive is %d bytes, past the %d "+
+			"a session is kept at", archive.Size, take.MaxBytes)
+	}
+	bounds := boundsFor(take.MaxBytes)
 	scrub := newScrubber(take.Scrub)
 	read, write := io.Pipe()
 	out := &takenBody{PipeReader: read, done: make(chan struct{})}
@@ -72,7 +85,7 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			}
 			return again, nil
 		}
-		scrubErr := scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum), scrub)
+		scrubErr := scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum), scrub, bounds)
 		out.finished(scrubErr, sum.String())
 		_ = write.CloseWithError(scrubErr)
 	}()
@@ -177,21 +190,26 @@ func (t *takenBody) Close() error {
 // streams it, described, as [Runner.OpenCapture] streams the one the script
 // left. For a job that never reached that pack: one a person stopped, one its
 // turn's cap ended while it still ran, one lost with its engine whose box is
-// still there. A zero description and a nil reader where there is nothing to
-// pack: a harness this runner carries none for, a run whose record names no
-// session, a harness that wrote no transcript.
+// still there, one whose own pack failed. A zero description and a nil reader
+// where there is nothing to pack: a harness this runner carries none for, a run
+// whose record names no session, a harness that wrote no transcript.
 //
 // THE RUNNER'S OWN PACK, NEVER ONE A CALLER SCRIPTS: every pack of a box's
 // session keeps its digest there, or the box later takes its own archive for
 // another box's and restores it over the copy that went on past it (carry.go).
 //
+// A PACK THAT FAILS IS AN ERROR, never "no session": a box without tar or
+// gzip, an OpenCode that would not export, a tar that broke — where the record
+// names a session the box holds — is a session that was not kept, and the
+// capture stamps it refused with what the pack said, so a later launch knows
+// the job's session is missing rather than reading an older capture as the
+// job's last. The pack says which it is by its exit ([packNothing]).
+//
 // A JOB STILL RUNNING is packed as it stands: a transcript's last line may be
-// one its harness had not finished writing, and an OpenCode export leaves out
-// the message still being written. A pack the box could not make — no tar or
-// gzip, an OpenCode that would not export — is said on the log, and the
-// archive the box holds, if any, is the one streamed: the run's script's own,
-// packed at its harness's exit, which [Runner.ClearArtifacts] cleared from
-// every run before this one.
+// one its harness had not finished writing, which the scrub keeps as the text
+// it is, and an OpenCode export leaves out the message still being written. A
+// file the harness appended to while tar read it is packed as tar read it,
+// rather than failing the pack.
 //
 // THE BOX'S OWN ENVIRONMENT: the pack runs in a login shell with the box's bin
 // directory first on its PATH, as the run's wrapper runs, but not with the
@@ -221,14 +239,31 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox) (sandbox.
 		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: packing %s's session %s: %w",
 			r.harness.Name(), rec.id, err)
 	}
-	if said := strings.TrimSpace(res.Stderr); said != "" || res.ExitCode != 0 {
-		log.WarnContext(ctx, "harness_session_pack_said", "harness", r.harness.Name(), "session", rec.id,
-			"exit", res.ExitCode, "said", firstLine(said, transcriptDetailLimit),
-			"detail", "the session was packed on demand and the pack said something, which is "+
-				"usually why there is no archive to keep; the archive the box holds, if any, is kept")
+	switch res.ExitCode {
+	case 0:
+	case packNothing:
+		return sandbox.SessionArchive{}, nil, nil
+	default:
+		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: %s's session %s could not be packed "+
+			"(exit %d): %s", r.harness.Name(), rec.id, res.ExitCode,
+			firstLine(strings.TrimSpace(res.Stderr), transcriptDetailLimit))
 	}
-	return r.OpenCapture(ctx, box)
+	archive, body, err := r.OpenCapture(ctx, box)
+	if err == nil && body == nil {
+		return sandbox.SessionArchive{}, nil, fmt.Errorf("executor: %s's session %s was packed and left no "+
+			"archive behind", r.harness.Name(), rec.id)
+	}
+	return archive, body, err
 }
+
+// The exits a pack made on demand ends with ([carrier.Pack]) beside 0, the
+// session packed: packNothing, a session there is nothing of to pack — no
+// transcript its harness wrote, no session its harness holds — and packFailed,
+// one there is and the pack could not make, its error stream saying why.
+const (
+	packFailed  = 2
+	packNothing = 3
+)
 
 // keepDigest records digest — `<crc> <length>`, as POSIX cksum prints it for its
 // standard input — as the digest of an archive of session the box's own copy

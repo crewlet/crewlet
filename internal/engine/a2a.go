@@ -108,20 +108,24 @@ type colleagueAnswer struct {
 	kind string
 	// sent is the text sent, where one was.
 	sent string
-	// replied says the reply reached the channel, and closed is a channel
-	// already closed — by the idle sweep, or by an earlier attempt at the
-	// same ending that answered it.
+	// replied says the colleague has an answer of this turn's: this reply
+	// reached the channel, or — closed, a channel already closed — an
+	// earlier attempt at the same ending answered it before closing it
+	// ([Engine.answeredBefore]). A channel closed with no answer on it —
+	// the asker gave up, or the idle sweep reaped it — is closed and not
+	// replied.
 	replied, closed bool
 }
 
 // onto records the answer on an ending: what the engine sent, and whether the
 // colleague waiting has it — which, for a turn that owed the engine's answer,
-// is the whole of whether its reply was delivered.
+// is the whole of whether its reply was delivered, and known either way.
 func (a colleagueAnswer) onto(ending *executordomain.Ending) {
 	if !a.owed {
 		return
 	}
 	ending.Answer, ending.DeliveredTo, ending.Delivered = a.kind, replyA2A, a.replied
+	ending.DeliveryUnknown = false
 	if a.closed {
 		ending.Answer = "channel_closed"
 	}
@@ -197,9 +201,10 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTu
 		// of the end, finds the channel its first attempt closed. Logged
 		// at a level that says so.
 		if errors.Is(replyErr, a2a.ErrClosed) {
-			log.InfoContext(ctx, "a2a_answer_channel_closed", "seat", by.handle,
-				"channel_id", ask.ChannelID)
 			sent.closed = true
+			sent.replied = e.answeredBefore(ctx, ask.ChannelID)
+			log.InfoContext(ctx, "a2a_answer_channel_closed", "seat", by.handle,
+				"channel_id", ask.ChannelID, "answered_before", sent.replied)
 			return sent
 		}
 		log.WarnContext(ctx, "a2a_answer_failed", "seat", by.handle,
@@ -228,6 +233,29 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTu
 	return sent
 }
 
+// answeredBefore reports whether a channel the engine found closed as it
+// answered had an answer on it already: the ask and an answer are the whole of
+// what crosses a channel ([a2a.Channel.Messages]), and the only party that
+// answers is the asked seat, so two messages are this turn's answer, sent by an
+// earlier attempt at the same ending that closed the channel after it — a
+// repeat after a crash between the reply and the record of the turn's end. One
+// closed with only the ask on it closed unanswered: the asker gave up on it, or
+// the idle sweep found nothing would answer it. A channel that cannot be read
+// is said, and taken for unanswered, which is what a reader is then told.
+func (e *Engine) answeredBefore(ctx context.Context, channelID string) bool {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return false
+	}
+	ch, err := a2a.NewCoordStore(e.backends.Fleet).Get(ctx, channelID)
+	if err != nil {
+		log.WarnContext(ctx, "a2a_channel_unread", "channel_id", channelID, "error", err.Error(),
+			"detail", "the closed channel could not be read to say whether an earlier attempt "+
+				"answered it, so the turn's end says the answer did not reach the asker")
+		return false
+	}
+	return ch.Messages >= 2
+}
+
 // answerLostTurn tells the colleague whose ask a lost run's turn took up that
 // the turn was lost — the coordinator's [sandbox.CoordinatorOptions.TurnLost],
 // a step of the run's ending on whichever node finishes it.
@@ -242,14 +270,12 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, by answeringTu
 // wake, never the run's ending. A repeat of the step after a crash finds the
 // channel its first attempt closed ([a2a.ErrClosed]).
 //
-// AND THE TURN'S END IS RECORDED on the executor log — lost, whether its reply
-// reached anybody as the run's own calls say, and what the engine told the
-// colleague — so the next turn on its conversation is told how this one ended
-// ([Engine.endExecutorTurn]). No frame of the turn is left to record it.
-func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun) {
-	if run.Ending == nil {
-		return
-	}
+// AND IT ANSWERS HOW THE TURN ENDED — lost, whether its reply reached anybody
+// as the turn's own calls say, and what the engine told the colleague — which
+// the ending owes the executor log on the run's row and records there, so the
+// next turn on its conversation is told how this one ended. No frame of the
+// turn is left to record it.
+func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun) executordomain.Ending {
 	company := e.Company()
 	var answered colleagueAnswer
 	switch {
@@ -260,10 +286,13 @@ func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun) {
 				"running no company, so there is no directory to reach the asker through")
 		answered = colleagueAnswer{owed: true, kind: "no_service"}
 	case run.ColleagueAsk != nil:
-		answered = e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{},
-			&runLostError{reason: run.Ending.Reason, detail: run.Ending.Detail})
+		lost := &runLostError{}
+		if run.Ending != nil {
+			lost.reason, lost.detail = run.Ending.Reason, run.Ending.Detail
+		}
+		answered = e.answerColleague(ctx, company, answeringRun(run), run.ColleagueAsk, turn.Result{}, lost)
 	}
-	e.endExecutorTurn(ctx, runTurnEnd(run, e.runEnding(company, run, answered)))
+	return e.runEnding(company, run, answered)
 }
 
 // runLostError is a turn ended by the loss of its executor's run: the reason

@@ -266,14 +266,18 @@ type ExecutorCollected struct {
 	// Absent where the launch recorded none.
 	HarnessSession string `json:"harness_session,omitempty"`
 	HarnessVersion string `json:"harness_version,omitempty"`
-	// SessionKeptBytes is the size of the sealed object the launch's
-	// session was kept as, where the read that collected it kept one the
-	// executor log names; SessionNotKept is why a capture taken did not land
-	// — refused, or its record not yet answered. Both absent where nothing
-	// was taken: a harness that carries no session, or the company's
+	// SessionTakenBytes is the size of the sealed session the read that
+	// collected the launch took out of its box to keep, where it took one:
+	// its upload and its record are made after the read, off it, and how
+	// they came out is stamped on the run's record and logged
+	// (executor_session_kept, executor_session_not_kept). SessionNotKept is
+	// why the read took none, or refused the one it took — a pack that
+	// failed, a session past its bounds, secrets the box was handed that
+	// could not be read back. Both absent where nothing was taken: a harness
+	// that carries no session, a box that held none, or the company's
 	// `turn_engine.conversation_session.enabled` off.
-	SessionKeptBytes int64  `json:"session_kept_bytes,omitempty"`
-	SessionNotKept   string `json:"session_not_kept,omitempty"`
+	SessionTakenBytes int64  `json:"session_taken_bytes,omitempty"`
+	SessionNotKept    string `json:"session_not_kept,omitempty"`
 }
 
 // EventType is the "executor_collected" wire type.

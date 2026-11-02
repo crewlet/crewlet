@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -96,6 +97,12 @@ var ErrHandBackOwed = errors.New("sandbox: the run still owes the seat a reply i
 // The answer is to let it go back to the seat first ([PendingStore.OweHandBack],
 // [Coordinator.letGoAnswer]) and then ask again.
 var ErrAnswerOwed = errors.New("sandbox: the run still holds a person's reply that no turn took")
+
+// ErrEndOwed is a store's refusal to delete a run whose row still owes the
+// executor log its turn's end ([PendingRun.OwedEnd]): the row is the end's only
+// record until the log takes it. The answer is to record it
+// ([Coordinator.EndTurn]), clear it ([PendingStore.ClearEnd]) and ask again.
+var ErrEndOwed = errors.New("sandbox: the run still owes the executor log its turn's end")
 
 // ErrAnswerTaken is a store's refusal to let go of a recorded answer a resumed
 // turn already took ([PendingStore.OweHandBack]): the reply has been used, and
@@ -466,31 +473,36 @@ type CoordinatorOptions struct {
 	// its holds by.
 	Stopped func(ctx context.Context, handle, turnID string)
 
-	// CloseStopped closes ON THE RECORD the turn that was parked on a run a
-	// person stopped ([Coordinator.StopSeat]): the turn's `stopped`
-	// completion and its [types.AgentTurnStopped], the shape a turn stopped
-	// at its next round takes, with the turn's work item charged what the run
-	// had spent ([RunStop.Collected]) — and its end on the executor log
-	// ([Coordinator.EndTurn]), whether its reply had reached anybody read off
-	// the run's own calls. The engine implements it, because
-	// only the agent layer reads the parked turn's state
+	// CloseStopped ends the turn of a run a person stopped
+	// ([Coordinator.StopSeat]) and answers how it ended, for the executor log
+	// ([Coordinator.EndTurn]): stopped, by whom and why, whether its reply had
+	// reached anybody as the turn's own calls say, and the engine's answer to
+	// the colleague whose ask the turn took up ([PendingRun.ColleagueAsk]).
+	// A turn that PARKED on the run is also closed on the record: the turn's
+	// `stopped` completion and its [types.AgentTurnStopped], the shape a turn
+	// stopped at its next round takes, with the turn's work item charged what
+	// the run had spent ([RunStop.Collected]). The engine implements it,
+	// because only the agent layer reads the parked turn's state
 	// ([PendingRun.ExecuteState]) and publishes the records a turn ends with.
 	//
-	// A STEP OF THE ENDING, made before the record is deleted and made again
-	// by any attempt that finishes the ending after a crash — this node's
-	// retry, or the seat's next holder — so what it publishes it publishes
-	// under identities derived from the run and its ending
-	// ([RecordedEnding.ID], [RecordedEnding.At]), which makes a repeat the
-	// same records to every store that keeps them. An error keeps the ending
-	// for its retry, as a refused announcement does.
+	// EVERY STOP, PARKED OR NOT. A launch stopped before its turn could park
+	// is still in the frame that launched it, which closes the turn on the
+	// record when its park is refused ([PendingStore.MarkSuspended],
+	// [ErrRunEnding]) — but its END, and its colleague's answer, are this
+	// step's, because only the ending records them after the stop's read
+	// has kept the job's session: recorded by the frame, the end's tombstone
+	// refused that session as it landed.
 	//
-	// ONLY FOR A TURN THAT PARKED. A row with no parked state is a launch
-	// stopped before its turn could park, and that turn is still running in
-	// the frame that launched it, which closes it as stopped when its park
-	// is refused ([PendingStore.MarkSuspended], [ErrRunEnding]). Nil closes
-	// nothing — a coordinator built without an engine (a test's): the stop
-	// is still announced and the run still ended.
-	CloseStopped func(ctx context.Context, run PendingRun) error
+	// A STEP OF THE ENDING, made before the record is deleted, its end
+	// decided ONCE ([PendingRun.OwedEnd]): an attempt that finds the end
+	// already owed after a crash does not close or answer again. What it
+	// publishes it publishes under identities derived from the run and its
+	// ending ([RecordedEnding.ID], [RecordedEnding.At]), which makes a repeat
+	// the same records to every store that keeps them. An error keeps the
+	// ending for its retry, as a refused announcement does. Nil closes
+	// nothing and ends nothing — a coordinator built without an engine (a
+	// test's): the stop is still announced and the run still ended.
+	CloseStopped func(ctx context.Context, run PendingRun) (executordomain.Ending, error)
 
 	// TurnLost is handed every run whose decided ending is a LOSS
 	// ([PendingRun.lost]) — its box gone or unreadable, its suspension never
@@ -498,9 +510,9 @@ type CoordinatorOptions struct {
 	// its seat retired, its resume broken before the turn began — for the
 	// engine to settle what the turn that parked on it still owed somebody
 	// outside the run: the colleague whose a2a_ask woke it
-	// ([PendingRun.ColleagueAsk]) is told the turn was lost, and why, and the
-	// executor log how the turn ended ([Coordinator.EndTurn]), which the next
-	// turn on its conversation is told.
+	// ([PendingRun.ColleagueAsk]) is told the turn was lost, and why; and to
+	// answer how the turn ended, which the ending records on the executor log
+	// ([Coordinator.EndTurn]) and the next turn on its conversation is told.
 	//
 	// THE ONE TERMINAL OF A PARKED TURN THAT NO FRAME OF THE TURN ENDS. A
 	// collected run's turn is ended by its resume, a person's stop by
@@ -510,21 +522,21 @@ type CoordinatorOptions struct {
 	// had not finished. Without this the ask went unanswered and its
 	// channel waited for the idle sweep.
 	//
-	// A STEP OF THE ENDING, as SteersExpired is: made after the
-	// announcement, before the record is deleted, once per attempt — so a
-	// repeat after a crash is made again, and finds the channel its first
-	// attempt answered and closed. BEST EFFORT, with no error: the turn is
-	// over whatever the asker hears, and keeping a lost run's ending — and
-	// the seat's inbox behind it — on a reply the broker refused would hold
-	// the seat's mail for a courtesy.
+	// A STEP OF THE ENDING, made after the announcement and before the record
+	// is deleted, its end decided ONCE ([PendingRun.OwedEnd]): an attempt
+	// that finds the end already owed after a crash answers nobody again.
+	// BEST EFFORT in what it tells the asker: the turn is over whatever the
+	// asker hears, and keeping a lost run's ending — and the seat's inbox
+	// behind it — on a reply the broker refused would hold the seat's mail
+	// for a courtesy.
 	//
 	// ONLY A LOSS, which is an ending that announces a reason: an ending
 	// whose turn came back — collected and resumed, or an abandoned resume
 	// whose turn ran and published its own end — announces nothing, and the
 	// turn's own frame answered; a stop is [CoordinatorOptions.CloseStopped]'s.
-	// Nil hands over nothing — a coordinator built without an engine (a
-	// test's).
-	TurnLost func(ctx context.Context, run PendingRun)
+	// Nil hands over nothing and ends nothing — a coordinator built without
+	// an engine (a test's).
+	TurnLost func(ctx context.Context, run PendingRun) executordomain.Ending
 
 	// SteersExpired publishes, as expired, every note a person sent the run's
 	// turn that no job ran with ([PendingRun.UnreadNotes]): the ones still
@@ -770,9 +782,9 @@ type Coordinator struct {
 	recovered func(ctx context.Context, run PendingRun)
 	stopped   func(ctx context.Context, handle, turnID string)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
-	closeStopped func(ctx context.Context, run PendingRun) error
+	closeStopped func(ctx context.Context, run PendingRun) (executordomain.Ending, error)
 	// turnLost is [CoordinatorOptions.TurnLost].
-	turnLost func(ctx context.Context, run PendingRun)
+	turnLost func(ctx context.Context, run PendingRun) executordomain.Ending
 	// steersExpired is [CoordinatorOptions.SteersExpired].
 	steersExpired func(ctx context.Context, run PendingRun) error
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
@@ -783,13 +795,26 @@ type Coordinator struct {
 	refresh RefreshFunc
 	// sessions and keep are [CoordinatorOptions.Sessions] and Keep;
 	// sessionRetry is the first wait between two attempts at one of their
-	// records ([sessionRetryBase]) and recordBudget all of a record's
-	// attempts together ([sessionRecordBudget]) — a test's shorter.
+	// records ([sessionRetryBase]), recordBudget all of a record's attempts
+	// together ([sessionRecordBudget]) and captureTick how often an ending
+	// waiting on a capture of its turn reads the row ([captureWaitTick]) —
+	// a test's shorter.
 	sessions     SessionWrites
 	keep         SessionKeep
 	sessionRetry time.Duration
 	recordBudget time.Duration
+	captureTick  time.Duration
 	now          func() time.Time
+
+	// keepLife is the lifetime every keep runs under, off the read that took
+	// its capture ([Coordinator.keepLater]), and keeping counts them:
+	// [Coordinator.Stop] lets the ones under way finish for
+	// [sessionKeepDrain], then ends them. spoolSweep runs
+	// [Coordinator.sweepSpools] once.
+	keepLife   context.Context
+	endKeeps   context.CancelFunc
+	keeping    sync.WaitGroup
+	spoolSweep sync.Once
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
 	// on every delivery, and attempts beside them.
@@ -945,6 +970,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		keep:          opts.Keep,
 		sessionRetry:  sessionRetryBase,
 		recordBudget:  sessionRecordBudget,
+		captureTick:   captureWaitTick,
 		now:           opts.Now,
 		runs:          map[string]seatRuns{},
 		moves:         map[string]uint64{},
@@ -973,12 +999,18 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		c.after = func(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
 	}
 	c.life, c.end = context.WithCancel(context.Background())
+	c.keepLife, c.endKeeps = context.WithCancel(context.Background())
 	return c, nil
 }
 
 // Stop ends every retry this coordinator has scheduled and waits for any that
 // is running. An answer whose resume is still owed stays recorded on its run,
 // and whichever node holds the seat next drives it ([Coordinator.RecoverSeat]).
+//
+// A KEEP UNDER WAY is given [sessionKeepDrain] to finish — the upload of an
+// ordinary session takes seconds — and ended after it, stamped refused saying
+// so: a stopping node does not hold its drain for the slowest upload a session
+// at its bound could take.
 func (c *Coordinator) Stop() {
 	c.mu.Lock()
 	c.closed = true
@@ -991,6 +1023,19 @@ func (c *Coordinator) Stop() {
 	c.mu.Unlock()
 	c.end()
 	c.inflight.Wait()
+	kept := make(chan struct{})
+	go func() {
+		c.keeping.Wait()
+		close(kept)
+	}()
+	drain := time.NewTimer(sessionKeepDrain)
+	defer drain.Stop()
+	select {
+	case <-kept:
+	case <-drain.C:
+	}
+	c.endKeeps()
+	<-kept
 }
 
 // leaseOf is the lease this node writes on a seat's behalf under —
@@ -1617,7 +1662,18 @@ func parkedEngineSpend(run PendingRun) EngineSpend {
 // since a paused remote box cannot be read — and the result says it was cut
 // off and why, so neither the reviewer nor the record takes a run the clock
 // stopped for one that finished.
+//
+// AND ITS TOOL-BRIDGE SESSION IS CLOSED FIRST ([CoordinatorOptions.Ended]): a
+// job its turn's cap ended speaks for the seat no more, and between the read
+// of its box — which takes its harness's session too, a pack of a job still
+// working included — and the pause that stops it, it would otherwise go on
+// posting and writing as the seat after its turn had stopped waiting for it.
+// A job that finished before the cap makes no call to refuse, and a turn past
+// its cap starts no round that would open the session again.
 func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool, error) {
+	if c.ended != nil && run.PastDeadline(c.now()) {
+		c.ended(run.TurnID)
+	}
 	// THE BOX IS READ WHERE IT IS: here, or on the node whose host it is on
 	// ([Coordinator.boxResult]). What follows is this node's own work, done
 	// under the turn the result is fitted for.
@@ -1691,7 +1747,7 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 // whose host it is on: the box reconnected, its job asked whether it finished
 // where its turn's cap has passed, its result read back and floored, its
 // transcript and refs held to their bounds ([boundBox]), the job's harness
-// session kept ([Coordinator.keepSession]), and — for a completion's
+// session taken ([Coordinator.takeCapture]), and — for a completion's
 // collection — the box paused and the pause recorded. ENDED is the run its
 // turn's cap ended: see [Coordinator.collect].
 //
@@ -1703,10 +1759,20 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	if err != nil {
 		return Result{}, false, err
 	}
-	ended := false
-	if read == BoxReadCollect && run.PastDeadline(c.now()) {
+	// WHETHER THE JOB STILL WORKS as its box is read: a stop's always may,
+	// and a collection's only where its turn's cap has passed — ENDED, a job
+	// the cap ended while it ran. A job still working is one whose session
+	// is packed as it stands and is not final ([readCapture]); a poll that
+	// cannot say is taken for one still working, which only packs again.
+	ended, running := false, false
+	switch {
+	case read == BoxReadStop:
+		state, pollErr := runner.Poll(ctx, box, run.Handle())
+		running = pollErr != nil || state == JobRunning
+	case run.PastDeadline(c.now()):
 		state, pollErr := runner.Poll(ctx, box, run.Handle())
 		ended = pollErr == nil && state == JobRunning
+		running = ended
 	}
 	result, err := runner.Collect(ctx, box, run.Handle())
 	if err != nil {
@@ -1721,15 +1787,14 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 				"is read as nothing spent rather than subtracted from the seat's budget")
 	}
 	result = boundBox(result)
-	// THE JOB'S SESSION, KEPT HERE, on the box's host and before the box is
-	// paused or reclaimed — a paused box cannot be read, and a reclaimed one is
-	// gone — whichever node asked for the read (session.go). A stop's read is
-	// the last anything makes of the box.
-	at := stopCapture
-	if read == BoxReadCollect {
-		at = collectionCapture(result, ended)
-	}
-	result.Kept = c.keepSession(ctx, run, box, runner, at)
+	// THE JOB'S SESSION, TAKEN HERE, on the box's host and before the box is
+	// paused or reclaimed — a paused box cannot be read, and a reclaimed one
+	// is gone — whichever node asked for the read, and spooled sealed on this
+	// node; KEPT after the read has answered, off it (session.go). A stop's
+	// read is the last anything makes of the box.
+	spooled, kept := c.takeCapture(ctx, run, box, runner, readCapture(read, result, running))
+	result.Kept = kept
+	defer c.keepLater(spooled)
 	if read != BoxReadCollect {
 		return result, ended, nil
 	}
@@ -1937,13 +2002,15 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		// THE SESSION THE LAUNCH RAN, as its own script recorded it — not
 		// the one it was asked to continue, which a run that fell back to a
 		// new one did not run — and the harness's release; and what the
-		// read kept of it, so the record of a launch says whether a later
-		// one can continue it.
+		// read took of it to keep, or why it took none, so the record of a
+		// launch says whether a later one may continue it. Whether the
+		// upload and the record after the read landed is the run's record's
+		// and the log's: they are made off the read.
 		HarnessSession: result.SessionID,
 		HarnessVersion: result.HarnessVersion,
 	}
 	if kept := result.Kept; kept != nil {
-		rec.SessionKeptBytes = kept.Bytes
+		rec.SessionTakenBytes = kept.Bytes
 		rec.SessionNotKept = redact.Secrets(kept.NotKept)
 	}
 	rec.StartedAt = facts.StartedAt.UTC()
@@ -3709,10 +3776,13 @@ func (c *Coordinator) endRun(ctx context.Context, run PendingRun, e ending, mayA
 	return &ending, nil
 }
 
-// errAskAway is a decided ending whose next step is a read of a box on another
-// node's host, reached on a frame that may not wait for that host
-// ([Coordinator.endRun]): the ending is handed to this node's retry, which may.
-var errAskAway = errors.New("sandbox: the run's box is read on another node's host, off this frame")
+// errAskAway is a decided ending whose next step may not be made on the frame
+// that reached it ([Coordinator.endRun]) — a read of a box on another node's
+// host, the take of a job's session out of its box, or the record of the turn's
+// end on the executor log, each of which waits on something that is not this
+// frame's to wait on: the ending is handed to this node's retry, which runs on
+// the coordinator's own lifetime and may.
+var errAskAway = errors.New("sandbox: the ending's next step is made off this frame, by its retry")
 
 // finishEnding does what a decided ending ([PendingRun.Ending]) still has to
 // do, IN THIS ORDER, and deletes the record last:
@@ -3721,27 +3791,40 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 //     ([Coordinator.letGoAnswer]), its copies recorded on the row as owed;
 //  2. every copy the row owes ([PendingRun.HandBack]) is published and cleared;
 //  3. for a STOP, the run's tool-bridge session is closed, and what the run
-//     spent is read off its box, charged and recorded
-//     ([Coordinator.collectStopped]) — before the box goes, since nothing can
-//     read it after. A box on another node's host is read there, and only
-//     where mayAsk says this frame may wait on that host: anywhere else the
-//     ending stops here, decided and with its session closed, and is handed
-//     to this node's retry ([errAskAway]) — and the job's harness session is
-//     kept, by the read itself ([Coordinator.readBox]);
-//  4. for a LOSS whose box is still on this node's host, the job's session
-//     is kept before the box goes ([Coordinator.keepLostSession]), and the
-//     box is reclaimed, where the ending reclaims it after its decision;
+//     spent is read off its box, charged and recorded, its harness session
+//     taken by the read itself ([Coordinator.collectStopped],
+//     [Coordinator.readBox]) — before the box goes, since nothing can read
+//     it after;
+//  4. for a LOSS whose box may still be read, the job's session is taken
+//     before the box goes ([Coordinator.keepLostSession]), here or on the
+//     host the box is on; and the box is reclaimed, where the ending
+//     reclaims it after its decision;
 //  5. the announcement is published, under the ending's own identity;
 //  6. for a loss, the run is handed to the engine, which answers the
-//     colleague whose ask its turn took up and records on the executor log
-//     that the turn was lost ([CoordinatorOptions.TurnLost]);
-//  7. for a stop, the turn that was parked on the run is closed on the record
-//     as stopped, and its end recorded on the executor log
-//     ([CoordinatorOptions.CloseStopped]);
+//     colleague whose ask its turn took up and says how the turn ended
+//     ([CoordinatorOptions.TurnLost]), and that end is recorded on the row
+//     as owed ([PendingStore.OweEnd]);
+//  7. for a stop, the turn is closed on the record as stopped where it was
+//     parked on the run, its colleague answered and its end owed the same
+//     way ([CoordinatorOptions.CloseStopped]);
 //  8. every note a person sent the turn that no job ran with — still waiting on
 //     the record, or read by the brief of a job that never started — is
 //     published expired ([CoordinatorOptions.SteersExpired]);
-//  9. the record is deleted ([PendingStore.Finish]).
+//  9. the end the row owes — this ending's, or the one the turn's resumed
+//     frame decided — is recorded on the executor log once every capture of
+//     the turn has settled ([Coordinator.awaitCapture],
+//     [Coordinator.publishEnd]), and cleared from the row;
+//  10. the record is deleted ([PendingStore.Finish]).
+//
+// # Off any frame somebody waits on
+//
+// Steps 3, 4 and 9 wait on what is not the frame's own: another node's host,
+// a box's pack and the scrub of its session, the executor log and a capture
+// being kept. Only where mayAsk says this is the ending's own retry, on the
+// coordinator's lifetime, are they made; anywhere else — the pause watch, a
+// seat's acquisition, a completion's handler — the ending stops there, decided
+// and with its session closed, and is handed to that retry at once
+// ([errAskAway]), the seat's mail held behind it until it lands.
 //
 // # Across a crash at each step
 //
@@ -3750,21 +3833,23 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 // finds nothing left to let go of, the copies go out again under the same
 // derived ids (the inbox's same-id dedupe and the completion ledger collapse
 // them), a box already reclaimed is a kill of nothing, the announcement is the
-// same event again, and a lost turn's asker finds the channel its first answer
-// closed. Stopped anywhere before the delete, the row still
-// carries the ending, and whoever reads it next — this node's retry, or the
-// seat's next holder ([Coordinator.RecoverSeat]) — finishes it from the step it
-// stopped at.
+// same event again, the turn's end was decided ONCE and is found owed on the
+// row rather than decided — and its colleague answered — again, and an end the
+// log took already is refused as one, which is the answer. Stopped anywhere
+// before the delete, the row still carries the ending, and whoever reads it
+// next — this node's retry, or the seat's next holder ([Coordinator.RecoverSeat])
+// — finishes it from the step it stopped at.
 //
 // # A delete the store refuses
 //
-// The store will not delete a row that still owes the seat copies or holds a
-// reply the ending must hand back ([ErrHandBackOwed], [ErrAnswerOwed]), and
-// hands back the row as it stands; the steps run again against it. A step that
-// does not land is returned, and the caller keeps the ending.
+// The store will not delete a row that still owes the seat copies, holds a
+// reply the ending must hand back, or owes the executor log its turn's end
+// ([ErrHandBackOwed], [ErrAnswerOwed], [ErrEndOwed]), and hands back the row as
+// it stands; the steps run again against it. A step that does not land is
+// returned, and the caller keeps the ending.
 func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk bool) error {
 	var handed []string
-	reclaimed, announced, answered, closed, expired := false, false, false, false, false
+	reclaimed, announced, expired := false, false, false
 	for range endingRounds {
 		if run.answerOwed() {
 			owing, err := c.letGoAnswer(ctx, run)
@@ -3795,7 +3880,7 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			if c.ended != nil {
 				c.ended(run.TurnID)
 			}
-			if !mayAsk && c.readsAway(run) {
+			if !mayAsk && (c.readsAway(run) || c.capturesStop(run)) {
 				return errAskAway
 			}
 			collected, err := c.collectStopped(ctx, run)
@@ -3804,9 +3889,12 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			}
 			run = collected
 		}
-		if run.lost() && run.Ending.Reclaim && !reclaimed {
+		if run.Ending.Reclaim && !reclaimed && c.capturesLoss(run) {
 			// THE LAST READ OF THE BOX ANYTHING MAKES, before the reclaim
 			// below takes it (session.go).
+			if !mayAsk {
+				return errAskAway
+			}
 			c.keepLostSession(ctx, run)
 		}
 		if run.Ending.Reclaim && !reclaimed {
@@ -3823,19 +3911,22 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			}
 			announced = true
 		}
-		if run.lost() && !answered && c.turnLost != nil {
-			// AFTER THE ANNOUNCEMENT, which is the record of the loss the
-			// answer tells somebody about, and BEST EFFORT: see
-			// [CoordinatorOptions.TurnLost].
-			c.turnLost(ctx, run)
-			answered = true
-		}
-		if run.Stop != nil && !closed && c.closeStopped != nil && len(run.ExecuteState) > 0 {
-			if err := c.closeStopped(ctx, run); err != nil {
+		if len(run.OwedEnd) == 0 {
+			// AFTER THE ANNOUNCEMENT, which is the record of the loss or the
+			// stop the end and the colleague's answer tell of — and ONCE:
+			// owed on the row, it is found there by every later attempt.
+			ending, owes, err := c.endingOfRun(ctx, run)
+			if err != nil {
 				return fmt.Errorf("sandbox: ending run %s, whose stopped turn could not be closed "+
 					"on the record: %w", run.TurnID, err)
 			}
-			closed = true
+			if owes {
+				owing, err := c.oweEnd(ctx, run, ending)
+				if err != nil {
+					return err
+				}
+				run = owing
+			}
 		}
 		if !expired && c.steersExpired != nil && run.unreadNotes() {
 			if err := c.steersExpired(ctx, run); err != nil {
@@ -3844,36 +3935,66 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			}
 			expired = true
 		}
+		if len(run.OwedEnd) > 0 {
+			if !mayAsk && c.keepsSessions() {
+				return errAskAway
+			}
+			published, err := c.publishEnd(ctx, c.awaitCapture(ctx, run))
+			if err != nil {
+				return fmt.Errorf("sandbox: ending run %s, whose turn's end the executor log has not "+
+					"taken yet: %w", run.TurnID, err)
+			}
+			run = published
+		}
 		settled, _, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
 		switch {
 		case err == nil:
 			// GONE, by this delete or by whoever finished the same ending
 			// first: either way there is nothing left of it to do.
 			return nil
-		case errors.Is(err, ErrHandBackOwed), errors.Is(err, ErrAnswerOwed):
+		case errors.Is(err, ErrHandBackOwed), errors.Is(err, ErrAnswerOwed), errors.Is(err, ErrEndOwed):
 			run = settled
 		default:
 			return fmt.Errorf("sandbox: ending run %s, whose record could not be deleted: %w",
 				run.TurnID, err)
 		}
 	}
-	return fmt.Errorf("sandbox: ending run %s: it kept owing its seat a reply after handing one back",
-		run.TurnID)
+	return fmt.Errorf("sandbox: ending run %s: it kept owing its seat a reply, or the log its turn's "+
+		"end, after recording one", run.TurnID)
+}
+
+// endingOfRun is how the turn of run — a loss or a stop — ended, from the
+// engine, and whether the turn owes the executor log an end: a loss's account
+// ([CoordinatorOptions.TurnLost]), or a stop's, its parked turn closed on the
+// record first ([CoordinatorOptions.CloseStopped]). An ending whose turn came
+// back owes none here: the turn's own frame decided its end.
+func (c *Coordinator) endingOfRun(ctx context.Context, run PendingRun) (executordomain.Ending, bool, error) {
+	switch {
+	case run.lost() && c.turnLost != nil:
+		return c.turnLost(ctx, run), true, nil
+	case run.Stop != nil && c.closeStopped != nil:
+		ending, err := c.closeStopped(ctx, run)
+		if err != nil {
+			return executordomain.Ending{}, false, err
+		}
+		return ending, true, nil
+	}
+	return executordomain.Ending{}, false, nil
 }
 
 // endingRounds bounds [Coordinator.finishEnding]'s rounds.
 //
-// A round repeats only when the delete is refused for a reply the row still
-// owes the seat — copies, or an answer, that another attempt at the same ending
-// left on it after this round read it — and a decided ending takes no new
-// answer (the store refuses every live write to it, [ErrRunEnding]), so what a
-// refusal can name is one of a finite set: an answer to let go of, an earlier
-// decline's copies, the let-go's own copies. Four rounds is one for each and
-// one for the delete. A round that finds the very copies it already handed
+// A round repeats only when the delete is refused for what the row still owes
+// — copies, an answer, or the turn's end, that another attempt at the same
+// ending left on it after this round read it — and a decided ending takes no
+// new answer (the store refuses every live write to it, [ErrRunEnding]), so
+// what a refusal can name is one of a finite set: an answer to let go of, an
+// earlier decline's copies, the let-go's own copies, an end. Five rounds is one
+// for each and one for the delete. A round that finds the very copies it already handed
 // back stops sooner (the same-copies guard below), so the bound is reached only
 // by another node finishing the same ending in step with this one, and the
 // ending is then kept for this node's retry.
-const endingRounds = 4
+const endingRounds = 5
 
 // keepEnding keeps an ending that could not be finished for this node's retry
 // ([Coordinator.oweEnding]) and returns cause as the kept ending's error.

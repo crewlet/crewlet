@@ -82,6 +82,13 @@ type CarryCheck struct {
 // demand, for a job that never got to — a stopped job, one its turn's cap
 // ended while it still ran, one lost with its engine whose box is still there.
 //
+// THREE ANSWERS: the session, taken; the zero [TakenSession], where the box
+// holds no session to take — a harness that wrote none, a run whose record
+// names none; and an error, where it holds one that could not be taken — a
+// pack that failed, an archive past its bound — which the capture stamps
+// refused, so a later launch knows the job's session was not kept rather than
+// reading an older capture as its latest.
+//
 // OPTIONAL, as [noteReader] is: a runner that carries no session — a harness not
 // taught to pack one, a test's — keeps nothing, and every capture of its runs
 // is no capture at all.
@@ -99,10 +106,19 @@ type SessionTake struct {
 	Pack bool
 
 	// Scrub is every secret the engine itself put in the box, by value — its
-	// login, its environment's credentials — which is taken out of every
-	// file of the archive in its raw form and in the form a JSON string
-	// holds it in, before the redaction every text leaving a box passes.
+	// login, its environment's credentials ([HandedSecrets]) — which is taken
+	// out of every file of the archive in its raw form and in the form a JSON
+	// string holds it in, before the redaction every text leaving a box
+	// passes.
 	Scrub []string
+
+	// MaxBytes is the largest archive kept (executordomain.SessionMaxBytes):
+	// one the box describes as larger is refused before a byte of it is read,
+	// and it bounds what the scrub reads out of the archive — the plaintext
+	// it expands to, and each piece of it the scrub holds whole — so an
+	// archive the box's own code wrote cannot cost the engine host more than
+	// that.
+	MaxBytes int64
 }
 
 // TakenSession is a session archive on its way out of its box: described, and

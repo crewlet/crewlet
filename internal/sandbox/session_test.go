@@ -5,7 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,11 +21,16 @@ import (
 )
 
 // sessionWrites is the executor log's writes as a case plays them: every
-// capture and end asked, and what each attempt answers.
+// capture and end asked, in the order asked, and what each attempt answers. An
+// END TOMBSTONES ITS TURN, as the log's does: a capture of an ended turn is
+// refused ([executordomain.ErrTurnEnded]), so a case can see an end that came
+// before the turn's last capture.
 type sessionWrites struct {
 	mu       sync.Mutex
 	captures []capturedRecord
 	ends     []endedRecord
+	order    []string
+	ended    map[string]bool
 	// refuse answers every capture attempt while it is set, as a log that
 	// did not answer does.
 	refuse error
@@ -30,6 +39,7 @@ type sessionWrites struct {
 type capturedRecord struct {
 	call executordomain.Call
 	n    executordomain.NewCapture
+	err  error
 }
 
 type endedRecord struct {
@@ -41,16 +51,31 @@ func (w *sessionWrites) Capture(_ context.Context, c executordomain.Call,
 	n executordomain.NewCapture) (executordomain.CaptureResult, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.captures = append(w.captures, capturedRecord{call: c, n: n})
-	if w.refuse != nil {
+	w.order = append(w.order, "capture")
+	switch {
+	case w.refuse != nil:
+		w.captures = append(w.captures, capturedRecord{call: c, n: n, err: w.refuse})
 		return executordomain.CaptureResult{Result: statelog.Result{Outcome: statelog.OutcomeUnknown}}, w.refuse
+	case w.ended[n.Turn]:
+		err := fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
+		w.captures = append(w.captures, capturedRecord{call: c, n: n, err: err})
+		return executordomain.CaptureResult{}, err
 	}
+	w.captures = append(w.captures, capturedRecord{call: c, n: n})
 	return executordomain.CaptureResult{Result: statelog.Result{Outcome: statelog.OutcomeApplied}, Recorded: true}, nil
 }
 
 func (w *sessionWrites) End(_ context.Context, c executordomain.Call, n executordomain.NewEnd) (statelog.Result, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.order = append(w.order, "end")
+	if w.ended == nil {
+		w.ended = map[string]bool{}
+	}
+	if w.ended[n.Turn] {
+		return statelog.Result{}, fmt.Errorf("%w: %s", executordomain.ErrTurnEnded, n.Turn)
+	}
+	w.ended[n.Turn] = true
 	w.ends = append(w.ends, endedRecord{call: c, n: n})
 	return statelog.Result{Outcome: statelog.OutcomeApplied}, nil
 }
@@ -67,19 +92,29 @@ func (w *sessionWrites) captured() []capturedRecord {
 	return append([]capturedRecord(nil), w.captures...)
 }
 
-func (w *sessionWrites) ended() []endedRecord {
+func (w *sessionWrites) endedRecords() []endedRecord {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return append([]endedRecord(nil), w.ends...)
 }
 
-// sessionKeep is the engine's part of keeping a session, as a case plays it.
+func (w *sessionWrites) calls() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.order)
+}
+
+// sessionKeep is the engine's part of keeping a session, as a case plays it:
+// the handed secrets "sealed" as the turn they belong to beside their bytes, a
+// spool of the archive as it came, and an upload that keeps what it read.
 type sessionKeep struct {
-	mu      sync.Mutex
-	policy  SessionPolicy
-	putErr  error
-	secrets []string
-	// uploaded is what every put read.
+	mu     sync.Mutex
+	policy SessionPolicy
+	putErr error
+	// gate, when set, holds every upload until it is closed: a keep that
+	// takes its time.
+	gate chan struct{}
+	// uploaded is what every upload read.
 	uploaded [][]byte
 }
 
@@ -89,15 +124,44 @@ func (k *sessionKeep) Policy(context.Context) (SessionPolicy, error) {
 	return k.policy, nil
 }
 
-func (k *sessionKeep) Secrets(context.Context, PendingRun) []string { return k.secrets }
+func (k *sessionKeep) SealHanded(turnID string, handed []byte) (string, error) {
+	return turnID + "|" + string(handed), nil
+}
+
+func (k *sessionKeep) OpenHanded(turnID, sealed string) ([]byte, error) {
+	body, ok := strings.CutPrefix(sealed, turnID+"|")
+	if !ok {
+		return nil, errors.New("sealed for another turn")
+	}
+	return []byte(body), nil
+}
 
 func (k *sessionKeep) MintedAt(context.Context, string, string, time.Time) (time.Time, error) {
 	return time.Date(2026, 8, 23, 11, 0, 0, 0, time.UTC), nil
 }
 
-func (k *sessionKeep) Put(_ context.Context, _, _ string, archive io.ReadCloser) (executordomain.SealedObject, error) {
-	defer func() { _ = archive.Close() }()
-	body, err := io.ReadAll(archive)
+func (k *sessionKeep) Seal(_, _ string, archive io.Reader, dst io.Writer) (executordomain.SealedSpool, error) {
+	n, err := io.Copy(dst, archive)
+	if err != nil {
+		return executordomain.SealedSpool{}, err
+	}
+	return executordomain.SealedSpool{Key: objstore.KeyAt(time.Now()), ContentKey: "k1", Size: n}, nil
+}
+
+func (k *sessionKeep) Upload(ctx context.Context, spool executordomain.SealedSpool,
+	sealed io.Reader) (executordomain.SealedObject, error) {
+
+	k.mu.Lock()
+	gate := k.gate
+	k.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return executordomain.SealedObject{}, ctx.Err()
+		}
+	}
+	body, err := io.ReadAll(sealed)
 	if err != nil {
 		return executordomain.SealedObject{}, err
 	}
@@ -108,10 +172,19 @@ func (k *sessionKeep) Put(_ context.Context, _, _ string, archive io.ReadCloser)
 	}
 	k.uploaded = append(k.uploaded, body)
 	sum := sha256.Sum256(body)
-	return executordomain.SealedObject{ContentKey: "k1", Object: objstore.Object{
-		Key: objstore.KeyAt(time.Now()), Hash: objstore.Hash(hex.EncodeToString(sum[:])), Size: int64(len(body)),
+	return executordomain.SealedObject{ContentKey: spool.ContentKey, Object: objstore.Object{
+		Key: spool.Key, Hash: objstore.Hash(hex.EncodeToString(sum[:])), Size: int64(len(body)),
 	}}, nil
 }
+
+func (k *sessionKeep) uploads() [][]byte {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return slices.Clone(k.uploaded)
+}
+
+// handedToken is the secret every keeping rig's launch handed its box.
+const handedToken = "the-entrys-own-token"
 
 // keepingRig is a coordinator rig that keeps sessions: its runner's boxes hold
 // one, and its records are the case's to read and to answer.
@@ -119,17 +192,57 @@ func keepingRig(t *testing.T) (*coordRig, *sessionWrites, *sessionKeep) {
 	t.Helper()
 	rig := newCoordRig(t)
 	writes := &sessionWrites{}
-	keep := &sessionKeep{policy: SessionPolicy{Keep: true, SeatBudget: 64 << 20},
-		secrets: []string{"the-entrys-own-token"}}
+	keep := &sessionKeep{policy: SessionPolicy{Keep: true, SeatBudget: 64 << 20}}
 	rig.coordinator.sessions, rig.coordinator.keep = writes, keep
 	rig.coordinator.sessionRetry, rig.coordinator.recordBudget = time.Millisecond, 200*time.Millisecond
+	rig.coordinator.captureTick = time.Millisecond
+	// THE ENGINE'S ACCOUNTS OF A STOP AND A LOSS, as its hooks answer them.
+	rig.coordinator.closeStopped = func(_ context.Context, run PendingRun) (executordomain.Ending, error) {
+		return executordomain.Ending{Outcome: executordomain.OutcomeStopped, StoppedBy: run.Stop.By}, nil
+	}
+	rig.coordinator.turnLost = func(context.Context, PendingRun) executordomain.Ending {
+		return executordomain.Ending{Outcome: executordomain.OutcomeLost}
+	}
 	rig.runner.Session = &FakeSession{
 		Archive: SessionArchive{Harness: "claude-code", SessionID: "s-1", Format: 1, Version: "2.1.310",
-			Size: 13, Path: "/home/user/.crewlet/session-capture"},
+			Size: 14, Path: "/home/user/.crewlet/session-capture"},
 		Body: []byte("the transcript"),
 	}
 	return rig, writes, keep
 }
+
+// handOver writes onto turnID's row the secrets its launch handed its box, as
+// the launch's attach does ([PendingRun.Handed]).
+func (r *coordRig) handOver(t *testing.T, turnID string, handed HandedSecrets) {
+	t.Helper()
+	raw, err := handed.encode()
+	if err != nil {
+		t.Fatalf("encoding the handed secrets: %v", err)
+	}
+	sealed, err := r.coordinator.keep.SealHanded(turnID, raw)
+	if err != nil {
+		t.Fatalf("sealing the handed secrets: %v", err)
+	}
+	if _, _, err := r.pending.mutateAny(t.Context(), turnID, func(run *PendingRun) bool {
+		run.Handed = sealed
+		return true
+	}); err != nil {
+		t.Fatalf("writing the handed secrets: %v", err)
+	}
+}
+
+// launchKept launches turnID's job with what its launch handed its box on the
+// row, as a keeping node's launch writes it.
+func (r *coordRig) launchKept(t *testing.T, turnID string) PendingRun {
+	t.Helper()
+	r.launch(turnID)
+	r.handOver(t, turnID, HandedSecrets{Values: []string{handedToken}})
+	r.coordinator.countRun("swe", StatusRunning)
+	return r.get(turnID)
+}
+
+// awaitKeeps waits for every keep under way ([Coordinator.keepLater]).
+func (r *coordRig) awaitKeeps() { r.coordinator.keeping.Wait() }
 
 // collectHeld collects turnID's finished job and leaves its row in place: the
 // resume is refused, so the claim goes back with everything the collection
@@ -141,6 +254,7 @@ func collectHeld(t *testing.T, rig *coordRig, turnID string) {
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
 		t.Fatal("the refused resume was acknowledged")
 	}
+	rig.awaitKeeps()
 }
 
 // EVERY LAUNCH OF A TURN IS NUMBERED ONE PAST THE LAUNCH BEFORE IT, in the write
@@ -183,6 +297,37 @@ func TestEachLaunchOfATurnIsNumberedPastTheOneBefore(t *testing.T) {
 	}
 	if next := launch(); next.LaunchSeq != 1 {
 		t.Fatalf("the first launch under this build of an older row is %d, want 1", next.LaunchSeq)
+	}
+}
+
+// A NEW ROUND FOLDS WHAT ITS TURN'S EARLIER LAUNCHES CALLED INTO THE ROW'S PRIOR
+// CALLS, by name and only where the call succeeded, and says so where calls had
+// been elided; a launch that carries a round on keeps its calls where they were.
+//
+// Mutation: drop the fold from the relaunch, or fold a failed call, and a stop
+// of the next round reads an earlier round's delivered reply as never made, or
+// a failed post as one that went.
+func TestANewRoundFoldsItsTurnsEarlierCallsIntoTheRow(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	ctx := t.Context()
+	rig.launch("t1")
+	if _, _, err := rig.pending.mutateAny(ctx, "t1", func(run *PendingRun) bool {
+		run.BridgeCalls = []BridgeCall{{Name: "chat_post", Seq: 1}, {Name: "ticket_comment", Failed: true, Seq: 2}}
+		run.BridgeCallsElided = 3
+		return true
+	}); err != nil {
+		t.Fatalf("seeding the round's calls: %v", err)
+	}
+	if _, err := rig.pending.BeginLaunch(ctx, PendingRun{TurnID: "t1", AgentHandle: "swe", AgentID: sweID,
+		Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	run := rig.get("t1")
+	if !slices.Equal(run.PriorCalls, []string{"chat_post"}) || !run.PriorCallsElided || len(run.BridgeCalls) != 0 {
+		t.Fatalf("the new round's row holds prior %v (elided %v) and calls %v, want the earlier "+
+			"round's successful post folded in, and its elision said", run.PriorCalls,
+			run.PriorCallsElided, run.BridgeCalls)
 	}
 }
 
@@ -236,21 +381,22 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 	}
 }
 
-// A COLLECTION KEEPS THE JOB'S SESSION THROUGH THE EXECUTOR LOG'S WRITES, before
-// the box is paused: the archive the run's script packed at its harness's exit,
-// handed the secrets the engine put in the box to scrub, uploaded, recorded at
-// the launch's ordinal and its own, its digest kept in the box, stamped landed
-// on the row with what the job had answered and read through — and the launch's
-// own record says it was kept, and which session it ran.
+// A COLLECTION TAKES THE JOB'S SESSION BEFORE IT PAUSES THE BOX AND KEEPS IT
+// AFTER: the archive the run's script packed at its harness's exit, scrubbed of
+// what the launch handed the box and bounded by the archive's bound, spooled,
+// the box paused, and only then uploaded and recorded at the launch's ordinal
+// and its own, its digest kept in the box, stamped landed on the row with what
+// the job had answered and read through — and the launch's own record says
+// what was taken, and which session it ran.
 //
-// Mutation: take the session after the pause, pack it on demand for a job that
-// packed its own, drop the secrets, stamp before the record lands, or leave the
-// record's fields off `executor_collected`, and a check here goes red.
-func TestACollectionKeepsTheJobsSessionThroughTheLogsWrites(t *testing.T) {
+// Mutation: take the session after the pause (the fake reads no paused box),
+// pack it on demand for a job that packed its own, drop what the box was
+// handed from the scrub, stamp before the record lands, or leave the record's
+// fields off `executor_collected`, and a check here goes red.
+func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItAfter(t *testing.T) {
 	t.Parallel()
 	rig, writes, keep := keepingRig(t)
-	rig.launch("t1")
-	rig.coordinator.countRun("swe", StatusRunning)
+	rig.launchKept(t, "t1")
 	session := rig.runner.Session
 	rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", HarnessVersion: "2.1.310",
 		Captured: &session.Archive})
@@ -260,11 +406,12 @@ func TestACollectionKeepsTheJobsSessionThroughTheLogsWrites(t *testing.T) {
 	if len(takes) != 1 || takes[0].Pack {
 		t.Fatalf("takes %+v, want one take of the archive the run's script packed", takes)
 	}
-	if strings.Join(takes[0].Scrub, ",") != "the-entrys-own-token" {
-		t.Errorf("the take scrubs %v, want the engine's secrets", takes[0].Scrub)
+	if !slices.Contains(takes[0].Scrub, handedToken) || takes[0].MaxBytes != executordomain.SessionMaxBytes {
+		t.Errorf("the take scrubs %v within %d bytes, want what the launch handed the box within the "+
+			"session's bound", takes[0].Scrub, takes[0].MaxBytes)
 	}
 	if !rig.provider.Box(rig.get("t1").SandboxID).Paused() {
-		t.Error("the collection did not pause the box after keeping its session")
+		t.Error("the collection did not pause the box after taking its session")
 	}
 	captures := writes.captured()
 	if len(captures) != 1 {
@@ -275,8 +422,8 @@ func TestACollectionKeepsTheJobsSessionThroughTheLogsWrites(t *testing.T) {
 		got.Object.Size != int64(len(session.Body)) || got.SeatBudget != 64<<20 || got.ContentKey != "k1" {
 		t.Errorf("the capture recorded %+v", got)
 	}
-	if string(keep.uploaded[0]) != "the transcript" {
-		t.Errorf("uploaded %q, want the box's archive", keep.uploaded[0])
+	if uploads := keep.uploads(); len(uploads) != 1 || string(uploads[0]) != "the transcript" {
+		t.Errorf("uploaded %q, want the box's archive once", uploads)
 	}
 	if session.Kept() != 1 {
 		t.Errorf("the box recorded %d digests of the archive kept, want 1", session.Kept())
@@ -287,45 +434,62 @@ func TestACollectionKeepsTheJobsSessionThroughTheLogsWrites(t *testing.T) {
 		t.Fatalf("the row keeps %+v, want the landed, final capture", run.Kept)
 	}
 	recs := rig.collected()
-	if len(recs) != 1 || recs[0].SessionKeptBytes != int64(len(session.Body)) ||
+	if len(recs) != 1 || recs[0].SessionTakenBytes != int64(len(session.Body)) ||
 		recs[0].HarnessSession != "s-1" || recs[0].HarnessVersion != "2.1.310" || recs[0].SessionNotKept != "" {
-		t.Errorf("the launch's record is %+v, want the session it ran and its kept size", recs)
+		t.Errorf("the launch's record is %+v, want the session it ran and what was taken of it", recs)
+	}
+	if spools, _ := filepath.Glob(filepath.Join(os.TempDir(), spoolPrefix+"*")); len(spools) > 0 {
+		for _, name := range spools {
+			if info, err := os.Stat(name); err == nil && time.Since(info.ModTime()) < time.Minute {
+				t.Logf("a spool younger than this case remains, maybe another case's: %s", name)
+			}
+		}
 	}
 }
 
-// A JOB KEPT WHOLE IS NOT KEPT AGAIN. A collection retried after a resume that
-// failed reads the same finished job, whose session nothing has changed: a
-// second upload would hold the store's room for a day for the same bytes.
+// A JOB TAKEN ONCE IT HAD ENDED IS NOT TAKEN AGAIN, whatever that take came to.
+// A collection retried after a resume that failed reads the same finished job,
+// whose session nothing has changed: taken again, a landed one would be a
+// second upload of the same bytes holding the store's room for a day, and a
+// refused one the same refusal paid for twice.
 //
-// Mutation: drop the check for a final capture of the job, and the retry
-// uploads and records the session a second time.
-func TestAJobKeptWholeIsNotKeptAgain(t *testing.T) {
+// Mutation: drop the check for a final capture of the job, or hold it to a
+// capture that landed, and the retry takes and uploads the session again.
+func TestAJobTakenOnceItHadEndedIsNotTakenAgain(t *testing.T) {
 	t.Parallel()
-	rig, writes, keep := keepingRig(t)
-	rig.launch("t1")
-	rig.coordinator.countRun("swe", StatusRunning)
-	session := rig.runner.Session
-	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
-	collectHeld(t, rig, "t1")
-	collectHeld(t, rig, "t1")
-	if n := len(writes.captured()); n != 1 || len(keep.uploaded) != 1 {
-		t.Fatalf("recorded %d captures and %d uploads of one finished job, want 1 each", n, len(keep.uploaded))
+	for name, putErr := range map[string]error{"landed": nil, "refused": objstore.ErrFull} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig, writes, keep := keepingRig(t)
+			keep.putErr = putErr
+			rig.launchKept(t, "t1")
+			session := rig.runner.Session
+			rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+			collectHeld(t, rig, "t1")
+			collectHeld(t, rig, "t1")
+			if takes := rig.runner.Takes(); len(takes) != 1 {
+				t.Fatalf("took the finished job's session %d times, want once", len(takes))
+			}
+			if putErr == nil && (len(writes.captured()) != 1 || len(keep.uploads()) != 1) {
+				t.Fatalf("recorded %d captures and %d uploads of one finished job, want 1 each",
+					len(writes.captured()), len(keep.uploads()))
+			}
+		})
 	}
 }
 
 // A RECORD THE LOG DOES NOT ANSWER IS ASKED AGAIN UNDER ITS ONE OPERATION — the
 // operation its turn, its launch and its place derive — and is left UNRESOLVED
 // on the row once its budget is spent; the turn's end asks it once more under
-// that same operation before it ends the turn, and the next launch's capture is
-// another operation.
+// that same operation before it records the end, and the next launch's capture
+// is another operation.
 //
 // Mutation: derive the operation per attempt, skip the end's ask, or derive it
 // from the turn alone, and the operations below stop matching or collide.
 func TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd(t *testing.T) {
 	t.Parallel()
 	rig, writes, _ := keepingRig(t)
-	rig.launch("t1")
-	rig.coordinator.countRun("swe", StatusRunning)
+	rig.launchKept(t, "t1")
 	session := rig.runner.Session
 	writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
 	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
@@ -346,21 +510,29 @@ func TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd(t *testing.T) {
 	}
 
 	writes.answer(nil)
-	rig.coordinator.EndTurn(t.Context(), TurnEnd{Handle: "swe", TurnID: "t1",
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeCompleted}})
+	ctx := t.Context()
+	if owed, err := rig.coordinator.OweEnd(ctx, "t1", executordomain.Ending{
+		Outcome: executordomain.OutcomeCompleted}); err != nil || !owed {
+		t.Fatalf("OweEnd = %v, %v", owed, err)
+	}
+	if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
+		t.Fatalf("publishEnd: %v", err)
+	}
 	all := writes.captured()
 	if last := all[len(all)-1]; last.call.OpID != asked[0].call.OpID {
 		t.Fatalf("the end asked the capture under %s, want its own %s", last.call.OpID, asked[0].call.OpID)
 	}
-	if ends := writes.ended(); len(ends) != 1 || ends[0].n.Ending.Outcome != executordomain.OutcomeCompleted {
-		t.Fatalf("ends %+v, want the turn's one end after its capture", ends)
+	ends := writes.endedRecords()
+	if len(ends) != 1 || ends[0].n.Ending.Outcome != executordomain.OutcomeCompleted || ends[0].n.Ending.Unkept != nil {
+		t.Fatalf("ends %+v, want the turn's one end after its capture landed, naming nothing unkept", ends)
 	}
-	if run := rig.get("t1"); run.Kept == nil || run.Kept.State != CaptureLanded {
-		t.Fatalf("the row keeps %+v, want the capture the end's ask landed", run.Kept)
+	if run := rig.get("t1"); run.Kept == nil || run.Kept.State != CaptureLanded || len(run.OwedEnd) != 0 {
+		t.Fatalf("the row keeps %+v and owes %s, want the capture the end's ask landed and the end "+
+			"cleared", run.Kept, run.OwedEnd)
 	}
 
 	// THE NEXT LAUNCH'S CAPTURE IS ANOTHER OPERATION.
-	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{TurnID: "t1", AgentHandle: "swe",
+	if _, err := rig.pending.BeginLaunch(ctx, PendingRun{TurnID: "t1", AgentHandle: "swe",
 		AgentID: sweID, Role: "SWE", Harness: "claude-code"}, rigLease); err != nil {
 		t.Fatalf("relaunch: %v", err)
 	}
@@ -371,18 +543,20 @@ func TestARecordIsAskedAgainUnderOneOperationAndByTheTurnsEnd(t *testing.T) {
 	}
 }
 
-// AN UPLOAD THE STORE REFUSES IS RECORDED AS REFUSED, with why, so a later
-// launch knows the launch's latest session was not kept rather than reading an
-// older capture as its latest; nothing is recorded on the log.
+// AN UPLOAD THE STORE REFUSES IS RECORDED AS REFUSED, with why, and THE TURN'S
+// END SAYS SO: the row's newest capture is refused, nothing is recorded on the
+// log, and the end the turn owes names that capture's place and why, so the
+// executor log does not go on naming an older capture of the turn as its last.
 //
-// Mutation: leave a refused upload stamped `begun`, or record it anyway, and
-// the row says nothing about it, or names bytes the store never took.
-func TestARefusedUploadIsRecordedAsRefused(t *testing.T) {
+// Mutation: leave a refused upload stamped `begun`, record it anyway, or leave
+// it off the end, and the row says nothing about it, names bytes the store
+// never took, or the next turn continues an older session believing it the
+// turn's last.
+func TestARefusedUploadIsRecordedAsRefusedAndRidesTheEnd(t *testing.T) {
 	t.Parallel()
 	rig, writes, keep := keepingRig(t)
 	keep.putErr = objstore.ErrFull
-	rig.launch("t1")
-	rig.coordinator.countRun("swe", StatusRunning)
+	rig.launchKept(t, "t1")
 	session := rig.runner.Session
 	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
 	collectHeld(t, rig, "t1")
@@ -396,8 +570,25 @@ func TestARefusedUploadIsRecordedAsRefused(t *testing.T) {
 		t.Fatalf("the row holds %+v, kept %+v, want the capture refused for the store's room",
 			run.Capture, run.Kept)
 	}
-	if recs := rig.collected(); len(recs) != 1 || recs[0].SessionNotKept == "" || recs[0].SessionKeptBytes != 0 {
-		t.Errorf("the launch's record is %+v, want it to say the session was not kept", recs)
+	if recs := rig.collected(); len(recs) != 1 || recs[0].SessionTakenBytes == 0 {
+		t.Errorf("the launch's record is %+v, want it to say the session was taken to be kept", recs)
+	}
+	ctx := t.Context()
+	if _, err := rig.coordinator.OweEnd(ctx, "t1", executordomain.Ending{
+		Outcome: executordomain.OutcomeCompleted}); err != nil {
+		t.Fatalf("OweEnd: %v", err)
+	}
+	if _, err := rig.coordinator.publishEnd(ctx, rig.get("t1")); err != nil {
+		t.Fatalf("publishEnd: %v", err)
+	}
+	ends := writes.endedRecords()
+	if len(ends) != 1 {
+		t.Fatalf("recorded %d ends, want the turn's one", len(ends))
+	}
+	unkept := ends[0].n.Ending.Unkept
+	if unkept == nil || unkept.LaunchSeq != 1 || unkept.CaptureSeq != 1 ||
+		!strings.Contains(unkept.Reason, "reservation is spent") {
+		t.Fatalf("the end names %+v unkept, want the launch's refused capture and why", unkept)
 	}
 }
 
@@ -412,8 +603,7 @@ func TestTheSwitchOffKeepsNothingAndStillEndsTheTurn(t *testing.T) {
 	t.Parallel()
 	rig, writes, keep := keepingRig(t)
 	keep.policy.Keep = false
-	rig.launch("t1")
-	rig.coordinator.countRun("swe", StatusRunning)
+	rig.launchKept(t, "t1")
 	session := rig.runner.Session
 	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
 	collectHeld(t, rig, "t1")
@@ -423,36 +613,361 @@ func TestTheSwitchOffKeepsNothingAndStillEndsTheTurn(t *testing.T) {
 	if run := rig.get("t1"); run.Capture != nil || run.Kept != nil {
 		t.Fatalf("stamped %+v with the switch off", run.Capture)
 	}
-	rig.coordinator.EndTurn(t.Context(), TurnEnd{Handle: "swe", TurnID: "t1",
-		Ending: executordomain.Ending{Outcome: executordomain.OutcomeFailed}})
-	if ends := writes.ended(); len(ends) != 1 {
+	if err := rig.coordinator.EndTurn(t.Context(), TurnEnd{Handle: "swe", TurnID: "t1",
+		Ending: executordomain.Ending{Outcome: executordomain.OutcomeFailed}}); err != nil {
+		t.Fatalf("EndTurn: %v", err)
+	}
+	if ends := writes.endedRecords(); len(ends) != 1 {
 		t.Fatalf("recorded %d ends with the switch off, want the turn's one", len(ends))
 	}
 }
 
-// A STOP KEEPS THE STOPPED JOB'S SESSION BEFORE ITS BOX GOES: the job never
-// reached its own pack, so the session is packed now, in the read that charges
-// what it spent, and the box is reclaimed after.
+// A STOP TAKES THE STOPPED JOB'S SESSION OFF THE FRAME THAT DECIDED IT, BEFORE
+// ITS BOX GOES: the pause watch decides the stop and hands the rest to the
+// ending's retry, which packs the session now — the job never reached its own
+// pack, and is still working, so the take is not final — and reclaims the box
+// after; the capture is recorded before the turn's end, which says the turn
+// was stopped.
 //
-// Mutation: take the stop's session as the run's script left it, or after the
-// reclaim, and nothing is packed, or there is no box left to pack in.
-func TestAStopKeepsTheJobsSessionBeforeItsBoxGoes(t *testing.T) {
+// Mutation: take the stop's session on the frame that decided it, as the read
+// once did, as the run's script left it, or after the reclaim (the fake reads
+// no reclaimed box), and the frame is held for an upload, nothing is packed,
+// or there is no box left to pack in.
+func TestAStopTakesItsSessionOffTheFrameAndBeforeTheReclaim(t *testing.T) {
 	t.Parallel()
 	rig, writes, _ := keepingRig(t)
-	launched := rig.launch("t1")
-	rig.coordinator.countRun("swe", StatusRunning)
+	launched := rig.launchKept(t, "t1")
+	rig.runner.Finish(Result{Text: "halfway through"})
 	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder", Reason: "wrong repo"}); err != nil {
 		t.Fatalf("StopSeat: %v", err)
 	}
+	if takes := rig.runner.Takes(); len(takes) != 0 {
+		t.Fatalf("the frame that decided the stop took %d sessions itself", len(takes))
+	}
+	rig.fireRetries()
+	rig.awaitKeeps()
+	rig.fireRetries()
+
 	takes := rig.runner.Takes()
 	if len(takes) != 1 || !takes[0].Pack {
 		t.Fatalf("takes %+v, want the stopped job's session packed now", takes)
 	}
 	captures := writes.captured()
-	if len(captures) != 1 || captures[0].n.LaunchSeq != launched.LaunchSeq {
-		t.Fatalf("recorded %+v, want the stopped launch's capture", captures)
+	if len(captures) != 1 || captures[0].n.LaunchSeq != launched.LaunchSeq || captures[0].err != nil {
+		t.Fatalf("recorded %+v, want the stopped launch's capture landed", captures)
 	}
 	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != launched.SandboxID {
-		t.Fatalf("killed %v, want the stopped job's box reclaimed after its session was kept", killed)
+		t.Fatalf("killed %v, want the stopped job's box reclaimed after its session was taken", killed)
+	}
+	if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
+		t.Fatalf("the log was written %v, want the capture before the turn's end", got)
+	}
+	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+		t.Fatal("the stopped run's record was left behind its end")
+	}
+}
+
+// AN END WAITS FOR ITS TURN'S CAPTURE TO LAND. A stop's take is kept off the read,
+// and its upload can take its time; the turn's end tombstones the turn, so an
+// end recorded first would refuse the turn's last session as it landed. The
+// ending's retry waits for the capture on the row, and records the end after.
+//
+// Mutation: drop the wait before the end's record, and the capture lands after
+// the end and is refused by its tombstone.
+func TestAnEndWaitsForItsTurnsCaptureToLand(t *testing.T) {
+	t.Parallel()
+	rig, writes, keep := keepingRig(t)
+	keep.gate = make(chan struct{})
+	rig.launchKept(t, "t1")
+	rig.runner.Finish(Result{Text: "halfway through"})
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(keep.gate)
+	}()
+	rig.fireRetries()
+	rig.awaitKeeps()
+
+	captures := writes.captured()
+	if len(captures) != 1 || captures[0].err != nil {
+		t.Fatalf("recorded %+v, want the stop's capture landed", captures)
+	}
+	if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
+		t.Fatalf("the log was written %v, want the end after the capture it waited for", got)
+	}
+}
+
+// A TAKE THAT CANNOT KNOW WHAT ITS BOX WAS HANDED IS REFUSED, never kept
+// scrubbed of less: a row that keeps no sealed secrets — a launch that could
+// not seal them — or a seal that does not open is a session the engine could
+// carry its own credentials out of the box in.
+//
+// Mutation: scrub with what the node's company says now, or with nothing, where
+// the row keeps none, and the session is kept.
+func TestATakeThatCannotKnowWhatItsBoxWasHandedIsRefused(t *testing.T) {
+	t.Parallel()
+	rig, writes, keep := keepingRig(t)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	session := rig.runner.Session
+	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+	collectHeld(t, rig, "t1")
+
+	if takes := rig.runner.Takes(); len(takes) != 0 {
+		t.Fatalf("took the session %d times with nothing known of what the box was handed", len(takes))
+	}
+	if len(writes.captured()) != 0 || len(keep.uploads()) != 0 {
+		t.Fatal("kept a session nobody could scrub")
+	}
+	run := rig.get("t1")
+	if run.Capture == nil || run.Capture.State != CaptureRefused ||
+		!strings.Contains(run.Capture.Reason, "cannot be read back") {
+		t.Fatalf("the row holds %+v, want the take refused saying why", run.Capture)
+	}
+}
+
+// THE SCRUB READS THE BOX'S LOGIN AGAIN WHERE IT IS REFRESHED: in the box, whose
+// harness refreshed it while it worked, and on the engine host, whose calls
+// refresh the shared copy — each refresh a token the launch never saw.
+//
+// Mutation: scrub with the login as it was seeded alone, and a refreshed token
+// leaves the box in the session.
+func TestTheScrubReadsTheLoginAgainWhereItIsRefreshed(t *testing.T) {
+	t.Parallel()
+	rig, _, _ := keepingRig(t)
+	launched := rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	host := filepath.Join(t.TempDir(), "credentials.json")
+	if err := os.WriteFile(host, []byte(`{"accessToken":"host-refreshed-token-0001"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken},
+		Logins: map[string]string{".claude/.credentials.json": host}})
+	box := rig.provider.Box(launched.SandboxID)
+	if err := box.WriteFile(t.Context(), box.Home()+"/.claude/.credentials.json",
+		[]byte(`{"accessToken":"box-refreshed-token-0002"}`)); err != nil {
+		t.Fatal(err)
+	}
+	session := rig.runner.Session
+	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+	collectHeld(t, rig, "t1")
+
+	takes := rig.runner.Takes()
+	if len(takes) != 1 {
+		t.Fatalf("took %d sessions, want one", len(takes))
+	}
+	for _, want := range []string{handedToken, "host-refreshed-token-0001", "box-refreshed-token-0002"} {
+		if !slices.Contains(takes[0].Scrub, want) {
+			t.Errorf("the take scrubs %v, which leaves %q in the session", takes[0].Scrub, want)
+		}
+	}
+}
+
+// A LOST RUN'S BOX IS TAKEN BEFORE ITS ENDING RECLAIMS IT: a launch whose engine
+// restarted before its turn could park is reaped as its seat is recovered, and
+// its box — on this node's host, still there — is read for its session by the
+// ending's retry, attached, packed now, and reclaimed after.
+//
+// Mutation: drop the loss's take, or make it after the reclaim, and the lost
+// job's session is gone with its box.
+func TestALostRunsBoxIsTakenBeforeItsEndingReclaimsIt(t *testing.T) {
+	t.Parallel()
+	rig, writes, _ := keepingRig(t)
+	launched := rig.launching("t1")
+	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+	if err := rig.recoverSeat(t.Context(), "node-b:1", 9); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+	rig.fireRetries()
+	rig.awaitKeeps()
+	rig.fireRetries()
+
+	takes := rig.runner.Takes()
+	if len(takes) != 1 || !takes[0].Pack {
+		t.Fatalf("takes %+v, want the lost job's session packed before its box went", takes)
+	}
+	if len(writes.captured()) != 1 {
+		t.Fatalf("recorded %d captures of the lost job, want 1", len(writes.captured()))
+	}
+	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, launched.SandboxID) {
+		t.Fatalf("killed %v, want the lost job's box reclaimed after", killed)
+	}
+}
+
+// A LOST RUN'S BOX ON ANOTHER NODE'S HOST IS ASKED OF THAT HOST, which takes the
+// session there before the box goes; and the host takes it only where the run's
+// row licenses it, a decided loss.
+//
+// Mutation: skip the ask for a box on another host, or let a host take a box no
+// loss is decided on, and the session is lost with its box, or a live job's
+// box is read under a forged request.
+func TestALostRunsBoxOnAnotherHostIsAskedOfThatHost(t *testing.T) {
+	t.Parallel()
+	rig, _, _ := keepingRig(t)
+	asks := &boxAsks{result: Result{}}
+	rig.onNode(t, "node-b", asks, &nudges{})
+	run := rig.launchedBy("t1", "node-a")
+	rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+	rig.coordinator.finish(t.Context(), rig.get("t1"), ending{fence: fenceOf(run),
+		note: &failureNote{reason: "engine_restarted", detail: "the engine that ran the job restarted"}})
+	rig.fireRetries()
+	rig.awaitKeeps()
+	rig.fireRetries()
+	if got := asks.reads(); !slices.Contains(got, BoxReadLoss) {
+		t.Fatalf("asked the host %v, want the lost job's box read for its session", got)
+	}
+
+	// AND THE HOST REFUSES A LOSS READ NO LOSS LICENSES.
+	host, _, _ := keepingRig(t)
+	live := host.launchKept(t, "t2")
+	if _, _, err := host.coordinator.ReadHostedBox(t.Context(), "t2", live.LaunchID, live.SandboxID,
+		BoxReadLoss); !errors.Is(err, ErrBoxNotHosted) {
+		t.Fatalf("a loss read of a live job was answered %v, want it refused", err)
+	}
+}
+
+// A REFUSED RESERVATION UPLOADS NOTHING, AND A REFUSED OUTCOME CLAIMS NOTHING:
+// a capture whose place the row would not take keeps no session, and one whose
+// landing the row would not take is not read back as landed.
+//
+// Mutation: go on to the spool when the begun stamp was refused, or read the
+// outcome off the record rather than the row, and a session is uploaded that
+// no row places, or the row claims a capture it never recorded.
+func TestARefusedCaptureStampUploadsAndClaimsNothing(t *testing.T) {
+	t.Parallel()
+	rig, writes, keep := keepingRig(t)
+	rig.launchKept(t, "t1")
+	rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending, refuse: []string{"StampCapture"}}
+	session := rig.runner.Session
+	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+	collectHeld(t, rig, "t1")
+
+	if len(keep.uploads()) != 0 || len(writes.captured()) != 0 {
+		t.Fatalf("uploaded %d and recorded %d captures whose place the row refused",
+			len(keep.uploads()), len(writes.captured()))
+	}
+	if run := rig.get("t1"); run.Capture != nil || run.Kept != nil {
+		t.Fatalf("the row claims %+v kept %+v though every stamp was refused", run.Capture, run.Kept)
+	}
+}
+
+// A ROW THAT OWES ITS TURN'S END IS NOT DELETED, and the end is decided once:
+// the delete refuses until the end is recorded and cleared, a second end
+// offered finds the first, and a clear of an end the row does not owe is
+// nothing.
+//
+// Mutation: let Finish delete a row that owes an end, let a second OweEnd
+// replace the first, or clear whatever the row owes, and an end is lost with
+// its row, recorded twice, or cleared unrecorded.
+func TestARowOwingItsTurnsEndIsKeptUntilTheEndIsRecorded(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	ctx := t.Context()
+	rig.launch("t1")
+	first, second := []byte(`{"outcome":"completed"}`), []byte(`{"outcome":"failed"}`)
+	if owing, wrote, err := rig.pending.OweEnd(ctx, "t1", first); err != nil || !wrote || string(owing.OwedEnd) != string(first) {
+		t.Fatalf("OweEnd = %s, %v, %v", owing.OwedEnd, wrote, err)
+	}
+	if owing, wrote, err := rig.pending.OweEnd(ctx, "t1", second); err != nil || wrote || string(owing.OwedEnd) != string(first) {
+		t.Fatalf("a second end was taken (%s, %v, %v), want the first kept", owing.OwedEnd, wrote, err)
+	}
+	decided, ok, err := rig.pending.DecideEnding(ctx, "t1", Decision{License: License{WhileIn: Active,
+		Launch: EveryLaunch}, Reclaim: true})
+	if err != nil || !ok {
+		t.Fatalf("DecideEnding = %v, %v", ok, err)
+	}
+	if _, _, err := rig.pending.Finish(ctx, "t1", decided.Ending.ID); !errors.Is(err, ErrEndOwed) {
+		t.Fatalf("Finish = %v, want the row kept for the end it owes", err)
+	}
+	if cleared, err := rig.pending.ClearEnd(ctx, "t1", second); err != nil || cleared {
+		t.Fatalf("ClearEnd of an end the row does not owe = %v, %v", cleared, err)
+	}
+	if cleared, err := rig.pending.ClearEnd(ctx, "t1", first); err != nil || !cleared {
+		t.Fatalf("ClearEnd = %v, %v", cleared, err)
+	}
+	if _, gone, err := rig.pending.Finish(ctx, "t1", decided.Ending.ID); err != nil || !gone {
+		t.Fatalf("Finish after the end was cleared = %v, %v", gone, err)
+	}
+}
+
+// A CAPTURE'S BUDGET IS ASKED BEFORE ITS UPLOAD: a seat whose other live turns
+// already hold its budget uploads nothing the log would refuse, and the
+// refusal is stamped saying so.
+//
+// Mutation: drop the budget's check before the upload, and a seat whose live
+// turns fill its budget uploads a session on every launch that the log refuses,
+// holding the store's room for a day each time.
+func TestACaptureTheSeatsBudgetCannotHoldIsNotUploaded(t *testing.T) {
+	t.Parallel()
+	rig, writes, keep := keepingRig(t)
+	keep.policy.SeatBudget = 20
+	rig.launchKept(t, "t0")
+	if _, err := rig.pending.StampCapture(t.Context(), "t0", SessionCapture{LaunchSeq: 1, CaptureSeq: 1,
+		Launch: rig.get("t0").LaunchID, State: CaptureLanded, ObjectSize: 15, Object: "o"}); err != nil {
+		t.Fatalf("StampCapture: %v", err)
+	}
+	rig.launchKept(t, "t1")
+	session := rig.runner.Session
+	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+	collectHeld(t, rig, "t1")
+
+	if len(keep.uploads()) != 0 || len(writes.captured()) != 0 {
+		t.Fatal("uploaded a session the seat's budget could not hold")
+	}
+	if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureRefused ||
+		!strings.Contains(run.Capture.Reason, "max_bytes_per_seat") {
+		t.Fatalf("the row holds %+v, want the capture refused for the seat's budget", run.Capture)
+	}
+}
+
+// EVERY COLLECTION TAKES WHAT ITS JOB LEFT, AND SAYS WHETHER THE JOB HAD ENDED:
+// the archive the run's script packed at its harness's exit, as it is; a job
+// that ended without packing — one that failed before it got there — packed
+// now, and final; and a job its turn's cap ended while it still ran, packed now
+// as it stood and NOT final, since it went on working until its box was paused.
+//
+// Mutation: read a job that never packed as one with nothing to take, call a
+// cap-ended job's capture final, or take its archive as its script left it,
+// and a row below differs.
+func TestEveryCollectionTakesWhatItsJobLeft(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name            string
+		capped, packed  bool
+		wantPack, final bool
+	}{
+		{name: "packed by its script", packed: true, final: true},
+		{name: "ended without packing", wantPack: true, final: true},
+		{name: "ended at its turn's cap while it ran", capped: true, wantPack: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rig, writes, _ := keepingRig(t)
+			if tc.capped {
+				rig.launchUntil("t1", rig.now.Add(-time.Minute))
+				rig.handOver(t, "t1", HandedSecrets{Values: []string{handedToken}})
+				rig.coordinator.countRun("swe", StatusRunning)
+			} else {
+				rig.launchKept(t, "t1")
+				res := Result{Success: true, SessionID: "s-1"}
+				if tc.packed {
+					res.Captured = &rig.runner.Session.Archive
+				}
+				rig.runner.Finish(res)
+			}
+			collectHeld(t, rig, "t1")
+			takes := rig.runner.Takes()
+			if len(takes) != 1 || takes[0].Pack != tc.wantPack {
+				t.Fatalf("takes %+v, want one, packed now: %v", takes, tc.wantPack)
+			}
+			if captures := writes.captured(); len(captures) != 1 || captures[0].err != nil {
+				t.Fatalf("recorded %+v, want the one capture", captures)
+			}
+			if kept := rig.get("t1").Kept; kept == nil || kept.State != CaptureLanded || kept.Final != tc.final {
+				t.Fatalf("the row keeps %+v, want a landed capture, final: %v", kept, tc.final)
+			}
+		})
 	}
 }
