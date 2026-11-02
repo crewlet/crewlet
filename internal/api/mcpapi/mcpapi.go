@@ -297,7 +297,7 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// is declared for the assistant's preview.
 	changes := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerReviewChanges))
 	if err := changes.Handle("POST /mcp-servers/{name}/changes",
-		authz.Policy{Action: authz.ActionConfigWrite}.Summarised(),
+		authz.Policy{Action: authz.ActionConfigWrite}.Rewriting().Summarised(),
 		s.audited(types.MCPServerReviewChanges, s.serveChanges)); err != nil {
 		return err
 	}
