@@ -33,7 +33,12 @@ import (
 //     every one writes;
 //   - append: one bridged call the box makes, appended to the run's log
 //     (sandbox.PendingStore.AppendBridgeCall) — where the log's size is paid
-//     now that the record does not carry it.
+//     now that the record does not carry it — that cost the engine nothing
+//     (a call answered by a builtin), so the record is not written;
+//   - append-paid: the same call where it moved what the job's bridged calls
+//     cost (a delegated worker's model call, say), so the append also reads
+//     and writes the run's record with the new total — the path every call
+//     that costs the engine anything takes.
 //
 // THE RUN IS A REALISTIC ONE, mid-job: launched with one repository, its turn
 // parked (its bookkeeping and a 32 KiB frozen context), and the bridge's log
@@ -46,8 +51,8 @@ import (
 //
 // Measured on 2026-11-02, thirty operations an arm and one count, on two
 // E-cores of an Intel Core Ultra 7 265U, with the log beside the record: see
-// docs/concepts/code-host.md ("What a box's request costs the coordination
-// store") for the figures, both layouts'. With the log on the record, as
+// docs/concepts/code-host.md ("What a box's request costs its run's record")
+// for the figures, both layouts'. With the log on the record, as
 // main's run record kept it (measured 2026-11-01 on the same machine), the
 // record was 516 173 bytes, nearly all of it the log, a read took 5.8 ms at
 // the median (7.9 at the 99th percentile) and a raise 11.1 ms (26.0): every
@@ -119,19 +124,31 @@ func BenchmarkABoxRequestOnItsRun(b *testing.B) {
 			return nil
 		})
 	})
+	output := strings.Repeat("o", 2<<10)
+	appendCall := func(i int, spent sandbox.EngineSpend) error {
+		recorded, err := store.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
+			Call: sandbox.BridgeCall{Name: "read_page",
+				Args: fmt.Sprintf(`{"id":%d,"q":"%s"}`, i, strings.Repeat("q", 240)), Output: output},
+			Spent: spent})
+		switch {
+		case err != nil:
+			return fmt.Errorf("append a call: %w", err)
+		case !recorded:
+			return fmt.Errorf("the append of call %d recorded nothing", i)
+		}
+		return nil
+	}
 	b.Run("append", func(b *testing.B) {
-		output := strings.Repeat("o", 2<<10)
+		measure(b, func(i int) error { return appendCall(i, sandbox.EngineSpend{}) })
+	})
+	// THE SPEND GROWS ON EVERY CALL, from past anything an earlier run of
+	// the arm wrote, so every append moves the record's total and writes it.
+	paid := 0
+	b.Run("append-paid", func(b *testing.B) {
 		measure(b, func(i int) error {
-			recorded, err := store.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
-				Call: sandbox.BridgeCall{Name: "read_page",
-					Args: fmt.Sprintf(`{"id":%d,"q":"%s"}`, i, strings.Repeat("q", 240)), Output: output}})
-			switch {
-			case err != nil:
-				return fmt.Errorf("append a call: %w", err)
-			case !recorded:
-				return fmt.Errorf("the append of call %d recorded nothing", i)
-			}
-			return nil
+			paid++
+			return appendCall(i, sandbox.EngineSpend{Workers: paid, WorkerInput: 1000 * paid,
+				WorkerOutput: 200 * paid})
 		})
 	})
 }
