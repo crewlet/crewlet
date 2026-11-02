@@ -157,7 +157,7 @@ function WaitingRows({
     ) : (
       <span className="t-caption">
         None among the newest changes read.{" "}
-        <a className="t-link" href={rest}>
+        <a className="t-link prose-link" href={rest}>
           See the rest in Code
         </a>
       </span>
