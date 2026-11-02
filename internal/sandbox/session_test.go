@@ -739,6 +739,118 @@ func TestAnEndWaitsForItsTurnsCaptureToLand(t *testing.T) {
 	}
 }
 
+// failsAReadOfABegunCapture fails the first read of a run whose ending is
+// decided while a capture of its turn is still being kept — the read an ending
+// makes as it waits for that capture — and says so on failed.
+type failsAReadOfABegunCapture struct {
+	PendingStore
+	once   sync.Once
+	failed chan struct{}
+}
+
+func (s *failsAReadOfABegunCapture) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	run, found, err := s.PendingStore.Get(ctx, turnID)
+	if err != nil || !found || run.Ending == nil || run.Capture == nil || run.Capture.State != CaptureBegun {
+		return run, found, err
+	}
+	fail := false
+	s.once.Do(func() {
+		fail = true
+		close(s.failed)
+	})
+	if fail {
+		return PendingRun{}, false, errors.New("the coordination store did not answer")
+	}
+	return run, found, err
+}
+
+// A READ THAT FAILS WHILE A CAPTURE IS KEPT IS NO ANSWER. A turn's end waits for
+// the turn's capture to land, reading the run's row on a tick, because the end
+// tombstones the turn and a capture recorded after it is refused. A read that
+// failed ended that wait: the end was recorded over the capture still being
+// kept, its tombstone refused the turn's last session, and the end named the
+// capture begun and never finished.
+//
+// Mutation: end the wait on a read that failed ([Coordinator.awaitCapture]), and
+// the end comes before the capture, which the log refuses.
+func TestAReadThatFailsWhileACaptureIsKeptIsNoAnswer(t *testing.T) {
+	t.Parallel()
+	rig, writes, keep := keepingRig(t)
+	keep.gate = make(chan struct{})
+	rig.launchKept(t, "t1")
+	rig.runner.Finish(Result{Text: "halfway through"})
+	store := &failsAReadOfABegunCapture{PendingStore: rig.coordinator.pending, failed: make(chan struct{})}
+	rig.coordinator.pending = store
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "founder"}); err != nil {
+		t.Fatalf("StopSeat: %v", err)
+	}
+	// THE KEEP LANDS once a read has failed while it was under way — or, should
+	// none ever fail, after a while, so the case reports that instead of hanging.
+	go func() {
+		select {
+		case <-store.failed:
+		case <-time.After(5 * time.Second):
+		}
+		close(keep.gate)
+	}()
+	rig.fireRetries()
+	rig.awaitKeeps()
+
+	select {
+	case <-store.failed:
+	default:
+		t.Fatal("the premise: no read of the run failed while its capture was kept")
+	}
+	if got := writes.calls(); !slices.Equal(got, []string{"capture", "end"}) {
+		t.Fatalf("the log was written %v, want the end after the capture it waited for", got)
+	}
+	if captures := writes.captured(); len(captures) != 1 || captures[0].err != nil {
+		t.Fatalf("recorded %+v, want the stop's capture landed", captures)
+	}
+	if ends := writes.endedRecords(); len(ends) != 1 || ends[0].n.Ending.Unkept != nil {
+		t.Fatalf("ended %+v, want the turn's one end naming nothing unkept", ends)
+	}
+}
+
+// AN END NAMES WHAT ITS OWN ASK OF AN UNRESOLVED CAPTURE SETTLED, even where the
+// row cannot be read back after it: the end asks the log again for a capture
+// whose record was never answered, and stamps the answer; a read of the row that
+// then failed left the end naming a capture that had just landed as one whose
+// record was never answered.
+//
+// Mutation: drop what settleCapture answered where the read after it fails
+// ([Coordinator.publishEnd]), and the end names the landed capture unkept.
+func TestAnEndNamesWhatItsAskOfAnUnresolvedCaptureSettled(t *testing.T) {
+	t.Parallel()
+	rig, writes, _ := keepingRig(t)
+	rig.launchKept(t, "t1")
+	session := rig.runner.Session
+	writes.answer(errors.New("estate: the write was sent to a data node that did not answer"))
+	rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
+	collectHeld(t, rig, "t1")
+	if run := rig.get("t1"); run.Capture == nil || run.Capture.State != CaptureUnresolved {
+		t.Fatalf("the premise: the row holds %+v, want its capture unresolved", run.Capture)
+	}
+	writes.answer(nil)
+	ctx := t.Context()
+	if owed, err := rig.coordinator.OweEnd(ctx, "t1", executordomain.Ending{
+		Outcome: executordomain.OutcomeCompleted}); err != nil || !owed {
+		t.Fatalf("OweEnd = %v, %v", owed, err)
+	}
+	owing := rig.get("t1")
+	rig.coordinator.pending = &refusingStore{inner: rig.pending, refuse: []string{"Get"}}
+	if _, err := rig.coordinator.publishEnd(ctx, owing); err != nil {
+		t.Fatalf("publishEnd: %v", err)
+	}
+	ends := writes.endedRecords()
+	if len(ends) != 1 || ends[0].n.Ending.Unkept != nil {
+		t.Fatalf("ended %+v, want the turn's one end naming nothing unkept: its capture landed", ends)
+	}
+	if run := rig.get("t1"); run.Kept == nil || run.Kept.State != CaptureLanded {
+		t.Fatalf("the row keeps %+v, want the capture the end's ask landed", run.Kept)
+	}
+}
+
 // A TAKE THAT CANNOT KNOW WHAT ITS BOX WAS HANDED IS REFUSED, never kept
 // scrubbed of less: a row that keeps no sealed secrets — a launch that could
 // not seal them — or a seal that does not open is a session the engine could

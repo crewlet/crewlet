@@ -356,28 +356,7 @@ func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture Se
 			capture.CaptureSeq, capture.State, words.Or(CaptureStates))
 	}
 	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
-		took := false
-		newest := run.Capture
-		switch {
-		case newest == nil || capture.newerThan(*newest):
-			took = true
-		case capture.samePlace(*newest):
-			took = newest.State.advancesTo(capture.State)
-		}
-		if took {
-			stamped := capture
-			run.Capture = &stamped
-		}
-		// LANDED, and not a place the row already answered otherwise: an
-		// older capture's answer that comes after a newer one began is the
-		// kept one where it is newer than what is kept, and a place the row
-		// holds refused is never kept, whatever a late write says.
-		landed := capture.State == CaptureLanded && (took || !capture.samePlace(*newest))
-		if landed && (run.Kept == nil || capture.newerThan(*run.Kept)) {
-			kept := capture
-			run.Kept, took = &kept, true
-		}
-		return took
+		return stampOnto(run, capture)
 	})
 	return won, err
 }

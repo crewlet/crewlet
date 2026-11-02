@@ -307,6 +307,39 @@ func (c SessionCapture) samePlace(o SessionCapture) bool {
 	return c.LaunchSeq == o.LaunchSeq && c.CaptureSeq == o.CaptureSeq
 }
 
+// stampOnto stamps capture on run as [PendingStore.StampCapture] does, and
+// reports whether it took: the row's own rule, which the store applies to the
+// row as it stands, and an ending applies to its copy where the row cannot be
+// read back after a stamp it made ([Coordinator.publishEnd]).
+//
+// A CAPTURE PLACED AFTER THE ROW'S NEWEST IS TAKEN, whatever its state, and one
+// at the newest's own place only where it moves that capture on — begun to an
+// outcome, unresolved to an answer — so a late write never takes an answer
+// back; anything older is refused. And a capture that LANDED is the turn's
+// kept one wherever it is newer than the kept one — an older capture's answer
+// that comes after a newer one began included — while a place the row holds
+// refused is never kept, whatever a late write says.
+func stampOnto(run *PendingRun, capture SessionCapture) bool {
+	took := false
+	newest := run.Capture
+	switch {
+	case newest == nil || capture.newerThan(*newest):
+		took = true
+	case capture.samePlace(*newest):
+		took = newest.State.advancesTo(capture.State)
+	}
+	if took {
+		stamped := capture
+		run.Capture = &stamped
+	}
+	landed := capture.State == CaptureLanded && (took || !capture.samePlace(*newest))
+	if landed && (run.Kept == nil || capture.newerThan(*run.Kept)) {
+		kept := capture
+		run.Kept, took = &kept, true
+	}
+	return took
+}
+
 // kept is the capture as a box read reports it ([SessionKept]).
 func (c SessionCapture) kept() *SessionKept {
 	k := &SessionKept{CaptureSeq: c.CaptureSeq}
@@ -1134,33 +1167,66 @@ func captureInFlight(run PendingRun, now time.Time) bool {
 
 // awaitCapture is run's row once no capture of its turn is in flight
 // ([captureInFlight]) — read again every [captureWaitTick], for as long as the
-// capture's budget allows — or as it stands when ctx ends first.
+// capture's budget allows — and whether it is still there; or why the wait
+// could not say: ctx ended first, or the row could not be read when the wait
+// ran out.
 //
 // WHY AN END WAITS: the end tombstones its turn, and a capture whose record
 // lands after it is refused, so ended first, the turn's last session would be
 // lost to the next turn. A keep is made off the read that took it, on the node
 // whose host the box is on, which may be another node; the row is what both
 // read.
-func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun) PendingRun {
+//
+// A READ THAT FAILS IS NO ANSWER, and the wait goes on: the capture is still
+// begun on the last row this read, and nothing says it has settled. The wait
+// used to end on it, with that stale row, and the end it was holding back was
+// recorded over a capture still being kept — the end's tombstone refused the
+// turn's last session, and the end named it begun and never finished, which it
+// was not. An end is never recorded from a row the wait could not read: once
+// the capture's own budget is out with the last read failed, or the wait's
+// budget is, or ctx ended, the caller keeps its ending and asks again on its
+// own spacing.
+//
+// PAST THE BUDGET ON A ROW IT DID READ, the capture's own budget is out too, on
+// this node's clock, and the end is recorded naming it begun and never
+// finished ([unkeptOf]): its node stopped, or its budget ran out.
+func (c *Coordinator) awaitCapture(ctx context.Context, run PendingRun) (PendingRun, bool, error) {
 	// NEVER LONGER THAN A CAPTURE CAN TAKE, whatever the stamp's clock says: a
 	// stamp whose node's clock runs ahead is waited out on this one's.
-	ctx, cancel := context.WithTimeout(ctx, SessionCaptureBudget)
+	wait, cancel := context.WithTimeout(ctx, SessionCaptureBudget)
 	defer cancel()
-	for captureInFlight(run, c.now()) {
-		wait := time.NewTimer(c.captureTick)
+	var unread error
+	for unread != nil || captureInFlight(run, c.now()) {
+		if unread != nil && !captureInFlight(run, c.now()) {
+			return run, true, fmt.Errorf("sandbox: run %s could not be read to see what a capture of "+
+				"its turn came to: %w", run.TurnID, unread)
+		}
+		tick := time.NewTimer(c.captureTick)
 		select {
-		case <-ctx.Done():
-			wait.Stop()
-			return run
-		case <-wait.C:
+		case <-wait.Done():
+			tick.Stop()
+			switch {
+			case ctx.Err() != nil:
+				return run, true, fmt.Errorf("sandbox: waiting for a capture of run %s to settle: %w",
+					run.TurnID, ctx.Err())
+			case unread != nil:
+				return run, true, fmt.Errorf("sandbox: run %s could not be read while a capture of its "+
+					"turn was being kept: %w", run.TurnID, unread)
+			}
+			return run, true, nil
+		case <-tick.C:
 		}
-		current, found, err := c.pending.Get(ctx, run.TurnID)
-		if err != nil || !found {
-			return run
+		current, found, err := c.pending.Get(wait, run.TurnID)
+		switch {
+		case err != nil:
+			unread = err
+			continue
+		case !found:
+			return PendingRun{}, false, nil
 		}
-		run = current
+		run, unread = current, nil
 	}
-	return run
+	return run, true, nil
 }
 
 // unkeptOf is the turn's newest capture where it is not one the turn's row on
@@ -1303,9 +1369,16 @@ func (c *Coordinator) publishEnd(ctx context.Context, run PendingRun) (PendingRu
 		return run, fmt.Errorf("sandbox: the end turn %s owes was written by a newer build: %s", run.TurnID, why)
 	default:
 		if newest := run.Capture; newest != nil && newest.State == CaptureUnresolved {
-			c.settleCapture(ctx, run, *newest)
-			if current, found, getErr := c.pending.Get(ctx, run.TurnID); getErr == nil && found {
+			settled := c.settleCapture(ctx, run, *newest)
+			current, found, getErr := c.pending.Get(ctx, run.TurnID)
+			if getErr == nil && found {
 				run = current
+			} else {
+				// WHAT THE ASK JUST SETTLED, where the row cannot be read
+				// back to show it: stamped on this copy by the row's own
+				// rule. Read off the copy as it was, the end named a capture
+				// that had just landed as one never answered.
+				stampOnto(&run, settled)
 			}
 		}
 		ending.Unkept = unkeptOf(run)

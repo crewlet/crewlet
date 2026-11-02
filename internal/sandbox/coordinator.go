@@ -4246,7 +4246,17 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			if !mayAsk && c.keepsSessions() {
 				return errAskAway
 			}
-			published, err := c.publishEnd(ctx, c.awaitCapture(ctx, run))
+			waited, found, err := c.awaitCapture(ctx, run)
+			switch {
+			case err != nil:
+				return fmt.Errorf("sandbox: ending run %s, whose turn's end waits for its capture: %w",
+					run.TurnID, err)
+			case !found:
+				// GONE WHILE IT WAITED: another attempt at the same ending
+				// recorded the end and deleted the record first.
+				return nil
+			}
+			published, err := c.publishEnd(ctx, waited)
 			if err != nil {
 				return fmt.Errorf("sandbox: ending run %s, whose turn's end the executor log has not "+
 					"taken yet: %w", run.TurnID, err)
