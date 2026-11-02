@@ -2607,9 +2607,8 @@ type LaunchRecord struct {
 	// refusal, on whichever node collects the job: the identity is keyed by
 	// the fleet keyring, so it compares across nodes and restarts.
 	//
-	// A PEER THAT DOES NOT KNOW IT drops it when it rewrites the row (this
-	// section carries no Extra of its own), and an empty identity is read as
-	// "not recorded", which relaunches nothing: the safe direction.
+	// An empty identity — a launch that had none to name — is read as "not
+	// recorded", which relaunches nothing: the safe direction.
 	SignInID string `json:"sign_in_id,omitempty"`
 
 	// FollowUp is why this job was launched as a follow-up of the job
@@ -2623,8 +2622,7 @@ type LaunchRecord struct {
 	// its own (restore.go) — written by the attach that names the job's
 	// command ([PendingStore.AttachSandbox]), for the record its collection
 	// publishes beside whether the run did continue the session, which only
-	// its box can say ([Result.Continued]). A peer that does not know it drops
-	// it, and the record then names no brief.
+	// its box can say ([Result.Continued]).
 	Brief BriefKind `json:"brief,omitempty"`
 
 	// SessionStart is which session the job's box said it started, where its
@@ -2642,12 +2640,12 @@ type LaunchRecord struct {
 	// WHAT EVERY LATER REBUILD OF THE RUN'S SKILL GUARD READS: the skills the
 	// launch armed its chosen session's guard with (the parked state's) are
 	// the job's session's only where this is [SessionStartContinued]. Empty —
-	// a launch that continued no session, a box that has not said, a record
-	// that could not be written, or a peer that does not know the field and
-	// dropped it — reads as a session of the job's own, holding none of them:
-	// the safe direction, since a guard short of a skill asks the run to load
-	// it again, and one holding a skill the session never read lets a call
-	// through that the skill exists to hold back.
+	// a launch that continued no session, a box that has not said, or a
+	// record that could not be written — reads as a session of the job's
+	// own, holding none of them: the safe direction, since a guard short of a
+	// skill asks the run to load it again, and one holding a skill the
+	// session never read lets a call through that the skill exists to hold
+	// back.
 	SessionStart SessionStart `json:"session_start,omitempty"`
 
 	// Iteration is the turn iteration the launching executor suspended in,
@@ -2740,6 +2738,13 @@ type LaunchRecord struct {
 	// written with the question ([PendingStore.MarkAwaiting]) and paid by
 	// the resume the answer drives, as [PendingRun.ParkedInputTokens] is.
 	Condensed AuxTokens `json:"parked_condensed,omitzero"`
+
+	// Extra is every key of the job's record THIS BUILD DOES NOT KNOW, kept
+	// verbatim and written back by every write that is not a relaunch's — a
+	// later build's fact about the job survives this build's status flips,
+	// leases, bridged calls and notes (wirekeys.go) — and dropped with the
+	// record by the relaunch that replaces it whole, since it is the job's.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // SessionStart is which session a job's box said it started, where its launch
