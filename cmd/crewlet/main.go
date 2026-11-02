@@ -2447,6 +2447,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// object store, opened under this node's keyring.
 			ExecutorSessions: executorSessionReads(e),
 			SessionObjects:   sessionObjects(e, log),
+			// AND WHETHER A RELAUNCH CONTINUES EACH ONE, decided as a
+			// relaunch decides it: off the FLEET's run records — the store
+			// a relaunch reads its own turn's from — and this build's
+			// runner for each harness's sessions, as the company this node
+			// runs registers it.
+			SessionRuns:      sandbox.NewCoordStore(e.Backends().Fleet),
+			SessionRestorers: e,
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
 			// it, and what this node costs to replace. Assembled per

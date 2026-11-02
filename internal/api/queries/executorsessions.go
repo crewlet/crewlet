@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -71,6 +72,30 @@ import (
 // order of a hundred mebibytes: a read past them waits for a slot, its object
 // not yet opened, for as long as its caller waits, and ends with the caller's
 // own error where the caller leaves first.
+//
+// # Whether a relaunch continues it, decided as a relaunch decides it
+//
+// Each row says whether a relaunch of its turn would continue its session
+// (`continuable`), and where not, why (`not_continuable`): asked of
+// [sandbox.ContinuityOf], THE decision a relaunch takes, over what a relaunch
+// reads — the turn's row on the executor log, the turn's run record in the
+// coordination store ([SessionRuns]) and the job that record names as the one
+// a relaunch would follow, and this build's runner for the row's harness
+// ([SessionRestorers]) — and never a second copy of any part of it. As far as the engine can know before a box is chosen: whether the box a
+// relaunch gets runs a harness that takes the session up, and whether the
+// seat's budget can carry it, are the launch's to find out, and no row says
+// them. An ended turn's session is never continuable here: a conversation's
+// next turn continues no session yet.
+//
+// A PAGE READS THE COORDINATION STORE ONCE, whatever it holds: one listing of
+// the seat's live runs ([SessionRuns.ListActiveForSeat]), which the fleet's
+// concurrent runs bound, and none at all where every row on the page has
+// ended, which the log's row alone decides. A STORE THAT DOES NOT ANSWER
+// LEAVES A LIVE ROW UNDECIDED, as the read surface leaves every fact it could
+// not read rather than counting it from zero: `continuable` null, and
+// `not_continuable` saying it could not be read — never a no, which would
+// tell a person a session will start over that may well be continued, and
+// never a failed page, whose rows the log answered whole.
 
 // ExecutorSessions is the seats' executor sessions as this surface reads them:
 // the two reads of the domain's reader a person asks, answered through the
@@ -90,6 +115,25 @@ type ExecutorSessions interface {
 // (executordomain.SessionStore): what the transcript is read from.
 type SessionObjects interface {
 	Open(ctx context.Context, session executordomain.Session) (io.ReadCloser, error)
+}
+
+// SessionRuns is the turns' run records in the fleet's coordination store, as
+// whether a session can be continued is decided off them ([sandbox.ContinuityOf]):
+// one seat's live runs for a page of its sessions, in one read however many
+// rows the page holds, and one turn's for a session read alone. The store a
+// relaunch reads its own turn's record from (sandbox.CoordStore), so the two
+// decide on one record.
+type SessionRuns interface {
+	ListActiveForSeat(ctx context.Context, handle string) ([]sandbox.PendingRun, error)
+	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
+}
+
+// SessionRestorers is this build's runner for the sessions a harness wrote, as
+// the company this node runs registers it — the runner a relaunch takes such a
+// session up with ([sandbox.SessionRestorer]) — or nil where none of its runners
+// restores one.
+type SessionRestorers interface {
+	SessionRestorer(harness string) sandbox.SessionRestorer
 }
 
 // SessionRow is one turn's executor session as this surface shows it.
@@ -123,6 +167,16 @@ type SessionRow struct {
 	// the seat's budget released it.
 	Kept        bool  `json:"kept"`
 	ObjectBytes int64 `json:"object_bytes"`
+
+	// Continuable says whether a relaunch of the turn would continue this
+	// session, as far as the engine can know before a box is chosen, decided
+	// as a relaunch decides it ([sandbox.ContinuityOf]); and NotContinuable,
+	// where it would not, why, in the engine's own words, redacted. NULL where
+	// it could not be decided, because the turn's run record could not be
+	// read, which NotContinuable then says: an unknown is never sent as a no.
+	// See the file comment.
+	Continuable    *bool  `json:"continuable"`
+	NotContinuable string `json:"not_continuable,omitempty"`
 }
 
 // SessionsAnswer is one page of a seat's executor sessions, the latest begun
@@ -233,12 +287,101 @@ func (s Sources) executorSessions(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, executorRefusal(err)
 	}
+	// ONE READ OF THE COORDINATION STORE FOR THE PAGE — see the file comment.
+	runs, unread := s.liveRuns(ctx, seat.Handle, page.Sessions)
 	rows := make([]SessionRow, 0, len(page.Sessions))
 	for _, row := range page.Sessions {
-		rows = append(rows, sessionRowOf(row))
+		shown := sessionRowOf(row)
+		shown.Continuable, shown.NotContinuable = s.continuity(row, runs[row.Turn], unread)
+		rows = append(rows, shown)
 	}
 	return SessionsAnswer{Handle: seat.Handle, Sessions: rows, Next: page.Next,
 		ReadLevel: fresh.Level, Position: page.Position, Complete: page.Complete}, nil
+}
+
+// errNoRunRecords is a node wired with no run records to read
+// ([Sources.SessionRuns]): every live turn's row is then undecided.
+var errNoRunRecords = errors.New("this node reads no run records")
+
+// undecidedContinuity is what a live turn's row says where its run record
+// could not be read: whether a relaunch continues its session is unknown, and
+// a person is told so rather than told it does not.
+const undecidedContinuity = "the turn's run record could not be read; ask again shortly"
+
+// liveRuns is the run record of every live turn among rows, by turn, read in
+// ONE listing of handle's live runs ([SessionRuns.ListActiveForSeat]) — and
+// nothing read where every row has ended, which the log's row alone decides —
+// or why they could not be read. A live turn with no record has a run that is
+// over: it is missing from the map, and decided so.
+func (s Sources) liveRuns(ctx context.Context, handle string,
+	rows []executordomain.Session) (map[string]*sandbox.PendingRun, error) {
+
+	if !slices.ContainsFunc(rows, func(row executordomain.Session) bool { return !row.Ended() }) {
+		return nil, nil
+	}
+	if s.SessionRuns == nil {
+		return nil, errNoRunRecords
+	}
+	listed, err := s.SessionRuns.ListActiveForSeat(ctx, handle)
+	if err != nil {
+		log.WarnContext(ctx, "executor_session_runs_unreadable", "handle", handle, "error", err,
+			"detail", "whether a relaunch continues each live session on the page cannot be said now")
+		return nil, err
+	}
+	runs := make(map[string]*sandbox.PendingRun, len(listed))
+	for i := range listed {
+		runs[listed[i].TurnID] = &listed[i]
+	}
+	return runs, nil
+}
+
+// liveRun is the run record of row's turn: nil where its run is over, and
+// nothing read where it has ended, which the log's row alone decides — or why
+// it could not be read.
+func (s Sources) liveRun(ctx context.Context, row executordomain.Session) (*sandbox.PendingRun, error) {
+	if row.Ended() {
+		return nil, nil
+	}
+	if s.SessionRuns == nil {
+		return nil, errNoRunRecords
+	}
+	run, found, err := s.SessionRuns.Get(ctx, row.Turn)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "executor_session_runs_unreadable", "handle", row.Handle, "turn_id", row.Turn,
+			"error", err, "detail", "whether a relaunch continues the session cannot be said now")
+		return nil, err
+	case !found:
+		return nil, nil
+	}
+	return &run, nil
+}
+
+// continuity is a row's `continuable` and `not_continuable`: THE DECISION A
+// RELAUNCH TAKES ([sandbox.ContinuityOf]), asked of the row, its turn's run
+// record — nil where its run is over — the job that record names as the one a
+// relaunch follows ([sandbox.PendingRun.LaunchSeq]), and this build's runner
+// for the row's harness; or undecided, where the turn is live and its record
+// could not be read (unread), since the decision would read a missing record
+// as a run that is over.
+func (s Sources) continuity(row executordomain.Session, run *sandbox.PendingRun,
+	unread error) (*bool, string) {
+
+	if unread != nil && !row.Ended() {
+		return nil, undecidedContinuity
+	}
+	var follows int64
+	if run != nil {
+		follows = run.LaunchSeq
+	}
+	var restorer sandbox.SessionRestorer
+	if s.SessionRestorers != nil {
+		restorer = s.SessionRestorers.SessionRestorer(row.Harness)
+	}
+	decided := sandbox.ContinuityOf(row, run, follows, restorer)
+	// REDACTED, as every text of this surface is: a reason can quote a
+	// harness's release as its box printed it.
+	return &decided.Continues, redact.Secrets(decided.Why)
 }
 
 // executorSession answers one turn's session — the turn `turn_id`, as every
@@ -270,8 +413,11 @@ func (s Sources) executorSession(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	shown := sessionRowOf(row)
+	run, unread := s.liveRun(ctx, row)
+	shown.Continuable, shown.NotContinuable = s.continuity(row, run, unread)
 	answer, err := s.readTranscript(ctx, row, SessionAnswer{
-		Handle: seat.Handle, Session: sessionRowOf(row), Entries: []executor.TranscriptEntry{},
+		Handle: seat.Handle, Session: shown, Entries: []executor.TranscriptEntry{},
 		From: from, Bounds: executor.TranscriptReadBounds(),
 		ReadLevel: fresh.Level, Position: read.Position, Complete: read.Complete,
 	})

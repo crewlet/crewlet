@@ -139,6 +139,28 @@ func (l *agentLauncher) restorer(manager *sandbox.Manager) (sandbox.SessionResto
 	return nil, "every member of the seat's executor chain is sitting out its plan"
 }
 
+// SessionRestorer is this build's runner for the sessions harness wrote, as the
+// company this node runs registers it in its sandbox catalogue — the runner a
+// relaunch takes such a session up with, from its own turn's catalogue
+// ([agentLauncher.restorer]) — or nil where this node runs no company, its
+// company reaches no sandbox cell, or none of its runners restores a session.
+//
+// What the read surface hands [sandbox.ContinuityOf] for each row of a seat's
+// sessions (internal/api/queries' `continuable`), so the row is decided by the
+// runner a relaunch would ask, never by a list of harnesses of its own.
+func (e *Engine) SessionRestorer(harness string) sandbox.SessionRestorer {
+	company := e.Company()
+	if company == nil || company.catalogue == nil {
+		return nil
+	}
+	run, err := company.catalogue.RunnerFor(harness)
+	if err != nil {
+		return nil
+	}
+	restorer, _ := run.(sandbox.SessionRestorer)
+	return restorer
+}
+
 // sandboxSession is a relaunch's kept session in the sandbox layer's terms, nil
 // where it continues none: the brief for the box the session was last worked
 // in, and the one for any other, each where the sandbox layer hands it.
