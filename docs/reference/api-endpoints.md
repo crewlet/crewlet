@@ -9397,7 +9397,7 @@ held:
 | `none` | The row names no object: its turn captured nothing, or the seat's budget released it |
 | `missing` | The object store no longer holds the object |
 | `unreadable` | The object does not open: it is sealed under a keyring key this fleet no longer holds, or its bytes are not the ones sealed for this turn |
-| `malformed` | It opened, and is not an archive of its harness's format — it is not gzip-compressed, its compressed bytes are corrupt, it ends part way through, or it holds no tar or no export document of its harness's (a box's own agent can rewrite what its run packs before a collection takes it) |
+| `malformed` | It opened, and is not an archive of its harness's format, and `why` says which of six ways: it is not gzip-compressed, its compressed bytes are corrupt, it ends part way through, it holds no tar of its harness's files, it holds no export document of its harness's, or its bytes are not laid out as its format describes (a box's own agent can rewrite what its run packs before a collection takes it) |
 | `unsupported` | It is of a harness or an archive format this build does not read |
 
 A store that did not answer is `503 unavailable` with a `Retry-After`, and a
