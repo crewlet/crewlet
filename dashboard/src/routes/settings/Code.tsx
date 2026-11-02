@@ -4,7 +4,7 @@
  * policy its configuration sets for seats' scratch repositories and the
  * addresses the engine's own commits are written under.
  *
- * THREE ANSWERS THE ENGINE ALREADY SERVES, none a question of its own:
+ * FOUR ANSWERS THE ENGINE ALREADY SERVES, none a question of its own:
  *
  * - the code log's row of the RETENTION report — its ceiling, what it holds,
  *   the trim's six terms and what holds it — drawn by Backups & retention's
@@ -17,11 +17,12 @@
  *   (`code.scratch`) and the identity domain (`code.identity_domain`), each
  *   with the default an unset field reads as, since an unset field is the one
  *   a reader most needs told what it means;
- * - and every repository's BRANCH PROTECTION — the push rules the listing
- *   carries and, as a repository's fold is opened, the merge gate of each
- *   rule from its detail, said in the repository page's own words
- *   (`lib/protection.ts`). Who set a rule and when is not on its row: the
- *   card says which surface sets the repository's rules instead.
+ * - and every repository's BRANCH PROTECTION — the engine's listing of the
+ *   protected repositories, a page at a time, with the push rules it carries
+ *   and, as a repository's fold is first opened, the merge gate of each rule
+ *   from its detail, asked for by name, said in the repository page's own
+ *   words (`lib/protection.ts`). Who set a rule and when is not on
+ *   its row: the card says which surface sets the repository's rules instead.
  *
  * ADMIN'S, as the rest of the Engine group: the document is read by an admin
  * alone, and the log and the fleet are the engine's. Hidden where the company
@@ -30,11 +31,11 @@
  */
 
 import { useState } from "react";
-import { Card, EmptyState, EmptyValue, InlineCode } from "@crewlethq/ui";
+import { Button, Card, EmptyState, EmptyValue, InlineCode } from "@crewlethq/ui";
 import { CodeGlyph } from "@crewlethq/icons/glyphs";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState } from "~/components/common.tsx";
 import {
   CODE_ALARM_KINDS,
   CODE_IDENTITY_DOMAIN,
@@ -44,11 +45,13 @@ import {
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { gateLine, pushRuleLine } from "~/lib/protection.ts";
-import { useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type {
   CodeProtection,
   CodeRepoSummary,
+  CodeReposAnswer,
   CodeRuleGate,
   CompanyDocument,
   FleetAnswer,
@@ -82,20 +85,42 @@ export function CodeSettings() {
 }
 
 /**
+ * The listing of the repositories a rule protects, as the card asks it: the
+ * engine's own filter (`protected`), walked by the index of those alone, so
+ * every page holds protected repositories whatever the company holds besides.
+ */
+export const PROTECTED_REPOS = { protected: true } as const;
+
+/**
  * Every repository a rule protects, each rule with what it lets a push do and
  * what its merge gate asks — the gate per pattern, read from the repository's
  * own detail as it is opened, since the listing carries the push rules and
  * not the gates. Where the rules come from is said too: a configured
  * repository's are the company document's, a tool-made one's the code tools'
  * lifecycle requests. Shown, never edited here, as the rest of this page.
+ *
+ * A PAGE AT A TIME, every page the engine's: the listing asks for the
+ * protected repositories alone (`PROTECTED_REPOS`) and Load more asks for
+ * the page after, so a company with more of them than a page sees every one —
+ * filtered here instead, a protected repository past the first page of EVERY
+ * repository was never shown. The count is said once nothing is left to page
+ * to: before then it is only what has loaded.
  */
-function BranchProtection() {
-  const read = useCodeQuery("code_repos", {});
-  const protectedRepos = (read.data?.repos ?? []).filter((r) => (r.protections ?? []).length > 0);
+export function BranchProtection() {
+  const read = useCodeQuery("code_repos", PROTECTED_REPOS);
+  const paged = usePaged(
+    read,
+    PROTECTED_REPOS,
+    (cursor) => codeRest.query("code_repos", { ...PROTECTED_REPOS, cursor }),
+    (answer: CodeReposAnswer) => answer.repos ?? [],
+    (repo: CodeRepoSummary) => repo.id,
+    (answer: CodeReposAnswer) => answer.next ?? "",
+  );
+  const protectedRepos = paged.items;
   return (
     <Card padding="none">
       <Card.Header
-        count={protectedRepos.length}
+        count={paged.more ? undefined : protectedRepos.length}
         subtitle="The rules on each repository's branches, and what a merge into each must meet"
         actions={
           <a className="t-link" href={href(["code", "repos"])}>
@@ -107,12 +132,15 @@ function BranchProtection() {
       </Card.Header>
       <Card.Body padding="md" className="col gap-2">
         <QueryState
-          error={read.error}
-          refusal={read.refusal}
+          error={paged.error}
+          refusal={paged.refusal}
           detail={read.detail}
-          loading={read.loading && !read.data}
+          loading={paged.loading && protectedRepos.length === 0}
           empty={
-            read.data && protectedRepos.length === 0
+            // A PAGE THAT HELD NONE MAY STILL HAVE A CURSOR — what the engine
+            // scanned and the reader may not read — so nothing is protected
+            // only where nothing is left to page to.
+            read.data && protectedRepos.length === 0 && !paged.more
               ? {
                   title: "No branch is protected",
                   hint: "A protection is declared under code.repos, or set with code_protect_branch.",
@@ -123,12 +151,23 @@ function BranchProtection() {
           {protectedRepos.map((repo) => (
             <RepoFold key={repo.id} repo={repo} />
           ))}
-          {read.data?.next && (
-            <span className="t-caption">
-              More repositories are past this page: the Code workspace lists every one.
-            </span>
-          )}
         </QueryState>
+        {(paged.more || paged.pageError) && (
+          <div className="row gap-2 wrap">
+            {paged.more && (
+              <Button
+                size="small"
+                variant="secondary"
+                onClick={paged.next}
+                disabled={paged.paging}
+                loading={paged.paging}
+              >
+                Load more
+              </Button>
+            )}
+            {paged.pageError && <PageFailed error={paged.pageError} />}
+          </div>
+        )}
       </Card.Body>
     </Card>
   );
@@ -137,17 +176,23 @@ function BranchProtection() {
 /**
  * One repository's fold. ITS DETAIL IS READ ONLY ONCE OPENED: a company with
  * many protected repositories would otherwise ask each one's detail on every
- * visit to this page, for gates nobody unfolded.
+ * visit to this page, for gates nobody unfolded. AND KEPT ONCE READ: a fold
+ * closed again keeps its answer mounted — a closed `<details>` draws none of
+ * it — so opening it again asks nothing.
  */
 function RepoFold({ repo }: { repo: CodeRepoSummary }) {
-  const [open, setOpen] = useState(false);
+  const [opened, setOpened] = useState(false);
   return (
-    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <details
+      onToggle={(event) => {
+        if (event.currentTarget.open) setOpened(true);
+      }}
+    >
       <summary>
         <span className="mono">{repo.name}</span>{" "}
         <span className="muted">— {plural(repo.protections?.length ?? 0, "rule")}</span>
       </summary>
-      {open && <RepoProtection repo={repo} />}
+      {opened && <RepoProtection repo={repo} />}
     </details>
   );
 }

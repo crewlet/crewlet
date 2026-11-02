@@ -568,9 +568,12 @@ before it lands ([The merge queue](../concepts/code-host.md#the-merge-queue)),
 and `main`'s tip is checked again once it lands, `code_green` advancing on
 green ([From a push to a green branch](../concepts/code-host.md#from-a-push-to-a-green-branch)).
 
-**Settings › Code** lists every protected repository, each rule with what it
-lets a push do and what its gate asks, and says where the repository's rules
-are set — the company document, or the code tools. A repository's own page
+**Settings › Code** lists every protected repository, a page at a time with
+**Load more** — the engine's own listing of them, `GET
+/code/repos?protected=true`, which reads an index of the protected
+repositories alone — each rule with what it lets a push do and, once its fold
+is opened, what its gate asks, and says where the repository's rules are set —
+the company document, or the code tools. A repository's own page
 shows the same under its **Settings** tab. A seat may tighten a gate and never
 loosen it ([Who may change a
 protection](../concepts/code-host.md#who-may-change-a-protection)); every
