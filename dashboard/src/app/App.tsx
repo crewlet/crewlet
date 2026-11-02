@@ -129,7 +129,7 @@ const Brand = lazyScreen("brand", (m) => m.BrandPage);
 const BrandSetup = lazyScreen("brand", (m) => m.BrandSetup);
 const Integrations = lazyScreen("settings", (m) => m.Integrations);
 const Models = lazyScreen("settings", (m) => m.Models);
-const Tools = lazyScreen("settings", (m) => m.Tools);
+const McpTools = lazyScreen("settings", (m) => m.McpTools);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
 const Limits = lazyScreen("settings", (m) => m.Limits);
 const People = lazyScreen("settings", (m) => m.People);
@@ -267,7 +267,7 @@ export function screenFor(route: Resolved): ReactNode {
       return <Models key={route.id ?? ""} id={route.id} />;
     case "mcp-tools":
       return (
-        <Tools
+        <McpTools
           key={`${route.server ?? ""}/${route.tool ?? ""}`}
           server={route.server}
           tool={route.tool}

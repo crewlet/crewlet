@@ -232,6 +232,41 @@ func TestTheBuiltinsAreShelvedInTheCataloguesOrder(t *testing.T) {
 	}
 }
 
+// A CATALOGUE ROW CARRIES THE ENGINE'S ONE RISK READING, built-in or not: the
+// same `risk`, `risk_declared` and `external` an MCP server's detail answers
+// per tool, read by [mcp.RiskOf] from the hints the row carries, so the
+// built-in catalogue draws a risk rather than computing one, and an
+// unannotated tool reads destructive by default with no hint said to have
+// decided it.
+//
+// Mutation: read an undeclared tool as additive, or the open-world default as
+// closed, and this is red.
+func TestACatalogueRowCarriesTheEnginesRiskReading(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		hints    tools.Annotations
+		want     mcp.Risk
+		declared bool
+		external bool
+	}{
+		{"read", tools.Annotations{ReadOnly: mcp.Yes, OpenWorld: mcp.No}, mcp.RiskReadOnly, true, false},
+		{"write", tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No}, mcp.RiskAdditive, true, true},
+		{"wipe", tools.Annotations{Destructive: mcp.Yes, OpenWorld: mcp.No}, mcp.RiskDestructive, true, false},
+		{"silent", tools.Annotations{}, mcp.RiskDestructive, false, true},
+	} {
+		row := queries.CatalogueRow(tools.Entry{Tool: catalogueTool{name: c.name},
+			Origin: tools.OriginBuiltin, Annotations: c.hints}, "")
+		if row.Risk != c.want || row.RiskDeclared != c.declared || row.External != c.external {
+			t.Errorf("%s reads %s (declared %v, external %v), want %s (declared %v, external %v)",
+				c.name, row.Risk, row.RiskDeclared, row.External, c.want, c.declared, c.external)
+		}
+		if reading := mcp.RiskOf(c.hints); reading.Risk != row.Risk {
+			t.Errorf("%s: the row reads %s and mcp.RiskOf %s", c.name, row.Risk, reading.Risk)
+		}
+	}
+}
+
 // THE TOOL SCREENS READ EXACTLY WHAT THE CATALOGUE SENDS, every field held
 // both ways and every closed word set the engine's own.
 //

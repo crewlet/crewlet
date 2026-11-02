@@ -1,5 +1,5 @@
 /**
- * Adding an MCP server from Settings › MCP Tools.
+ * Adding an MCP server from Settings › MCP & tools.
  *
  * A NEW CONFIGURATION REVISION, not an act: a server is a `mcp_servers` entry,
  * so the write goes through `protocol/configWrite.ts` like a seat or a budget
@@ -44,7 +44,7 @@ import {
   type Pair,
   type ServerField,
   type ServerForm,
-} from "~/lib/mcpServers.ts";
+} from "./addMcpServerForm.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
@@ -116,11 +116,11 @@ export function AddMcpServerDialog({
   onClose,
   onAdded,
 }: {
-  /** The names the configuration carries ([takenNames]): an add refuses them. */
+  /** The names the configuration carries: an add refuses them. */
   taken: ReadonlySet<string>;
   /**
    * Names only a node still runs, from a revision it has not left
-   * ([nodeOnlyNames]): free to add, and said beside the field rather than
+   * (`configured: false` on the list): free to add, and said beside the field rather than
    * refused, since the engine's create accepts them.
    */
   nodeOnly: ReadonlySet<string>;

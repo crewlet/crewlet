@@ -390,7 +390,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	}
 	for _, leak := range []string{"launch-sentinel", "npx", "exit status 1", "GITHUB_TOKEN",
 		"the image must provide", `"said"`, `"keys"`, `"box_seats"`, `"warnings"`, `"dependants"`,
-		`"instructions"`, `"reason"`} {
+		`"instructions"`, `"reason"`, `"seats"`, `"calls":{`, `"turn_id"`} {
 		if strings.Contains(w.Body.String(), leak) {
 			t.Errorf("a member's reading of the detail carries %s: %s", leak, w.Body.String())
 		}
@@ -400,7 +400,9 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 		t.Fatal(err)
 	}
 	holdKeys(t, "a member's detail", member, "reading", "server", "nodes", "listed", "tools", "tool_count",
-		"server_info", "instances", "instance_nodes", "last_success", "last_failure", "resolved")
+		"server_info", "instances", "instance_nodes", "last_success", "last_failure", "resolved", "usage")
+	holdKeys(t, "a member's usage", member["usage"].(map[string]any), "since", "until", "days", "tools",
+		"elided")
 	if member["reading"] != "member" {
 		t.Errorf("a member's detail says it is %v", member["reading"])
 	}

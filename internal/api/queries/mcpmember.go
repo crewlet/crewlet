@@ -99,10 +99,11 @@ type MemberMCPServerNode struct {
 }
 
 // MemberMCPServerAnswer is `GET /mcp-servers/{name}`, a member's reading: the
-// server's row, every tool it lists, how each instance is doing and what the
-// engine resolves about it, with no failure's sentence, no wait's, no header
-// or variable a credential reaches it under, no box, no instructions and
-// nothing removing it would take with it.
+// server's row, every tool it lists, how each instance is doing, what the
+// engine resolves about it and how often each tool was called, with no
+// failure's sentence, no wait's, no header or variable a credential reaches it
+// under, no box, no instructions, nothing removing it would take with it, and
+// neither a call nor who made one.
 type MemberMCPServerAnswer struct {
 	Reading       string                      `json:"reading"`
 	Server        MemberMCPServerRow          `json:"server"`
@@ -116,6 +117,31 @@ type MemberMCPServerAnswer struct {
 	LastSuccess   *time.Time                  `json:"last_success"`
 	LastFailure   *MemberMCPFailureView       `json:"last_failure"`
 	Resolved      *MemberMCPResolved          `json:"resolved"`
+	Usage         MemberMCPServerUsage        `json:"usage"`
+}
+
+// MemberMCPServerUsage is a server's calls per tool over the admin's range of
+// company days, a member's reading: how often each tool was called and how the
+// calls ended, which tells a member whether a tool is in use, and never which
+// seat called it, which is the trail of that seat's work.
+type MemberMCPServerUsage struct {
+	Since  string               `json:"since"`
+	Until  string               `json:"until"`
+	Days   int                  `json:"days"`
+	Tools  []MemberMCPToolUsage `json:"tools"`
+	Elided int64                `json:"elided"`
+}
+
+// MemberMCPToolUsage is one tool's calls over the range, a member's reading:
+// [MCPToolUsage]'s counts without its seats.
+type MemberMCPToolUsage struct {
+	Tool        string     `json:"tool"`
+	Calls       int64      `json:"calls"`
+	Failed      int64      `json:"failed"`
+	Unavailable int64      `json:"unavailable"`
+	Refused     int64      `json:"refused"`
+	TotalMS     int64      `json:"total_ms"`
+	LastAt      *time.Time `json:"last_at"`
 }
 
 // MemberMCPToolView is one tool the server lists, a member's reading: the
@@ -216,7 +242,14 @@ func MemberMCPServer(a MCPServerAnswer) MemberMCPServerAnswer {
 		Listed: nonNil(a.Listed), Tools: make([]MemberMCPToolView, 0, len(a.Tools)), ToolCount: a.ToolCount,
 		Instances:     make([]MemberMCPInstanceView, 0, len(a.Instances)),
 		InstanceNodes: make([]MemberMCPInstanceNodeView, 0, len(a.InstanceNodes)),
-		LastSuccess:   a.LastSuccess, LastFailure: memberFailure(a.LastFailure)}
+		LastSuccess:   a.LastSuccess, LastFailure: memberFailure(a.LastFailure),
+		Usage: MemberMCPServerUsage{Since: a.Usage.Since, Until: a.Usage.Until, Days: a.Usage.Days,
+			Tools: make([]MemberMCPToolUsage, 0, len(a.Usage.Tools)), Elided: a.Usage.Elided}}
+	for _, u := range a.Usage.Tools {
+		out.Usage.Tools = append(out.Usage.Tools, MemberMCPToolUsage{Tool: u.Tool, Calls: u.Calls,
+			Failed: u.Failed, Unavailable: u.Unavailable, Refused: u.Refused, TotalMS: u.TotalMS,
+			LastAt: u.LastAt})
+	}
 	for _, t := range a.Tools {
 		out.Tools = append(out.Tools, MemberMCPToolView{Name: t.Name, Raw: t.Raw, Title: t.Title,
 			Description: t.Description, Annotations: t.Annotations, Risk: t.Risk, RiskDeclared: t.RiskDeclared,
