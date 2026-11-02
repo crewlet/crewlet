@@ -34,11 +34,9 @@ const (
 	InboxReportInterval = 5 * time.Second
 
 	// InboxReportHeartbeat is how often an unchanged report is published
-	// again, so a dashboard that started since hears every seat within it.
-	// The projection forgets a reporter's counts after three of these with
-	// no report (livestate's waitingExpiry), which is how the counts of a
-	// node that went away clear.
-	InboxReportHeartbeat = 30 * time.Second
+	// again, so a dashboard that started since hears every seat within it;
+	// the projection's expiry is read off the same constant.
+	InboxReportHeartbeat = types.SeatInboxWaitingHeartbeat
 
 	// inboxReadConcurrency caps the reads one tick has in flight: each is
 	// two consumer-info requests to the broker, and a node holding thirty

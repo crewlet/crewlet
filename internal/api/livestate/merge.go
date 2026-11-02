@@ -16,8 +16,8 @@ func mergeOverlay(row map[string]any, o Overlay) {
 
 // mergeStatus writes everything the overlay says about a seat EXCEPT its call
 // in flight: what the seat is doing, why it stopped, its phase, its turn, its
-// last turn, its budget, its pause, its models' usage limit and its last
-// error. Every other [Overlay] field is written here, and a test reads the
+// last turn, its budget, its pause, its models' usage limit, what waits in
+// its inbox and its last error. Every other [Overlay] field is written here, and a test reads the
 // struct's tags to hold that, because a field the projection keeps and this
 // does not write reaches no client at all.
 //
@@ -46,4 +46,5 @@ func mergeStatus(row map[string]any, o Overlay) {
 	row["last_turn"] = o.LastTurn
 	row["paused"] = o.Paused
 	row["provider_limit"] = o.ProviderLimit
+	row["waiting"] = o.Waiting
 }

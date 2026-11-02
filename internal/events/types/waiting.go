@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -11,6 +12,12 @@ import (
 func init() {
 	events.Register[SeatInboxWaiting]()
 }
+
+// SeatInboxWaitingHeartbeat is how often a node publishes its report when no
+// count moved. It is ONE number for both ends: the reporting loop publishes on
+// it, and the live projection forgets a reporter it has not heard from for
+// three of it, which is how the counts of a node that went away clear.
+const SeatInboxWaitingHeartbeat = 30 * time.Second
 
 // SeatWaiting is one seat's mail that no turn is running on yet, per mailbox
 // of its inbox: the priority lane (a person waiting) and the rest.
