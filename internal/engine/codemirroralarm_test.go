@@ -27,6 +27,8 @@ knowledge:
   backend: none
 code:
   native: true
+  remote_credentials:
+    WEB_MIRROR_TOKEN: {hosts: [mirror.example.com]}
   repos:
     - name: web
       owner: {seat: founder}

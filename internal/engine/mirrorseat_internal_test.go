@@ -65,6 +65,8 @@ func TestADeclaredMirrorSeatReadsWhatTheDomainGrantsIt(t *testing.T) {
 			for _, visibility := range []code.Visibility{code.VisibilityUnit, code.VisibilityCompany} {
 				doc := chart + fmt.Sprintf(`code:
   native: true
+  remote_credentials:
+    FORGE_TOKEN: {hosts: [forge.example.com]}
   repos:
     - name: web
       owner: %s

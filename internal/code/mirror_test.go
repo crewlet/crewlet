@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -21,7 +22,84 @@ var (
 	mirrorTarget = &code.MirrorTarget{URL: "https://forge.example.com/acme/web-public.git",
 		Credential: "${FOUNDER_FORGE_TOKEN}", As: "founder"}
 	importSource = &code.ImportSource{URL: "https://forge.example.com/acme/api.git", Credential: "${FORGE_TOKEN}"}
+
+	// forgeCredentials is the code.remote_credentials every harness node's
+	// policy declares: the fixtures' variables, for the fixtures' forge.
+	forgeCredentials = config.CodeRemoteCredentials{
+		"FORGE_TOKEN":         {Hosts: []string{"forge.example.com"}},
+		"FOUNDER_FORGE_TOKEN": {Hosts: []string{"forge.example.com"}},
+	}
 )
+
+// A PERSON'S MIRROR OR IMPORT NAMES A CREDENTIAL code.remote_credentials
+// DECLARES FOR ITS HOST: a person — who may create any project and set any
+// mirror — asking to create a repository importing from, or mirroring, a
+// remote with a variable the table does not declare (the node's own object
+// store key, say), or with a declared variable toward a host it is not
+// declared for, or setting either mirror of a repository so, is refused
+// not_permitted naming the table and the host, the credential never quoted,
+// and nothing is appended; the deciding node reads the table of its epoch at
+// the request, so declaring the variable for that host lets the same request
+// land. A mirror removed names no remote, and is never refused for it.
+//
+// Mutation: drop remoteCredentialRefusal's call from lifecycleCreate — the
+// creates land, red; from decideOnRepo — the settings changes land, red.
+// Read only the create's import in remoteCredentialRefusal — the mirrors'
+// creates land, red.
+func TestAPersonsRemoteCredentialIsOneDeclaredForItsHost(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	id := n.made(lcPerson, "web", unitOwned("eng"))
+	undeclared := &code.ImportSource{URL: importSource.URL, Credential: "${AWS_SECRET_ACCESS_KEY}"}
+	elsewhere := "https://attacker.example.com/x.git"
+	cases := map[string]code.LifecycleRequest{
+		"an import naming an undeclared variable": withCreate(lcCreate(lcPerson, "leak-a", unitOwned("eng")),
+			func(r *code.LifecycleRequest) { r.Import = undeclared }),
+		"an import sending a declared one elsewhere": withCreate(lcCreate(lcPerson, "leak-b", unitOwned("eng")),
+			func(r *code.LifecycleRequest) {
+				r.Import = &code.ImportSource{URL: elsewhere, Credential: "${FORGE_TOKEN}"}
+			}),
+		"a create's pull mirror sending one elsewhere": withCreate(lcCreate(lcPerson, "leak-c", unitOwned("eng")),
+			func(r *code.LifecycleRequest) {
+				r.Create.MirrorFrom = &code.MirrorSource{URL: elsewhere, Credential: "${FORGE_TOKEN}"}
+			}),
+		"a create's push mirror sending one elsewhere": withCreate(lcCreate(lcPerson, "leak-d", unitOwned("eng")),
+			func(r *code.LifecycleRequest) {
+				r.Create.MirrorTo = &code.MirrorTarget{URL: elsewhere, Credential: "${FOUNDER_FORGE_TOKEN}",
+					As: "founder"}
+			}),
+		"a pull mirror set with an undeclared variable": lcSettings(lcPerson, id, code.RepoChange{
+			MirrorFrom: &code.MirrorSource{URL: mirrorSource.URL, Credential: "${CREWLET_API_TOKEN_FOUNDER}"}}),
+		"a push mirror set to send one elsewhere": lcSettings(lcPerson, id, code.RepoChange{
+			MirrorTo: &code.MirrorTarget{URL: elsewhere, Credential: "${FOUNDER_FORGE_TOKEN}", As: "founder"}}),
+	}
+	before := n.end()
+	for what, req := range cases {
+		got := n.life(req)
+		if got.Refusal != code.LifecycleNotPermitted || !strings.Contains(got.Detail, "code.remote_credentials") {
+			t.Errorf("%s: %+v, want not_permitted naming code.remote_credentials", what, got)
+		}
+		if strings.Contains(got.Detail, "${") {
+			t.Errorf("%s: the refusal %q quotes the credential", what, got.Detail)
+		}
+	}
+	if end := n.end(); end != before {
+		t.Fatalf("the refused requests appended %d records, want none", end-before)
+	}
+
+	// THE TABLE IS THE EPOCH'S, read at the request: declared for the host,
+	// the same import lands.
+	n.scratch.RemoteCredentials = config.CodeRemoteCredentials{
+		"FORGE_TOKEN":           {Hosts: []string{"forge.example.com"}},
+		"AWS_SECRET_ACCESS_KEY": {Hosts: []string{"forge.example.com"}},
+	}
+	n.lands(cases["an import naming an undeclared variable"])
+	// A MIRROR REMOVED sends nothing, whatever the table says.
+	n.lands(lcSettings(lcPerson, id, code.RepoChange{MirrorFrom: mirrorSource}))
+	n.scratch.RemoteCredentials = nil
+	n.lands(lcSettings(lcPerson, id, code.RepoChange{MirrorFrom: &code.MirrorSource{}}))
+}
 
 // A MIRROR AND AN IMPORT ARE A PERSON'S (U49 a): a seat — its unit's lead at
 // full_access, which may make, change and delete the project — asking to create

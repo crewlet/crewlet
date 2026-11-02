@@ -1313,6 +1313,15 @@ with your own token exported ([Give each person a token](#give-each-person-a-tok
 
 #### The node imports it
 
+An administrator first stores the source's token, where it is private, and
+declares which host it may be sent to, in the company document:
+
+```yaml
+code:
+  remote_credentials:
+    GITHUB_TOKEN: { hosts: [github.com] }
+```
+
 ```sh
 crewlet secrets set GITHUB_TOKEN          # the source's token, where it is private
 crewlet code import https://github.com/acme/web.git web -owner unit:eng -credential GITHUB_TOKEN
@@ -1328,7 +1337,11 @@ unless Tier A's `git.import_allow_private` lets it reach your own network.
 `-credential` names the variable holding the source's token — never the token,
 which the repository's settings would carry on every data node and in every
 backup; the node resolves it from the secret store, then its environment, each
-time it dials. A blob past `code.limits.max_blob_bytes` or a history past
+time it dials. It must be a variable
+[`code.remote_credentials`](../getting-started/configuration.md#coderemote_credentials)
+declares for the source's host, or the import is refused `not_permitted`,
+naming the host and the variables declared for it: the node sends the value
+there, so only an administrator decides which token may leave for which forge. A blob past `code.limits.max_blob_bytes` or a history past
 `code.limits.repo_max_bytes` ends the import early: the repository turns
 `active` holding what landed, and the import is not tried again. A **pull mirror**
 (`-mirror`) is imported the same way and then moves only by its home's syncs
@@ -1429,6 +1442,8 @@ minutes while it does not. Declare it on the repository:
 ```yaml
 code:
   native: true
+  remote_credentials:
+    GITHUB_MIRROR_TOKEN: {hosts: [github.com]}  # the one host its value may be sent to
   repos:
     - name: web
       owner: {unit: eng}
@@ -1462,7 +1477,8 @@ The seat must read the repository, and is asked again before every push, so a
 chart change that takes its read away stops the mirror. The token is never
 written in the company file — `credential` names the variable that holds it,
 resolved from the secret store and then the node's environment when it
-dials. A forge that wants a particular user name with its token is given it in
+dials, and only where `code.remote_credentials` declares that variable for
+the mirror's host (above). A forge that wants a particular user name with its token is given it in
 the variable itself, as `user:token`.
 
 **When it cannot push**, its home logs `code_mirror_attempt_failed` with the

@@ -7842,7 +7842,8 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   **Import a repository**, a person's alone (`code_import_repo`, which the
   authority table refuses every seat): a new project, named in the engine's
   grammar and owned by a unit picked from the chart, filled from an https URL
-  at another host — with the token a variable NAMES, typed as the name and
+  at another host — with the token a variable NAMES (one
+  `code.remote_credentials` declares for its host), typed as the name and
   never as the token, which the tool refuses — or made a pull mirror of it
   (**Keep following it**). It is drawn for every reader and held, with the
   sentence, for one holding no human seat; the dialog's Import is held until

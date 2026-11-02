@@ -331,6 +331,16 @@
             "null"
           ]
         },
+        "remote_credentials": {
+          "additionalProperties": {
+            "$ref": "#/$defs/CodeRemoteCredential"
+          },
+          "description": "The variables a repository's mirror or import may name for its credential, by the variable's name, each with the hosts its value may be sent to: a mirror's or an import's credential — in code.repos, or one a person asks for — is refused unless it is the ${NAME} of a variable declared here for its URL's host, and the code host dials no other. At most 64. The value is the secret store's or the environment's, as ever: this table holds names and hosts, never a token.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "repos": {
           "description": "The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again.",
           "items": {
@@ -475,7 +485,7 @@
       "additionalProperties": false,
       "properties": {
         "credential": {
-          "description": "What the code host fetches with: one whole ${VAR} reference to a token, resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
+          "description": "What the code host fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
           "type": [
             "string",
             "number",
@@ -578,7 +588,7 @@
       "additionalProperties": false,
       "properties": {
         "credential": {
-          "description": "What the code host fetches with: one whole ${VAR} reference to a token, resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
+          "description": "What the code host fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
           "type": [
             "string",
             "number",
@@ -618,7 +628,7 @@
           ]
         },
         "credential": {
-          "description": "What the code host pushes with: one whole ${VAR} reference to the as seat's own token at that host, resolved from the secret store and then the environment when it dials, never a literal.",
+          "description": "What the code host pushes with: one whole ${VAR} reference to the as seat's own token at that host — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal.",
           "type": [
             "string",
             "number",
@@ -878,6 +888,33 @@
           ]
         }
       },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeRemoteCredential": {
+      "additionalProperties": false,
+      "properties": {
+        "hosts": {
+          "description": "The hosts this variable's value may be sent to, each a host name or an IP address with an optional :port — github.com, gitlab.example.com:8443 — matched whole against a mirror's or an import's URL, its port included (443 where none is written): at least one, at most 16, each once.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "hosts"
+      ],
       "type": [
         "object",
         "null"

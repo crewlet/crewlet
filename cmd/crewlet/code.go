@@ -85,7 +85,8 @@ const codeUsage = `usage: crewlet code <command>
          [-credential VAR] [-mirror] [-op-id ID]
       create a project the node fills from another host's repository, or
       keeps in step with it (-mirror), fetching it with the token the node
-      holds as VAR; a person's alone, through their own token
+      holds as VAR, a variable code.remote_credentials declares for the
+      source's host; a person's alone, through their own token
   import <source-url> <name> -local [<config.yaml>] [-api URL] [-git PATH] [-dry-run]
       push another host's repository from this machine into one that exists,
       in steps under code.limits.max_push_bytes; the same command again

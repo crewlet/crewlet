@@ -33,7 +33,7 @@ func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Ca
 
 	o := mirror.Options{
 		Estate: e.router.Code(), Cache: c, Git: pool, Objects: objects, NodeID: nodeID, Limits: e.codeLimits,
-		Dial: mirrorDial(boot.Git.ImportAllowPrivate, e.LookupSecret), Roster: e.codeRoster,
+		Dial: mirrorDial(boot.Git.ImportAllowPrivate, e.codeRemoteCredentials, e.LookupSecret), Roster: e.codeRoster,
 		Events: e.codeEvents(), Metrics: e.metrics,
 	}
 	if e.mirrorSeams != nil {
@@ -56,6 +56,16 @@ func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Ca
 // (M6-D17) — resolved at the dial from the secret store and then the
 // environment (lookup: Engine.LookupSecret), never earlier and never kept.
 //
+// ONLY A CREDENTIAL code.remote_credentials DECLARES FOR THE URL'S HOST IS
+// RESOLVED (declared: the table this node's epoch holds at the dial,
+// Engine.codeRemoteCredentials; config.CodeRemoteCredentials.Refusal, the one
+// judgement), and any other refused before anything is looked up. The decide
+// held the request that recorded it to the table then; this holds every dial
+// to the table now — a declaration withdrawn, or narrowed to other hosts,
+// stops the value leaving at the next attempt — and to the URL each record
+// carries, whoever wrote it, so no value of this node's secret store or its
+// environment goes to a host an administrator did not name for it.
+//
 // THE CREDENTIAL'S VALUE IS SENT AS HTTP BASIC (remoteAuthorization): the one
 // scheme every forge's git endpoint accepts. A value holding a colon is
 // `user:password` as written; any other is a token, sent as the password
@@ -63,7 +73,8 @@ func (e *Engine) buildMirrors(nodeID string, boot *config.Bootstrap, c *cache.Ca
 // over https, and one GitLab, Gitea and Forgejo accept beside a token — so a
 // forge that wants a particular user (Bitbucket's `x-token-auth`) is given it
 // in the variable itself.
-func mirrorDial(allowPrivate bool, lookup func(name string) (string, bool)) mirror.Dial {
+func mirrorDial(allowPrivate bool, declared func() config.CodeRemoteCredentials,
+	lookup func(name string) (string, bool)) mirror.Dial {
 	return func(ctx context.Context, url, credential string) (gitproc.Remote, error) {
 		r, err := gitproc.ResolveRemote(ctx, url, allowPrivate)
 		if err != nil || credential == "" {
@@ -72,6 +83,9 @@ func mirrorDial(allowPrivate bool, lookup func(name string) (string, bool)) mirr
 		name, whole := envref.Whole(credential)
 		if !whole {
 			return gitproc.Remote{}, fmt.Errorf("engine: the credential of %s is no whole ${VAR} reference", url)
+		}
+		if why := declared().Refusal(url, credential); why != "" {
+			return gitproc.Remote{}, fmt.Errorf("engine: %s is not dialed with its credential: %s", url, why)
 		}
 		value, ok := lookup(name)
 		if !ok || value == "" {

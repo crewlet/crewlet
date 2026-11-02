@@ -29,7 +29,7 @@ subcommand below is served by it.
 | `crewlet code status [config] [-repo NAME] [-json]` | The [code host's](../concepts/code-host.md) repositories as a running node reads them — status, owner, default branch and its head, refs, packs, size and last push — or with `-repo` one repository in detail with its newest pushes: who made each and what became of every ref |
 | `crewlet code verify [config] [-repo NAME]… [-repair] [-json]` | Check **this node's** cache of every repository — or the named ones — against their rows, and with `-repair` repair what it finds — in place where only the copy's own directory is out of place, by a rebuild otherwise. Every git node keeps its own cache, so verify each. **Exits non-zero when any copy is not clean**, after checking every one — the hook for a cron on each git node |
 | `crewlet code export <name> <file.bundle> [config] [-git PATH]` | Write one repository — every ref and every object — to a git bundle on this machine, through your own git; `git clone <file.bundle>` restores it |
-| `crewlet code import <source-url> <name> [config] -owner unit:KEY\|seat:HANDLE [-credential VAR] [-mirror] [-op-id ID]` | Create a project repository the node fills from another host's — an https URL its home git node fetches with the token the node holds as `VAR` — or, with `-mirror`, keeps in step with it as a pull mirror. **A person's alone**, through your own token; answered once the repository is created, `importing` until its home has fetched the source |
+| `crewlet code import <source-url> <name> [config] -owner unit:KEY\|seat:HANDLE [-credential VAR] [-mirror] [-op-id ID]` | Create a project repository the node fills from another host's — an https URL its home git node fetches with the token the node holds as `VAR`, a variable `code.remote_credentials` declares for the source's host — or, with `-mirror`, keeps in step with it as a pull mirror. **A person's alone**, through your own token; answered once the repository is created, `importing` until its home has fetched the source |
 | `crewlet code import <source-url> <name> -local [config] [-git PATH] [-dry-run]` | Push another host's repository — GitHub, GitLab, any URL your git clones — into one that exists, as you, in steps that each fit `code.limits.max_push_bytes`: your own git clones the source and pushes it, and the engine dials nothing. Refuses before pushing anything what it can see in the source (a blob past the blob limit, a history already past the repository limit as one pack), stops before any step that would take the repository past that limit, skips a forge's pull refs, and **resumes** where a failed run stopped when run again |
 | `crewlet code purge-unreachable <name> [config] [-op-id ID]` | Ask a repository's maintainer to drop every object no branch or tag reaches — a secret force-pushed away, what a deleted branch left — with no grace. **A person's alone**, through your own token; answered once the request is recorded, with the node that serves it and what still holds the objects after |
 | `crewlet code credential [-token-env NAME] get` | git's credential helper for the code host: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
@@ -1872,10 +1872,15 @@ ends.
 - `-credential VAR` names the variable that holds the source's token — in upper
   case, such as `GITHUB_TOKEN` — which the node resolves from the
   [secret store](../concepts/secret-store.md) and then its environment when it
-  dials (`crewlet secrets set GITHUB_TOKEN` stores one). The repository records
-  the reference `${GITHUB_TOKEN}`, never the token, and a token given in its
-  place is refused before anything is sent. Left out, the source is fetched
-  anonymously.
+  dials (`crewlet secrets set GITHUB_TOKEN` stores one). It must be a variable
+  the company's
+  [`code.remote_credentials`](../getting-started/configuration.md#coderemote_credentials)
+  declares for the source's host — an administrator's to declare — or the node
+  refuses the import `not_permitted`, naming the host and the variables
+  declared for it: the code host sends no other value it can resolve to a host
+  you chose. The repository records the reference `${GITHUB_TOKEN}`, never the
+  token, and a token given in its place is refused before anything is sent.
+  Left out, the source is fetched anonymously.
 - `-mirror` makes the repository a pull mirror: imported from the source first,
   then moved only by its home's syncs from it — every push to it is refused.
 

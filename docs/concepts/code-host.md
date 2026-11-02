@@ -208,6 +208,16 @@ and every backup. The code log records the reference as written, and the code
 host resolves it — from the [secret store](secret-store.md), then the
 environment — only when it dials ([`${VAR}`
 references](configuration.md#var-references)); unset fetches anonymously.
+**And the variable is one an administrator declared for the URL's host**, in
+[`code.remote_credentials`](../getting-started/configuration.md#coderemote_credentials):
+the node sends the value to the remote's host, so a reference nothing bounded
+would let whoever may create a repository have a git node send any value it
+can resolve — its keyring, a Tier A token, the object store's key — to a host
+of their choosing. A declaration naming any other is refused when the revision
+is written, a person's create or settings change naming one is refused
+`not_permitted` by the data node that decides it, naming the host and the
+variables declared for it, and every dial resolves no other, under the table
+its node holds then. A host is matched whole, its port included.
 Only a person or this document sets a mirror or an import: a seat asking to
 create a repository with one, or to set or remove either mirror of one, is
 refused `not_permitted` whatever its grant, since a pull mirror and an import
@@ -781,8 +791,11 @@ certificate authorities are the process's own (`HTTPS_PROXY`, `NO_PROXY`,
 `SSL_CERT_FILE`), as [Deployment](../guides/deployment.md#reaching-other-forges) says.
 A `credential` is always one whole `${VAR}` reference, kept as the reference
 on every data node and in every backup and resolved from the secret store,
-then the node's environment, each time the node dials; it is sent in a header,
-never on git's command line, and redacted from every line the node logs.
+then the node's environment, each time the node dials — and only where the
+node's current `code.remote_credentials` declares the variable for the URL's
+host, or the attempt fails at its dial with nothing resolved; it is sent in a
+header, never on git's command line, and redacted from every line the node
+logs.
 
 **A failure is the home's to know.** A push to another host is no record on
 the code log, so whether a mirror is level is something only its home knows,

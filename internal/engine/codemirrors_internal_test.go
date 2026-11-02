@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // A MIRROR'S CREDENTIAL IS SENT AS HTTP BASIC: a value holding a colon is
@@ -43,10 +45,61 @@ func TestAMirrorCredentialIsSentAsBasic(t *testing.T) {
 // dial answers no error.
 func TestAMirrorCredentialThatResolvesToNothingIsRefused(t *testing.T) {
 	t.Parallel()
-	dial := mirrorDial(true, func(string) (string, bool) { return "", false })
+	declared := func() config.CodeRemoteCredentials {
+		return config.CodeRemoteCredentials{"MIRROR_TOKEN": {Hosts: []string{"127.0.0.1:1"}}}
+	}
+	dial := mirrorDial(true, declared, func(string) (string, bool) { return "", false })
 	_, err := dial(t.Context(), "https://127.0.0.1:1/r.git", "${MIRROR_TOKEN}")
 	if err == nil || !strings.Contains(err.Error(), "MIRROR_TOKEN") ||
 		!strings.Contains(err.Error(), "crewlet secrets set") {
 		t.Fatalf("a credential resolving to nothing dialed with %v; want it refused naming MIRROR_TOKEN", err)
+	}
+}
+
+// THE DIAL RESOLVES ONLY A CREDENTIAL code.remote_credentials DECLARES FOR THE
+// URL'S HOST, under the table the node holds at the dial: a variable the table
+// does not declare, or one declared for another host or another port, is
+// refused before anything is looked up — so no value of the node's secret
+// store or environment is resolved for a host an administrator did not name —
+// and a table that withdraws a declaration stops the dial that it admitted a
+// moment before. The one declared for the URL's host is resolved and sent.
+//
+// Mutation: drop the declared().Refusal check from mirrorDial — the
+// undeclared variable, the other host and the withdrawn declaration are each
+// resolved, red. Compare hosts without their port in
+// config.CodeRemoteCredentials.Refusal — the other port is resolved, red.
+func TestAMirrorDialResolvesOnlyACredentialDeclaredForItsHost(t *testing.T) {
+	t.Parallel()
+	table := config.CodeRemoteCredentials{"FORGE_TOKEN": {Hosts: []string{"127.0.0.1:1"}}}
+	var looked []string
+	dial := mirrorDial(true, func() config.CodeRemoteCredentials { return table },
+		func(name string) (string, bool) {
+			looked = append(looked, name)
+			return "ghp_value", true
+		})
+	for what, call := range map[string]struct{ url, credential string }{
+		"an undeclared variable":         {"https://127.0.0.1:1/r.git", "${CREWLET_SECRET_KEY_K1}"},
+		"a declared one to another port": {"https://127.0.0.1:2/r.git", "${FORGE_TOKEN}"},
+		"a declared one to another host": {"https://127.0.0.2:1/r.git", "${FORGE_TOKEN}"},
+	} {
+		looked = nil
+		_, err := dial(t.Context(), call.url, call.credential)
+		if err == nil || !strings.Contains(err.Error(), "code.remote_credentials") {
+			t.Errorf("%s: dialed with %v, want it refused naming code.remote_credentials", what, err)
+		}
+		if len(looked) > 0 {
+			t.Errorf("%s: looked up %v, want nothing resolved", what, looked)
+		}
+	}
+	looked = nil
+	if _, err := dial(t.Context(), "https://127.0.0.1:1/r.git", "${FORGE_TOKEN}"); err != nil ||
+		len(looked) != 1 || looked[0] != "FORGE_TOKEN" {
+		t.Fatalf("the declared credential: %v, looked up %v, want FORGE_TOKEN resolved", err, looked)
+	}
+	table = config.CodeRemoteCredentials{}
+	looked = nil
+	if _, err := dial(t.Context(), "https://127.0.0.1:1/r.git", "${FORGE_TOKEN}"); err == nil || len(looked) > 0 {
+		t.Errorf("a withdrawn declaration: dialed with %v, looked up %v, want it refused, nothing resolved", err,
+			looked)
 	}
 }

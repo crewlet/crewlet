@@ -333,9 +333,13 @@ units:
         handle: sre
 `
 
-// codeRepos is codeChart hosting code, with repos as code.repos' entries.
+// codeRepos is codeChart hosting code, with repos as code.repos' entries and
+// FORGE_TOKEN declared for forge.example.com, the forge every case's remotes
+// name.
 func codeRepos(repos string) string {
-	return codeChart + "code:\n  native: true\n  repos:\n" + repos
+	return codeChart + "code:\n  native: true\n" +
+		"  remote_credentials:\n    FORGE_TOKEN: {hosts: [forge.example.com]}\n" +
+		"  repos:\n" + repos
 }
 
 // EVERY RULE OF code.repos REFUSES AT THE FIELD IT IS ABOUT, AS ONE PROBLEM.

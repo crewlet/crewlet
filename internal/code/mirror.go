@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/org"
@@ -45,6 +46,11 @@ import (
 // so an agent asking for any of them is refused not_permitted whatever its
 // grant on the repository ([lifecycleRefusal]). A scratch repository takes
 // none: it is its seat's own experiment.
+//
+// AND ITS CREDENTIAL IS ONE AN ADMINISTRATOR DECLARED FOR ITS HOST
+// (code.remote_credentials): a person's request naming any other is refused
+// not_permitted ([remoteCredentialRefusal]), a declaration naming one is
+// refused by the configuration's validation, and the dial sends no other.
 //
 // BASE FORMAT, AS A STATED CONDITION: no build that carries the code domain
 // has run without these fields — none of the domain is on main, so no image
@@ -201,6 +207,51 @@ func MirrorSeatRefusal(as string, repo RepoRef, roster Roster) string {
 	if g := GrantOf(Principal{Kind: PrincipalAgent, Seat: as}, repo, roster); !g.MayRead() {
 		return fmt.Sprintf("mirror_to.as: seat %s does not read %s, and a push mirror publishes only what the "+
 			"seat it pushes as reads — %s", as, repo.Name, g.ReadRefusal())
+	}
+	return ""
+}
+
+// remoteCredentialRefusal is why req names a credential that code.remote_credentials
+// (declared) does not declare for its remote's host, or "": a create's
+// import, pull mirror or push mirror, or a mirror a settings change sets —
+// every remote a request carries a credential for, whoever asks it.
+//
+// THE CODE HOST SENDS A CREDENTIAL'S VALUE TO ITS REMOTE'S HOST, resolved on
+// the repository's home git node from the secret store and then that node's
+// environment, so a reference nothing bounded would let whoever may create a
+// repository — every member of the company — have that node send any value
+// it can resolve to a host of their choosing. An administrator declares which
+// variable may go to which host, and this decide holds every request to it
+// before anything is recorded; the dial holds it again under the table its
+// node has then (config.CodeRemoteCredentials.Refusal, the one judgement).
+// A seat is refused every mirror and import before this ([mirrorsAsked]).
+func remoteCredentialRefusal(req LifecycleRequest, declared config.CodeRemoteCredentials) string {
+	type remote struct{ field, url, credential string }
+	var asked []remote
+	switch {
+	case req.Kind == LifecycleCreate:
+		if i := req.Import; i != nil {
+			asked = append(asked, remote{"import", i.URL, i.Credential})
+		}
+		if m := req.Create.MirrorFrom; m != nil {
+			asked = append(asked, remote{"mirror_from", m.URL, m.Credential})
+		}
+		if m := req.Create.MirrorTo; m != nil {
+			asked = append(asked, remote{"mirror_to", m.URL, m.Credential})
+		}
+	case req.Kind == LifecycleSettings && req.Change != nil:
+		// A MIRROR NAMED WITH NO URL IS REMOVED, and sends nothing anywhere.
+		if m := req.Change.MirrorFrom; m != nil && m.URL != "" {
+			asked = append(asked, remote{"mirror_from", m.URL, m.Credential})
+		}
+		if m := req.Change.MirrorTo; m != nil && m.URL != "" {
+			asked = append(asked, remote{"mirror_to", m.URL, m.Credential})
+		}
+	}
+	for _, r := range asked {
+		if why := declared.Refusal(r.url, r.credential); why != "" {
+			return r.field + ".credential: " + why
+		}
 	}
 	return ""
 }

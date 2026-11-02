@@ -140,7 +140,8 @@ func (e *Engine) codeDeletedRetention() time.Duration {
 	return e.codeInForce().DeletedRetention()
 }
 
-// codeLifecyclePolicy is what a tool's create is held to, and how long a
+// codeLifecyclePolicy is what a tool's create is held to — and the
+// credentials a person's mirror or import may name — and how long a
 // seat's scratch repository may sit idle, at the current epoch
 // ([Engine.codeInForce]), the defaults applied through the code domain's one
 // conversion ([code.ScratchOf]). Two readers, one reading: the lifecycle
@@ -150,6 +151,16 @@ func (e *Engine) codeDeletedRetention() time.Duration {
 // restart, on each node's own epoch.
 func (e *Engine) codeLifecyclePolicy() code.LifecyclePolicy {
 	return code.ScratchOf(e.codeInForce())
+}
+
+// codeRemoteCredentials is code.remote_credentials at the current epoch
+// ([Engine.codeInForce]): the variables a mirror's or an import's dial may
+// resolve, each for the hosts it declares — read at every dial (mirrorDial),
+// so a revision that withdraws one stops its value leaving at the next
+// attempt, with no restart. The lifecycle decide reads the same table through
+// its policy ([code.ScratchOf]).
+func (e *Engine) codeRemoteCredentials() config.CodeRemoteCredentials {
+	return e.codeInForce().RemoteCredentials
 }
 
 // carriedCode is the code host's settings in force at next, installed over
