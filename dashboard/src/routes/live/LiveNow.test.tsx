@@ -197,6 +197,42 @@ test("a turn that has only started is on its Context step, timed from its start"
   expect(row.textContent).toMatch(/2m/);
 });
 
+// WHAT WAITS BEHIND A RUNNING TURN IS ON ITS ROW, a person waiting said first
+// and apart, as the node holding the seat counts it. The turn's own mail is
+// not in the count, so a seat with nothing else waiting says nothing.
+//
+// Mutation: drop the waiting tags from the row and neither phrase is drawn.
+test("a running turn's row says who and what waits behind it", async () => {
+  mount({
+    agents: [
+      {
+        agent_id: "a1",
+        id: "a1",
+        role: "Search Engineer",
+        handle: "eng-search",
+        activity: "working",
+        turn: { turn_id: "t-busy", started_at: ago(60_000), stage: "context" },
+        waiting: { priority: 1, background: 4 },
+      },
+      {
+        agent_id: "a2",
+        id: "a2",
+        role: "Docs Writer",
+        handle: "docs",
+        activity: "working",
+        turn: { turn_id: "t-calm", started_at: ago(60_000), stage: "context" },
+        waiting: { priority: 0, background: 0 },
+      },
+    ],
+  });
+  const card = cardOf("Running turns");
+  const busy = await within(card).findByRole("link", { name: /Search Engineer/ });
+  expect(busy.textContent).toContain("1 person waiting");
+  expect(busy.textContent).toContain("4 waiting");
+  const calm = await within(card).findByRole("link", { name: /Docs Writer/ });
+  expect(calm.textContent).not.toMatch(/waiting/);
+});
+
 // A ROUND THAT HAS STOPPED MOVING SAYS SO ON ITS OWN ROW, AND A PARKED TURN
 // NEVER DOES. The watched-conditions card that used to restate it is gone;
 // the mark is beside what it is about.
