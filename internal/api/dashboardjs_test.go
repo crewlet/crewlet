@@ -1493,8 +1493,9 @@ const (
 	// 5288 KiB.
 	// A person's message queued behind a busy seat, drawn still with the
 	// kit's queued state in the room's footer, a message's thread summary
-	// and the thread pane, took it from 5288.0 KiB to 5288.2 KiB (+0.2 KiB,
-	// all of it Chatlet's chunk). 5289 KiB.
+	// and the thread pane, and the feed's words for a fire a later one
+	// replaced, took it from 5288.0 KiB to 5288.3 KiB (+0.4 KiB): Chatlet's
+	// chunk +0.2 KiB and Home's +0.1 KiB. 5289 KiB.
 	treeBudget = 5<<20 + 169<<10
 )
 
