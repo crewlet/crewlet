@@ -1597,10 +1597,15 @@ func TestAHoldIsRecordedWhereALedgerCanVouchForIt(t *testing.T) {
 // one resolution of a tool's `repo`, which takes the turn's hold first — and a
 // read of a repository by name is built only there or in a function that has
 // no turn to resolve it for (an administrator's audit read). A second
-// resolution would be a way to a repository the expiry is not told of.
+// resolution would be a way to a repository the expiry is not told of. A FACT
+// a later call builds on — how far the refs a turn read had moved, a search's
+// ref as one repository resolved it — is kept with LoadOrStore, the shape
+// turnctx.Lookups gives a fact, and decides nothing, so it is no Store this
+// walk counts.
 //
-// Mutation: code_status's hot list keeping what it reads in the turn's
-// lookups again → red.
+// Mutations: code_status's hot list keeping what it reads in the turn's
+// lookups again → red; searchHolds keeping its search's ref with a Store
+// again → red.
 func TestOnlyTheSeamResolvesARepositoryForATurn(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(sourcetree.Root(t), "internal", "agent", "builtin")

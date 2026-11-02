@@ -349,7 +349,12 @@ func (d CodeDeps) searchHolds(ctx context.Context, turn *turnctx.Turn, tool stri
 				live = append(live, ref)
 			}
 		}
-		turn.LookedUp().Store(key, live)
+		// KEPT AS A FACT IS, with LoadOrStore ([turnctx.Lookups]): a page
+		// of the same search racing this one (the turn's workers search
+		// while it runs) keeps the resolution it made first, and neither
+		// replaces the other's. This page floors at its own, the freshest
+		// it holds.
+		turn.LookedUp().LoadOrStore(key, live)
 		refs = append(refs, live...)
 	}
 	return code.RefsFloor(own, refs...), nil
@@ -358,7 +363,10 @@ func (d CodeDeps) searchHolds(ctx context.Context, turn *turnctx.Turn, tool stri
 // searchRefKey keys, in a turn's lookups, a search's ref as one repository
 // resolved it for asker ([CodeDeps.searchHolds]): the live refs it answered,
 // their holds taken — a FACT about what the turn read, which floors the
-// turn's later pages of the search and decides nothing.
+// turn's later pages of the search and decides nothing. Taken with
+// LoadOrStore, as every fact a turn's lookups keep is: a Store is the one
+// seam's, [CodeDeps.repoRead], which keeps what a repository's name resolved
+// to, once the turn's hold is taken.
 type searchRefKey struct {
 	asker  code.Principal
 	repoID string
