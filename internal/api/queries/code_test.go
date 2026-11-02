@@ -356,27 +356,57 @@ func TestACodeQuestionHandsTheReaderTheCallersWholeFreshness(t *testing.T) {
 	}
 }
 
-// ONE REPOSITORY'S QUESTION ASKS FOR ITS PATH OWNERS AND ITS RULES' MERGE
-// GATES, and no other does: its detail is where an API reader learns who owns
-// which of its paths and what a merge into each protected branch needs
-// (code.ReadQuery.PathOwners, code.ReadQuery.Gates) — no listing answers a
-// gate — and the reader refuses either ask on every other kind of read.
+// A QUESTION ASKS FOR A REPOSITORY'S PATH OWNERS AND ITS RULES' MERGE GATES
+// ONLY WHERE ITS CALLER NAMES THEM — `path_owners=true`, `gates=true` — and
+// each alone: at their bound they are a quarter and half a mebibyte of JSON,
+// and the repository's question is mostly asked for its row, by a header a
+// screen polls every minute. A spelling that is neither `true` nor `false`
+// is refused before the reader is asked, never read as "not asked"
+// (code.ReadQuery.PathOwners, code.ReadQuery.Gates).
 //
-// Mutations: ask every question for path owners — the listing and the history
-// ask a read that refuses it, red; ask the detail for no gates — it answers
-// none of a gated repository's, red.
-func TestOnlyTheRepositoryQuestionAsksForPathOwnersAndGates(t *testing.T) {
+// Mutations: ask the repository's question for path owners and gates
+// whatever its caller named — the bare question asks for both, red; read
+// `gates` from `path_owners` — the question naming one asks for the other,
+// red; read an unknown spelling as false — it reaches the reader, red.
+func TestAQuestionAsksForPathOwnersAndGatesOnlyWhereItsCallerNamesThem(t *testing.T) {
 	t.Parallel()
 	for _, q := range codeQuestions {
 		stub := &stubCode{}
 		if _, err := askNative(t, queries.Sources{Code: stub}, q.what, q.args); err != nil {
 			t.Fatalf("%s: %v", q.what, err)
 		}
-		if got, want := stub.last().PathOwners, q.kind == code.ReadRepo; got != want {
-			t.Errorf("%s asked the reader for path owners: %t, want %t", q.what, got, want)
+		if got := stub.last(); got.PathOwners || got.Gates {
+			t.Errorf("%s, naming neither, asked the reader for path owners %t and gates %t, want neither",
+				q.what, got.PathOwners, got.Gates)
 		}
-		if got, want := stub.last().Gates, q.kind == code.ReadRepo; got != want {
-			t.Errorf("%s asked the reader for its rules' merge gates: %t, want %t", q.what, got, want)
+	}
+	for _, tc := range []struct {
+		name          string
+		args          map[string]any
+		owners, gates bool
+	}{
+		{"path owners", map[string]any{"name": "web", "path_owners": "true"}, true, false},
+		{"gates", map[string]any{"name": "web", "gates": "true"}, false, true},
+		{"both", map[string]any{"name": "web", "path_owners": "true", "gates": "true"}, true, true},
+		{"neither, spelled out", map[string]any{"name": "web", "path_owners": "false", "gates": "false"},
+			false, false},
+	} {
+		stub := &stubCode{}
+		if _, err := askNative(t, queries.Sources{Code: stub}, "code_repo", tc.args); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := stub.last(); got.PathOwners != tc.owners || got.Gates != tc.gates {
+			t.Errorf("code_repo naming %s asked for path owners %t and gates %t, want %t and %t",
+				tc.name, got.PathOwners, got.Gates, tc.owners, tc.gates)
+		}
+	}
+	for _, key := range []string{"path_owners", "gates"} {
+		stub := &stubCode{}
+		if _, err := askNative(t, queries.Sources{Code: stub}, "code_repo",
+			map[string]any{"name": "web", key: "yes"}); !errors.Is(err, queries.ErrBadParams) ||
+			len(stub.asked) != 0 {
+			t.Errorf("%s=yes: answered %v having asked the reader %d times, want bad_params before it",
+				key, err, len(stub.asked))
 		}
 	}
 }

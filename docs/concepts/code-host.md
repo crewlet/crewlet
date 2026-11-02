@@ -400,7 +400,8 @@ each term the gate holds it to ([The merge gate](#the-merge-gate)), and
 whose gate requires a check queued rather than merged ([The merge
 queue](#the-merge-queue)); a read of
 one repository in detail answers every gated rule's gate beside its pattern
-(`GET /code/repos/{name}`'s `gates`, and `code_get_repo`), and a push is held
+where it asks for them (`GET /code/repos/{name}?gates=true`'s `gates`, and
+`code_get_repo`), and a push is held
 to the rule's `allow_force`, `allow_delete` and `direct_push` alone ([Protection
 rules](#protection-rules)): a gate judges a change's merge, never a push. No
 other read carries
@@ -467,8 +468,8 @@ whole list the asker read elsewhere — so two requests giving one owner a glob
 each both land; an owner left with no glob is no path owner any more, and an
 owner a change gives globs to must be one the chart holds, while one it only
 removes them from need not be. A repository's detail answers its path owners
-(`GET /code/repos/{name}`), in their one order: by kind, then reference, each
-one's globs sorted.
+where it asks for them (`GET /code/repos/{name}?path_owners=true`), in their
+one order: by kind, then reference, each one's globs sorted.
 
 Where a rule's [merge gate](#merge-gates) sets `owners_approve`, a merge into
 its branches waits for an approval eligible for every owned glob it touches, so

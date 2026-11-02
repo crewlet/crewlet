@@ -85,6 +85,7 @@ function detail(extra: Record<string, unknown> = {}) {
         },
       },
     ],
+    path_owners: [{ owner: { kind: "unit", ref: "engineering" }, paths: ["src/**"] }],
     ...extra,
   };
 }
@@ -131,8 +132,20 @@ function stubEngine(repo: Record<string, unknown> = detail(), acted: Acted[] = [
       switch (url.pathname) {
         case "/auth/session":
           return new Promise<Response>(() => {});
-        case "/query/code_repo":
-          return json({ repo, position: POSITION, level: "session" });
+        case "/query/code_repo": {
+          // THE PATH OWNERS AND THE GATES ONLY TO A QUESTION THAT ASKS, as
+          // the engine answers them.
+          const { gates, path_owners, ...row } = repo;
+          return json({
+            repo: {
+              ...row,
+              ...(p.get("gates") === "true" ? { gates } : {}),
+              ...(p.get("path_owners") === "true" ? { path_owners } : {}),
+            },
+            position: POSITION,
+            level: "session",
+          });
+        }
         case "/query/code_refs":
           return json({
             refs:
@@ -453,11 +466,19 @@ test("the history is read at the revision and the path, with who pushed each com
 // they are changed. Mutation: offer an edit, drop the link, or leave the
 // queue's landing out of the gate, and this fails.
 test("a declared repository's settings are shown and lead to the configuration", async () => {
-  stubEngine();
+  const asked = stubEngine();
   mount("#/code/repos/web?tab=settings");
 
   expect(await screen.findByText("refs/heads/main")).toBeTruthy();
-  expect(screen.getByText(/one approval/)).toBeTruthy();
+  expect(await screen.findByText(/one approval/)).toBeTruthy();
+  expect(screen.getByText("src/**")).toBeTruthy();
+  // THE GATES AND THE PATH OWNERS ARE THE TAB'S OWN ASK: the page's polled
+  // read of the row asks for neither (at their bound, three quarters of a
+  // mebibyte of JSON a minute).
+  const asks = reads(asked, "code_repo").map(
+    (u) => `${u.searchParams.get("path_owners")}/${u.searchParams.get("gates")}`,
+  );
+  expect(new Set(asks)).toEqual(new Set(["null/null", "true/true"]));
   expect(screen.getByText(/landed by its queue, each change tested merged/)).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open the configuration" }).getAttribute("href")).toBe(
     "#/settings/config",

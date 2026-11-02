@@ -7853,7 +7853,9 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   the form is one the engine takes. The new repository reads `importing`
   until its home git node has landed the source.
 - **A repository's page**, `#/code/repos/{name}`, is its row (`code_repo`,
-  read at the tab's floor and again every minute) and its CONTENT, which its
+  read at the tab's floor and again every minute, the row alone: its path
+  owners and its rules' merge gates are its Settings tab's own ask,
+  `path_owners=true` and `gates=true`, read as the tab opens) and its CONTENT, which its
   home git node answers: a directory's listing (`code_tree`, and `code_blob`
   for a path under the root, which answers a directory's listing where the
   path names one, so a path is one read), a file's lines (`code_blob`, a page

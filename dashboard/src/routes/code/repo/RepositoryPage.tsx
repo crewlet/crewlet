@@ -369,7 +369,28 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
   // THE CONFIGURATION, offered only to a reader who may open it — the rule
   // every lock is drawn by.
   const canConfigure = held !== null && closedBy(CONFIG_PATH, held) === null;
-  const gates = new Map((repo.gates ?? []).map((g) => [g.pattern, g.gate]));
+  // WHO OWNS ITS PATHS AND ITS RULES' MERGE GATES are this tab's alone, asked
+  // by name (`path_owners`, `gates`): the page's own read of the row, polled
+  // every minute, carries neither — at their bound a quarter and half a
+  // mebibyte of JSON. Asked once as the tab opens, at the tab's floor, and
+  // again after a write of the reader's own, as every code question is.
+  const settings = useCodeQuery("code_repo", { name: repo.name, path_owners: true, gates: true });
+  const full = settings.data?.repo;
+  const gates = new Map((full?.gates ?? []).map((g) => [g.pattern, g.gate]));
+  const owners = full?.path_owners ?? [];
+  const detailState =
+    settings.loading && !full ? (
+      <Skeleton variant="text" rows={2} label="Loading its rules and owners" />
+    ) : (
+      <QueryState
+        error={settings.error}
+        refusal={settings.refusal}
+        detail={settings.detail}
+        loading={false}
+      >
+        {null}
+      </QueryState>
+    );
   const rules = repo.protections ?? [];
   return (
     <Stack gap={4}>
@@ -434,6 +455,10 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
         <h3 className="t-label">Protection rules</h3>
         {rules.length === 0 ? (
           <p className="muted">No rule protects a ref: anybody who may write may push to any.</p>
+        ) : !full ? (
+          // A RULE IS NEVER DRAWN WITHOUT ITS GATE, which a line with none
+          // would read as: the rules wait for the read that carries them.
+          detailState
         ) : (
           <ul className="code-rules">
             {rules.map((rule) => {
@@ -453,11 +478,13 @@ function Settings({ repo }: { repo: CodeRepoDetail }) {
       </section>
       <section aria-label="Path owners">
         <h3 className="t-label">Path owners</h3>
-        {(repo.path_owners ?? []).length === 0 ? (
+        {!full ? (
+          detailState
+        ) : owners.length === 0 ? (
           <p className="muted">No path is owned: a change asks reviews of nobody by its paths.</p>
         ) : (
           <ul className="code-rules">
-            {(repo.path_owners ?? []).map((p) => (
+            {owners.map((p) => (
               <li key={`${p.owner.kind}:${p.owner.ref}`}>
                 <span>{ownerName(p.owner)}</span>
                 <span className="muted mono">{p.paths.join(", ")}</span>

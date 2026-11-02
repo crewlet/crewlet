@@ -1022,7 +1022,8 @@
 // gate a read left nil, so no consumer can take a gate nobody read for a rule
 // that has none. A read that presents the gates asks one repository's detail
 // for them ([ReadQuery.Gates], [RepoDetail.Gates]) — the API's question of a
-// repository, code_get_repo — and a decide that rewrites the settings reads
+// repository where its caller asks (`gates=true`), code_get_repo — and a
+// decide that rewrites the settings reads
 // the rules whole beside the row, as it reads the path owners
 // ([protectionsIn]): the lifecycle decides and the reconcile.
 //

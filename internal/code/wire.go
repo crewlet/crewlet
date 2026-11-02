@@ -1297,9 +1297,12 @@ type ReadQuery struct {
 	// PathOwners asks a `repo` read for the repository's PATH OWNERS beside
 	// its detail ([RepoDetail.PathOwners]), and nothing else answers them: a
 	// read of who owns which of its paths sets it — the API's question of one
-	// repository does — and a read that RESOLVES a repository does not:
-	// every seat tool's once a turn, a refs listing's first page, the status
-	// and readers questions'. None of those reads a path owner, and at their
+	// repository does where its caller asks (`path_owners=true`), the
+	// repository page's Settings tab — and a read that RESOLVES a repository
+	// or reads its row does not: every seat tool's once a turn, a refs
+	// listing's first page, the status and readers questions', the API's
+	// question of one repository asked for its row — a screen's header,
+	// polled every minute. None of those reads a path owner, and at their
 	// bound the path owners are a quarter of a mebibyte of JSON on each — one
 	// more statement on the serving node, and the bytes encoded there,
 	// shipped and decoded to be dropped. Refused on every other kind.
@@ -1315,7 +1318,8 @@ type ReadQuery struct {
 	// read, or a refs listing's first page, which carries it — for the merge
 	// gates of its rules ([RepoDetail.Gates]), and nothing else answers
 	// them: a read that presents a rule's gate sets it — the API's question
-	// of one repository, code_get_repo — and a read that resolves a
+	// of one repository where its caller asks (`gates=true`), code_get_repo —
+	// and a read that resolves a
 	// repository does not, for the path owners' reason: none of those reads
 	// a gate, and at their bound a repository's gates are half a mebibyte of
 	// JSON on each. Refused on every other read, and on a refs listing's
