@@ -577,7 +577,13 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 func (r *Runner) executorPrompt(ctx context.Context, notes string,
 	history []ledger.Iteration, built *tools.Surface, fresh []steer.Note,
 ) (system, user prompts.Prompt) {
-	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
+	return r.executorSystem(built), r.executorBrief(ctx, notes, history, fresh)
+}
+
+// executorSystem is the executor's system prompt, over the surface it is
+// launched with — see [Runner.executorPrompt].
+func (r *Runner) executorSystem(built *tools.Surface) prompts.Prompt {
+	return prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
 		AvailableTools: built.Universe().Names(),
 
 		ThreadContext:       r.cfg.Context.ThreadContext,
@@ -588,7 +594,14 @@ func (r *Runner) executorPrompt(ctx context.Context, notes string,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
 		Workers:             r.workerCatalogue(),
 	})
-	user = prompts.BuildPhaseUserMessage(prompts.UserMessage{
+}
+
+// executorBrief is the turn's own ask as a run that starts a session of its own
+// reads it — see [Runner.executorPrompt]. It reads no surface, so a relaunch
+// can weigh it before its surface is built ([Runner.sessionBasis]).
+func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledger.Iteration,
+	fresh []steer.Note) prompts.Prompt {
+	return prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription:     r.taskFor(notes),
 		PriorWork:           r.priorWork(ctx, history),
 		ConversationHistory: r.cfg.Conversation,
@@ -599,7 +612,6 @@ func (r *Runner) executorPrompt(ctx context.Context, notes string,
 		// so its brief does. See [Runner.steered].
 		Steered: append(r.carriedSteers(), renderedNotes(fresh)...),
 	})
-	return system, user
 }
 
 // renderedNotes is notes as the model reads each ([prompts.SteerMessage]).

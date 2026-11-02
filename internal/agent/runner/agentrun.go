@@ -155,6 +155,17 @@ type AgentRunRequest struct {
 	// [Asked] and [Lost]. Nil for every other launch.
 	Continue *Continuation
 
+	// Session is the turn's kept session the launch continues, in whatever box
+	// it gets, as the launcher said it would before the run's surface and
+	// briefs were built ([SessionProber]), with the briefs that continue it —
+	// in the box it was last worked in, and in any other. Set on every
+	// relaunch of a turn whose session can be continued: a reviewer's
+	// send-back as much as a round carried on. Nil starts a session of its
+	// own, or continues one in place ([AgentRunRequest.Continue]); and a
+	// launch that cannot take it up after all — the object unreadable, the
+	// box's harness too old — starts fresh with Brief.
+	Session *SessionContinuation
+
 	// Fence is the turn's own fence ([Config.Fence]), which the launch asks
 	// again immediately before it opens anything: the prompt built since
 	// the phase opened can take a model call of its own, and a seat that
@@ -179,6 +190,77 @@ type Continuation struct {
 	// on a sign-in replaced while it ran ([Rotated]): the launch records it
 	// on the new job, so that job is not carried on again for it.
 	SignInReplaced bool
+}
+
+// SessionContinuation is how a relaunch continues the turn's kept session — see
+// [AgentRunRequest.Session].
+type SessionContinuation struct {
+	// Basis is the kept capture the launch continues, as the launcher
+	// answered it ([SessionProber]); the launch takes up exactly that one.
+	Basis SessionBasis
+
+	// Brief is the run's prompt in the box the session was last worked in,
+	// and Replaced in any other — Brief and what a box that replaced that
+	// one changes (continued.go).
+	Brief, Replaced string
+}
+
+// SessionBasis is the kept session a relaunch of the turn continues, or why it
+// continues none — a [SessionProber]'s answer.
+type SessionBasis struct {
+	// LaunchSeq and CaptureSeq are the capture's place among the turn's,
+	// zero where the relaunch continues none; SessionID is its harness's
+	// session.
+	LaunchSeq, CaptureSeq int64
+	SessionID             string
+
+	// BridgeSeq and NoteCursor are what the session accounts for — the last
+	// bridged call it had been answered and the last note read when it was
+	// captured — so the brief that continues it carries what came after.
+	BridgeSeq, NoteCursor int
+
+	// Interrupted says the session was captured from a harness that was cut
+	// off, so its transcript may end mid-call.
+	Interrupted bool
+
+	// Home is where the session was last worked: absolute paths in its
+	// transcript are under it.
+	Home string
+
+	// ContextTokens is what its last request carried, its budget floor's
+	// half ([AgentRunRequest] is held to it by the launcher).
+	ContextTokens int64
+
+	// Why is why the relaunch continues no kept session, "" where it
+	// continues one.
+	Why string
+
+	// Oversized says the session is past what a relaunch carries — its
+	// context past the window a session is carried at, or its launch's
+	// floor past every ceiling the seat's budget holds — so the relaunch
+	// does not continue it in its box either: the copy there is the same
+	// session, as large or larger.
+	Oversized bool
+}
+
+// Continues reports whether the basis names a kept session to continue.
+func (b SessionBasis) Continues() bool { return b.CaptureSeq > 0 }
+
+// SessionProber is an [AgentLauncher] that says, before a relaunch builds its
+// run's surface and briefs, which kept session of the turn the launch will
+// continue: the turn's newest kept capture where its harness, its format, the
+// box's chain member and the seat's budget let it be continued, or why not.
+// briefTokens is the fresh brief's size, which the budget's half of the
+// answer weighs beside the session's context; carries says the relaunch
+// carries its round on ([Continuation]) rather than beginning one, and so
+// continues only a session its round took.
+//
+// ASKED FIRST because what the run is offered and told depends on it: a
+// continued session remembers the skills it loaded, and is told what it lacks
+// rather than everything. OPTIONAL: a launcher without it continues no kept
+// session, which every relaunch then starts fresh, or in place.
+type SessionProber interface {
+	ProbeSession(ctx context.Context, briefTokens int, carries bool) SessionBasis
 }
 
 // executeAsAgentRun launches the executor as a detached agentic run.
@@ -213,19 +295,43 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// over the bridge after this segment has suspended and charged what it
 	// spent — see [BridgedSpend].
 	bridged := NewBridgedSpend()
-	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, round, snapshot, submit,
-		executorActive(snapshot, r.boxServers()))
-	if err != nil {
-		return turn.Work{}, turn.Surface{}, err
-	}
-	surface = built
 
 	// THE NOTES THIS BRIEF IS THE FIRST TO READ, after every one the turn
 	// read before — and the launch's from here: handed back on every way out
 	// that reaches no run's record ([Runner.steerReturn]), and recorded
 	// delivered only once the launch has opened its job ([Runner.steerBriefed]).
+	// Taken before the surface is built, since the brief they are rendered
+	// into is what a relaunch asks whether it continues the turn's session by.
 	fresh := r.steerBrief(ctx)
-	system, user := r.executorPrompt(ctx, notes, history, built, fresh)
+	user := r.executorBrief(ctx, notes, history, fresh)
+
+	// A RELAUNCH CONTINUES THE TURN'S SESSION where its launcher says it can
+	// (continued.go) — a reviewer's send-back, in a segment that collected
+	// the turn's last run — asked before the surface is built: a continued
+	// session remembers the skills it loaded, so its guard holds them, the
+	// launch state's and every load in the turn's calls, and a fresh one's
+	// starts empty.
+	var basis SessionBasis
+	if r.cfg.Resume != nil {
+		basis = r.sessionBasis(ctx, user.Text, false)
+	}
+	var loaded []string
+	if basis.Continues() {
+		loaded = r.cfg.Resume.State.LoadedSkills
+	}
+	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, round, snapshot, submit,
+		executorActive(snapshot, r.boxServers()), loaded...)
+	if err != nil {
+		r.steerReturn(ctx, Launched{}, fresh)
+		return turn.Work{}, turn.Surface{}, err
+	}
+	surface = built
+	var session *SessionContinuation
+	if basis.Continues() {
+		r.observeLoads(built, turnCalls(history))
+		session = r.keptSession(basis, r.sendBackLead(notes), r.cfg.Resume.Bridged, fresh, "")
+	}
+	system := r.executorSystem(built)
 	// ITS TOOL SKILLS, handed to its harness as the harness's own rather
 	// than listed in its prompt (handedskills.go), matched against the
 	// surface it is launched with.
@@ -263,6 +369,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		System:     system.Text,
 		Brief:      user.Text,
 		Notes:      fresh,
+		Session:    session,
 		Surface:    surface,
 		Skills:     handed,
 		Spend:      bridged,
@@ -381,17 +488,33 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if rendered := renderedNotes(fresh); len(rendered) > 0 {
 		continued += "\n\n" + strings.Join(rendered, "\n\n")
 	}
+	// A FRESH RUN'S BRIEF is the round's own, and what became of the run
+	// before it — what it asked and was told, or how it was cut off: it
+	// remembers neither.
+	reseed := user.Text + "\n\n" + carry.reseed(fence)
+	// AND THE TURN'S KEPT SESSION, CONTINUED in whatever box the launch gets
+	// (continued.go), where its launcher says it can and the round may be
+	// continued from it at all: a round lost a second time starts fresh
+	// rather than replay the state it was lost in ([Lost]). A session too
+	// large to carry is not continued in its box either.
+	var session *SessionContinuation
+	inPlace := carry.session()
+	if carry.keeps() {
+		basis := r.sessionBasis(ctx, reseed, true)
+		session = r.keptSession(basis, carry.continuation(fence), r.cfg.Resume.Bridged, fresh, carry.branch())
+		if basis.Oversized {
+			inPlace = ""
+		}
+	}
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
 		System: system.Text,
-		// A FRESH RUN'S BRIEF is the round's own, and what became of the run
-		// before it — what it asked and was told, or how it was cut off: it
-		// remembers neither.
-		Brief: user.Text + "\n\n" + carry.reseed(fence),
-		Notes: fresh,
+		Brief:  reseed,
+		Notes:  fresh,
 		Continue: &Continuation{
-			SessionID: carry.session(), Brief: continued,
+			SessionID: inPlace, Brief: continued,
 			SignInReplaced: isRotated(carry),
 		},
+		Session:    session,
 		Surface:    surface,
 		Skills:     handed,
 		Spend:      bridged,
