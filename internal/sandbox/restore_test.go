@@ -180,6 +180,70 @@ func TestAKeptSessionIsContinuedInWhicheverBoxTheLaunchGets(t *testing.T) {
 	}
 }
 
+// A RUN THAT CONTINUES A SESSION IS WIRED FOR EITHER SESSION ITS BOX MAY START,
+// AND ONE THAT STARTS ITS OWN FOR ONE. Whether the box restores the session is
+// the box's to find out, so a run handed a session to continue is handed the
+// job's tools twice: under the bridge token of that session, and under the
+// token of a session of its own, which its script installs in that one's place
+// where its restore fails — the box's own servers beside each, and nothing
+// else apart. The token its harness then dials is its box's word on which
+// session it started. A run that starts a session of its own from the first has
+// one session, and is handed one wiring.
+//
+// Mutation: hand the second wiring to every run or to none, or build it
+// without the box's own servers, and a check goes red.
+func TestARunThatContinuesASessionIsWiredForEitherSessionItsBoxStarts(t *testing.T) {
+	t.Parallel()
+	const at = "https://engine.example.com/mcp/"
+	opened := func(OpenedJob) (Opening, error) {
+		return Opening{
+			Servers: map[string]MCPServer{"crewlet": {Transport: TransportHTTP, URL: at + "kept"}},
+			Steer:   SteerWiring{Server: "crewlet", Tool: "steer_take", URL: at + "kept/steer"},
+			Fresh: &Opening{
+				Servers: map[string]MCPServer{"crewlet": {Transport: TransportHTTP, URL: at + "fresh"}},
+				Steer:   SteerWiring{Server: "crewlet", Tool: "steer_take", URL: at + "fresh/steer"},
+			},
+		}, nil
+	}
+	own := map[string]MCPServer{"repo": {Command: "repo-mcp"}}
+
+	rig, restore, kept := keptTurn(t)
+	req := continuingKept(kept)
+	req.Opened, req.MCPServers = opened, own
+	if _, err := launchRestoring(t, rig, restore, req); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	started := rig.runner.Started()
+	last := started[len(started)-1]
+	fresh := last.FreshWiring
+	switch {
+	case last.Resume != "s-1":
+		t.Fatalf("the relaunch continues %q, want the kept session", last.Resume)
+	case fresh == nil:
+		t.Fatal("a run that continues a session was handed no wiring for a session of its own")
+	case last.MCPServers["crewlet"].URL != at+"kept" || last.Steer.URL != at+"kept/steer":
+		t.Errorf("the run is wired to %q and %q, want the continued session's token",
+			last.MCPServers["crewlet"].URL, last.Steer.URL)
+	case fresh.MCPServers["crewlet"].URL != at+"fresh" || fresh.Steer.URL != at+"fresh/steer":
+		t.Errorf("a session of its own is wired to %q and %q, want its own token",
+			fresh.MCPServers["crewlet"].URL, fresh.Steer.URL)
+	case last.MCPServers["repo"].Command != "repo-mcp" || fresh.MCPServers["repo"].Command != "repo-mcp":
+		t.Errorf("the box's own servers are %+v and %+v, want them beside each wiring",
+			last.MCPServers["repo"], fresh.MCPServers["repo"])
+	}
+
+	bare := newCoordRig(t)
+	first := launchReq("t9")
+	first.Opened, first.MCPServers = opened, own
+	if _, err := launchRestoring(t, bare, &keptRestore{}, first); err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	if started := bare.runner.Started(); len(started) != 1 || started[0].Resume != "" ||
+		started[0].FreshWiring != nil || started[0].MCPServers["crewlet"].URL != at+"kept" {
+		t.Errorf("a run starting a session of its own was started %+v, want one wiring", started)
+	}
+}
+
 // THE BRIEF MATCHES WHAT THE RUN HAS. Of the three briefs, the launch hands the
 // one its box and its session make true: the continuation where the session is
 // taken up in the box it was last worked in — its own copy there where the job

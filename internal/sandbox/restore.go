@@ -360,6 +360,12 @@ func (k BriefKind) Valid() bool {
 	return false
 }
 
+// Continues reports whether k is a brief that continues a session: a run handed
+// one takes the session up where its box can, wired beside it for a session of
+// its own where its box cannot ([RunRequest.FreshWiring]). A brief this build
+// does not know continues nothing it can tell.
+func (k BriefKind) Continues() bool { return k == BriefContinued || k == BriefContinuedNewBox }
+
 // LaunchDecision is how a launch decided its run takes up a session, told to
 // its caller before the run starts ([LaunchRequest.Decided]).
 type LaunchDecision struct {

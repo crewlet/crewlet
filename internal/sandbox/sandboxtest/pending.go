@@ -64,6 +64,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
 		{"ALaunchAnswersTheJobItOpened", testALaunchAnswersTheJobItOpened},
+		{"ABoxsSessionStartIsRecordedOnceForItsOwnJob", testABoxsSessionStartIsRecordedOnceForItsOwnJob},
 		{"ALaunchARowsNewerLeaseOutranksIsRefused", testALaunchARowsNewerLeaseOutranksIsRefused},
 		{"ALaunchingRunIsNotClaimable", testALaunchingRunIsNotClaimable},
 		{"SuspendingOpensTheRunToTheTail", testSuspendingOpensTheRunToTheTail},
@@ -327,6 +328,42 @@ func decide(t *testing.T, s sandbox.PendingStore, turnID string, license sandbox
 		t.Fatalf("DecideEnding = %+v, %v, %v, want the ending recorded", decided.Ending, ok, err)
 	}
 	return decided
+}
+
+// A JOB'S BOX SAYS ONCE WHICH SESSION IT STARTED, AND ONLY FOR ITS OWN JOB.
+// The first record stands — a job's box starts one session, and a second word,
+// either way, is no truer than the first — a record naming a job the row has
+// moved on from is nothing, as is one for a run with no record, a start that is
+// no session is refused, and the next launch's job starts with nothing said:
+// what one job's box started is not the next's.
+//
+// Mutation: let a second record write over the first, record it on another
+// job's row, or carry it across a relaunch, and a check goes red.
+func testABoxsSessionStartIsRecordedOnceForItsOwnJob(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	launch := mustLaunched(t, s, run("t-start"))
+	if ok, err := s.MarkSessionStart(ctx, "t-start", "another-job", sandbox.SessionStartFresh); err != nil || ok {
+		t.Errorf("a start for a job the record does not hold = %v, %v", ok, err)
+	}
+	if _, err := s.MarkSessionStart(ctx, "t-start", launch, "resumed"); err == nil {
+		t.Error("a start that is no session was taken")
+	}
+	if ok, err := s.MarkSessionStart(ctx, "t-start", launch, sandbox.SessionStartFresh); err != nil || !ok {
+		t.Fatalf("MarkSessionStart = %v, %v", ok, err)
+	}
+	if ok, err := s.MarkSessionStart(ctx, "t-start", launch, sandbox.SessionStartContinued); err != nil || ok {
+		t.Errorf("a second start wrote over the first: %v, %v", ok, err)
+	}
+	if got := mustGet(t, s, "t-start").Launch.SessionStart; got != sandbox.SessionStartFresh {
+		t.Errorf("the record says %q, want the first word, %q", got, sandbox.SessionStartFresh)
+	}
+	mustBeginLaunch(t, s, run("t-start"))
+	if got := mustGet(t, s, "t-start").Launch.SessionStart; got != "" {
+		t.Errorf("the next job's record says %q, want nothing said", got)
+	}
+	if ok, err := s.MarkSessionStart(ctx, "t-none", "job-1", sandbox.SessionStartContinued); err != nil || ok {
+		t.Errorf("a start for a run with no record = %v, %v", ok, err)
+	}
 }
 
 func mustGet(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.PendingRun {

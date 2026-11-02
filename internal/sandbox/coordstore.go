@@ -1279,6 +1279,25 @@ func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspensio
 	return won, err
 }
 
+// MarkSessionStart records which session a job's box said it started. See the
+// contract on [PendingStore].
+func (s *CoordStore) MarkSessionStart(ctx context.Context, turnID, launch string, start SessionStart) (bool, error) {
+	if !start.Valid() {
+		return false, fmt.Errorf("sandbox: %q is no session a job's box starts", start)
+	}
+	if launch == "" {
+		return false, nil
+	}
+	_, marked, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launch || run.Launch.SessionStart != "" {
+			return false
+		}
+		run.Launch.SessionStart = start
+		return true
+	})
+	return marked, err
+}
+
 // ListActive returns every run that has not finished.
 func (s *CoordStore) ListActive(ctx context.Context) ([]PendingRun, error) {
 	return s.list(ctx, func(r PendingRun) bool { return slices.Contains(Active, r.Status) })

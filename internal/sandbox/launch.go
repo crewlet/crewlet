@@ -250,7 +250,10 @@ type LaunchRequest struct {
 	// the session's it will run in. Called once per launch that reaches its
 	// run's start; nil tells nobody. The run's own script may still start a
 	// session of its own where its box cannot restore the session after all
-	// ([RunRequest.FreshBrief]), which its collection says
+	// ([RunRequest.FreshBrief]): its box then says so as its harness first
+	// reaches the job's tools, on the bridge token of that session
+	// ([Opening.Fresh]), before any call of the run is made — which is where
+	// what the caller armed is put right — and its collection says it too
 	// ([Result.Continued]).
 	Decided func(LaunchDecision)
 
@@ -316,6 +319,19 @@ type LaunchRequest struct {
 	Now func() time.Time
 }
 
+// withServers is base with named's servers added, a name both hold taking
+// named's: the servers a job's box is handed once the job has a name
+// ([LaunchRequest.Opened]). base itself where named adds none.
+func withServers(base, named map[string]MCPServer) map[string]MCPServer {
+	if len(named) == 0 {
+		return base
+	}
+	servers := make(map[string]MCPServer, len(base)+len(named))
+	maps.Copy(servers, base)
+	maps.Copy(servers, named)
+	return servers
+}
+
 // OpenedJob is the job a launch opened, as [LaunchRequest.Opened] is told it.
 type OpenedJob struct {
 	// LaunchID names the job: the launch id the store minted for it, which
@@ -350,6 +366,14 @@ type Opening struct {
 	// skills it is handed as its own ([RunRequest.SkillLoads]); the zero
 	// value names nowhere, which a job handed none needs.
 	SkillLoads SkillWiring
+
+	// Fresh is the same three under the job's other bridge token: what its
+	// box is wired with where its script starts a session of its own in place
+	// of the one the launch continues ([RunRequest.FreshWiring]), so the token
+	// its harness dials says which session it started. Handed to the run only
+	// where the launch continues a session; nil hands none, and a Fresh's own
+	// Fresh is never read.
+	Fresh *Opening
 }
 
 // Continuation is how a job continues the job before it — see
@@ -542,18 +566,21 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// list the servers a box has.
 	var steer SteerWiring
 	var skillLoads SkillWiring
+	// fresh is how the job's box is wired where its script starts a session of
+	// its own in place of the one this launch continues — see
+	// [Opening.Fresh] — nil where what named the job answered none.
+	var fresh *Wiring
 	if req.Opened != nil {
 		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.LastBridgeSeq()})
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
 		}
-		if len(named.Servers) > 0 {
-			servers := make(map[string]MCPServer, len(req.MCPServers)+len(named.Servers))
-			maps.Copy(servers, req.MCPServers)
-			maps.Copy(servers, named.Servers)
-			req.MCPServers = servers
+		if f := named.Fresh; f != nil {
+			fresh = &Wiring{MCPServers: withServers(req.MCPServers, f.Servers), Steer: f.Steer,
+				SkillLoads: f.SkillLoads}
 		}
+		req.MCPServers = withServers(req.MCPServers, named.Servers)
 		steer = named.Steer
 		skillLoads = named.SkillLoads
 	}
@@ -611,13 +638,23 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// THE ENVIRONMENT THE JOB IS STARTED WITH, read once: it is what the job
 	// is handed, and what its session's capture scrubs out ([HandedSecrets]).
 	env := withTelemetry(m, req, box)
+	// AND, FOR A RUN THAT CONTINUES A SESSION, HOW ITS BOX IS WIRED WHERE ITS
+	// SCRIPT STARTS ONE OF ITS OWN INSTEAD: the job's other bridge token, so
+	// the token its harness dials is the box's word on which session it
+	// started ([RunRequest.FreshWiring]). A run that starts one of its own
+	// from the first has one session, and is handed one wiring.
+	var freshWiring *Wiring
+	if continued.session != "" {
+		freshWiring = fresh
+	}
 	handle, err := runner.Start(ctx, box, RunRequest{
-		System:     buildSystem(req),
-		Brief:      continued.brief,
-		FreshBrief: continued.fresh,
-		Resume:     continued.session,
-		Carried:    continued.carried,
-		Env:        env,
+		System:      buildSystem(req),
+		Brief:       continued.brief,
+		FreshBrief:  continued.fresh,
+		FreshWiring: freshWiring,
+		Resume:      continued.session,
+		Carried:     continued.carried,
+		Env:         env,
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same

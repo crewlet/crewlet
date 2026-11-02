@@ -882,6 +882,21 @@ type RunRequest struct {
 	// names the job's own endpoint.
 	SkillLoads SkillWiring
 
+	// FreshWiring is how the run's harness reaches the seat's tools where its
+	// script starts a session of its own in place of the one Resume names:
+	// MCPServers, Steer and SkillLoads as they are but under the job's OTHER
+	// bridge token, the one the bridge reads as the box having started a
+	// session of its own (internal/api/mcpbridge). The run's script installs
+	// exactly one of the two once its restore has come to whatever it came
+	// to, and removes the other from the box before its harness starts, so the
+	// token its harness dials IS the box's word on which session it started —
+	// one the run's model can neither forge nor take back, holding only the
+	// token of the session it is in. Nil where Resume is empty, which a
+	// runner refuses a run that sets it for, and where the run has no bridge
+	// to tell (the assistant's deep work). NEVER PERSISTED, for the reason
+	// Steer is not.
+	FreshWiring *Wiring
+
 	// Attribution is the credit every commit the run authors as itself
 	// carries — see [CommitAttribution]. Nil credits nothing: the run's git
 	// is left exactly as the box and the repository configure it.
@@ -998,6 +1013,16 @@ type CommitAttribution struct {
 	// with no page of its own — and the co-author line is credited alone.
 	// One line of printable text, since it becomes a trailer's value.
 	Run string
+}
+
+// Wiring is how a run's harness reaches the seat's tools and the engine's: its
+// MCP servers, the tool bridge among them, where it asks for its turn's notes,
+// and where it reports a skill it loaded — the three parts of a run's request
+// that name the job's bridge endpoint ([RunRequest.FreshWiring]).
+type Wiring struct {
+	MCPServers map[string]MCPServer
+	Steer      SteerWiring
+	SkillLoads SkillWiring
 }
 
 // SteerWiring is where a run's harness asks for its turn's notes: one tool of the

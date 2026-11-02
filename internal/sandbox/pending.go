@@ -2134,6 +2134,15 @@ type PendingStore interface {
 	// or is gone.
 	MarkPulled(ctx context.Context, turnID, launch string) (bool, error)
 
+	// MarkSessionStart records which session the job named said its box
+	// started ([LaunchRecord.SessionStart]), reporting whether this call
+	// recorded it. ONCE PER JOB: a job's box starts one session, and the first
+	// record stands. FALSE IS NOT AN ERROR: the record holds another job, has
+	// said already, or is gone. NO FENCE, as MarkPulled takes none: what a box
+	// said it started is a fact about the job, never an ownership decision. A
+	// start that is not [SessionStart.Valid] is an error.
+	MarkSessionStart(ctx context.Context, turnID, launch string, start SessionStart) (bool, error)
+
 	// WatchNotes follows one run's notes: the record's state when the watch
 	// began — [NotesView.Found] false where it has none — then each state it
 	// reaches, as [coord.SandboxRuns.WatchSandboxRun] delivers them, each
@@ -2614,6 +2623,29 @@ type LaunchRecord struct {
 	// it, and the record then names no brief.
 	Brief BriefKind `json:"brief,omitempty"`
 
+	// SessionStart is which session the job's box said it started, where its
+	// launch chose to continue one: that session, or one of the job's own its
+	// script started in that one's place, its restore having failed — said by
+	// WHICH of the job's two bridge tokens its harness dialled
+	// (internal/api/mcpbridge), the first time it reached the job's tools and
+	// before any call of its was made, and written once
+	// ([PendingStore.MarkSessionStart]). The one witness of it the run's model
+	// cannot forge: the token of the session the box did not start is gone from
+	// the box before the harness starts, while the record the box's script
+	// writes is a file the model can rewrite ([Result.FellBack], which stays
+	// the collection's record).
+	//
+	// WHAT EVERY LATER REBUILD OF THE RUN'S SKILL GUARD READS: the skills the
+	// launch armed its chosen session's guard with (the parked state's) are
+	// the job's session's only where this is [SessionStartContinued]. Empty —
+	// a launch that continued no session, a box that has not said, a record
+	// that could not be written, or a peer that does not know the field and
+	// dropped it — reads as a session of the job's own, holding none of them:
+	// the safe direction, since a guard short of a skill asks the run to load
+	// it again, and one holding a skill the session never read lets a call
+	// through that the skill exists to hold back.
+	SessionStart SessionStart `json:"session_start,omitempty"`
+
 	// Iteration is the turn iteration the launching executor suspended in,
 	// written by [PendingStore.MarkSuspended].
 	Iteration int `json:"iteration,omitempty"`
@@ -2705,6 +2737,27 @@ type LaunchRecord struct {
 	// the resume the answer drives, as [PendingRun.ParkedInputTokens] is.
 	Condensed AuxTokens `json:"parked_condensed,omitzero"`
 }
+
+// SessionStart is which session a job's box said it started, where its launch
+// chose to continue one ([LaunchRecord.SessionStart]).
+type SessionStart string
+
+const (
+	// SessionStartContinued is the session the launch chose: the box held it
+	// or restored the archive carried into it, and its harness took it up.
+	SessionStartContinued SessionStart = "continued"
+
+	// SessionStartFresh is a session of the job's own, which its script
+	// started in place of the chosen one where the box neither held it nor
+	// could restore it: an archive that did not unpack, an import OpenCode
+	// refused, a release too old to take it up ([Result.FellBack]).
+	SessionStartFresh SessionStart = "fresh"
+)
+
+// Valid reports whether s is a session a box can say it started. A record a
+// newer build wrote may name one this build does not know, which is read as the
+// value it is, and as no continued session.
+func (s SessionStart) Valid() bool { return s == SessionStartContinued || s == SessionStartFresh }
 
 // FollowUpReason is why a job was launched as a follow-up of the job before it
 // in the same round, where the collection of the new job has to know.
