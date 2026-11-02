@@ -501,9 +501,10 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	}
 
 	// 13. ITS SEARCHES, answered for the fleet (codesearch.go) through the
-	// git reads above, each as the asker its signed request names — and
-	// withdrawn before the host stops, with the status answerer.
-	withdrawSearch, err := e.serveCodeSearch(context.WithoutCancel(ctx), nodeID, reads)
+	// git reads above, each as the asker its signed request names, holding
+	// all but one unit of the share those reads take — and withdrawn before
+	// the host stops, with the status answerer.
+	withdrawSearch, err := e.serveCodeSearch(context.WithoutCancel(ctx), nodeID, reads, share.Units())
 	if err != nil {
 		if werr := withdraw(context.WithoutCancel(ctx)); werr != nil {
 			log.WarnContext(ctx, "code_status_answerer_not_withdrawn", "error", werr)

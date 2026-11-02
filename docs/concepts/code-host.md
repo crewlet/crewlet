@@ -5138,6 +5138,12 @@ sequenceDiagram
   round. A round waits at most nine seconds — a node's two-second wait for
   its share of git work, the search's own five, and a second each way — and
   ends as soon as every node it asked has answered.
+- **Never the whole share.** Every search a git node answers reads, together,
+  at most all but one unit of the node's share of git work for seats' reads
+  ([Server-side reads](#server-side-reads)), one where the share is one unit,
+  so a seat's read of a file, a log or a diff always finds a unit a search
+  cannot hold. A repository whose read could not start before its answer fell
+  due is unanswered for that node's share, and its runner-up is asked.
 - **Exact.** Each node keeps the first lines of its repositories by
   repository name, path and line, at most the search's limit, and the asker
   keeps the first of all of them, so the answer is the same whichever node

@@ -93,7 +93,8 @@
 // bytes, refused and never cut). `search: grep` repositories are read only
 // when a repo: filter names them, at most [MaxGrepRepos]. A round waits at
 // most [RoundBudget] and ends as soon as every node it asked has answered; a
-// node reads at most [ServeReads] of its repositories at once, each one's git
-// under the node's seat git-work share and the search's own budget
-// (code.SearchBudget).
+// node's searches together read at most [ScatterReads] of its repositories at
+// once — all but one unit of its seat git-work share, which each read's git
+// takes, so a seat's ordinary read always finds one a search cannot hold —
+// each under the search's own budget (code.SearchBudget).
 package codesearch

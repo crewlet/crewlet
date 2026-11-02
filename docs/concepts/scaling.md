@@ -490,7 +490,11 @@ that they are dropped, least recently used first, before any repository is
 evicted, since a dropped index is built again from the blobs the copy already
 holds. Segments are merged as each is written, each kept more than twice the
 next, so an index keeps a handful of them (three for that tip) and each blob is
-written a logarithmic number of times. A search costs its node a lookup of a
+written a logarithmic number of times. Every search a git node is answering
+reads, together, at most all but one of the units of its share of git work for
+seats' reads, which each read's search takes — one where the node has only
+one — so a seat's read of a file, a log or a diff always finds a unit no
+search can hold, however many company-wide searches are running. A search costs its node a lookup of a
 few lists and a read of the candidates' lines, never a walk of the tree: the
 repositories it names are divided among the git nodes that hold their
 indexes, each searching its own share at once, so adding git nodes divides a

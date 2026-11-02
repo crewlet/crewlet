@@ -188,12 +188,16 @@ func (f *fleet) ask(ctx context.Context, request []byte, each func([]byte) bool)
 	return nil
 }
 
+// shareUnits is every fake node's seat git-work share: four units, a git
+// node of eight cores (code.ShareOf).
+const shareUnits = 4
+
 func newFleet(t *testing.T, e *estate, nodes map[string]*node) *fleet {
 	t.Helper()
 	f := &fleet{servers: map[string]*codesearch.Server{}, silent: map[string]bool{}}
 	for id, n := range nodes {
 		n.e = e
-		s, err := codesearch.NewServer(wire(t, fleetRing), id, n)
+		s, err := codesearch.NewServer(wire(t, fleetRing), id, n, shareUnits)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -394,7 +398,7 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 	r := indexed("alpha", "git-a")
 	r.lines = []code.SearchHit{line("a.go", 1)}
 	n := &node{e: &estate{repos: []repo{r}}}
-	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", n)
+	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", n, shareUnits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,7 +661,8 @@ func TestARepositoryThatStoppedEarlyEndsTheMerge(t *testing.T) {
 func TestANodeHoldsTheFirstLimitLinesNotEveryAnswer(t *testing.T) {
 	t.Parallel()
 	const limit = 5
-	n := 3*codesearch.ServeReads + 7
+	at := codesearch.ScatterReads(shareUnits)
+	n := 3*at + 7
 	var repos []repo
 	for i := range n {
 		r := indexed(fmt.Sprintf("repo-%03d", i), "git-a")
@@ -675,9 +680,9 @@ func TestANodeHoldsTheFirstLimitLinesNotEveryAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(a.asked) > codesearch.ServeReads {
-		t.Errorf("the node read %d of its %d repositories, want at most the %d one request reads at once",
-			len(a.asked), n, codesearch.ServeReads)
+	if len(a.asked) > at {
+		t.Errorf("the node read %d of its %d repositories, want at most the %d it reads at once",
+			len(a.asked), n, at)
 	}
 	var want []codesearch.Hit
 	for _, h := range repos[0].lines {
@@ -690,5 +695,113 @@ func TestANodeHoldsTheFirstLimitLinesNotEveryAnswer(t *testing.T) {
 	if c.Searched != 1 || c.PastLimit.Count != n-1 || !c.Truncated {
 		t.Errorf("searched %d, past the limit %d, truncated %t; want 1, %d and true", c.Searched,
 			c.PastLimit.Count, c.Truncated, n-1)
+	}
+}
+
+// sharedReads is a git node's reads as query's take the node's share: each
+// read's search holds a unit of it until the test lets it go, and how many
+// reads have begun is counted.
+type sharedReads struct {
+	share   *code.GitShare
+	release chan struct{}
+	mu      sync.Mutex
+	began   int
+}
+
+func (r *sharedReads) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	r.mu.Lock()
+	r.began++
+	r.mu.Unlock()
+	done, err := r.share.Take(ctx, q.SeatWork())
+	if err != nil {
+		return code.GitAnswer{}, err
+	}
+	defer done()
+	<-r.release
+	return code.GitAnswer{Kind: code.GitSearch, Search: &code.SearchAnswer{Hits: []code.SearchHit{},
+		Tip: strings.Repeat("c", 40), Via: code.SearchViaIndex}}, nil
+}
+
+func (r *sharedReads) begun() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.began
+}
+
+// A SEAT'S READ FINDS A UNIT WHILE A SEARCH RUNS: a git node answering a
+// search of many repositories, each of whose reads holds a unit of the node's
+// seat git-work share while it searches, starts no more of them at once than
+// all but one of the share's units — so a seat's ordinary read, taking its
+// unit of the same share meanwhile, is granted one at once rather than
+// queued behind the search's reads — and the search still reads every
+// repository once the units come free.
+//
+// Mutation: bound a request's reads by the queue's answer slots instead of
+// the share, and the search takes every unit and queues behind them, so the
+// seat's read waits out the share's wait and is answered unready, red.
+func TestASeatReadFindsAUnitWhileASearchRuns(t *testing.T) {
+	t.Parallel()
+	const readSlots = 8
+	share := code.NewGitShare("git-a", readSlots, nil)
+	units := share.Units()
+	bound := codesearch.ScatterReads(units)
+	reads := &sharedReads{share: share, release: make(chan struct{})}
+	srv, err := codesearch.NewServer(wire(t, fleetRing), "git-a", reads, units)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var assign []codesearch.Assigned
+	for i := range 4 * units {
+		assign = append(assign, codesearch.Assigned{RepoID: fmt.Sprintf("id-%02d", i), Name: fmt.Sprintf("r%02d", i),
+			Home: true})
+	}
+	req := codesearch.Request{Version: codesearch.Protocol, ID: "req-share", Deadline: time.Now().Add(time.Minute),
+		Asker: person, Search: code.SearchQuery{Text: "needle", Mode: codeindex.ModeLiteral},
+		Assign: map[string][]codesearch.Assigned{"git-a": assign}}
+	sealed, err := wire(t, fleetRing).SealRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan []byte, 1)
+	go func() {
+		raw, _ := srv.Answer(context.Background(), sealed)
+		answered <- raw
+	}()
+	deadline := time.Now().Add(30 * time.Second)
+	for share.Held() < bound {
+		if time.Now().After(deadline) {
+			t.Fatalf("the search holds %d of the share's %d units, and never reached %d", share.Held(), units, bound)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// A READ PAST THE BOUND WOULD START AT ONCE: every one waits on nothing
+	// but its slot.
+	for settle := time.Now().Add(200 * time.Millisecond); time.Now().Before(settle); time.Sleep(time.Millisecond) {
+		if n := reads.begun(); n > bound {
+			t.Fatalf("the search began %d reads at once, past the %d of the share's %d units it may hold", n, bound,
+				units)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), code.GitShareWait)
+	defer cancel()
+	done, err := share.Take(ctx, code.SeatWorkRead)
+	if err != nil {
+		t.Fatalf("a seat's read beside the search = %v, want a unit at once", err)
+	}
+	done()
+	close(reads.release)
+	rep, why, err := wire(t, fleetRing).OpenReply(<-answered, "req-share")
+	if err != nil || why != "" {
+		t.Fatalf("the search's reply: %v %q", err, why)
+	}
+	for _, r := range rep.Repos {
+		if r.Outcome != codesearch.OutcomeSearched {
+			t.Errorf("repository %s: %s (%s), want it searched once the units came free", r.RepoID, r.Outcome,
+				r.Detail)
+		}
+	}
+	if len(rep.Repos) != len(assign) || reads.begun() != len(assign) {
+		t.Errorf("the reply names %d repositories and %d reads began, want %d each", len(rep.Repos), reads.begun(),
+			len(assign))
 	}
 }
