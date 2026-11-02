@@ -397,7 +397,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// one timer's worth, and the clones are as long as the repositories.
 	if reused && len(req.Clone) > 0 {
 		stopKeepalive := keepProvisioning(ctx, box, m.BoxTimeout())
-		err := ApplySetup(ctx, box, req.Clone, env)
+		err = ApplySetup(ctx, box, req.Clone, env)
 		stopKeepalive()
 		if err != nil {
 			log.ErrorContext(ctx, "sandbox_setup_failed", "sandbox_id", box.ID(), "reused", true,

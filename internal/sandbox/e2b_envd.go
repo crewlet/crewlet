@@ -701,7 +701,7 @@ func (c *envdClient) openTail(ctx context.Context, path string, n int64) (io.Rea
 	case resp.ContentLength >= 0:
 		stream := &envdStream{body: resp.Body, idle: idle, path: path}
 		if skip := resp.ContentLength - n; skip > 0 {
-			if _, err := io.CopyN(io.Discard, stream, skip); err != nil {
+			if _, err = io.CopyN(io.Discard, stream, skip); err != nil {
 				_ = stream.Close()
 				return nil, 0, err
 			}

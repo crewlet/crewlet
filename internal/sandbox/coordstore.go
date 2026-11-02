@@ -977,7 +977,7 @@ func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspensio
 	part := conversationPart(launch)
 	// THE CONVERSATION FIRST, under the job the row holds: the flip below is
 	// what makes the run claimable, and a claim resumes into this.
-	if err := s.putPart(ctx, turnID, part, suspension.State); err != nil {
+	if err = s.putPart(ctx, turnID, part, suspension.State); err != nil {
 		return false, fmt.Errorf("sandbox: write the suspended conversation of run %s: %w", turnID, err)
 	}
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {

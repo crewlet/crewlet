@@ -491,7 +491,7 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	if err != nil {
 		return nil, err
 	}
-	if err := mountsFit(placement, spec.Mounts); err != nil {
+	if err = mountsFit(placement, spec.Mounts); err != nil {
 		return nil, err
 	}
 	box, err := provider.Create(ctx, spec)
