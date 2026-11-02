@@ -140,6 +140,11 @@ var (
 	ErrNoMCPSignIn = errors.New("engine: this sign-in is not known any more; start it again")
 	// ErrMCPNotSignedIn is a sign-out of a server nobody signed in to.
 	ErrMCPNotSignedIn = errors.New("engine: nobody is signed in to the MCP server")
+	// ErrMCPServiceIdentity is a sign-in to a server the engine signs in to
+	// as a service identity (oauth.grant: client_credentials), which nobody
+	// signs in to: its tokens are issued as it is used.
+	ErrMCPServiceIdentity = errors.New("engine: the MCP server is signed in to as a service " +
+		"identity with client credentials, and its tokens are issued as it is used; nobody signs in to it")
 )
 
 // MCPSignInRefusal is why a sign-in could not be started or finished, in words
@@ -300,6 +305,9 @@ func (e *Engine) StartMCPSignIn(ctx context.Context, name string, by iam.Actor) 
 	server, err := e.oauthServer(name)
 	if err != nil {
 		return MCPSignInStarted{}, err
+	}
+	if server.OAuth.ServiceIdentity() {
+		return MCPSignInStarted{}, ErrMCPServiceIdentity
 	}
 	if _, ready := e.fleetReady(); ready != nil {
 		return MCPSignInStarted{}, ready
@@ -552,6 +560,12 @@ func (e *Engine) CompleteMCPSignIn(ctx context.Context, landing MCPSignInLanding
 	entry, err := e.oauthServer(server)
 	if err != nil {
 		return fail("the server is no longer signed in to with OAuth", "Add its oauth block, then sign in")
+	}
+	if entry.OAuth.ServiceIdentity() {
+		// CHANGED UNDER THE SIGN-IN: a code exchanged for a server that now
+		// signs in as a service identity would be a grant nothing uses.
+		return fail("the server now signs in as a service identity, which nobody signs in to",
+			"Nothing to do: the engine issues its tokens as it is used")
 	}
 	client, err := e.oauthClient(entry, sealed.Client)
 	if err != nil {
@@ -1010,10 +1024,20 @@ func (e *Engine) forgetSource(server string) {
 // oauthSource is one server's access token on this node, under one grant: the
 // [mcp.BearerSource] every start of the server under that grant sends with.
 // The token is held here and nowhere else.
+//
+// ONE SOURCE FOR BOTH GRANTS, so a server is sent its token, renews it ahead
+// of its end and renews it once on a 401 by the same path whichever way it is
+// issued: by renewing the company's grant ([oauthSource.renewGrant]), or by
+// signing in as the company's service identity ([serviceIdentity.issue]).
 type oauthSource struct {
 	engine *Engine
 	server string
-	grant  uuid.UUID
+	// grant is the company's grant the source renews, uuid.Nil for a
+	// service identity's source.
+	grant uuid.UUID
+	// service is the service identity the source signs in as, nil for a
+	// grant's source (mcpserviceidentity.go).
+	service *serviceIdentity
 
 	mu     sync.Mutex
 	token  string
@@ -1045,61 +1069,78 @@ func (s *oauthSource) Rejected(ctx context.Context, refused string) (string, err
 	return s.renewLocked(ctx)
 }
 
-// renewLocked renews the access token under the fleet's renewal lease: see the
-// file's comment. Called with s.mu held.
+// renewLocked is issued a new access token, as a service identity or by
+// renewing the grant, and holds it. Called with s.mu held, which is what
+// keeps two requests on this node from asking at once.
 func (s *oauthSource) renewLocked(ctx context.Context) (string, error) {
+	now := s.engine.now()
+	issue := s.renewGrant
+	if s.service != nil {
+		issue = s.service.issue
+	}
+	tokens, err := issue(ctx)
+	if err != nil {
+		return "", err
+	}
+	s.token, s.expiry, s.minted = tokens.Access, tokens.Expiry, now
+	return s.token, nil
+}
+
+// renewGrant renews the company's grant under the fleet's renewal lease: see
+// the file's comment. Called with s.mu held.
+func (s *oauthSource) renewGrant(ctx context.Context) (oauth.Tokens, error) {
 	e := s.engine
 	estate, err := e.fleetReady()
 	if err != nil {
-		return "", err
+		return oauth.Tokens{}, err
 	}
 	fleet := e.backends.Fleet
 	record, found, err := fleet.MCPGrant(ctx, s.server)
 	switch {
 	case err != nil:
-		return "", fmt.Errorf("engine: read %s's grant: %w", s.server, err)
+		return oauth.Tokens{}, fmt.Errorf("engine: read %s's grant: %w", s.server, err)
 	case !found || record.Grant != s.grant:
-		return "", &signInNeeded{server: s.server}
+		return oauth.Tokens{}, &signInNeeded{server: s.server}
 	case record.Failed():
 		// REFUSED FOR GOOD ALREADY, on this node or another: the vendor is
 		// not asked again until somebody signs in.
-		return "", &signInNeeded{server: s.server, failure: record.Failure}
+		return oauth.Tokens{}, &signInNeeded{server: s.server, failure: record.Failure}
 	}
 	if moved := e.grantMoved(s.server, record); moved != nil {
-		return "", moved
+		return oauth.Tokens{}, moved
 	}
 	release, err := e.holdRenewal(ctx, s.server)
 	if err != nil {
-		return "", err
+		return oauth.Tokens{}, err
 	}
 	defer release()
 	held, found, err := estate.Held(ctx, grantRow(s.server))
 	if err != nil {
-		return "", fmt.Errorf("engine: read %s's grant: %w", s.server, err)
+		return oauth.Tokens{}, fmt.Errorf("engine: read %s's grant: %w", s.server, err)
 	}
 	var grant sealedGrant
 	if !found || json.Unmarshal([]byte(held.Value), &grant) != nil || grant.Grant != s.grant {
-		return "", &signInNeeded{server: s.server}
+		return oauth.Tokens{}, &signInNeeded{server: s.server}
 	}
 	entry, err := e.oauthServer(s.server)
 	if err != nil {
-		return "", &signInNeeded{server: s.server}
+		return oauth.Tokens{}, &signInNeeded{server: s.server}
 	}
 	client, err := e.oauthClient(entry, grant.Client)
 	if err != nil {
-		return "", fmt.Errorf("engine: renew %s's sign-in: %w", s.server, err)
+		return oauth.Tokens{}, fmt.Errorf("engine: renew %s's sign-in: %w", s.server, err)
 	}
 	now := e.now()
 	tokens, err := oauth.Refresh(ctx, &grant.Endpoints, client, grant.Refresh, now)
 	var refused *oauth.Error
 	if errors.As(err, &refused) && refused.Definitive() {
 		e.recordRenewalRefused(ctx, record, oauthWords(err))
-		return "", &signInNeeded{server: s.server, failure: oauthWords(err)}
+		return oauth.Tokens{}, &signInNeeded{server: s.server, failure: oauthWords(err)}
 	}
 	if err != nil {
 		log.WarnContext(ctx, "mcp_oauth_renewal_failed", "server", s.server, "error", oauthWords(err),
 			"detail", "the next request asks again")
-		return "", fmt.Errorf("engine: renew %s's sign-in: %s", s.server, oauthWords(err))
+		return oauth.Tokens{}, fmt.Errorf("engine: renew %s's sign-in: %s", s.server, oauthWords(err))
 	}
 	if tokens.Refresh != "" && tokens.Refresh != grant.Refresh {
 		grant.Refresh = tokens.Refresh
@@ -1123,8 +1164,7 @@ func (s *oauthSource) renewLocked(ctx context.Context) (string, error) {
 	if expiry := instantOrNil(tokens.RefreshExpiry); expiry != nil {
 		e.recordGrantExpiry(ctx, record, *expiry)
 	}
-	s.token, s.expiry, s.minted = tokens.Access, tokens.Expiry, now
-	return s.token, nil
+	return tokens, nil
 }
 
 // holdRenewal takes the server's renewal lease, waiting up to

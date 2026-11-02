@@ -41,9 +41,11 @@
 // refresh token sealed in the secret store's engine rows, each node's access
 // token held in its memory and renewed one node at a time under a fleet lease,
 // and the grant given up at its vendor on a sign-out or a removal
-// (mcpoauth.go), because only this package holds the server's configuration,
-// the fleet's stores and keyring and the servers it starts together. ADR-0075
-// is the decision.
+// (mcpoauth.go), or the company's service identity signed in as by each node
+// when the server needs a token, with nothing kept (mcpserviceidentity.go),
+// because only this package holds the server's configuration, the fleet's
+// stores and keyring and the servers it starts together. ADR-0075 is the
+// decision.
 package engine
 
 import (

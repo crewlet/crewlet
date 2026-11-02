@@ -9665,12 +9665,21 @@ server not signed in to with OAuth. It is the grant's public half and never a
 token or the client's secret:
 
 ```json
-{"status": "connected", "client": "dcr", "client_id": "registered-client-id",
- "issuer": "https://auth.example.com", "resource": "https://mcp.example.com/mcp",
- "scopes": ["read", "offline_access"],
+{"grant": "authorization_code", "status": "connected", "client": "dcr",
+ "client_id": "registered-client-id", "issuer": "https://auth.example.com",
+ "resource": "https://mcp.example.com/mcp", "scopes": ["read", "offline_access"],
  "connected_by": "jane.doe", "connected_at": "2026-11-01T09:00:00Z",
  "expires_at": "2027-01-30T09:00:00Z", "failure": null}
 ```
+
+`grant` is `authorization_code` (a person signs the company in) or
+`client_credentials` (the engine signs in as the company's
+[service identity](../guides/tools-and-mcp.md#signing-in-as-a-service-identity)).
+A service identity is always `connected`, with `client` `""` (it registers
+nothing), the configured `client_id` and `scopes`, and `issuer`, `resource`,
+`connected_by`, `connected_at`, `expires_at` and `failure` empty: nobody signs
+in to it, and a credential its vendor refuses fails the server's instances
+(the row's `state`), never asks for a sign-in.
 
 `status` is `connected` (the engine renews it as the server is used),
 `needs_sign_in` (nobody has signed in: `client_id` is then the company's own
@@ -9868,8 +9877,10 @@ it under, so a node that drained, died or restarted stops counting at once.
   answers it but without its tools. `null` where the server was never tested.
   An administrator's reading only.
 - `values` is every header (a remote server) or variable (a local one) the
-  server is sent, by name and never by value: `key` as the document spells
-  it, `as` (`header` or `env`), `variable`, the one variable it reads (`""` for
+  server is sent, and the secret of the OAuth client it signs in with, by name
+  and never by value: `key` as the document spells it (`oauth.client_secret`
+  for the client's secret), `as` (`header`, `env`, or `oauth` for the client's
+  secret, which goes to the authorization server alone), `variable`, the one variable it reads (`""` for
   a value written in the document, one reading several, or a key an
   integration binds per agent), `set` (whether the secret store holds every
   variable it reads; a literal is set, and a key bound per agent is never set
@@ -10314,6 +10325,17 @@ never takes `secrets.write`, so it never stores one. A managed document
 (`api.auth.company_writers`) refuses it `403 config_managed`, before the body
 too.
 
+**The OAuth client's secret.** `key` `oauth.client_secret` stores the secret of
+the company's own OAuth client the server signs in with (a
+[service identity's](../guides/tools-and-mcp.md#signing-in-as-a-service-identity),
+or `client: own`'s), pointing `oauth.client_secret` at its variable; it is
+listed in the detail's `values` with `as: "oauth"`. A service identity's is
+tested by signing in with it. A person's sign-in sends its client's secret only
+when the grant renews, which a test does not do, so `test=true` is refused
+`400 invalid_query` there: store it with `test=false`. A server whose sign-in
+has no secret (no `oauth` block, `client: cimd` or `dcr`) is refused `409
+conflict`, and so is a `seat`: a sign-in is the company's.
+
 **Which variable.** The key's own variable where it already reads exactly one
 that nothing else in the document reads, so rotating it changes nobody else's
 credential; otherwise `MCP_<SERVER>_<KEY>`, and `_<SEAT>` for a seat's value,
@@ -10535,7 +10557,8 @@ server replaces the first. The sign-in is good for 15 minutes.
 proof](#some-gestures-ask-how-recently-you-proved-who-you-are), and never Ask
 Crewlet, which never takes the verb. Refusals: `404 not_found` for a server
 the configuration does not declare; `409 conflict` for one with no `oauth`
-block, an engine with no public address (`api.external_url`, or
+block, one that signs in as a service identity (`grant: client_credentials`,
+which nobody signs in to), an engine with no public address (`api.external_url`, or
 `api.public.external_url` where the public listener is on), or a server whose
 metadata or vendor rules the sign-in out (no `S256`, the registration not
 offered, the company's own client's secret not set), each saying what to

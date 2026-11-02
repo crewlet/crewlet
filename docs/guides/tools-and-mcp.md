@@ -1593,6 +1593,16 @@ that seat's `mcp_env` block, and tested as that agent), and only for an agent
 the server is already granted to. A key an integration fills for each agent
 (GitHub's token, for one) is never stored here.
 
+The secret of the OAuth client a server signs in with is stored the same way,
+under the key `oauth.client_secret` (its own variable, else
+`MCP_<SERVER>_OAUTH_CLIENT_SECRET`), and listed on the Connection tab beside
+the headers with `as: oauth`: it is sent to the server's authorization server,
+never to the server. A [service identity's](#signing-in-as-a-service-identity)
+is tested by signing in with it. The company's own client of a person's
+[sign-in](#signing-in-with-oauth) is first sent when the grant next renews,
+which a test does not do, so it is stored with `test=false`. A server whose
+sign-in has no secret (`client: cimd` or `dcr`) refuses the key.
+
 Storing a value is an administrator's, at a recent step-up, and Ask Crewlet
 never does it: a value it typed would sit in its conversation. A configuration
 another system manages refuses it; set the credential where that system
@@ -1672,6 +1682,60 @@ revokes the grant at the vendor where it offers revocation, forgets it here,
 and stops the server on every node. The page says whether the vendor revoked
 it; where the vendor offers no revocation, revoke the app's access in the
 vendor's own settings too.
+
+### Signing in as a service identity
+
+Some vendors offer a **service identity**: an OAuth client you register at the
+vendor that signs in as itself, with its client id and secret and no person
+behind it (OAuth's client credentials grant). The engine signs in as that
+client whenever the server needs a token:
+
+```yaml
+mcp_servers:
+  - name: vendor
+    transport: http
+    url: https://mcp.vendor.example.com/mcp
+    oauth:
+      grant: client_credentials
+      client_id: crewlet-agents
+      client_secret: ${VENDOR_CLIENT_SECRET}
+      scopes: [read]
+```
+
+`grant: client_credentials` needs `client_id` and `client_secret` (a `${VAR}`),
+and refuses `client`: a service identity is always your own client, so nothing
+is registered. `scopes` are what each token asks for; absent, the vendor issues
+the client's default. Every rule of a [sign-in](#signing-in-with-oauth) holds
+too: a remote, shared server, no `Authorization` header beside it, and never in
+a seat's `sandbox.mcp.servers`. `grant` left out is `authorization_code`, a
+person's sign-in.
+
+**Nobody signs in.** The server starts as soon as it is configured. Its `oauth`
+view on the Servers answer says `grant: client_credentials` and is always
+`connected`, and **Sign in** answers `409`. Each node reads the server's
+sign-in metadata the first time it needs a token, refuses an authorization
+server that lists the grants it issues without `client_credentials` or takes a
+client's secret by no method the engine sends one by, and asks the token
+endpoint for a token for this server. The secret goes by HTTP basic
+authentication, or in the request body where that is all the vendor takes,
+and only to a token endpoint on the server's own address or a public https
+address.
+
+**What is kept.** Nothing but your configuration. Each node holds the access
+token it is issued in its memory alone, never stored, logged or answered, asks
+for a new one shortly before it runs out, and once more when the server
+refuses it. There is no refresh token, grant record or sealed row, so a
+sign-out or a removal has nothing of a service identity's to revoke.
+
+**When the vendor refuses.** A refusal (a revoked or rotated secret, a client
+not allowed the grant, a scope it will not issue) fails the server's instances
+in the vendor's own words, classed `credential_rejected` or
+`missing_permission`, and raises `mcp_server_failing` as any failure does. The
+refusal is held for the restart schedule's wait, so the vendor is asked again
+at most once a wait rather than at every request; a new client id, secret or
+scopes is asked about at once. Store a new secret from the server's page
+([Storing a header or variable](#storing-a-header-or-variable)), which tests it
+by signing in with it first.
 
 ---
 

@@ -34,8 +34,10 @@ import (
 // node's apply, which the control plane names, and has none either.
 //
 // grants are the servers' OAuth grants by server ([Engine.grantsReading]): a
-// server signed in to with OAuth gets its sign-in's condition from its own,
-// or none held.
+// server signed in to by a person's grant gets its sign-in's condition from its
+// own, or none held. A service identity's server has none: nobody signs in to
+// it, and a credential its vendor refuses fails its instances, which the
+// failing and partial kinds read.
 func mcpConditions(c *Company, statuses map[string]coord.NodeStatus,
 	grants map[string]coord.MCPGrant) []statelog.MCPServerCondition {
 
@@ -44,7 +46,9 @@ func mcpConditions(c *Company, statuses map[string]coord.NodeStatus,
 	for i := range c.Config.MCPServers {
 		if c.Config.MCPServers[i].IsEnabled() {
 			servers = append(servers, c.Config.MCPServers[i].Name)
-			signedIn[c.Config.MCPServers[i].Name] = c.Config.MCPServers[i].OAuth != nil
+			// A PERSON'S SIGN-IN ALONE has a condition: a service identity
+			// is signed in by nobody, and its failures are its instances'.
+			signedIn[c.Config.MCPServers[i].Name] = c.Config.MCPServers[i].PersonSignIn()
 		}
 	}
 	slices.Sort(servers)
@@ -108,11 +112,11 @@ func signInCondition(grants map[string]coord.MCPGrant, server string) *statelog.
 }
 
 // grantsReading is every MCP server's OAuth grant, by server, for an alarm
-// reading: read afresh where c signs in to any server, and the last good
-// reading carried across a store that cannot answer, as the heartbeats are.
-// Nil where no server is signed in to with OAuth.
+// reading: read afresh where a person signs c in to any server, and the last
+// good reading carried across a store that cannot answer, as the heartbeats
+// are. Nil where no server is signed in to by a person's grant.
 func (e *Engine) grantsReading(ctx context.Context, c *Company) map[string]coord.MCPGrant {
-	if !slices.ContainsFunc(c.Config.MCPServers, func(s config.MCPServer) bool { return s.OAuth != nil }) ||
+	if !slices.ContainsFunc(c.Config.MCPServers, func(s config.MCPServer) bool { return s.PersonSignIn() }) ||
 		e.backends == nil || e.backends.Fleet == nil {
 		return nil
 	}

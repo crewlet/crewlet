@@ -120,9 +120,11 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 		// SIGNED IN TO WITH OAUTH: started under the company's grant, read
 		// afresh at each pass, and held back while nobody holds one (or its
 		// vendor refused to renew it), which a person ends by signing in
-		// (mcpoauth.go). Retired below if it was running.
+		// (mcpoauth.go); or as its service identity, whose tokens are issued
+		// as it is used (mcpserviceidentity.go). Retired below if it was
+		// running.
 		if server.OAuth != nil {
-			bearer, needed := e.bearerFor(ctx, server.Name)
+			bearer, needed := e.tokenSourceFor(ctx, server, env)
 			if needed != nil {
 				outcomes = append(outcomes, mcpOutcome{server: server.Name, err: needed})
 				continue
