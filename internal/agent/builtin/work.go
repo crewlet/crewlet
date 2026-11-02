@@ -3336,11 +3336,11 @@ func (t *commentOnWorkItem) Description() string {
 }
 
 // commentToolDescription is the comment tool's contract as a model reads it,
-// and the WAKE RULE IS PART OF IT: another agent's comment starts a colleague's
-// turn only when it names them ([worklet.CandidateFor] answers it for one
-// handle), so an agent that relied on the item's assignee or reporter hearing an unaddressed
-// note would hand work to nobody without knowing it. A constant so a test can
-// hold the words.
+// and the WAKE RULE IS PART OF IT: another agent's comment starts a
+// colleague's turn only when it names them ([worklet.CandidateFor] answers it
+// for one handle), so an agent that relied on the item's assignee or reporter
+// hearing an unaddressed note would hand work to nobody without knowing it. A
+// constant so a test can hold the words.
 const commentToolDescription = "Post a comment on a work item. Everyone " +
 	"following the item finds it in their inbox, but your comment wakes a " +
 	"colleague to act on it only when you @-mention them by handle, put a " +
