@@ -63,13 +63,14 @@ updates:
       prefix: "build(deps)"
 
   # The dashboard's own dependencies. It is a React + TypeScript application
-  # built by Vite, and its build output is committed to static/dashboard — so a
-  # bump here changes bytes the engine binary EMBEDS, which is why the surface
-  # has to be watched like any other. The directory is where the manifest is,
-  # not the repository root: npm reads package.json beside the lockfile.
+  # built by Vite, and its build output is committed to every tree the
+  # Makefile's UI_OUT names — so a bump here changes bytes the engine binary
+  # EMBEDS, which is why the surface has to be watched like any other. The
+  # directory is where the manifest is, not the repository root: npm reads
+  # package.json beside the lockfile.
   #
   # A bump lands with a rebuilt bundle or it does not land at all: ci.yml's
-  # `dashboard` job rebuilds and diffs static/dashboard, so a version bump that
+  # `dashboard` job rebuilds and diffs those trees, so a version bump that
   # changes the output fails until the output is committed with it. Dependabot
   # cannot do that, so .github/workflows/dependabot-dashboard.yml does: it
   # rebuilds on Dependabot's pull request and pushes the result to its branch.

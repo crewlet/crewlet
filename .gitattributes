@@ -14,12 +14,15 @@
 # working tree instead of writing markers into it. THE RESOLUTION IS THE ONLY
 # ONE THAT IS EVER CORRECT for generated files: rebuild, do not merge.
 #
-#     make dashboard && git add -A -- static/dashboard
+#     make dashboard && git add -A -- static/dashboard static/artifacts static/protocol
+#
+# (`make dashboard` writes all three trees, the Makefile's UI_OUT, so the
+# resolution stages all three.)
 #
 # NOT `binary` and NOT `-diff`, which would also be tempting: `make
-# dashboard-check` is `npm run build` followed by `git diff --exit-code --
-# static/dashboard` (and a check for files the index does not carry at all),
-# and that diff is the patch both it and ci.yml print when the committed tree
+# dashboard-check` is `npm run build` followed by `git diff --exit-code` over
+# those trees (and a check for files the index does not carry at all), and
+# that diff is the patch both it and ci.yml print when the committed tree
 # drifted. Under `binary` it becomes "Binary files … differ", and
 # `git log -G` over the tree drops from 66 matching commits to none. `-merge`
 # costs neither: the diff is byte-identical to having no attribute at all.

@@ -156,11 +156,12 @@ make test        # the suite, minus the packages that run alone, on the node pin
 make test-solo   # ... and those, at -p 1, with a runner to themselves
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
-# and the dashboard, whose build output is committed:
+# and the dashboard, whose build output is committed to every tree the
+# Makefile's UI_OUT names (static/dashboard, static/artifacts, static/protocol):
 cd dashboard && npm run format:check                          # dashboard-lint
 cd dashboard && npm run build                                 # dashboard-check:
-git diff --exit-code -- static/dashboard                      #   no tracked file moved
-test -z "$(git ls-files --others -- static/dashboard)"        #   and none is untracked
+git diff --exit-code -- $UI_OUT                               #   no tracked file moved
+test -z "$(git ls-files --others -- $UI_OUT)"                 #   and none is untracked
 cd dashboard && npm run typecheck && npm test                 # dashboard-test
 ```
 
@@ -288,6 +289,10 @@ dashboard's build output is committed — `go build ./...` and
 directive cannot run a bundler — so a bundle that has drifted from its source
 compiles, embeds, serves and passes every Go test while running code nobody
 wrote. Rebuilding and judging the tree is the only thing that can tell you.
+The build writes three trees, and the gate judges every one, as the Makefile's
+`UI_OUT` lists them: `static/dashboard`, `static/artifacts` (the page runtime
+and the artifact kit) and `static/protocol` (the wire protocol alone, which
+`internal/e2e` replays and no binary carries).
 
 Judging it takes TWO questions, because `git diff` sees only the paths the
 index already has. Every emitted name is content-hashed, so a changed chunk is
@@ -295,14 +300,14 @@ a new path, and `git commit -a` stages modified and deleted files but never a
 new one: a commit made that way carries the `index.html` that imports the new
 chunk and not the chunk, the diff is clean, and the binary serves a shell
 asking for a module it does not embed. So the gate also fails on any file under
-`static/dashboard` the index does not hold (`git ls-files --others`), and it
+those trees the index does not hold (`git ls-files --others`), and it
 prints each drifted path — `??` for one git does not track, `!!` for one
 `.gitignore` hides, which `git add -A` will not stage and the `all:dashboard`
 embed ships anyway. It judges against the INDEX rather than `HEAD`, so the
 repair it prints turns it green before you commit:
 
 ```bash
-make dashboard && git add -A -- static/dashboard
+make dashboard && git add -A -- static/dashboard static/artifacts static/protocol
 ```
 
 **And when two branches have both rebuilt it, REBUILD — never merge.** The
@@ -311,13 +316,13 @@ same chunk; git reads that as a rename/rename and three-way merges a megabyte
 of minified JavaScript. Left to itself it splices conflict markers into both
 bundles *and* into `index.html`, and the result does not parse — so staging the
 conflict instead of resolving it commits a dashboard that fails to load.
-`.gitattributes` marks the tree `-merge` so git leaves your side alone rather
-than corrupting it (the conflict still happens; only the damage stops), and
-`static/merge_test.go` holds that. The resolution is always the same two
-commands, whether you are merging or rebasing:
+`.gitattributes` marks each of the three trees `-merge` so git leaves your
+side alone rather than corrupting it (the conflict still happens; only the
+damage stops), and `static/merge_test.go` holds that. The resolution is always
+the same two commands, whether you are merging or rebasing:
 
 ```bash
-make dashboard && git add -A -- static/dashboard
+make dashboard && git add -A -- static/dashboard static/artifacts static/protocol
 ```
 
 `go mod tidy -diff` gates the half of tidiness nothing else notices. An
@@ -564,8 +569,9 @@ What follows are the prerequisites that legitimately vary by machine.
 
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit
-  `static/dashboard` with your source change — `git add -A`, so the new
-  content-hashed chunks go in with it. CI rebuilds it and fails on any
+  every tree it writes with your source change —
+  `git add -A -- static/dashboard static/artifacts static/protocol`, so the new
+  content-hashed chunks go in with it. CI rebuilds them and fails on any
   difference, an untracked file included (`make dashboard-check`), because a
   bundle that has drifted from its source
   compiles, embeds, serves and passes every Go test while running code nobody
@@ -1033,10 +1039,12 @@ worth knowing:
   one member's bad release in front of the rest. Pay that where a split bump is
   genuinely broken — not for neatness, and not to batch unrelated noise.
 - **A dashboard bump that changes the emitted bytes needs a rebuilt bundle, and
-  gets one.** `static/dashboard` is committed and the `dashboard` job rebuilds
-  and diffs it, but Dependabot edits only `package.json` and the lockfile — it
-  cannot run a bundler — so such a bump used to sit red on that gate until
-  someone ran `make dashboard` and pushed the output onto its branch.
+  gets one.** The build's output is committed (`static/dashboard`,
+  `static/artifacts` and `static/protocol`, the Makefile's `UI_OUT`) and the
+  `dashboard` job rebuilds and diffs it, but Dependabot edits only
+  `package.json` and the lockfile — it cannot run a bundler — so such a bump
+  used to sit red on that gate until someone ran `make dashboard` and pushed
+  the output onto its branch.
   [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml) is
   that someone: see [A dashboard bump brings its own
   bundle](#a-dashboard-bump-brings-its-own-bundle). Bumps that do not touch the
@@ -1200,22 +1208,37 @@ merge command on any diff that touches
 [`.github/workflows/dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)
 runs when Dependabot opens or updates a pull request that touches `dashboard/`.
 It does what the failing `dashboard` job tells a person to do — `make dashboard`
-— and, if `static/dashboard` came out different, commits the result onto
+— and, if any tree the build writes came out different, commits the result onto
 Dependabot's branch as `build(dashboard): rebuild the bundle for this dependency
 bump`, signed off like every other commit. ci.yml then runs on that new head and
 the drift gate that failed on the first commit passes on the second. A bump that
 leaves the output as it was pushes nothing.
 
+Which trees those are it reads from the Makefile's `UI_OUT` —
+`static/dashboard`, `static/artifacts` and `static/protocol` — rather than
+keeping a list of its own. A bump moves more than the dashboard: Vite 8.3.5
+rewrote the page runtime under `static/artifacts` as well, and while the
+workflow committed `static/dashboard` alone such a bump stayed red on the gate
+and never merged. A design-system bump moves `@crewlethq/artifact-kit` with the
+rest, and the workflow commits the new kit version's directory like any other
+output; the bump then fails `static/kit_test.go` until a person appends that
+version to its ledger, which is the ledger's job: a kit version joins what
+published pages may pin in a commit somebody reviewed.
+
 It is two jobs because one of them runs somebody else's code. `npm ci` and the
 bundler execute whatever a dependency published this week, so that job holds no
 secret and a read-only token, and passes the next job nothing but a directory of
 files. The second job holds the credential and runs only the runner's own tools
-and two of GitHub's own actions. It checks the bundle's file *names* against an
-allowlist, because `static/dashboard` sits inside the Go module and a stray
-`zz_test.go` would be run by every `go test ./...`, replaces the directory and
-pushes without `--force`, so a branch Dependabot has moved since the run began
-is refused rather than overwritten. A new kind of file in the bundle has to be
-added to that allowlist on purpose.
+and two of GitHub's own actions. It learns where it may write from its own
+checkout, never from the job that ran the bump's code: it reads `UI_OUT` as
+text, because running even `make` there would run the checkout beside the
+token, and refuses any tree that is not a directory directly under `static/`.
+It checks the bundle's file *names* against an allowlist, because every one of
+those trees sits inside the Go module and a stray `zz_test.go` would be run by
+every `go test ./...`; refuses a file outside the trees; replaces each tree the
+rebuild changed; and pushes without `--force`, so a branch Dependabot has moved
+since the run began is refused rather than overwritten. A new kind of file in
+the bundle has to be added to that allowlist on purpose.
 
 The push is made with a personal access token, not `GITHUB_TOKEN`: a push made
 with the workflow's own token leaves the pull request's runs waiting for someone

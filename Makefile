@@ -318,6 +318,13 @@ UI := dashboard
 # judges: the two package static embeds, and static/protocol, the wire
 # protocol alone, which internal/e2e replays frames through and no binary
 # carries.
+#
+# And every tree .github/workflows/dependabot-dashboard.yml commits for a
+# dependency bump, which reads it HERE rather than keep a list of its own: its
+# build job asks make, and its push job, which holds a token and so runs
+# nothing of this checkout, reads this line as TEXT. So it stays ONE
+# `UI_OUT :=` line of directories directly under static/; that job refuses
+# any other shape rather than guess at it.
 UI_OUT := static/dashboard static/artifacts static/protocol
 
 # npm ci rather than npm install: the lockfile is the pin, and `install` is
