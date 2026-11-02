@@ -333,23 +333,43 @@ func (e *Engine) fleetSitsOut(ctx context.Context, key string) (bool, error) {
 }
 
 // liveModelRows is every live node's published model rows, by node id; a node
-// whose heartbeat carried no status is absent.
+// whose heartbeat carried no status is absent. With no coordination store,
+// this node's own rows.
 func (e *Engine) liveModelRows(ctx context.Context) (map[string][]coord.ModelStatus, error) {
 	if e.backends == nil || e.backends.Coord == nil {
 		return map[string][]coord.ModelStatus{e.selfNode(): e.modelStatus(ctx)}, nil
+	}
+	statuses, err := e.liveStatuses(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]coord.ModelStatus, len(statuses))
+	for node, status := range statuses {
+		out[node] = status.Models
+	}
+	return out, nil
+}
+
+// liveStatuses is every live node's published heartbeat, by node id: one
+// listing of the presence leases. A node whose heartbeat carried no status is
+// absent, never a node with nothing to report; with no coordination store the
+// listing is empty, and a reader that needs this node's own rows reads them.
+func (e *Engine) liveStatuses(ctx context.Context) (map[string]coord.NodeStatus, error) {
+	if e.backends == nil || e.backends.Coord == nil {
+		return map[string]coord.NodeStatus{}, nil
 	}
 	leases, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string][]coord.ModelStatus, len(leases))
+	out := make(map[string]coord.NodeStatus, len(leases))
 	for _, lease := range leases {
 		status, ok := coord.StatusFromMeta(lease.Meta)
 		if !ok {
 			continue
 		}
 		node, _ := coord.ClassNode.Name(lease.Resource)
-		out[node] = status.Models
+		out[node] = status
 	}
 	return out, nil
 }

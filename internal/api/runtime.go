@@ -251,4 +251,11 @@ type NodeRuntime interface {
 	// (`POST /mcp-servers/{name}/retry`), which only the engine can tell
 	// every node.
 	MCPRestarter() mcpapi.Restarter
+
+	// LatestAlarms is this node's latest alarm evaluation, every kind it
+	// found standing with what it measured, nil before one has run or on a
+	// node that runs no state log: what the MCP servers answer carries of
+	// the MCP kinds, from the evaluation the health count, the gauge and the
+	// log lines were told, so the page cannot disagree with them.
+	LatestAlarms() []statelog.Alarm
 }

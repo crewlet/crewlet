@@ -19,6 +19,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // person is a signed-in person holding grants, proved an hour ago.
@@ -183,6 +184,13 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 				{Node: "node-b", Reason: "reason-sentinel: no answer within 2s"}},
 		}},
 	}
+	// AND THE MCP ALARMS STANDING ON THE NODE, whose details quote the
+	// failure and the wait a member's reading leaves out.
+	s.Alarms = func() []statelog.Alarm {
+		return []statelog.Alarm{{Kind: statelog.KindMCPServerPartial, Detail: "alarm-sentinel: github is down",
+			Remedy: "Fix it.", Entries: []statelog.AlarmEntry{{Key: "github", Since: down, Seat: "swe",
+				Detail: "alarm-sentinel: github is down"}}}}
+	}
 	// AND THE HISTORY the detail reads its usage and recent calls from, which
 	// a member's reading leaves out whole.
 	s, _ = withHistory(t, s)
@@ -224,8 +232,8 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 	}
 	leaks := map[string][]string{
 		"the list": {`"command":`, `"args":`, `"url":`, `"error":`, `"error_seat":`, `"wait":`,
-			`"wait_seat":`, `"unlisted_annotations":`, "docs-mcp", "--read-only", "github-mcp-server",
-			"10.0.0.5", "launch-sentinel", "Bearer rejected", "GITHUB_TOKEN"},
+			`"wait_seat":`, `"unlisted_annotations":`, `"alarms":`, "docs-mcp", "--read-only", "github-mcp-server",
+			"10.0.0.5", "launch-sentinel", "Bearer rejected", "GITHUB_TOKEN", "alarm-sentinel"},
 		"github's detail": {`"command":`, `"args":`, `"url":`, `"error":`, `"wait":`, `"said":`, `"reason":`,
 			`"instructions":`, `"dependants":`, `"keys":`, "github-mcp-server", "launch-sentinel",
 			"GITHUB_TOKEN", "said-sentinel", "wait-sentinel", "reason-sentinel", "instructions-sentinel",
@@ -325,7 +333,8 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 		without []string
 	}{
 		{"mcp_servers_status", status, queries.MemberMCPStatus(status), statusKeys,
-			[]string{"servers[].command", "servers[].nodes[].error", "servers[].nodes[].wait"}},
+			[]string{"servers[].command", "servers[].nodes[].error", "servers[].nodes[].wait", "alarms",
+				"alarms[].entries[].detail"}},
 		{"a server's detail", detail, queries.MemberMCPServer(detail), detailKeys,
 			[]string{"dependants", "instructions", "resolved.box_seats", "resolved.binding.keys",
 				"instances[].failure.said", "instance_nodes[].reason"}},

@@ -520,8 +520,8 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	if r.objects != nil {
 		r.objects(now, &out)
 	}
-	if r.models != nil {
-		r.models(ctx, now, &out)
+	if r.entries != nil {
+		r.entries(ctx, now, &out)
 	}
 	if r.feeds != nil {
 		r.feeds(now, &out)

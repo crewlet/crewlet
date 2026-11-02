@@ -30,6 +30,19 @@ export function knownKind(kind: ChatKind): boolean {
 }
 
 /**
+ * Whether only the people in the room may read it or write to it: a private
+ * room, and a direct conversation, which is the people in it.
+ *
+ * THE ENGINE'S OWN QUESTION, asked the engine's way (`privateRoom` in
+ * `internal/chatlet`, which its read gate `Visible` and its write gate
+ * `reachable` both ask). A screen that asked a narrower one, "is it private",
+ * would offer a box the engine refuses in a conversation the reader has left.
+ */
+export function membersOnly(kind: ChatKind): boolean {
+  return kind === "private" || isDirect(kind);
+}
+
+/**
  * Why a room of a kind this build cannot classify takes nothing from here:
  * the composer's reason and the membership note alike, so the one fact is
  * said one way wherever it holds a control.
