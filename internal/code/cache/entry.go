@@ -454,7 +454,8 @@ type incarnation struct {
 	// the tree, or the janitor listed it (listMemos); a boot's copy is not,
 	// until its first listing. memoUnlisted: the copy's last listing failed
 	// (code_cache_memo_unlisted), so the janitor lists it again only at its
-	// tick (listMemos); written under entry.mu. memoVersion moves with every
+	// tick (listMemos); written under entry.mu, and moved with the tree
+	// beside memoListed (carryMemo). memoVersion moves with every
 	// change to the record (setMemo) and memoStated is the version the state
 	// last written
 	// records, which the janitor writes again at its tick once they differ

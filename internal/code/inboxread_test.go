@@ -3,8 +3,10 @@ package code_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,15 +103,17 @@ func TestADeletedRepositorysNoticesHoldNoPageOfTheInboxBack(t *testing.T) {
 	}
 }
 
-// CODE NOTICES ARE HELD TO THE REPOSITORY GRANT: founder heard about a change
-// on the company's `web` and one on Sales' `visibility: unit` repository; read
-// as founder, the inbox holds both, each carrying what its change says; read
-// by a seat whose grant does not reach Sales' repository, only web's — the
-// page still a page of the notices it scanned, its cursor where the scan
-// stopped.
+// CODE NOTICES ARE HELD TO THE REPOSITORY GRANT, AND SO ARE THEIR CARDS:
+// founder heard about a change on the company's `web` and one on Sales'
+// `visibility: unit` repository; read as founder, the inbox holds both, each
+// carrying its change's title and no card, and the cards of both changes are
+// answered, each with its description; read by a seat whose grant does not
+// reach Sales' repository, only web's notice and web's card — the page still a
+// page of the notices it scanned, its cursor where the scan stopped.
 //
-// Mutation: keep every scanned notice whatever its repository — dev reads the
-// Sales change's notice, red.
+// Mutations: keep every scanned notice whatever its repository — dev reads the
+// Sales change's notice, red; answer every card a row holds whatever its
+// repository — dev reads the Sales change's card, red.
 func TestCodeNoticesAreHeldToTheRepositoryGrant(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -147,10 +151,31 @@ func TestCodeNoticesAreHeldToTheRepositoryGrant(t *testing.T) {
 		var out []string
 		for _, notice := range answer.Inbox.Notices {
 			out = append(out, notice.Repo)
-			if notice.Change == nil || notice.Change.Body != "Retry the upload once, not twice." ||
+			if notice.Change == nil || notice.Change.Title != "Retry the upload" || notice.Change.Body != "" ||
 				notice.ChangeID != opened[notice.Repo] {
-				t.Errorf("the notice of %s carries %+v, want its change and its description", notice.Repo,
+				t.Errorf("the notice of %s carries %+v, want its change's title and no card", notice.Repo,
 					notice.Change)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	cards := func(asker code.Principal) []string {
+		t.Helper()
+		answer, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadNoticeCards, Asker: asker,
+			NoticeCards: []string{opened["web"], opened["sales-private"]}})
+		if err != nil {
+			t.Fatalf("read the cards of both changes as %+v: %v", asker, err)
+		}
+		var out []string
+		for repo, id := range opened {
+			card, found := answer.NoticeCards[id]
+			if !found {
+				continue
+			}
+			out = append(out, repo)
+			if card == nil || card.Body != "Retry the upload once, not twice." {
+				t.Errorf("the card of %s's change carries %+v, want its description", repo, card)
 			}
 		}
 		slices.Sort(out)
@@ -159,21 +184,30 @@ func TestCodeNoticesAreHeldToTheRepositoryGrant(t *testing.T) {
 	if got := read(ada); !slices.Equal(got, []string{"sales-private", "web"}) {
 		t.Errorf("founder reads notices of %v, want both repositories'", got)
 	}
+	if got := cards(ada); !slices.Equal(got, []string{"sales-private", "web"}) {
+		t.Errorf("founder reads the cards of %v, want both repositories' changes'", got)
+	}
 	if got := read(dev); !slices.Equal(got, []string{"web"}) {
 		t.Errorf("dev reads founder's notices of %v, want web's alone — dev's grant does not reach Sales' "+
 			"repository", got)
 	}
+	if got := cards(dev); !slices.Equal(got, []string{"web"}) {
+		t.Errorf("dev reads the cards of %v, want web's change's alone — dev's grant does not reach Sales' "+
+			"repository", got)
+	}
 }
 
-// A CODE NOTICE CARRIES WHERE ITS CHANGE'S MERGE STANDS, judged at the read
-// as the change's own read judges it: founder heard about web!1 when dev
-// opened it, and the notice carries the readiness the change's read answers
-// ada — its counts and its first sentence — until the change is closed, when
-// a change that merges nothing carries none.
+// ONLY A CARD READ JUDGES WHERE A NOTICE'S CHANGE STANDS: founder heard about
+// web!1 when dev opened it. The inbox read's notice carries the change's title
+// and state and no readiness — the count of what waits and every list row are
+// drawn from it, and judge nothing. The change's card carries the readiness
+// the change's own read answers ada — its counts and its first sentence —
+// until the change is closed, when a change that merges nothing carries none.
 //
-// Mutations: carry no readiness on a notice — red; judge every change the
-// page names, the closed one too — red.
-func TestACodeNoticeCarriesItsChangesReadinessLine(t *testing.T) {
+// Mutations: judge the readiness on the inbox read's notices — the bare
+// notice carries one, red; carry no readiness on a card — red; judge every
+// change a card read names, the closed one too — red.
+func TestOnlyACardReadJudgesWhereANoticesChangeStands(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	n.chart = testChart()
@@ -191,7 +225,16 @@ func TestACodeNoticeCarriesItsChangesReadinessLine(t *testing.T) {
 		if err != nil || answer.Inbox == nil || len(answer.Inbox.Notices) == 0 {
 			t.Fatalf("read founder's code inbox: %+v, %v", answer.Inbox, err)
 		}
-		return answer.Inbox.Notices[0].Change
+		bare := answer.Inbox.Notices[0].Change
+		if bare == nil || bare.Title != "Retry the upload" || bare.Readiness != nil {
+			t.Fatalf("the inbox read's notice carries %+v, want the change's title and no readiness", bare)
+		}
+		cards, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadNoticeCards, Asker: ada,
+			NoticeCards: []string{answer.Inbox.Notices[0].ChangeID}})
+		if err != nil {
+			t.Fatalf("read the card of founder's notice: %v", err)
+		}
+		return cards.NoticeCards[answer.Inbox.Notices[0].ChangeID]
 	}
 	detail, err := readChange(t, n, ada, "", "web", opened.Number, 0, "")
 	if err != nil || detail.Change == nil || detail.Change.Readiness == nil {
@@ -203,13 +246,55 @@ func TestACodeNoticeCarriesItsChangesReadinessLine(t *testing.T) {
 		t.Fatalf("the change's read judges %+v, want a first sentence over its preconditions", want)
 	}
 	if got := notice(); got == nil || got.Readiness == nil || *got.Readiness != want {
-		t.Fatalf("an open change's notice carries %+v, want the readiness its change's read judges, %+v", got,
+		t.Fatalf("an open change's card carries %+v, want the readiness its change's read judges, %+v", got,
 			want)
 	}
 	closed, err := c.ProposeChange(t.Context(), closing(repo, opened.ChangeID, dev, opened.Version))
 	requireChanged(t, closed, err)
 	if got := notice(); got == nil || got.State != code.ChangeStateClosed || got.Readiness != nil {
-		t.Fatalf("a closed change's notice carries %+v, want it closed and with no readiness — it merges "+
+		t.Fatalf("a closed change's card carries %+v, want it closed and with no readiness — it merges "+
 			"nothing", got)
+	}
+}
+
+// A NOTICE_CARDS READ NAMES WHAT A PAGE CAN NAME, EACH CHANGE ONCE: none, more
+// than one page of an inbox can name, a change twice, an id in no change's
+// spelling, a cursor, a limit and a repository are each refused naming what
+// was wrong — the changes named are the read's rows, read across every
+// repository — and a read of a change no row holds answers no card.
+//
+// Mutation: drop the bound on how many changes a read names — a read of one
+// more than a page can name is answered, red.
+func TestANoticeCardsReadNamesWhatAPageCanNameEachChangeOnce(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := uuid.Must(uuid.NewV7()).String()
+	many := make([]string, code.MaxNoticeCards+1)
+	for i := range many {
+		many[i] = uuid.Must(uuid.NewV7()).String()
+	}
+	for _, tc := range []struct {
+		name, field string
+		q           code.ReadQuery
+	}{
+		{"no change", "notice_cards", code.ReadQuery{}},
+		{"past a page", "notice_cards", code.ReadQuery{NoticeCards: many}},
+		{"a change twice", "notice_cards", code.ReadQuery{NoticeCards: []string{id, id}}},
+		{"no change's id", "notice_cards", code.ReadQuery{NoticeCards: []string{"web!1"}}},
+		{"a cursor", "cursor", code.ReadQuery{NoticeCards: []string{id}, Cursor: "x"}},
+		{"a limit", "limit", code.ReadQuery{NoticeCards: []string{id}, Limit: 1}},
+		{"a repository", "repo", code.ReadQuery{NoticeCards: []string{id}, Repo: "web"}},
+	} {
+		tc.q.Kind, tc.q.Asker = code.ReadNoticeCards, ada
+		if _, err := n.reader.Read(t.Context(), tc.q); !errors.Is(err, code.ErrInvalid) ||
+			!strings.Contains(err.Error(), tc.field) {
+			t.Errorf("a notice_cards read naming %s = %v, want ErrInvalid naming %s", tc.name, err, tc.field)
+		}
+	}
+	answer, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadNoticeCards, Asker: ada,
+		NoticeCards: many[:code.MaxNoticeCards]})
+	if err != nil || len(answer.NoticeCards) != 0 {
+		t.Errorf("a notice_cards read of a page's worth of changes no row holds = (%+v, %v), want no card",
+			answer.NoticeCards, err)
 	}
 }

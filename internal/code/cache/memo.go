@@ -1665,6 +1665,13 @@ func (e *entry) memoStillDue(inc *incarnation) bool {
 // history from's answers were cut from. A tree that cannot be moved is logged
 // and left in from, and goes with it: to starts with none.
 //
+// THE TREE TAKES ITS LISTING WITH IT: whether every cohort on the disk is in
+// the record (memoListed), and whether its last listing failed
+// (memoUnlisted). A tree the janitor could not list is the same tree on the
+// same disk in to, so to is listed again at the janitor's tick alone, as from
+// was; leaving the mark behind would measure a failing disk again at the
+// first kicked pass after every swap and rebuild.
+//
 // NO SYNC: a memo is a cache of a cache. A crash that loses the rename leaves
 // the tree in from, the lower incarnation, which the boot moves aside; one
 // that keeps it before to's state records it leaves a tree to's first full
@@ -1696,13 +1703,13 @@ func (c *Cache) carryMemo(e *entry, from, to *incarnation) {
 		return
 	}
 	e.mu.Lock()
-	rec, listed := from.derived[DerivedMemo], from.memoListed
+	rec, listed, unlisted := from.derived[DerivedMemo], from.memoListed, from.memoUnlisted
 	c.setMemo(from, nil, false)
-	from.memoListed = true
+	from.memoListed, from.memoUnlisted = true, false
 	from.memoGen++
 	from.memoShut = true
 	c.setMemo(to, rec.Cohorts, true)
-	to.memoListed = listed
+	to.memoListed, to.memoUnlisted = listed, unlisted
 	e.mu.Unlock()
 	c.log.Info("code_cache_memo_carried", "repo", e.id, "from", from.n, "to", to.n, "bytes", rec.Bytes)
 }

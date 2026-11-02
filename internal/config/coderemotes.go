@@ -69,7 +69,7 @@ type CodeRemoteCredentials map[string]CodeRemoteCredential
 // CodeRemoteCredential is one declared variable: the hosts its value may be
 // sent to.
 type CodeRemoteCredential struct {
-	Hosts []string `yaml:"hosts" json:"hosts" js:"required" desc:"The hosts this variable's value may be sent to, each a host name or an IP address with an optional :port — github.com, gitlab.example.com:8443 — matched whole against a mirror's or an import's URL, its port included (443 where none is written): at least one, at most 16, each once."`
+	Hosts []string `yaml:"hosts" json:"hosts" js:"required" desc:"The hosts this variable's value may be sent to, each a host name or an IP address with an optional :port (github.com, gitlab.example.com:8443), matched whole against a mirror's or an import's URL, its port included (443 where none is written): at least one, at most 16, each once."`
 }
 
 // zero is a table that declares nothing.
@@ -117,7 +117,7 @@ func (c CodeRemoteCredentials) Refusal(url, credential string) string {
 		said = "the variables code.remote_credentials declares for it are " + strings.Join(forHost, ", ")
 	}
 	return fmt.Sprintf("the credential is no variable code.remote_credentials declares for %s, the host this "+
-		"remote's value would be sent to — %s: an administrator declares which variable may be sent to which "+
+		"remote's value would be sent to (%s): an administrator declares which variable may be sent to which "+
 		"host, so no other value the code host can resolve leaves for a host its writer chose",
 		remoteHostWords(r.Host, r.Port), said)
 }
@@ -150,7 +150,7 @@ func (c CodeRemoteCredentials) validate(path Path) error {
 			if !ok {
 				p.add(hostPath, ErrShape,
 					"%q is not a host a remote's https URL names: a host name or an IP address in its one "+
-						"written form, with an optional :port and nothing else — no scheme, user or path", h)
+						"written form, with an optional :port and nothing else, no scheme, user or path", h)
 				continue
 			}
 			if j, twice := first[key]; twice {

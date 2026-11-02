@@ -277,7 +277,8 @@ export const CODE_ALARM_KINDS = [
 /**
  * The most lines one blame names, its whole range (`code.MaxBlameLines`): the
  * Files tab's blame asks its lines a range at a time, each at most this many,
- * and the source reads earlier lines in steps of the same size. Held by
+ * forward and back (a file's own earlier lines step by `EARLIER_FILE_LINES`,
+ * `lib/code.ts`, a page's worth). Held by
  * `internal/code.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers`: a
  * wider range is refused, and a narrower one asks the engine more often than
  * it needs to.

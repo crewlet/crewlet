@@ -767,7 +767,8 @@ type RecordEnvelope struct {
 	// any kind rule, on a node that may not decode the payload at all.
 	Writer string `json:"writer,omitempty"`
 
-	// Scope is the complete set of objects this record's apply may write.
+	// Scope is every object this record's apply may write and every object
+	// its decide read (scope.go).
 	Scope Scope `json:"scope"`
 }
 

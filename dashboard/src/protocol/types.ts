@@ -5711,18 +5711,20 @@ export interface InboxPosition {
 }
 
 /** What a code notice carries of its change, read with the page
- *  (`code.NoticeChange`). */
+ *  (`code.NoticeChange`): its title, state and work item — and, where the
+ *  read asked for `cards`, what its card draws besides, read once the page
+ *  was composed for the notices it kept. */
 export interface CodeNoticeChange {
   title: string;
   state: string;
   work_item?: { backend: string; id: string; key: string; project?: string };
-  /** The description's first KiB; `body_cut` says there is more. */
+  /** The description's first KiB; `body_cut` says there is more. A card's. */
   body?: string;
   body_cut?: boolean;
-  /** The findings seats raised that stand open, by severity. */
+  /** The findings seats raised that stand open, by severity. A card's. */
   agent_findings?: Record<string, number>;
-  /** Where a live change's merge stands, judged at the read for its reader;
-   *  absent for a merged or closed change, which merges nothing. */
+  /** Where a live change's merge stands, judged for its reader; absent for a
+   *  merged or closed change, which merges nothing. A card's. */
   readiness?: CodeNoticeReadiness;
 }
 

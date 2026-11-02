@@ -10,6 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/inbox"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -116,5 +118,93 @@ func TestWorkletNoticesNeedWorklet(t *testing.T) {
 	}
 	if want := []string{"tracker", "code"}; !slices.Equal(sourcesOf(page), want) {
 		t.Errorf("the page read the sources %v, want %v", sourcesOf(page), want)
+	}
+}
+
+// THE CODE HOST IS ASKED THE CARDS OF THE NOTICES A PAGE KEEPS, AND ONLY FOR A
+// READ THAT DRAWS THEM: founder's code host holds two notices of web!1 and one
+// of web!2, its page read at code log position 9. Read with `cards`, the code
+// host is asked one `notice_cards` read of the two changes, each once, as the
+// caller and no older than its page, and each notice's change is its card;
+// read without, it is asked the inbox alone and the notices carry what the
+// page said.
+//
+// Mutations: read the cards whatever `cards` says — the bare read asks them,
+// red; floor the card read at the caller's own ask — it is asked with no
+// floor, red; leave the card out of its notice — the page carries the bare
+// change, red.
+func TestTheCodeHostIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2031, 4, 2, 9, 0, 0, 0, time.UTC)
+	page := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 9}
+	notice := func(record, change, ref string, minute int) code.InboxNotice {
+		return code.InboxNotice{RecordID: record, LogStream: topics.CodeLogStream, LogGeneration: 1,
+			LogSeq: uint64(minute), At: at.Add(time.Duration(minute) * time.Minute),
+			Reason: code.ReasonReviewRequested, Repo: "web", ChangeID: change, ChangeRef: ref,
+			Change: &code.NoticeChange{Title: "bare " + ref}}
+	}
+	read := func(params map[string]any) (inbox.Page, *stubCode) {
+		t.Helper()
+		host := &stubCode{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
+			switch q.Kind {
+			case code.ReadInbox:
+				return code.ReadAnswer{Level: q.Fresh.Level, Position: page, Inbox: &code.InboxPage{
+					Handle: q.Inbox.Handle, Notices: []code.InboxNotice{notice("c-3", "change-1", "web!1", 3),
+						notice("c-2", "change-2", "web!2", 2), notice("c-1", "change-1", "web!1", 1)}}}, nil
+			case code.ReadNoticeCards:
+				cards := map[string]*code.NoticeChange{}
+				for _, id := range q.NoticeCards {
+					cards[id] = &code.NoticeChange{Title: "card " + id, Body: "why " + id}
+				}
+				return code.ReadAnswer{Level: q.Fresh.Level, Position: page, NoticeCards: cards}, nil
+			}
+			return code.ReadAnswer{}, nil
+		}}
+		s := viewerSources(t, &stubWork{})
+		s.Code = host
+		got, err := askHolding(t, s, "ana", "inbox", params)
+		if err != nil {
+			t.Fatalf("inbox %v: %v", params, err)
+		}
+		composed, ok := got.(inbox.Page)
+		if !ok || len(composed.Notices) != 3 {
+			t.Fatalf("inbox %v answered %+v, want founder's three code notices", params, got)
+		}
+		return composed, host
+	}
+
+	composed, host := read(map[string]any{"cards": true})
+	var kinds []code.ReadKind
+	for _, q := range host.asked {
+		kinds = append(kinds, q.Kind)
+	}
+	if want := []code.ReadKind{code.ReadInbox, code.ReadNoticeCards}; !slices.Equal(kinds, want) {
+		t.Fatalf("a read drawing cards asked the code host %v, want %v", kinds, want)
+	}
+	cards := host.asked[1]
+	if !slices.Equal(cards.NoticeCards, []string{"change-1", "change-2"}) || cards.Asker.Seat != "ana" ||
+		!slices.Equal(cards.Fresh.Floors, []statelog.Position{page}) {
+		t.Errorf("the cards were asked %+v, want web!1's and web!2's once each, as ana, no older than the "+
+			"page at %s", cards, page)
+	}
+	for _, n := range composed.Notices {
+		said, ok := n.Extra.(code.InboxNotice)
+		if !ok || said.Change == nil || said.Change.Body != "why "+said.ChangeID ||
+			n.Subject.Title != "card "+said.ChangeID {
+			t.Errorf("the notice %s carries %+v titled %q, want its change's card", n.RecordID, n.Extra,
+				n.Subject.Title)
+		}
+	}
+
+	composed, host = read(nil)
+	if len(host.asked) != 1 || host.asked[0].Kind != code.ReadInbox {
+		t.Errorf("a read drawing no cards asked the code host %+v, want its inbox alone", host.asked)
+	}
+	for _, n := range composed.Notices {
+		said, ok := n.Extra.(code.InboxNotice)
+		if !ok || said.Change == nil || said.Change.Body != "" || n.Subject.Title != "bare "+said.ChangeRef {
+			t.Errorf("the notice %s of a read drawing no cards carries %+v, want what its page said", n.RecordID,
+				n.Extra)
+		}
 	}
 }

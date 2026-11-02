@@ -411,10 +411,9 @@ func TestTheDashboardStatesTheCodePolicysDefaults(t *testing.T) {
 // narrower.
 //
 // The Files tab asks a blame's lines a range at a time, each range
-// `CODE_MAX_BLAME_LINES` (`contract/code.ts`) wide, and reads a file's earlier
-// lines in steps of the same size: a range wider than [code.MaxBlameLines] is
-// refused by every blame it asks, and a narrower one asks the engine more
-// often than a file's lines need.
+// `CODE_MAX_BLAME_LINES` (`contract/code.ts`) wide, forward and back: a range
+// wider than [code.MaxBlameLines] is refused by every blame it asks, and a
+// narrower one asks the engine more often than a file's lines need.
 //
 // Mutation: change the bound on either side, and this fails.
 func TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers(t *testing.T) {

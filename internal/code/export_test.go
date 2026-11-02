@@ -288,6 +288,10 @@ func LandRecordRows(n int) int { return landRecordRows(n) }
 // QueueScope is the scope p's record names.
 func QueueScope(p QueueProposal) []string { return p.scope() }
 
+// ValidScope is the writer's check of a record's scope, which every record
+// this domain forms passes ([recordFor]).
+func ValidScope(paths []string) error { return validScope(paths) }
+
 // MergeRecordRows is the most rows one merge record makes its apply write
 // before its horizons.
 const MergeRecordRows = mergeRecordRows

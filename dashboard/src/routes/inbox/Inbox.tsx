@@ -212,16 +212,34 @@ export function Inbox() {
   const runs = useServicesRun();
   const backends = useBackends();
   const notices = bound && (runs.tracker || runs.code);
+  // EVERY LIST A ROW OPENS FROM ASKS FOR `cards`: what an opened code notice
+  // draws beyond the notice — the change's description, its open findings and
+  // where its merge stands — which the engine judges after it composes the
+  // page, for the notices the page keeps. A read that opens nothing (the
+  // Snoozed link's count below, the frame's badge, Home's Updates) asks for
+  // none, so it judges nothing.
   const updatesRead = useQuery(
     "inbox",
-    notices ? { handle: owner, limit: INBOX_PAGE, unread: true, snoozed: "exclude" } : undefined,
+    notices
+      ? { handle: owner, limit: INBOX_PAGE, unread: true, snoozed: "exclude", cards: true }
+      : undefined,
     { enabled: notices, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
   );
   usePageCoverage(updatesRead.data);
   // THE SNOOZED COUNT IS READ WHETHER OR NOT THE LIST IS OPEN, because the link
-  // says it; `only` IS WHAT WAS PUT OFF, and nothing else.
-  const snoozed = usePagedInbox(
+  // says it; `only` IS WHAT WAS PUT OFF, and nothing else. It draws no row, so
+  // it is read bare.
+  const snoozedCount = useQuery(
+    "inbox",
     notices ? { handle: owner, limit: INBOX_PAGE, snoozed: "only" } : undefined,
+    { enabled: notices, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
+  );
+  // THE SNOOZED LIST IS READ ONLY ONCE IT IS OPENED, with the cards its rows
+  // open onto.
+  const snoozed = usePagedInbox(
+    notices && snoozedOpen
+      ? { handle: owner, limit: INBOX_PAGE, snoozed: "only", cards: true }
+      : undefined,
     INBOX_POLL_MS,
     owner,
   );
@@ -229,7 +247,7 @@ export function Inbox() {
   // the read ones are listed (`earlierOf`).
   const earlier = usePagedInbox(
     notices && earlierOpen
-      ? { handle: owner, limit: INBOX_PAGE, unread: false, snoozed: "exclude" }
+      ? { handle: owner, limit: INBOX_PAGE, unread: false, snoozed: "exclude", cards: true }
       : undefined,
     INBOX_POLL_MS,
     owner,
@@ -560,8 +578,11 @@ export function Inbox() {
               onOpenChange: setSnoozedOpen,
             }}
             snoozedCount={
-              snoozed.first
-                ? { count: snoozed.first.notices.length, floor: Boolean(snoozed.first.next_cursor) }
+              snoozedCount.data
+                ? {
+                    count: snoozedCount.data.notices.length,
+                    floor: Boolean(snoozedCount.data.next_cursor),
+                  }
                 : null
             }
             earlier={{
@@ -595,6 +616,7 @@ export function Inbox() {
               (updatesRead.error ||
                 decisions.error ||
                 answeredRead.error ||
+                snoozedCount.error ||
                 snoozed.error ||
                 earlier.error) && (
                 <>
@@ -618,6 +640,14 @@ export function Inbox() {
                     error={answeredRead.error}
                     refusal={answeredRead.refusal}
                     detail={answeredRead.detail}
+                    loading={false}
+                  >
+                    {null}
+                  </QueryState>
+                  <QueryState
+                    error={snoozedCount.error}
+                    refusal={snoozedCount.refusal}
+                    detail={snoozedCount.detail}
                     loading={false}
                   >
                     {null}

@@ -271,3 +271,82 @@ func TestASourcesPageOfNoneStillMovesItsCursor(t *testing.T) {
 			code.asked, want)
 	}
 }
+
+// cardedSource is a fakeSource whose cards draw more than its notices carry:
+// each card is its notice with the excerpt "card", and every call records the
+// notices it was asked the cards of and the page it was handed.
+type cardedSource struct {
+	*fakeSource
+	carded [][]string
+	pages  []inbox.SourcePage
+}
+
+func (c *cardedSource) Cards(_ context.Context, page inbox.SourcePage, notices []inbox.Notice) ([]inbox.Notice,
+	error) {
+	c.pages = append(c.pages, page)
+	var asked []string
+	out := make([]inbox.Notice, 0, len(notices))
+	for _, n := range notices {
+		asked = append(asked, n.RecordID)
+		n.Excerpt = "card"
+		out = append(out, n)
+	}
+	c.carded = append(c.carded, asked)
+	return out, nil
+}
+
+// CARDS ARE READ AFTER THE CUT, AND ONLY WHERE THEY ARE ASKED: a page of three
+// over a tracker's notices at 9:50 and 9:30 and a code host's at 9:40, 9:20
+// and 9:10 takes the code host's 9:40 notice alone, though the code host
+// answered three. Asked for cards, the code host is asked the card of exactly
+// that one, once, handed the page it was read in — and the card stands in its
+// notice's place, its source named; the tracker, which draws none, is asked
+// nothing. Asked for none, the code host is asked no card at all.
+//
+// Mutations: ask a carded source for the cards of its whole page — the 9:20
+// and 9:10 notices the page cut are carded too, red; ask for cards whatever
+// the query says — the bare read asks them, red.
+func TestCardsAreReadAfterTheCutAndOnlyWhereAsked(t *testing.T) {
+	t.Parallel()
+	read := func(cards bool) (inbox.Page, *cardedSource) {
+		t.Helper()
+		tracker := noticesAt("tracker", "CREWLET_TRACKER_LOG", composeBase, 50, 30)
+		code := &cardedSource{fakeSource: noticesAt("code", "CREWLET_CODE_LOG", composeBase, 40, 20, 10)}
+		page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
+			Limit: 3, Cards: cards}, []inbox.Source{tracker, code})
+		if err != nil {
+			t.Fatalf("Compose: %v", err)
+		}
+		if want := []string{"tracker-50", "code-40", "tracker-30"}; !slices.Equal(ids(page), want) {
+			t.Fatalf("the composed page reads %v, want %v", ids(page), want)
+		}
+		return page, code
+	}
+
+	page, code := read(true)
+	if want := [][]string{{"code-40"}}; !slices.EqualFunc(code.carded, want, slices.Equal) {
+		t.Errorf("the code host was asked the cards of %v, want the notice the page took alone, %v", code.carded,
+			want)
+	}
+	if len(code.pages) != 1 || len(code.pages[0].Notices) != 3 {
+		t.Errorf("the code host was handed the pages %+v, want the one its notices were read in", code.pages)
+	}
+	for _, n := range page.Notices {
+		switch {
+		case n.Source == "code" && (n.Excerpt != "card" || n.RecordID != "code-40"):
+			t.Errorf("the page's code notice reads %+v, want its card in its place", n)
+		case n.Source == "tracker" && n.Excerpt != "":
+			t.Errorf("the tracker's notice %s was carded: %+v", n.RecordID, n)
+		}
+	}
+
+	page, code = read(false)
+	if len(code.carded) != 0 {
+		t.Errorf("a read that asks no cards asked the code host the cards of %v", code.carded)
+	}
+	for _, n := range page.Notices {
+		if n.Excerpt != "" {
+			t.Errorf("a read that asks no cards answers the card %+v", n)
+		}
+	}
+}

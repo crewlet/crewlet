@@ -133,10 +133,11 @@ const MaxDispatchRows = MaxRecordRows / 8
 
 // MaxDispatchBytes is the most one check_dispatched record's payload encodes
 // to: HALF of MaxRecordBytes, 522 240 bytes. The record's own frame — its
-// subject, scope, operation id and actor — is a few hundred bytes, so a
-// payload this size forms a record well inside MaxRecordBytes; and ONE HEAD'S
-// WHOLE DISPATCH ALWAYS FITS IT, so a head is never split between records: its
-// attempts' definitions are its target's checks file, at most
+// subject, operation id and actor, a few hundred bytes, and its scope, which
+// names each head's change and is at most MaxScopePaths paths, about 22 KB —
+// leaves a payload this size forming a record well inside MaxRecordBytes; and
+// ONE HEAD'S WHOLE DISPATCH ALWAYS FITS IT, so a head is never split between
+// records: its attempts' definitions are its target's checks file, at most
 // MaxChecksFileBytes (64 KiB) of YAML, which JSON writes in at most six bytes
 // a byte (`<` as <) — and a file of MaxChecksPerFile checks whose every
 // byte JSON writes six-fold encodes, with each attempt's own fields, well

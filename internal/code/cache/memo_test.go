@@ -1975,6 +1975,73 @@ func TestAFailedListingIsTriedAgainAtTheTick(t *testing.T) {
 	}
 }
 
+// A FAILED LISTING STILL WAITS FOR THE TICK AFTER A SWAP. A swap moves the
+// memo's tree whole into the next incarnation (carryMemo), and a tree whose
+// last listing failed is the same tree on the same disk there: so the next
+// incarnation is listed again at the janitor's tick alone, as the copy the
+// swap left was, and a kicked pass after the swap neither measures nor logs
+// it.
+//
+// Mutation: carry memoListed alone (carryMemo leaving the next incarnation's
+// memoUnlisted false): the first kicked pass after the swap measures the tree
+// again and logs code_cache_memo_unlisted a second time.
+func TestAFailedListingWaitsForTheTickAcrossASwap(t *testing.T) {
+	t.Parallel()
+	k := newCompactable(t, false)
+	w, repo := k.w, k.repo
+	memoize(t, k.c, k.held, memoKeys("unlisted", 2))
+	cache.JanitorTick(k.c) // the state records the answers' cohort
+	dir := k.held.Dir
+	k.held.Release()
+	// The cohort the state records renamed to one no state does, as a crash
+	// leaves one, so the boot's listing has entries to stat.
+	recorded := cache.MemoNewest(k.c)
+	if err := os.Rename(cache.MemoCohortDir(dir, recorded), cache.MemoCohortDir(dir, recorded+7)); err != nil {
+		t.Fatal(err)
+	}
+	var stats atomic.Int64
+	c := w.reopen(t, k.c, k.clk.on, func(o *cache.Options) {
+		cache.BeforeStatingMemo(o, func(string) error {
+			stats.Add(1)
+			return syscall.EIO
+		})
+	})
+	unlisted := func() int { return len(w.logs.lines(t, "code_cache_memo_unlisted")) }
+
+	cache.JanitorPass(c) // the boot's pass: the copy was never listed
+	if stats.Load() == 0 || unlisted() != 1 {
+		t.Fatalf("the boot's pass stat'ed %d entries and logged code_cache_memo_unlisted %d times, want the "+
+			"listing tried and logged once", stats.Load(), unlisted())
+	}
+	held := w.sync(t, c, repo) // a reader holds the copy, so the compaction swaps it
+	defer held.Release()
+	k.compact(t)
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	if s.Dir == held.Dir {
+		t.Fatalf("the compaction answered the copy a reader holds, %s: no swap", s.Dir)
+	}
+	if lines := w.logs.lines(t, "code_cache_memo_carried"); len(lines) != 1 {
+		t.Fatalf("code_cache_memo_carried = %v, want the swap's one line: the case needs the tree carried", lines)
+	}
+	if st, _ := cache.MemoOf(c, repo); st.Listed {
+		t.Fatalf("the next incarnation's memo is listed (%+v), want it unlisted, as the tree the swap carried was",
+			st)
+	}
+	before, logged := stats.Load(), unlisted()
+	cache.JanitorPass(c)
+	if got := stats.Load(); got != before || unlisted() != logged {
+		t.Errorf("a kicked pass after the swap stat'ed %d entries more and logged code_cache_memo_unlisted %d "+
+			"times more, want the carried tree left to the tick, as the copy the swap left was", got-before,
+			unlisted()-logged)
+	}
+	cache.JanitorTick(c)
+	if got := stats.Load(); got == before || unlisted() != logged+1 {
+		t.Errorf("the tick after the swap stat'ed %d entries more and logged code_cache_memo_unlisted %d times "+
+			"more, want the carried tree listed again and logged once more", got-before, unlisted()-logged)
+	}
+}
+
 // cohortLine is the reservation of cohort n as the cache's root holds it.
 func cohortLine(n uint64) string { return strconv.FormatUint(n, 10) + "\n" }
 

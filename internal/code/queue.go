@@ -1147,10 +1147,11 @@ func (c *Committer) queueWrite(repoID string, q *queued) {
 // before it runs, so a node holding a deferred record of any of it decides
 // none. An enqueue's gate reads the change's conversation and facts and the
 // repository's checks beside the repository; a LANDING proves each entry's
-// gate, so it names each entry's change beside them — and, past
-// [MaxScopePaths], the whole domain, which covers them all; a green and a
-// broken read the repository's checks; a dequeue, a candidate and an eject
-// read the repository's rows alone.
+// gate, so it names each entry's change beside them, EVERY ONE BY NAME and
+// never the whole domain, since a landing ends at most [MaxLandEntries]
+// entries and [MaxScopePaths] is sized past them; a green and a broken read
+// the repository's checks; a dequeue, a candidate and an eject read the
+// repository's rows alone.
 func (p QueueProposal) scope() []string {
 	repoID := p.RepoID()
 	switch {
@@ -1158,9 +1159,6 @@ func (p QueueProposal) scope() []string {
 		return []string{RepoPath(repoID), ChecksPath(repoID), ChangePath(p.Enqueue.ChangeID)}
 	case p.Land != nil:
 		scope := []string{RepoPath(repoID), ChecksPath(repoID)}
-		if len(scope)+len(p.Land.Entries) > MaxScopePaths {
-			return []string{DomainPath()}
-		}
 		for _, e := range p.Land.Entries {
 			scope = append(scope, ChangePath(e.ChangeID))
 		}
