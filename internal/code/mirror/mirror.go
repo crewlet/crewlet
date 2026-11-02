@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -101,17 +102,35 @@ type Pool interface {
 // anonymously — added (gitproc.Remote.WithHeader). An error is the attempt's.
 type Dial func(ctx context.Context, url, credential string) (gitproc.Remote, error)
 
-// Publisher is a node's event stream as a push announces itself on it:
-// queue.Queue satisfies it.
+// Publisher is a node's event stream as a push and an import's end announce
+// themselves on it: queue.Queue satisfies it.
 type Publisher interface {
 	Publish(ctx context.Context, subject string, ev *events.Event) error
 }
 
-// eventBudget bounds the announcement of one push: FIVE SECONDS, the
-// JetStream client's own request timeout, as every code-host announcement is
-// bounded (internal/code's checkEventBudget). The push has landed at the
-// other host by then, so nothing waits on it but the attempt's end.
+// eventBudget bounds one announcement — a push's (code_mirror_pushed) or an
+// import's end (code_imported): FIVE SECONDS, the JetStream client's own
+// request timeout, as every code-host announcement is bounded (internal/code's
+// checkEventBudget). What it accounts for has landed by then — at the other
+// host, or on the code log — so nothing waits on it but the attempt's end.
 const eventBudget = 5 * time.Second
+
+// announce publishes e — the account of something this node did for
+// repository repoID — on this node's event stream, bounded by [eventBudget]
+// and past the attempt's own context, since what it accounts for has already
+// landed; a stream that does not take it is logged as unpublished, with
+// detail, and what it accounts for stands. Events nil announces nothing.
+func (m *Mirrors) announce(ctx context.Context, repoID string, e *events.Event, unpublished, detail string) {
+	if m.o.Events == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), eventBudget)
+	defer cancel()
+	e.Source = m.o.NodeID
+	if err := m.o.Events.Publish(ctx, topics.Event(e.Type), e); err != nil {
+		m.log.Warn(unpublished, "repo", repoID, "error", err.Error(), "detail", detail)
+	}
+}
 
 // PushPace is the soonest a push mirror is pushed again after its last
 // attempt ended: ONE MINUTE, the home loop's backstop. A busy repository's
@@ -157,7 +176,8 @@ type Options struct {
 	// the seat's read away.
 	Roster func() code.Roster
 	// Events is this node's event stream, which a push's account
-	// (code_mirror_pushed) is published on; nil publishes none.
+	// (code_mirror_pushed) and an import's end (code_imported) are published
+	// on; nil publishes none.
 	Events Publisher
 	// Faults is nil in production (internal/code/codefault).
 	Faults codefault.Injector

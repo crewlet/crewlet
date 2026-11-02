@@ -823,6 +823,21 @@ first 16 in ref order beside the count of all of them, so that a first push of
 a repository of tens of thousands of refs is still one event the stream takes —
 the one durable account of what the company published, and when.
 
+Every import that ends is recorded there too, once, as `code_imported`, by
+the home that ended it: the repository, the source it came from (never the
+credential), whether it was a pull mirror's first fill, how many chunks
+landed, what the repository holds once it ended — its refs, the bytes of its
+live packs and its default branch — the import's error where it ended short
+of its source (a blob past `code.limits.max_blob_bytes`, say), and the end's
+position on the code log. The repository's row keeps only its latest import,
+and the push rows its chunks wrote (`via import`) name no source, so the event
+is where a repository's origin is kept; it stays out of the activity feed,
+where a person's import already is, as that person's `operator_acted`. An end
+its home did not hear applied — its answer pending, or the node gone before
+it published — is no event, and a stream that does not take the event within
+five seconds is logged `code_imported_unpublished`; the import stands either
+way. A pull mirror's syncs are no event: each is a push row `via mirror`.
+
 ---
 
 ## One subject per repository

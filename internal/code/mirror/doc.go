@@ -14,7 +14,13 @@
 // import's chunks and its end (code.ImportChunk, code.ImportDone,
 // Committer.ProposeImport) and a sync (code.MirrorSync,
 // Committer.ProposeMirrorSync). A push lands nothing here: it moves refs at
-// the other host, and its account is an event (code_mirror_pushed).
+// the other host, and its account is an event (code_mirror_pushed). An
+// import's end is the other account this package gives: once the home hears
+// it applied, one code_imported names the source, the chunks, the import's
+// error and what the repository holds then, read from the copy synced at or
+// past the end's record — the repository's row keeps only its latest import,
+// and its chunks' push rows name no source. A sync is no event: its push row
+// is.
 //
 // # One attempt, from the rows
 //

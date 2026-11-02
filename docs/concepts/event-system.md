@@ -566,6 +566,19 @@ code_mirror_pushed         # a repository's home pushed it to its push
                            # raises code_mirror_failing). STORED, NOT FED:
                            # the audit of what the company published
                            # (code-host.md, "Mirrors and imports")
+code_imported              # a repository's import ended, whole or short of
+                           # its source: repository by id and name, the
+                           # source's URL (never a credential), mirrored
+                           # for a pull mirror's first fill, the chunks
+                           # that landed, what the repository holds once it
+                           # ended — refs, live bytes, default branch — the
+                           # import's error where it ended short, and the
+                           # end's position on the code log. Published ONCE
+                           # an import, by the home git node that proposed
+                           # the end and heard it applied; a sync is none.
+                           # STORED, NOT FED: where a repository came from;
+                           # its row keeps only its latest import
+                           # (code-host.md, "Mirrors and imports")
 code_expunged              # an expunge's commit applied: repository by id
                            # and name, the person's purge it served (none
                            # for the weekly schedule), the expunge's id, the
