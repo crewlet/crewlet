@@ -160,3 +160,15 @@ func Together(evs []*events.Event) []*events.Event {
 	}
 	return out
 }
+
+// Waiting is the mail a subscription holds that no handler is running on yet
+// ([EventQueue.Waiting]), per mailbox: Priority on a laned topic's priority
+// lane, Background on the topic itself. A topic with no lane counts
+// everything as Background.
+type Waiting struct {
+	Priority   int
+	Background int
+}
+
+// Total is everything waiting, in both mailboxes.
+func (w Waiting) Total() int { return w.Priority + w.Background }

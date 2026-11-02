@@ -236,6 +236,12 @@ type agentLive struct {
 	// it, its own reorder guard. See provider.go.
 	providerLimit   *ProviderLimit
 	providerLimitAt stamp
+
+	// waiting is what waits in the seat's inbox, as the node holding it
+	// last reported, and waitingFrom that reporter: only its own later
+	// report, or its silence, clears it. See waiting.go.
+	waiting     *Waiting
+	waitingFrom string
 }
 
 // overlay renders the seat's own fields. Its state is the projection's to
@@ -253,6 +259,7 @@ func (a *agentLive) overlay() Overlay {
 		LastTurn:         a.lastTurn.clone(),
 		Paused:           a.paused.clone(),
 		ProviderLimit:    a.providerLimit.clone(),
+		Waiting:          a.waiting.clone(),
 	}
 }
 
@@ -368,6 +375,11 @@ type LiveState struct {
 	// budgetAt is when the held report was read, the guard against a
 	// delayed report from another node. Internal, never re-emitted.
 	budgetAt stamp
+
+	// reporters is every node incarnation whose inbox counts the projection
+	// holds, with the seats it last listed and when it was last heard. See
+	// waiting.go.
+	reporters map[string]*waitingReporter
 
 	// seededFrom is which nodes the startup seed read, nil until a seed
 	// ran. See [LiveState.SeededFrom].
@@ -602,6 +614,12 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 	// figures the counter left behind long ago as the current ones.
 	if env.Type == "budget_meters" {
 		return s.applyBudget(*env, payload)
+	}
+	// What waits in the seats' inboxes, as each holding node reads it.
+	// Stream-only for the same reason: a report supersedes its reporter's
+	// last. See waiting.go.
+	if env.Type == "seat_inbox_waiting" {
+		return s.applyWaiting(payload)
 	}
 
 	// The in-flight call is stream-only: update it, but never let it into

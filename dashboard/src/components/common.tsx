@@ -61,6 +61,7 @@ import {
   type SeatKind,
 } from "~/lib/seats.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
+import { InboxWaitingTags } from "~/components/InboxWaitingTags.tsx";
 import type { AgentRow, FeedRow, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
@@ -204,8 +205,14 @@ export function SeatCard({
           // circle was the outline said twice; the word stays for a
           // screen reader, which does not see the outline.
           <span className="sr-only">human</span>
-        ) : stateInHeading ? null : (
-          <StateBadge agent={agent} />
+        ) : (
+          <>
+            {stateInHeading ? null : <StateBadge agent={agent} />}
+            {/* WHAT WAITS IN THE SEAT'S INBOX, beside its state: a parked,
+                paused or idle seat with a backlog behind it says so here,
+                where Live, which lists only working seats, cannot. */}
+            <InboxWaitingTags waiting={agent?.waiting} />
+          </>
         )}
       </div>
       <div className="seat-line truncate">{stateLine(agent, { now, seat, nameOf })}</div>
