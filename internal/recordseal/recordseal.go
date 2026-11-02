@@ -25,6 +25,12 @@
 // the rule is the graph itself: a package that seals imports this, and a
 // package that links the state log does so because it reads a log.
 //
+// The leaf is held, not declared: TestTheRecordSealLinksNothingOfTheEngine
+// reads what this package links and refuses every path of the module but its
+// own. One engine import here is one more graph in everything that seals, and
+// no test downstream would name it — the sandbox's refuses the state log, the
+// configuration and the code host, not the next package somebody reaches for.
+//
 // # Why the framework seals and not each domain
 //
 // The broker's admission is no authority over a record. An embedded fleet's
