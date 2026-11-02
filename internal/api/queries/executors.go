@@ -237,7 +237,7 @@ func (s Sources) executorRows(ctx context.Context, p Params) (any, error) {
 		if filtered && !putTo(run, who) {
 			continue
 		}
-		out = append(out, serialiseRun(run, reach(run), s.answeredBy(run)))
+		out = append(out, serialiseRun(run, reach(run), s.opened(run)))
 	}
 	return map[string]any{"runs": out}, nil
 }
@@ -366,6 +366,8 @@ var runKeys = map[string]runShown{
 	"question":            runQuestion,
 	"question_context":    runQuestion,
 	"decision":            runQuestion,
+	"held_call":           runQuestion, // the tool and server a held call names, never its arguments
+	"held_arguments":      runBody,     // what the held call would send: the seat's trail
 	"audience":            runStatus,
 	"audience_handles":    runStatus,
 	"audience_fallback":   runStatus,
@@ -398,8 +400,8 @@ var runKeys = map[string]runShown{
 //
 // A KEY THE TABLE DOES NOT NAME IS WITHHELD, which the walk keeps unreachable:
 // left out is the direction a mistake here has to fail in.
-func serialiseRun(run sandbox.PendingRun, r livestate.Reach, answeredBy string) map[string]any {
-	row := runRow(run, answeredBy)
+func serialiseRun(run sandbox.PendingRun, r livestate.Reach, opened runOpened) map[string]any {
+	row := runRow(run, opened)
 	asked := r.Record != "" && slices.Contains(run.AudienceHandles, r.Record)
 	for key := range row {
 		switch runKeys[key] {
@@ -428,10 +430,41 @@ func serialiseRun(run sandbox.PendingRun, r livestate.Reach, answeredBy string) 
 	return row
 }
 
+// runOpened is what a row reads out of a run's seals ([Sources.opened]): who
+// gave its recorded answer, and the arguments of a call it holds for a
+// person's approval.
+type runOpened struct {
+	answeredBy string
+	heldArgs   map[string]any
+}
+
+// opened is what run's seals open to on this node: empty where a seal does not
+// open here, as each reader of one answers it.
+func (s Sources) opened(run sandbox.PendingRun) runOpened {
+	return runOpened{answeredBy: s.answeredBy(run), heldArgs: s.heldArguments(run)}
+}
+
+// heldArguments is what the call run holds for a person's approval would
+// send, opened from its seal, nil for a run that holds none or whose seal does
+// not open here.
+func (s Sources) heldArguments(run sandbox.PendingRun) map[string]any {
+	if run.HeldCall == nil || s.HeldCalls == nil {
+		return nil
+	}
+	args, err := s.HeldCalls.OpenArguments(run.TurnID, *run.HeldCall)
+	if err != nil {
+		log.Warn("held_call_arguments_unopened", "turn_id", run.TurnID, "held_call", run.HeldCall.ID,
+			"error", err.Error())
+		return nil
+	}
+	return args
+}
+
 // runRow is every fact an executor's row carries, whoever reads it — see
-// [serialiseRun] for what each reader is shown of it. answeredBy is who gave
-// the run's recorded answer, as its seal opens ([Sources.answeredBy]).
-func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
+// [serialiseRun] for what each reader is shown of it. opened is what its
+// seals open to ([Sources.opened]).
+func runRow(run sandbox.PendingRun, opened runOpened) map[string]any {
+	answeredBy := opened.answeredBy
 	// HELD, NOT STAMPED. A box parked on a question is being paid for
 	// whether or not the pause instant reached the row, and drawing the raw
 	// stamp showed exactly that box as a live one — the one reading that
@@ -439,7 +472,7 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 	// acts on ([sandbox.PendingRun.HeldSince]), so the screen and the
 	// reclaim cannot disagree about which boxes are held.
 	heldSince, _ := run.HeldSince()
-	return withDecision(run, map[string]any{
+	return withHeld(run, opened, withDecision(run, map[string]any{
 		"turn_id": run.TurnID,
 		// The unit of work behind that run, so a board row links back to
 		// the trigger rather than only to the one execution that detached.
@@ -541,7 +574,7 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		// draws "not shown to you" over a run's task rather than a run that
 		// was asked nothing. Set by [serialiseRun].
 		"body_withheld": false,
-	})
+	}))
 }
 
 // withDecision adds the choice a run's question offers to its row, and leaves
@@ -550,6 +583,23 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 func withDecision(run sandbox.PendingRun, row map[string]any) map[string]any {
 	if run.Decision != nil {
 		row["decision"] = run.Decision
+	}
+	return row
+}
+
+// withHeld adds the call a run holds for a person's approval to its row
+// (ADR-0077): `held_call`, the call its question is about, which the audience
+// reads with the question, and `held_arguments`, what the call would send,
+// opened from their seal (null where it does not open here), which only a
+// reader of the seat's trail reads: an administrator or the seat's lead, who
+// are who may approve it. Both ABSENT on a run that holds none.
+func withHeld(run sandbox.PendingRun, opened runOpened, row map[string]any) map[string]any {
+	if held := run.HeldCall; held != nil {
+		row["held_call"] = map[string]any{
+			"id": held.ID, "server": held.Server, "tool": held.Tool, "raw": held.Raw,
+			"digest": held.Digest, "held_at": isoOrEmpty(held.HeldAt),
+		}
+		row["held_arguments"] = opened.heldArgs
 	}
 	return row
 }

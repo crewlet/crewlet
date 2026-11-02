@@ -270,4 +270,10 @@ type NodeRuntime interface {
 	// MCPValues is the secret store a server's value is sealed in, under
 	// the engine's keyring.
 	MCPValues() mcpapi.ValueStore
+
+	// MCPApprovals finds a call held for a person's approval on the
+	// fleet's runs and puts its answer on the control topic of the seat
+	// holding the run (`POST /mcp-approvals/{id}`), nil on a node that
+	// holds no fleet store.
+	MCPApprovals() mcpapi.Approvals
 }

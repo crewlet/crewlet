@@ -214,18 +214,25 @@ interface McpShadowedTool {
  * been down that long. `mcp_server_waiting_long`: an agent's instance has been
  * held back past a provisioning pass for a credential that pass mints.
  * `mcp_tools_refused`: a tool cannot be offered under its name.
+ * `mcp_approval_waiting`: an agent's run has waited past the grace for a
+ * person to approve a call to one of the server's tools.
  */
 export type McpAlarmKind =
-  "mcp_server_failing" | "mcp_server_partial" | "mcp_server_waiting_long" | "mcp_tools_refused";
+  | "mcp_server_failing"
+  | "mcp_server_partial"
+  | "mcp_server_waiting_long"
+  | "mcp_tools_refused"
+  | "mcp_approval_waiting";
 
 /**
  * The one gesture that fixes a server's alarm. `restart`: restart its
  * instances now (`POST /mcp-servers/{name}/retry`), only the named agent's
  * where `seat` names one. `integration`: the integration that mints the named
  * agent's credential, which the server's binding names. `edit`: the server's
- * configuration, its `tool_prefix`.
+ * configuration, its `tool_prefix`. `approve`: the calls the named agent's run
+ * holds for approval on the server, each in `approvals`.
  */
-export type McpFixKind = "restart" | "integration" | "edit";
+export type McpFixKind = "restart" | "integration" | "edit" | "approve";
 
 /** The gesture that fixes one server's alarm, and what it acts on. */
 interface McpFix {
@@ -283,6 +290,42 @@ export interface McpServersStatusAnswer {
    * node that runs no state log, which evaluates no alarm.
    */
   alarms: McpAlarm[];
+  /**
+   * The calls agents' runs hold for a person's approval, the longest waiting
+   * first: each while its run waits, and once answered until the run carries
+   * on. The administrator's reading alone.
+   */
+  approvals: McpApproval[];
+}
+
+/** Where a held call's answer stands. */
+type McpApprovalStatus = "waiting" | "answered";
+
+/** One call to a tool at Needs approval, held for a person's answer (`POST /mcp-approvals/{id}`). */
+interface McpApproval {
+  /** What the approval is answered by. */
+  id: string;
+  /** When the call was held. */
+  at: string;
+  server: string;
+  /** The tool as the run called it, its prefix applied. */
+  tool: string;
+  /** The server's own name for it, which Always allow sets the level of. */
+  raw: string;
+  digest: string;
+  /** The agent whose run made the call, by handle. */
+  seat: string;
+  turn_id: string;
+  launch_id: string;
+  /** The key of the work item the run was on, or null. */
+  item: string | null;
+  /** What the call would send; null where its seal does not open on this node. */
+  args: Record<string, unknown> | null;
+  status: McpApprovalStatus;
+  /** `once`, `always` or `deny` once answered; "" while waiting or where the answer's seal does not open. */
+  answer: string;
+  answered_by: string;
+  answered_at: string | null;
 }
 
 /**
@@ -369,8 +412,11 @@ export interface McpToolView {
   custom: boolean;
 }
 
-/** The level a tool of an MCP server runs at: `allow` offers it, `blocked` never does. */
-type McpToolLevel = "allow" | "blocked";
+/**
+ * The level a tool of an MCP server runs at: `allow` offers it, `approve`
+ * offers it and holds each call for a person's answer, `blocked` never offers it.
+ */
+type McpToolLevel = "allow" | "approve" | "blocked";
 
 /** What the server said of itself in its handshake. */
 interface McpServerInfo {
@@ -589,8 +635,12 @@ export interface McpServerAnswer {
   tools: McpToolView[];
   /** How many tools the server lists; never fewer than `tools` holds. */
   tool_count: number;
-  /** The level of every tool `tools.levels` does not name. */
-  baseline: McpToolLevel;
+  /**
+   * The level of every tool `tools.levels` does not name, or null where the
+   * entry sets no default, which leaves each such tool at the level its hints
+   * start it at (allow for a read-only tool, approve for every other).
+   */
+  baseline: McpToolLevel | null;
   /** Tools `tools.levels` names that no live listing names; empty where the listings cannot say. */
   unlisted_levels: string[];
   server_info: McpServerInfo | null;

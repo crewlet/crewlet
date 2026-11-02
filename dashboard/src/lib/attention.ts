@@ -578,6 +578,13 @@ const MCP_ALARM_WORDS: Record<
     title: (e) => `Some of ${e.key}'s tools are not offered`,
     detail: () => "Their names do not fit, so no agent is offered them until they are renamed.",
   },
+  mcp_approval_waiting: {
+    severity: "caution",
+    icon: "clock",
+    title: (e) =>
+      e.seat ? `${e.seat} is waiting for approval to use ${e.key}` : `A call to ${e.key} is waiting for approval`,
+    detail: () => "Its run is parked until somebody allows or denies the call.",
+  },
 };
 
 /**

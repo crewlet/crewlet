@@ -288,6 +288,11 @@ export const ALARM: Record<
     title: ({ server, count }) =>
       count === 1 ? `1 ${server} tool is not offered` : `${count} ${server} tools are not offered`,
   },
+  mcp_approval_waiting: {
+    tone: "warning",
+    title: ({ server, who }) =>
+      who ? `${who} is waiting for your approval` : `A call to ${server} is waiting for approval`,
+  },
 };
 
 /** Each fix's button, where the page itself carries it out. */
@@ -295,6 +300,7 @@ export const FIX: Record<McpFixKind, string> = {
   restart: "Restart",
   integration: "See its sign-in",
   edit: "See which tools",
+  approve: "Open the Inbox",
 };
 
 /**

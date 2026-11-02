@@ -29,9 +29,10 @@ import (
 // classify `task_description` or `provider_key` as status and it goes red too.
 func TestEveryExecutorRowKeyIsClassified(t *testing.T) {
 	t.Parallel()
-	// A RUN THAT ASKED WITH A CHOICE, because `decision` is the one key the
-	// row leaves out rather than sends empty (absent, never null).
-	row := runRow(sandbox.PendingRun{Decision: &decision.Decision{}}, "")
+	// A RUN THAT ASKED WITH A CHOICE, about a call it holds, because
+	// `decision`, `held_call` and `held_arguments` are the keys the row
+	// leaves out rather than sends empty (absent, never null).
+	row := runRow(sandbox.PendingRun{Decision: &decision.Decision{}, HeldCall: &sandbox.HeldCall{}}, runOpened{})
 	for key := range row {
 		shown, ok := runKeys[key]
 		if !ok {
@@ -53,6 +54,8 @@ func TestEveryExecutorRowKeyIsClassified(t *testing.T) {
 		"reply":            runBody,
 		"bridge_calls":     runBody,
 		"question":         runQuestion,
+		"held_call":        runQuestion,
+		"held_arguments":   runBody,
 		"work_item":        runTracker,
 		"provider_key":     runConfig,
 	} {
@@ -71,8 +74,9 @@ func TestEveryExecutorRowKeyIsClassified(t *testing.T) {
 func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 	t.Parallel()
 	run := sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe",
-		AudienceHandles: []string{"ana"}, Decision: &decision.Decision{}}
-	status := serialiseRun(run, livestate.Reach{}, "")
+		AudienceHandles: []string{"ana"}, Decision: &decision.Decision{},
+		HeldCall: &sandbox.HeldCall{ID: "held-1", Server: "tracker", Tool: "tr_close_issue"}}
+	status := serialiseRun(run, livestate.Reach{}, runOpened{})
 	for key := range status {
 		if runKeys[key] != runStatus {
 			t.Errorf("a reader with no reach was shown %q, which is not status", key)
@@ -81,7 +85,7 @@ func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 	if status["body_withheld"] != true {
 		t.Errorf("body_withheld = %v for a reader shown no body", status["body_withheld"])
 	}
-	whole := serialiseRun(run, livestate.Reach{Body: true, Tracker: true, Config: true}, "")
+	whole := serialiseRun(run, livestate.Reach{Body: true, Tracker: true, Config: true}, runOpened{})
 	if got, want := slices.Sorted(maps.Keys(whole)), slices.Sorted(maps.Keys(runKeys)); !slices.Equal(got, want) {
 		t.Errorf("a reader with every reach was shown %v, want every key %v", got, want)
 	}
@@ -115,7 +119,7 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 	}
 	run.Answer = &answer
 	sources := Sources{RunAnswers: seal}
-	row := runRow(run, sources.answeredBy(run))
+	row := runRow(run, sources.opened(run))
 	if got := row["answer_ids"]; !slices.Equal(got.([]string), []string{"a1"}) {
 		t.Errorf("answer_ids = %v, want the recorded answer's delivery", got)
 	}
@@ -138,7 +142,7 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 		t.Errorf("a node with no seal names %q as the answerer, want nobody", by)
 	}
 	unanswered := sandbox.PendingRun{TurnID: "t2", Status: sandbox.StatusAwaiting}
-	empty := runRow(unanswered, sources.answeredBy(unanswered))
+	empty := runRow(unanswered, sources.opened(unanswered))
 	if got := empty["answer_ids"]; got == nil || len(got.([]string)) != 0 || empty["answered_by"] != "" {
 		t.Errorf("a run with no recorded answer shows %v by %v, want empty", got, empty["answered_by"])
 	}

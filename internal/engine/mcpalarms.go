@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"cmp"
 	"maps"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -73,4 +75,39 @@ func mcpConditions(c *Company, statuses map[string]coord.NodeStatus) []statelog.
 		out = append(out, cond)
 	}
 	return out
+}
+
+// heldConditions lays the calls the fleet's runs hold for a person's approval
+// over each server's condition (ADR-0077): how many still wait on an answer,
+// and the one waiting longest, ties to the lower turn id so every data node
+// names the same one. A call already answered, or whose run is not parked on
+// it, waits on nobody; a server no condition names (turned off, or not this
+// revision's) raises nothing.
+//
+// OFF THE RUNS, NOT THE HEARTBEAT: a held call is a run's question, on the
+// run's row in the coordination store, which every node reads alike.
+func heldConditions(conds []statelog.MCPServerCondition, runs []sandbox.PendingRun) {
+	at := make(map[string]int, len(conds))
+	for i := range conds {
+		at[conds[i].Server] = i
+	}
+	runs = slices.Clone(runs)
+	slices.SortFunc(runs, func(a, b sandbox.PendingRun) int { return cmp.Compare(a.TurnID, b.TurnID) })
+	for _, run := range runs {
+		held := run.HeldCall
+		if held == nil || held.LaunchID != run.LaunchID || run.Answer != nil ||
+			!slices.Contains(sandbox.Awaiting, run.Status) {
+			continue
+		}
+		i, ok := at[held.Server]
+		if !ok {
+			continue
+		}
+		cond := &conds[i]
+		cond.Approvals++
+		if datedBefore(held.HeldAt, cond.ApprovalSince) {
+			cond.ApprovalSince = held.HeldAt
+			cond.Approval = statelog.MCPApprovalNote{Seat: run.AgentHandle, Tool: held.Tool}
+		}
+	}
 }

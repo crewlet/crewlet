@@ -38,9 +38,11 @@ mcp_servers:
     url: https://mcp.linear.example/mcp
     shared: false
     headers: {X-Org: "${LINEAR_ORG}"}
+    tools: {default: allow}
   - name: search
     command: search-mcp
     env: {SEARCH_KEY: "${SEARCH_KEY}", SHARED_TOKEN: "${SHARED_TOKEN}"}
+    tools: {default: allow}
 roles:
   - name: PM
     handle: pm
@@ -342,6 +344,7 @@ mcp_servers:
   - name: search
     command: search-mcp
     env: {SEARCH_KEY: "${SEARCH_KEY}", SHARED_TOKEN: "${SHARED_TOKEN}", ORG: "${LINEAR_ORG}"}
+    tools: {default: allow}
 roles:
   - name: PM
     handle: pm

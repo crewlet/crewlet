@@ -172,7 +172,7 @@ type CheckedTool struct {
 	External     bool     `json:"external"`
 	// StartingLevel is the level the tool starts at when the server is
 	// added ([mcp.StartingLevel]).
-	StartingLevel mcp.StartLevel `json:"starting_level"`
+	StartingLevel mcp.Level `json:"starting_level"`
 	// Refused is why it would not be offered under its name, "" when it
 	// would.
 	Refused mcp.NameRefusal `json:"refused"`

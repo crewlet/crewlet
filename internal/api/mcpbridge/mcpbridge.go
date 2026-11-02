@@ -391,6 +391,11 @@ type Call struct {
 	// resolved: one made after the run's tools closed, or whose arguments
 	// did not parse.
 	Source string
+
+	// Held marks a call to a tool at Needs approval that the seat's surface
+	// recorded as the run's question rather than made
+	// ([toolloop.ToolResult.Held], ADR-0077): the call that ends the job.
+	Held bool
 }
 
 // Bridge holds the live sessions and the signer that admits them.
@@ -1566,11 +1571,18 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 	if after := fence(s); after != nil {
 		o.stop(after)
 	}
+	recorded := args
+	if res.Held {
+		// A HELD CALL'S ARGUMENTS ARE NOT LOGGED: they ride the run's row
+		// sealed beside its question (ADR-0077), and the call log is
+		// read in the clear by everybody who reads the seat's trail.
+		recorded = nil
+	}
 	o.record(Call{
-		Call: tools.Call{Name: in.Name, Args: args, Output: res.Output, Failed: res.Failed,
+		Call: tools.Call{Name: in.Name, Args: recorded, Output: res.Output, Failed: res.Failed,
 			Cause: res.Cause},
 		Seq: seq, StartedAt: started.UTC(), Duration: took,
-		Origin: res.Origin, Server: res.Server, Source: res.Source,
+		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
 	})
 	return toolsession.Result{Output: res.Output, Failed: res.Failed}
 }

@@ -303,6 +303,12 @@ type Sources struct {
 	// does not open here, leaves a row's `answered_by` empty.
 	RunAnswers *sandbox.AnswerSeal
 
+	// HeldCalls opens the arguments of a call a run holds for a person's
+	// approval (ADR-0077), for a reader who may approve it: an executor
+	// row's `held_arguments` and the MCP answer's `approvals`. Nil, or a
+	// seal that does not open here, answers them null.
+	HeldCalls *sandbox.CallSeal
+
 	// ExecutorTail is a running executor's live output, ANSWERED BY THE
 	// NODE THAT OWNS THE RUN (internal/sandbox/livetail.go): the box is
 	// reachable only through the node driving it, and what it has said so

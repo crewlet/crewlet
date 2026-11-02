@@ -59,7 +59,7 @@ providers:
       model: claude-sonnet-5
 mcp_servers:`+
 		levelledStandIn("tracker", true, []string{"list_items", "delete_items"},
-			"{levels: {delete_items: blocked}}")+
+			"{default: allow, levels: {delete_items: blocked}}")+
 		levelledStandIn("docs", false, []string{"read_doc", "erase_doc"},
 			"{default: blocked, levels: {read_doc: allow}}")+`
 roles:
@@ -247,9 +247,10 @@ func TestABlockedToolIsNotOfferedListedOrCallableThroughTheRelayOrTheBridge(t *t
 // A BOX IS GIVEN NO SERVER THAT HOLDS A TOOL BACK. The harness in a box dials
 // a server it is given itself, past the engine, so a level could not hold
 // there: a server any tool of which is at a level other than allow is left
-// out of the box, whatever the seat's listing says. Admission refuses the
-// listing, so a stored revision is what carries one. A server whose levels
-// all allow is given as ever.
+// out of the box, whatever the seat's listing says, and so is one whose entry
+// sets no default, whose tools start at the levels their hints give them,
+// most at approve. Admission refuses the listing, so a stored revision is what
+// carries one. A server whose default and levels all allow is given as ever.
 //
 // Mutation: drop the check from sandboxMCP, and this is red.
 func TestABoxIsGivenNoServerThatHoldsAToolBack(t *testing.T) {
@@ -264,27 +265,32 @@ providers:
 mcp_servers:
   - {name: tracker, command: tracker-server, tools: {levels: {delete_items: blocked}}}
   - {name: billing, command: billing-server, tools: {default: blocked}}
-  - {name: notes, command: notes-server, tools: {levels: {read_note: allow}}}
+  - {name: notes, command: notes-server, tools: {default: allow, levels: {read_note: allow}}}
+  - {name: search, command: search-server}
+  - {name: wiki, command: wiki-server, tools: {default: allow, levels: {edit_page: approve}}}
 roles:
   - {name: CEO, handle: ceo, llm: zulu}
 `)
-	gate := &org.RoleSandbox{MCP: org.RoleSandboxMCP{Servers: []string{"tracker", "billing", "notes"}}}
+	gate := &org.RoleSandbox{MCP: org.RoleSandboxMCP{Servers: []string{"tracker", "billing", "notes", "search", "wiki"}}}
 	got, withheld := sandboxMCP(config.EnvOnly(), company, company.Org.AgentSeatByHandle("ceo"), gate, nil)
 	if names := slices.Sorted(maps.Keys(got)); !slices.Equal(names, []string{"notes"}) || len(withheld) != 0 {
 		t.Errorf("the box is given %v (withheld %+v), want only notes, whose every tool is allowed", names, withheld)
 	}
 }
 
-// A SERVER'S LEVELS REACH ITS SPEC WRITTEN OUT: an entry that says nothing and
-// one that says `default: allow` decide every tool alike, so they make one
-// spec, and a running server is not restarted for an edit that changes none
-// of its tools; a level blocks by the server's own name.
+// A SERVER'S LEVELS REACH ITS SPEC AS WRITTEN: an entry that sets no default
+// leaves each tool at the level its hints start it at, which only the listing
+// can say, so its spec carries no default, and one that says `default: allow`
+// decides otherwise; a level blocks by the server's own name.
 func TestAServersLevelsReachItsSpecWrittenOut(t *testing.T) {
 	t.Parallel()
 	unset := toolLevels(config.MCPToolPolicy{})
-	if explicit := toolLevels(config.MCPToolPolicy{Default: config.MCPToolAllow}); unset.Default != explicit.Default ||
-		unset.Default != mcp.LevelAllow || unset.Tools != nil || explicit.Tools != nil {
-		t.Fatalf("unset %+v and default allow %+v differ", unset, explicit)
+	if explicit := toolLevels(config.MCPToolPolicy{Default: config.MCPToolAllow}); unset.Default != "" ||
+		explicit.Default != mcp.LevelAllow || unset.Tools != nil || explicit.Tools != nil {
+		t.Fatalf("unset %+v and default allow %+v, want no default and allow", unset, explicit)
+	}
+	if got := unset.Of("anything", mcp.Annotations{}); got != mcp.LevelApprove {
+		t.Fatalf("an unannotated tool of an entry setting nothing runs at %q, want approve", got)
 	}
 	levels := toolLevels(config.MCPToolPolicy{Default: config.MCPToolBlocked,
 		Levels: map[string]config.MCPToolLevel{"read_doc": config.MCPToolAllow}})

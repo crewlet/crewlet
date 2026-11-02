@@ -254,6 +254,9 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		// A TOOL'S LEVEL IS THE CONFIGURATION'S, written as any write of
 		// it: checked on dry_run and summarised (tools.go).
 		"PUT /mcp-servers/{name}/tools": authz.ActionConfigWrite,
+		// A HELD CALL'S ANSWER, decided again on the run's seat once the
+		// handler has read it (approvals.go).
+		"POST /mcp-approvals/{id}": authz.ActionToolsApprove,
 	}
 	for pattern, action := range want {
 		if got, ok := mux.policies[pattern]; !ok || got.Action != action {
@@ -265,6 +268,7 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		"POST /mcp-servers/{name}/check": authz.EffectRewrites,
 		"POST /mcp-checks":               authz.EffectReads,
 		"POST /mcp-probe":                authz.EffectReads,
+		"POST /mcp-approvals/{id}":       authz.EffectRewrites,
 	} {
 		if got := mux.policies[pattern]; got.Effect != effect {
 			t.Errorf("%s declares effect %q, want %q", pattern, got.Effect, effect)

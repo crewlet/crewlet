@@ -5,6 +5,7 @@ package queries
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // MCPServerState is one server's condition across the fleet, decided here
@@ -100,7 +102,65 @@ type MCPStatusAnswer struct {
 	// ([MCPAlarm]). ALWAYS A LIST, and empty on a node that runs no state
 	// log, which evaluates no alarm.
 	Alarms []MCPAlarm `json:"alarms"`
+	// Approvals are the calls agents' runs hold for a person's approval
+	// (ADR-0077), the longest waiting first: each while its run waits on
+	// it, and once answered until the run carries on to its next job.
+	// ALWAYS A LIST, and the administrator's alone: what a held call would
+	// send is the seat's trail.
+	Approvals []MCPApproval `json:"approvals"`
 }
+
+// MCPApproval is one call to a tool at Needs approval that an agent's run
+// holds for a person's answer (`POST /mcp-approvals/{id}`), as an
+// administrator reads it.
+type MCPApproval struct {
+	// ID is what the approval is answered by.
+	ID string `json:"id"`
+	// At is when the call was held.
+	At time.Time `json:"at"`
+	// Server is the MCP server, Tool the tool as the run called it (its
+	// prefix applied), Raw the server's own name for it, which Always
+	// allow sets the level of, and Digest the definition the run was
+	// offered.
+	Server string `json:"server"`
+	Tool   string `json:"tool"`
+	Raw    string `json:"raw"`
+	Digest string `json:"digest"`
+	// Seat is the agent whose run made the call; TurnID and LaunchID the
+	// run and the question.
+	Seat     string `json:"seat"`
+	TurnID   string `json:"turn_id"`
+	LaunchID string `json:"launch_id"`
+	// Item is the key of the work item the run was on, null where it was on
+	// none.
+	Item *string `json:"item"`
+	// Args are what the call would send, opened from their seal: null where
+	// the seal does not open on this node.
+	Args map[string]any `json:"args"`
+	// Status is `waiting` while the run waits on the answer, and
+	// `answered` once one is recorded and the run is carried on with it.
+	Status MCPApprovalStatus `json:"status"`
+	// Answer, AnsweredBy and AnsweredAt are the recorded answer: `once`,
+	// `always` or `deny`, who gave it and when, as its seal opens; empty
+	// and null while waiting, and where the seal does not open here.
+	Answer     string     `json:"answer"`
+	AnsweredBy string     `json:"answered_by"`
+	AnsweredAt *time.Time `json:"answered_at"`
+}
+
+// MCPApprovalStatus is where a held call's answer stands.
+type MCPApprovalStatus string
+
+const (
+	// MCPApprovalWaiting is a call whose run waits on its answer.
+	MCPApprovalWaiting MCPApprovalStatus = "waiting"
+	// MCPApprovalAnswered is a call whose answer is recorded, its run being
+	// carried on with it.
+	MCPApprovalAnswered MCPApprovalStatus = "answered"
+)
+
+// MCPApprovalStatuses is every status, for the gate holding a reader's copy.
+var MCPApprovalStatuses = []MCPApprovalStatus{MCPApprovalWaiting, MCPApprovalAnswered}
 
 // BuiltinGroup is one shelf of the built-in catalogue.
 type BuiltinGroup struct {
@@ -281,7 +341,58 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		return MemberMCPStatus(status), nil
 	}
 	status.Alarms = s.mcpAlarms()
+	if status.Approvals, err = s.mcpApprovals(ctx); err != nil {
+		return nil, err
+	}
 	return status, nil
+}
+
+// mcpApprovals is every call the fleet's runs hold for a person's approval,
+// the longest waiting first, each as [MCPApproval] reads it; empty where this
+// node holds no run record.
+func (s Sources) mcpApprovals(ctx context.Context) ([]MCPApproval, error) {
+	out := []MCPApproval{}
+	if s.Sandbox == nil {
+		return out, nil
+	}
+	runs, err := s.Sandbox.ListActive(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the runs, which hold the calls waiting for approval, could not "+
+			"be read: %w", ErrUnavailable, err)
+	}
+	for _, run := range runs {
+		held := run.HeldCall
+		if held == nil || held.LaunchID != run.LaunchID {
+			continue
+		}
+		row := MCPApproval{ID: held.ID, At: held.HeldAt, Server: held.Server, Tool: held.Tool,
+			Raw: held.Raw, Digest: held.Digest, Seat: run.AgentHandle, TurnID: run.TurnID,
+			LaunchID: run.LaunchID, Args: s.heldArguments(run), Status: MCPApprovalWaiting}
+		if item := run.WorkItem; item != nil {
+			key := cmp.Or(item.Key, item.ID)
+			row.Item = &key
+		}
+		if run.Answer != nil {
+			row.Status = MCPApprovalAnswered
+			at := run.Answer.RecordedAt
+			row.AnsweredAt = &at
+			if s.RunAnswers != nil {
+				if words, err := s.RunAnswers.Open(run); err == nil {
+					row.Answer, row.AnsweredBy = words.Choice, words.By
+				}
+			}
+		} else if !slices.Contains(sandbox.Awaiting, run.Status) {
+			// NOT YET PARKED, or ending: the job made the call and its
+			// harness has not ended yet, or the run ends without an answer.
+			// Not a call a person can answer yet, or any more.
+			continue
+		}
+		out = append(out, row)
+	}
+	slices.SortFunc(out, func(a, b MCPApproval) int {
+		return cmp.Or(a.At.Compare(b.At), cmp.Compare(a.ID, b.ID))
+	})
+	return out, nil
 }
 
 // mcpStatusOf is `mcp_servers_status` read off the presence leases given: the
@@ -315,8 +426,9 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 		Reading: ReadingAdmin,
 		Servers: []MCPServerRow{},
 		Nodes:   make([]MCPStatusNode, 0, len(reports)),
-		Builtin: s.builtinGroups(),
-		Alarms:  []MCPAlarm{},
+		Builtin:   s.builtinGroups(),
+		Alarms:    []MCPAlarm{},
+		Approvals: []MCPApproval{},
 	}
 	for _, r := range reports {
 		out.Nodes = append(out.Nodes, MCPStatusNode{ID: r.node, Reported: r.reported})

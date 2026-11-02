@@ -65,9 +65,11 @@ type MCPServerAnswer struct {
 	ToolCount int           `json:"tool_count"`
 
 	// Baseline is the level of every tool the entry's `tools.levels` does
-	// not name: its `tools.default`, allow where it sets none or the
-	// configuration does not declare the server.
-	Baseline config.MCPToolLevel `json:"baseline"`
+	// not name: its `tools.default`, or null where it sets none (or the
+	// configuration does not declare the server), which leaves each such
+	// tool at the level its hints start it at ([mcp.StartingLevel]): allow
+	// for a tool the server marks read-only, approve for every other.
+	Baseline *config.MCPToolLevel `json:"baseline"`
 
 	// UnlistedLevels are the tools `tools.levels` names that no live
 	// node's listing names, sorted ([UnlistedLevels]): a level that decides
@@ -302,13 +304,21 @@ type MCPToolView struct {
 	InputSchema  map[string]any `json:"input_schema"`
 	OutputSchema map[string]any `json:"output_schema"`
 	// Level is the level the tool runs at, as the server's entry decides
-	// it by the server's own name for the tool ([config.MCPToolPolicy.Level]),
-	// and Custom whether `tools.levels` names it rather than leaving it at
-	// the [MCPServerAnswer.Baseline]. A blocked tool is listed and offered
-	// to no agent. For a server the configuration does not declare, what
-	// the nodes did: blocked where a listing says no instance filed it.
+	// it by the server's own name for the tool ([config.MCPToolPolicy.Level])
+	// and, where the entry sets neither the tool's level nor a default, as
+	// its hints start it ([mcp.StartingLevel], read from the same hints its
+	// Risk is); and Custom whether `tools.levels` names it rather than
+	// leaving it at the [MCPServerAnswer.Baseline]. A blocked tool is listed
+	// and offered to no agent; a tool at approve is offered, and each call
+	// waits for a person's answer. For a server the configuration does not
+	// declare, what the nodes did: blocked where a listing says no instance
+	// filed it, its starting level otherwise.
 	Level  config.MCPToolLevel `json:"level"`
 	Custom bool                `json:"custom"`
+
+	// starting is the level the tool's hints start it at, which the entry's
+	// levels are laid over ([config.MCPToolPolicy.Level]).
+	starting config.MCPToolLevel
 }
 
 // ErrMCPDetailUnavailable is a detail asked of a node that holds no copy of
@@ -371,7 +381,7 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	out := MCPServerAnswer{
 		Reading: ReadingAdmin, Nodes: status.Nodes, Listed: []MCPServerListing{}, Tools: []MCPToolView{},
 		Instances: []MCPInstanceView{}, InstanceNodes: []MCPInstanceNodeView{}, Values: []MCPValueState{},
-		Reaches: []MCPReachView{}, Baseline: config.MCPToolAllow, UnlistedLevels: []string{},
+		Reaches: []MCPReachView{}, UnlistedLevels: []string{},
 		Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 			MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{},
 		}, Secrets: []string{}},
@@ -442,9 +452,13 @@ func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, e
 	out.Tools = tools
 	out.ToolCount = max(out.ToolCount, len(out.Tools))
 	if entry != nil {
-		out.Baseline = entry.Tools.DefaultLevel()
+		if entry.Tools.Default != "" {
+			baseline := entry.Tools.Default
+			out.Baseline = &baseline
+		}
 		for i := range out.Tools {
-			out.Tools[i].Level, out.Tools[i].Custom = entry.Tools.Level(out.Tools[i].Raw)
+			out.Tools[i].Level, out.Tools[i].Custom = entry.Tools.Level(out.Tools[i].Raw,
+				out.Tools[i].starting)
 		}
 		out.UnlistedLevels = UnlistedLevels(entry.Tools, out)
 	}
@@ -612,12 +626,13 @@ func mergeListedTools(listings []coord.MCPListing) (views []MCPToolView, kept []
 		// WHAT THE NODES DID, for a server no entry decides: a tool any
 		// listing says was left unfiled reads as blocked. The caller lays
 		// the entry's own decision over it where the server is declared.
-		level := config.MCPToolAllow
+		hints := annotationsOf(shown.Hints)
+		risk := mcp.RiskOf(hints)
+		starting := config.MCPToolLevel(mcp.StartingLevel(risk))
+		level := starting
 		if slices.ContainsFunc(definitions, func(d *definition) bool { return d.tool.Blocked }) {
 			level = config.MCPToolBlocked
 		}
-		hints := annotationsOf(shown.Hints)
-		risk := mcp.RiskOf(hints)
 		out = append(out, MCPToolView{
 			Name: shown.Name, Raw: shown.Raw, Title: shown.Title, Description: shown.Description,
 			Annotations: ToolHints{
@@ -626,7 +641,7 @@ func mergeListedTools(listings []coord.MCPListing) (views []MCPToolView, kept []
 			},
 			Risk: risk.Risk, RiskDeclared: risk.Declared, External: risk.External,
 			Digest: shown.Digest, Definitions: len(definitions), Instances: instances,
-			Nodes: slices.Sorted(maps.Keys(nodes[name])), Level: level,
+			Nodes: slices.Sorted(maps.Keys(nodes[name])), Level: level, starting: starting,
 		})
 	}
 	slices.Sort(kept)

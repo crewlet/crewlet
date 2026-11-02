@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // Equipping an epoch: putting this NODE's tools into it.
@@ -122,6 +123,11 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		Desk: runAsks{engine: e}, Work: deps.Work, Pages: deps.Pages.Reader,
 	}); tool != nil {
 		c.AskTool = tool
+	}
+	// AND ITS CALLS THAT NEED APPROVAL, on the same row, their arguments
+	// sealed under the fleet keyring.
+	if hold := builtin.NewCallHold(runAsks{engine: e}, sandbox.NewCallSeal(e.cipher)); hold != nil {
+		c.HoldTool = hold
 	}
 	// THE SHARED MCP SERVERS, into the same registry and straight after
 	// the builtins, because this is the surface every seat's is cloned

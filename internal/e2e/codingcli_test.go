@@ -117,6 +117,12 @@ const (
 	// that opened its bridge session, and its submission has to reach the
 	// one that rebuilt it. It asks no model.
 	codingModeHeld = "held"
+	// codingModeApproval calls a tool at Needs approval over the seat's
+	// bridge ([heldToolName], the e2e binary's own stdio MCP server), is
+	// told the call was held, is refused the submission it tries after it,
+	// and ends without submitting, as a harness told to end its turn does.
+	// The run carrying it on, told the call's answer, does the work.
+	codingModeApproval = "approval"
 )
 
 // codingQuestion is what a [codingModeAsk] run asks, and codingOptions the
@@ -452,6 +458,20 @@ func runHarness(endpoint string) int {
 			return fail("%v", err)
 		}
 		stream.result("success", codingHeldReport, 1, replyUsage{})
+		return 0
+	case codingModeApproval:
+		// A RUN CARRYING ON A HELD CALL is told what became of it, in its own
+		// session or as a fresh run, and does the work.
+		if strings.Contains(parsed.brief, heldAnswered) || strings.Contains(parsed.brief, heldReseeded) {
+			if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
+				return fail("%v", err)
+			}
+			return 0
+		}
+		if err := codingCallHeld(context.Background(), parsed, hooks, stream); err != nil {
+			return fail("%v", err)
+		}
+		stream.result("success", "waiting on a person's approval", 1, replyUsage{})
 		return 0
 	case codingModeAsk:
 		// A FRESH RUN CARRYING ON ONE THAT ASKED is told the question and

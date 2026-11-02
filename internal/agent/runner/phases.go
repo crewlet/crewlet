@@ -224,6 +224,13 @@ type Config struct {
 	// runner built outside an engine.
 	Ask RunAsk
 
+	// Hold is what records a call the executor's run makes to a tool at
+	// Needs approval as the question it parks on (internal/agent/builtin's
+	// CallHold, ADR-0077), installed on that run's surface alone. Nil holds
+	// none, and the surface refuses every such call, which is what every
+	// other phase's surface does.
+	Hold tools.Holder
+
 	// Steer is where the turn's notes from a person wait
 	// (internal/agent/steer): taken at the opening of every run of the
 	// REVIEWER — the turn's own conversation the engine drives — and by the
@@ -1564,6 +1571,12 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	// say which leg of the turn did it — see [turnctx.Turn.InPhase].
 	surface = tools.NewSurface(ph.String(), snapshot, active).
 		ForTurn(m.turn.InPhase(types.Phase(ph)))
+	// A CALL TO A TOOL AT NEEDS APPROVAL PARKS THE EXECUTOR'S RUN, which
+	// has a row to park on; every other phase's surface refuses it
+	// ([tools.Holder]).
+	if ph == phase.Execute && r.cfg.Hold != nil {
+		surface = surface.WithHolder(r.cfg.Hold)
+	}
 	if r.cfg.Metrics != nil {
 		surface = surface.WithCounter(r.cfg.Metrics)
 	}

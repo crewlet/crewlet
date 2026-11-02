@@ -1896,9 +1896,10 @@
       "additionalProperties": false,
       "properties": {
         "default": {
-          "description": "The level of every tool levels does not name: allow (the default) or blocked.",
+          "description": "The level of every tool levels does not name: allow, approve or blocked. Unset, a tool the server marks read-only runs at allow and every other tool at approve.",
           "enum": [
             "allow",
+            "approve",
             "blocked",
             "",
             null
@@ -1908,12 +1909,13 @@
           "additionalProperties": {
             "enum": [
               "allow",
+              "approve",
               "blocked",
               "",
               null
             ]
           },
-          "description": "One tool's level, keyed by the server's own name for the tool (before tool_prefix): allow or blocked.",
+          "description": "One tool's level, keyed by the server's own name for the tool (before tool_prefix): allow, approve or blocked.",
           "type": [
             "object",
             "null"
