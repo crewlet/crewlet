@@ -15,6 +15,13 @@
  * A value the server refuses stores nothing, and the wizard stays open on it
  * with the entry already saved, so a second Save sends only what is left.
  *
+ * THE VALUES WAIT FOR THE ENTRY TO RUN HERE. The values route tests the entry
+ * as this node runs it, so a value sent before the node has applied the
+ * revision the entry's write made is tested against a company without the
+ * server and refused. The save waits for this node's health push to say it
+ * applied that revision (`nodeStanding`, the after-save strip's one rule), or
+ * refused it, which stores nothing more.
+ *
  * THE TEST IS THE ENGINE'S: the draft as a write would leave it, with the
  * values typed for it read through the variables they will be stored under
  * and sealed across the fleet (`POST /mcp-checks`); an edit that changes
@@ -37,6 +44,9 @@ import type {
   McpValueState,
 } from "~/contract/mcp.ts";
 import { listed } from "~/lib/format.ts";
+import { MCP_STATUS_POLL_MS } from "~/lib/mcpStatusPoll.ts";
+import { nodeStanding, type ActivatedRevision, type Standing } from "~/lib/nodeStanding.ts";
+import { useLastHealth } from "~/lib/useLastHealth.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { findOpener, firstInvalid, focusWhenShown, openerNow } from "~/lib/wizardFocus.ts";
 import {
@@ -131,6 +141,18 @@ function problemsIn(body: Record<string, unknown>): ConfigProblem[] {
 /** A write is sent without a signal: started, it runs to its answer whatever the screen does. */
 const unbounded = () => new AbortController().signal;
 
+/**
+ * How long a save waits for this node to say it applied the entry's revision
+ * before it sends the values anyway and lets the engine answer them: three of
+ * the node's five-second health pushes, the page's own poll. An apply
+ * concludes well inside one push; a node that has said nothing by then is
+ * one the person is better told about by the values route's own answer.
+ */
+const APPLY_WAIT_MS = MCP_STATUS_POLL_MS;
+
+/** How often the wait reads the latest health push the page holds: a local read, a frame's few. */
+const APPLY_LOOK_MS = 100;
+
 export function ServerWizard({
   data,
   saved,
@@ -174,6 +196,23 @@ export function ServerWizard({
   const [seat, setSeat] = useState(() => reach[0]?.handle ?? data.agents[0]?.handle ?? "");
   const root = useRef<HTMLDivElement>(null);
   const inflight = useRef<AbortController | null>(null);
+  // THE LATEST HEALTH PUSH, read by a save that waits on an apply.
+  const health = useLastHealth();
+  const healthNow = useRef(health);
+  useEffect(() => {
+    healthNow.current = health;
+  }, [health]);
+
+  /** Where this node stands on the revision a write made, once it says, or "applying" past the wait. */
+  async function appliedHere(write: ActivatedRevision): Promise<Standing["kind"]> {
+    const until = Date.now() + APPLY_WAIT_MS;
+    for (;;) {
+      const now = healthNow.current;
+      const standing = now ? nodeStanding(now, write).kind : "applying";
+      if (standing !== "applying" || Date.now() >= until) return standing;
+      await new Promise((resolve) => setTimeout(resolve, APPLY_LOOK_MS));
+    }
+  }
 
   useAssistantDraft<Draft>({
     kind: "client",
@@ -321,6 +360,19 @@ export function ServerWizard({
           return;
         }
         setWritten({ entity: entitySig });
+        if (Object.keys(values).length > 0) {
+          const standing = await appliedHere({
+            revisionId: outcome.revisionId,
+            epoch: outcome.epoch,
+          });
+          if (screen.aborted) return;
+          if (standing === "refused" || standing === "passed") {
+            setPartial(
+              `${name} is ${saved ? "saved" : "added"}, and this node ${standing === "refused" ? "refused to apply it (Settings › Nodes says why)" : "moved on to a later revision before applying it"}, so ${listed(Object.keys(values))} ${Object.keys(values).length === 1 ? "is" : "are"} not stored yet.`,
+            );
+            return;
+          }
+        }
       }
       // THEN EACH VALUE, tested and sealed. A per-agent server's own value is
       // tested as each agent, so it is stored untested; the Test step tried it.

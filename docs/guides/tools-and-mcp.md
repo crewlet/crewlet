@@ -680,9 +680,11 @@ sent write-only. Its steps:
 
 Saving writes the entry (`PUT /config/mcp-servers/{name}` with
 `If-None-Match: *` for a new name, see
-[configure via the API](configure-via-api.md)), then stores each value you
-typed through [the values route](#storing-a-header-or-variable): tested, sealed
-write-only, and the key pointed at the variable the engine chooses. So no value
+[configure via the API](configure-via-api.md)), waits for the node serving
+the page to apply that revision (the values route tests the entry as the node
+runs it), then stores each value you typed through
+[the values route](#storing-a-header-or-variable): tested, sealed write-only,
+and the key pointed at the variable the engine chooses. So no value
 is ever written into the entry, and a value the server refuses stores nothing:
 the entry stays saved and the wizard open on what is left, and saving again
 sends only that. A per-agent server's own value is stored untested, since the

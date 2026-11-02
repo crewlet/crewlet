@@ -136,6 +136,36 @@ vi.mock("~/protocol/configWrite.ts", async (actual) => ({
   })),
 }));
 
+/**
+ * This node's latest health push, as the page holds it: it has applied the
+ * revision a save writes (epoch 3) unless a case says not, and a new push
+ * re-renders whoever reads it, as the store's slice does.
+ */
+const pushed = vi.hoisted(() => ({
+  health: { applied_epoch: 3, config_attempt: null } as {
+    applied_epoch: number;
+    config_attempt: null;
+  },
+  listeners: new Set<() => void>(),
+}));
+function push(appliedEpoch: number) {
+  pushed.health = { applied_epoch: appliedEpoch, config_attempt: null };
+  for (const listener of pushed.listeners) listener();
+}
+vi.mock("~/lib/useLastHealth.ts", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useLastHealth: () =>
+      useSyncExternalStore(
+        (listener) => {
+          pushed.listeners.add(listener);
+          return () => pushed.listeners.delete(listener);
+        },
+        () => pushed.health,
+      ),
+  };
+});
+
 const onSaved = vi.fn();
 
 function mount(
@@ -192,6 +222,7 @@ async function walkSentry() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  pushed.health = { applied_epoch: 3, config_attempt: null };
   vi.mocked(dryRunCreate).mockResolvedValue(VALID);
   vi.mocked(dryRunEntity).mockResolvedValue(VALID);
   vi.mocked(createEntity).mockResolvedValue(SAVED);
@@ -353,4 +384,24 @@ test("an edit writes the entry back, every field it does not draw kept", async (
   );
   expect(createEntity).not.toHaveBeenCalled();
   expect(storeValue).not.toHaveBeenCalled();
+});
+
+// THE VALUES WAIT FOR THE ENTRY TO RUN HERE: the values route tests the
+// entry as this node runs it, so a value is sent only once this node's health
+// push says it applied the revision the entry's write made. Mutation: store
+// the values straight after the write, and this is red.
+test("a value is stored only once this node has applied the entry's revision", async () => {
+  push(2);
+  await walkSentry();
+  fireEvent.click(screen.getByRole("button", { name: "Add server" }));
+  await settle();
+  expect(createEntity).toHaveBeenCalledTimes(1);
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  expect(storeValue).not.toHaveBeenCalled();
+  act(() => push(3));
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  });
+  expect(storeValue).toHaveBeenCalledTimes(1);
+  expect(onSaved).toHaveBeenCalledWith("sentry");
 });

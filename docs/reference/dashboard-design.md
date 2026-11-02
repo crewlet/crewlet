@@ -9027,8 +9027,10 @@ dry run of the entry, its problems on the fields they name and the steps that
 hold them marked). An edit has no Source, keeps the server's name, opens at
 the step its action names and writes back every field of the entry it does
 not draw. A value typed in the wizard is never written into the entry: it is
-tested with the draft, sealed across the fleet, and stored write-only after
-the entry is written, each through the same route as **Replace**; a value the
+tested with the draft, sealed across the fleet, and stored write-only once
+the entry is written and this node's health push says it applied that
+revision (`nodeStanding`, the after-save strip's rule), each through the same
+route as **Replace**; a value the
 server refuses leaves the entry saved and the wizard open on what is left.
 Enter moves on from a single-line field, a choice or a step's heading.
 **Remove** first asks the engine's dry run what names the server (an agent's
