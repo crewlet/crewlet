@@ -40,14 +40,15 @@ import (
 // than the kept one, and a run continued from the older would believe it knew
 // everything it did.
 //
-// ONE DECISION, [ContinuityOf]: the turn live, the job before's newest capture
-// kept and named by the turn's row on the executor log, in a format and by a
-// release the runner for its harness restores. The launch's caller asks it
-// before it builds the run's surface and briefs ([Coordinator.ContinuedCapture]),
-// the launch asks it again of the record as it opened the job, and a reader
-// that says whether a turn's session can be continued asks it of the same two
-// records. What only a launch can know is the launch's alone, and no reader
-// states it: whether the box it got runs a harness that takes the session up
+// ONE DECISION, [ContinuityOf]: the turn live and not ending, the job before's
+// newest capture kept and named by the turn's row on the executor log, in a
+// format and by a release the runner for its harness restores. The launch's
+// caller asks it before it builds the run's surface and briefs
+// ([Coordinator.ContinuedCapture]), the launch asks it again of the record as
+// it opened the job, and the read surface asks it of each row of a seat's
+// sessions (internal/api/queries' `continuable`), of the same two records. What
+// only a launch can know is the launch's alone, and no reader states it:
+// whether the box it got runs a harness that takes the session up
 // ([SessionRestorer.CheckCarry]), and whether the seat's budget can carry the
 // session's context beside the brief it hands the run (internal/engine's
 // launch floor).
@@ -128,14 +129,20 @@ type SessionContinuity struct {
 
 // ContinuityOf is THE decision whether a relaunch that follows the job at
 // launch follows ([PendingRun.LaunchSeq]) can continue the turn's kept
-// session — see the file comment: the turn live, the newest capture of that
-// job kept, the turn's row on the executor log naming it, and the runner the
-// launch would take it up with restoring it ([SessionRestorer.Restores]: its
-// harness, its archive's format, a release whose sessions another box
-// continues). row is the turn's row on the executor log; run the turn's run
-// record as the caller read it, nil where the turn has none — its run is over;
-// restorer nil where no runner of this build restores the row's harness's
-// sessions.
+// session — see the file comment: the turn live and not ending, the newest
+// capture of that job kept, the turn's row on the executor log naming it, and
+// the runner the launch would take it up with restoring it
+// ([SessionRestorer.Restores]: its harness, its archive's format, a release
+// whose sessions another box continues). row is the turn's row on the executor
+// log; run the turn's run record as the caller read it, nil where the turn has
+// none — its run is over; restorer nil where no runner of this build restores
+// the row's harness's sessions.
+//
+// A TURN WHOSE END IS DECIDED IS ENDED HERE, whatever its row on the log says
+// yet ([PendingRun.endDecided]): its end is owed on its run's record, or
+// recorded already and its record not yet gone, and no relaunch of it follows.
+// Read as live, a reader would say its session continues for the moments
+// between the end's decision and the log's taking it.
 //
 // What the box a launch gets says of its harness's own release, and what the
 // seat's budget says of the session's context, are the launch's to ask, and
@@ -143,9 +150,13 @@ type SessionContinuity struct {
 func ContinuityOf(row executordomain.Session, run *PendingRun, follows int64,
 	restorer SessionRestorer) SessionContinuity {
 
-	if run == nil || row.Ended() {
-		return SessionContinuity{Why: "the turn has ended, and a session is continued only by a later " +
-			"launch of the turn that kept it"}
+	switch {
+	case run == nil || row.Ended():
+		return SessionContinuity{Why: "the turn has ended, and no later turn continues its session yet, " +
+			"since a session is continued only by a relaunch of the turn that kept it"}
+	case run.endDecided():
+		return SessionContinuity{Why: "the turn is ending: its end is decided, and no relaunch of it " +
+			"follows to continue its session"}
 	}
 	kept, why := followedCapture(*run, follows)
 	if why != "" {
@@ -178,8 +189,11 @@ func followedCapture(run PendingRun, follows int64) (SessionCapture, string) {
 	case newest == nil:
 		return SessionCapture{}, "the turn has kept no capture of its session"
 	case newest.LaunchSeq != follows:
-		return SessionCapture{}, fmt.Sprintf("the job the relaunch follows (launch %d) left no capture of "+
-			"its session, and an earlier job's (launch %d) holds none of what the jobs after it were told",
+		// "HAS LEFT", which is true of a job still working as much as of one
+		// that ended: a reader asks this of a live turn whose job runs, and a
+		// relaunch now would continue nothing of it.
+		return SessionCapture{}, fmt.Sprintf("the job the relaunch follows (launch %d) has left no capture "+
+			"of its session, and an earlier job's (launch %d) holds none of what the jobs after it were told",
 			follows, newest.LaunchSeq)
 	case kept == nil || newest.newerThan(*kept):
 		return SessionCapture{}, fmt.Sprintf("the newest capture of the job the relaunch follows (launch %d, "+

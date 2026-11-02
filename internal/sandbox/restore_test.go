@@ -361,11 +361,14 @@ func (f fakeRestorer) CheckCarry(context.Context, Sandbox, SessionArchive) (Carr
 // executor log and its run's record. A live turn whose job the relaunch follows
 // left a kept capture, its newest, that the log's row names and the runner a
 // launch would take it up with restores: continued. A row naming no object, an
-// ended turn, a turn whose run is over, a runner of no harness that restores
-// sessions, one that refuses the archive, a job that left no capture of its own
-// — an earlier job's holding none of what it was told — a newest capture that
-// was not kept, a log row naming another capture, and a turn that kept none:
-// not, each saying why — the answer the launch acts on and every reader states.
+// ended turn — saying no later turn continues it yet — a turn whose run is
+// over, a turn whose end is owed on its record or recorded already (ending, and
+// no relaunch of it follows, though the log's row has not ended yet), a runner
+// of no harness that restores sessions, one that refuses the archive, a job
+// that left no capture of its own — an earlier job's holding none of what it
+// was told — a newest capture that was not kept, a log row naming another
+// capture, and a turn that kept none: not, each saying why — the answer the
+// launch acts on and every reader states.
 //
 // Mutation: drop any one condition and its row goes red.
 func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
@@ -381,6 +384,10 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	moved := live
 	moved.CaptureSeq = 2
 	run := &PendingRun{TurnID: "t1", LaunchSeq: 2, Capture: &kept, Kept: &kept}
+	owing := *run
+	owing.OwedEnd = []byte(`{"outcome":"completed"}`)
+	recorded := *run
+	recorded.EndRecorded = true
 	refused := kept
 	refused.CaptureSeq, refused.State, refused.Reason = 2, CaptureRefused, "past the seat's budget"
 	for name, tc := range map[string]struct {
@@ -393,9 +400,12 @@ func TestWhetherASessionContinuesIsOneDecision(t *testing.T) {
 	}{
 		"a live turn's kept session": {row: live, run: run, follows: 2, restorer: fakeRestorer{}, continues: true},
 		"a row naming no session":    {row: bare, run: run, follows: 2, restorer: fakeRestorer{}, why: "names no kept session"},
-		"an ended turn":              {row: ended, run: run, follows: 2, restorer: fakeRestorer{}, why: "has ended"},
-		"a turn whose run is over":   {row: live, follows: 2, restorer: fakeRestorer{}, why: "has ended"},
-		"no runner restores it":      {row: live, run: run, follows: 2, why: "no runner of this build restores"},
+		"an ended turn": {row: ended, run: run, follows: 2, restorer: fakeRestorer{},
+			why: "no later turn continues its session yet"},
+		"a turn whose run is over":     {row: live, follows: 2, restorer: fakeRestorer{}, why: "has ended"},
+		"a turn whose end is owed":     {row: live, run: &owing, follows: 2, restorer: fakeRestorer{}, why: "is ending"},
+		"a turn whose end is recorded": {row: live, run: &recorded, follows: 2, restorer: fakeRestorer{}, why: "is ending"},
+		"no runner restores it":        {row: live, run: run, follows: 2, why: "no runner of this build restores"},
 		"its runner refuses it": {row: live, run: run, follows: 2,
 			restorer: fakeRestorer{why: "older than 2.1.300"}, why: "older than 2.1.300"},
 		"the job it follows left none": {row: live, run: run, follows: 3, restorer: fakeRestorer{},
