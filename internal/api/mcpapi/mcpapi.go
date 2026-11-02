@@ -1,6 +1,7 @@
 // Package mcpapi is Settings › MCP & tools' own routes, each mounted through
 // [authz.Router] with the verb it is decided by: `GET /mcp-catalogue`, what a
-// server is added from, and `GET /mcp-servers/{name}`, one server whole.
+// server is added from, `GET /mcp-servers/{name}`, one server whole, and
+// `POST /mcp-servers/{name}/retry`, a restart of it now.
 //
 // # Routes, not registry questions
 //
@@ -16,6 +17,14 @@
 // reason (it names the launch and the first line of each failure). It is a
 // route until a screen watches it: the registry refuses a question no room
 // asks for, and the page that reads it reads it on a poll.
+//
+// # A gesture is audited, refusals included
+//
+// A restart changes runtime state and writes no record anywhere else, so every
+// call to it is one `mcp_server_acted`, its outcome and refusal read off the
+// answer the route wrote, and a refusal the guard made before the handler ran
+// is rendered through the same audit ([Service.refusedAudited]), as a model
+// gesture's is (internal/api/llmapi).
 //
 // # A search that fails is an answer
 //
@@ -33,10 +42,12 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
@@ -64,6 +75,15 @@ type Options struct {
 	// only the API's sources reach.
 	Detail func(ctx context.Context, name string) (queries.MCPServerAnswer, error)
 
+	// Restarter asks the fleet to restart a server: required, since only
+	// the engine can tell every node.
+	Restarter Restarter
+
+	// Audit is where each gesture's `mcp_server_acted` is published: this
+	// node's queue, whose publish listener writes the event store.
+	// Required: a restart leaves no record anywhere else.
+	Audit operator.AuditPublisher
+
 	// Guard decides each route's policy. Nil is the request context's
 	// principal with no org chart, which every route here asks for alone:
 	// both routes are the configuration's reader's.
@@ -72,10 +92,12 @@ type Options struct {
 
 // Service is the surface.
 type Service struct {
-	company  func() *config.Company
-	registry Searcher
-	detail   func(ctx context.Context, name string) (queries.MCPServerAnswer, error)
-	guard    authz.Guard
+	company   func() *config.Company
+	registry  Searcher
+	detail    func(ctx context.Context, name string) (queries.MCPServerAnswer, error)
+	restarter Restarter
+	audit     operator.AuditPublisher
+	guard     authz.Guard
 }
 
 // New builds the surface, refusing a missing dependency by name.
@@ -88,6 +110,13 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("mcpapi: Options.Detail is required: one server's detail is read " +
 			"off the fleet's listings")
 	}
+	if opts.Restarter == nil {
+		return nil, errors.New("mcpapi: Options.Restarter is required: a restart is asked of the " +
+			"fleet through the engine")
+	}
+	if opts.Audit == nil {
+		return nil, errors.New("mcpapi: Options.Audit is required: every server gesture is audited")
+	}
 	registry := opts.Registry
 	if registry == nil {
 		registry = catalogue.NewRegistry(catalogue.RegistryOptions{})
@@ -96,7 +125,8 @@ func New(opts Options) (*Service, error) {
 	if guard == nil {
 		guard = authz.ContextGuard(authz.NoChart{})
 	}
-	return &Service{company: opts.Company, registry: registry, detail: opts.Detail, guard: guard}, nil
+	return &Service{company: opts.Company, registry: registry, detail: opts.Detail,
+		restarter: opts.Restarter, audit: opts.Audit, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -110,8 +140,18 @@ func (s *Service) Routes(mux authz.Mux) error {
 		http.HandlerFunc(s.serveCatalogue)); err != nil {
 		return err
 	}
-	return router.Handle("GET /mcp-servers/{name}", authz.Policy{Action: authz.ActionConfigRead},
-		http.HandlerFunc(s.serveDetail))
+	if err := router.Handle("GET /mcp-servers/{name}", authz.Policy{Action: authz.ActionConfigRead},
+		http.HandlerFunc(s.serveDetail)); err != nil {
+		return err
+	}
+	// A RESTART ACTS ON THE SERVER ITS PATH NAMES AND KEEPS IT (authz.Effect),
+	// as a model's retry does, on its own verb. A router of its own renders
+	// the guard's refusal through the audit, so a refused call is recorded
+	// too.
+	restarts := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(types.MCPServerRestart))
+	return restarts.Handle("POST /mcp-servers/{name}/retry",
+		authz.Policy{Action: authz.ActionToolsRetry}.Rewriting(),
+		s.audited(types.MCPServerRestart, s.serveRestart))
 }
 
 // serveDetail answers one server whole: 404 for a server no node configures,

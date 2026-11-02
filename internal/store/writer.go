@@ -172,6 +172,10 @@ var tagKeys = map[string]string{
 	// filter.
 	"action":       "action",
 	"provider_key": "provider_key",
+	// And an MCP server gesture's (types.MCPServerActed): the configured
+	// server it was made on, under a key of its own because `server` means
+	// other things on other types.
+	"mcp_server": "mcp_server",
 	// The Dashboard Assistant's CONVERSATION a runtime audit row belongs to
 	// (types.AssistantTurnCompleted, and an approved write the act route
 	// records under the assistant transport), so the Audit log lists every

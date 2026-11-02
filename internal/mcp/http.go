@@ -6,7 +6,9 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"mime"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -92,6 +94,13 @@ type httpIdentity struct {
 	// because the session's requests run on their own goroutines.
 	protocolVersion atomic.Pointer[string]
 
+	// failed is the server's latest answer when it was not a success, nil
+	// when its latest answer was one: what a failed start and an ended
+	// session are classed by ([client.startClass], [client.deathClass]).
+	// CLEARED BY A SUCCESS, so a 429 the session rode out an hour ago is not
+	// the class of a session that ends for another reason now.
+	failed atomic.Pointer[answerFailure]
+
 	// deadline bounds ONE HTTP request, and it is here because nothing above
 	// it can do the job.
 	//
@@ -154,6 +163,13 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
 	}
 	if resp.StatusCode < 400 {
+		if webPage(resp) {
+			// A LOGIN PAGE, A PROXY OR A CAPTIVE PORTAL answers 200 with
+			// HTML, and the SDK's error for it is a parse failure.
+			h.failed.Store(&answerFailure{status: resp.StatusCode, class: FailNotMCP})
+		} else {
+			h.failed.Store(nil)
+		}
 		return resp, nil
 	}
 
@@ -185,6 +201,9 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 			"method", req.Method, "url", req.URL.String(),
 			"response_body", boundedBody(body))
 	}
+	h.failed.Store(&answerFailure{status: resp.StatusCode, class: classOfStatus(resp.StatusCode,
+		bearerChallenge(resp.Header.Get("WWW-Authenticate")), req.Header.Get("Authorization") != "",
+		bytes.Contains(bytes.ToLower(body), []byte("protocol version")))})
 	if len(body) > maxBufferedErrorBody {
 		// NOT CLOSED, and that is what keeps the deadline correct: the
 		// rest of the body is still to be read, and cancelOnClose fires
@@ -203,6 +222,28 @@ func (h *httpIdentity) RoundTrip(req *http.Request) (*http.Response, error) {
 	// complete.
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	return resp, nil
+}
+
+// answerFailure is one answer a remote server gave that was not a success:
+// its status, and the class it is read as.
+type answerFailure struct {
+	status int
+	class  FailureClass
+}
+
+// webPage reports whether resp is an HTML page: what a login page, a proxy or
+// a captive portal answers in front of a server.
+func webPage(resp *http.Response) bool {
+	media, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	return err == nil && media == "text/html"
+}
+
+// bearerChallenge reports whether a WWW-Authenticate header challenges for a
+// Bearer token: what a server that wants an OAuth sign-in answers a request
+// that carried none (RFC 6750, and the MCP authorization specification).
+func bearerChallenge(header string) bool {
+	scheme, _, _ := strings.Cut(strings.TrimSpace(header), " ")
+	return strings.EqualFold(scheme, "bearer")
 }
 
 // cancelOnClose releases a per-request deadline when the reader is finished

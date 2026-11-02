@@ -214,6 +214,11 @@ type Sources struct {
 	// [Sources.Config], answers the detail unavailable.
 	MCPListings MCPListingReader
 
+	// MCPInstances reads one server's instances from the nodes holding
+	// them, which only the engine can ask: what a server's detail says of
+	// each instance's health. Nil answers the detail with no instances read.
+	MCPInstances MCPInstanceReader
+
 	// Plane is the control plane, for the config columns of the fleet view.
 	Plane coord.Plane
 

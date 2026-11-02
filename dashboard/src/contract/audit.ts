@@ -1,7 +1,8 @@
 /**
  * The runtime audit: what a person did through a running node on the surfaces
  * that keep no record of their own — every operator tool call that is not a
- * proven read, and every `POST /backup`. The Audit log's fifth source.
+ * proven read, every `POST /backup`, and every gesture on a model or an MCP
+ * server. The Audit log's fifth source.
  *
  * EXACTLY WHAT `internal/events/types` PUBLISHES — held there by
  * `TestTheAuditLogReadsEveryRuntimeAuditType`.
@@ -16,6 +17,7 @@ export const RUNTIME_AUDIT_TYPES = [
   "operator_acted",
   "backup_requested",
   "model_acted",
+  "mcp_server_acted",
   "assistant_conversation_read",
   "assistant_turn_completed",
 ] as const;

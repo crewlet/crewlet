@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -177,6 +178,7 @@ func (e *Engine) startSharedServers(ctx context.Context, c *Company) {
 	// revision declares, and a server a revision dropped must leave the
 	// heartbeat with it rather than be reported as still started.
 	e.mcpMu.Lock()
+	stampSince(e.mcpShared, outcomes, e.now())
 	e.mcpShared = outcomes
 	e.mcpMu.Unlock()
 }
@@ -258,6 +260,13 @@ type mcpOutcome struct {
 	unlisted []string
 	err      error
 
+	// since is when the instance stopped serving, or first failed to start
+	// or was held back: stamped when the outcome is stored, and carried over
+	// from the outcome it replaces while the instance is still not serving
+	// ([stampSince]), so a retry does not restart the clock. Zero for a start
+	// that succeeded, whose bridge says since when it serves.
+	since time.Time
+
 	// bridge and instance name the server this start handed to a bridge,
 	// whose supervision then owns what happens to it: a child that started
 	// can die, and a start that failed can be retried into one that came
@@ -268,6 +277,26 @@ type mcpOutcome struct {
 	instance string
 }
 
+// stampSince dates each outcome of next that is not a start that succeeded:
+// since the outcome of prev for the same server and seat, where that one was
+// not a success either, and since now otherwise. An instance that stays down
+// across passes and applies keeps the instant it went down, which is what an
+// outage is measured from.
+func stampSince(prev, next []mcpOutcome, now time.Time) {
+	for i := range next {
+		if next[i].err == nil {
+			continue
+		}
+		next[i].since = now
+		for _, p := range prev {
+			if p.server == next[i].server && p.seat == next[i].seat && p.err != nil && !p.since.IsZero() {
+				next[i].since = p.since
+				break
+			}
+		}
+	}
+}
+
 // observe records what a started instance serves, off the bridge it runs on.
 func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 	o.tools = len(bridge.ServerTools(instance))
@@ -275,14 +304,16 @@ func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 }
 
 // mcpStatus is this node's MCP servers as the heartbeat publishes them: one
-// row per configured server, its instances counted.
+// row per configured server, its instances counted, read off the same
+// [mcpReading] of each instance a server's page is answered from
+// ([Engine.MCPInstances]).
 //
 // AS THEY ARE, not as they started: an instance its bridge still supervises
 // is reported by the bridge's own record, so a child that died since its
 // start counts as failed, with what took it down, until it is back.
 //
-// A seat's child held back for a credential a provisioning pass has not
-// sealed yet is WAITING, a count of its own: it never reached a bridge, so its
+// A seat's child held back for a credential a provisioning pass has not sealed
+// yet is WAITING, a count of its own: it never reached a bridge, so its
 // outcome is the only record of it, and counted as failed it would read as a
 // fault on the one screen an operator connecting an integration is watching.
 //
@@ -301,38 +332,14 @@ func (o *mcpOutcome) observe(bridge *mcp.Bridge, instance string) {
 // its bridge and the surface it is filed into at the beat, as its tools are:
 // a restart that lists differently, or a refile, moves both.
 //
+// AND HOW LONG THE SERVER HAS BEEN DOWN HERE AND HOW OFTEN IT CAME BACK: the
+// earliest instant a failed instance stopped serving, the class of the failure
+// the row names, and the restarts of its instances summed, all bounded.
+//
 // Sorted by server, and a server's reported error is its first failure by the
 // seat's agent id — its reported wait likewise — so a beat that re-sends the
 // same facts sends the same bytes.
 func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
-	// The surface each instance is filed into: the epoch's registry for a
-	// shared server, the seat's own for a seat's child.
-	var epoch *tools.Registry
-	if c := e.Company(); c != nil {
-		epoch = c.Tools
-	}
-	e.mcpMu.Lock()
-	all := make([]filedOutcome, 0, len(e.mcpShared))
-	for _, o := range e.mcpShared {
-		all = append(all, filedOutcome{mcpOutcome: o, surface: epoch})
-	}
-	for handle, outcomes := range e.mcpSeats {
-		for _, o := range outcomes {
-			all = append(all, filedOutcome{mcpOutcome: o, surface: e.seatTools[handle]})
-		}
-	}
-	e.mcpMu.Unlock()
-	slices.SortFunc(all, func(a, b filedOutcome) int {
-		return cmp.Or(cmp.Compare(a.server, b.server), cmp.Compare(a.seat.String(), b.seat.String()))
-	})
-	var withheld []*credentialMissing
-	for _, o := range all {
-		var missing *credentialMissing
-		if errors.As(o.err, &missing) {
-			withheld = append(withheld, missing)
-		}
-	}
-	states := e.mintingStates(ctx, withheld)
 	var out []coord.MCPServerStatus
 	// unlistedBy counts, per key, the started instances of the current row
 	// that do not list it, and notes gathers what the row's instances lost
@@ -356,50 +363,39 @@ func (e *Engine) mcpStatus(ctx context.Context) []coord.MCPServerStatus {
 		}
 		slices.Sort(row.Unlisted)
 	}
-	for _, o := range all {
-		if n := len(out); n == 0 || out[n-1].Server != o.server {
+	for _, r := range e.mcpReadings(ctx) {
+		if n := len(out); n == 0 || out[n-1].Server != r.server {
 			settle()
-			out = append(out, coord.MCPServerStatus{Server: o.server, Shared: o.seat == uuid.Nil})
+			out = append(out, coord.MCPServerStatus{Server: r.server, Shared: r.seat == uuid.Nil})
 			unlistedBy = map[string]int{}
 			notes = toolNotes{}
 		}
 		row := &out[len(out)-1]
-		tools, unlisted, failure := o.tools, o.unlisted, o.err
-		if health, ok := mcpHealth(o.mcpOutcome); ok {
-			// THE LISTING NOW, like its tools: a restart can come back
-			// listing a different set, so the keys it leaves out are read
-			// off the same record. And so are the tools it lost to their
-			// names, which a server that is down keeps from its last
-			// listing, as it keeps its tools.
-			tools, unlisted, failure = health.Tools, o.bridge.UnlistedOverrides(o.instance), nil
-			notes.add(unfiled(o.mcpOutcome, o.surface))
-			if !health.Serving {
-				failure = errors.New(health.Down)
+		notes.add(r.refused, r.shadowed)
+		row.Restarts += r.restarts
+		switch r.state {
+		case coord.MCPInstanceWaiting:
+			row.Waiting++
+			if row.Wait == "" {
+				row.Wait, row.WaitSeat = r.wait.Error(), r.seat
 			}
-		}
-		var missing *credentialMissing
-		if errors.As(failure, &missing) {
-			missing = missing.judged(states)
-			failure = missing
-			if missing.waiting() {
-				row.Waiting++
-				if row.Wait == "" {
-					row.Wait, row.WaitSeat = missing.Error(), o.seat
-				}
-				continue
-			}
-		}
-		if failure != nil {
+		case coord.MCPInstanceFailed:
 			row.Failed++
 			if row.Error == "" {
-				row.Error, row.ErrorSeat = failure.Error(), o.seat
+				// REDACTED, as a page's instance is: the row is on a lease
+				// every node reads, and a failure can carry what a
+				// server's process printed.
+				row.Error, row.ErrorSeat, row.ErrorClass = redact.Secrets(r.failure.Error()), r.seat, string(r.class)
 			}
-			continue
-		}
-		row.Started++
-		row.Tools = max(row.Tools, tools)
-		for _, key := range unlisted {
-			unlistedBy[key]++
+			if !r.since.IsZero() && (row.DownSince.IsZero() || r.since.Before(row.DownSince)) {
+				row.DownSince = r.since
+			}
+		default:
+			row.Started++
+			row.Tools = max(row.Tools, r.tools)
+			for _, key := range r.unlisted {
+				unlistedBy[key]++
+			}
 		}
 	}
 	settle()

@@ -7,6 +7,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // MCPServerState is one server's condition across the fleet, decided here
@@ -230,6 +232,17 @@ type MCPServerNode struct {
 	// sentence is the node's `mcp_server_awaiting_credential` log line.
 	Wait     string `json:"wait"`
 	WaitSeat string `json:"wait_seat"`
+	// ErrorClass is why the failed instance Error names failed
+	// ([mcp.FailureClass]): "" where no class fits, or a node named one this
+	// build does not.
+	ErrorClass mcp.FailureClass `json:"error_class"`
+	// DownSince is when the longest-failed instance on the node stopped
+	// serving, or first failed to start: null when none has failed. What a
+	// person reads as how long the server has been down there.
+	DownSince *time.Time `json:"down_since"`
+	// Restarts is how many times the node brought the server's instances
+	// back since each was started from its spec, summed.
+	Restarts int `json:"restarts"`
 }
 
 // mcpServersStatus answers what each MCP server did on each node.
@@ -338,6 +351,10 @@ func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 				cell.ErrorSeat = instanceSeat(organization, m.ErrorSeat)
 				cell.Wait = m.Wait
 				cell.WaitSeat = instanceSeat(organization, m.WaitSeat)
+				if class := mcp.FailureClass(m.ErrorClass); class.Valid() {
+					cell.ErrorClass = class
+				}
+				cell.DownSince, cell.Restarts = instantOrNull(m.DownSince), max(m.Restarts, 0)
 				row.Started += m.Started
 				row.Failed += m.Failed
 				row.Waiting += m.Waiting
@@ -435,7 +452,10 @@ func configuredRow(m *config.MCPServer) *MCPServerRow {
 		Transport:   string(m.Kind()),
 		Command:     m.Command,
 		Args:        append([]string{}, m.Args...),
-		URL:         m.URL,
+		// ITS CREDENTIALS WITHHELD: an address is shown wherever the
+		// server is, and a vendor that takes a key in its query string
+		// would otherwise have it answered to every reader of the row.
+		URL: redact.URL(m.URL),
 	}
 	if entry, ok := catalogue.Recognise(m.Launch()); ok {
 		row.Title, row.Catalogue, row.Vendor = entry.Title, entry.ID, entry.Vendor

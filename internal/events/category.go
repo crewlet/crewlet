@@ -183,6 +183,9 @@ var categories = map[string]placement{
 	// A person's gesture on a model (Settings › Models): a check, a retry,
 	// a credential test or write, a device sign-in, a host login read.
 	"model_acted": {"lifecycle", RateAuthenticated},
+	// A person's gesture on an MCP server (Settings › MCP & tools): a
+	// restart, on every node or one seat's instance.
+	"mcp_server_acted": {"lifecycle", RateAuthenticated},
 	// An administrator's compliance read of a person's assistant
 	// conversation (D06), with the reason they gave.
 	"assistant_conversation_read": {"lifecycle", RateAuthenticated},

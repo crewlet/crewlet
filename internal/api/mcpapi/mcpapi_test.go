@@ -64,7 +64,7 @@ func surface(t *testing.T, registry string, search mcpapi.Searcher) *mcpapi.Serv
 		t.Fatal(err)
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: search, Detail: noDetail})
+		Registry: search, Detail: noDetail, Restarter: &fakeRestarter{}, Audit: &recordedAudit{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +242,9 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 	if err != nil {
 		t.Fatal(err)
 	}
+	seen := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	failed := queries.MCPFailureView{Class: mcp.FailExited, Said: "its process exited (exit status 1)",
+		At: seen.Add(-time.Minute), Node: "node-a", Seat: "backend-dev"}
 	detail := func(_ context.Context, name string) (queries.MCPServerAnswer, error) {
 		switch name {
 		case "github":
@@ -257,6 +260,19 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 				Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
 					MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{}},
 					Secrets: []string{}},
+				Instances: []queries.MCPInstanceView{{Seat: "backend-dev", Node: "node-a",
+					State: coord.MCPInstanceRunning, Since: &seen, Restarts: 1, Tools: 1,
+					LastFailure: &failed, LastAnswer: &seen}},
+				InstanceNodes: []queries.MCPInstanceNodeView{{Node: "node-a", Answered: true, Count: 1}},
+				LastSuccess:   &seen, LastFailure: &failed,
+				Resolved: &queries.MCPResolved{Auth: queries.MCPAuthIntegration, RunsOn: queries.MCPRunsOnEngineHost,
+					Timeouts: queries.MCPTimeouts{StartupSeconds: 120, RequestSeconds: 300, StartupDefault: true,
+						RequestDefault: true},
+					Binding: &queries.MCPBinding{Vendor: "github", By: queries.MCPBindingRecognised,
+						Keys: []queries.MCPBoundKey{{Field: "TOKEN", Key: "GITHUB_TOKEN"}}},
+					BoxSeats: []queries.MCPBoxSeat{{Seat: "backend-dev", Cell: "container"}},
+					Warnings: []queries.MCPPlacementWarning{{Kind: queries.MCPWarnCommandInBox,
+						Seat: "backend-dev", Cell: "container", Message: "the image must provide npx"}}},
 			}, nil
 		case "catalogue":
 			return queries.MCPServerAnswer{Server: queries.MCPServerRow{Name: "catalogue"}}, nil
@@ -266,7 +282,7 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 		return queries.MCPServerAnswer{}, queries.ErrMCPDetailUnavailable
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: &fakeRegistry{}, Detail: detail})
+		Registry: &fakeRegistry{}, Detail: detail, Restarter: &fakeRestarter{}, Audit: &recordedAudit{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +307,26 @@ func TestAServersDetailIsTheConfigurationReadersAndSaysWhyItCannotAnswer(t *test
 		t.Fatalf("an admin read %d %v", code, body)
 	}
 	holdKeys(t, "the detail", body, "server", "nodes", "listed", "tools", "tool_count",
-		"server_info", "instructions", "dependants")
+		"server_info", "instructions", "dependants", "instances", "instance_nodes", "last_success",
+		"last_failure", "resolved")
+	instance := body["instances"].([]any)[0].(map[string]any)
+	holdKeys(t, "an instance", instance, "seat", "node", "state", "since", "restarts", "tools", "failure",
+		"wait", "last_failure", "last_answer")
+	if instance["failure"] != nil {
+		t.Errorf("a running instance answered a failure: %v", instance)
+	}
+	holdKeys(t, "a failure", instance["last_failure"].(map[string]any), "class", "said", "at", "node", "seat")
+	holdKeys(t, "a node asked", body["instance_nodes"].([]any)[0].(map[string]any),
+		"node", "answered", "reason", "count")
+	resolved := body["resolved"].(map[string]any)
+	holdKeys(t, "the resolved facts", resolved, "auth", "runs_on", "timeouts", "binding", "box_seats", "warnings")
+	holdKeys(t, "the timeouts", resolved["timeouts"].(map[string]any),
+		"startup_seconds", "request_seconds", "startup_default", "request_default")
+	binding := resolved["binding"].(map[string]any)
+	holdKeys(t, "the binding", binding, "vendor", "by", "keys")
+	holdKeys(t, "a bound key", binding["keys"].([]any)[0].(map[string]any), "field", "key")
+	holdKeys(t, "a box seat", resolved["box_seats"].([]any)[0].(map[string]any), "seat", "cell")
+	holdKeys(t, "a warning", resolved["warnings"].([]any)[0].(map[string]any), "kind", "seat", "cell", "message")
 	tool := body["tools"].([]any)[0].(map[string]any)
 	holdKeys(t, "a tool", tool, "name", "raw", "title", "description", "annotations", "risk",
 		"risk_declared", "external", "digest", "definitions", "instances", "nodes", "input_schema",
