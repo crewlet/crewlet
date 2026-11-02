@@ -122,6 +122,42 @@ func admittedAtItsCharge(t *testing.T, c *cache.Cache, s cache.Synced, name stri
 	adm.Release()
 }
 
+// AN EXPUNGE'S SCAN IS CHARGED ITS WALK AND WHAT ITS CALLER HOLDS, never its
+// build's: a budget of room for a walk of the whole repository at a
+// transfer's figure an object, beside the bytes the scan holds, admits it,
+// and a byte under refuses it for memory — so a repository found not due
+// costs its maintainer no build's charge, and a node that could not build an
+// expunge of it may still learn it owes none.
+//
+// Mutation: charge the scan the build's figure an object of what it holds, or
+// leave the held bytes out, and the budget of exactly its charge refuses it,
+// or the budget a byte under admits it.
+func TestAnExpungeScanIsChargedItsWalkAndWhatItsCallerHolds(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	objects := objectsOf(w.pushN(t, repo, 3))
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	const held = 1 << 20
+	charge := held + objects*gitproc.TransferBytesPerObject
+	cache.SetMaintenanceBudget(c, charge)
+	adm, err := c.AdmitExpungeScan(s, held)
+	if err != nil {
+		t.Fatalf("a scan of %d objects holding %d bytes on a budget of %d = %v, want it admitted", objects, held,
+			charge, err)
+	}
+	adm.Release()
+	cache.SetMaintenanceBudget(c, charge-1)
+	if adm, err := c.AdmitExpungeScan(s, held); !errors.Is(err, cache.ErrNoMemory) {
+		if err == nil {
+			adm.Release()
+		}
+		t.Fatalf("a scan on a budget a byte under its charge %d = %v, want ErrNoMemory", charge, err)
+	}
+}
+
 // A MAINTAINER IS PLACED BY THE LARGEST CHARGE ITS STEPS ARE ADMITTED AT: a
 // repository's maintenance is placed on a git node by Cache.MaintenanceCharge
 // of its objects, so a node whose budget is exactly that charge admits every

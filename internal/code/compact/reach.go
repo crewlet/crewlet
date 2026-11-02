@@ -38,11 +38,34 @@ import (
 // the pack's trailer. An object two eligible files both hold is weighed in
 // each, since a cycle retiring both frees both copies.
 //
-// HELD IN MEMORY BY THE FILES, never by the history: an id and a weight an
-// object of the eligible files (28 bytes, a byte more for its mark), which
-// the scan's admission charges as the build sorting those objects is charged
-// (cache.Cache.AdmitExpunge's cache.CompactBytesPerObject, 550 an object); the
-// walk's own output is streamed through, a line at a time.
+// HELD IN MEMORY BY THE FILES, never by the history: an id, a weight and a
+// mark an object of the eligible files, and one file's index read at a time
+// beside them ([indexBytes]), which the scan's admission charges beside room
+// for the walk (cache.Cache.AdmitExpungeScan); the walk's own output is
+// streamed through, a line at a time.
+
+// scanBytesPerObject is what the scan holds an object of the packs it weighs
+// for as long as its walk runs: its id (20 bytes), its weight (8) and its
+// mark (1). readBytesPerObject is what reading one pack's index holds an
+// object beside that, one pack at a time: the file itself (twenty-eight
+// bytes an object, code.IndexBytesFor) and its offsets sorted to weigh them
+// (sixteen).
+const (
+	scanBytesPerObject = 20 + 8 + 1
+	readBytesPerObject = 28 + 16
+)
+
+// indexBytes is what a scan weighing files holds while its walk runs: every
+// file's ids, weights and marks, and the largest file's read beside them —
+// cache.Cache.AdmitExpungeScan's held bytes.
+func indexBytes(files []pack) int64 {
+	var all, largest int64
+	for _, f := range files {
+		all += f.objects
+		largest = max(largest, f.objects)
+	}
+	return all*scanBytesPerObject + largest*readBytesPerObject
+}
 
 // packIndex is one eligible file's index as the scan reads it: its object ids
 // in index order (twenty bytes each), each object's bytes in the pack, the

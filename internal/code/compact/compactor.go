@@ -118,6 +118,7 @@ type Cache interface {
 	AdmitPublication(s cache.Synced, base int, layerObjects, repackObjects int64, limits code.Limits) (*cache.Admission,
 		error)
 	AdmitExpunge(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
+	AdmitExpungeScan(s cache.Synced, held int64) (*cache.Admission, error)
 	NewMergeScratch(ctx context.Context, s cache.Synced, id string, packs []string) (*cache.Scratch, error)
 	NewLayerScratch(ctx context.Context, s cache.Synced, id string, base int) (*cache.Scratch, error)
 	StageExpunge(ctx context.Context, s cache.Synced, id string, inputs []string) (*cache.Scratch, error)

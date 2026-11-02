@@ -466,7 +466,7 @@ func (c *Compactor) cycle(ctx context.Context, cand code.ExpungeCandidate, grace
 	}
 	limits := c.o.Limits()
 	if cand.Request == "" {
-		freed, out, err := c.due(ctx, cand, s, live, eligible, drops, limits) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
+		freed, out, err := c.due(ctx, cand, s, live, eligible, drops) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if out != "" {
 			return out, err
 		}
@@ -1185,21 +1185,18 @@ func (c *Compactor) keptTips(ctx context.Context, repoID string, at statelog.Pos
 // whole repository holds unreachable: garbage in a pack younger than the
 // grace is no byte any cycle now could free ([Compactor.unreachableIn]). What
 // a tip reaches is ONE WALK from every ref of the copy and every drop and row
-// in flight the scan keeps, run in the maintenance lane under the expunge's
-// own admission, charged as a build sorting every eligible object is — a walk
-// of the whole history, as the build's is — and released before the build is
-// admitted.
+// in flight the scan keeps, run in the maintenance lane under an admission of
+// its own (cache.Cache.AdmitExpungeScan) — room for a walk of the whole
+// history, as the build's walk is charged, and the indexes it holds
+// ([indexBytes]), never the build's charge, since it sorts nothing — and
+// released before the build is admitted.
 //
 // Found NOT DUE, the repository is recorded judged ([Compactor.judgedClean]),
 // so a repository with little garbage is walked at most weekly.
 func (c *Compactor) due(ctx context.Context, cand code.ExpungeCandidate, s cache.Synced, live []code.PackRow,
-	eligible []pack, drops []string, limits code.Limits) (map[string]int64, Outcome, error) {
+	eligible []pack, drops []string) (map[string]int64, Outcome, error) {
 
-	var objects int64
-	for _, f := range eligible {
-		objects += f.objects
-	}
-	adm, err := c.o.Cache.AdmitExpunge(s, objects, limits)
+	adm, err := c.o.Cache.AdmitExpungeScan(s, indexBytes(eligible))
 	switch {
 	case errors.Is(err, gitproc.ErrBusy):
 		c.log.Debug("code_expunge_busy", "repo", cand.Name, "error", err)

@@ -1380,6 +1380,11 @@ func (u *unreached) AdmitExpunge(cache.Synced, int64, code.Limits) (*cache.Admis
 	return nil, errUnreached
 }
 
+func (u *unreached) AdmitExpungeScan(cache.Synced, int64) (*cache.Admission, error) {
+	u.calls.Add(1)
+	return nil, errUnreached
+}
+
 func (u *unreached) NewMergeScratch(context.Context, cache.Synced, string, []string) (*cache.Scratch, error) {
 	u.calls.Add(1)
 	return nil, errUnreached
