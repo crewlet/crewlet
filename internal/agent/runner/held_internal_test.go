@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -174,4 +176,34 @@ func TestAHeldCallIsMadeOnlyAsItWasApproved(t *testing.T) {
 		t.Fatalf("a mark that could not be written = %v with %d calls, want an error and no call",
 			err, len(tool.calls))
 	}
+}
+
+// ONLY THE EXECUTOR'S SURFACE HOLDS A CALL FOR APPROVAL (ADR-0077): it alone
+// has a run whose row the call parks on, so every other phase's surface is
+// built with no holder and refuses the call as forbidden.
+//
+// Mutation: hand the holder to every phase, and this is red.
+func TestOnlyTheExecutorsSurfaceHoldsACallForApproval(t *testing.T) {
+	t.Parallel()
+	hold := holdNothing{}
+	r := &Runner{cfg: Config{Hold: hold}}
+	for _, ph := range phase.All {
+		got := r.holderFor(ph)
+		if ph == phase.Execute && got != tools.Holder(hold) {
+			t.Errorf("the executor's surface holds with %v, want the runner's holder", got)
+		}
+		if ph != phase.Execute && got != nil {
+			t.Errorf("the %s phase's surface holds with %v, want none", ph, got)
+		}
+	}
+	if (&Runner{}).holderFor(phase.Execute) != nil {
+		t.Error("a runner built with no holder gave the executor's surface one")
+	}
+}
+
+// holdNothing is a [tools.Holder] for a test that only asks where one goes.
+type holdNothing struct{}
+
+func (holdNothing) Hold(context.Context, *turnctx.Turn, tools.HeldCall) (tools.Result, bool) {
+	return tools.Result{}, false
 }

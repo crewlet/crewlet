@@ -1571,11 +1571,8 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	// say which leg of the turn did it — see [turnctx.Turn.InPhase].
 	surface = tools.NewSurface(ph.String(), snapshot, active).
 		ForTurn(m.turn.InPhase(types.Phase(ph)))
-	// A CALL TO A TOOL AT NEEDS APPROVAL PARKS THE EXECUTOR'S RUN, which
-	// has a row to park on; every other phase's surface refuses it
-	// ([tools.Holder]).
-	if ph == phase.Execute && r.cfg.Hold != nil {
-		surface = surface.WithHolder(r.cfg.Hold)
+	if hold := r.holderFor(ph); hold != nil {
+		surface = surface.WithHolder(hold)
 	}
 	if r.cfg.Metrics != nil {
 		surface = surface.WithCounter(r.cfg.Metrics)
@@ -1594,6 +1591,17 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	r.guard = guard.skills()
 	r.mu.Unlock()
 	return surface.WithGuard(guard.tools()), nil
+}
+
+// holderFor is what records a call to a tool at Needs approval on phase ph's
+// surface: the executor's alone, which has a run whose row the call parks on
+// (ADR-0077). Every other phase runs inside the turn on the engine host and
+// gets none, so its surface refuses such a call ([tools.Holder]).
+func (r *Runner) holderFor(ph phase.Phase) tools.Holder {
+	if ph != phase.Execute {
+		return nil
+	}
+	return r.cfg.Hold
 }
 
 // discovers reports whether a phase is offered the discovery pair,
