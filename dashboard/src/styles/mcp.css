@@ -536,13 +536,14 @@
 
 /* A figure's unit, drawn only where the grid has stacked into card rows (a
    phone, or a width that cannot hold its columns), where no column head says
-   what "34" is. Keyed to the grid's own decision rather than to the window,
-   so the unit and the missing head always go together. */
+   what "34" is. Keyed to the grid's own decision (its `data-stacked`) rather
+   than to the window, so the unit and the missing head always go together;
+   by the attribute alone, since a lazy sheet names no kit class. */
 .mcp-phone-unit {
   display: none;
 }
 
-.crewlet-data-grid[data-stacked] .mcp-phone-unit {
+[data-stacked] .mcp-phone-unit {
   display: inline;
   color: var(--color-text-tertiary);
   white-space: pre;
