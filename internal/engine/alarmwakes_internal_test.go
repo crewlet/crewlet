@@ -1,9 +1,14 @@
 package engine
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -347,4 +353,68 @@ func TestTheAlarmOutboxHoldsSixFlapsOfTheWholeTable(t *testing.T) {
 			"and %d per log, %d instances — are %d transitions, past the outbox's %d: raise the bound "+
 			"or restate what it holds", flaps, logs, nodeWide, perLog, instances, need, alarmOutboxCap)
 	}
+}
+
+// EVERY TEXT THAT STATES THE ALARM OUTBOX'S BOUND STATES alarmOutboxCap: the
+// dropped-transitions metric's own description (and the metrics reference
+// generated from it) and the concept page's paragraph on the outbox each name
+// the figure an operator reads a drop against, and nothing else ties them to
+// the constant — the bound has moved once already (1024 to 2048, when the code
+// log became the tenth domain), and a figure left behind tells an operator the
+// outbox holds what it does not. So each is read where it states the bound and
+// held to the constant.
+//
+// Mutation: move alarmOutboxCap, or the figure in any of the three texts, and
+// the case is red.
+func TestEveryTextNamingTheAlarmOutboxBoundNamesTheConstant(t *testing.T) {
+	t.Parallel()
+	want := "holds " + strconv.Itoa(alarmOutboxCap) + " "
+	shows := ""
+	for _, in := range metrics.Catalogue() {
+		if in.Name == metrics.AlarmTransitionsDropped {
+			shows = in.Shows
+		}
+	}
+	if !strings.Contains(shows, want) {
+		t.Errorf("the catalogue's %s says %q, which does not name the outbox's bound as %q",
+			metrics.AlarmTransitionsDropped, shows, want)
+	}
+	for _, doc := range []struct {
+		path   string
+		marker string // what begins the line that states the bound
+	}{
+		{"docs/reference/metrics.md", "| `" + metrics.AlarmTransitionsDropped + "` |"},
+		{"docs/concepts/event-system.md", "- **The outbox is bounded.**"},
+	} {
+		line := theLineBeginning(t, doc.path, doc.marker)
+		if !strings.Contains(line, want) {
+			t.Errorf("%s states the outbox's bound as %q, which does not name it as %q", doc.path, line, want)
+		}
+	}
+}
+
+// theLineBeginning is the one line of the repository's file at rel that begins
+// with marker; the test fails where none does or several do.
+func theLineBeginning(t *testing.T, rel, marker string) string {
+	t.Helper()
+	f, err := os.Open(filepath.Join(sourcetree.Root(t), filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var found []string
+	lines := bufio.NewScanner(f)
+	lines.Buffer(make([]byte, 0, 64<<10), 4<<20)
+	for lines.Scan() {
+		if strings.HasPrefix(lines.Text(), marker) {
+			found = append(found, lines.Text())
+		}
+	}
+	if err := lines.Err(); err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("%s has %d lines beginning %q, want exactly one", rel, len(found), marker)
+	}
+	return found[0]
 }

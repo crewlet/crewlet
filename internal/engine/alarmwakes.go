@@ -48,7 +48,11 @@ import (
 // logs, whose 100 instances flap six times in 1200 transitions; the next
 // power of two keeps the six flaps with room for a log or a kind more.
 // Past it the oldest go first: the newest are nearest the state a woken seat
-// reads anyway.
+// reads anyway. The figure IS restated where an operator reads a drop against
+// it — crewlet.alarm.transitions.dropped's description, so the metrics
+// reference, and the event-system page's paragraph on the outbox — and
+// TestEveryTextNamingTheAlarmOutboxBoundNamesTheConstant holds each of them to
+// this constant, so moving it fails there until they say the new bound.
 const alarmOutboxCap = 2048
 
 // alarmRetryBase and alarmRetryCeiling pace a publish the broker refused.
