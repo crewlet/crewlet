@@ -327,29 +327,38 @@ func cmp(old string, ok bool) string {
 }
 
 // refs is every branch and tag of the repository at dir and the object each
-// names, less the seats' namespace and any name the code host's grammar
-// refuses.
+// names, less the seats' namespace — left out by for-each-ref itself
+// (`--exclude`), so a repository's every seat branch is never listed only to
+// be dropped — and any name the code host's grammar refuses. STREAMED
+// (gitproc.Lines), never captured: a repository may hold code.MaxRefsPerRepo
+// refs, some 6 MB of listing, where a capture holds gitproc.CaptureMax (1 MiB,
+// some 17 000 refs) and refuses the rest — which failed every attempt of a
+// mirror of a repository past it, an import's and a sync's as much as a
+// push's.
 func (m *Mirrors) refs(ctx context.Context, dir, alternate string) (map[string]string, error) {
-	res, err := m.o.Git.Run(ctx, gitproc.Cmd{
-		Dir: dir, Alternate: alternate, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
-		Args: []string{"for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/", "refs/tags/"},
+	out := map[string]string{}
+	lines := gitproc.NewLines(func(line []byte) error {
+		oid, ref, ok := strings.Cut(string(line), " ")
+		if !ok || !gitref.ValidOID(oid) {
+			return fmt.Errorf("mirror: for-each-ref printed %q", line)
+		}
+		if gitref.ValidRef(ref) {
+			out[ref] = oid
+		}
+		return nil
 	})
+	_, err := m.o.Git.Run(ctx, gitproc.Cmd{
+		Dir: dir, Alternate: alternate, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline, Stdout: lines,
+		Args: []string{"for-each-ref", "--format=%(objectname) %(refname)", "--exclude=" + gitref.SeatsRoot,
+			"refs/heads/", "refs/tags/"},
+	})
+	if err == nil {
+		err = lines.Close()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("mirror: list the refs of %s: %w", dir, err)
 	}
-	out := map[string]string{}
-	lines := bufio.NewScanner(bytes.NewReader(res.Stdout))
-	for lines.Scan() {
-		oid, ref, ok := strings.Cut(lines.Text(), " ")
-		if !ok || !gitref.ValidOID(oid) {
-			return nil, fmt.Errorf("mirror: for-each-ref printed %q", lines.Text())
-		}
-		if strings.HasPrefix(ref, gitref.SeatsRoot) || !gitref.ValidRef(ref) {
-			continue
-		}
-		out[ref] = oid
-	}
-	return out, lines.Err()
+	return out, nil
 }
 
 // forced reports whether moving a ref from old to new leaves old behind: old is

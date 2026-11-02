@@ -103,6 +103,12 @@ func StartOrder(queued []string, ended map[string]time.Time) []string {
 	}
 }
 
+// RefsOf is the branches and tags of the repository at dir as every attempt
+// lists a copy's or a scratch's ([Mirrors.refs]).
+func (m *Mirrors) RefsOf(ctx context.Context, dir string) (map[string]string, error) {
+	return m.refs(ctx, dir, "")
+}
+
 // Remembered is how many entries the worker holds of the repositories its
 // listings named: what they said, its attempts' memory, its health and its
 // queued attempts, together.

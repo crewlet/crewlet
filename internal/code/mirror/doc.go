@@ -104,7 +104,10 @@
 // node's copy at or past it, judges the seat it pushes as against the chart
 // this node holds NOW (code.MirrorSeatRefusal: a later revision may have taken
 // the seat's read away), lists what the other host holds of the covered refs
-// in ONE `ls-remote --refs`, and pushes the difference — each ref set where
+// in ONE `ls-remote --refs` of the arms its patterns reach (`--branches`,
+// `--tags`: protocol v2's ref prefixes, so a forge's pull-request refs never
+// come), streamed as the copy's own listing is — neither is ever captured,
+// since both grow with a repository — and pushes the difference — each ref set where
 // the other host holds another object or none, each covered ref the copy no
 // longer has deleted, a waiting branch never — with `push --force --porcelain`
 // from a SCRATCH over the copy's incarnation, never from the copy, which only
