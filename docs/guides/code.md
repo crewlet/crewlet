@@ -880,7 +880,10 @@ Press an attempt to open it: what it was checking (a change's head, a queue's
 candidate, a branch's tip, a landing bisected), the commit and branch, how
 long it ran, its exit code and why it ended; its **failures**, each
 `path:line` a link into the diff it was checked on — the comparison of its
-base and its commit, opened on that file; its **tail**; and **Read its log**,
+base and its commit, opened on that file with the failing line marked and
+scrolled to (where the line is outside what the diff changes, the page says
+so and offers the file at the attempt's commit, opened on that line; an
+attempt that records no base opens the file there directly); its **tail**; and **Read its log**,
 which reads the log a failed run kept a page at a time, only when you ask. A
 check measures durations and exit codes, never tokens: it runs no model.
 
