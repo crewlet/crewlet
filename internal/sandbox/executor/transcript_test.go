@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1041,6 +1042,72 @@ func TestAReadStopsWhenItsCallerIsGone(t *testing.T) {
 			neverOpened(t, "its caller had left before the read began"), 0)
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("a read whose caller had left before it began: %v, want the context's error", err)
+		}
+	}
+}
+
+// leavesAfter is a read's context whose caller leaves once the read has asked
+// whether it is still there more than a given number of times: a caller who
+// leaves part way through one line of the record, at a point the case names
+// by the read's own checks rather than by a clock.
+type leavesAfter struct {
+	context.Context
+	asks atomic.Int64
+	gone chan struct{}
+	once sync.Once
+}
+
+// leavingAfter is a context under parent whose caller leaves at the read's
+// ask after the first asks.
+func leavingAfter(parent context.Context, asks int64) *leavesAfter {
+	c := &leavesAfter{Context: parent, gone: make(chan struct{})}
+	c.asks.Store(asks)
+	return c
+}
+
+// Err is nil for the first asks, and the caller's leaving after them.
+func (c *leavesAfter) Err() error {
+	if c.asks.Add(-1) >= 0 {
+		return nil
+	}
+	c.once.Do(func() { close(c.gone) })
+	return context.Canceled
+}
+
+// Done is closed once the caller has left.
+func (c *leavesAfter) Done() <-chan struct{} { return c.gone }
+
+// A READ STOPS BETWEEN THE NOTES AND THE VALUES ONE LINE HOLDS. One line of
+// Claude Code's record runs to mebibytes, and a record the harness wrote for
+// itself is searched value by value for the notes it carries: a value holding
+// a note on each of a thousand lines, or a thousand values before the one that
+// holds a note, is a line the read would otherwise walk to its end for a
+// caller who left at its start. Each stops where the caller left, with the
+// caller's own error, short of the page it would have filled.
+//
+// Mutation: ask the caller only between lines, or not between the notes one
+// value carries, or not between a record's values, and the read walks on and
+// answers a page to a caller who left.
+func TestAReadStopsBetweenTheNotesAndTheValuesOneLineHolds(t *testing.T) {
+	t.Parallel()
+	var many []string
+	for i := range 1000 {
+		many = append(many, note(fmt.Sprintf("ana-%d", i), "Keep going."))
+	}
+	values := strings.Repeat(jsonText(t, "x")+",", 1000) + jsonText(t, note("bo", "Stop here."))
+	for name, content := range map[string]string{
+		"a note on each of a value's lines":     jsonText(t, strings.Join(many, "\n\n")),
+		"a thousand values before the one note": values,
+	} {
+		_, raw := claudeCaptureOf(t, []string{
+			`{"type":"attachment","attachment":{"type":"hook_additional_context","hookEvent":"PostToolBatch",` +
+				`"content":[` + content + `]},"timestamp":"2026-10-30T12:00:03.000Z"}`,
+		}, nil)
+		got, err := executor.ReadTranscript(leavingAfter(t.Context(), 64), executor.ClaudeCodeName,
+			executor.ClaudeArchiveFormat, opener(bytes.NewReader(raw)), 0)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("%s, read for a caller who left part way through the line: (%d entries, %v), "+
+				"want the caller's own error", name, len(got.Entries), err)
 		}
 	}
 }

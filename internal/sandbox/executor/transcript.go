@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"path"
 	"regexp"
 	"slices"
@@ -60,7 +61,10 @@ import (
 // hook's additional context, kept in a record of the harness's own whose shape
 // is the harness's and moves between releases — so every record Claude Code
 // writes for itself is searched for that heading, rather than read by a shape
-// this build would have to pin. The line the run's own hook prints as it hands
+// this build would have to pin. A heading is a line's — the engine writes it
+// on a line of its own, after the framing a harness puts before it — so a line
+// holds one at most, and the search reads each line once, whatever the record
+// holds ([noteAt]). The line the run's own hook prints as it hands
 // notes over, which the live transcript shows as `[steer]`, is a note entry
 // too: a release that keeps the line and not the context leaves it the notes'
 // one trace.
@@ -80,7 +84,8 @@ import (
 // begins inside the bound is read whole, since a key cut in half by a bound is
 // a key the redaction no longer recognises — and none of the rest of a long
 // text, which would be scanned only to be dropped. And a read stops when its
-// caller's context is done, checked a line or a message at a time.
+// caller's context is done, checked a line or a message at a time, and between
+// the notes and the values one line holds.
 //
 // HOW MANY READS RUN AT ONCE is bounded too, for the whole process: at most
 // [TranscriptReadsAtOnce], whichever socket or REST caller asks. A read takes
@@ -666,19 +671,25 @@ func redactedWithin(text string, bound int) (string, bool) {
 // holds none. A brief that is a note — its words open with a note's heading,
 // inside nothing but what a harness wraps one in — is the note, or the notes,
 // it carries.
-func (b *transcriptBuilder) prose(kind EntryKind, at time.Time, text string) error {
+func (b *transcriptBuilder) prose(ctx context.Context, kind EntryKind, at time.Time, text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
 	if kind == EntryBrief && opensWithNote(text) {
-		return b.notes(at, text)
+		return b.notes(ctx, at, text)
 	}
 	return b.add(TranscriptEntry{Kind: kind, At: at, Thread: b.thread}, text)
 }
 
-// notes adds an entry for every note text carries ([notesIn]).
-func (b *transcriptBuilder) notes(at time.Time, text string) error {
-	for _, note := range notesIn(text) {
+// notes adds an entry for every note text carries ([notesIn]), as it finds
+// each: a page that holds all it hands out stops the search there, and so
+// does a caller that left — one text can carry a note on every line of the
+// mebibytes a line may run to.
+func (b *transcriptBuilder) notes(ctx context.Context, at time.Time, text string) error {
+	for note := range notesIn(text) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := b.add(TranscriptEntry{Kind: EntryNote, At: at, Thread: b.thread}, note); err != nil {
 			return err
 		}
@@ -709,42 +720,59 @@ func (b *transcriptBuilder) answered(id string) string {
 // ---- notes --------------------------------------------------------------- //
 
 // noteAt is where the first note heading in text at or after from opens, and
-// false where there is none: the heading's opening, a sender's name, and the
-// rest of the heading on the same line ([noteHeadOpen], [noteHeadClose]).
-func noteAt(text string, from int) (int, bool) {
+// where the line it is on ends, and false where there is none: the heading's
+// opening, a sender's name, and the rest of the heading closing its line
+// ([noteHeadOpen], [noteHeadClose]).
+//
+// EACH LINE IS READ ONCE, whatever it holds. Whether an opening is a heading
+// is a matter of how its line ends, which every opening on the line shares: so
+// where the first opening on a line is no heading, none after it on that line
+// is either, and the search goes on from the next line. It used to look for
+// the line's end again from every opening, and a line of a record — which may
+// run to [maxLineBytes] — written as nothing but openings cost the openings
+// times the line, tens of minutes of a core for one line. A heading found, the
+// next is looked for from the end of its line, for the same reason: a line
+// holds one heading at most.
+func noteAt(text string, from int) (at, end int, ok bool) {
 	for from < len(text) {
 		i := strings.Index(text[from:], noteHeadOpen)
 		if i < 0 {
-			return 0, false
+			return 0, 0, false
 		}
-		at := from + i
-		line, _, _ := strings.Cut(text[at:], "\n")
-		if len(line) > len(noteHeadOpen)+len(noteHeadClose) && strings.HasSuffix(line, noteHeadClose) {
-			return at, true
+		at = from + i
+		end = len(text)
+		if n := strings.IndexByte(text[at:], '\n'); n >= 0 {
+			end = at + n
 		}
-		from = at + len(noteHeadOpen)
+		if line := text[at:end]; len(line) > len(noteHeadOpen)+len(noteHeadClose) &&
+			strings.HasSuffix(line, noteHeadClose) {
+			return at, end, true
+		}
+		from = end + 1
 	}
-	return 0, false
+	return 0, 0, false
 }
 
 // notesIn is every note text carries, each from its heading to the next one's
 // or to text's end — a hook's answer joins the notes of one step in one text
 // (ClaudeHookAnswer) — trimmed of the system reminder a harness closes them
-// in.
-func notesIn(text string) []string {
-	var notes []string
-	at, ok := noteAt(text, 0)
-	for ok {
-		next, more := noteAt(text, at+len(noteHeadOpen))
-		end := len(text)
-		if more {
-			end = next
+// in, in order and one at a time, so a reader that stops reads no further.
+func notesIn(text string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		at, end, ok := noteAt(text, 0)
+		for ok {
+			next, nextEnd, more := noteAt(text, end)
+			stop := len(text)
+			if more {
+				stop = next
+			}
+			note := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(text[at:stop]), "</system-reminder>"))
+			if !yield(note) {
+				return
+			}
+			at, end, ok = next, nextEnd, more
 		}
-		note := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(text[at:end]), "</system-reminder>"))
-		notes = append(notes, note)
-		at, ok = next, more
 	}
-	return notes
 }
 
 // noteFraming is all a harness puts before a note it hands its model: a
@@ -758,7 +786,7 @@ var noteFraming = regexp.MustCompile(`^\s*(?:<system-reminder>\s*)?(?:\w+` +
 // that carries a note further down, as a launch's brief does with the notes
 // that arrived before it.
 func opensWithNote(text string) bool {
-	at, ok := noteAt(text, 0)
+	at, _, ok := noteAt(text, 0)
 	return ok && noteFraming.MatchString(text[:at])
 }
 
@@ -890,13 +918,13 @@ func (b *transcriptBuilder) claudeLine(ctx context.Context, line []byte) error {
 	at := claudeTime(rec.Timestamp)
 	switch {
 	case rec.Type == "assistant":
-		return b.claudeMessage(rec.Message, EntryModel, at)
+		return b.claudeMessage(ctx, rec.Message, EntryModel, at)
 	case rec.Type == "user" && !rec.IsMeta:
 		kind := EntryBrief
 		if rec.IsCompactSummary {
 			kind = EntrySummary
 		}
-		return b.claudeMessage(rec.Message, kind, at)
+		return b.claudeMessage(ctx, rec.Message, kind, at)
 	case rec.Type == "system":
 		// THE LINE THE RUN'S OWN HOOK PRINTS as it hands the model a note,
 		// which the live transcript shows as `[steer]`: a note in its own
@@ -908,7 +936,7 @@ func (b *transcriptBuilder) claudeLine(ctx context.Context, line []byte) error {
 			}
 		}
 	}
-	return b.claudeNotes(line, at)
+	return b.claudeNotes(ctx, line, at)
 }
 
 // notARecord says a line of the record, n bytes long, that is no record.
@@ -929,8 +957,9 @@ func (b *transcriptBuilder) unshaped() error {
 // record keeps that, under which field, is the harness's own and moves between
 // releases, where the heading every note opens with is the engine's. Read in
 // the record's own order, so one read counts a record's notes as the next one
-// does.
-func (b *transcriptBuilder) claudeNotes(line []byte, at time.Time) error {
+// does — and a value at a time, its caller asked at each whether it is still
+// there: a record of a line's mebibytes can hold millions of values.
+func (b *transcriptBuilder) claudeNotes(ctx context.Context, line []byte, at time.Time) error {
 	if !bytes.Contains(line, []byte(noteHeadOpen)) {
 		return nil
 	}
@@ -938,11 +967,14 @@ func (b *transcriptBuilder) claudeNotes(line []byte, at time.Time) error {
 	// TO THE RECORD'S END: it read whole as a record already, so its end is
 	// the only place this stops.
 	for tok, err := dec.Token(); err == nil; tok, err = dec.Token() {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		text, ok := tok.(string)
 		if !ok {
 			continue
 		}
-		if notesErr := b.notes(at, text); notesErr != nil {
+		if notesErr := b.notes(ctx, at, text); notesErr != nil {
 			return notesErr
 		}
 	}
@@ -952,7 +984,9 @@ func (b *transcriptBuilder) claudeNotes(line []byte, at time.Time) error {
 // claudeMessage reads a record's message — an object, its content a string or
 // a list of blocks — as kind, and says one of no shape this read knows rather
 // than reading it as a message that said nothing.
-func (b *transcriptBuilder) claudeMessage(raw json.RawMessage, kind EntryKind, at time.Time) error {
+func (b *transcriptBuilder) claudeMessage(ctx context.Context, raw json.RawMessage, kind EntryKind,
+	at time.Time) error {
+
 	if absent(raw) {
 		return nil
 	}
@@ -965,7 +999,7 @@ func (b *transcriptBuilder) claudeMessage(raw json.RawMessage, kind EntryKind, a
 	if err := json.Unmarshal(raw, &message); err != nil {
 		return b.unshaped()
 	}
-	return b.claudeContent(message.Content, kind, at)
+	return b.claudeContent(ctx, message.Content, kind, at)
 }
 
 // claudeContent reads a message's content: a string is one entry of kind, and
@@ -973,7 +1007,9 @@ func (b *transcriptBuilder) claudeMessage(raw json.RawMessage, kind EntryKind, a
 // tool call, a tool's result. A thinking block is the model's working and no
 // entry, and so is every block of a type this build does not know; content
 // that is neither a string nor a list is said.
-func (b *transcriptBuilder) claudeContent(raw json.RawMessage, kind EntryKind, at time.Time) error {
+func (b *transcriptBuilder) claudeContent(ctx context.Context, raw json.RawMessage, kind EntryKind,
+	at time.Time) error {
+
 	raw = bytes.TrimSpace(raw)
 	switch {
 	case absent(raw):
@@ -983,15 +1019,18 @@ func (b *transcriptBuilder) claudeContent(raw json.RawMessage, kind EntryKind, a
 		if err := json.Unmarshal(raw, &text); err != nil {
 			return b.unshaped()
 		}
-		return b.prose(kind, at, text)
+		return b.prose(ctx, kind, at, text)
 	case raw[0] != '[':
 		return b.unshaped()
 	}
 	for _, block := range claudeBlocks(raw) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		var err error
 		switch block.Type {
 		case "text":
-			err = b.prose(kind, at, block.Text)
+			err = b.prose(ctx, kind, at, block.Text)
 		case "tool_use":
 			b.called(block.ID, block.Name)
 			err = b.add(TranscriptEntry{Kind: EntryToolCall, At: at, Thread: b.thread,
@@ -1198,7 +1237,7 @@ func (b *transcriptBuilder) openCodeNext(ctx context.Context, dec *json.Decoder)
 	if !ok {
 		return b.unread("a message of the export whose parts are not a list was not read")
 	}
-	return b.openCodeMessage(m, parts)
+	return b.openCodeMessage(ctx, m, parts)
 }
 
 // openCodeParts is a message's parts, and false where they are there and are
@@ -1241,10 +1280,15 @@ func (b *transcriptBuilder) pastHeld(held *heldValue, err error) error {
 // a note, where it is one — the model's is its own words, or a summary on a
 // compaction's message, and a tool part is the call and, once it settled, its
 // result. Reasoning, the steps' bookkeeping, files and patches are no entry.
-func (b *transcriptBuilder) openCodeMessage(m openCodeMessage, parts []openCodePart) error {
+func (b *transcriptBuilder) openCodeMessage(ctx context.Context, m openCodeMessage,
+	parts []openCodePart) error {
+
 	at := unixMillis(m.Info.Time.Created)
 	summary := bytes.Equal(bytes.TrimSpace(m.Info.Summary), []byte("true"))
 	for _, p := range parts {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		var err error
 		switch p.Type {
 		case "text":
@@ -1257,7 +1301,7 @@ func (b *transcriptBuilder) openCodeMessage(m openCodeMessage, parts []openCodeP
 			case summary:
 				kind = EntrySummary
 			}
-			err = b.prose(kind, firstInstant(unixMillis(p.Time.Start), at), p.Text)
+			err = b.prose(ctx, kind, firstInstant(unixMillis(p.Time.Start), at), p.Text)
 		case "tool":
 			err = b.add(TranscriptEntry{Kind: EntryToolCall, Tool: p.Tool,
 				At: firstInstant(unixMillis(p.State.Time.Start), at)}, compactJSON(p.State.Input))
