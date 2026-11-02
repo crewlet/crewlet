@@ -5,12 +5,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +40,11 @@ type source struct {
 	wt   string
 	bare string
 	url  string
+	// reads counts the git processes that read the served repository: each
+	// fetch or ls-remote opens with exactly one advertisement request,
+	// `GET info/refs?service=git-upload-pack`, whatever the protocol does
+	// after it.
+	reads *atomic.Int64
 }
 
 func newSource(t *testing.T) *source {
@@ -46,7 +53,15 @@ func newSource(t *testing.T) *source {
 	root := t.TempDir()
 	bare := filepath.Join(root, "src.git")
 	c.Run(t, "", "init", "-q", "--bare", bare)
-	srv := httptest.NewTLSServer(c.HTTPBackend(root))
+	reads := &atomic.Int64{}
+	backend := c.HTTPBackend(root)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/info/refs") &&
+			r.URL.Query().Get("service") == "git-upload-pack" {
+			reads.Add(1)
+		}
+		backend.ServeHTTP(w, r)
+	}))
 	t.Cleanup(srv.Close)
 	ca := filepath.Join(t.TempDir(), "ca.pem")
 	block := &pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}
@@ -54,7 +69,7 @@ func newSource(t *testing.T) *source {
 		t.Fatal(err)
 	}
 	t.Setenv("SSL_CERT_FILE", ca)
-	return &source{t: t, c: c, wt: c.Init(t), bare: bare, url: srv.URL + "/src.git"}
+	return &source{t: t, c: c, wt: c.Init(t), bare: bare, url: srv.URL + "/src.git", reads: reads}
 }
 
 // commit commits files in the source's work tree.
@@ -142,6 +157,8 @@ type harness struct {
 	// dial is what the workers dial a URL with: nil for the source's own
 	// dial, as Tier A's git.import_allow_private lets a node dial loopback.
 	dial mirror.Dial
+	// git is the git pool the workers run in: nil for the git node's own.
+	git mirror.Pool
 
 	mu  sync.Mutex
 	now time.Time
@@ -192,7 +209,11 @@ func (h *harness) mirrors() *mirror.Mirrors {
 			return gitproc.ResolveRemote(ctx, url, true)
 		}
 	}
-	m, err := mirror.New(mirror.Options{Estate: h.est, Cache: n.Cache(), Git: n.Pool(), Objects: objects,
+	var git mirror.Pool = n.Pool()
+	if h.git != nil {
+		git = h.git
+	}
+	m, err := mirror.New(mirror.Options{Estate: h.est, Cache: n.Cache(), Git: git, Objects: objects,
 		Dial: dial, NodeID: n.ID(), Limits: func() code.Limits { return h.limits },
 		Roster: codetest.FixtureRoster, Events: &h.events, Faults: h.faults, Now: h.clock})
 	if err != nil {
@@ -206,6 +227,15 @@ func (h *harness) mirrors() *mirror.Mirrors {
 // each repository it names worked, and every attempt that started waited
 // for. It answers the repositories listed.
 func (h *harness) pass(m *mirror.Mirrors) []string {
+	h.t.Helper()
+	listed := h.listAndWork(m)
+	m.Wait()
+	return listed
+}
+
+// listAndWork is a pass's listing and its turns, each repository the listing
+// names worked, without waiting for the attempts they started.
+func (h *harness) listAndWork(m *mirror.Mirrors) []string {
 	h.t.Helper()
 	ctx := h.t.Context()
 	var listed []string
@@ -225,7 +255,6 @@ func (h *harness) pass(m *mirror.Mirrors) []string {
 		}
 		cursor = next
 	}
-	m.Wait()
 	return listed
 }
 
@@ -750,5 +779,79 @@ func TestAPushMirrorWaitsForGreen(t *testing.T) {
 	}
 	if got := held["refs/tags/v2"]; got != c {
 		t.Errorf("the other host's v2 is %q, want the tag's %s", got, c)
+	}
+}
+
+// busyLane is the git node's pool with every refusal of a maintenance slot
+// told on refused: the moment an attempt's cut finds the lane full.
+type busyLane struct {
+	*gitproc.Pool
+	refused chan struct{}
+}
+
+func (b busyLane) Reserve() (*gitproc.Reserved, error) {
+	slot, err := b.Pool.Reserve()
+	if errors.Is(err, gitproc.ErrBusy) {
+		select {
+		case b.refused <- struct{}{}:
+		default:
+		}
+	}
+	return slot, err
+}
+
+// A CUT WAITS FOR A MAINTENANCE SLOT AND KEEPS ITS FETCH: an import whose
+// fetch has landed in its scratch while every slot of the node's maintenance
+// lane is held — a compaction's build, a merge — waits for one, and once a
+// slot frees cuts and lands what it fetched, the source read ONCE: never an
+// attempt ended on the lane's refusal, its scratch removed with everything it
+// downloaded, and the next attempt downloading it all again.
+//
+// Mutation: ask the lane once and end the attempt on its refusal, as a
+// maintenance Run does, and the repository is still importing once the slots
+// are free.
+func TestACutWaitsForAMaintenanceSlotAndKeepsItsFetch(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	head := h.src.commit(map[string]string{"a": "a\n"}, "first")
+	h.src.push("HEAD:refs/heads/main")
+	h.f.Declare(t, code.Declared{Name: "imported", Settings: codetest.Settings(),
+		Import: &code.ImportSource{URL: h.src.url}})
+
+	pool := h.f.Nodes()[0].Pool()
+	var held []*gitproc.Reserved
+	for {
+		slot, err := pool.Reserve()
+		if errors.Is(err, gitproc.ErrBusy) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("holding the maintenance lane: %v", err)
+		}
+		held = append(held, slot)
+	}
+	refused := make(chan struct{}, 1)
+	h.git = busyLane{Pool: pool, refused: refused}
+	m := h.mirrors()
+	h.listAndWork(m)
+	select {
+	case <-refused:
+	case <-time.After(time.Minute):
+		t.Fatal("the import never asked the full maintenance lane for its cut's slot")
+	}
+	if got := h.src.reads.Load(); got != 1 {
+		t.Fatalf("the source was read %d times before the cut; want the fetch's once", got)
+	}
+	for _, slot := range held {
+		slot.Release()
+	}
+	m.Wait()
+
+	rows := h.rows("imported")
+	if rows.Repo.Status != code.RepoStatusActive || rows.Refs["refs/heads/main"] != head {
+		t.Fatalf("once a slot freed the repository is %s with main at %q; want it active at the source's %s",
+			rows.Repo.Status, rows.Refs["refs/heads/main"], head)
+	}
+	if got := h.src.reads.Load(); got != 1 {
+		t.Errorf("the source was read %d times; want once, the fetch the cut waited with", got)
 	}
 }

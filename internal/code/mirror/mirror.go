@@ -75,10 +75,13 @@ type Cache interface {
 }
 
 // Pool is the node's git pool: the fetch and the listing of the source's HEAD
-// in its transfer lane, the cut in its maintenance lane and the reads of the
-// scratch in its read lane.
+// in its transfer lane, the reads of the scratch in its read lane, and the
+// cut in a slot of its maintenance lane the attempt waits for and holds
+// (Reserve), since that lane refuses a process at once when it is full and
+// the cut comes after a fetch no attempt should make twice.
 type Pool interface {
 	Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error)
+	Reserve() (*gitproc.Reserved, error)
 }
 
 // Dial is the one outbound dial, as the engine builds it: the source's URL

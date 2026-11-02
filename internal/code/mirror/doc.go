@@ -134,15 +134,21 @@
 // Each of its steps is bounded on its own — the fetch by
 // gitproc.RemoteDeadline over what it may bring, the cut and the scan by
 // gitproc.PackWorkDeadline, each upload by code.UploadDeadline — and every
-// attempt ends with [Mirrors.Stop]. At most [MaxAttempts] run at once on a
-// node. A pull mirror is synced once every code.MirrorInterval: listed by the
-// `mirrors_due` read until its last sync is within it — a sync that found its
-// source moved nothing landing a record of nothing (code.MirrorSync.Current),
-// which moves that instant all the same, and a pull mirror's import that
-// landed whole moving it to its end — so the listing stops at the first
-// mirror synced within the interval on every node, this one after a restart
-// included; this node's memory of its last attempts holds a mirror whose
-// last attempt failed back for RetryAfter.
+// attempt ends with [Mirrors.Stop]. THE CUT WAITS FOR ITS SLOT: the
+// maintenance lane refuses a process at once when it is full, and the cut
+// comes after a fetch of up to the repository's whole size, so the attempt
+// polls the lane for a slot it then holds (gitproc.Pool.Reserve) and keeps
+// its scratch meanwhile, rather than ending and fetching everything again.
+//
+// At most [MaxAttempts] run at once on a node. A pull mirror is synced once
+// every code.MirrorInterval: listed by the `mirrors_due` read until its last
+// sync is within it — a sync that found its source moved nothing landing a
+// record of nothing (code.MirrorSync.Current), which moves that instant all
+// the same, and a pull mirror's import that landed whole moving it to its
+// end — so the listing stops at the first mirror synced within the interval
+// on every node, this one after a restart included; this node's memory of
+// its last attempts holds a mirror whose last attempt failed back for
+// RetryAfter.
 //
 // ITS IMPORTS: internal/code/query, internal/code/compact, internal/code/host,
 // internal/code/home, internal/code/checkrun and this package never import

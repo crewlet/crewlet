@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -382,7 +383,9 @@ func (m *Mirrors) forced(ctx context.Context, sc *cache.Scratch, old, new string
 // git writes and names a pack of no objects, which no record may carry
 // (code.PackRef.Check), so the attempt would fail on it every time: the
 // restart after a chunk of packs alone, whose fetch brings again only what
-// those packs hold, would never land its refs.
+// those packs hold, would never land its refs. It runs in a slot of the
+// node's maintenance lane the attempt WAITS FOR ([Mirrors.maintenanceSlot]),
+// the fetch kept meanwhile.
 func (m *Mirrors) cut(ctx context.Context, s cache.Synced, sc *cache.Scratch, fetched []cache.ScratchPack,
 	fetchedBytes int64, limits code.Limits) ([]string, error) {
 
@@ -396,7 +399,12 @@ func (m *Mirrors) cut(ctx context.Context, s cache.Synced, sc *cache.Scratch, fe
 	for _, p := range m.o.Cache.Packs(s) {
 		list.WriteString("^pack-" + p.GitChecksum + ".pack\n")
 	}
-	res, err := m.o.Git.Run(ctx, gitproc.Cmd{
+	slot, err := m.maintenanceSlot(ctx, s.Repo.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer slot.Release()
+	res, err := slot.Run(ctx, gitproc.Cmd{
 		Dir: sc.Dir, Alternate: sc.Alternate, Class: gitproc.ClassMaintenance,
 		Args: []string{"pack-objects", "--stdin-packs", "--non-empty",
 			"--max-pack-size=" + strconv.FormatInt(code.CompactPackBytes, 10), "--delta-base-offset", "--quiet",
@@ -417,6 +425,56 @@ func (m *Mirrors) cut(ctx context.Context, s cache.Synced, sc *cache.Scratch, fe
 		outs = append(outs, cs)
 	}
 	return outs, lines.Err()
+}
+
+// The cut's wait for a maintenance slot polls the lane, which never queues a
+// caller (gitproc's Reserved: it refuses at once when full): first after
+// slotPollFirst, a QUARTER OF A SECOND, doubling to slotPollMax, FIVE
+// SECONDS. A poll is one lock of the lane and nothing more, so its cost is
+// nothing; what the cap bounds is how long a freed slot can sit before the
+// cut asks for it — five seconds at most, against a maintenance process's
+// seconds to minutes and against the home's passes, which ask the same lane
+// for compactions and merges once a minute.
+const (
+	slotPollFirst = 250 * time.Millisecond
+	slotPollMax   = 5 * time.Second
+)
+
+// maintenanceSlot is a slot of the node's maintenance lane for repoID's cut,
+// WAITED FOR under ctx alone: the lane refuses a process at once when every
+// slot is held — by a compaction's or a publication's build, a home's merge,
+// a commit-graph write — and the cut comes after the attempt's fetch, up to
+// the repository's whole repo_max_bytes for an import. Refused there, the
+// attempt would end, its scratch removed with everything the fetch wrote, and
+// the next attempt download it all again for as long as the lane stayed
+// busy — gitproc's Reserved names the hazard, work done for a process the
+// lane then refuses. NO DEADLINE OF ITS OWN: giving up is that same refetch,
+// and every process holding the lane ends by its own deadline; Stop ends the
+// wait with the attempt.
+func (m *Mirrors) maintenanceSlot(ctx context.Context, repoID string) (*gitproc.Reserved, error) {
+	wait := slotPollFirst
+	for logged := false; ; {
+		slot, err := m.o.Git.Reserve()
+		switch {
+		case err == nil:
+			return slot, nil
+		case !errors.Is(err, gitproc.ErrBusy):
+			return nil, fmt.Errorf("mirror: a maintenance slot for the cut of %s: %w", repoID, err)
+		case !logged:
+			logged = true
+			m.log.Info("code_mirror_cut_waiting", "repo", repoID, "error", err,
+				"detail", "the fetch is kept; the cut starts once a maintenance slot frees")
+		}
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, fmt.Errorf("mirror: waiting for a maintenance slot for the cut of %s: %w", repoID,
+				context.Cause(ctx))
+		case <-t.C:
+		}
+		wait = min(2*wait, slotPollMax)
+	}
 }
 
 // largestBlob is why an output may not be stored — its first blob past limit,

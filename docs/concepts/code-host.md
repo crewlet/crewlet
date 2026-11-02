@@ -241,7 +241,11 @@ refs do not reach. One that cannot finish — a blob past
 that answers only over the dumb HTTP protocol — ends: the repository is active
 with what landed, and its import's error says why. A source that cannot be
 reached, or that refuses the credential, is asked again a minute after the
-first failure, the wait doubling to once every 15 minutes. The credential's
+first failure, the wait doubling to once every 15 minutes. An attempt whose
+fetch has arrived while every maintenance process the node allows is running
+keeps what it fetched and waits for one to end (logged
+`code_mirror_cut_waiting`), rather than ending and fetching it all again. The
+credential's
 value is sent as HTTP Basic: a value holding a colon is `user:password` as
 written, and any other a token, sent as the password beside the user
 `x-access-token`, which GitHub, GitLab, Gitea and Forgejo accept; a forge that
