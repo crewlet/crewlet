@@ -1645,8 +1645,8 @@ var table = []rule{
 		},
 		remedy: mcpRemedy("No agent is offered the server's tools until an instance serves. " +
 			"Fix what the failure names (its address, its command, or the credentials it " +
-			"reads); the engine keeps trying every five minutes, and " +
-			"`POST /mcp-servers/<name>/retry` tries every instance now."),
+			"reads); the engine keeps trying every five minutes, and Restart on the " +
+			"server's page (`POST /mcp-servers/<name>/retry`) tries every instance now."),
 	},
 	{
 		// SOME INSTANCES SERVING AND SOME NOT, past the same ceiling: a
@@ -1667,8 +1667,9 @@ var table = []rule{
 		},
 		remedy: mcpRemedy("The agents and nodes whose instance serves are not affected. Fix " +
 			"what the failure names, usually one node's environment or one agent's " +
-			"credentials; `POST /mcp-servers/<name>/retry` (with `seat` for one agent's " +
-			"instance) tries it now rather than on the five-minute schedule."),
+			"credentials; Restart on the alarm (`POST /mcp-servers/<name>/retry`, with " +
+			"`seat` for one agent's instance) tries it now rather than on the five-minute " +
+			"schedule."),
 	},
 	{
 		// AN AGENT'S INSTANCE HELD BACK past a provisioning pass for a
@@ -1701,7 +1702,7 @@ var table = []rule{
 			}
 			return AlarmEntry{Detail: refusedDetail(s)}, true
 		},
-		remedy: mcpRemedy("`GET /mcp-servers/<name>` says why each name is refused. A name too " +
+		remedy: mcpRemedy("The server's Tools tab says why each name is refused. A name too " +
 			"long for the harnesses fits with a shorter `tool_prefix`, or none; a name a " +
 			"built-in holds needs a prefix; a name with characters a model cannot read is " +
 			"the server's own to change. No agent is offered those tools until then."),
@@ -1722,8 +1723,8 @@ func feedOutageDetail(f FeedOutage) string {
 // mcpRemedy is an MCP alarm's remedy, ending with where a person reads the
 // server from.
 func mcpRemedy(what string) string {
-	return what + " Settings › MCP Tools shows the server on every node, and " +
-		"`GET /mcp-servers/<name>` lists each instance with what it last said."
+	return what + " The server's page under Settings › MCP & tools " +
+		"(`GET /mcp-servers/<name>`) lists each instance with what it last said."
 }
 
 // heldPast reports whether a condition that began at since has held for at

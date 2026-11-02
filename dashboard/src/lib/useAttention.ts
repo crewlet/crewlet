@@ -9,7 +9,6 @@
  */
 
 import { useMemo } from "react";
-import { settingsSectionOpen } from "~/app/nav.ts";
 import type { McpAlarm } from "~/contract/mcp.ts";
 import { attentionQueue, type Attention, type Subject } from "./attention.ts";
 import { useQuery } from "./useQuery.ts";
@@ -24,14 +23,15 @@ import { useViewer } from "./viewer.ts";
 const NO_MCP_ALARMS: readonly McpAlarm[] = [];
 
 /**
- * Whether this reader is asked the MCP alarms: a reader the MCP section opens
- * for, by the rule its lock is drawn by, since `mcp_servers_status` is that
- * section's answer and a refusal on a timer is a refusal nobody reads. False
- * while the frame has not said who the reader is.
+ * Whether this reader is asked the MCP alarms: an administrator, the reader
+ * `mcp_servers_status` answers in the reading that carries them. The MCP
+ * section opens to every member, whose reading carries no alarm, so asking a
+ * member would be a poll whose answer is never read. False while the frame
+ * has not said who the reader is.
  */
 function useReadsMcpAlarms(): boolean {
   const viewer = useViewer();
-  return !viewer.loading && settingsSectionOpen("mcp-tools", viewer.grants);
+  return !viewer.loading && viewer.admin;
 }
 
 /**
@@ -64,7 +64,7 @@ export function useAttention(): Attention[] {
     pollMs: MCP_STATUS_POLL_MS,
     enabled: readsMcp,
   });
-  const mcpAlarms = readsMcp ? (mcp?.alarms ?? NO_MCP_ALARMS) : NO_MCP_ALARMS;
+  const mcpAlarms = readsMcp && mcp?.reading === "admin" ? mcp.alarms : NO_MCP_ALARMS;
   return useMemo(
     () =>
       attentionQueue({
