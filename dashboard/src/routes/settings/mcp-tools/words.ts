@@ -439,6 +439,24 @@ export function reasonWords(reach: McpReach, units: ReadonlyMap<string, string>)
   return REASON[reach.reason];
 }
 
+/**
+ * What a team lead's limits hold a server to for one agent, in a line: off
+ * for it, or how many of its tools are held back, naming the team whose
+ * limit does it (the agent's own block where the engine names no team).
+ * "" where nothing narrows it.
+ */
+export function limitWords(
+  limited: McpReach["limited"],
+  units: ReadonlyMap<string, string>,
+): string {
+  if (!limited) return "";
+  const who = (key: string | null) => (key ? `${units.get(key) ?? key}'s lead` : "its lead");
+  if (limited.off) return `Turned off for it by ${who(limited.off_by)}`;
+  if (limited.tools.length === 0) return "";
+  const by = [...new Set(limited.tools.map((t) => t.by))];
+  return `${limited.tools.length === 1 ? "1 tool" : `${limited.tools.length} tools`} held back by ${by.map(who).join(" and ")}`;
+}
+
 /** A held call's answer in a word, and the tone its tag wears. */
 export function approvalWords(a: Pick<McpApproval, "status" | "answer">): {
   label: string;

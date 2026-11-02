@@ -1044,6 +1044,18 @@ These limits are admission rules beside the lead's own: a stored revision that
 breaks one runs, its limits holding as written (a level this build cannot read
 blocks the tool), and warns.
 
+#### Seeing a team's limits on the dashboard
+
+An administrator sees what the limits hold a server to on its page, as the
+engine resolved them for each agent: the **Access** tab says under an agent's
+reason that the server is turned off for it, or how many of its tools are held
+back, and by whose lead (a team's, or the agent's own); the **Tools** tab
+marks a tool *Held back*, naming on hover each team or agent it is held back
+for and the level. A lead writes the limits on their teams and agents through
+the configuration's entity routes (`PUT /config/units/{id}`,
+`PUT /config/roles/{handle}`); the page offers a lead no control of its own,
+since a lead who is not an administrator reads no server's reach.
+
 ### When a server changes a tool
 
 A tool's level is decided on the tool as its server defined it then, and holds

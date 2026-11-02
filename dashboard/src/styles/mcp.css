@@ -491,7 +491,7 @@
   min-width: 0;
 }
 
-.mcp-tool-name > :last-child:not(:first-child) {
+.mcp-tool-name > :not(:first-child) {
   flex: none;
 }
 

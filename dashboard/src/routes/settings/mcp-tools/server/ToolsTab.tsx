@@ -8,7 +8,9 @@
  * AVAILABILITY AND APPROVAL ARE ONE CHOICE HERE, by design: Blocked is "not
  * offered", Needs approval parks the run on a person's answer, Always allow
  * runs. The hints only chose where an undecided tool began; they never loosen
- * a level somebody set. A tool whose definition changed asks first until the
+ * a level somebody set. A team's lead may hold a tool back further for their
+ * own teams (`mcp_limits`); the engine resolves who it holds and how, per
+ * agent (`reaches[].limited`), and the row says so. A tool whose definition changed asks first until the
  * change is reviewed (the engine's `held`), and the Drift dialog reviews it.
  *
  * THE ENGINE DECIDES EACH LEVEL. A tool's `level` and whether the entry names
@@ -42,6 +44,8 @@ import {
 } from "@crewlethq/icons/glyphs";
 import type { McpMemberServerStatus, McpRisk, McpToolView } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { indexOrg } from "~/lib/seats.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
 import { useParam } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { setLevels, type LevelsChange, type ServerDetail } from "../api.ts";
@@ -89,6 +93,25 @@ export function ToolsTab({
     );
   }, [detail.tools, q]);
   const changes = detail.reading === "admin" ? detail.changes : [];
+  const org = useOrg();
+  // WHO HOLDS EACH TOOL BACK, from the engine's resolved limits per agent:
+  // the team whose limit does it, or the agent whose own block does.
+  const heldBack = useMemo(() => {
+    const index = indexOrg(org);
+    const out = new Map<string, Map<string, string>>();
+    if (detail.reading !== "admin") return out;
+    for (const r of detail.reaches) {
+      for (const t of r.limited?.tools ?? []) {
+        const who = t.by
+          ? (index.units.find((u) => u.id === t.by)?.name ?? t.by)
+          : (index.byHandle.get(r.seat)?.name ?? r.seat);
+        const holders = out.get(t.tool) ?? new Map<string, string>();
+        holders.set(who, LEVEL[t.level].label);
+        out.set(t.tool, holders);
+      }
+    }
+    return out;
+  }, [detail, org]);
   const changeOf = new Map(changes.map((c) => [c.tool, c]));
   const changedTool = (t: McpToolView) => t.held || t.removed || changeOf.has(t.raw);
   const keep = (f: Filter) => (t: McpToolView) =>
@@ -151,6 +174,7 @@ export function ToolsTab({
             : t.held || change
               ? { label: "Changed", variant: "warning" as const }
               : null;
+        const holders = heldBack.get(t.raw);
         return (
           <TableTwoLineCell
             value={
@@ -160,6 +184,18 @@ export function ToolsTab({
                   <Tag size="xs" variant={mark.variant} appearance="soft">
                     {mark.label}
                   </Tag>
+                ) : null}
+                {holders ? (
+                  <Tooltip
+                    content={[...holders].map(([who, level]) => `${level} for ${who}`).join("; ")}
+                    placement="top"
+                  >
+                    <span>
+                      <Tag size="xs" variant="neutral" appearance="outline">
+                        Held back
+                      </Tag>
+                    </span>
+                  </Tooltip>
                 ) : null}
               </span>
             }

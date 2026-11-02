@@ -293,8 +293,22 @@ test("the access tab lists who the server reaches and writes who gets it on its 
   detail = {
     ...LINEAR_DETAIL,
     reaches: [
-      { seat: "backend-engineer", reason: "seat", via: null, limited: null },
-      { seat: "pm", reason: "unit", via: "product", limited: null },
+      {
+        seat: "backend-engineer",
+        reason: "seat",
+        via: null,
+        limited: {
+          off: false,
+          off_by: null,
+          tools: [{ tool: "delete_issue", level: "blocked", by: "eng" }],
+        },
+      },
+      {
+        seat: "pm",
+        reason: "unit",
+        via: "product",
+        limited: { off: true, off_by: null, tools: [] },
+      },
     ],
   };
   entry = {
@@ -314,6 +328,9 @@ test("the access tab lists who the server reaches and writes who gets it on its 
   expect(within(tabs).getByRole("tab", { name: /Access/ })).toBeDefined();
   expect(screen.getByText("Granted to it")).toBeDefined();
   expect(screen.getByText("Through product")).toBeDefined();
+  // A TEAM LEAD'S LIMIT, as the engine resolved it for each agent.
+  expect(screen.getByText("1 tool held back by eng's lead")).toBeDefined();
+  expect(screen.getByText("Turned off for it by its lead")).toBeDefined();
   expect(screen.getByText("What each agent can call")).toBeDefined();
   expect(await screen.findByRole("radio", { name: /Chosen teams and agents/ })).toBeDefined();
   expect(
@@ -423,4 +440,30 @@ test("a changed tool is marked on the tools tab, with a review of the changes", 
   expect(screen.getAllByText("Changed").length).toBeGreaterThan(1);
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
   expect(onFlow).toHaveBeenCalledWith("drift");
+});
+
+// A TOOL A TEAM'S LEAD HOLDS BACK is marked on the Tools tab, naming who it is
+// held back for and how, from the engine's resolved limits. Mutation: read the
+// limits off the entry rather than `reaches[].limited`, and this is red.
+test("a tool a team's lead holds back is marked, with who it is held back for", () => {
+  detail = {
+    ...LINEAR_DETAIL,
+    reaches: [
+      {
+        seat: "backend-engineer",
+        reason: "every_agent",
+        via: null,
+        limited: {
+          off: false,
+          off_by: null,
+          tools: [{ tool: "list_issues", level: "approve", by: null }],
+        },
+      },
+      { seat: "pm", reason: "every_agent", via: null, limited: null },
+    ],
+  };
+  mountAt("tools", mcpData("admin"));
+  const row = screen.getByText("linear_list_issues").closest("tr, [role='row']") as HTMLElement;
+  expect(within(row).getByText("Held back")).toBeDefined();
+  expect(screen.queryAllByText("Held back")).toHaveLength(1);
 });

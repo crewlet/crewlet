@@ -27,6 +27,7 @@ import {
   Card,
   EmptyValue,
   StatusDot,
+  TableTwoLineCell,
   Text,
   useToast,
   type DataGridColumn,
@@ -40,7 +41,7 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { saveAccess } from "../api.ts";
 import { useServerEntry, type McpData } from "../data.ts";
 import { accessOf, GrantPicker, sameAccess, type Access } from "../GrantPicker.tsx";
-import { reasonWords, STATE, writeRefusalWords } from "../words.ts";
+import { limitWords, reasonWords, STATE, writeRefusalWords } from "../words.ts";
 
 interface ReachRow {
   seat: string;
@@ -94,12 +95,14 @@ export function AccessTab({
       header: "Reaches it",
       sortValue: (r) => r.reach?.reason ?? "",
       // A REASON IS WORDS, not a state: in a success chip beside a "Not
-      // running" word it read as a second status.
+      // running" word it read as a second status. What a team lead's limit
+      // holds it to for the agent is said under it, as the engine resolved it.
       cell: (r) =>
         r.reach ? (
-          <Text as="span" variant="inherit" truncate>
-            {reasonWords(r.reach, units)}
-          </Text>
+          <TableTwoLineCell
+            value={reasonWords(r.reach, units)}
+            detail={limitWords(r.reach.limited, units) || undefined}
+          />
         ) : (
           <Text as="span" variant="caption" tone="tertiary">
             No
