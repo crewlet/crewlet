@@ -249,6 +249,38 @@ export const ADMIN_STATUS: McpServersStatusAnswer = {
     },
   ],
   approvals: [],
+  agents: [
+    {
+      seat: "backend-engineer",
+      name: "Backend Engineer",
+      unit: null,
+      unit_key: null,
+      servers: [
+        { server: "docs", reason: "every_agent", tools: 0, state: "disabled" },
+        { server: "github", reason: "integration", tools: 42, state: "running" },
+        { server: "linear", reason: "every_agent", tools: 23, state: "partial" },
+        { server: "search", reason: "seat", tools: 5, state: "running" },
+      ],
+      mcp_tools: 70,
+      builtin_tools: 3,
+      over_budget: false,
+    },
+    {
+      seat: "pm",
+      name: "Product Manager",
+      unit: null,
+      unit_key: null,
+      servers: [
+        { server: "docs", reason: "every_agent", tools: 0, state: "disabled" },
+        { server: "github", reason: "integration", tools: 42, state: "running" },
+        { server: "linear", reason: "every_agent", tools: 23, state: "partial" },
+      ],
+      mcp_tools: 65,
+      builtin_tools: 3,
+      over_budget: false,
+    },
+  ],
+  tool_budget: 100,
 };
 
 /** A member's row of a server: the administrator's, its launch line and sentences left out. */

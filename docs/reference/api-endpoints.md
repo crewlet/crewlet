@@ -5578,7 +5578,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Servers tab of Settings › MCP & tools, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Servers tab of Settings › MCP & tools, the built-in tools by group, and (to an administrator) the MCP alarms standing on the answering node with the gesture that fixes each, and each agent's MCP tools against the tool budget. **Everybody's**, in two readings. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
@@ -9622,7 +9622,16 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
         "delivers": "", "input_schema": {"type": "object", "properties": {"…": {}}},
         "group": "work", "gate": "worklet"}
      ]}
-  ]
+  ],
+  "agents": [
+    {"seat": "backend-dev", "name": "Backend Dev", "unit": "Engineering", "unit_key": "eng",
+     "servers": [
+       {"server": "github", "reason": "integration", "tools": 26, "state": "partial"},
+       {"server": "linear", "reason": "unit", "tools": 31, "state": "running"}
+     ],
+     "mcp_tools": 57, "builtin_tools": 34, "over_budget": false}
+  ],
+  "tool_budget": 100
 }
 ```
 
@@ -9709,6 +9718,27 @@ and `raw` the server's own name for it, which Always allow sets the level of;
 work item the run was on, or `null`. `args` are what the call would send,
 opened from their seal under this node's fleet keyring, `null` where they do
 not open here. A member's reading carries no `approvals`. Always present.
+
+`agents`, in an administrator's reading only, is every agent seat in the
+chart's order with the MCP tools its grants hand it, and `tool_budget` the
+count past which an agent is flagged: 100, the engine's own, which no setting
+moves ([Each agent's tools, and the budget](../guides/tools-and-mcp.md#each-agents-tools-and-the-budget)).
+`unit` and `unit_key` are the name and key of the unit the seat sits in, both
+`null` for a seat at the root of the chart. `servers` is every server the
+configuration declares whose grant reaches the seat, on or off, in name order:
+`reason` is why, as the server's [`reaches`](#get-mcp-serversname) says it
+(`every_agent`, `unit`, `seat` or `integration`); `tools` is how many tools it
+offers the agent, every tool the live nodes' listings name at a level other
+than `blocked` (a tool refused its name is never listed), the whole listing
+for each agent a per-agent server reaches, and `0` for a server turned off,
+which is granted to nobody; and `state` is the server's own, its row's.
+`mcp_tools` counts each tool name once, so a name two of the agent's servers
+list counts once; `builtin_tools` is how many of the engine's own tools every
+agent holds, which the budget does not count; and `over_budget` is `mcp_tools`
+above `tool_budget`. A server's tools count while it is down, since they come
+back with it. `agents` is `null` while the answering node has not read the
+fleet's listings yet, a moment after it starts, which is not an agent holding
+no tools.
 
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [Per-entity read and write](#per-entity-read-and-write).
@@ -10055,7 +10085,10 @@ A server's row carries `name`, `title`, `catalogue`, `vendor`, `configured`,
 cell's `error` and `wait` sentences and the seats they name, and
 `unlisted_annotations`, which is about a configuration only an administrator
 reads. The list's `nodes` and `builtin` are as an administrator reads them. It
-carries no `alarms`: each alarm's detail quotes a failure or a wait sentence.
+carries no `alarms`: each alarm's detail quotes a failure or a wait sentence,
+and no `agents` or `tool_budget`: which servers an agent holds is read off the
+configuration's grants, as a seat's `tool_sources` on the org chart is, which
+no other reader is given either.
 
 A server's detail carries `server` (the row above), `nodes`, `listed`, `tools`
 (every field, `held` and `removed` included), `tool_count`, `server_info`,

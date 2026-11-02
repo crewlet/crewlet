@@ -347,7 +347,8 @@ func TestAMembersReadingCarriesExactlyTheKeysItsAllowListNames(t *testing.T) {
 	}{
 		{"mcp_servers_status", status, queries.MemberMCPStatus(status), statusKeys,
 			[]string{"servers[].command", "servers[].nodes[].error", "servers[].nodes[].wait", "alarms",
-				"alarms[].entries[].detail", "approvals"}},
+				"alarms[].entries[].detail", "approvals", "agents", "agents[].servers[].server",
+				"agents[].mcp_tools", "tool_budget"}},
 		{"a server's detail", detail, queries.MemberMCPServer(detail), detailKeys,
 			[]string{"dependants", "instructions", "resolved.box_seats", "resolved.binding.keys",
 				"instances[].failure.said", "instance_nodes[].reason", "usage.tools[].seats", "calls",

@@ -367,6 +367,14 @@ export interface McpServersStatusAnswer {
    * on. The administrator's reading alone.
    */
   approvals: McpApproval[];
+  /**
+   * Every agent seat in the chart's order, with the servers its grants reach
+   * and how many MCP tools they hand it. Null where the answering node cannot
+   * read the fleet's listings yet, which is not an agent holding no tools.
+   */
+  agents: McpAgentTools[] | null;
+  /** How many MCP tools an agent may hold before the engine flags it. */
+  tool_budget: number;
 }
 
 /** Where a held call's answer stands. */
@@ -397,6 +405,36 @@ interface McpApproval {
   answer: string;
   answered_by: string;
   answered_at: string | null;
+}
+
+/** One agent seat's MCP tools, counted against `tool_budget`. */
+interface McpAgentTools {
+  /** The seat's handle. */
+  seat: string;
+  name: string;
+  /** The unit the seat sits in, by name and by the key a grant names it by;
+   *  both null for a seat at the root of the chart. */
+  unit: string | null;
+  unit_key: string | null;
+  /** Every server whose grant reaches the seat, on or off, in name order. */
+  servers: McpAgentServer[];
+  /** Every tool its servers offer it, a name two servers offer counted once. */
+  mcp_tools: number;
+  /** The engine's own tools every agent holds, which the budget does not count. */
+  builtin_tools: number;
+  /** `mcp_tools` is past `tool_budget`. */
+  over_budget: boolean;
+}
+
+/** One server's part in an agent's tools. */
+interface McpAgentServer {
+  server: string;
+  reason: McpReachReason;
+  /** The tools it offers the agent: every one it lists at a level other than
+   *  blocked, a whole listing for a per-agent server, 0 for one turned off. */
+  tools: number;
+  /** The server's own state, as its row says. */
+  state: McpServerState;
 }
 
 /**
