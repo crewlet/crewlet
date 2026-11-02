@@ -384,6 +384,9 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node (serving, failed, tools served and the first failure), read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Everybody's**, in two readings: a member's names no launch line, failure sentence or wait (see [below](#get-mcp-servers)) |
 | `GET` | `/mcp-servers/{name}` | One MCP server whole: its row as `/mcp-servers` answers it, every tool the fleet's live nodes list for it (per-agent servers included) with its hints, risk and arguments, what the server said of itself in its handshake, and what removing it would take with it. **Takes `tools.read`**, everybody's, in two readings (see [below](#get-mcp-serversname)) |
 | `POST` | `/mcp-servers/{name}/retry` | Restart one MCP server now: every instance on every node, or with `seat` one agent's instance on the node holding the seat. **Takes `tools.retry`**, an administrator's at any recency (see [below](#post-mcp-serversnameretry)) |
+| `POST` | `/mcp-servers/{name}/check` | Test one MCP server where it runs, calling no tool: on every node, or with `seat` one agent's instance on the node holding the seat; recorded as the server's latest test. **Takes `tools.check`**, an administrator's at any recency (see [below](#post-mcp-serversnamecheck)) |
+| `POST` | `/mcp-checks` | Test a draft MCP server entry before it is saved, as a write would leave it. **Takes `tools.check`**, and `config.write` and `secrets.write` on top, decided before the body is read (see [below](#post-mcp-checks)) |
+| `POST` | `/mcp-probe` | Check an address before an MCP server is added at it: what answers there, and the sign-in it asks for, read from its OAuth metadata. **Takes `tools.check`**, and `config.write` on top (see [below](#post-mcp-probe)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -9538,6 +9541,11 @@ it under, so a node that drained, died or restarted stops counting at once.
   never read as one holding nothing.
 - `last_success` and `last_failure` are the latest answer and the latest
   failure across the instances read, `null` where there is none.
+- `last_check` is the server's latest test ([below](#post-mcp-serversnamecheck)),
+  whoever asked for it through whichever node: `at`, `by`, the `seat` it was
+  made for (`""` for a shared server), `ok`, and `nodes`, each as a test
+  answers it but without its tools. `null` where the server was never tested.
+  An administrator's reading only.
 - `resolved` is what the engine decides about the server from its
   configuration, so a screen never re-derives it, `null` for a server the
   configuration does not declare: `auth` (`integration` for a per-agent server
@@ -9752,6 +9760,183 @@ seat.
 Every call is recorded in the runtime audit as one `mcp_server_acted`, the
 guard's refusals included: who asked, which server, the seat if one, and how it
 ended, never anything the server is started with.
+
+### `POST /mcp-servers/{name}/check`
+
+Tests one MCP server where it runs, for the **Test** action on its page under
+**Settings › MCP & tools**. Each node asked brings up a connection of its own,
+exactly as it starts the server (the same transport, launch, scrubbed
+environment and startup timeout), walks its stages, lists its tools and closes
+the connection. **A test never calls a tool**, and the server the company runs
+keeps serving beside it. It is decided by `tools.check`, **an administrator's at
+any recency** and Ask Crewlet's only on the person's approval: it changes no
+configuration and no credential.
+
+A shared server is tested on every node that holds a presence lease, since each
+reaches it from where it is. A per-agent server runs as one agent, with that
+agent's credentials, so it is tested for one seat on the node holding it: the
+body names the seat, `{"seat": "<handle>"}`, and no other node tests it. The
+body is empty for a shared server.
+
+The answer is `200` with what each node found:
+
+```json
+{
+  "server": "tracker", "seat": "", "draft": false,
+  "at": "2026-11-01T09:05:00Z", "by": "jane.doe", "node": "node-a", "ok": true,
+  "nodes": [
+    {"node": "node-a", "answered": true, "reason": "", "ok": true,
+     "steps": [{"stage": "launch", "state": "passed", "took_ms": 41, "detail": "the process started"},
+               {"stage": "discover", "state": "passed", "took_ms": 182, "detail": "tracker-mcp 1.2.0, protocol 2026-07-28"},
+               {"stage": "list", "state": "passed", "took_ms": 33, "detail": "2 tools"}],
+     "failure": null,
+     "server_info": {"name": "tracker-mcp", "version": "1.2.0", "protocol": "2026-07-28"},
+     "tools": 2, "refused": 0, "took_ms": 270},
+    {"node": "node-b", "answered": false, "reason": "did not answer within 4m15s", "ok": false,
+     "steps": [], "failure": null, "server_info": null, "tools": 0, "refused": 0, "took_ms": 0}
+  ],
+  "server_info": {"name": "tracker-mcp", "version": "1.2.0", "protocol": "2026-07-28"},
+  "tools": [{"name": "tracker_search", "raw": "search", "title": "", "description": "Searches issues.",
+             "annotations": {"read_only": "yes", "destructive": "unknown", "idempotent": "unknown", "open_world": "unknown"},
+             "risk": "read_only", "risk_declared": true, "external": true,
+             "starting_level": "allow", "refused": ""}],
+  "warnings": []
+}
+```
+
+- `steps` are the stages a node walked, in order. A remote server walks
+  `address`, `resolve`, `connect`, `tls`, `discover` and `list`; a local one
+  `launch`, `discover` and `list`. Each `state` is `passed`, `failed`,
+  `skipped` (no name to look up for an address written as one, no TLS for
+  plain http) or `not_reached` (after the stage that failed). `detail` is what
+  the stage found, or the failure's sentence for the stage that failed.
+- `failure` is why the test stopped on a node: its `class`, one of the fourteen
+  failure classes `/mcp-servers` reports, decided at the stage whose facts
+  produced it (a lookup at `resolve`, a dial at `connect`, a certificate at
+  `tls`, what the server answered at `discover`, a command that could not
+  start or a process that exited before it answered at `launch`), and `said`.
+  A server that answers and lists no tool it can be offered under is `ok`,
+  with the class `empty_tools`.
+- `tools` and `server_info` come from the first node that found the server
+  serving: each tool as the engine would offer it (its prefixed name, its hints
+  with the configuration's overrides, `risk` as `/mcp-servers/{name}` reads it),
+  the level it starts at when the server is added (`starting_level`: `allow`
+  for a tool asserted read-only, `approve` for every other), and `refused`,
+  why it would not be offered under its name (`characters`, `too_long` or
+  `builtin`). `warnings` say each refusal in a sentence.
+
+**What an answer never carries.** No header or variable value the server is
+started with (a server or a process that repeats one has it withheld), and no
+address with a credential in it. Every sentence is redacted and bounded to 512
+bytes on the node that wrote it, and the server's instructions are left out.
+
+**The latest test is kept.** The test is recorded as the server's latest in the
+coordination store, one record per server, and [the server's
+detail](#get-mcp-serversname) answers it as `last_check` to every
+administrator, whichever node serves them. A later test replaces it, and the
+record goes when the configuration stops declaring the server.
+
+| Status | `error` | When |
+|---|---|---|
+| `404` | `not_found` | The configuration declares no such server |
+| `409` | `conflict` | The server is turned off, so nothing runs it to test (test its entry as a draft instead); or the seat named is not granted the server |
+| `400` | `invalid_body` | A `seat` named for a shared server, none named for a per-agent one, or a body with a field the route does not read |
+| `404` | `no_such_seat` | The organization has no agent seat by that handle |
+| `503` | `unavailable` | The node could not ask the fleet; ask again |
+
+A node that does not answer within the test's budget (twice the server's startup
+timeout, and fifteen seconds to close what it started) is named in `nodes`
+with why, never read as one that found nothing. One test of a server (and
+seat) runs at a time on a node: a test asked while one is still running there
+is answered at once, on that node, that one is running, and starts nothing
+beside it. Every call is one `mcp_server_acted` with the action `check`, the
+guard's refusals included.
+
+### `POST /mcp-checks`
+
+Tests a **draft** MCP server entry before it is saved, for the test step of the
+add and edit flows. The body is the entry as `PUT /config/mcp-servers/{name}`
+would take it, and the seat for a per-agent one:
+
+```json
+{"entity": {"name": "wiki", "command": "wiki-mcp", "env": {"WIKI_TOKEN": "${WIKI_TOKEN}"}}, "seat": ""}
+```
+
+A draft runs what a write would: a command on the engine host, or an address
+dialled with the values the entry names, each `${VAR}` resolved from the secret
+store. So it is decided as that write, **`config.write` and `secrets.write` on
+top of `tools.check`**, before anything of the body is read: a person who may
+not write the company and its secrets is refused `403` (`step_up_required` for
+a proof older than the step-up window) and nothing is tested. Ask Crewlet never
+runs one, since `secrets.write` is never its.
+
+The entry is held to the configuration's own dry run, in the company it would
+join (a create for a new name, an edit for one the company declares), and an
+entry the dry run refuses is answered `422 validation_error` with the
+problems a write of it would get. An admitted draft is tested as the dry run
+left it, turned on whatever its `enabled` says, on the nodes the saved entry
+would run on, and answered as [`POST /mcp-servers/{name}/check`](#post-mcp-serversnamecheck)
+answers, with `"draft": true`. **A draft's test is never recorded**: the
+server's latest test is of the entry the company runs.
+
+### `POST /mcp-probe`
+
+Checks an address before an MCP server is added at it, for the address step of
+the add flow: what answers there, and how it is signed in to. The body is
+`{"url": "https://..."}`. The address is the caller's, dialled as the server
+would be once added, a private address included, so the check is decided as
+the write that would make the engine dial it: **`config.write` on top of
+`tools.check`**, before the body is read. It resolves no secret and sends no
+credential.
+
+```json
+{
+  "address": "https://mcp.example.com/mcp", "reachable": true,
+  "check": {"node": "", "answered": true, "reason": "", "ok": false,
+            "steps": [{"stage": "address", "state": "passed", "took_ms": 0, "detail": "https://mcp.example.com/mcp"},
+                      {"stage": "discover", "state": "failed", "took_ms": 210, "detail": "..."}],
+            "failure": {"class": "needs_sign_in", "said": "..."}, "server_info": {"name": "", "title": "", "version": "", "protocol": ""},
+            "tools": 0, "refused": 0, "took_ms": 380},
+  "auth": "oauth",
+  "oauth": {"resource_metadata": "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+            "resource": "https://mcp.example.com/mcp",
+            "authorization_servers": ["https://auth.example.com"], "issuer": "https://auth.example.com",
+            "scopes": ["read", "write"], "client": "dcr", "pkce": true, "failure": null},
+  "tools": null, "catalogue": "", "title": "", "vendor": ""
+}
+```
+
+- `check` is the address's walk with nothing configured, as a node's test is
+  answered.
+- `auth` is the sign-in the server asks for: `none` where it lists its tools to
+  no credential (`tools` counts them), `oauth` where it answers `401` with a
+  Bearer challenge and publishes protected-resource metadata, `headers` where
+  it refuses another way or publishes none, and `""` where the check did not
+  reach an answer to tell by. `reachable` is whether an MCP server answered at
+  all: its handshake, or a refusal asking for a credential.
+- `oauth` is what the server's sign-in metadata says: the protected-resource
+  metadata (RFC 9728) at the address its challenge names, or at the well-known
+  address on its own origin, and the metadata of the first authorization
+  server it names (RFC 8414, or OpenID Connect discovery): its `issuer`, the
+  `scopes`, how the engine would register as a client (`cimd` where it reads a
+  client metadata document, `dcr` where it offers dynamic registration, `own`
+  for a client an administrator registers), and whether it offers PKCE `S256`.
+  `failure` is why the discovery stopped short.
+- `catalogue`, `title` and `vendor` name the curated entry the address is, `""`
+  where the curated catalogue does not know it.
+
+**Whose address each request goes to.** The typed address is the operator's.
+Every other address the check reaches is one the server named, in its
+challenge or its metadata, and it is fetched only through the engine's
+public-address guard (ADR-0072) unless it is on the typed address's own
+origin, over https alone, following no redirect, reading at most 64 KiB, and
+within ten seconds. An address the guard refuses ends the discovery with the
+class `blocked_address`: the server's sign-in points somewhere the engine does
+not follow. Metadata naming another issuer than the one asked for is not used.
+An address the configuration's own rule refuses (plain http to a public host, a
+user name or password in it) stops at the `address` stage, dialling nothing.
+Every call is one `mcp_server_acted` with the action `probe`, naming the
+address with its credentials withheld.
 
 ### `GET /fleet`
 

@@ -258,4 +258,12 @@ type NodeRuntime interface {
 	// the MCP kinds, from the evaluation the health count, the gauge and the
 	// log lines were told, so the page cannot disagree with them.
 	LatestAlarms() []statelog.Alarm
+
+	// MCPChecker tests an MCP server where it runs and checks an address
+	// before one is added (`POST /mcp-servers/{name}/check`,
+	// `POST /mcp-checks`, `POST /mcp-probe`), which only the engine can ask
+	// the nodes that run it; MCPChecks reads each server's latest test,
+	// which its detail answers.
+	MCPChecker() mcpapi.Checker
+	MCPChecks() queries.MCPCheckReader
 }

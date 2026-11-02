@@ -80,7 +80,7 @@ func restartSurface(t *testing.T, restarter mcpapi.Restarter, audit *recordedAud
 		t.Fatal(err)
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: restarter, Audit: audit})
+		Registry: &fakeRegistry{}, Detail: noDetail, Restarter: restarter, Checker: &fakeChecker{}, Audit: audit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,8 +193,12 @@ func TestARestartIsAskedOfTheFleetAndAuditedRefusalsIncluded(t *testing.T) {
 }
 
 // EVERY ROUTE IS DECIDED ON ITS OWN VERB: the catalogue and the detail are
-// `tools.read`, everybody's in two readings, and a restart is `tools.retry`,
-// declared as acting on the server its path names and keeping it.
+// `tools.read`, everybody's in two readings, a restart is `tools.retry`,
+// declared as acting on the server its path names and keeping it, and the
+// tests are `tools.check`: a saved server's recording its latest test, a
+// draft's and an address's recording nothing. None of the tests that name no
+// saved server sits under /mcp-servers/{name}, where it would shadow a server
+// of its name.
 func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 	t.Parallel()
 	svc := restartSurface(t, &fakeRestarter{}, &recordedAudit{})
@@ -206,24 +210,34 @@ func TestEveryMCPRouteTakesItsVerb(t *testing.T) {
 		"GET /mcp-catalogue":             authz.ActionToolsRead,
 		"GET /mcp-servers/{name}":        authz.ActionToolsRead,
 		"POST /mcp-servers/{name}/retry": authz.ActionToolsRetry,
+		"POST /mcp-servers/{name}/check": authz.ActionToolsCheck,
+		"POST /mcp-checks":               authz.ActionToolsCheck,
+		"POST /mcp-probe":                authz.ActionToolsCheck,
 	}
 	for pattern, action := range want {
 		if got, ok := mux.policies[pattern]; !ok || got.Action != action {
 			t.Errorf("%s is mounted with %+v, want %s", pattern, got, action)
 		}
 	}
-	if got := mux.policies["POST /mcp-servers/{name}/retry"]; got.Effect != authz.EffectRewrites {
-		t.Errorf("the restart declares effect %q, want it acts on its server and keeps it", got.Effect)
+	for pattern, effect := range map[string]authz.Effect{
+		"POST /mcp-servers/{name}/retry": authz.EffectRewrites,
+		"POST /mcp-servers/{name}/check": authz.EffectRewrites,
+		"POST /mcp-checks":               authz.EffectReads,
+		"POST /mcp-probe":                authz.EffectReads,
+	} {
+		if got := mux.policies[pattern]; got.Effect != effect {
+			t.Errorf("%s declares effect %q, want %q", pattern, got.Effect, effect)
+		}
 	}
 	if len(mux.policies) != len(want) {
 		t.Errorf("mounted %d routes, want %d", len(mux.policies), len(want))
 	}
 	if _, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return nil },
-		Detail: noDetail, Audit: &recordedAudit{}}); err == nil {
+		Detail: noDetail, Checker: &fakeChecker{}, Audit: &recordedAudit{}}); err == nil {
 		t.Error("a surface with no restarter was built")
 	}
 	if _, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return nil },
-		Detail: noDetail, Restarter: &fakeRestarter{}}); err == nil {
+		Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}}); err == nil {
 		t.Error("a surface with no audit was built")
 	}
 }

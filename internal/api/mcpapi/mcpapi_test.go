@@ -64,7 +64,7 @@ func surface(t *testing.T, registry string, search mcpapi.Searcher) *mcpapi.Serv
 		t.Fatal(err)
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: search, Detail: noDetail, Restarter: &fakeRestarter{}, Audit: &recordedAudit{}})
+		Registry: search, Detail: noDetail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Audit: &recordedAudit{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,7 +311,7 @@ func detailSurface(t *testing.T) *mcpapi.Service {
 		return queries.MCPServerAnswer{}, queries.ErrMCPDetailUnavailable
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: &fakeRegistry{}, Detail: detail, Restarter: &fakeRestarter{}, Audit: &recordedAudit{}})
+		Registry: &fakeRegistry{}, Detail: detail, Restarter: &fakeRestarter{}, Checker: &fakeChecker{}, Audit: &recordedAudit{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestAServersDetailIsEverybodysInTwoReadingsAndSaysWhyItCannotAnswer(t *test
 	}
 	holdKeys(t, "the detail", body, "reading", "server", "nodes", "listed", "tools", "tool_count",
 		"server_info", "instructions", "dependants", "instances", "instance_nodes", "last_success",
-		"last_failure", "resolved", "usage", "calls")
+		"last_failure", "resolved", "usage", "calls", "last_check")
 	instance := body["instances"].([]any)[0].(map[string]any)
 	holdKeys(t, "an instance", instance, "seat", "node", "state", "since", "restarts", "tools", "failure",
 		"wait", "last_failure", "last_answer")

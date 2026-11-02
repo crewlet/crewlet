@@ -1255,6 +1255,66 @@ agent's instance where the rest serve), the integration minting the agent's
 credential, or the server's `tool_prefix`. An administrator's Inbox lists each
 one under **Needs you**, linked to the server's page.
 
+### Testing a server
+
+**Test** on a server's page
+([`POST /mcp-servers/{name}/check`](../reference/api-endpoints.md#post-mcp-serversnamecheck))
+tells you whether the server works from where it runs, stage by stage, without
+waiting for an agent to call it. Each node brings up a connection of its own,
+exactly as it starts the server, walks it and closes it: for a remote server
+the address, the name lookup, the connection, TLS, the MCP handshake and the
+tool listing, and for a local one the launch, the handshake and the listing,
+each timed. **A test never calls a tool**, and the server keeps serving beside
+it. A shared server is tested on every node; a per-agent server is tested for
+the seat you name, on the node holding that seat, with that agent's own
+credentials. An administrator may test without stepping up, and Ask Crewlet
+prepares one for your approval.
+
+Where a test stops, it says at which stage and why, in the classes of
+[Why a server failed](#why-a-server-failed): a name nobody resolves at the
+lookup, a refused dial at the connection, a certificate at TLS, a sign-in, a
+refused credential or a page that is not an MCP server at the handshake, a
+command not found or a process that exited at the launch, with the process's
+own last words. A server that answers and lists no tool it can be offered under
+is reported as working, with the finding `empty_tools`. The tools it lists are
+shown as an agent would be offered them, each with its risk, the level it would
+start at (Always allow for a tool asserted read-only, Needs approval for every
+other), and the reason a tool would not be offered under its name.
+
+The latest test of each server is kept for the whole fleet and shown on its
+page to every administrator, whichever node serves them; a later test replaces
+it, and removing the server removes it. A test never shows a header or
+variable value the server is started with, and never an address with a key in
+it. Each test is recorded in the runtime audit as `mcp_server_acted`.
+
+**Before you save.** The add and edit flows test the entry you are writing
+([`POST /mcp-checks`](../reference/api-endpoints.md#post-mcp-checks)) as the
+configuration would run it once saved. Since a draft runs a command on the
+engine host or dials an address with your stored values, it asks for the same
+rights a write does (`config.write` and `secrets.write`, with a recent
+step-up), and it is held to the configuration's own checks first. A draft's
+test is not kept.
+
+**Checking an address.** When you type a remote server's address, the add
+flow checks it ([`POST /mcp-probe`](../reference/api-endpoints.md#post-mcp-probe))
+with no credential: whether an MCP server answers there, whether it lists its
+tools to anybody, needs a header, or asks for an OAuth sign-in, and, from its
+OAuth metadata, which authorization server it uses, the scopes it offers and how
+the engine would register at it. The address you type may be on a private
+network, as a configured server's may. Every other address the check follows
+was named by the server, in its sign-in challenge or its metadata: the engine
+fetches those only through its public-address guard unless they are on the
+address's own origin, over https, following no redirect, so a server cannot
+point the engine at an internal address. One that tries is reported as
+`blocked_address`.
+
+**A server's redirect.** A remote server that answers with a redirect to an
+address on another origin (scheme, host and port) is not followed, by a test or
+by the server's own connection: the failure names the address it pointed at,
+which you can configure as the server's address if you trust it. A redirect on
+the server's own origin, such as a moved path, is followed, and the headers you
+configured are only ever sent to that origin.
+
 ---
 
 ## Per-agent identity
