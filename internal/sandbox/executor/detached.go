@@ -195,6 +195,15 @@ type Session struct {
 }
 
 // resumer is a harness that continues a session an earlier run reported.
+//
+// AND THAT WIRES ITS RUN TO THE SESSION IT STARTED: a run that continues a
+// session is handed the seat's tools under two bridge tokens, that session's
+// and one for a session of its own its script starts in that one's place
+// ([sandbox.RunRequest.FreshWiring]), and a resumer's [Harness.WriteConfig]
+// writes both and its script installs the one of the session it started,
+// removing the other, before its harness starts. A harness that could not would
+// start a session of its own reaching the seat's tools as the continued one, and
+// be held to that session's skill guard.
 type resumer interface{ Resumes() bool }
 
 // carrier is a harness whose session the runner carries between boxes
@@ -473,7 +482,12 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // capture and a carried archive it left — each this run's to write again or
 // to have none of, so a run that packs nothing is never collected with the
 // last run's capture as its own — and the staging directory a script that was
-// killed part way left. NOT THE HARNESS'S OWN SESSION STORE, which is the session
+// killed part way left. And the wiring a run that continued a session was
+// handed for a session of its own ([Paths.MCPConfigFresh],
+// [Paths.OpenCodeValuesFresh]), which its script removes before its harness
+// starts and one killed before it could leaves behind: this run writes its own
+// where it has one, and none is left beside a run that has none.
+// NOT THE HARNESS'S OWN SESSION STORE, which is the session
 // a run in this box continues, nor the digests of the archives that store's
 // copy holds ([Paths.SessionDigests]), which describe it for as long as it is
 // there.
@@ -482,7 +496,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	out := r.harness.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
 		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(), p.BaseResult(),
-		p.SessionRecord(), p.SessionCapture(), p.SessionCarried()}
+		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfigFresh()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
@@ -493,9 +507,9 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// file, removed as it always was. Two statements rather than one joined
 	// by `&&`, so a file that will not go never keeps a directory.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
-		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution(),
-			p.SessionStaging(), p.SessionPackStaging(), p.ClaudeSkillsPlugin(), p.OpenCodeSkills(),
-			p.OpenCodeSkillsPlugin()})
+		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
+			p.CommitAttribution(), p.SessionStaging(), p.SessionPackStaging(), p.ClaudeSkillsPlugin(),
+			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()})
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: clearing the prior run's artefacts: %w", err)
 	}
@@ -544,6 +558,13 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	if err := r.refuseSkills(req); err != nil {
 		return sandbox.RunHandle{}, err
+	}
+	// A SECOND WIRING IS A CONTINUING RUN'S ALONE: a run that starts a session
+	// of its own has one session, and the other token written into its box
+	// would be one its model could read and dial as a session it is not in.
+	if req.FreshWiring != nil && req.Resume == "" {
+		return sandbox.RunHandle{}, fmt.Errorf("executor: this run starts a session of its own and was " +
+			"handed a second wiring for one, which only a run that continues a session is handed")
 	}
 	paths := PathsFor(box)
 	// WHAT THE SESSION HAD SPENT, read before the clear removes it: the
@@ -605,6 +626,20 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// ([OpenCode.WriteConfig]), for the same reason.
 	if req.SkillLoads.Set() {
 		req.SkillLoads.URL = sandbox.EngineAddress(box, req.SkillLoads.URL)
+	}
+	// AND THE SAME THREE UNDER THE JOB'S OTHER TOKEN, for a session the run's
+	// script starts of its own ([sandbox.RunRequest.FreshWiring]): dialled from
+	// the same box, so held to the same addresses. A copy, as req is.
+	if f := req.FreshWiring; f != nil {
+		wired := sandbox.Wiring{MCPServers: sandbox.EngineServers(box, f.MCPServers), Steer: f.Steer,
+			SkillLoads: f.SkillLoads}
+		if wired.Steer.Set() {
+			wired.Steer.URL = sandbox.EngineAddress(box, wired.Steer.URL)
+		}
+		if wired.SkillLoads.Set() {
+			wired.SkillLoads.URL = sandbox.EngineAddress(box, wired.SkillLoads.URL)
+		}
+		req.FreshWiring = &wired
 	}
 	configPath, err := r.harness.WriteConfig(ctx, box, req, paths)
 	if err != nil {

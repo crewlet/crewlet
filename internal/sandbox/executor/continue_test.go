@@ -102,6 +102,97 @@ func TestAnOpenCodeRunThatCannotContinueItsSessionReadsTheFreshBrief(t *testing.
 	})
 }
 
+// wiredHarness is [sessionHarness] that also records, as it starts, the MCP
+// configuration it was pointed at, and whether the configuration of the other
+// session was still beside it in the box: what the run's model could read.
+func wiredHarness(release string) string {
+	return strings.Replace(sessionHarness(release), "for a; do printf",
+		`prev=; for a; do if [ "$prev" = --mcp-config ]; then cp "$a" "$HOME/mcp-seen"; `+
+			`if [ -e "$(dirname "$a")/mcp-fresh.json" ]; then echo yes; else echo no; fi > "$HOME/other-left"; `+
+			`fi; prev=$a; done`+"\nfor a; do printf", 1)
+}
+
+// bridgeAt is a run's tool bridge, reached under token.
+func bridgeAt(token string) map[string]sandbox.MCPServer {
+	return map[string]sandbox.MCPServer{"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP,
+		URL: "https://engine.example.com/mcp/" + token}}
+}
+
+// A RUN IS WIRED TO THE SESSION ITS BOX STARTED, AND ITS BOX HOLDS NO OTHER
+// TOKEN. A run that continues a session is handed the seat's tools under two
+// bridge tokens: that session's, and one for a session of its own. Where its
+// box takes the session up, its harness starts on the first; where the session
+// is neither held nor restorable, on the second — so the token it dials is its
+// box's word to the bridge on which session it started. Either way the other is
+// gone from the box before the harness starts, so nothing the run's model reads
+// hands it the token of a session it is not in.
+//
+// Mutation: start the harness on the continued session's token whatever its
+// restore came to, or leave the other configuration in the box, and a row goes
+// red.
+func TestARunIsWiredToTheSessionItsBoxStarted(t *testing.T) {
+	t.Parallel()
+	runner, box := realBox(t)
+	writeBoxStandIn(t, box, executor.PathsFor(box).BinDir()+"/claude", wiredHarness("2.1.310"))
+	_, first := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "begin", MCPServers: bridgeAt("first-job")})
+	for _, tc := range []struct {
+		name, resume, want string
+	}{
+		{name: "its session held", resume: first.SessionID, want: "continued-token"},
+		{name: "a session it cannot take up", resume: uuid.NewString(), want: "fresh-token"},
+	} {
+		runToEnd(t, runner, box, sandbox.RunRequest{Brief: "carry on where you stopped",
+			FreshBrief: "the task, from the top", Resume: tc.resume, MCPServers: bridgeAt("continued-token"),
+			FreshWiring: &sandbox.Wiring{MCPServers: bridgeAt("fresh-token")}})
+		if seen := boxFile(t, box, box.Home()+"/mcp-seen"); !strings.Contains(seen, tc.want) {
+			t.Errorf("%s: the harness started on %s, want the %s", tc.name, seen, tc.want)
+		}
+		if left := strings.TrimSpace(boxFile(t, box, box.Home()+"/other-left")); left != "no" {
+			t.Errorf("%s: the other session's configuration was in the box as the harness started (%q)",
+				tc.name, left)
+		}
+	}
+}
+
+// AN OPENCODE RUN IS WIRED TO THE SESSION ITS BOX STARTED, AND ITS BOX HOLDS NO
+// OTHER TOKEN, under every sh a box may run its script with: the run's server
+// starts on the configuration's values under the continued session's token
+// where the box holds the session, and on those under a session of its own's
+// where it starts one — the other set gone from the box before the server
+// starts, which is what reads them.
+//
+// Mutation: start the server on the continued session's values whatever the
+// gate came to, or leave the other set in the box, and a row goes red.
+func TestAnOpenCodeRunIsWiredToTheSessionItsBoxStarted(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for name, tc := range map[string]struct {
+			held []string
+			want string
+		}{
+			"the session held":    {held: []string{carriedOpenCode}, want: "continued-token"},
+			"nothing to continue": {want: "fresh-token"},
+		} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				run := runScript(t, scriptOpts{shell: sh, session: &continuingOpenCode, held: tc.held,
+					freshBrief: "the task, from the top", values: "continued-token", freshValues: "fresh-token",
+					req: sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeOnly,
+						FreshWiring: &sandbox.Wiring{MCPServers: bridgeOnly}}})
+				if run.code != 0 {
+					t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+				}
+				if got := readIn(t, run.dir, "served-value"); got != tc.want {
+					t.Errorf("the run's server started on %q, want %q", got, tc.want)
+				}
+				if left := strings.TrimSpace(readIn(t, run.dir, "served-beside-other")); left != "no" {
+					t.Errorf("the other session's values were in the box as the server started (%q)", left)
+				}
+			})
+		}
+	})
+}
+
 // A SESSION ITS HARNESS WAS CUT OFF IN IS RESTORED OVER THE BOX'S OWN COPY. The
 // capture of a job that did not exit cleanly was packed by the engine, and the
 // box's copy may hold what its harness never finished — or what it went on to

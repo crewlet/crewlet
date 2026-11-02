@@ -254,7 +254,7 @@ func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, 
 	if len(req.Skills) > 0 {
 		b.WriteString(claudeSkillsGate(paths.ClaudeSkillsPlugin(), anyRequired(req.Skills)))
 	}
-	b.WriteString(claudeSessionGate(session, paths))
+	b.WriteString(claudeSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
 	// THE RECORD, before the harness starts, so a run killed before it reported
 	// anything still says which session it took up, and why it began again
 	// where it did. The release last, as the harness printed it
@@ -398,7 +398,19 @@ func claudeNotesGate(settings, notes, plain string) string {
 // minted for it in its place and says why, on its error stream and in its
 // record, rather than resume a session the harness does not hold, which fails the
 // run.
-func claudeSessionGate(session Session, paths Paths) string {
+//
+// AND THE RUN IS WIRED TO THE SESSION IT STARTS, where it was handed a wiring
+// for each (rewired, [sandbox.RunRequest.FreshWiring]): the MCP configuration
+// under the continued session's bridge token where it takes that session up, and
+// the one under the token of a session of its own moved over it where it starts
+// one — the other removed from the box either way, before the harness starts.
+// So the token the harness dials is the box's word to the bridge on which
+// session it started (internal/api/mcpbridge), one the run's model can neither
+// forge nor take back: the box holds no other token by the time the model can
+// read a file. A configuration that cannot be moved into place ends the run
+// before its harness starts, rather than start a session of its own on the
+// continued one's token, whose skill guard it would be held to.
+func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := shellQuote
@@ -473,6 +485,9 @@ func claudeSessionGate(session Session, paths Paths) string {
 	line(`  unset CLAUDE_CODE_RESUME_INTERRUPTED_TURN`)
 	line(`  set -- "$@" --resume %s`, q(session.ID))
 	line(`  if at %s; then set -- "$@" --system-prompt-snapshot off; fi`, floorArgs(claudeSnapshotFloor))
+	if rewired {
+		line(`  rm -f %s`, q(paths.MCPConfigFresh()))
+	}
 	line(`else`)
 	line(`  s=%s k=no`, q(session.Fresh))
 	line(`  printf '%%s%%s\n' %s "$w" >&2`, q("crewlet: this run was asked to continue the Claude Code session "+session.ID+
@@ -482,6 +497,10 @@ func claudeSessionGate(session Session, paths Paths) string {
 	// given it: the brief on the script's stdin continues a session the
 	// harness no longer holds ([sandbox.RunRequest.FreshBrief]).
 	line(`  [ ! -s %s ] || exec < %s`, q(paths.FreshBrief()), q(paths.FreshBrief()))
+	if rewired {
+		line(`  mv -f %s %s || { echo 'crewlet: the new session could not be wired to the tools of its seat, so the run does not start' >&2; exit 1; }`,
+			q(paths.MCPConfigFresh()), q(paths.MCPConfig()))
+	}
 	line(`fi`)
 	return b.String()
 }
@@ -603,18 +622,37 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	if len(req.MCPServers) == 0 {
 		return "", nil
 	}
-	servers := make(map[string]any, len(req.MCPServers))
-	for name, s := range req.MCPServers {
-		servers[name] = claudeCodeMCP(s)
-	}
-	blob, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
-	if err != nil {
+	if err := writeClaudeMCP(ctx, box, paths.MCPConfig(), req.MCPServers); err != nil {
 		return "", err
 	}
-	if err := box.WriteFile(ctx, paths.MCPConfig(), blob); err != nil {
-		return "", err
+	// AND UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the run's script
+	// starts of its own in place of the one it continues
+	// ([sandbox.RunRequest.FreshWiring]), which the script moves over the
+	// first where it starts one ([claudeSessionGate]). The whole of what
+	// differs: the run's hooks name the bridge by its server's name, never its
+	// address.
+	if f := req.FreshWiring; f != nil {
+		if err := writeClaudeMCP(ctx, box, paths.MCPConfigFresh(), f.MCPServers); err != nil {
+			return "", err
+		}
 	}
 	return paths.MCPConfig(), nil
+}
+
+// writeClaudeMCP renders servers into file, in the harness's own .mcp.json
+// vocabulary ([claudeCodeMCP]).
+func writeClaudeMCP(ctx context.Context, box sandbox.Sandbox, file string,
+	servers map[string]sandbox.MCPServer) error {
+
+	rendered := make(map[string]any, len(servers))
+	for name, s := range servers {
+		rendered[name] = claudeCodeMCP(s)
+	}
+	blob, err := json.MarshalIndent(map[string]any{"mcpServers": rendered}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return box.WriteFile(ctx, file, blob)
 }
 
 // claudeCodeMCP is one server in this harness's own .mcp.json vocabulary.
