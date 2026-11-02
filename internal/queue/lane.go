@@ -42,6 +42,40 @@ import (
 // requeued is published again as the event it is, so it returns to the lane it
 // left; a publisher that had to choose the subject itself would put every
 // requeued priority event back behind the backlog it was meant to skip.
+//
+// # A priority partition is delivered whole: the fold
+//
+// The lane changes which partition runs first, and must not change what a
+// partition is. A conversation's mail can sit in both mailboxes at once: the
+// person's message on the lane and, on the topic, a colleague's remark in the
+// same thread, a tracker notice on the same item, or the unmarked half of a
+// partition a park has just requeued (a park republishes each event as it is,
+// so the marked one goes back to the lane and the rest to the topic's tail).
+// A drain that took only the lane and the topic's head would run the person's
+// turn without the rest of its conversation, and then run the conversation a
+// second time when the rest reached the head, behind a backlog, on mail the
+// first turn should already have answered.
+//
+// So a batched drain that takes priority mail FOLDS into its delivery every
+// event still pending on the topic whose partition key ([BatchKeyFunc]) is the
+// key of one of those priority events, wherever on the topic it sits. The
+// handler is handed the partition whole and the fold is settled with it:
+//
+//   - An Ack settles every folded event with the partition. None of them is
+//     delivered again.
+//   - A Nak or a Defer leaves every folded event exactly where it was, never
+//     delivered and charged no delivery, because none was made: only the
+//     events the drain itself took are handed back, and a folded event states
+//     no headroom ([DeliveriesLeftFor]). The next drain that takes the
+//     partition's priority mail folds them again, unless the topic has served
+//     them in the meantime (a Nak holds the priority event back for its
+//     redelivery backoff, and the topic's head moves on without it). Either
+//     way every event is settled once.
+//
+// Folding reads the topic without consuming it and then settles what it read,
+// so it costs a read of the topic's pending mail on the drains that took lane
+// mail, and nothing on any other. A single-event consumer has no partitions
+// and folds nothing. [Fold] is the rule both backends apply.
 
 // PriorityField is the envelope bag key that marks an event for its topic's
 // priority lane. See [Prioritize].
@@ -101,4 +135,43 @@ func SubjectFor(topic string, ev *events.Event) string {
 		return LaneOf(topic)
 	}
 	return topic
+}
+
+// Fold is the set of partitions a batched drain's priority mail names: the
+// partitions whose events still pending on the topic the drain takes with it.
+// See the package's lane documentation for why a priority partition is
+// delivered whole.
+type Fold struct {
+	key  BatchKeyFunc
+	keys map[string]struct{}
+}
+
+// FoldOf is the fold of a drained batch: the partition key of every priority
+// event in it, derived exactly as [PartitionByKey] derives it, so an event the
+// fold takes lands in the same partition as the priority event that named it.
+func FoldOf(drained []*events.Event, key BatchKeyFunc) Fold {
+	f := Fold{key: key}
+	for _, ev := range drained {
+		if !Prioritized(ev) {
+			continue
+		}
+		if f.keys == nil {
+			f.keys = map[string]struct{}{}
+		}
+		f.keys[safeKey(ev, key)] = struct{}{}
+	}
+	return f
+}
+
+// Empty reports a drain that took no priority mail, which folds nothing.
+func (f Fold) Empty() bool { return len(f.keys) == 0 }
+
+// Takes reports whether ev, pending on the topic, belongs to one of the
+// fold's partitions.
+func (f Fold) Takes(ev *events.Event) bool {
+	if ev == nil || len(f.keys) == 0 {
+		return false
+	}
+	_, ok := f.keys[safeKey(ev, f.key)]
+	return ok
 }

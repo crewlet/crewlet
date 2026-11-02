@@ -466,7 +466,10 @@ type EventQueue interface {
 	//
 	// On a laned topic a drain takes the priority lane's mail first, and a
 	// partition holding a priority event is dispatched ahead of every other
-	// ([OrderForDispatch]).
+	// ([OrderForDispatch]). Such a partition is delivered WHOLE: every event
+	// of it still pending on the topic is folded into the delivery and
+	// settled by its Ack, and left in place, uncharged, by a Nak or a Defer
+	// ([Fold]).
 	//
 	// opts is read live on every cycle, so a config reload changes
 	// linger and batch size with no re-subscription.

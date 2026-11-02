@@ -89,20 +89,37 @@ func (q *Queue) Backlog(ctx context.Context, topic, group string) ([]*events.Eve
 
 // backlogOf is [Queue.Backlog] for one durable consumer reading one subject.
 func (q *Queue) backlogOf(ctx context.Context, stream, topic, name string) ([]*events.Event, error) {
+	var out []*events.Event
+	err := q.pendingOf(ctx, stream, topic, name, func(_ uint64, ev *events.Event) {
+		out = append(out, ev)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// pendingOf hands visit every message one durable consumer has not finished
+// with on one subject, in stream order and with its stream sequence, WITHOUT
+// consuming any of them: the read [Queue.Backlog] answers from, and the one a
+// drain folds a priority partition from ([attachment.fold]).
+func (q *Queue) pendingOf(ctx context.Context, stream, topic, name string,
+	visit func(seq uint64, ev *events.Event)) error {
+
 	cons, err := q.js.Consumer(ctx, stream, name)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrConsumerNotFound) {
-			return nil, nil
+			return nil
 		}
-		return nil, fmt.Errorf("inspect consumer: %w", err)
+		return fmt.Errorf("inspect consumer: %w", err)
 	}
 	info, err := cons.Info(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("consumer info: %w", err)
+		return fmt.Errorf("consumer info: %w", err)
 	}
 	stored, lastSeq, err := q.storedOn(ctx, stream, topic)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// The window is (what this GROUP has finished with, what the STREAM
@@ -121,9 +138,9 @@ func (q *Queue) backlogOf(ctx context.Context, stream, topic, name string) ([]*e
 	above := int(lastSeq) - int(info.AckFloor.Stream)
 	limit := min(stored, above)
 	if limit <= 0 {
-		return nil, nil
+		return nil
 	}
-	return q.peek(ctx, stream, topic, info.AckFloor.Stream+1, limit)
+	return q.peekEach(ctx, stream, topic, info.AckFloor.Stream+1, limit, visit)
 }
 
 // DeadLetters reports the events a subscription gave up on.
@@ -206,14 +223,34 @@ const peekBackstop = 30 * time.Second
 const peekCleanup = 5 * time.Second
 
 // peek reads up to limit messages from a subject, starting at a stream
-// sequence, WITHOUT consuming them — through a throwaway ack-none consumer.
-// Inspecting a backlog must never change it.
+// sequence, WITHOUT consuming them. See [Queue.peekEach].
 func (q *Queue) peek(
 	ctx context.Context,
 	stream, subject string,
 	from uint64,
 	limit int,
 ) ([]*events.Event, error) {
+	var out []*events.Event
+	err := q.peekEach(ctx, stream, subject, from, limit, func(_ uint64, ev *events.Event) {
+		out = append(out, ev)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// peekEach hands visit up to limit messages from a subject, starting at a
+// stream sequence, each with its stream sequence, WITHOUT consuming them:
+// through a throwaway ack-none consumer. Inspecting a backlog must never
+// change it.
+func (q *Queue) peekEach(
+	ctx context.Context,
+	stream, subject string,
+	from uint64,
+	limit int,
+	visit func(seq uint64, ev *events.Event),
+) error {
 	q.noteConsumerProposal()
 	cons, err := q.js.CreateConsumer(ctx, stream, jetstream.ConsumerConfig{
 		FilterSubject: subject,
@@ -227,7 +264,7 @@ func (q *Queue) peek(
 		InactiveThreshold: peekBackstop,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("peek consumer: %w", err)
+		return fmt.Errorf("peek consumer: %w", err)
 	}
 	defer func() {
 		// WithoutCancel because a cleanup that inherits the cancellation
@@ -239,11 +276,11 @@ func (q *Queue) peek(
 		_ = q.js.DeleteConsumer(cleanupCtx, stream, cons.CachedInfo().Name)
 	}()
 
-	var out []*events.Event
-	for len(out) < limit {
-		batch, err := cons.Fetch(min(peekPage, limit-len(out)), jetstream.FetchMaxWait(peekWait))
+	read := 0
+	for read < limit {
+		batch, err := cons.Fetch(min(peekPage, limit-read), jetstream.FetchMaxWait(peekWait))
 		if err != nil {
-			return nil, fmt.Errorf("peek fetch: %w", err)
+			return fmt.Errorf("peek fetch: %w", err)
 		}
 		got := 0
 		for msg := range batch.Messages() {
@@ -254,12 +291,17 @@ func (q *Queue) peek(
 				// build cannot read it" and "there is no mail" are
 				// different facts, and these are the functions the
 				// conformance suite reads its absence assertions through.
-				return nil, fmt.Errorf("peek decode %s: %w", subject, err)
+				return fmt.Errorf("peek decode %s: %w", subject, err)
 			}
-			out = append(out, &ev)
+			md, err := msg.Metadata()
+			if err != nil {
+				return fmt.Errorf("peek metadata %s: %w", subject, err)
+			}
+			visit(md.Sequence.Stream, &ev)
 		}
+		read += got
 		if err := batch.Error(); err != nil {
-			return nil, fmt.Errorf("peek fetch %s: %w", subject, err)
+			return fmt.Errorf("peek fetch %s: %w", subject, err)
 		}
 		if got == 0 {
 			// A SHORT READ IS THE ORDINARY END OF THE WINDOW, not an
@@ -282,7 +324,7 @@ func (q *Queue) peek(
 			break
 		}
 	}
-	return out, nil
+	return nil
 }
 
 // Attachments reports every (topic, group) pair THIS client is attached to.

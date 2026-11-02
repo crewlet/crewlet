@@ -698,8 +698,14 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 func (a *attachment) withHeadroom(ctx context.Context, ds ...delivery) context.Context {
 	perMessage := make([]queue.Headroom, 0, len(ds))
 	for _, d := range ds {
+		// A FOLDED EVENT IS LEFT OUT: it was read, not delivered, so this
+		// consumer has no delivery count of it to state, and a return of
+		// its partition charges it none ([attachment.fold]).
+		if d.folded() || d.ev == nil {
+			continue
+		}
 		md, err := d.msg.Metadata()
-		if err != nil || d.ev == nil {
+		if err != nil {
 			continue
 		}
 		perMessage = append(perMessage, queue.Headroom{
@@ -717,6 +723,11 @@ func (a *attachment) withHeadroom(ctx context.Context, ds ...delivery) context.C
 func (a *attachment) withProgress(ctx context.Context, ds ...delivery) context.Context {
 	return queue.WithProgress(ctx, a.q.ackWait()/3, func() error {
 		for _, d := range ds {
+			// A folded event has no ack window to restart: nothing
+			// delivered it ([attachment.fold]).
+			if d.folded() {
+				continue
+			}
 			if err := d.msg.InProgress(); err != nil {
 				return fmt.Errorf("jetstream: in-progress acknowledgement: %w", err)
 			}
