@@ -30,7 +30,17 @@
  */
 
 import { useId, useState } from "react";
-import { Button, EmptyState, Input, Modal, Skeleton, Tabs, Textarea, tabId } from "@crewlethq/ui";
+import {
+  Button,
+  EmptyState,
+  Input,
+  Modal,
+  Skeleton,
+  Stack,
+  Tabs,
+  Textarea,
+  tabId,
+} from "@crewlethq/ui";
 import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -308,8 +318,12 @@ const VERDICT_TITLES: Readonly<Record<string, { title: string; done: string }>> 
  * reader's own standing findings it CARRIES — checked by default, since a
  * review of a later revision supersedes every standing finding of the
  * reviewer's it does not carry (S40), and that is a choice made by unchecking
- * one, never by forgetting it. Sent as ONE `code_review_change`; the drafts
- * are forgotten only once the engine has taken the review.
+ * one, never by forgetting it. So the press is HELD until the dialog holds
+ * every one of them (`useStandingFindings`, read to its last page): a review
+ * sent while that read is out, or after it was refused, would carry none it
+ * had not read and supersede the rest unseen. Sent as ONE
+ * `code_review_change`; the drafts are forgotten only once the engine has
+ * taken the review.
  */
 function ReviewDialog({
   change,
@@ -325,11 +339,20 @@ function ReviewDialog({
   const [summary, setSummary] = useState("");
   const drafts = readDrafts(change.id, change.revision);
   const elsewhere = draftedRevisions(change.id).filter((d) => d.revision !== change.revision);
-  const standing = useStandingFindings(change, viewer.owner);
+  const read = useStandingFindings(change, viewer.owner);
+  const standing = read.findings ?? [];
   const [dropped, setDropped] = useState<ReadonlySet<string>>(new Set());
   const carries = standing.filter((f) => !dropped.has(f.id)).map((f) => f.id);
   const words = VERDICT_TITLES[verdict] ?? { title: "Review", done: "Reviewed" };
+  const held =
+    read.findings !== null
+      ? undefined
+      : read.error === null
+        ? "Reading your standing findings…"
+        : "Your standing findings were not read: a review sent now would supersede those it leaves out.";
   const submit = async () => {
+    // HELD HERE TOO, where Enter reaches it past the button.
+    if (held !== undefined) return;
     const result = await write.run(
       {
         change: change.ref,
@@ -363,7 +386,7 @@ function ReviewDialog({
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
             Cancel
           </Button>
-          <WriteButton write={write} variant="primary" onPress={() => void submit()}>
+          <WriteButton write={write} variant="primary" blocked={held} onPress={() => void submit()}>
             {words.title}
           </WriteButton>
         </>
@@ -383,6 +406,26 @@ function ReviewDialog({
         {elsewhere.length > 0 &&
           ` Drafts on revision ${elsewhere.map((d) => d.revision).join(", ")} stay in this tab: a review raises findings on the revision it judges.`}
       </p>
+      {read.error !== null ? (
+        <Stack gap={2}>
+          <QueryState
+            error={read.error}
+            refusal={read.refusal}
+            {...(read.detail ? { detail: read.detail } : {})}
+            loading={false}
+          >
+            {null}
+          </QueryState>
+          <p className="muted">
+            {held}{" "}
+            <Button size="small" variant="secondary" onClick={read.retry}>
+              Read them again
+            </Button>
+          </p>
+        </Stack>
+      ) : (
+        held !== undefined && <p className="muted">{held}</p>
+      )}
       {standing.length > 0 && (
         <fieldset className="code-carries">
           <legend>Your standing findings it keeps standing</legend>

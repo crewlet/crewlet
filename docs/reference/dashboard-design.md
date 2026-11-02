@@ -7810,7 +7810,10 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   `code_review_change` with the verdict, a summary and the reviewer's own
   standing findings it carries (each checked, since a review of a later
   revision supersedes every standing finding of the reviewer's it leaves out);
-  the drafts are forgotten only once the engine has taken it. An open finding
+  those are the engine's `standing` part, read to its last page, and the press
+  is held, with why, while that read is out or after it was refused, so no
+  review supersedes a finding the dialog never showed; the drafts are
+  forgotten only once the engine has taken it. An open finding
   with a suggestion offers **Apply suggestion** (`code_apply_suggestions`,
   against the head on screen), and every finding and thread a reply; a thread
   **Resolve**. **Request review** asks reviewers by handle with a note

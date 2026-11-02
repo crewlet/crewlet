@@ -398,15 +398,6 @@ export function findingStateWord(state: string): string {
   return state;
 }
 
-/**
- * Whether a finding STANDS: open, or answered by an author — what a raiser
- * carries into a later review to keep it standing, and the only findings a
- * review may carry (`code.Review.Carries`).
- */
-export function findingStands(state: string): boolean {
-  return state === "open" || state === "resolved" || state === "wont_fix" || state === "disputed";
-}
-
 /** A review's verdict, said of a review as its timeline row says it. */
 export function verdictWord(verdict: string): string {
   switch (verdict) {
