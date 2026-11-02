@@ -9,8 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RECORD'S SCOPE: the complete set of objects its apply may write, stated by
-// the WRITER and readable at every version.
+// A RECORD'S SCOPE: every object its apply may write and every object its
+// decide read (M5-D33), stated by the WRITER and readable at every version. A
+// SUPERSET of what the apply writes, because a record decided from rows a
+// record this node could not decode left stale is as wrong as one that writes
+// over them: a write is probed against the paths it reads, and a record names
+// what it read, so a node behind on any of it decides nothing from it.
 //
 // It is what a node that cannot decode a record files the deferral under, and
 // what a later read or write probes to discover it is behind. The framework

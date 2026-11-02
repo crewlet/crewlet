@@ -144,13 +144,21 @@ func checkLogRecordReferences(payload []byte) ([]objstore.RecordReference, error
 
 // mayWriteCheckLogs reports whether a record this build cannot read may write
 // a code_check_logs row, from what every build reads of it: its kind and the
-// scope its writer stated as the complete set of objects its apply may write.
+// scope its writer stated — every object its apply may write and, since
+// M5-D33, every object its decide read beside them (scope.go). A SUPERSET IS
+// SOUND HERE: a path the record only read can only turn this answer to "may",
+// answering a record that writes no log row [objstore.ErrRecordUnreadable],
+// on which a backup refuses rather than guesses, and never hides a path its
+// apply writes.
+//
 // AN UNKNOWN KIND MAY. A KNOWN KIND may when any path of its scope reaches a
 // repository's checks — the domain, a checks path, or a path this build cannot
 // interpret, which is the domain's reading of it — and may not when every
 // path is a name's claim, a repository's own, a change's, the activation
 // fence or the framework's: a log row is written only under its repository's
-// checks path, which a record writing one names.
+// checks path, which a record writing one names. A record that only READ the
+// checks names that path too (a mergeability, a merge, an enqueue), and is
+// refused with the rest: the over-refusal a superset allows.
 func mayWriteCheckLogs(env RecordEnvelope) bool {
 	if !env.Subject.Kind.Valid() {
 		return true
@@ -323,7 +331,12 @@ func knownOrNot(k ObjectKind) string {
 
 // mayWritePacks reports whether a record this build cannot read may write a
 // code_packs row, from what every build reads of it: its kind and the scope
-// its WRITER stated as the complete set of objects its apply may write.
+// its WRITER stated — every object its apply may write and, since M5-D33,
+// every object its decide read beside them (scope.go). A SUPERSET IS SOUND
+// HERE: a path the record only read can only turn this answer to "may",
+// answering a record that writes no pack [objstore.ErrRecordUnreadable], on
+// which a backup refuses rather than guesses, and never hides a path its
+// apply writes.
 //
 // AN UNKNOWN KIND MAY: this build cannot place what a kind it has never heard
 // of names. A KNOWN KIND may when any path of its scope reaches a repository —
@@ -331,7 +344,11 @@ func knownOrNot(k ObjectKind) string {
 // which is the domain's reading of it — and may not when every path is a
 // name's claim, a repository's checks, the activation fence or the
 // framework's own: a pack row is written only under its repository's own
-// path, which a record writing one names, and a check's record never names it.
+// path, which a record writing one names. A record that only READ the
+// repository's row names that path too — a check's record does on every arm,
+// a change's on its own subject — and is refused with the rest: the
+// over-refusal a superset allows, which for a check's record refuses nothing
+// new, since [mayWriteCheckLogs] already refuses it by its checks path.
 func mayWritePacks(env RecordEnvelope) bool {
 	if !env.Subject.Kind.Valid() {
 		return true
