@@ -3,6 +3,7 @@ package cache_test
 import (
 	"errors"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -335,5 +336,54 @@ func TestOnlyTheFirstOfTwoHoldersSendsASearchOn(t *testing.T) {
 			t.Errorf("git-1 in the order %v is a holder %t and passes a search on %t, want %t and %t", tc.order,
 				got.Holder, got.PassesOn, tc.holder, tc.passesOn)
 		}
+	}
+}
+
+// fourSegmentFiles is four files of disjoint text: at a segment a file
+// (cache.IndexSegmentBytesWith(1)) a build writes four segments and merges
+// the first three as it goes (TestAnIndexBuildMergesAsItWritesNotOnceAtTheEnd).
+func fourSegmentFiles() map[string]string {
+	files := map[string]string{}
+	for i, word := range []string{"alpha", "bravo", "charlie", "delta"} {
+		files[word+".txt"] = strings.Repeat(word+" "+strings.Repeat(string(rune('k'+i)), 3)+"\n", 8)
+	}
+	return files
+}
+
+// AN INDEX BUILD SYNCS ITS DIRECTORY ONCE. Nothing names a file a build
+// places until its commit stores the record, and every staged file is synced
+// as it is written, so the index's directory is synced once, before the
+// commit — never after each placement, which cost a first build of many
+// segments a second fsync a file. A build of four segments, merged twice,
+// and a tip map places seven files and syncs the directory once.
+//
+// Mutation: sync the directory after each placement (codeindex.go's place,
+// b.c.durableDir of the index's directory after the rename) — seven syncs.
+func TestAnIndexBuildSyncsItsDirectoryOnce(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	w.push(t, repo, "refs/heads/main", fourSegmentFiles())
+	var (
+		mu     sync.Mutex
+		synced []string
+	)
+	c := w.open(t, cache.IndexSegmentBytesWith(1), cache.SyncingWith(func(dir string) {
+		if filepath.Base(dir) == "codeindex" {
+			mu.Lock()
+			defer mu.Unlock()
+			synced = append(synced, dir)
+		}
+	}))
+	indexOf(t, c, w.sync(t, c, repo), cache.IndexBuilt)
+	_, paths, ok := cache.CodeIndexFiles(c, repo)
+	if !ok {
+		t.Fatal("the build stored no index")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{filepath.Dir(paths[0])}; !slices.Equal(synced, want) {
+		t.Errorf("the build synced the index's directory %d times (%v), want once (%v)", len(synced), synced,
+			want)
 	}
 }

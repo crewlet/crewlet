@@ -538,6 +538,9 @@ func (c *Cache) Index(ctx context.Context, s Synced) (IndexOutcome, error) {
 	if err := b.tipMap(tip, files); err != nil {
 		return "", err
 	}
+	if err := b.durable(); err != nil {
+		return "", err
+	}
 	if !b.commit(tip) {
 		return IndexCurrent, nil
 	}
@@ -619,8 +622,12 @@ type indexBuild struct {
 	tip     map[codeindex.OID]bool
 	tipPart codeIndexPart
 	wrote   []string
-	next    uint64
-	stored  bool
+	// dirs is every directory whose entries the build's renames changed —
+	// the index's own, and the parent of each directory it made — which
+	// durable syncs once, before the record names any file in them.
+	dirs   []string
+	next   uint64
+	stored bool
 }
 
 // builtSegment is one segment a record names, opened: m is the mapping of a
@@ -666,18 +673,51 @@ func (b *indexBuild) place(rel string, write func(io.Writer) error) (int64, erro
 	if err != nil {
 		return 0, err
 	}
-	dir := filepath.Join(b.inc.dir, filepath.FromSlash(codeIndexDir))
-	if err := os.MkdirAll(dir, hostbox.DirMode); err != nil {
+	if err := b.mkdir(); err != nil {
 		return 0, removeStaged(staged, err)
 	}
 	if err := b.c.place(staged, filepath.Join(b.inc.dir, rel)); err != nil {
 		return 0, err
 	}
 	b.wrote = append(b.wrote, rel)
-	if err := syncDir(dir); err != nil {
-		return 0, err
-	}
 	return size, nil
+}
+
+// mkdir makes the index's directory, the first time the build places a file,
+// and notes the directories durable syncs: the index's own, and the parent of
+// each directory it made, whose new entry is a rename of its own.
+func (b *indexBuild) mkdir() error {
+	if b.dirs != nil {
+		return nil
+	}
+	dir := filepath.Join(b.inc.dir, filepath.FromSlash(codeIndexDir))
+	b.dirs = []string{dir}
+	for d := dir; d != b.inc.dir; d = filepath.Dir(d) {
+		_, err := os.Lstat(d)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		b.dirs = append(b.dirs, filepath.Dir(d))
+	}
+	return os.MkdirAll(dir, hostbox.DirMode)
+}
+
+// durable syncs every directory the build's renames changed, ONCE each,
+// before its commit stores the record that names them — the cache's rule of
+// one sync a directory a step writes ([Cache.place]): nothing names a file the
+// build placed until then, and each staged file was synced as it was written
+// (stage), so a sync after each placement, as the build once made, bought
+// nothing but a second fsync a file — hundreds of them for a first build.
+func (b *indexBuild) durable() error {
+	for _, dir := range b.dirs {
+		if err := b.c.durableDir(dir); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // placeSegment places a segment through write at a number of its own and

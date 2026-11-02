@@ -75,11 +75,7 @@ func TestAnIndexBuildReadsItsSegmentsThroughMappings(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	repo := w.repo(t, 1)
-	files := map[string]string{}
-	for i, word := range []string{"alpha", "bravo", "charlie", "delta"} {
-		files[word+".txt"] = strings.Repeat(word+" "+strings.Repeat(string(rune('k'+i)), 3)+"\n", 8)
-	}
-	w.push(t, repo, "refs/heads/main", files)
+	w.push(t, repo, "refs/heads/main", fourSegmentFiles())
 	var (
 		mu     sync.Mutex
 		opened int
