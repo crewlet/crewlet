@@ -387,15 +387,16 @@ func mergeRefusalWords(tool string, refusal code.MergeRefusal) caveat.Refusal {
 //   - CONFLICT: the change or its repository in a state that refuses the
 //     merge until somebody changes it — a change closed or merged, a draft its
 //     owner or a person marks ready, a repository archived or a pull mirror —
-//     and a merge that lost its race or met its target at a cap that clears
-//     as it lands: a target moving faster than a merge is built onto it, a
-//     committer's round lost, a repository its compaction has not caught up
-//     with, a queue holding all it may until it lands what it holds;
+//     a merge that lost its race to a target moving faster than a merge is
+//     built onto it, and a queue holding all it may, its contents at their
+//     cap until it lands what it holds;
 //   - QUOTA_EXCEEDED: a repository the merge would take past
 //     code.limits.repo_max_bytes, as a push's repo_size is, which no
 //     permission lifts and no retry clears;
-//   - UNAVAILABLE: what waiting on the node clears, as a push's is — an
-//     import finishing, an expunge that began, a pack the merge's own builder
+//   - UNAVAILABLE: what waiting on the node clears, as a push's is, and in
+//     the same class wherever the code host answers it — a committer busy,
+//     a repository its compaction has not caught up with, an import
+//     finishing, an expunge that began, a pack the merge's own builder
 //     uploaded too long ago (it builds it again), a log that refused or a
 //     record applied nowhere;
 //   - FORBIDDEN: a rule refusing the caller — a seat asking a person's
@@ -426,13 +427,13 @@ func mergeRefusalClass(r code.MergeRefusal) tools.Refusal {
 	case code.MergeRefusalStale, code.MergeRefusalHeadMoved, code.MergeRefusalTargetMoved:
 		return tools.RefusalStaleVersion
 	case code.MergeRefusalChangeNotOpen, code.MergeRefusalChangeDraft, code.MergeRefusalRepoArchived,
-		code.MergeRefusalRepoMirrored, code.MergeRefusalTargetMoving, code.MergeRefusalBusy,
-		code.MergeRefusalCompactionBehind, code.MergeRefusalQueueFull:
+		code.MergeRefusalRepoMirrored, code.MergeRefusalTargetMoving, code.MergeRefusalQueueFull:
 		return tools.RefusalConflict
 	case code.MergeRefusalRepoSize:
 		return tools.RefusalQuotaExceeded
-	case code.MergeRefusalRepoImporting, code.MergeRefusalExpunging, code.MergeRefusalUploadExpired,
-		code.MergeRefusalUnavailable, code.MergeRefusalNotApplied:
+	case code.MergeRefusalBusy, code.MergeRefusalCompactionBehind, code.MergeRefusalRepoImporting,
+		code.MergeRefusalExpunging, code.MergeRefusalUploadExpired, code.MergeRefusalUnavailable,
+		code.MergeRefusalNotApplied:
 		return tools.RefusalUnavailable
 	case code.MergeRefusalNotPerson, code.MergeRefusalNotPermitted:
 		return tools.RefusalForbidden
