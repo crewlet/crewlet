@@ -47,6 +47,15 @@ export interface Module {
 
 let cached: { modules: Module[]; suites: Module[] } | null = null;
 
+/**
+ * Whether a file is one Vitest runs rather than one the dashboard is built
+ * from: a suite (`.test.`), or a benchmark (`.bench.`), which `vitest bench`
+ * runs as `vitest run` runs a suite. A benchmark ships no more than a suite
+ * does, so a gate over what ships reads neither, and a gate over the suites
+ * reads both: a case in either is the same `test` with the same budgets.
+ */
+const isSuite = (name: string) => name.includes(".test.") || name.includes(".bench.");
+
 /** The one walk: every `.ts` and `.tsx` file under `src/`, modules and suites apart, each sorted by path. */
 function tree(): { modules: Module[]; suites: Module[] } {
   if (cached) return cached;
@@ -61,7 +70,7 @@ function tree(): { modules: Module[]; suites: Module[] } {
       }
       if (!/\.tsx?$/.test(entry)) continue;
       const lang: Lang = entry.endsWith(".d.ts") ? "dts" : entry.endsWith(".tsx") ? "tsx" : "ts";
-      (entry.includes(".test.") ? suites : modules).push({
+      (isSuite(entry) ? suites : modules).push({
         path: relative(SRC, full).split("\\").join("/"),
         text: readFileSync(full, "utf8"),
         lang,
@@ -87,8 +96,9 @@ export function modules(): Module[] {
 }
 
 /**
- * Every suite under `src/` — a file whose name carries `.test.` — sorted by
- * path, from the same walk: what a gate over the suites themselves reads.
+ * Every suite under `src/` — a file whose name carries `.test.`, or `.bench.`
+ * for a benchmark — sorted by path, from the same walk: what a gate over the
+ * suites themselves reads.
  */
 export function suites(): Module[] {
   return tree().suites;
