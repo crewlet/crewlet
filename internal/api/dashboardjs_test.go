@@ -1112,8 +1112,18 @@ const (
 	// its own the first paint loads beside it (markdown.js, 3.1 KiB), the two
 	// compressed apart, and the frame gained the code screens' routes,
 	// trails and contract. 328 KiB, still under two seconds on that link,
-	// whose two seconds are 366 KiB.
-	initialBudget = 328 << 10
+	// whose two seconds are 366 KiB. Code search, a repository's import,
+	// mirrors, index and purge, and the checks' latest attempts and window
+	// end took it to 328.5 KiB, with no screen newly in the first paint: a
+	// seat's Code tab in the seats workspace the first paint loads (about
+	// 0.6 KiB, every seat tab riding that workspace's one chunk by the
+	// workspace rule); the frame's code routes, keys, palette hits and sheet
+	// rules (the entry, the keymap, the boundaries and the one sheet, about
+	// 0.25 KiB net); and the bundler splitting the refusal and waiting
+	// helpers out into two chunks of their own beside a merge of two shared
+	// ones (under 0.1 KiB net). 329 KiB, still under two seconds on that
+	// link.
+	initialBudget = 329 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
